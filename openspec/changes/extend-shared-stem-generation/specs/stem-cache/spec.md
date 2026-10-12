@@ -273,6 +273,15 @@ immediate change SHALL NOT silently discard the command.
 - **AND** actual output SHALL follow the new original's complete PCM, declared playback rate and fresh neutral filter chronology without old component readers, old-source stem effectiveness or predecessor wet history
 - **AND** the old rejected V2 SHALL remain rejected and unclaimed through repeated polling, and the other pad SHALL retain its independent source, voice and playback trajectory
 
+#### Scenario: New original requires its own live stem preparation and dry effect
+
+- **GIVEN** a different original has obtained its own load, finite NormalLoop window and explicit Play acknowledgements, is producing FullMix with KEY LOCK OFF, and the predecessor's queued stem candidate remains rejected and unclaimed
+- **WHEN** that new original's verified complete stem files enter the existing pair worker and durable selection path while playback continues
+- **THEN** preparation SHALL capture the new original's current source, request and window context, retain its own complete-source and component artifact owners, and commit its own complete pair independently of the predecessor's selection
+- **AND** durable selection and active pending registration SHALL preserve current FullMix output, voice, phase, Native/FIFO and filter chronology without admitting Capture or reporting stem effectiveness
+- **AND** a later explicit public ALL gesture SHALL require that new selection's own Capture, component worker and Adopt acknowledgement, followed by128 consumed source frames of handover and actual dry output before its own receipt becomes effective
+- **AND** output SHALL follow independently verified new-original component PCM and the explicitly selected mask while the rejected predecessor remains unclaimed, other pads retain their own trajectory and owners, and persistence reopens the new assignment and complete pair
+
 #### Scenario: First candidate is prepared after a productive FullMix voice was paused
 - **GIVEN** a current proper NormalLoop FullMix voice has produced genuine wet output and is paused before new-set registration and own Capture
 - **WHEN** its new complete-set candidate obtains own residency acceptance while the same voice remains paused

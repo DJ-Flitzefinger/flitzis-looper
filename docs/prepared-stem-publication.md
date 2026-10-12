@@ -1101,6 +1101,58 @@ warnings (one duplicate), none in the changed test. Format, strict affected
 OpenSpec, five relative file links and whitespace pass. Production Release/
 import/Python181 checks remain reusable without Native installation or App use.
 
+### New original prepares and adopts its own live dry stems
+
+After actual B assignment, finite-window ACK and public Play, this bounded
+task3.2 trace returns the genuine SampleStarted feedback to the production
+Transport handler. Python therefore registers the first B set as an active
+pending candidate. Both predecessor histories (A FullMix or selected V1) use
+B's inherited KEY LOCK OFF at rate1.25; later B ON remains separate.
+
+The fresh B source ticket is captured after its real voice birth and finite
+window adoption. Its source request differs from A, and its preparation context
+differs from B's earlier whole-original ticket. The actual typed B original
+determines its own material root and fresh ready generation. Four complete B
+WAVs contain layers4..7, with their own complete marker and source version;
+the independent oracle decodes those bytes rather than resident component views.
+Only this new trace also predeclares the same independently encoded component
+PCM in its complete reference before that reference's voice starts, then checks
+it against all subsequently written B WAV bytes. The actual B mixer has no
+components before its own Adopt. The reference changes only scalar selection
+at the matching handover, retaining its voice, source clock and filter history.
+
+With durable intent still FullMix, the established completion seam enters the
+existing two-thread StemWorkerPool once with components disabled. Its current
+source/content/path fence commits the complete B pair through the real atomic
+ProjectPersistence writer and settles assignment owners. Active pending
+registration emits no audio message. Reopen verifies B's own pair while
+continuing FullMix output, unchanged voice/source phase/Native/FIFO and neutral
+filter chronology confirm that disk selection grants no audible effect.
+
+Only explicit public ALL with session mask1010 (B melody5 plus drums7) admits
+B's own Capture, actual component worker and Adopt. Its four finite component
+views are compared with independent complete B WAV slices. The existing
+algebraic feed, complete-PCM mixer and uninterrupted filter oracle verify
+every output sample through128 consumed source frames (103 output frames at
+rate1.25) and subsequent dry effect. No Wet preparation supplies evidence.
+Disk/control/effective identities, own receipt and persisted ALL must agree
+with B. Old A-V2 remains rejected and unclaimed with its own unchanged error,
+and pad215 retains its independent absolute clock, source and Native/FIFO.
+
+This fixture uses genuine verified files and the existing offline-completion
+seam; it does not run model inference or the full App. Production final-reader
+retirement, B ON, remaining task3.2/3.3/L4, resource and Human gates remain open.
+The corrected Release focus passes1/two histories in4.21s after1m10s compile.
+The final affected public-controller suite passes28 in109.21s with an
+unchanged-source0.19s compile. Unchanged36 Parent/Native/offline cases reuse
+the prior shared59 run; this is not a fresh64-case integrated run. One
+independent final review closes the reference setup correction without open
+findings. Clippy workspace/tests exits0 in7.25s with63 existing looper warnings
+(one duplicate), identical warning-kind sets and no changed-test diagnostic.
+Format, strict affected OpenSpec, five relative file links and whitespace pass.
+Production Release/import and Python181 checks remain reusable without
+installing the Native extension or running the Human App.
+
 ### Public loop expansion requires fresh V2 preparation
 
 The public loop-end path can acknowledge a genuinely changed resident window

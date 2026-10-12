@@ -59,6 +59,8 @@ const SOURCE_PLAY_CHILD: &str = "FLITZI_L3_CONTROLLER_SOURCE_PLAY_CHILD";
 const SOURCE_PLAY_TEST: &str = "audio_engine::cold_load::tests::stem_pair_publication_tests::committed_stem_residency_tests::l3_controller_productive_tests::actual_public_play_of_replaced_source_requires_own_voice_after_keylock_on";
 const SOURCE_PLAY_OFF_CHILD: &str = "FLITZI_L3_CONTROLLER_SOURCE_PLAY_OFF_CHILD";
 const SOURCE_PLAY_OFF_TEST: &str = "audio_engine::cold_load::tests::stem_pair_publication_tests::committed_stem_residency_tests::l3_controller_productive_tests::actual_public_play_of_replaced_source_requires_own_voice_after_keylock_off";
+const SOURCE_STEMS_OFF_CHILD: &str = "FLITZI_L3_CONTROLLER_SOURCE_STEMS_OFF_CHILD";
+const SOURCE_STEMS_OFF_TEST: &str = "audio_engine::cold_load::tests::stem_pair_publication_tests::committed_stem_residency_tests::l3_controller_productive_tests::actual_public_all_of_replaced_source_requires_own_dry_stem_effect";
 
 #[derive(Clone, Copy)]
 enum CandidateTrace {
@@ -77,6 +79,7 @@ enum CandidateTrace {
     WindowChange,
     SourceReplacement,
     SourcePlay,
+    SourceStemsOff,
 }
 
 /// Public cold admission/event polling are unchanged. The stream-bound scalar
@@ -2603,6 +2606,7 @@ fn public_replaced_source_play(
     expected_pcm: Vec<f32>,
     predecessor_generation: u64,
     historical_adoption: Option<u64>,
+    reference_components: bool,
 ) {
     assert!(!playback.scheduled && playback.rate_ledger.is_none());
     assert_eq!(playback.loop_period, 1500.0);
@@ -2850,6 +2854,31 @@ assert source_candidate.residency_status() == 'rejected' and not source_candidat
         "independent B PCM differs from old A PCM"
     );
     let ratio = playback.ratio;
+    let independent_stems = reference_components.then(|| {
+        let version = Python::attach(|py| {
+            locals
+                .bind(py)
+                .get_item("source_version_now")
+                .unwrap()
+                .unwrap()
+                .extract::<String>()
+                .unwrap()
+        });
+        PreparedStemSet {
+            complete_set_identity: Arc::new([0xb4; 32]),
+            reference_samples: independent.samples.clone(),
+            publication: PreparedSourcePermit::unrestricted(),
+            accepted_timing: None,
+            source_version_hash: crate::audio_engine::stem_cache::source_version_hash(&version),
+            sample_rate_hz: RATE,
+            channels: 2,
+            frame_count: 4096,
+            available_mask: 0b1111,
+            stems: std::array::from_fn(|index| {
+                replacement_component_pcm(&signal_wav(4096, index + 4))
+            }),
+        }
+    });
     let reference = || {
         let mut mixer = Box::new(RtMixer::new(2, RATE as f32));
         mixer.load_sample(0, independent.clone());
@@ -2857,11 +2886,19 @@ assert source_candidate.residency_status() == 'rejected' and not source_candidat
         mixer.set_speed(ratio);
         mixer.set_pad_gain(0, 0.0);
         mixer.set_pad_eq(0, 0.0, 0.0, 0.0);
+        if let Some(stems) = &independent_stems {
+            // Only the complete-PCM reference predeclares immutable B components
+            // before its birth; actual B still owns no stems until its own Adopt.
+            assert!(mixer.publish_prepared_stems(0, stems.clone()));
+        }
         assert!(mixer.play_sample_at_output_frame(0, 1.0, birth));
         mixer
     };
     playback.reference = reference();
     playback.full_mix = reference();
+    if let Some(stems) = independent_stems {
+        playback.components = stems.stems;
+    }
     playback.source = independent;
     playback.source_frame = 0;
     playback.resumed_at = Some(birth);
@@ -2951,6 +2988,366 @@ assert source_play_reopened.project.pad_loop_start_s[0] == 17 / fixture['rate']
 assert source_play_reopened.project.pad_loop_end_s[0] == 1517 / fixture['rate']
 "#,
     );
+}
+
+fn replacement_component_pcm(bytes: &[u8]) -> SampleBuffer {
+    // Independent committed-component PCM16 convention divides by32767.
+    // The original decoder uses32768; neither oracle copies resident views.
+    let samples: Vec<f32> = bytes[44..]
+        .chunks_exact(2)
+        .map(|sample| {
+            let integer = i16::from_le_bytes(sample.try_into().unwrap());
+            assert_ne!(
+                integer,
+                i16::MIN,
+                "fixture components need no negative saturation"
+            );
+            f32::from(integer) / 32767.0
+        })
+        .collect();
+    assert_eq!(samples.len(), 4096 * 2);
+    SampleBuffer {
+        channels: 2,
+        samples: Arc::from(samples),
+        residency: None,
+    }
+}
+
+fn public_replaced_source_stems_off(
+    root: &Path,
+    playback: &mut ControllerPlayback,
+    consumer: &mut rtrb::Consumer<ControlMessage>,
+    locals: &Py<PyDict>,
+) {
+    use crate::audio_engine::committed_stem_residency::CommittedStemRtWork;
+    assert_eq!(playback.ratio, 1.25);
+    assert!(!playback.callback.mixer.key_lock_for_measurement(0));
+    assert!(consumer.is_empty() && playback.selection.is_none());
+    let finite = playback.callback.mixer.bank_for_measurement()[0]
+        .clone()
+        .unwrap();
+    let before = voice(&playback.callback.mixer);
+    let generation = before.generation;
+    let native = before.stretch.native_state_address();
+    let fifo = before.stretch.pending_fifo_frames();
+    let other = other_voice(&playback.callback.mixer);
+    let other_source = other.sample.clone().unwrap();
+    let other_generation = other.generation;
+    let other_native = other.stretch.native_state_address();
+    let other_fifo = other.stretch.pending_fifo_frames();
+    let other_demand = playback.callback.mixer.stem_demand_for_measurement(215);
+    let started = playback
+        .callback
+        .feedback
+        .events
+        .iter()
+        .rev()
+        .find(|event| matches!(event, AudioMessage::SampleStarted { id: 0 }))
+        .expect("B's genuine public launch feedback")
+        .clone();
+    Python::attach(|py| {
+        locals
+            .bind(py)
+            .set_item("b_started", Py::new(py, started).unwrap())
+            .unwrap();
+    });
+    controller_python(
+        locals,
+        r#"
+assert 0 not in session.active_sample_ids
+transport.playback.handle_sample_started_message(b_started)
+assert 0 in session.active_sample_ids and 0 not in session.paused_sample_ids
+assert project.stem_cache[0] is None and project.pad_stem_mix_mode[0] == 'full_mix'
+b_path = project.sample_paths[0]
+b_content = project.pad_content[0]
+b_version = controller.source_version_for_pad(0)
+assert b_version is not None and b_version != fixture['source_version']
+b_source = audio.capture_prepared_source(0, b_version)
+assert b_source.same_source_request(source_now)
+assert not b_source.same_preparation_context(source_now)
+assert not b_source.same_source_request(source_v2)
+b_worker_calls = audio.worker_call_count()
+assert controller.set_stem_enabled_mask(0, 0b1010)
+assert session.pad_stem_enabled_mask[0] == 0b1010
+controller.bind_disk_selection_commit(persistence.commit_stem_selection, persistence.flush)
+"#,
+    );
+    let (original, version) = Python::attach(|py| {
+        let locals = locals.bind(py);
+        (
+            locals
+                .get_item("b_path")
+                .unwrap()
+                .unwrap()
+                .extract::<String>()
+                .unwrap(),
+            locals
+                .get_item("b_version")
+                .unwrap()
+                .unwrap()
+                .extract::<String>()
+                .unwrap(),
+        )
+    });
+    let material_root =
+        crate::audio_engine::material_paths::material_root_for_original(root, Path::new(&original))
+            .unwrap();
+    let directory = material_root
+        .join("stems")
+        .join(format!(".ready-{:032x}", 0xb401_u32));
+    write_signal_set(&directory, 4096, &version, 4);
+    let project_root = fs::canonicalize(root.parent().unwrap()).unwrap();
+    let reference = directory
+        .strip_prefix(&project_root)
+        .unwrap()
+        .to_string_lossy()
+        .replace('\\', "/");
+    // Read actual independent complete B files, never resident component views.
+    let components: [SampleBuffer; 4] = std::array::from_fn(|index| {
+        let bytes = fs::read(directory.join(format!("{}.wav", STEM_FILE_NAMES[index]))).unwrap();
+        let decoded = replacement_component_pcm(&bytes);
+        assert_eq!(
+            decoded.samples.as_ref(),
+            playback.components[index].samples.as_ref(),
+            "independent prebirth oracle matches its own complete B component file"
+        );
+        decoded
+    });
+    Python::attach(|py| locals.bind(py).set_item("b_cache", reference).unwrap());
+    controller_python(
+        locals,
+        r#"
+b_entry = StemCacheEntry(source_version=b_version, cache_dir=b_cache,
+    stems=expected_stem_files(b_cache), available=False)
+assert b_entry.pair is None
+assert controller._queue_stem_publication(0, b_entry, b_source)
+b_request = controller._pair_preparations.pending[0]
+assert b_request.entry is b_entry and b_request.previous_entry is None
+assert b_request.ticket is b_source and b_request.content_id == b_content.instance_id
+assert b_request.source_path == b_path and not b_request.residency_only
+assert project.stem_cache[0] is None
+"#,
+    );
+    let assert_continuity = |playback: &ControllerPlayback| {
+        let current = voice(&playback.callback.mixer);
+        assert_eq!(current.generation, generation);
+        assert_eq!(current.stretch.native_state_address(), native);
+        assert_eq!(current.stretch.pending_fifo_frames(), fifo);
+        assert!(current.sample.as_ref().unwrap().same_window(&finite));
+        assert!(current.stretch.productive_history().is_none());
+        assert!(!current.stretch.wet_render_ready());
+        let other = other_voice(&playback.callback.mixer);
+        let phase = (playback.frame as f64 * playback.ratio).rem_euclid(1500.0);
+        assert_eq!(
+            other.source_playback.position().frame,
+            LOOP_START + phase.floor() as usize
+        );
+        assert_eq!(
+            other.source_playback.position().fraction.to_bits(),
+            phase.fract().to_bits()
+        );
+        assert_eq!(other.generation, other_generation);
+        assert_eq!(other.stretch.native_state_address(), other_native);
+        assert_eq!(other.stretch.pending_fifo_frames(), other_fifo);
+        assert!(Arc::ptr_eq(
+            &other.sample.as_ref().unwrap().samples,
+            &other_source.samples
+        ));
+        assert_eq!(
+            playback.callback.mixer.stem_demand_for_measurement(215),
+            other_demand
+        );
+    };
+    for frames in [1, 31, 137] {
+        let (actual, full_mix) = render_varispeed(playback, frames);
+        assert_eq!(
+            actual, full_mix,
+            "B FullMix during own complete-pair preparation"
+        );
+        assert!(consumer.is_empty());
+        assert!(playback.callback.mixer.stems_for_measurement()[0].is_none());
+        assert_continuity(playback);
+    }
+    wait_until(|| {
+        let ready = Python::attach(|py| {
+            worker_python(
+                py,
+                locals.bind(py),
+                "controller.on_frame_render()\nassert not session.stem_generation_errors, session.stem_generation_errors",
+            );
+            locals
+                .bind(py)
+                .get_item("controller")
+                .unwrap()
+                .unwrap()
+                .getattr("_committed_residency")
+                .unwrap()
+                .call_method1("contains", (0,))
+                .unwrap()
+                .extract::<bool>()
+                .unwrap()
+        });
+        assert!(
+            consumer.is_empty(),
+            "pair-worker polling grants no audio request"
+        );
+        ready
+    });
+    controller_python(
+        locals,
+        r#"
+b_live = controller._committed_residency._live_selections[0]
+b_selection = b_live.disk.selection
+assert b_selection is not None and b_selection.candidate
+assert b_selection.ticket.publication_status() == 'accepted' and b_selection.ticket.is_current()
+assert b_selection.ticket.error() is None and b_selection.receipt is None
+assert 0 not in controller._pair_preparations.pending
+assert 0 not in controller._disk_selection_settlements
+assert b_live.desired is None and not b_live.blocked
+assert b_live.control is None and b_live.attempt is None and b_live.effective_identity is None
+assert not b_live.disk.prepared.has_components()
+assert b_live.disk.source_ticket.same_preparation_context(b_source)
+b_disk = project.stem_cache[0].pair
+assert b_disk is not None and b_disk != disk_v1 and b_disk != disk_v2
+assert project.stem_cache[0].source_version == b_version
+assert project.sample_paths[0] == b_path and project.pad_content[0] == b_content
+b_reopened = ProjectPersistence.from_config_path(persistence.config_path)
+assert b_reopened.load_error is None and b_reopened.project.stem_cache[0].pair == b_disk
+assert b_reopened.project.pad_stem_mix_mode[0] == 'full_mix'
+assert b_reopened.project.sample_paths[0] == b_path and b_reopened.project.pad_content[0] == b_content
+status = controller.stem_residency_status(0)
+assert status.disk_stem_set_identity == b_disk.stem_set_identity
+assert status.control_stem_set_identity is None and status.effective_stem_set_identity is None
+assert status.residency is None and status.effective is None
+assert audio.worker_call_count() == b_worker_calls + 1 and audio.prepared_only_on_pool_threads()
+assert source_candidate.residency_status() == 'rejected' and not source_candidate.claimed()
+"#,
+    );
+    assert!(
+        consumer.is_empty(),
+        "disk commit and pending registration grant no Capture"
+    );
+    for frames in [31, 257] {
+        let (actual, full_mix) = render_varispeed(playback, frames);
+        assert_eq!(
+            actual, full_mix,
+            "disk-only B selection leaves FullMix productive"
+        );
+        assert!(playback.callback.mixer.stems_for_measurement()[0].is_none());
+        assert_continuity(playback);
+    }
+    controller_python(
+        locals,
+        r#"
+assert controller.set_stem_mix_mode(0, 'all_stems')
+b_candidate = b_live.attempt.receipt
+assert b_candidate is not source_candidate and b_candidate is not candidate
+assert b_candidate.is_current() and not b_candidate.claimed()
+assert b_candidate.effective_mode_status() == 'waiting'
+for _ in range(16):
+    controller.on_frame_render()
+assert b_candidate.effective_mode_status() == 'waiting' and not b_candidate.claimed()
+assert b_live.control is None and b_live.effective_identity is None
+"#,
+    );
+    assert!(
+        matches!(consumer.peek(), Ok(ControlMessage::CommittedStemWork(work))
+        if matches!(work.as_ref(), CommittedStemRtWork::Capture(_)))
+    );
+    own_adoption(playback, consumer, locals, "b_candidate", false);
+    assert!(consumer.is_empty());
+    assert_continuity(playback);
+    let resident = playback.callback.mixer.stems_for_measurement()[0]
+        .as_ref()
+        .unwrap();
+    assert_eq!(
+        resident.source_version_hash,
+        crate::audio_engine::stem_cache::source_version_hash(&version)
+    );
+    for (actual, expected) in resident.stems.iter().zip(&components) {
+        assert_eq!(
+            (actual.resident_start(), actual.resident_end()),
+            (LOOP_START, LOOP_END)
+        );
+        assert_eq!(
+            actual.samples.as_ref(),
+            &expected.samples[LOOP_START * 2..LOOP_END * 2]
+        );
+    }
+    let oracle_hash = crate::audio_engine::stem_cache::source_version_hash(&version);
+    assert_eq!(
+        playback.reference.stems_for_measurement()[0]
+            .as_ref()
+            .unwrap()
+            .source_version_hash,
+        oracle_hash
+    );
+    // Independent B components were declared before the oracle's birth.
+    // Only scalar selection changes now; its voice, phase and filters continue.
+    assert!(
+        playback
+            .reference
+            .set_stem_enabled_mask(0, 0b1010, oracle_hash)
+    );
+    assert!(
+        playback
+            .reference
+            .set_stem_mix_mode(0, StemMixMode::AllStems, oracle_hash)
+    );
+    playback.components = components;
+    playback.select(Some(0b1010));
+    controller_python(
+        locals,
+        r#"
+controller.on_frame_render()
+status = controller.stem_residency_status(0)
+assert status.control_stem_set_identity == b_disk.stem_set_identity
+assert status.effective_stem_set_identity is None and status.effective == 'transitioning'
+assert b_candidate.claimed() and not b_candidate.withdraw()
+assert source_candidate.residency_status() == 'rejected' and not source_candidate.claimed()
+"#,
+    );
+    let ramp_start = playback.source_frame;
+    settle_varispeed(playback, locals, "b_candidate");
+    assert!(playback.source_frame - ramp_start > 103);
+    assert_continuity(playback);
+    assert_eq!(
+        playback.callback.mixer.stem_demand_for_measurement(0),
+        (StemMixMode::AllStems, 0b1010, oracle_hash)
+    );
+    controller_python(
+        locals,
+        r#"
+status = controller.stem_residency_status(0)
+assert status.disk_stem_set_identity == b_disk.stem_set_identity
+assert status.control_stem_set_identity == b_disk.stem_set_identity
+assert status.effective_stem_set_identity == b_disk.stem_set_identity and status.effective == 'effective'
+assert b_candidate.claimed() and b_candidate.is_current() and b_candidate.error() is None
+assert b_candidate.effective_failure_reason() is None
+assert source_candidate.residency_status() == 'rejected' and not source_candidate.claimed()
+assert not source_candidate.is_current()
+assert source_candidate.error() == 'Committed stem residency or mode ownership changed'
+assert source_candidate.effective_failure_reason() is None
+assert not session.stem_generation_errors
+assert audio.worker_call_count() == b_worker_calls + 1
+persistence.flush()
+b_reopened = ProjectPersistence.from_config_path(persistence.config_path)
+assert b_reopened.load_error is None and b_reopened.project.stem_cache[0].pair == b_disk
+assert b_reopened.project.stem_cache[0].source_version == b_version
+assert b_reopened.project.sample_paths[0] == b_path and b_reopened.project.pad_content[0] == b_content
+assert b_reopened.project.pad_stem_mix_mode[0] == 'all_stems'
+assert b_reopened.project.pad_key_lock[0] is None
+"#,
+    );
+    for frames in [1, 31, 137, 511] {
+        render_varispeed(playback, frames);
+        assert_continuity(playback);
+        controller_python(
+            locals,
+            "controller.on_frame_render()\nassert audio.worker_call_count() == b_worker_calls + 1\nassert not session.stem_generation_errors\nassert not source_candidate.claimed()\nassert b_candidate.effective_mode_status() == 'effective'",
+        );
+        assert!(consumer.is_empty());
+    }
 }
 
 fn public_window_then_explicit_retry(
@@ -4707,10 +5104,17 @@ fn round_trip(
     let preclaim_masks = matches!(trace, CandidateTrace::PreclaimMasks);
     let retrigger = matches!(trace, CandidateTrace::Retrigger);
     let window_change = matches!(trace, CandidateTrace::WindowChange);
-    let source_play = matches!(trace, CandidateTrace::SourcePlay);
+    let source_stems_off = matches!(trace, CandidateTrace::SourceStemsOff);
+    assert!(!source_stems_off || !key_lock);
+    let source_play = matches!(
+        trace,
+        CandidateTrace::SourcePlay | CandidateTrace::SourceStemsOff
+    );
     let source_replacement = matches!(
         trace,
-        CandidateTrace::SourceReplacement | CandidateTrace::SourcePlay
+        CandidateTrace::SourceReplacement
+            | CandidateTrace::SourcePlay
+            | CandidateTrace::SourceStemsOff
     );
     assert!(
         !(claimed_masks || preclaim_masks || retrigger || window_change || source_replacement)
@@ -5500,7 +5904,11 @@ assert previous_control.ticket.is_current()
                 expected_source,
                 predecessor_generation,
                 historical_adoption,
+                source_stems_off,
             );
+            if source_stems_off {
+                public_replaced_source_stems_off(&h.root, &mut playback, &mut h.consumer, &locals);
+            }
         }
         controller_python(
             &locals,
@@ -5889,6 +6297,40 @@ assert bpm_selection.ticket is bpm_registration and bpm_selection.receipt is can
         "controller.shut_down()\ncontroller._assets.release_saved_assignments()\nowner_v1.release()\nowner_v2.release()",
     );
     std::env::set_current_dir(previous_cwd).unwrap();
+}
+
+#[test]
+fn actual_public_all_of_replaced_source_requires_own_dry_stem_effect() {
+    if std::env::var_os(SOURCE_STEMS_OFF_CHILD).is_some() {
+        for selected_v1 in [false, true] {
+            round_trip(
+                selected_v1,
+                None,
+                false,
+                None,
+                false,
+                CandidateTrace::SourceStemsOff,
+            );
+        }
+        return;
+    }
+    let output = std::process::Command::new(std::env::current_exe().unwrap())
+        .args([
+            "--exact",
+            SOURCE_STEMS_OFF_TEST,
+            "--nocapture",
+            "--test-threads=1",
+        ])
+        .env(SOURCE_STEMS_OFF_CHILD, "1")
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "L3 replaced-source own dry stems child failed:\n{}\n{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert!(String::from_utf8_lossy(&output.stdout).contains("1 passed; 0 failed"));
 }
 
 #[test]
