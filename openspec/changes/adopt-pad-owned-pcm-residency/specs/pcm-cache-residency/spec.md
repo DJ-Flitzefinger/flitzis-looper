@@ -51,6 +51,12 @@ retaining original/content/rate/transform/schema/generation and assignment ident
 - **AND** an unchanged eligible interval SHALL share its actual backing while each pad keeps independent source, timing and window authority
 - **AND** cancellation or rejection SHALL preserve prior effective audio and keep each old voice, job and history reader until its own final use
 
+#### Scenario: Paired window custody uses one authoritative reader registration
+- **WHEN** a held verified pair prepares and registers a finite four-component window
+- **THEN** its paired registration SHALL retain the actual component readers, complete-set identity, all paired areas and source lease until their actual final use
+- **AND** the same window SHALL NOT consume an additional generic stem-reader record for those same component allocations
+- **AND** legacy unpaired windows SHALL retain their existing generic registration, and actual reader-capacity exhaustion SHALL still fail before adoption without evicting live owners or increasing the bounded registry limit
+
 #### Scenario: Cross-area complete set ownership remains coupled
 - **WHEN** WAVs reside in the material version's `stems` and all PCM resides in that version's `.pcm-cache`
 - **THEN** common descriptors SHALL bind both immutable generations/source/transforms/digests
@@ -78,6 +84,35 @@ within a declared sufficient supported resource configuration.
 - **THEN** it reports finite recoverable preparation/admission failure
 - **AND** partial ready count cannot satisfy the all216 acceptance obligation
 - **AND** requested/queued/preparing/ACKed/error and exact-byte totals SHALL remain distinct
+
+### Requirement: Initial saved KEYLOCK demand uses its verified physical loop
+The system SHALL resolve a supplied saved physical loop hint against the incoming
+verified complete source's rate and extent through one native selection policy
+before allocating live PCM. A proper partial ON hint SHALL select
+`KeyLockFiniteLoop` for the supported NormalLoop context; an ON hint resolving
+to the complete `[0,N)` extent SHALL retain `KeyLockFullTrack`. OFF finite hints
+and requests without trustworthy finite geometry SHALL retain their existing
+finite or explicitly admitted complete demand. Complete storage, identity,
+integrity and absolute metadata SHALL remain independent of the selected range.
+
+#### Scenario: Saved resolved ON is captured before initial source admission
+- **GIVEN** a restored pad has trustworthy saved physical loop bounds resolving to a proper partial source interval and resolved inherited or explicit KEYLOCK ON
+- **WHEN** cold, verified warm or prepared-material subscriber loading prepares that incoming source
+- **THEN** every path SHALL use the same resolved finite physical interval and genuine `KeyLockFiniteLoop` context without retaining a hidden complete live PCM backing
+- **AND** source and Load admission SHALL agree on valid incoming NormalLoop coverage before own callback ACK, using the incoming bounds rather than the predecessor's loop markers
+- **AND** incoming finite markers SHALL become effective with that source; unchanged resolved ON application SHALL remain admissible without granting an unprepared OFF finite view ON authority
+- **AND** own public Play SHALL retain its existing timing, window, source and Native readiness guards; storage Success alone SHALL NOT certify wet processing or later source-bound Native adoption
+
+#### Scenario: Complete or unavailable geometry keeps genuine exceptions
+- **WHEN** supplied ON bounds resolve to the complete extent, trustworthy saved geometry is absent, or an explicit hint is malformed
+- **THEN** genuine complete demand SHALL retain its actual allocation and overlap admission, and malformed explicit hints SHALL be rejected before source effects
+- **AND** no guessed loop, predecessor timing or invented halo SHALL authorize finite readiness
+- **AND** unsupported Intro/Tail or other source contexts SHALL retain their existing preparation and coverage guards
+
+#### Scenario: Saved finite ON preparation becomes stale or cannot be admitted
+- **WHEN** source, loop, timing or resolved mode changes, cancellation occurs, or worker, PCM, feedback or retirement capacity is unavailable before adoption
+- **THEN** the existing transaction SHALL reject or settle only its own request and preserve prior effective audio, source readers and newer assignment or intent
+- **AND** no callback disk work, allocation, blocking lock or Python call SHALL be introduced
 
 ### Requirement: Finite DSP coverage is a feature completion gate
 The system SHALL prove and implement finite source-domain supply for the supported

@@ -141,7 +141,10 @@ adoption, explicit-seek cuts and next-tap-aware physical edits at production k=0
 Complete exceptions and finite return use the same retained ownership lanes.
 Its [bounded report](finite-seek-domain-validation.md) retains failures and
 independent complete PCM/raw-native/filter evidence, without parent closure.
-Initial finite KEYLOCK-load/default-loop admission remains P4b/P5b integration.
+The bounded [initial saved physical ON admission](pcm-cache-residency.md#initial-saved-finite-keylock-on--2026-10-12)
+now has a shared verified finite/complete selection implementation and passing
+bounded software gates. Ordinary external Loader incoming-timing/default-loop preparation
+and initial BPM-lock/accepted-musical admission remain P4b/P5b integration.
 The lifecycle/source-custody checkbox is accepted. Full P4b parents remain open. Unproved seek/intro/tail,
 physical-domain cuts and the remaining complete resource/musical/history/causality
 matrix remain required, including binary64 P/integer H, 119.999..123.45 BPM,
@@ -285,8 +288,13 @@ cleanup. Bounded software execution and independent source/evidence review pass;
 delivery requires the final frozen-tree/publication receipts. This software
 result does not close full LONG/P1b/P2b, copy/move/Re-Arrange,
 E11-19/20 current-model controls, active new-generation adoption, all216 aggregate
-resources or music/Human/program gates. In particular, ordinary UI default-loop
-admission and finite KEYLOCK-load/DSP remain required P4b/P5b work.
+resources or music/Human/program gates. In particular, ordinary external Loader
+incoming-timing/default-eight-bars preparation, initial BPM-lock/accepted-musical
+admission and whole finite KEYLOCK/DSP gates remain required P4b/P5b work. The bounded
+saved physical ON report linked above records its bounded software admission gate.
+Its inherited/explicit ON x SPEED/manual
+source-BPM-plus-display-target histories are physical NormalLoop Native continuation,
+not BPM-lock admission or accepted-musical timing evidence.
 
 X11-LIVE-STEMS has bounded [L1 identity/intent](prepared-stem-publication.md#l1-effective-generation-identity--2026-10-11), [L2 offline custody/disk commit](prepared-stem-publication.md#l2-offline-source-custody-and-joint-disk-commit--2026-10-11) and [L3 finite NormalLoop adoption](prepared-stem-publication.md#l3-finite-normalloop-new-set-adoption--2026-10-11) deliveries. L2 permits source-leased offline generation during playback and commits complete disk selection through the existing fenced writer. L3's separate candidate transaction proves own-ACK first/replacement adoption, exact two-set ramps and Native/FIFO/EQ continuity; [task3.2 is closed within supported finite NormalLoop](prepared-stem-publication.md#consolidated-task32-closure--2026-10-12). [Task4.1 separates saved replacement, pending switch and own last-confirmed audio](prepared-stem-publication.md#sidebar-distinguishes-saved-replacement-and-last-confirmed-audio) in that same supported scope. Bounded L4.2 evidence includes [productive final-reader cleanup](prepared-stem-publication.md#productive-v1-replacement-and-actual-final-reader-retirement), [shutdown/late-lease/sharing retry](prepared-stem-publication.md#actual-engine-shutdown-late-leases-and-sharing-retry) and [post-admission target preservation](prepared-stem-publication.md#queued-targets-changed-after-retirement-admission). [Task3.3 closes bounded candidate domain topology](prepared-stem-publication.md#consolidated-task33-domain-closure--2026-10-12), including own changed/equal Seek and actual complete-resident partial loops. [Bounded task4.2/4.3 candidate-domain final-reader lifetime](prepared-stem-publication.md#seek-and-one-shot-final-reader-lifetime--2026-10-12) adds eight ON replacement and two queued-Unload histories with actual worker/Native/history release, three-area cleanup and final own V2 Unload. Unchanged finite owner-family preservation evidence is logically reused without fresh Cartesian claims. [Bounded frozen unfinished-handover/own-Unload lifetime](prepared-stem-publication.md#frozen-unfinished-handover-and-own-unload--2026-10-12) adds genuine frozen A-V2/outgoing V1 custody under distinct native bank B, strict short A output and both final-reader/six-area cleanup after own Unload. Native restore does not prove public Loader B assignment or B candidate adoption. [Progressive frozen readers/retained-A Native](prepared-stem-publication.md#progressive-frozen-readers-and-retained-a-native--2026-10-12) adds own Pause/Resume, consumed-ramp outgoing retry/FIFO, later A-bound Native and V1 cleanup while V2 plays, then own V2 Unload. All required E11-19 last-reader owner families are covered within supported candidate/native-retained-source software topology using source-grounded reuse, without fresh Cartesian or new publication-domain claims. Public Loader B assignment, ordinary default-Play admission, active ON-to-OFF control, complete L4.2/L4.3/all-reader, full-source public Play/default admission, unchanged-set ALL, complete musical/resource matrices and whole-parent/Human gates remain open. These bounded results close no whole E11 or program parent; ordinary active publication and unproved-domain guards remain.
 

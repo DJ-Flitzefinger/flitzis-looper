@@ -2,12 +2,19 @@
 
 X11-LONG/E11-03 now prepares complete FullMix and five aligned stem artifacts through
 bounded blocks and immutable disk generations. Complete disk extent is separate from
-scratch admission and the requested live loop/ALL allocation. This report records the
-bounded storage implementation and its actual software evidence on 2026-10-11.
-Ordinary UI/default-eight-bars admission and finite KEYLOCK loading remain required
-open work within P4b/P5b. Bounded storage and finite Native/restore KEYLOCK-off proofs
-do not close E11-03/X11-LONG or its parent program. Independent final-tree review
-remains a separate publication gate.
+scratch admission and the requested live loop/ALL allocation. This report retains
+historical storage implementation evidence and KEYLOCK-OFF measurements from
+2026-10-11; those runs do not certify the later saved finite ON admission work.
+The bounded 2026-10-12 saved physical ON NormalLoop policy is described
+[in the residency contract](pcm-cache-residency.md#initial-saved-finite-keylock-on--2026-10-12).
+Initial focused runs passed four low-level admission checks; the corrected public
+wrapper now passes all four physical ON histories in 6.12 seconds. Its failed
+attempts remain recorded. Impacted cold-load/residency/cold-store integrations and
+private Release/preflight/Python gates pass at the scopes recorded there.
+Initial BPM-lock/accepted musical timing and ordinary external Loader incoming
+timing/default-eight-bars admission remain open,
+as do full P4b/P5b, X11-LONG/MATERIAL, resource/music and Human gates. Independent
+final-tree review remains a separate publication gate.
 
 ## Implemented paths
 
@@ -33,10 +40,15 @@ real RAM budget. `SourceSuccess` processing subsequently invokes
 `initialize_loaded_pad_defaults`, which selects the default eight bars. That later
 initialization cannot repair an initial whole-source allocation failure. This ordinary
 UI/default-loop integration remains open in the existing P4b/P5b work; it is separate
-from the implemented bounded disk preparation and proved finite Native/restore paths
-with KEYLOCK off. A KEYLOCK load still selects the existing full-track fallback,
-even with finite bounds. Actual finite KEYLOCK-load/DSP integration is also required
-remaining P4b/P5b work; that fallback is a current limitation.
+from bounded disk preparation and the historical finite Native/restore proofs with
+KEYLOCK off. For trustworthy saved physical ON bounds in the supported NormalLoop
+context, one native policy now resolves selection against the incoming verified
+source's actual rate and extent: proper partial ranges use `KeyLockFiniteLoop`, while
+resolved `[0,N)` ranges use `KeyLockFullTrack`. Unknown or absent finite geometry
+retains explicitly admitted complete demand. Complete storage, source identity and
+integrity remain unchanged, and actual selected allocation/overlap limits still
+apply. This bounded selection work has passing runtime receipts; it does not close
+the remaining initial timing, ordinary Loader or full P4b/P5b obligations.
 
 `stem_cache/streamed.rs` scans complete source/component data for global onset maxima,
 then finds the first 5-percent threshold crossing and reads the bounded analysis window.
@@ -62,10 +74,13 @@ initialization, and vendor source/license edits participate in uv's explicit cac
 Native stem parsing accepts exact RIFF/RF64 PCM16 geometry and compatible extensible
 PCM headers. FullMix uses the actual Symphonia registry with `Rf64Reader`, retaining
 `rf64-wave-ds64-flitzi-demux-v1` provenance. Heavy preparation remains outside the
-realtime callback. No callback/hot-path source is changed; the independent whole-source
-review checks the control/background boundary as part of final acceptance.
+realtime callback. The historical storage implementation left callback/hot-path source
+unchanged; independent whole-source review checks the control/background boundary
+as part of final acceptance.
 
 ## Actual complete-source runs
+
+These are historical 2026-10-11 storage runs with KEYLOCK OFF.
 
 Packet 61 executed the configured productive Native parent through PyO3 dispatch to
 `AudioEngine.load_sample_async`, source-ticket capture and public pair preparation.
@@ -124,6 +139,8 @@ five-RF64 pair preparation or model inference.
 
 ## Measured memory and owner return
 
+These measurements belong to the historical 2026-10-11 KEYLOCK-OFF runs.
+
 The following byte counts distinguish incremental Rust allocations in each measured
 phase from Windows lifetime process peaks. Rust observations use a test-only System
 allocator; they do not account for Python or other native-library allocations. Windows
@@ -173,6 +190,8 @@ Only this post-exit operation establishes `post_process_sealed_handles_returned=
 It does not prove sealed-file closure before exit or whole-program unload retirement.
 
 ## Fault coverage and retained validation state
+
+The following validation state records the historical 2026-10-11 storage delivery.
 
 Native tests executed in packets 09/39/50/55/56 include complete five-WAV/five-PCM first/late
 mutation, missing/truncated/extra EOF rejection, finite warm selection with late PCM
@@ -251,7 +270,7 @@ hashing remain under the existing asset gate.
 
 Earlier whole-Python formatting recorded two unchanged baseline failures (`controller/stem_cache.py`
 and `controller/stem_job.py`); all changed files pass the final formatting gate.
-The final software command gates pass at the scopes above. Independent whole
+The 2026-10-11 software command gates pass at the scopes above. Independent whole
 frozen-tree review is recorded separately before publication. Filtered analysis suites, no-op
 helper children, scope audits and strict spec validation cannot stand in for these gates.
 No App, CPAL/device, recorder, hearing or model run is claimed here.

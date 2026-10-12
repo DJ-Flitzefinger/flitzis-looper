@@ -544,8 +544,8 @@ fn run_publication_and_mouse_proof(test_name: &str, accepted_only: bool, shared:
             .extract(py)
             .unwrap()
     });
-    assert_eq!(callback.drain(&mut consumer), 1);
-    call(&probe, "accepted");
+    // Initial generation selected complete disk truth without resident components.
+    // Its own Register/Capture/Worker/Adopt receipts establish callback custody.
     committed_probe_ack(
         &engine,
         &mut callback,
@@ -554,6 +554,7 @@ fn run_publication_and_mouse_proof(test_name: &str, accepted_only: bool, shared:
         "controller",
         0,
     );
+    call(&probe, "accepted");
     if shared {
         prove_shared_material(
             &engine,

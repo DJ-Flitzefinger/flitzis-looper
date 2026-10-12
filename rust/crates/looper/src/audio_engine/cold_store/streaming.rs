@@ -194,14 +194,8 @@ impl ColdTransaction {
         use crate::messages::{ResidentContext, ResidentSourceView};
         let source = cold_residency::identity(self.manifest()?).map_err(io::Error::other)?;
         let (start, end, context) = if let Some(hint) = hint {
-            let range = hint
-                .region(source.sample_rate_hz, source.frame_count)
-                .map_err(io::Error::other)?;
-            if hint.key_lock {
-                (0, source.frame_count, ResidentContext::KeyLockFullTrack)
-            } else {
-                (range.start, range.end, ResidentContext::FiniteLoop)
-            }
+            hint.selection(source.sample_rate_hz, source.frame_count)
+                .map_err(io::Error::other)?
         } else {
             (0, source.frame_count, ResidentContext::FullTrack)
         };

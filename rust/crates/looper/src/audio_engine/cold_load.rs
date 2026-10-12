@@ -586,20 +586,7 @@ impl ColdLoad {
             // same sealed complete lease before source queue admission.
             let source = &prepared.sample;
             let (start, end, context) = if let Some(hint) = self.resident_hint {
-                let range = hint.region(self.output_rate, source.frame_count())?;
-                if hint.key_lock {
-                    (
-                        0,
-                        source.frame_count(),
-                        crate::messages::ResidentContext::KeyLockFullTrack,
-                    )
-                } else {
-                    (
-                        range.start,
-                        range.end,
-                        crate::messages::ResidentContext::FiniteLoop,
-                    )
-                }
+                hint.selection(self.output_rate, source.frame_count())?
             } else {
                 (
                     0,

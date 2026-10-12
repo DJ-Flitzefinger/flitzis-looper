@@ -399,16 +399,10 @@ impl ColdTransaction {
             state.caches.get(path).and_then(Weak::upgrade)
         };
         let source = cold_residency::identity(&manifest).map_err(io::Error::other)?;
-        let selected = resident_hint
-            .map(|hint| hint.region(rate, frames))
-            .transpose()
-            .map_err(io::Error::other)?;
-        let (start, end, context) = match (resident_hint, selected) {
-            (Some(hint), Some(region)) if !hint.key_lock => {
-                (region.start, region.end, ResidentContext::FiniteLoop)
-            }
-            (Some(_), _) => (0, frames, ResidentContext::KeyLockFullTrack),
-            _ => (0, frames, ResidentContext::FullTrack),
+        let (start, end, context) = if let Some(hint) = resident_hint {
+            hint.selection(rate, frames).map_err(io::Error::other)?
+        } else {
+            (0, frames, ResidentContext::FullTrack)
         };
         let finite = start != 0 || end != frames;
         let samples = if finite {

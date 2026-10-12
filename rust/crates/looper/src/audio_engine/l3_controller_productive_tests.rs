@@ -9,6 +9,8 @@ use crate::audio_engine::buffer_retirement::AudioBufferRetirement;
 mod l4_disk_settlement_tests;
 #[path = "l4_shared_job_tests.rs"]
 mod l4_shared_job_tests;
+#[path = "saved_keylock_controller_tests.rs"]
+mod saved_keylock_controller_tests;
 
 const CHILD: &str = "FLITZI_L3_CONTROLLER_CANDIDATE_CHILD";
 const TEST: &str = "audio_engine::cold_load::tests::stem_pair_publication_tests::committed_stem_residency_tests::l3_controller_productive_tests::actual_python_controller_first_and_replacement_candidates_keep_own_wet_chronology";
@@ -2852,8 +2854,8 @@ fn current_bank_candidate_cannot_borrow_frozen_voice(
         .unwrap();
     let _component_owner = engine.project_assets.acquire(root, &wav_path).unwrap();
 
-    // An explicit ON hint supplies genuine complete B for the existing ON
-    // cold-load guard; a finite convenience-wrapper OFF hint cannot prove B ON.
+    // This negative intentionally exercises complete ON bank B; its physical
+    // whole-source hint preserves that demand independently of finite admission.
     playback.callback.retirement.slots = 2;
     let admitted = crate::audio_engine::cold_load::admit_selected_material(
         engine,
@@ -2867,8 +2869,12 @@ fn current_bank_candidate_cannot_borrow_frozen_voice(
             false,
             false,
             Some(ResidentLoadHint {
-                start_s: LOOP_START as f64 / f64::from(RATE),
-                end_s: LOOP_END as f64 / f64::from(RATE),
+                start_s: if key_lock {
+                    0.0
+                } else {
+                    LOOP_START as f64 / f64::from(RATE)
+                },
+                end_s: if key_lock { 4096.0 } else { LOOP_END as f64 } / f64::from(RATE),
                 key_lock,
             }),
         ),
@@ -3312,8 +3318,8 @@ del first, previous_control
             false,
             false,
             Some(ResidentLoadHint {
-                start_s: LOOP_START as f64 / f64::from(RATE),
-                end_s: LOOP_END as f64 / f64::from(RATE),
+                start_s: 0.0,
+                end_s: 4096.0 / f64::from(RATE),
                 key_lock: true,
             }),
         ),
@@ -12496,6 +12502,14 @@ fn residual_domain_child(name: &str, run: impl FnOnce()) {
         String::from_utf8_lossy(&output.stderr)
     );
     assert!(String::from_utf8_lossy(&output.stdout).contains("1 passed; 0 failed"));
+}
+
+#[test]
+fn productive_saved_key_lock_public_canonical_restore_play_preserves_own_native_chronology() {
+    residual_domain_child(
+        "productive_saved_key_lock_public_canonical_restore_play_preserves_own_native_chronology",
+        saved_keylock_controller_tests::run,
+    );
 }
 
 #[test]

@@ -11260,7 +11260,7 @@
       "gates": [
         "Legacy full-array small-fixture oracle + actual >10-minute/>1GiB complete PCM/frame/EOF/digest/Cancel/failure/memory tests; PAD4 real source case if accessible.",
         "Live residency follows user loop/ALL/budget. Explicit scratch/process peaks and Demucs inference separate.",
-        "OPEN: ordinary UI import supplies no finite hint before initial full-source live admission, and KEYLOCK loads retain the existing full-track fallback even with finite bounds. Actual default-eight-bars/user-loop admission and finite KEYLOCK-load integration remain required P4b/P5b work. Bounded storage delivery does not complete X11-LONG."
+        "OPEN: ordinary external Loader import supplies no finite hint before initial full-source live admission; actual incoming-timing/default-eight-bars/user-loop preparation remains required P4b/P5b work. Known saved physical ON NormalLoop demand now uses verified partial KeyLockFiniteLoop/complete KeyLockFullTrack selection, with unknown demand still complete; bounded software admission receipts pass at docs/pcm-cache-residency.md#initial-saved-finite-keylock-on--2026-10-12. Initial BPM-lock/accepted-musical admission, full finite KEYLOCK/DSP, X11-LONG/MATERIAL and resource/music/Human/parent gates remain OPEN. Historical 2026-10-11 OFF storage evidence does not complete X11-LONG."
       ]
     },
     {

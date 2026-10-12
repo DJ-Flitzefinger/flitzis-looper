@@ -7,7 +7,8 @@ implementation and performance acceptance remain OPEN. The runtime remains hybri
 
 ## Verified starting point
 
-Current symbols, not old line labels, establish these constraints:
+The published 2026-10-09 R0 symbols established these historical starting constraints;
+later bounded implementations and their remaining gates are recorded below:
 
 | Area | Current implementation | Required change |
 | --- | --- | --- |
@@ -380,6 +381,57 @@ pitch remains B5. No new scheduler/worker lane or callback I/O, GIL, blocking,
 logging, heavy allocation or unbounded work is introduced; Human alone operates
 the App, devices, recording and listening. This step does not plan a full Rust port.
 
+### Initial saved finite ON admission
+
+Saved restore already captures absolute physical bounds and resolved global/pad
+KEYLOCK intent before native loading. Its selected live extent must be derived
+from the incoming verified complete source, never from the predecessor's loop
+or timing. One `ResidentLoadHint` selection resolves the existing physical
+boundary policy and returns the actual range/context. Cold selection, fresh
+verified warm range reads, streaming preparation and prepared-material
+subscriber reads use that same policy: proper partial ON is KeyLockFiniteLoop,
+complete ON is KeyLockFullTrack, and absent trustworthy geometry retains
+explicit complete admission. Full disk verification and metadata are unchanged.
+
+Initial callback source and Load checks must share the same supported incoming
+NormalLoop coverage rule. Their own native ACK must not accept a source that
+the actual Load would reject. Both finite contexts initialize physical markers
+from the incoming view; captured loop/mode cancellation and fresh source
+generation checks remain in force. Reapplying ON to a genuine admitted finite
+ON view is valid, while an OFF FiniteLoop view still needs the existing proved
+window/mode transaction. Existing Play, timing, Native/history and source-context
+guards remain the launch authority.
+
+Real saved-ON cold/warm/prepared-source admission is separate from first wet
+Native output and later source-bound 4096-history preparation/adoption. The
+productive controller proof must start with captured ON before Load, exercise
+own restore/source ACK and public Play at a nonneutral rate, and continue with
+independent complete-PCM/raw-Native/FIFO/filter/source-clock oracles. OFF preload
+followed by ON is not an initial ON-load proof. Genuine complete requests,
+malformed bounds, stale intent, capacity failure and prior readers remain
+meaningful negative controls. This bounded delivery does not solve ordinary
+external Loader's later incoming-timing/default-eight-bars preparation or close
+whole P4b/P5b, resource, musical or Human gates.
+
+Paired `WindowWork` preparation uses the existing `retain_stem_pair` registration
+as its authoritative component/file/source custody. It already retains the same
+four PCM allocations, reference PCM, complete-set identity, source lease and sealed
+WAV/PCM/common areas. A second generic registration adds no ownership and consumes
+bounded reader capacity, so only legacy unpaired windows use `retain_stems`.
+The 1024-record limit, real exhaustion rejection and all216 readiness/edit/output
+obligations remain unchanged; no live owner is evicted to admit another window.
+
+The current saved physical NormalLoop implementation and test plan are recorded in
+[the bounded report](../../../docs/pcm-cache-residency.md#initial-saved-finite-keylock-on--2026-10-12).
+Its four public histories combine inherited or explicit ON with public SPEED or
+manual source BPM plus display target deriving nonunity SPEED. Neither variant
+asserts BPM-lock admission or accepted-musical timing. Cold/fresh-warm/prepared
+selection and incoming source/Load coverage checks are distinct from productive
+public restore/Play, later own Native history, Pause/Resume and independent215
+continuation. The bounded runtime/integration/Release/private-Python gates pass at
+the report's stated scopes; ordinary external/default-loop and whole-parent
+obligations remain open.
+
 ## First lazy live activation and effective-mode acknowledgement
 
 Separate five states per source-bound pad: durable desired mode, selected verified
@@ -576,10 +628,12 @@ live allocation requests the complete source. Default eight-bar initialization
 occurs only after source success and cannot rescue that initial admission.
 Supplying the actual default/user loop before allocation remains open within
 P4b/P5b; bounded storage and finite Native/restore proofs do not close all of
-E11-03/X11-LONG. Those finite proofs use KEYLOCK off; KEYLOCK loads still choose
-the existing full-track fallback even with finite bounds. Actual finite KEYLOCK
-load integration is also required remaining P4b/P5b work. Automatic analysis is
-still requested and is not silently disabled.
+E11-03/X11-LONG. The 2026-10-11 storage proofs use KEYLOCK off. Current known saved
+physical ON demand uses the shared incoming selection above: proper partial
+KeyLockFiniteLoop or complete KeyLockFullTrack, with unknown/no-hint demand still
+complete. Its bounded runtime gates pass. Initial BPM-lock/accepted-musical admission
+and ordinary external Loader incoming-timing/default-loop preparation remain required
+P4b/P5b work. Automatic analysis is still requested and is not silently disabled.
 
 Complete PCM16 storage uses RIFF for small files and checked RF64/ds64 u64 extents
 for large files through Python project/model writers, native WAV parsing and the

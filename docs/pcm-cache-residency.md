@@ -48,22 +48,24 @@ and exact EOF before selected residency can be published.
 | Public Native import with finite bounds and automatic analysis | Stream complete storage; retain the requested loop. Attempt separately admitted analysis, then return matching analysis or a visible analysis error with source success. |
 | Public Native import without analysis | Stream complete storage; read supplied finite bounds, or the complete source when bounds are absent. |
 | Ordinary UI import | `LoaderController.load_sample_async` currently supplies no resident bounds. Initial live allocation therefore still requests the complete source and can exceed its genuine RAM budget before default-loop initialization. |
-| Canonical restore / fresh warm | Fully verify sealed complete storage; restore the actual finite hint or genuine ALL demand. Saved KEYLOCK retains its existing admitted full-track fallback. |
+| Canonical restore / fresh warm | Fully verify sealed complete storage; restore the actual finite hint or genuine ALL demand. Known physical saved ON demand now selects KeyLockFiniteLoop for a proper partial range and KeyLockFullTrack for a complete range; its current runtime gates are [pending below](#initial-saved-finite-keylock-on--2026-10-12). |
 | Noncanonical migration | Prepare a one-frame identity seed and complete lease. Read the subscriber's captured current finite range when adopting. |
 | Complete stem preparation | Use the complete source lease, full WAV scans and bounded alignment/conversion; the metadata seed is never an analysis or playback choice. |
 | Complete pair reopening | Fully verify all five WAV/PCM leaves and the common descriptor; prepare four matching selected component views. |
 
 Explicit ALL reads retain their real live allocation/overlap admission and may
-fail for a large source. The existing KEYLOCK load fallback also reads the full
-source under its actual live budget, even when finite bounds are supplied.
+fail for a large source. Complete ON demand and absent trustworthy saved geometry
+still read the complete source under its actual live budget. Known proper partial
+physical ON demand uses the shared finite selection; no unknown geometry is guessed.
 One-frame material metadata preparation grants no ALL
 residency. Warm verification scratch is 64 KiB, independent of disk extent.
 The ordinary UI/default-eight-bars integration remains open within the existing
 P4b/P5b work: the default loop is initialized after source success and cannot
 repair a failed initial whole-source allocation. Bounded complete storage and
-the proved finite Native/restore paths with KEYLOCK off do not complete that import
-UX or all of E11-03/X11-LONG. Finite KEYLOCK load integration also remains required
-within P4b/P5b; its existing full-track fallback is a current limitation.
+the historical finite Native/restore paths with KEYLOCK off do not complete that import
+UX or all of E11-03/X11-LONG. The bounded initial saved ON implementation below has
+pending runtime gates; ordinary external Loader/default-loop and initial BPM-lock/
+accepted-musical admission remain required within P4b/P5b.
 Stem alignment performs full global-maxima and first-threshold scans before
 retaining a four-second onset/correlation window. Previous absolute envelopes
 cross scan blocks; ordered f32 component summation, ascending lag ties, PCM16
@@ -89,7 +91,7 @@ The pending [pad-owned PCM program](pad-owned-pcm-program.md) extends this deliv
 foundation. It replaces obsolete legacy physical containers with canonical immutable material
 versions and equal all-bank content users, with #1..#216 only stable membership,
 adds persistent aligned stem PCM/direct range reads, and requires actual216-slot
-residency plus finite DSP proof. Existing measured200-pad evidence and labelled
+residency plus finite DSP proof. Existing measured200-pad evidence and historical
 full-track KEYLOCK fallback do not complete those new requirements. SourceVersion
 path migration needs verified lineage and fresh native source/timing ACK; existing
 cache/manifests/readers are not edited in place. P1a now supplies typed canonical
@@ -123,7 +125,8 @@ into that acknowledged source after reservation; failure preserves old playback,
 parameters and owners. Existing readers/retirement paths count actual old/new held
 backing/history peak and each distinct final use. Finite seek/intro/tail, physical
 cuts, remaining full P4b resource/music/history/causality and P5a remain guarded or
-open. The saved-load full-track fallback remains labelled.
+open. Historical saved-load fallback evidence remains scoped to its original source;
+the bounded current saved ON selection and pending proof are described below.
 
 WindowWork peak admission now snapshots the existing same-pad 128-entry weak PCM
 history and resolves its actual original assignment readers and corresponding
@@ -483,10 +486,11 @@ Normal dry playback needs the admitted physical `[a,e)` and no guard PCM. Physic
 last knot is `min(ceil(P)-1,H-1)` and its seam joins that knot to `a` at `P`.
 Both taps stay inside `[a,e)`; source rate/smoothing alter phase frequency rather
 than this read set. Per-pad filters consume rendered samples and retain their
-fixed history. C2a labels unproved finite native continuation as
-`full-track-key-lock-continuation-unproved-v1`; saved Key Lock admits complete
-PCM instead of guessing source margins from the 4096-output-frame worker horizon.
-This fallback is a finite allocation, not a streaming pipeline.
+fixed history. Historical C2a labelled unproved finite native continuation as
+`full-track-key-lock-continuation-unproved-v1` and admitted complete saved Key Lock
+PCM. That historical complete allocation was not a streaming pipeline. The bounded
+current physical saved ON selection below admits a verified proper partial range;
+it does not guess source margins from the 4096-output-frame worker horizon.
 
 Warm restoration still verifies the complete original, decoder and playback
 bytes. It then reads only the selected absolute resident range into playback RAM.
@@ -542,6 +546,127 @@ These are logical PCM/integrity byte proofs, not measured process RAM or startup
 performance. The separate productive five-file stem probe checks complete-set
 identity, finite component geometry and bit-exact active continuation across
 native window ACK and cancellation; it does not evaluate separation quality.
+
+<a id="initial-saved-finite-keylock-on--2026-10-12"></a>
+
+## Initial saved finite KEYLOCK ON — 2026-10-12
+
+Status: bounded software runtime, integrated, private Release/preflight, static
+and independent final review gates pass. Exact publication is recorded in the
+local delivery receipt.
+The initial saved ON task is separate from the open whole-parent gates. Initial focused public attempts failed
+before the productive output proof. The first had released canonical preparation
+custody before acquiring the actual saved assignment, allowing the saved asset to
+retire; unloaded-pad reset also reached scalar methods without a headless stream.
+The fixture now acquires real saved-asset custody before releasing its preparation
+lease and forwards those actual scalar kernels. The next bare restore-ID assertion and its
+diagnostic rerun found both project paths cleared before Native admission despite
+existing originals. A canonicalized extended-prefix Windows cwd differed from the
+ordinary Win32 spelling returned by the public asset resolver, so Loader's lexical
+`relative_to` rejected both paths. Using the existing ordinary Windows cwd helper
+preserved real Loader parsing and progressed through restore admission/source ACK.
+The next run failed a bare active-ID assertion after Play. The fixture now waits
+for both pads' genuine readiness, delivers actual callback enum values through the
+real feedback queue/`receive_msg` conversion and checks their public handlers with
+rich state/event diagnostics. The corrected public wrapper passes all four histories
+in 6.12 seconds and passes again in the larger integration. The combined readiness
+and enum-conversion repair does not isolate which seam caused the last failure.
+All four failed receipts remain retained.
+
+`ResidentLoadHint::selection` is the single incoming verified physical selection
+policy for cold selection, streaming preparation, fresh verified warm range reads
+and prepared-material subscribers. A proper partial ON range receives
+`KeyLockFiniteLoop`; a resolved complete `[0,N)` ON range receives
+`KeyLockFullTrack`. Missing geometry retains complete demand, and malformed public
+hints reject before request/cache/job mutation. Complete source identity, full
+original/decoder/playback verification and EOF checks remain authoritative. Complete
+and unknown demand retain actual complete live allocation and overlap admission.
+
+The source-current and actual Load checks share one incoming ON geometry rule, so
+an own source ACK cannot certify a source that Load rejects. Both finite contexts
+initialize physical markers from that incoming view before a predecessor's markers
+can affect admission. Genuine admitted finite ON may be reapplied idempotently;
+an OFF `FiniteLoop` view still needs its existing guarded OFF-to-ON window/mode
+transaction. Captured intent cancellation, fresh source generation, Play, timing,
+Native coverage/history, queue and retirement guards remain in force.
+
+The public fixture starts with a fresh Engine and captured ON before Load, using
+real `LoaderController.restore_samples_from_project_state`, canonical saved-asset
+custody, own native source ACK and ordinary public pad Play. Its four histories are
+inherited global ON or explicit pad ON, each with public SPEED 0.73 or manual source
+BPM 120 plus display target 87.6 deriving that same nonunity SPEED. All four describe
+physical NormalLoop continuation at production k=0; the display setter is not a
+BPM-lock admission or accepted-musical timing proof. The selected physical range is
+`[17,1517)` of a verified 4096-frame stereo source, with complete duration/identity
+retained and actual selected PCM captured before ACK. No OFF preload or after-load
+mode flag supplies initial ON authority.
+
+Required oracles compare every rendered sample against independent complete PCM16
+integers, complete-PCM callback output, raw RubberBand Native/FIFO and uninterrupted
+EQ. They retain an independent consumed-source clock, actual public Pause/Resume,
+later own 4096-frame source-history preparation/adoption, same generation/finite
+PCM identity, independent pad215 assignment/voice/clock and unchanged original
+bytes/requested inheritance. Low-level cases retain cold/fresh-warm/prepared
+selection, complete/unknown demand, late corruption/EOF, malformed hints,
+stale/cancel/pressure and prior-reader controls. These are required current-source
+gates, not substituted for runtime receipts.
+
+| Current saved ON delivery gate | Receipt |
+| --- | --- |
+| Verified selection and incoming geometry regressions | PASS within whole cold-load (199 passed), cold-store (87 passed) and residency (68 passed) integrations |
+| Four public restore/Play/Native histories | PASS: one public wrapper, all four histories, initially 6.12 seconds and final focused rerun 3.76 seconds; four initial failed receipts retained above |
+| Impacted integration | Cold-load: 199 passed, four ignored, 681.48 seconds. Cold-store: 87 passed, 17.98 seconds. Residency: 68 passed, eight ignored, 72.64 seconds. Separate actual paired relocation: one passed, 0.32 seconds. Separate stem publication/mouse/sharing: three passed, 11.87 seconds |
+| Build-only Release and private preflight/Python | PASS: fresh Release build, 23.92 seconds; exact private Native API/controller/UI import; six impacted Python suites, 285 passed and two skipped, 16.58 seconds. No installed Native replacement or App/device start |
+| Independent final review and static checks | PASS: one independent whole-block review, no remaining actionable findings; official strict specification, JSON semantic preservation, local links/anchors and whitespace checks. Workspace/tests Clippy PASS with unchanged diagnostic inventory; Rust fmt PASS. Probe syntax and Ruff lint/format changes match the existing baseline without new diagnostics or suppressions |
+| Coherent publication and clean main/remote equality | Exact reviewed commit and fresh clean main/remote equality are recorded in the local delivery receipt |
+
+The first affected cold-load integration retains its actual FAIL receipt:
+196 passed, three failed and four ignored in 897.29 seconds. Two adoption fixtures
+offered fewer retirement slots than the unchanged callback envelope requires.
+Their one-below/exact-bound checks now pass with the complete 16-case adoption
+suite in 16.07 seconds. The real 216-pad paired-window case exhausted the bounded
+reader registry: a verified pair registered its four component readers and the
+worker then registered those same allocations generically. Paired custody already
+holds all paired areas, source lease and actual readers; legacy unpaired windows
+still need generic custody. The scoped correction preserves the 1024-record limit;
+the unchanged real 216-pad test passes in 35.54 seconds with every both-endpoint,
+unaffected-215 and usable-output assertion retained. The whole cold-load rerun
+passes 199 tests with four ignored in 681.48 seconds, including that unchanged
+216-pad case after preceding tests. The prior 295 records' live versus file-only classification was not
+observed, so this receipt does not establish a global leaked-reader diagnosis.
+
+The first whole residency integration retains its separate FAIL receipt: 64
+passed, four failed and eight ignored in 95.20 seconds. A full-bank test had
+requested a partial ON range while asserting complete residency; its actual
+complete-range hint is now explicit. Three generation fixtures still waited for
+legacy pending publication. At the unchanged ten-second deadline, the diagnostic
+rerun observes a completed error-free worker, an available paired disk selection
+and a current pending committed registration. The fixture must acknowledge that
+actual registration and subsequent Native adoption; it cannot create a legacy
+pending ticket or bypass disk generation. Its next integration retained 65 passed,
+three failed and eight ignored in 71.18 seconds: the full-bank correction passed,
+while generation reached registration and failed an old UI availability assertion.
+`stems_available` reports verified disk metadata for controls. The corrected probe
+requires that disk availability while separately checking pending own registration,
+no resident receipt and no effective output. Actual Register/Capture/Worker/Adopt
+and own ACK precede its accepted assertions; stopped residency still has effective
+`waiting` until rendered output. All three stem tests pass in 11.87 seconds, then
+the whole residency suite passes 68 tests with eight ignored in 72.64 seconds.
+Legacy restore/stale-ticket, tamper, mouse, shared PCM and own-subscriber assertions
+are preserved. Both integrations and the diagnostic failure remain retained.
+
+The successful production build, cold-load/cold-store integrations and private
+Native/Python checks are reused after these test-only corrections; their production
+inputs are unchanged. The paired-reader correction is covered by the unchanged
+ordered 216-pad test and the separate actual paired relocation test. Ignored long
+resource/model helpers remain required at their respective final gates; these
+bounded results do not claim those runs or process RAM, hearing or device acceptance.
+
+Ordinary external Loader incoming-timing/default-eight-bars preparation, initial
+BPM-lock/accepted-musical admission, whole P4b/P5b, X11-LONG/MATERIAL, aggregate
+resources/music and Human/device/hearing gates remain OPEN. Historical
+2026-10-11 OFF storage measurements remain unchanged in the
+[complete-source streaming report](long-source-streaming-validation.md).
 
 ## Complete access and acknowledged controls (C2b)
 

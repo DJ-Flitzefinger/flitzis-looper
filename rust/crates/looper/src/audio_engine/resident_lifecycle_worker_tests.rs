@@ -446,8 +446,8 @@ fn replace_with_actual_full_bank(loaded: &mut Loaded) -> SampleBuffer {
             false,
             false,
             Some(ResidentLoadHint {
-                start_s: 100.0 / 48_000.0,
-                end_s: 300.0 / 48_000.0,
+                start_s: 0.0,
+                end_s: 1000.0 / 48_000.0,
                 key_lock: true,
             }),
         ),

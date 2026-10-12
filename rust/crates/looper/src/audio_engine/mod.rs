@@ -838,12 +838,10 @@ impl AudioEngine {
                 .lock()
                 .map_err(|_| PyRuntimeError::new_err("sample cache lock poisoned"))?[id]
                 .as_ref()
-                .is_some_and(|sample| {
-                    sample.resident_start() != 0 || sample.resident_end() != sample.frame_count()
-                })
+                .is_some_and(|sample| !mixer::RtMixer::initial_key_lock_geometry_available(sample))
         {
             return Err(PyValueError::new_err(
-                "Key Lock requires an admitted complete-track resident context",
+                "Key Lock requires an admitted finite ON loop or complete-track resident context",
             ));
         }
         Ok(())

@@ -239,17 +239,167 @@ fn selected_load(
     rate: u32,
     hint: ResidentLoadHint,
 ) -> (u64, rtrb::Consumer<ControlMessage>) {
+    selected_load_with_hint(engine, path, root, rate, Some(hint))
+}
+
+fn selected_load_with_hint(
+    engine: &AudioEngine,
+    path: &Path,
+    root: &Path,
+    rate: u32,
+    hint: Option<ResidentLoadHint>,
+) -> (u64, rtrb::Consumer<ControlMessage>) {
     let (producer, consumer) = rtrb::RingBuffer::new(4);
     let request = admit_for_format_selected(
         engine,
         0,
         path.to_string_lossy().into_owned(),
-        (false, false, true, Some(hint)),
+        (false, false, true, hint),
         Arc::new(Mutex::new(producer)),
         (2, rate, root.to_owned()),
     )
     .unwrap();
     (request, consumer)
+}
+
+#[test]
+fn saved_resident_hint_boundary_selection_preserves_reader_clamp_and_context() {
+    const RATE: u32 = 48_000;
+    const FRAMES: usize = 256;
+    for key_lock in [false, true] {
+        for (start, end, expected) in [
+            (32.0, 64.0, (32, 64)),
+            (32.0, 512.0, (32, FRAMES)),
+            (0.0, 512.0, (0, FRAMES)),
+            // Both endpoints clamp to EOF, so the established source reader
+            // resolves the empty clamped interval to the complete extent.
+            (512.0, 768.0, (0, FRAMES)),
+        ] {
+            let hint = ResidentLoadHint::parse(
+                Some(start / f64::from(RATE)),
+                Some(end / f64::from(RATE)),
+                key_lock,
+            )
+            .unwrap()
+            .unwrap();
+            let context = if !key_lock {
+                ResidentContext::FiniteLoop
+            } else if expected == (0, FRAMES) {
+                ResidentContext::KeyLockFullTrack
+            } else {
+                ResidentContext::KeyLockFiniteLoop
+            };
+            assert_eq!(
+                hint.selection(RATE, FRAMES).unwrap(),
+                (expected.0, expected.1, context)
+            );
+            assert!(hint.selection(0, FRAMES).is_err());
+            assert!(hint.selection(RATE, 0).is_err());
+        }
+    }
+}
+
+#[test]
+fn public_load_malformed_resident_hints_reject_before_request_cache_or_job_effects() {
+    pyo3::Python::initialize();
+    pyo3::Python::attach(|py| {
+        let mut engine = AudioEngine::new().unwrap();
+        let previous = SampleBuffer {
+            channels: 2,
+            samples: Arc::from([0.25; 64]),
+            residency: None,
+        };
+        engine.sample_cache.lock().unwrap()[0] = Some(previous.clone());
+        engine.loaded_source_generations.lock().unwrap()[0] = (7, 48_000);
+        engine.loaded_source_digests.lock().unwrap()[0] = Some("old".into());
+        engine.pad_request_ids.lock().unwrap()[0] = 7;
+        engine
+            .input_runtime_ownership
+            .publish_source(0, &previous, 48_000, 7);
+        let (mut producer, mut consumer) = rtrb::RingBuffer::new(4);
+        producer.push(ControlMessage::Ping()).unwrap();
+        let producer = Arc::new(Mutex::new(producer));
+        let (_feedback, feedback_rx) = rtrb::RingBuffer::new(4);
+        engine.test_control_channels = Some((producer.clone(), Arc::new(Mutex::new(feedback_rx))));
+        let requests = engine.pad_request_ids.lock().unwrap().clone();
+        let epoch = engine.prepared_source_epochs[0].load(Ordering::Acquire);
+        let producer_slots = producer.lock().unwrap().slots();
+        for key_lock in [false, true] {
+            for (start, end) in [
+                (Some(f64::NAN), Some(1.0)),
+                (Some(0.0), Some(f64::NAN)),
+                (Some(f64::INFINITY), Some(f64::INFINITY)),
+                (Some(0.0), Some(f64::INFINITY)),
+                (Some(f64::NEG_INFINITY), Some(1.0)),
+                (Some(-1.0), Some(1.0)),
+                (Some(2.0), Some(1.0)),
+                (Some(1.0), Some(1.0)),
+                (Some(0.0), None),
+                (None, Some(1.0)),
+                (None, None),
+            ] {
+                if !key_lock && start.is_none() && end.is_none() {
+                    continue; // This is the supported no-hint complete request.
+                }
+                let error = engine
+                    .load_sample_async(
+                        0,
+                        "missing-source-that-must-not-be-opened.wav".into(),
+                        Some(false),
+                        false,
+                        true,
+                        start,
+                        end,
+                        key_lock,
+                        "auto",
+                    )
+                    .unwrap_err();
+                assert!(error.is_instance_of::<pyo3::exceptions::PyValueError>(py));
+                assert!(
+                    error
+                        .to_string()
+                        .contains("resident loop requires finite ordered source-second bounds")
+                );
+                assert_eq!(*engine.pad_request_ids.lock().unwrap(), requests);
+                assert_eq!(
+                    engine.prepared_source_epochs[0].load(Ordering::Acquire),
+                    epoch
+                );
+                assert_eq!(engine.cold_jobs.counts_for_test(), (0, 0, 0));
+                assert_eq!(engine.cold_loading[0].load(Ordering::Acquire), 0);
+                assert!(engine.loading_sample_ids.lock().unwrap().is_empty());
+                assert!(engine.active_tasks.lock().unwrap().is_empty());
+                assert!(engine.resident_restore_guards.lock().unwrap()[0].is_none());
+                assert!(engine.cold_leases.lock().unwrap()[0].is_none());
+                assert_eq!(
+                    engine.loaded_source_generations.lock().unwrap()[0],
+                    (7, 48_000)
+                );
+                assert_eq!(
+                    engine.loaded_source_digests.lock().unwrap()[0].as_deref(),
+                    Some("old")
+                );
+                assert!(Arc::ptr_eq(
+                    &engine.sample_cache.lock().unwrap()[0]
+                        .as_ref()
+                        .unwrap()
+                        .samples,
+                    &previous.samples
+                ));
+                assert!(
+                    engine
+                        .input_runtime_ownership
+                        .source_current(0, &previous, 48_000)
+                );
+                assert_eq!(producer.lock().unwrap().slots(), producer_slots);
+                assert_eq!(consumer.slots(), 1);
+                assert!(matches!(consumer.peek(), Ok(ControlMessage::Ping())));
+                assert!(engine.loader_rx.lock().unwrap().try_recv().is_err());
+            }
+        }
+        assert!(matches!(consumer.pop(), Ok(ControlMessage::Ping())));
+        assert!(consumer.is_empty());
+    });
 }
 
 fn pcm_hash(samples: &[f32]) -> String {
@@ -432,24 +582,110 @@ fn productive_finite_startup_preserves_absolute_metadata_and_matches_original_pc
 
 #[test]
 fn productive_saved_key_lock_uses_explicit_complete_context() {
+    for key_lock in [false, true] {
+        let directory = tempfile::tempdir().unwrap();
+        let source = directory.path().join("external.wav");
+        let mono = wav(&source, 48_000);
+        let engine = AudioEngine::new().unwrap();
+        let mut callback = Callback::new(&engine, 48_000);
+        callback.mixer.set_pad_key_lock(0, key_lock);
+        assert_eq!(callback.mixer.key_lock_for_measurement(0), key_lock);
+        let hint = ResidentLoadHint {
+            start_s: 0.0,
+            end_s: 256.0 / 48_000.0,
+            key_lock,
+        };
+        let (request, mut consumer) = selected_load(
+            &engine,
+            &source,
+            &directory.path().join("samples"),
+            48_000,
+            hint,
+        );
+        wait_until(Duration::from_secs(10), || consumer.peek().is_ok());
+        assert_no_terminal(&engine);
+        let ControlMessage::LoadColdSample {
+            sample,
+            adoption,
+            loop_region,
+            ..
+        } = consumer.peek().unwrap()
+        else {
+            panic!("saved complete hint did not queue guarded source admission");
+        };
+        assert_eq!((sample.resident_start(), sample.resident_end()), (0, 256));
+        assert_eq!(sample.samples.len(), 256 * 2);
+        assert_eq!(
+            sample.residency.as_ref().unwrap().context,
+            if key_lock {
+                ResidentContext::KeyLockFullTrack
+            } else {
+                ResidentContext::FiniteLoop
+            }
+        );
+        assert_eq!(*loop_region, Some((0, 256)));
+        assert_eq!(adoption.load(Ordering::Acquire), 0);
+        assert_eq!(callback.drain(&mut consumer), 1);
+        assert!(matches!(
+            terminal(&engine, request),
+            LoaderEvent::Success { .. }
+        ));
+        wait_until(Duration::from_secs(10), || {
+            engine.cold_loading[0].load(Ordering::Acquire) == 0
+        });
+        assert_residency(
+            &engine,
+            256,
+            0,
+            256,
+            48_000,
+            &mono,
+            if key_lock {
+                ResidentContext::KeyLockFullTrack
+            } else {
+                ResidentContext::FiniteLoop
+            },
+        );
+        assert_eq!(callback.mixer.key_lock_for_measurement(0), key_lock);
+        assert_eq!(callback.mixer.loop_region_frames(0), (0, Some(256)));
+    }
+}
+
+#[test]
+fn productive_saved_key_lock_without_finite_hint_retains_complete_demand() {
     let directory = tempfile::tempdir().unwrap();
     let source = directory.path().join("external.wav");
     let mono = wav(&source, 48_000);
     let engine = AudioEngine::new().unwrap();
     let mut callback = Callback::new(&engine, 48_000);
-    let hint = ResidentLoadHint {
-        start_s: 32.0 / 48_000.0,
-        end_s: 64.0 / 48_000.0,
-        key_lock: true,
-    };
-    let (request, mut consumer) = selected_load(
+    callback.mixer.set_pad_key_lock(0, true);
+    assert!(callback.mixer.key_lock_for_measurement(0));
+    let (request, mut consumer) = selected_load_with_hint(
         &engine,
         &source,
         &directory.path().join("samples"),
         48_000,
-        hint,
+        None,
     );
     wait_until(Duration::from_secs(10), || consumer.peek().is_ok());
+    assert_no_terminal(&engine);
+    let ControlMessage::LoadColdSample {
+        sample,
+        adoption,
+        loop_region,
+        ..
+    } = consumer.peek().unwrap()
+    else {
+        panic!("unbounded ON did not queue guarded complete admission");
+    };
+    assert_eq!((sample.resident_start(), sample.resident_end()), (0, 256));
+    assert_eq!(sample.samples.len(), 256 * 2);
+    assert_eq!(
+        sample.residency.as_ref().unwrap().context,
+        ResidentContext::FullTrack
+    );
+    assert_eq!(*loop_region, None);
+    assert_eq!(adoption.load(Ordering::Acquire), 0);
     assert_eq!(callback.drain(&mut consumer), 1);
     assert!(matches!(
         terminal(&engine, request),
@@ -465,8 +701,9 @@ fn productive_saved_key_lock_uses_explicit_complete_context() {
         256,
         48_000,
         &mono,
-        ResidentContext::KeyLockFullTrack,
+        ResidentContext::FullTrack,
     );
+    assert!(callback.mixer.key_lock_for_measurement(0));
 }
 
 fn seed_old(engine: &AudioEngine, callback: &mut Callback) -> SampleBuffer {
@@ -493,84 +730,76 @@ fn seed_old(engine: &AudioEngine, callback: &mut Callback) -> SampleBuffer {
     previous
 }
 
-#[test]
-fn pending_finite_intent_cancellation_preserves_native_old_voice_and_metadata() {
-    for key_lock_change in [false, true] {
-        let directory = tempfile::tempdir().unwrap();
-        let source = directory.path().join("external.wav");
-        wav(&source, 48_000);
-        let engine = AudioEngine::new().unwrap();
-        let mut callback = Callback::new(&engine, 48_000);
-        let previous = seed_old(&engine, &mut callback);
-        let hint = ResidentLoadHint {
-            start_s: 32.0 / 48_000.0,
-            end_s: 64.0 / 48_000.0,
-            key_lock: false,
-        };
-        let (request, mut consumer) = selected_load(
-            &engine,
-            &source,
-            &directory.path().join("samples"),
-            48_000,
-            hint,
-        );
-        wait_until(Duration::from_secs(10), || consumer.peek().is_ok());
-        callback.assert_old_voice(&previous);
-        assert_no_terminal(&engine);
-        // Use the productive native intent guard, after command enqueue and
-        // before the actual callback is allowed to claim the source/window.
-        if key_lock_change {
-            engine.note_resident_key_lock_intent(0, true).unwrap();
-        } else {
-            engine
-                .note_resident_loop_intent(0, 33.0 / 48_000.0, Some(64.0 / 48_000.0))
-                .unwrap();
-        }
-        assert_eq!(callback.drain(&mut consumer), 1);
-        assert!(matches!(
-            terminal(&engine, request),
-            LoaderEvent::Error { .. }
-        ));
-        wait_until(Duration::from_secs(10), || {
-            engine.cold_loading[0].load(Ordering::Acquire) == 0
-        });
-        callback.assert_old_voice(&previous);
-        assert!(
-            engine
-                .input_runtime_ownership
-                .source_current(0, &previous, 48_000)
-        );
-        assert_eq!(
-            engine.loaded_source_generations.lock().unwrap()[0],
-            (7, 48_000)
-        );
-        assert_eq!(
-            engine.loaded_source_digests.lock().unwrap()[0].as_deref(),
-            Some("old")
-        );
-        assert!(engine.cold_leases.lock().unwrap()[0].is_none());
-        assert!(Arc::ptr_eq(
-            &engine.sample_cache.lock().unwrap()[0]
-                .as_ref()
-                .unwrap()
-                .samples,
-            &previous.samples
-        ));
+fn assert_initial_on_pending(
+    engine: &AudioEngine,
+    callback: &Callback,
+    consumer: &mut rtrb::Consumer<ControlMessage>,
+    request: u64,
+    mono_window: &[f32],
+) -> usize {
+    assert_no_terminal(engine);
+    assert_eq!(
+        engine.input_runtime_ownership.cold_status(0, request),
+        Some(0)
+    );
+    assert!(callback.mixer.key_lock_for_measurement(0));
+    assert_eq!(callback.mixer.loop_region_frames(0), (4, Some(23)));
+    let ControlMessage::LoadColdSample {
+        id,
+        sample,
+        source_generation,
+        adoption,
+        replace_assignment,
+        loop_region,
+        ..
+    } = consumer.peek().unwrap()
+    else {
+        panic!("saved finite ON did not queue guarded source admission");
+    };
+    assert_eq!(*id, 0);
+    assert_eq!(*source_generation, request);
+    assert!(*replace_assignment);
+    assert_eq!(*loop_region, Some((32, 64)));
+    assert_eq!(adoption.load(Ordering::Acquire), 0);
+    assert!(sample.valid_residency(48_000, 2));
+    assert_eq!(sample.frame_count(), 256);
+    assert_eq!((sample.resident_start(), sample.resident_end()), (32, 64));
+    assert_eq!(sample.samples.len(), 32 * 2);
+    let view = sample.residency.as_ref().unwrap();
+    assert_eq!(view.context, ResidentContext::KeyLockFiniteLoop);
+    assert_eq!(
+        (view.source.frame_count, view.source.source_zero_frame),
+        (256, 0)
+    );
+    for (actual, expected) in sample.samples.chunks_exact(2).zip(mono_window) {
+        assert_eq!(actual[0].to_bits(), expected.to_bits());
+        assert_eq!(actual[1].to_bits(), expected.to_bits());
     }
+    assert!(Arc::ptr_eq(
+        &sample.samples,
+        &engine.sample_cache.lock().unwrap()[0]
+            .as_ref()
+            .unwrap()
+            .samples
+    ));
+    sample.samples.as_ptr() as usize
 }
 
 #[test]
-fn finite_replacement_waits_for_actual_native_retirement_feedback_and_ack() {
+fn productive_saved_key_lock_uses_incoming_finite_context_before_own_ack() {
     let directory = tempfile::tempdir().unwrap();
     let source = directory.path().join("external.wav");
     let mono = wav(&source, 48_000);
+    let source_bytes = fs::read(&source).unwrap();
     let engine = AudioEngine::new().unwrap();
     let mut callback = Callback::new(&engine, 48_000);
     let previous = seed_old(&engine, &mut callback);
+    callback.mixer.set_pad_key_lock(0, true);
+    callback.mixer.set_loop_region_frames(0, 4, Some(23));
     let hint = ResidentLoadHint {
         start_s: 32.0 / 48_000.0,
         end_s: 64.0 / 48_000.0,
-        key_lock: false,
+        key_lock: true,
     };
     let (request, mut consumer) = selected_load(
         &engine,
@@ -580,23 +809,107 @@ fn finite_replacement_waits_for_actual_native_retirement_feedback_and_ack() {
         hint,
     );
     wait_until(Duration::from_secs(10), || consumer.peek().is_ok());
-    callback.retirement.capacity = 0;
-    assert_eq!(callback.drain(&mut consumer), 0);
+    let pending_address =
+        assert_initial_on_pending(&engine, &callback, &mut consumer, request, &mono[32..64]);
     callback.assert_old_voice(&previous);
-    assert_no_terminal(&engine);
-    callback.retirement.capacity = usize::MAX;
-    callback.feedback.push(AudioMessage::Pong()).unwrap();
-    assert_eq!(callback.drain(&mut consumer), 0);
-    callback.assert_old_voice(&previous);
-    assert_no_terminal(&engine);
-    assert_eq!(
-        engine.input_runtime_ownership.cold_status(0, request),
-        Some(0)
+    assert_eq!(callback.drain(&mut consumer), 1);
+    let LoaderEvent::Success {
+        duration_s,
+        cached_path,
+        ..
+    } = terminal(&engine, request)
+    else {
+        panic!("initial finite ON source was not acknowledged");
+    };
+    assert_eq!(duration_s, 256.0 / 48_000.0);
+    wait_until(Duration::from_secs(10), || {
+        engine.cold_loading[0].load(Ordering::Acquire) == 0
+    });
+    let selected = assert_residency(
+        &engine,
+        256,
+        32,
+        64,
+        48_000,
+        &mono[32..64],
+        ResidentContext::KeyLockFiniteLoop,
     );
-    assert!(matches!(
-        callback.feedback_rx.pop().unwrap(),
-        AudioMessage::Pong()
+    assert_eq!(selected.samples.as_ptr() as usize, pending_address);
+    assert!(Arc::ptr_eq(
+        &callback.mixer.bank_for_measurement()[0]
+            .as_ref()
+            .unwrap()
+            .samples,
+        &selected.samples
     ));
+    assert_eq!(callback.mixer.loop_region_frames(0), (32, Some(64)));
+    callback.mixer.set_pad_key_lock(0, true);
+    assert!(callback.mixer.key_lock_for_measurement(0));
+    let full_stereo: Vec<_> = mono.iter().flat_map(|value| [*value, *value]).collect();
+    let leases = engine.cold_leases.lock().unwrap();
+    let lease = leases[0].as_ref().unwrap();
+    assert_eq!(
+        lease.live_cached_pcm_samples(),
+        None,
+        "finite ON retained complete cache PCM"
+    );
+    assert_eq!(
+        lease.manifest.descriptor["playback"]["pcm"]["full_frames"],
+        256
+    );
+    assert_eq!(
+        full_hash(&lease.cache_path.join("playback.f32le")),
+        pcm_hash(&full_stereo)
+    );
+    assert_eq!(
+        fs::read(directory.path().join(cached_path)).unwrap(),
+        source_bytes
+    );
+    drop(leases);
+    callback.render_oracle(&mono[32..64], 32, 48_000);
+}
+
+#[test]
+fn productive_saved_key_lock_fresh_warm_reads_finite_identity_before_own_ack() {
+    let directory = tempfile::tempdir().unwrap();
+    let root = directory.path().join("samples");
+    fs::create_dir_all(&root).unwrap();
+    let source = root.join("old.wav");
+    let mono = wav(&source, 48_000);
+    let original_bytes = fs::read(&source).unwrap();
+    let material =
+        super::material_migration::prepare_material(&root, &source, 48_000, 2, &|| false).unwrap();
+    let original = material.lease.original_path.clone();
+    let cache = material.lease.cache_path.clone();
+    let identity = material.sample.residency.as_ref().unwrap().source.clone();
+    let manifest_identity = material.lease.manifest.identity.clone();
+    let old_pcm = Arc::downgrade(&material.sample.samples);
+    drop(material);
+    assert_eq!(
+        old_pcm.strong_count(),
+        0,
+        "warm restore retained the preparation PCM"
+    );
+    let engine = AudioEngine::new().unwrap();
+    let mut callback = Callback::new(&engine, 48_000);
+    let previous = seed_old(&engine, &mut callback);
+    callback.mixer.set_pad_key_lock(0, true);
+    callback.mixer.set_loop_region_frames(0, 4, Some(23));
+    let (request, mut consumer) = selected_load(
+        &engine,
+        &original,
+        &root,
+        48_000,
+        ResidentLoadHint {
+            start_s: 32.0 / 48_000.0,
+            end_s: 64.0 / 48_000.0,
+            key_lock: true,
+        },
+    );
+    wait_until(Duration::from_secs(10), || consumer.peek().is_ok());
+    let pending_address =
+        assert_initial_on_pending(&engine, &callback, &mut consumer, request, &mono[32..64]);
+    callback.assert_old_voice(&previous);
     assert_eq!(callback.drain(&mut consumer), 1);
     assert!(matches!(
         terminal(&engine, request),
@@ -605,27 +918,350 @@ fn finite_replacement_waits_for_actual_native_retirement_feedback_and_ack() {
     wait_until(Duration::from_secs(10), || {
         engine.cold_loading[0].load(Ordering::Acquire) == 0
     });
-    assert!(matches!(
-        callback.feedback_rx.pop().unwrap(),
-        AudioMessage::SampleStopped { id: 0 }
-    ));
-    assert!(
-        !callback
-            .mixer
-            .voices
-            .iter()
-            .any(|voice| voice.is_playing_sample(0))
-    );
-    assert_residency(
+    let selected = assert_residency(
         &engine,
         256,
         32,
         64,
         48_000,
         &mono[32..64],
-        ResidentContext::FiniteLoop,
+        ResidentContext::KeyLockFiniteLoop,
     );
+    assert_eq!(selected.samples.as_ptr() as usize, pending_address);
+    assert_eq!(
+        selected.residency.as_ref().unwrap().source.as_ref(),
+        identity.as_ref()
+    );
+    assert_eq!(callback.mixer.loop_region_frames(0), (32, Some(64)));
+    assert!(callback.mixer.key_lock_for_measurement(0));
+    let leases = engine.cold_leases.lock().unwrap();
+    let lease = leases[0].as_ref().unwrap();
+    assert_eq!(lease.cache_path, cache);
+    assert_eq!(lease.manifest.identity, manifest_identity);
+    assert!(lease.integrity.warm);
+    assert_eq!(lease.integrity.decoder_verify_bytes, 256 * 4);
+    assert_eq!(lease.integrity.playback_verify_bytes, 256 * 2 * 4);
+    assert_eq!(lease.integrity.playback_read_bytes, 32 * 2 * 4);
+    assert_eq!(lease.integrity.source_copied_bytes, 0);
+    assert_eq!(lease.integrity.original_copied_bytes, 0);
+    assert_eq!(lease.live_cached_pcm_samples(), None);
+    assert_eq!(fs::read(&original).unwrap(), original_bytes);
+    drop(leases);
     callback.render_oracle(&mono[32..64], 32, 48_000);
+}
+
+#[test]
+fn productive_prepared_material_saved_on_reads_own_finite_range_before_ack() {
+    let directory = tempfile::tempdir().unwrap();
+    let root = directory.path().join("samples");
+    fs::create_dir_all(&root).unwrap();
+    let source = root.join("old.wav");
+    let mono = wav(&source, 48_000);
+    let original = fs::read(&source).unwrap();
+    let material = Arc::new(
+        super::material_migration::prepare_material(&root, &source, 48_000, 2, &|| false).unwrap(),
+    );
+    assert_eq!(
+        (
+            material.sample.resident_start(),
+            material.sample.resident_end()
+        ),
+        (0, 1)
+    );
+    assert_eq!(material.sample.samples.len(), 2);
+    assert_eq!(material.lease.live_cached_pcm_samples(), None);
+    let identity = material.sample.residency.as_ref().unwrap().source.clone();
+    let parent_assignment = material.lease.assignment_id();
+    let engine = AudioEngine::new().unwrap();
+    let mut callback = Callback::new(&engine, 48_000);
+    let previous = seed_old(&engine, &mut callback);
+    callback.mixer.set_pad_key_lock(0, true);
+    callback.mixer.set_loop_region_frames(0, 4, Some(23));
+    let (producer, mut consumer) = rtrb::RingBuffer::new(4);
+    let admitted = super::cold_load::admit_selected_material(
+        &engine,
+        0,
+        material.lease.original_path.to_string_lossy().into_owned(),
+        (
+            false,
+            false,
+            true,
+            Some(ResidentLoadHint {
+                start_s: 32.0 / 48_000.0,
+                end_s: 64.0 / 48_000.0,
+                key_lock: true,
+            }),
+        ),
+        Arc::new(Mutex::new(producer)),
+        (2, 48_000, root),
+        "restore",
+        Some(material.clone()),
+    )
+    .unwrap();
+    wait_until(Duration::from_secs(10), || consumer.peek().is_ok());
+    let pending_address = assert_initial_on_pending(
+        &engine,
+        &callback,
+        &mut consumer,
+        admitted.request_id,
+        &mono[32..64],
+    );
+    assert_eq!(admitted.adoption.load(Ordering::Acquire), 0);
+    callback.assert_old_voice(&previous);
+    assert_eq!(callback.drain(&mut consumer), 1);
+    assert!(matches!(
+        terminal(&engine, admitted.request_id),
+        LoaderEvent::Success { .. }
+    ));
+    wait_until(Duration::from_secs(10), || {
+        engine.cold_loading[0].load(Ordering::Acquire) == 0
+    });
+    assert_eq!(admitted.adoption.load(Ordering::Acquire), 2);
+    let selected = assert_residency(
+        &engine,
+        256,
+        32,
+        64,
+        48_000,
+        &mono[32..64],
+        ResidentContext::KeyLockFiniteLoop,
+    );
+    assert_eq!(selected.samples.as_ptr() as usize, pending_address);
+    assert_eq!(
+        selected.residency.as_ref().unwrap().source.as_ref(),
+        identity.as_ref()
+    );
+    assert!(!Arc::ptr_eq(&selected.samples, &material.sample.samples));
+    assert_eq!(callback.mixer.loop_region_frames(0), (32, Some(64)));
+    assert!(callback.mixer.key_lock_for_measurement(0));
+    let leases = engine.cold_leases.lock().unwrap();
+    let lease = leases[0].as_ref().unwrap();
+    assert_ne!(lease.assignment_id(), parent_assignment);
+    assert_eq!(lease.cache_path, material.lease.cache_path);
+    assert_eq!(lease.live_cached_pcm_samples(), None);
+    assert_eq!(fs::read(&source).unwrap(), original);
+    drop(leases);
+    callback.render_oracle(&mono[32..64], 32, 48_000);
+}
+
+#[test]
+fn pending_finite_intent_cancellation_preserves_native_old_voice_and_metadata() {
+    for key_lock in [false, true] {
+        for edit in ["loop", "mode", "cancel", "timing", "request"] {
+            let directory = tempfile::tempdir().unwrap();
+            let source = directory.path().join("external.wav");
+            wav(&source, 48_000);
+            let engine = AudioEngine::new().unwrap();
+            let mut callback = Callback::new(&engine, 48_000);
+            let previous = seed_old(&engine, &mut callback);
+            callback.mixer.set_pad_key_lock(0, key_lock);
+            callback.mixer.set_loop_region_frames(0, 4, Some(23));
+            assert_eq!(callback.mixer.key_lock_for_measurement(0), key_lock);
+            let hint = ResidentLoadHint {
+                start_s: 32.0 / 48_000.0,
+                end_s: 64.0 / 48_000.0,
+                key_lock,
+            };
+            let (producer, mut consumer) = rtrb::RingBuffer::new(4);
+            let producer = Arc::new(Mutex::new(producer));
+            let request = admit_for_format_selected(
+                &engine,
+                0,
+                source.to_string_lossy().into_owned(),
+                (false, false, true, Some(hint)),
+                producer.clone(),
+                (2, 48_000, directory.path().join("samples")),
+            )
+            .unwrap();
+            wait_until(Duration::from_secs(10), || consumer.peek().is_ok());
+            callback.assert_old_voice(&previous);
+            assert_no_terminal(&engine);
+            let queued = engine.sample_cache.lock().unwrap()[0].clone().unwrap();
+            assert_eq!((queued.resident_start(), queued.resident_end()), (32, 64));
+            assert_eq!(
+                queued.residency.as_ref().unwrap().context,
+                if key_lock {
+                    ResidentContext::KeyLockFiniteLoop
+                } else {
+                    ResidentContext::FiniteLoop
+                }
+            );
+            let queued_pcm = Arc::downgrade(&queued.samples);
+            drop(queued);
+            // Use the productive native intent guard, after command enqueue and
+            // before the actual callback is allowed to claim the source/window.
+            let newest_request = match edit {
+                "mode" => {
+                    engine.note_resident_key_lock_intent(0, !key_lock).unwrap();
+                    request
+                }
+                "loop" => {
+                    engine
+                        .note_resident_loop_intent(0, 33.0 / 48_000.0, Some(64.0 / 48_000.0))
+                        .unwrap();
+                    request
+                }
+                "cancel" => {
+                    assert!(engine.input_runtime_ownership.cancel_cold(0, request));
+                    request
+                }
+                "timing" => {
+                    super::constant_timing::set_intent(
+                        &engine,
+                        &producer,
+                        0,
+                        flitzis_looper_analysis::tempo_acceptance::TimingIntent::Manual,
+                    )
+                    .unwrap();
+                    request
+                }
+                "request" => super::next_pad_request_id(
+                    &engine.pad_request_ids,
+                    0,
+                    &engine.prepared_source_epochs[0],
+                )
+                .unwrap(),
+                _ => unreachable!(),
+            };
+            assert_eq!(
+                callback.drain(&mut consumer),
+                if edit == "timing" { 2 } else { 1 }
+            );
+            assert!(matches!(
+                terminal(&engine, request),
+                LoaderEvent::Error { .. }
+            ));
+            wait_until(Duration::from_secs(10), || {
+                engine.cold_loading[0].load(Ordering::Acquire) == 0
+            });
+            callback.assert_old_voice(&previous);
+            assert_eq!(callback.mixer.loop_region_frames(0), (4, Some(23)));
+            assert_eq!(callback.mixer.key_lock_for_measurement(0), key_lock);
+            assert_eq!(engine.pad_request_ids.lock().unwrap()[0], newest_request);
+            if edit == "timing" {
+                assert_eq!(
+                    engine.timing_intents.lock().unwrap()[0],
+                    flitzis_looper_analysis::tempo_acceptance::TimingIntent::Manual
+                );
+            }
+            assert!(
+                engine
+                    .input_runtime_ownership
+                    .source_current(0, &previous, 48_000)
+            );
+            assert_eq!(
+                engine.loaded_source_generations.lock().unwrap()[0],
+                (7, 48_000)
+            );
+            assert_eq!(
+                engine.loaded_source_digests.lock().unwrap()[0].as_deref(),
+                Some("old")
+            );
+            assert!(engine.cold_leases.lock().unwrap()[0].is_none());
+            assert!(Arc::ptr_eq(
+                &engine.sample_cache.lock().unwrap()[0]
+                    .as_ref()
+                    .unwrap()
+                    .samples,
+                &previous.samples
+            ));
+            wait_until(Duration::from_secs(10), || queued_pcm.strong_count() == 0);
+            let mut output = [0.0; 17 * 2];
+            callback.mixer.render_rt_at_output_frame(
+                &mut output,
+                &mut [0.0; NUM_SAMPLES],
+                0,
+                &mut callback.retirement,
+            );
+            assert!(
+                output
+                    .into_iter()
+                    .all(|sample| sample.to_bits() == 0.25_f32.to_bits())
+            );
+        }
+    }
+}
+
+#[test]
+fn finite_replacement_waits_for_actual_native_retirement_feedback_and_ack() {
+    for key_lock in [false, true] {
+        let directory = tempfile::tempdir().unwrap();
+        let source = directory.path().join("external.wav");
+        let mono = wav(&source, 48_000);
+        let engine = AudioEngine::new().unwrap();
+        let mut callback = Callback::new(&engine, 48_000);
+        let previous = seed_old(&engine, &mut callback);
+        callback.mixer.set_pad_key_lock(0, key_lock);
+        callback.mixer.set_loop_region_frames(0, 4, Some(23));
+        assert_eq!(callback.mixer.key_lock_for_measurement(0), key_lock);
+        let hint = ResidentLoadHint {
+            start_s: 32.0 / 48_000.0,
+            end_s: 64.0 / 48_000.0,
+            key_lock,
+        };
+        let (request, mut consumer) = selected_load(
+            &engine,
+            &source,
+            &directory.path().join("samples"),
+            48_000,
+            hint,
+        );
+        wait_until(Duration::from_secs(10), || consumer.peek().is_ok());
+        callback.retirement.capacity = 0;
+        assert_eq!(callback.drain(&mut consumer), 0);
+        callback.assert_old_voice(&previous);
+        assert_eq!(callback.mixer.loop_region_frames(0), (4, Some(23)));
+        assert_no_terminal(&engine);
+        callback.retirement.capacity = usize::MAX;
+        callback.feedback.push(AudioMessage::Pong()).unwrap();
+        assert_eq!(callback.drain(&mut consumer), 0);
+        callback.assert_old_voice(&previous);
+        assert_eq!(callback.mixer.loop_region_frames(0), (4, Some(23)));
+        assert_no_terminal(&engine);
+        assert_eq!(
+            engine.input_runtime_ownership.cold_status(0, request),
+            Some(0)
+        );
+        assert!(matches!(
+            callback.feedback_rx.pop().unwrap(),
+            AudioMessage::Pong()
+        ));
+        assert_eq!(callback.drain(&mut consumer), 1);
+        assert!(matches!(
+            terminal(&engine, request),
+            LoaderEvent::Success { .. }
+        ));
+        wait_until(Duration::from_secs(10), || {
+            engine.cold_loading[0].load(Ordering::Acquire) == 0
+        });
+        assert!(matches!(
+            callback.feedback_rx.pop().unwrap(),
+            AudioMessage::SampleStopped { id: 0 }
+        ));
+        assert!(
+            !callback
+                .mixer
+                .voices
+                .iter()
+                .any(|voice| voice.is_playing_sample(0))
+        );
+        assert_residency(
+            &engine,
+            256,
+            32,
+            64,
+            48_000,
+            &mono[32..64],
+            if key_lock {
+                ResidentContext::KeyLockFiniteLoop
+            } else {
+                ResidentContext::FiniteLoop
+            },
+        );
+        assert_eq!(callback.mixer.loop_region_frames(0), (32, Some(64)));
+        assert_eq!(callback.mixer.key_lock_for_measurement(0), key_lock);
+        callback.render_oracle(&mono[32..64], 32, 48_000);
+    }
 }
 
 fn exercise_productive_relocation(directory: &Path, with_stems: bool) {

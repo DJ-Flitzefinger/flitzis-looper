@@ -80,12 +80,22 @@ impl ResidentLoadHint {
             .ok_or_else(|| "empty resident source".into())
     }
 
-    pub(super) fn context(self) -> ResidentContext {
-        if self.key_lock {
-            ResidentContext::KeyLockFullTrack
+    pub(super) fn selection(
+        self,
+        rate: u32,
+        frames: usize,
+    ) -> Result<(usize, usize, ResidentContext), String> {
+        let region = self.region(rate, frames)?;
+        let context = if self.key_lock {
+            if region.start == 0 && region.end == frames {
+                ResidentContext::KeyLockFullTrack
+            } else {
+                ResidentContext::KeyLockFiniteLoop
+            }
         } else {
             ResidentContext::FiniteLoop
-        }
+        };
+        Ok((region.start, region.end, context))
     }
 }
 
@@ -163,16 +173,10 @@ pub(super) fn select(
         .residency
         .as_ref()
         .ok_or("resident selection lacks complete identity")?;
-    let region = hint.region(view.source.sample_rate_hz, sample.frame_count())?;
-    let (start, end) = if hint.key_lock {
-        (0, sample.frame_count())
-    } else {
-        (region.start, region.end)
-    };
+    let (start, end, context) = hint.selection(view.source.sample_rate_hz, sample.frame_count())?;
     if sample.resident_start() == start && sample.resident_end() == end {
         let mut sample = sample;
-        Arc::make_mut(sample.residency.as_mut().expect("checked descriptor")).context =
-            hint.context();
+        Arc::make_mut(sample.residency.as_mut().expect("checked descriptor")).context = context;
         return Ok(sample);
     }
     let overlap = sample
@@ -189,5 +193,5 @@ pub(super) fn select(
     if overlap > maximum {
         return Err("resident selection exceeds transient PCM limit".into());
     }
-    sample.window(start, end, 1, hint.context())
+    sample.window(start, end, 1, context)
 }

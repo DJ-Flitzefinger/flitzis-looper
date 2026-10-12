@@ -269,6 +269,57 @@ class OfflineFixtureBackend:
         )
 
 
+def _publication_wait_state(controller: StemController, sample_id: int) -> dict[str, object]:
+    selection = controller._committed_residency._selections.get(sample_id)
+    receipt = selection.receipt if selection is not None else None
+    entry = controller._project.stem_cache[sample_id]
+    return {
+        "sample_id": sample_id,
+        "cwd": str(Path.cwd()),
+        "source_path": controller._project.sample_paths[sample_id],
+        "generation_errors": controller._session.stem_generation_errors,
+        "generation_diagnostics": controller._session.stem_generation_diagnostics,
+        "generating_ids": sorted(controller._session.stem_generating_sample_ids),
+        "jobs": {str(path): job.phase for path, job in controller._jobs.items()},
+        "generation_events": controller._stem_generation_events.qsize(),
+        "pair_results": controller._pair_preparations._results.qsize(),
+        "pair_workers": {
+            owner: {
+                "cancelled": request.cancelled.is_set(),
+                "error": request.error,
+                "source_ticket": request.ticket.publication_status(),
+                "prepared": request.prepared is not None,
+                "components": request.prepared.has_components()
+                if request.prepared is not None
+                else None,
+                "generation_intent": request.generation_intent,
+            }
+            for owner, request in controller._pair_preparations.pending.items()
+        },
+        "pending_publications": sorted(controller._pending_stem_publications),
+        "disk_settlements": sorted(controller._disk_selection_settlements),
+        "selected_entry": None
+        if entry is None
+        else {"available": entry.available, "paired": entry.pair is not None},
+        "registration": None
+        if selection is None
+        else {
+            "status": selection.ticket.publication_status(),
+            "current": selection.ticket.is_current(),
+            "error": selection.ticket.error(),
+            "receipt_intent": selection.receipt_intent,
+        },
+        "receipt": None
+        if receipt is None
+        else {
+            "residency": receipt.residency_status(),
+            "effective": receipt.effective_mode_status(),
+            "current": receipt.is_current(),
+            "error": receipt.error(),
+        },
+    }
+
+
 def wait_for_pending(controller: StemController, sample_id: int) -> PreparedSourceTicket:
     """Collect the real Pair worker result before checking its native queued ticket."""
     deadline = time.monotonic() + 10
@@ -277,12 +328,40 @@ def wait_for_pending(controller: StemController, sample_id: int) -> PreparedSour
         assert not controller._session.stem_generation_errors, (
             controller._session.stem_generation_errors
         )
-        assert time.monotonic() < deadline, "actual Pair worker did not publish a pending ticket"
+        assert time.monotonic() < deadline, (
+            "actual Pair worker did not publish a pending ticket",
+            _publication_wait_state(controller, sample_id),
+        )
         if sample_id not in controller._pending_stem_publications:
             time.sleep(0.001)
     ticket = controller._pending_stem_publications[sample_id].source_ticket
     assert ticket.publication_status() == "pending"
     return ticket
+
+
+def wait_for_committed_registration(
+    controller: StemController, sample_id: int
+) -> CommittedStemSetTicket:
+    """Generation selects disk truth before its own native reader registration ACK."""
+    deadline = time.monotonic() + 10
+    while sample_id not in controller._committed_residency._selections:
+        controller.on_frame_render()
+        assert not controller._session.stem_generation_errors, (
+            controller._session.stem_generation_errors
+        )
+        assert time.monotonic() < deadline, (
+            "actual Pair worker did not register its committed disk selection",
+            _publication_wait_state(controller, sample_id),
+        )
+        if sample_id not in controller._committed_residency._selections:
+            time.sleep(0.001)
+    selection = controller._committed_residency._selections[sample_id]
+    assert selection.ticket.publication_status() == "pending"
+    assert selection.ticket.is_current()
+    assert selection.ticket.error() is None
+    assert selection.receipt is None
+    assert not controller._pending_stem_publications
+    return selection.ticket
 
 
 def assert_committed_ack(controller: StemController, sample_id: int) -> None:
@@ -452,12 +531,18 @@ class Probe:
         assert self.controller.generate_stems_async(0)
         self.controller.on_frame_render()
         assert not self.session.stem_generation_errors, self.session.stem_generation_errors
-        self.original_ticket = wait_for_pending(self.controller, 0)
+        self.original_ticket = wait_for_committed_registration(self.controller, 0)
         assert self.original_ticket.publication_status() == "pending"
         entry = self.project.stem_cache[0]
         assert entry is not None
-        assert not entry.available
-        assert not self.controller.stems_available(0)
+        assert entry.available
+        # UI cache availability is disk truth, not an own resident or output ACK.
+        assert self.controller.stems_available(0)
+        status = self.controller.stem_residency_status(0)
+        assert status is not None
+        assert status.registration == "pending", _publication_wait_state(self.controller, 0)
+        assert status.residency is None
+        assert status.effective is None
         assert self.backend.private_path is not None
         assert not self.backend.private_path.exists()
         assert Path(entry.cache_dir).name.startswith(".ready-")
@@ -466,7 +551,9 @@ class Probe:
         return entry.source_version
 
     def accepted(self) -> None:
+        assert self.original_ticket is self.controller._committed_residency._selections[0].ticket
         assert self.original_ticket.publication_status() == "accepted"
+        assert_committed_ack(self.controller, 0)
         self.controller.on_frame_render()
         assert not self.session.stem_generation_errors, self.session.stem_generation_errors
         assert self.controller.stems_available(0)

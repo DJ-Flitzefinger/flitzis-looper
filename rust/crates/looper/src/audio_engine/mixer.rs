@@ -1032,16 +1032,36 @@ impl RtMixer {
         }
     }
 
+    /// Initial finite ON admission proves the incoming physical loop, before
+    /// its markers replace the predecessor's region. Native preparation and
+    /// Play still obtain their own source/timing/read-plan permissions later.
+    pub(crate) fn initial_key_lock_geometry_available(sample: &SampleBuffer) -> bool {
+        super::native_source_coverage::complete_view_available(sample)
+            || (sample.residency.as_ref().is_some_and(|view| {
+                view.context == crate::messages::ResidentContext::KeyLockFiniteLoop
+            }) && super::native_source_coverage::normal_loop_context_available(
+                sample,
+                FrameRange {
+                    start: sample.resident_start(),
+                    end: sample.resident_end(),
+                },
+                ExplicitSeekMode::Normal,
+            ))
+    }
+
+    fn cold_sample_geometry_available(&self, id: usize, sample: &SampleBuffer) -> bool {
+        id < NUM_SAMPLES
+            && sample.valid_residency(self.sample_rate_hz as u32, self.channels)
+            && (!self.pad_key_lock_enabled[id] || Self::initial_key_lock_geometry_available(sample))
+    }
+
     pub(crate) fn cold_source_current(
         &self,
         id: usize,
         sample: &SampleBuffer,
         generation: u64,
     ) -> bool {
-        id < NUM_SAMPLES
-            && sample.valid_residency(self.sample_rate_hz as u32, self.channels)
-            && (!self.pad_key_lock_enabled[id]
-                || (sample.resident_start() == 0 && sample.resident_end() == sample.frame_count()))
+        self.cold_sample_geometry_available(id, sample)
             && self.input_runtime_ownership.source_generation(
                 id,
                 sample,
@@ -1060,10 +1080,7 @@ impl RtMixer {
             return false;
         }
 
-        if !sample.valid_residency(self.sample_rate_hz as u32, self.channels)
-            || (self.pad_key_lock_enabled[id]
-                && (sample.resident_start() != 0 || sample.resident_end() != sample.frame_count()))
-        {
+        if !self.cold_sample_geometry_available(id, &sample) {
             retirement.retire_sample(sample);
             return false;
         }
@@ -1127,7 +1144,7 @@ impl RtMixer {
             && sample
                 .residency
                 .as_ref()
-                .is_some_and(|view| view.context == crate::messages::ResidentContext::FiniteLoop)
+                .is_some_and(|view| view.context.permits_finite_range())
         {
             self.pad_loop_start_frame[id] = sample.resident_start();
             self.pad_loop_end_frame[id] = Some(sample.resident_end());

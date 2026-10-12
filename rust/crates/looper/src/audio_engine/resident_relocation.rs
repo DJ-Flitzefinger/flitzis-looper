@@ -1056,9 +1056,13 @@ impl WindowWork {
                     .as_ref()
                     .map_or(self.binding.binding.accepted, |pin| pin.timing.accepted);
                 set.publication = owner.set.publication.clone();
-                self.assets
-                    .retain_stems(owner.generation_path.clone(), &set)
-                    .map_err(|error| error.to_string())?;
+                // Paired preparation already registered these four PCM owners,
+                // their source lease and the paired WAV/PCM/common files.
+                if owner.pair.is_none() {
+                    self.assets
+                        .retain_stems(owner.generation_path.clone(), &set)
+                        .map_err(|error| error.to_string())?;
+                }
                 Ok(set)
             })
             .transpose()?;

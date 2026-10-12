@@ -165,8 +165,16 @@ P4b, later stages and final Human/hearing acceptance remain open.
 - [x] Resident-transition vertical: finite current-source NormalLoop production-k=0 non-unity FullMix->Stems, Stems->FullMix and masks over the same already ACKed resident selected committed set; actual two-side taps/128-source-frame wet Native-FIFO/filter continuation, deferred then real preparation/adoption and outgoing/history/job final-reader retirement
 - [x] Lifecycle/source-custody vertical: finite NormalLoop production-k=0 non-unity at fixed physical geometry; actual pause/resume/rate/storage-ACK continuity, same-source accepted-period refresh/clear, active/paused old-voice fresh authority, independently ACKed future-bank preparation and guarded explicit retrigger, with later real native requests/adoptions and distinct owner final-use/held-peak proof
 - [x] Seek/physical-domain vertical: production-k=0 finite Seek/Intro/Tail with real retained range worker/control ACK, current/old-source Native/FIFO preparation/adoption and sustained wet continuation; explicit seek and changed-next-tap cuts, continuous physical edits and own finite return from complete ALL exceptions
+- [x] Initial saved ON admission vertical: one verified physical hint policy across cold/warm/streaming/prepared subscribers, genuine partial KeyLockFiniteLoop and complete KeyLockFullTrack, consistent source/Load checks and finite markers; real public restore/source ACK/Play and actual nonunity Native/FIFO/filter continuation, later own source-history adoption, stale/cancel/pressure/ALL guards and preserved independent215; ordinary external Loader/default-loop preparation and whole parent gates remain separate
 - [ ] Wirkliche finite DSP/KEYLOCK-Versorgung+Continuation fuer heutigen production k=0
 - [ ] Executed feed/lookahead/history/FIFO/filter/seams/crossfade/oldvoices; causality1598/33.292ms erhalten, fallback-only laesst Gate offen. Nonzero k bleibt B5
+
+The bounded [initial saved physical ON report](../../../docs/pcm-cache-residency.md#initial-saved-finite-keylock-on--2026-10-12)
+records the shared selection implementation, required oracles and passing bounded
+software gates. Its inherited/explicit ON x public SPEED/manual source BPM plus
+display target histories describe physical NormalLoop continuation. Initial
+BPM-lock/accepted-musical admission and ordinary external Loader incoming-timing/
+default-eight-bars preparation remain open; no P4b/P5b parent closure follows.
 
 The first vertical is bounded to NormalLoop and storage-only current-source ACK.
 First-vertical validation passed51 focused native cases,168 Analysis,3318 Python/FFI
@@ -435,10 +443,13 @@ Bounded complete-storage conversion and finite Native/restore preparation are
 implemented; [the validation report](../../../docs/long-source-streaming-validation.md)
 records their actual evidence and final software gates. Ordinary UI import still
 passes no resident hint and may fail initial whole-source live admission before
-the default eight-bar loop is initialized. Finite Native/restore proofs use
-KEYLOCK off; KEYLOCK loads still request the existing full-track fallback.
-Both actual default/user-loop admission and finite KEYLOCK-load integration remain
-required P4b/P5b work, so this task and full E11-03 stay unchecked. Storage evidence does not close
+the default eight-bar loop is initialized. The 2026-10-11 storage/finite restore
+proofs use KEYLOCK off. Current known saved physical ON demand now selects proper
+partial KeyLockFiniteLoop or complete KeyLockFullTrack through the shared verified
+policy, with unknown demand still complete and bounded runtime gates passing. Ordinary
+external/default-user-loop preparation, initial BPM-lock/accepted-musical admission
+and full finite KEYLOCK/DSP integration remain required P4b/P5b work, so this task
+and full E11-03 stay unchecked. Storage evidence does not close
 aggregate resources, model inference or Human/device gates.
 
 - [ ] X11-MATERIAL M1: readable contained roots, full-SHA cross-name dedup/unsafe-case collisions, exact original preservation and independent content settings/DSP/owners through copy/move/origin-delete.
@@ -456,8 +467,10 @@ coherent publication and clean-main/fresh-remote verification in local receipts:
 - [x] MATERIAL M2 software: both old layouts through actual config/journal/controller and fresh source/window/timing/pair ACK, current intent and exact before/after negative inventories, real old Native owners and restart/partial-retirement/last-reader birth-receipt terminal.
 - [x] MATERIAL software validation: current LONG/RF64 regression, broad Debug/Release, installed Python/static/scoped-format, Cargo check, Release build-only/preflight, official strict and independent whole-source/evidence review with all prior FAIL/UNKNOWN scopes retained. The LONG children prove source callback ACK and pair preparation/reopening; separate Native tests prove pair callback/adoption and physical retirement.
 
-X11-MATERIAL keeps its X11-LONG/P1b/P2b dependencies. Ordinary UI NoHint/default
-eight-bar admission and finite KEYLOCK-load/DSP remain REQUIRED OPEN in P4b/P5b.
+X11-MATERIAL keeps its X11-LONG/P1b/P2b dependencies. Ordinary external Loader
+incoming-timing/default-eight-bar admission, initial BPM-lock/accepted-musical
+admission and full finite KEYLOCK/DSP remain REQUIRED OPEN in P4b/P5b. The bounded
+saved physical ON vertical records its separate bounded software admission gate.
 Bounded software acceptance cannot complete the two full MATERIAL checkboxes
 above, copy/move/Re-Arrange, E11-19/20/current-model controls, active new-generation
 adoption, all216 resource/music/Human or full Goal gates.
