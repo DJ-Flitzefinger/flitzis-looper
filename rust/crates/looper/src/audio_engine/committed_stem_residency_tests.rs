@@ -184,11 +184,28 @@ struct Productive {
     reference_ownership: Arc<InputRuntimeOwnership>,
     frame: u64,
     key_lock: bool,
+    loop_region: crate::audio_engine::source_reader::FrameRange,
 }
 
 impl Productive {
     fn new(key_lock: bool, ratio: f64) -> Self {
+        Self::with_loop(key_lock, ratio, false)
+    }
+
+    fn full_track(key_lock: bool, ratio: f64) -> Self {
+        Self::with_loop(key_lock, ratio, true)
+    }
+
+    fn with_loop(key_lock: bool, ratio: f64, full_track: bool) -> Self {
         let mut h = long_harness();
+        let loop_region = crate::audio_engine::source_reader::FrameRange {
+            start: if full_track { 0 } else { LOOP_START },
+            end: if full_track {
+                h.material.sample.frame_count()
+            } else {
+                LOOP_END
+            },
+        };
         let source = h.ticket(0);
         let oracle_pair = h.prepare(0, &source, true, None);
         assert_eq!(
@@ -202,7 +219,7 @@ impl Productive {
         );
         for component in oracle_pair.component_views_for_test().unwrap() {
             assert!(
-                component.samples[LOOP_START * 2..LOOP_END * 2]
+                component.samples[loop_region.start * 2..loop_region.end * 2]
                     .iter()
                     .any(|sample| sample.abs() > 0.04),
                 "actual aligned loop component must contain signal"
@@ -229,10 +246,10 @@ impl Productive {
             &h.engine,
             0,
             WindowRequest {
-                key_lock: Some(key_lock),
+                key_lock: Some(key_lock && !full_track),
                 loop_region: Some((
-                    LOOP_START as f64 / f64::from(RATE),
-                    Some(LOOP_END as f64 / f64::from(RATE)),
+                    loop_region.start as f64 / f64::from(RATE),
+                    Some(loop_region.end as f64 / f64::from(RATE)),
                 )),
                 ..WindowRequest::default()
             },
@@ -249,10 +266,41 @@ impl Productive {
         assert_eq!(h.callback.drain(&mut h.consumer), 1);
         assert_eq!(window.publication_status(), "accepted");
         reconcile(&h.engine).unwrap();
+        if full_track && key_lock {
+            // A real mode-only request preserves the FullTrack geometry/tag;
+            // an ON loop edit would deliberately produce KeyLockFiniteLoop.
+            let mode = prepare_window_with_producer(
+                &h.engine,
+                0,
+                WindowRequest {
+                    key_lock: Some(true),
+                    ..WindowRequest::default()
+                },
+                h.producer.clone(),
+            )
+            .unwrap();
+            wait_until(|| h.consumer.peek().is_ok() || mode.error().unwrap().is_some());
+            assert_eq!(h.callback.drain(&mut h.consumer), 1);
+            assert_eq!(mode.publication_status(), "accepted", "{:?}", mode.error());
+            reconcile(&h.engine).unwrap();
+        }
         let resident = h.callback.mixer.bank_for_measurement()[0].as_ref().unwrap();
-        assert_eq!(resident.resident_start(), LOOP_START);
-        assert_eq!(resident.resident_end(), LOOP_END);
-        assert_eq!(resident.samples.len(), (LOOP_END - LOOP_START) * 2);
+        assert_eq!(resident.resident_start(), loop_region.start);
+        assert_eq!(resident.resident_end(), loop_region.end);
+        assert_eq!(
+            resident.samples.len(),
+            (loop_region.end - loop_region.start) * 2
+        );
+        if full_track {
+            assert_eq!(
+                resident.residency.as_ref().unwrap().context,
+                if key_lock {
+                    crate::messages::ResidentContext::KeyLockFullTrack
+                } else {
+                    crate::messages::ResidentContext::FullTrack
+                }
+            );
+        }
         assert_eq!(h.callback.mixer.key_lock_for_measurement(0), key_lock);
         let source = h.ticket(0);
         let pair = h.prepare(0, &source, false, Some(&selection));
@@ -263,12 +311,36 @@ impl Productive {
         let ownership = Arc::new(InputRuntimeOwnership::tracked());
         ownership.publish_source(0, &full, RATE, 1);
         reference.set_input_runtime_ownership(ownership.clone());
-        reference.load_sample(0, full);
+        reference.load_sample(0, full.clone());
         assert!(reference.publish_prepared_stems(0, full_stems));
-        reference.set_loop_region_frames(0, LOOP_START, Some(LOOP_END));
+        reference.set_loop_region_frames(0, loop_region.start, Some(loop_region.end));
+        if full_track {
+            // Complete-source tracked mode ACKs retain their own dry-to-wet
+            // readiness through voice birth. The independent PCM oracle must
+            // use its own equivalent request, rather than legacy scalar ON.
+            let request = ownership.next_key_lock_request(0).unwrap();
+            reference.set_pad_key_lock_request(
+                0,
+                key_lock,
+                request,
+                InputPadBinding {
+                    resident: full.resident_binding(),
+                    source_address: full.source_address(),
+                    sample_count: full.source_sample_count(),
+                    channels: full.channels,
+                    sample_rate_hz: RATE,
+                    authority_revision: ownership.authority[0].load(Ordering::Acquire),
+                    runtime_revision: 0,
+                    accepted: None,
+                },
+                1,
+            );
+        }
         for mixer in [&mut h.callback.mixer, reference.as_mut()] {
             mixer.set_speed(ratio);
-            mixer.set_pad_key_lock(0, key_lock);
+            if !full_track {
+                mixer.set_pad_key_lock(0, key_lock);
+            }
             mixer.set_pad_eq(0, -12.0, -3.0, 4.0);
             assert!(mixer.play_sample_at_output_frame(0, 1.0, 0));
         }
@@ -281,6 +353,7 @@ impl Productive {
             reference_ownership: ownership,
             frame: 0,
             key_lock,
+            loop_region,
         };
         if key_lock {
             fixture.render(13, true);
@@ -314,8 +387,14 @@ impl Productive {
         assert_eq!(taps.missing_reads, 0);
         // Checked finite addressing observes real taps even when ALL's
         // enabled component sum is empty. Zero feed is asserted separately.
-        assert!(taps.min_frame.is_some_and(|frame| frame >= LOOP_START));
-        assert!(taps.max_frame.is_some_and(|frame| frame < LOOP_END));
+        assert!(
+            taps.min_frame
+                .is_some_and(|frame| frame >= self.loop_region.start)
+        );
+        assert!(
+            taps.max_frame
+                .is_some_and(|frame| frame < self.loop_region.end)
+        );
         if timestamp {
             self.reference.render_at_output_frame(
                 self.frame,
@@ -371,11 +450,31 @@ impl Productive {
         assert_ne!(prepared, 0);
         let taps = voice_mut(&mut self.h.callback.mixer)
             .stretch
-            .prepared_tap_observation()
-            .unwrap();
-        assert_eq!(taps.missing_reads, 0);
-        assert!(taps.min_frame.is_some_and(|frame| frame >= LOOP_START));
-        assert!(taps.max_frame.is_some_and(|frame| frame < LOOP_END));
+            .prepared_tap_observation();
+        if self.loop_region.start == 0
+            && self.loop_region.end == self.h.material.sample.frame_count()
+        {
+            // The complete-source worker has no finite-coverage observation.
+            // Actual full PCM output/clock/FIFO remain compared below.
+            assert!(taps.is_none());
+            let bank = self.h.callback.mixer.bank_for_measurement()[0]
+                .as_ref()
+                .unwrap();
+            assert_eq!(bank.resident_start(), 0);
+            assert_eq!(bank.resident_end(), self.loop_region.end);
+            assert_eq!(bank.samples.len(), self.loop_region.end * 2);
+        } else {
+            let taps = taps.expect("finite worker coverage observation");
+            assert_eq!(taps.missing_reads, 0);
+            assert!(
+                taps.min_frame
+                    .is_some_and(|frame| frame >= self.loop_region.start)
+            );
+            assert!(
+                taps.max_frame
+                    .is_some_and(|frame| frame < self.loop_region.end)
+            );
+        }
         let mut partitions = [31_usize, 777, 1, 257, 512].into_iter().cycle();
         while self.frame < target {
             let count = partitions
@@ -2079,6 +2178,7 @@ struct ControllerPlayback {
     components: [SampleBuffer; 4],
     ratio: f64,
     loop_period: f64,
+    loop_start: usize,
     loop_end: usize,
     rate_ledger: Option<ControllerRateLedger>,
     scheduled: bool,
@@ -2333,16 +2433,16 @@ impl ControllerPlayback {
                             whole as f64 + fraction
                         },
                     );
-                    let last =
-                        (self.loop_period.ceil() as usize - 1).min(self.loop_end - LOOP_START - 1);
+                    let last = (self.loop_period.ceil() as usize - 1)
+                        .min(self.loop_end - self.loop_start - 1);
                     let (left, right, fraction) = if phase >= last as f64 {
                         (
-                            LOOP_START + last,
-                            LOOP_START,
+                            self.loop_start + last,
+                            self.loop_start,
                             (phase - last as f64) / (self.loop_period - last as f64),
                         )
                     } else {
-                        let left = LOOP_START + phase.floor() as usize;
+                        let left = self.loop_start + phase.floor() as usize;
                         (left, left + 1, phase.fract())
                     };
                     let knot = |frame: usize, mask: Option<u8>| {
@@ -2446,7 +2546,7 @@ impl ControllerPlayback {
         }
         let taps = tap_observation_for_test();
         assert_eq!(taps.missing_reads, 0);
-        assert!(taps.min_frame.is_some_and(|frame| frame >= LOOP_START));
+        assert!(taps.min_frame.is_some_and(|frame| frame >= self.loop_start));
         assert!(taps.max_frame.is_some_and(|frame| frame < self.loop_end));
         for (mixer, target) in [
             (self.reference.as_mut(), &mut expected),
@@ -2499,7 +2599,7 @@ impl ControllerPlayback {
                 "independent Native FIFO chronology",
             );
         }
-        if self.loop_period != (LOOP_END - LOOP_START) as f64 {
+        if self.loop_start != LOOP_START || self.loop_period != (LOOP_END - LOOP_START) as f64 {
             let (whole, fraction) = self.rate_ledger.as_ref().map_or_else(
                 || {
                     let phase =
@@ -2515,10 +2615,10 @@ impl ControllerPlayback {
             assert_eq!(current.tempo_ratio().to_bits(), ratio.to_bits());
             assert_eq!(
                 current.loop_period().map(f64::to_bits),
-                (self.loop_period != (self.loop_end - LOOP_START) as f64)
+                (self.loop_period != (self.loop_end - self.loop_start) as f64)
                     .then_some(self.loop_period.to_bits())
             );
-            assert_eq!(current.position().frame, LOOP_START + whole);
+            assert_eq!(current.position().frame, self.loop_start + whole);
             assert_eq!(current.position().fraction.to_bits(), fraction.to_bits());
         }
         (output, full_mix)
@@ -2634,19 +2734,32 @@ impl ControllerPlayback {
         );
         let prepared_taps = voice_mut(&mut self.callback.mixer)
             .stretch
-            .prepared_tap_observation()
-            .unwrap();
-        assert_eq!(prepared_taps.missing_reads, 0);
-        assert!(
-            prepared_taps
-                .min_frame
-                .is_some_and(|frame| frame >= LOOP_START)
-        );
-        assert!(
-            prepared_taps
-                .max_frame
-                .is_some_and(|frame| frame < self.loop_end)
-        );
+            .prepared_tap_observation();
+        if self.loop_start == 0 && self.loop_end == self.source.frame_count() {
+            assert!(
+                prepared_taps.is_none(),
+                "complete worker has no finite observation"
+            );
+            let bank = self.callback.mixer.bank_for_measurement()[0]
+                .as_ref()
+                .unwrap();
+            assert_eq!(bank.resident_start(), 0);
+            assert_eq!(bank.resident_end(), self.loop_end);
+            assert_eq!(bank.samples.len(), self.loop_end * 2);
+        } else {
+            let prepared_taps = prepared_taps.expect("finite Native coverage observation");
+            assert_eq!(prepared_taps.missing_reads, 0);
+            assert!(
+                prepared_taps
+                    .min_frame
+                    .is_some_and(|frame| frame >= self.loop_start)
+            );
+            assert!(
+                prepared_taps
+                    .max_frame
+                    .is_some_and(|frame| frame < self.loop_end)
+            );
+        }
         let warm_start =
             target - crate::audio_engine::prepared_native_history::PREPARED_HISTORY_FRAMES as u64;
         if let Some(resumed_at) = self.resumed_at {
@@ -2696,7 +2809,7 @@ impl ControllerPlayback {
         );
         assert_eq!(
             voice(&self.callback.mixer).stretch.native_tap_observation(),
-            Some(prepared_taps)
+            prepared_taps
         );
         let mut remaining = voice(&self.callback.mixer).stretch.rubberband_block_size() * 8;
         for frames in [1_usize, 31, 137, 257, 512].into_iter().cycle() {
@@ -3280,6 +3393,7 @@ assert audio.worker_call_count() == 1 and audio.prepared_only_on_pool_threads()
         components: full_stems.stems.clone(),
         ratio,
         loop_period: (LOOP_END - LOOP_START) as f64,
+        loop_start: LOOP_START,
         loop_end: LOOP_END,
         rate_ledger: None,
         scheduled: false,

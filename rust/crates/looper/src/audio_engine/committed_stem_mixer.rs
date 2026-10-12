@@ -5,10 +5,22 @@ use crate::audio_engine::committed_stem_residency::{
     StemResidencyTransaction, StemVoiceCapture, StemVoicePin,
 };
 use crate::audio_engine::native_source_coverage::{
-    normal_loop_feed_available, normal_loop_feed_available_with_readers,
+    complete_view_available, normal_loop_feed_available, normal_loop_feed_available_with_readers,
 };
 use crate::audio_engine::source_reader::StemReadSets;
 use std::sync::atomic::Ordering;
+
+fn candidate_normal_loop_residency_available(sample: &SampleBuffer) -> bool {
+    sample
+        .residency
+        .as_ref()
+        .is_some_and(|view| match view.context {
+            crate::messages::ResidentContext::FiniteLoop
+            | crate::messages::ResidentContext::KeyLockFiniteLoop => true,
+            crate::messages::ResidentContext::FullTrack
+            | crate::messages::ResidentContext::KeyLockFullTrack => complete_view_available(sample),
+        })
+}
 
 impl RtMixer {
     fn committed_selection_matches(&self, id: usize, selection: &SelectionPermit) -> bool {
@@ -43,15 +55,7 @@ impl RtMixer {
             return None;
         }
         let bank = self.sample_bank[id].as_ref()?;
-        if capture.candidate.is_some()
-            && !bank.residency.as_ref().is_some_and(|view| {
-                matches!(
-                    view.context,
-                    crate::messages::ResidentContext::FiniteLoop
-                        | crate::messages::ResidentContext::KeyLockFiniteLoop
-                )
-            })
-        {
+        if capture.candidate.is_some() && !candidate_normal_loop_residency_available(bank) {
             return None;
         }
         let selection = self.stem_render_selection(id);
@@ -120,9 +124,6 @@ impl RtMixer {
                 )
             };
         playback.configure_domain(timing.loop_domain(sample.frame_count(), region));
-        if capture.candidate.is_some() && region.start == 0 && region.end == sample.frame_count() {
-            return None;
-        }
         let position = playback.position();
         if position.seek_mode != ExplicitSeekMode::Normal {
             return None;
@@ -188,15 +189,9 @@ impl RtMixer {
                             == candidate.predecessor_selection_expected
                         && !self.stem_transitions[id].is_active()
                         && self.outgoing_stems[id].is_none()
-                        && self.sample_bank[id].as_ref().is_some_and(|bank| {
-                            bank.residency.as_ref().is_some_and(|view| {
-                                matches!(
-                                    view.context,
-                                    crate::messages::ResidentContext::FiniteLoop
-                                        | crate::messages::ResidentContext::KeyLockFiniteLoop
-                                )
-                            })
-                        })
+                        && self.sample_bank[id]
+                            .as_ref()
+                            .is_some_and(candidate_normal_loop_residency_available)
                 } else {
                     self.committed_selection_matches(id, &transaction.selection)
                 })

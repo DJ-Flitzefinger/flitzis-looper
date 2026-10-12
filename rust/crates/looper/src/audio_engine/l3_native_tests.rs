@@ -393,6 +393,10 @@ fn bpm_productive(
         reference_ownership: ownership,
         frame: 0,
         key_lock,
+        loop_region: crate::audio_engine::source_reader::FrameRange {
+            start: LOOP_START,
+            end: LOOP_END,
+        },
     };
     if key_lock {
         p.render(13, true);
@@ -1133,97 +1137,197 @@ fn candidate_new_window_ack_wins_and_keeps_the_actual_v1_owner() {
     p.render(257, false);
 }
 
+// Independent full-source phase arithmetic supplements the complete PCM mixer.
+// The oracle does not read the actual SourceReadPlan or borrow candidate readers.
+fn render_full_track(p: &mut Productive, frames: usize) -> bool {
+    let before = voice(&p.h.callback.mixer).source_playback;
+    let position = before.position();
+    let period = p.h.material.sample.frame_count() as f64;
+    assert_eq!(p.loop_region.start, 0);
+    assert_eq!(p.loop_region.end as f64, period);
+    let phase = position.frame as f64 + position.fraction;
+    let distance = frames as f64 * before.tempo_ratio();
+    let output = p.render(frames, false);
+    assert!(output.iter().all(|sample| sample.is_finite()));
+    let actual = voice(&p.h.callback.mixer).source_playback.position();
+    let expected = (phase + distance).rem_euclid(period);
+    let error = (actual.frame as f64 + actual.fraction - expected).abs();
+    assert!(error.min((period - error).abs()) < 1e-8);
+    assert_eq!(
+        actual.seek_mode,
+        crate::audio_engine::source_reader::ExplicitSeekMode::Normal
+    );
+    phase + distance >= period
+}
+
 #[test]
-fn candidate_full_track_callback_bank_rejects_first_and_replacement_without_claim() {
-    for stopped in [false, true] {
-        for selected_v1 in [false, true] {
-            let mut p = Productive::new(false, 0.73);
-            if selected_v1 {
-                make_v1_effective(&mut p);
-            }
-            if stopped {
-                p.h.callback.mixer.stop_sample(0);
-                p.reference.stop_sample(0);
-            }
-            let expanded = prepare_window_with_producer(
-                &p.h.engine,
-                0,
-                WindowRequest {
-                    storage_range: Some((
-                        0.0,
-                        p.h.material.sample.frame_count() as f64 / f64::from(RATE),
-                    )),
-                    ..WindowRequest::default()
-                },
-                p.h.producer.clone(),
-            )
-            .unwrap();
-            wait_until(|| {
-                expanded.publication_status() == "pending" || expanded.error().unwrap().is_some()
-            });
-            assert_eq!(
-                expanded.publication_status(),
-                "pending",
-                "{:?}",
-                expanded.error()
-            );
-            assert_eq!(p.h.callback.drain(&mut p.h.consumer), 1);
-            assert_eq!(expanded.publication_status(), "accepted");
-            assert_eq!(
-                p.h.callback.mixer.bank_for_measurement()[0]
-                    .as_ref()
-                    .unwrap()
-                    .residency
-                    .as_ref()
-                    .unwrap()
-                    .context,
-                crate::messages::ResidentContext::FullTrack
-            );
-            let old = p.h.callback.mixer.stems_for_measurement()[0]
-                .as_ref()
-                .map(|set| set.complete_set_identity.clone());
-            let source = p.h.callback.mixer.bank_for_measurement()[0]
-                .clone()
-                .unwrap();
-            let before = (!stopped).then(|| voice(&p.h.callback.mixer).source_playback);
-            let (_pair, selected) = candidate(&mut p, 112);
-            let receipt = request_candidate(&mut p, &selected, 0b1010);
-            assert_eq!(p.h.callback.drain(&mut p.h.consumer), 1);
-            assert_eq!(receipt.residency_status(), "rejected");
-            assert!(!receipt.claimed());
-            assert!(p.selected.is_current());
-            if let Some(before) = before {
-                assert!(before.matches_exact(&voice(&p.h.callback.mixer).source_playback));
-            } else {
-                // No active old window/voice can explain this rejection: it proves
-                // the explicit candidate FullTrack guard on the actual current bank.
-                assert!(
-                    p.h.callback
-                        .mixer
-                        .voices
-                        .iter()
-                        .all(|voice| !voice.is_playing_sample(0))
-                );
-            }
-            assert!(Arc::ptr_eq(
-                &source.samples,
-                &p.h.callback.mixer.bank_for_measurement()[0]
-                    .as_ref()
-                    .unwrap()
-                    .samples
-            ));
-            match (
-                old.as_ref(),
-                p.h.callback.mixer.stems_for_measurement()[0].as_ref(),
-            ) {
-                (Some(old), Some(current)) => {
-                    assert!(Arc::ptr_eq(old, &current.complete_set_identity))
+fn full_track_first_and_replacement_keep_own_native_fifo_eq_and_actual_seam() {
+    for key_lock in [false, true] {
+        for ratio in [0.73, 1.371_234_567_890_123] {
+            for selected_v1 in [false, true] {
+                let mut p = Productive::full_track(key_lock, ratio);
+                if selected_v1 {
+                    make_v1_effective(&mut p);
                 }
-                (None, None) => {}
-                _ => panic!("rejected full-track candidate changed the predecessor reader"),
+                // Ordinary productive callbacks place the handover at the actual
+                // end-to-start seam; no Seek, restart or phase reset is involved.
+                let position = voice(&p.h.callback.mixer).source_playback.position();
+                let period = p.loop_region.end as f64;
+                let distance =
+                    (period - 64.0 - position.frame as f64 - position.fraction).rem_euclid(period);
+                let frames = (distance / ratio).floor() as usize;
+                if frames != 0 {
+                    render_full_track(&mut p, frames);
+                }
+                let generation = voice(&p.h.callback.mixer).generation;
+                let native = voice(&p.h.callback.mixer).stretch.native_state_address();
+                let original = p.h.callback.mixer.bank_for_measurement()[0]
+                    .clone()
+                    .unwrap();
+                let old = p.h.callback.mixer.stems_for_measurement()[0]
+                    .as_ref()
+                    .map(|set| set.complete_set_identity.clone());
+                let (_pair, selected) = candidate(&mut p, 112);
+                assert!(p.selected.is_current());
+                let receipt = request_candidate(&mut p, &selected, 0b1010);
+                p.capture_then_wait(&receipt);
+                render_full_track(&mut p, 1);
+                let before = voice(&p.h.callback.mixer);
+                let playback = before.source_playback;
+                let fifos = before.stretch.pending_fifo_frames();
+                let history = before.stretch.productive_history();
+                assert_eq!(p.h.callback.drain(&mut p.h.consumer), 1);
+                assert_eq!(
+                    receipt.residency_status(),
+                    "accepted",
+                    "{:?}",
+                    receipt.error()
+                );
+                assert!(receipt.claimed() && selected.is_current() && !p.selected.is_current());
+                assert!(!receipt.withdraw());
+                let actual = voice(&p.h.callback.mixer);
+                assert_eq!(actual.generation, generation);
+                assert!(actual.source_playback.matches_exact(&playback));
+                assert_eq!(actual.stretch.native_state_address(), native);
+                assert_eq!(actual.stretch.pending_fifo_frames(), fifos);
+                if let Some(history) = history {
+                    let after = actual.stretch.productive_history().unwrap();
+                    assert_eq!(after.binding, history.binding);
+                    assert_eq!(after.next_position, history.next_position);
+                    assert_eq!(after.fed_output_frames, history.fed_output_frames);
+                }
+                assert!(
+                    original.same_window(
+                        p.h.callback.mixer.bank_for_measurement()[0]
+                            .as_ref()
+                            .unwrap()
+                    )
+                );
+                let current = &p.h.callback.mixer.stems_for_measurement()[0]
+                    .as_ref()
+                    .unwrap()
+                    .complete_set_identity;
+                if let Some(old) = old {
+                    assert!(!Arc::ptr_eq(&old, current));
+                }
+                p.select_reference("all_stems", reordered_mask(0b1010));
+                p.selected = selected;
+                let mut remaining = (128.0 / ratio).ceil() as usize;
+                let mut wrapped = false;
+                for frames in [1_usize, 31, 17, 7].into_iter().cycle() {
+                    let frames = frames.min(remaining);
+                    wrapped |= render_full_track(&mut p, frames);
+                    assert_eq!(
+                        voice(&p.h.callback.mixer).stretch.native_state_address(),
+                        native
+                    );
+                    remaining -= frames;
+                    if remaining == 0 {
+                        break;
+                    }
+                }
+                assert!(wrapped, "the consumed-source handover must cross N-1 -> 0");
+                assert!(
+                    !p.h.callback
+                        .mixer
+                        .stem_transition_for_measurement(0)
+                        .is_active()
+                );
+                render_full_track(&mut p, 777);
+                if key_lock {
+                    p.render(13, true);
+                    p.adopt_native();
+                }
+                assert_eq!(
+                    receipt.effective_mode_status(),
+                    "effective",
+                    "{:?}",
+                    receipt.error()
+                );
+                assert!(render_full_track(&mut p, (period / ratio).ceil() as usize));
+                assert_eq!(voice(&p.h.callback.mixer).generation, generation);
             }
-            if !stopped {
-                p.render(257, false);
+        }
+    }
+}
+
+#[test]
+fn full_track_paused_and_stopped_adoption_waits_for_own_consumption() {
+    for key_lock in [false, true] {
+        for selected_v1 in [false, true] {
+            for stopped in [false, true] {
+                let mut p = Productive::full_track(key_lock, 0.73);
+                if selected_v1 {
+                    make_v1_effective(&mut p);
+                }
+                if stopped {
+                    p.h.callback.mixer.stop_sample(0);
+                    p.reference.stop_sample(0);
+                } else {
+                    p.h.callback.mixer.pause_sample_at_output_frame(0, p.frame);
+                    p.reference.pause_sample_at_output_frame(0, p.frame);
+                }
+                let (_pair, selected) = candidate(&mut p, 113);
+                let receipt = request_candidate(&mut p, &selected, 0b1010);
+                p.capture_then_wait(&receipt);
+                assert_eq!(p.h.callback.drain(&mut p.h.consumer), 1);
+                assert_eq!(
+                    receipt.residency_status(),
+                    "accepted",
+                    "{:?}",
+                    receipt.error()
+                );
+                assert!(receipt.claimed() && selected.is_current());
+                p.select_reference("all_stems", reordered_mask(0b1010));
+                p.selected = selected;
+                if stopped {
+                    assert_eq!(receipt.effective_mode_status(), "waiting");
+                    assert!(
+                        p.h.callback
+                            .mixer
+                            .voices
+                            .iter()
+                            .all(|voice| !voice.is_playing_sample(0))
+                    );
+                    assert!(
+                        p.h.callback
+                            .mixer
+                            .play_sample_at_output_frame(0, 1.0, p.frame)
+                    );
+                    assert!(p.reference.play_sample_at_output_frame(0, 1.0, p.frame));
+                } else {
+                    for frames in [1, 127, 384] {
+                        p.render_paused(frames);
+                        assert_eq!(receipt.effective_mode_status(), "transitioning");
+                    }
+                    p.h.callback.mixer.resume_sample_at_output_frame(0, p.frame);
+                    p.reference.resume_sample_at_output_frame(0, p.frame);
+                }
+                settle(&mut p, &receipt);
+                assert!(render_full_track(
+                    &mut p,
+                    (4096.0_f64 / 0.73).ceil() as usize
+                ));
             }
         }
     }

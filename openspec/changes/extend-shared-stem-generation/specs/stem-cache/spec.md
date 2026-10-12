@@ -66,6 +66,12 @@ effective audio with visible status; no stop/retrigger or position jump SHALL be
 used to claim successful live adoption. Old voice A SHALL retain its own frozen
 source/set/timing/history even after current bank B changes.
 
+The system SHALL permit first and replacement new-complete-set adoption on a
+physically complete resident NormalLoop `[0,N)` with KEY LOCK OFF or ON through
+the same own Capture, off-thread preparation and guarded Adopt transaction.
+Complete residency SHALL NOT authorize explicit Seek, Intro, Tail, frozen
+old-source voices, multiple same-pad voices or another unproved playback domain.
+
 New-set preparation SHALL retain separate candidate and actual predecessor
 authority. Registering or preparing candidate V2 SHALL NOT revoke V1's accepted
 selection, source, resident-intent or Native/history permits. Capture SHALL pin
@@ -122,6 +128,15 @@ immediate change SHALL NOT silently discard the command.
 - **WHEN** source, request, timing, window, voice/history or capacity no longer matches, or the requested domain lacks a genuine coverage proof
 - **THEN** native adoption rejects safely and the current FullMix/stem/KEYLOCK trajectory remains usable
 - **AND** neither a complete disk descriptor nor a same-set residency permission bypasses the guard
+
+#### Scenario: Complete NormalLoop adopts first and replacement sets
+
+- **GIVEN** a callback-acknowledged FullTrack or KeyLockFullTrack resident source physically covering `[0,N)`, a NormalLoop over that complete extent, and fresh own source/window/timing authority
+- **WHEN** a distinct verified complete set obtains that pad's own Capture, off-thread preparation and guarded Adopt from FullMix or selected V1
+- **THEN** both exact reader generations SHALL physically cover the complete source and both `N-1` to `0` seam taps throughout the 128-consumed-source-frame handover
+- **AND** fractional nonunity playback, source position, actual voice, Native/FIFO and uninterrupted filter history SHALL remain continuous; later own complete Native preparation SHALL establish the new set's actual wet effectiveness with KEY LOCK ON
+- **AND** paused adoption SHALL consume no source or report audible effectiveness before Resume, and stopped readiness SHALL require its own later playback/effect observation
+- **AND** the existing source/launch/timing/window/history/capacity fences SHALL remain authoritative; this complete NormalLoop proof SHALL NOT authorize explicit Seek, Intro, Tail, frozen old-source or multiple same-pad voices
 
 #### Scenario: Acknowledged Intro or Tail seek rejects a fresh new-set candidate
 

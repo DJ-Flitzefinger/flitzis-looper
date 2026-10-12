@@ -102,6 +102,7 @@ const UNKNOWN_PCM_BYTES: &[u8] = b"caller-owned post-admission PCM child";
 #[derive(Clone, Copy)]
 enum CandidateTrace {
     Ordinary,
+    FullTrack,
     RepeatedSets,
     WithdrawPreclaim,
     AdmissionPressure,
@@ -1083,6 +1084,30 @@ fn complete_reference_with_timing(
         f64,
     )>,
 ) -> Box<RtMixer> {
+    complete_reference_at_loop(
+        full,
+        stems,
+        ratio,
+        key_lock_enabled,
+        timing,
+        crate::audio_engine::source_reader::FrameRange {
+            start: LOOP_START,
+            end: LOOP_END,
+        },
+    )
+}
+
+fn complete_reference_at_loop(
+    full: &SampleBuffer,
+    stems: &PreparedStemSet,
+    ratio: f64,
+    key_lock_enabled: bool,
+    timing: Option<(
+        crate::audio_engine::constant_timing::AcceptedTimingProjection,
+        f64,
+    )>,
+    region: crate::audio_engine::source_reader::FrameRange,
+) -> Box<RtMixer> {
     let accepted = timing.map(|(projection, _)| projection);
     let mut mixer = Box::new(RtMixer::new(2, RATE as f32));
     let ownership = Arc::new(InputRuntimeOwnership::tracked());
@@ -1107,7 +1132,7 @@ fn complete_reference_with_timing(
         mixer.set_bpm_lock(true);
         mixer.set_master_period(master_period);
     }
-    mixer.set_loop_region_frames(0, LOOP_START, Some(LOOP_END));
+    mixer.set_loop_region_frames(0, region.start, Some(region.end));
     mixer.set_speed(ratio);
     let key_lock = ownership.next_key_lock_request(0).unwrap();
     mixer.set_pad_key_lock_request(
@@ -1244,7 +1269,10 @@ fn render_varispeed_with_historical_adoption(
     }
     let taps = tap_observation_for_test();
     assert_eq!(taps.missing_reads, 0);
-    assert!(taps.min_frame.is_some_and(|frame| frame >= LOOP_START));
+    assert!(
+        taps.min_frame
+            .is_some_and(|frame| frame >= playback.loop_start)
+    );
     assert!(
         taps.max_frame
             .is_some_and(|frame| frame < playback.loop_end)
@@ -1310,7 +1338,10 @@ fn render_varispeed_with_historical_adoption(
         },
         |ledger| ledger.position(end),
     );
-    assert_eq!(current.source_playback.position().frame, LOOP_START + whole);
+    assert_eq!(
+        current.source_playback.position().frame,
+        playback.loop_start + whole
+    );
     assert_eq!(
         current.source_playback.position().fraction.to_bits(),
         fraction.to_bits()
@@ -1326,7 +1357,7 @@ fn render_varispeed_with_historical_adoption(
     if playback.rate_ledger.is_some() {
         assert_eq!(
             current.source_playback.loop_period().map(f64::to_bits),
-            (playback.loop_period != (playback.loop_end - LOOP_START) as f64)
+            (playback.loop_period != (playback.loop_end - playback.loop_start) as f64)
                 .then_some(playback.loop_period.to_bits())
         );
     }
@@ -7073,6 +7104,7 @@ fn round_trip(
     paused_first: bool,
     trace: CandidateTrace,
 ) {
+    let full_track = matches!(trace, CandidateTrace::FullTrack);
     let final_reader = matches!(
         trace,
         CandidateTrace::FinalReader
@@ -7217,6 +7249,14 @@ fn round_trip(
     let saved_selection = selection(&oracle_pair);
     let mut saved = h.save(&oracle_pair);
     let full = h.material.sample.clone();
+    let loop_region = crate::audio_engine::source_reader::FrameRange {
+        start: if full_track { 0 } else { LOOP_START },
+        end: if full_track {
+            full.frame_count()
+        } else {
+            LOOP_END
+        },
+    };
     let original_before = final_reader.then(|| fs::read(&h.material.lease.original_path).unwrap());
     let full_stems = PreparedStemSet {
         complete_set_identity: Arc::new([0x74; 32]),
@@ -7243,7 +7283,7 @@ fn round_trip(
             }),
     };
     assert!(full_stems.stems.iter().all(|component| {
-        component.samples[LOOP_START * 2..LOOP_END * 2]
+        component.samples[loop_region.start * 2..loop_region.end * 2]
             .iter()
             .any(|value| value.abs() > 0.04)
     }));
@@ -7252,10 +7292,10 @@ fn round_trip(
         &h.engine,
         0,
         WindowRequest {
-            key_lock: Some(key_lock),
+            key_lock: Some(key_lock && !full_track),
             loop_region: Some((
-                LOOP_START as f64 / f64::from(RATE),
-                Some(LOOP_END as f64 / f64::from(RATE)),
+                loop_region.start as f64 / f64::from(RATE),
+                Some(loop_region.end as f64 / f64::from(RATE)),
             )),
             ..WindowRequest::default()
         },
@@ -7266,7 +7306,36 @@ fn round_trip(
     assert_eq!(h.callback.drain(&mut h.consumer), 1);
     assert_eq!(window.publication_status(), "accepted");
     reconcile(&h.engine).unwrap();
+    if full_track && key_lock {
+        let mode = prepare_window_with_producer(
+            &h.engine,
+            0,
+            WindowRequest {
+                key_lock: Some(true),
+                ..WindowRequest::default()
+            },
+            h.producer.clone(),
+        )
+        .unwrap();
+        wait_until(|| h.consumer.peek().is_ok() || mode.error().unwrap().is_some());
+        assert_eq!(h.callback.drain(&mut h.consumer), 1);
+        assert_eq!(mode.publication_status(), "accepted", "{:?}", mode.error());
+        reconcile(&h.engine).unwrap();
+    }
     let finite = h.callback.mixer.bank_for_measurement()[0].clone().unwrap();
+    if full_track {
+        assert_eq!(finite.resident_start(), 0);
+        assert_eq!(finite.resident_end(), full.frame_count());
+        assert_eq!(finite.samples.len(), full.frame_count() * 2);
+        assert_eq!(
+            finite.residency.as_ref().unwrap().context,
+            if key_lock {
+                crate::messages::ResidentContext::KeyLockFullTrack
+            } else {
+                crate::messages::ResidentContext::FullTrack
+            }
+        );
+    }
     let other_source = h.callback.mixer.bank_for_measurement()[215]
         .clone()
         .unwrap();
@@ -7548,6 +7617,7 @@ persistence.flush()
             components: full_stems.stems.clone(),
             ratio,
             loop_period: (LOOP_END - LOOP_START) as f64,
+            loop_start: LOOP_START,
             loop_end: LOOP_END,
             rate_ledger: None,
             scheduled: false,
@@ -7658,19 +7728,21 @@ owner_v2.release()
     });
     let mut playback = ControllerPlayback {
         callback: h.callback,
-        reference: complete_reference_with_timing(
+        reference: complete_reference_at_loop(
             &full,
             &full_stems,
             ratio,
             key_lock,
             oracle_timing,
+            loop_region,
         ),
-        full_mix: complete_reference_with_timing(
+        full_mix: complete_reference_at_loop(
             &full,
             &full_stems,
             ratio,
             key_lock,
             oracle_timing,
+            loop_region,
         ),
         frame: 0,
         source_frame: 0,
@@ -7678,10 +7750,11 @@ owner_v2.release()
         source: full.clone(),
         components: full_stems.stems.clone(),
         ratio,
-        loop_period: accepted.map_or((LOOP_END - LOOP_START) as f64, |projection| {
+        loop_period: accepted.map_or((loop_region.end - loop_region.start) as f64, |projection| {
             projection.period_seconds * f64::from(RATE) / 16.0
         }),
-        loop_end: LOOP_END,
+        loop_start: loop_region.start,
+        loop_end: loop_region.end,
         rate_ledger: (live_bpm || public_rate_adoption).then(|| {
             ControllerRateLedger::new(
                 ratio,
@@ -8147,6 +8220,23 @@ assert previous_control.ticket.is_current()
         std::env::set_current_dir(previous_cwd).unwrap();
         return;
     }
+    if full_track {
+        // Live callbacks move the queued candidate near the complete-source seam.
+        // Own Capture/Adopt still rechecks the continuously advancing real cursor.
+        let phase =
+            (playback.source_frame as f64 * playback.ratio).rem_euclid(playback.loop_period);
+        let distance = (playback.loop_period - 64.0 - phase).rem_euclid(playback.loop_period);
+        let mut remaining = (distance / playback.ratio).floor() as usize;
+        while remaining != 0 {
+            let count = remaining.min(511);
+            if key_lock {
+                playback.render(count, false);
+            } else {
+                render_varispeed(&mut playback, count);
+            }
+            remaining -= count;
+        }
+    }
     if public_rate_adoption {
         assert_eq!(
             playback.drain(&mut h.consumer),
@@ -8267,6 +8357,13 @@ assert previous_control.ticket.is_current()
         full_stems.source_version_hash
     ));
     playback.select(Some(oracle_mask));
+    if full_track {
+        let phase = (playback.ramp_start as f64 * playback.ratio).rem_euclid(playback.loop_period);
+        assert!(
+            phase < playback.loop_period && phase + 128.0 > playback.loop_period,
+            "public own handover crosses the complete-source seam"
+        );
+    }
     if public_rate_adoption {
         let boundary = public_rate_start.unwrap() + 512;
         assert_eq!(playback.ramp_start + 12, boundary);
@@ -8689,7 +8786,7 @@ else:
             other.source_playback.tempo_ratio().to_bits(),
             playback.ratio.to_bits()
         );
-    } else if window_change || retriggered_at.is_some() {
+    } else if window_change || retriggered_at.is_some() || full_track {
         assert_eq!(
             playback.frame - playback.source_frame,
             retriggered_at.unwrap_or(0)
@@ -9984,6 +10081,58 @@ fn actual_python_controller_varispeed_paused_before_first_candidate_keeps_consum
     assert!(
         output.status.success(),
         "L3 OFF paused-first child failed:\n{}\n{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert!(String::from_utf8_lossy(&output.stdout).contains("1 passed; 0 failed"));
+}
+
+#[test]
+fn actual_public_full_track_first_and_replacement_require_own_wet_effect() {
+    full_track_public_child(true);
+}
+
+#[test]
+fn actual_public_full_track_first_and_replacement_require_own_dry_effect() {
+    full_track_public_child(false);
+}
+
+fn full_track_public_child(key_lock: bool) {
+    let (child, name) = if key_lock {
+        (
+            "FLITZI_L3_FULL_TRACK_ON_CHILD",
+            "actual_public_full_track_first_and_replacement_require_own_wet_effect",
+        )
+    } else {
+        (
+            "FLITZI_L3_FULL_TRACK_OFF_CHILD",
+            "actual_public_full_track_first_and_replacement_require_own_dry_effect",
+        )
+    };
+    if std::env::var_os(child).is_some() {
+        for selected_v1 in [false, true] {
+            round_trip(
+                selected_v1,
+                None,
+                key_lock,
+                None,
+                false,
+                CandidateTrace::FullTrack,
+            );
+        }
+        return;
+    }
+    let test = format!(
+        "audio_engine::cold_load::tests::stem_pair_publication_tests::committed_stem_residency_tests::l3_controller_productive_tests::{name}"
+    );
+    let output = std::process::Command::new(std::env::current_exe().unwrap())
+        .args(["--exact", &test, "--nocapture", "--test-threads=1"])
+        .env(child, "1")
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "FullTrack public child failed:\n{}\n{}",
         String::from_utf8_lossy(&output.stdout),
         String::from_utf8_lossy(&output.stderr)
     );

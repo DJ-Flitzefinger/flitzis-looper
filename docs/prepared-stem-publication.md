@@ -196,7 +196,9 @@ Active adoption requires the identical complete source and already accepted
 complete set token/content, matching fullmix/components and coverage of the actual
 voice trajectory. Source fraction, rate/ramp, filter and native/FIFO state stay
 coherent; old job/voice allocations remain pinned until their final reader retires.
-Introducing a new complete set or source generation remains inactive-only.
+This generic publication path keeps new complete sets and source generations
+inactive-only. The separate [L3 candidate transaction](#l3-finite-normalloop-new-set-adoption--2026-10-11)
+provides the proved live new-set route without granting new-source authority.
 C2b source-bound control preparation changes matching fullmix/stem windows and
 loop/seek/Key Lock effect under one native ACK. Complete source/set identity,
 timing and history still govern adoption; pending/error/cancellation leaves
@@ -526,14 +528,80 @@ transition afterwards. A later explicit accepted ALL intent can supersede that
 release; neither path discards a reader still needed by the current ramp.
 
 Supported candidates require a current FiniteLoop/KeyLockFiniteLoop resident
-context with a proper NormalLoop region, and either no active voice or one current
-voice playing or paused. Existing ramps, FullTrack/whole-source-loop contexts,
-explicit seek/Intro/Tail, frozen old-source or multiple same-pad voices remain
+context or a physically complete FullTrack/KeyLockFullTrack view, a NormalLoop
+region including the complete `[0,N)` extent, and either no active voice or one
+current voice playing or paused. Existing ramps, explicit seek/Intro/Tail,
+frozen old-source or multiple same-pad voices remain
 guarded pending their own productive new-set proofs. Ordinary active publication
 retains its existing `PadPlaying` guard; this candidate transaction supplies the
 separately proved path. This bounded delivery does not close additional-domain
 L3 obligations, L4 UI/all final-reader families, whole P4b/P5a, Bulk/RECORD,
 musical/resource or Human GUI/device/hearing acceptance.
+
+### Complete resident NormalLoop new-set adoption — 2026-10-12
+
+The additional supported domain is a physically complete resident NormalLoop
+`[0,N)`. Capture and Adopt use one bounded residency predicate: finite context
+tags retain their existing coverage path, while FullTrack/KeyLockFullTrack require
+the actual complete source layout and both physical bounds. The whole-source-loop
+rejection is removed; all own candidate/predecessor, source/launch/timing/window,
+single current voice, Normal seek mode, history and capacity fences remain. The
+existing two-reader feed check still proves source and exact old/new component
+coverage before claim. No callback preparation, I/O, Python, inference or lock is
+added by this scalar predicate.
+
+The two Native `full_track_*` tests build real OFF FullTrack through an own window
+ACK before voice birth. ON then uses a real mode-only ACK to obtain
+KeyLockFullTrack without changing its full extent. Eight running combinations
+cover first FullMix and selected V1 replacement, OFF/ON and fractional rates
+0.73/1.371234567890123. Ordinary productive callbacks place the actual 128-source-
+frame handover across the `N-1 -> 0` seam. Complete independent V1 PCM with only
+the expected component permutation supplies every sample; separate checkpoint
+phase arithmetic checks local constant-rate continuation. Actual own Adopt
+retains the voice, source fraction, Native handle, FIFOs and chronological EQ;
+ON obtains later own complete Native preparation and productive wet output.
+Eight paused/stopped combinations also distinguish accepted residency from
+effectiveness until own Resume/Play and actual source consumption.
+
+The two public `actual_public_full_track_*` child tests exercise first/replacement
+OFF/ON through the real StemController, two-worker preparation, own registration,
+Capture and Adopt. They start from the real acknowledged full residency; initial
+voice birth uses the existing device-free Native harness. Every output sample is
+checked against complete independent PCM and uninterrupted nonneutral EQ.
+OFF additionally checks the real Varispeed feed; ON uses a separately created raw
+Native/FIFO oracle and independently reconstructs each later 4096-frame warmfeed
+from the absolute consumed-source ledger. The own handover crosses the full-source
+seam. Pad215 retains its separate finite `17..1517` geometry, source, generation,
+Native/FIFO/demand and independent absolute phase. Neither its ACK nor V2's disk
+selection confirms Pad0's audio. Own controller effect and model-free reopen
+remain distinct from accepted preparation.
+
+Complete-source workers intentionally have no finite-coverage tap observation;
+the tests require that `None`, actual complete physical reader bounds and the
+independent output/warmfeed proofs. Existing finite `Some` observations and exact
+`17..1517` assertions are retained. This delivery does not prove public transport
+Play's context tag, Intro/Tail/Seek, frozen old-source or multiple same-pad voices.
+Task3.3, whole P4b/P5a/P5b, full-track lifecycle/resource/music and Human
+GUI/device/hearing gates remain open; earlier finite4.2/4.3 closure is not widened.
+
+Validation: the final four FullTrack focus tests pass in Release (19.35s,
+58.36s compile), followed by a fresh whole committed-stem residency suite:
+85 PASS in 242.02s (0.17s compile). The fresh production Release wheel builds in
+21.67s and is extracted into a separate build-only runtime. Candidate API,
+controller and UI import preflight pass; six impacted Python controller files
+pass 154 tests in 58.49s against that runtime and current Python source. Clippy
+workspace/tests exits0 in 7.73s with the same37 warning kinds and no changed-file
+diagnostics. Cargo fmt, official strict OpenSpec, the new local documentation
+anchor and diff whitespace checks pass. ONE independent source/test/spec/docs
+review closes its Pad215 oracle finding; no open code findings remain.
+
+Earlier failures remain recorded: initial ON oracle used legacy mode readiness;
+the next fixture assumed a finite tap observation for the complete worker;
+the public helper initially compared nested observation Options; and the first
+public run retained an obsolete same-domain Pad215 assertion. These were fixture
+corrections preserving the actual own receipts and finite checks. No production
+guard or PCM tolerance was weakened to fix them. No installed Native, Human App,
+device or listening acceptance is changed or claimed by this software delivery.
 
 ### Consolidated task3.2 closure — 2026-10-12
 
