@@ -549,6 +549,15 @@ Original FullMix/source PCM SHALL remain usable after stem deletion.
 - **THEN** predecessor WAV/PCM/descriptor files remain immutable and protected
 - **AND** off-thread cleanup occurs only after that actual final reader retires
 
+#### Scenario: Productive replacement retires through both native owner lanes
+- **GIVEN** V1 has its own effective KEYLOCK ON output and V2 has a fresh complete-set Capture/Adopt transaction
+- **WHEN** the 128-source-frame handover finishes while callback retirement has no capacity
+- **THEN** the outgoing V1 reader SHALL remain owned with continuous source, Native/FIFO and filter output
+- **WHEN** capacity returns and the existing audio retirement worker consumes that outgoing reader
+- **THEN** the still-used V1 Native/history reader SHALL continue protecting its immutable WAV, PCM and descriptor areas
+- **AND** only V2's own later complete Native preparation and retirement of all remaining V1 readers SHALL allow the existing off-thread asset worker to clean up V1
+- **AND** V2, the current original and unrelated playing pads SHALL remain usable
+
 #### Scenario: Cleanup races a new generation or fails sharing
 - **WHEN** cleanup encounters a new generation, unknown file, external path, reparse point or sharing denial
 - **THEN** it preserves non-owned content and defers/report failures through bounded control status

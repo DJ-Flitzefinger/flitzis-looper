@@ -83,6 +83,8 @@ const FROZEN_ON_CHILD: &str = "FLITZI_L3_FROZEN_OLD_ON_CHILD";
 const FROZEN_ON_TEST: &str = "audio_engine::cold_load::tests::stem_pair_publication_tests::committed_stem_residency_tests::l3_controller_productive_tests::actual_native_current_bank_candidate_cannot_borrow_frozen_old_voice_with_keylock_on";
 const FROZEN_OFF_CHILD: &str = "FLITZI_L3_FROZEN_OLD_OFF_CHILD";
 const FROZEN_OFF_TEST: &str = "audio_engine::cold_load::tests::stem_pair_publication_tests::committed_stem_residency_tests::l3_controller_productive_tests::actual_native_current_bank_candidate_cannot_borrow_frozen_old_voice_with_keylock_off";
+const FINAL_READER_CHILD: &str = "FLITZI_L4_PRODUCTIVE_FINAL_READER_CHILD";
+const FINAL_READER_TEST: &str = "audio_engine::cold_load::tests::stem_pair_publication_tests::committed_stem_residency_tests::l3_controller_productive_tests::actual_productive_replacement_waits_for_last_native_reader_and_asset_worker";
 
 #[derive(Clone, Copy)]
 enum CandidateTrace {
@@ -108,6 +110,7 @@ enum CandidateTrace {
     Unload,
     FrozenOld,
     PausedReplacement,
+    FinalReader,
 }
 
 /// Public cold admission/event polling are unchanged. The stream-bound scalar
@@ -1485,6 +1488,15 @@ fn settle_wet_after(
             .stem_transition_for_measurement(0)
             .is_active()
     );
+    finish_wet_after_ramp(playback, locals, name, minimum_warm_start);
+}
+
+fn finish_wet_after_ramp(
+    playback: &mut ControllerPlayback,
+    locals: &Py<PyDict>,
+    name: &str,
+    minimum_warm_start: Option<u64>,
+) {
     // This real timestamped feed starts a fresh ordinary Native preparation.
     // adopt_native independently reconstructs its complete 4096-frame raw feed.
     let after_ramp = playback.frame;
@@ -1529,6 +1541,176 @@ fn settle_wet_after(
             "assert {name}.is_current() and {name}.claimed()\ncontroller.on_frame_render()\nassert not session.stem_generation_errors, session.stem_generation_errors"
         ),
     );
+}
+
+struct FinalReaderProbe {
+    identity: std::sync::Weak<[u8; 32]>,
+    pcm: [std::sync::Weak<[f32]>; 4],
+    areas: [PathBuf; 3],
+    files: Vec<(PathBuf, Vec<u8>)>,
+}
+
+impl FinalReaderProbe {
+    fn new(root: &Path, selection: &Value, actual: &PreparedStemSet) -> Self {
+        let areas = ["wav_generation", "pcm_generation", "descriptor_reference"]
+            .map(|field| selected_path(root, selection, field));
+        let mut files = Vec::new();
+        for area in &areas {
+            if area.is_file() {
+                files.push((area.clone(), fs::read(area).unwrap()));
+            } else {
+                for entry in fs::read_dir(area).unwrap() {
+                    let path = entry.unwrap().path();
+                    assert!(path.is_file());
+                    files.push((path.clone(), fs::read(path).unwrap()));
+                }
+            }
+        }
+        Self {
+            identity: Arc::downgrade(&actual.complete_set_identity),
+            pcm: std::array::from_fn(|index| Arc::downgrade(&actual.stems[index].samples)),
+            areas,
+            files,
+        }
+    }
+
+    fn assert_retained(&self) {
+        assert!(self.identity.strong_count() > 0);
+        assert!(self.pcm.iter().all(|pcm| pcm.strong_count() > 0));
+        for (path, before) in &self.files {
+            assert_eq!(
+                &fs::read(path).unwrap(),
+                before,
+                "retained file: {}",
+                path.display()
+            );
+        }
+    }
+
+    fn wait_for(&self, stage: &str, mut ready: impl FnMut() -> bool) {
+        let start = Instant::now();
+        while !ready() {
+            assert!(
+                start.elapsed() < Duration::from_secs(10),
+                "{stage}: identity={}, PCM={:?}, areas={:?}",
+                self.identity.strong_count(),
+                self.pcm.each_ref().map(std::sync::Weak::strong_count),
+                self.areas.each_ref().map(|path| path.exists())
+            );
+            std::thread::sleep(Duration::from_millis(1));
+        }
+    }
+}
+
+fn productive_final_reader_after_claim(
+    engine: &AudioEngine,
+    playback: &mut ControllerPlayback,
+    locals: &Py<PyDict>,
+    old: &FinalReaderProbe,
+    current: &FinalReaderProbe,
+) {
+    assert!(playback.callback.retirement.actual.is_some());
+    assert!(playback.callback.retirement.retired.is_empty());
+    // Test-local receipts/registrations must not counterfeit a final native reader.
+    // The controller has already observed V2's own accepted residency above.
+    controller_python(locals, "del first, previous_control");
+    // The regular public Native loader poll reconciles accepted control caches.
+    // Receipt-only controller polling cannot end those separate native owners.
+    Python::attach(|py| {
+        engine.poll_loader_events(py).unwrap();
+    });
+    old.assert_retained();
+    current.assert_retained();
+    let native = voice(&playback.callback.mixer)
+        .stretch
+        .native_state_address();
+    let generation = voice(&playback.callback.mixer).generation;
+    playback.callback.retirement.slots = 0;
+    playback.ramp(locals, "candidate", playback.ratio);
+    let outgoing = playback
+        .callback
+        .mixer
+        .outgoing_stems_for_measurement(0)
+        .unwrap();
+    assert!(
+        old.identity
+            .ptr_eq(&Arc::downgrade(&outgoing.complete_set_identity))
+    );
+    old.assert_retained();
+    current.assert_retained();
+    assert!(playback.callback.retirement.retired.is_empty());
+    let held_counts = old.pcm.each_ref().map(std::sync::Weak::strong_count);
+    playback.callback.retirement.slots = usize::MAX;
+    playback.render(1, false);
+    assert!(
+        playback
+            .callback
+            .mixer
+            .outgoing_stems_for_measurement(0)
+            .is_none()
+    );
+    // An older Adopt payload can also hold V1. Place an independent marker after
+    // the actual outgoing transfer in the same production FIFO. Its completed
+    // Drop proves the worker consumed every prior owner, not just some V1 Arc.
+    let marker = Arc::new(AtomicU8::new(0));
+    let completion = Arc::downgrade(&marker);
+    playback.callback.retirement.retire_cold_adoption(marker);
+    old.wait_for("FIFO worker completion after outgoing transfer", || {
+        completion.strong_count() == 0
+    });
+    old.wait_for("audio worker outgoing transfer", || {
+        old.pcm
+            .iter()
+            .zip(held_counts)
+            .all(|(pcm, held)| pcm.strong_count() < held)
+    });
+    assert!(playback.callback.retirement.retired.is_empty());
+    assert_eq!(voice(&playback.callback.mixer).generation, generation);
+    assert_eq!(
+        voice(&playback.callback.mixer)
+            .stretch
+            .native_state_address(),
+        native
+    );
+    assert_eq!(
+        controller_ticket_status(locals, "candidate", "effective_mode_status"),
+        "transitioning"
+    );
+    // No outgoing slot or shared oracle Arcs remain. The used V1 Native/history
+    // still protects every actual component and the complete pair on disk.
+    old.assert_retained();
+    current.assert_retained();
+    assert!(fs::write(old.areas[1].join("vocals.f32le"), b"leased overwrite").is_err());
+    let after_ramp = playback.frame;
+    finish_wet_after_ramp(playback, locals, "candidate", Some(after_ramp));
+    assert_ne!(
+        voice(&playback.callback.mixer)
+            .stretch
+            .native_state_address(),
+        native
+    );
+    assert_eq!(voice(&playback.callback.mixer).generation, generation);
+    Python::attach(|py| {
+        engine.poll_loader_events(py).unwrap();
+    });
+    old.wait_for("actual final native pins", || {
+        Python::attach(|py| {
+            engine.poll_loader_events(py).unwrap();
+        });
+        old.identity.strong_count() == 0 && old.pcm.iter().all(|pcm| pcm.strong_count() == 0)
+    });
+    // Use the actual process-wide asset worker, with no collect_for_test shortcut.
+    old.wait_for("productive asset worker cleanup", || {
+        Python::attach(|py| {
+            engine.poll_loader_events(py).unwrap();
+        });
+        old.areas.iter().all(|path| !path.exists())
+    });
+    current.assert_retained();
+    for frames in [1, 137, 511, 257] {
+        playback.render(frames, false);
+        current.assert_retained();
+    }
 }
 
 fn settle_empty(
@@ -6366,6 +6548,15 @@ fn round_trip(
     paused_first: bool,
     trace: CandidateTrace,
 ) {
+    let final_reader = matches!(trace, CandidateTrace::FinalReader);
+    assert!(
+        !final_reader
+            || (selected_v1
+                && key_lock
+                && delete_pause.is_none()
+                && stopped_before_poll.is_none()
+                && !paused_first)
+    );
     let repeated_sets = matches!(trace, CandidateTrace::RepeatedSets);
     let claimed_masks = matches!(trace, CandidateTrace::ClaimedMasks);
     let preclaim_masks = matches!(trace, CandidateTrace::PreclaimMasks);
@@ -6459,6 +6650,14 @@ fn round_trip(
     } else {
         long_harness()
     };
+    let _retirement_worker = final_reader.then(|| {
+        let (actual, worker) =
+            crate::audio_engine::buffer_retirement::create_audio_buffer_retirement();
+        // End setup-only collecting owners on this control thread before render.
+        h.callback.retirement.retired.clear();
+        h.callback.retirement.actual = Some(actual);
+        worker
+    });
     let accepted = public_bpm.then(|| l3_native_tests::accepted_bpm_timing(&mut h));
     // Only the exact child owns this cwd and its project config/artifact paths.
     std::env::set_current_dir(h.root.parent().unwrap()).unwrap();
@@ -6474,8 +6673,9 @@ fn round_trip(
         0
     );
     let saved_selection = selection(&oracle_pair);
-    let _saved = h.save(&oracle_pair);
+    let mut saved = h.save(&oracle_pair);
     let full = h.material.sample.clone();
+    let original_before = final_reader.then(|| fs::read(&h.material.lease.original_path).unwrap());
     let full_stems = PreparedStemSet {
         complete_set_identity: Arc::new([0x74; 32]),
         reference_samples: full.samples.clone(),
@@ -6486,7 +6686,19 @@ fn round_trip(
         channels: 2,
         frame_count: full.frame_count(),
         available_mask: 0b1111,
-        stems: oracle_pair.component_views_for_test().unwrap().clone(),
+        stems: oracle_pair
+            .component_views_for_test()
+            .unwrap()
+            .each_ref()
+            .map(|component| {
+                let mut oracle = component.clone();
+                if final_reader {
+                    // Expected audio has its own complete PCM allocation. It must not
+                    // hold the registered generation's actual final native readers.
+                    oracle.samples = Arc::from(component.samples.as_ref().to_vec());
+                }
+                oracle
+            }),
     };
     assert!(full_stems.stems.iter().all(|component| {
         component.samples[LOOP_START * 2..LOOP_END * 2]
@@ -7092,6 +7304,15 @@ assert session.paused_sample_ids == {0, 215}
     let predecessor = playback.callback.mixer.stems_for_measurement()[0]
         .as_ref()
         .map(|stems| stems.complete_set_identity.clone());
+    let final_old = final_reader.then(|| {
+        FinalReaderProbe::new(
+            &h.root,
+            &fixture["pair"],
+            playback.callback.mixer.stems_for_measurement()[0]
+                .as_ref()
+                .unwrap(),
+        )
+    });
     let predecessor_set = (repeated_sets || (claimed_masks && selected_v1)).then(|| {
         playback.callback.mixer.stems_for_measurement()[0]
             .clone()
@@ -7186,6 +7407,14 @@ assert candidate.effective_mode_status() == 'waiting'
 assert previous_control.ticket.is_current()
 "#,
     );
+    if let Some(old) = &final_old {
+        saved.release();
+        controller_python(
+            &locals,
+            "controller._assets.sync_assignments()\naudio.retire_project_asset(str(Path(disk_v1.wav_generation).absolute()), True)\nowner_v1.release()",
+        );
+        old.assert_retained();
+    }
     if !(queue_pressure || capture_deadline) {
         let current = voice(&playback.callback.mixer);
         assert!(current.source_playback.matches_exact(&initial_clock));
@@ -7607,7 +7836,32 @@ assert not session.paused_sample_ids
                 );
             }
         }
-        if key_lock {
+        if let Some(old) = &final_old {
+            let candidate: Value = Python::attach(|py| {
+                serde_json::from_str(
+                    &locals
+                        .bind(py)
+                        .get_item("candidate_json")
+                        .unwrap()
+                        .unwrap()
+                        .extract::<String>()
+                        .unwrap(),
+                )
+                .unwrap()
+            });
+            let current = FinalReaderProbe::new(
+                &h.root,
+                &candidate,
+                playback.callback.mixer.stems_for_measurement()[0]
+                    .as_ref()
+                    .unwrap(),
+            );
+            productive_final_reader_after_claim(&engine, &mut playback, &locals, old, &current);
+            assert_eq!(
+                fs::read(&h.material.lease.original_path).unwrap(),
+                *original_before.as_ref().unwrap()
+            );
+        } else if key_lock {
             if public_rate_adoption {
                 let own_adopt_frame = playback.frame;
                 settle_wet_after(&mut playback, &locals, "candidate", Some(own_adopt_frame));
@@ -7813,6 +8067,31 @@ else:
         "controller.shut_down()\ncontroller._assets.release_saved_assignments()\nowner_v1.release()\nowner_v2.release()",
     );
     std::env::set_current_dir(previous_cwd).unwrap();
+}
+
+#[test]
+fn actual_productive_replacement_waits_for_last_native_reader_and_asset_worker() {
+    if std::env::var_os(FINAL_READER_CHILD).is_some() {
+        round_trip(true, None, true, None, false, CandidateTrace::FinalReader);
+        return;
+    }
+    let output = std::process::Command::new(std::env::current_exe().unwrap())
+        .args([
+            "--exact",
+            FINAL_READER_TEST,
+            "--nocapture",
+            "--test-threads=1",
+        ])
+        .env(FINAL_READER_CHILD, "1")
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "L4 final-reader child failed:\n{}\n{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert!(String::from_utf8_lossy(&output.stdout).contains("1 passed; 0 failed"));
 }
 
 #[test]

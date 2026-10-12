@@ -497,27 +497,81 @@ impl AudioMessageSink for Feedback {
 struct Retirement {
     slots: usize,
     retired: Vec<RetiredAudioBuffer>,
+    actual: Option<crate::audio_engine::buffer_retirement::RtAudioBufferRetirement>,
 }
 impl Retirement {
     fn push(&mut self, value: RetiredAudioBuffer) {
         assert!(self.slots > 0);
         self.slots -= 1;
-        self.retired.push(value);
+        if let Some(actual) = &mut self.actual {
+            // This optional fixture uses the same bounded owner transfer as CPAL.
+            // The original collecting fixture remains unchanged when absent.
+            match value {
+                RetiredAudioBuffer::Sample(value) => actual.retire_sample(value),
+                RetiredAudioBuffer::ColdAdoption(value) => actual.retire_cold_adoption(value),
+                RetiredAudioBuffer::PreparedStems(value) => actual.retire_prepared_stems(value),
+                RetiredAudioBuffer::ConstantTiming(value) => actual.retire_constant_timing(value),
+                RetiredAudioBuffer::GlobalPlaybackBatch(value) => {
+                    actual.retire_global_playback_batch(value)
+                }
+                RetiredAudioBuffer::AcceptedTimingRefresh(value) => {
+                    actual.retire_accepted_timing_refresh(value)
+                }
+                RetiredAudioBuffer::ResidentTransaction(value) => {
+                    actual.retire_resident_transaction(value)
+                }
+                RetiredAudioBuffer::ResidentCancellation(value) => {
+                    actual.retire_resident_cancellation(value)
+                }
+                RetiredAudioBuffer::ResidentSeekCapture(value) => {
+                    actual.retire_resident_capture(value)
+                }
+                RetiredAudioBuffer::CommittedStemWork(value) => {
+                    actual.retire_committed_stem_work(value)
+                }
+            }
+        } else {
+            self.retired.push(value);
+        }
     }
 }
 impl AudioBufferRetirement for Retirement {
+    fn retire_committed_stem_work(
+        &mut self,
+        value: Box<crate::audio_engine::committed_stem_residency::CommittedStemRtWork>,
+    ) {
+        if self.actual.is_some() {
+            self.push(RetiredAudioBuffer::CommittedStemWork(value));
+        }
+    }
     fn retire_resident_capture(
         &mut self,
-        _: std::sync::Arc<crate::audio_engine::resident_seek::ResidentSeekCapture>,
+        value: std::sync::Arc<crate::audio_engine::resident_seek::ResidentSeekCapture>,
     ) {
+        if self.actual.is_some() {
+            self.push(RetiredAudioBuffer::ResidentSeekCapture(value));
+        }
     }
-    fn retire_resident_cancellation(&mut self, _: std::sync::Arc<std::sync::atomic::AtomicBool>) {}
-    fn retire_resident_transaction(&mut self, _: Box<crate::messages::ResidentTransaction>) {}
+    fn retire_resident_cancellation(
+        &mut self,
+        value: std::sync::Arc<std::sync::atomic::AtomicBool>,
+    ) {
+        if self.actual.is_some() {
+            self.push(RetiredAudioBuffer::ResidentCancellation(value));
+        }
+    }
+    fn retire_resident_transaction(&mut self, value: Box<crate::messages::ResidentTransaction>) {
+        if self.actual.is_some() {
+            self.push(RetiredAudioBuffer::ResidentTransaction(value));
+        }
+    }
     fn retire_cold_adoption(&mut self, value: Arc<std::sync::atomic::AtomicU8>) {
         self.push(RetiredAudioBuffer::ColdAdoption(value));
     }
     fn available_retirement_slots(&mut self) -> usize {
-        self.slots
+        self.actual.as_mut().map_or(self.slots, |actual| {
+            self.slots.min(actual.available_retirement_slots())
+        })
     }
     fn retire_sample(&mut self, value: SampleBuffer) {
         self.push(RetiredAudioBuffer::Sample(value));
@@ -566,6 +620,7 @@ impl Callback {
             retirement: Retirement {
                 slots: usize::MAX,
                 retired: Vec::new(),
+                actual: None,
             },
         };
         value

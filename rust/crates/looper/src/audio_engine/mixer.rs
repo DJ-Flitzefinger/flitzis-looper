@@ -305,6 +305,11 @@ impl RtMixer {
     }
 
     #[cfg(test)]
+    pub(super) fn outgoing_stems_for_measurement(&self, id: usize) -> Option<&PreparedStemSet> {
+        self.outgoing_stems[id].as_ref()
+    }
+
+    #[cfg(test)]
     pub(super) fn stem_demand_for_measurement(&self, id: usize) -> (StemMixMode, u8, u64) {
         (
             self.stem_mix_mode[id],

@@ -535,6 +535,68 @@ separately proved path. This bounded delivery does not close additional-domain
 L3 obligations, L4 UI/all final-reader families, whole P4b/P5a, Bulk/RECORD,
 musical/resource or Human GUI/device/hearing acceptance.
 
+### Consolidated task3.2 closure — 2026-10-12
+
+The accumulated productive Native and public controller evidence now covers
+task3.2 within the supported finite NormalLoop domain above. Earlier leaf notes
+describe the limits of those individual deliveries; this consolidated assessment
+replaces their then-open parent status. It does not enable any additional domain.
+
+| Obligation | Distinct evidence in the maintained productive fixtures |
+| --- | --- |
+| First FullMix and selected V1 replacement, OFF/ON | Public first/replacement cases; exact two-reader complete-PCM handover; OFF dry Varispeed and ON raw Native/FIFO, uninterrupted nonneutral EQ and own later Wet effect |
+| Stopped, playing and paused | Native first stopped installation; public stopped replacement with both Play/Poll orders and fresh ALL; first pause and accepted V1 paused replacement with consumed-source clocks and own Resume effect |
+| Rate/BPM and irregular partitions | Independent source phases, accepted musical timing/fractional seam, public BPM stale/retry and public first/replacement glide crossing a real 512-frame smoothing step within the source handover |
+| Masks, repeated sets and late ACK | Preclaim/claimed masks, empty V2 then deferred V3, latest intent and separate own registration/residency/effect receipts |
+| Queue pressure, Cancel and failure | Real admission/worker-post pressure, unchanged queued Capture through the actual 30-second deadline, explicit fresh retries and withdrawn unclaimed V2 |
+| Source/timing/window/voice/history | Public BPM, Play, window, assignment and Unload fences; later real complete 4096-frame preparation; authorized source chronology cuts distinguished from stem adoption |
+| Current/old readers | Exact predecessor/current replacement plus the real FrozenOld negative: B's current authority cannot borrow retained A audio or its source/Native/FIFO/EQ chronology |
+
+The nonauthor parent coverage assessment found no remaining functional task3.2
+gap within these limits. Its callback ownership review follows fixed Capture/Adopt
+slots, preallocated queues, atomics and Arc-backed pins through the actual retirement
+lane; component I/O, JSON, GIL, locks, inference and buffer/ring allocation belong
+to control/offline workers. This is source/ownership evidence, not a new dynamic
+zero-allocation or whole-backend WCET measurement. Additional domains3.3, L4's
+complete lifecycle/UI obligations, whole P4b/P5a and all later product/resource/Human
+gates remain open.
+
+### Productive V1 replacement and actual final-reader retirement
+
+`actual_productive_replacement_waits_for_last_native_reader_and_asset_worker`
+uses the public controller's genuine selected V1 effect, distinct V2 files,
+fenced commit/reopen and own Capture/worker/Adopt at KEY LOCK ON/rate0.75.
+Its callback fixture forwards every retired owner directly to the existing
+`RtAudioBufferRetirement` SPSC/backlog and audio retirement worker, including
+CommittedStemWork and resident transaction/capture owners. Only reported capacity
+is constrained; the previous collecting fixtures keep their existing behavior.
+
+Complete expected component PCM uses independent copied buffers before reference
+voice birth. Old test assignment leases and receipt/registration aliases end on
+the control thread; regular public Native loader polling reconciles its distinct
+accepted control caches and obsolete history owners. Receipt-only controller
+polling cannot substitute for that phase. Weak observations cover the actual
+complete-set identity and every actual component PCM; file evidence covers all five WAVs, all five PCM
+artifacts and metadata across the WAV/PCM/descriptor areas.
+
+After the exact 128-source-frame ramp, zero retirement capacity still retains the
+outgoing V1 reader. Restored capacity transfers it directly from rendering to the
+actual audio worker. A separate Arc marker follows that transfer in the same
+production FIFO; its completed worker Drop proves consumption of all earlier
+owners, including the outgoing reader. A mere reduction in V1 reference counts
+cannot distinguish this from a delayed Adopt-payload release. The still-used V1
+Native/history reader continues to protect immutable files and deny overwrite,
+despite the ended outgoing reader.
+Only V2's own later full 4096-frame preparation, ready nonneutral Wet effect and
+actual end of the old native pins permit the process-wide asset worker to remove
+the three old areas. No isolated asset collector or test-side final Arc drop
+substitutes for those workers. V2, current original and unrelated pad215 survive;
+complete PCM, source phase, raw Native/FIFO and continuous EQ remain checked.
+
+This is one coupled L4.2 replacement outcome. Other assignment/job/action/unload
+reader families, sharing-error retry, shutdown, unknown/external/newer preservation,
+the complete L4 parent and Human acceptance still require their own remaining gates.
+
 ### Native current-bank eligibility does not transfer to retained A
 
 `actual_native_current_bank_candidate_cannot_borrow_frozen_old_voice_with_keylock_on`

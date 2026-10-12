@@ -47,12 +47,15 @@
   existing lanes, with fresh own source/request/timing/window/voice/history
   permits and reserved native capacity. Keep current active-publication rejection
   until genuine NormalLoop new-set proof passes; same-set P5a is insufficient.
-- [ ] 3.2 Prove productive controller/Native/FIFO/filter/render continuity and
+- [x] 3.2 Prove productive controller/Native/FIFO/filter/render continuity and
   nonneutral wet output for first and replacement new sets during FullMix and
   selected stems, KEYLOCK OFF/ON, rate/BPM, stopped/playing/paused, masks/current/
   old voices and irregular partitions. Cover late ACK, queue pressure, Cancel,
   source/timing/window change and later real preparation/adoption; no restart or
   position jump, no callback I/O/GIL/locks/allocation/inference.
+  Consolidated finite NormalLoop coverage and callback ownership assessment:
+  `docs/prepared-stem-publication.md`, task3.2 closure of 2026-10-12. Additional
+  domains, complete L4 retirement and whole P4b/P5a/Human gates remain separate.
 - [ ] 3.3 Prove each additional seek/Intro/Tail/full-track domain in bounded
   transactions before enabling that domain; unsupported cases stay explicitly
   guarded with current audio usable. Preserve whole P4b/P5a open gates.

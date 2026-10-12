@@ -740,6 +740,7 @@ pub(super) fn migration_callback_8000(engine: &AudioEngine) -> Callback {
         retirement: Retirement {
             slots: usize::MAX,
             retired: Vec::new(),
+            actual: None,
         },
     };
     callback
