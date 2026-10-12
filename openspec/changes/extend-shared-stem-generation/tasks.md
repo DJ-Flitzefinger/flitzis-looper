@@ -60,9 +60,10 @@
   transactions before enabling that domain; unsupported cases stay explicitly
   guarded with current audio usable. Preserve whole P4b/P5a open gates.
   The additional complete-resident NormalLoop `[0,N)` proof is documented in
-  `docs/prepared-stem-publication.md`; a separate Native Tail-ON proof covers
-  first/replacement after own Seek without accepted musical timing. Public Tail,
-  paused Tail, Tail OFF/musical, Intro and whole3.3 remain open. Finite4.2/4.3
+  `docs/prepared-stem-publication.md`; separate Native and public StemController/
+  seek-only software proofs cover current running Tail-ON first/replacement
+  after own Seek without accepted musical timing. Paused Tail, Tail OFF/musical,
+  Intro, remaining Seek/Tail domains and whole3.3 remain open. Finite4.2/4.3
   lifecycle closure is not a full-track or Tail parent acceptance.
 
 ## 4. X11-LIVE-STEMS: current model and actual reader retirement (L4)

@@ -644,7 +644,7 @@ retain the same voice, Native/FIFO and EQ chronology without another Seek/reset.
 OFF, accepted-musical and paused Tail guards. The existing two Intro FullMix/V1
 histories retain fresh-candidate rejection and productive post-seek Native/FIFO/EQ
 output.
-This bounded Native evidence does not prove public Tail-controller gestures,
+This bounded Native evidence alone does not prove public Tail-controller gestures,
 Tail OFF/musical, Intro, every rate/pitch/lifecycle/resource combination or whole
 task3.3/P4b/P5a/P5b acceptance. Earlier finite4.2/4.3 final-reader closure remains
 NormalLoop-only; Human GUI/device/hearing and full Goal gates remain open.
@@ -667,6 +667,56 @@ was further narrowed to running Tail; the final four-test and 87-test gates use
 the completed running-only source and its three unsupported Tail contexts.
 No installed Native, Human App, device or listening acceptance is changed or
 claimed by this software delivery.
+
+### Public StemController adoption after acknowledged Tail Seek — 2026-10-12
+
+`actual_public_tail_first_and_replacement_require_own_wet_effect_and_return`
+adds the public software integration for this same running Tail-ON domain.
+The existing `round_trip` uses `CandidateTrace::Tail`, the genuine 16384-frame
+source without accepted BPM timing, loop `17..1517`, seek `1517` and rate 0.73.
+FullMix and selected V1 are separate productive histories. Actual
+`transport.playback.seek_pad` submits a seek-only transaction through its own
+CaptureResidentSeek, worker and Relocate acknowledgement. Only this authorized
+Seek starts a new voice/Native/FIFO/filter chronology; pad215 keeps running.
+
+An independent consumed-time Seek epoch addresses physical Tail knots and the
+natural source-end-to-loop17 return using complete original and component PCM
+retained before the actual resident window. Absolute callback and consumed time
+remain intact for pad215's separate physical-loop oracle. The post-Seek raw
+Native has no new ON-request dry interval; its independent EQ chain applies the
+persistent nonneutral targets with ordinary parameter smoothing. Every rendered
+sample, source trajectory and Native FIFO is checked through the first own
+4096-frame preparation and productive Wet output while still AfterLoop.
+
+Distinct V2 files then use the real disk commit/reopen, fresh post-Seek source
+ticket, registration and public StemController candidate request. Accepted disk
+and control selection remain separate from effect: the old V1 receipt is
+obsolete after Seek and cannot confirm either its new chronology or V2. The own
+Capture/worker/guarded Adopt preserves voice, source fraction, Native/FIFO and
+filter history through the 128-consumed-source-frame handover. A later own
+4096-frame preparation proves V2 Wet, still AfterLoop, against complete independent
+PCM, raw Native/FIFO/EQ and the continuing FullMix counterfactual. Natural return
+and a further 4096 output frames retain the same voice and Native handle.
+Final model-free reopen verifies V2 and the unchanged loop/KEY LOCK intent;
+another active pad retains its original source, owners, Native/FIFO and absolute
+physical phase throughout.
+
+This is public StemController and seek-only software API evidence. Human GUI,
+CPAL, device and hearing acceptance, Tail final-reader/full-L4 lifecycle, paused
+Tail, Tail OFF/musical, Intro, remaining Seek/Tail domains and whole3.3/P4b/P5a/P5b
+remain open. Existing NormalLoop and accepted-musical oracle paths are retained.
+
+Validation: the focused Release test passes both histories (2.99s, 58.68s
+compile), followed by a fresh complete committed-stem residency suite: 88 PASS
+in 244.57s (0.19s compile). Clippy workspace/tests exits 0 in 7.44s with the same
+37 warning kinds and no diagnostics in the two changed Rust test files. This
+test-only block reuses the unchanged production Release, import preflight and
+154 Python controller PASS from the preceding Native Tail delivery, plus the
+unchanged asset-worker suite; it does not claim a newly built production module.
+The initial fixture failures are retained: an enum spelling compile error, an
+incorrect immediate Seek-ACK FIFO expectation and an obsolete V1 effect
+projection. Only the fixtures were corrected; production behavior and existing
+domain guards are unchanged.
 
 ### Consolidated task3.2 closure — 2026-10-12
 

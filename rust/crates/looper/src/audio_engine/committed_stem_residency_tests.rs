@@ -2177,6 +2177,7 @@ struct ControllerPlayback {
     // interpolation and ramp gains use only actually consumed output frames.
     source_frame: u64,
     resumed_at: Option<u64>,
+    seek_epoch: Option<ControllerSeekEpoch>,
     source: SampleBuffer,
     components: [SampleBuffer; 4],
     ratio: f64,
@@ -2191,6 +2192,14 @@ struct ControllerPlayback {
     raw: Option<ControllerRawNative>,
     candidate: Option<(u64, ControllerRawNative)>,
     filter: PerPadDspChain,
+}
+
+// Declared seek intent plus the independently counted consumption at its ACK.
+// Expected physical positions never come from the live SourceReadPlan.
+struct ControllerSeekEpoch {
+    consumed_at: u64,
+    acknowledged_at: u64,
+    target: usize,
 }
 
 struct ControllerRawNative {
@@ -2380,6 +2389,10 @@ impl ControllerRawNative {
 }
 
 fn controller_filter() -> PerPadDspChain {
+    controller_filter_with_reset(true)
+}
+
+fn controller_filter_with_reset(reset: bool) -> PerPadDspChain {
     let mut filter = PerPadDspChain::new(0, RATE as f32, 2);
     for (slot, db) in [
         (DspParameterSlot::Slot0, -12.0_f32),
@@ -2396,11 +2409,41 @@ fn controller_filter() -> PerPadDspChain {
             normalized
         ));
     }
-    filter.reset();
+    if reset {
+        filter.reset();
+    }
     filter
 }
 
 impl ControllerPlayback {
+    fn seek_position(&self, output_frame: u64) -> (usize, f64, bool) {
+        let epoch = self.seek_epoch.as_ref().unwrap();
+        let distance = output_frame.checked_sub(epoch.consumed_at).unwrap() as f64 * self.ratio;
+        let tail = (self.source.frame_count() - epoch.target) as f64;
+        if distance < tail {
+            (
+                epoch.target + distance.floor() as usize,
+                distance.fract(),
+                true,
+            )
+        } else {
+            let phase = (distance - tail).rem_euclid(self.loop_period);
+            (
+                self.loop_start + phase.floor() as usize,
+                phase.fract(),
+                false,
+            )
+        }
+    }
+
+    fn resident_end(&self) -> usize {
+        if self.seek_epoch.is_some() {
+            self.source.frame_count()
+        } else {
+            self.loop_end
+        }
+    }
+
     fn drain(&mut self, consumer: &mut rtrb::Consumer<ControlMessage>) -> usize {
         let callback = self.callback.as_mut();
         drain_control_messages(
@@ -2438,7 +2481,23 @@ impl ControllerPlayback {
                     );
                     let last = (self.loop_period.ceil() as usize - 1)
                         .min(self.loop_end - self.loop_start - 1);
-                    let (left, right, fraction) = if phase >= last as f64 {
+                    let (left, right, fraction) = if self.seek_epoch.is_some() {
+                        let (left, fraction, tail) = self.seek_position(output_frame);
+                        let end = if tail {
+                            self.source.frame_count()
+                        } else {
+                            self.loop_end
+                        };
+                        (
+                            left,
+                            if left + 1 == end {
+                                self.loop_start
+                            } else {
+                                left + 1
+                            },
+                            fraction,
+                        )
+                    } else if phase >= last as f64 {
                         (
                             self.loop_start + last,
                             self.loop_start,
@@ -2511,6 +2570,10 @@ impl ControllerPlayback {
                 offset += count;
             }
             raw
+        } else if self.seek_epoch.is_some() {
+            // An acknowledged seek retains settled ON; it does not create a
+            // fresh tracked ON request's initial dry-retention interval.
+            native.render(&feed)
         } else {
             native.render_chosen(&feed)
         };
@@ -2550,7 +2613,10 @@ impl ControllerPlayback {
         let taps = tap_observation_for_test();
         assert_eq!(taps.missing_reads, 0);
         assert!(taps.min_frame.is_some_and(|frame| frame >= self.loop_start));
-        assert!(taps.max_frame.is_some_and(|frame| frame < self.loop_end));
+        assert!(
+            taps.max_frame
+                .is_some_and(|frame| frame < self.resident_end())
+        );
         for (mixer, target) in [
             (self.reference.as_mut(), &mut expected),
             (self.full_mix.as_mut(), &mut full_mix),
@@ -2595,6 +2661,8 @@ impl ControllerPlayback {
         self.source_frame += frames as u64;
         if self.scheduled {
             assert_eq!(self.callback.transport.output_frame(), self.frame);
+        }
+        if self.scheduled || self.seek_epoch.is_some() {
             let raw = self.raw.as_ref().unwrap();
             assert_eq!(
                 voice(&self.callback.mixer).stretch.pending_fifo_frames(),
@@ -2602,7 +2670,24 @@ impl ControllerPlayback {
                 "independent Native FIFO chronology",
             );
         }
-        if self.loop_start != LOOP_START || self.loop_period != (LOOP_END - LOOP_START) as f64 {
+        if self.seek_epoch.is_some() {
+            let (whole, fraction, tail) = self.seek_position(self.source_frame);
+            let current = voice(&self.callback.mixer).source_playback;
+            assert_eq!(current.position().frame, whole);
+            assert!((current.position().fraction - fraction).abs() < 1e-9);
+            assert_eq!(current.tempo_ratio().to_bits(), self.ratio.to_bits());
+            assert_eq!(current.loop_period(), None);
+            assert_eq!(
+                voice(&self.callback.mixer).explicit_seek_mode,
+                if tail {
+                    crate::audio_engine::source_reader::ExplicitSeekMode::AfterLoop
+                } else {
+                    crate::audio_engine::source_reader::ExplicitSeekMode::Normal
+                }
+            );
+        } else if self.loop_start != LOOP_START
+            || self.loop_period != (LOOP_END - LOOP_START) as f64
+        {
             let (whole, fraction) = self.rate_ledger.as_ref().map_or_else(
                 || {
                     let phase =
@@ -2760,7 +2845,7 @@ impl ControllerPlayback {
             assert!(
                 prepared_taps
                     .max_frame
-                    .is_some_and(|frame| frame < self.loop_end)
+                    .is_some_and(|frame| frame < self.resident_end())
             );
         }
         let warm_start =
@@ -2775,6 +2860,10 @@ impl ControllerPlayback {
         let warm_source_start = warm_start
             .checked_sub(pause_offset)
             .expect("later Native preparation must start after the retained pause gap");
+        if let Some(epoch) = &self.seek_epoch {
+            assert!(warm_start >= epoch.acknowledged_at);
+            assert!(warm_source_start >= epoch.consumed_at);
+        }
         let warm_rate = self
             .rate_ledger
             .as_ref()
@@ -3392,6 +3481,7 @@ assert audio.worker_call_count() == 1 and audio.prepared_only_on_pool_threads()
         frame: 0,
         source_frame: 0,
         resumed_at: None,
+        seek_epoch: None,
         source: full.clone(),
         components: full_stems.stems.clone(),
         ratio,

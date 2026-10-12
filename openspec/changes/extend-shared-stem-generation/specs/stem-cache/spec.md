@@ -165,6 +165,16 @@ immediate change SHALL NOT silently discard the command.
 - **AND** the actual source-end-to-loop-start return SHALL preserve fractional playback, exact PCM, Native/FIFO and filter chronology without another seek, reset or retrigger
 - **AND** this candidate proof SHALL NOT authorize Intro, paused Tail, KEY LOCK OFF or accepted-musical Tail, ordinary same-set mode requests, frozen old-source voices, multiple same-pad voices or whole task3.3 acceptance
 
+#### Scenario: Public StemController adopts first and replacement sets after own Tail Seek
+
+- **GIVEN** the public playback seek-only API has obtained its own acknowledged Tail window for a single current running KEY LOCK ON voice without accepted musical timing
+- **AND** FullMix or selected V1 has established its own complete Native preparation and productive Wet output while still AfterLoop
+- **WHEN** a distinct complete V2 is durably committed and the public StemController requests its own candidate registration, Capture, worker preparation and guarded Adopt
+- **THEN** disk selection and accepted preparation SHALL remain distinct from actual effectiveness until that transaction's own 128-source-frame handover and later complete Native preparation establish V2 Wet while still AfterLoop
+- **AND** independent complete PCM, raw Native/FIFO and uninterrupted nonneutral filter history SHALL verify post-Seek output, natural return to NormalLoop and continued playback; candidate adoption SHALL introduce no additional seek, reset or launch
+- **AND** another active pad SHALL retain its independent absolute source trajectory and authority; neither its ACK nor an earlier V1 receipt SHALL confirm V2
+- **AND** model-free reopen SHALL verify the saved committed selection without treating persistence as audible acknowledgement
+
 #### Scenario: Current bank B cannot authorize retained old-source voice A
 
 - **GIVEN** actual Native admission has installed a distinct current bank source B while retained voice A continues using its own frozen source and FullMix or V1 readers with KEY LOCK OFF or ON
