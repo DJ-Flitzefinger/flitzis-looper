@@ -108,6 +108,17 @@ enum CandidateTrace {
         paused: bool,
         musical: bool,
     },
+    NormalSeek {
+        equal: bool,
+        paused: bool,
+        musical: bool,
+    },
+    CompletePartial {
+        seek: Option<bool>,
+        paused: bool,
+        stopped: bool,
+        musical: bool,
+    },
     RepeatedSets,
     WithdrawPreclaim,
     AdmissionPressure,
@@ -135,6 +146,13 @@ enum CandidateTrace {
     PostAdmitPcmFinalReader,
     SharedJobFinalReader,
     DiskSettlementFinalReader,
+}
+
+#[derive(Clone, Copy)]
+enum PublicSeekTarget {
+    Intro,
+    Tail,
+    InLoop { equal: bool },
 }
 
 #[derive(Clone, Copy)]
@@ -1070,38 +1088,6 @@ assert status.control_stem_set_identity == disk_v1.stem_set_identity
     );
 }
 
-fn complete_reference(
-    full: &SampleBuffer,
-    stems: &PreparedStemSet,
-    ratio: f64,
-    key_lock_enabled: bool,
-) -> Box<RtMixer> {
-    complete_reference_with_timing(full, stems, ratio, key_lock_enabled, None)
-}
-
-fn complete_reference_with_timing(
-    full: &SampleBuffer,
-    stems: &PreparedStemSet,
-    ratio: f64,
-    key_lock_enabled: bool,
-    timing: Option<(
-        crate::audio_engine::constant_timing::AcceptedTimingProjection,
-        f64,
-    )>,
-) -> Box<RtMixer> {
-    complete_reference_at_loop(
-        full,
-        stems,
-        ratio,
-        key_lock_enabled,
-        timing,
-        crate::audio_engine::source_reader::FrameRange {
-            start: LOOP_START,
-            end: LOOP_END,
-        },
-    )
-}
-
 fn complete_reference_at_loop(
     full: &SampleBuffer,
     stems: &PreparedStemSet,
@@ -1414,7 +1400,7 @@ fn ramp_varispeed(playback: &mut ControllerPlayback, locals: &Py<PyDict>, name: 
             .source_timing
             .accepted
             .map_or(1.25, |projection| {
-                projection.period_seconds * (150.0 / 60.0)
+                projection.period_seconds * (playback.target_bpm / 60.0)
             });
         assert_eq!(playback.ratio.to_bits(), declared_ratio.to_bits());
     }
@@ -6994,6 +6980,7 @@ fn stopped_candidate_play(
     consumer: &mut rtrb::Consumer<ControlMessage>,
     before_poll: bool,
     key_lock: bool,
+    complete_partial: bool,
 ) {
     let source = callback.mixer.bank_for_measurement()[0].clone().unwrap();
     let set = callback.mixer.stems_for_measurement()[0].clone().unwrap();
@@ -7032,7 +7019,8 @@ project.pad_key_lock[0] = stopped_key_lock
 transport = TransportController(project, session, ReadyTransportAudio())
 transport.playback.trigger_pad_keep_others(0)
 ready_start = transport.residency._pending[0].ticket
-assert ready_start is not None and ready_start.publication_status() == 'pending'
+assert ready_start is not None
+assert ready_start.publication_status() in ({'preparing', 'pending'} if complete_partial else {'pending'})
 assert not stopped.is_current() and stopped.effective_mode_status() == 'rejected'
 controller.on_frame_render()
 assert live.control is live.disk.selection and live.attempt is None
@@ -7046,34 +7034,69 @@ assert project.pad_stem_mix_mode[0] == 'all_stems'
 assert not session.stem_generation_errors, session.stem_generation_errors
 "#,
     );
+    wait_until(|| consumer.peek().is_ok());
+    controller_python(
+        locals,
+        "assert ready_start.is_current() and ready_start.publication_status() == 'pending'\nassert 0 not in session.active_sample_ids",
+    );
     assert!(matches!(
         consumer.peek(),
         Ok(ControlMessage::RelocateResident(_))
     ));
     assert_eq!(callback.drain(consumer), 1, "ordinary Play window ACK");
-    assert!(Arc::ptr_eq(
-        &source.samples,
-        &callback.mixer.bank_for_measurement()[0]
-            .as_ref()
-            .unwrap()
-            .samples
-    ));
+    controller_python(
+        locals,
+        "assert ready_start.is_current() and ready_start.publication_status() == 'accepted'\nassert ready_start.error() is None\nassert 0 not in session.active_sample_ids",
+    );
+    if !complete_partial {
+        assert!(Arc::ptr_eq(
+            &source.samples,
+            &callback.mixer.bank_for_measurement()[0]
+                .as_ref()
+                .unwrap()
+                .samples
+        ));
+    } else {
+        let current = callback.mixer.bank_for_measurement()[0].as_ref().unwrap();
+        assert_eq!(
+            (current.resident_start(), current.resident_end()),
+            (LOOP_START, LOOP_END)
+        );
+        assert_eq!(current.source_address(), source.source_address());
+        assert_eq!(
+            current.residency.as_ref().unwrap().context,
+            if key_lock {
+                crate::messages::ResidentContext::KeyLockFiniteLoop
+            } else {
+                crate::messages::ResidentContext::FiniteLoop
+            }
+        );
+    }
     let actual = callback.mixer.stems_for_measurement()[0].as_ref().unwrap();
     assert!(Arc::ptr_eq(
         &set.complete_set_identity,
         &actual.complete_set_identity
     ));
     for (before, after) in set.stems.iter().zip(&actual.stems) {
-        assert!(Arc::ptr_eq(&before.samples, &after.samples));
+        if !complete_partial {
+            assert!(Arc::ptr_eq(&before.samples, &after.samples));
+        } else {
+            assert_eq!(
+                (after.resident_start(), after.resident_end()),
+                (LOOP_START, LOOP_END)
+            );
+            assert_eq!(after.samples.len(), (LOOP_END - LOOP_START) * 2);
+        }
     }
     Python::attach(|py| {
         let ready = locals.bind(py).get_item("ready_start").unwrap().unwrap();
         let ready = ready
             .extract::<PyRef<crate::audio_engine::resident_relocation::ResidentWindowTicket>>()
             .unwrap();
-        assert!(
+        assert_eq!(
             ready.read_observation_for_test().is_none(),
-            "Play reused exact ready window"
+            !complete_partial,
+            "ordinary Play either reuses its ready window or owns its new finite preparation"
         );
     });
     controller_python(
@@ -7117,7 +7140,14 @@ assert audio.worker_call_count() == 1
         &actual.complete_set_identity
     ));
     for (before, after) in set.stems.iter().zip(&actual.stems) {
-        assert!(Arc::ptr_eq(&before.samples, &after.samples));
+        if !complete_partial {
+            assert!(Arc::ptr_eq(&before.samples, &after.samples));
+        } else {
+            assert_eq!(
+                (after.resident_start(), after.resident_end()),
+                (LOOP_START, LOOP_END)
+            );
+        }
     }
 }
 
@@ -7127,16 +7157,19 @@ fn public_explicit_seek(
     consumer: &mut rtrb::Consumer<ControlMessage>,
     locals: &Py<PyDict>,
     key_lock: bool,
-    intro: bool,
+    target_kind: PublicSeekTarget,
     accepted: Option<crate::audio_engine::constant_timing::AcceptedTimingProjection>,
 ) {
     use crate::audio_engine::source_reader::ExplicitSeekMode;
-    let target = if intro { 0 } else { LOOP_END };
-    let mode = if intro {
-        ExplicitSeekMode::BeforeLoop
-    } else {
-        ExplicitSeekMode::AfterLoop
+    let complete_resident = playback.complete_resident;
+    let (target, mode, repeats) = match target_kind {
+        PublicSeekTarget::Intro => (0, ExplicitSeekMode::BeforeLoop, 1),
+        PublicSeekTarget::Tail => (LOOP_END, ExplicitSeekMode::AfterLoop, 1),
+        PublicSeekTarget::InLoop { equal } => {
+            (64, ExplicitSeekMode::Normal, if equal { 2 } else { 1 })
+        }
     };
+    let intro = mode == ExplicitSeekMode::BeforeLoop;
     if intro && key_lock {
         let block = voice(&playback.callback.mixer)
             .stretch
@@ -7149,10 +7182,41 @@ fn public_explicit_seek(
     let other = other_voice(&playback.callback.mixer);
     let other_clock = other.source_playback;
     let other_generation = other.generation;
-    let generation = voice(&playback.callback.mixer).generation;
-    controller_python(
-        locals,
-        r#"
+    Python::attach(|py| locals.bind(py).set_item("seek_target", target).unwrap());
+    let consumed = playback.source_frame;
+    for attempt in 0..repeats {
+        let before = voice(&playback.callback.mixer);
+        let generation = before.generation;
+        let history_epoch = before.stretch.source_epoch_owner().load(Ordering::Acquire);
+        let source = playback.callback.mixer.bank_for_measurement()[0]
+            .clone()
+            .unwrap();
+        if attempt == 1 {
+            assert_eq!(before.source_playback.position().frame, target);
+            assert_eq!(before.source_playback.position().fraction, 0.0);
+            assert_eq!(before.explicit_seek_mode, mode);
+            assert_eq!(
+                playback.source_frame, consumed,
+                "equal-phase Seek has no intervening source consumption"
+            );
+            controller_python(
+                locals,
+                "transport.on_frame_render()\nassert 0 not in transport.residency._pending\nprevious_seek = tail_seek\nassert previous_seek.is_current()\nassert session.pad_playhead_s[0] == seek_target / fixture['rate']",
+            );
+            assert!(
+                consumer.is_empty(),
+                "polling the first ACK consumes no audio or new control request"
+            );
+        } else if mode == ExplicitSeekMode::Normal {
+            let position = before.source_playback.position();
+            assert!(
+                position.frame != target || position.fraction != 0.0,
+                "changed in-loop Seek starts from a different exact phase"
+            );
+        }
+        controller_python(
+            locals,
+            r#"
 from flitzis_looper.controller.transport import TransportController
 if not musical_explicit:
     transport = TransportController(project, session, playback_audio)
@@ -7166,20 +7230,72 @@ assert tail_seek is not None
 assert transport.residency._pending[0].seek_only
 assert tail_seek.key_lock_request_id is None
 "#,
-    );
-    wait_until(|| {
-        if matches!(consumer.peek(), Ok(ControlMessage::CaptureResidentSeek(_))) {
-            assert_eq!(playback.drain(consumer), 1, "public own Seek Capture");
+        );
+        wait_until(|| {
+            if matches!(consumer.peek(), Ok(ControlMessage::CaptureResidentSeek(_))) {
+                assert_eq!(playback.drain(consumer), 1, "public own Seek Capture");
+            }
+            let status = controller_ticket_status(locals, "tail_seek", "publication_status");
+            status == "accepted"
+                || (status == "pending"
+                    && matches!(consumer.peek(), Ok(ControlMessage::RelocateResident(_))))
+        });
+        let direct =
+            controller_ticket_status(locals, "tail_seek", "publication_status") == "accepted";
+        assert_eq!(
+            direct,
+            complete_resident || mode == ExplicitSeekMode::Normal
+        );
+        if direct {
+            let current = playback.callback.mixer.bank_for_measurement()[0]
+                .as_ref()
+                .unwrap();
+            assert!(Arc::ptr_eq(&source.samples, &current.samples));
+            assert_eq!(source.resident_binding(), current.resident_binding());
+            assert_eq!(
+                (source.resident_start(), source.resident_end()),
+                (current.resident_start(), current.resident_end())
+            );
+            Python::attach(|py| {
+                let ticket = locals.bind(py).get_item("tail_seek").unwrap().unwrap();
+                let ticket = ticket.extract::<PyRef<crate::audio_engine::resident_relocation::ResidentWindowTicket>>().unwrap();
+                assert!(
+                    ticket.read_observation_for_test().is_none(),
+                    "covered own Seek performs no worker PCM read"
+                );
+            });
+            assert!(consumer.is_empty(), "covered Seek needs no Relocate");
+        } else {
+            assert_eq!(playback.drain(consumer), 1, "public own Seek Relocate");
         }
-        controller_ticket_status(locals, "tail_seek", "publication_status") == "pending"
-            && matches!(consumer.peek(), Ok(ControlMessage::RelocateResident(_)))
-    });
-    assert_eq!(playback.drain(consumer), 1, "public own Seek Relocate");
-    assert_eq!(
-        controller_ticket_status(locals, "tail_seek", "publication_status"),
-        "accepted"
-    );
-    reconcile(engine).unwrap();
+        assert_eq!(
+            controller_ticket_status(locals, "tail_seek", "publication_status"),
+            "accepted"
+        );
+        reconcile(engine).unwrap();
+        let current = voice(&playback.callback.mixer);
+        assert_ne!(
+            current.generation, generation,
+            "each own Seek cuts its old chronology, including an exactly equal phase"
+        );
+        assert!(current.stretch.source_epoch_owner().load(Ordering::Acquire) > history_epoch);
+        assert_eq!(current.explicit_seek_mode, mode);
+        assert_eq!(current.source_playback.position().frame, target);
+        assert_eq!(current.source_playback.position().fraction, 0.0);
+        assert_eq!(current.stretch.pending_fifo_frames(), (0, 0));
+        assert_eq!(current.source_timing.accepted, accepted);
+        // Seek clears the old configured domain even when its ACK preserves
+        // immutable resident PCM. The exact accepted projection remains owned;
+        // the next productive render configures its musical domain from it.
+        assert_eq!(current.source_playback.loop_period(), None);
+        assert_eq!(playback.source_frame, consumed);
+        if attempt == 1 {
+            controller_python(
+                locals,
+                "assert not previous_seek.is_current() and tail_seek.is_current()",
+            );
+        }
+    }
     controller_python(
         locals,
         r#"
@@ -7201,8 +7317,18 @@ if selected_v1:
     assert_eq!(
         (source.resident_start(), source.resident_end()),
         (
-            if key_lock && !intro { LOOP_START } else { 0 },
-            if key_lock && intro {
+            if complete_resident {
+                0
+            } else if mode == ExplicitSeekMode::Normal {
+                playback.loop_start
+            } else if key_lock && !intro {
+                LOOP_START
+            } else {
+                0
+            },
+            if complete_resident {
+                16_384
+            } else if mode == ExplicitSeekMode::Normal || (key_lock && intro) {
                 playback.loop_end
             } else {
                 16_384
@@ -7211,7 +7337,11 @@ if selected_v1:
     );
     assert_eq!(
         source.residency.as_ref().unwrap().context,
-        if key_lock {
+        if complete_resident && key_lock {
+            crate::messages::ResidentContext::KeyLockFullTrack
+        } else if mode == ExplicitSeekMode::Normal && !key_lock {
+            crate::messages::ResidentContext::FiniteLoop
+        } else if key_lock {
             crate::messages::ResidentContext::KeyLockFiniteLoop
         } else {
             crate::messages::ResidentContext::FullTrack
@@ -7230,18 +7360,11 @@ if selected_v1:
         accepted.map_or(0, |projection| projection.publication_epoch)
     );
     let current = voice(&playback.callback.mixer);
-    assert_ne!(
-        current.generation, generation,
-        "only the authorized Seek starts a new voice chronology"
-    );
     assert_eq!(current.explicit_seek_mode, mode);
     assert_eq!(current.source_playback.position().frame, target);
     assert_eq!(current.source_playback.position().fraction, 0.0);
     assert_eq!(current.stretch.pending_fifo_frames(), (0, 0));
     assert_eq!(current.source_timing.accepted, accepted);
-    // Relocate installs the new Seek clock without consuming source. The first
-    // render configures its domain from this retained exact timing projection.
-    assert_eq!(current.source_playback.loop_period(), None);
     let other = other_voice(&playback.callback.mixer);
     assert!(other.source_playback.matches_exact(&other_clock));
     assert_eq!(other.generation, other_generation);
@@ -7266,6 +7389,15 @@ if selected_v1:
     playback.previous = playback.selection;
     let actual = if key_lock {
         playback.render(13, true);
+        assert_eq!(
+            voice(&playback.callback.mixer)
+                .source_playback
+                .loop_period()
+                .map(f64::to_bits),
+            accepted
+                .map(|projection| (projection.period_seconds * f64::from(RATE) / 16.0).to_bits()),
+            "first productive post-Seek render uses the retained own timing ACK"
+        );
         playback.adopt_native(true).0
     } else {
         let mut actual = Vec::new();
@@ -7290,6 +7422,113 @@ if selected_v1:
         key_lock
     );
     assert!(consumer.is_empty());
+}
+
+fn prove_public_loop_return(
+    playback: &mut ControllerPlayback,
+    key_lock: bool,
+    accepted: Option<crate::audio_engine::constant_timing::AcceptedTimingProjection>,
+) {
+    use crate::audio_engine::source_reader::ExplicitSeekMode;
+    let current = voice(&playback.callback.mixer);
+    let native = current.stretch.native_state_address();
+    let generation = current.generation;
+    let (consumed_at, one_shot, initial_phase) =
+        playback.seek_epoch.as_ref().map_or((0, 0, 0), |epoch| {
+            if epoch.target < playback.loop_start {
+                (epoch.consumed_at, playback.loop_start - epoch.target, 0)
+            } else if epoch.target >= playback.loop_end {
+                (
+                    epoch.consumed_at,
+                    playback.source.frame_count() - epoch.target,
+                    0,
+                )
+            } else {
+                (epoch.consumed_at, 0, epoch.target - playback.loop_start)
+            }
+        });
+    let return_at = consumed_at + (one_shot as f64 / playback.ratio).ceil() as u64;
+    // Observe three complete future seams even when the own Native checkpoint
+    // has already advanced an in-loop Seek through earlier musical cycles.
+    let begin = playback.source_frame.max(return_at);
+    let base_cycle = (((begin - consumed_at) as f64 * playback.ratio - one_shot as f64
+        + initial_phase as f64)
+        / playback.loop_period)
+        .floor() as usize;
+    let finish = begin
+        + if accepted.is_some() {
+            (4.0 * playback.loop_period / playback.ratio).ceil() as u64 + 512
+        } else {
+            4096
+        };
+    let mut seams = [false; 3];
+    for frames in [1_usize, 31, 137, 257, 511].into_iter().cycle() {
+        let count = frames.min((finish - playback.source_frame) as usize);
+        if accepted.is_some() {
+            let last = (playback.loop_period.ceil() as usize - 1)
+                .min(playback.loop_end - playback.loop_start - 1);
+            for frame in playback.source_frame..playback.source_frame + count as u64 {
+                let (whole, fraction, mode) = if playback.seek_epoch.is_some() {
+                    playback.seek_position(frame)
+                } else {
+                    let phase = (frame as f64 * playback.ratio).rem_euclid(playback.loop_period);
+                    (
+                        playback.loop_start + phase.floor() as usize,
+                        phase.fract(),
+                        ExplicitSeekMode::Normal,
+                    )
+                };
+                let phase = whole.saturating_sub(playback.loop_start) as f64 + fraction;
+                if mode == ExplicitSeekMode::Normal && phase >= last as f64 && fraction != 0.0 {
+                    assert!(playback.loop_start + last < playback.loop_end);
+                    let gain = (phase - last as f64) / (playback.loop_period - last as f64);
+                    assert!((0.0..1.0).contains(&gain));
+                    assert_ne!(
+                        gain.to_bits(),
+                        fraction.to_bits(),
+                        "virtual seam uses its accepted duration"
+                    );
+                    let distance = (frame - consumed_at) as f64 * playback.ratio - one_shot as f64
+                        + initial_phase as f64;
+                    let cycle = (distance / playback.loop_period).floor() as usize;
+                    if let Some(observed) = cycle
+                        .checked_sub(base_cycle)
+                        .and_then(|cycle| seams.get_mut(cycle))
+                    {
+                        *observed = true;
+                    }
+                }
+            }
+        }
+        if key_lock {
+            playback.render(count, true);
+        } else {
+            render_varispeed(playback, count);
+        }
+        let current = voice(&playback.callback.mixer);
+        assert_eq!(current.generation, generation);
+        assert_eq!(current.stretch.native_state_address(), native);
+        assert_eq!(current.source_timing.accepted, accepted);
+        if playback.source_frame == finish {
+            break;
+        }
+    }
+    assert_eq!(
+        voice(&playback.callback.mixer).explicit_seek_mode,
+        ExplicitSeekMode::Normal
+    );
+    if accepted.is_some() {
+        assert_ne!(
+            playback.loop_period.to_bits(),
+            ((playback.loop_end - playback.loop_start) as f64).to_bits()
+        );
+        assert!(
+            seams.into_iter().all(|observed| observed),
+            "independent complete PCM/Native/EQ must cross three accepted virtual seams: observed={seams:?}, outputs={begin}..{finish}, ratio={}, period={}",
+            playback.ratio,
+            playback.loop_period
+        );
+    }
 }
 
 fn public_explicit_pause(
@@ -7368,13 +7607,52 @@ fn round_trip(
     trace: CandidateTrace,
 ) {
     let full_track = matches!(trace, CandidateTrace::FullTrack);
-    let explicit = matches!(trace, CandidateTrace::Explicit { .. });
-    let intro = matches!(trace, CandidateTrace::Explicit { intro: true, .. });
-    let tail = explicit && !intro;
-    let paused_explicit = matches!(trace, CandidateTrace::Explicit { paused: true, .. });
-    let musical_explicit = matches!(trace, CandidateTrace::Explicit { musical: true, .. });
+    let complete_partial = matches!(trace, CandidateTrace::CompletePartial { .. });
+    let stopped_partial = matches!(trace, CandidateTrace::CompletePartial { stopped: true, .. });
+    let stopped_before_poll = stopped_before_poll.or(stopped_partial.then_some(false));
+    let complete_resident = full_track || complete_partial;
+    let seek_target = match trace {
+        CandidateTrace::Explicit { intro: true, .. }
+        | CandidateTrace::CompletePartial {
+            seek: Some(true), ..
+        } => Some(PublicSeekTarget::Intro),
+        CandidateTrace::Explicit { intro: false, .. }
+        | CandidateTrace::CompletePartial {
+            seek: Some(false), ..
+        } => Some(PublicSeekTarget::Tail),
+        CandidateTrace::NormalSeek { equal, .. } => Some(PublicSeekTarget::InLoop { equal }),
+        _ => None,
+    };
+    let explicit = seek_target.is_some() || complete_partial;
+    let intro = matches!(seek_target, Some(PublicSeekTarget::Intro));
+    let tail = matches!(seek_target, Some(PublicSeekTarget::Tail));
+    let normal_explicit = explicit && !intro && !tail;
+    let paused_explicit = matches!(
+        trace,
+        CandidateTrace::Explicit { paused: true, .. }
+            | CandidateTrace::NormalSeek { paused: true, .. }
+            | CandidateTrace::CompletePartial { paused: true, .. }
+    );
+    let musical_explicit = matches!(
+        trace,
+        CandidateTrace::Explicit { musical: true, .. }
+            | CandidateTrace::NormalSeek { musical: true, .. }
+            | CandidateTrace::CompletePartial { musical: true, .. }
+    );
+    // A phase-zero OFF musical loop at150 BPM has an exactly1200-output
+    // period whose regular sample mesh skips the virtual tail. This declared
+    // public target keeps the complete-partial Normal proof nonneutral and
+    // samples each seam; existing explicit-Seek150 BPM meshes remain unchanged.
+    let target_bpm = if musical_explicit && (key_lock || (complete_partial && normal_explicit)) {
+        87.6
+    } else {
+        150.0
+    };
     assert!(
-        !explicit || (delete_pause.is_none() && stopped_before_poll.is_none() && !paused_first)
+        !explicit
+            || (delete_pause.is_none()
+                && (stopped_before_poll.is_none() || stopped_partial)
+                && !paused_first)
     );
     let final_reader = matches!(
         trace,
@@ -7572,10 +7850,18 @@ fn round_trip(
         &h.engine,
         0,
         WindowRequest {
-            key_lock: Some(key_lock && !full_track),
+            key_lock: Some(key_lock && !complete_resident),
             loop_region: Some((
-                loop_region.start as f64 / f64::from(RATE),
-                Some(loop_region.end as f64 / f64::from(RATE)),
+                if complete_partial {
+                    0.0
+                } else {
+                    loop_region.start as f64 / f64::from(RATE)
+                },
+                Some(if complete_partial {
+                    full.frame_count() as f64 / f64::from(RATE)
+                } else {
+                    loop_region.end as f64 / f64::from(RATE)
+                }),
             )),
             ..WindowRequest::default()
         },
@@ -7586,7 +7872,14 @@ fn round_trip(
     assert_eq!(h.callback.drain(&mut h.consumer), 1);
     assert_eq!(window.publication_status(), "accepted");
     reconcile(&h.engine).unwrap();
-    if full_track && key_lock {
+    if complete_partial {
+        // Scalar intent declares the partial loop before voice birth while the
+        // genuinely acknowledged OFF complete source remains resident.
+        h.callback
+            .mixer
+            .set_loop_region_frames(0, loop_region.start, Some(loop_region.end));
+    }
+    if complete_resident && key_lock {
         let mode = prepare_window_with_producer(
             &h.engine,
             0,
@@ -7603,7 +7896,7 @@ fn round_trip(
         reconcile(&h.engine).unwrap();
     }
     let finite = h.callback.mixer.bank_for_measurement()[0].clone().unwrap();
-    if full_track {
+    if complete_resident {
         assert_eq!(finite.resident_start(), 0);
         assert_eq!(finite.resident_end(), full.frame_count());
         assert_eq!(finite.samples.len(), full.frame_count() * 2);
@@ -7658,6 +7951,12 @@ fn round_trip(
             .unwrap();
         locals.set_item("tail", tail).unwrap();
         locals.set_item("explicit", explicit).unwrap();
+        locals
+            .set_item("seek_requested", seek_target.is_some())
+            .unwrap();
+        locals
+            .set_item("complete_partial", complete_partial)
+            .unwrap();
         locals
             .set_item("seek_target", if intro { 0 } else { LOOP_END })
             .unwrap();
@@ -7833,11 +8132,7 @@ persistence.flush()
                 bpm
             } else {
                 assert!(live_bpm || public_rate_adoption || musical_explicit);
-                if musical_explicit && key_lock {
-                    87.6
-                } else {
-                    150.0
-                }
+                target_bpm
             },
         )
     } else {
@@ -7854,24 +8149,31 @@ persistence.flush()
     assert_eq!(h.callback.mixer.key_lock_for_measurement(0), key_lock);
     h.callback.mixer.set_pad_eq(0, -12.0, -3.0, 4.0);
     if let Some(before_poll) = stopped_before_poll {
+        let other_stopped_demand = h.callback.mixer.stem_demand_for_measurement(215);
         assert!(!paused_first);
-        assert!(!selected_v1 && delete_pause.is_none());
-        controller_python(
-            &locals,
-            "assert controller.set_stem_mix_mode(0, 'all_stems')\nv1_stopped = previous_control.receipt",
-        );
-        stopped_adopt(
-            &engine,
-            &locals,
-            &mut h.callback,
-            &mut h.consumer,
-            "v1_stopped",
-        );
-        controller_python(
-            &locals,
-            "controller.on_frame_render()\nassert controller.stem_residency_status(0).effective_stem_set_identity is None",
-        );
-        let v1 = h.callback.mixer.stems_for_measurement()[0].clone().unwrap();
+        assert!((!selected_v1 || stopped_partial) && delete_pause.is_none());
+        let install_stopped_v1 = !stopped_partial || selected_v1;
+        let v1 = if install_stopped_v1 {
+            controller_python(
+                &locals,
+                "assert controller.set_stem_mix_mode(0, 'all_stems')\nv1_stopped = previous_control.receipt",
+            );
+            stopped_adopt(
+                &engine,
+                &locals,
+                &mut h.callback,
+                &mut h.consumer,
+                "v1_stopped",
+            );
+            controller_python(
+                &locals,
+                "controller.on_frame_render()\nassert controller.stem_residency_status(0).effective_stem_set_identity is None",
+            );
+            Some(h.callback.mixer.stems_for_measurement()[0].clone().unwrap())
+        } else {
+            assert!(h.callback.mixer.stems_for_measurement()[0].is_none());
+            None
+        };
         commit_candidate_v2(
             &engine,
             &h.root,
@@ -7882,7 +8184,7 @@ persistence.flush()
         );
         controller_python(
             &locals,
-            "assert controller.set_stem_mix_mode(0, 'all_stems')\nstopped = live.attempt.receipt\nassert stopped is not v1_stopped",
+            "assert controller.set_stem_mix_mode(0, 'all_stems')\nstopped = live.attempt.receipt\nassert stopped is not globals().get('v1_stopped')",
         );
         stopped_adopt(
             &engine,
@@ -7892,12 +8194,49 @@ persistence.flush()
             "stopped",
         );
         let v2 = h.callback.mixer.stems_for_measurement()[0].clone().unwrap();
-        assert!(!Arc::ptr_eq(
-            &v1.complete_set_identity,
-            &v2.complete_set_identity
-        ));
-        for (before, after) in v1.stems.iter().zip(&v2.stems) {
-            assert!(!Arc::ptr_eq(&before.samples, &after.samples));
+        if let Some(v1) = v1 {
+            assert!(!Arc::ptr_eq(
+                &v1.complete_set_identity,
+                &v2.complete_set_identity
+            ));
+            for (before, after) in v1.stems.iter().zip(&v2.stems) {
+                assert!(!Arc::ptr_eq(&before.samples, &after.samples));
+            }
+        }
+        if stopped_partial {
+            let source = h.callback.mixer.bank_for_measurement()[0].as_ref().unwrap();
+            assert_eq!(
+                (source.resident_start(), source.resident_end()),
+                (0, full.frame_count())
+            );
+            assert_eq!(
+                source.residency.as_ref().unwrap().context,
+                if key_lock {
+                    crate::messages::ResidentContext::KeyLockFullTrack
+                } else {
+                    crate::messages::ResidentContext::FullTrack
+                }
+            );
+            assert_eq!(v2.accepted_timing, accepted);
+            assert!(
+                v2.stems
+                    .iter()
+                    .all(|component| component.resident_start() == 0
+                        && component.resident_end() == full.frame_count()
+                        && component.samples.len() == full.frame_count() * 2)
+            );
+            assert!(Arc::ptr_eq(
+                &other_source.samples,
+                &h.callback.mixer.bank_for_measurement()[215]
+                    .as_ref()
+                    .unwrap()
+                    .samples
+            ));
+            assert!(h.callback.mixer.stems_for_measurement()[215].is_none());
+            controller_python(
+                &locals,
+                "controller.on_frame_render()\nassert stopped.is_current() and stopped.effective_mode_status() == 'waiting'\nassert not session.active_sample_ids\nassert controller.stem_residency_status(0).effective_stem_set_identity is None",
+            );
         }
         stopped_candidate_play(
             &locals,
@@ -7905,8 +8244,23 @@ persistence.flush()
             &mut h.consumer,
             before_poll,
             key_lock,
+            stopped_partial,
         );
-        let mut reference = complete_reference(&full, &full_stems, ratio, key_lock);
+        let played_set = h.callback.mixer.stems_for_measurement()[0].clone().unwrap();
+        assert!(Arc::ptr_eq(
+            &v2.complete_set_identity,
+            &played_set.complete_set_identity
+        ));
+        let oracle_timing =
+            accepted.map(|projection| (projection, projection.period_seconds / ratio));
+        let mut reference = complete_reference_at_loop(
+            &full,
+            &full_stems,
+            ratio,
+            key_lock,
+            oracle_timing,
+            loop_region,
+        );
         // Stopped V2 is already selected before this new ordinary voice starts.
         // Physical V2 mask1010 equals complete independent V1 mask0011.
         reference.stop_sample(0);
@@ -7920,15 +8274,26 @@ persistence.flush()
         let mut playback = ControllerPlayback {
             callback: h.callback,
             reference,
-            full_mix: complete_reference(&full, &full_stems, ratio, key_lock),
+            full_mix: complete_reference_at_loop(
+                &full,
+                &full_stems,
+                ratio,
+                key_lock,
+                oracle_timing,
+                loop_region,
+            ),
             frame: 0,
             source_frame: 0,
             resumed_at: None,
             seek_epoch: None,
+            complete_resident: false,
             source: full.clone(),
             components: full_stems.stems.clone(),
             ratio,
-            loop_period: (LOOP_END - LOOP_START) as f64,
+            target_bpm,
+            loop_period: accepted.map_or((LOOP_END - LOOP_START) as f64, |projection| {
+                projection.period_seconds * f64::from(RATE) / 16.0
+            }),
             loop_start: LOOP_START,
             loop_end: LOOP_END,
             rate_ledger: None,
@@ -7977,10 +8342,10 @@ assert fresh.effective_mode_status() == 'waiting'
             .as_ref()
             .unwrap();
         assert!(Arc::ptr_eq(
-            &v2.complete_set_identity,
+            &played_set.complete_set_identity,
             &after.complete_set_identity
         ));
-        for (before, after) in v2.stems.iter().zip(&after.stems) {
+        for (before, after) in played_set.stems.iter().zip(&after.stems) {
             assert!(Arc::ptr_eq(&before.samples, &after.samples));
         }
         let mut output = Vec::new();
@@ -7992,6 +8357,48 @@ assert fresh.effective_mode_status() == 'waiting'
             });
         }
         assert!(output.iter().any(|sample| sample.abs() > 0.001));
+        if stopped_partial {
+            prove_public_loop_return(&mut playback, key_lock, accepted);
+            let current = engine
+                .current_input_runtime_pad_binding(0)
+                .unwrap()
+                .unwrap();
+            assert_eq!(current.binding.accepted, accepted);
+            assert_eq!(
+                engine.current_timing_acknowledgements.current_epoch(0),
+                accepted.map_or(0, |projection| projection.publication_epoch)
+            );
+            assert!(Arc::ptr_eq(
+                &other_source.samples,
+                &playback.callback.mixer.bank_for_measurement()[215]
+                    .as_ref()
+                    .unwrap()
+                    .samples
+            ));
+            assert!(playback.callback.mixer.stems_for_measurement()[215].is_none());
+            assert_eq!(
+                playback.callback.mixer.stem_demand_for_measurement(215),
+                other_stopped_demand
+            );
+            controller_python(
+                &locals,
+                r#"
+persistence.mark_dirty()
+persistence.flush()
+stopped_reopened = ProjectPersistence.from_config_path(persistence.config_path)
+assert stopped_reopened.load_error is None
+assert stopped_reopened.project.stem_cache[0].pair == disk_v2
+assert stopped_reopened.project.pad_loop_start_s[0] == declared_loop_start / fixture['rate']
+assert stopped_reopened.project.pad_loop_end_s[0] == declared_loop_end / fixture['rate']
+assert stopped_reopened.project.pad_key_lock[0] is tail_key_lock
+assert stopped_reopened.project.pad_timing_intent[0] == ('automatic' if musical_explicit else 'legacy')
+if musical_explicit:
+    assert stopped_reopened.project.bpm_lock
+    assert stopped_reopened.project.speed == accepted_period * (target_bpm / 60)
+    assert stopped_reopened.project.manual_bpm[0] is None
+"#,
+            );
+        }
         controller_python(
             &locals,
             r#"
@@ -8031,11 +8438,7 @@ owner_v2.release()
         let bpm = if let CandidateTrace::PublicBpm(bpm) = trace {
             bpm
         } else {
-            if musical_explicit && key_lock {
-                87.6
-            } else {
-                150.0
-            }
+            target_bpm
         };
         (
             projection,
@@ -8064,9 +8467,11 @@ owner_v2.release()
         source_frame: 0,
         resumed_at: None,
         seek_epoch: None,
+        complete_resident,
         source: full.clone(),
         components: full_stems.stems.clone(),
         ratio,
+        target_bpm,
         loop_period: accepted.map_or((loop_region.end - loop_region.start) as f64, |projection| {
             projection.period_seconds * f64::from(RATE) / 16.0
         }),
@@ -8226,21 +8631,27 @@ assert session.paused_sample_ids == {0, 215}
         ));
         public_rate_start = Some(start);
     }
-    if explicit {
+    if let Some(target_kind) = seek_target {
         public_explicit_seek(
             &engine,
             &mut playback,
             &mut h.consumer,
             &locals,
             key_lock,
-            intro,
+            target_kind,
             accepted,
         );
         adopted_window = playback.callback.mixer.bank_for_measurement()[0].clone();
-        if paused_explicit {
-            paused_other_clock = Some(other_voice(&playback.callback.mixer).source_playback);
-            public_explicit_pause(&mut playback, &mut h.consumer, &locals);
+    }
+    if explicit && paused_explicit {
+        if !musical_explicit && seek_target.is_none() {
+            controller_python(
+                &locals,
+                "from flitzis_looper.controller.transport import TransportController\ntransport = TransportController(project, session, playback_audio)",
+            );
         }
+        paused_other_clock = Some(other_voice(&playback.callback.mixer).source_playback);
+        public_explicit_pause(&mut playback, &mut h.consumer, &locals);
     }
     let before = voice(&playback.callback.mixer);
     let initial_clock = before.source_playback;
@@ -8368,7 +8779,7 @@ assert previous_control.ticket.is_current()
 status = controller.stem_residency_status(0)
 assert status.disk_stem_set_identity == disk_v2.stem_set_identity
 assert status.control_stem_set_identity == disk_v1.stem_set_identity
-assert status.effective_stem_set_identity == (disk_v1.stem_set_identity if selected_v1 and not explicit else None)
+assert status.effective_stem_set_identity == (disk_v1.stem_set_identity if selected_v1 and not seek_requested else None)
 "#,
     );
     if capture_deadline {
@@ -8663,8 +9074,10 @@ assert previous_control.ticket.is_current()
             voice(&playback.callback.mixer).explicit_seek_mode,
             if intro {
                 crate::audio_engine::source_reader::ExplicitSeekMode::BeforeLoop
-            } else {
+            } else if tail {
                 crate::audio_engine::source_reader::ExplicitSeekMode::AfterLoop
+            } else {
+                crate::audio_engine::source_reader::ExplicitSeekMode::Normal
             }
         );
         assert_eq!(
@@ -8685,7 +9098,7 @@ assert previous_control.ticket.is_current()
             assert_eq!(set.accepted_timing, accepted);
         }
     }
-    if explicit && (!key_lock || intro) {
+    if complete_partial || (explicit && !normal_explicit && (!key_lock || intro)) {
         for set in [
             playback.callback.mixer.stems_for_measurement()[0].as_ref(),
             playback.callback.mixer.outgoing_stems_for_measurement(0),
@@ -8696,13 +9109,13 @@ assert previous_control.ticket.is_current()
             assert!(set.stems.iter().all(|component| {
                 component.resident_start() == 0
                     && component.resident_end()
-                        == (if key_lock {
+                        == (if key_lock && !complete_partial {
                             loop_region.end
                         } else {
                             full.frame_count()
                         })
                     && component.samples.len()
-                        == (if key_lock {
+                        == (if key_lock && !complete_partial {
                             loop_region.end
                         } else {
                             full.frame_count()
@@ -8775,7 +9188,7 @@ assert previous_control.ticket.is_current()
 controller.on_frame_render()
 status = controller.stem_residency_status(0)
 assert status.control_stem_set_identity == disk_v2.stem_set_identity
-assert status.effective_stem_set_identity == (disk_v1.stem_set_identity if selected_v1 and not withdraw_preclaim and not window_change and not explicit else None)
+assert status.effective_stem_set_identity == (disk_v1.stem_set_identity if selected_v1 and not withdraw_preclaim and not window_change and not seek_requested else None)
 assert status.effective == 'transitioning'
 assert candidate.claimed() and not candidate.withdraw()
 assert not previous_control.ticket.is_current()
@@ -8882,7 +9295,7 @@ if paused_replacement or paused_explicit:
     assert status.effective == 'transitioning'
     assert status.disk_stem_set_identity == disk_v2.stem_set_identity
     assert status.control_stem_set_identity == disk_v2.stem_set_identity
-    assert status.effective_stem_set_identity == (disk_v1.stem_set_identity if paused_replacement else None)
+    assert status.effective_stem_set_identity == (disk_v1.stem_set_identity if paused_replacement or (complete_partial and selected_v1 and not seek_requested) else None)
     assert candidate.claimed() and candidate.is_current()
     assert audio.worker_call_count() == 1
 "#,
@@ -9136,92 +9549,7 @@ if retrigger:
         );
     }
     if explicit {
-        use crate::audio_engine::source_reader::ExplicitSeekMode;
-        assert_eq!(
-            voice(&playback.callback.mixer).explicit_seek_mode,
-            if intro {
-                ExplicitSeekMode::BeforeLoop
-            } else {
-                ExplicitSeekMode::AfterLoop
-            }
-        );
-        let native = voice(&playback.callback.mixer)
-            .stretch
-            .native_state_address();
-        let generation = voice(&playback.callback.mixer).generation;
-        let epoch = playback.seek_epoch.as_ref().unwrap();
-        let seek_consumed_at = epoch.consumed_at;
-        let one_shot_frames = if intro {
-            loop_region.start
-        } else {
-            full.frame_count() - LOOP_END
-        };
-        let return_at = epoch.consumed_at + (one_shot_frames as f64 / playback.ratio).ceil() as u64;
-        let finish = return_at
-            + if musical_explicit {
-                (3.0 * playback.loop_period / playback.ratio).ceil() as u64 + 512
-            } else {
-                4096
-            };
-        let mut musical_seam_cycles = [false; 3];
-        for frames in [1_usize, 31, 137, 257, 511].into_iter().cycle() {
-            let count = frames.min((finish - playback.source_frame) as usize);
-            if musical_explicit {
-                let last = (playback.loop_period.ceil() as usize - 1)
-                    .min(playback.loop_end - playback.loop_start - 1);
-                for frame in playback.source_frame..playback.source_frame + count as u64 {
-                    let (whole, fraction, mode) = playback.seek_position(frame);
-                    let phase = whole.saturating_sub(playback.loop_start) as f64 + fraction;
-                    if mode == ExplicitSeekMode::Normal && phase >= last as f64 && fraction != 0.0 {
-                        // The independent complete-PCM feed joins these exact physical knots,
-                        // with virtual duration rather than the ordinary unit interval gain.
-                        assert!(playback.loop_start + last < playback.loop_end);
-                        let gain = (phase - last as f64) / (playback.loop_period - last as f64);
-                        assert!((0.0..1.0).contains(&gain));
-                        assert_ne!(gain.to_bits(), fraction.to_bits());
-                        let loop_distance = (frame - seek_consumed_at) as f64 * playback.ratio
-                            - one_shot_frames as f64;
-                        let cycle = (loop_distance / playback.loop_period).floor() as usize;
-                        if let Some(observed) = musical_seam_cycles.get_mut(cycle) {
-                            *observed = true;
-                        }
-                    }
-                }
-            }
-            if key_lock {
-                playback.render(count, true);
-            } else {
-                render_varispeed(&mut playback, count);
-            }
-            assert_eq!(voice(&playback.callback.mixer).generation, generation);
-            assert_eq!(
-                voice(&playback.callback.mixer)
-                    .stretch
-                    .native_state_address(),
-                native
-            );
-            assert_eq!(
-                voice(&playback.callback.mixer).source_timing.accepted,
-                accepted
-            );
-            if playback.source_frame == finish {
-                break;
-            }
-        }
-        assert_eq!(
-            voice(&playback.callback.mixer).explicit_seek_mode,
-            ExplicitSeekMode::Normal
-        );
-        if musical_explicit {
-            assert_ne!(
-                playback.loop_period.to_bits(),
-                ((loop_region.end - loop_region.start) as f64).to_bits()
-            );
-            assert!(
-                musical_seam_cycles.into_iter().all(|observed| observed),
-                "independent PCM/Native/EQ output must cross three accepted virtual seams"
-            );
-        }
+        prove_public_loop_return(&mut playback, key_lock, accepted);
         controller_python(
             &locals,
             r#"
@@ -9266,6 +9594,9 @@ persistence.flush()
 bpm_reopened = ProjectPersistence.from_config_path(persistence.config_path)
 assert bpm_reopened.load_error is None
 assert bpm_reopened.project.bpm_lock and bpm_reopened.project.speed == project.speed
+if musical_explicit:
+    assert project.speed == accepted_period * (target_bpm / 60)
+    assert bpm_reopened.project.speed == accepted_period * (target_bpm / 60)
 assert bpm_reopened.project.manual_bpm[0] is None
 assert bpm_reopened.project.pad_timing_intent[0] == 'automatic'
 assert bpm_reopened.project.stem_cache[0].pair == disk_v2
@@ -10637,6 +10968,129 @@ fn actual_python_controller_varispeed_paused_before_first_candidate_keeps_consum
 #[test]
 fn actual_public_full_track_first_and_replacement_require_own_wet_effect() {
     full_track_public_child(true);
+}
+
+#[test]
+fn actual_public_residual_domain_in_loop_and_equal_seek_requires_own_new_set_effect() {
+    residual_domain_child(
+        "actual_public_residual_domain_in_loop_and_equal_seek_requires_own_new_set_effect",
+        || {
+            let mut histories = 0;
+            for equal in [false, true] {
+                for key_lock in [false, true] {
+                    for musical in [false, true] {
+                        for paused in [false, true] {
+                            for selected_v1 in [false, true] {
+                                round_trip(
+                                    selected_v1,
+                                    None,
+                                    key_lock,
+                                    None,
+                                    false,
+                                    CandidateTrace::NormalSeek {
+                                        equal,
+                                        paused,
+                                        musical,
+                                    },
+                                );
+                                histories += 1;
+                            }
+                        }
+                    }
+                }
+            }
+            assert_eq!(histories, 32);
+        },
+    );
+}
+
+#[test]
+fn actual_public_residual_domain_complete_partial_normal_requires_own_new_set_effect() {
+    residual_domain_child(
+        "actual_public_residual_domain_complete_partial_normal_requires_own_new_set_effect",
+        || {
+            let mut histories = 0;
+            for key_lock in [false, true] {
+                for musical in [false, true] {
+                    for state in 0..3 {
+                        for selected_v1 in [false, true] {
+                            round_trip(
+                                selected_v1,
+                                None,
+                                key_lock,
+                                None,
+                                false,
+                                CandidateTrace::CompletePartial {
+                                    seek: None,
+                                    paused: state == 1,
+                                    stopped: state == 2,
+                                    musical,
+                                },
+                            );
+                            histories += 1;
+                        }
+                    }
+                }
+            }
+            assert_eq!(histories, 24);
+        },
+    );
+}
+
+#[test]
+fn actual_public_residual_domain_keylock_full_track_intro_tail_requires_own_effect_and_return() {
+    residual_domain_child(
+        "actual_public_residual_domain_keylock_full_track_intro_tail_requires_own_effect_and_return",
+        || {
+            let mut histories = 0;
+            for intro in [false, true] {
+                for musical in [false, true] {
+                    for paused in [false, true] {
+                        for selected_v1 in [false, true] {
+                            round_trip(
+                                selected_v1,
+                                None,
+                                true,
+                                None,
+                                false,
+                                CandidateTrace::CompletePartial {
+                                    seek: Some(intro),
+                                    paused,
+                                    stopped: false,
+                                    musical,
+                                },
+                            );
+                            histories += 1;
+                        }
+                    }
+                }
+            }
+            assert_eq!(histories, 16);
+        },
+    );
+}
+
+fn residual_domain_child(name: &str, run: impl FnOnce()) {
+    const RESIDUAL_CHILD: &str = "FLITZI_L3_PUBLIC_RESIDUAL_DOMAIN_CHILD";
+    if std::env::var_os(RESIDUAL_CHILD).is_some() {
+        run();
+        return;
+    }
+    let test = format!(
+        "audio_engine::cold_load::tests::stem_pair_publication_tests::committed_stem_residency_tests::l3_controller_productive_tests::{name}"
+    );
+    let output = std::process::Command::new(std::env::current_exe().unwrap())
+        .args(["--exact", &test, "--nocapture", "--test-threads=1"])
+        .env(RESIDUAL_CHILD, "1")
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "public residual domain child failed:\n{}\n{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert!(String::from_utf8_lossy(&output.stdout).contains("1 passed; 0 failed"));
 }
 
 #[test]

@@ -393,6 +393,7 @@ fn bpm_productive(
         reference_ownership: ownership,
         frame: 0,
         key_lock,
+        complete_resident: false,
         loop_region: crate::audio_engine::source_reader::FrameRange {
             start: LOOP_START,
             end: LOOP_END,
@@ -1337,6 +1338,10 @@ fn acknowledge_candidate_seek(
     p: &mut Productive,
     target: usize,
 ) -> crate::audio_engine::resident_relocation::ResidentWindowTicket {
+    let old_window = p.h.callback.mixer.bank_for_measurement()[0]
+        .as_ref()
+        .unwrap()
+        .clone();
     let previous_frame = p.h.callback.transport.output_frame();
     p.h.callback
         .transport
@@ -1358,13 +1363,23 @@ fn acknowledge_candidate_seek(
         ) {
             assert_eq!(p.h.callback.drain(&mut p.h.consumer), 1);
         }
-        seek.publication_status() == "pending" && !p.h.consumer.is_empty()
+        seek.publication_status() == "accepted"
+            || (seek.publication_status() == "pending" && !p.h.consumer.is_empty())
     });
-    assert_eq!(
-        p.h.callback.drain(&mut p.h.consumer),
-        1,
-        "actual own Seek Relocate"
-    );
+    if seek.publication_status() == "accepted" {
+        let current = p.h.callback.mixer.bank_for_measurement()[0]
+            .as_ref()
+            .unwrap();
+        assert_eq!(current.resident_binding(), old_window.resident_binding());
+        assert!(Arc::ptr_eq(&current.samples, &old_window.samples));
+        assert!(p.h.consumer.is_empty(), "covered Seek requires no Relocate");
+    } else {
+        assert_eq!(
+            p.h.callback.drain(&mut p.h.consumer),
+            1,
+            "actual own Seek Relocate"
+        );
+    }
     assert_eq!(seek.publication_status(), "accepted", "{:?}", seek.error());
     reconcile(&p.h.engine).unwrap();
     assert!(seek.is_current());
@@ -1997,6 +2012,190 @@ fn unsupported_seek_modes(target: usize, contexts: &[(bool, bool, bool)]) {
         assert_eq!(after.stretch.native_state_address(), native);
         assert_eq!(after.stretch.pending_fifo_frames(), fifo);
         assert_eq!(receipt.effective_mode_status(), "rejected");
+    }
+}
+
+#[test]
+fn complete_key_lock_intro_and_tail_same_set_requests_preserve_own_voice() {
+    for target in [0, LOOP_END] {
+        for paused in [false, true] {
+            let mut p = Productive::complete_partial(true, 0.73);
+            make_v1_effective(&mut p);
+            let _seek = acknowledge_candidate_seek(&mut p, target);
+            let sample = p.h.callback.mixer.bank_for_measurement()[0]
+                .as_ref()
+                .unwrap();
+            assert_eq!(
+                sample.residency.as_ref().unwrap().context,
+                crate::messages::ResidentContext::KeyLockFullTrack
+            );
+            assert_eq!(sample.resident_start(), 0);
+            assert_eq!(sample.resident_end(), sample.frame_count());
+            assert_eq!(
+                voice(&p.h.callback.mixer).explicit_seek_mode,
+                if target == 0 {
+                    crate::audio_engine::source_reader::ExplicitSeekMode::BeforeLoop
+                } else {
+                    crate::audio_engine::source_reader::ExplicitSeekMode::AfterLoop
+                }
+            );
+            if paused {
+                p.h.callback.mixer.pause_sample_at_output_frame(0, p.frame);
+            }
+            let source = p.h.ticket(0);
+            let pair = p.h.prepare(0, &source, false, Some(&selection(&p.pair)));
+            let registration =
+                p.h.engine
+                    .register_committed_stem_pair_with_producer(&pair, &source, &p.h.producer)
+                    .unwrap();
+            if registration.publication_status() == "pending" {
+                assert_eq!(p.h.callback.drain(&mut p.h.consumer), 1);
+            }
+            assert_eq!(registration.publication_status(), "accepted");
+            let receipt = request_candidate(&mut p, &registration, 0b1010);
+            let before = voice(&p.h.callback.mixer);
+            let clock = before.source_playback;
+            let generation = before.generation;
+            let native = before.stretch.native_state_address();
+            let fifo = before.stretch.pending_fifo_frames();
+            let source = before.sample.clone().unwrap();
+            let readers = p.h.callback.mixer.stems_for_measurement()[0]
+                .clone()
+                .unwrap();
+            assert_eq!(p.h.callback.drain(&mut p.h.consumer), 1);
+            assert_eq!(receipt.residency_status(), "rejected");
+            assert_eq!(receipt.effective_mode_status(), "rejected");
+            assert!(!receipt.claimed() && p.h.consumer.is_empty());
+            // The rejected Capture releases its waiting worker off callback;
+            // rejection is not a synchronous worker-termination acknowledgement.
+            wait_until(|| p.h.engine.cold_jobs.counts_for_test() == (0, 0, 0));
+            let after = voice(&p.h.callback.mixer);
+            assert!(after.source_playback.matches_exact(&clock));
+            assert_eq!(after.generation, generation);
+            assert_eq!(after.paused, paused);
+            assert_eq!(after.stretch.native_state_address(), native);
+            assert_eq!(after.stretch.pending_fifo_frames(), fifo);
+            assert!(after.sample.as_ref().unwrap().same_window(&source));
+            let current = p.h.callback.mixer.stems_for_measurement()[0]
+                .as_ref()
+                .unwrap();
+            assert!(Arc::ptr_eq(
+                &readers.complete_set_identity,
+                &current.complete_set_identity
+            ));
+            for (old, current) in readers.stems.iter().zip(&current.stems) {
+                assert!(Arc::ptr_eq(&old.samples, &current.samples));
+            }
+            assert!(registration.is_current());
+        }
+    }
+}
+
+#[test]
+fn own_in_loop_and_equal_phase_seek_rejects_older_capture_and_adopt() {
+    for key_lock in [false, true] {
+        for musical in [false, true] {
+            for equal_phase in [false, true] {
+                for after_capture in [false, true] {
+                    let mut p = if musical {
+                        bpm_productive(key_lock).0
+                    } else {
+                        Productive::with_harness(bpm_harness(), key_lock, 0.73, false)
+                    };
+                    make_v1_effective(&mut p);
+                    let target = LOOP_START + 64;
+                    if equal_phase {
+                        let _first_seek = acknowledge_candidate_seek(&mut p, target);
+                        assert_eq!(
+                            voice(&p.h.callback.mixer).source_playback.position().frame,
+                            target
+                        );
+                        assert_eq!(
+                            voice(&p.h.callback.mixer)
+                                .source_playback
+                                .position()
+                                .fraction,
+                            0.0
+                        );
+                    }
+                    let (_pair, registration) = candidate(&mut p, 182);
+                    let receipt = request_candidate(&mut p, &registration, 0b1010);
+                    if after_capture {
+                        p.capture_then_wait(&receipt);
+                    }
+                    let stale = p.h.consumer.pop().unwrap();
+                    assert!(p.h.consumer.is_empty());
+                    let before_seek = voice(&p.h.callback.mixer);
+                    let previous_generation = before_seek.generation;
+                    let previous_history = before_seek
+                        .stretch
+                        .source_epoch_owner()
+                        .load(Ordering::Acquire);
+                    let previous_timing = before_seek.source_timing.accepted;
+                    if equal_phase {
+                        assert_eq!(before_seek.source_playback.position().frame, target);
+                        assert_eq!(before_seek.source_playback.position().fraction, 0.0);
+                    }
+                    let _seek = acknowledge_candidate_seek(&mut p, target);
+                    let before = voice(&p.h.callback.mixer);
+                    assert_ne!(before.generation, previous_generation);
+                    assert_ne!(
+                        before.stretch.source_epoch_owner().load(Ordering::Acquire),
+                        previous_history
+                    );
+                    assert_eq!(before.source_timing.accepted, previous_timing);
+                    assert_eq!(before.source_playback.position().frame, target);
+                    assert_eq!(before.source_playback.position().fraction, 0.0);
+                    assert_eq!(
+                        before.explicit_seek_mode,
+                        crate::audio_engine::source_reader::ExplicitSeekMode::Normal
+                    );
+                    let clock = before.source_playback;
+                    let generation = before.generation;
+                    let native = before.stretch.native_state_address();
+                    let fifo = before.stretch.pending_fifo_frames();
+                    let source = before.sample.clone().unwrap();
+                    let old_readers = p.h.callback.mixer.stems_for_measurement()[0]
+                        .clone()
+                        .unwrap();
+                    p.h.producer.lock().unwrap().push(stale).unwrap();
+                    assert_eq!(p.h.callback.drain(&mut p.h.consumer), 1);
+                    wait_until(|| p.h.engine.cold_jobs.counts_for_test() == (0, 0, 0));
+                    assert_eq!(receipt.residency_status(), "rejected");
+                    assert_eq!(receipt.effective_mode_status(), "rejected");
+                    assert!(!receipt.claimed() && p.h.consumer.is_empty());
+                    let after = voice(&p.h.callback.mixer);
+                    assert!(after.source_playback.matches_exact(&clock));
+                    assert_eq!(after.generation, generation);
+                    assert_eq!(after.stretch.native_state_address(), native);
+                    assert_eq!(after.stretch.pending_fifo_frames(), fifo);
+                    assert_eq!(after.source_timing.accepted, previous_timing);
+                    assert!(after.sample.as_ref().unwrap().same_window(&source));
+                    let current = p.h.callback.mixer.stems_for_measurement()[0]
+                        .as_ref()
+                        .unwrap();
+                    assert!(Arc::ptr_eq(
+                        &old_readers.complete_set_identity,
+                        &current.complete_set_identity
+                    ));
+                    for (old, current) in old_readers.stems.iter().zip(&current.stems) {
+                        assert!(Arc::ptr_eq(&old.samples, &current.samples));
+                    }
+                    assert!(p.reference.seek_sample_at_output_frame(
+                        0,
+                        target as f64 / f64::from(RATE),
+                        p.frame
+                    ));
+                    if key_lock {
+                        p.render(13, true);
+                        p.adopt_native();
+                    }
+                    let output = p.render(257, true);
+                    assert!(output.iter().any(|sample| sample.abs() > 0.001));
+                    assert_eq!(receipt.effective_mode_status(), "rejected");
+                }
+            }
+        }
     }
 }
 

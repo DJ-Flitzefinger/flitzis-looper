@@ -40,6 +40,8 @@ fn committed_stem_mode_available(
             && sample.residency.as_ref().is_some_and(|view| {
                 if key_lock {
                     view.context == crate::messages::ResidentContext::KeyLockFiniteLoop
+                        || (view.context == crate::messages::ResidentContext::KeyLockFullTrack
+                            && complete_view_available(sample))
                 } else {
                     view.context == crate::messages::ResidentContext::FullTrack
                         && complete_view_available(sample)

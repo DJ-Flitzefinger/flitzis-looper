@@ -271,6 +271,54 @@ Intro/Tail-specific final-reader/lifecycle coverage also remains separate from
 the earlier finite NormalLoop L4 closure. Whole P4b/P5a/P5b, full L4, resources,
 Human acceptance and the stop before full Rust-port/Slice8 remain unchanged.
 
+### L3 own Seek and complete-resident partial loops: bounded software closure
+
+The delivered grouped product block adds changed-position and equal-phase public
+Normal Seek followed by fresh first/replacement adoption, proper partial
+NormalLoop on actual complete OFF/ON residency, and ON complete-resident
+Intro/Tail candidate exceptions. Its executed matrix is 32 Seek histories
+(changed/equal, OFF/ON, physical/musical, running/paused, first/replacement),
+24 complete-partial Normal histories (OFF/ON, physical/musical,
+stopped/running/paused, first/replacement) and 16 ON complete-partial Intro/Tail
+histories (Intro/Tail, physical/musical, running/paused, first/replacement).
+
+An equal-phase case obtains two own acknowledged Seeks to the same integer T
+without intervening source consumption, checking exact fraction `0.0` and the second
+intentional Seek cut. A covered Seek can receive its actual preserved-window
+ACK directly; no nonexistent Relocate is invented. Fresh V2 adoption preserves
+the resulting source/voice/Native/FIFO/filter chronology without another cut.
+
+Complete cases first obtain a real complete-source ACK, then declare a proper
+partial physical loop `[S,E)` and use the actual mode-only ON ACK where needed.
+Residency `[0,N)`, H=`E-S` and accepted musical P remain separate. Hand-assigned
+context tags or a loop rewritten as `[0,N)` cannot establish this proof. The
+existing full-source ALL trace remains separately scoped; these cases claim no
+unexercised public Play or initial default-loop admission. All fresh permits,
+exact readers, consumed-source effect and pause-frozen owners remain required.
+Stopped cases prove complete Capture/Adopt and readiness before the existing
+real public Play supplies markers, which may narrow ON residency to finite.
+That Play does not prove complete residency persists; an obsolete readiness/
+effect permit is not borrowed. A fresh own ALL receipt proves V2 output after Play.
+
+Additional negatives prove 16 stale-pre-Seek Capture/Adopt histories
+(Capture/Adopt, changed/equal, OFF/ON, physical/musical) and four complete-ON
+ordinary same-set Intro/Tail histories (Intro/Tail, running/paused).
+
+The three positive tests pass all 72 histories; Native negatives pass 16+4.
+The integrated residency profile passes 106 tests, separate source coverage nine,
+and fresh build-only Release/private preflight plus six Python files/183 tests
+pass. Equivalent conditional cleanup only changes test style; successful audio
+checks are reused and final fmt/Clippy test compilation passes with no changed-file
+diagnostic. Exact profiles, failed fixture attempts and limits are recorded in
+`docs/prepared-stem-publication.md`.
+
+Together with delivered Intro/Tail and full-source-loop proofs, this closes
+task3.3's bounded candidate domain topology, not a full Cartesian musical/resource
+or reader-retirement matrix. Ordinary same-set Intro/Tail, frozen-source and
+multiple-voice guards remain. Full-source public Play/default initial admission,
+unchanged-set ALL, domain-specific final-reader/full L4, P4b/P5a/P5b, resources and
+final/Human gates remain open; no full Rust-port/Slice8 work follows.
+
 ## L4: single-current-set retirement and duplicate UI
 
 The shared material has one durable current selected set. After replacement,

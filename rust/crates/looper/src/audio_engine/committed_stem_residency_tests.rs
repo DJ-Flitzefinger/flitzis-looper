@@ -185,6 +185,7 @@ struct Productive {
     frame: u64,
     key_lock: bool,
     loop_region: crate::audio_engine::source_reader::FrameRange,
+    complete_resident: bool,
 }
 
 impl Productive {
@@ -196,11 +197,25 @@ impl Productive {
         Self::with_loop(key_lock, ratio, true)
     }
 
+    fn complete_partial(key_lock: bool, ratio: f64) -> Self {
+        Self::with_geometry(long_harness(), key_lock, ratio, false, true)
+    }
+
     fn with_loop(key_lock: bool, ratio: f64, full_track: bool) -> Self {
         Self::with_harness(long_harness(), key_lock, ratio, full_track)
     }
 
-    fn with_harness(mut h: Harness, key_lock: bool, ratio: f64, full_track: bool) -> Self {
+    fn with_harness(h: Harness, key_lock: bool, ratio: f64, full_track: bool) -> Self {
+        Self::with_geometry(h, key_lock, ratio, full_track, full_track)
+    }
+
+    fn with_geometry(
+        mut h: Harness,
+        key_lock: bool,
+        ratio: f64,
+        full_track: bool,
+        complete_resident: bool,
+    ) -> Self {
         let loop_region = crate::audio_engine::source_reader::FrameRange {
             start: if full_track { 0 } else { LOOP_START },
             end: if full_track {
@@ -249,10 +264,18 @@ impl Productive {
             &h.engine,
             0,
             WindowRequest {
-                key_lock: Some(key_lock && !full_track),
+                key_lock: Some(key_lock && !complete_resident),
                 loop_region: Some((
-                    loop_region.start as f64 / f64::from(RATE),
-                    Some(loop_region.end as f64 / f64::from(RATE)),
+                    if complete_resident {
+                        0.0
+                    } else {
+                        loop_region.start as f64 / f64::from(RATE)
+                    },
+                    Some(if complete_resident {
+                        full.frame_count() as f64 / f64::from(RATE)
+                    } else {
+                        loop_region.end as f64 / f64::from(RATE)
+                    }),
                 )),
                 ..WindowRequest::default()
             },
@@ -269,7 +292,12 @@ impl Productive {
         assert_eq!(h.callback.drain(&mut h.consumer), 1);
         assert_eq!(window.publication_status(), "accepted");
         reconcile(&h.engine).unwrap();
-        if full_track && key_lock {
+        if complete_resident && !full_track {
+            h.callback
+                .mixer
+                .set_loop_region_frames(0, loop_region.start, Some(loop_region.end));
+        }
+        if complete_resident && key_lock {
             // A real mode-only request preserves the FullTrack geometry/tag;
             // an ON loop edit would deliberately produce KeyLockFiniteLoop.
             let mode = prepare_window_with_producer(
@@ -288,13 +316,31 @@ impl Productive {
             reconcile(&h.engine).unwrap();
         }
         let resident = h.callback.mixer.bank_for_measurement()[0].as_ref().unwrap();
-        assert_eq!(resident.resident_start(), loop_region.start);
-        assert_eq!(resident.resident_end(), loop_region.end);
+        assert_eq!(
+            resident.resident_start(),
+            if complete_resident {
+                0
+            } else {
+                loop_region.start
+            }
+        );
+        assert_eq!(
+            resident.resident_end(),
+            if complete_resident {
+                full.frame_count()
+            } else {
+                loop_region.end
+            }
+        );
         assert_eq!(
             resident.samples.len(),
-            (loop_region.end - loop_region.start) * 2
+            (if complete_resident {
+                full.frame_count()
+            } else {
+                loop_region.end - loop_region.start
+            }) * 2
         );
-        if full_track {
+        if complete_resident {
             assert_eq!(
                 resident.residency.as_ref().unwrap().context,
                 if key_lock {
@@ -317,7 +363,7 @@ impl Productive {
         reference.load_sample(0, full.clone());
         assert!(reference.publish_prepared_stems(0, full_stems));
         reference.set_loop_region_frames(0, loop_region.start, Some(loop_region.end));
-        if full_track {
+        if complete_resident {
             // Complete-source tracked mode ACKs retain their own dry-to-wet
             // readiness through voice birth. The independent PCM oracle must
             // use its own equivalent request, rather than legacy scalar ON.
@@ -341,7 +387,7 @@ impl Productive {
         }
         for mixer in [&mut h.callback.mixer, reference.as_mut()] {
             mixer.set_speed(ratio);
-            if !full_track {
+            if !complete_resident {
                 mixer.set_pad_key_lock(0, key_lock);
             }
             mixer.set_pad_eq(0, -12.0, -3.0, 4.0);
@@ -357,6 +403,7 @@ impl Productive {
             frame: 0,
             key_lock,
             loop_region,
+            complete_resident,
         };
         if key_lock {
             fixture.render(13, true);
@@ -454,8 +501,9 @@ impl Productive {
         let taps = voice_mut(&mut self.h.callback.mixer)
             .stretch
             .prepared_tap_observation();
-        if self.loop_region.start == 0
-            && self.loop_region.end == self.h.material.sample.frame_count()
+        if self.complete_resident
+            || (self.loop_region.start == 0
+                && self.loop_region.end == self.h.material.sample.frame_count())
         {
             // The complete-source worker has no finite-coverage observation.
             // Actual full PCM output/clock/FIFO remain compared below.
@@ -464,8 +512,8 @@ impl Productive {
                 .as_ref()
                 .unwrap();
             assert_eq!(bank.resident_start(), 0);
-            assert_eq!(bank.resident_end(), self.loop_region.end);
-            assert_eq!(bank.samples.len(), self.loop_region.end * 2);
+            assert_eq!(bank.resident_end(), self.h.material.sample.frame_count());
+            assert_eq!(bank.samples.len(), self.h.material.sample.frame_count() * 2);
         } else {
             let taps = taps.expect("finite worker coverage observation");
             assert_eq!(taps.missing_reads, 0);
@@ -2178,9 +2226,11 @@ struct ControllerPlayback {
     source_frame: u64,
     resumed_at: Option<u64>,
     seek_epoch: Option<ControllerSeekEpoch>,
+    complete_resident: bool,
     source: SampleBuffer,
     components: [SampleBuffer; 4],
     ratio: f64,
+    target_bpm: f64,
     loop_period: f64,
     loop_start: usize,
     loop_end: usize,
@@ -2427,6 +2477,24 @@ impl ControllerPlayback {
         use crate::audio_engine::source_reader::ExplicitSeekMode;
         let epoch = self.seek_epoch.as_ref().unwrap();
         let distance = output_frame.checked_sub(epoch.consumed_at).unwrap() as f64 * self.ratio;
+        if (self.loop_start..self.loop_end).contains(&epoch.target) {
+            if self.loop_period == (self.loop_end - self.loop_start) as f64 {
+                return (
+                    self.loop_start
+                        + (epoch.target - self.loop_start + distance.floor() as usize)
+                            % (self.loop_end - self.loop_start),
+                    distance.fract(),
+                    ExplicitSeekMode::Normal,
+                );
+            }
+            let phase = (epoch.target - self.loop_start) as f64 + distance;
+            let phase = phase.rem_euclid(self.loop_period);
+            return (
+                self.loop_start + phase.floor() as usize,
+                phase.fract(),
+                ExplicitSeekMode::Normal,
+            );
+        }
         let intro = epoch.target < self.loop_start;
         let remaining = if intro {
             self.loop_start - epoch.target
@@ -2454,6 +2522,14 @@ impl ControllerPlayback {
     }
 
     fn resident_start(&self) -> usize {
+        if self.complete_resident
+            || (self.raw.is_none()
+                && self.seek_epoch.as_ref().is_some_and(|epoch| {
+                    epoch.target < self.loop_start || epoch.target >= self.loop_end
+                }))
+        {
+            return 0;
+        }
         if self
             .seek_epoch
             .as_ref()
@@ -2466,11 +2542,18 @@ impl ControllerPlayback {
     }
 
     fn resident_end(&self) -> usize {
+        if self.complete_resident {
+            return self.source.frame_count();
+        }
         if self
             .seek_epoch
             .as_ref()
-            .is_some_and(|epoch| epoch.target >= self.loop_start)
-            || (self.seek_epoch.is_some() && self.raw.is_none())
+            .is_some_and(|epoch| epoch.target >= self.loop_end)
+            || (self.raw.is_none()
+                && self
+                    .seek_epoch
+                    .as_ref()
+                    .is_some_and(|epoch| epoch.target < self.loop_start))
         {
             self.source.frame_count()
         } else {
@@ -2871,7 +2954,9 @@ impl ControllerPlayback {
         let prepared_taps = voice_mut(&mut self.callback.mixer)
             .stretch
             .prepared_tap_observation();
-        if self.loop_start == 0 && self.loop_end == self.source.frame_count() {
+        if self.complete_resident
+            || (self.loop_start == 0 && self.loop_end == self.source.frame_count())
+        {
             assert!(
                 prepared_taps.is_none(),
                 "complete worker has no finite observation"
@@ -2880,8 +2965,8 @@ impl ControllerPlayback {
                 .as_ref()
                 .unwrap();
             assert_eq!(bank.resident_start(), 0);
-            assert_eq!(bank.resident_end(), self.loop_end);
-            assert_eq!(bank.samples.len(), self.loop_end * 2);
+            assert_eq!(bank.resident_end(), self.source.frame_count());
+            assert_eq!(bank.samples.len(), self.source.frame_count() * 2);
         } else {
             let prepared_taps = prepared_taps.expect("finite Native coverage observation");
             assert_eq!(prepared_taps.missing_reads, 0);
@@ -3530,9 +3615,11 @@ assert audio.worker_call_count() == 1 and audio.prepared_only_on_pool_threads()
         source_frame: 0,
         resumed_at: None,
         seek_epoch: None,
+        complete_resident: false,
         source: full.clone(),
         components: full_stems.stems.clone(),
         ratio,
+        target_bpm: 150.0,
         loop_period: (LOOP_END - LOOP_START) as f64,
         loop_start: LOOP_START,
         loop_end: LOOP_END,

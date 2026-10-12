@@ -56,7 +56,7 @@
   Consolidated finite NormalLoop coverage and callback ownership assessment:
   `docs/prepared-stem-publication.md`, task3.2 closure of 2026-10-12. Additional
   domains, complete L4 retirement and whole P4b/P5a/Human gates remain separate.
-- [ ] 3.3 Prove each additional seek/Intro/Tail/full-track domain in bounded
+- [x] 3.3 Prove each additional seek/Intro/Tail/full-track domain in bounded
   transactions before enabling that domain; unsupported cases stay explicitly
   guarded with current audio usable. Preserve whole P4b/P5a open gates.
   The additional complete-resident NormalLoop `[0,N)` proof is documented in
@@ -77,10 +77,34 @@
   build-only Release/import/static/strict and one independent review are
   documented in `docs/prepared-stem-publication.md`;
   earlier paused-Intro/musical negatives are superseded only within that
-  candidate contract. Explicit in-loop/equal-phase Seek, actual KEYLOCK ON
-  KeyLockFullTrack Seek/ALL exceptions, unproved complete-resident partial-loop
-  contexts and whole3.3 remain open. Finite4.2/4.3 lifecycle closure does not
+  candidate contract. At that boundary, explicit in-loop/equal-phase Seek,
+  actual KEYLOCK ON KeyLockFullTrack Seek/ALL exceptions, complete-resident
+  partial-loop contexts and whole3.3 remained open. Finite4.2/4.3 lifecycle closure does not
   establish Intro/Tail/full-track final-reader or parent acceptance.
+  The delivered grouped block proves 32 changed/equal Normal public-Seek histories,
+  24 actual complete-resident proper-partial Normal histories and 16 ON actual
+  KeyLockFullTrack proper-partial Intro/Tail histories. Physical/musical timing,
+  first/replacement and running/paused apply throughout; complete Normal also
+  covers stopped readiness. Equal phase uses two acknowledged Seeks to the same
+  integer T without consumption; covered direct ACK is valid. Complete-source
+  ACK, declared partial markers and actual mode-only ON ACK establish geometry,
+  without hand-tags or full-source-loop relabelling. Stopped cases prove complete
+  Capture/Adopt/readiness before real public Play, whose markers may narrow ON
+  to finite; fresh own ALL proves V2 output without borrowing obsolete readiness
+  or claiming complete-through-Play/default admission. Additional negatives prove 16
+  stale-pre-Seek Capture/Adopt histories and four complete-ON ordinary same-set
+  Intro/Tail running/paused histories. All72 positive histories, Native16+4,
+  fresh106 residency and nine source-coverage checks pass; fresh build-only
+  Release/private preflight and six Python files/183 tests pass. Final static
+  test compilation passes after equivalent fixture conditional cleanup; the
+  successful audio profiles are reused. Together with earlier delivered domains,
+  this closes bounded candidate task3.3 software topology; exact profiles,
+  failed fixture attempts and limits are in the consolidated task3.3 report in
+  `docs/prepared-stem-publication.md`. Ordinary same-set Intro/Tail, frozen old
+  source and multiple-voice guards remain. Full-source public Play/default
+  admission, unchanged-set ALL, domain-specific final-reader/full L4, complete
+  musical/resource matrices, whole P4b/P5a/P5b and all final/Human gates remain
+  separate; no full Rust-port/Slice8 work follows.
 
 ## 4. X11-LIVE-STEMS: current model and actual reader retirement (L4)
 

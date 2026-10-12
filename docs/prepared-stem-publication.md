@@ -534,11 +534,10 @@ current voice playing or paused. Earlier separately validated candidate-only
 paths cover acknowledged nonmusical Tail running/paused and Intro running:
 KEY LOCK ON needs actual KeyLockFiniteLoop Tail-and-loop `[S,N)` or
 prefix-and-loop `[0,E)` coverage; OFF needs physically complete FullTrack
-`[0,N)`. The current bounded extension below adds paused Intro and
+`[0,N)`. The delivered bounded extension below adds paused Intro and
 accepted-musical Intro/Tail running/paused to that same own candidate contract,
 with the productive software gates reported below. Existing ramps, ordinary
-same-set requests
-in Intro/Tail, frozen old-source or multiple same-pad voices remain guarded
+same-set requests in Intro/Tail, frozen old-source or multiple same-pad voices remain guarded
 pending their own productive new-set proofs. Ordinary active publication
 retains its existing `PadPlaying` guard; this candidate transaction supplies the
 separately proved path. This bounded delivery does not close additional-domain
@@ -549,6 +548,8 @@ The domain reports below preserve their original delivered scopes, failed
 attempts and validation profiles. Historical paused-Intro and accepted-musical
 Intro/Tail negative expectations are superseded only within the current
 candidate extension contract, whose positive gates are reported below.
+The subsequent own-Seek/complete-partial block has its separate validation
+profile below; it does not inherit a result from those earlier profiles.
 
 ### Complete resident NormalLoop new-set adoption — 2026-10-12
 
@@ -977,6 +978,104 @@ NormalLoop proof is not authority for those contexts. Intro/Tail-specific
 last-reader/lifecycle gates remain separate from finite NormalLoop task4.2/4.3.
 Whole P4b/P5a/P5b, full L4, resources and Human GUI/CPAL/device/hearing remain open;
 the Goal still stops before full Rust-port planning/implementation or Slice8.
+
+### Own Seek and complete-resident partial loops — 2026-10-12
+
+This coherent block proves the three remaining bounded candidate groups under
+the official stem-cache contract. Productive public coverage is:
+
+| Own path and actual geometry | Executed matrix | Histories |
+| --- | --- | --- |
+| Changed/equal Normal public Seek followed by V2 | OFF/ON × physical/musical × running/paused × first FullMix/replacement V1, for each Seek kind | 32 |
+| Complete FullTrack/KeyLockFullTrack `[0,N)` with proper partial NormalLoop `[S,E)` | OFF/ON × physical/musical × stopped/running/paused × first/replacement | 24 |
+| Actual ON KeyLockFullTrack `[0,N)` with proper partial Intro/Tail | Intro/Tail × physical/musical × running/paused × first/replacement | 16 |
+
+Equal-phase proof obtains two own acknowledged public Seeks to the same integer
+T without source consumption between them, verifies exact fraction `0.0`, and retains
+the intentional second Seek generation/Native/FIFO/filter cut. A covered Seek
+may obtain its real preserved-window ACK directly; no Relocate is fabricated.
+Fresh post-ACK V2 registration, Capture, worker and guarded Adopt must introduce
+no additional cut, launch or source jump.
+
+Complete fixtures obtain a real complete-source ACK before declared partial
+markers and the actual mode-only ON ACK. Both source/component readers must
+retain complete physical bounds. The partial loop `[S,E)` differs from `[0,N)`;
+resident extent N, physical H=`E-S` and accepted musical P stay independent.
+No hand-tagging or full-source-loop relabelling supplies authority. The existing
+full-source ALL trace remains separate, with no unexercised public Play/context
+tag or ordinary initial/default-loop admission claim.
+Stopped complete-partial cases assert actual complete Capture/Adopt/readiness.
+The existing real public Play then supplies markers and may narrow ON residency
+to finite; complete-through-Play is not claimed. The obsolete readiness/effect
+permit is not reused: a fresh own ALL receipt must confirm V2 output after Play.
+
+Additional negatives prove 16 stale-pre-Seek Capture/Adopt histories across
+changed/equal Seek, OFF/ON and physical/musical timing, plus four actual complete-ON
+ordinary same-set Intro/Tail running/paused rejection histories. Rejection occurs
+before claim, preserves the actual post-Seek source/voice/readers/Native/FIFO,
+and leaves no late Adopt or worker after off-thread termination.
+
+Running and resumed histories require their own 128-consumed-source-frame
+two-reader handover, distinct dry OFF or later exact 4096-output-frame Wet ON effect,
+continuous nonneutral filter/Native/FIFO chronology, physical or musical seam
+output and independent other-pad trajectory. Paused adoption freezes source,
+handover and owners until own Resume; stopped readiness is separate from own
+later Play/effect. The eight stopped histories establish complete V2 readiness
+and later own Play plus fresh ALL output; they do not claim an audible V1-to-V2
+handover. Saved reopen checks V2 and the declared partial/musical intent
+separately. Missing complete bounds, stale own permits and ordinary same-set,
+frozen-source or multiple-voice guards must preserve usable previous audio.
+
+The final positive focus passes all three tests/72 histories in 98.09s after
+70s compilation. Native stale-pre-Seek focus passes 16 histories in 15.43s;
+complete-ON same-set focus passes four histories in 3.30s. The fresh integrated
+residency profile passes 106 tests in 442.90s after 71s compilation; separate
+source-coverage tests pass nine in 0.29s. Two subsequent equivalent test-only
+conditional simplifications remove new Clippy diagnostics without changing any
+predicate, oracle, input or production code; the successful audio profiles are
+reused. Final fmt and Clippy test compilation pass (7.40s), retaining 63 existing
+warnings plus one duplicate and the prior warning-message set, with no diagnostic
+in the four changed Rust files. No warning-free claim or suppression is made.
+
+Fresh build-only production Release passes in 24.18s. All eight wheel entries
+were checked before four Native entries were extracted into a private runtime;
+Native SHA256 is `31e369865a4d7bb6f947f03ba2115859a0b3f97ec0aabdab09fc29db2142f9af`.
+Release/API/controller/UI import preflight passes, and six affected Python files
+pass 183 tests in 49.61s against that exact Native. The installed Human module
+and App are preserved; no install, device or hearing acceptance is performed.
+Logs remain in workspace `scratch/goal-seek-complete-20261012`.
+
+Failed attempts remain recorded: direct covered Seek also clears the configured
+domain until its first productive render; new Play preparation initially may be
+`preparing`; an unpolled first ACK turns a second Seek into a combined pending
+request; the phase-zero OFF 150-BPM mesh skips the narrow virtual seam each cycle.
+The last case uses an actual public 87.6-BPM request and independent saved-intent
+ratio checks so three consecutive rendered seams remain required. A rejected
+Capture releases its worker asynchronously, requiring the established bounded
+termination wait. None of these fixture repairs opens a guard or weakens audio
+or authority assertions. The same single nonauthor final source/test review
+closes the stopped-handover wording issue and verifies the equivalent cleanup,
+reported profiles and scoped closure, with no open findings.
+
+### Consolidated task3.3 domain closure — 2026-10-12
+
+Task3.3 is closed for bounded software new-set adoption through the authoritative
+candidate transaction: Normal, BeforeLoop and AfterLoop, finite prefix/loop/suffix
+unions and actual complete OFF/ON sources, physical and accepted musical timing,
+own changed/equal-phase Seek, first/replacement and running/paused consumption,
+plus stopped complete readiness followed by own Play/fresh effect authority.
+The delivered reports above and existing full-source-loop Native/public proofs
+establish the domain topology together; an individual bounded scenario alone
+does not close this consolidated task or the original product parents.
+
+Ordinary same-set Intro/Tail, frozen old-source and multiple same-pad voices
+remain guarded. Full-source public Play/default initial residency, unchanged-set
+ALL, complete musical/resource matrices and actual domain-specific final-reader
+retirement remain separate P4b/P5a/P5b/full-L4 obligations. The eight stopped
+histories do not prove audible V1-to-V2 handover or complete residency through
+Play. Whole E11/product/resource/final/Human GUI/CPAL/device/hearing gates remain
+open. Prior `8d76e31` results retain their exact scope, and the Goal stops before
+full Rust-port planning/implementation or Slice8.
 
 ### Consolidated task3.2 closure — 2026-10-12
 
