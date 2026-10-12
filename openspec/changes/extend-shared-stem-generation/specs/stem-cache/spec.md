@@ -563,6 +563,14 @@ Original FullMix/source PCM SHALL remain usable after stem deletion.
 - **THEN** it preserves non-owned content and defers/report failures through bounded control status
 - **AND** no callback deletion or immediate recursive material removal occurs
 
+#### Scenario: Engine shutdown precedes final lease and sharing release
+- **GIVEN** exact unassigned owned-original retirement receipts retain their inventory custody, transient source/job leases remain live and a real Windows handle denies deletion of one target
+- **WHEN** the actual last Engine owner shuts down and those leases release afterward
+- **THEN** the shared off-thread asset worker SHALL continue processing eligible unrelated targets while preserving the blocked target bytes and pending receipt
+- **WHEN** the blocking handle releases
+- **THEN** the same queued retirement SHALL complete without re-admission or a direct collector call
+- **AND** inventory custody SHALL remain through physical cleanup and unknown neighboring files SHALL remain unchanged
+
 ## MODIFIED Requirements
 
 ### Requirement: Stem Generation And Replacement Require An Inactive Pad

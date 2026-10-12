@@ -4,6 +4,111 @@
 use super::*;
 use crate::audio_engine::cold_store;
 
+const SHUTDOWN_CHILD: &str = "FLITZI_L4_ASSET_SHUTDOWN_CHILD";
+const SHUTDOWN_TEST: &str = "audio_engine::material_migration_recovery::tests::retirement_tests::actual_engine_shutdown_keeps_late_lease_cleanup_and_sharing_retry";
+
+#[test]
+fn actual_engine_shutdown_keeps_late_lease_cleanup_and_sharing_retry() {
+    if std::env::var_os(SHUTDOWN_CHILD).is_none() {
+        let output = Command::new(std::env::current_exe().unwrap())
+            .args(["--exact", SHUTDOWN_TEST, "--nocapture", "--test-threads=1"])
+            .env(SHUTDOWN_CHILD, "1")
+            .output()
+            .unwrap();
+        assert!(
+            output.status.success(),
+            "asset shutdown child failed:\n{}\n{}",
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr)
+        );
+        assert!(String::from_utf8_lossy(&output.stdout).contains("1 passed; 0 failed"));
+        return;
+    }
+    use std::os::windows::fs::OpenOptionsExt;
+
+    let scratch = std::env::temp_dir().join("codex");
+    fs::create_dir_all(&scratch).unwrap();
+    let temp = tempfile::Builder::new()
+        .prefix("flitzi-asset-shutdown-")
+        .tempdir_in(scratch)
+        .unwrap();
+    let root = temp.path().join("samples");
+    let original = root.join("materials/M0123456789abcdef0123456789abcdef/original/blocked.wav");
+    let sentinel = root.join("materials/Mfedcba9876543210fedcba9876543210/original/sentinel.wav");
+    for path in [&original, &sentinel] {
+        fs::create_dir_all(path.parent().unwrap()).unwrap();
+        wav(path);
+    }
+    let before = fs::read(&original).unwrap();
+    let unknown = original.parent().unwrap().join("unknown.keep");
+    fs::write(&unknown, b"outside both exact retirement receipts").unwrap();
+    // This real external handle grants reads only. It is not an asset lease,
+    // native PCM owner or test-injected cleanup failure.
+    let handle = fs::OpenOptions::new()
+        .read(true)
+        .share_mode(1)
+        .open(&original)
+        .unwrap();
+    assert!(matches!(
+        fs::remove_file(&original).unwrap_err().raw_os_error(),
+        Some(32 | 33)
+    ));
+    let engine = Arc::new(crate::audio_engine::AudioEngine::new().unwrap());
+    let engine_lifetime = Arc::downgrade(&engine);
+    let assets = engine.project_assets.clone();
+    assert!(Arc::ptr_eq(&assets, &ProjectAssets::shared()));
+    // Transient source/job leases protect an unassigned original. A current
+    // saved assignment correctly denies this retirement admission altogether.
+    let mut original_lease = assets.acquire_pin(&root, &original).unwrap();
+    let mut sentinel_lease = assets.acquire_pin(&root, &sentinel).unwrap();
+    let mut inventory = inventory_gate(&root).unwrap();
+    let inventory_lifetime = Arc::downgrade(inventory.handle.as_ref().unwrap());
+    let mut original_receipt = MigrationArtifactLease::capture_native(&root, &original).unwrap();
+    let mut sentinel_receipt = MigrationArtifactLease::capture_native(&root, &sentinel).unwrap();
+    original_receipt.retire_native(&inventory).unwrap();
+    sentinel_receipt.retire_native(&inventory).unwrap();
+    let original_outcome = original_receipt.outcome.as_ref().unwrap().clone();
+    let sentinel_outcome = sentinel_receipt.outcome.as_ref().unwrap().clone();
+    inventory.release();
+    original_receipt.release();
+    sentinel_receipt.release();
+    drop(original_receipt);
+    drop(sentinel_receipt);
+    assert_eq!(original_outcome.status().unwrap(), ("pending", None));
+    assert_eq!(sentinel_outcome.status().unwrap(), ("pending", None));
+    // No facade or cloned Engine remains. Its actual Drop closes admission/jobs;
+    // the independent shared asset worker must still finish later releases.
+    drop(engine);
+    assert!(engine_lifetime.upgrade().is_none());
+    assert_eq!(fs::read(&original).unwrap(), before);
+    assert!(sentinel.is_file());
+    original_lease.release();
+    sentinel_lease.release();
+    drop(original_lease);
+    drop(sentinel_lease);
+    // Own unblocked progress proves the real worker ran after Engine shutdown.
+    // Never call collect/collect_for_test or re-admit a retirement in this case.
+    wait_until(|| !sentinel.exists() && sentinel_outcome.status().unwrap().0 == "complete");
+    assert_eq!(fs::read(&original).unwrap(), before);
+    assert_eq!(original_outcome.status().unwrap(), ("pending", None));
+    assert!(inventory_lifetime.upgrade().is_some());
+    assert_registration_blocked(&root);
+    assert_eq!(
+        fs::read(&unknown).unwrap(),
+        b"outside both exact retirement receipts"
+    );
+    drop(handle);
+    wait_until(|| !original.exists() && original_outcome.status().unwrap().0 == "complete");
+    wait_until(|| inventory_lifetime.upgrade().is_none());
+    assert_eq!(original_outcome.status().unwrap(), ("complete", None));
+    assert_eq!(sentinel_outcome.status().unwrap(), ("complete", None));
+    assert_eq!(
+        fs::read(&unknown).unwrap(),
+        b"outside both exact retirement receipts"
+    );
+    assert_registration_available(&root);
+}
+
 pub(super) fn assert_registration_blocked(root: &Path) {
     let config = root.parent().unwrap().join("project.config.json");
     let error = MigrationProjectGuard::create_native(root, &config)

@@ -597,6 +597,27 @@ This is one coupled L4.2 replacement outcome. Other assignment/job/action/unload
 reader families, sharing-error retry, shutdown, unknown/external/newer preservation,
 the complete L4 parent and Human acceptance still require their own remaining gates.
 
+### Actual Engine shutdown, late leases and sharing retry
+
+`actual_engine_shutdown_keeps_late_lease_cleanup_and_sharing_retry` runs in its
+own exact Windows child with a real `AudioEngine` and its shared `ProjectAssets`
+service. Two unassigned managed originals acquire genuine transient source/job leases before exact
+verified retirement admission. A real read-only Windows handle denies deletion
+of one target. The final Engine Arc then drops; neither a facade nor an Engine
+clone remains. Both source/job leases release only after that actual shutdown.
+Current saved-original assignments continue to deny this retirement admission.
+
+The unblocked original's own deletion and completed receipt prove background
+worker progress. The blocked original stays byte-identical and pending, with its
+inventory custody retained. Closing the Windows handle lets the same queued
+target complete and its inventory lock release. This case calls no direct
+collector and does not re-admit cleanup; unknown neighboring bytes remain intact.
+
+This closes a bounded shutdown/late-lease/sharing-retry outcome for exact original
+receipts. It supplies no active-audio, all reader-family, complete paired-stem,
+unknown-child-after-admission or replaced-object preservation acceptance. Those
+remaining L4 obligations and Human GUI/device/hearing gates stay open.
+
 ### Native current-bank eligibility does not transfer to retained A
 
 `actual_native_current_bank_candidate_cannot_borrow_frozen_old_voice_with_keylock_on`
