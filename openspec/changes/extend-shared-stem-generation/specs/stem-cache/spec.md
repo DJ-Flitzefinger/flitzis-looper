@@ -77,7 +77,14 @@ adoption on a single current running voice during its acknowledged Tail with
 KEY LOCK ON, no accepted musical timing, and a KeyLockFiniteLoop view covering the
 entire Tail-and-loop union. This candidate-only path SHALL use the same fresh
 Capture, off-thread preparation, two-reader coverage and guarded Adopt authority.
-Intro, paused Tail, KEY LOCK OFF Tail, accepted-musical Tail and ordinary same-set
+The system SHALL additionally permit this own candidate transaction on a single
+current running KEY LOCK OFF Tail without accepted musical timing when the
+acknowledged Seek holds a physically complete FullTrack view `[0,N)`. Complete
+source layout and both exact predecessor/candidate reader generations MUST
+cover all current and future Tail/loop taps. Actual consumed-source handover and
+dry output SHALL establish OFF effectiveness without claiming Native Wet
+preparation or resetting Native/FIFO/filter history at candidate adoption.
+Intro, paused Tail, accepted-musical Tail and ordinary same-set
 mode requests SHALL retain their existing unsupported-domain guards.
 
 New-set preparation SHALL retain separate candidate and actual predecessor
@@ -163,7 +170,7 @@ immediate change SHALL NOT silently discard the command.
 - **THEN** both exact immutable generations SHALL cover all current and future Tail/loop taps throughout the 128-consumed-source-frame ramp; independent complete PCM SHALL establish the selected V2 feed and its distinct Wet effect
 - **AND** V2 adoption SHALL preserve the existing voice, source fraction, actual Native/FIFO and uninterrupted post-seek filter history; later Native adoption SHALL use its own advanced exact target checkpoint
 - **AND** the actual source-end-to-loop-start return SHALL preserve fractional playback, exact PCM, Native/FIFO and filter chronology without another seek, reset or retrigger
-- **AND** this candidate proof SHALL NOT authorize Intro, paused Tail, KEY LOCK OFF or accepted-musical Tail, ordinary same-set mode requests, frozen old-source voices, multiple same-pad voices or whole task3.3 acceptance
+- **AND** this ON candidate proof alone SHALL NOT authorize Intro, paused Tail, KEY LOCK OFF or accepted-musical Tail, ordinary same-set mode requests, frozen old-source voices, multiple same-pad voices or whole task3.3 acceptance
 
 #### Scenario: Public StemController adopts first and replacement sets after own Tail Seek
 
@@ -174,6 +181,16 @@ immediate change SHALL NOT silently discard the command.
 - **AND** independent complete PCM, raw Native/FIFO and uninterrupted nonneutral filter history SHALL verify post-Seek output, natural return to NormalLoop and continued playback; candidate adoption SHALL introduce no additional seek, reset or launch
 - **AND** another active pad SHALL retain its independent absolute source trajectory and authority; neither its ACK nor an earlier V1 receipt SHALL confirm V2
 - **AND** model-free reopen SHALL verify the saved committed selection without treating persistence as audible acknowledgement
+
+#### Scenario: Public KEY LOCK OFF Tail adopts with complete resident coverage
+
+- **GIVEN** a single current running KEY LOCK OFF voice without accepted musical timing and its own public seek-only acknowledgement into Tail
+- **AND** the acknowledged source and its actual FullMix or V1 readers physically cover the complete FullTrack `[0,N)` including the entire Tail-and-loop union
+- **WHEN** a distinct complete V2 obtains fresh own source authority, durable disk selection, registration, Capture, off-thread preparation and guarded Adopt through the public StemController
+- **THEN** independent complete PCM and fractional one-shot source addressing SHALL verify both exact generations through the 128-consumed-source-frame ramp, subsequent distinct dry V2 output and natural return to NormalLoop
+- **AND** adoption and continued output SHALL retain the actual voice, Native address/FIFO and uninterrupted nonneutral filter chronology; productive Native history and Wet readiness SHALL remain absent
+- **AND** disk/preparation status and obsolete V1 receipts SHALL NOT confirm V2 effectiveness before its own actual source consumption; saved reopen SHALL verify persistence separately
+- **AND** another active pad SHALL retain its absolute physical source trajectory and independent owners; paused Tail, accepted-musical Tail, Intro, ordinary same-set requests, frozen old-source and multiple same-pad voices SHALL remain guarded
 
 #### Scenario: Current bank B cannot authorize retained old-source voice A
 

@@ -62,7 +62,9 @@
   The additional complete-resident NormalLoop `[0,N)` proof is documented in
   `docs/prepared-stem-publication.md`; separate Native and public StemController/
   seek-only software proofs cover current running Tail-ON first/replacement
-  after own Seek without accepted musical timing. Paused Tail, Tail OFF/musical,
+  after own Seek without accepted musical timing. A separate public Tail-OFF
+  proof uses actual complete FullTrack residency and its own dry effectiveness.
+  Paused Tail, accepted-musical Tail,
   Intro, remaining Seek/Tail domains and whole3.3 remain open. Finite4.2/4.3
   lifecycle closure is not a full-track or Tail parent acceptance.
 

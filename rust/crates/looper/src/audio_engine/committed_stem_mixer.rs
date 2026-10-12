@@ -31,11 +31,15 @@ fn committed_stem_mode_available(
 ) -> bool {
     mode == ExplicitSeekMode::Normal
         || (candidate
-            && key_lock
             && accepted.is_none()
             && mode == ExplicitSeekMode::AfterLoop
             && sample.residency.as_ref().is_some_and(|view| {
-                view.context == crate::messages::ResidentContext::KeyLockFiniteLoop
+                if key_lock {
+                    view.context == crate::messages::ResidentContext::KeyLockFiniteLoop
+                } else {
+                    view.context == crate::messages::ResidentContext::FullTrack
+                        && complete_view_available(sample)
+                }
             }))
 }
 

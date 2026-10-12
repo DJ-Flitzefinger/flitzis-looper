@@ -1276,7 +1276,7 @@ fn render_varispeed_with_historical_adoption(
     );
     assert!(
         taps.max_frame
-            .is_some_and(|frame| frame < playback.loop_end)
+            .is_some_and(|frame| frame < playback.resident_end())
     );
     for (mixer, target) in [
         (playback.reference.as_mut(), &mut expected),
@@ -1332,21 +1332,37 @@ fn render_varispeed_with_historical_adoption(
         voice(&playback.reference).stretch.pending_fifo_frames()
     );
     let end = playback.source_frame + frames as u64;
-    let (whole, fraction) = playback.rate_ledger.as_ref().map_or_else(
-        || {
-            let phase = (end as f64 * playback.ratio).rem_euclid(playback.loop_period);
-            (phase.floor() as usize, phase.fract())
-        },
-        |ledger| ledger.position(end),
-    );
-    assert_eq!(
-        current.source_playback.position().frame,
-        playback.loop_start + whole
-    );
-    assert_eq!(
-        current.source_playback.position().fraction.to_bits(),
-        fraction.to_bits()
-    );
+    if playback.seek_epoch.is_some() {
+        let (whole, fraction, tail) = playback.seek_position(end);
+        let position = current.source_playback.position();
+        assert_eq!(position.frame, whole);
+        assert_eq!(position.fraction.to_bits(), fraction.to_bits());
+        assert_eq!(current.source_playback.loop_period(), None);
+        assert_eq!(
+            current.explicit_seek_mode,
+            if tail {
+                crate::audio_engine::source_reader::ExplicitSeekMode::AfterLoop
+            } else {
+                crate::audio_engine::source_reader::ExplicitSeekMode::Normal
+            }
+        );
+    } else {
+        let (whole, fraction) = playback.rate_ledger.as_ref().map_or_else(
+            || {
+                let phase = (end as f64 * playback.ratio).rem_euclid(playback.loop_period);
+                (phase.floor() as usize, phase.fract())
+            },
+            |ledger| ledger.position(end),
+        );
+        assert_eq!(
+            current.source_playback.position().frame,
+            playback.loop_start + whole
+        );
+        assert_eq!(
+            current.source_playback.position().fraction.to_bits(),
+            fraction.to_bits()
+        );
+    }
     let applied = playback
         .rate_ledger
         .as_ref()
@@ -7102,6 +7118,7 @@ fn public_tail_seek(
     playback: &mut ControllerPlayback,
     consumer: &mut rtrb::Consumer<ControlMessage>,
     locals: &Py<PyDict>,
+    key_lock: bool,
 ) {
     use crate::audio_engine::source_reader::ExplicitSeekMode;
     let other = other_voice(&playback.callback.mixer);
@@ -7113,7 +7130,7 @@ fn public_tail_seek(
         r#"
 from flitzis_looper.controller.transport import TransportController
 transport = TransportController(project, session, playback_audio)
-assert project.resolve_pad_key_lock(0) is True
+assert project.resolve_pad_key_lock(0) is tail_key_lock
 transport.playback.seek_pad(0, 1517 / fixture['rate'])
 tail_seek = transport.residency._pending[0].ticket
 assert tail_seek is not None
@@ -7154,11 +7171,15 @@ if selected_v1:
     assert_eq!(source.frame_count(), 16_384);
     assert_eq!(
         (source.resident_start(), source.resident_end()),
-        (LOOP_START, 16_384)
+        (if key_lock { LOOP_START } else { 0 }, 16_384)
     );
     assert_eq!(
         source.residency.as_ref().unwrap().context,
-        crate::messages::ResidentContext::KeyLockFiniteLoop
+        if key_lock {
+            crate::messages::ResidentContext::KeyLockFiniteLoop
+        } else {
+            crate::messages::ResidentContext::FullTrack
+        }
     );
     assert!(
         crate::audio_engine::input_runtime_binding::capture(engine, 0)
@@ -7192,21 +7213,33 @@ if selected_v1:
         acknowledged_at: playback.frame,
         target: LOOP_END,
     });
-    playback.raw = Some(ControllerRawNative::new(playback.ratio, false));
+    playback.raw = key_lock.then(|| ControllerRawNative::new(playback.ratio, false));
     playback.candidate = None;
-    playback.filter = controller_filter_with_reset(false);
+    // The authorized Seek resets fixed filter storage and snaps persistent
+    // parameters to their targets. Immediate OFF output exposes this state;
+    // the initial ON Wet silence used to mask an unnecessarily smoothed oracle.
+    playback.filter = controller_filter();
     playback.previous = playback.selection;
-    playback.render(13, true);
-    let (actual, _) = playback.adopt_native(true);
+    let actual = if key_lock {
+        playback.render(13, true);
+        playback.adopt_native(true).0
+    } else {
+        let mut actual = Vec::new();
+        for frames in [1, 31, 137, 257, 511] {
+            actual.extend(render_varispeed(playback, frames).0);
+        }
+        actual
+    };
     assert!(actual.iter().any(|sample| sample.abs() > 0.001));
     assert_eq!(
         voice(&playback.callback.mixer).explicit_seek_mode,
         ExplicitSeekMode::AfterLoop
     );
-    assert!(
+    assert_eq!(
         voice(&playback.callback.mixer)
             .stretch
-            .wet_current_source_output_ready()
+            .wet_current_source_output_ready(),
+        key_lock
     );
     assert!(consumer.is_empty());
 }
@@ -7221,13 +7254,7 @@ fn round_trip(
 ) {
     let full_track = matches!(trace, CandidateTrace::FullTrack);
     let tail = matches!(trace, CandidateTrace::Tail);
-    assert!(
-        !tail
-            || (key_lock
-                && delete_pause.is_none()
-                && stopped_before_poll.is_none()
-                && !paused_first)
-    );
+    assert!(!tail || (delete_pause.is_none() && stopped_before_poll.is_none() && !paused_first));
     let final_reader = matches!(
         trace,
         CandidateTrace::FinalReader
@@ -7497,6 +7524,7 @@ fn round_trip(
         locals.set_item("selected_v1", selected_v1).unwrap();
         locals.set_item("public_bpm", public_bpm).unwrap();
         locals.set_item("tail", tail).unwrap();
+        locals.set_item("tail_key_lock", key_lock).unwrap();
         locals.set_item("live_bpm", live_bpm).unwrap();
         locals
             .set_item("paused_replacement", paused_replacement)
@@ -7600,7 +7628,7 @@ if tail:
     project.pad_loop_auto[0] = False
     project.pad_loop_start_s[0] = 17 / fixture['rate']
     project.pad_loop_end_s[0] = 1517 / fixture['rate']
-    project.pad_key_lock[0] = True
+    project.pad_key_lock[0] = tail_key_lock
 disk_v1 = StemPairSelection.model_validate(fixture['pair'])
 project.stem_cache[0] = StemCacheEntry(source_version=fixture['source_version'],
     cache_dir=disk_v1.wav_generation, stems=expected_stem_files(disk_v1.wav_generation), pair=disk_v1, available=True)
@@ -7665,7 +7693,7 @@ persistence.flush()
             },
         )
     } else {
-        let ratio = if tail {
+        let ratio = if tail && key_lock {
             0.73
         } else if key_lock {
             0.75
@@ -8047,7 +8075,7 @@ assert session.paused_sample_ids == {0, 215}
         public_rate_start = Some(start);
     }
     if tail {
-        public_tail_seek(&engine, &mut playback, &mut h.consumer, &locals);
+        public_tail_seek(&engine, &mut playback, &mut h.consumer, &locals, key_lock);
         adopted_window = playback.callback.mixer.bank_for_measurement()[0].clone();
     }
     let before = voice(&playback.callback.mixer);
@@ -8466,6 +8494,30 @@ assert previous_control.ticket.is_current()
         expected_window.resident_binding()
     );
     let old_owner = predecessor.as_ref().map(Arc::downgrade);
+    if tail && !key_lock {
+        for set in [
+            playback.callback.mixer.stems_for_measurement()[0].as_ref(),
+            playback.callback.mixer.outgoing_stems_for_measurement(0),
+        ]
+        .into_iter()
+        .flatten()
+        {
+            assert!(set.stems.iter().all(|component| {
+                component.resident_start() == 0
+                    && component.resident_end() == full.frame_count()
+                    && component.samples.len() == full.frame_count() * 2
+            }));
+        }
+        if selected_v1 {
+            assert!(
+                playback
+                    .callback
+                    .mixer
+                    .outgoing_stems_for_measurement(0)
+                    .is_some()
+            );
+        }
+    }
     let adopted_owner = &playback.callback.mixer.stems_for_measurement()[0]
         .as_ref()
         .unwrap()
@@ -8852,7 +8904,11 @@ if retrigger:
         let finish = return_at + 4096;
         for frames in [1_usize, 31, 137, 257, 511].into_iter().cycle() {
             let count = frames.min((finish - playback.source_frame) as usize);
-            playback.render(count, true);
+            if key_lock {
+                playback.render(count, true);
+            } else {
+                render_varispeed(&mut playback, count);
+            }
             assert_eq!(voice(&playback.callback.mixer).generation, generation);
             assert_eq!(
                 voice(&playback.callback.mixer)
@@ -8882,7 +8938,7 @@ assert tail_reopened.load_error is None
 assert tail_reopened.project.stem_cache[0].pair == disk_v2
 assert tail_reopened.project.pad_loop_start_s[0] == 17 / fixture['rate']
 assert tail_reopened.project.pad_loop_end_s[0] == 1517 / fixture['rate']
-assert tail_reopened.project.pad_key_lock[0] is True
+assert tail_reopened.project.pad_key_lock[0] is tail_key_lock
 assert audio.worker_call_count() == 1 and audio.prepared_only_on_pool_threads()
 "#,
         );
@@ -10333,17 +10389,45 @@ fn full_track_public_child(key_lock: bool) {
 
 #[test]
 fn actual_public_tail_first_and_replacement_require_own_wet_effect_and_return() {
-    const CHILD: &str = "FLITZI_L3_PUBLIC_TAIL_ON_CHILD";
-    const TEST: &str = "audio_engine::cold_load::tests::stem_pair_publication_tests::committed_stem_residency_tests::l3_controller_productive_tests::actual_public_tail_first_and_replacement_require_own_wet_effect_and_return";
-    if std::env::var_os(CHILD).is_some() {
+    tail_public_child(true);
+}
+
+#[test]
+fn actual_public_tail_first_and_replacement_require_own_dry_effect_and_return() {
+    tail_public_child(false);
+}
+
+fn tail_public_child(key_lock: bool) {
+    let (child, name) = if key_lock {
+        (
+            "FLITZI_L3_PUBLIC_TAIL_ON_CHILD",
+            "actual_public_tail_first_and_replacement_require_own_wet_effect_and_return",
+        )
+    } else {
+        (
+            "FLITZI_L3_PUBLIC_TAIL_OFF_CHILD",
+            "actual_public_tail_first_and_replacement_require_own_dry_effect_and_return",
+        )
+    };
+    if std::env::var_os(child).is_some() {
         for selected_v1 in [false, true] {
-            round_trip(selected_v1, None, true, None, false, CandidateTrace::Tail);
+            round_trip(
+                selected_v1,
+                None,
+                key_lock,
+                None,
+                false,
+                CandidateTrace::Tail,
+            );
         }
         return;
     }
+    let test = format!(
+        "audio_engine::cold_load::tests::stem_pair_publication_tests::committed_stem_residency_tests::l3_controller_productive_tests::{name}"
+    );
     let output = std::process::Command::new(std::env::current_exe().unwrap())
-        .args(["--exact", TEST, "--nocapture", "--test-threads=1"])
-        .env(CHILD, "1")
+        .args(["--exact", &test, "--nocapture", "--test-threads=1"])
+        .env(child, "1")
         .output()
         .unwrap();
     assert!(
