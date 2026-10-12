@@ -8,6 +8,135 @@ const SHUTDOWN_CHILD: &str = "FLITZI_L4_ASSET_SHUTDOWN_CHILD";
 const SHUTDOWN_TEST: &str = "audio_engine::material_migration_recovery::tests::retirement_tests::actual_engine_shutdown_keeps_late_lease_cleanup_and_sharing_retry";
 const PRESERVATION_CHILD: &str = "FLITZI_L4_ASSET_PRESERVATION_CHILD";
 const PRESERVATION_TEST: &str = "audio_engine::material_migration_recovery::tests::retirement_tests::actual_asset_worker_preserves_targets_changed_after_admission";
+const REPARSE_CHILD: &str = "FLITZI_L4_ASSET_REPARSE_CHILD";
+const REPARSE_TEST: &str = "audio_engine::material_migration_recovery::tests::retirement_tests::actual_asset_worker_preserves_external_junction_after_retirement_admission";
+
+#[test]
+fn actual_asset_worker_preserves_external_junction_after_retirement_admission() {
+    if std::env::var_os(REPARSE_CHILD).is_none() {
+        let output = Command::new(std::env::current_exe().unwrap())
+            .args(["--exact", REPARSE_TEST, "--nocapture", "--test-threads=1"])
+            .env(REPARSE_CHILD, "1")
+            .output()
+            .unwrap();
+        assert!(
+            output.status.success(),
+            "asset reparse child failed:\n{}\n{}",
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr)
+        );
+        assert!(String::from_utf8_lossy(&output.stdout).contains("1 passed; 0 failed"));
+        return;
+    }
+    let scratch = std::env::temp_dir().join("codex");
+    fs::create_dir_all(&scratch).unwrap();
+    let temp = tempfile::Builder::new()
+        .prefix("flitzi-asset-reparse-")
+        .tempdir_in(scratch)
+        .unwrap();
+    let root = temp.path().join("samples");
+    let material = root
+        .join("materials")
+        .join("M0123456789abcdef0123456789abcdef");
+    let original = material.join("original/source.wav");
+    fs::create_dir_all(original.parent().unwrap()).unwrap();
+    wav(&original);
+    let bytes = fs::read(&original).unwrap();
+    let foreign = temp.path().join("foreign-material");
+    let foreign_original = foreign.join("original/source.wav");
+    fs::create_dir_all(foreign_original.parent().unwrap()).unwrap();
+    // Even equal bytes at the redirected locator grant no deletion authority.
+    fs::write(&foreign_original, &bytes).unwrap();
+    let foreign_keep = foreign.join("private.keep");
+    fs::write(&foreign_keep, b"test-generated external neighbor").unwrap();
+    let moved = temp.path().join("moved-material");
+    let engine = crate::audio_engine::AudioEngine::new().unwrap();
+    let assets = engine.project_assets.clone();
+    assert!(Arc::ptr_eq(&assets, &ProjectAssets::shared()));
+    let mut job = assets.acquire_pin(&root, &original).unwrap();
+    let mut inventory = inventory_gate(&root).unwrap();
+    let inventory_lifetime = Arc::downgrade(inventory.handle.as_ref().unwrap());
+    let mut artifact = MigrationArtifactLease::capture_native(&root, &original).unwrap();
+    artifact.retire_native(&inventory).unwrap();
+    let outcome = artifact.outcome.as_ref().unwrap().clone();
+    inventory.release();
+    artifact.release();
+    drop(artifact);
+    assert_eq!(outcome.status().unwrap(), ("pending", None));
+    assert_registration_blocked(&root);
+    // Real queued inventory custody guards Samples itself. Never weaken that
+    // owner merely to manufacture a root replacement that cannot actually occur.
+    assert!(matches!(
+        fs::rename(&root, temp.path().join("moved-samples"))
+            .unwrap_err()
+            .raw_os_error(),
+        Some(32 | 33)
+    ));
+    // The released artifact seal no longer guards this descendant directory.
+    // Keep the actual inventory/root custody and genuine transient job pin.
+    fs::rename(&material, &moved).unwrap();
+    let junction = Command::new("cmd")
+        .args(["/C", "mklink", "/J"])
+        .arg(&material)
+        .arg(&foreign)
+        .output()
+        .unwrap();
+    assert!(
+        junction.status.success(),
+        "contained fixture junction failed: {:?}\n{}\n{}",
+        junction.status,
+        String::from_utf8_lossy(&junction.stdout),
+        String::from_utf8_lossy(&junction.stderr)
+    );
+    assert!(project_assets::reject_links(&original).is_err());
+    assert_eq!(outcome.status().unwrap(), ("pending", None));
+    assert!(inventory_lifetime.upgrade().is_some());
+    assert_registration_blocked(&root);
+    job.release();
+    drop(job);
+    // Only the actual shared background worker processes this admitted receipt.
+    // No direct collector, synthetic worker error or target re-admission runs.
+    wait_until(|| outcome.status().unwrap().0 == "error");
+    let terminal = outcome.status().unwrap();
+    let error = terminal.1.as_ref().unwrap();
+    assert!(
+        error.contains("path contains a link") || error.contains("path contains a reparse point"),
+        "{error}"
+    );
+    assert!(error.chars().count() <= 2048);
+    wait_until(|| inventory_lifetime.upgrade().is_none());
+    assert_eq!(fs::read(&foreign_original).unwrap(), bytes);
+    assert_eq!(fs::read(moved.join("original/source.wav")).unwrap(), bytes);
+    assert_eq!(
+        fs::read(&foreign_keep).unwrap(),
+        b"test-generated external neighbor"
+    );
+    assert_registration_available(&root);
+    // Remove the caller's junction itself, without traversing its foreign tree.
+    fs::remove_dir(&material).unwrap();
+    fs::rename(&moved, &material).unwrap();
+    let sentinel = root.join("materials/Mfedcba9876543210fedcba9876543210/original/sentinel.wav");
+    fs::create_dir_all(sentinel.parent().unwrap()).unwrap();
+    wav(&sentinel);
+    let mut later_inventory = inventory_gate(&root).unwrap();
+    let later_lifetime = Arc::downgrade(later_inventory.handle.as_ref().unwrap());
+    let mut receipt = MigrationArtifactLease::capture_native(&root, &sentinel).unwrap();
+    receipt.retire_native(&later_inventory).unwrap();
+    let sentinel_outcome = receipt.outcome.as_ref().unwrap().clone();
+    later_inventory.release();
+    receipt.release();
+    drop(receipt);
+    wait_until(|| !sentinel.exists() && sentinel_outcome.status().unwrap().0 == "complete");
+    wait_until(|| later_lifetime.upgrade().is_none());
+    assert_eq!(outcome.status().unwrap(), terminal);
+    assert_eq!(fs::read(&original).unwrap(), bytes);
+    assert_eq!(fs::read(&foreign_original).unwrap(), bytes);
+    assert_eq!(
+        fs::read(&foreign_keep).unwrap(),
+        b"test-generated external neighbor"
+    );
+    assert_registration_available(&root);
+}
 
 #[test]
 fn actual_asset_worker_preserves_targets_changed_after_admission() {

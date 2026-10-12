@@ -68,13 +68,19 @@
   Bounded finite NormalLoop closure combines published productive L3 own-ACK/PCM,
   controller/reopen evidence and the saved/last-confirmed Sidebar projection;
   see `docs/prepared-stem-publication.md`. Additional3.3/fullL4/Human remain open.
-- [ ] 4.2 Hold distinct actual assignments/jobs/subscribers/actions/versions/
+- [x] 4.2 Hold distinct actual assignments/jobs/subscribers/actions/versions/
   queued/unload-ACK/bank/voice/Native/FIFO/history/complete-reader owners across
   replacement; verify no leased overwrite, actual final-reader cleanup and safe
   sharing-error retry, shutdown, unknown/external/newer file preservation.
-- [ ] 4.3 Run impact-based native/Python/static/official strict checks, inspect
+  Bounded finite NormalLoop/off-thread lifecycle owner-family consolidation:
+  `docs/prepared-stem-publication.md`, task4.2 software closure of 2026-10-12.
+  Additional3.3, whole P4b/P5a/P5b, resources and Human/full L4 remain separate.
+- [x] 4.3 Run impact-based native/Python/static/official strict checks, inspect
   callback safety, document delivered limits and obtain independent nonauthor
   source/test review. Leave genuine Human GUI/device/hearing gates open.
+  Impacted82-case residency,13-case retirement and80-case Python profiles,
+  static/strict, reusable unchanged production Release/import and bounded
+  nonauthor source/test reviews are documented with their actual limits.
 
 ## 5. X11-BULK: all-bank generation and Cancel (B1)
 

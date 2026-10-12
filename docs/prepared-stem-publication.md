@@ -912,6 +912,75 @@ exit0 in7.35s with the same37 warning kinds and no changed-test diagnostics.
 Formatting, official strict and whitespace pass. One independent nonauthor final
 review has no open findings; unchanged production Release/import checks are reused.
 
+### Actual post-admission external/reparse containment
+
+`actual_asset_worker_preserves_external_junction_after_retirement_admission`
+uses real Engine/shared assets, a managed original and its exact own retirement
+receipt, transient source/job pin and inventory custody. All source, moved and
+foreign bytes are generated inside one private test directory.
+
+Actual inventory directory guards deny replacement of the Samples root. The
+test asserts that denial and retains those real guards. After the artifact seal
+ends, it instead moves one material subtree and replaces that locator with an
+actual Windows junction to a separately generated foreign material. Equal foreign
+original bytes provide no authority to delete through the redirected path.
+
+Only final transient-pin release lets the actual shared background worker settle
+the admitted receipt. It reports that receipt's bounded terminal link/reparse
+containment error, releases inventory custody and leaves both foreign bytes and
+the moved original intact. The caller then removes only its junction, restores
+its material and admits a separate sentinel. That sentinel physically completes
+while the earlier receipt stays terminal and the restored original remains
+present. No direct collector, injected worker failure or failed-target re-admission
+substitutes for the background worker.
+
+### Task4.2 software owner-family consolidation
+
+The following evidence joins the required owner families for the delivered
+finite NormalLoop replacement/Unload and guarded off-thread asset lifecycle.
+Existing bounded final reviews and their actual owner distinctions remain
+authoritative; a file lease, Native reader, durable snapshot and effective audio
+ACK are separate observations.
+
+| Required family | Actual connected evidence |
+| --- | --- |
+| Saved independent assignments | Saved-C retains V1 after A's actual final audio readers and V2 Unload; explicit C deletion ends its genuine stem assignment and cleans the three V1 areas |
+| Jobs and subscribers | Actual two-subscriber Python pool job survives both public Unloads and actual loaded-PCM retirement; actual backend return/control settlement permits final Original/private-output cleanup |
+| Actions, versions and predecessor custody | Actual postcommit settlement holds both leases, reservation and its V2 complete reader until the superseding Unload config is durable, then both generations clean up |
+| Queued publication, own Unload ACK, bank and voice | Actual queued V2 rejection precedes its own public Unload ACK; both sets retain actual queued/audio owners until off-thread retirement and final cleanup |
+| Native, FIFO, history and complete readers | Productive replacement separates outgoing capacity/backpressure, same audio-worker FIFO completion and later own Native preparation from actual V1 Weak-zero and asset cleanup |
+| Sharing retry and shutdown | Actual Engine shutdown precedes late lease/Windows-sharing release; own unblocked worker progress, retained inventory and the same blocked receipt's later completion are observed |
+| Unknown and newer content | Actual post-admission WAV/original mutation and paired-PCM unknown-child preservation leave changed targets intact with own terminal errors; current V2 stays usable during predecessor cleanup |
+| External and reparse routes | Admission guards remain required; the actual worker also rejects the post-admission material junction, preserves foreign/moved bytes and does not revive the rejected receipt after restoration |
+
+The native callback ownership assessment for task3.2 still applies: fixed
+Capture/Adopt/control transfers publish no file/JSON/Python/GIL/locking/inference
+work; heavy readers and retirement belong to the existing nonRT lanes. These
+last-owner proofs add only tests and normative/documented evidence. They add no
+production callback behavior or dynamic WCET/allocation measurement.
+
+Task3.3's additional domains, whole P4b/P5a/P5b, resources, Bulk/RECORD and genuine
+Human GUI/device/hearing/final acceptance remain open. The finite software
+owner-family consolidation is not complete L4 or full-program acceptance.
+
+The corrected external/reparse focus passes1 case in0.12s after57.84s Release
+compilation; its initial run fails only at fixture junction creation in0.07s after
+58.00s compile. Passing native path components to the Windows command fixes that
+fixture, with no production/guard change. The fresh retirement suite passes13
+cases in1.32s after0.19s compile. The unchanged committed-residency paths reuse
+the immediately preceding fresh82-case/223.20s suite and Python uses its fresh
+80-case/58.28s impacted disk/pair/asset check. This is not a fresh combined suite
+under one executable. Clippy tests exit0 in6.71s with the same37 warning kinds and
+no changed-test diagnostics. Formatting, official strict and whitespace pass.
+
+Task4.2 closes within the named finite software/lifecycle limits after the final
+source-family reconciliation and one independent current-block review with no
+open finding. Task4.3's impact-based software checks, callback ownership inspection,
+documented limits and nonauthor reviews are complete for that same delivery.
+Production is unchanged, so existing production Release/import/preflight and
+unchanged Python/UI/static profiles remain reusable without installation.
+Human GUI/device/hearing gates and the broader domains above stay open.
+
 ### Native current-bank eligibility does not transfer to retained A
 
 `actual_native_current_bank_candidate_cannot_borrow_frozen_old_voice_with_keylock_on`

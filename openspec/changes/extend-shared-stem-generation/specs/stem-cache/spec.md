@@ -619,6 +619,15 @@ Original FullMix/source PCM SHALL remain usable after stem deletion.
 - **AND** it SHALL release that retirement's inventory custody after reporting preservation and SHALL NOT resume the failed retirement merely because the unknown child is later removed
 - **AND** independent eligible retirement targets SHALL continue to complete
 
+#### Scenario: A queued material path becomes a junction to external content
+- **GIVEN** a valid original retirement retains its real inventory custody and transient source/job pin after exact admission and seal release
+- **THEN** the inventory's ordinary Samples-root guard SHALL prevent root replacement while that custody is held
+- **WHEN** an otherwise unguarded material subtree is replaced by a junction to external content before the final transient pin releases
+- **THEN** the actual shared off-thread asset worker SHALL reject the changed route without deleting external content or the moved original
+- **AND** the own receipt SHALL expose a bounded terminal containment error and release its inventory custody
+- **WHEN** the caller removes only its junction and restores that material route without a new retirement admission
+- **THEN** the rejected retirement SHALL NOT revive, and an independent eligible retirement SHALL still complete
+
 ### Requirement: Post-admission paired PCM cleanup preserves unknown content
 The system SHALL recheck complete known PCM leaves at physical off-thread cleanup
 after valid paired retirement admission. An unknown child added while actual
