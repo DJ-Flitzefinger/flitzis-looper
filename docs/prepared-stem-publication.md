@@ -684,6 +684,29 @@ without installing an extension or changing the Human App.
 Paused-first adoption, the rest of task3.2, additional domains3.3, L4 and all later
 product/resource/Human acceptance gates remain open.
 
+### Stopped replacement and ordinary Play with KEY LOCK OFF
+
+`actual_python_controller_stopped_replacement_play_then_fresh_all_uses_own_dry_receipt`
+adds KEY LOCK OFF at rate1.25 in both observation orders: ordinary public Play
+before the controller's first post-Adopt poll and after that observation. Genuine
+V1/V2 preparation and stopped Capture/worker/Adopt establish installed readiness
+without audible effectiveness. Play takes its own resident-window acknowledgement
+and actual queued Trigger, retaining the installed V2 readers while starting a
+new voice and source clock.
+
+Complete independent original/component PCM, exact varispeed feed and nonneutral
+per-frame EQ verify that voice's actual output. Physical V2 mask1010 corresponds
+to the declared complete V1 mask0011 oracle. Neither this output nor Play's
+acknowledgements certify the obsolete stopped receipt. A subsequent explicit equal
+ALL obtains a distinct own Capture/worker/Adopt receipt and confirms its own dry
+effect without replacing those exact readers or resetting the running voice or
+filter chronology. V2 was installed before voice birth; this equal-mask request
+does not claim a new V1-to-V2 source-selection ramp.
+
+This OFF extension makes no Native wet or4096-frame preparation claim. The
+existing ON proof remains separate; further task3.2 and domain3.3 obligations
+remain open.
+
 ### First new set after an already productive FullMix voice was paused
 
 A further public controller proof starts with genuine nonneutral FullMix wet

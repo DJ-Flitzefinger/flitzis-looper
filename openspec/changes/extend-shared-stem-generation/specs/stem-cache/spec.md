@@ -240,11 +240,12 @@ immediate change SHALL NOT silently discard the command.
 - **AND** paused transition SHALL advance only on resumed source consumption and stopped readiness SHALL report no audible success
 
 #### Scenario: Ordinary Play supersedes a stopped candidate's accepted observation
-- **GIVEN** a new complete set was installed with its own stopped residency acceptance but no audible effectiveness
-- **WHEN** an ordinary authorized Play changes launch authority while retaining those installed readers
+- **GIVEN** a new complete set was installed with KEY LOCK OFF or ON and its own stopped residency acceptance but no audible effectiveness
+- **WHEN** an ordinary authorized Play changes launch authority while retaining those installed readers, before or after controller observation of that acceptance
 - **THEN** the controller SHALL withdraw the obsolete accepted observation without reporting a candidate adoption failure or borrowing its effectiveness for the new voice
 - **AND** polling SHALL NOT submit an implicit replacement operation; a later explicit ALL gesture SHALL request fresh own residency and effective-output authority even for the same mode and mask
 - **AND** genuine Native preparation failure or unaccepted candidate rejection SHALL remain observable and require explicit retry
+- **AND** with KEY LOCK OFF, actual nonneutral varispeed output and continuous filter processing SHALL confirm the fresh operation's own dry effectiveness; stopped readiness SHALL NOT imply Native wet processing or preparation
 
 #### Scenario: Ordinary Play supersedes a queued unclaimed new-set adoption
 - **GIVEN** productive finite NormalLoop FullMix or selected V1 playback with KEY LOCK OFF or ON and durably committed V2 whose own Capture and worker preparation have queued Adopt without claim

@@ -11,6 +11,8 @@ const VARISPEED_CHILD: &str = "FLITZI_L3_CONTROLLER_VARISPEED_CHILD";
 const VARISPEED_TEST: &str = "audio_engine::cold_load::tests::stem_pair_publication_tests::committed_stem_residency_tests::l3_controller_productive_tests::actual_python_controller_keylock_off_first_and_replacement_keep_varispeed_feed_and_eq";
 const STOPPED_NEW_SET_CHILD: &str = "FLITZI_L3_CONTROLLER_STOPPED_NEW_SET_CHILD";
 const STOPPED_NEW_SET_TEST: &str = "audio_engine::cold_load::tests::stem_pair_publication_tests::committed_stem_residency_tests::l3_controller_productive_tests::actual_python_controller_stopped_replacement_play_then_fresh_all_uses_own_wet_receipt";
+const STOPPED_NEW_SET_OFF_CHILD: &str = "FLITZI_L3_CONTROLLER_STOPPED_NEW_SET_OFF_CHILD";
+const STOPPED_NEW_SET_OFF_TEST: &str = "audio_engine::cold_load::tests::stem_pair_publication_tests::committed_stem_residency_tests::l3_controller_productive_tests::actual_python_controller_stopped_replacement_play_then_fresh_all_uses_own_dry_receipt";
 const PAUSED_FIRST_CHILD: &str = "FLITZI_L3_CONTROLLER_PAUSED_FIRST_CHILD";
 const PAUSED_FIRST_TEST: &str = "audio_engine::cold_load::tests::stem_pair_publication_tests::committed_stem_residency_tests::l3_controller_productive_tests::actual_python_controller_wet_full_mix_paused_before_first_candidate_keeps_consumed_clock";
 const PAUSED_FIRST_OFF_CHILD: &str = "FLITZI_L3_CONTROLLER_PAUSED_FIRST_OFF_CHILD";
@@ -6061,6 +6063,7 @@ fn stopped_candidate_play(
     callback: &mut Callback,
     consumer: &mut rtrb::Consumer<ControlMessage>,
     before_poll: bool,
+    key_lock: bool,
 ) {
     let source = callback.mixer.bank_for_measurement()[0].clone().unwrap();
     let set = callback.mixer.stems_for_measurement()[0].clone().unwrap();
@@ -6068,7 +6071,11 @@ fn stopped_candidate_play(
         locals
             .bind(py)
             .set_item("before_poll", before_poll)
-            .unwrap()
+            .unwrap();
+        locals
+            .bind(py)
+            .set_item("stopped_key_lock", key_lock)
+            .unwrap();
     });
     controller_python(
         locals,
@@ -6091,7 +6098,7 @@ class ReadyTransportAudio:
 project.pad_loop_auto[0] = False
 project.pad_loop_start_s[0] = 17 / fixture['rate']
 project.pad_loop_end_s[0] = 1517 / fixture['rate']
-project.pad_key_lock[0] = True
+project.pad_key_lock[0] = stopped_key_lock
 transport = TransportController(project, session, ReadyTransportAudio())
 transport.playback.trigger_pad_keep_others(0)
 ready_start = transport.residency._pending[0].ticket
@@ -6530,7 +6537,7 @@ persistence.flush()
     h.callback.mixer.set_pad_eq(0, -12.0, -3.0, 4.0);
     if let Some(before_poll) = stopped_before_poll {
         assert!(!paused_first);
-        assert!(key_lock && !selected_v1 && delete_pause.is_none());
+        assert!(!selected_v1 && delete_pause.is_none());
         controller_python(
             &locals,
             "assert controller.set_stem_mix_mode(0, 'all_stems')\nv1_stopped = previous_control.receipt",
@@ -6574,8 +6581,14 @@ persistence.flush()
         for (before, after) in v1.stems.iter().zip(&v2.stems) {
             assert!(!Arc::ptr_eq(&before.samples, &after.samples));
         }
-        stopped_candidate_play(&locals, &mut h.callback, &mut h.consumer, before_poll);
-        let mut reference = complete_reference(&full, &full_stems, ratio, true);
+        stopped_candidate_play(
+            &locals,
+            &mut h.callback,
+            &mut h.consumer,
+            before_poll,
+            key_lock,
+        );
+        let mut reference = complete_reference(&full, &full_stems, ratio, key_lock);
         // Stopped V2 is already selected before this new ordinary voice starts.
         // Physical V2 mask1010 equals complete independent V1 mask0011.
         reference.stop_sample(0);
@@ -6589,7 +6602,7 @@ persistence.flush()
         let mut playback = ControllerPlayback {
             callback: h.callback,
             reference,
-            full_mix: complete_reference(&full, &full_stems, ratio, true),
+            full_mix: complete_reference(&full, &full_stems, ratio, key_lock),
             frame: 0,
             source_frame: 0,
             resumed_at: None,
@@ -6603,12 +6616,23 @@ persistence.flush()
             selection: Some(0b0011),
             previous: Some(0b0011),
             ramp_start: 0,
-            raw: Some(ControllerRawNative::new(ratio, false)),
+            raw: key_lock.then(|| ControllerRawNative::new(ratio, false)),
             candidate: None,
             filter: controller_filter(),
         };
-        playback.render(13, true);
-        let (actual, counterfactual) = playback.adopt_native(true);
+        let (actual, counterfactual) = if key_lock {
+            playback.render(13, true);
+            playback.adopt_native(true)
+        } else {
+            let mut actual = Vec::new();
+            let mut counterfactual = Vec::new();
+            for frames in [13, 31, 137, 257, 511] {
+                let (output, full_mix) = render_varispeed(&mut playback, frames);
+                actual.extend(output);
+                counterfactual.extend(full_mix);
+            }
+            (actual, counterfactual)
+        };
         assert!(actual.iter().any(|sample| sample.abs() > 0.001));
         assert!(
             actual
@@ -6628,7 +6652,7 @@ assert fresh.residency_status() in {'captured', 'pending'}
 assert fresh.effective_mode_status() == 'waiting'
 "#,
         );
-        own_adoption(&mut playback, &mut h.consumer, &locals, "fresh", true);
+        own_adoption(&mut playback, &mut h.consumer, &locals, "fresh", key_lock);
         let after = playback.callback.mixer.stems_for_measurement()[0]
             .as_ref()
             .unwrap();
@@ -6640,8 +6664,12 @@ assert fresh.effective_mode_status() == 'waiting'
             assert!(Arc::ptr_eq(&before.samples, &after.samples));
         }
         let mut output = Vec::new();
-        for frames in [1, 31, 137, 257, 777] {
-            output.extend(playback.render(frames, true).0);
+        for frames in [1, 31, 137, 257, if key_lock { 777 } else { 511 }] {
+            output.extend(if key_lock {
+                playback.render(frames, true).0
+            } else {
+                render_varispeed(&mut playback, frames).0
+            });
         }
         assert!(output.iter().any(|sample| sample.abs() > 0.001));
         controller_python(
@@ -8234,6 +8262,40 @@ fn actual_python_controller_keylock_off_first_and_replacement_keep_varispeed_fee
     assert!(
         output.status.success(),
         "L3 Varispeed controller child failed:\n{}\n{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert!(String::from_utf8_lossy(&output.stdout).contains("1 passed; 0 failed"));
+}
+
+#[test]
+fn actual_python_controller_stopped_replacement_play_then_fresh_all_uses_own_dry_receipt() {
+    if std::env::var_os(STOPPED_NEW_SET_OFF_CHILD).is_some() {
+        for before_poll in [false, true] {
+            round_trip(
+                false,
+                None,
+                false,
+                Some(before_poll),
+                false,
+                CandidateTrace::Ordinary,
+            );
+        }
+        return;
+    }
+    let output = std::process::Command::new(std::env::current_exe().unwrap())
+        .args([
+            "--exact",
+            STOPPED_NEW_SET_OFF_TEST,
+            "--nocapture",
+            "--test-threads=1",
+        ])
+        .env(STOPPED_NEW_SET_OFF_CHILD, "1")
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "L3 stopped OFF replacement child failed:\n{}\n{}",
         String::from_utf8_lossy(&output.stdout),
         String::from_utf8_lossy(&output.stderr)
     );
