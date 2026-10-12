@@ -85,6 +85,8 @@ const FROZEN_OFF_CHILD: &str = "FLITZI_L3_FROZEN_OLD_OFF_CHILD";
 const FROZEN_OFF_TEST: &str = "audio_engine::cold_load::tests::stem_pair_publication_tests::committed_stem_residency_tests::l3_controller_productive_tests::actual_native_current_bank_candidate_cannot_borrow_frozen_old_voice_with_keylock_off";
 const FINAL_READER_CHILD: &str = "FLITZI_L4_PRODUCTIVE_FINAL_READER_CHILD";
 const FINAL_READER_TEST: &str = "audio_engine::cold_load::tests::stem_pair_publication_tests::committed_stem_residency_tests::l3_controller_productive_tests::actual_productive_replacement_waits_for_last_native_reader_and_asset_worker";
+const UNLOAD_FINAL_READER_CHILD: &str = "FLITZI_L4_UNLOAD_FINAL_READER_CHILD";
+const UNLOAD_FINAL_READER_TEST: &str = "audio_engine::cold_load::tests::stem_pair_publication_tests::committed_stem_residency_tests::l3_controller_productive_tests::actual_public_unload_waits_for_queued_candidate_and_final_reader_cleanup";
 
 #[derive(Clone, Copy)]
 enum CandidateTrace {
@@ -111,6 +113,7 @@ enum CandidateTrace {
     FrozenOld,
     PausedReplacement,
     FinalReader,
+    UnloadFinalReader,
 }
 
 /// Public cold admission/event polling are unchanged. The stream-bound scalar
@@ -2945,6 +2948,7 @@ fn public_unload_queued_candidate(
     parameters: &mut rtrb::Consumer<ControlParameterMessage>,
     locals: &Py<PyDict>,
     key_lock: bool,
+    cleanup: Option<(&Path, &FinalReaderProbe)>,
 ) {
     use crate::audio_engine::committed_stem_residency::CommittedStemRtWork;
     assert_eq!(playback.drain(consumer), 1, "own V2 Capture before Unload");
@@ -2959,6 +2963,32 @@ fn public_unload_queued_candidate(
         }
         _ => panic!("expected actual queued V2 Adopt"),
     };
+    let pending = cleanup.map(|(root, old)| {
+        let selection: Value = Python::attach(|py| {
+            serde_json::from_str(
+                &locals
+                    .bind(py)
+                    .get_item("candidate_json")
+                    .unwrap()
+                    .unwrap()
+                    .extract::<String>()
+                    .unwrap(),
+            )
+            .unwrap()
+        });
+        let Ok(ControlMessage::CommittedStemWork(work)) = consumer.peek() else {
+            unreachable!()
+        };
+        let CommittedStemRtWork::Adopt(transaction) = work.as_ref() else {
+            unreachable!()
+        };
+        let pending = FinalReaderProbe::new(root, &selection, transaction.stems.as_ref().unwrap());
+        assert!(playback.callback.retirement.actual.is_some());
+        assert!(playback.callback.retirement.retired.is_empty());
+        old.assert_retained();
+        pending.assert_retained();
+        pending
+    });
     playback.callback.retirement.slots = 2;
     assert_eq!(playback.drain(consumer), 0);
     let bank = playback.callback.mixer.bank_for_measurement()[0]
@@ -3021,6 +3051,24 @@ assert not session.stem_generation_errors and not session.sample_load_errors
 assert unload_notifications == [0]
 "#,
     );
+    if let Some((_, old)) = cleanup {
+        // End fixture-only pair/receipt/assignment aliases before the queued
+        // Adopt and own Unload run. Genuine callback/Native owners remain.
+        controller_python(
+            locals,
+            "owner_v2.release()\ndel prepared_v2, first, previous_control, live",
+        );
+        old.assert_retained();
+        pending.as_ref().unwrap().assert_retained();
+        assert!(fs::write(old.areas[1].join("vocals.f32le"), b"leased overwrite").is_err());
+        assert!(
+            fs::write(
+                pending.as_ref().unwrap().areas[1].join("vocals.f32le"),
+                b"queued overwrite"
+            )
+            .is_err()
+        );
+    }
     assert!(
         matches!(consumer.peek(), Ok(ControlMessage::CommittedStemWork(work))
         if work.as_ref() as *const CommittedStemRtWork as usize == queued)
@@ -3101,6 +3149,10 @@ assert unload_notifications == [0]
         }
         assert_current(playback);
         assert_other(playback);
+        if let Some((_, old)) = cleanup {
+            old.assert_retained();
+            pending.as_ref().unwrap().assert_retained();
+        }
         controller_python(
             locals,
             "loader.poll_loader_events()\ncontroller.on_frame_render()\nassert not session.stem_generation_errors\nassert not unload_candidate.claimed()\nassert audio.worker_call_count() == unload_workers",
@@ -3129,6 +3181,9 @@ assert unload_notifications == [0]
         Ok(ControlMessage::UnloadSample { id: 0 })
     ));
     assert_current(playback);
+    if let Some((_, old)) = cleanup {
+        old.assert_retained();
+    }
     let after = voice(&playback.callback.mixer);
     assert!(after.source_playback.matches_exact(&clock));
     assert_eq!(after.stretch.pending_fifo_frames(), fifo);
@@ -3165,7 +3220,13 @@ assert unload_notifications == [0]
         assert_current(playback);
         assert_other(playback);
         assert_eq!(playback.drain(consumer), 0);
+        if let Some((_, old)) = cleanup {
+            old.assert_retained();
+        }
     }
+    // This is only an observation alias. Remove it while the genuine V1 bank,
+    // voice and Native/history still exist, before own Unload's callback ACK.
+    drop(stems);
     playback.callback.retirement.slots = usize::MAX;
     assert_eq!(
         playback.drain(consumer),
@@ -3223,6 +3284,63 @@ assert not unload_candidate.claimed() and not unload_candidate.is_current()
 assert unload_candidate.effective_failure_reason() is None
 "#,
     );
+    if let Some((_, old)) = cleanup {
+        let pending = pending.as_ref().unwrap();
+        // Status observation tickets also retain SelectionOwner identities;
+        // their final assertions above are complete, so end those test aliases.
+        controller_python(
+            locals,
+            "del candidate, unload_candidate, unload_registration",
+        );
+        // Same production FIFO marker follows the actual rejected Adopt and
+        // Unload transfers, distinguishing consumption from a mere Arc decrease.
+        let marker = Arc::new(AtomicU8::new(0));
+        let completion = Arc::downgrade(&marker);
+        playback.callback.retirement.retire_cold_adoption(marker);
+        old.wait_for("Unload audio FIFO worker completion", || {
+            completion.strong_count() == 0
+        });
+        old.wait_for(
+            "Unload actual final Native/history/complete readers",
+            || {
+                // An in-flight Native preparation may finish after Unload. The real
+                // inactive render path recycles it; regular loader polling reconciles.
+                let frames = 137;
+                let mut output = vec![0.0; frames * 2];
+                playback.callback.mixer.render_rt_at_output_frame(
+                    &mut output,
+                    &mut [0.0; NUM_SAMPLES],
+                    playback.frame,
+                    &mut playback.callback.retirement,
+                );
+                assert!(output.iter().all(|sample| *sample == 0.0));
+                playback.frame += frames as u64;
+                assert_other(playback);
+                controller_python(
+                    locals,
+                    "loader.poll_loader_events()\ncontroller.on_frame_render()",
+                );
+                [old, pending].iter().all(|probe| {
+                    probe.identity.strong_count() == 0
+                        && probe.pcm.iter().all(|pcm| pcm.strong_count() == 0)
+                })
+            },
+        );
+        old.wait_for("Unload productive paired asset cleanup", || {
+            controller_python(
+                locals,
+                "loader.poll_loader_events()\ncontroller.on_frame_render()",
+            );
+            [old, pending]
+                .iter()
+                .all(|probe| probe.areas.iter().all(|path| !path.exists()))
+        });
+        assert!(playback.callback.retirement.retired.is_empty());
+        controller_python(
+            locals,
+            "assert project.sample_paths[215] == unload_other_path\nassert project.pad_content[215] == unload_other_content\nassert not controller._assets.retirement_errors",
+        );
+    }
 }
 
 fn public_source_replacement(
@@ -6548,7 +6666,11 @@ fn round_trip(
     paused_first: bool,
     trace: CandidateTrace,
 ) {
-    let final_reader = matches!(trace, CandidateTrace::FinalReader);
+    let final_reader = matches!(
+        trace,
+        CandidateTrace::FinalReader | CandidateTrace::UnloadFinalReader
+    );
+    let unload_final_reader = matches!(trace, CandidateTrace::UnloadFinalReader);
     assert!(
         !final_reader
             || (selected_v1
@@ -6563,7 +6685,10 @@ fn round_trip(
     let retrigger = matches!(trace, CandidateTrace::Retrigger);
     let window_change = matches!(trace, CandidateTrace::WindowChange);
     let source_stems_off = matches!(trace, CandidateTrace::SourceStemsOff);
-    let unload = matches!(trace, CandidateTrace::Unload);
+    let unload = matches!(
+        trace,
+        CandidateTrace::Unload | CandidateTrace::UnloadFinalReader
+    );
     let frozen_old = matches!(trace, CandidateTrace::FrozenOld);
     let source_stems_on = matches!(trace, CandidateTrace::SourceStemsOn);
     let source_key_lock = matches!(
@@ -7476,13 +7601,24 @@ assert previous_control.ticket.is_current()
         return;
     }
     if unload {
+        if unload_final_reader {
+            // End this identity-only comparison alias before the real Unload.
+            drop(predecessor);
+        }
         public_unload_queued_candidate(
             &mut playback,
             &mut h.consumer,
             &mut parameter_consumer,
             &locals,
             key_lock,
+            unload_final_reader.then(|| (h.root.as_path(), final_old.as_ref().unwrap())),
         );
+        if unload_final_reader {
+            assert_eq!(
+                fs::read(&h.material.lease.original_path).unwrap(),
+                *original_before.as_ref().unwrap()
+            );
+        }
         controller_python(
             &locals,
             "controller.shut_down()\ncontroller._assets.release_saved_assignments()\nowner_v1.release()\nowner_v2.release()",
@@ -8067,6 +8203,38 @@ else:
         "controller.shut_down()\ncontroller._assets.release_saved_assignments()\nowner_v1.release()\nowner_v2.release()",
     );
     std::env::set_current_dir(previous_cwd).unwrap();
+}
+
+#[test]
+fn actual_public_unload_waits_for_queued_candidate_and_final_reader_cleanup() {
+    if std::env::var_os(UNLOAD_FINAL_READER_CHILD).is_some() {
+        round_trip(
+            true,
+            None,
+            true,
+            None,
+            false,
+            CandidateTrace::UnloadFinalReader,
+        );
+        return;
+    }
+    let output = std::process::Command::new(std::env::current_exe().unwrap())
+        .args([
+            "--exact",
+            UNLOAD_FINAL_READER_TEST,
+            "--nocapture",
+            "--test-threads=1",
+        ])
+        .env(UNLOAD_FINAL_READER_CHILD, "1")
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "L4 Unload final-reader child failed:\n{}\n{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert!(String::from_utf8_lossy(&output.stdout).contains("1 passed; 0 failed"));
 }
 
 #[test]

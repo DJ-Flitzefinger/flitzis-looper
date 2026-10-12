@@ -568,6 +568,15 @@ Original FullMix/source PCM SHALL remain usable after stem deletion.
 - **AND** only V2's own later complete Native preparation and retirement of all remaining V1 readers SHALL allow the existing off-thread asset worker to clean up V1
 - **AND** V2, the current original and unrelated playing pads SHALL remain usable
 
+#### Scenario: Unload retires a queued replacement through its actual readers
+- **GIVEN** selected V1 has its own effective KEYLOCK ON output and a distinct V2 Adopt remains queued and unclaimed
+- **WHEN** the pad's own public Unload revokes publication while callback retirement capacity delays command consumption
+- **THEN** the queued V2 and still-playing V1 SHALL retain their immutable WAV, PCM and descriptor files through their actual reader ownership
+- **WHEN** the FIFO rejects the obsolete V2 Adopt before consuming that Unload
+- **THEN** V1 SHALL remain usable until Unload's own callback `SampleStopped` acknowledgement, separately from the candidate rejection
+- **AND** only the actual audio retirement worker and final Native/history/complete-reader release SHALL permit the off-thread asset worker to remove each retired pair's three areas
+- **AND** the current original, unrelated saved assignments and unrelated playing pads SHALL remain usable
+
 #### Scenario: Cleanup races a new generation or fails sharing
 - **WHEN** cleanup encounters a new generation, unknown file, external path, reparse point or sharing denial
 - **THEN** it preserves non-owned content and defers/report failures through bounded control status

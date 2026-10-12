@@ -631,6 +631,52 @@ This is one coupled L4.2 replacement outcome. Other assignment/job/action/unload
 reader families, sharing-error retry, shutdown, unknown/external/newer preservation,
 the complete L4 parent and Human acceptance still require their own remaining gates.
 
+### Queued V2 Unload and actual final-reader cleanup
+
+`actual_public_unload_waits_for_queued_candidate_and_final_reader_cleanup`
+extends the existing public Unload trace at selected V1, KEY LOCK ON/rate0.75.
+V1 already has its own nonneutral Wet effect. Distinct V2 is durably selected,
+reopened and prepared through its own Capture/worker; its actual unclaimed Adopt
+remains in the control FIFO while retirement capacity delays consumption.
+The fixture uses the existing production audio SPSC/retirement worker and
+independent complete reference PCM, with Weak observations of both actual set
+identities and all four component buffers per set. Byte evidence spans each
+pair's five WAVs, five PCM artifacts and metadata in three areas.
+
+Public Loader Unload revokes V2 authority and removes its saved assignment.
+Fixture-only preparation/receipt/assignment aliases end while the queued V2
+and still-playing V1 remain real owners. Both pairs remain byte-identical and
+deny PCM overwrite. The normal FIFO rejects the obsolete V2 Adopt while the
+following Unload remains held. V1 continues with its same source, Native/FIFO,
+history and EQ until that Unload's own `SampleStopped` acknowledgement removes
+bank/stems/voice. Candidate rejection cannot substitute for this acknowledgement.
+Remaining status-observation ticket aliases end after their last rejection and
+persist/reopen assertions; they do not substitute for actual component readers.
+
+A marker placed after the actual reject/Unload transfers in the same production
+retirement FIFO proves prior audio-worker consumption. Ordinary inactive render
+callbacks recycle any late Native preparation, and regular Native loader polling
+reconciles remaining control/history ownership. Only actual Weak-zero for both
+sets and every component precedes the observed asset-worker cleanup of all six
+retired pair areas. No direct collector or test-side final Arc drop replaces
+those paths. The original's bytes and unrelated pad215's source, generation,
+Native/FIFO, phase, intent and saved/reopened assignment remain intact.
+
+This is one queued-publication/own-Unload L4.2 outcome. Genuine non-requesting
+saved-copy custody, other remaining reader/preservation families, full L4 and
+resource/Human GUI/device/hearing gates remain open. Production and the installed
+Native are unchanged; this proof performs no App/device/listening acceptance.
+
+The initial focused Release run failed after reaching own Unload and zero V1
+component counts because two identity-only fixture observations remained. Ending
+the Rust predecessor and Python live-selection aliases before Unload corrected
+that fixture gap; no production leak was inferred. The corrected focus passes
+in1.81s after58.05s compilation, and the fresh final impacted residency suite
+passes all78 cases in215.78s. One independent nonauthor final review has no open
+findings. Clippy tests exit0 with the same existing warning kinds and no changed
+test diagnostics; formatting, official strict and whitespace pass. Unchanged
+production Release/import/Python checks are reused; no wheel install occurs.
+
 ### Actual Engine shutdown, late leases and sharing retry
 
 `actual_engine_shutdown_keeps_late_lease_cleanup_and_sharing_retry` runs in its
