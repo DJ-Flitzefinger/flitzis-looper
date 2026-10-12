@@ -436,6 +436,16 @@ library. Retained immutable predecessors SHALL protect independently assigned co
 - **THEN** material selection names one complete B set and each requesting current pad requires its own later effective adoption ACK
 - **AND** A remains immutable and readable for actual old voice/history/job/rollback readers until they retire
 
+#### Scenario: Durable replacement waits for the superseding Unload snapshot
+- **GIVEN** a complete V2 pair replaced the config successfully with independent new and predecessor settlement owners, and a subsequent public Unload changed current intent
+- **WHEN** the superseding config flush fails after that actual replacement
+- **THEN** the exact settlement SHALL retain both generations and its cleanup reservation for bounded retry, even after the own Unload acknowledgement and actual predecessor audio retirement
+- **AND** the last durable config SHALL still restore its complete V2 selection, while current memory SHALL preserve the newer Unload intent
+- **AND** leased files SHALL remain byte-identical and protected from overwrite during independent off-thread asset-worker progress
+- **WHEN** the ordinary writer durably saves that newer intent and bounded settlement polling completes
+- **THEN** the stale action SHALL release its exact owners and complete pair readers, allowing eligible predecessor and V2 cleanup through the existing asset worker without late registration or adoption
+- **AND** unrelated assignments and playback SHALL remain usable
+
 #### Scenario: Sidebar separates a saved replacement from its own audio confirmation
 - **GIVEN** a pad retains its own old-set audio confirmation for the current launch and a different complete current set has committed to disk
 - **WHEN** the sidebar renders before the new set's own effective confirmation, including no request, waiting, transition or failed admission/adoption

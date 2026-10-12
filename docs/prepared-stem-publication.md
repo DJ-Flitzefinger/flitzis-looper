@@ -868,6 +868,50 @@ nonauthor review's PCM terminology correction is incorporated. Native production
 Release/import checks remain reusable; Python runs use the existing build-only
 Release extension and current source without installation.
 
+### Postcommit action custody after a public Unload
+
+`actual_disk_settlement_keeps_both_generations_until_unload_is_durable`
+starts from the existing actual productive V1 ON/.75 playback and independent
+complete PCM/Native/FIFO/EQ chronology. Only generated V2 WAV fixture preparation
+runs on control; the existing two-worker pair queue first verifies and seals its
+complete five-WAV/five-PCM/common-descriptor pair with `components=False`.
+No setup pair, duplicate selected flag or manual replacement registration owns V2.
+
+The same fenced Persistence writer actually replaces the config with V2.
+The test then invokes public Loader Unload and denies the subsequent superseding
+config fsync. Current memory keeps Unload intent while the last durable config
+still restores complete V2. The exact postcommit action remains reachable with
+both independent assignment leases, its cleanup reservation and its own actual
+V2 complete-pair reader; this is no claim that V2 has no readers yet.
+
+After the own `SampleStopped` ACK, actual audio retirement FIFO completion and
+regular Native loader reconciliation, V1's observed Native identity/component
+Weak counts reach zero. Both generations remain byte-identical and deny overwrite
+while an independent Original sentinel completes under the same shared asset
+worker. Fixture receipt/registration/request/prepared aliases hold no independent
+owner at this point. The action's genuine V2 complete reader remains live.
+
+Restoring the config fsync permits ordinary bounded control polling to write the
+superseding Unload snapshot before releasing action ownership. Actual V2 complete
+reader Weak-zero and shared-worker cleanup of both generations follow without
+late registration or adoption. Other-pad chronology and Original bytes remain
+covered. The existing stale-action deferred-error text may remain after settlement;
+the test does not infer a production error or successful fresh adoption from it.
+
+This is a bounded action/version lifetime, without complete4.2/L4, resource or
+Human GUI/device/hearing acceptance. Production and installed Native are unchanged.
+
+Initial and final focused Release checks each pass in1.82s, after58.24s and58.14s
+compilation respectively. The final profile also checks productive old V1 after
+public Unload intent and before its callback ACK; the fsync fault is confined to
+this Persistence instance's actual atomic writer. The fresh complete committed
+residency suite passes all82 cases in223.20s after0.19s compile. The three affected
+Python disk-commit/pair-preparation/asset-lifecycle files pass all80 cases in58.28s
+using current Python and the unchanged build-only Release extension. Clippy tests
+exit0 in7.35s with the same37 warning kinds and no changed-test diagnostics.
+Formatting, official strict and whitespace pass. One independent nonauthor final
+review has no open findings; unchanged production Release/import checks are reused.
+
 ### Native current-bank eligibility does not transfer to retained A
 
 `actual_native_current_bank_candidate_cannot_borrow_frozen_old_voice_with_keylock_on`

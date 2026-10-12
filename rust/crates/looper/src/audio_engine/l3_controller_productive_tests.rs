@@ -5,6 +5,8 @@
 use super::*;
 use crate::audio_engine::buffer_retirement::AudioBufferRetirement;
 
+#[path = "l4_disk_settlement_tests.rs"]
+mod l4_disk_settlement_tests;
 #[path = "l4_shared_job_tests.rs"]
 mod l4_shared_job_tests;
 
@@ -126,6 +128,7 @@ enum CandidateTrace {
     SavedCopyFinalReader,
     PostAdmitPcmFinalReader,
     SharedJobFinalReader,
+    DiskSettlementFinalReader,
 }
 
 #[derive(Clone, Copy)]
@@ -944,6 +947,29 @@ fn version_files(
     frames: usize,
     set: FixtureSet,
 ) -> (PreparedStemPair, PreparedSourceTicket) {
+    let reference = version_wav_files(root, version, original_reference, frames, set);
+    let source = engine
+        .capture_prepared_source(0, version.to_owned())
+        .unwrap();
+    let pair = engine
+        .prepare_stem_pair_at_root(root, 0, version, &reference, &source, false, None)
+        .unwrap();
+    assert!(!pair.has_components());
+    assert_eq!(
+        pair.pair_reader.descriptor.content.alignment.offset_frames,
+        0
+    );
+    assert_complete_selection(root, &selection(&pair));
+    (pair, source)
+}
+
+fn version_wav_files(
+    root: &Path,
+    version: &str,
+    original_reference: &str,
+    frames: usize,
+    set: FixtureSet,
+) -> String {
     let (generation, first, second, instrumental) = match set {
         FixtureSet::Second => (0x301_u32, "vocals", "drums", [0, 1, 2]),
         FixtureSet::Third => (0x302_u32, "melody", "bass", [2, 1, 3]),
@@ -981,19 +1007,7 @@ fn version_files(
         .unwrap(),
     )
     .unwrap();
-    let source = engine
-        .capture_prepared_source(0, version.to_owned())
-        .unwrap();
-    let pair = engine
-        .prepare_stem_pair_at_root(root, 0, version, &reference, &source, false, None)
-        .unwrap();
-    assert!(!pair.has_components());
-    assert_eq!(
-        pair.pair_reader.descriptor.content.alignment.offset_frames,
-        0
-    );
-    assert_complete_selection(root, &selection(&pair));
-    (pair, source)
+    reference
 }
 
 fn commit_candidate_v2(
@@ -7066,11 +7080,13 @@ fn round_trip(
             | CandidateTrace::SavedCopyFinalReader
             | CandidateTrace::PostAdmitPcmFinalReader
             | CandidateTrace::SharedJobFinalReader
+            | CandidateTrace::DiskSettlementFinalReader
     );
     let unload_final_reader = matches!(trace, CandidateTrace::UnloadFinalReader);
     let saved_copy = matches!(trace, CandidateTrace::SavedCopyFinalReader);
     let preserve_pcm = matches!(trace, CandidateTrace::PostAdmitPcmFinalReader);
     let shared_job = matches!(trace, CandidateTrace::SharedJobFinalReader);
+    let disk_settlement = matches!(trace, CandidateTrace::DiskSettlementFinalReader);
     assert!(
         !final_reader
             || (selected_v1
@@ -7111,7 +7127,8 @@ fn round_trip(
             | CandidateTrace::SourceKeyLockOn
             | CandidateTrace::SourceStemsOn
     );
-    let source_controls = source_replacement || unload || saved_copy || shared_job;
+    let source_controls =
+        source_replacement || unload || saved_copy || shared_job || disk_settlement;
     assert!(
         !(claimed_masks
             || preclaim_masks
@@ -7838,6 +7855,29 @@ assert session.paused_sample_ids == {0, 215}
                 .unwrap(),
         )
     });
+    if disk_settlement {
+        drop(predecessor);
+        saved.release();
+        l4_disk_settlement_tests::deferred_after_v1(
+            &engine,
+            &h.root,
+            (&h.version, &h.wav_reference, full.frame_count()),
+            &mut playback,
+            (&mut h.consumer, &mut parameter_consumer),
+            &locals,
+            final_old.as_ref().unwrap(),
+        );
+        assert_eq!(
+            fs::read(&h.material.lease.original_path).unwrap(),
+            *original_before.as_ref().unwrap()
+        );
+        controller_python(
+            &locals,
+            "controller.shut_down()\ncontroller._assets.release_saved_assignments()",
+        );
+        std::env::set_current_dir(previous_cwd).unwrap();
+        return;
+    }
     if saved_copy {
         controller_python(
             &locals,
