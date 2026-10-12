@@ -1229,6 +1229,370 @@ fn candidate_full_track_callback_bank_rejects_first_and_replacement_without_clai
     }
 }
 
+struct CandidateSeekOracle {
+    channels: [SampleBuffer; 2],
+    clock: crate::audio_engine::mixer::prepared_native_mixer_tests::finite_lifecycle_tests::AlgebraicClock,
+    raw: ControllerRawNative,
+    filter: PerPadDspChain,
+    candidate: Option<(u64, usize, ControllerRawNative)>,
+}
+
+impl CandidateSeekOracle {
+    fn after_ack(p: &mut Productive, target: usize, selected_v1: bool) -> Self {
+        use crate::audio_engine::mixer::prepared_native_mixer_tests::finite_lifecycle_tests::AlgebraicClock;
+        assert!(p.reference.seek_sample_at_output_frame(
+            0,
+            target as f64 / f64::from(RATE),
+            p.frame
+        ));
+        let full = p.reference.bank_for_measurement()[0].as_ref().unwrap();
+        let stems = p.reference.stems_for_measurement()[0].as_ref().unwrap();
+        let channels = std::array::from_fn(|channel| SampleBuffer {
+            channels: 1,
+            residency: None,
+            samples: (0..full.frame_count())
+                .map(|frame| {
+                    if selected_v1 {
+                        stems
+                            .stems
+                            .iter()
+                            .enumerate()
+                            .filter(|(index, _)| 0b1010 & (1 << index) != 0)
+                            .map(|(_, component)| component.samples[frame * 2 + channel])
+                            .sum()
+                    } else {
+                        full.samples[frame * 2 + channel]
+                    }
+                })
+                .collect::<Vec<f32>>()
+                .into(),
+        });
+        let mut clock = AlgebraicClock::physical(LOOP_START, LOOP_END, 0.73);
+        clock.seek_physical(target, full.frame_count());
+        // Seek cuts the old DSP state. Apply its persistent targets to a fresh
+        // stereo chain without reset(), retaining ordinary parameter smoothing.
+        let mut filter = PerPadDspChain::new(0, RATE as f32, 2);
+        for (slot, db) in [
+            (DspParameterSlot::Slot0, -12.0_f32),
+            (DspParameterSlot::Slot1, -3.0),
+            (DspParameterSlot::Slot2, 4.0),
+        ] {
+            let normalized = if db <= 0.0 {
+                0.5 * 10.0_f32.powf(db / 20.0)
+            } else {
+                0.5 + 0.5 * (db / 6.0)
+            };
+            assert!(filter.set_parameter(
+                DspParameterId::per_pad(0, DspNodeSlot::Slot0, slot).unwrap(),
+                normalized
+            ));
+        }
+        Self {
+            channels,
+            clock,
+            raw: ControllerRawNative::new(0.73, false),
+            filter,
+            candidate: None,
+        }
+    }
+
+    fn feed(&self, frames: usize) -> [Vec<f32>; 2] {
+        std::array::from_fn(|channel| self.clock.clone().dry(&self.channels[channel], frames))
+    }
+
+    fn render(&mut self, p: &mut Productive, frames: usize, timestamp: bool) -> Vec<f32> {
+        if self
+            .candidate
+            .as_ref()
+            .is_some_and(|(target, _, _)| p.frame == *target)
+        {
+            let (_, address, raw) = self.candidate.take().unwrap();
+            self.raw = raw;
+            assert_eq!(
+                voice_mut(&mut p.h.callback.mixer)
+                    .stretch
+                    .prepared_native_address(),
+                address
+            );
+        }
+        let feed = self.feed(frames);
+        let raw = self.raw.render(&feed);
+        let mut output = vec![0.0; frames * 2];
+        let mut complete = vec![0.0; frames * 2];
+        reset_tap_observation_for_test();
+        if timestamp {
+            p.h.callback.mixer.render_rt_at_output_frame(
+                &mut output,
+                &mut [0.0; NUM_SAMPLES],
+                p.frame,
+                &mut p.h.callback.retirement,
+            );
+            p.reference
+                .render_at_output_frame(p.frame, &mut complete, &mut [0.0; NUM_SAMPLES]);
+        } else {
+            p.h.callback.mixer.render_rt(
+                &mut output,
+                &mut [0.0; NUM_SAMPLES],
+                &mut p.h.callback.retirement,
+            );
+            p.reference.render(&mut complete, &mut [0.0; NUM_SAMPLES]);
+        }
+        let taps = tap_observation_for_test();
+        let sample = voice(&p.h.callback.mixer).sample.as_ref().unwrap();
+        assert_eq!(taps.missing_reads, 0);
+        assert!(
+            taps.min_frame
+                .is_some_and(|frame| frame >= sample.resident_start())
+        );
+        assert!(
+            taps.max_frame
+                .is_some_and(|frame| frame < sample.resident_end())
+        );
+        assert_eq!(
+            output, complete,
+            "complete post-Seek candidate guard at {}",
+            p.frame
+        );
+        for (actual, raw) in output.chunks_exact(2).zip(raw.chunks_exact(2)) {
+            self.filter.begin_frame();
+            for channel in 0..2 {
+                assert_eq!(
+                    actual[channel],
+                    self.filter.process_sample(channel, raw[channel]),
+                    "independent post-Seek Native/EQ at {}",
+                    p.frame
+                );
+            }
+        }
+        self.clock.advance(frames);
+        let (frame, fraction, explicit) = self.clock.physical_position(0);
+        let actual = voice(&p.h.callback.mixer);
+        assert_eq!(actual.source_playback.position().frame, frame);
+        assert!((actual.source_playback.position().fraction - fraction).abs() < 1e-9);
+        assert_eq!(
+            actual.source_playback.position().seek_mode
+                != crate::audio_engine::source_reader::ExplicitSeekMode::Normal,
+            explicit
+        );
+        assert!(
+            actual
+                .source_playback
+                .matches_exact(&voice(&p.reference).source_playback)
+        );
+        assert_eq!(
+            actual.stretch.pending_fifo_frames(),
+            (self.raw.input[0].len(), self.raw.output[0].len())
+        );
+        assert_eq!(
+            actual.stretch.pending_fifo_frames(),
+            voice(&p.reference).stretch.pending_fifo_frames()
+        );
+        p.frame += frames as u64;
+        output
+    }
+
+    fn later_native(&mut self, p: &mut Productive) {
+        let capture = p.frame;
+        let mut raw = ControllerRawNative::new(0.73, true);
+        raw.render(&self.feed(4096));
+        self.render(p, 1, true);
+        wait_until(|| {
+            voice_mut(&mut p.h.callback.mixer)
+                .stretch
+                .source_preparation_ready()
+                && voice_mut(&mut p.reference)
+                    .stretch
+                    .source_preparation_ready()
+        });
+        let target = voice_mut(&mut p.h.callback.mixer)
+            .stretch
+            .prepared_target_output_frame()
+            .unwrap();
+        assert_eq!(target, capture + 4096);
+        assert_eq!(
+            voice_mut(&mut p.reference)
+                .stretch
+                .prepared_target_output_frame(),
+            Some(target)
+        );
+        let address = voice_mut(&mut p.h.callback.mixer)
+            .stretch
+            .prepared_native_address();
+        assert_ne!(
+            address,
+            voice(&p.h.callback.mixer).stretch.native_state_address()
+        );
+        let taps = voice_mut(&mut p.h.callback.mixer)
+            .stretch
+            .prepared_tap_observation()
+            .unwrap();
+        let sample = voice(&p.h.callback.mixer).sample.as_ref().unwrap();
+        assert_eq!(taps.missing_reads, 0);
+        assert_eq!(taps.left_reads, 4096 * 2);
+        assert!(
+            taps.min_frame
+                .is_some_and(|frame| frame >= sample.resident_start())
+        );
+        assert!(
+            taps.max_frame
+                .is_some_and(|frame| frame < sample.resident_end())
+        );
+        self.candidate = Some((target, address, raw));
+        for frames in [1_usize, 127, 777, 96, 257, 512, 31].into_iter().cycle() {
+            if p.frame == target {
+                break;
+            }
+            self.render(p, frames.min((target - p.frame) as usize), true);
+        }
+        let mut audible = false;
+        for frames in [137, 511, 257, 31, 512, 777, 512] {
+            audible |= self
+                .render(p, frames, true)
+                .iter()
+                .any(|sample| sample.abs() > 0.001);
+            assert_eq!(
+                voice(&p.h.callback.mixer).stretch.native_state_address(),
+                address
+            );
+        }
+        assert!(audible);
+    }
+}
+
+#[test]
+fn actual_intro_tail_seek_rejects_fresh_candidate_without_changing_post_seek_audio() {
+    use crate::audio_engine::source_reader::ExplicitSeekMode;
+    for target in [0, LOOP_END] {
+        for selected_v1 in [false, true] {
+            let mut p = Productive::new(true, 0.73);
+            if selected_v1 {
+                make_v1_effective(&mut p);
+            }
+            let previous_frame = p.h.callback.transport.output_frame();
+            p.h.callback
+                .transport
+                .advance_by_rendered_frames((p.frame - previous_frame) as usize);
+            let seek = prepare_window_with_producer(
+                &p.h.engine,
+                0,
+                WindowRequest {
+                    seek_position_s: Some(target as f64 / f64::from(RATE)),
+                    ..Default::default()
+                },
+                p.h.producer.clone(),
+            )
+            .unwrap();
+            wait_until(|| {
+                if matches!(
+                    p.h.consumer.peek(),
+                    Ok(ControlMessage::CaptureResidentSeek(_))
+                ) {
+                    assert_eq!(p.h.callback.drain(&mut p.h.consumer), 1);
+                }
+                seek.publication_status() == "pending" && !p.h.consumer.is_empty()
+            });
+            assert_eq!(
+                p.h.callback.drain(&mut p.h.consumer),
+                1,
+                "actual own Seek Relocate"
+            );
+            assert_eq!(seek.publication_status(), "accepted", "{:?}", seek.error());
+            reconcile(&p.h.engine).unwrap();
+            assert!(seek.is_current());
+            assert_eq!(
+                seek.effective_seek_seconds(),
+                Some(target as f64 / f64::from(RATE))
+            );
+            let source = p.h.callback.mixer.bank_for_measurement()[0]
+                .clone()
+                .unwrap();
+            let extent = if target == 0 {
+                (0, LOOP_END)
+            } else {
+                (LOOP_START, p.h.material.sample.frame_count())
+            };
+            assert_eq!((source.resident_start(), source.resident_end()), extent);
+            assert_eq!(
+                source.residency.as_ref().unwrap().context,
+                crate::messages::ResidentContext::KeyLockFiniteLoop
+            );
+            let before = voice(&p.h.callback.mixer);
+            assert_eq!(
+                before.source_playback.position().seek_mode,
+                if target == 0 {
+                    ExplicitSeekMode::BeforeLoop
+                } else {
+                    ExplicitSeekMode::AfterLoop
+                }
+            );
+            assert!(before.sample.as_ref().unwrap().same_window(&source));
+            let clock = before.source_playback;
+            let generation = before.generation;
+            let native = before.stretch.native_state_address();
+            assert_eq!(before.stretch.pending_fifo_frames(), (0, 0));
+            assert!(before.stretch.productive_history().is_none());
+            assert!(p.h.callback.mixer.dsp_source_history_for_test(0).is_none());
+            let old = p.h.callback.mixer.stems_for_measurement()[0].clone();
+            let mut oracle = CandidateSeekOracle::after_ack(&mut p, target, selected_v1);
+            let (_pair, registration) = candidate(&mut p, 120 + target + usize::from(selected_v1));
+            let receipt = request_candidate(&mut p, &registration, 0b1010);
+            assert_eq!(
+                p.h.callback.drain(&mut p.h.consumer),
+                1,
+                "actual fresh candidate Capture"
+            );
+            assert_eq!(receipt.residency_status(), "rejected");
+            assert!(!receipt.claimed());
+            assert!(registration.is_current());
+            assert_eq!(registration.publication_status(), "accepted");
+            wait_until(|| p.h.engine.cold_jobs.counts_for_test() == (0, 0, 0));
+            assert!(
+                p.h.consumer.is_empty(),
+                "rejected candidate enqueues no Adopt"
+            );
+            let after = voice(&p.h.callback.mixer);
+            assert!(after.source_playback.matches_exact(&clock));
+            assert_eq!(after.generation, generation);
+            assert_eq!(after.stretch.native_state_address(), native);
+            assert_eq!(after.stretch.pending_fifo_frames(), (0, 0));
+            assert!(after.stretch.productive_history().is_none());
+            assert!(p.h.callback.mixer.dsp_source_history_for_test(0).is_none());
+            for frames in [1, 31, 137, 257, 511] {
+                oracle.render(&mut p, frames, false);
+            }
+            oracle.later_native(&mut p);
+            assert_eq!(voice(&p.h.callback.mixer).generation, generation);
+            assert!(Arc::ptr_eq(
+                &source.samples,
+                &p.h.callback.mixer.bank_for_measurement()[0]
+                    .as_ref()
+                    .unwrap()
+                    .samples
+            ));
+            match (
+                old.as_ref(),
+                p.h.callback.mixer.stems_for_measurement()[0].as_ref(),
+            ) {
+                (Some(old), Some(current)) => {
+                    assert!(Arc::ptr_eq(
+                        &old.complete_set_identity,
+                        &current.complete_set_identity
+                    ));
+                    for (old, current) in old.stems.iter().zip(&current.stems) {
+                        assert!(Arc::ptr_eq(&old.samples, &current.samples));
+                    }
+                }
+                (None, None) => {}
+                _ => panic!("rejected explicit-Seek candidate changed old reader ownership"),
+            }
+            assert_eq!(receipt.residency_status(), "rejected");
+            assert_eq!(receipt.effective_mode_status(), "rejected");
+            assert!(receipt.effective_failure_reason().is_none());
+            assert!(registration.is_current() && p.h.consumer.is_empty());
+        }
+    }
+}
+
 // Independent transport expectation: the declared .5 -> 2.0 control trajectory
 // applies .05 per 512 consumed output frames. No copied SourcePlayback cursor,
 // chunk/advance call or transition helper supplies the expected distance.

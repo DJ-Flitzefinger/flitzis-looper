@@ -123,6 +123,15 @@ immediate change SHALL NOT silently discard the command.
 - **THEN** native adoption rejects safely and the current FullMix/stem/KEYLOCK trajectory remains usable
 - **AND** neither a complete disk descriptor nor a same-set residency permission bypasses the guard
 
+#### Scenario: Acknowledged Intro or Tail seek rejects a fresh new-set candidate
+
+- **GIVEN** productive KEY LOCK ON FullMix or selected V1 and a real acknowledged finite resident Seek into Intro or Tail
+- **WHEN** a distinct V2 obtains a fresh own source ticket, accepted current registration and actual candidate Capture before further source consumption
+- **THEN** the unsupported explicit seek mode SHALL reject V2 before claim without Adopt, while its own registration remains accepted and current
+- **AND** the actual KeyLockFiniteLoop union SHALL retain the old source and selected readers, rather than relying on a FullTrack rejection
+- **AND** independent complete PCM, fractional one-shot source addressing, actual Native/FIFO and uninterrupted post-seek filter history SHALL remain usable through irregular callbacks and a later own complete Native preparation
+- **AND** the authorized Seek SHALL establish its own new voice and filter chronology; candidate rejection SHALL NOT introduce another reset, retry or audible V2 acknowledgement
+
 #### Scenario: Current bank B cannot authorize retained old-source voice A
 
 - **GIVEN** actual Native admission has installed a distinct current bank source B while retained voice A continues using its own frozen source and FullMix or V1 readers with KEY LOCK OFF or ON

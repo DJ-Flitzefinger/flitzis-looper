@@ -1532,6 +1532,28 @@ changed test file. Formatting, official strict validation, five relative file
 links and whitespace pass. Unchanged production Release/import/Python checks
 remain reusable, without Native installation or Human App/device changes.
 
+### Fresh candidate rejection after genuine Intro/Tail Seek
+
+`actual_intro_tail_seek_rejects_fresh_candidate_without_changing_post_seek_audio`
+uses real resident Seek Capture, worker and Relocate acknowledgement before a
+fresh distinct V2 source ticket, pair registration and candidate Capture. Four
+ON/rate0.73 cases combine Intro/Tail with FullMix or already effective selected
+V1. Intro0 and Tail1517 create actual KeyLockFiniteLoop unions0..1517 and17..4096,
+so rejection exercises the explicit seek-mode guard rather than FullTrack.
+
+The own candidate rejects before claim and produces no Adopt; its registration
+remains accepted/current. Source and existing component owners survive. A narrow
+post-seek oracle checks complete independent PCM, one-shot fractional source
+addressing, stereo raw Native/FIFO and continuous nonneutral EQ through irregular
+callbacks and later own4096-frame Native preparation. It uses independently
+declared seek geometry and complete channel PCM rather than a copied live clock.
+
+The real authorized Seek intentionally cuts generation, Native/FIFO and filter
+state. Continuity assertions start after that own acknowledgement and verify
+that rejecting V2 adds no cut or restart. This is a Native guard proof; additional
+domains remain disabled, and public-controller, whole task3.3, final-reader and
+Human acceptance are not claimed by these cases.
+
 ### Fresh public adoption during an ongoing BPM glide
 
 `actual_public_bpm_glide_adoption_requires_own_wet_effect` and its dry counterpart
