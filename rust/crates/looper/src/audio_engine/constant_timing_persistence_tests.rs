@@ -932,7 +932,16 @@ fn saved_timing_signed_zero_roundtrip_and_nonaccepted_unsupported_export() {
     let f = fixture();
     let engine = fresh_engine();
     let saved = capture_saved(&engine, 0, &f.envelope, f.path.clone()).unwrap();
-    let (accepted, _, _) = verify(&engine, &saved).unwrap();
+    let (accepted, _, _) = verify(
+        &saved,
+        &crate::audio_engine::native_owned_work::CompleteSampleWork::capture(
+            &engine,
+            0,
+            &saved.sample,
+        )
+        .unwrap(),
+    )
+    .unwrap();
     let hypotheses = parse_hypotheses(&saved.record["hypotheses"].to_string()).unwrap();
     let borrowed: Vec<_> = hypotheses
         .iter()
@@ -956,7 +965,16 @@ fn saved_timing_signed_zero_roundtrip_and_nonaccepted_unsupported_export() {
     .unwrap();
     let json = encode(&minus_zero).unwrap();
     let saved = capture_saved(&engine, 0, &json.to_string(), f.path.clone()).unwrap();
-    let (a, _, _) = verify(&engine, &saved).unwrap();
+    let (a, _, _) = verify(
+        &saved,
+        &crate::audio_engine::native_owned_work::CompleteSampleWork::capture(
+            &engine,
+            0,
+            &saved.sample,
+        )
+        .unwrap(),
+    )
+    .unwrap();
     assert_eq!(a.origin().seconds.to_bits(), (-0.0_f64).to_bits());
     assert_eq!(a.revision(), minus_zero.revision());
 }

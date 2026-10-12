@@ -40,7 +40,9 @@ pub use persistence::SavedConstantTimingTicket;
 pub(super) use persistence::capture_saved_with_measurement_limit;
 #[cfg(test)]
 pub(super) use persistence::migration_test_fixture;
-pub(super) use persistence::{capture_saved, export_current, restore_saved};
+pub(super) use persistence::{SavedTimingExportWork, SavedTimingRestoreWork, capture_saved};
+#[cfg(test)]
+pub(super) use persistence::{export_current, restore_saved};
 
 pub(super) fn validated_pcm_limit_bytes(limit_bytes: usize) -> Result<usize, String> {
     PcmBudget::new(limit_bytes).map(PcmBudget::limit_bytes)
@@ -430,8 +432,20 @@ impl ConstantTimingTicket {
     }
 }
 
-struct PreparationLease<'a>(&'a AtomicBool);
-impl Drop for PreparationLease<'_> {
+struct PreparationLease(Arc<AtomicBool>);
+impl PreparationLease {
+    fn capture(engine: &AudioEngine) -> Result<Self, String> {
+        if engine
+            .constant_timing_busy
+            .compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)
+            .is_err()
+        {
+            return Err("constant timing preparation busy".into());
+        }
+        Ok(Self(engine.constant_timing_busy.clone()))
+    }
+}
+impl Drop for PreparationLease {
     fn drop(&mut self) {
         self.0.store(false, Ordering::Release);
     }
@@ -480,15 +494,12 @@ fn check_timing_pcm_geometry(
 }
 
 fn complete_timing_sample(
-    engine: &AudioEngine,
-    id: usize,
+    work: &super::native_owned_work::CompleteSampleWork,
     reference: &SampleBuffer,
     budget: PcmBudget,
 ) -> Result<(SampleBuffer, usize), String> {
     let retained_reference_bytes = timing_resident_reference_bytes(reference)?;
-    let complete = engine
-        .complete_sample(id, reference, budget.limit_bytes())
-        .map_err(|error| error.to_string())?;
+    let complete = work.materialize(budget.limit_bytes())?;
     if !complete.same_source(reference)
         || complete.resident_start() != 0
         || complete.resident_end() != reference.frame_count()
@@ -512,6 +523,7 @@ pub(super) fn parse_intent(value: &str) -> PyResult<TimingIntent> {
 
 /// Opaque synchronous source/request capture for off-thread native preparation.
 #[pyclass(frozen)]
+#[derive(Clone)]
 pub struct CapturedConstantTiming {
     id: usize,
     sample: SampleBuffer,
@@ -525,21 +537,15 @@ pub struct CapturedConstantTiming {
     pcm_budget: PcmBudget,
 }
 
+#[cfg(test)]
 pub(super) fn prepare(
     engine: &AudioEngine,
     id: usize,
     timing_bound: TimingBound,
 ) -> Result<ConstantTimingTicket, String> {
-    if engine
-        .constant_timing_busy
-        .compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)
-        .is_err()
-    {
-        return Err("constant timing preparation busy".into());
-    }
-    let _lease = PreparationLease(&engine.constant_timing_busy);
-    let captured = capture_preparation(engine, id, timing_bound, None)?;
-    prepare_captured_inner(engine, &captured)
+    ConstantTimingPreparationWork::capture(engine, id, timing_bound)?
+        .prepare()?
+        .finish(engine)
 }
 
 /// Capture all actual native owners under their common request publication mutex.
@@ -666,29 +672,89 @@ pub(super) fn capture_preparation_with_limit(
     })
 }
 
+#[cfg(test)]
 pub(super) fn prepare_captured(
     engine: &AudioEngine,
     captured: &CapturedConstantTiming,
 ) -> Result<ConstantTimingTicket, String> {
-    if !Arc::ptr_eq(&captured.epoch, &engine.prepared_source_epochs[captured.id])
-        || captured.epoch.load(Ordering::Acquire) != captured.captured_epoch
-    {
-        return Err("stale or foreign captured constant timing preparation".into());
+    ConstantTimingPreparationWork::capture_existing(engine, captured)?
+        .prepare()?
+        .finish(engine)
+}
+
+pub(super) struct ConstantTimingPreparationWork {
+    captured: CapturedConstantTiming,
+    source: super::native_owned_work::CompleteSampleWork,
+    lease: PreparationLease,
+}
+
+pub(super) struct PreparedTimingEvidence {
+    ticket: ConstantTimingTicket,
+    _lease: PreparationLease,
+}
+
+impl ConstantTimingPreparationWork {
+    pub(super) fn capture(
+        engine: &AudioEngine,
+        id: usize,
+        timing_bound: TimingBound,
+    ) -> Result<Self, String> {
+        let lease = PreparationLease::capture(engine)?;
+        let captured = capture_preparation(engine, id, timing_bound, None)?;
+        let source =
+            super::native_owned_work::CompleteSampleWork::capture(engine, id, &captured.sample)?;
+        Ok(Self {
+            captured,
+            source,
+            lease,
+        })
     }
-    if engine
-        .constant_timing_busy
-        .compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)
-        .is_err()
-    {
-        return Err("constant timing preparation busy".into());
+
+    pub(super) fn capture_existing(
+        engine: &AudioEngine,
+        captured: &CapturedConstantTiming,
+    ) -> Result<Self, String> {
+        if !Arc::ptr_eq(&captured.epoch, &engine.prepared_source_epochs[captured.id])
+            || captured.epoch.load(Ordering::Acquire) != captured.captured_epoch
+        {
+            return Err("stale or foreign captured constant timing preparation".into());
+        }
+        let lease = PreparationLease::capture(engine)?;
+        let source = super::native_owned_work::CompleteSampleWork::capture(
+            engine,
+            captured.id,
+            &captured.sample,
+        )?;
+        Ok(Self {
+            captured: captured.clone(),
+            source,
+            lease,
+        })
     }
-    let _lease = PreparationLease(&engine.constant_timing_busy);
-    prepare_captured_inner(engine, captured)
+
+    pub(super) fn prepare(self) -> Result<PreparedTimingEvidence, String> {
+        let ticket = prepare_captured_inner(&self.captured, &self.source)?;
+        Ok(PreparedTimingEvidence {
+            ticket,
+            _lease: self.lease,
+        })
+    }
+}
+
+impl PreparedTimingEvidence {
+    pub(super) fn finish(self, engine: &AudioEngine) -> Result<ConstantTimingTicket, String> {
+        let requests = engine
+            .pad_request_ids
+            .lock()
+            .map_err(|_| "request lock poisoned")?;
+        validate_current(engine, &self.ticket, &requests)?;
+        Ok(self.ticket)
+    }
 }
 
 fn prepare_captured_inner(
-    engine: &AudioEngine,
     captured: &CapturedConstantTiming,
+    source: &super::native_owned_work::CompleteSampleWork,
 ) -> Result<ConstantTimingTicket, String> {
     let id = captured.id;
     let sample = captured.sample.clone();
@@ -705,7 +771,9 @@ fn prepare_captured_inner(
         return Err("constant timing preparation cancelled".into());
     }
     let (complete, retained_reference_bytes) =
-        complete_timing_sample(engine, id, &sample, captured.pcm_budget)?;
+        complete_timing_sample(source, &sample, captured.pcm_budget)?;
+    #[cfg(test)]
+    super::native_owned_work::observe(super::native_owned_work::WorkPoint::TimingPcm);
     if cancelled() {
         return Err("constant timing preparation cancelled".into());
     }
@@ -816,11 +884,6 @@ fn prepare_captured_inner(
         publication: Mutex::new(None),
         pcm_budget: captured.pcm_budget,
     };
-    let requests = engine
-        .pad_request_ids
-        .lock()
-        .map_err(|_| "request lock poisoned")?;
-    validate_current(engine, &ticket, &requests)?;
     Ok(ticket)
 }
 
@@ -959,6 +1022,7 @@ fn projection(
     })
 }
 
+#[cfg(test)]
 pub(super) fn publish(
     engine: &AudioEngine,
     producer: &Arc<Mutex<Producer<ControlMessage>>>,
@@ -967,6 +1031,16 @@ pub(super) fn publish(
     origin: IndependentTimingOrigin,
     decision: TimingAcceptanceDecision,
 ) -> PyResult<()> {
+    let timing = prepare_publication(ticket, hypotheses_json, origin, decision)?;
+    publish_record(engine, producer, ticket, timing, false)
+}
+
+pub(super) fn prepare_publication(
+    ticket: &ConstantTimingTicket,
+    hypotheses_json: &str,
+    origin: IndependentTimingOrigin,
+    decision: TimingAcceptanceDecision,
+) -> PyResult<AcceptedConstantTiming> {
     let hypotheses = parse_hypotheses(hypotheses_json).map_err(PyValueError::new_err)?;
     let borrowed: Vec<_> = hypotheses
         .iter()
@@ -981,10 +1055,12 @@ pub(super) fn publish(
     let timing =
         AcceptedConstantTiming::from_raw(ticket.evidence.clone(), &borrowed, origin, decision)
             .map_err(|e| PyValueError::new_err(e.to_string()))?;
-    publish_record(engine, producer, ticket, timing, false)
+    #[cfg(test)]
+    super::native_owned_work::observe(super::native_owned_work::WorkPoint::AcceptedTiming);
+    Ok(timing)
 }
 
-fn publish_record(
+pub(super) fn publish_record(
     engine: &AudioEngine,
     producer: &Arc<Mutex<Producer<ControlMessage>>>,
     ticket: &ConstantTimingTicket,
@@ -1179,6 +1255,10 @@ pub(super) fn publish_legacy_origin(
 #[cfg(test)]
 #[path = "constant_timing_tests.rs"]
 mod tests;
+
+#[cfg(all(test, windows))]
+#[path = "native_borrow_tests.rs"]
+mod native_borrow_tests;
 
 #[cfg(test)]
 #[path = "l3_constant_timing_fixture.rs"]

@@ -31,3 +31,34 @@
 
 Project binary Release publication is not a prerequisite or delivery gate for
 this source-main installer and is not authorized by this change.
+
+## Direct Human repair — 2026-10-12
+
+The source-main steps above record the prior software delivery. This repair
+supersedes its persistent version/data layout and old-runtime retention policy;
+the actual-machine gates remain open.
+
+- [x] 9. Replace seven public Engine APIs' eight long borrowed-detach seams with
+  short capture, owned detached work and fresh guarded adoption; prove genuine
+  receive_msg/mutable control/render during actual I/O and stale completion guards.
+- [x] 10. Install one complete exact-main checkout, fixed private runtime and
+  native cwd/samples/config/input paths; private preflight and offline children
+  must use that same layout without a second app copy.
+- [x] 11. Implement shared process-lifetime start/update locking, recognized old
+  process detection, journaled activation/recovery and temporary owned backups;
+  never kill an App or replace files while its owner may be live.
+- [x] 12. Prove exact-byte and actual-FileID legacy relocation with one Native
+  config resolver, bounded quiescent plan and durable exact-owner location
+  projection; preserve birth/current-config/recovery/own-ACK authority, known
+  pending journals and distinct equal-byte config owners, plus unsafe negatives.
+- [x] 13. Prepare/verify both actual separator checkpoints with existing resolvers
+  and sequential fresh private CPU loads; align controller/offline-child persistent
+  caches and repair model-only defects without Native rebuilding.
+- [x] 14. Clean only recorded completed owned stages/backups after success; preserve
+  samples/.pcm-cache/unknown/models/useful tool and build caches, measure retained
+  bytes and explain their reuse.
+- [x] 15. Run meaningful public Native and real BAT/PowerShell transaction/model
+  regressions, needed private Release/preflight/integrated checks, strict OpenSpec,
+  one independent final review and coherent publication; update BAT/scripts,
+  repository maintenance rules and beginner docs together. Retain real failures
+  and clean-Windows/Human/device/hearing limitations.

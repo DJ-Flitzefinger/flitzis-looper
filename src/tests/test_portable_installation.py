@@ -1,11 +1,14 @@
 """Exercise the real source-main installer without network, native builds or audio."""
 
+import base64
 import ctypes
 import hashlib
 import json
 import os
 import shutil
+import stat
 import subprocess
+import time
 from contextlib import contextmanager
 from dataclasses import dataclass
 from pathlib import Path
@@ -15,7 +18,7 @@ from zipfile import ZipFile, ZipInfo
 import pytest
 
 if TYPE_CHECKING:
-    from collections.abc import Iterator
+    from collections.abc import Callable, Iterator
 
 pytestmark = pytest.mark.skipif(os.name != "nt", reason="Windows portable installation")
 REPO = Path(__file__).resolve().parents[2]
@@ -25,76 +28,138 @@ GIT_ARCHIVE = (
     "v2.56.0.windows.2/MinGit-2.56.0.2-64-bit.zip"
 )
 GIT_SHA256 = "da35e72aa21c005a5a0d298cfbae110bc1609a815730ea0dde84b01a1b3cd3be"
-LAUNCH = """
-param([string] $Root, [switch] $Check, [string] $VersionDirectory)
+LAUNCH = r"""
+param([string] $Root, [switch] $Check, [string] $CheckoutDirectory,
+    [string] $RuntimeDirectory, [switch] $InstallerOwned, [switch] $StartLockHeld,
+    [string] $ModelMode, [string] $RelocationAction, [string] $RelocationSource,
+    [string] $RelocationTarget, [string] $RelocationRecord)
 Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
+$runtime = $PSScriptRoot
+. (Join-Path $runtime 'common.ps1')
+if (-not $CheckoutDirectory) { $CheckoutDirectory = Join-Path $Root 'flitzis-looper' }
+$release = Get-Content -LiteralPath (Join-Path $runtime 'release-manifest.json') -Raw |
+    ConvertFrom-Json
+if ($release.fixture_version -ne '@VERSION@') { throw 'Wrong private launch implementation' }
+if ($RelocationAction) {
+    function Inventory([string] $Path) {
+        $result = @{}
+        foreach ($file in @(Get-ChildItem -LiteralPath $Path -Recurse -Force -File)) {
+            $relative = $file.FullName.Substring($Path.TrimEnd('\').Length + 1).Replace('\','/')
+            $result[$relative] = Get-Sha256 $file.FullName
+        }
+        return $result
+    }
+    if ($RelocationAction -eq 'capture') {
+        $capture = @{files=(Inventory $RelocationSource)} | ConvertTo-Json -Depth 6
+        [IO.File]::WriteAllText($RelocationRecord, $capture)
+        if ('@FAILURE@' -eq 'capture') { exit 33 }
+    } elseif ($RelocationAction -eq 'rollback') {
+        if ('@FAILURE@' -eq 'capture') {
+            throw 'Unsealed capture rollback was incorrectly consumed'
+        }
+        if ((Test-Path -LiteralPath $RelocationTarget) -and
+            -not (Test-Path -LiteralPath $RelocationSource)) {
+            [IO.Directory]::Move($RelocationTarget,$RelocationSource)
+        }
+    } else {
+        $proof = Get-Content -LiteralPath $RelocationRecord -Raw | ConvertFrom-Json
+        $actual = if (Test-Path -LiteralPath $RelocationSource) {
+            $RelocationSource
+        } else { $RelocationTarget }
+        $found = Inventory $actual
+        foreach ($property in $proof.files.PSObject.Properties) {
+            if ($found[$property.Name] -ne $property.Value) { throw 'Captured data changed' }
+        }
+        if ($RelocationAction -eq 'move' -and $actual -ne $RelocationTarget) {
+            [IO.Directory]::Move($RelocationSource,$RelocationTarget)
+        }
+    }
+    exit 0
+}
+if ($ModelMode) {
+    foreach ($name in @('demucs-fixture.th','bs-fixture.ckpt')) {
+        $path = Join-Path $Root "models/$name"
+        if ($ModelMode -eq 'repair') { [IO.File]::WriteAllText($path,'verified fixture') }
+        if (-not (Test-Path -LiteralPath $path) -or
+            [IO.File]::ReadAllText($path) -ne 'verified fixture') { exit 31 }
+    }
+    [IO.File]::AppendAllText((Join-Path $Root 'cache/model-history.jsonl'),
+        (@{mode=$ModelMode; fixture_version='@VERSION@'} | ConvertTo-Json -Compress) + "`n")
+    if ('@FAILURE@' -eq 'model-cpu') { exit 32 }
+    exit 0
+}
 if (-not $Check) { exit 90 }
-if (-not $VersionDirectory) { throw 'Staging must name its actual candidate version' }
-if ((Split-Path -Leaf $PSScriptRoot) -ne $VersionDirectory) { throw 'Wrong candidate directory' }
-# Read this immutable fixture through the path used to execute the candidate;
-# the BAT may intentionally provide a short build alias while Root is canonical.
-$version = $PSScriptRoot
-$releasePath = Join-Path $version 'release-manifest.json'
-$release = Get-Content -LiteralPath $releasePath -Raw | ConvertFrom-Json
-if ($release.fixture_version -ne '@VERSION@') { throw 'Wrong launch implementation' }
-$required = Join-Path $version '@VERSION@-required.txt'
-if (-not (Test-Path -LiteralPath $required)) { throw 'New launcher required' }
+if (-not (Test-Path -LiteralPath (Join-Path $runtime '@VERSION@-required.txt'))) {
+    throw 'Unusable private runtime'
+}
+if ([IO.File]::ReadAllText((Join-Path $CheckoutDirectory 'fixture-version.txt')) -ne '@VERSION@') {
+    throw 'Wrong checkout'
+}
 $previous = $null
-$pointer = Join-Path $Root 'current.json'
-if (Test-Path -LiteralPath $pointer) {
-    $previous = (Get-Content -LiteralPath $pointer -Raw | ConvertFrom-Json).git_commit
+if (Test-Path -LiteralPath (Join-Path $Root 'current.json')) {
+    $pointer = Get-Content -LiteralPath (Join-Path $Root 'current.json') -Raw | ConvertFrom-Json
+    $previous = $pointer.git_commit
 }
 $entry = @{fixture_version='@VERSION@'; git_commit=$release.git_commit;
-    version_directory=$VersionDirectory; previous_commit=$previous} | ConvertTo-Json -Compress
+    checkout=$CheckoutDirectory; previous_commit=$previous} | ConvertTo-Json -Compress
 [IO.File]::AppendAllText((Join-Path $Root 'cache/preflight-history.jsonl'), $entry + "`n")
 exit @EXIT@
 """
 HELPER = r"""
 param([string] $Root, [string] $Source, [string] $Git, [string] $Commit,
-    [string] $RuntimeDirectory)
+    [string] $RuntimeDirectory, [string] $OperationId)
 Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
+. (Join-Path $PSScriptRoot 'common.ps1')
 $actual = & $Git -C $Source rev-parse HEAD
-if ($LASTEXITCODE -ne 0 -or $actual -ne $Commit) { throw 'Expected the pinned source commit' }
+if ($LASTEXITCODE -ne 0 -or $actual -ne $Commit) { throw 'Expected exact pinned source' }
 $dirty = @(& $Git -C $Source status --porcelain)
-if ($LASTEXITCODE -ne 0 -or $dirty.Count) { throw 'Expected a clean private source checkout' }
+if ($LASTEXITCODE -ne 0 -or $dirty.Count) { throw 'Expected clean source before Native staging' }
 $canonicalSource = [IO.Path]::GetFullPath((& $Git -C $Source rev-parse --show-toplevel))
-if ($LASTEXITCODE -ne 0) { throw 'Cannot resolve the physical source checkout' }
 $canonicalGit = & $Git -C $Source rev-parse --path-format=absolute --git-dir
-if ($LASTEXITCODE -ne 0) { throw 'Cannot resolve the physical Git directory' }
-$rootPrefix = $Root.TrimEnd('\')
-$relativeSource = $Source.Substring($rootPrefix.Length).TrimStart('\')
-$canonicalRoot = $canonicalSource.Substring(0,
-    $canonicalSource.Length - $relativeSource.Length).TrimEnd('\')
-$relativeRuntime = $RuntimeDirectory.Substring($rootPrefix.Length).TrimStart('\')
+$relativeSource = $Source.Substring($Root.TrimEnd('\').Length).TrimStart('\')
+$canonicalRoot = $canonicalSource.Substring(
+    0,$canonicalSource.Length-$relativeSource.Length).TrimEnd('\')
+$relativeRuntime = $RuntimeDirectory.Substring($Root.TrimEnd('\').Length).TrimStart('\')
 $canonicalRuntime = Join-Path $canonicalRoot $relativeRuntime
-$prefix = [IO.Path]::GetFullPath((Join-Path $Root 'versions')).TrimEnd('\') + '\'
-if (-not [IO.Path]::GetFullPath($RuntimeDirectory).StartsWith(
-    $prefix, [StringComparison]::OrdinalIgnoreCase)) { throw 'Candidate leaves versions' }
+$expectedRuntime = Join-Path $Root ('cache/r-' + $OperationId.Substring(0,8))
+if ($RuntimeDirectory -ne $expectedRuntime) { throw 'Wrong candidate runtime' }
 $entry = @{fixture_version='@VERSION@'; git_commit=$Commit; source=$canonicalSource;
     runtime=$canonicalRuntime; git_directory=[IO.Path]::GetFullPath($canonicalGit);
     canonical_root=$canonicalRoot; build_root=$Root} | ConvertTo-Json -Compress
 [IO.File]::AppendAllText((Join-Path $Root 'cache/helper-invocations.jsonl'), $entry + "`n")
 if ('@FAILURE@' -eq 'helper') { exit 23 }
 [IO.Directory]::CreateDirectory((Join-Path $RuntimeDirectory 'python')) | Out-Null
-[IO.File]::WriteAllText((Join-Path $RuntimeDirectory 'python/python.exe'),
-    'immutable-runtime-@VERSION@')
-[IO.File]::WriteAllText((Join-Path $RuntimeDirectory '@VERSION@-required.txt'), 'required')
-foreach ($name in @('launch.ps1', 'dispatch.ps1', 'START-LOOPER.bat')) {
-    [IO.File]::Copy((Join-Path $Source "scripts/portable/$name"),
-        (Join-Path $RuntimeDirectory $name), $false)
+$python = Join-Path $RuntimeDirectory 'python/python.exe'
+[IO.File]::WriteAllText($python,'immutable-runtime-@VERSION@')
+[IO.File]::WriteAllText((Join-Path $RuntimeDirectory '@VERSION@-required.txt'),'required')
+[IO.Directory]::CreateDirectory((Join-Path $RuntimeDirectory 'licenses')) | Out-Null
+[IO.File]::WriteAllText((Join-Path $RuntimeDirectory 'licenses/samplerate.txt'),'owned-license')
+[IO.File]::WriteAllText((Join-Path $RuntimeDirectory 'python/vcruntime140.dll'),'owned-runtime-dll')
+foreach ($name in @('launch.ps1','dispatch.ps1','START-LOOPER.bat','common.ps1','build-path.ps1')) {
+    $helperSource = Join-Path $Source "scripts/portable/$name"
+    [IO.File]::Copy($helperSource,(Join-Path $RuntimeDirectory $name),$false)
+}
+function Inventory([string] $Path) {
+    $result = @{}
+    foreach ($file in @(Get-ChildItem -LiteralPath $Path -Recurse -Force -File)) {
+        $relative = $file.FullName.Substring($Path.TrimEnd('\').Length + 1).Replace('\','/')
+        $result[$relative] = Get-Sha256 $file.FullName
+    }
+    return $result
 }
 if ('@FAILURE@' -ne 'missing-manifest') {
-    $runtimeCommit = $Commit
-    if ('@FAILURE@' -eq 'wrong-commit') {
-        $runtimeCommit = 'ffffffffffffffffffffffffffffffffffffffff'
-    }
-    $release = @{release_id=$Commit; git_commit=$runtimeCommit;
-        source_dirty=('@FAILURE@' -eq 'dirty-manifest'); fixture_version='@VERSION@'}
-    [IO.File]::WriteAllText((Join-Path $RuntimeDirectory 'release-manifest.json'),
-        ($release | ConvertTo-Json))
+    $runtimeCommit = if ('@FAILURE@' -eq 'wrong-commit') {
+        'ffffffffffffffffffffffffffffffffffffffff'
+    } else { $Commit }
+    $release = @{schema_version=2; release_id=$Commit; git_commit=$runtimeCommit;
+        source_dirty=('@FAILURE@' -eq 'dirty-manifest'); fixture_version='@VERSION@';
+        checkout_files=(Inventory $Source); runtime_files=(Inventory $RuntimeDirectory)}
+    $manifest = Join-Path $RuntimeDirectory 'release-manifest.json'
+    [IO.File]::WriteAllText($manifest,($release | ConvertTo-Json -Depth 8))
 }
+if ('@FAILURE@' -eq 'prepared-interrupt') { exit 24 }
 exit 0
 """
 FAKE_GIT = """
@@ -213,12 +278,14 @@ class Installation:
                 encoding="utf-8-sig",
             )
         (portable / "launch.ps1").write_text(
-            LAUNCH.replace("@VERSION@", version).replace(
-                "@EXIT@", "17" if failure == "preflight" else "0"
-            ),
+            LAUNCH
+            .replace("@VERSION@", version)
+            .replace("@FAILURE@", failure)
+            .replace("@EXIT@", "17" if failure == "preflight" else "0"),
             encoding="utf-8-sig",
         )
-        shutil.copyfile(REPO / "scripts/portable/dispatch.ps1", portable / "dispatch.ps1")
+        for name in ("dispatch.ps1", "common.ps1", "build-path.ps1"):
+            shutil.copyfile(REPO / "scripts/portable" / name, portable / name)
         (portable / "START-LOOPER.bat").write_bytes(b"@echo off\r\nexit /b 90\r\n")
         (self.source / "fixture-version.txt").write_text(version, encoding="utf-8")
         self.git_run("add", "--all")
@@ -273,93 +340,101 @@ def installation(tmp_path: Path) -> Installation:
     return fixture
 
 
-def test_first_install_builds_current_main_without_a_release_bundle(
-    installation: Installation,
-) -> None:
+def test_first_install_builds_one_complete_main_checkout(installation: Installation) -> None:
     commit = installation.publish("first")
     require_success(installation.run(explicit_target=False))
     pointer = installation.pointer()
+    assert pointer["schema_version"] == 2
     assert pointer["git_commit"] == pointer["release_id"] == commit
     assert pointer["source_kind"] == "main"
-    assert str(pointer["directory"]).startswith(f"main-{commit[:12]}-")
-    candidate = installation.target / "versions" / str(pointer["directory"])
-    assert (candidate / "python/python.exe").read_text() == "immutable-runtime-first"
-    assert json.loads((candidate / "release-manifest.json").read_text())["source_dirty"] is False
+    checkout = installation.target / "flitzis-looper"
+    runtime = installation.target / "Runtime"
+    assert (checkout / ".git").is_dir()
+    assert (checkout / "fixture-version.txt").read_text() == "first"
+    assert (checkout / "samples").is_dir()
+    assert (checkout / "config/input").is_dir()
+    assert (runtime / "python/python.exe").read_text() == "immutable-runtime-first"
+    assert not (runtime / "app").exists()
+    assert not (installation.target / "versions").exists()
+    assert not (installation.target / "data").exists()
     calls = installation.trace("helper-invocations.jsonl")
     assert len(calls) == 1
     assert calls[0]["git_commit"] == commit
-    assert Path(str(calls[0]["runtime"])) == candidate
-    source = Path(str(calls[0]["source"]))
-    assert source.is_relative_to(installation.target / "cache")
-    assert (source / "fixture-version.txt").read_text() == "first"
+    for field in ("source", "runtime"):
+        assert Path(str(calls[0][field])).parent == installation.target / "cache"
+        assert not Path(str(calls[0][field])).exists()
     assert installation.trace("preflight-history.jsonl")[0]["previous_commit"] is None
-    assert (installation.target / "portable-root.json").is_file()
+    assert not (installation.target / "portable-transaction.json").exists()
+    assert len(installation.trace("model-history.jsonl")) == 2
     for name in ("START-LOOPER.bat", "start.bat", "start-release.bat", "launch.ps1"):
         assert (installation.target / name).is_file()
 
 
-def test_deep_destination_builds_from_a_short_local_remote(
+def test_deep_destination_keeps_source_and_final_git_paths_short(
     installation: Installation, tmp_path: Path
 ) -> None:
-    # Git canonicalizes SUBST paths and limits inherited GIT_DIR by UTF-8 bytes.
-    # Keep the remote independently short so a transport-side limit cannot mask
-    # the installer's destination layout. The target remains below that intrinsic
-    # limit, while the former source-commit12-GUID32 layout would exceed it.
-    remote_git = installation.source / ".git"
-    assert len(str(remote_git).encode("utf-8")) < 180
+    assert len(str(installation.source / ".git").encode("utf-8")) < 180
     prefix = "Portable ü deep destination "
     padding = 190 - len(str(tmp_path / prefix).encode("utf-8"))
-    assert padding >= 0, "Use a shorter basetemp; the remote must stay independently short"
+    assert padding >= 0, "Use a shorter basetemp for the intrinsic Git path bound"
     installation.target = tmp_path / (prefix + "d" * padding)
-    assert len(str(installation.target).encode("utf-8")) == 190
     commit = installation.publish("deep")
     require_success(installation.run())
     assert installation.pointer()["git_commit"] == commit
-    calls = installation.trace("helper-invocations.jsonl")
-    assert len(calls) == 1
-    assert Path(str(calls[0]["canonical_root"])) == installation.target
-    source = Path(str(calls[0]["source"]))
+    call = installation.trace("helper-invocations.jsonl")[0]
+    assert Path(str(call["canonical_root"])) == installation.target
+    source = Path(str(call["source"]))
     assert source.parent == installation.target / "cache"
-    assert Path(str(calls[0]["git_directory"])) == source / ".git"
+    assert Path(str(call["git_directory"])) == source / ".git"
     assert 200 <= len(str(source / ".git").encode("utf-8")) <= 220
-    assert (source / "fixture-version.txt").read_text() == "deep"
-    candidate = installation.target / "versions" / str(installation.pointer()["directory"])
-    assert Path(str(calls[0]["runtime"])) == candidate
-    assert (candidate / "python/python.exe").read_text() == "immutable-runtime-deep"
+    assert len(str(installation.target / "flitzis-looper/.git").encode("utf-8")) <= 220
+    assert (installation.target / "flitzis-looper/fixture-version.txt").read_text() == "deep"
+    assert (installation.target / "Runtime/python/python.exe").read_text() == (
+        "immutable-runtime-deep"
+    )
 
 
-def test_repeat_and_new_main_keep_old_locked_runtime_and_user_data(
+def _user_data(installation: Installation) -> dict[Path, bytes]:
+    checkout = installation.target / "flitzis-looper"
+    contents = {
+        checkout / "samples/flitzis_looper.config.json": b'{"Human": "saved config"}',
+        checkout / "samples/.pcm-cache/material/original.wav": b"original audio",
+        checkout / "samples/.material-migrations/unknown.dat": b"history bytes",
+        checkout / "config/input/keyboard.json": b'{"Human": "keyboard"}',
+        checkout / "config/input/midi.json": b'{"Human": "MIDI"}',
+        installation.target / "models/my-model.bin": b"Human model",
+    }
+    for path, content in contents.items():
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_bytes(content)
+    return contents
+
+
+def test_repeat_and_update_preserve_native_data_and_clean_owned_stages(
     installation: Installation,
 ) -> None:
     first = installation.publish("first")
     require_success(installation.run())
     original = installation.pointer()
-    old_runtime = (
-        installation.target / "versions" / str(original["directory"]) / "python/python.exe"
-    )
-    data = installation.target / "data/user-settings.json"
-    model = installation.target / "models/my-model.bin"
-    data.write_text("Human settings", encoding="utf-8")
-    model.write_bytes(b"Human model")
-    starter = (installation.target / "launch.ps1").read_bytes()
-    sources = set((installation.target / "cache").glob("source-*"))
+    contents = _user_data(installation)
     require_success(installation.run())
     assert installation.pointer() == original
     assert len(installation.trace("helper-invocations.jsonl")) == 1
-    assert set((installation.target / "cache").glob("source-*")) == sources
     second = installation.publish("second")
-    with exclusive_file(old_runtime):
-        require_success(installation.run())
+    require_success(installation.run())
     assert installation.pointer()["git_commit"] == second
-    assert installation.pointer()["directory"] != original["directory"]
-    assert old_runtime.read_text() == "immutable-runtime-first"
-    assert data.read_text() == "Human settings"
-    assert model.read_bytes() == b"Human model"
-    assert (installation.target / "launch.ps1").read_bytes() == starter
+    assert (installation.target / "Runtime/python/python.exe").read_text() == (
+        "immutable-runtime-second"
+    )
+    for path, content in contents.items():
+        assert path.read_bytes() == content
+    assert not (installation.target / "versions").exists()
+    assert not (installation.target / "portable-transaction.json").exists()
+    for prefix in ("s-", "r-", "o-", "p-", "relocation-"):
+        assert not list((installation.target / "cache").glob(prefix + "*"))
     checks = installation.trace("preflight-history.jsonl")
     assert checks[-1]["git_commit"] == second
     assert checks[-1]["previous_commit"] == first
-    # The unchanged dispatcher must select the newly activated candidate launcher.
     require_success(
         _run_powershell([
             "-File",
@@ -372,60 +447,173 @@ def test_repeat_and_new_main_keep_old_locked_runtime_and_user_data(
     assert installation.trace("preflight-history.jsonl")[-1]["fixture_version"] == "second"
 
 
-def test_same_main_rebuilds_an_unusable_runtime_before_activation(
-    installation: Installation,
+def test_same_main_model_repair_does_not_invoke_native_builder(installation: Installation) -> None:
+    installation.publish("first")
+    require_success(installation.run())
+    original = installation.pointer()
+    (installation.target / "models/demucs-fixture.th").unlink()
+    (installation.target / "models/bs-fixture.ckpt").write_bytes(b"corrupt")
+    require_success(installation.run())
+    assert installation.pointer() == original
+    assert len(installation.trace("helper-invocations.jsonl")) == 1
+    for name in ("demucs-fixture.th", "bs-fixture.ckpt"):
+        assert (installation.target / "models" / name).read_text() == "verified fixture"
+
+
+def test_same_main_runtime_defect_rebuilds_before_activation(installation: Installation) -> None:
+    commit = installation.publish("first")
+    require_success(installation.run())
+    (installation.target / "Runtime/first-required.txt").unlink()
+    require_success(installation.run())
+    assert installation.pointer()["git_commit"] == commit
+    assert len(installation.trace("helper-invocations.jsonl")) == 2
+    assert (installation.target / "Runtime/first-required.txt").is_file()
+    assert not list((installation.target / "cache").glob("o-*"))
+    assert not list((installation.target / "cache").glob("p-*"))
+
+
+@pytest.mark.parametrize("relative", ["licenses/samplerate.txt", "python/vcruntime140.dll"])
+@pytest.mark.parametrize("update", [False, True])
+def test_replaced_known_runtime_bytes_stop_before_activation_and_remain_intact(
+    installation: Installation, relative: str, *, update: bool
+) -> None:
+    installation.publish("first")
+    require_success(installation.run())
+    pointer = (installation.target / "current.json").read_bytes()
+    contents = _user_data(installation)
+    changed = installation.target / "Runtime" / relative
+    changed.write_bytes(b"Human replacement; preserve these bytes")
+    if update:
+        installation.publish("second")
+
+    result = installation.run()
+
+    assert result.returncode != 0, result.stdout + result.stderr
+    assert changed.read_bytes() == b"Human replacement; preserve these bytes"
+    assert (installation.target / "current.json").read_bytes() == pointer
+    assert len(installation.trace("helper-invocations.jsonl")) == 1
+    assert not (installation.target / "portable-transaction.json").exists()
+    for path, content in contents.items():
+        assert path.read_bytes() == content
+
+
+@pytest.mark.parametrize("relative", ["licenses/samplerate.txt", "python/vcruntime140.dll"])
+def test_retired_runtime_cleanup_preserves_replaced_known_bytes(
+    installation: Installation, relative: str
 ) -> None:
     commit = installation.publish("first")
     require_success(installation.run())
-    original = installation.pointer()
-    candidate = installation.target / "versions" / str(original["directory"])
-    (candidate / "first-required.txt").unlink()
-    require_success(installation.run())
-    assert installation.pointer()["git_commit"] == commit
-    assert installation.pointer()["directory"] != original["directory"]
-    assert len(installation.trace("helper-invocations.jsonl")) == 2
-    assert (candidate / "python/python.exe").read_text() == "immutable-runtime-first"
+    original = (installation.target / "Runtime" / relative).read_bytes()
+    retired = installation.target / "cache/p-11111111" / relative
+    retired.parent.mkdir(parents=True)
+    retired.write_bytes(b"Human replacement after ownership capture")
+    journal = installation.target / "portable-transaction.json"
+    journal.write_text(
+        json.dumps({
+            "operation": "1" * 32,
+            "git_commit": commit,
+            "legacy_directory": None,
+            "old_release": {"runtime_files": {relative: hashlib.sha256(original).hexdigest()}},
+        }),
+        encoding="utf-8",
+    )
+    captured_journal = journal.read_bytes()
+
+    result = _run_embedded(
+        installation.installer.parent,
+        f"$record = Get-Content -LiteralPath {_ps_string(journal)} -Raw | ConvertFrom-Json\n"
+        f"Complete-PortableTransaction {_ps_string(installation.target)} $record",
+    )
+
+    assert result.returncode != 0, result.stdout + result.stderr
+    assert retired.read_bytes() == b"Human replacement after ownership capture"
+    assert journal.read_bytes() == captured_journal
+    assert (installation.target / "Runtime" / relative).read_bytes() == original
 
 
 @pytest.mark.parametrize(
     "failure",
-    ["helper", "preflight", "wrong-commit", "dirty-manifest", "missing-manifest", "missing-helper"],
+    [
+        "helper",
+        "preflight",
+        "model-cpu",
+        "capture",
+        "wrong-commit",
+        "dirty-manifest",
+        "missing-manifest",
+        "missing-helper",
+    ],
 )
-def test_failed_source_update_preserves_accepted_pointer_runtime_and_data(
+def test_failed_update_preserves_pointer_runtime_and_user_bytes(
     installation: Installation, failure: str
 ) -> None:
     installation.publish("first")
     require_success(installation.run())
-    pointer = installation.target / "current.json"
-    original = pointer.read_bytes()
-    runtime = (
-        installation.target
-        / "versions"
-        / str(installation.pointer()["directory"])
-        / "python/python.exe"
+    original = (installation.target / "current.json").read_bytes()
+    starter = (installation.target / "launch.ps1").read_bytes()
+    contents = _user_data(installation)
+    installation.publish("broken", failure=failure)
+    result = installation.run()
+    assert result.returncode != 0, result.stdout + result.stderr
+    assert (installation.target / "current.json").read_bytes() == original
+    assert (installation.target / "Runtime/python/python.exe").read_text() == (
+        "immutable-runtime-first"
     )
-    launcher = (installation.target / "launch.ps1").read_bytes()
-    data = installation.target / "data/project.bin"
-    data.write_bytes(b"saved project")
-    installation.publish("broken", failure=failure)
-    result = installation.run()
-    assert result.returncode != 0, result.stdout + result.stderr
-    assert pointer.read_bytes() == original
-    assert runtime.read_text() == "immutable-runtime-first"
-    assert (installation.target / "launch.ps1").read_bytes() == launcher
-    assert data.read_bytes() == b"saved project"
+    assert (installation.target / "launch.ps1").read_bytes() == starter
+    for path, content in contents.items():
+        assert path.read_bytes() == content
 
 
-@pytest.mark.parametrize("failure", ["helper", "preflight"])
-def test_failed_initial_install_never_publishes_a_current_runtime(
-    installation: Installation, failure: str
-) -> None:
+@pytest.mark.parametrize("failure", ["helper", "preflight", "model-cpu"])
+def test_failed_initial_install_does_not_publish(installation: Installation, failure: str) -> None:
     installation.publish("broken", failure=failure)
+    assert installation.run().returncode != 0
+    for name in ("current.json", "launch.ps1", "START-LOOPER.bat"):
+        assert not (installation.target / name).exists()
+
+
+def test_failed_capture_is_preserved_without_native_rollback(installation: Installation) -> None:
+    installation.publish("first")
+    require_success(installation.run())
+    contents = _user_data(installation)
+    installation.publish("capture-failure", failure="capture")
     result = installation.run()
-    assert result.returncode != 0, result.stdout + result.stderr
-    assert not (installation.target / "current.json").exists()
-    assert not (installation.target / "launch.ps1").exists()
-    assert not (installation.target / "START-LOOPER.bat").exists()
+    assert result.returncode != 0
+    assert "incorrectly consumed" not in result.stdout + result.stderr
+    record = json.loads((installation.target / "portable-transaction.json").read_text())
+    assert record["capture_completed"] is False
+    next_commit = installation.publish("second")
+    require_success(installation.run())
+    assert installation.pointer()["git_commit"] == next_commit
+    diagnostic = installation.target / f"cache/failed-relocation-{record['operation']}.json"
+    assert diagnostic.is_file()
+    for path, content in contents.items():
+        assert path.read_bytes() == content
+
+
+@pytest.mark.parametrize("location", ["flitzis-looper/human.txt", "Runtime/human.txt"])
+def test_unknown_files_stop_update_before_swaps(installation: Installation, location: str) -> None:
+    installation.publish("first")
+    require_success(installation.run())
+    original = (installation.target / "current.json").read_bytes()
+    unknown = installation.target / location
+    unknown.write_bytes(b"Human data")
+    installation.publish("second")
+    assert installation.run().returncode != 0
+    assert unknown.read_bytes() == b"Human data"
+    assert (installation.target / "current.json").read_bytes() == original
+    assert len(installation.trace("helper-invocations.jsonl")) == 1
+
+
+def test_changed_tracked_source_is_preserved(installation: Installation) -> None:
+    installation.publish("first")
+    require_success(installation.run())
+    source = installation.target / "flitzis-looper/fixture-version.txt"
+    source.write_text("Human edit")
+    installation.publish("second")
+    assert installation.run().returncode != 0
+    assert source.read_text() == "Human edit"
+    assert len(installation.trace("helper-invocations.jsonl")) == 1
 
 
 def test_installer_rejects_unowned_nonempty_target(installation: Installation) -> None:
@@ -457,8 +645,9 @@ def test_installer_rejects_reparse_target_without_writing_through_it(
         installation.target.rmdir()
 
 
-def test_installer_rejects_reparse_data_directory_without_modifying_current(
-    installation: Installation,
+@pytest.mark.parametrize("location", ["samples", "config/input"])
+def test_installer_rejects_reparse_native_data_without_modifying_current(
+    installation: Installation, location: str
 ) -> None:
     installation.publish("first")
     require_success(installation.run())
@@ -468,7 +657,7 @@ def test_installer_rejects_reparse_data_directory_without_modifying_current(
     outside.mkdir()
     sentinel = outside / "human.bin"
     sentinel.write_bytes(b"outside data")
-    data = installation.target / "data"
+    data = installation.target / "flitzis-looper" / location
     data.rmdir()
     _junction(data, outside)
     try:
@@ -480,9 +669,7 @@ def test_installer_rejects_reparse_data_directory_without_modifying_current(
         data.rmdir()
 
 
-def test_concurrent_installer_fails_without_changing_current_version(
-    installation: Installation,
-) -> None:
+def test_concurrent_installer_stops_before_build(installation: Installation) -> None:
     installation.publish("first")
     require_success(installation.run())
     original = (installation.target / "current.json").read_bytes()
@@ -493,10 +680,15 @@ def test_concurrent_installer_fails_without_changing_current_version(
     assert len(installation.trace("helper-invocations.jsonl")) == 1
 
 
-def test_portable_launch_rejects_escaping_current_pointer(tmp_path: Path) -> None:
+def test_portable_dispatch_rejects_escaping_legacy_pointer(tmp_path: Path) -> None:
     shutil.copyfile(REPO / "scripts/portable/dispatch.ps1", tmp_path / "launch.ps1")
+    (tmp_path / ".install.lock").touch()
     (tmp_path / "current.json").write_text(
-        json.dumps({"schema_version": 1, "directory": "../outside"})
+        json.dumps({
+            "schema_version": 1,
+            "directory": "../outside",
+            "git_commit": "a" * 40,
+        })
     )
     result = _run_powershell([
         "-File",
@@ -506,6 +698,316 @@ def test_portable_launch_rejects_escaping_current_pointer(tmp_path: Path) -> Non
         "-Check",
     ])
     assert result.returncode != 0
+
+
+def _is_owned_git_pack_leaf(leaf: Path, pack_directory: Path) -> bool:
+    object_id = leaf.stem.removeprefix("pack-")
+    return (
+        leaf.parent == pack_directory
+        and leaf.name.startswith("pack-")
+        and leaf.suffix in {".idx", ".pack", ".rev"}
+        and len(object_id) in {40, 64}
+        and all(character in "0123456789abcdef" for character in object_id)
+    )
+
+
+def _remove_fixture_checkout(checkout: Path, root: Path) -> None:
+    owned_checkout = checkout.resolve(strict=True)
+    assert owned_checkout == root.resolve(strict=True) / "flitzis-looper"
+    pack_directory = owned_checkout / ".git/objects/pack"
+    assert pack_directory.resolve() == pack_directory
+
+    def retry_readonly_pack(
+        function: Callable[[str], None], path: str, error: BaseException
+    ) -> None:
+        leaf = Path(path)
+        if (
+            function is not os.unlink
+            or not isinstance(error, PermissionError)
+            or getattr(error, "winerror", None) != 5
+            or not _is_owned_git_pack_leaf(leaf, pack_directory)
+        ):
+            raise error
+        attributes = leaf.lstat()
+        if (
+            not stat.S_ISREG(attributes.st_mode)
+            or attributes.st_file_attributes & stat.FILE_ATTRIBUTE_REPARSE_POINT
+            or not attributes.st_file_attributes & stat.FILE_ATTRIBUTE_READONLY
+        ):
+            raise error
+        # Windows chmod changes only the read-only bit of this owned pack leaf.
+        os.chmod(leaf, attributes.st_mode | stat.S_IWRITE)
+        function(path)
+
+    shutil.rmtree(owned_checkout, onexc=retry_readonly_pack)
+
+
+def test_legacy_native_data_moves_once_with_same_file_identities(
+    installation: Installation,
+) -> None:
+    commit = installation.publish("first")
+    require_success(installation.run())
+    contents = _user_data(installation)
+    checkout = installation.target / "flitzis-looper"
+    legacy_name = f"main-{commit[:12]}-01234567"
+    legacy = installation.target / "versions" / legacy_name
+    legacy.parent.mkdir()
+    (installation.target / "Runtime").rename(legacy)
+    manifest = json.loads((legacy / "release-manifest.json").read_text())
+    manifest["schema_version"] = 1
+    (legacy / "release-manifest.json").write_text(json.dumps(manifest))
+    data = installation.target / "data"
+    (data / "config").mkdir(parents=True)
+    samples_identity = (checkout / "samples").stat().st_ino
+    original_identity = (checkout / "samples/.pcm-cache/material/original.wav").stat().st_ino
+    (checkout / "samples").rename(data / "samples")
+    (checkout / "config/input").rename(data / "config/input")
+    assert checkout.resolve().is_relative_to(installation.target.resolve())
+    _remove_fixture_checkout(checkout, installation.target)
+    (data / "unknown-human.bin").write_bytes(b"unknown preserved")
+    (installation.target / "current.json").write_text(
+        json.dumps({
+            "schema_version": 1,
+            "directory": legacy_name,
+            "release_id": commit,
+            "git_commit": commit,
+            "source_kind": "main",
+        })
+    )
+    require_success(installation.run())
+    for path, content in contents.items():
+        assert path.read_bytes() == content
+    assert (checkout / "samples").stat().st_ino == samples_identity
+    assert (checkout / "samples/.pcm-cache/material/original.wav").stat().st_ino == (
+        original_identity
+    )
+    assert (data / "unknown-human.bin").read_bytes() == b"unknown preserved"
+    assert not legacy.exists()
+    assert not (installation.target / "versions").exists()
+    calls = len(installation.trace("helper-invocations.jsonl"))
+    require_success(installation.run())
+    assert len(installation.trace("helper-invocations.jsonl")) == calls
+
+
+INTERRUPTION_SEAMS = (
+    "captured",
+    "old_checkout",
+    "new_checkout",
+    "old_runtime",
+    "new_runtime",
+    "samples",
+    "input",
+    "state",
+    "accepted",
+)
+
+
+@dataclass(slots=True)
+class ActivationPaths:
+    source: Path
+    candidate: Path
+    checkout: Path
+    runtime: Path
+    old_checkout: Path
+    old_runtime: Path
+    relocation: Path
+
+    @classmethod
+    def for_transaction(cls, root: Path, operation: str) -> ActivationPaths:
+        cache = root / "cache"
+        short = operation[:8]
+        return cls(
+            cache / f"s-{short}",
+            cache / f"r-{short}",
+            root / "flitzis-looper",
+            root / "Runtime",
+            cache / f"o-{short}",
+            cache / f"p-{short}",
+            cache / f"relocation-{operation}.json",
+        )
+
+
+def _simulate_activation_interrupt(
+    installation: Installation,
+    seam: str,
+    commit: str,
+) -> ActivationPaths:
+    journal = installation.target / "portable-transaction.json"
+    record = json.loads(journal.read_text())
+    paths = ActivationPaths.for_transaction(installation.target, str(record["operation"]))
+    record["starters"] = {
+        name: base64.b64encode((installation.target / name).read_bytes()).decode("ascii")
+        for name in ("launch.ps1", "START-LOOPER.bat", "start.bat", "start-release.bat")
+    }
+    require_success(
+        _run_powershell([
+            "-File",
+            str(paths.candidate / "launch.ps1"),
+            "-Root",
+            str(installation.target),
+            "-CheckoutDirectory",
+            str(paths.source),
+            "-RuntimeDirectory",
+            str(paths.candidate),
+            "-InstallerOwned",
+            "-RelocationAction",
+            "capture",
+            "-RelocationSource",
+            str(paths.checkout / "samples"),
+            "-RelocationTarget",
+            str(paths.checkout / "samples"),
+            "-RelocationRecord",
+            str(paths.relocation),
+        ])
+    )
+    record["capture_completed"] = True
+    reached = INTERRUPTION_SEAMS.index(seam)
+    if reached >= 1:
+        paths.checkout.rename(paths.old_checkout)
+    if reached >= 2:
+        paths.source.rename(paths.checkout)
+    if reached >= 3:
+        paths.runtime.rename(paths.old_runtime)
+    if reached >= 4:
+        paths.candidate.rename(paths.runtime)
+    if reached >= 5:
+        (paths.old_checkout / "samples").rename(paths.checkout / "samples")
+    if reached >= 6:
+        (paths.checkout / "config").mkdir(exist_ok=True)
+        (paths.old_checkout / "config/input").rename(paths.checkout / "config/input")
+    record["phase"] = "accepted" if reached == 8 else "verifying" if reached >= 7 else "swapping"
+    if reached >= 7:
+        release = json.loads((paths.runtime / "release-manifest.json").read_text())
+        (installation.target / "current.json").write_text(
+            json.dumps({
+                "schema_version": 2,
+                "git_commit": commit,
+                "release_id": commit,
+                "source_kind": "main",
+                "release": release,
+            })
+        )
+    journal.write_text(json.dumps(record))
+    return paths
+
+
+@pytest.mark.parametrize("seam", INTERRUPTION_SEAMS)
+def test_interrupted_activation_recovers_old_or_verified_new(
+    installation: Installation,
+    seam: str,
+) -> None:
+    first = installation.publish("first")
+    require_success(installation.run())
+    contents = _user_data(installation)
+    second = installation.publish("second", failure="prepared-interrupt")
+    assert installation.run().returncode != 0
+    paths = _simulate_activation_interrupt(installation, seam, second)
+    result = installation.run()
+    expected = second if seam == "accepted" else first
+    assert installation.pointer()["git_commit"] == expected
+    assert (paths.runtime / "python/python.exe").read_text() == (
+        "immutable-runtime-second" if seam == "accepted" else "immutable-runtime-first"
+    )
+    if seam == "accepted":
+        require_success(result)
+        assert not (installation.target / "portable-transaction.json").exists()
+    else:
+        # The deliberately interrupted new builder remains selected remotely.
+        assert result.returncode != 0
+    for path, content in contents.items():
+        assert path.read_bytes() == content
+    assert not paths.old_checkout.exists()
+    assert not paths.old_runtime.exists()
+
+
+LIVE_PYTHON = """
+using System;
+using System.IO;
+using System.Threading;
+public static class PortableLiveFixture {
+    public static int Main(string[] arguments) {
+        File.WriteAllText(Environment.GetEnvironmentVariable("LOOPER_TEST_READY"), "ready");
+        while (!File.Exists(Environment.GetEnvironmentVariable("LOOPER_TEST_EXIT"))) {
+            Thread.Sleep(20);
+        }
+        return 0;
+    }
+}
+"""
+
+
+@pytest.mark.parametrize("legacy", [False, True])
+def test_running_app_stops_update_and_is_not_terminated(
+    installation: Installation, tmp_path: Path, *, legacy: bool
+) -> None:
+    first = installation.publish("first")
+    require_success(installation.run())
+    original = (installation.target / "current.json").read_bytes()
+    ready, leave = tmp_path / "ready", tmp_path / "leave"
+    executable = installation.target / (
+        f"versions/main-{first[:12]}-01234567/python/python.exe"
+        if legacy
+        else "Runtime/python/python.exe"
+    )
+    executable.parent.mkdir(parents=True, exist_ok=True)
+    executable.unlink(missing_ok=True)
+    compiler = tmp_path / "compile-live.ps1"
+    compiler.write_text(
+        "Add-Type -TypeDefinition @'\n"
+        + LIVE_PYTHON
+        + "'@ -OutputAssembly "
+        + _ps_string(executable)
+        + " -OutputType ConsoleApplication",
+        encoding="utf-8-sig",
+    )
+    require_success(_run_powershell(["-File", str(compiler)]))
+    environment = _git_environment() | {
+        "LOOPER_TEST_READY": str(ready),
+        "LOOPER_TEST_EXIT": str(leave),
+    }
+    if legacy:
+        process = subprocess.Popen(
+            [str(executable)],
+            env=environment,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+        )
+    else:
+        shutil.copyfile(
+            REPO / "scripts/portable/launch.ps1",
+            installation.target / "Runtime/launch.ps1",
+        )
+        process = subprocess.Popen(
+            [
+                "powershell.exe",
+                "-NoLogo",
+                "-NoProfile",
+                "-ExecutionPolicy",
+                "Bypass",
+                "-File",
+                str(installation.target / "launch.ps1"),
+                "-Root",
+                str(installation.target),
+            ],
+            env=environment,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+        )
+    try:
+        deadline = time.monotonic() + 15
+        while not ready.exists() and time.monotonic() < deadline and process.poll() is None:
+            time.sleep(0.05)
+        assert ready.exists(), "Owned private child did not start"
+        installation.publish("second")
+        result = installation.run()
+        assert result.returncode != 0
+        assert "schliessen" in result.stdout.lower()
+        assert process.poll() is None
+        assert (installation.target / "current.json").read_bytes() == original
+        assert len(installation.trace("helper-invocations.jsonl")) == 1
+    finally:
+        leave.touch()
+        process.communicate(timeout=20)
 
 
 def _embedded_functions() -> str:

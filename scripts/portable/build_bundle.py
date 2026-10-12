@@ -1,7 +1,6 @@
 """Package an existing Release and installed runtime without installing anything."""
 
-# Standalone build command, not an importable package.
-# ruff: noqa: INP001
+# Standalone build command.
 import argparse
 import hashlib
 import importlib.metadata
@@ -199,9 +198,10 @@ def prepare_output(output: Path) -> Path:
     return staging
 
 
-def copy_application(staging: Path, native_wheel: Path) -> Path:
-    app = staging / "app"
-    app.mkdir()
+def copy_application(staging: Path, checkout: Path, native_wheel: Path) -> Path:
+    """Place only Native outputs in the complete checkout; preserve tracked wrappers."""
+    native_directory = checkout / "src/flitzis_looper_audio"
+    require(native_directory.is_dir(), "Complete checkout lacks the Native Python package")
     with ZipFile(native_wheel) as archive:
         require(
             not any(name.endswith(".pth") for name in archive.namelist()),
@@ -209,24 +209,29 @@ def copy_application(staging: Path, native_wheel: Path) -> Path:
         )
         for entry in archive.infolist():
             require(
-                (app / entry.filename).resolve().is_relative_to(app.resolve()),
+                (native_directory / entry.filename)
+                .resolve()
+                .is_relative_to(native_directory.resolve()),
                 "Native wheel contains an escaping entry",
             )
-        archive.extractall(app)
-    native = list(app.glob("flitzis_looper_audio/*.pyd"))
-    require(len(native) == 1, "Native wheel must contain exactly one Windows extension")
-    for relative in git("ls-files", "--", "src/flitzis_looper").splitlines():
-        target = app / Path(relative).relative_to("src")
-        target.parent.mkdir(parents=True, exist_ok=True)
-        shutil.copyfile(REPO / relative, target)
-    shutil.copyfile(REPO / "assets/models/keynet.onnx", staging / "python/keynet.onnx")
+        native_entries = [
+            entry
+            for entry in archive.infolist()
+            if Path(entry.filename).parent.as_posix() == "flitzis_looper_audio"
+            and Path(entry.filename).suffix == ".pyd"
+        ]
+        require(len(native_entries) == 1, "Native wheel must contain exactly one Windows extension")
+        native = native_directory / Path(native_entries[0].filename).name
+        require(not native.exists(), "Native destination must be a fresh checkout")
+        with archive.open(native_entries[0]) as source, native.open("xb") as target:
+            shutil.copyfileobj(source, target)
     for name in ["bootstrap.py", "launch.ps1", "dispatch.ps1", "common.ps1", "build-path.ps1"]:
         shutil.copyfile(PORTABLE / name, staging / name)
     (staging / "START-LOOPER.bat").write_bytes(STARTER.encode("ascii"))
-    return native[0]
+    return native
 
 
-def copy_external_runtime(staging: Path, args: argparse.Namespace) -> None:
+def copy_external_runtime(staging: Path, checkout: Path, args: argparse.Namespace) -> None:
     dll_files = {
         path.name.lower(): path
         for directory in args.dll_dir
@@ -238,7 +243,7 @@ def copy_external_runtime(staging: Path, args: argparse.Namespace) -> None:
         f"Required redistributable DLLs missing: {sorted(DLL_NAMES - dll_files.keys())}",
     )
     for name, source in dll_files.items():
-        shutil.copyfile(source, staging / "app/flitzis_looper_audio" / name)
+        shutil.copyfile(source, checkout / "src/flitzis_looper_audio" / name)
         if name.startswith("vcruntime"):
             shutil.copyfile(source, staging / "python" / name)
     ffmpeg = staging / "runtime/ffmpeg"
@@ -263,10 +268,7 @@ def copy_licenses(staging: Path, values: list[str]) -> None:
     )
 
 
-def preflight(staging: Path, output: Path) -> None:
-    check_root = output / ("check-" + uuid.uuid4().hex)
-    for name in ["data", "models", "cache/temp"]:
-        (check_root / name).mkdir(parents=True, exist_ok=True)
+def preflight(staging: Path, checkout: Path, root: Path) -> None:
     env = os.environ.copy()
     for name in [
         "PYTHONPATH",
@@ -289,8 +291,12 @@ def preflight(staging: Path, output: Path) -> None:
             "-B",
             str(staging / "bootstrap.py"),
             "--root",
-            str(check_root),
-            "--check",
+            str(root),
+            "--checkout",
+            str(checkout),
+            "--runtime",
+            str(staging),
+            "--check-runtime",
         ],
         env=env,
         check=True,
@@ -322,27 +328,94 @@ def package_runtime(staging: Path, output: Path, release: dict[str, object]) -> 
     emit(json.dumps({"channel": str(manifest), "installer": str(installer), **channel}, indent=2))
 
 
+def file_inventory(directory: Path) -> dict[str, str]:
+    """Record exact owned files before user data is introduced."""
+    return {
+        path.relative_to(directory).as_posix(): digest(path)
+        for path in sorted(directory.rglob("*"))
+        if path.is_file()
+    }
+
+
+def complete_bundle_checkout(destination: Path, commit: str) -> None:
+    """Give the optional ZIP utility the same standalone full-checkout layout."""
+    subprocess.run(
+        [
+            "git",
+            "-c",
+            "init.templateDir=",
+            "clone",
+            "--no-hardlinks",
+            "--no-checkout",
+            "--depth",
+            "1",
+            REPO.as_uri(),
+            str(destination),
+        ],
+        check=True,
+    )
+    subprocess.run(["git", "-C", str(destination), "checkout", "-B", "main", commit], check=True)
+    # The explicit advanced candidate mode includes the caller's tracked bytes.
+    for relative in git("ls-files").splitlines():
+        source, target = REPO / relative, destination / relative
+        if source.is_file():
+            target.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copyfile(source, target)
+        elif target.is_file():
+            target.unlink()
+
+
 def build(args: argparse.Namespace) -> None:
     commit, dirty = source_identity(args)
     # Keep an owned short build-drive path for Windows DLL loading. Resolve only
     # for containment comparisons; resolving operational paths defeats SUBST.
     output = args.output.absolute()
     staging = prepare_output(output)
+    bundle_root = staging
+    if args.runtime_directory:
+        require(
+            args.checkout_directory,
+            "Ordinary installs require their complete candidate checkout",
+        )
+        checkout = args.checkout_directory.absolute()
+        require(checkout.resolve() == REPO, "Candidate checkout must be the exact build source")
+        runtime = staging
+        require(args.root, "Ordinary installs require their owned installation root")
+        root = args.root.absolute()
+    else:
+        checkout = bundle_root / "flitzis-looper"
+        complete_bundle_checkout(checkout, commit)
+        runtime = bundle_root / "Runtime"
+        runtime.mkdir()
+        root = bundle_root
+        (root / "cache/temp").mkdir(parents=True)
     emit(f"Preparing private runtime: {staging}")
     shutil.copytree(
         Path(sys.base_prefix),
-        staging / "python",
+        runtime / "python",
         ignore=shutil.ignore_patterns("__pycache__", "*.pyc", "site-packages"),
     )
-    dependencies = copy_runtime_dependencies(staging / "python/Lib/site-packages")
+    dependencies = copy_runtime_dependencies(runtime / "python/Lib/site-packages")
     shutil.copyfile(
-        PORTABLE / "sitecustomize.py", staging / "python/Lib/site-packages/sitecustomize.py"
+        PORTABLE / "sitecustomize.py", runtime / "python/Lib/site-packages/sitecustomize.py"
     )
     emit(f"Copied {len(dependencies)} non-development distributions")
-    native = copy_application(staging, args.native_wheel)
-    copy_external_runtime(staging, args)
-    copy_licenses(staging, args.license_file)
-    preflight(staging, output)
+    native = copy_application(runtime, checkout, args.native_wheel)
+    copy_external_runtime(runtime, checkout, args)
+    copy_licenses(runtime, args.license_file)
+    preflight(runtime, checkout, root)
+    release = {
+        "schema_version": 2,
+        "release_id": commit,
+        "git_commit": commit,
+        "source_dirty": dirty,
+        "native_source_commit": args.native_source_commit,
+        "native_sha256": digest(native),
+        "runtime_dependencies": dependencies,
+        "python_version": sys.version.split()[0],
+        "checkout_files": file_inventory(checkout),
+        "runtime_files": file_inventory(runtime),
+    }
     if args.runtime_directory:
         destination = args.runtime_directory.absolute()
         require(not destination.exists(), "Runtime destination must be a fresh directory")
@@ -351,20 +424,8 @@ def build(args: argparse.Namespace) -> None:
             "Runtime must stay outside source checkout",
         )
         destination.parent.mkdir(parents=True, exist_ok=True)
-        staging.rename(destination)
-        write_json(
-            destination / "release-manifest.json",
-            {
-                "schema_version": 1,
-                "release_id": commit,
-                "git_commit": commit,
-                "source_dirty": dirty,
-                "native_source_commit": args.native_source_commit,
-                "native_sha256": digest(destination / native.relative_to(staging)),
-                "runtime_dependencies": dependencies,
-                "python_version": sys.version.split()[0],
-            },
-        )
+        runtime.rename(destination)
+        write_json(destination / "release-manifest.json", release)
         emit(json.dumps({"runtime_directory": str(destination), "git_commit": commit}))
         return
     fingerprint = hashlib.sha256()
@@ -372,6 +433,21 @@ def build(args: argparse.Namespace) -> None:
         if path.is_file():
             fingerprint.update(path.relative_to(staging).as_posix().encode("utf-8"))
             fingerprint.update(bytes.fromhex(digest(path)))
+    write_json(runtime / "release-manifest.json", release)
+    for name in ["launch.ps1", "START-LOOPER.bat", "start.bat", "start-release.bat"]:
+        template = runtime / ("dispatch.ps1" if name == "launch.ps1" else "START-LOOPER.bat")
+        shutil.copyfile(template, bundle_root / name)
+    write_json(bundle_root / "portable-root.json", OWNER)
+    write_json(
+        bundle_root / "current.json",
+        {
+            "schema_version": 2,
+            "git_commit": commit,
+            "source_kind": "main",
+            "release": release,
+        },
+    )
+    (bundle_root / ".install.lock").touch()
     package_runtime(
         staging,
         output,
@@ -399,6 +475,8 @@ def main() -> None:
     parser.add_argument("--output", type=Path, required=True)
     parser.add_argument("--allow-dirty", action="store_true")
     parser.add_argument("--runtime-directory", type=Path)
+    parser.add_argument("--checkout-directory", type=Path)
+    parser.add_argument("--root", type=Path)
     build(parser.parse_args())
 
 

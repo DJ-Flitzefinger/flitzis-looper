@@ -23,6 +23,10 @@ mod flitzis_looper_audio {
     #[pymodule_export]
     use super::audio_engine::SealedProcessingFiles;
     #[pymodule_export]
+    use super::audio_engine::portable_relocate_data;
+    #[pymodule_export]
+    use super::audio_engine::resolve_migration_config_reference;
+    #[pymodule_export]
     use super::audio_engine::resolve_project_asset;
     #[pymodule_export]
     use super::audio_engine::resolve_project_asset_details;

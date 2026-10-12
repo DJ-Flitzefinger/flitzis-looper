@@ -3,7 +3,8 @@ param(
     [Parameter(Mandatory = $true)][string] $Source,
     [Parameter(Mandatory = $true)][string] $Git,
     [Parameter(Mandatory = $true)][string] $Commit,
-    [Parameter(Mandatory = $true)][string] $RuntimeDirectory
+    [Parameter(Mandatory = $true)][string] $RuntimeDirectory,
+    [Parameter(Mandatory = $true)][string] $OperationId
 )
 Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
@@ -26,6 +27,8 @@ function Get-VerifiedArchive([string] $Name, [string] $Url, [string] $Hash) {
         Write-AtomicJson (Join-Path $directory 'verified.json') @{sha256=$Hash}
         $canonical = Join-Path $Root "tools/$Name"
         if (-not (Test-Path -LiteralPath $canonical)) { [IO.Directory]::Move($directory, $canonical); $directory = $canonical }
+        Assert-PlainPath $archive
+        Remove-Item -LiteralPath $archive
     }
     return $directory
 }
@@ -67,7 +70,7 @@ function Get-PortableVcpkg {
 }
 
 function Get-RuntimeLicenses([string] $Vcpkg, [string] $Ffmpeg) {
-    $directory = Join-Path $Root "cache/licenses-$([Guid]::NewGuid().ToString('N'))"
+    $directory = Join-Path $Root "cache/licenses-$($OperationId.Substring(0,8))"
     [IO.Directory]::CreateDirectory($directory) | Out-Null
     $urls = [ordered]@{
         'antlr-4.9.3.txt' = 'https://raw.githubusercontent.com/antlr/antlr4/4.9.3/LICENSE.txt'
@@ -92,10 +95,11 @@ try {
     $Root = [IO.Path]::GetFullPath($Root).TrimEnd('\')
     $Source = [IO.Path]::GetFullPath($Source)
     $RuntimeDirectory = [IO.Path]::GetFullPath($RuntimeDirectory)
+    $paths = Get-PortablePaths $Root $OperationId
     foreach ($path in @($Root,$Source,$RuntimeDirectory)) { Assert-PlainPath $path }
     $prefix = $Root + '\'
     if (-not $Source.StartsWith($prefix, [StringComparison]::OrdinalIgnoreCase) -or
-        -not $RuntimeDirectory.StartsWith((Join-Path $Root 'versions') + '\', [StringComparison]::OrdinalIgnoreCase) -or
+        $Source -ne $paths.source -or $RuntimeDirectory -ne $paths.candidate -or
         (Test-Path -LiteralPath $RuntimeDirectory) -or $Commit -notmatch '^[a-f0-9]{40}$') { throw 'Ungueltige private Build-Pfade oder Quellidentitaet.' }
     $marker = Get-Content -LiteralPath (Join-Path $Root 'portable-root.json') -Raw | ConvertFrom-Json
     if ($marker.app -ne 'flitzis-looper' -or $marker.schema_version -ne 1) { throw 'Der Build benoetigt eine eigene Portable-Installation.' }
@@ -121,7 +125,18 @@ try {
     $env:UV_CACHE_DIR = Join-Path $Root 'cache/uv'
     $env:UV_PYTHON_INSTALL_DIR = Join-Path $Root 'tools/python'
     $env:UV_TOOL_DIR = Join-Path $Root 'tools/uv-tools'
-    $env:UV_PROJECT_ENVIRONMENT = Join-Path $Root "cache/env-$([Guid]::NewGuid().ToString('N'))"
+    $shortOperation = $OperationId.Substring(0,8)
+    $ownedDirectories = @("cache/env-$shortOperation", "cache/wheels-$shortOperation",
+        "cache/licenses-$shortOperation", "cache/bundle-$shortOperation")
+    foreach ($relative in $ownedDirectories) {
+        $path = Join-Path $Root $relative
+        Assert-PlainPath $path
+        if (Test-Path -LiteralPath $path) { throw "Build-Staging-Konflikt: $path" }
+    }
+    Write-AtomicJson (Join-Path $Root "cache/build-owned-$OperationId.json") @{
+        schema_version=1; operation=$OperationId; directories=$ownedDirectories
+    }
+    $env:UV_PROJECT_ENVIRONMENT = Join-Path $Root "cache/env-$shortOperation"
     $env:UV_LINK_MODE = 'copy'
     $env:UV_PYTHON_PREFERENCE = 'only-managed'
     $env:UV_NO_PROGRESS = '1'
@@ -149,7 +164,7 @@ try {
         Invoke-Checked $uv @('sync','--locked','--python','3.14.2','--no-install-project','--no-editable') | Out-Host
         Write-Host 'Bereite RubberBand und seine privaten Bibliotheken vor ...'
         $vcpkg = Get-PortableVcpkg
-        $wheelDirectory = Join-Path $Root "cache/wheels-$([Guid]::NewGuid().ToString('N'))"
+        $wheelDirectory = Join-Path $Root "cache/wheels-$shortOperation"
         [IO.Directory]::CreateDirectory($wheelDirectory) | Out-Null
         Write-Host 'Baue das native Audio-Modul im Release-Profil ...'
         Invoke-Checked $uv @('run','--no-sync','maturin','build','--locked','--release','--strip','--interpreter',(Join-Path $env:UV_PROJECT_ENVIRONMENT 'Scripts/python.exe'),'--out',$wheelDirectory) | Out-Host
@@ -166,7 +181,7 @@ try {
         $redist = $redistributables[0].FullName
         $dllDirectories = @((Join-Path $vcpkg 'installed/x64-windows/bin'), (Join-Path $env:CARGO_TARGET_DIR 'release'))
         $dllDirectories += @(Get-ChildItem -LiteralPath (Join-Path $redist 'x64') -Directory | Where-Object { $_.Name -match '^Microsoft\.VC\d+\.(CRT|OpenMP)$' } | ForEach-Object { $_.FullName })
-        $arguments = @('run','--no-sync','python','-B',(Join-Path $Source 'scripts/portable/build_bundle.py'),'--native-wheel',$wheels[0].FullName,'--native-source-commit',$Commit,'--ffmpeg-dir',(Join-Path $ffmpeg 'bin'),'--output',(Join-Path $Root "cache/r-$([Guid]::NewGuid().ToString('N').Substring(0,8))"),'--runtime-directory',$RuntimeDirectory)
+        $arguments = @('run','--no-sync','python','-B',(Join-Path $Source 'scripts/portable/build_bundle.py'),'--native-wheel',$wheels[0].FullName,'--native-source-commit',$Commit,'--ffmpeg-dir',(Join-Path $ffmpeg 'bin'),'--output',(Join-Path $Root "cache/bundle-$shortOperation"),'--runtime-directory',$RuntimeDirectory,'--checkout-directory',$Source,'--root',$Root)
         foreach ($directory in $dllDirectories) { $arguments += @('--dll-dir',$directory) }
         foreach ($license in Get-ChildItem -LiteralPath $licenses -File) { $arguments += @('--license-file',($license.Name + '=' + $license.FullName)) }
         Invoke-Checked $uv $arguments | Out-Host

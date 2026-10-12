@@ -67,25 +67,35 @@ def test_default_demucs_model_cache_avoids_project_root(tmp_path: Path) -> None:
     assert not _is_relative_to(cache_dir, project_root / "samples")
 
 
-def test_explicit_portable_model_cache_survives_runtime_version_change(tmp_path: Path) -> None:
+@pytest.mark.parametrize("project_directory", ["data", "flitzis-looper"])
+def test_explicit_portable_model_cache_survives_runtime_version_change(
+    tmp_path: Path, project_directory: str
+) -> None:
     cache = tmp_path / "portable" / "models" / "torch" / "hub" / "checkpoints"
     for version in ["first", "second"]:
         assert (
             default_demucs_model_cache_dir(
                 env={MODEL_CACHE_DIR_ENV_VAR: str(cache)},
-                project_root=tmp_path / "portable" / "data",
+                project_root=tmp_path / "portable" / project_directory,
                 home_dir=tmp_path / "versions" / version,
             )
             == cache
         )
 
 
-def test_demucs_cache_environment_points_torch_home_to_standard_root(tmp_path: Path) -> None:
+@pytest.mark.parametrize("separator_directory", ["", "bs-roformer-musdb18hq"])
+def test_demucs_cache_environment_points_torch_home_to_standard_root(
+    tmp_path: Path, separator_directory: str
+) -> None:
     cache_dir = tmp_path / ".cache" / "torch" / "hub" / "checkpoints"
 
-    env = demucs_cache_environment(cache_dir, base_env={})
+    env = demucs_cache_environment(
+        cache_dir / separator_directory,
+        base_env={"TORCH_HOME": "obsolete-runtime", MODEL_CACHE_DIR_ENV_VAR: "obsolete-cache"},
+    )
 
     assert env["TORCH_HOME"] == str(tmp_path / ".cache" / "torch")
+    assert env[MODEL_CACHE_DIR_ENV_VAR] == str(cache_dir)
     assert "XDG_CACHE_HOME" not in env
     assert "DORA_CACHE" not in env
     assert "HF_HOME" not in env

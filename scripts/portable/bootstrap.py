@@ -1,7 +1,6 @@
 """Run the private portable runtime; import checks never start the GUI/device."""
 
-# Standalone entrypoint copied into each runtime, not an importable package.
-# ruff: noqa: INP001
+# Standalone entrypoint copied into each runtime.
 import argparse
 import ctypes
 import importlib
@@ -24,27 +23,30 @@ def physical_path(path: Path) -> Path:
     return Path(value)
 
 
-def configure(root: Path, version: Path) -> list[object]:
-    sys.path.insert(0, str(version / "app"))
-    os.chdir(root / "data")
+def configure(root: Path, checkout: Path, runtime: Path | None = None) -> list[object]:
+    """Select one checkout and its private interpreter before importing the app."""
+    runtime = runtime or Path(sys.executable).absolute().parent.parent
+    sys.path.insert(0, str(checkout / "src"))
+    os.environ["PYTHONPATH"] = str(checkout / "src")
+    os.chdir(checkout)
     os.environ["FLITZIS_MODEL_CACHE_DIR"] = str(root / "models/torch/hub/checkpoints")
     os.environ["TORCH_HOME"] = str(root / "models/torch")
     os.environ["HF_HOME"] = str(root / "models/huggingface")
     os.environ["XDG_CACHE_HOME"] = str(root / "cache")
     os.environ["DORA_DIR"] = str(root / "cache/dora")
     os.environ["TMP"] = os.environ["TEMP"] = str(root / "cache/temp")
-    ffmpeg = version / "runtime/ffmpeg"
+    ffmpeg = runtime / "runtime/ffmpeg"
     os.environ["FLITZIS_FFMPEG_DIR"] = str(ffmpeg)
     os.environ["PATH"] = os.pathsep.join(
-        [str(ffmpeg), str(version / "python"), os.environ.get("PATH", "")],
+        [str(ffmpeg), str(runtime / "python"), os.environ.get("PATH", "")],
     )
     # Keep loader directory handles alive until the GUI and workers terminate.
     return [
-        os.add_dll_directory(str(path)) for path in [version / "app/flitzis_looper_audio", ffmpeg]
+        os.add_dll_directory(str(path)) for path in [checkout / "src/flitzis_looper_audio", ffmpeg]
     ]
 
 
-def private_dlls(version: Path) -> dict[str, str]:
+def private_dlls(runtime: Path, checkout: Path) -> dict[str, str]:
     kernel = ctypes.WinDLL("kernel32", use_last_error=True)
     kernel.GetModuleHandleW.argtypes = [ctypes.c_wchar_p]
     kernel.GetModuleHandleW.restype = ctypes.c_void_p
@@ -67,34 +69,40 @@ def private_dlls(version: Path) -> dict[str, str]:
         buffer = ctypes.create_unicode_buffer(32768)
         assert kernel.GetModuleFileNameW(handle, buffer, len(buffer))
         dll = physical_path(Path(buffer.value))
-        assert dll.is_relative_to(physical_path(version)), f"Nonportable DLL resolution: {dll}"
+        assert any(
+            dll.is_relative_to(physical_path(directory))
+            for directory in [runtime, checkout / "src/flitzis_looper_audio"]
+        ), f"Nonportable DLL resolution: {dll}"
         dlls[name] = str(dll)
     return dlls
 
 
-def check_runtime(root: Path, version: Path) -> None:
+def check_runtime(root: Path, checkout: Path, runtime: Path) -> None:
     # Runtime imports must follow private-path/DLL setup, before any GUI/device opens.
     native_module = importlib.import_module("flitzis_looper_audio")
     native = physical_path(Path(native_module.flitzis_looper_audio.__file__))
-    assert native.is_relative_to(physical_path(version / "app")), native
+    assert native.is_relative_to(physical_path(checkout / "src/flitzis_looper_audio")), native
     assert native_module.native_build_profile() == "release"
-    assert physical_path(Path(sys.executable)).is_relative_to(physical_path(version / "python"))
+    assert physical_path(Path(sys.executable)).is_relative_to(physical_path(runtime / "python"))
     customization = importlib.import_module("sitecustomize")
     assert physical_path(Path(customization.__file__)).is_relative_to(
-        physical_path(version / "python")
+        physical_path(runtime / "python")
     )
     for name in ["imgui_bundle", "torch", "torchaudio", "torchcodec"]:
         module = importlib.import_module(name)
         assert physical_path(Path(module.__file__)).is_relative_to(
-            physical_path(version / "python")
+            physical_path(runtime / "python")
         ), module
     assert importlib.import_module("flitzis_looper.controller.stems").StemController
     assert importlib.import_module("flitzis_looper.ui.render.sidebar_left")
     generation = importlib.import_module("flitzis_looper.controller.stem_generation")
     assert generation.default_demucs_model_cache_dir() == root / "models/torch/hub/checkpoints"
-    assert (version / "python/keynet.onnx").is_file()
-    dlls = private_dlls(version)
-    child_env = os.environ | {"PYTHONPATH": str(version / "app"), "PYTHONDONTWRITEBYTECODE": "1"}
+    assert physical_path(Path.cwd()) == physical_path(checkout)
+    assert (checkout / "assets/models/keynet.onnx").is_file()
+    app_module = importlib.import_module("flitzis_looper")
+    assert physical_path(Path(app_module.__file__)).is_relative_to(physical_path(checkout / "src"))
+    dlls = private_dlls(runtime, checkout)
+    child_env = os.environ | {"PYTHONPATH": str(checkout / "src"), "PYTHONDONTWRITEBYTECODE": "1"}
     subprocess.run(
         [
             sys.executable,
@@ -111,13 +119,19 @@ def check_runtime(root: Path, version: Path) -> None:
     )
     for tool in ["ffmpeg.exe", "ffprobe.exe"]:
         subprocess.run(
-            [str(version / "runtime/ffmpeg" / tool), "-version"],
+            [str(runtime / "runtime/ffmpeg" / tool), "-version"],
             check=True,
             stdout=subprocess.DEVNULL,
             stderr=subprocess.DEVNULL,
         )
     sys.stdout.write(
-        json.dumps({"portable_preflight": "passed", "native": str(native), "dlls": dlls}) + "\n"
+        json.dumps({
+            "portable_preflight": "passed",
+            "native": str(native),
+            "checkout": str(physical_path(checkout)),
+            "dlls": dlls,
+        })
+        + "\n"
     )
     sys.stdout.flush()
 
@@ -125,16 +139,20 @@ def check_runtime(root: Path, version: Path) -> None:
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--root", type=Path, required=True)
+    parser.add_argument("--checkout", type=Path)
+    parser.add_argument("--runtime", type=Path)
     parser.add_argument("--check", action="store_true")
+    parser.add_argument("--check-runtime", action="store_true")
     args = parser.parse_args()
     # Preserve the starter's short operational path; use resolved paths only
     # when proving that imports/DLLs belong to this private runtime.
-    version = Path(__file__).absolute().parent
+    runtime = args.runtime or Path(__file__).absolute().parent
     root = args.root.resolve()
-    dll_handles = configure(root, version)
+    checkout = args.checkout or root / "flitzis-looper"
+    dll_handles = configure(root, checkout, runtime)
     assert dll_handles
-    if args.check:
-        check_runtime(root, version)
+    if args.check or args.check_runtime:
+        check_runtime(root, checkout, runtime)
     else:
         runpy.run_module("flitzis_looper", run_name="__main__")
 

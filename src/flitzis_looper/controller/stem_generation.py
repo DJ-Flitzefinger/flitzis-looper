@@ -187,11 +187,14 @@ def demucs_cache_environment(
     *,
     base_env: dict[str, str] | None = None,
 ) -> dict[str, str]:
-    """Return environment variables for Demucs model and tool resolution."""
+    """Keep both separator children on their shared Torch checkpoint root."""
     env = dict(os.environ if base_env is None else base_env)
     cache_dir = model_cache_dir.resolve(strict=False)
+    if cache_dir.parent.name == "checkpoints" and cache_dir.parent.parent.name == "hub":
+        cache_dir = cache_dir.parent
     if cache_dir.name == "checkpoints" and cache_dir.parent.name == "hub":
         env["TORCH_HOME"] = str(cache_dir.parent.parent)
+        env[MODEL_CACHE_DIR_ENV_VAR] = str(cache_dir)
     _add_ffmpeg_dir_to_path(env)
     return env
 

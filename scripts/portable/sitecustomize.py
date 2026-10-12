@@ -1,7 +1,6 @@
 """Windows long DLL paths for the private runtime and its offline child processes."""
 
 # Copied only into Portable's private site-packages, never the developer runtime.
-# ruff: noqa: INP001
 import ctypes
 import os
 

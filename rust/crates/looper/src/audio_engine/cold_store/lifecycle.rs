@@ -930,6 +930,20 @@ impl Drop for OriginalReader {
     }
 }
 
+/// Verified off-thread file custody and reserved cleanup capacity. Consuming
+/// this token registers dormant ownership without reopening or reading files.
+pub(in crate::audio_engine) struct PreparedMaterialCreationOwnership {
+    creation: MaterialCreation,
+    _guards: Vec<File>,
+}
+
+impl PreparedMaterialCreationOwnership {
+    pub(in crate::audio_engine) fn finish(self) -> io::Result<()> {
+        restore_verified_material_creation(self.creation)?;
+        Ok(())
+    }
+}
+
 impl CommittedColdLease {
     pub(in crate::audio_engine) fn material_creation_receipt(
         &self,
@@ -946,10 +960,10 @@ impl CommittedColdLease {
     /// Current native ACK/config/journal validation is required at the recovery
     /// caller. This registers dormant historical ownership only: it retains no
     /// inventory lock and grants no original or descendant retirement rights.
-    pub(in crate::audio_engine) fn restore_material_creation(
+    pub(in crate::audio_engine) fn prepare_material_creation_restore(
         &self,
         receipt: &MaterialCreationReceipt,
-    ) -> io::Result<()> {
+    ) -> io::Result<PreparedMaterialCreationOwnership> {
         if self.assignment_retired() || self.material_id.is_none() {
             return Err(invalid(
                 "creation ownership restore requires current canonical lease",
@@ -973,7 +987,7 @@ impl CommittedColdLease {
                 .to_owned(),
         };
         let [slot] = reserve_cleanup::<1>()?;
-        let _guards = material::verify_material_creation(
+        let guards = material::verify_material_creation(
             &self.samples_root,
             &self.original_path,
             receipt,
@@ -981,16 +995,18 @@ impl CommittedColdLease {
         )?;
         let root = super::super::material_paths::material_root(&self.original_path)
             .ok_or_else(|| invalid("restored readable root missing"))?;
-        restore_verified_material_creation(MaterialCreation {
-            root: root.to_owned(),
-            original_leaf: proof.name,
-            identity: receipt.root_identity.clone(),
-            binding: Some(receipt.binding.clone()),
-            pending: false,
-            protection: None,
-            _slot: slot,
-        })?;
-        Ok(())
+        Ok(PreparedMaterialCreationOwnership {
+            creation: MaterialCreation {
+                root: root.to_owned(),
+                original_leaf: proof.name,
+                identity: receipt.root_identity.clone(),
+                binding: Some(receipt.binding.clone()),
+                pending: false,
+                protection: None,
+                _slot: slot,
+            },
+            _guards: guards,
+        })
     }
     pub(in crate::audio_engine) fn samples_root(&self) -> &Path {
         &self.samples_root

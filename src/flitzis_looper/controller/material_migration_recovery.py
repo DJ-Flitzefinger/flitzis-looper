@@ -8,6 +8,7 @@ from pathlib import Path
 
 from pydantic import ValidationError
 
+import flitzis_looper_audio
 from flitzis_looper.material_migration_model import MaterialMigrationJournal
 from flitzis_looper.models import ProjectState
 from flitzis_looper_audio import MaterialMigrationJournalStore
@@ -44,7 +45,28 @@ def _committed_current(journal: MaterialMigrationJournal, current: ProjectState 
     )
 
 
-def _record_for_config(raw: str, config_reference: str) -> dict[str, object] | None:
+def resolve_config_reference(samples: Path, reference: str) -> str:
+    """Resolve location through Native custody, without granting journal authority."""
+    resolver = getattr(flitzis_looper_audio, "resolve_migration_config_reference", None)
+    if resolver is None:
+        message = "Native config-location resolution is unavailable; migration data preserved"
+        raise RuntimeError(message)
+    resolved = resolver(str(samples), reference)
+    if type(resolved) is not str:
+        message = "Native config-location resolver returned no recognized location"
+        raise TypeError(message)
+    return os.path.normcase(os.path.abspath(resolved))
+
+
+def config_reference_matches(samples: Path, current: str, historical: str | None) -> bool:
+    if historical is None:
+        return False
+    return resolve_config_reference(samples, current) == resolve_config_reference(
+        samples, historical
+    )
+
+
+def _record_for_config(raw: str, samples: Path, config_reference: str) -> dict[str, object] | None:
     record = json.loads(raw)
     if not isinstance(record, dict):
         message = "Migration scan record is not a recognized object"
@@ -60,7 +82,7 @@ def _record_for_config(raw: str, config_reference: str) -> dict[str, object] | N
     if type(binding) is not str or not Path(binding).is_absolute():
         message = "Migration journal has no recognized project config binding"
         raise ValueError(message)
-    if os.path.normcase(os.path.abspath(binding)) != config_reference:
+    if resolve_config_reference(samples, binding) != config_reference:
         # A known other config owns this intent even when its bytes match.
         # Inspect no foreign config and acquire none of its owners or fences.
         return None
@@ -102,19 +124,20 @@ def inspect_migration_recovery(samples: Path, config: Path) -> MigrationRecovery
     if not samples.exists():
         return result
     try:
-        config_reference = os.path.normcase(str(config.resolve()))
+        config_reference = resolve_config_reference(samples, str(config.resolve()))
         records = MaterialMigrationJournalStore.scan(str(samples))
-        config_bytes = config.read_bytes() if config.exists() else None
+        located_config = Path(config_reference)
+        config_bytes = located_config.read_bytes() if located_config.exists() else None
         digest = hashlib.sha256(config_bytes).hexdigest() if config_bytes is not None else None
         current = (
             ProjectState.model_validate_json(config_bytes) if config_bytes is not None else None
         )
-    except (OSError, RuntimeError, ValueError) as error:
+    except (OSError, RuntimeError, TypeError, ValueError) as error:
         result.errors.append(str(error))
         return result
     for raw in records:
         try:
-            record = _record_for_config(raw, config_reference)
+            record = _record_for_config(raw, samples, config_reference)
             if record is None:
                 continue
             if record["error"] is not None or record["record"] is None:
@@ -132,6 +155,6 @@ def inspect_migration_recovery(samples: Path, config: Path) -> MigrationRecovery
                 intent.config_revision = max(intent.config_revision, journal.intent_revision)
                 if result.intent is None or intent.config_revision > result.intent.config_revision:
                     result.intent = intent
-        except (KeyError, TypeError, ValueError, ValidationError) as error:
+        except (KeyError, OSError, RuntimeError, TypeError, ValueError, ValidationError) as error:
             result.errors.append(str(error))
     return result

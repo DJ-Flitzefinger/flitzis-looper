@@ -1,71 +1,68 @@
-# Source-built portable runtime and safe updates
+# Fixed source checkout, private runtime and recoverable activation
 
-The standalone BAT embeds enough bootstrap logic to work from an arbitrary
-folder on Windows x64 without Git, Python, Rust or a project binary Release.
-It checks required tools, downloads verified pinned bootstrap components into
-its owned root, resolves remote `main` and prepares one exact source commit.
-Subsequent repeat runs check remote `main`; an unchanged commit with a healthy
-runtime avoids another build. A source acquisition or bootstrap failure leaves
-the accepted version selected.
+The BAT bootstraps verified private tools and acquires the exact remote main commit.
+The final installation contains one complete Git checkout Root/flitzis-looper and
+one Root/Runtime; current.json schema2 records installed source identity/status,
+not a version path. Candidate source/runtime and backup paths use short operation
+IDs under Root/cache. Native DLLs and the built extension belong beside the tracked
+Python Native wrapper in the checkout. No duplicate Runtime/app source tree remains.
+Start uses that checkout as cwd and reads its native samples/settings/config/input.
 
-Private Git and uv, CPython 3.14.2, Rust 1.95.0, vcpkg/Rubber Band and
-FFmpeg/FFprobe use installation-owned tools/caches and process-local environment
-variables. Developer environments and persistent user PATH remain untouched.
-Missing Microsoft C++ Build Tools/Windows SDK use the supported signed Microsoft
-installer with Windows elevation. Those build components are system-wide and
-do not move with the application. Declined elevation or required restart stops
-before activation and provides a clear rerun instruction.
+START-LOOPER and the installed dispatcher take a shared .install.lock for the entire
+child process lifetime. Updating takes an exclusive lock and positively excludes
+legacy running runtimes; inaccessible process state stops before mutation. No process
+is killed. Candidate preflight has an explicit installer-owned mode so it does not
+try to reacquire the updater's lock. All candidate checks use actual physical paths.
 
-An owned source/build candidate produces a non-editable Release extension and
-private CPython runtime with non-development dependencies, native DLLs,
-FFmpeg/FFprobe, keynet and licenses. Candidate work does not copy the developer
-virtual environment, audio, settings, project assets or model checkpoints.
-Pinned download hashes and archive containment are verified before execution
-or extraction. Source/tool preparation and preflight happen outside realtime
-audio and do not open the GUI or an audio device.
+Source/runtime identity, private DLL origins, imports, offline-worker and FFmpeg paths
+are verified before activation. Data capture occurs BEFORE the original checkout is
+renamed, while historical absolute config references still identify their real files.
+The Native hook captures bounded recognized registrations/journal histories, exact
+Samples and config/metadata identities and bytes. Known configs outside the moved
+Samples subtree, unknown/gapped/unsafe records, live custody, changed files, reparse,
+collisions or cross-volume moves stop with data preserved. After code swaps the same
+Samples directory may be addressed through its backup alias. Native revalidates its
+captured physical custody, performs the same-volume rename to the final checkout,
+and revalidates IDs/bytes. It never copies/recreates artifact identities.
 
-Native preparation uses a temporary free DOS drive mapped to the owned root,
-avoiding MSVC/CMake long-path limits and build-path separators. Existing mappings
-are retained; only that exact temporary mapping is removed in the build's finally
-path. The installed runtime is checked and started at its real path afterward.
+Historical owner references use one Native location resolver. An exact location
+projection inside Samples is checked against a Native custody anchor attached to
+the actual directory. Captured root/parent FileIDs and exact relative config address
+bind location; first move also checks captured config identity/bytes. Later legitimate
+atomic config saves may change the config FileID, while the parent/location custody
+continues. This projection supplies no material birth, retirement, runtime readiness,
+current revision or callback acknowledgement authority. Existing current config and
+fresh own source ACK checks remain authoritative. Journal/config bytes are not rewritten.
+Unsupported custody-anchor filesystems stop safely. Rollback restores the prior projection
+and Native Samples location before the PowerShell code/runtime swaps are reversed.
 
-The installation separates `tools`, `cache`, `b`, `versions`, `data`, `models`
-and `logs`. The short owned `b` native target directory also bounds physical
-dependency paths that Cargo embeds after canonicalizing the temporary drive.
-A lock serializes installers. A candidate passes isolated imports,
-private loaded-DLL checks and offline-worker/FFmpeg checks before atomic
-activation via `current.json`. Existing runtime directories and all persistent
-data remain intact, including for a running old process. Unsafe, reparse or
-unowned nonempty installation paths are rejected.
+Each activation is journalled outside Samples with a validated operation ID. Recovery
+verifies actual paths and captured custody; it does not infer successful publication
+from existence alone. Successful cleanup removes only complete recorded installer-owned
+candidates/downloads/backups. Samples, PCM caches, models, logs and useful measured
+build/tool caches remain. New manifests record full source/runtime file inventories.
+Legacy cleanup requires authoritative exact Git blobs, installed distribution RECORD,
+pinned interpreter/FFmpeg and original Native manifest proofs; unknown extras stop
+before activation, rather than being accepted merely by directory name or marker.
 
-A stable root dispatcher resolves the pointer once and invokes that exact
-version's launch script. `START-LOOPER.bat`, `start.bat` and `start-release.bat`
-select the private Release runtime; normal starts do not install or build.
-Candidate preflight and actual starts therefore use the same version-specific
-setup. The whole completed installation can move; launch/runtime/data/model
-paths resolve from its new root. System drivers and Microsoft build components
-remain installed on their Windows host.
+Model preparation calls the existing Demucs htdemucs resolver/checksum and pinned
+BS-RoFormer musdb18hq asset installer. Parent orchestration is Torch-free. Preparation
+children exit before two fresh sequential CPU-only deserializing children; missing,
+corrupt or failed models fail the preflight. No inference, GUI or audio device opens.
+An unchanged source/runtime can repair only models. Controller and both offline children
+share one explicit root/cache environment, including TORCH_HOME.
 
-Launches use stable `data` as their working directory and explicit local model,
-Torch/cache, FFmpeg and DLL paths. The existing standard model cache remains
-the default for developer launches; Portable supplies an explicit override.
-Optional Beat This diagnostic setup is separate from the required normal app.
+Public Engine work follows short Bound capture, owned preparation after releasing the
+borrow, and fresh try_borrow/current admission. Timing busy permits and source/producer
+custody are owned. Actual file verification guards survive through final admission.
+Only constant-time current state and existing runtime publication/ownership operations
+run during the final Engine borrow. Material source generation, request, preparation
+epoch, current sample and own audio ACK must still match. No callback disk/JSON/GIL,
+logging, inference, allocation, blocking lock or unbounded work is introduced.
 
-Operational build/runtime paths preserve short DOS aliases; canonical paths are
-used only for private-origin/containment checks. Portable-only `sitecustomize.py`
-normalizes long absolute ctypes DLL filenames to Windows verbatim paths when a
-dependency canonicalizes an alias. It loads in the private interpreter and its
-offline child processes, without altering developer Python or dependency files.
-
-Runtime ABI, locks, native DLL/toolchain layout, source layout and launch/data/
-model path changes must adapt the BAT, helpers, tests and portable documentation
-together. The previous bundle builder remains available for advanced maintainer
-packaging, without gating ordinary installation on its ZIP or manifest.
-
-Focused checks cover missing-tool bootstrap, unchanged `main`, changed-commit
-activation, preparation/preflight failures, retained data/old runtimes and
-relocation. First installation has substantial downloads, builds and disk use;
-the UI records progress and failure logs rather than promises a fixed duration.
-Configured developer-machine checks do not establish clean-Windows bootstrap
-or Human GUI/audio/device/listening acceptance. Those results stay pending
-until the corresponding actual runs occur.
+Validation includes actual public receiver/control/render concurrency during real I/O,
+stale request/source/unload/timing/capacity negatives, independent fresh Engine behavior,
+actual Native relocation/recovery/FileID/bytes/held-reader guards, installer update and
+failure paths, fresh private Release/import/preflight and actual model CPU loads.
+Clean-Windows bootstrap and Human GUI/device/listening acceptance remain explicit
+open gates. Exact successful unchanged-input checks may be reused; failures remain evidence.

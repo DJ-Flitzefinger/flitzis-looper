@@ -14,6 +14,10 @@ from flitzis_looper.controller.material_migration_history import (
     merge_artifacts,
     rollback_artifacts,
 )
+from flitzis_looper.controller.material_migration_recovery import (
+    config_reference_matches,
+    resolve_config_reference,
+)
 from flitzis_looper.material_migration_model import (
     MaterialCreationReceipt,
     MaterialMigrationJournal,
@@ -194,7 +198,7 @@ class MigrationArtifactReconciler:
 
     def __init__(self, samples: Path, config: Path, audio: AudioEngine | None = None) -> None:
         self._samples = samples
-        self._config = os.path.normcase(str(config.resolve()))
+        self._config = resolve_config_reference(samples, str(config.resolve()))
         self._audio = audio
         self._guard = MigrationProjectGuard(str(samples), self._config)
         self._worker = ThreadPoolExecutor(max_workers=1, thread_name_prefix="material-recovery")
@@ -342,7 +346,7 @@ class MigrationArtifactReconciler:
             message = "history has no committed alias binding"
             raise ValueError(message)
         if (
-            journal.config_reference != self._config
+            not config_reference_matches(self._samples, self._config, journal.config_reference)
             or saved.material_migrations.get(journal.transaction_id) != journal.alias
             or current.material_migrations.get(journal.transaction_id) != journal.alias
             or saved.config_revision < journal.committed_revision
@@ -613,9 +617,10 @@ class MigrationArtifactReconciler:
             if type(reference) is not str or not Path(reference).is_absolute():
                 errors.append("migration project inventory has no actual config binding")
                 continue
-            path = Path(reference)
-            if not path.is_relative_to(self._samples.parent):
-                errors.append("migration project binding leaves the guarded project root")
+            try:
+                path = Path(resolve_config_reference(self._samples, reference))
+            except (OSError, RuntimeError, TypeError, ValueError) as error:
+                errors.append(f"migration project location is unverified: {error}")
                 continue
             configs.add(path)
             if (

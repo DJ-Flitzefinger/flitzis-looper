@@ -167,30 +167,6 @@ fn canonical_version(material: &PreparedMigrationMaterial) -> Result<String, Str
 }
 
 impl AudioEngine {
-    /// Run on the bounded ordinary stem worker, outside UI and callback threads.
-    pub(super) fn prepare_stem_pair_current(
-        &self,
-        id: usize,
-        source_version: &str,
-        cache_dir: &str,
-        ticket: &PreparedSourceTicket,
-        components: bool,
-        descriptor_reference: Option<&str>,
-    ) -> Result<PreparedStemPair, String> {
-        let root = self
-            .project_assets_root()
-            .map_err(|error| error.to_string())?;
-        self.prepare_stem_pair_at_root(
-            &root,
-            id,
-            source_version,
-            cache_dir,
-            ticket,
-            components,
-            descriptor_reference,
-        )
-    }
-
     /// Capture exact current immutable readers before releasing the Python engine borrow.
     pub(super) fn capture_stem_pair_work(
         &self,
@@ -241,6 +217,7 @@ impl AudioEngine {
     }
 
     /// The same ordinary kernel with an explicit verified root for device-free execution.
+    #[cfg(test)]
     pub(super) fn prepare_stem_pair_at_root(
         &self,
         root: &Path,

@@ -44,18 +44,22 @@ All package preparation and installation SHALL remain outside realtime audio.
 ### Requirement: Safe repeatable portable updates
 
 Repeated installation SHALL check remote `main`. An update MUST prepare a fresh
-owned source/build/version, verify tool downloads and archive containment, and
+owned source/build candidate, verify tool downloads and archive containment, and
 pass a private-runtime import/preflight without
-starting the GUI/audio device before atomically selecting it. Existing runtime
-files and persistent user data/models/settings MUST remain intact on failure
-and after successful update. Simultaneous installers SHALL be serialized.
+starting the GUI/audio device before atomically selecting it. Persistent user
+data/models/settings MUST remain intact on failure and after successful update.
+Successful activation SHALL use one complete current-main checkout and one fixed
+private runtime, with only transaction-owned temporary backups until verification
+completes. Starts and updates SHALL share an exclusive installation lock; a start
+SHALL hold it until its application process exits.
 
 #### Scenario: Update while an old runtime exists
 
-- **GIVEN** an accepted prior version and saved installation-local data
-- **WHEN** a newer exact `main` source runtime passes staging and preflight
-- **THEN** only the current-version pointer SHALL change atomically, with the old version and all persistent data retained
-- **AND** an already running old process SHALL keep its old immutable runtime files
+- **GIVEN** an accepted prior installation and saved installation-local data
+- **WHEN** a newer exact `main` source runtime passes staging and preflight with no running installation-owned application
+- **THEN** journaled activation SHALL select its complete checkout and fixed private runtime together and preserve every sample, PCM cache, configuration and input mapping
+- **AND** interruption SHALL recover either the previously accepted installation or the fully verified new installation, without merging partial runtime files
+- **AND** a running current or recognized legacy application, or an unqueryable relevant process owner, SHALL stop mutation with a clear close-and-rerun message and SHALL NOT be terminated
 
 #### Scenario: Corrupt or escaping bundle
 
@@ -88,3 +92,93 @@ standard user cache when no explicit Portable override is supplied.
 - **GIVEN** Portable supplies its installation-local model cache
 - **WHEN** a runtime update is activated and separator configuration is resolved
 - **THEN** the same persistent model directory SHALL be used independently of the selected version or developer user-cache defaults
+
+### Requirement: One complete checkout and native data layout
+The accepted installation SHALL contain one complete Git checkout of the exact
+selected `main` at `flitzis-looper` and one fixed private runtime. The application
+working directory SHALL be that checkout, using its native `samples`,
+`samples/flitzis_looper.config.json` and `config/input` paths. Application Python
+and the Release extension SHALL resolve from that checkout rather than a second
+application copy. Persistent `versions/main-*` runtimes SHALL NOT be retained
+after a verified successful update. Installation-owned tool/build caches and
+failure logs SHALL remain distinct from application data.
+
+#### Scenario: Fresh and unchanged-main installation
+- **WHEN** a fresh installation or repeat run prepares the selected current `main`
+- **THEN** the complete accepted checkout, private runtime, starters and actual private-origin preflight SHALL agree on source, working directory and native data paths
+- **AND** unchanged healthy source/runtime SHALL avoid another Native build, while missing or invalid model assets SHALL still be repaired and checked
+- **AND** ordinary GUI starts SHALL NOT acquire a new model download or build job
+
+### Requirement: Verified legacy data relocation
+Recognized legacy installation data SHALL be relocated once under the installation
+lock, preserving exact project, journal, input, sample and PCM-cache bytes and
+actual material/file identities. The Native boundary SHALL capture a bounded
+quiescent plan before relocation, verify recognized configuration/journal bindings
+and actual file identities, and revalidate those identities after a journaled
+same-volume rename. Durable configuration-location projection SHALL resolve only
+the exact captured owners through one Native resolver; it SHALL NOT grant material
+birth, retirement, source readiness or replayed Native ACK authority. Existing
+current-configuration/revision and fresh source-ACK checks SHALL remain required.
+
+#### Scenario: Canonical material and migration history survive legacy relocation
+- **GIVEN** recognized legacy samples and configurations with complete Native material and migration evidence and no live readers or project owners
+- **WHEN** the installer relocates them into the native checkout layout
+- **THEN** fresh-process restore SHALL resolve their exact captured configuration owners and retained original/material/marker identities without rewriting historical project or journal bytes
+- **AND** pending versus newer-current-config recovery SHALL retain its existing precedence, and each source SHALL require its own fresh callback acknowledgement
+- **AND** byte-identical distinct configurations SHALL remain distinct owners
+
+#### Scenario: Unsafe or unknown legacy state is preserved
+- **WHEN** relocation encounters a target collision, cross-volume identity loss, reparse path, unknown or incomplete journal/inventory, changed capture, forged projection, live or unqueryable owner, or unavailable required configuration
+- **THEN** it SHALL stop before destructive activation and preserve the existing installation, data and unknown files with a concrete reason
+- **AND** copied equal bytes with different actual identities SHALL NOT satisfy relocation or material authority
+- **AND** external references and unknown data SHALL remain untouched
+
+### Requirement: Both actual separator models are prepared before activation
+Installation SHALL automatically prepare and verify exactly `demucs:htdemucs`
+and `bs-roformer:musdb18hq` through the existing authoritative asset resolvers.
+Their persistent cache SHALL be installation-local outside the checkout, shared
+by controller configuration and actual offline children. The installer SHALL
+validate reused Demucs checkpoint checksums and the pinned BS-RoFormer extent and
+digest, repairing absent or corrupt assets. It SHALL then load each actual model
+in its own fresh private CPU subprocess, sequentially, without inference or an
+audio device. Download or CPU-loader failure SHALL block activation.
+
+#### Scenario: Repeat run repairs missing models without rebuilding Native
+- **GIVEN** unchanged healthy source and runtime but missing or corrupt required separator assets
+- **WHEN** the installer is run again
+- **THEN** it SHALL repair authoritative assets and pass both real fresh CPU model loads while the Native-builder count remains unchanged
+- **AND** the controller and offline children SHALL use the same accepted cache after activation and whole-installation relocation
+
+### Requirement: Background Native work releases the public Engine borrow
+The system SHALL perform long file, JSON, verification, preparation and persistence
+work exposed through AudioEngine by capturing owned input under a short Engine borrow, releasing that
+borrow before detached work, and reacquiring it only for guarded current adoption.
+Concurrent public event polling and mutable control SHALL remain usable during
+that work. Source, request, timing, intent, retirement/queue capacity, material
+birth and own-ACK guards SHALL remain authoritative before publication. The
+callback SHALL NOT acquire disk/JSON, Python/GIL, blocking locks or heavy work.
+
+#### Scenario: Polling during real background preparation and second-process restore
+- **WHEN** a real public preparation/verification worker is held at its actual I/O boundary, or a fresh Engine/controller reopens saved state
+- **THEN** public `receive_msg`, mutable control and callback rendering SHALL remain usable without an Engine `Already borrowed` error
+- **AND** completion SHALL adopt only its own still-current authority; changed source, intent, unload or capacity SHALL reject stale work while preserving confirmed audio
+
+### Requirement: Cleanup respects ownership and useful caches
+Successful installation SHALL remove only recorded transaction-owned completed
+source/environment/wheel/license/check stages, finished downloads and retired
+runtime backups after accepted-runtime and containment/reparse verification.
+Samples, `.pcm-cache`, model assets, unknown files and useful tool/build caches
+SHALL NOT be classified as disposable staging. Actual retained cache byte counts
+and their build/download reuse purpose SHALL be reported without fixed resource
+or speed promises.
+
+#### Scenario: Verified success cleans completed owned stages
+- **WHEN** the installation transaction has verified the accepted runtime and data
+- **THEN** recorded contained temporary stages and backups SHALL be removed without traversing links or touching unknown data
+- **AND** failed or interrupted transactions SHALL retain the evidence and recovery material needed to recover the accepted installation
+
+#### Scenario: Known Runtime filenames contain replacement bytes
+- **GIVEN** a recorded Runtime license or DLL filename whose present bytes no longer match the accepted ownership hash
+- **WHEN** the installer checks an unchanged installation, prepares an update or cleans a recorded retired Runtime
+- **THEN** it SHALL stop before treating the replacement bytes as disposable and preserve those bytes
+- **AND** an absent recorded Runtime leaf SHALL remain eligible for Runtime repair; absence SHALL NOT authorize deletion of a present changed leaf

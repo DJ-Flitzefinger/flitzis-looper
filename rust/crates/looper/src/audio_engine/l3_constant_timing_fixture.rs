@@ -24,8 +24,17 @@ pub(crate) fn publish_synthetic_loaded_timing(
         None,
     )
     .unwrap();
-    let (complete, _) =
-        complete_timing_sample(engine, id, &captured.sample, captured.pcm_budget).unwrap();
+    let (complete, _) = complete_timing_sample(
+        &crate::audio_engine::native_owned_work::CompleteSampleWork::capture(
+            engine,
+            id,
+            &captured.sample,
+        )
+        .unwrap(),
+        &captured.sample,
+        captured.pcm_budget,
+    )
+    .unwrap();
     let snapshot = LoadedPcmSnapshot::new(
         complete,
         captured.sample_rate_hz,

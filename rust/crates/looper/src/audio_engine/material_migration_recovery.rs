@@ -16,6 +16,10 @@ use std::{
 const JSON_LIMIT: usize = 256 * 1024;
 const PATH_LIMIT: usize = 8192;
 const RECORD_LIMIT: usize = 256;
+mod config_location;
+mod portable_relocation;
+pub use config_location::resolve_migration_config_reference;
+pub use portable_relocation::portable_relocate_data;
 const STEM_NAMES: [&str; 6] = [
     "vocals.wav",
     "melody.wav",
@@ -567,10 +571,7 @@ fn historical_created_target(root: &Path, config: &Path, receipt: &Receipt) -> i
             continue;
         };
         let latest: Value = serde_json::from_str(record).map_err(io::Error::other)?;
-        if !latest["config_reference"]
-            .as_str()
-            .is_some_and(|raw| same_config_reference(config, raw))
-        {
+        if !config_binding(root, config, &latest["config_reference"])? {
             continue;
         }
         let transaction = status["transaction_id"]
@@ -658,9 +659,7 @@ impl MigrationArtifactLease {
             .map_err(|error| invalid(error.to_string()))?;
         if history.last().map(String::as_str) != Some(journal_json)
             || journal["cleanup_complete"] != false
-            || !journal["config_reference"]
-                .as_str()
-                .is_some_and(|raw| same_config_reference(&config, raw))
+            || !config_binding(&root, &config, &journal["config_reference"])?
         {
             return Err(invalid(
                 "root recovery journal/current config binding changed",
@@ -737,18 +736,14 @@ impl MigrationArtifactLease {
             let record: Value = serde_json::from_str(&encoded).map_err(io::Error::other)?;
             if !record["error"].is_null()
                 || (record["live"] == true
-                    && !record["config_reference"]
-                        .as_str()
-                        .is_some_and(|raw| same_config_reference(&config, raw)))
+                    && !config_binding(&root, &config, &record["config_reference"])?)
             {
                 return Err(invalid(
                     "unknown or other live owner protects retired material root",
                 ));
             }
             registered |= record["live"] == true
-                && record["config_reference"]
-                    .as_str()
-                    .is_some_and(|raw| same_config_reference(&config, raw));
+                && config_binding(&root, &config, &record["config_reference"])?;
             let known = record["config_reference"]
                 .as_str()
                 .ok_or_else(|| invalid("known config binding missing"))?;
@@ -1049,31 +1044,15 @@ struct ProjectRecord {
 }
 
 fn ordinary_config(root: &Path, reference: &Path) -> io::Result<PathBuf> {
-    if !reference.is_absolute()
-        || reference.to_string_lossy().len() > PATH_LIMIT
-        || reference
-            .components()
-            .any(|part| matches!(part, Component::ParentDir | Component::CurDir))
-        || reference
-            .to_string_lossy()
-            .split(['/', '\\'])
-            .any(|part| [".", ".."].contains(&part))
-    {
-        return Err(invalid(
-            "config reference must be an ordinary absolute project path",
-        ));
-    }
-    project_assets::reject_links(reference)?;
-    let project = root
-        .parent()
-        .ok_or_else(|| invalid("samples project parent missing"))?;
-    let path = project_assets::canonical_with_missing(reference)?;
-    if path == project || !path.starts_with(project)
-        || reference.components().any(|part| matches!(part, Component::Normal(name) if name.to_str().is_none_or(|name| !material_paths::filename(name))))
-        || path.exists() && !path.is_file() {
-        return Err(invalid("config reference escaped project root or is not an ordinary file"));
-    }
-    Ok(path)
+    config_location::resolve(root, reference)
+}
+
+fn config_binding(root: &Path, current: &Path, value: &Value) -> io::Result<bool> {
+    value
+        .as_str()
+        .map(|raw| config_location::matches(root, current, raw))
+        .transpose()
+        .map(|result| result.unwrap_or(false))
 }
 
 fn plain_path(path: &Path) -> String {
@@ -1082,18 +1061,6 @@ fn plain_path(path: &Path) -> String {
         format!("\\\\{unc}")
     } else {
         path.strip_prefix("\\\\?\\").unwrap_or(&path).to_owned()
-    }
-}
-
-fn same_config_reference(path: &Path, reference: &str) -> bool {
-    #[cfg(windows)]
-    {
-        plain_path(path).replace('/', "\\").to_lowercase()
-            == reference.replace('/', "\\").to_lowercase()
-    }
-    #[cfg(not(windows))]
-    {
-        plain_path(path) == reference
     }
 }
 
@@ -1249,10 +1216,11 @@ impl InventoryHandle {
                 serde_json::from_slice(&json_bytes(&mut file)?).map_err(io::Error::other)?;
             if record.schema_version != 1
                 || record.instance_id != id
-                || plain_path(&ordinary_config(
+                || !config_location::matches(
                     &self.root,
-                    Path::new(&record.config_reference),
-                )?) != record.config_reference
+                    &ordinary_config(&self.root, Path::new(&record.config_reference))?,
+                    &record.config_reference,
+                )?
             {
                 return Err(invalid("project inventory binding is invalid"));
             }
@@ -1276,8 +1244,310 @@ impl MigrationInventoryLease {
     }
 }
 
-/// Recreate dormant birth ownership only from this process's actual acknowledged
-/// source and the exact current saved content. The JSON remains evidence.
+/// File/config/journal verification runs from this owned capture, never while
+/// retaining a public Engine borrow or its request mutex.
+pub(super) struct MaterialCreationRestoreWork {
+    id: usize,
+    encoded_creation: String,
+    config_reference: String,
+    instance_id: String,
+    inventory: Arc<InventoryHandle>,
+    journal_json: Option<String>,
+    sample: crate::messages::SampleBuffer,
+    lease: super::cold_store::CommittedColdLease,
+    request_id: u64,
+    prepared_epoch: u64,
+    generation: u64,
+    rate: u32,
+}
+
+pub(super) struct PreparedMaterialCreationRestore {
+    work: MaterialCreationRestoreWork,
+    ownership: super::cold_store::PreparedMaterialCreationOwnership,
+    _config_guards: Vec<File>,
+    _config_reader: File,
+    _artifact_guards: Vec<SealedArtifact>,
+    _registration_reader: File,
+}
+
+impl MaterialCreationRestoreWork {
+    pub(super) fn capture(
+        engine: &super::AudioEngine,
+        id: usize,
+        encoded_creation: String,
+        config_reference: String,
+        instance_id: String,
+        inventory: &MigrationInventoryLease,
+        journal_json: Option<String>,
+    ) -> io::Result<Self> {
+        use std::sync::atomic::Ordering;
+        if id >= super::constants::NUM_SAMPLES
+            || !material_paths::valid_id(&instance_id)
+            || encoded_creation.len() > JSON_LIMIT
+        {
+            return Err(invalid("invalid bounded current material restoration"));
+        }
+        let requests = engine
+            .pad_request_ids
+            .lock()
+            .map_err(|_| invalid("request lock poisoned"))?;
+        let sample = engine
+            .sample_cache
+            .lock()
+            .map_err(|_| invalid("source cache lock poisoned"))?[id]
+            .clone()
+            .ok_or_else(|| invalid("fresh current source missing"))?;
+        let (generation, rate) = engine
+            .loaded_source_generations
+            .lock()
+            .map_err(|_| invalid("source generation lock poisoned"))?[id];
+        if generation == 0
+            || engine.cold_loading[id].load(Ordering::Acquire) != 0
+            || engine.cold_lease_generations[id].load(Ordering::Acquire) != generation
+            || engine
+                .input_runtime_ownership
+                .source_generation(id, &sample, rate)
+                != Some(generation)
+        {
+            return Err(invalid(
+                "material restoration requires this process's actual current source ACK",
+            ));
+        }
+        let lease = engine
+            .cold_leases
+            .lock()
+            .map_err(|_| invalid("cold lease lock poisoned"))?[id]
+            .clone()
+            .ok_or_else(|| invalid("fresh canonical lease missing"))?;
+        let inventory = inventory
+            .handle
+            .as_ref()
+            .ok_or_else(|| invalid("inventory lease released"))?
+            .clone();
+        if inventory.root != lease.samples_root() {
+            return Err(invalid(
+                "current material inventory belongs to another root",
+            ));
+        }
+        Ok(Self {
+            id,
+            encoded_creation,
+            config_reference,
+            instance_id,
+            inventory,
+            journal_json,
+            sample,
+            lease,
+            request_id: requests[id],
+            prepared_epoch: engine.prepared_source_epochs[id].load(Ordering::Acquire),
+            generation,
+            rate,
+        })
+    }
+
+    pub(super) fn prepare(self) -> io::Result<PreparedMaterialCreationRestore> {
+        let id = self.id;
+        let sample = &self.sample;
+        let lease = &self.lease;
+        let config_reference = self.config_reference.as_str();
+        let instance_id = self.instance_id.as_str();
+        let journal_json = self.journal_json.as_deref();
+        let creation: super::cold_store::MaterialCreationReceipt =
+            serde_json::from_str(&self.encoded_creation).map_err(io::Error::other)?;
+        let root = lease.samples_root();
+        let handle = &self.inventory;
+        if handle.root != root {
+            return Err(invalid(
+                "current material inventory belongs to another root",
+            ));
+        }
+        handle.validate()?;
+        let config = ordinary_config(root, Path::new(config_reference))?;
+        let records = handle.records_native()?;
+        let mut registration_reader = None;
+        for encoded in records {
+            let record: Value = serde_json::from_str(&encoded).map_err(io::Error::other)?;
+            if !record["error"].is_null() {
+                return Err(invalid("unknown current project inventory; preserved"));
+            }
+            if config_binding(root, &config, &record["config_reference"])? && record["live"] == true
+            {
+                let registration = record["instance_id"]
+                    .as_str()
+                    .filter(|id| material_paths::valid_id(id))
+                    .ok_or_else(|| invalid("current registration identity missing"))?;
+                registration_reader = Some(sealed_reader(
+                    &handle.path.join(format!("{registration}.json")),
+                )?);
+            }
+        }
+        if registration_reader.is_none() {
+            return Err(invalid(
+                "saved material has no actual current config registration",
+            ));
+        }
+        let config_guards = project_assets::directory_guards(
+            config
+                .parent()
+                .ok_or_else(|| invalid("config parent missing"))?,
+        )?;
+        #[cfg(test)]
+        super::native_owned_work::observe(super::native_owned_work::WorkPoint::MaterialRestoreIo);
+        let mut config_reader = sealed_reader(&config)?;
+        if config_reader.metadata()?.len() > 16 * 1024 * 1024 {
+            return Err(invalid("current config exceeds restoration bound"));
+        }
+        let mut config_bytes = Vec::new();
+        Read::by_ref(&mut config_reader)
+            .take(16 * 1024 * 1024 + 1)
+            .read_to_end(&mut config_bytes)?;
+        if config_bytes.len() > 16 * 1024 * 1024 {
+            return Err(invalid("current config exceeds restoration bound"));
+        }
+        let saved: Value = serde_json::from_slice(&config_bytes).map_err(io::Error::other)?;
+        let content = &saved["pad_content"][id];
+        let persisted: super::cold_store::MaterialCreationReceipt =
+            serde_json::from_value(content["material_creation"].clone())
+                .map_err(io::Error::other)?;
+        let reference = saved["sample_paths"][id]
+            .as_str()
+            .ok_or_else(|| invalid("saved source reference missing"))?;
+        if content["instance_id"].as_str() != Some(instance_id)
+            || persisted != creation
+            || content["material_id"].as_str() != lease.material_id.as_deref()
+            || material_paths::resolve(root, Path::new(reference))?.path != lease.original_path
+        {
+            return Err(invalid(
+                "newer saved source/content wins over material birth evidence",
+            ));
+        }
+        let mut artifact_guards = Vec::new();
+        if let Some(encoded) = journal_json {
+            if encoded.len() > 16 * 1024 * 1024 {
+                return Err(invalid("migration record exceeds restoration bound"));
+            }
+            let journal: Value = serde_json::from_str(encoded).map_err(io::Error::other)?;
+            let transaction = journal["transaction_id"]
+                .as_str()
+                .filter(|id| material_paths::valid_id(id))
+                .ok_or_else(|| invalid("migration transaction missing"))?;
+            let store = super::material_migration_journal::MaterialMigrationJournalStore::open(
+                root.to_string_lossy().into(),
+                transaction.into(),
+            )
+            .map_err(|error| invalid(error.to_string()))?;
+            if store
+                .history()
+                .map_err(|error| invalid(error.to_string()))?
+                .last()
+                .map(String::as_str)
+                != Some(encoded)
+                || journal["phase"] != "config_committed"
+                || !config_binding(root, &config, &journal["config_reference"])?
+                || saved["material_migrations"][transaction] != journal["alias"]
+                || journal["alias"]["new_reference"].as_str() != Some(reference)
+                || saved["config_revision"].as_u64() < journal["committed_revision"].as_u64()
+                || !journal["assignments"].as_array().is_some_and(|items| {
+                    items.iter().any(|item| {
+                        item["sample_id"].as_u64() == Some(id as u64)
+                            && item["instance_id"].as_str() == Some(instance_id)
+                    })
+                })
+                || serde_json::from_value::<super::cold_store::MaterialCreationReceipt>(
+                    journal["alias"]["material_creation"].clone(),
+                )
+                .map_err(io::Error::other)?
+                    != creation
+            {
+                return Err(invalid(
+                    "current config/journal no longer binds the created material",
+                ));
+            }
+            let artifacts = journal["artifacts"]
+                .as_array()
+                .ok_or_else(|| invalid("created material ledger missing"))?;
+            let mut linked = false;
+            for record in artifacts {
+                if record["role"] != "target" {
+                    continue;
+                }
+                let evidence: Receipt =
+                    serde_json::from_value(record["evidence"].clone()).map_err(io::Error::other)?;
+                if evidence.kind == ArtifactKind::Original
+                    && evidence.reference == reference
+                    && evidence.material_creation.as_ref() == Some(&creation)
+                {
+                    let mut actual = seal_artifact(root, Path::new(reference))?;
+                    attach_material_creation(&mut actual, Some(creation.clone()))?;
+                    linked |= actual.receipt == evidence
+                        && (record["created"] == true
+                            || historical_created_target(root, &config, &evidence)?);
+                    artifact_guards.push(actual);
+                }
+            }
+            if !linked {
+                return Err(invalid(
+                    "migration has no exact created target-original receipt",
+                ));
+            }
+        }
+        lease.verify_reference(sample)?;
+        let ownership = lease.prepare_material_creation_restore(&creation)?;
+        Ok(PreparedMaterialCreationRestore {
+            work: self,
+            ownership,
+            _config_guards: config_guards,
+            _config_reader: config_reader,
+            _artifact_guards: artifact_guards,
+            _registration_reader: registration_reader
+                .ok_or_else(|| invalid("current registration disappeared"))?,
+        })
+    }
+}
+
+impl PreparedMaterialCreationRestore {
+    /// All file custody and cleanup capacity are already verified/reserved.
+    /// This final short Engine phase checks fresh authority and registers only
+    /// dormant ownership; it cannot read disk or restore a callback ACK.
+    pub(super) fn finish(self, engine: &super::AudioEngine) -> io::Result<()> {
+        use std::sync::atomic::Ordering;
+        let work = &self.work;
+        let requests = engine
+            .pad_request_ids
+            .lock()
+            .map_err(|_| invalid("request lock poisoned"))?;
+        let sample = engine
+            .sample_cache
+            .lock()
+            .map_err(|_| invalid("source cache lock poisoned"))?[work.id]
+            .clone()
+            .ok_or_else(|| invalid("fresh current source missing"))?;
+        let actual = engine
+            .loaded_source_generations
+            .lock()
+            .map_err(|_| invalid("source generation lock poisoned"))?[work.id];
+        if requests[work.id] != work.request_id
+            || engine.prepared_source_epochs[work.id].load(Ordering::Acquire) != work.prepared_epoch
+            || actual != (work.generation, work.rate)
+            || !sample.same_source(&work.sample)
+            || engine.cold_loading[work.id].load(Ordering::Acquire) != 0
+            || engine.cold_lease_generations[work.id].load(Ordering::Acquire) != work.generation
+            || engine
+                .input_runtime_ownership
+                .source_generation(work.id, &sample, work.rate)
+                != Some(work.generation)
+        {
+            return Err(invalid(
+                "material restoration source or request changed during verification",
+            ));
+        }
+        self.ownership.finish()
+    }
+}
+
+/// Direct native test entrypoint uses exactly the same capture/prepare/finish
+/// transaction as the public Bound receiver, retaining its own source ACK guards.
+#[cfg(test)]
 pub(super) fn restore_current_material_creation(
     engine: &super::AudioEngine,
     id: usize,
@@ -1287,180 +1557,17 @@ pub(super) fn restore_current_material_creation(
     inventory: &MigrationInventoryLease,
     journal_json: Option<&str>,
 ) -> io::Result<()> {
-    if id >= super::constants::NUM_SAMPLES
-        || !material_paths::valid_id(instance_id)
-        || encoded_creation.len() > JSON_LIMIT
-    {
-        return Err(invalid("invalid bounded current material restoration"));
-    }
-    let creation: super::cold_store::MaterialCreationReceipt =
-        serde_json::from_str(encoded_creation).map_err(io::Error::other)?;
-    let _requests = engine
-        .pad_request_ids
-        .lock()
-        .map_err(|_| invalid("request lock poisoned"))?;
-    let sample = engine
-        .sample_cache
-        .lock()
-        .map_err(|_| invalid("source cache lock poisoned"))?[id]
-        .clone()
-        .ok_or_else(|| invalid("fresh current source missing"))?;
-    let (generation, rate) = engine
-        .loaded_source_generations
-        .lock()
-        .map_err(|_| invalid("source generation lock poisoned"))?[id];
-    if generation == 0
-        || engine.cold_loading[id].load(std::sync::atomic::Ordering::Acquire) != 0
-        || engine.cold_lease_generations[id].load(std::sync::atomic::Ordering::Acquire)
-            != generation
-        || engine
-            .input_runtime_ownership
-            .source_generation(id, &sample, rate)
-            != Some(generation)
-    {
-        return Err(invalid(
-            "material restoration requires this process's actual current source ACK",
-        ));
-    }
-    let lease = engine
-        .cold_leases
-        .lock()
-        .map_err(|_| invalid("cold lease lock poisoned"))?[id]
-        .clone()
-        .ok_or_else(|| invalid("fresh canonical lease missing"))?;
-    let root = lease.samples_root();
-    let handle = inventory
-        .handle
-        .as_ref()
-        .ok_or_else(|| invalid("inventory lease released"))?;
-    if handle.root != root {
-        return Err(invalid(
-            "current material inventory belongs to another root",
-        ));
-    }
-    handle.validate()?;
-    let config = ordinary_config(root, Path::new(config_reference))?;
-    let records = handle.records_native()?;
-    let mut current_registration = false;
-    for encoded in records {
-        let record: Value = serde_json::from_str(&encoded).map_err(io::Error::other)?;
-        if !record["error"].is_null() {
-            return Err(invalid("unknown current project inventory; preserved"));
-        }
-        current_registration |= record["config_reference"]
-            .as_str()
-            .is_some_and(|raw| same_config_reference(&config, raw))
-            && record["live"] == true;
-    }
-    if !current_registration {
-        return Err(invalid(
-            "saved material has no actual current config registration",
-        ));
-    }
-    let _config_guards = project_assets::directory_guards(
-        config
-            .parent()
-            .ok_or_else(|| invalid("config parent missing"))?,
-    )?;
-    let mut config_reader = sealed_reader(&config)?;
-    if config_reader.metadata()?.len() > 16 * 1024 * 1024 {
-        return Err(invalid("current config exceeds restoration bound"));
-    }
-    let mut config_bytes = Vec::new();
-    Read::by_ref(&mut config_reader)
-        .take(16 * 1024 * 1024 + 1)
-        .read_to_end(&mut config_bytes)?;
-    if config_bytes.len() > 16 * 1024 * 1024 {
-        return Err(invalid("current config exceeds restoration bound"));
-    }
-    let saved: Value = serde_json::from_slice(&config_bytes).map_err(io::Error::other)?;
-    let content = &saved["pad_content"][id];
-    let persisted: super::cold_store::MaterialCreationReceipt =
-        serde_json::from_value(content["material_creation"].clone()).map_err(io::Error::other)?;
-    let reference = saved["sample_paths"][id]
-        .as_str()
-        .ok_or_else(|| invalid("saved source reference missing"))?;
-    if content["instance_id"].as_str() != Some(instance_id)
-        || persisted != creation
-        || content["material_id"].as_str() != lease.material_id.as_deref()
-        || material_paths::resolve(root, Path::new(reference))?.path != lease.original_path
-    {
-        return Err(invalid(
-            "newer saved source/content wins over material birth evidence",
-        ));
-    }
-    if let Some(encoded) = journal_json {
-        if encoded.len() > 16 * 1024 * 1024 {
-            return Err(invalid("migration record exceeds restoration bound"));
-        }
-        let journal: Value = serde_json::from_str(encoded).map_err(io::Error::other)?;
-        let transaction = journal["transaction_id"]
-            .as_str()
-            .filter(|id| material_paths::valid_id(id))
-            .ok_or_else(|| invalid("migration transaction missing"))?;
-        let store = super::material_migration_journal::MaterialMigrationJournalStore::open(
-            root.to_string_lossy().into(),
-            transaction.into(),
-        )
-        .map_err(|error| invalid(error.to_string()))?;
-        if store
-            .history()
-            .map_err(|error| invalid(error.to_string()))?
-            .last()
-            .map(String::as_str)
-            != Some(encoded)
-            || journal["phase"] != "config_committed"
-            || !journal["config_reference"]
-                .as_str()
-                .is_some_and(|raw| same_config_reference(&config, raw))
-            || saved["material_migrations"][transaction] != journal["alias"]
-            || journal["alias"]["new_reference"].as_str() != Some(reference)
-            || saved["config_revision"].as_u64() < journal["committed_revision"].as_u64()
-            || !journal["assignments"].as_array().is_some_and(|items| {
-                items.iter().any(|item| {
-                    item["sample_id"].as_u64() == Some(id as u64)
-                        && item["instance_id"].as_str() == Some(instance_id)
-                })
-            })
-            || serde_json::from_value::<super::cold_store::MaterialCreationReceipt>(
-                journal["alias"]["material_creation"].clone(),
-            )
-            .map_err(io::Error::other)?
-                != creation
-        {
-            return Err(invalid(
-                "current config/journal no longer binds the created material",
-            ));
-        }
-        let artifacts = journal["artifacts"]
-            .as_array()
-            .ok_or_else(|| invalid("created material ledger missing"))?;
-        let mut linked = false;
-        for record in artifacts {
-            if record["role"] != "target" {
-                continue;
-            }
-            let evidence: Receipt =
-                serde_json::from_value(record["evidence"].clone()).map_err(io::Error::other)?;
-            if evidence.kind == ArtifactKind::Original
-                && evidence.reference == reference
-                && evidence.material_creation.as_ref() == Some(&creation)
-            {
-                let mut actual = seal_artifact(root, Path::new(reference))?;
-                attach_material_creation(&mut actual, Some(creation.clone()))?;
-                linked |= actual.receipt == evidence
-                    && (record["created"] == true
-                        || historical_created_target(root, &config, &evidence)?);
-            }
-        }
-        if !linked {
-            return Err(invalid(
-                "migration has no exact created target-original receipt",
-            ));
-        }
-    }
-    lease.verify_reference(&sample)?;
-    lease.restore_material_creation(&creation)
+    MaterialCreationRestoreWork::capture(
+        engine,
+        id,
+        encoded_creation.into(),
+        config_reference.into(),
+        instance_id.into(),
+        inventory,
+        journal_json.map(str::to_owned),
+    )?
+    .prepare()?
+    .finish(engine)
 }
 
 #[pymethods]
@@ -1492,12 +1599,12 @@ impl MigrationProjectGuard {
         checkpoint: &impl Fn(&str) -> io::Result<()>,
     ) -> io::Result<Self> {
         let (root, mut guards) = samples_root(root)?;
+        let config = ordinary_config(&root, config)?;
         guards.extend(project_assets::directory_guards(
             config
                 .parent()
                 .ok_or_else(|| invalid("config parent missing"))?,
         )?);
-        let config = ordinary_config(&root, config)?;
         let gate = inventory_gate(&root)?;
         let gate_handle = gate.handle.as_ref().expect("fresh inventory gate");
         // Unknown/error records also consume admission capacity; they are never deleted.
@@ -1510,7 +1617,7 @@ impl MigrationProjectGuard {
                 let status: Value = serde_json::from_str(status).map_err(io::Error::other)?;
                 if status["live"] != false
                     || !status["error"].is_null()
-                    || status["config_reference"].as_str() != Some(plain_path(&config).as_str())
+                    || !config_binding(&root, &config, &status["config_reference"])?
                 {
                     continue;
                 }
@@ -1527,7 +1634,7 @@ impl MigrationProjectGuard {
                     serde_json::from_slice(&json_bytes(&mut reader)?).map_err(io::Error::other)?;
                 if record.schema_version != 1
                     || record.instance_id != id
-                    || record.config_reference != plain_path(&config)
+                    || !config_location::matches(&root, &config, &record.config_reference)?
                 {
                     return Err(invalid(
                         "inactive project binding changed before compaction",

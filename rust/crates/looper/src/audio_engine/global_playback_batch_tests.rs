@@ -849,7 +849,7 @@ fn global_batch_execution_failures_retire_payload_and_preserve_history_before_co
             _ => unreachable!(),
         };
         let mut retirement = RetainedBatchRetirement {
-            slots: 2 * MAX_VOICES + 1,
+            slots: 3 * MAX_VOICES + 1,
             batches: Vec::new(),
             samples: Vec::new(),
             revoke: None,
@@ -867,7 +867,7 @@ fn global_batch_execution_failures_retire_payload_and_preserve_history_before_co
             }
         }
         if failure == "retirement" {
-            retirement.slots = 1;
+            retirement.slots = 3 * MAX_VOICES;
         }
         if failure == "prepare-race" {
             retirement.revoke = Some((fixture.engine.input_runtime_ownership.clone(), 1));
@@ -1102,7 +1102,7 @@ fn global_batch_old_started_then_reliable_unload_feedback_cannot_reactivate_unlo
         .push(ControlMessage::UnloadSample { id: 0 })
         .unwrap();
     let mut retirement = RetainedBatchRetirement {
-        slots: 2 * MAX_VOICES + 2,
+        slots: 3 * MAX_VOICES + 3,
         batches: Vec::new(),
         samples: Vec::new(),
         revoke: None,
@@ -1133,6 +1133,35 @@ fn global_batch_old_started_then_reliable_unload_feedback_cannot_reactivate_unlo
         _ => unreachable!(),
     }
     assert!(projected_active.contains(&0));
+    retirement.slots = 3 * MAX_VOICES + 2;
+    assert_eq!(
+        drain_control_messages(
+            &mut fixture.consumer,
+            &mut fixture.scheduler,
+            0,
+            &mut fixture.mode,
+            &mut fixture.transport,
+            &mut fixture.mixer,
+            &mut feedback,
+            &mut retirement
+        ),
+        0
+    );
+    assert!(retirement.samples.is_empty());
+    assert!(receiver.pop().is_err());
+    assert!(matches!(
+        fixture.consumer.peek().unwrap(),
+        ControlMessage::UnloadSample { id: 0 }
+    ));
+    assert!(
+        fixture
+            .mixer
+            .voices
+            .iter()
+            .any(|voice| voice.active && voice.sample_id == 0)
+    );
+    assert!(projected_active.contains(&0));
+    retirement.slots += 1;
     assert_eq!(
         drain_control_messages(
             &mut fixture.consumer,
@@ -1184,7 +1213,7 @@ fn global_batch_unload_full_feedback_defers_actual_pin_and_paused_history_until_
     let (mut feedback, mut receiver) = rtrb::RingBuffer::<AudioMessage>::new(1);
     feedback.push(AudioMessage::Pong()).unwrap();
     let mut retirement = RetainedBatchRetirement {
-        slots: 2 * MAX_VOICES + 2,
+        slots: 3 * MAX_VOICES + 3,
         batches: Vec::new(),
         samples: Vec::new(),
         revoke: None,
@@ -1214,6 +1243,36 @@ fn global_batch_unload_full_feedback_defers_actual_pin_and_paused_history_until_
     assert!(voice.paused);
     assert!(pin.upgrade().is_some());
     assert!(matches!(receiver.pop().unwrap(), AudioMessage::Pong()));
+    retirement.slots = 3 * MAX_VOICES + 2;
+    assert_eq!(
+        drain_control_messages(
+            &mut fixture.consumer,
+            &mut fixture.scheduler,
+            0,
+            &mut fixture.mode,
+            &mut fixture.transport,
+            &mut fixture.mixer,
+            &mut feedback,
+            &mut retirement
+        ),
+        0
+    );
+    assert!(retirement.samples.is_empty());
+    assert!(receiver.pop().is_err());
+    assert!(matches!(
+        fixture.consumer.peek().unwrap(),
+        ControlMessage::UnloadSample { id: 1 }
+    ));
+    let voice = fixture
+        .mixer
+        .voices
+        .iter()
+        .find(|voice| voice.active)
+        .unwrap();
+    assert_eq!(voice.frame_pos, position);
+    assert!(voice.paused);
+    assert!(pin.upgrade().is_some());
+    retirement.slots += 1;
     assert_eq!(
         drain_control_messages(
             &mut fixture.consumer,

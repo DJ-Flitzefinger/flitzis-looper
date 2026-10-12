@@ -1,6 +1,8 @@
 function Write-AtomicJson([string] $Path, $Value) {
     $temporary = "$Path.$([Guid]::NewGuid().ToString('N')).tmp"
-    [IO.File]::WriteAllText($temporary, ($Value | ConvertTo-Json -Depth 8), [Text.UTF8Encoding]::new($false))
+    $bytes = [Text.UTF8Encoding]::new($false).GetBytes(($Value | ConvertTo-Json -Depth 12))
+    $stream = [IO.File]::Open($temporary, [IO.FileMode]::CreateNew, [IO.FileAccess]::Write, [IO.FileShare]::None)
+    try { $stream.Write($bytes, 0, $bytes.Length); $stream.Flush($true) } finally { $stream.Dispose() }
     if (Test-Path -LiteralPath $Path) {
         [IO.File]::Replace($temporary, $Path, [NullString]::Value)
     } else { [IO.File]::Move($temporary, $Path) }
@@ -30,11 +32,15 @@ function Read-Payload([Uri] $Uri, [string] $Destination) {
     } else { throw 'Nur lokale Dateien oder HTTPS-Downloads werden unterstuetzt.' }
 }
 
-function Assert-Hash([string] $Path, [string] $Expected) {
+function Get-Sha256([string] $Path) {
     $algorithm = [Security.Cryptography.SHA256]::Create()
     $stream = [IO.File]::OpenRead($Path)
-    try { $actual = [BitConverter]::ToString($algorithm.ComputeHash($stream)).Replace('-', '').ToLowerInvariant() }
+    try { return [BitConverter]::ToString($algorithm.ComputeHash($stream)).Replace('-', '').ToLowerInvariant() }
     finally { $stream.Dispose(); $algorithm.Dispose() }
+}
+
+function Assert-Hash([string] $Path, [string] $Expected) {
+    $actual = Get-Sha256 $Path
     if ($Expected -notmatch '^[a-f0-9]{64}$' -or $actual -ne $Expected) {
         throw "SHA256-Pruefung fehlgeschlagen: $Path"
     }
@@ -80,4 +86,338 @@ function Expand-ContainedZip([string] $Archive, [string] $Destination) {
 function Invoke-Checked([string] $Executable, [string[]] $Arguments) {
     & $Executable @Arguments
     if ($LASTEXITCODE -ne 0) { throw "Befehl fehlgeschlagen ($LASTEXITCODE): $Executable" }
+}
+
+function Assert-PortableTree([string] $Path) {
+    Assert-PlainPath $Path
+    if (-not (Test-Path -LiteralPath $Path)) { return }
+    $pending = [Collections.Generic.Stack[string]]::new()
+    $pending.Push($Path)
+    while ($pending.Count) {
+        foreach ($item in @(Get-ChildItem -LiteralPath $pending.Pop() -Force)) {
+            if ($item.Attributes -band [IO.FileAttributes]::ReparsePoint) { throw "Verknuepfung in Portable-Dateien: $($item.FullName)" }
+            if ($item.PSIsContainer) { $pending.Push($item.FullName) }
+        }
+    }
+}
+
+function Open-PortableLock([string] $Root) {
+    $path = Join-Path $Root '.install.lock'
+    Assert-PlainPath $path
+    try { return [IO.File]::Open($path, [IO.FileMode]::OpenOrCreate, [IO.FileAccess]::ReadWrite, [IO.FileShare]::None) }
+    catch { throw 'Der Looper oder ein anderer Installer laeuft. Bitte den Looper schliessen und erneut starten; kein Prozess wird beendet.' }
+}
+
+function Assert-NoPortableProcess([string] $Root) {
+    $prefix = [IO.Path]::GetFullPath($Root).TrimEnd('\') + '\'
+    foreach ($process in @(Get-Process -Name python,pythonw -ErrorAction SilentlyContinue)) {
+        try { $executable = $process.Path }
+        catch { throw 'Ein Python-Prozessbesitzer kann nicht geprueft werden. Bitte den Looper schliessen und erneut ausfuehren.' }
+        if (-not $executable) { throw 'Ein Python-Prozessbesitzer kann nicht geprueft werden. Bitte den Looper schliessen und erneut ausfuehren.' }
+        if ((Resolve-PortablePhysicalPath $executable).StartsWith($prefix, [StringComparison]::OrdinalIgnoreCase)) {
+            throw 'Ein installierter Looper-Prozess laeuft noch. Bitte den Looper schliessen und den Installer erneut ausfuehren; kein Prozess wird beendet.'
+        }
+    }
+}
+
+function Get-PortablePaths([string] $Root, [string] $Operation) {
+    if ($Operation -notmatch '^[a-f0-9]{32}$') { throw 'Ungueltige Portable-Transaktionsidentitaet.' }
+    $short = $Operation.Substring(0,8)
+    return @{
+        checkout = Join-Path $Root 'flitzis-looper'; runtime = Join-Path $Root 'Runtime'
+        source = Join-Path $Root "cache/s-$short"; candidate = Join-Path $Root "cache/r-$short"
+        old_checkout = Join-Path $Root "cache/o-$short"; old_runtime = Join-Path $Root "cache/p-$short"
+        relocation = Join-Path $Root "cache/relocation-$Operation.json"
+        build_owned = Join-Path $Root "cache/build-owned-$Operation.json"
+    }
+}
+
+function Read-PortableTransaction([string] $Root) {
+    $path = Join-Path $Root 'portable-transaction.json'
+    Assert-PlainPath $path
+    if (-not (Test-Path -LiteralPath $path)) { return $null }
+    $record = Get-Content -LiteralPath $path -Raw | ConvertFrom-Json
+    if ($record.schema_version -ne 1 -or $record.operation -notmatch '^[a-f0-9]{32}$' -or
+        $record.git_commit -notmatch '^[a-f0-9]{40}$' -or
+        $record.capture_completed -isnot [bool] -or
+        $record.phase -notin @('staging','prepared','captured','swapping','data','verifying','accepted','rolling_back','rolled_back')) {
+        throw 'Unbekanntes Portable-Transaktionsjournal; vorhandene Dateien bleiben erhalten.'
+    }
+    if ($record.old -and ($record.old.schema_version -notin @(1,2) -or $record.old.git_commit -notmatch '^[a-f0-9]{40}$')) {
+        throw 'Ungueltiger bisheriger Quellstand im Transaktionsjournal.'
+    }
+    if ($record.legacy_directory -and $record.legacy_directory -notmatch '^main-[a-f0-9]{12}-[a-f0-9]{8}$') {
+        throw 'Ungueltige bisherige Portable-Laufzeit.'
+    }
+    if ($record.had_samples -and -not $record.capture_completed -and $record.phase -in @('swapping','data','verifying','accepted')) {
+        throw 'Die Datenbewegung besitzt keinen abgeschlossenen Native-Capture; Dateien bleiben erhalten.'
+    }
+    $paths = Get-PortablePaths $Root $record.operation
+    foreach ($entry in $paths.GetEnumerator()) { Assert-PlainPath $entry.Value }
+    return $record
+}
+
+function Save-PortableTransaction([string] $Root, $Record, [string] $Phase) {
+    $Record.phase = $Phase
+    Write-AtomicJson (Join-Path $Root 'portable-transaction.json') $Record
+}
+
+function Invoke-PortableCheck([string] $Root, [string] $Checkout, [string] $Runtime) {
+    Invoke-Checked 'powershell.exe' @('-NoLogo','-NoProfile','-ExecutionPolicy','Bypass','-File',
+        (Join-Path $Runtime 'launch.ps1'),'-Root',$Root,'-CheckoutDirectory',$Checkout,
+        '-RuntimeDirectory',$Runtime,'-Check','-InstallerOwned')
+}
+
+function Invoke-PortableModels([string] $Root, [string] $Checkout, [string] $Runtime, [string] $Mode) {
+    Invoke-Checked 'powershell.exe' @('-NoLogo','-NoProfile','-ExecutionPolicy','Bypass','-File',
+        (Join-Path $Runtime 'launch.ps1'),'-Root',$Root,'-CheckoutDirectory',$Checkout,
+        '-RuntimeDirectory',$Runtime,'-ModelMode',$Mode,'-InstallerOwned')
+}
+
+function Invoke-PortableRelocation([string] $Root, [string] $Checkout, [string] $Runtime,
+    [string] $Source, [string] $Target, [string] $Record, [string] $Action) {
+    Invoke-Checked 'powershell.exe' @('-NoLogo','-NoProfile','-ExecutionPolicy','Bypass','-File',
+        (Join-Path $Runtime 'launch.ps1'),'-Root',$Root,'-CheckoutDirectory',$Checkout,
+        '-RuntimeDirectory',$Runtime,'-RelocationAction',$Action,'-RelocationSource',$Source,
+        '-RelocationTarget',$Target,'-RelocationRecord',$Record,'-InstallerOwned')
+}
+
+function Move-PortableDirectory([string] $Source, [string] $Target) {
+    Assert-PlainPath $Source; Assert-PlainPath $Target
+    if (-not (Test-Path -LiteralPath $Source)) { return }
+    if (Test-Path -LiteralPath $Target) { throw "Portable-Zielkonflikt: $Target" }
+    [IO.Directory]::CreateDirectory([IO.Path]::GetDirectoryName($Target)) | Out-Null
+    [IO.Directory]::Move($Source, $Target)
+}
+
+function Assert-PortableInventory([string] $Directory, $Inventory, [switch] $Persistent, [switch] $VerifyHashes) {
+    Assert-PortableTree $Directory
+    if ($null -eq $Inventory) { throw "Keine vollstaendige Dateibesitzliste fuer $Directory; Dateien bleiben erhalten." }
+    if (-not (Test-Path -LiteralPath $Directory)) {
+        if ($VerifyHashes) { throw "Quellstand fehlt: $Directory" }
+        return
+    }
+    $known = @{}
+    foreach ($property in $Inventory.PSObject.Properties) {
+        $relative = $property.Name
+        if ($relative -match '(^[/\\]|:|(^|[/\\])\.\.([/\\]|$))' -or $property.Value -notmatch '^[a-f0-9]{64}$') {
+            throw 'Ungueltige Portable-Dateibesitzliste.'
+        }
+        $known[$relative.Replace('\','/')] = $property.Value
+    }
+    foreach ($file in @(Get-ChildItem -LiteralPath $Directory -Recurse -Force -File)) {
+        $relative = $file.FullName.Substring($Directory.TrimEnd('\').Length + 1).Replace('\','/')
+        if ($Persistent -and ($relative.StartsWith('samples/') -or $relative.StartsWith('config/input/'))) { continue }
+        if (-not $Persistent -and $relative -eq 'release-manifest.json') { continue }
+        if (-not $known.ContainsKey($relative)) { throw "Unbekannte Datei bleibt erhalten: $($file.FullName)" }
+        # Present bytes must still belong to this installation, even when absent
+        # Runtime leaves are allowed so that a damaged installation can be repaired.
+        Assert-Hash $file.FullName $known[$relative]
+    }
+    if ($VerifyHashes) {
+        foreach ($relative in $known.Keys) {
+            $path = Join-Path $Directory $relative
+            if (-not (Test-Path -LiteralPath $path -PathType Leaf)) { throw "Quellstand wurde veraendert: $path" }
+        }
+    }
+}
+
+function Write-PortableBytes([string] $Path, [byte[]] $Bytes) {
+    Assert-PlainPath $Path
+    $temporary = "$Path.$([Guid]::NewGuid().ToString('N')).tmp"
+    $stream = [IO.File]::Open($temporary, [IO.FileMode]::CreateNew, [IO.FileAccess]::Write, [IO.FileShare]::None)
+    try { $stream.Write($Bytes,0,$Bytes.Length); $stream.Flush($true) } finally { $stream.Dispose() }
+    if (Test-Path -LiteralPath $Path) { [IO.File]::Replace($temporary,$Path,[NullString]::Value) }
+    else { [IO.File]::Move($temporary,$Path) }
+}
+
+function Remove-PortableOwnedDirectory([string] $Root, [string] $Path) {
+    $rootPrefix = [IO.Path]::GetFullPath((Join-Path $Root 'cache')).TrimEnd('\') + '\'
+    $absolute = [IO.Path]::GetFullPath($Path)
+    if (-not $absolute.StartsWith($rootPrefix, [StringComparison]::OrdinalIgnoreCase)) { throw 'Aufraeumziel verlaesst den privaten Cache.' }
+    Assert-PortableTree $absolute
+    if (Test-Path -LiteralPath $absolute) { Remove-Item -LiteralPath $absolute -Recurse -Force }
+}
+
+function Get-PortableInputInventory([string] $Path) {
+    $inventory = @{}
+    Assert-PortableTree $Path
+    if (Test-Path -LiteralPath $Path) {
+        foreach ($file in @(Get-ChildItem -LiteralPath $Path -Recurse -Force -File)) {
+            $relative = $file.FullName.Substring($Path.TrimEnd('\').Length + 1).Replace('\','/')
+            $inventory[$relative] = Get-Sha256 $file.FullName
+        }
+    }
+    return [pscustomobject]$inventory
+}
+
+function Get-PortableDataSource([string] $Root, $Record, $Paths) {
+    if ($Record.legacy_directory) { return (Join-Path $Root 'data') }
+    if (Test-Path -LiteralPath $Paths.old_checkout) { return $Paths.old_checkout }
+    return $Paths.checkout
+}
+
+function Get-PortableCandidateCustody($Paths) {
+    $checkout = if (Test-Path -LiteralPath $Paths.source) { $Paths.source } else { $Paths.checkout }
+    $runtime = if (Test-Path -LiteralPath $Paths.candidate) { $Paths.candidate } else { $Paths.runtime }
+    foreach ($path in @($checkout,$runtime)) {
+        Assert-PlainPath $path
+        if (-not (Test-Path -LiteralPath $path -PathType Container)) { throw 'Transaktionskandidat fehlt; Wiederaufnahme wurde sicher angehalten.' }
+    }
+    return @{checkout=$checkout; runtime=$runtime}
+}
+
+function Remove-PortableBuildStages([string] $Root, $Record, $Paths) {
+    if (-not (Test-Path -LiteralPath $Paths.build_owned)) { return }
+    $owned = Get-Content -LiteralPath $Paths.build_owned -Raw | ConvertFrom-Json
+    if ($owned.operation -ne $Record.operation -or $owned.schema_version -ne 1) { throw 'Unbekannte Build-Dateibesitzliste.' }
+    foreach ($relative in $owned.directories) {
+        if ($relative -notmatch ('^cache/(env|wheels|licenses|bundle)-' + $Record.operation.Substring(0,8) + '$')) { throw 'Unbekannter temporaerer Build-Pfad.' }
+        Remove-PortableOwnedDirectory $Root (Join-Path $Root $relative)
+    }
+    Remove-Item -LiteralPath $Paths.build_owned
+}
+
+function Complete-PortableTransaction([string] $Root, $Record) {
+    $paths = Get-PortablePaths $Root $Record.operation
+    $release = Get-Content -LiteralPath (Join-Path $paths.runtime 'release-manifest.json') -Raw | ConvertFrom-Json
+    if ($release.git_commit -ne $Record.git_commit -or $release.source_dirty) { throw 'Aktivierter Quellstand stimmt nicht mit dem Journal ueberein.' }
+    Assert-PortableInventory $paths.checkout $release.checkout_files -Persistent -VerifyHashes
+    Assert-PortableInventory $paths.runtime $release.runtime_files
+    if (Test-Path -LiteralPath $paths.old_checkout) {
+        Assert-PortableInventory $paths.old_checkout $Record.old_release.checkout_files -VerifyHashes
+        Remove-PortableOwnedDirectory $Root $paths.old_checkout
+    }
+    if (Test-Path -LiteralPath $paths.old_runtime) {
+        Assert-PortableInventory $paths.old_runtime $Record.old_release.runtime_files
+        Remove-PortableOwnedDirectory $Root $paths.old_runtime
+    }
+    if ($Record.legacy_directory) {
+        $legacy = Join-Path (Join-Path $Root 'versions') $Record.legacy_directory
+        if (Test-Path -LiteralPath $legacy) {
+            if ($Record.old_release.PSObject.Properties['runtime_files']) {
+                Assert-PortableInventory $legacy $Record.old_release.runtime_files
+                Assert-PortableTree $legacy
+                Remove-Item -LiteralPath $legacy -Recurse -Force
+            } else {
+                Write-Warning "Alte Laufzeit ohne vollstaendige Dateibesitzliste bleibt erhalten: $legacy"
+            }
+        }
+        foreach ($directory in @('data/config/input','data/config','data','versions')) {
+            $path = Join-Path $Root $directory
+            Assert-PlainPath $path
+            if ((Test-Path -LiteralPath $path -PathType Container) -and -not @(Get-ChildItem -LiteralPath $path -Force).Count) {
+                Remove-Item -LiteralPath $path
+            }
+        }
+    }
+    Remove-PortableBuildStages $Root $Record $paths
+    foreach ($path in @($paths.source,$paths.candidate)) {
+        if (Test-Path -LiteralPath $path) { throw "Kandidat wurde nicht vollstaendig aktiviert: $path" }
+    }
+    if (Test-Path -LiteralPath $paths.relocation) { Remove-Item -LiteralPath $paths.relocation }
+    Remove-Item -LiteralPath (Join-Path $Root 'portable-transaction.json')
+    $sizes = @{}
+    foreach ($name in @('cache/uv','cache/ort','cache/vcpkg-downloads','cache/vcpkg-binaries','b','tools')) {
+        $path = Join-Path $Root $name
+        try {
+            Assert-PortableTree $path
+            [long] $bytes = 0
+            if (Test-Path -LiteralPath $path) {
+                foreach ($file in @(Get-ChildItem -LiteralPath $path -Recurse -Force -File)) { $bytes += $file.Length }
+            }
+            $sizes[$name] = $bytes
+        } catch { $sizes[$name] = 'nicht gemessen; Cache bleibt erhalten' }
+    }
+    Write-Host ('Behaltene Werkzeug-/Build-Caches (Bytes; vermeiden erneute Downloads und Builds): ' + ($sizes | ConvertTo-Json -Compress))
+}
+
+function Undo-PortableTransaction([string] $Root, $Record) {
+    $paths = Get-PortablePaths $Root $Record.operation
+    Save-PortableTransaction $Root $Record 'rolling_back'
+    if ($Record.had_samples -and $Record.capture_completed -and (Test-Path -LiteralPath $paths.relocation)) {
+        $custody = Get-PortableCandidateCustody $paths
+        $sourceRoot = Get-PortableDataSource $Root $Record $paths
+        Invoke-PortableRelocation $Root $custody.checkout $custody.runtime (Join-Path $sourceRoot 'samples') (Join-Path $paths.checkout 'samples') $paths.relocation 'rollback'
+    }
+    if ($Record.had_input) {
+        $sourceRoot = Get-PortableDataSource $Root $Record $paths
+        $inputSource = Join-Path $sourceRoot 'config/input'
+        $inputTarget = Join-Path $paths.checkout 'config/input'
+        if ($inputSource -ne $inputTarget -and -not (Test-Path -LiteralPath $inputSource) -and (Test-Path -LiteralPath $inputTarget)) {
+            Assert-PortableInventory $inputTarget $Record.input_files -VerifyHashes
+            Move-PortableDirectory $inputTarget $inputSource
+        }
+    }
+    if (-not (Test-Path -LiteralPath $paths.source) -and (Test-Path -LiteralPath $paths.checkout) -and
+        (-not $Record.had_checkout -or (Test-Path -LiteralPath $paths.old_checkout))) {
+        Move-PortableDirectory $paths.checkout $paths.source
+    }
+    if (-not (Test-Path -LiteralPath $paths.candidate) -and (Test-Path -LiteralPath $paths.runtime) -and
+        (-not $Record.had_runtime -or (Test-Path -LiteralPath $paths.old_runtime))) {
+        Move-PortableDirectory $paths.runtime $paths.candidate
+    }
+    Move-PortableDirectory $paths.old_checkout $paths.checkout
+    Move-PortableDirectory $paths.old_runtime $paths.runtime
+    if ($Record.PSObject.Properties['starters']) {
+        foreach ($property in $Record.starters.PSObject.Properties) {
+            if ($property.Name -notin @('launch.ps1','START-LOOPER.bat','start.bat','start-release.bat')) { throw 'Ungueltiger Starter im Journal.' }
+            $path = Join-Path $Root $property.Name
+            if ($null -ne $property.Value) { Write-PortableBytes $path ([Convert]::FromBase64String($property.Value)) }
+            elseif (Test-Path -LiteralPath $path) { Assert-PlainPath $path; Remove-Item -LiteralPath $path }
+        }
+    }
+    if ($Record.old) { Write-AtomicJson (Join-Path $Root 'current.json') $Record.old }
+    elseif (Test-Path -LiteralPath (Join-Path $Root 'current.json')) { Remove-Item -LiteralPath (Join-Path $Root 'current.json') }
+    Save-PortableTransaction $Root $Record 'rolled_back'
+    # Failed candidates remain recorded as diagnostic material. A repeat can
+    # clean only these exact paths after the accepted installation is restored.
+}
+
+function Recover-PortableTransaction([string] $Root) {
+    $record = Read-PortableTransaction $Root
+    if (-not $record) { return }
+    $paths = Get-PortablePaths $Root $record.operation
+    if ($record.phase -eq 'accepted') {
+        Invoke-PortableCheck $Root $paths.checkout $paths.runtime
+        Invoke-PortableModels $Root $paths.checkout $paths.runtime 'check'
+        Complete-PortableTransaction $Root $record
+        return
+    }
+    if ($record.phase -notin @('staging','prepared','rolled_back')) { Undo-PortableTransaction $Root $record }
+    $proven = $false
+    if ((Test-Path -LiteralPath $paths.source) -and (Test-Path -LiteralPath (Join-Path $paths.candidate 'release-manifest.json'))) {
+        $release = Get-Content -LiteralPath (Join-Path $paths.candidate 'release-manifest.json') -Raw | ConvertFrom-Json
+        if ($release.schema_version -eq 2 -and $release.git_commit -eq $record.git_commit -and -not $release.source_dirty) {
+            Assert-PortableInventory $paths.source $release.checkout_files -VerifyHashes
+            Assert-PortableInventory $paths.candidate $release.runtime_files
+            $proven = $true
+        }
+    }
+    if ($proven) {
+        foreach ($path in @($paths.source,$paths.candidate)) { Remove-PortableOwnedDirectory $Root $path }
+        Remove-PortableBuildStages $Root $record $paths
+    } else {
+        Write-AtomicJson (Join-Path $Root ("cache/failed-" + $record.operation + '.json')) $record
+        Write-Warning 'Unvollstaendige Kandidaten bleiben als Diagnosematerial im privaten Cache erhalten.'
+    }
+    if ((Test-Path -LiteralPath $paths.old_checkout) -or (Test-Path -LiteralPath $paths.old_runtime)) {
+        throw 'Die bisherige Installation wurde nicht vollstaendig wiederhergestellt.'
+    }
+    if (Test-Path -LiteralPath $paths.relocation) {
+        if ($record.capture_completed) { Remove-Item -LiteralPath $paths.relocation }
+        else {
+            if ($record.had_checkout) { Assert-PortableInventory $paths.checkout $record.old_release.checkout_files -Persistent -VerifyHashes }
+            if ($record.had_runtime) { Assert-PortableInventory $paths.runtime $record.old_release.runtime_files }
+            if ($record.legacy_directory) {
+                Assert-PortableInventory (Join-Path (Join-Path $Root 'versions') $record.legacy_directory) $record.old_release.runtime_files
+            }
+            $diagnostic = Join-Path $Root ('cache/failed-relocation-' + $record.operation + '.json')
+            Assert-PlainPath $diagnostic
+            if (Test-Path -LiteralPath $diagnostic) { throw "Capture-Diagnosepfad ist bereits belegt: $diagnostic" }
+            [IO.File]::Move($paths.relocation,$diagnostic)
+            Write-Warning "Unvollstaendiger Native-Capture bleibt ohne Datenbewegung erhalten: $diagnostic"
+        }
+    }
+    Remove-Item -LiteralPath (Join-Path $Root 'portable-transaction.json')
 }

@@ -1,4 +1,3 @@
-from pathlib import Path
 from typing import TYPE_CHECKING
 
 from flitzis_looper.controller.bs_roformer_generation import BsRoformerStemGenerationBackend
@@ -13,12 +12,19 @@ from flitzis_looper.controller.stem_generation import (
 )
 
 if TYPE_CHECKING:
+    from pathlib import Path
+
     from flitzis_looper.models import StemSeparator
 
 
-def separator_model_cache_dir(separator: StemSeparator) -> Path:
+def separator_model_cache_dir(
+    separator: StemSeparator,
+    *,
+    env: dict[str, str] | None = None,
+    project_root: Path | None = None,
+) -> Path:
     """Resolve only model-cache paths, without imports, scans or downloads."""
-    root = default_demucs_model_cache_dir(project_root=Path.cwd())
+    root = default_demucs_model_cache_dir(env=env, project_root=project_root)
     return root / "bs-roformer-musdb18hq" if separator == "bs-roformer:musdb18hq" else root
 
 

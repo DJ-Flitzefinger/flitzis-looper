@@ -5,7 +5,7 @@
 //! Pending and claimed parent sources use the actual callback CAS. Historical
 //! acknowledged-error text remains journal policy, without a parent ACK claim.
 use super::*;
-use pyo3::types::{PyDict, PyDictMethods};
+use pyo3::types::{PyDict, PyDictMethods, PyModule, PyModuleMethods};
 
 const RESUME_ROOT: &str = "FLITZI_MATERIAL_MIGRATION_RESUME_ROOT";
 const RESUME_CHILD: &str = "audio_engine::cold_load::tests::material_migration_control_tests::material_migration_resume_tests::material_migration_resume_new_process_child";
@@ -596,6 +596,23 @@ fn material_migration_resume_new_process_child() {
     assert_eq!(engine.current_timing_acknowledgements.current_epoch(0), 0);
     let locals = Python::attach(|py| {
         let locals = migration_python_locals(py, &root);
+        resume_python(
+            py,
+            &locals,
+            "import sys\nsys.path.insert(0, source_modules)\n",
+        );
+        // This isolated child uses the current Rust resolver while leaving the
+        // Human's installed extension untouched. No recovery facade is supplied.
+        let native = PyModule::import(py, "flitzis_looper_audio").unwrap();
+        native
+            .add_function(
+                pyo3::wrap_pyfunction!(
+                    crate::audio_engine::resolve_migration_config_reference,
+                    &native
+                )
+                .unwrap(),
+            )
+            .unwrap();
         locals
             .set_item("parent_transaction", PARENT_TRANSACTION)
             .unwrap();
@@ -617,9 +634,10 @@ fn material_migration_resume_new_process_child() {
             py,
             &locals,
             r#"
-import sys, json, hashlib
+import sys, json, hashlib, os
 from pathlib import Path
 sys.path.insert(0, source_modules)
+import flitzis_looper_audio as native
 from flitzis_looper.models import ProjectState, SessionState
 from flitzis_looper.key_intent import MAX_KEY_EPOCH
 from flitzis_looper.material_migration_model import MaterialMigrationJournal
@@ -630,6 +648,12 @@ from flitzis_looper.controller.material_migration import MaterialMigrationContro
 from flitzis_looper_audio import MaterialMigrationJournalStore
 samples = Path(project_root)/'samples'
 config = samples/'flitzis_looper.config.json'
+resolver = getattr(native, 'resolve_migration_config_reference', None)
+assert callable(resolver), {'native_module': getattr(native, '__file__', None)}
+resolved_config = resolver(str(samples), str(config.resolve()))
+expected_config = os.path.normcase(os.path.abspath(config))
+assert os.path.normcase(os.path.abspath(resolved_config)) == expected_config, {
+    'resolved_config': resolved_config, 'expected_config': expected_config}
 config_before = config.read_bytes()
 scan = [json.loads(item) for item in MaterialMigrationJournalStore.scan(str(samples))]
 assert len(scan) == 1 and scan[0]['error'] is None
@@ -651,8 +675,16 @@ loader = LoaderController(project, session, audio, lambda _: None, persistence.m
 loader.bind_asset_lifecycle(assets)
 persistence.bind_audio(audio)
 service = MaterialMigrationController(persistence, session, audio, assets, loader)
-assert service._ledger_enabled and service.status == 'unresolved'
-assert service._recovery_pending == [parent]
+recovery_state = {
+    'ledger_enabled': service._ledger_enabled, 'status': service.status,
+    'error': service.error, 'recovery_errors': service._recovery_errors,
+    'cleanup_error': service.cleanup_error,
+    'pending_transactions': [(item.transaction_id, item.phase)
+                             for item in service._recovery_pending],
+    'expected_transaction': parent.transaction_id}
+assert service._ledger_enabled and service.status == 'unresolved', recovery_state
+assert service._recovery_errors == [], recovery_state
+assert service._recovery_pending == [parent], recovery_state
 assert persistence._migration_owner is not None
 assert service._history_future is None
 for i in (0,215):

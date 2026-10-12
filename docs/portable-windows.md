@@ -1,124 +1,148 @@
 # Portable Looper for Windows x64
 
 `INSTALL-LOOPER-PORTABLE.bat` installs the current remote `main` from source.
-Copy that single file into your chosen folder and double-click it. No terminal
-commands or preinstalled Git, Python or Rust are needed. It creates
-`Flitzis-Looper` beside the BAT and checks and acquires the required build tools.
-Internet access is needed for installation and update checks. A project Release,
-local bundle channel or developer checkout is not required.
+Copy that single file into your chosen folder and double-click it. It creates
+`Flitzis-Looper` beside the BAT and acquires the required build tools. No terminal
+commands, preinstalled Git/Python/Rust or project binary release are required.
+Internet access is needed for installation, updates and missing model downloads.
 
 ## Install, start and update
 
-The installer acquires private Git and uv, CPython 3.14.2, Rust 1.95.0,
-vcpkg/Rubber Band and FFmpeg/FFprobe as required, then builds a non-editable
-Release runtime from one exact remote `main` commit. Its own tools and caches
-stay under the installation root; it does not change the developer environment
-or persistent user PATH. Required tool downloads are pinned and verified before
-execution.
+The installer pins and verifies its private Git, uv, CPython 3.14.2, Rust 1.95.0,
+vcpkg/Rubber Band and FFmpeg/FFprobe inputs, then builds a private Release runtime
+from one exact remote `main` commit. It keeps one complete Git checkout on `main`
+at `Flitzis-Looper/flitzis-looper`, including tracked source, assets, vendor and
+build files. `Flitzis-Looper/Runtime` holds the private Python interpreter,
+dependencies, FFmpeg and launch helpers. Native binaries sit beside their tracked
+wrappers in the checkout. The app's working directory is this checkout.
 
-During compilation the installer temporarily maps a free drive letter to the
-chosen installation folder, because Microsoft build tools can reject long paths.
-It keeps all files in that folder, preserves existing drive mappings and removes
-its own mapping when the build ends. A starter can acquire a fresh mapping for
-long runtime DLL paths, keep it while the app runs, then remove it. Starts do not
-depend on a drive letter left over from installation.
+Start the installed app with `Flitzis-Looper/START-LOOPER.bat`. The `start.bat` and
+`start-release.bat` aliases select the same private Release runtime. Ordinary
+starts perform no build, dependency installation, update or model preflight.
+`START-LOOPER.bat --check` runs the isolated runtime import/DLL/FFmpeg/offline-worker
+checks without opening the GUI or an audio device.
 
-Missing Microsoft C++ Build Tools and the Windows SDK are installed using the
-supported Microsoft installer. These are shared Windows build components:
-Windows may show a UAC administrator prompt, and their installation may require
-a restart. Approve the Windows prompt if you want to continue. If elevation is
-declined or a restart is required, installation stops without activating a
-partial runtime. After the required restart, double-click the BAT again.
+Every successful installation or update also prepares `demucs:htdemucs` and
+`bs-roformer:musdb18hq` using the existing model resolvers. It verifies checkpoint
+assets and loads each real model on CPU in a separate fresh process, sequentially.
+Model failures prevent activation. Running the installer on an unchanged healthy
+`main` repairs missing or corrupt model assets and repeats both CPU loads without
+invoking the Native builder.
 
-The first installation downloads and builds a substantial toolchain as well as
-the application dependencies. Downloads, build caches and retained runtimes can
-require many gigabytes, and initial compilation can take a long time. There is
-no fixed time or disk-size promise: allow additional space for models, samples
-and later versions. Progress and build logs help identify a failed step.
+The starter holds the same exclusive installation lock as the updater for the
+entire private app process lifetime. Updates stop with a close-and-retry message
+when the app is running. They also detect an older installation's actual private
+Python processes, whose starters did not use that shared lock. The installer
+does not terminate them. Native data custody guards additionally protect against
+an active material owner.
 
-Start the installed application with `Flitzis-Looper/START-LOOPER.bat`. Its
-`start.bat` and `start-release.bat` aliases select the same private Release
-runtime; ordinary starts perform no build, dependency installation or update.
+Changed source or a damaged private runtime is prepared in short owned cache
+directories. The installer validates the complete candidate checkout, runtime,
+both models and existing file ownership before activation. A durable transaction
+journal covers short checkout/runtime backups, data transfer and starter
+selection. Repeating the same BAT after an interruption restores the previous
+installation or finishes cleanup of a fully verified accepted candidate before
+starting another update. A starter refuses an unfinished transaction and points
+to that recovery step.
 
-Run the installer again to check the current remote `main`. If the installed
-commit is unchanged and its private runtime is healthy, it avoids another build.
-A changed commit is built in fresh owned directories and checked without opening
-the GUI or an audio device. Only after that preflight succeeds does
-`current.json` change atomically. The next app start uses the new runtime and its
-matching launch logic. Existing processes keep their retained old runtime files.
-Failed updates retain the previous selection, runtimes and persistent user data.
+The installation uses these areas:
 
-The installation keeps these areas separate:
-
-- `data`: projects, samples and settings used by the application.
-- `models`: persistent separator/model caches.
-- `tools`: installation-owned bootstrap and build tools.
-- `cache`: downloads, source/build preparation and failed installation diagnostics.
-- `b`: native build cache; its short name also protects canonical linker paths.
-- `versions`: complete private runtimes selected by `current.json`.
+- `flitzis-looper/samples`: project samples, PCM caches, material inventories and
+  `flitzis_looper.config.json`.
+- `flitzis-looper/config/input`: persisted input configuration.
+- `Runtime`: the fixed private interpreter, dependencies, FFmpeg and launch files.
+- `models`: persistent model caches shared by install checks and offline workers.
+- `tools`: verified bootstrap and build tools.
+- `cache`: useful package preparation caches and bounded failed-install diagnostics;
+  successful operation stages and short backups are removed.
+- `b`: reusable Native build output; its short name protects linker paths.
 - `logs`: installation-local diagnostics.
 
-The completed application, private runtime, data and models can be moved by
-moving the whole `Flitzis-Looper` directory. Its starters resolve runtime and
-data/model paths from the new location. Shared Microsoft Build Tools/SDK and
-Windows GPU/audio drivers remain system components; they are not relocatable
-parts of the application directory. Installing an update on another Windows
-computer checks that computer's required build components again.
+There is no second `Runtime/app` copy and no permanent per-version runtime tree.
+The full checkout's installed-file inventory distinguishes shipped files from
+Human changes. Unknown files or changed tracked files outside persistent sample
+and input areas stop activation with their concrete preserved path. Existing
+Runtime files, including licenses and DLLs, must also match their recorded
+hashes; replacement bytes stop updates and retired-runtime cleanup. Missing
+Runtime files remain eligible for repair. Files are not removed based only on
+a directory name. Completed downloads and
+successful operation-owned environment, wheel, license and bundle stages are
+removed. The installer reports retained tool/build cache sizes and their reuse
+purpose; it does not recursively purge caches merely to reduce disk usage.
 
-Copying only a starter or one version does not move the whole installation.
-Audio imported by reference may still use external paths chosen by the user.
-Separator checkpoints use the existing model setup and remain persistent across
-updates; developer models, projects and settings are not copied. Separate
-Portable and developer runtimes do not share settings or installed modules;
-simultaneous apps still use the same CPU/GPU and audio devices.
+An older recognized `versions/main-...` plus `data` installation migrates once.
+The installer proves the old runtime's files from its exact source revision,
+pinned interpreter/FFmpeg and installed distribution inventories. Native capture
+binds the real sample directory, config files and journals before any code swap.
+Native moves that same directory into the final checkout and projects location
+references while preserving material birth ownership, latest config state and
+external references. Input files move intact. Unknown old runtime files,
+ambiguous configs, active owners, reparse points, destination collisions or
+unsupported custody capabilities stop before swaps and keep the old installation.
+Sample migration requires same-volume Windows FileIDs and directory alternate
+data streams; NTFS provides the tested capability. Unrelated files left in the
+old `data` area remain preserved.
 
-For automation, the BAT accepts an optional target directory followed by
-`--no-pause`. `START-LOOPER.bat --check` runs the isolated import/DLL/FFmpeg/worker
-preflight without opening the GUI or an audio device. An installer lock
-serializes concurrent updates. Nonempty unowned targets and reparse installation
-paths are rejected; downloaded archives reject unsafe paths, duplicates and
-symlinks.
+Temporary drive mappings protect long paths during builds and runtime DLL
+loading. All files stay in the chosen folder. Each operation acquires a free
+letter, preserves existing mappings, keeps its own mapping for its child process
+lifetime and removes it afterward. Starts do not depend on an installation-time
+drive letter. Reparse installation paths, unsafe archive paths, duplicate archive
+entries and archive symlinks are rejected.
+
+Missing Microsoft C++ Build Tools and the Windows SDK use Microsoft's supported
+installer. These shared Windows components may show a UAC prompt and require a
+restart. Declining elevation or requiring a reboot stops without activating a
+partial runtime; after the restart, run the BAT again. The private installation
+does not change the developer environment or persistent user PATH.
+
+The first installation downloads a substantial toolchain, application dependencies
+and both separator checkpoints. Compilation and real CPU model loads can take a
+long time and require substantial disk and memory. There is no fixed time or disk
+size promise. Logs identify the failed stage. Developer settings, samples and
+models are not copied into the installation. Referenced external audio keeps the
+external paths chosen by the user. Shared Build Tools/SDK and GPU/audio drivers
+remain system components. For automation, the BAT accepts an optional target
+directory followed by `--no-pause`.
 
 ## Installer maintenance and validation
 
-Changes to dependency locks, Python/Rust ABI, MSVC/SDK/vcpkg requirements, native
-DLLs, source layout, launch/data/model paths or FFmpeg must review and adapt the
-BAT, `scripts/portable`, focused tests and this document in the same delivery.
-The source installer must continue to work without a project binary release.
+Changes to dependencies, ABI, toolchain, Native DLLs, source layout, data/model
+paths or FFmpeg must review the BAT, `scripts/portable`, focused tests and this
+document together. Keep the Native relocation contract authoritative; installer
+code must not copy sample trees or rewrite JSON references independently.
 
-Focused missing-tool, unchanged-main, update, failure and relocation checks are
-required when those paths change. Passing tests on a configured developer
-computer does not establish a clean-Windows installation. Clean Windows x64
-bootstrap and Human GUI/audio/device/listening acceptance remain separate gates;
-they must be recorded from actual runs before being described as passed.
+Focused missing-tool, deep-path/SUBST, DLL isolation, unchanged-main model repair,
+update/failure/recovery, legacy migration, ownership and actual-process lifetime
+checks are required when these paths change. Passing tests on a configured
+developer computer does not establish a clean-Windows bootstrap. Clean Windows
+x64 installation and Human GUI/audio/device/listening acceptance remain separate
+gates and must be recorded from actual runs before being described as passed.
 
 ## Advanced maintainer bundle utility
 
-`scripts/portable/build_bundle.py` remains an advanced packaging utility for an
-already synchronized Windows x64 CPython 3.14 developer environment. It is not
-the ordinary installation or update path. It reads installed non-development
-dependency RECORDs and copies files without replacing the developer runtime.
-The base interpreter's `site-packages` is excluded before copying the declared
-dependency closure. A fresh non-editable Release wheel and its full Native source
-commit are required; changed Native inputs are rejected. Runtime imports,
-private loaded DLL paths and offline-worker imports must pass before packaging.
+`scripts/portable/build_bundle.py` remains an advanced utility for an already
+synchronized Windows x64 CPython 3.14 developer environment. Its ZIP uses the same
+full `flitzis-looper` checkout plus fixed `Runtime` layout and starter contract.
+It reads installed non-development dependency RECORDs, excludes the base
+interpreter's `site-packages`, and copies the declared dependency closure without
+replacing the developer runtime. A fresh non-editable Release wheel and exact
+Native source commit are required. Runtime imports, private loaded DLL paths and
+offline-worker imports must pass before packaging. The source BAT remains the
+ordinary install/update path and performs the model preparation gate.
 
 Required arguments are `--native-wheel`, `--native-source-commit`, `--ffmpeg-dir`,
 one or more `--dll-dir`, external `--license-file NAME=PATH` inputs and `--output`
-outside the repository. The output directory must be empty or owned by the
-bundle utility. Application source comes from tracked `src/flitzis_looper`
-files; private projects, settings and checkpoints are excluded. A generated ZIP
-or manifest is a maintainer artifact, not a prerequisite for the standalone BAT.
-
-The external license inventory includes `rubberband.txt`, `samplerate.txt`,
-`sleef.txt`, `ffmpeg.txt`, `ffmpeg-README.txt`, `antlr-4.9.3.txt`,
-`onnxruntime-1.24.2.txt`, `onnxruntime-1.24.2-notices.txt`,
-`directml-1.15.4.html`, `msvc-2026.docx` and `source-urls.json`.
-Python/package licenses and project/vendor notices are retained. Required DLL
-names are declared in the builder, including the redistributable VC runtime;
+outside the repository. The output must be empty or utility-owned. Private
+projects, input settings and checkpoints are excluded. The external license
+inventory includes `rubberband.txt`, `samplerate.txt`, `sleef.txt`, `ffmpeg.txt`,
+`ffmpeg-README.txt`, `antlr-4.9.3.txt`, `onnxruntime-1.24.2.txt`,
+`onnxruntime-1.24.2-notices.txt`, `directml-1.15.4.html`, `msvc-2026.docx` and
+`source-urls.json`. Python/package licenses and project/vendor notices are kept.
+DLL names, including the redistributable VC runtime, are declared in the builder;
 do not source them from System32.
 
-Clean reviewed source is the builder default. Its `--allow-dirty` flag is only an
-explicit local candidate option and records the base commit, Native source
-commit and actual source fingerprint. Optional Beat This diagnostic setup
-remains a separate environment workflow.
+Clean reviewed source is the builder default. `--allow-dirty` is an explicit local
+candidate option recording the base commit, Native source commit and source
+fingerprint; the ordinary installer rejects such candidates. Optional Beat This
+diagnostic setup remains a separate environment workflow.

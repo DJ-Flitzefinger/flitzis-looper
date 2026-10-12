@@ -12,6 +12,7 @@ const ENCODING: &str = "accepted-constant-timing-qm-raw-v1";
 
 /// Fresh source/request capture made before background restore work begins.
 #[pyclass(frozen)]
+#[derive(Clone)]
 pub struct SavedConstantTimingTicket {
     id: usize,
     request_id: u64,
@@ -22,7 +23,7 @@ pub struct SavedConstantTimingTicket {
     sample: SampleBuffer,
     epoch: Arc<AtomicU64>,
     captured_epoch: u64,
-    record: Value,
+    record: Arc<Value>,
     pcm_budget: PcmBudget,
 }
 
@@ -347,8 +348,8 @@ fn decode(
 }
 
 fn verify(
-    engine: &AudioEngine,
     ticket: &SavedConstantTimingTicket,
+    source: &crate::audio_engine::native_owned_work::CompleteSampleWork,
 ) -> Result<
     (
         AcceptedConstantTiming,
@@ -366,9 +367,13 @@ fn verify(
     if actual_digest != ticket.source_digest {
         return Err("actual source file differs from loaded source".into());
     }
+    #[cfg(test)]
+    crate::audio_engine::native_owned_work::observe(
+        crate::audio_engine::native_owned_work::WorkPoint::SavedTimingSource,
+    );
     check_timing_pcm_geometry(&ticket.sample, ticket.sample_rate_hz, ticket.pcm_budget)?;
     let (complete, retained_reference_bytes) =
-        complete_timing_sample(engine, ticket.id, &ticket.sample, ticket.pcm_budget)?;
+        complete_timing_sample(source, &ticket.sample, ticket.pcm_budget)?;
     if cancelled() {
         return Err("saved timing restore cancelled".into());
     }
@@ -573,50 +578,107 @@ pub(in crate::audio_engine) fn capture_saved(
         sample,
         epoch: engine.prepared_source_epochs[id].clone(),
         captured_epoch: engine.prepared_source_epochs[id].load(Ordering::Acquire),
-        record,
+        record: Arc::new(record),
         pcm_budget: PcmBudget::default(),
     })
 }
 
+#[cfg(test)]
 pub(in crate::audio_engine) fn restore_saved(
     engine: &AudioEngine,
     producer: &Arc<Mutex<Producer<ControlMessage>>>,
     saved: &SavedConstantTimingTicket,
 ) -> PyResult<ConstantTimingTicket> {
-    if engine
-        .constant_timing_busy
-        .compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)
-        .is_err()
-    {
-        return Err(PyValueError::new_err("constant timing preparation busy"));
+    SavedTimingRestoreWork::capture(engine, saved)
+        .map_err(PyValueError::new_err)?
+        .prepare()
+        .map_err(PyValueError::new_err)?
+        .finish(engine, producer)
+}
+
+pub(in crate::audio_engine) struct SavedTimingRestoreWork {
+    saved: SavedConstantTimingTicket,
+    source: crate::audio_engine::native_owned_work::CompleteSampleWork,
+    lease: PreparationLease,
+}
+
+pub(in crate::audio_engine) struct PreparedSavedTimingRestore {
+    saved: SavedConstantTimingTicket,
+    accepted: AcceptedConstantTiming,
+    binding: PcmBindingMetadata,
+    guard: TimingAdoptionGuard,
+    _lease: PreparationLease,
+}
+
+impl SavedTimingRestoreWork {
+    pub(in crate::audio_engine) fn capture(
+        engine: &AudioEngine,
+        saved: &SavedConstantTimingTicket,
+    ) -> Result<Self, String> {
+        let lease = PreparationLease::capture(engine)?;
+        validate_capture(engine, saved)?;
+        let source = crate::audio_engine::native_owned_work::CompleteSampleWork::capture(
+            engine,
+            saved.id,
+            &saved.sample,
+        )?;
+        Ok(Self {
+            saved: saved.clone(),
+            source,
+            lease,
+        })
     }
-    let _lease = PreparationLease(&engine.constant_timing_busy);
-    validate_capture(engine, saved).map_err(PyValueError::new_err)?;
-    let (accepted, binding, mut guard) = verify(engine, saved).map_err(PyValueError::new_err)?;
-    validate_capture(engine, saved).map_err(PyValueError::new_err)?;
-    // Fresh verified binding initializes the guard; historical accepted evidence
-    // stays immutable and is admitted only through source-verified adoption.
-    let adoption_ticket = guard
-        .issue_ticket()
-        .map_err(|e| PyValueError::new_err(e.to_string()))?;
-    let ticket = ConstantTimingTicket {
-        id: saved.id,
-        request_id: saved.request_id,
-        source_generation: saved.source_generation,
-        sample_rate_hz: saved.sample_rate_hz,
-        source_digest: saved.source_digest.clone(),
-        sample: saved.sample.clone(),
-        epoch: saved.epoch.clone(),
-        captured_epoch: saved.captured_epoch,
-        evidence: accepted.evidence().clone(),
-        binding,
-        guard: Mutex::new(guard),
-        adoption_ticket,
-        publication: Mutex::new(None),
-        pcm_budget: saved.pcm_budget,
-    };
-    publish_record(engine, producer, &ticket, accepted, true)?;
-    Ok(ticket)
+
+    pub(in crate::audio_engine) fn prepare(self) -> Result<PreparedSavedTimingRestore, String> {
+        let (accepted, binding, guard) = verify(&self.saved, &self.source)?;
+        Ok(PreparedSavedTimingRestore {
+            saved: self.saved,
+            accepted,
+            binding,
+            guard,
+            _lease: self.lease,
+        })
+    }
+}
+
+impl PreparedSavedTimingRestore {
+    pub(in crate::audio_engine) fn finish(
+        self,
+        engine: &AudioEngine,
+        producer: &Arc<Mutex<Producer<ControlMessage>>>,
+    ) -> PyResult<ConstantTimingTicket> {
+        let Self {
+            saved,
+            accepted,
+            binding,
+            mut guard,
+            _lease,
+        } = self;
+        validate_capture(engine, &saved).map_err(PyValueError::new_err)?;
+        // Fresh verified binding initializes the guard; historical accepted evidence
+        // stays immutable and is admitted only through source-verified adoption.
+        let adoption_ticket = guard
+            .issue_ticket()
+            .map_err(|e| PyValueError::new_err(e.to_string()))?;
+        let ticket = ConstantTimingTicket {
+            id: saved.id,
+            request_id: saved.request_id,
+            source_generation: saved.source_generation,
+            sample_rate_hz: saved.sample_rate_hz,
+            source_digest: saved.source_digest,
+            sample: saved.sample,
+            epoch: saved.epoch,
+            captured_epoch: saved.captured_epoch,
+            evidence: accepted.evidence().clone(),
+            binding,
+            guard: Mutex::new(guard),
+            adoption_ticket,
+            publication: Mutex::new(None),
+            pcm_budget: saved.pcm_budget,
+        };
+        publish_record(engine, producer, &ticket, accepted, true)?;
+        Ok(ticket)
+    }
 }
 
 /// Isolated measurements may explicitly admit the existing larger verifier budget.
@@ -635,97 +697,171 @@ pub(in crate::audio_engine) fn capture_saved_with_measurement_limit(
     Ok(saved)
 }
 
+#[cfg(test)]
 pub(in crate::audio_engine) fn export_current(
     engine: &AudioEngine,
     id: usize,
     source_path: String,
 ) -> Result<Option<String>, String> {
-    if id >= NUM_SAMPLES {
-        return Err("id out of range".into());
+    let Some(work) = SavedTimingExportWork::capture(engine, id, source_path)? else {
+        return Ok(None);
+    };
+    work.prepare()?.finish(engine)
+}
+
+pub(in crate::audio_engine) struct SavedTimingExportWork {
+    saved: SavedConstantTimingTicket,
+    publication_epoch: u64,
+    accepted: Arc<AcceptedConstantTiming>,
+    source: crate::audio_engine::native_owned_work::CompleteSampleWork,
+    _lease: PreparationLease,
+}
+
+pub(in crate::audio_engine) struct VerifiedTimingExport {
+    saved: SavedConstantTimingTicket,
+    publication_epoch: u64,
+    encoded: String,
+    _lease: PreparationLease,
+}
+
+impl SavedTimingExportWork {
+    pub(in crate::audio_engine) fn capture(
+        engine: &AudioEngine,
+        id: usize,
+        source_path: String,
+    ) -> Result<Option<Self>, String> {
+        if id >= NUM_SAMPLES {
+            return Err("id out of range".into());
+        }
+        let captured = {
+            let requests = engine
+                .pad_request_ids
+                .lock()
+                .map_err(|_| "request lock poisoned")?;
+            if engine
+                .timing_intents
+                .lock()
+                .map_err(|_| "timing intent lock poisoned")?[id]
+                != TimingIntent::Automatic
+            {
+                return Ok(None);
+            }
+            let cache = engine
+                .sample_cache
+                .lock()
+                .map_err(|_| "sample cache lock poisoned")?;
+            let Some(sample) = cache[id].as_ref() else {
+                return Ok(None);
+            };
+            let generations = engine
+                .loaded_source_generations
+                .lock()
+                .map_err(|_| "source generation lock poisoned")?;
+            let digests = engine
+                .loaded_source_digests
+                .lock()
+                .map_err(|_| "source digest lock poisoned")?;
+            let mut all = engine
+                .current_constant_timing
+                .lock()
+                .map_err(|_| "current timing lock poisoned")?;
+            retire_old_current_records(engine, id, &mut all[id]);
+            let Some(current) = current_record_for_source(
+                engine,
+                id,
+                sample,
+                generations[id],
+                digests[id].as_deref(),
+                &all[id],
+            ) else {
+                return Ok(None);
+            };
+            if current.accepted.refinement().is_some()
+                || current.accepted.independent_quarters().is_some()
+                || !matches!(
+                    current.accepted.evidence().backend(),
+                    BackendEvidence::Qm { .. }
+                )
+            {
+                return Ok(None);
+            }
+            (
+                SavedConstantTimingTicket {
+                    id,
+                    request_id: requests[id],
+                    source_generation: generations[id].0,
+                    sample_rate_hz: generations[id].1,
+                    source_digest: current.binding.source_sha256.clone(),
+                    source_path,
+                    sample: sample.clone(),
+                    epoch: engine.prepared_source_epochs[id].clone(),
+                    captured_epoch: engine.prepared_source_epochs[id].load(Ordering::Acquire),
+                    record: Arc::new(Value::Null),
+                    pcm_budget: current.pcm_budget,
+                },
+                current.publication_epoch,
+                current.accepted.clone(),
+            )
+        };
+        let lease = PreparationLease::capture(engine)?;
+        let source = crate::audio_engine::native_owned_work::CompleteSampleWork::capture(
+            engine,
+            id,
+            &captured.0.sample,
+        )?;
+        Ok(Some(Self {
+            saved: captured.0,
+            publication_epoch: captured.1,
+            accepted: captured.2,
+            source,
+            _lease: lease,
+        }))
     }
-    let captured = {
-        let requests = engine
-            .pad_request_ids
-            .lock()
-            .map_err(|_| "request lock poisoned")?;
+
+    pub(in crate::audio_engine) fn prepare(mut self) -> Result<VerifiedTimingExport, String> {
+        #[cfg(test)]
+        crate::audio_engine::native_owned_work::observe(
+            crate::audio_engine::native_owned_work::WorkPoint::SavedTimingEncode,
+        );
+        let envelope = encode(&self.accepted)?;
+        #[cfg(test)]
+        crate::audio_engine::native_owned_work::observe(
+            crate::audio_engine::native_owned_work::WorkPoint::SavedTimingSerialize,
+        );
+        let encoded = envelope.to_string();
+        if encoded.len() > MAX_HYPOTHESIS_JSON_BYTES {
+            return Err("complete saved timing byte limit exceeded".into());
+        }
+        self.saved.record = Arc::new(envelope["record"].clone());
+        // A failed content/source verification cannot save previously accepted data.
+        verify(&self.saved, &self.source)?;
+        // Evidence, JSON and source leases retire in this detached phase. Final
+        // adoption owns only fixed-size authority and the already encoded string.
+        self.saved.record = Arc::new(Value::Null);
+        Ok(VerifiedTimingExport {
+            saved: self.saved,
+            publication_epoch: self.publication_epoch,
+            encoded,
+            _lease: self._lease,
+        })
+    }
+}
+
+impl VerifiedTimingExport {
+    pub(in crate::audio_engine) fn finish(
+        self,
+        engine: &AudioEngine,
+    ) -> Result<Option<String>, String> {
+        validate_capture(engine, &self.saved)?;
         if engine
-            .timing_intents
-            .lock()
-            .map_err(|_| "timing intent lock poisoned")?[id]
-            != TimingIntent::Automatic
+            .current_timing_acknowledgements
+            .current_epoch(self.saved.id)
+            != self.publication_epoch
         {
             return Ok(None);
         }
-        let cache = engine
-            .sample_cache
-            .lock()
-            .map_err(|_| "sample cache lock poisoned")?;
-        let Some(sample) = cache[id].as_ref() else {
-            return Ok(None);
-        };
-        let generations = engine
-            .loaded_source_generations
-            .lock()
-            .map_err(|_| "source generation lock poisoned")?;
-        let digests = engine
-            .loaded_source_digests
-            .lock()
-            .map_err(|_| "source digest lock poisoned")?;
-        let mut all = engine
-            .current_constant_timing
-            .lock()
-            .map_err(|_| "current timing lock poisoned")?;
-        retire_old_current_records(engine, id, &mut all[id]);
-        let Some(current) = current_record_for_source(
-            engine,
-            id,
-            sample,
-            generations[id],
-            digests[id].as_deref(),
-            &all[id],
-        ) else {
-            return Ok(None);
-        };
-        let Ok(envelope) = encode(&current.accepted) else {
-            return Ok(None);
-        };
-        (
-            SavedConstantTimingTicket {
-                id,
-                request_id: requests[id],
-                source_generation: generations[id].0,
-                sample_rate_hz: generations[id].1,
-                source_digest: current.binding.source_sha256.clone(),
-                source_path,
-                sample: sample.clone(),
-                epoch: engine.prepared_source_epochs[id].clone(),
-                captured_epoch: engine.prepared_source_epochs[id].load(Ordering::Acquire),
-                record: envelope["record"].clone(),
-                pcm_budget: current.pcm_budget,
-            },
-            current.publication_epoch,
-            envelope,
-        )
-    };
-    if engine
-        .constant_timing_busy
-        .compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)
-        .is_err()
-    {
-        return Err("constant timing preparation busy".into());
+        Ok(Some(self.encoded))
     }
-    let _lease = PreparationLease(&engine.constant_timing_busy);
-    // A failed content/source verification cannot save previously accepted data.
-    verify(engine, &captured.0)?;
-    validate_capture(engine, &captured.0)?;
-    if engine.current_timing_acknowledgements.current_epoch(id) != captured.1 {
-        return Ok(None);
-    }
-    let encoded = captured.2.to_string();
-    if encoded.len() > MAX_HYPOTHESIS_JSON_BYTES {
-        return Err("complete saved timing byte limit exceeded".into());
-    }
-    Ok(Some(encoded))
 }
 
 #[cfg(test)]

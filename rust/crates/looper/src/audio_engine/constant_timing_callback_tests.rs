@@ -195,12 +195,12 @@ fn productive_history_native_loaded_source_publication_fences_new_launch_during_
     assert_eq!(digest, Some("b".repeat(64)));
     assert!(!state.mixer.play_sample(0, 1.0)); // new control pin cannot authorize old callback PCM
     let mut blocked = LimitedRetirement {
-        slots: 1,
+        slots: 2 * MAX_VOICES + 2,
         retired: Vec::new(),
         stems: Vec::new(),
     };
     assert_eq!(state.drain(&mut consumer, &mut blocked), 0);
-    blocked.slots = MAX_VOICES + 2;
+    blocked.slots = 2 * MAX_VOICES + 3;
     assert_eq!(state.drain(&mut consumer, &mut blocked), 1);
     assert!(!state.mixer.play_sample(0, 1.0)); // Automatic requires fresh new-source acceptance
     state.mixer.render(&mut [0.0; 37], &mut [0.0; NUM_SAMPLES]);
@@ -447,7 +447,7 @@ fn productive_history_exclusive_preflight_failure_preserves_loop_and_other_audio
             .iter()
             .any(|voice| voice.is_playing_sample(1))
     );
-    retirement.slots = MAX_VOICES;
+    retirement.slots = 3 * MAX_VOICES;
     retirement.calls = 0;
     retirement.revoke_at_preflight = Some(2); // after guard but before final admitted source snapshot
     execute_scheduled_command(
@@ -458,6 +458,8 @@ fn productive_history_exclusive_preflight_failure_preserves_loop_and_other_audio
         &mut state.messages,
         &mut retirement,
     );
+    assert_eq!(retirement.calls, 2);
+    assert!(!state.mixer.can_play_sample(0, 1.0));
     assert_eq!(
         productive_voice(&state)
             .stretch
@@ -499,7 +501,7 @@ fn productive_history_exclusive_commit_uses_admitted_source_when_authority_chang
         revoke_at_preflight: None,
         revoke_at_retire: true,
         samples: Vec::new(),
-        slots: 2 * MAX_VOICES,
+        slots: 3 * MAX_VOICES,
     };
     execute_scheduled_command(
         &mut state.mixer,

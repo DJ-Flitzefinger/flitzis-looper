@@ -4,9 +4,7 @@ use crate::audio_engine::constants::{
     SPEED_MIN, VOLUME_MAX, VOLUME_MIN,
 };
 use crate::audio_engine::input_mapping::InputRuntime;
-use crate::audio_engine::stem_cache::{
-    prepare_stem_buffers_from_cache, project_stem_cache_dir, source_version_hash,
-};
+use crate::audio_engine::stem_cache::{project_stem_cache_dir, source_version_hash};
 use crate::audio_engine::timing::{InputClock, validated_input_timestamp};
 use crate::audio_engine::transport::QuantizeGrid;
 use flitzis_looper_analysis as analysis;
@@ -69,11 +67,13 @@ mod key_lock_source_preparation;
 mod loop_acceptance;
 mod mixer;
 mod native_history_permit;
+mod native_owned_work;
 mod native_source_coverage;
 mod offline_stem_source;
 pub use offline_stem_source::OfflineStemSourceLease;
 mod prepared_native_history;
 pub(crate) mod prepared_source;
+mod prepared_stems_work;
 mod productive_source_history;
 mod progress;
 mod project_assets;
@@ -85,7 +85,8 @@ mod material_migration_control;
 mod material_migration_journal;
 mod material_migration_recovery;
 pub use material_migration_recovery::{
-    MigrationArtifactLease, MigrationInventoryLease, MigrationProjectGuard,
+    MigrationArtifactLease, MigrationInventoryLease, MigrationProjectGuard, portable_relocate_data,
+    resolve_migration_config_reference,
 };
 mod material_migration_stems;
 mod material_paths;
@@ -95,9 +96,7 @@ pub use material_migration_control::{
 };
 pub use material_paths::{resolve_project_asset, resolve_project_asset_details};
 mod processing_files;
-use prepared_source::{
-    enqueue_current_prepared_stems_with_owner, next_epoch, validate_prepared_ticket,
-};
+use prepared_source::next_epoch;
 pub use processing_files::SealedProcessingFiles;
 pub use project_assets::ProjectAssetLease;
 pub(crate) mod rubberband_backend;
@@ -636,7 +635,7 @@ pub struct AudioEngine {
     current_constant_timing: Mutex<Vec<Vec<constant_timing::CurrentConstantTimingRecord>>>,
     input_runtime_ownership: Arc<input_runtime_binding::InputRuntimeOwnership>,
     global_timing_revision: Arc<AtomicU64>,
-    constant_timing_busy: AtomicBool,
+    constant_timing_busy: Arc<AtomicBool>,
     offline_jobs: analysis_jobs::OfflineJobs,
     cold_jobs: cold_jobs::ColdJobs,
     waveform_requests: waveform::WaveformRequests,
@@ -689,6 +688,7 @@ impl AudioEngine {
 
     /// Prepare, lease and enqueue a current stem set through the actual control producer.
     /// Stream startup supplies the producer; hardware-free probes use the same kernel.
+    #[cfg(test)]
     pub(super) fn publish_prepared_stems_with_producer(
         &self,
         py: Python<'_>,
@@ -698,124 +698,17 @@ impl AudioEngine {
         source_ticket: &PreparedSourceTicket,
         producer: &Arc<Mutex<Producer<ControlMessage>>>,
     ) -> PyResult<()> {
-        if id >= NUM_SAMPLES {
-            return Err(PyValueError::new_err("id out of range"));
-        }
-        if source_version.trim().is_empty() {
-            return Err(PyValueError::new_err("source_version must not be empty"));
-        }
-        project_stem_cache_dir(&cache_dir).map_err(PyValueError::new_err)?;
-        let requests = self
-            .pad_request_ids
-            .lock()
-            .map_err(|_| PyRuntimeError::new_err("request lock poisoned"))?;
-        let sample = {
-            let cache = self
-                .sample_cache
-                .lock()
-                .map_err(|_| PyRuntimeError::new_err("Failed to acquire sample cache lock"))?;
-            cache
-                .get(id)
-                .and_then(|slot| slot.clone())
-                .ok_or_else(|| PyValueError::new_err("sample is not loaded"))?
-        };
-        validate_prepared_ticket(
-            source_ticket,
-            id,
-            &source_version,
-            requests[id],
-            &self.prepared_source_epochs[id],
-            &sample,
-        )
-        .map_err(PyValueError::new_err)?;
-        drop(requests);
-
-        // Ordinary cold-loaded sources use the persistent complete pair kernel.
-        // The legacy in-memory probe path below has no immutable cold source lease.
-        if self
-            .cold_leases
-            .lock()
-            .map_err(|_| PyRuntimeError::new_err("cold lease lock poisoned"))?[id]
-            .is_some()
-        {
-            let pair = py
-                .detach(|| {
-                    self.prepare_stem_pair_current(
-                        id,
-                        &source_version,
-                        &cache_dir,
-                        source_ticket,
-                        true,
-                        None,
-                    )
-                })
-                .map_err(PyValueError::new_err)?;
-            return self.publish_stem_pair_with_producer(&pair, source_ticket, producer);
-        }
-
-        // Preparation owns the exact generation while disk reads run detached.
-        // Successful registration below transfers protection to PCM readers.
-        let (_, generation_path) = project_assets::owned_path(
-            &self.project_assets_root()?,
-            std::path::Path::new(&cache_dir),
-        )
-        .map_err(|error| PyValueError::new_err(error.to_string()))?;
-        let generation_lease = self.acquire_project_asset_lease(cache_dir.clone())?;
-        let (mut stems, files) = py
-            .detach(|| -> Result<(crate::messages::PreparedStemSet, Option<Vec<std::fs::File>>), String> {
-                if let Some(shared) = self.project_assets.shared_stems(
-                    &generation_path, &sample, &source_version, source_ticket.sample_rate_hz
-                ).map_err(|error| error.to_string())? {
-                    return Ok((shared, None));
-                }
-                let files = project_assets::stem_readers::seal_stem_artifacts(&generation_path)
-                    .map_err(|error| error.to_string())?;
-                let peak = stem_cache::admitted_stem_pcm_bytes(sample.frame_count(), sample.channels)?
-                    .checked_add(sample.samples.len().checked_mul(4).ok_or("resident stem budget overflow")?)
-                    .ok_or("resident stem budget overflow")?;
-                if peak > cold_jobs::PCM_LIMIT_BYTES {
-                    return Err("complete stem preparation with resident window exceeds transient PCM admission".into());
-                }
-                let complete = self.complete_sample(id, &sample, cold_jobs::PCM_LIMIT_BYTES).map_err(|error| error.to_string())?;
-                let stems = prepare_stem_buffers_from_cache(
-                    &source_version,
-                    &complete,
-                    source_ticket.sample_rate_hz,
-                    &cache_dir,
-                )?;
-                Ok((stems, Some(files)))
-            })
-            .map_err(PyValueError::new_err)?;
-        stems = stems.window_for(&sample).map_err(PyValueError::new_err)?;
-        stems.publication = source_ticket.publication.clone();
-        stems.accepted_timing = source_ticket.publication.accepted_projection();
-        if let Some(files) = files {
-            self.project_assets.retain_shared_stems(
-                generation_path.clone(),
-                &stems,
-                &sample,
-                &source_version,
-                files,
-            )
-        } else {
-            // The existing weak backing record covers every actual Arc reader,
-            // including this subscriber. A failed enqueue must add no redundant
-            // record that remains pinned merely because another user survives.
-            Ok(())
-        }
-        .map_err(|error| PyRuntimeError::new_err(error.to_string()))?;
-
-        // Source mutation, timing publication and enqueue all serialize here.
-        let result = enqueue_current_prepared_stems_with_owner(
+        let work = prepared_stems_work::PreparedStemsWork::capture(
             self,
-            producer,
+            id,
+            source_version,
+            cache_dir,
             source_ticket,
-            &source_version,
-            stems,
-            (cache_dir.into(), generation_path),
-        );
-        drop(generation_lease);
-        result
+        )?;
+        let prepared = py
+            .detach(move || work.prepare())
+            .map_err(PyValueError::new_err)?;
+        prepared.finish(self, source_ticket, producer)
     }
 
     fn note_resident_loop_intent(&self, id: usize, start: f64, end: Option<f64>) -> PyResult<()> {
@@ -862,29 +755,16 @@ impl AudioEngine {
 
     /// Materialize a bounded full-source reader for non-realtime evidence work.
     /// It shares immutable source authority without changing the effective window.
+    #[cfg(test)]
     pub(super) fn complete_sample(
         &self,
         id: usize,
         sample: &SampleBuffer,
         maximum: usize,
     ) -> PyResult<SampleBuffer> {
-        if sample.resident_start() == 0 && sample.resident_end() == sample.frame_count() {
-            return Ok(sample.clone());
-        }
-        let lease = self
-            .cold_leases
-            .lock()
-            .map_err(|_| PyRuntimeError::new_err("cold lease lock poisoned"))?
-            .get(id)
-            .and_then(Clone::clone)
-            .ok_or_else(|| PyValueError::new_err("complete source lease unavailable"))?;
-        let complete = lease
-            .read_complete(sample, maximum)
-            .map_err(|error| PyValueError::new_err(error.to_string()))?;
-        self.project_assets
-            .retain_cold_reader(&lease, &complete)
-            .map_err(|error| PyRuntimeError::new_err(error.to_string()))?;
-        Ok(complete)
+        native_owned_work::CompleteSampleWork::capture(self, id, sample)
+            .and_then(|work| work.materialize(maximum))
+            .map_err(PyValueError::new_err)
     }
 }
 
@@ -970,7 +850,7 @@ impl AudioEngine {
                 input_runtime_binding::InputRuntimeOwnership::tracked(),
             ),
             global_timing_revision: Arc::new(AtomicU64::new(1)),
-            constant_timing_busy: AtomicBool::new(false),
+            constant_timing_busy: Arc::new(AtomicBool::new(false)),
             offline_jobs: analysis_jobs::OfflineJobs::default(),
             cold_jobs: cold_jobs::ColdJobs::new()
                 .map_err(|error| PyRuntimeError::new_err(error.to_string()))?,
@@ -1458,7 +1338,7 @@ impl AudioEngine {
 
     #[pyo3(signature = (sample_id, material_creation_json, config_reference, instance_id, inventory, journal_json=None))]
     pub fn restore_material_creation(
-        &self,
+        slf: &Bound<'_, Self>,
         py: Python<'_>,
         sample_id: usize,
         material_creation_json: String,
@@ -1467,18 +1347,26 @@ impl AudioEngine {
         inventory: &MigrationInventoryLease,
         journal_json: Option<String>,
     ) -> PyResult<()> {
-        py.detach(|| {
-            material_migration_recovery::restore_current_material_creation(
-                self,
+        let work = {
+            let engine = slf.try_borrow()?;
+            material_migration_recovery::MaterialCreationRestoreWork::capture(
+                &engine,
                 sample_id,
-                &material_creation_json,
-                &config_reference,
-                &instance_id,
+                material_creation_json,
+                config_reference,
+                instance_id,
                 inventory,
-                journal_json.as_deref(),
+                journal_json,
             )
-        })
-        .map_err(|error| PyValueError::new_err(error.to_string()))
+            .map_err(|error| PyValueError::new_err(error.to_string()))?
+        };
+        let prepared = py
+            .detach(move || work.prepare())
+            .map_err(|error| PyValueError::new_err(error.to_string()))?;
+        let engine = slf.try_borrow()?;
+        prepared
+            .finish(&engine)
+            .map_err(|error| PyValueError::new_err(error.to_string()))
     }
 
     pub fn prepare_material_migration(
@@ -1798,7 +1686,7 @@ impl AudioEngine {
         if sample_id >= NUM_SAMPLES {
             return Err(PyValueError::new_err("id out of range"));
         }
-        if self.stream_handle.is_none() {
+        if self.control_producer().is_err() {
             return Ok(None);
         }
         constant_timing::current_metadata(self, py, sample_id)
@@ -1806,15 +1694,27 @@ impl AudioEngine {
 
     /// Export only complete evidence for current acknowledged, content-verified timing.
     pub fn export_current_constant_timing(
-        &self,
+        slf: &Bound<'_, Self>,
         py: Python<'_>,
         sample_id: usize,
         source_path: String,
     ) -> PyResult<Option<String>> {
-        if self.stream_handle.is_none() {
+        let work = {
+            let engine = slf.try_borrow()?;
+            if engine.control_producer().is_err() {
+                return Ok(None);
+            }
+            constant_timing::SavedTimingExportWork::capture(&engine, sample_id, source_path)
+                .map_err(PyValueError::new_err)?
+        };
+        let Some(work) = work else {
             return Ok(None);
-        }
-        py.detach(|| constant_timing::export_current(self, sample_id, source_path))
+        };
+        let prepared = py
+            .detach(move || work.prepare())
+            .map_err(PyValueError::new_err)?;
+        prepared
+            .finish(&*slf.try_borrow()?)
             .map_err(PyValueError::new_err)
     }
 
@@ -1825,48 +1725,57 @@ impl AudioEngine {
         record_json: &str,
         source_path: String,
     ) -> PyResult<SavedConstantTimingTicket> {
-        self.stream_handle
-            .as_ref()
-            .ok_or_else(|| PyRuntimeError::new_err("Audio engine not initialized"))?;
+        self.control_producer()?;
         constant_timing::capture_saved(self, sample_id, record_json, source_path)
             .map_err(PyValueError::new_err)
     }
 
     /// Verify actual source/mono/analyzer evidence and enqueue fresh guarded adoption.
     pub fn restore_constant_timing(
-        &self,
+        slf: &Bound<'_, Self>,
         py: Python<'_>,
         ticket: &SavedConstantTimingTicket,
     ) -> PyResult<ConstantTimingTicket> {
-        let handle = self
-            .stream_handle
-            .as_ref()
-            .ok_or_else(|| PyRuntimeError::new_err("Audio engine not initialized"))?;
-        py.detach(|| constant_timing::restore_saved(self, &handle.producer, ticket))
+        let (work, producer) = {
+            let engine = slf.try_borrow()?;
+            let producer = engine.control_producer()?.clone();
+            let work = constant_timing::SavedTimingRestoreWork::capture(&engine, ticket)
+                .map_err(PyValueError::new_err)?;
+            (work, producer)
+        };
+        let prepared = py
+            .detach(move || work.prepare())
+            .map_err(PyValueError::new_err)?;
+        prepared.finish(&*slf.try_borrow()?, &producer)
     }
 
     /// Explicitly run complete native QM evidence on the actual current loaded source.
     pub fn prepare_constant_timing(
-        &self,
+        slf: &Bound<'_, Self>,
         py: Python<'_>,
         sample_id: usize,
         timing_error_halfwidth_seconds: f64,
         timing_error_provenance: String,
     ) -> PyResult<ConstantTimingTicket> {
-        self.stream_handle
-            .as_ref()
-            .ok_or_else(|| PyRuntimeError::new_err("Audio engine not initialized"))?;
-        py.detach(|| {
-            constant_timing::prepare(
-                self,
+        let work = {
+            let engine = slf.try_borrow()?;
+            engine.control_producer()?;
+            constant_timing::ConstantTimingPreparationWork::capture(
+                &engine,
                 sample_id,
                 analysis::tempo_evidence::TimingBound {
                     halfwidth_seconds: timing_error_halfwidth_seconds,
                     provenance: timing_error_provenance,
                 },
             )
-        })
-        .map_err(PyRuntimeError::new_err)
+            .map_err(PyRuntimeError::new_err)?
+        };
+        let prepared = py
+            .detach(move || work.prepare())
+            .map_err(PyRuntimeError::new_err)?;
+        prepared
+            .finish(&*slf.try_borrow()?)
+            .map_err(PyRuntimeError::new_err)
     }
 
     /// Capture actual source/request/authority synchronously before off-thread analysis.
@@ -1878,9 +1787,7 @@ impl AudioEngine {
         timing_error_provenance: String,
         #[pyo3(from_py_with = parse_constant_timing_pcm_limit)] pcm_limit_bytes: usize,
     ) -> PyResult<CapturedConstantTiming> {
-        self.stream_handle
-            .as_ref()
-            .ok_or_else(|| PyRuntimeError::new_err("Audio engine not initialized"))?;
+        self.control_producer()?;
         constant_timing::capture_preparation_with_limit(
             self,
             binding.id,
@@ -1896,14 +1803,21 @@ impl AudioEngine {
 
     /// Prepare only the captured immutable source; newer requests reject this work.
     pub fn prepare_captured_constant_timing(
-        &self,
+        slf: &Bound<'_, Self>,
         py: Python<'_>,
         captured: &CapturedConstantTiming,
     ) -> PyResult<ConstantTimingTicket> {
-        self.stream_handle
-            .as_ref()
-            .ok_or_else(|| PyRuntimeError::new_err("Audio engine not initialized"))?;
-        py.detach(|| constant_timing::prepare_captured(self, captured))
+        let work = {
+            let engine = slf.try_borrow()?;
+            engine.control_producer()?;
+            constant_timing::ConstantTimingPreparationWork::capture_existing(&engine, captured)
+                .map_err(PyRuntimeError::new_err)?
+        };
+        let prepared = py
+            .detach(move || work.prepare())
+            .map_err(PyRuntimeError::new_err)?;
+        prepared
+            .finish(&*slf.try_borrow()?)
             .map_err(PyRuntimeError::new_err)
     }
 
@@ -1934,7 +1848,7 @@ impl AudioEngine {
     // Keep explicit evidence assertions distinct at the public control boundary.
     #[allow(clippy::too_many_arguments)]
     pub fn publish_constant_timing(
-        &self,
+        slf: &Bound<'_, Self>,
         py: Python<'_>,
         ticket: &ConstantTimingTicket,
         hypotheses_json: String,
@@ -1943,14 +1857,9 @@ impl AudioEngine {
         acceptance_policy_version: String,
         acceptance_provenance: String,
     ) -> PyResult<()> {
-        let handle = self
-            .stream_handle
-            .as_ref()
-            .ok_or_else(|| PyRuntimeError::new_err("Audio engine not initialized"))?;
-        py.detach(|| {
-            constant_timing::publish(
-                self,
-                &handle.producer,
+        let producer = slf.try_borrow()?.control_producer()?.clone();
+        let timing = py.detach(|| {
+            constant_timing::prepare_publication(
                 ticket,
                 &hypotheses_json,
                 analysis::tempo_acceptance::IndependentTimingOrigin {
@@ -1962,7 +1871,8 @@ impl AudioEngine {
                     provenance: acceptance_provenance,
                 },
             )
-        })
+        })?;
+        constant_timing::publish_record(&*slf.try_borrow()?, &producer, ticket, timing, false)
     }
 
     /// Analyze a previously loaded sample on a background thread.
@@ -2083,7 +1993,7 @@ impl AudioEngine {
 
     /// Recheck the admission snapshot before and after off-thread artifact preparation.
     pub fn publish_prepared_stems(
-        &self,
+        slf: &Bound<'_, Self>,
         py: Python<'_>,
         id: usize,
         source_version: String,
@@ -2096,26 +2006,26 @@ impl AudioEngine {
                 NUM_SAMPLES - 1
             )));
         }
-
         if source_version.trim().is_empty() {
             return Err(PyValueError::new_err("source_version must not be empty"));
         }
-
         project_stem_cache_dir(&cache_dir).map_err(PyValueError::new_err)?;
-
-        let handle = self
-            .stream_handle
-            .as_ref()
-            .ok_or_else(|| PyRuntimeError::new_err("Audio engine not initialized"))?;
-
-        self.publish_prepared_stems_with_producer(
-            py,
-            id,
-            source_version,
-            cache_dir,
-            source_ticket,
-            &handle.producer,
-        )
+        let (work, producer) = {
+            let engine = slf.try_borrow()?;
+            let producer = engine.control_producer()?.clone();
+            let work = prepared_stems_work::PreparedStemsWork::capture(
+                &engine,
+                id,
+                source_version,
+                cache_dir,
+                source_ticket,
+            )?;
+            (work, producer)
+        };
+        let prepared = py
+            .detach(move || work.prepare())
+            .map_err(PyValueError::new_err)?;
+        prepared.finish(&*slf.try_borrow()?, source_ticket, &producer)
     }
 
     /// Select whether a pad renders from the loaded full mix or all prepared stems.

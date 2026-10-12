@@ -34,6 +34,7 @@ mod staging;
 mod streaming;
 pub(super) use streaming::{CompletedPcmArtifact, PcmArtifactWriter};
 mod warm;
+pub(super) use lifecycle::PreparedMaterialCreationOwnership;
 pub(super) use lifecycle::admit_original_owner;
 pub(super) use lifecycle::cleanup_admission_status;
 pub(super) use lifecycle::cleanup_status;
