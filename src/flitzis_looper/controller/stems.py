@@ -704,6 +704,7 @@ class StemController(BaseController):  # noqa: PLR0904
     def _request_pair_mode(
         self, sample_id: int, entry: StemCacheEntry, source_version: str
     ) -> bool:
+        ticket = None
         if self._committed_residency.contains(sample_id):
             if self._committed_residency.request(
                 sample_id, "all_stems", self._session.pad_stem_enabled_mask[sample_id]
@@ -712,11 +713,21 @@ class StemController(BaseController):  # noqa: PLR0904
                 self._mark_project_changed()
                 return True
             if self._committed_residency.contains(sample_id):
-                return False
-            # A terminal registration was withdrawn by this explicit gesture.
-            # Retry through fresh source/pair preparation and its own callback ACK.
+                try:
+                    ticket = self._capture_source_ticket(sample_id, source_version)
+                    if not self._committed_residency.requires_current_preparation(
+                        sample_id, ticket
+                    ):
+                        return False
+                except (OSError, RuntimeError, ValueError) as error:
+                    self._session.stem_generation_errors[sample_id] = str(error)
+                    return False
+            # This explicit gesture either withdrew terminal registration or
+            # found changed sealed preparation context on the same source.
+            # Fresh worker preparation still requires its own Native ACK.
         try:
-            ticket = self._capture_source_ticket(sample_id, source_version)
+            if ticket is None:
+                ticket = self._capture_source_ticket(sample_id, source_version)
             residency_only = self._committed_residency.supported
             self._prepare_pair(
                 sample_id,

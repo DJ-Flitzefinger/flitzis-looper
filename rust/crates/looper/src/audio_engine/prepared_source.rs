@@ -48,6 +48,15 @@ impl PreparedSourceTicket {
             && Arc::ptr_eq(&self.publication.epoch, &other.publication.epoch)
             && self.sample.same_source(&other.sample)
     }
+
+    /// Compare sealed preparation snapshots; equality does not grant an audio ACK.
+    pub fn same_preparation_context(&self, other: &PreparedSourceTicket) -> bool {
+        self.same_source_request(other)
+            && self.publication.expected == other.publication.expected
+            && self.publication.current()
+            && other.publication.current()
+            && self.sample.same_window(&other.sample)
+    }
 }
 
 #[derive(Debug, Clone, Copy)]

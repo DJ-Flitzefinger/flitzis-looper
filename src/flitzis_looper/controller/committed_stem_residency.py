@@ -100,6 +100,21 @@ class CommittedStemResidency:
         """Return whether the pad has a tracked current disk selection receipt."""
         return sample_id in self._selections or sample_id in self._live_selections
 
+    def requires_current_preparation(
+        self, sample_id: int, source_ticket: PreparedSourceTicket
+    ) -> bool:
+        """Allow explicit same-source refresh when sealed preparation context changed."""
+        live = self._live_selections.get(sample_id)
+        if live is None or self._busy(live.attempt):
+            return False
+        previous = live.disk.source_ticket
+        compare = getattr(previous, "same_preparation_context", None)
+        return (
+            callable(compare)
+            and previous.same_source_request(source_ticket)
+            and not compare(source_ticket)
+        )
+
     def register(
         self,
         sample_id: int,

@@ -47,6 +47,10 @@ const RETRIGGER_CHILD: &str = "FLITZI_L3_CONTROLLER_RETRIGGER_CHILD";
 const RETRIGGER_TEST: &str = "audio_engine::cold_load::tests::stem_pair_publication_tests::committed_stem_residency_tests::l3_controller_productive_tests::actual_public_play_rejects_queued_v2_then_new_voice_requires_own_wet_ack";
 const RETRIGGER_OFF_CHILD: &str = "FLITZI_L3_CONTROLLER_RETRIGGER_OFF_CHILD";
 const RETRIGGER_OFF_TEST: &str = "audio_engine::cold_load::tests::stem_pair_publication_tests::committed_stem_residency_tests::l3_controller_productive_tests::actual_public_play_rejects_queued_v2_then_new_voice_requires_own_dry_ack";
+const WINDOW_OFF_CHILD: &str = "FLITZI_L3_CONTROLLER_WINDOW_OFF_CHILD";
+const WINDOW_OFF_TEST: &str = "audio_engine::cold_load::tests::stem_pair_publication_tests::committed_stem_residency_tests::l3_controller_productive_tests::actual_public_window_rejects_queued_v2_then_requires_fresh_dry_preparation";
+const WINDOW_CHILD: &str = "FLITZI_L3_CONTROLLER_WINDOW_CHILD";
+const WINDOW_TEST: &str = "audio_engine::cold_load::tests::stem_pair_publication_tests::committed_stem_residency_tests::l3_controller_productive_tests::actual_public_window_rejects_queued_v2_then_requires_fresh_wet_preparation";
 
 #[derive(Clone, Copy)]
 enum CandidateTrace {
@@ -62,6 +66,7 @@ enum CandidateTrace {
     ClaimedMasks,
     PreclaimMasks,
     Retrigger,
+    WindowChange,
 }
 
 fn live_bpm_then_explicit_retry(
@@ -925,7 +930,10 @@ fn render_varispeed(playback: &mut ControllerPlayback, frames: usize) -> (Vec<f3
     let taps = tap_observation_for_test();
     assert_eq!(taps.missing_reads, 0);
     assert!(taps.min_frame.is_some_and(|frame| frame >= LOOP_START));
-    assert!(taps.max_frame.is_some_and(|frame| frame < LOOP_END));
+    assert!(
+        taps.max_frame
+            .is_some_and(|frame| frame < playback.loop_end)
+    );
     for (mixer, target) in [
         (playback.reference.as_mut(), &mut expected),
         (playback.full_mix.as_mut(), &mut full_mix),
@@ -1002,8 +1010,9 @@ fn render_varispeed(playback: &mut ControllerPlayback, frames: usize) -> (Vec<f3
     );
     if playback.rate_ledger.is_some() {
         assert_eq!(
-            current.source_playback.loop_period().unwrap().to_bits(),
-            playback.loop_period.to_bits()
+            current.source_playback.loop_period().map(f64::to_bits),
+            (playback.loop_period != (playback.loop_end - LOOP_START) as f64)
+                .then_some(playback.loop_period.to_bits())
         );
     }
     for (frame, actual) in output.chunks_exact(2).enumerate() {
@@ -1129,7 +1138,7 @@ fn settle_varispeed(playback: &mut ControllerPlayback, locals: &Py<PyDict>, name
     if name == "candidate" {
         controller_python(
             locals,
-            "if retrigger:\n    assert session.stem_generation_errors == {0: play_error}",
+            "if retrigger:\n    assert session.stem_generation_errors == {0: play_error}\nif window_change:\n    assert session.stem_generation_errors == {0: window_error}",
         );
     }
     controller_python(
@@ -1167,7 +1176,7 @@ fn settle_wet(playback: &mut ControllerPlayback, locals: &Py<PyDict>, name: &str
     if name == "candidate" {
         controller_python(
             locals,
-            "if retrigger:\n    assert session.stem_generation_errors == {0: play_error}",
+            "if retrigger:\n    assert session.stem_generation_errors == {0: play_error}\nif window_change:\n    assert session.stem_generation_errors == {0: window_error}",
         );
     }
     controller_python(
@@ -2007,6 +2016,394 @@ assert controller.stem_residency_status(0).effective_stem_set_identity == disk_v
 assert session.stem_generation_errors == {0: deadline_error}
 "#,
     );
+}
+
+fn public_window_then_explicit_retry(
+    playback: &mut ControllerPlayback,
+    consumer: &mut rtrb::Consumer<ControlMessage>,
+    locals: &Py<PyDict>,
+    key_lock: bool,
+) -> SampleBuffer {
+    use crate::audio_engine::committed_stem_residency::CommittedStemRtWork;
+    assert!(!playback.scheduled && playback.rate_ledger.is_none());
+    assert_eq!(
+        playback.drain(consumer),
+        1,
+        "actual V2 Capture before public window intent"
+    );
+    wait_until(|| consumer.peek().is_ok());
+    let queued = match consumer.peek().unwrap() {
+        ControlMessage::CommittedStemWork(work) => {
+            assert!(
+                matches!(work.as_ref(), CommittedStemRtWork::Adopt(transaction)
+                if transaction.id == 0 && transaction.mask == 0b1010 && transaction.candidate.is_some())
+            );
+            work.as_ref() as *const CommittedStemRtWork as usize
+        }
+        _ => panic!("expected actual queued V2 Adopt"),
+    };
+    playback.callback.retirement.slots = 2;
+    assert_eq!(playback.drain(consumer), 0);
+    let source = playback.callback.mixer.bank_for_measurement()[0]
+        .clone()
+        .unwrap();
+    let old_set = playback.callback.mixer.stems_for_measurement()[0].clone();
+    let before = voice(&playback.callback.mixer);
+    let old_clock = before.source_playback;
+    let generation = before.generation;
+    let native = before.stretch.native_state_address();
+    let fifo = before.stretch.pending_fifo_frames();
+    let history = before.stretch.productive_history();
+    let dsp = playback
+        .callback
+        .mixer
+        .dsp_source_history_for_test(0)
+        .unwrap();
+    let demand = playback.callback.mixer.stem_demand_for_measurement(0);
+    let transition = playback.callback.mixer.stem_transition_for_measurement(0);
+    let other_clock = other_voice(&playback.callback.mixer).source_playback;
+    Python::attach(|py| {
+        locals
+            .bind(py)
+            .set_item("window_key_lock", key_lock)
+            .unwrap()
+    });
+    controller_python(
+        locals,
+        r#"
+from flitzis_looper.controller.transport import TransportController
+class WindowTransportAudio:
+    def __getattr__(self, name):
+        return getattr(playback_audio, name)
+    def play_sample(self, *args, **kwargs):
+        raise AssertionError('finite window edit must not retrigger')
+    play_sample_exclusive = play_sample
+project.pad_loop_auto[0] = False
+project.pad_loop_start_s[0] = 17 / fixture['rate']
+project.pad_loop_end_s[0] = 1517 / fixture['rate']
+project.pad_key_lock[0] = window_key_lock
+transport = TransportController(project, session, WindowTransportAudio())
+failed_window = candidate
+window_selection = live.disk.selection
+window_registration = window_selection.ticket
+window_ownership_error = 'Committed stem residency or mode ownership changed'
+window_worker_calls = audio.worker_call_count()
+transport.loop.set_end(0, 1581 / fixture['rate'])
+ready_window = transport.residency._pending[0].ticket
+assert ready_window is not None
+assert not failed_window.is_current() and not failed_window.claimed()
+"#,
+    );
+    wait_until(|| {
+        controller_ticket_status(locals, "ready_window", "publication_status") == "pending"
+    });
+    assert!(
+        matches!(consumer.peek(), Ok(ControlMessage::CommittedStemWork(work))
+        if work.as_ref() as *const CommittedStemRtWork as usize == queued)
+    );
+    assert_eq!(consumer.slots(), 2);
+    assert_eq!(playback.drain(consumer), 0);
+    let admitted = voice(&playback.callback.mixer);
+    assert!(admitted.source_playback.matches_exact(&old_clock));
+    assert_eq!(admitted.generation, generation);
+    assert_eq!(admitted.stretch.native_state_address(), native);
+    assert_eq!(admitted.stretch.pending_fifo_frames(), fifo);
+    assert!(Arc::ptr_eq(
+        &source.samples,
+        &admitted.sample.as_ref().unwrap().samples
+    ));
+    assert_eq!(history.is_some(), key_lock);
+    if let Some(history) = history {
+        let next = admitted.stretch.productive_history().unwrap();
+        assert_eq!(next.binding, history.binding);
+        assert_eq!(next.next_position, history.next_position);
+        assert_eq!(next.fed_output_frames, history.fed_output_frames);
+    }
+    let next_dsp = playback
+        .callback
+        .mixer
+        .dsp_source_history_for_test(0)
+        .unwrap();
+    assert_eq!(next_dsp.binding, dsp.binding);
+    assert_eq!(next_dsp.next_position, dsp.next_position);
+    assert_eq!(next_dsp.fed_output_frames, dsp.fed_output_frames);
+    assert_eq!(
+        playback.callback.mixer.stem_demand_for_measurement(0),
+        demand
+    );
+    assert!(
+        playback
+            .callback
+            .mixer
+            .stem_transition_for_measurement(0)
+            .matches_exact(transition)
+    );
+    assert!(
+        other_voice(&playback.callback.mixer)
+            .source_playback
+            .matches_exact(&other_clock)
+    );
+    controller_python(
+        locals,
+        r#"
+for _ in range(16):
+    controller.on_frame_render()
+    assert live.blocked and live.attempt is window_selection and live.control is previous_control
+    assert failed_window.error() == window_ownership_error and failed_window.effective_failure_reason() is None
+    assert not failed_window.claimed() and not failed_window.is_current()
+    assert session.stem_generation_errors == {0: window_ownership_error}
+    assert audio.worker_call_count() == window_worker_calls
+"#,
+    );
+    for frames in [1, 31, 137, 257] {
+        let output = if key_lock {
+            playback.render(frames, false)
+        } else {
+            render_varispeed(playback, frames)
+        }
+        .0;
+        assert!(output.iter().any(|sample| sample.abs() > 0.001));
+    }
+    // Choose an interior ACK position from the independent original geometry.
+    // This proves an expansion without invoking the separate source-cut domain.
+    let phase = (playback.source_frame as f64 * playback.ratio).rem_euclid(1500.0);
+    if !(256.0..768.0).contains(&phase) {
+        let frames = ((256.0 - phase).rem_euclid(1500.0) / playback.ratio).ceil() as usize;
+        if key_lock {
+            playback.render(frames, false);
+        } else {
+            render_varispeed(playback, frames);
+        }
+    }
+    let phase = (playback.source_frame as f64 * playback.ratio).rem_euclid(1500.0);
+    assert!((256.0..768.0).contains(&phase));
+    let before_ack = voice(&playback.callback.mixer);
+    let fifo = before_ack.stretch.pending_fifo_frames();
+    let history = before_ack.stretch.productive_history();
+    let dsp = playback
+        .callback
+        .mixer
+        .dsp_source_history_for_test(0)
+        .unwrap();
+    let other_clock = other_voice(&playback.callback.mixer).source_playback;
+    assert!(
+        matches!(consumer.peek(), Ok(ControlMessage::CommittedStemWork(work))
+        if work.as_ref() as *const CommittedStemRtWork as usize == queued)
+    );
+    playback.callback.retirement.slots = usize::MAX;
+    assert_eq!(
+        playback.drain(consumer),
+        2,
+        "normal old Adopt rejection then changed Window ACK"
+    );
+    assert!(consumer.is_empty());
+    let current = voice(&playback.callback.mixer);
+    assert_eq!(current.generation, generation);
+    assert_eq!(
+        current.source_playback.position().frame,
+        LOOP_START + phase.floor() as usize
+    );
+    assert_eq!(
+        current.source_playback.position().fraction.to_bits(),
+        phase.fract().to_bits()
+    );
+    assert_eq!(
+        current.source_playback.tempo_ratio().to_bits(),
+        playback.ratio.to_bits()
+    );
+    assert_eq!(current.stretch.native_state_address(), native);
+    assert_eq!(current.stretch.pending_fifo_frames(), fifo);
+    if let Some(history) = history {
+        let next = current.stretch.productive_history().unwrap();
+        assert_eq!(next.binding, history.binding);
+        assert_eq!(next.next_position, history.next_position);
+        assert_eq!(next.fed_output_frames, history.fed_output_frames);
+    } else {
+        assert!(current.stretch.productive_history().is_none());
+    }
+    let next_dsp = playback
+        .callback
+        .mixer
+        .dsp_source_history_for_test(0)
+        .unwrap();
+    assert_eq!(next_dsp.binding, dsp.binding);
+    assert_eq!(next_dsp.next_position, dsp.next_position);
+    assert_eq!(next_dsp.fed_output_frames, dsp.fed_output_frames);
+    assert!(
+        other_voice(&playback.callback.mixer)
+            .source_playback
+            .matches_exact(&other_clock)
+    );
+    let changed = playback.callback.mixer.bank_for_measurement()[0]
+        .clone()
+        .unwrap();
+    assert!(!Arc::ptr_eq(&source.samples, &changed.samples));
+    assert!(source.same_source(&changed));
+    assert_eq!(changed.resident_start(), LOOP_START);
+    assert_eq!(changed.resident_end(), 1581);
+    assert_eq!(changed.window_revision(), source.window_revision() + 1);
+    assert_eq!(
+        playback.callback.mixer.stem_demand_for_measurement(0),
+        demand
+    );
+    assert!(
+        playback
+            .callback
+            .mixer
+            .stem_transition_for_measurement(0)
+            .matches_exact(transition)
+    );
+    match (
+        old_set.as_ref(),
+        playback.callback.mixer.stems_for_measurement()[0].as_ref(),
+    ) {
+        (Some(old), Some(next)) => {
+            assert!(Arc::ptr_eq(
+                &old.complete_set_identity,
+                &next.complete_set_identity
+            ));
+            for (old, next) in old.stems.iter().zip(&next.stems) {
+                assert!(!Arc::ptr_eq(&old.samples, &next.samples));
+                assert!(next.same_window(&changed));
+            }
+        }
+        (None, None) => {}
+        _ => panic!("window ACK cannot select the rejected V2"),
+    }
+    Python::attach(|py| {
+        let ready = locals.bind(py).get_item("ready_window").unwrap().unwrap();
+        let ready = ready
+            .extract::<PyRef<crate::audio_engine::resident_relocation::ResidentWindowTicket>>()
+            .unwrap();
+        let read = ready
+            .read_observation_for_test()
+            .expect("changed window needs genuine range reads");
+        assert_eq!(
+            (read.source.start_frame, read.source.end_frame),
+            (LOOP_START, 1581)
+        );
+        assert_eq!(read.source.read_bytes, 1564 * 2 * 4);
+        assert_eq!(
+            read.stems.read_bytes.iter().any(|bytes| *bytes > 0),
+            old_set.is_some()
+        );
+    });
+    let epoch = playback.source_frame;
+    playback.loop_end = 1581;
+    playback.loop_period = 1564.0;
+    playback.rate_ledger = Some(ControllerRateLedger {
+        period: 1564.0,
+        epochs: vec![
+            ControllerRateEpoch {
+                start: 0,
+                whole: 0,
+                fraction: 0.0,
+                rate: playback.ratio,
+                distance: 0.0,
+                period: 1500.0,
+            },
+            ControllerRateEpoch {
+                start: epoch,
+                whole: phase.floor() as usize,
+                fraction: phase.fract(),
+                rate: playback.ratio,
+                distance: epoch as f64 * playback.ratio,
+                period: 1564.0,
+            },
+        ],
+    });
+    playback.resumed_at = Some(playback.frame);
+    for reference in [&mut playback.reference, &mut playback.full_mix] {
+        reference.set_loop_region_frames(0, LOOP_START, Some(1581));
+    }
+    controller_python(
+        locals,
+        r#"
+assert failed_window.residency_status() == 'rejected' and not failed_window.claimed()
+assert ready_window.publication_status() == 'accepted'
+transport.on_frame_render()
+controller.on_frame_render()
+assert live.blocked and live.attempt is window_selection
+assert session.stem_generation_errors == {0: window_ownership_error}
+assert audio.worker_call_count() == window_worker_calls
+fresh_window_source = audio.capture_prepared_source(0, fixture['source_version'])
+assert source_v2.same_source_request(fresh_window_source)
+assert not source_v2.same_preparation_context(fresh_window_source)
+assert fresh_window_source.same_preparation_context(fresh_window_source)
+foreign_window_source = audio.capture_prepared_source(215, fixture['source_version'])
+assert not source_v2.same_source_request(foreign_window_source)
+assert not source_v2.same_preparation_context(foreign_window_source)
+assert not controller._committed_residency.requires_current_preparation(0, foreign_window_source)
+assert controller._committed_residency.requires_current_preparation(0, fresh_window_source)
+assert live.control is previous_control and live.attempt is window_selection
+for _ in range(16):
+    controller.on_frame_render()
+    assert live.blocked and live.attempt is window_selection
+    assert audio.worker_call_count() == window_worker_calls
+"#,
+    );
+    if key_lock {
+        playback.render(13, true);
+        let output = playback.adopt_native(true).0;
+        assert!(output.iter().any(|sample| sample.abs() > 0.001));
+    } else {
+        for frames in [1, 31, 137, 257, 511, 777] {
+            render_varispeed(playback, frames);
+        }
+    }
+    assert_eq!(voice(&playback.callback.mixer).generation, generation);
+    controller_python(
+        locals,
+        r#"
+# Actual explicit ALL, without privately refreshing the candidate beforehand.
+assert controller.set_stem_mix_mode(0, 'all_stems'), session.stem_generation_errors
+window_error = 'Stem residency admission failed: stale or foreign prepared source ticket'
+assert session.stem_generation_errors == {0: window_error}
+request = controller._pair_preparations.pending[0]
+assert request.residency_only and request.ticket.same_preparation_context(fresh_window_source)
+assert source_v2.same_source_request(request.ticket) and not source_v2.same_preparation_context(request.ticket)
+assert request.entry.pair == disk_v2
+assert live.blocked and live.attempt is None and live.control is previous_control
+"#,
+    );
+    wait_until(|| {
+        controller_python(
+            locals,
+            "controller.on_frame_render()\nassert session.stem_generation_errors == {0: window_error}",
+        );
+        Python::attach(|py| {
+            let live = locals.bind(py).get_item("live").unwrap().unwrap();
+            if live.getattr("attempt").unwrap().is_none() {
+                return false;
+            }
+            worker_python(
+                py,
+                locals.bind(py),
+                r#"
+candidate = live.attempt.receipt
+fresh_window_selection = live.disk.selection
+fresh_window_registration = fresh_window_selection.ticket
+assert live.control is previous_control and not live.blocked
+assert fresh_window_selection is not window_selection and fresh_window_registration is not window_registration
+assert candidate is not failed_window and candidate.is_current() and not candidate.claimed()
+assert candidate.effective_mode_status() == 'waiting'
+assert audio.worker_call_count() == window_worker_calls + 1 and audio.prepared_only_on_pool_threads()
+assert live.disk.source_ticket.same_preparation_context(fresh_window_source)
+assert project.stem_cache[0].pair == disk_v2
+assert StemPairSelection.model_validate_json(live.disk.prepared.selection_json()) == disk_v2
+assert not failed_window.is_current() and not failed_window.claimed()
+assert failed_window.error() == window_ownership_error and failed_window.effective_failure_reason() is None
+"#,
+            );
+            true
+        })
+    });
+    assert_eq!(
+        consumer.slots(),
+        1,
+        "fresh own Capture only after worker preparation"
+    );
+    changed
 }
 
 fn public_play_then_explicit_retry(
@@ -3374,8 +3771,9 @@ fn round_trip(
     let claimed_masks = matches!(trace, CandidateTrace::ClaimedMasks);
     let preclaim_masks = matches!(trace, CandidateTrace::PreclaimMasks);
     let retrigger = matches!(trace, CandidateTrace::Retrigger);
+    let window_change = matches!(trace, CandidateTrace::WindowChange);
     assert!(
-        !(claimed_masks || preclaim_masks || retrigger)
+        !(claimed_masks || preclaim_masks || retrigger || window_change)
             || (!paused_first && delete_pause.is_none() && stopped_before_poll.is_none())
     );
     let withdraw_preclaim = matches!(trace, CandidateTrace::WithdrawPreclaim);
@@ -3395,6 +3793,7 @@ fn round_trip(
     let mut live_other_ledger = None;
     let mut retriggered_at = None;
     let mut adoption_generation = None;
+    let mut adopted_window = None;
     assert!(
         !public_bpm
             || ((key_lock || live_bpm)
@@ -3522,6 +3921,7 @@ fn round_trip(
         locals.set_item("repeated_sets", repeated_sets).unwrap();
         locals.set_item("preclaim_masks", preclaim_masks).unwrap();
         locals.set_item("retrigger", retrigger).unwrap();
+        locals.set_item("window_change", window_change).unwrap();
         locals.set_item("queue_pressure", queue_pressure).unwrap();
         locals
             .set_item("capture_deadline", capture_deadline)
@@ -3720,6 +4120,7 @@ persistence.flush()
             components: full_stems.stems.clone(),
             ratio,
             loop_period: (LOOP_END - LOOP_START) as f64,
+            loop_end: LOOP_END,
             rate_ledger: None,
             scheduled: false,
             selection: Some(0b0011),
@@ -3837,6 +4238,7 @@ owner_v2.release()
         loop_period: accepted.map_or((LOOP_END - LOOP_START) as f64, |projection| {
             projection.period_seconds * f64::from(RATE) / 16.0
         }),
+        loop_end: LOOP_END,
         rate_ledger: live_bpm.then(|| {
             ControllerRateLedger::new(
                 ratio,
@@ -4110,6 +4512,14 @@ assert previous_control.ticket.is_current()
         retriggered_at = Some(birth);
         adoption_generation = Some(generation);
     }
+    if window_change {
+        adopted_window = Some(public_window_then_explicit_retry(
+            &mut playback,
+            &mut h.consumer,
+            &locals,
+            key_lock,
+        ));
+    }
     if preclaim_masks {
         supersede_queued_candidate_mask(
             &h.producer,
@@ -4151,8 +4561,15 @@ assert previous_control.ticket.is_current()
     let current_source = playback.callback.mixer.bank_for_measurement()[0]
         .as_ref()
         .unwrap();
-    assert!(Arc::ptr_eq(&current_source.samples, &finite.samples));
-    assert_eq!(current_source.resident_binding(), finite.resident_binding());
+    let expected_window = adopted_window.as_ref().unwrap_or(&finite);
+    assert!(Arc::ptr_eq(
+        &current_source.samples,
+        &expected_window.samples
+    ));
+    assert_eq!(
+        current_source.resident_binding(),
+        expected_window.resident_binding()
+    );
     let old_owner = predecessor.as_ref().map(Arc::downgrade);
     let adopted_owner = &playback.callback.mixer.stems_for_measurement()[0]
         .as_ref()
@@ -4192,7 +4609,7 @@ assert previous_control.ticket.is_current()
 controller.on_frame_render()
 status = controller.stem_residency_status(0)
 assert status.control_stem_set_identity == disk_v2.stem_set_identity
-assert status.effective_stem_set_identity == (disk_v1.stem_set_identity if selected_v1 and not withdraw_preclaim else None)
+assert status.effective_stem_set_identity == (disk_v1.stem_set_identity if selected_v1 and not withdraw_preclaim and not window_change else None)
 assert status.effective == 'transitioning'
 assert candidate.claimed() and not candidate.withdraw()
 assert not previous_control.ticket.is_current()
@@ -4204,6 +4621,8 @@ if live_bpm:
     assert session.stem_generation_errors == {0: bpm_error}
 if retrigger:
     assert session.stem_generation_errors == {0: play_error}
+if window_change:
+    assert session.stem_generation_errors == {0: window_error}
 "#,
     );
     if repeated_sets {
@@ -4327,6 +4746,23 @@ if queue_pressure:
         assert not failed_post.is_current() and not failed_post.claimed()
         assert failed_post.residency_status() == 'rejected' and failed_post.effective_mode_status() == 'rejected'
         assert failed_post.error() == pressure_error and failed_post.effective_failure_reason() is None
+if window_change:
+    assert live.control is fresh_window_selection and live.disk.selection is fresh_window_selection
+    assert fresh_window_selection.ticket is fresh_window_registration and fresh_window_registration.is_current()
+    assert fresh_window_selection.receipt is candidate and candidate.is_current() and candidate.claimed()
+    assert not failed_window.is_current() and not failed_window.claimed()
+    assert failed_window.residency_status() == 'rejected' and failed_window.error() == window_ownership_error
+    assert failed_window.effective_failure_reason() is None
+    assert window_selection.receipt is failed_window and not window_registration.is_current()
+    assert not session.stem_generation_errors, session.stem_generation_errors
+    persistence.mark_dirty()
+    persistence.flush()
+    window_reopened = ProjectPersistence.from_config_path(persistence.config_path)
+    assert window_reopened.load_error is None
+    assert window_reopened.project.stem_cache[0].pair == disk_v2
+    assert window_reopened.project.pad_loop_start_s[0] == 17 / fixture['rate']
+    assert window_reopened.project.pad_loop_end_s[0] == 1581 / fixture['rate']
+    assert window_reopened.project.pad_key_lock[0] is window_key_lock
 if withdraw_preclaim:
     assert not withdrawn.claimed() and not withdrawn.is_current()
     assert withdrawn.residency_status() == 'rejected' and withdrawn.effective_mode_status() == 'rejected'
@@ -4429,8 +4865,11 @@ assert bpm_selection.ticket is bpm_registration and bpm_selection.receipt is can
         assert_eq!(other.source_playback.loop_period(), None);
         assert_eq!(position.frame, LOOP_START + phase.floor() as usize);
         assert_eq!(position.fraction.to_bits(), distance.fract().to_bits());
-    } else if let Some(birth) = retriggered_at {
-        assert_eq!(playback.frame - playback.source_frame, birth);
+    } else if window_change || retriggered_at.is_some() {
+        assert_eq!(
+            playback.frame - playback.source_frame,
+            retriggered_at.unwrap_or(0)
+        );
         let phase =
             (playback.frame as f64 * playback.ratio).rem_euclid((LOOP_END - LOOP_START) as f64);
         let position = other.source_playback.position();
@@ -4461,6 +4900,69 @@ assert bpm_selection.ticket is bpm_registration and bpm_selection.receipt is can
         "controller.shut_down()\ncontroller._assets.release_saved_assignments()\nowner_v1.release()\nowner_v2.release()",
     );
     std::env::set_current_dir(previous_cwd).unwrap();
+}
+
+#[test]
+fn actual_public_window_rejects_queued_v2_then_requires_fresh_wet_preparation() {
+    if std::env::var_os(WINDOW_CHILD).is_some() {
+        for selected_v1 in [false, true] {
+            round_trip(
+                selected_v1,
+                None,
+                true,
+                None,
+                false,
+                CandidateTrace::WindowChange,
+            );
+        }
+        return;
+    }
+    let output = std::process::Command::new(std::env::current_exe().unwrap())
+        .args(["--exact", WINDOW_TEST, "--nocapture", "--test-threads=1"])
+        .env(WINDOW_CHILD, "1")
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "L3 public changed window ON child failed:\n{}\n{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert!(String::from_utf8_lossy(&output.stdout).contains("1 passed; 0 failed"));
+}
+
+#[test]
+fn actual_public_window_rejects_queued_v2_then_requires_fresh_dry_preparation() {
+    if std::env::var_os(WINDOW_OFF_CHILD).is_some() {
+        for selected_v1 in [false, true] {
+            round_trip(
+                selected_v1,
+                None,
+                false,
+                None,
+                false,
+                CandidateTrace::WindowChange,
+            );
+        }
+        return;
+    }
+    let output = std::process::Command::new(std::env::current_exe().unwrap())
+        .args([
+            "--exact",
+            WINDOW_OFF_TEST,
+            "--nocapture",
+            "--test-threads=1",
+        ])
+        .env(WINDOW_OFF_CHILD, "1")
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "L3 public changed window child failed:\n{}\n{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert!(String::from_utf8_lossy(&output.stdout).contains("1 passed; 0 failed"));
 }
 
 #[test]

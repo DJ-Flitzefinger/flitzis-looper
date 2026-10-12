@@ -2079,6 +2079,7 @@ struct ControllerPlayback {
     components: [SampleBuffer; 4],
     ratio: f64,
     loop_period: f64,
+    loop_end: usize,
     rate_ledger: Option<ControllerRateLedger>,
     scheduled: bool,
     selection: Option<u8>,
@@ -2105,6 +2106,7 @@ struct ControllerRateEpoch {
     fraction: f64,
     rate: f64,
     distance: f64,
+    period: f64,
 }
 
 struct ControllerRateLedger {
@@ -2122,6 +2124,7 @@ impl ControllerRateLedger {
                 fraction: 0.0,
                 rate,
                 distance: 0.0,
+                period,
             }],
         }
     }
@@ -2137,13 +2140,13 @@ impl ControllerRateLedger {
     fn position(&self, frame: u64) -> (usize, f64) {
         let epoch = self.epoch(frame);
         let offset = epoch.fraction + (frame - epoch.start) as f64 * epoch.rate;
-        if self.period == (LOOP_END - LOOP_START) as f64 {
+        if epoch.period == (LOOP_END - LOOP_START) as f64 {
             (
                 (epoch.whole + offset.floor() as usize) % (LOOP_END - LOOP_START),
                 offset.fract(),
             )
         } else {
-            let phase = (epoch.whole as f64 + offset).rem_euclid(self.period);
+            let phase = (epoch.whole as f64 + offset).rem_euclid(epoch.period);
             (phase.floor() as usize, phase.fract())
         }
     }
@@ -2170,6 +2173,7 @@ impl ControllerRateLedger {
                 fraction,
                 rate,
                 distance,
+                period: self.period,
             });
             start += 512;
         }
@@ -2330,7 +2334,7 @@ impl ControllerPlayback {
                         },
                     );
                     let last =
-                        (self.loop_period.ceil() as usize - 1).min(LOOP_END - LOOP_START - 1);
+                        (self.loop_period.ceil() as usize - 1).min(self.loop_end - LOOP_START - 1);
                     let (left, right, fraction) = if phase >= last as f64 {
                         (
                             LOOP_START + last,
@@ -2443,7 +2447,7 @@ impl ControllerPlayback {
         let taps = tap_observation_for_test();
         assert_eq!(taps.missing_reads, 0);
         assert!(taps.min_frame.is_some_and(|frame| frame >= LOOP_START));
-        assert!(taps.max_frame.is_some_and(|frame| frame < LOOP_END));
+        assert!(taps.max_frame.is_some_and(|frame| frame < self.loop_end));
         for (mixer, target) in [
             (self.reference.as_mut(), &mut expected),
             (self.full_mix.as_mut(), &mut full_mix),
@@ -2510,8 +2514,9 @@ impl ControllerPlayback {
             });
             assert_eq!(current.tempo_ratio().to_bits(), ratio.to_bits());
             assert_eq!(
-                current.loop_period().unwrap().to_bits(),
-                self.loop_period.to_bits()
+                current.loop_period().map(f64::to_bits),
+                (self.loop_period != (self.loop_end - LOOP_START) as f64)
+                    .then_some(self.loop_period.to_bits())
             );
             assert_eq!(current.position().frame, LOOP_START + whole);
             assert_eq!(current.position().fraction.to_bits(), fraction.to_bits());
@@ -2640,7 +2645,7 @@ impl ControllerPlayback {
         assert!(
             prepared_taps
                 .max_frame
-                .is_some_and(|frame| frame < LOOP_END)
+                .is_some_and(|frame| frame < self.loop_end)
         );
         let warm_start =
             target - crate::audio_engine::prepared_native_history::PREPARED_HISTORY_FRAMES as u64;
@@ -3275,6 +3280,7 @@ assert audio.worker_call_count() == 1 and audio.prepared_only_on_pool_threads()
         components: full_stems.stems.clone(),
         ratio,
         loop_period: (LOOP_END - LOOP_START) as f64,
+        loop_end: LOOP_END,
         rate_ledger: None,
         scheduled: false,
         selection: stopped_start.then_some(0b1010),

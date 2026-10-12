@@ -244,6 +244,16 @@ immediate change SHALL NOT silently discard the command.
 - **AND** that Trigger SHALL start its own new voice/source and filter chronology without borrowing either old voice's or V2's effectiveness, while other pads continue independently
 - **AND** the rejected unaccepted receipt SHALL remain observable without Native preparation failure or implicit polling retry; a later explicit ALL SHALL require fresh V2 registration, own Capture/worker/Adopt and its own 128-source-frame handover and subsequent dry or prepared wet effect on the new voice
 
+#### Scenario: Public finite loop expansion supersedes queued new-set adoption
+
+- **GIVEN** productive finite NormalLoop FullMix or selected V1 with KEY LOCK OFF or ON and a committed V2 whose actual Adopt remains queued and unclaimed
+- **WHEN** public loop-end expansion changes the resident window while the current fractional taps remain inside the old loop
+- **THEN** the old candidate's authority SHALL become obsolete before claim; normal FIFO rejection SHALL remain distinct from the changed window's own preparation and callback ACK
+- **AND** admission and rejection SHALL preserve the old productive readers, voice, source trajectory, Native/FIFO and filter history; the acknowledged expansion SHALL retain current phase and continue through independently proved new loop geometry without a retrigger
+- **AND** polling SHALL preserve the failed unaccepted receipt and durable V2 selection without automatically retrying or treating a window ACK as a V2 effect
+- **AND** later explicit ALL SHALL prepare that same verified V2 through the existing worker lane using a fresh current-window source ticket and component views, then require fresh own registration, Capture/worker/Adopt,128-source-frame handover and actual dry or prepared wet effect before clearing its own error
+- **AND** this explicit refresh SHALL require Native-confirmed same source/request and changed sealed preparation context; unrelated admission failures or another source SHALL NOT grant that refresh, and preparation-context equality SHALL NOT constitute an audio ACK
+
 #### Scenario: First candidate is prepared after a productive FullMix voice was paused
 - **GIVEN** a current proper NormalLoop FullMix voice has produced genuine wet output and is paused before new-set registration and own Capture
 - **WHEN** its new complete-set candidate obtains own residency acceptance while the same voice remains paused

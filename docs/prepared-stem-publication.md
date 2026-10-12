@@ -1014,6 +1014,57 @@ five relative file links and whitespace pass. Clippy tests exit0 with63 existing
 warnings (one duplicate), none in the changed test. Production Release/import/
 Python checks remain reusable, without Native installation or Human App changes.
 
+### Public loop expansion requires fresh V2 preparation
+
+The public loop-end path can acknowledge a genuinely changed resident window
+while an earlier unclaimed V2 Adopt remains queued. Previously, explicit ALL
+then reused V2's old prepared source ticket and pair. Native correctly rejected
+the stale window, but the controller's retained live disk selection prevented
+its existing worker preparation fallback from running. The actual public
+17..1517 to17..1581 trace reproduced the failure before the fix.
+
+PreparedSourceTicket now compares sealed preparation contexts separately from
+same-source/request identity. This bounded control query includes the current
+publication epoch and immutable window; it grants no residency or audio ACK.
+After a failed explicit request, the controller permits its existing residency-only
+pair worker fallback only for Native-confirmed same source/request with changed
+preparation context and no occupied claimed handover. Ordinary failure and foreign
+source remain failed; polling does not reprepare. The worker verifies the same
+durable V2 files against a fresh current-window ticket and prepares new views.
+The existing registration, Capture/worker/Adopt and own effect guards remain
+authoritative. No realtime path or publication guard is changed.
+
+The first-FullMix and replacement-V1 traces use actual public loop.set_end,
+genuine changed-window source/component range reads, normal FIFO old-Adopt
+rejection then own Window ACK, and later explicit ALL. The changed window is
+acknowledged at an independently chosen interior phase. This bounded expansion
+retains current fractional taps, Voicegeneration, Native/FIFO and uninterrupted
+EQ; V1's actual immutable range backings change while its complete-set owner
+remains V1. An independent geometry epoch continues the complete PCM at the
+retained phase through the new physical extent and wrap. Absolute callback time
+and consumed-output counters continue, and pad215 keeps its original trajectory.
+No Play, Trigger, manual queue removal or private refresh substitutes for this
+public path. A later ON preparation uses its own complete4096 interval after
+the window ACK; OFF remains genuine Varispeed. Fresh V2 then requires its own
+128-source-frame handover and later prepared wet or dry effect.
+
+This proves interior finite NormalLoop expansion only. Source-cut, Seek, Intro,
+Tail, full-track, remaining task3.2/3.3/L4 and resource/Human gates stay open.
+
+Both focused tests cover four real first/replacement and ON/OFF cases and pass
+in6.02s after58.08s compilation. The preliminary shared gate passes59 tests
+in161.54s. After restoring the existing queue-pressure assertions to their own
+branch and adding window persistence/reopen checks, the final affected public
+suite passes23 tests in90.40s after58.56s compilation; the unchanged36 parent,
+Native and offline cases reuse that preliminary gate, without claiming a fresh
+final59-test run. Current Python control regressions pass181 tests in49.40s
+with the prior build-only Native. A fresh Release wheel builds in21.63s; its
+separate build-only runtime passes the new API/controller/UI import preflight.
+One independent final review has no open findings. Format, Ruff, Mypy, strict
+OpenSpec, five relative file links and whitespace pass. Clippy tests exit0
+with63 existing warnings (one duplicate), none in the changed Rust files.
+No Native installation, App, device or listening acceptance is performed.
+
 ### Ordinary public Play supersedes an unclaimed queued V2 adoption
 
 The public ON/rate0.75 and OFF/rate1.25 traces each cover productive FullMix and
