@@ -54,6 +54,7 @@ The installation keeps these areas separate:
 - `models`: persistent separator/model caches.
 - `tools`: installation-owned bootstrap and build tools.
 - `cache`: downloads, source/build preparation and failed installation diagnostics.
+- `b`: native build cache; its short name also protects canonical linker paths.
 - `versions`: complete private runtimes selected by `current.json`.
 - `logs`: installation-local diagnostics.
 

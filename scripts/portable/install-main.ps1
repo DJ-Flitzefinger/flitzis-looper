@@ -125,7 +125,9 @@ try {
     $env:UV_LINK_MODE = 'copy'
     $env:UV_PYTHON_PREFERENCE = 'only-managed'
     $env:UV_NO_PROGRESS = '1'
-    $env:CARGO_TARGET_DIR = Join-Path $Root 'cache/cargo-target'
+    # Cargo can embed canonical physical dependency paths in rlibs despite SUBST.
+    # Keep the owned target directory short enough for MSVC LINK after relocation.
+    $env:CARGO_TARGET_DIR = Join-Path $Root 'b'
     $env:ORT_CACHE_DIR = Join-Path $Root 'cache/ort'
     $env:TEMP = Join-Path $Root 'cache/temp'
     $env:TMP = $env:TEMP

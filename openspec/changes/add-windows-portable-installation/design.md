@@ -29,8 +29,10 @@ avoiding MSVC/CMake long-path limits and build-path separators. Existing mapping
 are retained; only that exact temporary mapping is removed in the build's finally
 path. The installed runtime is checked and started at its real path afterward.
 
-The installation separates `tools`, `cache`, `versions`, `data`, `models` and
-`logs`. A lock serializes installers. A candidate passes isolated imports,
+The installation separates `tools`, `cache`, `b`, `versions`, `data`, `models`
+and `logs`. The short owned `b` native target directory also bounds physical
+dependency paths that Cargo embeds after canonicalizing the temporary drive.
+A lock serializes installers. A candidate passes isolated imports,
 private loaded-DLL checks and offline-worker/FFmpeg checks before atomic
 activation via `current.json`. Existing runtime directories and all persistent
 data remain intact, including for a running old process. Unsafe, reparse or

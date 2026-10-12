@@ -104,6 +104,8 @@ public static class PortableGitFixture {
     public static int Main(string[] arguments) {
         File.AppendAllText(Environment.GetEnvironmentVariable("LOOPER_TEST_GIT_TRACE"),
             string.Join(" ", arguments) + Environment.NewLine);
+        File.AppendAllText(Environment.GetEnvironmentVariable("LOOPER_TEST_GIT_EXECUTABLE_TRACE"),
+            typeof(PortableGitFixture).Assembly.Location + Environment.NewLine);
         if (arguments.Length == 1 && arguments[0] == "--version") {
             Console.WriteLine("git version portable-fixture");
             return 0;
@@ -580,13 +582,18 @@ def test_missing_git_uses_the_pinned_verified_private_bootstrap(
     require_success(_run_powershell(["-File", str(compiler)]))
     archive_path = tmp_path / "owned-mingit.zip"
     with ZipFile(archive_path, "w") as archive:
-        archive.write(executable, "cmd/git.exe")
+        archive.write(executable, "ucrt64/bin/git.exe")
     fixture_hash = hashlib.sha256(archive_path.read_bytes()).hexdigest()
     digest = fixture_hash if integrity == "verified" else "0" * 64
-    root = tmp_path / "private install"
+    prefix = "Portable ü, comma; deep install "
+    padding = 190 - len(str(tmp_path / prefix).encode("utf-8"))
+    assert padding >= 0, "Use a shorter basetemp for the fixed-depth bootstrap fixture"
+    root = tmp_path / (prefix + "d" * padding)
+    assert len(str(root).encode("utf-8")) == 190
     (root / "cache").mkdir(parents=True)
     trace = tmp_path / "git-runs.txt"
-    commands = f"""
+    executable_trace = tmp_path / "git-executable-paths.txt"
+    commands = rf"""
 $originalHash = ${{function:Assert-Hash}}
 function Get-Command {{ param($Name, $CommandType, $ErrorAction); return }}
 function Read-Payload([Uri] $Uri, [string] $Destination) {{
@@ -598,20 +605,35 @@ function Assert-Hash([string] $Path, [string] $Expected) {{
     & $originalHash $Path '{digest}'
 }}
 $env:LOOPER_TEST_GIT_TRACE = {_ps_string(trace)}
-$git = Get-PortableGit {_ps_string(root)}
-$again = Get-PortableGit {_ps_string(root)}
-if ($git -ne $again) {{ throw 'Verified private Git must be reused' }}
-if ($git -ne (Join-Path {_ps_string(root)} 'tools/git-2.56.0.2/cmd/git.exe')) {{
-    throw 'Git must be activated inside the installation'
+$env:LOOPER_TEST_GIT_EXECUTABLE_TRACE = {_ps_string(executable_trace)}
+$env:PATH = "$env:SystemRoot\System32;$env:SystemRoot;$PSHOME"
+$mapping = $null
+try {{
+    $mapping = New-PortableBuildDrive {_ps_string(root)}
+    $git = Get-PortableGit $mapping.Path
+    $again = Get-PortableGit $mapping.Path
+    if ($git -ne $again) {{ throw 'Verified private Git must be reused' }}
+    if ($git -ne (Join-Path $mapping.Path 'tools/git-2.56.0.2/ucrt64/bin/git.exe')) {{
+        throw 'Git must use the pinned real UCRT executable inside the installation'
+    }}
+}} finally {{
+    if ($null -ne $mapping) {{ Remove-PortableBuildDrive $mapping | Out-Null }}
 }}
 """
     result = _run_embedded(tmp_path, commands)
-    published = root / "tools/git-2.56.0.2/cmd/git.exe"
+    published = root / "tools/git-2.56.0.2/ucrt64/bin/git.exe"
     if integrity == "verified":
         require_success(result)
         assert published.read_bytes() == executable.read_bytes()
         assert trace.read_text().splitlines() == ["--version"]
+        executed = Path(executable_trace.read_text(encoding="utf-8").strip())
+        assert executed.parts[-3:] == ("ucrt64", "bin", "git.exe")
+        staging = executed.parent.parent.parent.name
+        assert staging.startswith("g-")
+        assert len(staging) == 10
+        assert list((root / "tools").iterdir()) == [published.parents[2]]
     else:
         assert result.returncode != 0, result.stdout + result.stderr
         assert not published.exists()
         assert not trace.exists()
+        assert not executable_trace.exists()

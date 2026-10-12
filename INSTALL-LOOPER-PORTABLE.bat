@@ -263,22 +263,25 @@ function Get-PortableGit([string] $Root) {
         if ($LASTEXITCODE -eq 0) { return $existing.Source }
     }
     $directory = Join-Path $Root 'tools/git-2.56.0.2'
-    $executable = Join-Path $directory 'cmd/git.exe'
+    # Use the real pinned UCRT executable: cmd/git.exe reconstructs a physical
+    # PATH that breaks for long folders or semicolons despite the build alias.
+    $executable = Join-Path $directory 'ucrt64/bin/git.exe'
     Assert-PlainPath $directory
     if (-not (Test-Path -LiteralPath $executable -PathType Leaf)) {
         $archive = Join-Path $Root "cache/git-$([Guid]::NewGuid().ToString('N')).zip"
         Write-Host 'Git fehlt: lade die private Git-Version ...'
         Read-Payload ([Uri]'https://github.com/git-for-windows/git/releases/download/v2.56.0.windows.2/MinGit-2.56.0.2-64-bit.zip') $archive
         Assert-Hash $archive 'da35e72aa21c005a5a0d298cfbae110bc1609a815730ea0dde84b01a1b3cd3be'
-        $fresh = "$directory-$([Guid]::NewGuid().ToString('N'))"
+        # MinGit's cmd launcher also canonicalizes its executable directory.
+        $fresh = Join-Path $Root "tools/g-$([Guid]::NewGuid().ToString('N').Substring(0,8))"
         [IO.Directory]::CreateDirectory($fresh) | Out-Null
         Expand-ContainedZip $archive $fresh
-        $executable = Join-Path $fresh 'cmd/git.exe'
+        $executable = Join-Path $fresh 'ucrt64/bin/git.exe'
         Invoke-Checked $executable @('--version') | Out-Host
         # Publish only a verified usable tool, without touching any existing tool.
         if (-not (Test-Path -LiteralPath $directory)) { [IO.Directory]::Move($fresh, $directory) }
         else { $directory = $fresh }
-        $executable = Join-Path $directory 'cmd/git.exe'
+        $executable = Join-Path $directory 'ucrt64/bin/git.exe'
     }
     Assert-PlainPath $executable
     return $executable
