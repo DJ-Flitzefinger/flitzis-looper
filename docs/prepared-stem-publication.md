@@ -1014,6 +1014,51 @@ five relative file links and whitespace pass. Clippy tests exit0 with63 existing
 warnings (one duplicate), none in the changed test. Production Release/import/
 Python checks remain reusable, without Native installation or Human App changes.
 
+### Public mask supersedes an actually queued V2 adoption before claim
+
+The public ON/rate0.75 and OFF/rate1.25 traces each cover first V2 adoption from
+productive FullMix and replacement from selected V1. Real V2 files, durable
+commit/reopen and accepted registration precede public ALL1010 and its actual
+Capture/worker preparation. The normal callback's two-slot retirement gate
+retains the unchanged actual front Adopt before claim. Public mask0101 then
+withdraws that unclaimed receipt, revokes its registration and admits a fresh
+V2 selection/registration/receipt for the latest authorized mask.
+
+The old receipt stays separately observable as rejected, uncurrent and unclaimed;
+its ordinary ownership error is not a Native preparation failure. The old fixed
+registration still reports accepted, but is revoked and cannot authorize audio.
+Polling reports the new waiting attempt without a session error or duplicate
+admission. Disk V2 remains durable. The previous actual FullMix or V1 selection
+keeps its source, readers, demand, transition, Native/FIFO and productive/EQ
+histories. Irregular productive callbacks compare every old-selection sample
+with complete independent PCM and raw Native for ON or actual Varispeed for OFF.
+
+Only after public admission does the fixture hold the existing producer mutex
+across one normal capacity-restored callback drain. Callback handlers do not take
+that mutex; it prevents the new worker from posting Adopt into the same batch.
+No Python admission, worker wait, manual queue pop or message reordering occurs
+under the guard. Exactly the unchanged old Adopt rejects, followed by the new
+own Capture. Both preserve the current audio snapshots. Releasing the mutex
+permits the fresh worker/Adopt half, using the same established adoption checks.
+
+Only that fresh Adopt changes the independent expectation to original V1 PCM
+mask1100, because the genuine V2 files swap vocals/drums and request0101. Its own
+128-source-frame ramp and uninterrupted EQ prove the new component output; ON
+also requires its own later complete4096 Native preparation and wet effect,
+while OFF requires its own dry effect. Pad215 remains independent. This bounded
+four-case proof leaves the rest of task3.2/3.3/L4 and resource/Human gates open.
+Production, runtime, Python and the installed Human Native are unchanged.
+
+The focused ON/OFF tests cover all four combinations and pass in9.37s after a
+1m52s Release compile. All19 affected public Controller tests then pass in111.46s
+after a0.35s compile, including the old Capture deadline and queue-failure traces.
+The unchanged36 Parent/Native/offline cases reuse the preceding fresh53-test gate
+in215.75s; this is not a fresh55-test run. One independent nonauthor final review
+reports no findings. Formatting, official strict validation, five relative file
+links and whitespace pass. Clippy tests exit0 with63 existing warnings (one
+duplicate), none in the changed test, in11.03s. Existing production Release,
+import, Python and static checks remain reusable without Native installation.
+
 ### Latest public mask during a claimed nonempty V2 handover
 
 The public ON/rate0.75 and OFF/rate1.25 traces each cover first V2 adoption from

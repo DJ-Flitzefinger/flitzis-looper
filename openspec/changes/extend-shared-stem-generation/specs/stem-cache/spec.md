@@ -194,6 +194,14 @@ immediate change SHALL NOT silently discard the command.
 - **AND** FullMix SHALL obtain its own residency and effective-output authority; V2's withdrawn operation SHALL NOT report V2 effective or override that intent
 - **AND** polling SHALL NOT retry V2 implicitly; later explicit ALL SHALL obtain fresh V2 registration and its own Capture, worker preparation, Adopt and subsequent effectiveness
 
+#### Scenario: Public mask supersedes a prepared candidate before callback claim
+- **GIVEN** productive FullMix or selected V1 finite NormalLoop playback with KEY LOCK OFF or ON and a durably committed V2 whose own nonempty ALL Capture and worker preparation have queued Adopt without claim
+- **WHEN** actual callback retirement pressure retains that Adopt and a newer public component-mask gesture requests a different nonempty ALL mask
+- **THEN** the old unclaimed receipt and candidate registration SHALL lose future authority while disk V2 and the previous actual control/effect remain usable; intentional supersession SHALL NOT report Native preparation failure
+- **AND** the unchanged old Adopt SHALL remain in normal FIFO order and reject when capacity returns without replacing actual readers, demand, source trajectory, voice, Native, FIFO, transition or filter history
+- **AND** the latest authorized mask SHALL obtain fresh V2 registration and its own Capture, worker preparation and Adopt; polling SHALL NOT duplicate that admission or lend the old receipt's ACK
+- **AND** only the new own Adopt SHALL start its 128-source-frame handover, with exact independent component output and own dry effectiveness for OFF or later complete prepared Native wet effectiveness for ON
+
 #### Scenario: Public candidate admission encounters a full control queue
 - **GIVEN** productive V1 playback and a distinct durably committed V2 with current accepted registration but no residency receipt
 - **WHEN** an explicit public ALL request encounters a full Native control queue before Capture admission

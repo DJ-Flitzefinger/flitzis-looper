@@ -39,6 +39,10 @@ const CLAIMED_MASKS_CHILD: &str = "FLITZI_L3_CONTROLLER_CLAIMED_MASKS_CHILD";
 const CLAIMED_MASKS_TEST: &str = "audio_engine::cold_load::tests::stem_pair_publication_tests::committed_stem_residency_tests::l3_controller_productive_tests::actual_public_latest_masks_during_nonempty_v2_claim_require_own_wet_ack";
 const CLAIMED_MASKS_OFF_CHILD: &str = "FLITZI_L3_CONTROLLER_CLAIMED_MASKS_OFF_CHILD";
 const CLAIMED_MASKS_OFF_TEST: &str = "audio_engine::cold_load::tests::stem_pair_publication_tests::committed_stem_residency_tests::l3_controller_productive_tests::actual_public_latest_masks_during_nonempty_v2_claim_require_own_dry_ack";
+const PRECLAIM_MASKS_CHILD: &str = "FLITZI_L3_CONTROLLER_PRECLAIM_MASKS_CHILD";
+const PRECLAIM_MASKS_TEST: &str = "audio_engine::cold_load::tests::stem_pair_publication_tests::committed_stem_residency_tests::l3_controller_productive_tests::actual_public_preclaim_mask_supersession_requires_own_wet_ack";
+const PRECLAIM_MASKS_OFF_CHILD: &str = "FLITZI_L3_CONTROLLER_PRECLAIM_MASKS_OFF_CHILD";
+const PRECLAIM_MASKS_OFF_TEST: &str = "audio_engine::cold_load::tests::stem_pair_publication_tests::committed_stem_residency_tests::l3_controller_productive_tests::actual_public_preclaim_mask_supersession_requires_own_dry_ack";
 
 #[derive(Clone, Copy)]
 enum CandidateTrace {
@@ -52,6 +56,7 @@ enum CandidateTrace {
     LiveBpm,
     PausedLiveBpm,
     ClaimedMasks,
+    PreclaimMasks,
 }
 
 fn live_bpm_then_explicit_retry(
@@ -817,6 +822,16 @@ fn own_adoption(
     key_lock: bool,
 ) {
     assert_eq!(playback.drain(consumer), 1, "own callback Capture");
+    own_adoption_after_capture(playback, consumer, locals, name, key_lock);
+}
+
+fn own_adoption_after_capture(
+    playback: &mut ControllerPlayback,
+    consumer: &mut rtrb::Consumer<ControlMessage>,
+    locals: &Py<PyDict>,
+    name: &str,
+    key_lock: bool,
+) {
     wait_until(|| {
         consumer.peek().is_ok()
             || controller_ticket_status(locals, name, "residency_status") == "rejected"
@@ -1977,6 +1992,238 @@ assert session.stem_generation_errors == {0: deadline_error}
     );
 }
 
+fn supersede_queued_candidate_mask(
+    producer: &Arc<Mutex<rtrb::Producer<ControlMessage>>>,
+    playback: &mut ControllerPlayback,
+    consumer: &mut rtrb::Consumer<ControlMessage>,
+    locals: &Py<PyDict>,
+    key_lock: bool,
+) {
+    use crate::audio_engine::committed_stem_residency::CommittedStemRtWork;
+    assert_eq!(playback.drain(consumer), 1, "actual old V2 Capture");
+    wait_until(|| consumer.peek().is_ok());
+    let queued = match consumer.peek().unwrap() {
+        ControlMessage::CommittedStemWork(work) => {
+            assert!(
+                matches!(work.as_ref(), CommittedStemRtWork::Adopt(transaction)
+                if transaction.id == 0 && transaction.target == StemMixMode::AllStems
+                && transaction.mask == 0b1010 && transaction.candidate.is_some())
+            );
+            work.as_ref() as *const CommittedStemRtWork as usize
+        }
+        _ => panic!("expected actual prepared old V2 Adopt"),
+    };
+    playback.callback.retirement.slots = 2;
+    assert_eq!(
+        playback.drain(consumer),
+        0,
+        "real preclaim retirement pressure"
+    );
+    controller_python(
+        locals,
+        r#"
+superseded = candidate
+superseded_selection = live.disk.selection
+superseded_registration = superseded_selection.ticket
+assert superseded.is_current() and not superseded.claimed()
+assert superseded.residency_status() == 'pending' and superseded.effective_mode_status() == 'waiting'
+assert superseded_selection.receipt_intent == ('all_stems', 0b1010)
+assert superseded_registration.is_current() and superseded_registration.publication_status() == 'accepted'
+"#,
+    );
+    // Check public admission and the normal late-Adopt/new-Capture batch against
+    // their own current snapshots. Rendering between them keeps the old actual
+    // selection productive, with its independent PCM/Native/EQ oracle unchanged.
+    for stage in 0..2 {
+        let source = playback.callback.mixer.bank_for_measurement()[0]
+            .clone()
+            .unwrap();
+        let predecessor = playback.callback.mixer.stems_for_measurement()[0].clone();
+        let before = voice(&playback.callback.mixer);
+        let clock = before.source_playback;
+        let generation = before.generation;
+        let native = before.stretch.native_state_address();
+        let fifo = before.stretch.pending_fifo_frames();
+        let history = before.stretch.productive_history();
+        let epoch = before.stretch.source_epoch_owner().load(Ordering::Acquire);
+        assert_eq!(history.is_some(), key_lock);
+        let demand = playback.callback.mixer.stem_demand_for_measurement(0);
+        let transition = playback.callback.mixer.stem_transition_for_measurement(0);
+        assert!(!transition.is_active());
+        let dsp = playback
+            .callback
+            .mixer
+            .dsp_source_history_for_test(0)
+            .unwrap();
+        let other_clock = other_voice(&playback.callback.mixer).source_playback;
+        if stage == 0 {
+            controller_python(
+                locals,
+                r#"
+assert controller.set_stem_enabled_mask(0, 0b0101)
+latest_selection = live.disk.selection
+fresh_registration = latest_selection.ticket
+candidate = live.attempt.receipt
+assert latest_selection is not superseded_selection
+assert fresh_registration is not superseded_registration
+assert fresh_registration.is_current() and fresh_registration.publication_status() == 'accepted'
+assert candidate is not superseded and candidate.is_current() and not candidate.claimed()
+assert latest_selection.receipt_intent == ('all_stems', 0b0101)
+assert project.pad_stem_mix_mode[0] == 'all_stems' and project.stem_cache[0].pair == disk_v2
+persistence.flush()
+reopened = ProjectPersistence.from_config_path(persistence.config_path)
+assert reopened.load_error is None and reopened.project.stem_cache[0].pair == disk_v2
+assert reopened.project.pad_stem_mix_mode[0] == 'all_stems'
+"#,
+            );
+            assert_eq!(
+                playback.drain(consumer),
+                0,
+                "pressure retains old Adopt before new Capture"
+            );
+            assert!(
+                matches!(consumer.peek(), Ok(ControlMessage::CommittedStemWork(work))
+                if work.as_ref() as *const CommittedStemRtWork as usize == queued)
+            );
+            assert_eq!(
+                consumer.slots(),
+                2,
+                "only old Adopt and new own Capture queued"
+            );
+        } else {
+            // Admission already succeeded. The callback never takes this mutex;
+            // holding it here prevents the fresh worker from posting its Adopt
+            // inside the old-Adopt/new-Capture batch. No Python call or wait runs
+            // under the guard, and no queued message is popped or reordered.
+            let guard = producer.lock().unwrap();
+            assert!(
+                matches!(consumer.peek(), Ok(ControlMessage::CommittedStemWork(work))
+                if work.as_ref() as *const CommittedStemRtWork as usize == queued)
+            );
+            playback.callback.retirement.slots = usize::MAX;
+            assert_eq!(
+                playback.drain(consumer),
+                2,
+                "normal old Adopt rejection then own latest Capture"
+            );
+            assert!(consumer.is_empty());
+            drop(guard);
+        }
+        let after = voice(&playback.callback.mixer);
+        assert!(after.source_playback.matches_exact(&clock));
+        assert_eq!(after.generation, generation);
+        assert_eq!(after.stretch.native_state_address(), native);
+        assert_eq!(after.stretch.pending_fifo_frames(), fifo);
+        assert_eq!(
+            after.stretch.source_epoch_owner().load(Ordering::Acquire),
+            epoch
+        );
+        if let Some(history) = history {
+            let next = after.stretch.productive_history().unwrap();
+            assert_eq!(next.binding, history.binding);
+            assert_eq!(next.next_position, history.next_position);
+            assert_eq!(next.fed_output_frames, history.fed_output_frames);
+        } else {
+            assert!(after.stretch.productive_history().is_none());
+        }
+        assert!(
+            other_voice(&playback.callback.mixer)
+                .source_playback
+                .matches_exact(&other_clock)
+        );
+        assert_eq!(
+            playback.callback.mixer.stem_demand_for_measurement(0),
+            demand
+        );
+        assert!(
+            playback
+                .callback
+                .mixer
+                .stem_transition_for_measurement(0)
+                .matches_exact(transition)
+        );
+        let next_dsp = playback
+            .callback
+            .mixer
+            .dsp_source_history_for_test(0)
+            .unwrap();
+        assert_eq!(next_dsp.binding, dsp.binding);
+        assert_eq!(next_dsp.next_position, dsp.next_position);
+        assert_eq!(next_dsp.fed_output_frames, dsp.fed_output_frames);
+        let current_source = playback.callback.mixer.bank_for_measurement()[0]
+            .as_ref()
+            .unwrap();
+        assert!(Arc::ptr_eq(&source.samples, &current_source.samples));
+        assert_eq!(source.resident_binding(), current_source.resident_binding());
+        match (
+            predecessor.as_ref(),
+            playback.callback.mixer.stems_for_measurement()[0].as_ref(),
+        ) {
+            (Some(old), Some(current)) => {
+                assert!(Arc::ptr_eq(
+                    &old.complete_set_identity,
+                    &current.complete_set_identity
+                ));
+                for (old, next) in old.stems.iter().zip(&current.stems) {
+                    assert!(Arc::ptr_eq(&old.samples, &next.samples));
+                }
+            }
+            (None, None) => {}
+            _ => panic!("superseded Adopt or fresh Capture replaced actual readers"),
+        }
+        controller_python(
+            locals,
+            r#"
+for _ in range(16):
+    controller.on_frame_render()
+    assert live.control is previous_control and live.attempt is latest_selection
+    assert live.disk.selection is latest_selection and latest_selection.ticket is fresh_registration
+    assert latest_selection.receipt is candidate and candidate.is_current() and not candidate.claimed()
+    assert candidate.residency_status() in {'captured', 'pending'} and candidate.effective_mode_status() == 'waiting'
+    assert live.desired == ('all_stems', 0b0101) and session.pad_stem_enabled_mask[0] == 0b0101
+    assert not superseded.is_current() and not superseded.claimed()
+    assert superseded.residency_status() == 'rejected' and superseded.effective_mode_status() == 'rejected'
+    assert superseded.effective_failure_reason() is None
+    assert superseded.error() == 'Committed stem residency or mode ownership changed'
+    assert superseded_selection.receipt is superseded
+    assert not superseded_registration.is_current() and superseded_registration.publication_status() == 'accepted'
+    assert superseded_registration.error() is None
+    assert previous_control.ticket.is_current()
+    if selected_v1:
+        assert previous_control.receipt is first and first.is_current() and first.effective_mode_status() == 'effective'
+    else:
+        assert previous_control.receipt is None
+    status = controller.stem_residency_status(0)
+    assert status.disk_stem_set_identity == disk_v2.stem_set_identity
+    assert status.control_stem_set_identity == disk_v1.stem_set_identity
+    assert status.effective_stem_set_identity == (disk_v1.stem_set_identity if selected_v1 else None)
+    assert status.effective == 'waiting' and not live.blocked
+    assert not session.stem_generation_errors, session.stem_generation_errors
+"#,
+        );
+        if stage == 0 {
+            assert_eq!(
+                consumer.slots(),
+                2,
+                "polling cannot duplicate latest admission"
+            );
+            let mut nontrivial = false;
+            for frames in [1, 31, 137, 257, 511] {
+                let output = if key_lock {
+                    playback.render(frames, false)
+                } else {
+                    render_varispeed(playback, frames)
+                }
+                .0;
+                nontrivial |= output.iter().any(|sample| sample.abs() > 0.001);
+            }
+            assert!(nontrivial);
+        }
+    }
+    // The normal batch above really dispatched the fresh Capture. Continue only
+    // its worker/Adopt half; a second invented Capture would hide FIFO ordering.
+}
+
 fn latest_masks_after_nonempty_claim(
     playback: &mut ControllerPlayback,
     consumer: &mut rtrb::Consumer<ControlMessage>,
@@ -2817,8 +3064,9 @@ fn round_trip(
 ) {
     let repeated_sets = matches!(trace, CandidateTrace::RepeatedSets);
     let claimed_masks = matches!(trace, CandidateTrace::ClaimedMasks);
+    let preclaim_masks = matches!(trace, CandidateTrace::PreclaimMasks);
     assert!(
-        !claimed_masks
+        !(claimed_masks || preclaim_masks)
             || (!paused_first && delete_pause.is_none() && stopped_before_poll.is_none())
     );
     let withdraw_preclaim = matches!(trace, CandidateTrace::WithdrawPreclaim);
@@ -2961,6 +3209,7 @@ fn round_trip(
                 .unwrap();
         }
         locals.set_item("repeated_sets", repeated_sets).unwrap();
+        locals.set_item("preclaim_masks", preclaim_masks).unwrap();
         locals.set_item("queue_pressure", queue_pressure).unwrap();
         locals
             .set_item("capture_deadline", capture_deadline)
@@ -3543,20 +3792,43 @@ assert previous_control.ticket.is_current()
             key_lock,
         ));
     }
-    own_adoption(
-        &mut playback,
-        &mut h.consumer,
-        &locals,
-        "candidate",
-        key_lock,
-    );
+    if preclaim_masks {
+        supersede_queued_candidate_mask(
+            &h.producer,
+            &mut playback,
+            &mut h.consumer,
+            &locals,
+            key_lock,
+        );
+        own_adoption_after_capture(
+            &mut playback,
+            &mut h.consumer,
+            &locals,
+            "candidate",
+            key_lock,
+        );
+    } else {
+        own_adoption(
+            &mut playback,
+            &mut h.consumer,
+            &locals,
+            "candidate",
+            key_lock,
+        );
+    }
     assert_eq!(
         playback.callback.mixer.key_lock_for_measurement(0),
         key_lock
     );
     assert_eq!(
         playback.callback.mixer.stem_demand_for_measurement(0).1,
-        if repeated_sets { 0 } else { 0b1010 }
+        if repeated_sets {
+            0
+        } else if preclaim_masks {
+            0b0101
+        } else {
+            0b1010
+        }
     );
     let current_source = playback.callback.mixer.bank_for_measurement()[0]
         .as_ref()
@@ -3576,8 +3848,15 @@ assert previous_control.ticket.is_current()
         voice(&playback.callback.mixer).generation,
         initial_generation
     );
-    // Actual V2 mask1010 maps to V1 vocals+melody; mask0 stays Some(0), not FullMix.
-    let oracle_mask = if repeated_sets { 0 } else { 0b0011 };
+    // Real V2 swaps vocals/drums: mask1010 maps to original0011 and0101 to1100.
+    // An empty ALL mask stays Some(0), not FullMix.
+    let oracle_mask = if repeated_sets {
+        0
+    } else if preclaim_masks {
+        0b1100
+    } else {
+        0b0011
+    };
     assert!(playback.reference.set_stem_enabled_mask(
         0,
         oracle_mask,
@@ -3738,6 +4017,18 @@ if capture_deadline:
     assert not failed_capture.is_current() and not failed_capture.claimed()
     assert failed_capture.residency_status() == 'rejected' and failed_capture.error() == deadline_error
     assert not session.stem_generation_errors, session.stem_generation_errors
+if preclaim_masks:
+    assert live.control is latest_selection and live.disk.selection is latest_selection
+    assert latest_selection.ticket is fresh_registration and fresh_registration.is_current()
+    assert latest_selection.receipt is candidate and candidate.is_current() and candidate.claimed()
+    assert latest_selection.receipt_intent == ('all_stems', 0b0101)
+    assert live.desired == ('all_stems', 0b0101) and session.pad_stem_enabled_mask[0] == 0b0101
+    assert superseded_selection.receipt is superseded
+    assert not superseded.is_current() and not superseded.claimed()
+    assert superseded.residency_status() == 'rejected' and superseded.effective_mode_status() == 'rejected'
+    assert superseded.effective_failure_reason() is None
+    assert not superseded_registration.is_current() and superseded_registration.error() is None
+    assert not session.stem_generation_errors, session.stem_generation_errors
 "#,
         );
     }
@@ -3830,6 +4121,74 @@ assert bpm_selection.ticket is bpm_registration and bpm_selection.receipt is can
         "controller.shut_down()\ncontroller._assets.release_saved_assignments()\nowner_v1.release()\nowner_v2.release()",
     );
     std::env::set_current_dir(previous_cwd).unwrap();
+}
+
+#[test]
+fn actual_public_preclaim_mask_supersession_requires_own_wet_ack() {
+    if std::env::var_os(PRECLAIM_MASKS_CHILD).is_some() {
+        for selected_v1 in [false, true] {
+            round_trip(
+                selected_v1,
+                None,
+                true,
+                None,
+                false,
+                CandidateTrace::PreclaimMasks,
+            );
+        }
+        return;
+    }
+    let output = std::process::Command::new(std::env::current_exe().unwrap())
+        .args([
+            "--exact",
+            PRECLAIM_MASKS_TEST,
+            "--nocapture",
+            "--test-threads=1",
+        ])
+        .env(PRECLAIM_MASKS_CHILD, "1")
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "L3 preclaim mask ON child failed:\n{}\n{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert!(String::from_utf8_lossy(&output.stdout).contains("1 passed; 0 failed"));
+}
+
+#[test]
+fn actual_public_preclaim_mask_supersession_requires_own_dry_ack() {
+    if std::env::var_os(PRECLAIM_MASKS_OFF_CHILD).is_some() {
+        for selected_v1 in [false, true] {
+            round_trip(
+                selected_v1,
+                None,
+                false,
+                None,
+                false,
+                CandidateTrace::PreclaimMasks,
+            );
+        }
+        return;
+    }
+    let output = std::process::Command::new(std::env::current_exe().unwrap())
+        .args([
+            "--exact",
+            PRECLAIM_MASKS_OFF_TEST,
+            "--nocapture",
+            "--test-threads=1",
+        ])
+        .env(PRECLAIM_MASKS_OFF_CHILD, "1")
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "L3 preclaim mask OFF child failed:\n{}\n{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert!(String::from_utf8_lossy(&output.stdout).contains("1 passed; 0 failed"));
 }
 
 #[test]
