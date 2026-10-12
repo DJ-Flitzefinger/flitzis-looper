@@ -229,6 +229,48 @@ arrives. Component acceptance is not wet effectiveness; stopped waiting and
 paused transitioning remain explicit. Final UI and every final-reader family
 remain L4 proof obligations, rather than being inferred from this L3 mechanism.
 
+### L3 Intro/Tail candidate adoption
+
+The bounded extension covers first FullMix-to-V2 and selected-V1-to-V2 candidates
+on one current running or paused Intro/Tail voice with KEY LOCK OFF or ON,
+including callback-acknowledged accepted musical timing. The own explicit Seek
+must already have completed. ON requires the actual KeyLockFiniteLoop physical
+prefix-and-loop `[0,E)` or tail-and-loop `[S,N)` union; OFF requires physically
+complete FullTrack `[0,N)`. Both exact predecessor/candidate reader generations,
+the accepted projection and source/window/launch/history/capacity fences remain
+authoritative at Capture and Adopt. Ordinary same-set mode requests, frozen
+old-source voices, multiple same-pad voices and missing unions remain guarded.
+
+Accepted musical timing preserves the physical one-shot prefix or suffix and
+then returns naturally to the accepted musical loop period P, which can differ
+from physical extent H. Productive tests must independently verify both physical
+boundary taps, fractional return and later virtual P/H seams through the actual
+128-consumed-source-frame handover, raw Native/FIFO and uninterrupted filter
+chronology. An earlier receipt cannot confirm V2. ON needs V2's own later exact
+4096-output-frame source preparation and productive Wet while still in its
+explicit domain; OFF establishes distinct consumed-source dry effectiveness.
+
+Paused Capture/preparation/Adopt retain source fraction, generation, Native/FIFO,
+productive/filter history, unconsumed ramp and both immutable owners. Silent
+callback time and controller polling do not advance the source clock or report
+new effectiveness. Only own Resume and subsequent source consumption establish
+V2 effectiveness; another pad keeps its independently consumed trajectory.
+Save/reopen verifies durable V2 and musical/loop/KEY LOCK intent separately.
+
+The earlier paused-Intro and accepted-musical Intro/Tail negative expectations
+are superseded only within this candidate extension contract. Its positive
+public/native software profiles, integrated checks and one independent review
+are recorded in `docs/prepared-stem-publication.md`: twenty added productive
+histories, sixteen stale-own-timing Capture/Adopt histories and preserved
+ordinary same-set/withdrawal guards. This is software proof of the bounded
+candidate contract, not general musical quality or Human hearing acceptance.
+Whole task3.3 remains open: explicit in-loop/equal-phase Seek followed by new-set
+adoption, actual KEYLOCK ON KeyLockFullTrack explicit Seek/ALL exceptions and
+unproved complete-resident partial-loop contexts need their own bounded proofs.
+Intro/Tail-specific final-reader/lifecycle coverage also remains separate from
+the earlier finite NormalLoop L4 closure. Whole P4b/P5a/P5b, full L4, resources,
+Human acceptance and the stop before full Rust-port/Slice8 remain unchanged.
+
 ## L4: single-current-set retirement and duplicate UI
 
 The shared material has one durable current selected set. After replacement,

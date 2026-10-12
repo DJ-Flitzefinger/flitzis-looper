@@ -2524,15 +2524,26 @@ impl ControllerPlayback {
                         } else {
                             self.loop_end
                         };
-                        (
-                            left,
-                            if left + 1 == end {
-                                self.loop_start
-                            } else {
-                                left + 1
-                            },
-                            fraction,
-                        )
+                        let normal_phase = left.saturating_sub(self.loop_start) as f64 + fraction;
+                        if mode == crate::audio_engine::source_reader::ExplicitSeekMode::Normal
+                            && normal_phase >= last as f64
+                        {
+                            (
+                                self.loop_start + last,
+                                self.loop_start,
+                                (normal_phase - last as f64) / (self.loop_period - last as f64),
+                            )
+                        } else {
+                            (
+                                left,
+                                if left + 1 == end {
+                                    self.loop_start
+                                } else {
+                                    left + 1
+                                },
+                                fraction,
+                            )
+                        }
                     } else if phase >= last as f64 {
                         (
                             self.loop_start + last,
@@ -2716,7 +2727,11 @@ impl ControllerPlayback {
             assert_eq!(current.position().frame, whole);
             assert!((current.position().fraction - fraction).abs() < 1e-9);
             assert_eq!(current.tempo_ratio().to_bits(), self.ratio.to_bits());
-            assert_eq!(current.loop_period(), None);
+            assert_eq!(
+                current.loop_period().map(f64::to_bits),
+                (self.loop_period != (self.loop_end - self.loop_start) as f64)
+                    .then_some(self.loop_period.to_bits())
+            );
             assert_eq!(voice(&self.callback.mixer).explicit_seek_mode, mode);
         } else if self.loop_start != LOOP_START
             || self.loop_period != (LOOP_END - LOOP_START) as f64

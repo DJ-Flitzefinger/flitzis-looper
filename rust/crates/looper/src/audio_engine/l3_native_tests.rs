@@ -1903,10 +1903,14 @@ fn actual_tail_first_and_replacement_keep_own_wet_history_through_normal_return(
 }
 
 #[test]
-fn actual_tail_unsupported_candidates_preserve_their_own_voice() {
-    unsupported_seek_candidates(
+fn actual_tail_same_set_requests_preserve_their_own_voice() {
+    unsupported_seek_modes(
         LOOP_END,
         &[
+            (true, false, false),
+            (false, false, false),
+            (true, false, true),
+            (false, false, true),
             (true, true, false),
             (false, true, false),
             (true, true, true),
@@ -1916,21 +1920,25 @@ fn actual_tail_unsupported_candidates_preserve_their_own_voice() {
 }
 
 #[test]
-fn actual_intro_unsupported_candidates_preserve_their_own_voice() {
-    unsupported_seek_candidates(
+fn actual_intro_same_set_requests_preserve_their_own_voice() {
+    unsupported_seek_modes(
         0,
         &[
+            (true, false, false),
+            (false, false, false),
             (true, false, true),
             (false, false, true),
             (true, true, false),
             (false, true, false),
+            (true, true, true),
+            (false, true, true),
         ],
     );
 }
 
-fn unsupported_seek_candidates(target: usize, contexts: &[(bool, bool, bool)]) {
+fn unsupported_seek_modes(target: usize, contexts: &[(bool, bool, bool)]) {
     use crate::audio_engine::source_reader::ExplicitSeekMode;
-    for (context, &(key_lock, musical, paused)) in contexts.iter().enumerate() {
+    for &(key_lock, musical, paused) in contexts {
         let mut p = if musical {
             bpm_productive(key_lock).0
         } else {
@@ -1958,7 +1966,19 @@ fn unsupported_seek_candidates(target: usize, contexts: &[(bool, bool, bool)]) {
                 .is_some()
                 == musical
         );
-        let (_pair, registration) = candidate(&mut p, 180 + context);
+        // Fresh own registration for the already selected complete set does not
+        // acquire the separate new-generation candidate authority.
+        let source = p.h.ticket(0);
+        let pair = p.h.prepare(0, &source, false, Some(&selection(&p.pair)));
+        let registration =
+            p.h.engine
+                .register_committed_stem_pair_with_producer(&pair, &source, &p.h.producer)
+                .unwrap();
+        if registration.publication_status() == "pending" {
+            assert_eq!(p.h.callback.drain(&mut p.h.consumer), 1);
+        }
+        assert_eq!(registration.publication_status(), "accepted");
+        assert!(registration.is_current());
         let receipt = request_candidate(&mut p, &registration, 0b1010);
         let before = voice(&p.h.callback.mixer);
         let playback = before.source_playback;
@@ -1981,7 +2001,93 @@ fn unsupported_seek_candidates(target: usize, contexts: &[(bool, bool, bool)]) {
 }
 
 #[test]
-fn actual_paused_intro_seek_rejects_fresh_candidate_without_changing_post_seek_audio() {
+fn musical_intro_and_tail_stale_timing_ack_rejects_capture_and_adopt() {
+    use crate::audio_engine::constant_timing::l3_constant_timing_fixture;
+    for target in [0, LOOP_END] {
+        for key_lock in [false, true] {
+            for paused in [false, true] {
+                for after_capture in [false, true] {
+                    let (mut p, accepted) = bpm_productive(key_lock);
+                    make_v1_effective(&mut p);
+                    let _seek = acknowledge_candidate_seek(&mut p, target);
+                    if paused {
+                        p.h.callback.mixer.pause_sample_at_output_frame(0, p.frame);
+                    }
+                    let (_pair, registration) = candidate(&mut p, 181);
+                    let receipt = request_candidate(&mut p, &registration, 0b1010);
+                    if after_capture {
+                        p.capture_then_wait(&receipt);
+                    }
+                    // Hold the actual queued Capture or Adopt off realtime while
+                    // another genuine timing publication obtains its own ACK.
+                    let stale = p.h.consumer.pop().unwrap();
+                    assert!(p.h.consumer.is_empty());
+                    let newer = l3_constant_timing_fixture::publish_synthetic_loaded_timing(
+                        &p.h.engine,
+                        &p.h.producer,
+                        0,
+                        60.0 / 121.001,
+                    );
+                    assert_eq!(p.h.callback.drain(&mut p.h.consumer), 1);
+                    assert_eq!(newer.publication_status().unwrap(), "accepted");
+                    let binding =
+                        crate::audio_engine::input_runtime_binding::capture(&p.h.engine, 0)
+                            .unwrap()
+                            .unwrap();
+                    let new_accepted = binding.binding.accepted.unwrap();
+                    assert_ne!(new_accepted.publication_epoch, accepted.publication_epoch);
+                    let before = voice(&p.h.callback.mixer);
+                    let clock = before.source_playback;
+                    let generation = before.generation;
+                    let native = before.stretch.native_state_address();
+                    let fifo = before.stretch.pending_fifo_frames();
+                    let source = before.sample.clone().unwrap();
+                    let old_readers = p.h.callback.mixer.stems_for_measurement()[0].clone();
+                    p.h.producer.lock().unwrap().push(stale).unwrap();
+                    assert_eq!(p.h.callback.drain(&mut p.h.consumer), 1);
+                    wait_until(|| p.h.engine.cold_jobs.counts_for_test() == (0, 0, 0));
+                    assert_eq!(receipt.residency_status(), "rejected");
+                    assert_eq!(receipt.effective_mode_status(), "rejected");
+                    assert!(!receipt.claimed() && p.h.consumer.is_empty());
+                    let after = voice(&p.h.callback.mixer);
+                    assert!(after.source_playback.matches_exact(&clock));
+                    assert_eq!(after.generation, generation);
+                    assert_eq!(after.paused, paused);
+                    assert_eq!(after.stretch.native_state_address(), native);
+                    assert_eq!(after.stretch.pending_fifo_frames(), fifo);
+                    assert!(after.sample.as_ref().unwrap().same_window(&source));
+                    match (
+                        old_readers.as_ref(),
+                        p.h.callback.mixer.stems_for_measurement()[0].as_ref(),
+                    ) {
+                        (Some(old), Some(current)) => {
+                            assert!(Arc::ptr_eq(
+                                &old.complete_set_identity,
+                                &current.complete_set_identity
+                            ));
+                            for (old, current) in old.stems.iter().zip(&current.stems) {
+                                assert!(Arc::ptr_eq(&old.samples, &current.samples));
+                            }
+                        }
+                        (None, None) => {}
+                        _ => panic!("stale musical candidate changed current readers"),
+                    }
+                    assert_eq!(
+                        crate::audio_engine::input_runtime_binding::capture(&p.h.engine, 0)
+                            .unwrap()
+                            .unwrap()
+                            .binding
+                            .accepted,
+                        Some(new_accepted)
+                    );
+                }
+            }
+        }
+    }
+}
+
+#[test]
+fn actual_paused_intro_seek_withdrawal_preserves_post_seek_audio() {
     use crate::audio_engine::source_reader::ExplicitSeekMode;
     let target = 0;
     for selected_v1 in [false, true] {
@@ -2025,6 +2131,10 @@ fn actual_paused_intro_seek_rejects_fresh_candidate_without_changing_post_seek_a
         assert!(voice(&p.h.callback.mixer).paused);
         let (_pair, registration) = candidate(&mut p, 120 + target + usize::from(selected_v1));
         let receipt = request_candidate(&mut p, &registration, 0b1010);
+        assert!(
+            receipt.withdraw(),
+            "own cancellation before candidate Capture"
+        );
         assert_eq!(
             p.h.callback.drain(&mut p.h.consumer),
             1,

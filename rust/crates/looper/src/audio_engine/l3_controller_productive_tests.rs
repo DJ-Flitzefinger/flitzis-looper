@@ -103,9 +103,11 @@ const UNKNOWN_PCM_BYTES: &[u8] = b"caller-owned post-admission PCM child";
 enum CandidateTrace {
     Ordinary,
     FullTrack,
-    Tail,
-    PausedTail,
-    Intro,
+    Explicit {
+        intro: bool,
+        paused: bool,
+        musical: bool,
+    },
     RepeatedSets,
     WithdrawPreclaim,
     AdmissionPressure,
@@ -738,8 +740,8 @@ project.speed = 1.0
 project.bpm_lock = False
 project.manual_bpm[0] = None
 project.pad_loop_auto[0] = False
-project.pad_loop_start_s[0] = 17 / fixture['rate']
-project.pad_loop_end_s[0] = 1517 / fixture['rate']
+project.pad_loop_start_s[0] = (declared_loop_start if explicit else 17) / fixture['rate']
+project.pad_loop_end_s[0] = (declared_loop_end if explicit else 1517) / fixture['rate']
 transport = TransportController(project, session, BpmTransportAudio(), persistence.mark_dirty)
 timing_before_bpm = transport.bpm.current_timing(0)
 assert timing_before_bpm is not None and timing_before_bpm.accepted_revision is not None
@@ -1340,7 +1342,11 @@ fn render_varispeed_with_historical_adoption(
         let position = current.source_playback.position();
         assert_eq!(position.frame, whole);
         assert_eq!(position.fraction.to_bits(), fraction.to_bits());
-        assert_eq!(current.source_playback.loop_period(), None);
+        assert_eq!(
+            current.source_playback.loop_period().map(f64::to_bits),
+            (playback.loop_period != (playback.loop_end - playback.loop_start) as f64)
+                .then_some(playback.loop_period.to_bits())
+        );
         assert_eq!(current.explicit_seek_mode, mode);
     } else {
         let (whole, fraction) = playback.rate_ledger.as_ref().map_or_else(
@@ -1404,7 +1410,13 @@ fn render_varispeed_with_historical_adoption(
 
 fn ramp_varispeed(playback: &mut ControllerPlayback, locals: &Py<PyDict>, name: &str) {
     if playback.rate_ledger.is_none() {
-        assert_eq!(playback.ratio, 1.25);
+        let declared_ratio = voice(&playback.callback.mixer)
+            .source_timing
+            .accepted
+            .map_or(1.25, |projection| {
+                projection.period_seconds * (150.0 / 60.0)
+            });
+        assert_eq!(playback.ratio.to_bits(), declared_ratio.to_bits());
     }
     let start = playback.source_frame;
     let mut remaining = playback.rate_ledger.as_ref().map_or_else(
@@ -7116,6 +7128,7 @@ fn public_explicit_seek(
     locals: &Py<PyDict>,
     key_lock: bool,
     intro: bool,
+    accepted: Option<crate::audio_engine::constant_timing::AcceptedTimingProjection>,
 ) {
     use crate::audio_engine::source_reader::ExplicitSeekMode;
     let target = if intro { 0 } else { LOOP_END };
@@ -7141,7 +7154,11 @@ fn public_explicit_seek(
         locals,
         r#"
 from flitzis_looper.controller.transport import TransportController
-transport = TransportController(project, session, playback_audio)
+if not musical_explicit:
+    transport = TransportController(project, session, playback_audio)
+else:
+    # Keep the own existing public timing/playback facade and accepted anchor.
+    assert transport.bpm.current_timing(0) == timing_before_bpm
 assert project.resolve_pad_key_lock(0) is tail_key_lock
 transport.playback.seek_pad(0, seek_target / fixture['rate'])
 tail_seek = transport.residency._pending[0].ticket
@@ -7200,13 +7217,17 @@ if selected_v1:
             crate::messages::ResidentContext::FullTrack
         }
     );
-    assert!(
+    assert_eq!(
         crate::audio_engine::input_runtime_binding::capture(engine, 0)
             .unwrap()
             .unwrap()
             .binding
-            .accepted
-            .is_none()
+            .accepted,
+        accepted
+    );
+    assert_eq!(
+        engine.current_timing_acknowledgements.current_epoch(0),
+        accepted.map_or(0, |projection| projection.publication_epoch)
     );
     let current = voice(&playback.callback.mixer);
     assert_ne!(
@@ -7217,6 +7238,10 @@ if selected_v1:
     assert_eq!(current.source_playback.position().frame, target);
     assert_eq!(current.source_playback.position().fraction, 0.0);
     assert_eq!(current.stretch.pending_fifo_frames(), (0, 0));
+    assert_eq!(current.source_timing.accepted, accepted);
+    // Relocate installs the new Seek clock without consuming source. The first
+    // render configures its domain from this retained exact timing projection.
+    assert_eq!(current.source_playback.loop_period(), None);
     let other = other_voice(&playback.callback.mixer);
     assert!(other.source_playback.matches_exact(&other_clock));
     assert_eq!(other.generation, other_generation);
@@ -7253,6 +7278,13 @@ if selected_v1:
     assert_eq!(voice(&playback.callback.mixer).explicit_seek_mode, mode);
     assert_eq!(
         voice(&playback.callback.mixer)
+            .source_playback
+            .loop_period()
+            .map(f64::to_bits),
+        accepted.map(|projection| (projection.period_seconds * f64::from(RATE) / 16.0).to_bits())
+    );
+    assert_eq!(
+        voice(&playback.callback.mixer)
             .stretch
             .wet_current_source_output_ready(),
         key_lock
@@ -7260,7 +7292,7 @@ if selected_v1:
     assert!(consumer.is_empty());
 }
 
-fn public_tail_pause(
+fn public_explicit_pause(
     playback: &mut ControllerPlayback,
     consumer: &mut rtrb::Consumer<ControlMessage>,
     locals: &Py<PyDict>,
@@ -7291,7 +7323,7 @@ assert session.paused_sample_ids == {0, 215}
     assert_eq!(
         playback.drain(consumer),
         2,
-        "own public Tail Pause commands"
+        "own public explicit Seek Pause commands"
     );
     for reference in [&mut playback.reference, &mut playback.full_mix] {
         reference.pause_sample_at_output_frame(0, playback.frame);
@@ -7301,10 +7333,7 @@ assert session.paused_sample_ids == {0, 215}
     }
     let paused = voice(&playback.callback.mixer);
     assert!(paused.paused && paused.source_playback.matches_exact(&clock));
-    assert_eq!(
-        paused.explicit_seek_mode,
-        crate::audio_engine::source_reader::ExplicitSeekMode::AfterLoop
-    );
+    assert_eq!(paused.explicit_seek_mode, clock.position().seek_mode);
     assert_eq!(paused.generation, generation);
     assert_eq!(paused.stretch.native_state_address(), native);
     assert_eq!(paused.stretch.pending_fifo_frames(), fifo);
@@ -7339,10 +7368,11 @@ fn round_trip(
     trace: CandidateTrace,
 ) {
     let full_track = matches!(trace, CandidateTrace::FullTrack);
-    let tail = matches!(trace, CandidateTrace::Tail | CandidateTrace::PausedTail);
-    let intro = matches!(trace, CandidateTrace::Intro);
-    let explicit = tail || intro;
-    let paused_tail = matches!(trace, CandidateTrace::PausedTail);
+    let explicit = matches!(trace, CandidateTrace::Explicit { .. });
+    let intro = matches!(trace, CandidateTrace::Explicit { intro: true, .. });
+    let tail = explicit && !intro;
+    let paused_explicit = matches!(trace, CandidateTrace::Explicit { paused: true, .. });
+    let musical_explicit = matches!(trace, CandidateTrace::Explicit { musical: true, .. });
     assert!(
         !explicit || (delete_pause.is_none() && stopped_before_poll.is_none() && !paused_first)
     );
@@ -7473,7 +7503,8 @@ fn round_trip(
         h.callback.retirement.actual = Some(actual);
         worker
     });
-    let accepted = public_bpm.then(|| l3_native_tests::accepted_bpm_timing(&mut h));
+    let accepted =
+        (public_bpm || musical_explicit).then(|| l3_native_tests::accepted_bpm_timing(&mut h));
     // Only the exact child owns this cwd and its project config/artifact paths.
     std::env::set_current_dir(h.root.parent().unwrap()).unwrap();
     let source = h.ticket(0);
@@ -7622,6 +7653,9 @@ fn round_trip(
             .unwrap();
         locals.set_item("selected_v1", selected_v1).unwrap();
         locals.set_item("public_bpm", public_bpm).unwrap();
+        locals
+            .set_item("musical_explicit", musical_explicit)
+            .unwrap();
         locals.set_item("tail", tail).unwrap();
         locals.set_item("explicit", explicit).unwrap();
         locals
@@ -7633,13 +7667,13 @@ fn round_trip(
         locals
             .set_item("declared_loop_end", loop_region.end)
             .unwrap();
-        locals.set_item("paused_tail", paused_tail).unwrap();
+        locals.set_item("paused_explicit", paused_explicit).unwrap();
         locals.set_item("tail_key_lock", key_lock).unwrap();
         locals.set_item("live_bpm", live_bpm).unwrap();
         locals
             .set_item("paused_replacement", paused_replacement)
             .unwrap();
-        if public_bpm {
+        if public_bpm || musical_explicit {
             locals
                 .set_item(
                     "bpm_audio",
@@ -7732,7 +7766,7 @@ project = ProjectState()
 project.sample_paths[0] = fixture['original_reference']
 project.sample_durations[0] = fixture['frames'] / fixture['rate']
 project.pad_content[0] = PadContentIdentity(instance_id='8' * 32, material_id=fixture['material_id'])
-project.pad_timing_intent[0] = 'automatic' if public_bpm else 'legacy'
+project.pad_timing_intent[0] = 'automatic' if public_bpm or musical_explicit else 'legacy'
 project.pad_stem_mix_mode[0] = 'full_mix'
 if explicit:
     project.pad_loop_auto[0] = False
@@ -7798,8 +7832,12 @@ persistence.flush()
             if let CandidateTrace::PublicBpm(bpm) = trace {
                 bpm
             } else {
-                assert!(live_bpm || public_rate_adoption);
-                150.0
+                assert!(live_bpm || public_rate_adoption || musical_explicit);
+                if musical_explicit && key_lock {
+                    87.6
+                } else {
+                    150.0
+                }
             },
         )
     } else {
@@ -7993,7 +8031,11 @@ owner_v2.release()
         let bpm = if let CandidateTrace::PublicBpm(bpm) = trace {
             bpm
         } else {
-            150.0
+            if musical_explicit && key_lock {
+                87.6
+            } else {
+                150.0
+            }
         };
         (
             projection,
@@ -8192,11 +8234,12 @@ assert session.paused_sample_ids == {0, 215}
             &locals,
             key_lock,
             intro,
+            accepted,
         );
         adopted_window = playback.callback.mixer.bank_for_measurement()[0].clone();
-        if paused_tail {
+        if paused_explicit {
             paused_other_clock = Some(other_voice(&playback.callback.mixer).source_playback);
-            public_tail_pause(&mut playback, &mut h.consumer, &locals);
+            public_explicit_pause(&mut playback, &mut h.consumer, &locals);
         }
     }
     let before = voice(&playback.callback.mixer);
@@ -8624,6 +8667,23 @@ assert previous_control.ticket.is_current()
                 crate::audio_engine::source_reader::ExplicitSeekMode::AfterLoop
             }
         );
+        assert_eq!(
+            voice(&playback.callback.mixer).source_timing.accepted,
+            accepted
+        );
+        assert_eq!(
+            engine.current_timing_acknowledgements.current_epoch(0),
+            accepted.map_or(0, |projection| projection.publication_epoch)
+        );
+        for set in [
+            playback.callback.mixer.stems_for_measurement()[0].as_ref(),
+            playback.callback.mixer.outgoing_stems_for_measurement(0),
+        ]
+        .into_iter()
+        .flatten()
+        {
+            assert_eq!(set.accepted_timing, accepted);
+        }
     }
     if explicit && (!key_lock || intro) {
         for set in [
@@ -8781,7 +8841,7 @@ if window_change:
             paused,
         );
     } else {
-        if paused_first || paused_replacement || paused_tail {
+        if paused_first || paused_replacement || paused_explicit {
             let source_frame = playback.source_frame;
             let fifo = voice(&playback.callback.mixer)
                 .stretch
@@ -8797,7 +8857,7 @@ if window_change:
                     )
                 })
             };
-            let paused_readers = paused_tail.then(|| {
+            let paused_readers = paused_explicit.then(|| {
                 [
                     playback.callback.mixer.stems_for_measurement()[0].as_ref(),
                     playback.callback.mixer.outgoing_stems_for_measurement(0),
@@ -8816,7 +8876,7 @@ if window_change:
                     r#"
 controller.on_frame_render()
 assert not session.stem_generation_errors, session.stem_generation_errors
-if paused_replacement or paused_tail:
+if paused_replacement or paused_explicit:
     status = controller.stem_residency_status(0)
     assert status.registration == 'accepted' and status.residency == 'accepted'
     assert status.effective == 'transitioning'
@@ -8845,7 +8905,7 @@ if paused_replacement or paused_tail:
                     );
                     assert_eq!(readers[1].is_some(), selected_v1);
                 }
-                if paused_replacement || paused_tail {
+                if paused_replacement || paused_explicit {
                     let other = other_voice(&playback.callback.mixer);
                     assert!(
                         other.paused
@@ -8906,7 +8966,7 @@ assert not session.paused_sample_ids
             assert_eq!(resumed.generation, initial_generation);
             assert_eq!(resumed.stretch.native_state_address(), initial_native);
             assert_eq!(resumed.stretch.pending_fifo_frames(), fifo);
-            if paused_replacement || paused_tail {
+            if paused_replacement || paused_explicit {
                 let other = other_voice(&playback.callback.mixer);
                 assert!(
                     !other.paused
@@ -9090,17 +9150,44 @@ if retrigger:
             .native_state_address();
         let generation = voice(&playback.callback.mixer).generation;
         let epoch = playback.seek_epoch.as_ref().unwrap();
-        let return_at = epoch.consumed_at
-            + ((if intro {
-                loop_region.start
+        let seek_consumed_at = epoch.consumed_at;
+        let one_shot_frames = if intro {
+            loop_region.start
+        } else {
+            full.frame_count() - LOOP_END
+        };
+        let return_at = epoch.consumed_at + (one_shot_frames as f64 / playback.ratio).ceil() as u64;
+        let finish = return_at
+            + if musical_explicit {
+                (3.0 * playback.loop_period / playback.ratio).ceil() as u64 + 512
             } else {
-                full.frame_count() - LOOP_END
-            }) as f64
-                / playback.ratio)
-                .ceil() as u64;
-        let finish = return_at + 4096;
+                4096
+            };
+        let mut musical_seam_cycles = [false; 3];
         for frames in [1_usize, 31, 137, 257, 511].into_iter().cycle() {
             let count = frames.min((finish - playback.source_frame) as usize);
+            if musical_explicit {
+                let last = (playback.loop_period.ceil() as usize - 1)
+                    .min(playback.loop_end - playback.loop_start - 1);
+                for frame in playback.source_frame..playback.source_frame + count as u64 {
+                    let (whole, fraction, mode) = playback.seek_position(frame);
+                    let phase = whole.saturating_sub(playback.loop_start) as f64 + fraction;
+                    if mode == ExplicitSeekMode::Normal && phase >= last as f64 && fraction != 0.0 {
+                        // The independent complete-PCM feed joins these exact physical knots,
+                        // with virtual duration rather than the ordinary unit interval gain.
+                        assert!(playback.loop_start + last < playback.loop_end);
+                        let gain = (phase - last as f64) / (playback.loop_period - last as f64);
+                        assert!((0.0..1.0).contains(&gain));
+                        assert_ne!(gain.to_bits(), fraction.to_bits());
+                        let loop_distance = (frame - seek_consumed_at) as f64 * playback.ratio
+                            - one_shot_frames as f64;
+                        let cycle = (loop_distance / playback.loop_period).floor() as usize;
+                        if let Some(observed) = musical_seam_cycles.get_mut(cycle) {
+                            *observed = true;
+                        }
+                    }
+                }
+            }
             if key_lock {
                 playback.render(count, true);
             } else {
@@ -9113,6 +9200,10 @@ if retrigger:
                     .native_state_address(),
                 native
             );
+            assert_eq!(
+                voice(&playback.callback.mixer).source_timing.accepted,
+                accepted
+            );
             if playback.source_frame == finish {
                 break;
             }
@@ -9121,6 +9212,16 @@ if retrigger:
             voice(&playback.callback.mixer).explicit_seek_mode,
             ExplicitSeekMode::Normal
         );
+        if musical_explicit {
+            assert_ne!(
+                playback.loop_period.to_bits(),
+                ((loop_region.end - loop_region.start) as f64).to_bits()
+            );
+            assert!(
+                musical_seam_cycles.into_iter().all(|observed| observed),
+                "independent PCM/Native/EQ output must cross three accepted virtual seams"
+            );
+        }
         controller_python(
             &locals,
             r#"
@@ -9136,6 +9237,7 @@ assert tail_reopened.project.stem_cache[0].pair == disk_v2
 assert tail_reopened.project.pad_loop_start_s[0] == declared_loop_start / fixture['rate']
 assert tail_reopened.project.pad_loop_end_s[0] == declared_loop_end / fixture['rate']
 assert tail_reopened.project.pad_key_lock[0] is tail_key_lock
+assert tail_reopened.project.pad_timing_intent[0] == ('automatic' if musical_explicit else 'legacy')
 assert audio.worker_call_count() == 1 and audio.prepared_only_on_pool_threads()
 "#,
         );
@@ -9143,7 +9245,7 @@ assert audio.worker_call_count() == 1 and audio.prepared_only_on_pool_threads()
     if matches!(trace, CandidateTrace::PublicBpm(bpm) if bpm == 149.9) {
         render_public_bpm_tail_sample(&mut playback);
     }
-    if public_bpm {
+    if public_bpm || musical_explicit {
         let current = engine
             .current_input_runtime_pad_binding(0)
             .unwrap()
@@ -9215,7 +9317,7 @@ else:
         assert_eq!(other.source_playback.loop_period(), None);
         assert_eq!(position.frame, LOOP_START + phase.floor() as usize);
         assert_eq!(position.fraction.to_bits(), distance.fract().to_bits());
-    } else if paused_replacement || paused_tail {
+    } else if paused_replacement || paused_explicit {
         assert!(playback.frame > playback.source_frame);
         let phase = (playback.source_frame as f64 * playback.ratio)
             .rem_euclid((LOOP_END - LOOP_START) as f64);
@@ -10614,19 +10716,55 @@ fn actual_public_intro_first_and_replacement_require_own_dry_effect_and_return()
     explicit_public_child(false, false, true);
 }
 
+#[test]
+fn actual_public_paused_intro_first_and_replacement_require_own_resumed_wet_effect() {
+    explicit_public_child(true, true, true);
+}
+
+#[test]
+fn actual_public_paused_intro_first_and_replacement_require_own_resumed_dry_effect() {
+    explicit_public_child(false, true, true);
+}
+
+#[test]
+fn actual_public_musical_intro_first_and_replacement_require_own_wet_effect_and_return() {
+    musical_explicit_public_child(true, true);
+}
+
+#[test]
+fn actual_public_musical_intro_first_and_replacement_require_own_dry_effect_and_return() {
+    musical_explicit_public_child(false, true);
+}
+
+#[test]
+fn actual_public_musical_tail_first_and_replacement_require_own_wet_effect_and_return() {
+    musical_explicit_public_child(true, false);
+}
+
+#[test]
+fn actual_public_musical_tail_first_and_replacement_require_own_dry_effect_and_return() {
+    musical_explicit_public_child(false, false);
+}
+
 fn explicit_public_child(key_lock: bool, paused: bool, intro: bool) {
-    assert!(!intro || !paused);
     let (child, name) = if intro {
-        if key_lock {
-            (
+        match (key_lock, paused) {
+            (true, false) => (
                 "FLITZI_L3_PUBLIC_INTRO_ON_CHILD",
                 "actual_public_intro_first_and_replacement_require_own_wet_effect_and_return",
-            )
-        } else {
-            (
+            ),
+            (false, false) => (
                 "FLITZI_L3_PUBLIC_INTRO_OFF_CHILD",
                 "actual_public_intro_first_and_replacement_require_own_dry_effect_and_return",
-            )
+            ),
+            (true, true) => (
+                "FLITZI_L3_PUBLIC_PAUSED_INTRO_ON_CHILD",
+                "actual_public_paused_intro_first_and_replacement_require_own_resumed_wet_effect",
+            ),
+            (false, true) => (
+                "FLITZI_L3_PUBLIC_PAUSED_INTRO_OFF_CHILD",
+                "actual_public_paused_intro_first_and_replacement_require_own_resumed_dry_effect",
+            ),
         }
     } else {
         match (key_lock, paused) {
@@ -10648,22 +10786,55 @@ fn explicit_public_child(key_lock: bool, paused: bool, intro: bool) {
             ),
         }
     };
+    explicit_public_cases(key_lock, intro, false, &[paused], child, name);
+}
+
+fn musical_explicit_public_child(key_lock: bool, intro: bool) {
+    let (child, name) = match (key_lock, intro) {
+        (true, true) => (
+            "FLITZI_L3_PUBLIC_MUSICAL_INTRO_ON_CHILD",
+            "actual_public_musical_intro_first_and_replacement_require_own_wet_effect_and_return",
+        ),
+        (false, true) => (
+            "FLITZI_L3_PUBLIC_MUSICAL_INTRO_OFF_CHILD",
+            "actual_public_musical_intro_first_and_replacement_require_own_dry_effect_and_return",
+        ),
+        (true, false) => (
+            "FLITZI_L3_PUBLIC_MUSICAL_TAIL_ON_CHILD",
+            "actual_public_musical_tail_first_and_replacement_require_own_wet_effect_and_return",
+        ),
+        (false, false) => (
+            "FLITZI_L3_PUBLIC_MUSICAL_TAIL_OFF_CHILD",
+            "actual_public_musical_tail_first_and_replacement_require_own_dry_effect_and_return",
+        ),
+    };
+    explicit_public_cases(key_lock, intro, true, &[false, true], child, name);
+}
+
+fn explicit_public_cases(
+    key_lock: bool,
+    intro: bool,
+    musical: bool,
+    pause_states: &[bool],
+    child: &str,
+    name: &str,
+) {
     if std::env::var_os(child).is_some() {
-        for selected_v1 in [false, true] {
-            round_trip(
-                selected_v1,
-                None,
-                key_lock,
-                None,
-                false,
-                if intro {
-                    CandidateTrace::Intro
-                } else if paused {
-                    CandidateTrace::PausedTail
-                } else {
-                    CandidateTrace::Tail
-                },
-            );
+        for &paused in pause_states {
+            for selected_v1 in [false, true] {
+                round_trip(
+                    selected_v1,
+                    None,
+                    key_lock,
+                    None,
+                    false,
+                    CandidateTrace::Explicit {
+                        intro,
+                        paused,
+                        musical,
+                    },
+                );
+            }
         }
         return;
     }

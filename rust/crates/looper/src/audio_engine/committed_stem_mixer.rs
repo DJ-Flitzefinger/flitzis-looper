@@ -25,16 +25,18 @@ fn candidate_residency_available(sample: &SampleBuffer) -> bool {
 fn committed_stem_mode_available(
     mode: ExplicitSeekMode,
     candidate: bool,
-    paused: bool,
     key_lock: bool,
-    accepted: Option<crate::audio_engine::constant_timing::AcceptedTimingProjection>,
     sample: &SampleBuffer,
 ) -> bool {
+    // Pause freezes consumption, not preparation authority. Musical timing is
+    // fenced by the own captured projection/history permit and exact two-reader
+    // coverage below, including physical one-shots and the later virtual seam.
     mode == ExplicitSeekMode::Normal
         || (candidate
-            && accepted.is_none()
-            && (mode == ExplicitSeekMode::AfterLoop
-                || (mode == ExplicitSeekMode::BeforeLoop && !paused))
+            && matches!(
+                mode,
+                ExplicitSeekMode::BeforeLoop | ExplicitSeekMode::AfterLoop
+            )
             && sample.residency.as_ref().is_some_and(|view| {
                 if key_lock {
                     view.context == crate::messages::ResidentContext::KeyLockFiniteLoop
@@ -109,7 +111,6 @@ impl RtMixer {
         if active.next().is_some() {
             return None;
         }
-        let paused = voice.is_some_and(|(_, voice)| voice.paused);
         let (sample, index, generation, timing, mut playback, region, history_epoch) =
             if let Some((index, voice)) = voice {
                 let sample = voice.sample.as_ref()?;
@@ -118,9 +119,7 @@ impl RtMixer {
                     || !committed_stem_mode_available(
                         voice.explicit_seek_mode,
                         capture.candidate.is_some(),
-                        voice.paused,
                         self.pad_key_lock_enabled[id],
-                        self.timing_for_voice(voice).accepted,
                         sample,
                     )
                 {
@@ -159,9 +158,7 @@ impl RtMixer {
         if !committed_stem_mode_available(
             position.seek_mode,
             capture.candidate.is_some(),
-            paused,
             self.pad_key_lock_enabled[id],
-            timing.accepted,
             sample,
         ) {
             return None;
@@ -311,9 +308,7 @@ impl RtMixer {
                     || !committed_stem_mode_available(
                         voice.explicit_seek_mode,
                         transaction.candidate.is_some(),
-                        voice.paused,
                         pin.key_lock,
-                        pin.accepted,
                         &pin.sample,
                     )
                     || voice.stretch.source_epoch_owner().load(Ordering::Acquire)
@@ -350,9 +345,7 @@ impl RtMixer {
                     && committed_stem_mode_available(
                         position.seek_mode,
                         transaction.candidate.is_some(),
-                        voice.paused,
                         pin.key_lock,
-                        pin.accepted,
                         &pin.sample,
                     )
                     && normal_loop_feed_available_with_readers(

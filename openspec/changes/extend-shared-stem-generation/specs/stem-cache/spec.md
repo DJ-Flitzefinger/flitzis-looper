@@ -100,8 +100,22 @@ Capture, off-thread preparation and guarded Adopt SHALL verify both exact
 immutable reader generations through Intro and all future loop taps. Own
 consumed-source handover and output SHALL establish dry OFF or later exact-history
 Native Wet ON effectiveness without another source/voice/filter restart.
-Paused or accepted-musical Intro, accepted-musical Tail and ordinary same-set
-mode requests SHALL retain their existing unsupported-domain guards.
+The same candidate transaction SHALL additionally permit paused Intro and
+running or paused Intro/Tail with current callback-accepted musical timing.
+Intro MUST retain its actual ON prefix-and-loop union or complete OFF FullTrack;
+Tail MUST retain its actual ON suffix-and-loop union or complete OFF FullTrack.
+Both exact immutable reader generations MUST cover every physical one-shot tap
+and both accepted musical seam taps after natural return. Capture and Adopt
+MUST retain and revalidate the exact own accepted timing projection and ACK epoch,
+source/window, launch/voice/history and reserved capacity. A stale projection
+SHALL reject without claiming another timing or another pad's permission.
+Paused adoption SHALL freeze source consumption, handover, Native/FIFO and
+filter history; only own resumed dry OFF or later exact-history Native Wet ON
+output SHALL acknowledge effectiveness. Natural return MUST preserve the accepted
+musical period, fractional source phase and actual voice without extra Seek,
+launch or filter reset. Ordinary same-set mode requests, ON complete-track
+Intro/Tail exceptions, frozen old-source and multiple same-pad voices SHALL
+retain their existing unsupported-domain guards.
 
 New-set preparation SHALL retain separate candidate and actual predecessor
 authority. Registering or preparing candidate V2 SHALL NOT revoke V1's accepted
@@ -169,11 +183,11 @@ immediate change SHALL NOT silently discard the command.
 - **AND** paused adoption SHALL consume no source or report audible effectiveness before Resume, and stopped readiness SHALL require its own later playback/effect observation
 - **AND** the existing source/launch/timing/window/history/capacity fences SHALL remain authoritative; this complete NormalLoop proof alone SHALL NOT authorize explicit Seek, Intro, Tail, frozen old-source or multiple same-pad voices
 
-#### Scenario: Paused Intro seek rejects a fresh new-set candidate
+#### Scenario: Paused Intro preserves post-seek audio after candidate withdrawal
 
 - **GIVEN** productive KEY LOCK ON FullMix or selected V1, a real acknowledged finite resident Seek into Intro, and its own Pause before candidate Capture
-- **WHEN** a distinct V2 obtains a fresh own source ticket, accepted current registration and actual candidate Capture before further source consumption
-- **THEN** the unsupported explicit seek mode SHALL reject V2 before claim without Adopt, while its own registration remains accepted and current
+- **WHEN** a distinct V2 obtains a fresh own source ticket and accepted current registration, then its own interest is withdrawn before actual candidate Capture
+- **THEN** the withdrawn request SHALL reject before claim without Adopt, while its own registration remains accepted and current
 - **AND** the actual KeyLockFiniteLoop union SHALL retain the old source and selected readers, rather than relying on a FullTrack rejection
 - **AND** after its own Resume, independent complete PCM, fractional one-shot source addressing, actual Native/FIFO and uninterrupted post-seek filter history SHALL remain usable through irregular callbacks and a later own complete Native preparation
 - **AND** the authorized Seek SHALL establish its own new voice and filter chronology; candidate rejection SHALL NOT introduce another reset, retry or audible V2 acknowledgement
@@ -186,14 +200,40 @@ immediate change SHALL NOT silently discard the command.
 - **THEN** both exact reader generations SHALL cover every current and future prefix/loop tap through the 128-consumed-source-frame ramp; complete independent physical PCM SHALL verify distinct own dry OFF or later exact-history Native Wet ON output with uninterrupted nonneutral filter history
 - **AND** adoption SHALL preserve the actual voice, source fraction and Native/FIFO checkpoint; natural Intro-to-NormalLoop progression and further output SHALL introduce no extra Seek, reset or launch
 - **AND** obsolete V1 or another pad's receipt SHALL NOT confirm V2; another active pad SHALL retain its absolute independent source trajectory and owners, and model-free reopen SHALL verify saved V2 and loop/KEY LOCK intent separately
-- **AND** paused or accepted-musical Intro, accepted-musical Tail, ordinary same-set requests, frozen old-source and multiple same-pad voices SHALL remain guarded; whole task3.3/full L4 and Human acceptance SHALL remain separate
+- **AND** ordinary same-set requests, ON complete-track Intro/Tail exceptions, frozen old-source and multiple same-pad voices SHALL remain guarded; whole task3.3/full L4 and Human acceptance SHALL remain separate
 
-#### Scenario: Unsupported Intro preserves its own voice and owners
+#### Scenario: Unsupported same-set Intro and Tail preserve their own voice and owners
 
-- **GIVEN** an own acknowledged Intro Seek with KEY LOCK ON or OFF and either a paused nonmusical voice or accepted musical timing
-- **WHEN** a distinct current candidate obtains fresh registration and reaches actual Capture
-- **THEN** Capture SHALL reject before claim without Adopt or effectiveness, while the candidate registration remains current and accepted
+- **GIVEN** an own acknowledged Intro or Tail Seek with KEY LOCK ON or OFF, running or paused, with physical or accepted musical timing
+- **WHEN** an ordinary same-set mode request obtains fresh own registration and reaches actual Capture
+- **THEN** Capture SHALL reject before claim without Adopt or effectiveness, while the own registration remains current and accepted
 - **AND** source position/fraction, voice generation, used Native/FIFO, pause state and actual source/component owners SHALL remain usable and unchanged
+
+#### Scenario: Public paused Intro adopts only through own resumed output
+
+- **GIVEN** first FullMix or selected V1 has obtained its own public nonmusical Intro Seek acknowledgement with ON prefix-and-loop union or OFF complete FullTrack coverage, then its own public Pause
+- **WHEN** a distinct complete V2 is durably committed and obtains fresh own registration, Capture, off-thread preparation and guarded Adopt while that voice remains paused
+- **THEN** exact source position, voice generation, both immutable reader generations, Native/FIFO and filter history SHALL remain frozen through irregular callbacks and controller polls, with an unconsumed handover and no V2 effectiveness
+- **AND** only own public Resume, consumed-source handover and dry OFF or later complete exact-history Native Wet ON output SHALL establish V2 effectiveness while still BeforeLoop
+- **AND** natural return and further NormalLoop output SHALL preserve voice, source chronology and another independently paused/resumed pad's absolute trajectory; model-free reopen SHALL verify saved V2 and loop/KEY LOCK intent separately
+
+#### Scenario: Public musical Intro and Tail preserve accepted return geometry
+
+- **GIVEN** own callback-accepted Automatic timing whose fractional musical loop period differs from physical extent, and first FullMix or selected V1 obtains its own public Intro or Tail Seek with ON physical union or OFF complete FullTrack coverage
+- **AND** the current voice is running or publicly paused before V2 Capture
+- **WHEN** a distinct complete V2 obtains durable disk selection, own registration, Capture, off-thread preparation and guarded Adopt through the public StemController
+- **THEN** exact own timing projection and ACK epoch SHALL remain authoritative for both real generations through physical one-shot playback, the consumed-source handover and natural return to both virtual seam taps of the accepted musical loop
+- **AND** independent complete PCM, raw Native/FIFO or dry buffers and uninterrupted nonneutral filtering SHALL prove distinct own V2 output; ON effectiveness SHALL require its own later complete exact-history Native preparation
+- **AND** paused callbacks SHALL consume no source or handover and report no new effectiveness; own Resume SHALL preserve source fraction, actual voice, Native/FIFO and reader owners
+- **AND** natural return and multiple later musical seams SHALL cause no extra Seek, reset or launch; another active pad SHALL retain its independent absolute trajectory and owners, and saved reopen SHALL retain V2 and loop/KEY LOCK intent
+- **AND** explicit in-loop/equal-phase Seek, ON complete-track Intro/Tail exceptions, domain-specific final-reader retirement, whole task3.3/full L4 and Human acceptance SHALL remain separate gates
+
+#### Scenario: Musical Intro and Tail reject an obsolete own timing ACK
+
+- **GIVEN** own accepted musical Intro or Tail, KEY LOCK ON or OFF, running or paused, with a selected usable V1 and a genuine queued V2 Capture or prepared Adopt
+- **WHEN** a newer real timing publication obtains that pad's own callback ACK before the held old operation is dispatched
+- **THEN** the old V2 operation SHALL reject before claim and effectiveness without borrowing the newer accepted projection
+- **AND** dispatch of that stale operation SHALL preserve the actual current source fraction, voice generation, pause state, used Native/FIFO and current immutable reader owners; the newer own timing ACK SHALL remain authoritative
 
 #### Scenario: Current KEY LOCK Tail adopts first and replacement sets
 
@@ -234,7 +274,7 @@ immediate change SHALL NOT silently discard the command.
 - **AND** OFF SHALL establish its own distinct dry output without Native Wet preparation; ON SHALL establish its own advanced exact-history 4096-output-frame preparation and distinct Wet output while still AfterLoop
 - **AND** the natural Tail-to-NormalLoop return and further playback SHALL preserve the voice and source/Native/FIFO/filter chronology without another Seek, reset or launch
 - **AND** another independently paused and resumed pad SHALL retain its own absolute consumed-source trajectory and owners; saved reopen SHALL verify V2 and loop/KEY LOCK intent separately from audible acknowledgement
-- **AND** accepted-musical Tail, Intro, ordinary same-set requests, frozen old-source and multiple same-pad voices SHALL remain guarded; this bounded paused proof SHALL NOT close whole task3.3, full L4 or Human acceptance
+- **AND** ordinary same-set requests, ON complete-track Intro/Tail exceptions, frozen old-source and multiple same-pad voices SHALL remain guarded; this bounded paused proof SHALL NOT close whole task3.3, full L4 or Human acceptance
 
 #### Scenario: Current bank B cannot authorize retained old-source voice A
 

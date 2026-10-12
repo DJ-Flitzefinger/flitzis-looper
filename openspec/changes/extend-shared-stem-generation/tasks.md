@@ -69,9 +69,18 @@
   Running nonmusical Intro ON/OFF first/replacement proofs use own acknowledged
   Seek, actual ON prefix-and-loop union `[0,E)` or complete OFF FullTrack
   `[0,N)`, and own consumed-source dry or later Native Wet effectiveness.
-  Paused or accepted-musical Intro, accepted-musical Tail,
-  remaining Seek/Tail domains and whole3.3 remain open. Finite4.2/4.3
-  lifecycle closure is not a full-track or Tail parent acceptance.
+  The additional bounded software proof covers paused Intro and accepted-musical
+  Intro/Tail ON/OFF, running/paused and first/replacement, preserving physical
+  one-shot addressing before the accepted P/H loop return and three virtual
+  seams. Twenty added public histories, stale-own-ACK Capture/Adopt and
+  same-set/withdrawal negatives, fresh101 residency and183 Python checks,
+  build-only Release/import/static/strict and one independent review are
+  documented in `docs/prepared-stem-publication.md`;
+  earlier paused-Intro/musical negatives are superseded only within that
+  candidate contract. Explicit in-loop/equal-phase Seek, actual KEYLOCK ON
+  KeyLockFullTrack Seek/ALL exceptions, unproved complete-resident partial-loop
+  contexts and whole3.3 remain open. Finite4.2/4.3 lifecycle closure does not
+  establish Intro/Tail/full-track final-reader or parent acceptance.
 
 ## 4. X11-LIVE-STEMS: current model and actual reader retirement (L4)
 
