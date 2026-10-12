@@ -1014,6 +1014,51 @@ five relative file links and whitespace pass. Clippy tests exit0 with63 existing
 warnings (one duplicate), none in the changed test. Production Release/import/
 Python checks remain reusable, without Native installation or Human App changes.
 
+### Public source assignment fences old-source V2 before replacement ACK
+
+Public LoaderController.load_sample_async admits a different original with its
+actual run_analysis=True, replace_assignment=True and source_intent="import"
+options. Its request invalidates the old prepared-source epoch before claim.
+The genuine cold worker prepares the new source and queues LoadColdSample
+behind the already queued, unclaimed old-source V2 Adopt. Until the source's own
+callback ACK, pending admission and preparation retain the previous assignment
+and the actual old productive PCM/voice/NativeFIFO/EQ. A control-side cache
+change or obsolete receipt is not the audible source oracle.
+
+The first-FullMix and selected-V1 traces cover ON/rate0.75 and OFF/rate1.25.
+The real two-slot retirement gate holds both operations. Three slots then permit
+only the old Adopt's normal FIFO rejection, leaving the whole-assignment Load
+queued under its larger reservation. Independent complete PCM/rawNative or dry
+Varispeed/uninterruptedEQ continues both before and after that rejection. Only
+the actual next Load ACK deliberately stops pad0 and installs the different
+original, emits SampleStopped and sets its own adoption token to accepted.
+This is the requested source-assignment lifecycle, not live V2 effectiveness;
+no new voice starts automatically. Pad215 retains its own source, generation,
+Native/FIFO and independently declared absolute physical trajectory.
+The new complete PCM matches independently decoded input WAV bytes. The old
+source-bound scalar mode/hash can remain after Load while the mask resets;
+there are no old component readers or new-voice effectiveness to confirm it.
+
+Actual Loader polling consumes the matching real completion, publishes the new
+source/content identity and original lease, runs the real scalar default kernels
+and the bound StemController invalidation, and persists/reopens the new assignment
+without the old stem observation. Repeated polls cannot retry the old source or
+borrow the source ACK as a V2 effect. The headless public Native admission/event
+path is unchanged; only stream-bound scalar default wrappers use thin queue/kernel
+forwarders. BPM-change notifications are recorded by the Loader's callback;
+complete App timing/loop initialization and later Play/new-source stem adoption
+remain separate gates. The cfg(test) immediate-drop retirement sink still does
+not prove productive final-reader retirement, resource or Human acceptance.
+
+The final affected public-controller Release suite passes25 in96.19s after a
+1m10s compile. Unchanged36 Parent/Native/offline cases reuse the previous shared59
+run; this is not a fresh61-case integrated run. One independent final review has
+no open findings. Production Native/Python are unchanged, so their previous
+Release/import/Python181 checks remain reusable without installation or App use.
+Format, strict affected OpenSpec, five relative file links and whitespace pass.
+Clippy lib/tests exits0 in9.61s with the existing31 lib/63 test warnings
+(27 duplicate test diagnostics); no warning points to the changed test.
+
 ### Public loop expansion requires fresh V2 preparation
 
 The public loop-end path can acknowledge a genuinely changed resident window

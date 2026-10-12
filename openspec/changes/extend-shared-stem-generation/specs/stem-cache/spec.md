@@ -254,6 +254,16 @@ immediate change SHALL NOT silently discard the command.
 - **AND** later explicit ALL SHALL prepare that same verified V2 through the existing worker lane using a fresh current-window source ticket and component views, then require fresh own registration, Capture/worker/Adopt,128-source-frame handover and actual dry or prepared wet effect before clearing its own error
 - **AND** this explicit refresh SHALL require Native-confirmed same source/request and changed sealed preparation context; unrelated admission failures or another source SHALL NOT grant that refresh, and preparation-context equality SHALL NOT constitute an audio ACK
 
+#### Scenario: Public source assignment replaces audio after its own acknowledgement
+
+- **GIVEN** productive finite NormalLoop FullMix or selected V1 with KEY LOCK OFF or ON and an old-source V2 whose actual Adopt remains queued and unclaimed
+- **WHEN** public source loading admits a different original as an assignment replacement
+- **THEN** the new source request SHALL invalidate the old candidate before claim while pending assignment and preparation preserve the old productive PCM, voice, Native/FIFO and filter chronology
+- **AND** normal FIFO rejection of the old V2 SHALL remain separate from the new source's own callback acknowledgement; the old V2 SHALL never claim or borrow that acknowledgement
+- **AND** only the acknowledged assignment replacement SHALL deliberately stop that pad's old voice and install the new original without an automatic voice start, while other pads retain their own source, voice and trajectory
+- **AND** the matching actual loader completion SHALL publish the new source identity, assignment and defaults, invalidate the old stem observation and persist the new assignment without treating this lifecycle stop as a successful live stem adoption
+- **AND** repeated polling SHALL NOT retry the old-source candidate or infer a new source's audible effect; later playback and new-source stem adoption SHALL require their own explicit authority and acknowledgement
+
 #### Scenario: First candidate is prepared after a productive FullMix voice was paused
 - **GIVEN** a current proper NormalLoop FullMix voice has produced genuine wet output and is paused before new-set registration and own Capture
 - **WHEN** its new complete-set candidate obtains own residency acceptance while the same voice remains paused
