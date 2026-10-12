@@ -69,6 +69,10 @@ const UNLOAD_ON_CHILD: &str = "FLITZI_L3_CONTROLLER_UNLOAD_ON_CHILD";
 const UNLOAD_ON_TEST: &str = "audio_engine::cold_load::tests::stem_pair_publication_tests::committed_stem_residency_tests::l3_controller_productive_tests::actual_public_unload_rejects_queued_v2_before_own_stop_with_keylock_on";
 const UNLOAD_OFF_CHILD: &str = "FLITZI_L3_CONTROLLER_UNLOAD_OFF_CHILD";
 const UNLOAD_OFF_TEST: &str = "audio_engine::cold_load::tests::stem_pair_publication_tests::committed_stem_residency_tests::l3_controller_productive_tests::actual_public_unload_rejects_queued_v2_before_own_stop_with_keylock_off";
+const FROZEN_ON_CHILD: &str = "FLITZI_L3_FROZEN_OLD_ON_CHILD";
+const FROZEN_ON_TEST: &str = "audio_engine::cold_load::tests::stem_pair_publication_tests::committed_stem_residency_tests::l3_controller_productive_tests::actual_native_current_bank_candidate_cannot_borrow_frozen_old_voice_with_keylock_on";
+const FROZEN_OFF_CHILD: &str = "FLITZI_L3_FROZEN_OLD_OFF_CHILD";
+const FROZEN_OFF_TEST: &str = "audio_engine::cold_load::tests::stem_pair_publication_tests::committed_stem_residency_tests::l3_controller_productive_tests::actual_native_current_bank_candidate_cannot_borrow_frozen_old_voice_with_keylock_off";
 
 #[derive(Clone, Copy)]
 enum CandidateTrace {
@@ -91,6 +95,7 @@ enum CandidateTrace {
     SourceKeyLockOn,
     SourceStemsOn,
     Unload,
+    FrozenOld,
 }
 
 /// Public cold admission/event polling are unchanged. The stream-bound scalar
@@ -2184,6 +2189,401 @@ assert candidate.is_current() and not candidate.claimed() and candidate.effectiv
 assert live.control is previous_control and not live.blocked
 assert controller.stem_residency_status(0).effective_stem_set_identity == disk_v1.stem_set_identity
 assert session.stem_generation_errors == {0: deadline_error}
+"#,
+    );
+}
+
+#[allow(clippy::too_many_arguments)]
+fn current_bank_candidate_cannot_borrow_frozen_voice(
+    engine: &AudioEngine,
+    root: &Path,
+    producer: &Arc<Mutex<rtrb::Producer<ControlMessage>>>,
+    playback: &mut ControllerPlayback,
+    consumer: &mut rtrb::Consumer<ControlMessage>,
+    locals: &Py<PyDict>,
+    key_lock: bool,
+) {
+    use crate::audio_engine::cold_residency::ResidentLoadHint;
+    use crate::audio_engine::committed_stem_residency::CommittedStemRtWork;
+    use crate::audio_engine::source_reader::StemRenderSelection;
+    use crate::messages::ResidentContext;
+
+    // Keep the existing complete A PCM/raw Native/EQ chronology. This native
+    // restore is deliberately separate from public Loader assignment replacement.
+    assert!(!playback.scheduled && playback.candidate.is_none());
+    let a = voice(&playback.callback.mixer).sample.clone().unwrap();
+    let a_set = playback.callback.mixer.stems_for_measurement()[0].clone();
+    let generation = voice(&playback.callback.mixer).generation;
+    let adopted = voice(&playback.callback.mixer).stretch.adopted_request_id();
+    let native = voice(&playback.callback.mixer)
+        .stretch
+        .native_state_address();
+    let selection = playback
+        .selection
+        .map_or_else(StemRenderSelection::full_mix, |mask| {
+            StemRenderSelection::for_stems(a_set.as_ref().unwrap(), mask)
+        });
+    let other = other_voice(&playback.callback.mixer);
+    let other_source = other.sample.clone().unwrap();
+    let other_generation = other.generation;
+    let other_native = other.stretch.native_state_address();
+    let other_fifo = other.stretch.pending_fifo_frames();
+    let other_demand = playback.callback.mixer.stem_demand_for_measurement(215);
+    let feedback = playback.callback.feedback.events.len();
+
+    macro_rules! unchanged {
+        ($action:block) => {{
+            let current = voice(&playback.callback.mixer);
+            let clock = current.source_playback;
+            let fifo = current.stretch.pending_fifo_frames();
+            let history = current.stretch.productive_history();
+            let dsp = playback.callback.mixer.dsp_source_history_for_test(0).unwrap();
+            $action
+            let current = voice(&playback.callback.mixer);
+            assert!(current.source_playback.matches_exact(&clock));
+            assert_eq!(current.generation, generation);
+            assert_eq!(current.stretch.native_state_address(), native);
+            assert_eq!(current.stretch.pending_fifo_frames(), fifo);
+            assert!(Arc::ptr_eq(&current.sample.as_ref().unwrap().samples, &a.samples));
+            assert_eq!(history.is_some(), key_lock);
+            if let Some(history) = history {
+                let next = current.stretch.productive_history().unwrap();
+                assert_eq!(next.binding, history.binding);
+                assert_eq!(next.next_position, history.next_position);
+                assert_eq!(next.fed_output_frames, history.fed_output_frames);
+            } else {
+                assert!(current.stretch.productive_history().is_none());
+            }
+            let next = playback.callback.mixer.dsp_source_history_for_test(0).unwrap();
+            assert_eq!(next.binding, dsp.binding);
+            assert_eq!(next.next_position, dsp.next_position);
+            assert_eq!(next.fed_output_frames, dsp.fed_output_frames);
+            assert_eq!(playback.callback.feedback.events.len(), feedback);
+        }};
+    }
+
+    // Actual distinct B content and typed complete lease, not a cloned A source.
+    let input = signal_sum_wav(4096, &[4, 5, 6, 7]);
+    let expected_b: Vec<f32> = input[44..]
+        .chunks_exact(2)
+        .map(|bytes| f32::from(i16::from_le_bytes(bytes.try_into().unwrap())) / 32768.0)
+        .collect();
+    let input_path = root.join("retained-old-bank-b.wav");
+    fs::write(&input_path, input).unwrap();
+    let material = Arc::new(prepare_material(root, &input_path, RATE, 2, &|| false).unwrap());
+    let version = canonical_version(&material);
+    let reference = canonical_wav_reference(&material);
+    let wav_path = root.parent().unwrap().join(&reference);
+    write_signal_set(&wav_path, 4096, &version, 4);
+    assert_eq!(material.sample.samples.as_ref(), expected_b.as_slice());
+    let _original_owner = engine
+        .project_assets
+        .acquire(root, &material.lease.original_path)
+        .unwrap();
+    let _component_owner = engine.project_assets.acquire(root, &wav_path).unwrap();
+
+    // An explicit ON hint supplies genuine complete B for the existing ON
+    // cold-load guard; a finite convenience-wrapper OFF hint cannot prove B ON.
+    playback.callback.retirement.slots = 2;
+    let admitted = crate::audio_engine::cold_load::admit_selected_material(
+        engine,
+        0,
+        material.metadata()["new_reference"]
+            .as_str()
+            .unwrap()
+            .to_owned(),
+        (
+            false,
+            false,
+            false,
+            Some(ResidentLoadHint {
+                start_s: LOOP_START as f64 / f64::from(RATE),
+                end_s: LOOP_END as f64 / f64::from(RATE),
+                key_lock,
+            }),
+        ),
+        producer.clone(),
+        (2, RATE, root.to_path_buf()),
+        "restore",
+        Some(material.clone()),
+    )
+    .unwrap();
+    wait_until(|| consumer.slots() == 2 || admitted.adoption.load(Ordering::Acquire) != 0);
+    assert_eq!(admitted.adoption.load(Ordering::Acquire), 0);
+    controller_python(
+        locals,
+        r#"
+assert not source_v2.same_preparation_context(source_v2)
+assert not candidate.is_current() and not candidate.claimed()
+assert not previous_control.ticket.is_current()
+"#,
+    );
+    unchanged!({
+        assert_eq!(playback.drain(consumer), 0);
+    });
+    // Reject obsolete A Capture through its normal retirement gate; B Load
+    // remains behind it until its larger normal reservation becomes available.
+    playback.callback.retirement.slots = 3;
+    unchanged!({
+        assert_eq!(playback.drain(consumer), 1);
+    });
+    assert!(
+        matches!(consumer.peek(), Ok(ControlMessage::LoadColdSample {
+        id: 0, replace_assignment: false, sample, ..
+    }) if !sample.same_source(&a))
+    );
+    playback.callback.retirement.slots = usize::MAX;
+    unchanged!({
+        assert_eq!(playback.drain(consumer), 1);
+    });
+    source_successes(engine, &[admitted.request_id]);
+    let b = playback.callback.mixer.bank_for_measurement()[0]
+        .clone()
+        .unwrap();
+    assert!(!b.same_source(&a));
+    assert!(!Arc::ptr_eq(&b.samples, &a.samples));
+    assert_eq!(b.frame_count(), 4096);
+    let expected_context = if key_lock {
+        ResidentContext::KeyLockFullTrack
+    } else {
+        ResidentContext::FiniteLoop
+    };
+    assert_eq!(b.residency.as_ref().unwrap().context, expected_context);
+    assert_eq!(
+        b.samples.as_ref(),
+        &expected_b[b.resident_start() * 2..b.resident_end() * 2]
+    );
+    assert!(playback.callback.mixer.stems_for_measurement()[0].is_none());
+
+    let assert_retained = |playback: &ControllerPlayback| {
+        let current = voice(&playback.callback.mixer);
+        assert_eq!(current.generation, generation);
+        assert_eq!(current.stretch.native_state_address(), native);
+        assert_eq!(current.stretch.adopted_request_id(), adopted);
+        assert_eq!(
+            current.source_playback.tempo_ratio().to_bits(),
+            playback.ratio.to_bits()
+        );
+        let phase = (playback.source_frame as f64 * playback.ratio)
+            .rem_euclid((LOOP_END - LOOP_START) as f64);
+        assert_eq!(
+            current.source_playback.position().frame,
+            LOOP_START + phase.floor() as usize
+        );
+        assert_eq!(
+            current.source_playback.position().fraction.to_bits(),
+            phase.fract().to_bits()
+        );
+        if let Some(raw) = &playback.raw {
+            assert_eq!(
+                current.stretch.pending_fifo_frames(),
+                (raw.input[0].len(), raw.output[0].len()),
+                "retained A independent raw Native FIFO chronology"
+            );
+        }
+        assert!(Arc::ptr_eq(
+            &current.sample.as_ref().unwrap().samples,
+            &a.samples
+        ));
+        let frozen = current
+            .frozen_stems
+            .as_ref()
+            .expect("actual retained A voice");
+        assert_eq!(frozen.selection, selection);
+        assert!(!frozen.transition.is_active() && frozen.outgoing.is_none());
+        match (&a_set, &frozen.set) {
+            (Some(old), Some(frozen)) => {
+                assert!(Arc::ptr_eq(
+                    &old.complete_set_identity,
+                    &frozen.complete_set_identity
+                ));
+                for (old, frozen) in old.stems.iter().zip(&frozen.stems) {
+                    assert!(Arc::ptr_eq(&old.samples, &frozen.samples));
+                }
+            }
+            (None, None) => {}
+            _ => panic!("retained A readers changed"),
+        }
+        let other = other_voice(&playback.callback.mixer);
+        assert_eq!(other.generation, other_generation);
+        assert_eq!(other.stretch.native_state_address(), other_native);
+        assert_eq!(other.stretch.pending_fifo_frames(), other_fifo);
+        assert!(Arc::ptr_eq(
+            &other.sample.as_ref().unwrap().samples,
+            &other_source.samples
+        ));
+        let phase =
+            (playback.frame as f64 * playback.ratio).rem_euclid((LOOP_END - LOOP_START) as f64);
+        assert_eq!(
+            other.source_playback.position().frame,
+            LOOP_START + phase.floor() as usize
+        );
+        assert_eq!(
+            other.source_playback.position().fraction.to_bits(),
+            phase.fract().to_bits()
+        );
+        assert_eq!(
+            playback.callback.mixer.stem_demand_for_measurement(215),
+            other_demand
+        );
+        assert!(playback.callback.mixer.stems_for_measurement()[215].is_none());
+        assert_eq!(playback.callback.feedback.events.len(), feedback);
+    };
+    assert_retained(playback);
+
+    let window = prepare_window_with_producer(
+        engine,
+        0,
+        WindowRequest {
+            key_lock: Some(key_lock),
+            loop_region: Some((
+                LOOP_START as f64 / f64::from(RATE),
+                Some(LOOP_END as f64 / f64::from(RATE)),
+            )),
+            ..WindowRequest::default()
+        },
+        producer.clone(),
+    )
+    .unwrap();
+    wait_until(|| consumer.peek().is_ok() || window.error().unwrap().is_some());
+    unchanged!({
+        assert_eq!(playback.drain(consumer), 1);
+    });
+    assert_eq!(
+        window.publication_status(),
+        "accepted",
+        "{:?}",
+        window.error()
+    );
+    reconcile(engine).unwrap();
+    let finite_b = playback.callback.mixer.bank_for_measurement()[0]
+        .clone()
+        .unwrap();
+    assert!(finite_b.same_source(&b) && !finite_b.same_source(&a));
+    assert_eq!(
+        (finite_b.resident_start(), finite_b.resident_end()),
+        (LOOP_START, LOOP_END)
+    );
+    assert_eq!(
+        finite_b.residency.as_ref().unwrap().context,
+        if key_lock {
+            ResidentContext::KeyLockFiniteLoop
+        } else {
+            ResidentContext::FiniteLoop
+        }
+    );
+    assert_eq!(
+        finite_b.samples.as_ref(),
+        &expected_b[LOOP_START * 2..LOOP_END * 2]
+    );
+    assert_retained(playback);
+
+    let source = engine.capture_prepared_source(0, version.clone()).unwrap();
+    assert!(source.same_preparation_context(&source));
+    let pair = engine
+        .prepare_stem_pair_at_root(root, 0, &version, &reference, &source, false, None)
+        .unwrap();
+    assert!(!pair.has_components());
+    assert_eq!(
+        pair.pair_reader.descriptor.content.alignment.offset_frames,
+        0
+    );
+    pair.select();
+    let registration = engine
+        .register_pending_committed_stem_pair_with_producer(&pair, &source, producer)
+        .unwrap();
+    assert_eq!(registration.publication_status(), "accepted");
+    assert!(registration.is_current() && registration.error().is_none());
+    let receipt = engine
+        .request_committed_stem_residency_with_producer(
+            &registration,
+            "all_stems",
+            0b1010,
+            producer,
+        )
+        .unwrap();
+    assert_eq!(receipt.residency_status(), "captured");
+    assert_eq!(receipt.effective_mode_status(), "waiting");
+    assert!(receipt.is_current() && !receipt.claimed());
+    let queued = match consumer.peek().unwrap() {
+        ControlMessage::CommittedStemWork(work) => {
+            assert!(
+                matches!(work.as_ref(), CommittedStemRtWork::Capture(capture)
+                if capture.id == 0 && capture.candidate.is_some())
+            );
+            work.as_ref() as *const CommittedStemRtWork as usize
+        }
+        _ => panic!("expected B's own actual Candidate Capture"),
+    };
+    playback.callback.retirement.slots = 2;
+    unchanged!({
+        assert_eq!(playback.drain(consumer), 0);
+    });
+    for frames in [1, 31, 137, 257] {
+        if key_lock {
+            playback.render(frames, false);
+        } else {
+            render_varispeed(playback, frames);
+        }
+        assert_retained(playback);
+        assert_eq!(receipt.residency_status(), "captured");
+        assert!(receipt.is_current() && !receipt.claimed());
+        assert!(
+            matches!(consumer.peek(), Ok(ControlMessage::CommittedStemWork(work))
+            if work.as_ref() as *const CommittedStemRtWork as usize == queued)
+        );
+        unchanged!({
+            assert_eq!(playback.drain(consumer), 0);
+        });
+    }
+    playback.callback.retirement.slots = 3;
+    unchanged!({
+        assert_eq!(
+            playback.drain(consumer),
+            1,
+            "own B Capture must reject frozen A"
+        );
+    });
+    wait_until(|| engine.cold_jobs.counts_for_test() == (0, 0, 0));
+    assert_eq!(receipt.residency_status(), "rejected");
+    assert_eq!(receipt.effective_mode_status(), "rejected");
+    assert!(!receipt.is_current() && !receipt.claimed());
+    assert_eq!(
+        receipt.error().as_deref(),
+        Some("Committed stem residency or mode ownership changed")
+    );
+    assert!(receipt.effective_failure_reason().is_none());
+    assert_eq!(registration.publication_status(), "accepted");
+    assert!(registration.is_current() && source.same_preparation_context(&source));
+    assert!(consumer.is_empty(), "rejected Capture cannot queue Adopt");
+    assert_retained(playback);
+    for frames in [1, 31, 137, 257, 511] {
+        if key_lock {
+            playback.render(frames, false);
+        } else {
+            render_varispeed(playback, frames);
+        }
+        assert_retained(playback);
+        assert!(
+            playback.callback.mixer.bank_for_measurement()[0]
+                .as_ref()
+                .unwrap()
+                .same_window(&finite_b)
+        );
+        assert!(playback.callback.mixer.stems_for_measurement()[0].is_none());
+        assert!(registration.is_current() && !receipt.is_current() && !receipt.claimed());
+        assert!(consumer.is_empty());
+        unchanged!({
+            assert_eq!(playback.drain(consumer), 0);
+        });
+    }
+    controller_python(
+        locals,
+        r#"
+assert not source_v2.same_preparation_context(source_v2)
+assert candidate.residency_status() == 'rejected' and not candidate.claimed()
+assert not candidate.is_current() and candidate.effective_failure_reason() is None
+assert not previous_control.ticket.is_current()
 "#,
     );
 }
@@ -5799,6 +6199,7 @@ fn round_trip(
     let window_change = matches!(trace, CandidateTrace::WindowChange);
     let source_stems_off = matches!(trace, CandidateTrace::SourceStemsOff);
     let unload = matches!(trace, CandidateTrace::Unload);
+    let frozen_old = matches!(trace, CandidateTrace::FrozenOld);
     let source_stems_on = matches!(trace, CandidateTrace::SourceStemsOn);
     let source_key_lock = matches!(
         trace,
@@ -5822,7 +6223,12 @@ fn round_trip(
     );
     let source_controls = source_replacement || unload;
     assert!(
-        !(claimed_masks || preclaim_masks || retrigger || window_change || source_controls)
+        !(claimed_masks
+            || preclaim_masks
+            || retrigger
+            || window_change
+            || source_controls
+            || frozen_old)
             || (!paused_first && delete_pause.is_none() && stopped_before_poll.is_none())
     );
     let withdraw_preclaim = matches!(trace, CandidateTrace::WithdrawPreclaim);
@@ -6591,6 +6997,23 @@ assert previous_control.ticket.is_current()
             key_lock,
         ));
     }
+    if frozen_old {
+        current_bank_candidate_cannot_borrow_frozen_voice(
+            &engine,
+            &h.root,
+            &h.producer,
+            &mut playback,
+            &mut h.consumer,
+            &locals,
+            key_lock,
+        );
+        controller_python(
+            &locals,
+            "controller.shut_down()\ncontroller._assets.release_saved_assignments()\nowner_v1.release()\nowner_v2.release()",
+        );
+        std::env::set_current_dir(previous_cwd).unwrap();
+        return;
+    }
     if unload {
         public_unload_queued_candidate(
             &mut playback,
@@ -7045,6 +7468,44 @@ assert bpm_selection.ticket is bpm_registration and bpm_selection.receipt is can
 #[test]
 fn actual_public_unload_rejects_queued_v2_before_own_stop_with_keylock_on() {
     unload_child(true, UNLOAD_ON_CHILD, UNLOAD_ON_TEST);
+}
+
+#[test]
+fn actual_native_current_bank_candidate_cannot_borrow_frozen_old_voice_with_keylock_on() {
+    frozen_old_child(true, FROZEN_ON_CHILD, FROZEN_ON_TEST);
+}
+
+#[test]
+fn actual_native_current_bank_candidate_cannot_borrow_frozen_old_voice_with_keylock_off() {
+    frozen_old_child(false, FROZEN_OFF_CHILD, FROZEN_OFF_TEST);
+}
+
+fn frozen_old_child(key_lock: bool, child: &str, test: &str) {
+    if std::env::var_os(child).is_some() {
+        for selected_v1 in [false, true] {
+            round_trip(
+                selected_v1,
+                None,
+                key_lock,
+                None,
+                false,
+                CandidateTrace::FrozenOld,
+            );
+        }
+        return;
+    }
+    let output = std::process::Command::new(std::env::current_exe().unwrap())
+        .args(["--exact", test, "--nocapture", "--test-threads=1"])
+        .env(child, "1")
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "L3 Native frozen old voice child failed:\n{}\n{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert!(String::from_utf8_lossy(&output.stdout).contains("1 passed; 0 failed"));
 }
 
 #[test]

@@ -535,6 +535,33 @@ separately proved path. This bounded delivery does not close additional-domain
 L3 obligations, L4 UI/all final-reader families, whole P4b/P5a, Bulk/RECORD,
 musical/resource or Human GUI/device/hearing acceptance.
 
+### Native current-bank eligibility does not transfer to retained A
+
+`actual_native_current_bank_candidate_cannot_borrow_frozen_old_voice_with_keylock_on`
+and its `_off` counterpart retain the existing complete A PCM, raw Native/FIFO
+or dry Varispeed, and uninterrupted nonneutral EQ chronology. Each covers old
+FullMix and selected V1 playback. Genuine typed, distinct B material enters the
+normal native restore admission and Load FIFO with `replace_assignment=false`.
+The ON case explicitly requests complete KEY LOCK residency through the existing
+admission kernel; the convenience wrapper's finite OFF hint would fail the ON
+load guard. The test checks actual B bank identity, decoded complete content and
+resident context as well as the source ACK, then B's own finite-window ACK.
+
+B's fresh source ticket, real complete component files and selected descriptor
+obtain an accepted current pending registration. Its own queued candidate Capture
+waits behind the normal two-slot retirement pressure while A continues rendering.
+Three slots permit actual Capture to reject residency before claim because the
+only active same-pad voice still owns frozen A. The actual worker settles without
+queuing Adopt. B's registration remains accepted/current, distinct from residency
+rejection and actual effectiveness. A's obsolete preparation ticket cannot grant
+B authority. Exact A voice/source/frozen readers, Native/FIFO/history and filter
+chronology remain continuous; pad215 keeps its owners and absolute trajectory.
+
+This is a Native-only negative guard proof. It does not exercise public Loader
+assignment replacement or controller model/config reconciliation for retained A,
+enable successful old-voice adoption, or establish productive final-reader
+retirement. Frozen old-source and other unsupported domains remain guarded.
+
 Evidence uses distinguishable real V1/V2 files with equal source identity, genuine
 worker/Capture/Adopt and independent complete PCM, raw Native/FIFO and uninterrupted
 EQ oracles. The public controller proof includes first adoption, replacement,

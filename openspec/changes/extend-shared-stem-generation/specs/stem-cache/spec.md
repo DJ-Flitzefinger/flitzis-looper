@@ -123,6 +123,16 @@ immediate change SHALL NOT silently discard the command.
 - **THEN** native adoption rejects safely and the current FullMix/stem/KEYLOCK trajectory remains usable
 - **AND** neither a complete disk descriptor nor a same-set residency permission bypasses the guard
 
+#### Scenario: Current bank B cannot authorize retained old-source voice A
+
+- **GIVEN** actual Native admission has installed a distinct current bank source B while retained voice A continues using its own frozen source and FullMix or V1 readers with KEY LOCK OFF or ON
+- **AND** B has its own acknowledged finite NormalLoop window, fresh PreparedSourceTicket and accepted current pending stem registration
+- **WHEN** B's own residency request reaches actual callback Capture while only retained voice A is active for that pad
+- **THEN** Capture SHALL reject that residency before claim and SHALL NOT enqueue Adopt or report B effective; B's registration SHALL remain accepted and current while its own residency reports rejection
+- **AND** A's obsolete preparation ticket SHALL NOT authorize B, and B's current bank, window or registration SHALL NOT authorize adoption on A
+- **AND** A SHALL continue through its own independently verified complete PCM, fractional source trajectory, Native/FIFO and uninterrupted filter history, while another active pad retains its independent owners and trajectory
+- **AND** this rejection SHALL NOT enable new-set adoption on frozen old-source voices or extend supported playback domains
+
 #### Scenario: Same-original replacement keeps two exact readers
 - **GIVEN** active V1 and distinct verified V2 have the same source hash, geometry and mask
 - **WHEN** V2 obtains its own current adoption ACK
