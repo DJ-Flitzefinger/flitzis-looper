@@ -6,6 +6,180 @@ use crate::audio_engine::cold_store;
 
 const SHUTDOWN_CHILD: &str = "FLITZI_L4_ASSET_SHUTDOWN_CHILD";
 const SHUTDOWN_TEST: &str = "audio_engine::material_migration_recovery::tests::retirement_tests::actual_engine_shutdown_keeps_late_lease_cleanup_and_sharing_retry";
+const PRESERVATION_CHILD: &str = "FLITZI_L4_ASSET_PRESERVATION_CHILD";
+const PRESERVATION_TEST: &str = "audio_engine::material_migration_recovery::tests::retirement_tests::actual_asset_worker_preserves_targets_changed_after_admission";
+
+#[test]
+fn actual_asset_worker_preserves_targets_changed_after_admission() {
+    if std::env::var_os(PRESERVATION_CHILD).is_none() {
+        let output = Command::new(std::env::current_exe().unwrap())
+            .args([
+                "--exact",
+                PRESERVATION_TEST,
+                "--nocapture",
+                "--test-threads=1",
+            ])
+            .env(PRESERVATION_CHILD, "1")
+            .output()
+            .unwrap();
+        assert!(
+            output.status.success(),
+            "asset preservation child failed:\n{}\n{}",
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr)
+        );
+        assert!(String::from_utf8_lossy(&output.stdout).contains("1 passed; 0 failed"));
+        return;
+    }
+    let scratch = std::env::temp_dir().join("codex");
+    fs::create_dir_all(&scratch).unwrap();
+    let engine = crate::audio_engine::AudioEngine::new().unwrap();
+    let assets = engine.project_assets.clone();
+    assert!(Arc::ptr_eq(&assets, &ProjectAssets::shared()));
+    for change in ["unknown-child", "replacement", "same-file-edit"] {
+        let temp = tempfile::Builder::new()
+            .prefix("flitzi-asset-preservation-")
+            .tempdir_in(&scratch)
+            .unwrap();
+        let root = temp.path().join("samples");
+        let original = root.join("materials/M0123456789abcdef0123456789abcdef/original/source.wav");
+        fs::create_dir_all(original.parent().unwrap()).unwrap();
+        wav(&original);
+        let original_before = fs::read(&original).unwrap();
+        let target = if change == "unknown-child" {
+            let directory = root.join("materials/M0123456789abcdef0123456789abcdef/stems/.ready-0123456789abcdef0123456789abcdef");
+            let source = format!(
+                "samples/materials/M0123456789abcdef0123456789abcdef/original/source.wav|sha256-v1:{:x}",
+                Sha256::digest(&original_before)
+            );
+            stems(&directory, &source);
+            directory
+        } else {
+            original.clone()
+        };
+        let known_paths: Vec<_> = if change == "unknown-child" {
+            STEM_NAMES.iter().map(|name| target.join(name)).collect()
+        } else {
+            vec![target.clone()]
+        };
+        let mut expected_bytes: Vec<_> = known_paths
+            .iter()
+            .map(|path| (path.clone(), fs::read(path).unwrap()))
+            .collect();
+        let identity_before = project_assets::capture_identity(&target).unwrap();
+        let neighbor = root.join("unrelated.keep");
+        fs::write(&neighbor, b"outside the exact retirement target").unwrap();
+        let mut job = assets.acquire_pin(&root, &target).unwrap();
+        let mut inventory = inventory_gate(&root).unwrap();
+        let inventory_lifetime = Arc::downgrade(inventory.handle.as_ref().unwrap());
+        let mut artifact = MigrationArtifactLease::capture_native(&root, &target).unwrap();
+        assert_eq!(
+            artifact.sealed.as_ref().unwrap().receipt.files.len(),
+            known_paths.len()
+        );
+        artifact.retire_native(&inventory).unwrap();
+        let outcome = artifact.outcome.as_ref().unwrap().clone();
+        inventory.release();
+        artifact.release();
+        drop(artifact);
+        assert_eq!(outcome.status().unwrap(), ("pending", None));
+        assert_registration_blocked(&root);
+        // Mutations happen after exact admission/seal release, while a genuine
+        // transient job lease still excludes physical worker deletion.
+        let unknown = target.join("late-private.keep");
+        let moved = root.join("moved-original.wav");
+        let expected_error = match change {
+            "unknown-child" => {
+                fs::write(&unknown, b"introduced after retirement admission").unwrap();
+                assert_eq!(
+                    project_assets::capture_identity(&target).unwrap(),
+                    identity_before
+                );
+                "generation contains an unknown file; preserved"
+            }
+            "replacement" => {
+                fs::rename(&target, &moved).unwrap();
+                wav(&target);
+                assert_ne!(
+                    project_assets::capture_identity(&target).unwrap(),
+                    identity_before
+                );
+                assert_eq!(fs::read(&target).unwrap(), original_before);
+                "retired original was replaced; preserved"
+            }
+            "same-file-edit" => {
+                let mut changed = original_before.clone();
+                *changed.last_mut().unwrap() ^= 1;
+                fs::write(&target, &changed).unwrap();
+                assert_eq!(
+                    project_assets::capture_identity(&target).unwrap(),
+                    identity_before
+                );
+                assert_eq!(changed.len(), original_before.len());
+                "retired leaf changed contents; preserved"
+            }
+            _ => unreachable!(),
+        };
+        if change != "unknown-child" {
+            expected_bytes[0].1 = fs::read(&target).unwrap();
+        }
+        assert_eq!(outcome.status().unwrap(), ("pending", None));
+        assert_registration_blocked(&root);
+        job.release();
+        drop(job);
+        // The actual process worker alone must settle this own receipt.
+        // No collect*(), injected failure or target re-admission is used.
+        wait_until(|| outcome.status().unwrap().0 == "error");
+        let terminal = outcome.status().unwrap();
+        let error = terminal.1.as_ref().unwrap();
+        assert!(error.contains(expected_error), "{change}: {error}");
+        assert!(error.chars().count() <= 2048);
+        wait_until(|| inventory_lifetime.upgrade().is_none());
+        for (path, bytes) in &expected_bytes {
+            assert_eq!(fs::read(path).unwrap(), *bytes, "{change}: {path:?}");
+        }
+        assert_registration_available(&root);
+        if change == "unknown-child" {
+            assert_eq!(
+                fs::read(&unknown).unwrap(),
+                b"introduced after retirement admission"
+            );
+            assert_eq!(fs::read(&original).unwrap(), original_before);
+            // Removing this test-created obstruction must not revive a terminal
+            // failed retirement when the worker subsequently processes other work.
+            fs::remove_file(&unknown).unwrap();
+        } else if change == "replacement" {
+            assert_eq!(fs::read(&moved).unwrap(), original_before);
+        }
+        let sentinel =
+            root.join("materials/Mfedcba9876543210fedcba9876543210/original/sentinel.wav");
+        fs::create_dir_all(sentinel.parent().unwrap()).unwrap();
+        wav(&sentinel);
+        let mut later_inventory = inventory_gate(&root).unwrap();
+        let later_lifetime = Arc::downgrade(later_inventory.handle.as_ref().unwrap());
+        let mut sentinel_receipt =
+            MigrationArtifactLease::capture_native(&root, &sentinel).unwrap();
+        sentinel_receipt.retire_native(&later_inventory).unwrap();
+        let sentinel_outcome = sentinel_receipt.outcome.as_ref().unwrap().clone();
+        later_inventory.release();
+        sentinel_receipt.release();
+        drop(sentinel_receipt);
+        wait_until(|| !sentinel.exists() && sentinel_outcome.status().unwrap().0 == "complete");
+        wait_until(|| later_lifetime.upgrade().is_none());
+        assert_eq!(outcome.status().unwrap(), terminal);
+        for (path, bytes) in &expected_bytes {
+            assert_eq!(fs::read(path).unwrap(), *bytes, "{change}: {path:?}");
+        }
+        if change == "replacement" {
+            assert_eq!(fs::read(&moved).unwrap(), original_before);
+        }
+        assert_eq!(
+            fs::read(&neighbor).unwrap(),
+            b"outside the exact retirement target"
+        );
+        assert_registration_available(&root);
+    }
+}
 
 #[test]
 fn actual_engine_shutdown_keeps_late_lease_cleanup_and_sharing_retry() {

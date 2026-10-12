@@ -571,6 +571,14 @@ Original FullMix/source PCM SHALL remain usable after stem deletion.
 - **THEN** the same queued retirement SHALL complete without re-admission or a direct collector call
 - **AND** inventory custody SHALL remain through physical cleanup and unknown neighboring files SHALL remain unchanged
 
+#### Scenario: A queued target changes after retirement admission
+- **GIVEN** an exact verified original or complete WAV-generation retirement is pending behind its actual transient source/job lease
+- **WHEN** an unknown child enters the generation, the original path is replaced or the original's bytes change after admission and before that lease releases
+- **THEN** the shared off-thread asset worker SHALL recheck the admitted identity, complete known leaves and byte evidence without removing any leaf of the changed target
+- **AND** it SHALL preserve the unknown file, replacement object or edited bytes and expose a bounded terminal error on that target's own receipt
+- **AND** it SHALL release that retirement's inventory custody after reporting preservation and SHALL NOT resume the failed retirement merely because the unknown child is later removed
+- **AND** independent eligible retirement targets SHALL continue to complete
+
 ## MODIFIED Requirements
 
 ### Requirement: Stem Generation And Replacement Require An Inactive Pad

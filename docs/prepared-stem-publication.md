@@ -618,6 +618,28 @@ receipts. It supplies no active-audio, all reader-family, complete paired-stem,
 unknown-child-after-admission or replaced-object preservation acceptance. Those
 remaining L4 obligations and Human GUI/device/hearing gates stay open.
 
+### Queued targets changed after retirement admission
+
+`actual_asset_worker_preserves_targets_changed_after_admission` uses a real
+Engine's shared asset service in an exact Windows child. Each of three managed
+targets is admitted with its own complete receipt and inventory custody, while
+a genuine transient source/job lease prevents cleanup. Only after admission and
+seal release does the test introduce an unknown child into a complete six-leaf
+WAV generation, replace an original with a different file object holding identical
+bytes, or edit an original while preserving its file identity and length.
+
+Releasing the lease lets the actual background worker expose the target's own
+bounded terminal preservation error and release inventory custody. All affected
+known files, the unknown child, moved old original and replacement/edited bytes
+remain intact. After the test removes its own unknown child, a separate clean
+original completes under a fresh receipt. That later worker progress cannot
+revive the failed retirement or alter its preserved files/status. The case uses
+no direct collector, injected cleanup failure or re-admission of a failed target.
+
+This is an exact WAV-generation/original preservation outcome. Complete paired
+WAV/PCM/descriptor cleanup, external/reparse targets, every audio-reader family,
+the complete L4 parent and Human GUI/device/hearing acceptance remain separate.
+
 ### Native current-bank eligibility does not transfer to retained A
 
 `actual_native_current_bank_candidate_cannot_borrow_frozen_old_voice_with_keylock_on`
