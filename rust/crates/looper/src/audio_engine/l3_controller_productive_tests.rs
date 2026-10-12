@@ -5,6 +5,9 @@
 use super::*;
 use crate::audio_engine::buffer_retirement::AudioBufferRetirement;
 
+#[path = "l4_shared_job_tests.rs"]
+mod l4_shared_job_tests;
+
 const CHILD: &str = "FLITZI_L3_CONTROLLER_CANDIDATE_CHILD";
 const TEST: &str = "audio_engine::cold_load::tests::stem_pair_publication_tests::committed_stem_residency_tests::l3_controller_productive_tests::actual_python_controller_first_and_replacement_candidates_keep_own_wet_chronology";
 const VARISPEED_CHILD: &str = "FLITZI_L3_CONTROLLER_VARISPEED_CHILD";
@@ -122,6 +125,7 @@ enum CandidateTrace {
     UnloadFinalReader,
     SavedCopyFinalReader,
     PostAdmitPcmFinalReader,
+    SharedJobFinalReader,
 }
 
 #[derive(Clone, Copy)]
@@ -7061,10 +7065,12 @@ fn round_trip(
             | CandidateTrace::UnloadFinalReader
             | CandidateTrace::SavedCopyFinalReader
             | CandidateTrace::PostAdmitPcmFinalReader
+            | CandidateTrace::SharedJobFinalReader
     );
     let unload_final_reader = matches!(trace, CandidateTrace::UnloadFinalReader);
     let saved_copy = matches!(trace, CandidateTrace::SavedCopyFinalReader);
     let preserve_pcm = matches!(trace, CandidateTrace::PostAdmitPcmFinalReader);
+    let shared_job = matches!(trace, CandidateTrace::SharedJobFinalReader);
     assert!(
         !final_reader
             || (selected_v1
@@ -7105,7 +7111,7 @@ fn round_trip(
             | CandidateTrace::SourceKeyLockOn
             | CandidateTrace::SourceStemsOn
     );
-    let source_controls = source_replacement || unload || saved_copy;
+    let source_controls = source_replacement || unload || saved_copy || shared_job;
     assert!(
         !(claimed_masks
             || preclaim_masks
@@ -8434,6 +8440,17 @@ assert not session.paused_sample_ids
                     &mut playback,
                     &locals,
                     (old, &current),
+                );
+            }
+            if shared_job {
+                l4_shared_job_tests::shared_job_after_origin_readers(
+                    &engine,
+                    &h.root,
+                    &mut playback,
+                    &mut h.consumer,
+                    &mut parameter_consumer,
+                    &locals,
+                    &current,
                 );
             }
             assert_eq!(

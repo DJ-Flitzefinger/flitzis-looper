@@ -816,6 +816,58 @@ formatting, official strict and whitespace pass. One independent nonauthor
 source/test review finds no issue. Unchanged production Release/import/Python
 checks remain reusable without a wheel build or installation.
 
+### Shared running Python job after its final public Unload
+
+`actual_shared_running_job_keeps_custody_after_final_public_unload` reuses the
+productive V2/actual audio retirement worker and independent current PCM/raw
+Native/FIFO/EQ oracle. Two separate public Loader imports at pads37/38 give
+each pad its own ColdLoad acknowledgement, Success/default transaction and
+content instance. Verified equal generated B bytes select the same canonical
+B original, distinct from the still-playing material of0/215.
+
+Both public Generate requests enter the real two-worker Python pool and resolve
+through actual Native offline-source custody. A declared nonneural fixture
+producer uses genuine sealed input files to supply its explicit shared identity;
+no neural model execution or musical quality is claimed. Its actual backend
+thread writes one known private WAV and waits on an Event while retaining its
+source read. No substituted task runner, source ticket or asset lease owns that
+read. The device-free source-shape facade reads acknowledged Native cache/rate
+metadata; digest and offline source methods delegate to the existing APIs.
+
+Public origin Unload removes only its own subscriber. The survivor continues
+until its own public Unload. Each actual `SampleStopped` acknowledgement and an
+audio FIFO worker marker precede Weak-zero for all observed loaded B PCM readers.
+The running job's real original/cache file reader and source/private-generation
+leases still retain B bytes and cleanup capacity. An independent Original
+sentinel physically completes under the shared asset worker during this interval;
+B's original denies overwrite and its known private WAV remains unchanged.
+
+Only the backend's actual normal return and the existing stale-event control
+settlement release the job's source/generation ownership and reservation.
+The shared asset worker then completes eligible B-original/private-generation
+cleanup without late stem preparation or publication. Persisted reopen keeps
+37/38 unassigned and the current V2 selection intact. Current0/215 audio remains
+covered by its original independent chronology.
+
+This is one actual shared-job/last-subscriber lifetime. It adds no neural
+inference, complete reader-family/L4, resource or Human GUI/device/hearing
+acceptance. Production, installed Native and the running App are unchanged.
+
+The focused Release case passes in2.44s after59.01s compilation. Fresh affected
+checks also cover the four existing replacement/saved-C/queued-Unload/PCM
+residency outcomes and one shared-warm subscriber regression. Other76 unchanged
+residency cases reuse the earlier fresh78-case suite; this is no fresh combined
+81-case claim. The Python four-file check initially passes67 cases and fails11
+because the declared producer fixture patched its defining module but left the
+controller's imported function unchanged. Binding that same fixture function at
+the actual call site restores all12 cases in the affected file in1.45s; the other
+66 unchanged cases retain their preceding PASS, without a fresh combined78 claim.
+Clippy tests exit0 with the same37 warning kinds and no changed-test diagnostics;
+formatting, touched-test Ruff, official strict and whitespace pass. One independent
+nonauthor review's PCM terminology correction is incorporated. Native production
+Release/import checks remain reusable; Python runs use the existing build-only
+Release extension and current source without installation.
+
 ### Native current-bank eligibility does not transfer to retained A
 
 `actual_native_current_bank_candidate_cannot_borrow_frozen_old_voice_with_keylock_on`

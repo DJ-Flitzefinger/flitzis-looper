@@ -582,6 +582,17 @@ Original FullMix/source PCM SHALL remain usable after stem deletion.
 - **THEN** it preserves non-owned content and defers/report failures through bounded control status
 - **AND** no callback deletion or immediate recursive material removal occurs
 
+#### Scenario: A shared running job outlives its final public subscriber
+- **GIVEN** two independently loaded pads requested the same verified managed original through one actual shared Python generation job, whose backend read is still running
+- **WHEN** the origin is publicly unloaded
+- **THEN** only that subscriber's interest SHALL end and the surviving subscriber's job SHALL remain current
+- **WHEN** the final subscriber is publicly unloaded and both own Unload acknowledgements and actual Native retirement complete before the backend returns
+- **THEN** the running job SHALL retain its actual original/source and private-generation custody and reserved cleanup capacity through independent asset-worker progress
+- **AND** the original SHALL remain byte-identical and protected from overwrite, while known private backend outputs SHALL remain present
+- **WHEN** that backend actually returns and control settles its stale event
+- **THEN** the job SHALL release its real custody and reservations, allowing the shared off-thread asset worker to finish eligible original and private-generation cleanup without a late publication
+- **AND** unrelated current assignments and playing pads SHALL remain usable
+
 #### Scenario: Engine shutdown precedes final lease and sharing release
 - **GIVEN** exact unassigned owned-original retirement receipts retain their inventory custody, transient source/job leases remain live and a real Windows handle denies deletion of one target
 - **WHEN** the actual last Engine owner shuts down and those leases release afterward

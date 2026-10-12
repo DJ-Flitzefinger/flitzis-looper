@@ -51,6 +51,9 @@ def _declared_shared_producer(
     monkeypatch.setattr(
         stem_provenance, "processing_source_roots", lambda _request, _guard: (tmp_path,)
     )
+    monkeypatch.setattr(
+        stems_module, "processing_source_roots", stem_provenance.processing_source_roots
+    )
     stem_backend.result = replace(
         stem_backend.result, backend_name="demucs", model_name="htdemucs", encoder_verified=True
     )
