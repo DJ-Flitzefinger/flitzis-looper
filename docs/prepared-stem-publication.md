@@ -769,6 +769,53 @@ This is an exact WAV-generation/original preservation outcome. Complete paired
 WAV/PCM/descriptor cleanup, external/reparse targets, every audio-reader family,
 the complete L4 parent and Human GUI/device/hearing acceptance remain separate.
 
+### Paired PCM unknown child after admission and actual Native readers
+
+`actual_paired_pcm_preserves_unknown_child_after_native_final_readers` extends
+the genuine selected-V1/KEY LOCK ON/rate0.75 replacement. V1's complete paired
+WAV/PCM/descriptor retirement is admitted while its actual readers remain live.
+Only after the exact handover and actual audio FIFO worker completion, while
+the still-used V1 Native/history owns all four components, does the caller add
+its own unknown child to the PCM generation. Known leaves remain byte-identical
+and deny leased overwrite. The independent reference voice owns copied PCM.
+
+V2's own later full Native preparation and nonneutral Wet effect end every
+actual predecessor identity/component reader. The shared off-thread asset
+worker then preserves every known PCM leaf and the unknown child, exposing the
+bounded terminal error for that exact canonical PCM path. Unchanged WAV and
+descriptor targets finish independently; paired retirement does not promise
+atomic preservation of all three targets. This path uses the paired targets'
+proof-backed deletion, not an owned-original migration receipt or an isolated
+collector.
+
+Two tiny generated Original sentinels complete under the same shared asset
+worker, first with the unknown child present and later after the caller removes
+only that child. The rejected PCM generation remains byte-identical and its
+terminal error unchanged without re-admission. Additional real V2 renders retain
+the complete independent PCM/raw Native/FIFO/EQ oracle. Current V2, original
+bytes and unrelated pad215's source, phase, generation, Native/FIFO and demand
+remain protected. No test-side final PCM Drop substitutes for the native or
+asset workers.
+
+This is one complete-paired post-admission PCM preservation outcome. The prior
+PCM unknown-child test rejects admission before cleanup; the separate actual
+post-admission receipt case covers WAV/original mutations. Remaining reader/
+preservation families, complete4.2/4.3/L4, additional L3 domains, resource and
+Human GUI/device/hearing gates remain open. Production and installed Native are
+unchanged; this case performs no App or listening acceptance.
+
+The final focused Release case passes in1.80s after58.58s compilation. Fresh
+affected checks cover all four replacement/saved-C/queued-Unload/PCM-preservation
+residency outcomes, one shared-warm subscriber regression, all12 paired-owner
+cases and all12 migration-retirement cases. Other76 unchanged residency cases
+reuse the preceding fresh78-case run; this is no fresh combined80-case claim.
+The initial case passed; a subsequent Clippy clone diagnostic was removed with
+equivalent borrowed slice equality and the exact case rerun. Final Clippy tests
+exit0 with the same37 existing warning kinds and no changed-test diagnostics;
+formatting, official strict and whitespace pass. One independent nonauthor
+source/test review finds no issue. Unchanged production Release/import/Python
+checks remain reusable without a wheel build or installation.
+
 ### Native current-bank eligibility does not transfer to retained A
 
 `actual_native_current_bank_candidate_cannot_borrow_frozen_old_voice_with_keylock_on`

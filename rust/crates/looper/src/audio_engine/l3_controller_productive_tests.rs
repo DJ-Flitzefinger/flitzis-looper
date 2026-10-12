@@ -89,6 +89,10 @@ const UNLOAD_FINAL_READER_CHILD: &str = "FLITZI_L4_UNLOAD_FINAL_READER_CHILD";
 const UNLOAD_FINAL_READER_TEST: &str = "audio_engine::cold_load::tests::stem_pair_publication_tests::committed_stem_residency_tests::l3_controller_productive_tests::actual_public_unload_waits_for_queued_candidate_and_final_reader_cleanup";
 const SAVED_COPY_CHILD: &str = "FLITZI_L4_SAVED_COPY_CHILD";
 const SAVED_COPY_TEST: &str = "audio_engine::cold_load::tests::stem_pair_publication_tests::committed_stem_residency_tests::l3_controller_productive_tests::actual_saved_copy_retains_v1_after_origin_final_readers_and_unload";
+const PCM_PRESERVATION_CHILD: &str = "FLITZI_L4_POST_ADMIT_PCM_CHILD";
+const PCM_PRESERVATION_TEST: &str = "audio_engine::cold_load::tests::stem_pair_publication_tests::committed_stem_residency_tests::l3_controller_productive_tests::actual_paired_pcm_preserves_unknown_child_after_native_final_readers";
+const UNKNOWN_PCM_CHILD: &str = "late-private.keep";
+const UNKNOWN_PCM_BYTES: &[u8] = b"caller-owned post-admission PCM child";
 
 #[derive(Clone, Copy)]
 enum CandidateTrace {
@@ -117,6 +121,14 @@ enum CandidateTrace {
     FinalReader,
     UnloadFinalReader,
     SavedCopyFinalReader,
+    PostAdmitPcmFinalReader,
+}
+
+#[derive(Clone, Copy)]
+enum FinalReaderOutcome {
+    Cleanup,
+    SavedCopy,
+    PreserveUnknownPcm,
 }
 
 /// Public cold admission/event polling are unchanged. The stream-bound scalar
@@ -1597,6 +1609,22 @@ impl FinalReaderProbe {
         }
     }
 
+    fn assert_area_retained(&self, index: usize) {
+        let mut count = 0;
+        for (path, before) in &self.files {
+            if path.starts_with(&self.areas[index]) {
+                assert_eq!(
+                    &fs::read(path).unwrap(),
+                    before,
+                    "preserved area file: {}",
+                    path.display()
+                );
+                count += 1;
+            }
+        }
+        assert!(count > 0, "preservation must cover known leaves");
+    }
+
     fn wait_for(&self, stage: &str, mut ready: impl FnMut() -> bool) {
         let start = Instant::now();
         while !ready() {
@@ -1618,7 +1646,7 @@ fn productive_final_reader_after_claim(
     locals: &Py<PyDict>,
     old: &FinalReaderProbe,
     current: &FinalReaderProbe,
-    saved_copy: bool,
+    outcome: FinalReaderOutcome,
 ) {
     assert!(playback.callback.retirement.actual.is_some());
     assert!(playback.callback.retirement.retired.is_empty());
@@ -1692,6 +1720,16 @@ fn productive_final_reader_after_claim(
     old.assert_retained();
     current.assert_retained();
     assert!(fs::write(old.areas[1].join("vocals.f32le"), b"leased overwrite").is_err());
+    if matches!(outcome, FinalReaderOutcome::PreserveUnknownPcm) {
+        // Admission happened before this child existed. Actual Native/history
+        // still owns every old component; neither the fixture nor its oracle does.
+        assert_eq!(engine.project_assets.status().unwrap().0, 3);
+        assert!(engine.project_assets.status().unwrap().3.is_empty());
+        let unknown = old.areas[1].join(UNKNOWN_PCM_CHILD);
+        assert!(!unknown.exists());
+        fs::write(&unknown, UNKNOWN_PCM_BYTES).unwrap();
+        old.assert_retained();
+    }
     let after_ramp = playback.frame;
     finish_wet_after_ramp(playback, locals, "candidate", Some(after_ramp));
     assert_ne!(
@@ -1710,23 +1748,114 @@ fn productive_final_reader_after_claim(
         });
         old.identity.strong_count() == 0 && old.pcm.iter().all(|pcm| pcm.strong_count() == 0)
     });
-    if saved_copy {
-        // C has a genuine saved-assignment lease, not an invented PCM owner.
-        old.assert_files_retained();
-    } else {
-        // Use the actual process-wide asset worker, with no collector shortcut.
-        old.wait_for("productive asset worker cleanup", || {
-            Python::attach(|py| {
-                engine.poll_loader_events(py).unwrap();
+    match outcome {
+        FinalReaderOutcome::SavedCopy => {
+            // C has a genuine saved-assignment lease, not an invented PCM owner.
+            old.assert_files_retained();
+        }
+        FinalReaderOutcome::PreserveUnknownPcm => old.assert_area_retained(1),
+        FinalReaderOutcome::Cleanup => {
+            // Use the actual process-wide asset worker, with no collector shortcut.
+            old.wait_for("productive asset worker cleanup", || {
+                Python::attach(|py| {
+                    engine.poll_loader_events(py).unwrap();
+                });
+                old.areas.iter().all(|path| !path.exists())
             });
-            old.areas.iter().all(|path| !path.exists())
-        });
+        }
     }
     current.assert_retained();
     for frames in [1, 137, 511, 257] {
         playback.render(frames, false);
         current.assert_retained();
     }
+}
+
+fn pcm_preservation_after_readers(
+    engine: &AudioEngine,
+    root: &Path,
+    playback: &mut ControllerPlayback,
+    locals: &Py<PyDict>,
+    probes: (&FinalReaderProbe, &FinalReaderProbe),
+) {
+    let (old, current) = probes;
+    assert_eq!(old.identity.strong_count(), 0);
+    assert!(old.pcm.iter().all(|pcm| pcm.strong_count() == 0));
+    let unknown = old.areas[1].join(UNKNOWN_PCM_CHILD);
+    let expected = format!(
+        "{}: generation contains an unknown file; preserved",
+        fs::canonicalize(&old.areas[1]).unwrap().display()
+    );
+    old.wait_for(
+        "paired PCM terminal preservation and independent members",
+        || {
+            old.assert_area_retained(1);
+            assert_eq!(fs::read(&unknown).unwrap(), UNKNOWN_PCM_BYTES);
+            let status = engine.project_assets.status().unwrap();
+            status.0 == 0
+                && status.3.as_slice() == std::slice::from_ref(&expected)
+                && !old.areas[0].exists()
+                && !old.areas[2].exists()
+        },
+    );
+    // The complete pair has independent targets. PCM preservation does not
+    // imply all-three atomic preservation or an owned-original receipt.
+    assert!(Arc::ptr_eq(
+        &engine.project_assets,
+        &crate::audio_engine::project_assets::ProjectAssets::shared()
+    ));
+    for (material, remove_unknown) in [
+        ("M55555555555555555555555555555555", false),
+        ("M66666666666666666666666666666666", true),
+    ] {
+        if remove_unknown {
+            // Remove only the caller's own child. This is no re-admission of
+            // the terminally preserved generation.
+            fs::remove_file(&unknown).unwrap();
+        }
+        for frames in [1, 137, 511, 257] {
+            playback.render(frames, false);
+            current.assert_retained();
+            old.assert_area_retained(1);
+        }
+        let sentinel = root
+            .join("materials")
+            .join(material)
+            .join("original/sentinel.wav");
+        fs::create_dir_all(sentinel.parent().unwrap()).unwrap();
+        assert!(!sentinel.exists());
+        fs::write(&sentinel, stereo_wav(64)).unwrap();
+        let mut pin = engine.project_assets.acquire_pin(root, &sentinel).unwrap();
+        engine
+            .project_assets
+            .retire(root, &sentinel, false)
+            .unwrap();
+        pin.release();
+        drop(pin);
+        old.wait_for(
+            "same asset worker progress after paired PCM preservation",
+            || {
+                old.assert_area_retained(1);
+                if !remove_unknown {
+                    assert_eq!(fs::read(&unknown).unwrap(), UNKNOWN_PCM_BYTES);
+                }
+                !sentinel.exists()
+            },
+        );
+        let status = engine.project_assets.status().unwrap();
+        assert_eq!(status.0, 0);
+        assert_eq!(status.3.as_slice(), std::slice::from_ref(&expected));
+        assert!(status.3.len() <= 16, "bounded control errors");
+        old.assert_area_retained(1);
+        current.assert_retained();
+    }
+    assert!(!unknown.exists());
+    assert_eq!(old.identity.strong_count(), 0);
+    assert!(old.pcm.iter().all(|pcm| pcm.strong_count() == 0));
+    controller_python(
+        locals,
+        "assert candidate.is_current() and candidate.claimed()\nassert candidate.effective_mode_status() == 'effective'\nassert not session.stem_generation_errors",
+    );
 }
 
 fn settle_empty(
@@ -6931,9 +7060,11 @@ fn round_trip(
         CandidateTrace::FinalReader
             | CandidateTrace::UnloadFinalReader
             | CandidateTrace::SavedCopyFinalReader
+            | CandidateTrace::PostAdmitPcmFinalReader
     );
     let unload_final_reader = matches!(trace, CandidateTrace::UnloadFinalReader);
     let saved_copy = matches!(trace, CandidateTrace::SavedCopyFinalReader);
+    let preserve_pcm = matches!(trace, CandidateTrace::PostAdmitPcmFinalReader);
     assert!(
         !final_reader
             || (selected_v1
@@ -8288,8 +8419,23 @@ assert not session.paused_sample_ids
                 &locals,
                 old,
                 &current,
-                saved_copy,
+                if saved_copy {
+                    FinalReaderOutcome::SavedCopy
+                } else if preserve_pcm {
+                    FinalReaderOutcome::PreserveUnknownPcm
+                } else {
+                    FinalReaderOutcome::Cleanup
+                },
             );
+            if preserve_pcm {
+                pcm_preservation_after_readers(
+                    &engine,
+                    &h.root,
+                    &mut playback,
+                    &locals,
+                    (old, &current),
+                );
+            }
             assert_eq!(
                 fs::read(&h.material.lease.original_path).unwrap(),
                 *original_before.as_ref().unwrap()
@@ -8521,6 +8667,38 @@ else:
         "controller.shut_down()\ncontroller._assets.release_saved_assignments()\nowner_v1.release()\nowner_v2.release()",
     );
     std::env::set_current_dir(previous_cwd).unwrap();
+}
+
+#[test]
+fn actual_paired_pcm_preserves_unknown_child_after_native_final_readers() {
+    if std::env::var_os(PCM_PRESERVATION_CHILD).is_some() {
+        round_trip(
+            true,
+            None,
+            true,
+            None,
+            false,
+            CandidateTrace::PostAdmitPcmFinalReader,
+        );
+        return;
+    }
+    let output = std::process::Command::new(std::env::current_exe().unwrap())
+        .args([
+            "--exact",
+            PCM_PRESERVATION_TEST,
+            "--nocapture",
+            "--test-threads=1",
+        ])
+        .env(PCM_PRESERVATION_CHILD, "1")
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "L4 post-admission PCM child failed:\n{}\n{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert!(String::from_utf8_lossy(&output.stdout).contains("1 passed; 0 failed"));
 }
 
 #[test]

@@ -598,6 +598,23 @@ Original FullMix/source PCM SHALL remain usable after stem deletion.
 - **AND** it SHALL release that retirement's inventory custody after reporting preservation and SHALL NOT resume the failed retirement merely because the unknown child is later removed
 - **AND** independent eligible retirement targets SHALL continue to complete
 
+### Requirement: Post-admission paired PCM cleanup preserves unknown content
+The system SHALL recheck complete known PCM leaves at physical off-thread cleanup
+after valid paired retirement admission. An unknown child added while actual
+Native/history readers retain the predecessor SHALL preserve the affected PCM
+target and its known leaves, and SHALL expose a bounded error identifying that
+target after final reader release. Unchanged independently retired WAV and
+descriptor targets MAY complete; cleanup SHALL NOT delete the unknown content
+or resume the terminally rejected PCM retirement merely after that child is removed.
+
+#### Scenario: Unknown PCM child arrives while predecessor Native history remains
+- **GIVEN** V1's three-area retirement was admitted before an unknown PCM child existed and V1's actual Native/history readers still retain its files
+- **WHEN** the child is added, V2 completes its own later Native preparation and V1's actual final readers end
+- **THEN** the shared asset worker SHALL preserve every known leaf and the unknown child in the affected PCM generation, with a bounded error for that exact PCM path
+- **AND** independent eligible cleanup SHALL continue, while current V2, the original and unrelated playing pads remain usable
+- **WHEN** the caller later removes its own unknown child without a new retirement admission
+- **THEN** the rejected PCM target SHALL remain preserved
+
 ## MODIFIED Requirements
 
 ### Requirement: Stem Generation And Replacement Require An Inactive Pad
