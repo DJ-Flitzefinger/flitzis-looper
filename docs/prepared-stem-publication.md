@@ -1014,6 +1014,56 @@ five relative file links and whitespace pass. Clippy tests exit0 with63 existing
 warnings (one duplicate), none in the changed test. Production Release/import/
 Python checks remain reusable, without Native installation or Human App changes.
 
+### Ordinary public Play supersedes an unclaimed queued V2 adoption
+
+The public ON/rate0.75 and OFF/rate1.25 traces each cover productive FullMix and
+selected V1. Genuine V2 files, durable commit/reopen, accepted registration and
+public ALL1010 precede its actual Capture and worker-queued Adopt. The normal
+two-slot retirement gate retains that unchanged Adopt. Public ordinary Play
+requests the exact same finite17..1517 window and KEY LOCK mode. Its real ready
+window admission advances resident intent, making V2's captured predecessor
+intent obsolete before callback claim; it does not substitute a launch flag for
+the actual authority change.
+
+Normal restored-capacity dispatch processes exactly old Adopt and same-window
+Relocate. The old unclaimed candidate rejects; the new window gets its own ACK.
+Source/component owners, generation, fractional phase, Native/FIFO, productive
+and EQ histories, demand and transition remain intact through both admission
+and ACK. Irregular output on both sides of the ACK matches the complete independent
+PCM plus raw Native/FIFO for ON or Varispeed for OFF, with uninterrupted EQ.
+No manual queue pop, private dispatch, fabricated ACK or fallback Play is used.
+
+Only the subsequent public Transport poll admits its actual prepared Trigger;
+normal callback dispatch then deliberately retriggers pad0 at current callback
+time. That authorized Play starts a new Voicegeneration, Loopstart source clock,
+Stretch/FIFO and EQ history. Independent reference voices, complete-PCM local
+clock, raw Native/FIFO and filter begin again only at this actual birth. Absolute
+callback time continues. The existing warm-history mapping subtracts the new
+birth offset and requires the complete4096 interval after birth. Pad215 retains
+its original generation and independent absolute-time physical trajectory.
+
+The rejected pending V2 receipt remains a visible ownership rejection, as required
+for an unaccepted candidate. It has no Native preparation failure or audible ACK.
+The saved V1 effective identity is historical; its old observation cannot certify
+the new voice. Repeated polling preserves the failed attempt without retrying.
+A later explicit identical ALL gets a fresh V2 selection/registration/receipt
+using the still-valid same-window prepared source, followed by its own actual
+Capture/worker/Adopt,128-source-frame handover and subsequent ON wet4096 effect
+or OFF dry effect. The ownership error clears only when Controller observes
+that fresh own effect; the old receipt stays independently rejected and unclaimed.
+The complete V1 PCM oracle switches to0011 only at the fresh V2 Adopt because
+the real V2 files swap vocals/drums. Production/runtime/Python and the installed
+Human Native are unchanged. Remaining task3.2/3.3/L4 and resource/Human gates stay open.
+
+The focused ON/OFF pair covers all four cases and passes in5.76s after a1m12s
+Release compile. The final affected public-controller suite passes all21 tests
+in85.86s; its unchanged-source compile takes0.18s. The other36 shared-fixture
+cases reuse the preceding fresh53-test gate; this is not a fresh57-test run.
+One independent nonauthor final review reports no findings. Formatting, official
+strict validation, five relative file links and whitespace pass. Clippy tests
+exit0 in7.42s with63 existing warnings (one duplicate), none in the changed test.
+Unchanged production Release/import/Python checks remain reusable.
+
 ### Public mask supersedes an actually queued V2 adoption before claim
 
 The public ON/rate0.75 and OFF/rate1.25 traces each cover first V2 adoption from

@@ -43,6 +43,10 @@ const PRECLAIM_MASKS_CHILD: &str = "FLITZI_L3_CONTROLLER_PRECLAIM_MASKS_CHILD";
 const PRECLAIM_MASKS_TEST: &str = "audio_engine::cold_load::tests::stem_pair_publication_tests::committed_stem_residency_tests::l3_controller_productive_tests::actual_public_preclaim_mask_supersession_requires_own_wet_ack";
 const PRECLAIM_MASKS_OFF_CHILD: &str = "FLITZI_L3_CONTROLLER_PRECLAIM_MASKS_OFF_CHILD";
 const PRECLAIM_MASKS_OFF_TEST: &str = "audio_engine::cold_load::tests::stem_pair_publication_tests::committed_stem_residency_tests::l3_controller_productive_tests::actual_public_preclaim_mask_supersession_requires_own_dry_ack";
+const RETRIGGER_CHILD: &str = "FLITZI_L3_CONTROLLER_RETRIGGER_CHILD";
+const RETRIGGER_TEST: &str = "audio_engine::cold_load::tests::stem_pair_publication_tests::committed_stem_residency_tests::l3_controller_productive_tests::actual_public_play_rejects_queued_v2_then_new_voice_requires_own_wet_ack";
+const RETRIGGER_OFF_CHILD: &str = "FLITZI_L3_CONTROLLER_RETRIGGER_OFF_CHILD";
+const RETRIGGER_OFF_TEST: &str = "audio_engine::cold_load::tests::stem_pair_publication_tests::committed_stem_residency_tests::l3_controller_productive_tests::actual_public_play_rejects_queued_v2_then_new_voice_requires_own_dry_ack";
 
 #[derive(Clone, Copy)]
 enum CandidateTrace {
@@ -57,6 +61,7 @@ enum CandidateTrace {
     PausedLiveBpm,
     ClaimedMasks,
     PreclaimMasks,
+    Retrigger,
 }
 
 fn live_bpm_then_explicit_retry(
@@ -1121,6 +1126,12 @@ fn settle_varispeed(playback: &mut ControllerPlayback, locals: &Py<PyDict>, name
             "assert session.stem_generation_errors == {0: bpm_error}",
         );
     }
+    if name == "candidate" {
+        controller_python(
+            locals,
+            "if retrigger:\n    assert session.stem_generation_errors == {0: play_error}",
+        );
+    }
     controller_python(
         locals,
         &format!(
@@ -1153,6 +1164,12 @@ fn settle_wet(playback: &mut ControllerPlayback, locals: &Py<PyDict>, name: &str
         controller_ticket_status(locals, name, "effective_mode_status"),
         "effective"
     );
+    if name == "candidate" {
+        controller_python(
+            locals,
+            "if retrigger:\n    assert session.stem_generation_errors == {0: play_error}",
+        );
+    }
     controller_python(
         locals,
         &format!(
@@ -1990,6 +2007,297 @@ assert controller.stem_residency_status(0).effective_stem_set_identity == disk_v
 assert session.stem_generation_errors == {0: deadline_error}
 "#,
     );
+}
+
+fn public_play_then_explicit_retry(
+    playback: &mut ControllerPlayback,
+    consumer: &mut rtrb::Consumer<ControlMessage>,
+    locals: &Py<PyDict>,
+    key_lock: bool,
+) -> (u64, u64) {
+    use crate::audio_engine::committed_stem_residency::CommittedStemRtWork;
+    assert!(!playback.scheduled && playback.rate_ledger.is_none());
+    assert_eq!(playback.drain(consumer), 1, "actual old-voice V2 Capture");
+    wait_until(|| consumer.peek().is_ok());
+    let queued = match consumer.peek().unwrap() {
+        ControlMessage::CommittedStemWork(work) => {
+            assert!(
+                matches!(work.as_ref(), CommittedStemRtWork::Adopt(transaction)
+                if transaction.id == 0 && transaction.mask == 0b1010 && transaction.candidate.is_some())
+            );
+            work.as_ref() as *const CommittedStemRtWork as usize
+        }
+        _ => panic!("expected genuine old-voice V2 Adopt"),
+    };
+    playback.callback.retirement.slots = 2;
+    assert_eq!(playback.drain(consumer), 0);
+    controller_python(
+        locals,
+        r#"
+failed_play = candidate
+play_selection = live.disk.selection
+play_registration = play_selection.ticket
+play_error = 'Committed stem residency or mode ownership changed'
+assert failed_play.is_current() and not failed_play.claimed()
+assert failed_play.residency_status() == 'pending' and failed_play.effective_mode_status() == 'waiting'
+"#,
+    );
+    let old_generation = voice(&playback.callback.mixer).generation;
+    for stage in 0..2 {
+        let source = playback.callback.mixer.bank_for_measurement()[0]
+            .clone()
+            .unwrap();
+        let set = playback.callback.mixer.stems_for_measurement()[0].clone();
+        let before = voice(&playback.callback.mixer);
+        let clock = before.source_playback;
+        let native = before.stretch.native_state_address();
+        let fifo = before.stretch.pending_fifo_frames();
+        let history = before.stretch.productive_history();
+        let dsp = playback
+            .callback
+            .mixer
+            .dsp_source_history_for_test(0)
+            .unwrap();
+        let demand = playback.callback.mixer.stem_demand_for_measurement(0);
+        let transition = playback.callback.mixer.stem_transition_for_measurement(0);
+        let other_clock = other_voice(&playback.callback.mixer).source_playback;
+        if stage == 0 {
+            Python::attach(|py| locals.bind(py).set_item("play_key_lock", key_lock).unwrap());
+            controller_python(
+                locals,
+                r#"
+from flitzis_looper.controller.transport import TransportController
+class ReadyTransportAudio:
+    def __getattr__(self, name):
+        return getattr(playback_audio, name)
+    def play_sample(self, *args, **kwargs):
+        raise AssertionError('ordinary Play must use its own resident window ACK')
+    play_sample_exclusive = play_sample
+project.pad_loop_auto[0] = False
+project.pad_loop_start_s[0] = 17 / fixture['rate']
+project.pad_loop_end_s[0] = 1517 / fixture['rate']
+project.pad_key_lock[0] = play_key_lock
+transport = TransportController(project, session, ReadyTransportAudio())
+transport.playback.trigger_pad_keep_others(0)
+ready_play = transport.residency._pending[0].ticket
+assert ready_play is not None and ready_play.publication_status() == 'pending'
+assert failed_play.residency_status() == 'pending' and failed_play.effective_mode_status() == 'rejected'
+assert not failed_play.is_current() and not failed_play.claimed()
+assert play_registration.publication_status() == 'accepted' and not play_registration.is_current()
+assert play_registration.error() is None
+"#,
+            );
+            assert_eq!(
+                playback.drain(consumer),
+                0,
+                "old Adopt still holds same-window Play ACK behind it"
+            );
+            assert!(
+                matches!(consumer.peek(), Ok(ControlMessage::CommittedStemWork(work))
+                if work.as_ref() as *const CommittedStemRtWork as usize == queued)
+            );
+            assert_eq!(consumer.slots(), 2);
+        } else {
+            assert!(
+                matches!(consumer.peek(), Ok(ControlMessage::CommittedStemWork(work))
+                if work.as_ref() as *const CommittedStemRtWork as usize == queued)
+            );
+            playback.callback.retirement.slots = usize::MAX;
+            assert_eq!(
+                playback.drain(consumer),
+                2,
+                "unchanged old Adopt rejects before real same-window ACK"
+            );
+            assert!(consumer.is_empty());
+            controller_python(
+                locals,
+                "assert failed_play.residency_status() == 'rejected'\nassert ready_play.publication_status() == 'accepted'",
+            );
+            Python::attach(|py| {
+                let ready = locals.bind(py).get_item("ready_play").unwrap().unwrap();
+                let ready = ready.extract::<PyRef<crate::audio_engine::resident_relocation::ResidentWindowTicket>>().unwrap();
+                assert!(
+                    ready.read_observation_for_test().is_none(),
+                    "Play reuses the exact ready window"
+                );
+            });
+        }
+        let after = voice(&playback.callback.mixer);
+        assert!(after.source_playback.matches_exact(&clock));
+        assert_eq!(after.generation, old_generation);
+        assert_eq!(after.stretch.native_state_address(), native);
+        assert_eq!(after.stretch.pending_fifo_frames(), fifo);
+        assert_eq!(history.is_some(), key_lock);
+        if let Some(history) = history {
+            let next = after.stretch.productive_history().unwrap();
+            assert_eq!(next.binding, history.binding);
+            assert_eq!(next.next_position, history.next_position);
+            assert_eq!(next.fed_output_frames, history.fed_output_frames);
+        } else {
+            assert!(after.stretch.productive_history().is_none());
+        }
+        let next_dsp = playback
+            .callback
+            .mixer
+            .dsp_source_history_for_test(0)
+            .unwrap();
+        assert_eq!(next_dsp.binding, dsp.binding);
+        assert_eq!(next_dsp.next_position, dsp.next_position);
+        assert_eq!(next_dsp.fed_output_frames, dsp.fed_output_frames);
+        assert_eq!(
+            playback.callback.mixer.stem_demand_for_measurement(0),
+            demand
+        );
+        assert!(
+            playback
+                .callback
+                .mixer
+                .stem_transition_for_measurement(0)
+                .matches_exact(transition)
+        );
+        assert!(
+            other_voice(&playback.callback.mixer)
+                .source_playback
+                .matches_exact(&other_clock)
+        );
+        let current_source = playback.callback.mixer.bank_for_measurement()[0]
+            .as_ref()
+            .unwrap();
+        assert!(Arc::ptr_eq(&source.samples, &current_source.samples));
+        assert_eq!(source.resident_binding(), current_source.resident_binding());
+        match (
+            set.as_ref(),
+            playback.callback.mixer.stems_for_measurement()[0].as_ref(),
+        ) {
+            (Some(old), Some(current)) => {
+                assert!(Arc::ptr_eq(
+                    &old.complete_set_identity,
+                    &current.complete_set_identity
+                ));
+                for (old, next) in old.stems.iter().zip(&current.stems) {
+                    assert!(Arc::ptr_eq(&old.samples, &next.samples));
+                }
+            }
+            (None, None) => {}
+            _ => panic!("Play admission/ACK installed rejected V2 readers"),
+        }
+        controller_python(
+            locals,
+            r#"
+for _ in range(16):
+    controller.on_frame_render()
+    assert live.blocked and live.attempt is play_selection and live.control is previous_control
+    assert live.disk.selection is play_selection and play_selection.receipt is failed_play
+    assert not failed_play.claimed() and not failed_play.is_current()
+    assert failed_play.effective_mode_status() == 'rejected' and failed_play.error() == play_error
+    assert failed_play.effective_failure_reason() is None
+    assert play_registration.publication_status() == 'accepted' and not play_registration.is_current()
+    assert previous_control.ticket.is_current()
+    if selected_v1:
+        assert not first.is_current()
+    else:
+        assert previous_control.receipt is None
+    status = controller.stem_residency_status(0)
+    assert status.disk_stem_set_identity == disk_v2.stem_set_identity
+    assert status.control_stem_set_identity == disk_v1.stem_set_identity
+    assert status.effective_stem_set_identity == (disk_v1.stem_set_identity if selected_v1 else None)
+    assert status.effective is None and session.stem_generation_errors == {0: play_error}
+"#,
+        );
+        assert_eq!(
+            consumer.slots(),
+            if stage == 0 { 2 } else { 0 },
+            "stem polling cannot retry or launch Play"
+        );
+        for frames in [1, 31, 137, 257] {
+            let output = if key_lock {
+                playback.render(frames, false)
+            } else {
+                render_varispeed(playback, frames)
+            }
+            .0;
+            assert!(output.iter().any(|sample| sample.abs() > 0.001));
+            assert_eq!(voice(&playback.callback.mixer).generation, old_generation);
+        }
+    }
+    let other_clock = other_voice(&playback.callback.mixer).source_playback;
+    controller_python(
+        locals,
+        "transport.on_frame_render()\nassert transport.residency.status(0) == (None, None)\nassert failed_play.residency_status() == 'rejected' and not failed_play.claimed()",
+    );
+    assert!(matches!(
+        consumer.peek(),
+        Ok(ControlMessage::TriggerInputPad {
+            id: 0,
+            resident_control: Some(_),
+            exclusive: false,
+            ..
+        })
+    ));
+    let birth = playback.frame;
+    assert_eq!(
+        playback.drain(consumer),
+        1,
+        "actual public prepared Play retriggers its own voice"
+    );
+    assert!(consumer.is_empty());
+    let new_voice = voice(&playback.callback.mixer);
+    let generation = new_voice.generation;
+    assert_ne!(generation, old_generation);
+    assert_eq!(new_voice.source_playback.position().frame, LOOP_START);
+    assert_eq!(
+        new_voice.source_playback.position().fraction.to_bits(),
+        0.0_f64.to_bits()
+    );
+    assert!(
+        other_voice(&playback.callback.mixer)
+            .source_playback
+            .matches_exact(&other_clock)
+    );
+    // The authorized Trigger, not queue admission or Window ACK, starts all
+    // three independent new-voice clocks. Absolute callback time remains intact.
+    for reference in [&mut playback.reference, &mut playback.full_mix] {
+        assert!(reference.play_sample_at_output_frame(0, 1.0, birth));
+    }
+    playback.source_frame = 0;
+    playback.resumed_at = Some(birth);
+    playback.previous = playback.selection;
+    playback.ramp_start = 0;
+    playback.raw = key_lock.then(|| ControllerRawNative::new(playback.ratio, false));
+    playback.candidate = None;
+    playback.filter = controller_filter();
+    if key_lock {
+        playback.render(13, true);
+        let (actual, _) = playback.adopt_native(true);
+        assert!(actual.iter().any(|sample| sample.abs() > 0.001));
+    } else {
+        for frames in [1, 31, 137, 257, 511] {
+            render_varispeed(playback, frames);
+        }
+    }
+    assert_eq!(voice(&playback.callback.mixer).generation, generation);
+    controller_python(
+        locals,
+        r#"
+for _ in range(16):
+    controller.on_frame_render()
+    assert live.blocked and live.attempt is play_selection
+    assert failed_play.residency_status() == 'rejected' and not failed_play.claimed()
+    assert controller.stem_residency_status(0).effective is None
+    assert session.stem_generation_errors == {0: play_error}
+assert controller.set_stem_mix_mode(0, 'all_stems')
+fresh_play_selection = live.disk.selection
+fresh_play_registration = fresh_play_selection.ticket
+candidate = live.attempt.receipt
+assert fresh_play_selection is not play_selection and fresh_play_registration is not play_registration
+assert fresh_play_registration.is_current() and fresh_play_registration.publication_status() == 'accepted'
+assert candidate is not failed_play and candidate.is_current() and not candidate.claimed()
+assert candidate.effective_mode_status() == 'waiting' and not live.blocked
+assert live.control is previous_control
+assert session.stem_generation_errors == {0: play_error}
+"#,
+    );
+    (birth, generation)
 }
 
 fn supersede_queued_candidate_mask(
@@ -3065,8 +3373,9 @@ fn round_trip(
     let repeated_sets = matches!(trace, CandidateTrace::RepeatedSets);
     let claimed_masks = matches!(trace, CandidateTrace::ClaimedMasks);
     let preclaim_masks = matches!(trace, CandidateTrace::PreclaimMasks);
+    let retrigger = matches!(trace, CandidateTrace::Retrigger);
     assert!(
-        !(claimed_masks || preclaim_masks)
+        !(claimed_masks || preclaim_masks || retrigger)
             || (!paused_first && delete_pause.is_none() && stopped_before_poll.is_none())
     );
     let withdraw_preclaim = matches!(trace, CandidateTrace::WithdrawPreclaim);
@@ -3084,6 +3393,8 @@ fn round_trip(
         CandidateTrace::PublicBpm(_) | CandidateTrace::LiveBpm | CandidateTrace::PausedLiveBpm
     );
     let mut live_other_ledger = None;
+    let mut retriggered_at = None;
+    let mut adoption_generation = None;
     assert!(
         !public_bpm
             || ((key_lock || live_bpm)
@@ -3210,6 +3521,7 @@ fn round_trip(
         }
         locals.set_item("repeated_sets", repeated_sets).unwrap();
         locals.set_item("preclaim_masks", preclaim_masks).unwrap();
+        locals.set_item("retrigger", retrigger).unwrap();
         locals.set_item("queue_pressure", queue_pressure).unwrap();
         locals
             .set_item("capture_deadline", capture_deadline)
@@ -3792,6 +4104,12 @@ assert previous_control.ticket.is_current()
             key_lock,
         ));
     }
+    if retrigger {
+        let (birth, generation) =
+            public_play_then_explicit_retry(&mut playback, &mut h.consumer, &locals, key_lock);
+        retriggered_at = Some(birth);
+        adoption_generation = Some(generation);
+    }
     if preclaim_masks {
         supersede_queued_candidate_mask(
             &h.producer,
@@ -3846,7 +4164,7 @@ assert previous_control.ticket.is_current()
     }
     assert_eq!(
         voice(&playback.callback.mixer).generation,
-        initial_generation
+        adoption_generation.unwrap_or(initial_generation)
     );
     // Real V2 swaps vocals/drums: mask1010 maps to original0011 and0101 to1100.
     // An empty ALL mask stays Some(0), not FullMix.
@@ -3884,6 +4202,8 @@ if capture_deadline:
     assert session.stem_generation_errors == {0: deadline_error}
 if live_bpm:
     assert session.stem_generation_errors == {0: bpm_error}
+if retrigger:
+    assert session.stem_generation_errors == {0: play_error}
 "#,
     );
     if repeated_sets {
@@ -4029,6 +4349,15 @@ if preclaim_masks:
     assert superseded.effective_failure_reason() is None
     assert not superseded_registration.is_current() and superseded_registration.error() is None
     assert not session.stem_generation_errors, session.stem_generation_errors
+if retrigger:
+    assert live.control is fresh_play_selection and live.disk.selection is fresh_play_selection
+    assert fresh_play_selection.ticket is fresh_play_registration and fresh_play_registration.is_current()
+    assert fresh_play_selection.receipt is candidate and candidate.is_current() and candidate.claimed()
+    assert not failed_play.is_current() and not failed_play.claimed()
+    assert failed_play.residency_status() == 'rejected' and failed_play.error() == play_error
+    assert failed_play.effective_failure_reason() is None
+    assert play_selection.receipt is failed_play and not play_registration.is_current()
+    assert not session.stem_generation_errors, session.stem_generation_errors
 "#,
         );
     }
@@ -4100,6 +4429,17 @@ assert bpm_selection.ticket is bpm_registration and bpm_selection.receipt is can
         assert_eq!(other.source_playback.loop_period(), None);
         assert_eq!(position.frame, LOOP_START + phase.floor() as usize);
         assert_eq!(position.fraction.to_bits(), distance.fract().to_bits());
+    } else if let Some(birth) = retriggered_at {
+        assert_eq!(playback.frame - playback.source_frame, birth);
+        let phase =
+            (playback.frame as f64 * playback.ratio).rem_euclid((LOOP_END - LOOP_START) as f64);
+        let position = other.source_playback.position();
+        assert_eq!(position.frame, LOOP_START + phase.floor() as usize);
+        assert_eq!(position.fraction.to_bits(), phase.fract().to_bits());
+        assert_eq!(
+            other.source_playback.tempo_ratio().to_bits(),
+            playback.ratio.to_bits()
+        );
     } else {
         assert!(
             other
@@ -4121,6 +4461,69 @@ assert bpm_selection.ticket is bpm_registration and bpm_selection.receipt is can
         "controller.shut_down()\ncontroller._assets.release_saved_assignments()\nowner_v1.release()\nowner_v2.release()",
     );
     std::env::set_current_dir(previous_cwd).unwrap();
+}
+
+#[test]
+fn actual_public_play_rejects_queued_v2_then_new_voice_requires_own_wet_ack() {
+    if std::env::var_os(RETRIGGER_CHILD).is_some() {
+        for selected_v1 in [false, true] {
+            round_trip(
+                selected_v1,
+                None,
+                true,
+                None,
+                false,
+                CandidateTrace::Retrigger,
+            );
+        }
+        return;
+    }
+    let output = std::process::Command::new(std::env::current_exe().unwrap())
+        .args(["--exact", RETRIGGER_TEST, "--nocapture", "--test-threads=1"])
+        .env(RETRIGGER_CHILD, "1")
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "L3 public Play ON child failed:\n{}\n{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert!(String::from_utf8_lossy(&output.stdout).contains("1 passed; 0 failed"));
+}
+
+#[test]
+fn actual_public_play_rejects_queued_v2_then_new_voice_requires_own_dry_ack() {
+    if std::env::var_os(RETRIGGER_OFF_CHILD).is_some() {
+        for selected_v1 in [false, true] {
+            round_trip(
+                selected_v1,
+                None,
+                false,
+                None,
+                false,
+                CandidateTrace::Retrigger,
+            );
+        }
+        return;
+    }
+    let output = std::process::Command::new(std::env::current_exe().unwrap())
+        .args([
+            "--exact",
+            RETRIGGER_OFF_TEST,
+            "--nocapture",
+            "--test-threads=1",
+        ])
+        .env(RETRIGGER_OFF_CHILD, "1")
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "L3 public Play OFF child failed:\n{}\n{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert!(String::from_utf8_lossy(&output.stdout).contains("1 passed; 0 failed"));
 }
 
 #[test]

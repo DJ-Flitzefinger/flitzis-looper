@@ -236,6 +236,14 @@ immediate change SHALL NOT silently discard the command.
 - **AND** polling SHALL NOT submit an implicit replacement operation; a later explicit ALL gesture SHALL request fresh own residency and effective-output authority even for the same mode and mask
 - **AND** genuine Native preparation failure or unaccepted candidate rejection SHALL remain observable and require explicit retry
 
+#### Scenario: Ordinary Play supersedes a queued unclaimed new-set adoption
+- **GIVEN** productive finite NormalLoop FullMix or selected V1 playback with KEY LOCK OFF or ON and durably committed V2 whose own Capture and worker preparation have queued Adopt without claim
+- **WHEN** public ordinary Play requests the same finite window before that Adopt can pass the actual callback retirement gate
+- **THEN** the new resident intent SHALL invalidate the old candidate's authority; its unchanged FIFO Adopt SHALL reject before claim, separately from the new window's own ACK and actual prepared Play
+- **AND** admission, late rejection and the same-window ACK SHALL retain the prior productive source trajectory, voice, immutable readers, Native/FIFO and filter continuation until the actual authorized Trigger
+- **AND** that Trigger SHALL start its own new voice/source and filter chronology without borrowing either old voice's or V2's effectiveness, while other pads continue independently
+- **AND** the rejected unaccepted receipt SHALL remain observable without Native preparation failure or implicit polling retry; a later explicit ALL SHALL require fresh V2 registration, own Capture/worker/Adopt and its own 128-source-frame handover and subsequent dry or prepared wet effect on the new voice
+
 #### Scenario: First candidate is prepared after a productive FullMix voice was paused
 - **GIVEN** a current proper NormalLoop FullMix voice has produced genuine wet output and is paused before new-set registration and own Capture
 - **WHEN** its new complete-set candidate obtains own residency acceptance while the same voice remains paused
