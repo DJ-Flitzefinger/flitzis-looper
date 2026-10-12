@@ -87,6 +87,8 @@ const FINAL_READER_CHILD: &str = "FLITZI_L4_PRODUCTIVE_FINAL_READER_CHILD";
 const FINAL_READER_TEST: &str = "audio_engine::cold_load::tests::stem_pair_publication_tests::committed_stem_residency_tests::l3_controller_productive_tests::actual_productive_replacement_waits_for_last_native_reader_and_asset_worker";
 const UNLOAD_FINAL_READER_CHILD: &str = "FLITZI_L4_UNLOAD_FINAL_READER_CHILD";
 const UNLOAD_FINAL_READER_TEST: &str = "audio_engine::cold_load::tests::stem_pair_publication_tests::committed_stem_residency_tests::l3_controller_productive_tests::actual_public_unload_waits_for_queued_candidate_and_final_reader_cleanup";
+const SAVED_COPY_CHILD: &str = "FLITZI_L4_SAVED_COPY_CHILD";
+const SAVED_COPY_TEST: &str = "audio_engine::cold_load::tests::stem_pair_publication_tests::committed_stem_residency_tests::l3_controller_productive_tests::actual_saved_copy_retains_v1_after_origin_final_readers_and_unload";
 
 #[derive(Clone, Copy)]
 enum CandidateTrace {
@@ -114,6 +116,7 @@ enum CandidateTrace {
     PausedReplacement,
     FinalReader,
     UnloadFinalReader,
+    SavedCopyFinalReader,
 }
 
 /// Public cold admission/event polling are unchanged. The stream-bound scalar
@@ -1580,6 +1583,10 @@ impl FinalReaderProbe {
     fn assert_retained(&self) {
         assert!(self.identity.strong_count() > 0);
         assert!(self.pcm.iter().all(|pcm| pcm.strong_count() > 0));
+        self.assert_files_retained();
+    }
+
+    fn assert_files_retained(&self) {
         for (path, before) in &self.files {
             assert_eq!(
                 &fs::read(path).unwrap(),
@@ -1611,6 +1618,7 @@ fn productive_final_reader_after_claim(
     locals: &Py<PyDict>,
     old: &FinalReaderProbe,
     current: &FinalReaderProbe,
+    saved_copy: bool,
 ) {
     assert!(playback.callback.retirement.actual.is_some());
     assert!(playback.callback.retirement.retired.is_empty());
@@ -1702,13 +1710,18 @@ fn productive_final_reader_after_claim(
         });
         old.identity.strong_count() == 0 && old.pcm.iter().all(|pcm| pcm.strong_count() == 0)
     });
-    // Use the actual process-wide asset worker, with no collect_for_test shortcut.
-    old.wait_for("productive asset worker cleanup", || {
-        Python::attach(|py| {
-            engine.poll_loader_events(py).unwrap();
+    if saved_copy {
+        // C has a genuine saved-assignment lease, not an invented PCM owner.
+        old.assert_files_retained();
+    } else {
+        // Use the actual process-wide asset worker, with no collector shortcut.
+        old.wait_for("productive asset worker cleanup", || {
+            Python::attach(|py| {
+                engine.poll_loader_events(py).unwrap();
+            });
+            old.areas.iter().all(|path| !path.exists())
         });
-        old.areas.iter().all(|path| !path.exists())
-    });
+    }
     current.assert_retained();
     for frames in [1, 137, 511, 257] {
         playback.render(frames, false);
@@ -2942,6 +2955,272 @@ assert not previous_control.ticket.is_current()
     );
 }
 
+fn prepare_public_unload_loader(locals: &Py<PyDict>) {
+    controller_python(
+        locals,
+        r#"
+from flitzis_looper.controller.loader import LoaderController
+from flitzis_looper.controller.transport import TransportController
+class UnloadAudio:
+    def __getattr__(self, name):
+        for delegate in (load_audio, playback_audio, audio):
+            if hasattr(delegate, name):
+                return getattr(delegate, name)
+        raise AttributeError(name)
+unload_audio = UnloadAudio()
+unload_transport = TransportController(project, session, unload_audio)
+unload_notifications = []
+loader = LoaderController(project, session, unload_audio,
+    unload_notifications.append, persistence.mark_dirty,
+    on_stems_deleted=controller.delete_stems)
+loader.bind_asset_lifecycle(controller._assets)
+loader.set_stems_invalidated_callback(controller.invalidate_stem_cache)
+def unloaded_control(sample_id):
+    unload_transport.residency.cancel(sample_id)
+    unload_transport.playback.discard_global_restore_for_unloaded_pad(sample_id)
+loader.set_sample_unloaded_callback(unloaded_control)
+"#,
+    );
+}
+
+fn saved_copy_after_origin_readers(
+    engine: &AudioEngine,
+    root: &Path,
+    playback: &mut ControllerPlayback,
+    consumer: &mut rtrb::Consumer<ControlMessage>,
+    parameters: &mut rtrb::Consumer<ControlParameterMessage>,
+    locals: &Py<PyDict>,
+    probes: (&FinalReaderProbe, &FinalReaderProbe),
+) {
+    let (old, current) = probes;
+    assert_eq!(old.identity.strong_count(), 0);
+    assert!(old.pcm.iter().all(|pcm| pcm.strong_count() == 0));
+    old.assert_files_retained();
+    current.assert_retained();
+    controller_python(
+        locals,
+        r#"
+assert project.stem_cache[copy_id] is copy_entry and copy_entry.pair == disk_v1
+assert project.pad_content[copy_id] == copy_content
+assert project.pad_stem_mix_mode[copy_id] == 'all_stems'
+assert not controller._committed_residency.contains(copy_id)
+assert project.stem_cache[0].pair == disk_v2
+assert controller.stem_residency_status(0).effective_stem_set_identity == disk_v2.stem_set_identity
+"#,
+    );
+    // An unrelated real retirement completes in this same shared asset service
+    // while C alone retains V1 files; delayed worker startup cannot fake custody.
+    let sentinel = root.join("materials/M55555555555555555555555555555555/original/sentinel.wav");
+    fs::create_dir_all(sentinel.parent().unwrap()).unwrap();
+    assert!(!sentinel.exists());
+    assert!(Arc::ptr_eq(
+        &engine.project_assets,
+        &crate::audio_engine::project_assets::ProjectAssets::shared()
+    ));
+    fs::write(&sentinel, stereo_wav(64)).unwrap();
+    let mut pin = engine.project_assets.acquire_pin(root, &sentinel).unwrap();
+    engine
+        .project_assets
+        .retire(root, &sentinel, false)
+        .unwrap();
+    pin.release();
+    drop(pin);
+    old.wait_for(
+        "asset worker progress while saved C holds predecessor",
+        || {
+            old.assert_files_retained();
+            !sentinel.exists()
+        },
+    );
+    old.assert_files_retained();
+    let other = other_voice(&playback.callback.mixer);
+    let other_source = other.sample.clone().unwrap();
+    let other_generation = other.generation;
+    let other_native = other.stretch.native_state_address();
+    let other_fifo = other.stretch.pending_fifo_frames();
+    let other_demand = playback.callback.mixer.stem_demand_for_measurement(215);
+    let other_path = Python::attach(|py| {
+        locals
+            .bind(py)
+            .get_item("project")
+            .unwrap()
+            .unwrap()
+            .getattr("sample_paths")
+            .unwrap()
+            .get_item(215)
+            .unwrap()
+            .extract::<String>()
+            .unwrap()
+    });
+    prepare_public_unload_loader(locals);
+    controller_python(
+        locals,
+        r#"
+copy_worker_calls = audio.worker_call_count()
+loader.unload_sample(0)
+assert project.sample_paths[0] is None and project.pad_content[0] is None
+assert project.stem_cache[0] is None and not controller._committed_residency.contains(0)
+assert project.stem_cache[copy_id] is copy_entry and copy_entry.pair == disk_v1
+assert project.pad_content[copy_id] == copy_content
+assert project.pad_stem_mix_mode[copy_id] == 'all_stems'
+assert ('stems', copy_id) in controller._assets._assignments
+assert unload_notifications == [0]
+owner_v2.release()
+del prepared_v2, candidate, live
+"#,
+    );
+    old.assert_files_retained();
+    let before = playback.callback.feedback.events.len();
+    crate::audio_engine::audio_stream::drain_parameter_messages(
+        parameters,
+        &mut playback.callback.mixer,
+        &mut playback.callback.transport,
+    );
+    assert!(parameters.is_empty());
+    assert_eq!(
+        playback.drain(consumer),
+        4,
+        "A own Unload then pair/loop/keylock defaults"
+    );
+    assert!(consumer.is_empty());
+    assert!(playback.callback.mixer.bank_for_measurement()[0].is_none());
+    assert!(playback.callback.mixer.stems_for_measurement()[0].is_none());
+    assert!(
+        !playback
+            .callback
+            .mixer
+            .voices
+            .iter()
+            .any(|voice| voice.is_playing_sample(0))
+    );
+    assert_eq!(playback.callback.feedback.events.len(), before + 1);
+    assert!(matches!(
+        playback.callback.feedback.events[before],
+        AudioMessage::SampleStopped { id: 0 }
+    ));
+    let assert_other = |playback: &ControllerPlayback| {
+        let other = other_voice(&playback.callback.mixer);
+        let phase = (playback.frame as f64 * playback.ratio).rem_euclid(1500.0);
+        assert_eq!(
+            other.source_playback.position().frame,
+            LOOP_START + phase.floor() as usize
+        );
+        assert_eq!(
+            other.source_playback.position().fraction.to_bits(),
+            phase.fract().to_bits()
+        );
+        assert_eq!(other.generation, other_generation);
+        assert_eq!(other.stretch.native_state_address(), other_native);
+        assert_eq!(other.stretch.pending_fifo_frames(), other_fifo);
+        assert!(Arc::ptr_eq(
+            &other.sample.as_ref().unwrap().samples,
+            &other_source.samples
+        ));
+        assert_eq!(
+            playback.callback.mixer.stem_demand_for_measurement(215),
+            other_demand
+        );
+    };
+    assert_other(playback);
+    let mut render_inactive = |frames: usize| {
+        let mut output = vec![0.0; frames * 2];
+        playback.callback.mixer.render_rt_at_output_frame(
+            &mut output,
+            &mut [0.0; NUM_SAMPLES],
+            playback.frame,
+            &mut playback.callback.retirement,
+        );
+        assert!(output.iter().all(|sample| *sample == 0.0));
+        playback.frame += frames as u64;
+        assert_other(playback);
+        controller_python(
+            locals,
+            "loader.poll_loader_events()\ncontroller.on_frame_render()",
+        );
+        old.assert_files_retained();
+    };
+    for frames in [1, 31, 137, 257, 511] {
+        render_inactive(frames);
+    }
+    old.wait_for("A V2 final readers while saved C holds V1", || {
+        render_inactive(137);
+        current.identity.strong_count() == 0
+            && current.pcm.iter().all(|pcm| pcm.strong_count() == 0)
+    });
+    old.wait_for("A V2 asset cleanup while saved C holds V1", || {
+        old.assert_files_retained();
+        current.areas.iter().all(|path| !path.exists())
+    });
+    controller_python(
+        locals,
+        r#"
+persistence.flush()
+copy_reopened = ProjectPersistence.from_config_path(persistence.config_path)
+assert copy_reopened.load_error is None
+assert copy_reopened.project.sample_paths[0] is None and copy_reopened.project.pad_content[0] is None
+assert copy_reopened.project.stem_cache[0] is None
+assert copy_reopened.project.pad_content[copy_id] == copy_content
+assert copy_reopened.project.stem_cache[copy_id].pair == disk_v1
+assert copy_reopened.project.pad_stem_mix_mode[copy_id] == 'all_stems'
+assert copy_reopened.project.sample_paths[copy_id] == project.sample_paths[copy_id]
+assert copy_reopened.project.pad_content[215] == project.pad_content[215]
+assert copy_reopened.project.sample_paths[215] == project.sample_paths[215]
+assert audio.worker_call_count() == copy_worker_calls
+assert not session.stem_generation_errors and not session.sample_load_errors
+assert controller.delete_stems(copy_id)
+assert project.stem_cache[copy_id] is None and project.pad_stem_mix_mode[copy_id] == 'full_mix'
+assert ('stems', copy_id) not in controller._assets._assignments
+assert ('original', copy_id) in controller._assets._assignments
+persistence.flush()
+copy_deleted_reopened = ProjectPersistence.from_config_path(persistence.config_path)
+assert copy_deleted_reopened.load_error is None
+assert copy_deleted_reopened.project.stem_cache[copy_id] is None
+assert copy_deleted_reopened.project.sample_paths[copy_id] == project.sample_paths[copy_id]
+assert copy_deleted_reopened.project.pad_content[copy_id] == copy_content
+"#,
+    );
+    assert_eq!(
+        playback.drain(consumer),
+        1,
+        "C explicit own FullMix deletion"
+    );
+    assert!(consumer.is_empty());
+    old.wait_for(
+        "saved C final assignment release and paired asset cleanup",
+        || {
+            controller_python(
+                locals,
+                "loader.poll_loader_events()\ncontroller.on_frame_render()",
+            );
+            old.areas.iter().all(|path| !path.exists())
+        },
+    );
+    assert_eq!(old.identity.strong_count(), 0);
+    assert!(old.pcm.iter().all(|pcm| pcm.strong_count() == 0));
+    assert_other(playback);
+    assert!(playback.callback.retirement.retired.is_empty());
+    controller_python(
+        locals,
+        "assert not controller._assets.retirement_errors\nassert not session.stem_generation_errors",
+    );
+    Python::attach(|py| {
+        assert_eq!(
+            locals
+                .bind(py)
+                .get_item("project")
+                .unwrap()
+                .unwrap()
+                .getattr("sample_paths")
+                .unwrap()
+                .get_item(215)
+                .unwrap()
+                .extract::<String>()
+                .unwrap(),
+            other_path
+        );
+    });
+}
+
 fn public_unload_queued_candidate(
     playback: &mut ControllerPlayback,
     consumer: &mut rtrb::Consumer<ControlMessage>,
@@ -3006,29 +3285,10 @@ fn public_unload_queued_candidate(
     let other_native = other.stretch.native_state_address();
     let other_fifo = other.stretch.pending_fifo_frames();
     let other_demand = playback.callback.mixer.stem_demand_for_measurement(215);
+    prepare_public_unload_loader(locals);
     controller_python(
         locals,
         r#"
-from flitzis_looper.controller.loader import LoaderController
-from flitzis_looper.controller.transport import TransportController
-class UnloadAudio:
-    def __getattr__(self, name):
-        for delegate in (load_audio, playback_audio, audio):
-            if hasattr(delegate, name):
-                return getattr(delegate, name)
-        raise AttributeError(name)
-unload_audio = UnloadAudio()
-unload_transport = TransportController(project, session, unload_audio)
-unload_notifications = []
-loader = LoaderController(project, session, unload_audio,
-    unload_notifications.append, persistence.mark_dirty,
-    on_stems_deleted=controller.delete_stems)
-loader.bind_asset_lifecycle(controller._assets)
-loader.set_stems_invalidated_callback(controller.invalidate_stem_cache)
-def unloaded_control(sample_id):
-    unload_transport.residency.cancel(sample_id)
-    unload_transport.playback.discard_global_restore_for_unloaded_pad(sample_id)
-loader.set_sample_unloaded_callback(unloaded_control)
 unload_candidate = candidate
 unload_registration = live.disk.selection.ticket
 unload_workers = audio.worker_call_count()
@@ -6668,9 +6928,12 @@ fn round_trip(
 ) {
     let final_reader = matches!(
         trace,
-        CandidateTrace::FinalReader | CandidateTrace::UnloadFinalReader
+        CandidateTrace::FinalReader
+            | CandidateTrace::UnloadFinalReader
+            | CandidateTrace::SavedCopyFinalReader
     );
     let unload_final_reader = matches!(trace, CandidateTrace::UnloadFinalReader);
+    let saved_copy = matches!(trace, CandidateTrace::SavedCopyFinalReader);
     assert!(
         !final_reader
             || (selected_v1
@@ -6711,7 +6974,7 @@ fn round_trip(
             | CandidateTrace::SourceKeyLockOn
             | CandidateTrace::SourceStemsOn
     );
-    let source_controls = source_replacement || unload;
+    let source_controls = source_replacement || unload || saved_copy;
     assert!(
         !(claimed_masks
             || preclaim_masks
@@ -7438,6 +7701,33 @@ assert session.paused_sample_ids == {0, 215}
                 .unwrap(),
         )
     });
+    if saved_copy {
+        controller_python(
+            &locals,
+            r#"
+copy_id = 37
+project.sample_paths[215] = project.sample_paths[0]
+project.sample_durations[215] = project.sample_durations[0]
+project.pad_content[215] = PadContentIdentity(instance_id='a' * 32, material_id=fixture['material_id'])
+project.sample_paths[copy_id] = project.sample_paths[0]
+project.sample_durations[copy_id] = project.sample_durations[0]
+project.pad_content[copy_id] = PadContentIdentity(instance_id='9' * 32, material_id=fixture['material_id'])
+project.stem_cache[copy_id] = project.stem_cache[0].model_copy(deep=True)
+project.pad_stem_mix_mode[copy_id] = 'all_stems'
+copy_content = project.pad_content[copy_id]
+copy_entry = project.stem_cache[copy_id]
+assert copy_content != project.pad_content[0]
+assert copy_entry is not project.stem_cache[0] and copy_entry.pair == disk_v1
+controller._assets.sync_assignments()
+assert ('original', copy_id) in controller._assets._assignments
+assert ('stems', copy_id) in controller._assets._assignments
+assert not controller._committed_residency.contains(copy_id)
+assert copy_id not in session.active_sample_ids
+persistence.mark_dirty()
+persistence.flush()
+"#,
+        );
+    }
     let predecessor_set = (repeated_sets || (claimed_masks && selected_v1)).then(|| {
         playback.callback.mixer.stems_for_measurement()[0]
             .clone()
@@ -7992,11 +8282,39 @@ assert not session.paused_sample_ids
                     .as_ref()
                     .unwrap(),
             );
-            productive_final_reader_after_claim(&engine, &mut playback, &locals, old, &current);
+            productive_final_reader_after_claim(
+                &engine,
+                &mut playback,
+                &locals,
+                old,
+                &current,
+                saved_copy,
+            );
             assert_eq!(
                 fs::read(&h.material.lease.original_path).unwrap(),
                 *original_before.as_ref().unwrap()
             );
+            if saved_copy {
+                saved_copy_after_origin_readers(
+                    &engine,
+                    &h.root,
+                    &mut playback,
+                    &mut h.consumer,
+                    &mut parameter_consumer,
+                    &locals,
+                    (old, &current),
+                );
+                assert_eq!(
+                    fs::read(&h.material.lease.original_path).unwrap(),
+                    *original_before.as_ref().unwrap()
+                );
+                controller_python(
+                    &locals,
+                    "controller.shut_down()\ncontroller._assets.release_saved_assignments()\nowner_v1.release()\nowner_v2.release()",
+                );
+                std::env::set_current_dir(previous_cwd).unwrap();
+                return;
+            }
         } else if key_lock {
             if public_rate_adoption {
                 let own_adopt_frame = playback.frame;
@@ -8203,6 +8521,38 @@ else:
         "controller.shut_down()\ncontroller._assets.release_saved_assignments()\nowner_v1.release()\nowner_v2.release()",
     );
     std::env::set_current_dir(previous_cwd).unwrap();
+}
+
+#[test]
+fn actual_saved_copy_retains_v1_after_origin_final_readers_and_unload() {
+    if std::env::var_os(SAVED_COPY_CHILD).is_some() {
+        round_trip(
+            true,
+            None,
+            true,
+            None,
+            false,
+            CandidateTrace::SavedCopyFinalReader,
+        );
+        return;
+    }
+    let output = std::process::Command::new(std::env::current_exe().unwrap())
+        .args([
+            "--exact",
+            SAVED_COPY_TEST,
+            "--nocapture",
+            "--test-threads=1",
+        ])
+        .env(SAVED_COPY_CHILD, "1")
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "L4 saved-copy child failed:\n{}\n{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert!(String::from_utf8_lossy(&output.stdout).contains("1 passed; 0 failed"));
 }
 
 #[test]

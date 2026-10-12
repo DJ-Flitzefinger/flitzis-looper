@@ -677,6 +677,55 @@ findings. Clippy tests exit0 with the same existing warning kinds and no changed
 test diagnostics; formatting, official strict and whitespace pass. Unchanged
 production Release/import/Python checks are reused; no wheel install occurs.
 
+### Saved independent C after A's final audio readers and Unload
+
+`actual_saved_copy_retains_v1_after_origin_final_readers_and_unload` reuses the
+productive selected-V1/KEY LOCK ON/rate0.75 replacement and actual audio retirement
+worker. Before A selects V2, C at pad37 receives a deep independent V1 entry,
+the same verified material/original and a distinct content instance. The real
+`ProjectAssetLifecycle.sync_assignments` acquires C's Native assignment leases;
+its saved ALL intent is flushed. C requests no job, source preparation, Native
+registration or playback. Pad215 keeps its independent running oracle.
+
+A's own V2 Capture/worker/Adopt, handover and later complete Wet preparation end
+every actual V1 identity/component reader. C now retains V1 files without holding
+invented PCM Arcs. The same shared asset worker physically deletes an unrelated
+tiny generated Original sentinel while all V1 WAV/PCM/descriptor bytes remain
+unchanged, proving actual worker progress rather than delayed startup.
+
+The existing public Loader/facades/callback setup then unloads A, with its own
+`SampleStopped` acknowledgement and ordinary inactive Native recycling. A's V2
+readers and retired three areas actually finish while C still retains V1. A
+model-free persisted reopen shows A absent and C's exact V1 selection, separate
+content identity and saved ALL intent intact. This checks the saved image; it
+does not create another session-owner handoff. Only C's explicit public controller
+stem deletion removes its saved stem assignment. The actual shared asset worker
+then cleans V1's three areas, while C's original/content, current original bytes
+and pad215's source, phase, generation, Native/FIFO and saved assignment survive.
+
+File custody and actual Native Weak observations remain separate. The common
+loader setup is extracted unchanged for both this outcome and the existing
+queued-Unload tests; original candidate/ACK assertions remain in those tests.
+No direct collector, fake assignment lease, shutdown-only assignment release or
+test-side final PCM Drop substitutes for the observed worker outcomes.
+
+This proves one genuine saved-copy assignment lifetime. It supplies no C audio,
+public Copy-UI, new session handoff or complete E11-19/L4/program/Human acceptance.
+Remaining reader/preservation families, additional L3 domains, resources and
+Human GUI/device/hearing gates remain open. Production, installed Native and the
+running App are unchanged.
+
+The final saved-copy Release case passes in2.04s after58.18s compilation.
+Fresh affected runtime checks cover the five C/replacement/queued-Unload/ON/OFF
+outcomes, with one additional shared-warm-subscriber cleanup regression. Other74
+unchanged residency cases reuse the preceding fresh78-case integrated run;
+this is no fresh combined79-case PASS claim. The initial fixture compile/type
+and missing saved-pad215 failures, and the corrected runs, remain in the test log.
+One independent nonauthor review finds no issue. The final Clippy tests exit0
+with the same37 warning kinds and no changed-test diagnostics after grouping the
+helper's two probes; formatting, official strict and whitespace pass. Unchanged
+production Release/import/Python checks remain reusable without installation.
+
 ### Actual Engine shutdown, late leases and sharing retry
 
 `actual_engine_shutdown_keeps_late_lease_cleanup_and_sharing_retry` runs in its

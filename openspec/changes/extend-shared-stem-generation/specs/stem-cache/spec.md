@@ -635,3 +635,12 @@ The system SHALL preserve a non-requesting copied assignment's separately select
 - **WHEN** A requests model B and commits V2 while C has no replacement request
 - **THEN** only A's own accepted replacement SHALL change its effective selection
 - **AND** C SHALL retain usable V1 files, intent and readers through origin deletion/reopen until its explicit replacement/deletion or actual final release
+
+#### Scenario: A's final audio readers end while C remains saved
+- **GIVEN** independent C has its own genuine saved V1 assignment and has requested no replacement or audio publication
+- **WHEN** A's own V2 adoption completes and every actual predecessor Native/history/PCM reader ends
+- **THEN** C's assignment SHALL continue retaining byte-identical V1 WAV, PCM and descriptor files while independent eligible off-thread cleanup continues
+- **WHEN** A receives its own public Unload acknowledgement and the saved project reopens without a model
+- **THEN** A SHALL remain removed and C SHALL retain its exact independent V1 selection and saved intent
+- **WHEN** C explicitly deletes its stems and releases the final V1 assignment
+- **THEN** the existing off-thread asset worker SHALL remove V1's three areas without deleting the current original or unrelated assignments
