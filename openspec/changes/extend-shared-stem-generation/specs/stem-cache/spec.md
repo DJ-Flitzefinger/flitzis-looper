@@ -103,6 +103,15 @@ immediate change SHALL NOT silently discard the command.
 - **THEN** the existing bounded source-selection transition preserves source fraction, rate/ramp, loop and masks with actual nontrivial wet output
 - **AND** later real native preparations/adoptions preserve continuous history and old readers retire only after their final use
 
+#### Scenario: Latest public mask waits for a claimed nonempty new-set handover
+
+- **GIVEN** a first or replacement finite NormalLoop V2 transaction has claimed its own nonempty ALL mask with KEY LOCK OFF or ON
+- **WHEN** public component-mask gestures include a subset and an empty intermediate intent and end with a different nonempty mask while the original source-frame handover remains occupied
+- **THEN** the latest model intent SHALL be retained without withdrawing the claimed receipt, replacing either immutable reader, changing its captured mask or admitting another Capture before that transaction's own actual effect
+- **AND** productive partial handover output SHALL retain its original two-reader PCM, fractional source trajectory, voice, Native/FIFO and uninterrupted filter history; an intermediate empty intent SHALL NOT retroactively silence the claimed nonempty handover
+- **AND** observation of the original own dry or later prepared wet effect SHALL permit the latest authorized mask to obtain a fresh own Capture/worker/Adopt receipt through the same V2 registration
+- **AND** that mask change SHALL consume its own 128-source-frame transition and prove its exact independent component output and own effectiveness; V2 identity or the earlier receipt's ACK alone SHALL NOT establish the latest mask
+
 #### Scenario: Another subscriber acknowledges first
 - **GIVEN** equal material assigned to two pads with independent permits
 - **WHEN** only the first pad acknowledges a prepared replacement

@@ -1014,6 +1014,51 @@ five relative file links and whitespace pass. Clippy tests exit0 with63 existing
 warnings (one duplicate), none in the changed test. Production Release/import/
 Python checks remain reusable, without Native installation or Human App changes.
 
+### Latest public mask during a claimed nonempty V2 handover
+
+The public ON/rate0.75 and OFF/rate1.25 traces each cover first V2 adoption from
+productive FullMix and replacement from selected V1. Real V2 files, durable
+commit/reopen, current registration and own Capture/worker/Adopt first claim
+mask1010. Public gestures then request0101,0,0101 across genuinely partial
+handover output. Their latest session/model intent changes, while the claimed
+receipt and its captured1010 intent remain current and transitioning. Polling
+and failed withdrawal cannot admit another Capture through that occupied ramp.
+The empty intermediate intent has no authority to silence the actual handover.
+
+Each gesture preserves exact source fraction, generation, Native/FIFO, productive
+and EQ histories, demand and transition. Actual partial output retains the
+original two readers against complete independent PCM, raw Native/FIFO for ON
+or dry Varispeed for OFF, and uninterrupted EQ. The remaining source-frame ramp
+accounts for the already consumed partial interval. ON then proves its own
+later complete4096 preparation and wet effect; OFF proves its own dry effect.
+Both require the original receipt current and claimed immediately before the
+Controller observes that effect.
+
+That observation can immediately admit the already authorized latest0101 mask
+through the same V2 selection/registration. The selection's receipt attribute
+then changes; the test retains the original receipt independently. Fresh
+same-set admission makes the old intent uncurrent without lending its effect
+to the new waiting receipt. Native demand remains1010 until the new own actual
+Capture/worker/Adopt. V2's complete-set owner and every component Arc remain
+identical; only the new own0101 adoption starts its128-source-frame mask ramp.
+
+The real V2 permutation swaps vocals/drums. Thus the independent complete V1
+oracle changes from0011 to1100 only at the fresh mask Adopt. Exact samples and
+continuous EQ prove the final different mask, in addition to its own dry or
+later prepared wet effectiveness. Disk/control/effective V2 identity alone
+does not prove the mask. Pad215 retains its independent voice and trajectory.
+Production/runtime/Python and the installed Human Native remain unchanged.
+This bounded four-case proof leaves the whole masks/current/old-voice matrix,
+task3.2/3.3/L4, resource and Human gates open.
+
+The focused ON/OFF tests cover all four combinations and pass in9.85s after a
+1m51s Release compile. The final shared-fixture Release gate freshly passes
+all53 tests in215.75s. One independent nonauthor final review reports no findings.
+Clippy tests exit0 with63 existing warnings (one duplicate), none in either
+changed test file. Formatting, official strict validation, five relative file
+links and whitespace pass. Unchanged production Release/import/Python checks
+remain reusable, without Native installation or Human App/device changes.
+
 ### Public live BPM while an already effective V1 is paused
 
 The public ON/OFF traces now pause pad0 and the independently playing physical

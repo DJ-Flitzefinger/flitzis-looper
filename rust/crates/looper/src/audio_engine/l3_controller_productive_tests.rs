@@ -35,6 +35,10 @@ const PAUSED_LIVE_BPM_CHILD: &str = "FLITZI_L3_CONTROLLER_PAUSED_LIVE_BPM_CHILD"
 const PAUSED_LIVE_BPM_TEST: &str = "audio_engine::cold_load::tests::stem_pair_publication_tests::committed_stem_residency_tests::l3_controller_productive_tests::actual_public_live_bpm_paused_v1_rejects_then_resumes_and_retries_with_keylock_on";
 const PAUSED_LIVE_BPM_OFF_CHILD: &str = "FLITZI_L3_CONTROLLER_PAUSED_LIVE_BPM_OFF_CHILD";
 const PAUSED_LIVE_BPM_OFF_TEST: &str = "audio_engine::cold_load::tests::stem_pair_publication_tests::committed_stem_residency_tests::l3_controller_productive_tests::actual_public_live_bpm_paused_v1_rejects_then_resumes_and_retries_with_keylock_off";
+const CLAIMED_MASKS_CHILD: &str = "FLITZI_L3_CONTROLLER_CLAIMED_MASKS_CHILD";
+const CLAIMED_MASKS_TEST: &str = "audio_engine::cold_load::tests::stem_pair_publication_tests::committed_stem_residency_tests::l3_controller_productive_tests::actual_public_latest_masks_during_nonempty_v2_claim_require_own_wet_ack";
+const CLAIMED_MASKS_OFF_CHILD: &str = "FLITZI_L3_CONTROLLER_CLAIMED_MASKS_OFF_CHILD";
+const CLAIMED_MASKS_OFF_TEST: &str = "audio_engine::cold_load::tests::stem_pair_publication_tests::committed_stem_residency_tests::l3_controller_productive_tests::actual_public_latest_masks_during_nonempty_v2_claim_require_own_dry_ack";
 
 #[derive(Clone, Copy)]
 enum CandidateTrace {
@@ -47,6 +51,7 @@ enum CandidateTrace {
     PublicBpm(f64),
     LiveBpm,
     PausedLiveBpm,
+    ClaimedMasks,
 }
 
 fn live_bpm_then_explicit_retry(
@@ -1015,11 +1020,12 @@ fn ramp_varispeed(playback: &mut ControllerPlayback, locals: &Py<PyDict>, name: 
     }
     let start = playback.source_frame;
     let mut remaining = playback.rate_ledger.as_ref().map_or_else(
-        || (128.0 / playback.ratio).ceil() as usize,
+        || (128.0 / playback.ratio).ceil() as usize - (start - playback.ramp_start) as usize,
         |ledger| {
             (1..=256)
                 .find(|frames| {
-                    ledger.distance(start + *frames as u64) - ledger.distance(start) >= 128.0
+                    ledger.distance(start + *frames as u64) - ledger.distance(playback.ramp_start)
+                        >= 128.0
                 })
                 .expect("minimum supported rate consumes128 source frames within256 outputs")
         },
@@ -1102,7 +1108,9 @@ fn settle_varispeed(playback: &mut ControllerPlayback, locals: &Py<PyDict>, name
     }
     controller_python(
         locals,
-        "controller.on_frame_render()\nassert not session.stem_generation_errors, session.stem_generation_errors",
+        &format!(
+            "assert {name}.is_current() and {name}.claimed()\ncontroller.on_frame_render()\nassert not session.stem_generation_errors, session.stem_generation_errors"
+        ),
     );
 }
 
@@ -1132,7 +1140,9 @@ fn settle_wet(playback: &mut ControllerPlayback, locals: &Py<PyDict>, name: &str
     );
     controller_python(
         locals,
-        "controller.on_frame_render()\nassert not session.stem_generation_errors, session.stem_generation_errors",
+        &format!(
+            "assert {name}.is_current() and {name}.claimed()\ncontroller.on_frame_render()\nassert not session.stem_generation_errors, session.stem_generation_errors"
+        ),
     );
 }
 
@@ -1967,6 +1977,256 @@ assert session.stem_generation_errors == {0: deadline_error}
     );
 }
 
+fn latest_masks_after_nonempty_claim(
+    playback: &mut ControllerPlayback,
+    consumer: &mut rtrb::Consumer<ControlMessage>,
+    locals: &Py<PyDict>,
+    full_stems: &PreparedStemSet,
+    predecessor: Option<&PreparedStemSet>,
+    key_lock: bool,
+) {
+    use crate::audio_engine::source_reader::StemRenderSelection;
+    let v2 = playback.callback.mixer.stems_for_measurement()[0]
+        .clone()
+        .unwrap();
+    let expected_from = predecessor.map_or(StemRenderSelection::full_mix(), |set| {
+        StemRenderSelection::for_stems(set, 0b1010)
+    });
+    assert_eq!(
+        playback
+            .callback
+            .mixer
+            .stem_transition_for_measurement(0)
+            .required_from_selection(),
+        Some(expected_from)
+    );
+    assert_eq!(playback.selection, Some(0b0011));
+    let generation = voice(&playback.callback.mixer).generation;
+    let native = voice(&playback.callback.mixer)
+        .stretch
+        .native_state_address();
+    controller_python(
+        locals,
+        r#"
+initial_nonempty = candidate
+nonempty_selection = live.control
+nonempty_registration = nonempty_selection.ticket
+assert live.attempt is nonempty_selection and live.disk.selection is nonempty_selection
+assert nonempty_selection.receipt_intent == ('all_stems', 0b1010)
+assert initial_nonempty.claimed() and initial_nonempty.is_current()
+assert initial_nonempty.effective_mode_status() == 'transitioning'
+"#,
+    );
+    let mut nontrivial = false;
+    for (mask, frames) in [(0b0101, 1), (0, 31), (0b0101, 17)] {
+        let before = voice(&playback.callback.mixer);
+        let clock = before.source_playback;
+        let fifo = before.stretch.pending_fifo_frames();
+        let history = before.stretch.productive_history();
+        let transition = playback.callback.mixer.stem_transition_for_measurement(0);
+        let demand = playback.callback.mixer.stem_demand_for_measurement(0);
+        let dsp = playback
+            .callback
+            .mixer
+            .dsp_source_history_for_test(0)
+            .unwrap();
+        Python::attach(|py| locals.bind(py).set_item("latest_mask", mask).unwrap());
+        controller_python(
+            locals,
+            r#"
+assert controller.set_stem_enabled_mask(0, latest_mask)
+for _ in range(16):
+    controller.on_frame_render()
+    assert session.pad_stem_enabled_mask[0] == latest_mask
+    assert live.desired == ('all_stems', latest_mask)
+    assert live.control is nonempty_selection and live.attempt is nonempty_selection
+    assert live.disk.selection is nonempty_selection
+    assert nonempty_selection.ticket is nonempty_registration and nonempty_registration.is_current()
+    assert nonempty_selection.receipt is initial_nonempty
+    assert nonempty_selection.receipt_intent == ('all_stems', 0b1010)
+    assert initial_nonempty.claimed() and initial_nonempty.is_current() and not initial_nonempty.withdraw()
+    assert initial_nonempty.effective_mode_status() == 'transitioning'
+    assert controller.stem_residency_status(0).effective == 'transitioning'
+    assert not session.stem_generation_errors, session.stem_generation_errors
+"#,
+        );
+        assert!(
+            consumer.is_empty(),
+            "latest intent cannot Capture through occupied handover"
+        );
+        let after = voice(&playback.callback.mixer);
+        assert!(after.source_playback.matches_exact(&clock));
+        assert_eq!(after.generation, generation);
+        assert_eq!(after.stretch.native_state_address(), native);
+        assert_eq!(after.stretch.pending_fifo_frames(), fifo);
+        if let Some(history) = history {
+            let next = after.stretch.productive_history().unwrap();
+            assert_eq!(next.binding, history.binding);
+            assert_eq!(next.next_position, history.next_position);
+            assert_eq!(next.fed_output_frames, history.fed_output_frames);
+        } else {
+            assert!(after.stretch.productive_history().is_none());
+        }
+        assert!(
+            playback
+                .callback
+                .mixer
+                .stem_transition_for_measurement(0)
+                .matches_exact(transition)
+        );
+        assert_eq!(
+            playback.callback.mixer.stem_demand_for_measurement(0),
+            demand
+        );
+        let next_dsp = playback
+            .callback
+            .mixer
+            .dsp_source_history_for_test(0)
+            .unwrap();
+        assert_eq!(next_dsp.binding, dsp.binding);
+        assert_eq!(next_dsp.next_position, dsp.next_position);
+        assert_eq!(next_dsp.fed_output_frames, dsp.fed_output_frames);
+        assert_eq!(demand.1, 0b1010);
+        let output = if key_lock {
+            playback.render(frames, false)
+        } else {
+            render_varispeed(playback, frames)
+        }
+        .0;
+        nontrivial |= output.iter().any(|sample| sample.abs() > 0.001);
+        assert!(
+            playback
+                .callback
+                .mixer
+                .stem_transition_for_measurement(0)
+                .is_active()
+        );
+        assert_eq!(
+            playback
+                .callback
+                .mixer
+                .stem_transition_for_measurement(0)
+                .required_from_selection(),
+            Some(expected_from)
+        );
+        assert_eq!(voice(&playback.callback.mixer).generation, generation);
+        assert_eq!(
+            voice(&playback.callback.mixer)
+                .stretch
+                .native_state_address(),
+            native
+        );
+    }
+    assert!(
+        nontrivial && (playback.source_frame - playback.ramp_start) as f64 * playback.ratio < 128.0
+    );
+    // Complete the original source-set ramp, not another128 frames after the
+    // already proved partial interval. Only its own actual effect releases busy.
+    if key_lock {
+        settle_wet(playback, locals, "initial_nonempty");
+    } else {
+        settle_varispeed(playback, locals, "initial_nonempty");
+    }
+    controller_python(
+        locals,
+        r#"
+candidate = nonempty_selection.receipt
+assert candidate is not initial_nonempty
+assert live.control is nonempty_selection and live.attempt is nonempty_selection
+assert live.disk.selection is nonempty_selection
+assert nonempty_selection.ticket is nonempty_registration and nonempty_registration.is_current()
+assert nonempty_registration.publication_status() == 'accepted'
+assert nonempty_selection.receipt_intent == ('all_stems', 0b0101)
+assert live.desired == ('all_stems', 0b0101)
+assert session.pad_stem_enabled_mask[0] == 0b0101
+assert candidate.is_current() and not candidate.claimed()
+assert candidate.residency_status() in {'captured', 'pending'}
+assert candidate.effective_mode_status() == 'waiting'
+assert not initial_nonempty.is_current()
+assert initial_nonempty.effective_failure_reason() is None
+status = controller.stem_residency_status(0)
+assert status.disk_stem_set_identity == disk_v2.stem_set_identity
+assert status.control_stem_set_identity == disk_v2.stem_set_identity
+assert status.effective_stem_set_identity == disk_v2.stem_set_identity
+assert status.effective == 'waiting'
+assert not session.stem_generation_errors, session.stem_generation_errors
+"#,
+    );
+    assert!(
+        consumer.peek().is_ok(),
+        "latest authorized mask has its own actual Capture"
+    );
+    assert_eq!(
+        playback.callback.mixer.stem_demand_for_measurement(0).1,
+        0b1010
+    );
+    assert!(
+        !playback
+            .callback
+            .mixer
+            .stem_transition_for_measurement(0)
+            .is_active()
+    );
+    own_adoption(playback, consumer, locals, "candidate", key_lock);
+    let current = playback.callback.mixer.stems_for_measurement()[0]
+        .as_ref()
+        .unwrap();
+    assert!(Arc::ptr_eq(
+        &v2.complete_set_identity,
+        &current.complete_set_identity
+    ));
+    for (old, next) in v2.stems.iter().zip(&current.stems) {
+        assert!(Arc::ptr_eq(&old.samples, &next.samples));
+    }
+    assert_eq!(
+        playback.callback.mixer.stem_demand_for_measurement(0).1,
+        0b0101
+    );
+    assert_eq!(voice(&playback.callback.mixer).generation, generation);
+    // V2 files swap vocals/drums: mask0101 selects original drums+bass1100.
+    assert!(
+        playback
+            .reference
+            .set_stem_enabled_mask(0, 0b1100, full_stems.source_version_hash)
+    );
+    playback.select(Some(0b1100));
+    controller_python(
+        locals,
+        r#"
+controller.on_frame_render()
+assert candidate.claimed() and candidate.is_current() and not candidate.withdraw()
+assert candidate.effective_mode_status() == 'transitioning'
+assert controller.stem_residency_status(0).effective == 'transitioning'
+assert nonempty_selection.ticket is nonempty_registration
+"#,
+    );
+    if key_lock {
+        settle_wet(playback, locals, "candidate");
+    } else {
+        settle_varispeed(playback, locals, "candidate");
+    }
+    controller_python(
+        locals,
+        r#"
+assert live.attempt is None and live.control is nonempty_selection
+assert live.disk.selection is nonempty_selection
+assert nonempty_selection.ticket is nonempty_registration and nonempty_registration.is_current()
+assert nonempty_selection.receipt is candidate
+assert nonempty_selection.receipt_intent == ('all_stems', 0b0101)
+assert candidate.is_current() and candidate.effective_mode_status() == 'effective'
+status = controller.stem_residency_status(0)
+assert status.registration == 'accepted' and status.residency == 'accepted' and status.effective == 'effective'
+assert status.disk_stem_set_identity == disk_v2.stem_set_identity
+assert status.control_stem_set_identity == disk_v2.stem_set_identity
+assert status.effective_stem_set_identity == disk_v2.stem_set_identity
+assert project.stem_cache[0].pair == disk_v2 and live.desired == ('all_stems', 0b0101)
+assert not session.stem_generation_errors, session.stem_generation_errors
+"#,
+    );
+    assert!(consumer.is_empty());
+    assert_eq!(voice(&playback.callback.mixer).generation, generation);
+}
+
 fn repeated_sets_after_empty_claim(
     playback: &mut ControllerPlayback,
     consumer: &mut rtrb::Consumer<ControlMessage>,
@@ -2556,6 +2816,11 @@ fn round_trip(
     trace: CandidateTrace,
 ) {
     let repeated_sets = matches!(trace, CandidateTrace::RepeatedSets);
+    let claimed_masks = matches!(trace, CandidateTrace::ClaimedMasks);
+    assert!(
+        !claimed_masks
+            || (!paused_first && delete_pause.is_none() && stopped_before_poll.is_none())
+    );
     let withdraw_preclaim = matches!(trace, CandidateTrace::WithdrawPreclaim);
     let admission_pressure = matches!(trace, CandidateTrace::AdmissionPressure);
     let worker_post_pressure = matches!(trace, CandidateTrace::WorkerPostPressure);
@@ -3155,7 +3420,7 @@ assert session.paused_sample_ids == {0, 215}
     let predecessor = playback.callback.mixer.stems_for_measurement()[0]
         .as_ref()
         .map(|stems| stems.complete_set_identity.clone());
-    let predecessor_set = repeated_sets.then(|| {
+    let predecessor_set = (repeated_sets || (claimed_masks && selected_v1)).then(|| {
         playback.callback.mixer.stems_for_measurement()[0]
             .clone()
             .unwrap()
@@ -3373,6 +3638,15 @@ if live_bpm:
             &predecessor_set.unwrap(),
             key_lock,
         );
+    } else if claimed_masks {
+        latest_masks_after_nonempty_claim(
+            &mut playback,
+            &mut h.consumer,
+            &locals,
+            &full_stems,
+            predecessor_set.as_ref(),
+            key_lock,
+        );
     } else if let Some(paused) = delete_pause {
         delete_during_claimed_handover(
             &mut playback,
@@ -3556,6 +3830,74 @@ assert bpm_selection.ticket is bpm_registration and bpm_selection.receipt is can
         "controller.shut_down()\ncontroller._assets.release_saved_assignments()\nowner_v1.release()\nowner_v2.release()",
     );
     std::env::set_current_dir(previous_cwd).unwrap();
+}
+
+#[test]
+fn actual_public_latest_masks_during_nonempty_v2_claim_require_own_wet_ack() {
+    if std::env::var_os(CLAIMED_MASKS_CHILD).is_some() {
+        for selected_v1 in [false, true] {
+            round_trip(
+                selected_v1,
+                None,
+                true,
+                None,
+                false,
+                CandidateTrace::ClaimedMasks,
+            );
+        }
+        return;
+    }
+    let output = std::process::Command::new(std::env::current_exe().unwrap())
+        .args([
+            "--exact",
+            CLAIMED_MASKS_TEST,
+            "--nocapture",
+            "--test-threads=1",
+        ])
+        .env(CLAIMED_MASKS_CHILD, "1")
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "L3 claimed latest masks ON child failed:\n{}\n{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert!(String::from_utf8_lossy(&output.stdout).contains("1 passed; 0 failed"));
+}
+
+#[test]
+fn actual_public_latest_masks_during_nonempty_v2_claim_require_own_dry_ack() {
+    if std::env::var_os(CLAIMED_MASKS_OFF_CHILD).is_some() {
+        for selected_v1 in [false, true] {
+            round_trip(
+                selected_v1,
+                None,
+                false,
+                None,
+                false,
+                CandidateTrace::ClaimedMasks,
+            );
+        }
+        return;
+    }
+    let output = std::process::Command::new(std::env::current_exe().unwrap())
+        .args([
+            "--exact",
+            CLAIMED_MASKS_OFF_TEST,
+            "--nocapture",
+            "--test-threads=1",
+        ])
+        .env(CLAIMED_MASKS_OFF_CHILD, "1")
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "L3 claimed latest masks OFF child failed:\n{}\n{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert!(String::from_utf8_lossy(&output.stdout).contains("1 passed; 0 failed"));
 }
 
 #[test]

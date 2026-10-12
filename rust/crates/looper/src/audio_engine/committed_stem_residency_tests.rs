@@ -2718,7 +2718,7 @@ impl ControllerPlayback {
 
     fn ramp(&mut self, locals: &Py<PyDict>, ticket: &str, ratio: f64) {
         let native = voice(&self.callback.mixer).stretch.native_state_address();
-        let mut elapsed = 0;
+        let mut elapsed = (self.source_frame - self.ramp_start) as usize;
         for frames in [1_usize, 31, 17, 7].into_iter().cycle() {
             let remaining = (128.0 / ratio).ceil() as usize - elapsed;
             let frames = frames.min(remaining);
