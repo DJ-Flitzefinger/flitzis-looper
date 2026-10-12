@@ -66,8 +66,11 @@
   proof uses actual complete FullTrack residency and its own dry effectiveness.
   Public paused Tail ON/OFF first/replacement proofs require their own Resume
   and consumed-source dry or later complete Native Wet effectiveness.
-  Accepted-musical Tail,
-  Intro, remaining Seek/Tail domains and whole3.3 remain open. Finite4.2/4.3
+  Running nonmusical Intro ON/OFF first/replacement proofs use own acknowledged
+  Seek, actual ON prefix-and-loop union `[0,E)` or complete OFF FullTrack
+  `[0,N)`, and own consumed-source dry or later Native Wet effectiveness.
+  Paused or accepted-musical Intro, accepted-musical Tail,
+  remaining Seek/Tail domains and whole3.3 remain open. Finite4.2/4.3
   lifecycle closure is not a full-track or Tail parent acceptance.
 
 ## 4. X11-LIVE-STEMS: current model and actual reader retirement (L4)

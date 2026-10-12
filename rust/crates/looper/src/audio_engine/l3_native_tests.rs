@@ -1904,21 +1904,50 @@ fn actual_tail_first_and_replacement_keep_own_wet_history_through_normal_return(
 
 #[test]
 fn actual_tail_unsupported_candidates_preserve_their_own_voice() {
+    unsupported_seek_candidates(
+        LOOP_END,
+        &[
+            (true, true, false),
+            (false, true, false),
+            (true, true, true),
+            (false, true, true),
+        ],
+    );
+}
+
+#[test]
+fn actual_intro_unsupported_candidates_preserve_their_own_voice() {
+    unsupported_seek_candidates(
+        0,
+        &[
+            (true, false, true),
+            (false, false, true),
+            (true, true, false),
+            (false, true, false),
+        ],
+    );
+}
+
+fn unsupported_seek_candidates(target: usize, contexts: &[(bool, bool, bool)]) {
     use crate::audio_engine::source_reader::ExplicitSeekMode;
-    for (context, (key_lock, paused)) in
-        [(true, false), (false, false), (true, true), (false, true)]
-            .into_iter()
-            .enumerate()
-    {
-        let mut p = bpm_productive(key_lock).0;
-        let _seek = acknowledge_candidate_seek(&mut p, LOOP_END);
+    for (context, &(key_lock, musical, paused)) in contexts.iter().enumerate() {
+        let mut p = if musical {
+            bpm_productive(key_lock).0
+        } else {
+            Productive::new(key_lock, 0.73)
+        };
+        let _seek = acknowledge_candidate_seek(&mut p, target);
         if paused {
             p.h.callback.mixer.pause_sample_at_output_frame(0, p.frame);
             assert!(voice(&p.h.callback.mixer).paused);
         }
         assert_eq!(
             voice(&p.h.callback.mixer).explicit_seek_mode,
-            ExplicitSeekMode::AfterLoop
+            if target == 0 {
+                ExplicitSeekMode::BeforeLoop
+            } else {
+                ExplicitSeekMode::AfterLoop
+            }
         );
         assert!(
             crate::audio_engine::input_runtime_binding::capture(&p.h.engine, 0)
@@ -1927,6 +1956,7 @@ fn actual_tail_unsupported_candidates_preserve_their_own_voice() {
                 .binding
                 .accepted
                 .is_some()
+                == musical
         );
         let (_pair, registration) = candidate(&mut p, 180 + context);
         let receipt = request_candidate(&mut p, &registration, 0b1010);
@@ -1951,7 +1981,7 @@ fn actual_tail_unsupported_candidates_preserve_their_own_voice() {
 }
 
 #[test]
-fn actual_intro_seek_rejects_fresh_candidate_without_changing_post_seek_audio() {
+fn actual_paused_intro_seek_rejects_fresh_candidate_without_changing_post_seek_audio() {
     use crate::audio_engine::source_reader::ExplicitSeekMode;
     let target = 0;
     for selected_v1 in [false, true] {
@@ -1991,6 +2021,8 @@ fn actual_intro_seek_rejects_fresh_candidate_without_changing_post_seek_audio() 
         assert!(p.h.callback.mixer.dsp_source_history_for_test(0).is_none());
         let old = p.h.callback.mixer.stems_for_measurement()[0].clone();
         let mut oracle = CandidateSeekOracle::after_ack(&mut p, target, selected_v1);
+        p.h.callback.mixer.pause_sample_at_output_frame(0, p.frame);
+        assert!(voice(&p.h.callback.mixer).paused);
         let (_pair, registration) = candidate(&mut p, 120 + target + usize::from(selected_v1));
         let receipt = request_candidate(&mut p, &registration, 0b1010);
         assert_eq!(
@@ -2014,6 +2046,8 @@ fn actual_intro_seek_rejects_fresh_candidate_without_changing_post_seek_audio() 
         assert_eq!(after.stretch.pending_fifo_frames(), (0, 0));
         assert!(after.stretch.productive_history().is_none());
         assert!(p.h.callback.mixer.dsp_source_history_for_test(0).is_none());
+        assert!(after.paused);
+        p.h.callback.mixer.resume_sample_at_output_frame(0, p.frame);
         for frames in [1, 31, 137, 257, 511] {
             oracle.render(&mut p, frames, false);
         }

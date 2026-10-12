@@ -2416,28 +2416,62 @@ fn controller_filter_with_reset(reset: bool) -> PerPadDspChain {
 }
 
 impl ControllerPlayback {
-    fn seek_position(&self, output_frame: u64) -> (usize, f64, bool) {
+    fn seek_position(
+        &self,
+        output_frame: u64,
+    ) -> (
+        usize,
+        f64,
+        crate::audio_engine::source_reader::ExplicitSeekMode,
+    ) {
+        use crate::audio_engine::source_reader::ExplicitSeekMode;
         let epoch = self.seek_epoch.as_ref().unwrap();
         let distance = output_frame.checked_sub(epoch.consumed_at).unwrap() as f64 * self.ratio;
-        let tail = (self.source.frame_count() - epoch.target) as f64;
-        if distance < tail {
+        let intro = epoch.target < self.loop_start;
+        let remaining = if intro {
+            self.loop_start - epoch.target
+        } else {
+            self.source.frame_count() - epoch.target
+        } as f64;
+        if distance < remaining {
             (
                 epoch.target + distance.floor() as usize,
                 distance.fract(),
-                true,
+                if intro {
+                    ExplicitSeekMode::BeforeLoop
+                } else {
+                    ExplicitSeekMode::AfterLoop
+                },
             )
         } else {
-            let phase = (distance - tail).rem_euclid(self.loop_period);
+            let phase = (distance - remaining).rem_euclid(self.loop_period);
             (
                 self.loop_start + phase.floor() as usize,
                 phase.fract(),
-                false,
+                ExplicitSeekMode::Normal,
             )
         }
     }
 
+    fn resident_start(&self) -> usize {
+        if self
+            .seek_epoch
+            .as_ref()
+            .is_some_and(|epoch| epoch.target < self.loop_start)
+        {
+            0
+        } else {
+            self.loop_start
+        }
+    }
+
     fn resident_end(&self) -> usize {
-        if self.seek_epoch.is_some() {
+        if self
+            .seek_epoch
+            .as_ref()
+            .is_some_and(|epoch| epoch.target >= self.loop_start)
+            || (self.seek_epoch.is_some() && self.raw.is_none())
+        {
             self.source.frame_count()
         } else {
             self.loop_end
@@ -2482,8 +2516,10 @@ impl ControllerPlayback {
                     let last = (self.loop_period.ceil() as usize - 1)
                         .min(self.loop_end - self.loop_start - 1);
                     let (left, right, fraction) = if self.seek_epoch.is_some() {
-                        let (left, fraction, tail) = self.seek_position(output_frame);
-                        let end = if tail {
+                        let (left, fraction, mode) = self.seek_position(output_frame);
+                        let end = if mode
+                            == crate::audio_engine::source_reader::ExplicitSeekMode::AfterLoop
+                        {
                             self.source.frame_count()
                         } else {
                             self.loop_end
@@ -2612,7 +2648,11 @@ impl ControllerPlayback {
         }
         let taps = tap_observation_for_test();
         assert_eq!(taps.missing_reads, 0);
-        assert!(taps.min_frame.is_some_and(|frame| frame >= self.loop_start));
+        assert!(
+            taps.min_frame
+                // The callback observation includes pad215's independent loop.
+                .is_some_and(|frame| frame >= self.resident_start().min(LOOP_START))
+        );
         assert!(
             taps.max_frame
                 .is_some_and(|frame| frame < self.resident_end())
@@ -2671,20 +2711,13 @@ impl ControllerPlayback {
             );
         }
         if self.seek_epoch.is_some() {
-            let (whole, fraction, tail) = self.seek_position(self.source_frame);
+            let (whole, fraction, mode) = self.seek_position(self.source_frame);
             let current = voice(&self.callback.mixer).source_playback;
             assert_eq!(current.position().frame, whole);
             assert!((current.position().fraction - fraction).abs() < 1e-9);
             assert_eq!(current.tempo_ratio().to_bits(), self.ratio.to_bits());
             assert_eq!(current.loop_period(), None);
-            assert_eq!(
-                voice(&self.callback.mixer).explicit_seek_mode,
-                if tail {
-                    crate::audio_engine::source_reader::ExplicitSeekMode::AfterLoop
-                } else {
-                    crate::audio_engine::source_reader::ExplicitSeekMode::Normal
-                }
-            );
+            assert_eq!(voice(&self.callback.mixer).explicit_seek_mode, mode);
         } else if self.loop_start != LOOP_START
             || self.loop_period != (LOOP_END - LOOP_START) as f64
         {
@@ -2840,7 +2873,7 @@ impl ControllerPlayback {
             assert!(
                 prepared_taps
                     .min_frame
-                    .is_some_and(|frame| frame >= self.loop_start)
+                    .is_some_and(|frame| frame >= self.resident_start())
             );
             assert!(
                 prepared_taps

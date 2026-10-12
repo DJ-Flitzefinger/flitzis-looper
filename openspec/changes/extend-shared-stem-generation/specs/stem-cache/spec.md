@@ -92,7 +92,15 @@ both immutable reader owners without consuming source or reporting effective
 output. Only that voice's own Resume and subsequent consumed-source handover
 SHALL establish dry OFF effectiveness or later exact-history Native Wet ON
 effectiveness; neither callback time nor disk/preparation acceptance suffices.
-Intro, accepted-musical Tail and ordinary same-set
+The system SHALL permit first and replacement candidate adoption on a single
+current running BeforeLoop voice after its own acknowledged nonmusical Intro
+Seek. KEY LOCK ON MUST hold the actual KeyLockFiniteLoop prefix-and-loop union
+`[0,E)`; OFF MUST hold a physically complete FullTrack `[0,N)`. Fresh own
+Capture, off-thread preparation and guarded Adopt SHALL verify both exact
+immutable reader generations through Intro and all future loop taps. Own
+consumed-source handover and output SHALL establish dry OFF or later exact-history
+Native Wet ON effectiveness without another source/voice/filter restart.
+Paused or accepted-musical Intro, accepted-musical Tail and ordinary same-set
 mode requests SHALL retain their existing unsupported-domain guards.
 
 New-set preparation SHALL retain separate candidate and actual predecessor
@@ -161,14 +169,31 @@ immediate change SHALL NOT silently discard the command.
 - **AND** paused adoption SHALL consume no source or report audible effectiveness before Resume, and stopped readiness SHALL require its own later playback/effect observation
 - **AND** the existing source/launch/timing/window/history/capacity fences SHALL remain authoritative; this complete NormalLoop proof alone SHALL NOT authorize explicit Seek, Intro, Tail, frozen old-source or multiple same-pad voices
 
-#### Scenario: Acknowledged Intro seek rejects a fresh new-set candidate
+#### Scenario: Paused Intro seek rejects a fresh new-set candidate
 
-- **GIVEN** productive KEY LOCK ON FullMix or selected V1 and a real acknowledged finite resident Seek into Intro
+- **GIVEN** productive KEY LOCK ON FullMix or selected V1, a real acknowledged finite resident Seek into Intro, and its own Pause before candidate Capture
 - **WHEN** a distinct V2 obtains a fresh own source ticket, accepted current registration and actual candidate Capture before further source consumption
 - **THEN** the unsupported explicit seek mode SHALL reject V2 before claim without Adopt, while its own registration remains accepted and current
 - **AND** the actual KeyLockFiniteLoop union SHALL retain the old source and selected readers, rather than relying on a FullTrack rejection
-- **AND** independent complete PCM, fractional one-shot source addressing, actual Native/FIFO and uninterrupted post-seek filter history SHALL remain usable through irregular callbacks and a later own complete Native preparation
+- **AND** after its own Resume, independent complete PCM, fractional one-shot source addressing, actual Native/FIFO and uninterrupted post-seek filter history SHALL remain usable through irregular callbacks and a later own complete Native preparation
 - **AND** the authorized Seek SHALL establish its own new voice and filter chronology; candidate rejection SHALL NOT introduce another reset, retry or audible V2 acknowledgement
+
+#### Scenario: Public running Intro adopts first and replacement sets
+
+- **GIVEN** a single current running nonmusical BeforeLoop voice after its own public Intro Seek acknowledgement, with FullMix or selected V1, KEY LOCK ON prefix-and-loop union or OFF complete FullTrack coverage
+- **AND** the actual Intro is long enough for own Capture, Adopt, consumed-source handover and complete ON 4096-output-frame preparation with productive Wet both before and after V2 while still BeforeLoop
+- **WHEN** a distinct complete V2 obtains fresh post-Seek source authority, durable disk selection, registration, Capture, off-thread preparation and guarded Adopt through the public StemController
+- **THEN** both exact reader generations SHALL cover every current and future prefix/loop tap through the 128-consumed-source-frame ramp; complete independent physical PCM SHALL verify distinct own dry OFF or later exact-history Native Wet ON output with uninterrupted nonneutral filter history
+- **AND** adoption SHALL preserve the actual voice, source fraction and Native/FIFO checkpoint; natural Intro-to-NormalLoop progression and further output SHALL introduce no extra Seek, reset or launch
+- **AND** obsolete V1 or another pad's receipt SHALL NOT confirm V2; another active pad SHALL retain its absolute independent source trajectory and owners, and model-free reopen SHALL verify saved V2 and loop/KEY LOCK intent separately
+- **AND** paused or accepted-musical Intro, accepted-musical Tail, ordinary same-set requests, frozen old-source and multiple same-pad voices SHALL remain guarded; whole task3.3/full L4 and Human acceptance SHALL remain separate
+
+#### Scenario: Unsupported Intro preserves its own voice and owners
+
+- **GIVEN** an own acknowledged Intro Seek with KEY LOCK ON or OFF and either a paused nonmusical voice or accepted musical timing
+- **WHEN** a distinct current candidate obtains fresh registration and reaches actual Capture
+- **THEN** Capture SHALL reject before claim without Adopt or effectiveness, while the candidate registration remains current and accepted
+- **AND** source position/fraction, voice generation, used Native/FIFO, pause state and actual source/component owners SHALL remain usable and unchanged
 
 #### Scenario: Current KEY LOCK Tail adopts first and replacement sets
 
