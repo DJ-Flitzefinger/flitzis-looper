@@ -808,6 +808,18 @@ Original FullMix/source PCM SHALL remain usable after stem deletion.
 - **AND** actual expiration of both complete identities and every component PCM owner SHALL precede removal of their exact WAV, PCM and descriptor areas; A's and B's originals and unrelated playing pads SHALL remain usable
 - **AND** this retained-reader proof SHALL NOT authorize a current-bank candidate to borrow A's frozen voice or substitute native restore for public Loader assignment replacement
 
+#### Scenario: Frozen outgoing completion keeps current stems live through later retained-voice preparation
+- **GIVEN** retained source A owns claimed V2, outgoing V1 and its used V1 Native/history under distinct actual bank B, while its candidate receipt is obsolete
+- **WHEN** the retained voice is publicly paused and resumed without a new source assignment
+- **THEN** paused output SHALL preserve both exact frozen generations, source phase, occupied transition and Native/FIFO/history, and own Resume SHALL continue their consumed-source chronology
+- **WHEN** that frozen handover finishes while callback retirement capacity is exhausted
+- **THEN** outgoing V1 SHALL remain owned and immutable until capacity returns and the actual audio worker consumes its outgoing retirement; used V1 Native/history SHALL continue protecting its files afterward
+- **WHEN** the retained A voice's own later source-bound Native preparation covers the required complete history after Resume and handover, and is actually adopted
+- **THEN** the retained-voice authority SHALL bind that preparation to A's source, voice and current frozen V2 independently of B's bank; it SHALL NOT rehabilitate the obsolete candidate receipt
+- **AND** only expiration of every V1 complete identity and component PCM owner SHALL permit its exact three-area cleanup while A/V2 remains productive with continuous source, Native/FIFO and filter output
+- **WHEN** the later own public V2 Unload reports its own callback `SampleStopped` acknowledgement
+- **THEN** actual remaining frozen, Native/history and complete-reader release SHALL precede V2 identity/component expiration and its exact three-area cleanup, preserving both originals and unrelated playing pads
+
 #### Scenario: Cleanup races a new generation or fails sharing
 - **WHEN** cleanup encounters a new generation, unknown file, external path, reparse point or sharing denial
 - **THEN** it preserves non-owned content and defers/report failures through bounded control status

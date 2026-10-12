@@ -134,8 +134,14 @@
   outgoing V1 in actual FrozenStemView, strict short A rendering keeps its ramp
   unfinished, and saved A Unload/own SampleStopped precede both actual final
   readers' Weak-zero and all six areas' worker cleanup. Native restore does not
-  prove public Loader B assignment or B candidate adoption. Progressive frozen
-  outgoing completion/RetainedVoice fresh Native, active ON-to-OFF control,
+  prove public Loader B assignment or B candidate adoption. The progressive
+  Frozen report adds own Pause/Resume, consumed-ramp outgoing retry/real FIFO,
+  later source-bound RetainedVoice Native preparation and V1-only cleanup during
+  continued A/V2 output, followed by final own V2 Unload. With the established
+  unchanged owner-family proofs, all required E11-19 last-reader owner families
+  are covered within supported candidate/native-retained-source software
+  topology, without fresh Cartesian or new publication-domain claims.
+  Public Loader B assignment, ordinary default-Play admission, active ON-to-OFF,
   full L4/all-reader, whole P4b/P5a/P5b, resources and final/Human remain open.
 - [x] 4.3 Run impact-based native/Python/static/official strict checks, inspect
   callback safety, document delivered limits and obtain independent nonauthor
@@ -157,6 +163,13 @@
   timeout is relaxed. Unchanged1827227 production Release/preflight/183 Python
   checks are reused. Final strict/consistency/review receipts and remaining
   progressive Frozen/parent/Human gates belong to the same dedicated report.
+  The later progressive Frozen extension freshly passes both focused Frozen
+  cases,110-case residency,13-case actual retirement and17-case complete
+  stem-reader module, fmt/Clippy with unchanged warnings/no changed diagnostics.
+  Strict/coverage/source-family reconciliation and the same independent review
+  belong to its dedicated report; unchanged1827227 production Release/private
+  preflight/183 Python are reused. Whole L4/parents, later V0 and Human gates
+  remain separate; these profiles supply no full-program reacceptance.
 
 ## 5. X11-BULK: all-bank generation and Cancel (B1)
 

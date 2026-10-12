@@ -383,12 +383,29 @@ in `docs/prepared-stem-publication.md`, Frozen unfinished-handover/own-Unload
 report. It does not establish public Loader B assignment, candidate adoption
 for B, active ON-to-OFF or full-L4/Human acceptance.
 
-Progressive FrozenStemView completion remains a separate gate: its own consumed
+Progressive FrozenStemView completion uses a separate release route: its own consumed
 transition retires only outgoing V1 while frozen A/V2 continues under bank B.
 Actual later retained-A Native preparation must replace the old V1 history pins
 before V1 identity/four-PCM Weak expiration and three-area cleanup; A/V2 must
 remain productive until its later own public Unload. Whole-container Unload does
 not establish that outgoing retry/FIFO or RetainedVoice-authority route.
+
+The bounded progressive fixture reuses actual B restore, both frozen
+generations, bank-owner FIFO retirement and strict short A output. Public
+Pause/Resume freezes those readers without restoring current-bank candidate
+authority. Untimestamped productive partitions consume the frozen ramp under
+zero retirement capacity; capacity restoration and the actual audio FIFO end
+outgoing V1 while the used Native/history still protects it. Only subsequent
+timestamped A consumption starts a fresh retained-voice preparation, whose own
+complete history interval must begin after Resume and ramp completion. Its
+actual finite-A Native taps, changed own request/Native and unchanged A
+source/generation/phase distinguish RetainedVoice from complete bank B.
+V1-only Weak expiration and cleanup must occur during continued A/V2 output,
+before own final V2 Unload. The obsolete candidate stays rejected throughout.
+The actual source/test/validation receipts and source-grounded E11-19 software
+reader-family consolidation are recorded in the progressive Frozen report in
+`docs/prepared-stem-publication.md`. Public Loader/default-Play admission, active
+ON-to-OFF, full L4 and other parents, later V0 and final/Human gates remain open.
 
 ## B1: all-loaded generation and cooperative Cancel
 

@@ -155,6 +155,7 @@ enum CandidateLifecycle {
     CleanupAfterClaim,
     QueuedUnloadCleanup,
     FrozenUnload,
+    FrozenResumeReaders,
 }
 
 #[derive(Clone, Copy)]
@@ -3187,8 +3188,7 @@ loader.set_sample_unloaded_callback(unloaded_control)
 
 fn frozen_source_final_readers_then_public_unload(
     engine: &AudioEngine,
-    root: &Path,
-    producer: &Arc<Mutex<rtrb::Producer<ControlMessage>>>,
+    fixture: (&Path, &Arc<Mutex<rtrb::Producer<ControlMessage>>>),
     playback: &mut ControllerPlayback,
     queues: (
         &mut rtrb::Consumer<ControlMessage>,
@@ -3196,11 +3196,17 @@ fn frozen_source_final_readers_then_public_unload(
     ),
     locals: &Py<PyDict>,
     probes: (&FinalReaderProbe, &FinalReaderProbe),
+    lifecycle: CandidateLifecycle,
 ) {
     use crate::audio_engine::cold_residency::ResidentLoadHint;
     use crate::messages::ResidentContext;
     let (consumer, parameters) = queues;
+    let (root, producer) = fixture;
     let (old, current) = probes;
+    assert!(matches!(
+        lifecycle,
+        CandidateLifecycle::FrozenUnload | CandidateLifecycle::FrozenResumeReaders
+    ));
     assert!(consumer.is_empty() && parameters.is_empty());
     assert!(playback.callback.retirement.actual.is_some());
     assert!(playback.callback.retirement.retired.is_empty());
@@ -3509,18 +3515,453 @@ assert ('stems', 0) in controller._assets._assignments
 assert not session.stem_generation_errors and not session.sample_load_errors
 "#,
     );
-    public_unload_reader_pairs(
-        engine,
-        playback,
-        (consumer, parameters),
-        locals,
-        &[old, current],
-        None,
-        true,
-    );
+    if lifecycle == CandidateLifecycle::FrozenResumeReaders {
+        progressive_frozen_source_readers(engine, playback, consumer, locals, (old, current));
+        public_unload_reader_pairs(
+            engine,
+            playback,
+            (consumer, parameters),
+            locals,
+            &[current],
+            None,
+            true,
+        );
+        assert_eq!(old.identity.strong_count(), 0);
+        assert!(old.pcm.iter().all(|pcm| pcm.strong_count() == 0));
+        assert!(old.areas.iter().all(|path| !path.exists()));
+    } else {
+        public_unload_reader_pairs(
+            engine,
+            playback,
+            (consumer, parameters),
+            locals,
+            &[old, current],
+            None,
+            true,
+        );
+    }
     assert_eq!(
         fs::read(&material.lease.original_path).unwrap(),
         b_original_before
+    );
+}
+
+fn progressive_frozen_source_readers(
+    engine: &AudioEngine,
+    playback: &mut ControllerPlayback,
+    consumer: &mut rtrb::Consumer<ControlMessage>,
+    locals: &Py<PyDict>,
+    probes: (&FinalReaderProbe, &FinalReaderProbe),
+) {
+    let (old, current) = probes;
+    let before = voice(&playback.callback.mixer);
+    // These aliases contain original PCM only. The pair probes are Weak and the
+    // independent stem oracle owns deep copies, so neither can pin an old reader.
+    let a = before.sample.clone().unwrap();
+    let b = playback.callback.mixer.bank_for_measurement()[0]
+        .clone()
+        .unwrap();
+    assert!(!a.same_source(&b));
+    assert_eq!(
+        (a.resident_start(), a.resident_end()),
+        (LOOP_START, LOOP_END)
+    );
+    assert_eq!((b.resident_start(), b.resident_end()), (0, 4096));
+    let clock = before.source_playback;
+    let generation = before.generation;
+    let native = before.stretch.native_state_address();
+    let adopted = before.stretch.adopted_request_id().unwrap();
+    let fifo = before.stretch.pending_fifo_frames();
+    let history = before.stretch.productive_history().unwrap();
+    let dsp = playback
+        .callback
+        .mixer
+        .dsp_source_history_for_test(0)
+        .unwrap();
+    let frozen = before.frozen_stems.as_ref().unwrap();
+    let transition = frozen.transition;
+    assert!(transition.is_active());
+    let selection = frozen.selection;
+    let incoming_pcm = frozen
+        .set
+        .as_ref()
+        .unwrap()
+        .stems
+        .each_ref()
+        .map(|stem| stem.samples.as_ptr() as usize);
+    let outgoing_pcm = frozen
+        .outgoing
+        .as_ref()
+        .unwrap()
+        .stems
+        .each_ref()
+        .map(|stem| stem.samples.as_ptr() as usize);
+    let output_frame = playback.frame;
+    let consumed = playback.source_frame;
+    let feedback = playback.callback.feedback.events.len();
+    let other = other_voice(&playback.callback.mixer);
+    let other_source = other.sample.clone().unwrap();
+    let other_clock = other.source_playback;
+    let other_generation = other.generation;
+    let other_native = other.stretch.native_state_address();
+    let other_fifo = other.stretch.pending_fifo_frames();
+    let other_demand = playback.callback.mixer.stem_demand_for_measurement(215);
+    let assert_frozen = |playback: &ControllerPlayback, outgoing: bool| {
+        let voice = voice(&playback.callback.mixer);
+        assert_eq!(voice.generation, generation);
+        assert!(voice.sample.as_ref().unwrap().same_window(&a));
+        assert!(Arc::ptr_eq(
+            &voice.sample.as_ref().unwrap().samples,
+            &a.samples
+        ));
+        let bank = playback.callback.mixer.bank_for_measurement()[0]
+            .as_ref()
+            .unwrap();
+        assert!(bank.same_window(&b) && !bank.same_source(&a));
+        assert!(Arc::ptr_eq(&bank.samples, &b.samples));
+        assert_eq!(
+            bank.residency.as_ref().unwrap().context,
+            crate::messages::ResidentContext::KeyLockFullTrack
+        );
+        assert!(playback.callback.mixer.stems_for_measurement()[0].is_none());
+        assert!(
+            playback
+                .callback
+                .mixer
+                .outgoing_stems_for_measurement(0)
+                .is_none()
+        );
+        let frozen = voice.frozen_stems.as_ref().unwrap();
+        assert_eq!(frozen.selection, selection);
+        let incoming = frozen.set.as_ref().unwrap();
+        assert!(
+            current
+                .identity
+                .ptr_eq(&Arc::downgrade(&incoming.complete_set_identity))
+        );
+        assert_eq!(
+            incoming
+                .stems
+                .each_ref()
+                .map(|stem| stem.samples.as_ptr() as usize),
+            incoming_pcm
+        );
+        assert!(incoming.stems.iter().all(|stem| stem.same_window(&a)));
+        if outgoing {
+            let outgoing = frozen.outgoing.as_ref().unwrap();
+            assert!(
+                old.identity
+                    .ptr_eq(&Arc::downgrade(&outgoing.complete_set_identity))
+            );
+            assert_eq!(
+                outgoing
+                    .stems
+                    .each_ref()
+                    .map(|stem| stem.samples.as_ptr() as usize),
+                outgoing_pcm
+            );
+            assert!(outgoing.stems.iter().all(|stem| stem.same_window(&a)));
+        } else {
+            assert!(frozen.outgoing.is_none() && !frozen.transition.is_active());
+        }
+        // Both pads consume the same declared physical trajectory. The retained
+        // pause gap advances output time alone; B never supplies A's source clock.
+        let phase = (playback.source_frame as f64 * playback.ratio).rem_euclid(1500.0);
+        for source in [voice, other_voice(&playback.callback.mixer)] {
+            let position = source.source_playback.position();
+            assert_eq!(position.frame, LOOP_START + phase.floor() as usize);
+            assert_eq!(position.fraction.to_bits(), phase.fract().to_bits());
+            assert_eq!(source.source_playback.loop_period(), None);
+            assert_eq!(
+                source.source_playback.tempo_ratio().to_bits(),
+                playback.ratio.to_bits()
+            );
+        }
+        let raw = playback.raw.as_ref().unwrap();
+        assert_eq!(
+            voice.stretch.pending_fifo_frames(),
+            (raw.input[0].len(), raw.output[0].len()),
+            "retained-A independent Native FIFO chronology"
+        );
+        let other = other_voice(&playback.callback.mixer);
+        assert_eq!(other.generation, other_generation);
+        assert_eq!(other.stretch.native_state_address(), other_native);
+        assert_eq!(other.stretch.pending_fifo_frames(), other_fifo);
+        assert!(Arc::ptr_eq(
+            &other.sample.as_ref().unwrap().samples,
+            &other_source.samples
+        ));
+        assert_eq!(
+            playback.callback.mixer.stem_demand_for_measurement(215),
+            other_demand
+        );
+        assert!(playback.callback.mixer.stems_for_measurement()[215].is_none());
+        current.assert_retained();
+    };
+    assert_frozen(playback, true);
+    controller_python(
+        locals,
+        r#"
+from flitzis_looper.controller.transport import TransportController
+transport = TransportController(project, session, playback_audio)
+assert candidate.claimed() and not candidate.is_current()
+assert candidate.residency_status() == 'accepted' and candidate.effective_mode_status() == 'rejected'
+assert candidate.effective_failure_reason() is None
+"#,
+    );
+    public_explicit_pause(playback, consumer, locals);
+    assert_frozen(playback, true);
+    old.assert_retained();
+    assert!(
+        voice(&playback.callback.mixer)
+            .frozen_stems
+            .as_ref()
+            .unwrap()
+            .transition
+            .matches_exact(transition)
+    );
+    assert_eq!(
+        (playback.frame, playback.source_frame),
+        (output_frame + 513, consumed)
+    );
+    assert_eq!(playback.callback.feedback.events.len(), feedback);
+    assert!(playback.callback.retirement.retired.is_empty());
+    controller_python(
+        locals,
+        r#"
+controller.on_frame_render()
+assert candidate.claimed() and not candidate.is_current()
+assert candidate.effective_mode_status() == 'rejected' and candidate.effective_failure_reason() is None
+transport.playback.resume_pad(0)
+transport.playback.resume_pad(215)
+assert not session.paused_sample_ids
+"#,
+    );
+    assert_eq!(
+        playback.drain(consumer),
+        2,
+        "own frozen-A public Resume commands"
+    );
+    assert!(consumer.is_empty());
+    for reference in [&mut playback.reference, &mut playback.full_mix] {
+        reference.resume_sample_at_output_frame(0, playback.frame);
+    }
+    playback.resumed_at = Some(playback.frame);
+    assert_frozen(playback, true);
+    old.assert_retained();
+    let resumed = voice(&playback.callback.mixer);
+    assert!(!resumed.paused && resumed.source_playback.matches_exact(&clock));
+    assert_eq!(resumed.stretch.native_state_address(), native);
+    assert_eq!(resumed.stretch.adopted_request_id(), Some(adopted));
+    assert_eq!(resumed.stretch.pending_fifo_frames(), fifo);
+    let resumed_history = resumed.stretch.productive_history().unwrap();
+    assert_eq!(resumed_history.binding, history.binding);
+    assert_eq!(resumed_history.next_position, history.next_position);
+    assert_eq!(resumed_history.fed_output_frames, history.fed_output_frames);
+    let resumed_dsp = playback
+        .callback
+        .mixer
+        .dsp_source_history_for_test(0)
+        .unwrap();
+    assert_eq!(resumed_dsp.binding, dsp.binding);
+    assert_eq!(resumed_dsp.next_position, dsp.next_position);
+    assert_eq!(resumed_dsp.fed_output_frames, dsp.fed_output_frames);
+    assert!(
+        resumed
+            .frozen_stems
+            .as_ref()
+            .unwrap()
+            .transition
+            .matches_exact(transition)
+    );
+    let other = other_voice(&playback.callback.mixer);
+    assert!(!other.paused && other.source_playback.matches_exact(&other_clock));
+    assert_eq!(playback.source_frame, consumed);
+    assert_eq!(playback.callback.feedback.events.len(), feedback);
+
+    // Actual consumed source distance ends the frozen ramp. Saturation prevents
+    // the callback from transferring its real outgoing reader until a later pass.
+    playback.callback.retirement.slots = 0;
+    let mut remaining = (1..=256)
+        .find(|frames| {
+            (playback.source_frame + *frames as u64 - playback.ramp_start) as f64 * playback.ratio
+                >= 128.0
+        })
+        .unwrap();
+    for frames in [1_usize, 31, 17, 7].into_iter().cycle() {
+        let frames = frames.min(remaining);
+        playback.render(frames, false);
+        remaining -= frames;
+        assert_frozen(playback, true);
+        old.assert_retained();
+        assert_eq!(
+            voice(&playback.callback.mixer)
+                .stretch
+                .native_state_address(),
+            native
+        );
+        assert_eq!(
+            voice(&playback.callback.mixer).stretch.adopted_request_id(),
+            Some(adopted)
+        );
+        assert_eq!(
+            voice(&playback.callback.mixer)
+                .frozen_stems
+                .as_ref()
+                .unwrap()
+                .transition
+                .is_active(),
+            (playback.source_frame - playback.ramp_start) as f64 * playback.ratio < 128.0
+        );
+        assert!(playback.callback.retirement.retired.is_empty());
+        if remaining == 0 {
+            break;
+        }
+    }
+    let held_counts = old.pcm.each_ref().map(std::sync::Weak::strong_count);
+    playback.callback.retirement.slots = usize::MAX;
+    playback.render(1, false);
+    assert_frozen(playback, false);
+    let marker = Arc::new(AtomicU8::new(0));
+    let completion = Arc::downgrade(&marker);
+    playback.callback.retirement.retire_cold_adoption(marker);
+    old.wait_for("frozen outgoing production FIFO completion", || {
+        completion.strong_count() == 0
+    });
+    old.wait_for("frozen outgoing actual worker transfer", || {
+        old.pcm
+            .iter()
+            .zip(held_counts)
+            .all(|(pcm, held)| pcm.strong_count() < held)
+    });
+    assert!(playback.callback.retirement.retired.is_empty());
+    assert_eq!(
+        voice(&playback.callback.mixer)
+            .stretch
+            .native_state_address(),
+        native
+    );
+    assert_eq!(
+        voice(&playback.callback.mixer).stretch.adopted_request_id(),
+        Some(adopted)
+    );
+    assert_frozen(playback, false);
+    // Outgoing callback/FIFO owners are gone. The used V1 Native/history remains
+    // the genuine final reader and still protects all four PCM files and identity.
+    old.assert_retained();
+    assert!(fs::write(old.areas[1].join("vocals.f32le"), b"leased overwrite").is_err());
+    controller_python(
+        locals,
+        r#"
+assert candidate.claimed() and not candidate.is_current()
+assert candidate.residency_status() == 'accepted' and candidate.effective_mode_status() == 'rejected'
+assert candidate.effective_failure_reason() is None
+assert project.sample_paths[0] == frozen_saved_path and project.pad_content[0] == frozen_saved_content
+assert project.stem_cache[0].pair == disk_v2 and ('stems', 0) in controller._assets._assignments
+"#,
+    );
+
+    // The first timestamped settled frozen feed captures RetainedVoice authority
+    // for finite A, while the actual current bank is still distinct complete B.
+    let after_ramp = playback.frame;
+    playback.render(13, true);
+    wait_until(|| {
+        voice_mut(&mut playback.callback.mixer)
+            .stretch
+            .source_preparation_ready()
+    });
+    let target = voice_mut(&mut playback.callback.mixer)
+        .stretch
+        .prepared_target_output_frame()
+        .unwrap();
+    let warm_start =
+        target - crate::audio_engine::prepared_native_history::PREPARED_HISTORY_FRAMES as u64;
+    assert!(warm_start >= after_ramp && warm_start >= playback.resumed_at.unwrap());
+    let prepared = voice_mut(&mut playback.callback.mixer)
+        .stretch
+        .prepared_native_address();
+    assert_ne!(prepared, 0);
+    assert_ne!(prepared, native);
+    let (actual, full_mix) = playback.adopt_native(false);
+    assert!(actual.iter().any(|value| value.abs() > 0.001));
+    assert!(
+        actual
+            .iter()
+            .zip(full_mix)
+            .any(|(actual, full)| (actual - full).abs() > 0.005)
+    );
+    let adopted_voice = voice(&playback.callback.mixer);
+    assert_eq!(adopted_voice.stretch.native_state_address(), prepared);
+    assert!(
+        adopted_voice
+            .stretch
+            .adopted_request_id()
+            .is_some_and(|request| request > adopted)
+    );
+    assert!(adopted_voice.stretch.wet_current_source_output_ready());
+    let taps = adopted_voice.stretch.native_tap_observation().unwrap();
+    assert_eq!(taps.missing_reads, 0);
+    assert!(taps.min_frame.is_some_and(|frame| frame >= LOOP_START));
+    assert!(taps.max_frame.is_some_and(|frame| frame < LOOP_END));
+    let adopted_history = adopted_voice.stretch.productive_history().unwrap();
+    assert_eq!(adopted_history.binding, history.binding);
+    assert_eq!(adopted_history.binding.source_address, a.source_address());
+    assert_ne!(adopted_history.binding.source_address, b.source_address());
+    assert_frozen(playback, false);
+    old.wait_for("retained-A actual final V1 Native/history readers", || {
+        playback.render(31, false);
+        assert_frozen(playback, false);
+        assert_eq!(
+            voice(&playback.callback.mixer)
+                .stretch
+                .native_state_address(),
+            prepared
+        );
+        Python::attach(|py| engine.poll_loader_events(py).unwrap());
+        old.identity.strong_count() == 0 && old.pcm.iter().all(|pcm| pcm.strong_count() == 0)
+    });
+    old.wait_for(
+        "retained-A V1 asset worker three-area cleanup with V2 live",
+        || {
+            playback.render(137, false);
+            assert_frozen(playback, false);
+            assert_eq!(
+                voice(&playback.callback.mixer)
+                    .stretch
+                    .native_state_address(),
+                prepared
+            );
+            Python::attach(|py| engine.poll_loader_events(py).unwrap());
+            old.areas.iter().all(|path| !path.exists())
+        },
+    );
+    for frames in [1, 137, 511, 257] {
+        playback.render(frames, false);
+        assert_frozen(playback, false);
+        assert_eq!(
+            voice(&playback.callback.mixer)
+                .stretch
+                .native_state_address(),
+            prepared
+        );
+    }
+    assert_eq!(
+        playback.frame - playback.source_frame,
+        output_frame - consumed + 513
+    );
+    assert!(consumer.is_empty() && playback.callback.retirement.retired.is_empty());
+    controller_python(
+        locals,
+        r#"
+controller.on_frame_render()
+assert candidate.claimed() and not candidate.is_current()
+assert candidate.residency_status() == 'accepted' and candidate.effective_mode_status() == 'rejected'
+assert candidate.effective_failure_reason() is None
+assert project.sample_paths[0] == frozen_saved_path and project.pad_content[0] == frozen_saved_content
+assert project.stem_cache[0].pair == disk_v2 and project.pad_stem_mix_mode[0] == 'all_stems'
+assert ('stems', 0) in controller._assets._assignments and ('original', 215) in controller._assets._assignments
+assert not session.stem_generation_errors and not session.sample_load_errors
+"#,
     );
 }
 
@@ -8298,7 +8739,10 @@ fn round_trip_with_lifecycle(
     lifecycle: CandidateLifecycle,
 ) {
     let domain_final_reader = lifecycle == CandidateLifecycle::CleanupAfterClaim;
-    let frozen_final_reader = lifecycle == CandidateLifecycle::FrozenUnload;
+    let frozen_final_reader = matches!(
+        lifecycle,
+        CandidateLifecycle::FrozenUnload | CandidateLifecycle::FrozenResumeReaders
+    );
     assert!(!frozen_final_reader || matches!(trace, CandidateTrace::Ordinary));
     let full_track = matches!(trace, CandidateTrace::FullTrack);
     let complete_partial = matches!(trace, CandidateTrace::CompletePartial { .. });
@@ -9944,12 +10388,12 @@ if window_change:
         );
         frozen_source_final_readers_then_public_unload(
             &engine,
-            &h.root,
-            &h.producer,
+            (&h.root, &h.producer),
             &mut playback,
             (&mut h.consumer, &mut parameter_consumer),
             &locals,
             (final_old.as_ref().unwrap(), &current),
+            lifecycle,
         );
         assert_eq!(
             fs::read(&h.material.lease.original_path).unwrap(),
@@ -11780,6 +12224,24 @@ fn actual_public_frozen_source_final_reader_unfinished_handover_unload_cleans_bo
                 false,
                 CandidateTrace::Ordinary,
                 CandidateLifecycle::FrozenUnload,
+            )
+        },
+    );
+}
+
+#[test]
+fn actual_public_frozen_source_final_reader_resume_retires_outgoing_before_current_unload() {
+    residual_domain_child(
+        "actual_public_frozen_source_final_reader_resume_retires_outgoing_before_current_unload",
+        || {
+            round_trip_with_lifecycle(
+                true,
+                None,
+                true,
+                None,
+                false,
+                CandidateTrace::Ordinary,
+                CandidateLifecycle::FrozenResumeReaders,
             )
         },
     );

@@ -1654,6 +1654,81 @@ Installed Human Native remains29289472 bytes with unchanged UTC write time
 Official strict and final document/coverage consistency pass. The same one
 independent final source/fact review closes with no actionable finding.
 
+### Progressive frozen readers and retained-A Native — 2026-10-12
+
+`actual_public_frozen_source_final_reader_resume_retires_outgoing_before_current_unload`
+reuses the genuinely claimed A-V2/outgoing V1 frozen under distinct complete ON
+bank B, actual former-bank FIFO retirement and seventeen strict A output frames.
+Its own public Pause/Resume for pad0 and independent pad215 preserves both frozen
+identities/eight PCM pointers, occupied transition, exact physical source phase,
+generation, Native/FIFO and productive/DSP histories through513 silent frames.
+The obsolete candidate remains claimed and rejected; bank B supplies no new
+candidate authority for A.
+
+Irregular untimestamped productive partitions independently consume the frozen
+128-source-frame ramp with retirement capacity zero. Its transition becomes
+inactive while actual outgoing V1 and all files remain retained. Restored
+capacity, another productive pass, the production FIFO marker and decreased
+component PCM owner counts prove transfer and worker consumption of only that
+outgoing lane. Used V1 Native/history still retains the complete identity, all
+four component PCM readers and all three areas; a real leased-overwrite attempt
+continues to fail.
+
+Only subsequent timestamped settled A output starts a fresh source preparation.
+Its complete4096-history interval begins after both own Resume and frozen-ramp
+completion. Actual bank B remains distinct and complete while the old voice A
+remains finite; the mixer therefore captures `NativeVoiceHistoryContext` and
+`RetainedVoice` authority. Actual finite-A Native taps, A's source-bound history,
+new Native address/request and unchanged A generation/physical phase accompany
+the independent4096 raw Native warm-feed and uninterrupted EQ/FIFO oracle.
+The later adoption cannot rehabilitate the obsolete candidate receipt.
+
+Strict productive A/V2 output continues while actual remaining V1 Native/history
+owners retire, its identity/four PCM Weak owners expire and the existing asset
+worker removes its three areas. V2's frozen identity and actual bank B remain
+usable. The final own public V2 Unload alone then requires its four commands,
+single `SampleStopped` acknowledgement, actual final frozen/Native/history
+release, V2 Weak expiration and three-area cleanup. A/B originals remain
+byte-identical; pad215's independent physical trajectory excludes its own pause
+gap and remains usable.
+
+Source mapping identifies the two Native authority families (current bank and
+retained voice), the regular bank/current/outgoing readers, and the distinct
+FrozenStemView outgoing-retry and whole-container-Unload release routes. The
+established finite owner-family table separately supplies saved assignments,
+actual jobs/subscribers, durable actions/versions, queued publication/Unload,
+complete/last-component readers, sharing/shutdown and containment/preservation
+evidence where source inputs and owner topology are unchanged. Stable OFF and
+paused-first/musical variants introduce no independent owner container; actual
+same-pad public Play restarts its existing voice rather than adding a synthetic
+current-plus-frozen voice. This is source-grounded reuse, without fresh Cartesian
+execution. Together these source-grounded proofs cover all required E11-19
+last-reader owner families within the supported candidate and native-retained-
+source software topology. This does not establish public Loader B assignment
+or expand the supported publication domains.
+
+The focused Release filter passes both progressive and unchanged unfinished
+Frozen-Unload cases in3.97s after71s compile. The fresh residency profile passes
+all110 cases in472.29s after0.17s compile, including both actual Frozen lifetimes,
+existing effective/saved-C paths and the previously failed unchanged stale-Seek
+negative. The separate actual retirement profile passes13 cases in1.41s after
+0.21s compile. The full `project_assets::stem_readers::` prefix passes17 cases
+in3.90s after0.18s compile, including actual paired/cold-reader snapshots,
+shared-source pads, descriptor-only and final-fourth-component custody,
+three-target queue saturation, rollback and unknown-child preservation.
+Final fmt and workspace/tests Clippy pass. Clippy finishes in9.42s with the
+unchanged63 warnings (one duplicate), the same warning-message inventory
+and no changed-file diagnostic. Official strict validation and final
+document/coverage consistency pass. The same independent final source/fact
+review closes without remaining findings.
+Only the productive cfg(test) child changes Rust. Unchanged production1827227
+Release24.18s/private API/controller/UI preflight/six Python files183PASS49.61s
+remain reusable, without a fresh production build, Python run or installation.
+Public Loader B assignment, ordinary public default-Play admission, active
+ON-to-OFF/P5a, unchanged-set ALL/P5b, complete L4 and other parents, later V0
+integrated reacceptance, resource/musical and genuine final/Human gates remain
+separate and open.
+
 ### Native current-bank eligibility does not transfer to retained A
 
 `actual_native_current_bank_candidate_cannot_borrow_frozen_old_voice_with_keylock_on`
