@@ -151,6 +151,16 @@ immediate change SHALL NOT silently discard the command.
 - **THEN** display and saved intent SHALL remain distinct from callback acknowledgement, and the accepted source timing SHALL retain its exact authority through Capture, worker preparation and Adopt
 - **AND** independent complete-PCM phase, virtual-tail interpolation, raw Native/FIFO and uninterrupted filter output SHALL verify the consumed-source-frame handover and V2's later own prepared wet effectiveness without restart
 
+#### Scenario: Fresh new-set adoption crosses a public live BPM smoothing step
+
+- **GIVEN** productive finite NormalLoop FullMix or independently confirmed selected V1, KEY LOCK OFF or ON, and callback-acknowledged Automatic timing
+- **WHEN** the public BPM controller applies a new coupled speed/master-period intent before distinct V2 preparation and V2 obtains its own fresh registration, Capture, worker preparation and Adopt while the rate is still smoothing
+- **THEN** the unchanged accepted timing, current source and own V2 authority SHALL remain valid without retry, restart or position jump
+- **AND** the actual 128-consumed-source-frame handover SHALL cross an active-output-frame smoothing boundary using the continuous fractional trajectory and both complete readers
+- **AND** independent complete PCM, rate epochs and uninterrupted filter history SHALL verify all irregular output partitions; another active pad SHALL retain its own physical loop trajectory under the global intent
+- **AND** KEY LOCK OFF SHALL confirm V2's own dry output; KEY LOCK ON SHALL preserve actual raw Native/FIFO chronology and require V2's own later complete 4096-frame preparation and ready Wet output
+- **AND** current registration, accepted residency and audible effectiveness SHALL remain separate, and earlier FullMix or V1 acknowledgements SHALL NOT confirm V2
+
 #### Scenario: Public live BPM invalidates an already queued replacement Adopt
 
 - **GIVEN** productive finite NormalLoop V1 with KEY LOCK ON, accepted Automatic timing and V2's own already captured and queued Adopt

@@ -1532,6 +1532,36 @@ changed test file. Formatting, official strict validation, five relative file
 links and whitespace pass. Unchanged production Release/import/Python checks
 remain reusable, without Native installation or Human App/device changes.
 
+### Fresh public adoption during an ongoing BPM glide
+
+`actual_public_bpm_glide_adoption_requires_own_wet_effect` and its dry counterpart
+cover productive FullMix and already effective selected V1. Actual public
+150-BPM setup precedes voice birth. The public controller then requests210 BPM
+before V2's distinct files, source ticket, durable commit/reopen, registration
+and Capture. Its ordinary Bootstrap control and coupled speed/master-period
+parameter use the existing admission lanes; neither consumes source or resets
+the same voice, Native/FIFO or filter history.
+
+Independent rate ledgers retain the musical phase for pad0 and the physical
+1500-frame loop for pad215. Actual output consumes13 frames before V2 Capture,
+then456 irregular frames while the real worker's Adopt remains queued. The
+ordinary pre-Adopt31 frames place V2's own acceptance500 active output frames
+after the public intent. The next512-frame smoothing boundary therefore falls
+inside the128-consumed-source-frame two-reader handover, while the target is
+still pending. The ramp endpoint comes from integrated piecewise source distance,
+not a constant final-rate duration.
+
+Every output sample is checked against independent complete PCM and continuous
+nonneutral EQ. OFF uses actual dry varispeed and its own effective receipt. ON
+also checks independently fed raw Native/FIFO chronology and V2's subsequent
+complete4096-frame warm preparation and ready Wet effect. FullMix/V1 observations
+cannot confirm V2, and its current fresh registration needs no reject/retry or
+re-registration. Source, timing, phase and other-pad ownership remain independent.
+
+This adds positive public adoption during a glide to the existing stale-BPM
+rejection/retry evidence. Task3.2, additional domains, productive final-reader
+retirement and Human acceptance remain open.
+
 ### Public live BPM while an already effective V1 is paused
 
 The public ON/OFF traces now pause pad0 and the independently playing physical

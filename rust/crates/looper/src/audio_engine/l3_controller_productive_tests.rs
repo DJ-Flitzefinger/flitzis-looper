@@ -33,6 +33,10 @@ const CAPTURE_DEADLINE_CHILD: &str = "FLITZI_L3_CONTROLLER_CAPTURE_DEADLINE_CHIL
 const CAPTURE_DEADLINE_TEST: &str = "audio_engine::cold_load::tests::stem_pair_publication_tests::committed_stem_residency_tests::l3_controller_productive_tests::actual_python_controller_pending_capture_deadline_keeps_v1_then_fresh_own_retry";
 const PUBLIC_BPM_CHILD: &str = "FLITZI_L3_CONTROLLER_PUBLIC_BPM_CHILD";
 const PUBLIC_BPM_TEST: &str = "audio_engine::cold_load::tests::stem_pair_publication_tests::committed_stem_residency_tests::l3_controller_productive_tests::actual_public_bpm_target_then_own_replacement_preserves_musical_wet_chronology";
+const PUBLIC_RATE_ON_CHILD: &str = "FLITZI_L3_PUBLIC_RATE_ADOPTION_ON_CHILD";
+const PUBLIC_RATE_ON_TEST: &str = "audio_engine::cold_load::tests::stem_pair_publication_tests::committed_stem_residency_tests::l3_controller_productive_tests::actual_public_bpm_glide_adoption_requires_own_wet_effect";
+const PUBLIC_RATE_OFF_CHILD: &str = "FLITZI_L3_PUBLIC_RATE_ADOPTION_OFF_CHILD";
+const PUBLIC_RATE_OFF_TEST: &str = "audio_engine::cold_load::tests::stem_pair_publication_tests::committed_stem_residency_tests::l3_controller_productive_tests::actual_public_bpm_glide_adoption_requires_own_dry_effect";
 const LIVE_BPM_CHILD: &str = "FLITZI_L3_CONTROLLER_LIVE_BPM_CHILD";
 const LIVE_BPM_TEST: &str = "audio_engine::cold_load::tests::stem_pair_publication_tests::committed_stem_residency_tests::l3_controller_productive_tests::actual_public_live_bpm_rejects_queued_v2_then_explicit_retry_keeps_wet_chronology";
 const LIVE_BPM_OFF_CHILD: &str = "FLITZI_L3_CONTROLLER_LIVE_BPM_OFF_CHILD";
@@ -89,6 +93,7 @@ enum CandidateTrace {
     WorkerPostPressure,
     CaptureDeadline,
     PublicBpm(f64),
+    PublicRateAdoption,
     LiveBpm,
     PausedLiveBpm,
     ClaimedMasks,
@@ -215,6 +220,121 @@ impl PublicLoadAudio {
         self.engine.admit_resident_key_lock(id, enabled)?;
         crate::audio_engine::key_lock_feedback::enqueue(&self.engine, id, enabled)
     }
+}
+
+fn public_rate_before_candidate(
+    engine: &AudioEngine,
+    playback: &mut ControllerPlayback,
+    consumer: &mut rtrb::Consumer<ControlMessage>,
+    parameters: &mut rtrb::Consumer<ControlParameterMessage>,
+    locals: &Py<PyDict>,
+    accepted: crate::audio_engine::constant_timing::AcceptedTimingProjection,
+    key_lock: bool,
+) -> ControllerRateLedger {
+    assert!(consumer.is_empty() && parameters.is_empty());
+    let before = voice(&playback.callback.mixer);
+    let clock = before.source_playback;
+    let generation = before.generation;
+    let native = before.stretch.native_state_address();
+    let fifo = before.stretch.pending_fifo_frames();
+    let history = before.stretch.productive_history();
+    assert_eq!(history.is_some(), key_lock);
+    let dsp = playback
+        .callback
+        .mixer
+        .dsp_source_history_for_test(0)
+        .unwrap();
+    let other_clock = other_voice(&playback.callback.mixer).source_playback;
+    let revision = engine.global_timing_revision.load(Ordering::Acquire);
+    let old_rate = playback.ratio;
+    let start = playback.source_frame;
+    controller_python(
+        locals,
+        r#"
+if selected_v1:
+    assert first.is_current() and first.effective_mode_status() == 'effective'
+else:
+    assert controller.stem_residency_status(0).effective is None
+assert transport.global_params.set_effective_display_bpm(210.0)
+assert project.speed == accepted_period * (210.0 / 60)
+assert session.master_period_seconds == accepted_period / project.speed
+assert abs(transport.global_params.effective_display_bpm() - 210.0) < 1e-10
+assert transport.bpm.current_timing(0) == timing_before_bpm
+assert previous_control.ticket.is_current()
+assert not session.stem_generation_errors, session.stem_generation_errors
+"#,
+    );
+    let speed = accepted.period_seconds * (210.0 / 60.0);
+    let master = accepted.period_seconds / speed;
+    let ratio = accepted.period_seconds / master;
+    assert!(engine.global_timing_revision.load(Ordering::Acquire) > revision);
+    assert!(
+        matches!(parameters.peek(), Ok(ControlParameterMessage::SetSpeedAndMasterPeriod {
+        speed: actual, period_seconds
+    }) if actual.to_bits() == speed.to_bits() && period_seconds.to_bits() == master.to_bits())
+    );
+    assert_eq!(playback.drain(consumer), 1, "own public BPM Bootstrap");
+    crate::audio_engine::audio_stream::drain_parameter_messages(
+        parameters,
+        &mut playback.callback.mixer,
+        &mut playback.callback.transport,
+    );
+    assert!(consumer.is_empty() && parameters.is_empty());
+    assert_eq!(
+        playback.callback.transport.master_period_seconds(),
+        Some(master)
+    );
+    let after = voice(&playback.callback.mixer);
+    assert!(
+        after.source_playback.matches_exact(&clock),
+        "public intent consumes no source"
+    );
+    assert_eq!(after.generation, generation);
+    assert_eq!(after.stretch.native_state_address(), native);
+    assert_eq!(after.stretch.pending_fifo_frames(), fifo);
+    if let Some(history) = history {
+        let after = after.stretch.productive_history().unwrap();
+        assert_eq!(after.binding, history.binding);
+        assert_eq!(after.next_position, history.next_position);
+        assert_eq!(after.fed_output_frames, history.fed_output_frames);
+    } else {
+        assert!(after.stretch.productive_history().is_none());
+    }
+    let after_dsp = playback
+        .callback
+        .mixer
+        .dsp_source_history_for_test(0)
+        .unwrap();
+    assert_eq!(after_dsp.binding, dsp.binding);
+    assert_eq!(after_dsp.next_position, dsp.next_position);
+    assert_eq!(after_dsp.fed_output_frames, dsp.fed_output_frames);
+    assert!(
+        other_voice(&playback.callback.mixer)
+            .source_playback
+            .matches_exact(&other_clock)
+    );
+    let mut other = ControllerRateLedger::new(old_rate, (LOOP_END - LOOP_START) as f64);
+    other.change(start, speed);
+    playback.rate_ledger.as_mut().unwrap().change(start, ratio);
+    playback.ratio = ratio;
+    for reference in [&mut playback.reference, &mut playback.full_mix] {
+        reference.set_speed(speed);
+        reference.set_master_period(master);
+    }
+    if key_lock {
+        playback.render(13, false);
+    } else {
+        render_varispeed(playback, 13);
+    }
+    assert_eq!(playback.source_frame - start, 13);
+    assert_ne!(
+        voice(&playback.callback.mixer)
+            .source_playback
+            .tempo_ratio()
+            .to_bits(),
+        ratio.to_bits()
+    );
+    other
 }
 
 fn live_bpm_then_explicit_retry(
@@ -1288,7 +1408,7 @@ fn settle_varispeed(playback: &mut ControllerPlayback, locals: &Py<PyDict>, name
     if playback.scheduled && name == "candidate" {
         controller_python(
             locals,
-            "assert session.stem_generation_errors == {0: bpm_error}",
+            "if live_bpm:\n    assert session.stem_generation_errors == {0: bpm_error}",
         );
     }
     if name == "candidate" {
@@ -1305,6 +1425,44 @@ fn settle_varispeed(playback: &mut ControllerPlayback, locals: &Py<PyDict>, name
     );
 }
 
+fn ramp_wet_with_rate_ledger(playback: &mut ControllerPlayback, locals: &Py<PyDict>, name: &str) {
+    let start = playback.source_frame;
+    let ledger = playback.rate_ledger.as_ref().unwrap();
+    let mut remaining = (1..=256)
+        .find(|frames| {
+            ledger.distance(start + *frames as u64) - ledger.distance(playback.ramp_start) >= 128.0
+        })
+        .expect("supported rate consumes128 source frames within256 outputs");
+    let native = voice(&playback.callback.mixer)
+        .stretch
+        .native_state_address();
+    for frames in [1_usize, 31, 17, 7].into_iter().cycle() {
+        let count = frames.min(remaining);
+        playback.render(count, false);
+        remaining -= count;
+        assert_eq!(
+            voice(&playback.callback.mixer)
+                .stretch
+                .native_state_address(),
+            native
+        );
+        assert_eq!(
+            controller_ticket_status(locals, name, "effective_mode_status"),
+            "transitioning"
+        );
+        if remaining == 0 {
+            break;
+        }
+        assert!(
+            playback
+                .callback
+                .mixer
+                .stem_transition_for_measurement(0)
+                .is_active()
+        );
+    }
+}
+
 fn settle_wet(playback: &mut ControllerPlayback, locals: &Py<PyDict>, name: &str) {
     settle_wet_after(playback, locals, name, None);
 }
@@ -1315,7 +1473,11 @@ fn settle_wet_after(
     name: &str,
     minimum_warm_start: Option<u64>,
 ) {
-    playback.ramp(locals, name, playback.ratio);
+    if playback.rate_ledger.is_some() {
+        ramp_wet_with_rate_ledger(playback, locals, name);
+    } else {
+        playback.ramp(locals, name, playback.ratio);
+    }
     assert!(
         !playback
             .callback
@@ -6249,6 +6411,8 @@ fn round_trip(
     let queue_pressure = admission_pressure || worker_post_pressure;
     let capture_deadline = matches!(trace, CandidateTrace::CaptureDeadline);
     let paused_live_bpm = matches!(trace, CandidateTrace::PausedLiveBpm);
+    let public_rate_adoption = matches!(trace, CandidateTrace::PublicRateAdoption);
+    let mut public_rate_start = None;
     let paused_replacement = matches!(trace, CandidateTrace::PausedReplacement);
     let mut paused_other_clock = None;
     assert!(
@@ -6264,7 +6428,10 @@ fn round_trip(
     );
     let public_bpm = matches!(
         trace,
-        CandidateTrace::PublicBpm(_) | CandidateTrace::LiveBpm | CandidateTrace::PausedLiveBpm
+        CandidateTrace::PublicBpm(_)
+            | CandidateTrace::LiveBpm
+            | CandidateTrace::PausedLiveBpm
+            | CandidateTrace::PublicRateAdoption
     );
     let mut live_other_ledger = None;
     let mut retriggered_at = None;
@@ -6272,8 +6439,8 @@ fn round_trip(
     let mut adopted_window = None;
     assert!(
         !public_bpm
-            || ((key_lock || live_bpm)
-                && selected_v1
+            || ((key_lock || live_bpm || public_rate_adoption)
+                && (selected_v1 || public_rate_adoption)
                 && !paused_first
                 && delete_pause.is_none()
                 && stopped_before_poll.is_none())
@@ -6541,7 +6708,7 @@ persistence.flush()
             if let CandidateTrace::PublicBpm(bpm) = trace {
                 bpm
             } else {
-                assert!(live_bpm);
+                assert!(live_bpm || public_rate_adoption);
                 150.0
             },
         )
@@ -6761,13 +6928,13 @@ owner_v2.release()
             projection.period_seconds * f64::from(RATE) / 16.0
         }),
         loop_end: LOOP_END,
-        rate_ledger: live_bpm.then(|| {
+        rate_ledger: (live_bpm || public_rate_adoption).then(|| {
             ControllerRateLedger::new(
                 ratio,
                 accepted.unwrap().period_seconds * f64::from(RATE) / 16.0,
             )
         }),
-        scheduled: live_bpm,
+        scheduled: live_bpm || public_rate_adoption,
         selection: None,
         previous: None,
         ramp_start: 0,
@@ -6901,6 +7068,19 @@ assert session.paused_sample_ids == {0, 215}
         let other = other_voice(&playback.callback.mixer);
         assert!(other.paused && other.source_playback.matches_exact(&other_clock));
         assert!(h.consumer.is_empty());
+    }
+    if public_rate_adoption {
+        let start = playback.source_frame;
+        live_other_ledger = Some(public_rate_before_candidate(
+            &engine,
+            &mut playback,
+            &mut h.consumer,
+            &mut parameter_consumer,
+            &locals,
+            accepted.unwrap(),
+            key_lock,
+        ));
+        public_rate_start = Some(start);
     }
     let before = voice(&playback.callback.mixer);
     let initial_clock = before.source_playback;
@@ -7135,7 +7315,44 @@ assert previous_control.ticket.is_current()
         std::env::set_current_dir(previous_cwd).unwrap();
         return;
     }
-    if preclaim_masks {
+    if public_rate_adoption {
+        assert_eq!(
+            playback.drain(&mut h.consumer),
+            1,
+            "fresh own V2 Capture during glide"
+        );
+        wait_until(|| h.consumer.peek().is_ok());
+        for frames in [257, 1, 198] {
+            if key_lock {
+                playback.render(frames, false);
+            } else {
+                render_varispeed(&mut playback, frames);
+            }
+            assert_eq!(
+                controller_ticket_status(&locals, "candidate", "residency_status"),
+                "pending"
+            );
+            controller_python(
+                &locals,
+                "controller.on_frame_render()\nassert not candidate.claimed() and candidate.is_current()\nassert not session.stem_generation_errors, session.stem_generation_errors",
+            );
+        }
+        own_adoption_after_capture(
+            &mut playback,
+            &mut h.consumer,
+            &locals,
+            "candidate",
+            key_lock,
+        );
+        assert_eq!(playback.source_frame - public_rate_start.unwrap(), 500);
+        assert_ne!(
+            voice(&playback.callback.mixer)
+                .source_playback
+                .tempo_ratio()
+                .to_bits(),
+            playback.ratio.to_bits()
+        );
+    } else if preclaim_masks {
         supersede_queued_candidate_mask(
             &h.producer,
             &mut playback,
@@ -7218,6 +7435,17 @@ assert previous_control.ticket.is_current()
         full_stems.source_version_hash
     ));
     playback.select(Some(oracle_mask));
+    if public_rate_adoption {
+        let boundary = public_rate_start.unwrap() + 512;
+        assert_eq!(playback.ramp_start + 12, boundary);
+        let ledger = playback.rate_ledger.as_ref().unwrap();
+        assert_eq!(ledger.epoch(boundary).start, boundary);
+        assert_ne!(
+            ledger.epoch(boundary - 1).rate.to_bits(),
+            ledger.epoch(boundary).rate.to_bits()
+        );
+        assert!(ledger.distance(boundary) - ledger.distance(playback.ramp_start) < 128.0);
+    }
     controller_python(
         &locals,
         r#"
@@ -7380,7 +7608,12 @@ assert not session.paused_sample_ids
             }
         }
         if key_lock {
-            settle_wet(&mut playback, &locals, "candidate");
+            if public_rate_adoption {
+                let own_adopt_frame = playback.frame;
+                settle_wet_after(&mut playback, &locals, "candidate", Some(own_adopt_frame));
+            } else {
+                settle_wet(&mut playback, &locals, "candidate");
+            }
         } else {
             settle_varispeed(&mut playback, &locals, "candidate");
         }
@@ -7502,11 +7735,18 @@ assert bpm_reopened.project.stem_cache[0].pair == disk_v2
             &locals,
             r#"
 assert not session.stem_generation_errors, session.stem_generation_errors
-assert not failed_bpm.is_current() and not failed_bpm.claimed()
-assert failed_bpm.residency_status() == 'rejected' and failed_bpm.error() == bpm_error
-assert failed_bpm.effective_failure_reason() is None
-assert live.control is bpm_selection and live.disk.selection is bpm_selection
-assert bpm_selection.ticket is bpm_registration and bpm_selection.receipt is candidate
+if live_bpm:
+    assert not failed_bpm.is_current() and not failed_bpm.claimed()
+    assert failed_bpm.residency_status() == 'rejected' and failed_bpm.error() == bpm_error
+    assert failed_bpm.effective_failure_reason() is None
+    assert live.control is bpm_selection and live.disk.selection is bpm_selection
+    assert bpm_selection.ticket is bpm_registration and bpm_selection.receipt is candidate
+else:
+    assert candidate.is_current() and candidate.claimed()
+    assert candidate.residency_status() == 'accepted' and candidate.effective_mode_status() == 'effective'
+    assert candidate.error() is None and candidate.effective_failure_reason() is None
+    assert live.control is live.disk.selection and live.control.receipt is candidate
+    assert audio.worker_call_count() == 1
 "#,
         );
     } else if let CandidateTrace::PublicBpm(target_bpm) = trace {
@@ -8391,6 +8631,44 @@ fn actual_public_paused_v1_replacement_requires_own_resumed_wet_effect() {
         PAUSED_REPLACEMENT_ON_CHILD,
         PAUSED_REPLACEMENT_ON_TEST,
     );
+}
+
+#[test]
+fn actual_public_bpm_glide_adoption_requires_own_wet_effect() {
+    public_rate_adoption_child(true, PUBLIC_RATE_ON_CHILD, PUBLIC_RATE_ON_TEST);
+}
+
+#[test]
+fn actual_public_bpm_glide_adoption_requires_own_dry_effect() {
+    public_rate_adoption_child(false, PUBLIC_RATE_OFF_CHILD, PUBLIC_RATE_OFF_TEST);
+}
+
+fn public_rate_adoption_child(key_lock: bool, child: &str, test: &str) {
+    if std::env::var_os(child).is_some() {
+        for selected_v1 in [false, true] {
+            round_trip(
+                selected_v1,
+                None,
+                key_lock,
+                None,
+                false,
+                CandidateTrace::PublicRateAdoption,
+            );
+        }
+        return;
+    }
+    let output = std::process::Command::new(std::env::current_exe().unwrap())
+        .args(["--exact", test, "--nocapture", "--test-threads=1"])
+        .env(child, "1")
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "L3 public rate adoption child failed:\n{}\n{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert!(String::from_utf8_lossy(&output.stdout).contains("1 passed; 0 failed"));
 }
 
 #[test]
