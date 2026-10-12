@@ -798,6 +798,16 @@ Original FullMix/source PCM SHALL remain usable after stem deletion.
 - **WHEN** that Unload is consumed and actual off-thread retirement releases each generation's final identity and component PCM owners
 - **THEN** the existing asset worker SHALL clean only the eligible exact retired areas, while preserving the original and unrelated playing pads
 
+#### Scenario: Frozen old-source current and outgoing sets survive bank replacement until own Unload
+- **GIVEN** source A's current ON voice has claimed V2 while V1 remains its outgoing reader and used Native/history source during an unfinished handover
+- **WHEN** an actual native restore admits distinct current bank source B without replacing A's saved assignment
+- **THEN** the retained A voice SHALL freeze its exact V2 current and V1 outgoing sets, source trajectory, transition and required Native/history owners independently of B's bank and preparation authority
+- **AND** actual bank-owner retirement SHALL NOT release those frozen readers or permit either generation's three-area cleanup; strict productive output SHALL continue from A's complete PCM and uninterrupted filter history
+- **WHEN** own public Unload releases the saved A selection and its own callback reports `SampleStopped`
+- **THEN** both frozen set generations SHALL retire through the existing audio worker and all remaining Native/history/complete readers before physical asset-worker cleanup
+- **AND** actual expiration of both complete identities and every component PCM owner SHALL precede removal of their exact WAV, PCM and descriptor areas; A's and B's originals and unrelated playing pads SHALL remain usable
+- **AND** this retained-reader proof SHALL NOT authorize a current-bank candidate to borrow A's frozen voice or substitute native restore for public Loader assignment replacement
+
 #### Scenario: Cleanup races a new generation or fails sharing
 - **WHEN** cleanup encounters a new generation, unknown file, external path, reparse point or sharing denial
 - **THEN** it preserves non-owned content and defers/report failures through bounded control status

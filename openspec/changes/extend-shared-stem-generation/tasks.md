@@ -129,7 +129,13 @@
   Weak-zero, physical three-area cleanup and own V2 Unload/SampleStopped.
   Existing finite owner-family preservation proofs are logically reused where
   source inputs/topology are unchanged, without fresh Cartesian claims.
-  Retained FrozenStemView A after bank B final cleanup, active ON-to-OFF control,
+  The subsequent Frozen unfinished-handover/own-Unload report adds one physical
+  ON history: genuine bank B native restore(false) leaves claimed A-V2 and
+  outgoing V1 in actual FrozenStemView, strict short A rendering keeps its ramp
+  unfinished, and saved A Unload/own SampleStopped precede both actual final
+  readers' Weak-zero and all six areas' worker cleanup. Native restore does not
+  prove public Loader B assignment or B candidate adoption. Progressive frozen
+  outgoing completion/RetainedVoice fresh Native, active ON-to-OFF control,
   full L4/all-reader, whole P4b/P5a/P5b, resources and final/Human remain open.
 - [x] 4.3 Run impact-based native/Python/static/official strict checks, inspect
   callback safety, document delivered limits and obtain independent nonauthor
@@ -143,6 +149,14 @@
   preflight/183 Python results are reused; exact failed fixture attempt,
   authorized pre-Unload Legacy(None) reference repair, profiles and remaining
   gates are recorded in the Seek/one-shot lifetime report.
+  The Frozen unfinished-handover/own-Unload extension passes the focused new
+  case and fresh109-case residency repeat, actual13-case retirement, fmt and
+  Clippy with unchanged warnings/no changed-file diagnostics. The first full
+  run's unchanged stale-Seek synchronization timeout, exact passing focus and
+  same-profile repeat remain recorded with unknown cause; no test condition or
+  timeout is relaxed. Unchanged1827227 production Release/preflight/183 Python
+  checks are reused. Final strict/consistency/review receipts and remaining
+  progressive Frozen/parent/Human gates belong to the same dedicated report.
 
 ## 5. X11-BULK: all-bank generation and Cancel (B1)
 

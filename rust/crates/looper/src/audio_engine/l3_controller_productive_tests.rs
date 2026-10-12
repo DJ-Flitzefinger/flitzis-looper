@@ -154,6 +154,7 @@ enum CandidateLifecycle {
     Existing,
     CleanupAfterClaim,
     QueuedUnloadCleanup,
+    FrozenUnload,
 }
 
 #[derive(Clone, Copy)]
@@ -3184,6 +3185,345 @@ loader.set_sample_unloaded_callback(unloaded_control)
     );
 }
 
+fn frozen_source_final_readers_then_public_unload(
+    engine: &AudioEngine,
+    root: &Path,
+    producer: &Arc<Mutex<rtrb::Producer<ControlMessage>>>,
+    playback: &mut ControllerPlayback,
+    queues: (
+        &mut rtrb::Consumer<ControlMessage>,
+        &mut rtrb::Consumer<ControlParameterMessage>,
+    ),
+    locals: &Py<PyDict>,
+    probes: (&FinalReaderProbe, &FinalReaderProbe),
+) {
+    use crate::audio_engine::cold_residency::ResidentLoadHint;
+    use crate::messages::ResidentContext;
+    let (consumer, parameters) = queues;
+    let (old, current) = probes;
+    assert!(consumer.is_empty() && parameters.is_empty());
+    assert!(playback.callback.retirement.actual.is_some());
+    assert!(playback.callback.retirement.retired.is_empty());
+    assert!(!playback.scheduled && playback.seek_epoch.is_none());
+    assert!(playback.selection.is_some() && playback.previous.is_some());
+    assert_ne!(playback.selection, playback.previous);
+    controller_python(
+        locals,
+        r#"
+assert first.effective_mode_status() == 'rejected' and not first.is_current()
+assert candidate.is_current() and candidate.claimed()
+assert candidate.effective_mode_status() == 'transitioning'
+assert candidate.effective_failure_reason() is None
+assert project.stem_cache[0].pair == disk_v2 and project.pad_stem_mix_mode[0] == 'all_stems'
+controller._assets.sync_assignments()
+assert ('stems', 0) in controller._assets._assignments
+assert ('original', 215) in controller._assets._assignments
+frozen_saved_path = project.sample_paths[0]
+frozen_saved_content = project.pad_content[0]
+# Only observation/fixture aliases end here. The real Native and both actual
+# callback sets remain until B freezes them and own Unload retires them.
+del first, previous_control
+"#,
+    );
+    Python::attach(|py| {
+        engine.poll_loader_events(py).unwrap();
+    });
+    old.assert_retained();
+    current.assert_retained();
+    let a = voice(&playback.callback.mixer).sample.clone().unwrap();
+    let before = voice(&playback.callback.mixer);
+    assert!(!before.paused && before.frozen_stems.is_none());
+    let clock = before.source_playback;
+    let generation = before.generation;
+    let native = before.stretch.native_state_address();
+    let adopted = before.stretch.adopted_request_id();
+    let fifo = before.stretch.pending_fifo_frames();
+    let history = before.stretch.productive_history().unwrap();
+    let dsp = playback
+        .callback
+        .mixer
+        .dsp_source_history_for_test(0)
+        .unwrap();
+    let transition = playback.callback.mixer.stem_transition_for_measurement(0);
+    assert!(transition.is_active());
+    let selection = crate::audio_engine::source_reader::StemRenderSelection::for_stems(
+        playback.callback.mixer.stems_for_measurement()[0]
+            .as_ref()
+            .unwrap(),
+        0b1010,
+    );
+    let incoming_pcm = playback.callback.mixer.stems_for_measurement()[0]
+        .as_ref()
+        .unwrap()
+        .stems
+        .each_ref()
+        .map(|stem| stem.samples.as_ptr() as usize);
+    let outgoing_pcm = playback
+        .callback
+        .mixer
+        .outgoing_stems_for_measurement(0)
+        .unwrap()
+        .stems
+        .each_ref()
+        .map(|stem| stem.samples.as_ptr() as usize);
+    let consumed = playback.source_frame;
+    let output_frame = playback.frame;
+    let feedback = playback.callback.feedback.events.len();
+    let other = other_voice(&playback.callback.mixer);
+    let other_source = other.sample.clone().unwrap();
+    let other_clock = other.source_playback;
+    let other_generation = other.generation;
+    let other_native = other.stretch.native_state_address();
+    let other_fifo = other.stretch.pending_fifo_frames();
+    let other_demand = playback.callback.mixer.stem_demand_for_measurement(215);
+
+    // Reuse the actual distinct-B native restore operation from the frozen-bank
+    // rejection fixture. This does not change the saved public A assignment.
+    let input = signal_sum_wav(4096, &[4, 5, 6, 7]);
+    let expected_b: Vec<f32> = input[44..]
+        .chunks_exact(2)
+        .map(|bytes| f32::from(i16::from_le_bytes(bytes.try_into().unwrap())) / 32768.0)
+        .collect();
+    let input_path = root.join("final-reader-bank-b.wav");
+    fs::write(&input_path, input).unwrap();
+    let material = Arc::new(prepare_material(root, &input_path, RATE, 2, &|| false).unwrap());
+    assert_eq!(material.sample.samples.as_ref(), expected_b.as_slice());
+    let b_original_before = fs::read(&material.lease.original_path).unwrap();
+    let _original_owner = engine
+        .project_assets
+        .acquire(root, &material.lease.original_path)
+        .unwrap();
+    playback.callback.retirement.slots = 2;
+    let admitted = crate::audio_engine::cold_load::admit_selected_material(
+        engine,
+        0,
+        material.metadata()["new_reference"]
+            .as_str()
+            .unwrap()
+            .to_owned(),
+        (
+            false,
+            false,
+            false,
+            Some(ResidentLoadHint {
+                start_s: LOOP_START as f64 / f64::from(RATE),
+                end_s: LOOP_END as f64 / f64::from(RATE),
+                key_lock: true,
+            }),
+        ),
+        producer.clone(),
+        (2, RATE, root.to_path_buf()),
+        "restore",
+        Some(material.clone()),
+    )
+    .unwrap();
+    wait_until(|| consumer.peek().is_ok() || admitted.adoption.load(Ordering::Acquire) != 0);
+    assert_eq!(admitted.adoption.load(Ordering::Acquire), 0);
+    assert!(
+        matches!(consumer.peek(), Ok(ControlMessage::LoadColdSample {
+        id: 0, replace_assignment: false, sample, ..
+    }) if !sample.same_source(&a))
+    );
+    assert_eq!(
+        playback.drain(consumer),
+        0,
+        "actual B restore waits for retirement capacity"
+    );
+    playback.callback.retirement.slots = usize::MAX;
+    assert_eq!(
+        playback.drain(consumer),
+        1,
+        "actual native B bank restore ACK"
+    );
+    assert!(consumer.is_empty());
+    source_successes(engine, &[admitted.request_id]);
+    let b = playback.callback.mixer.bank_for_measurement()[0]
+        .clone()
+        .unwrap();
+    assert!(!b.same_source(&a) && !Arc::ptr_eq(&b.samples, &a.samples));
+    assert_eq!(
+        b.residency.as_ref().unwrap().context,
+        ResidentContext::KeyLockFullTrack
+    );
+    assert_eq!(
+        (b.resident_start(), b.resident_end(), b.frame_count()),
+        (0, 4096, 4096)
+    );
+    assert_eq!(b.samples.as_ref(), expected_b.as_slice());
+    assert!(playback.callback.mixer.stems_for_measurement()[0].is_none());
+    assert!(
+        playback
+            .callback
+            .mixer
+            .outgoing_stems_for_measurement(0)
+            .is_none()
+    );
+    assert!(playback.callback.mixer.key_lock_for_measurement(0));
+    let frozen = voice(&playback.callback.mixer)
+        .frozen_stems
+        .as_ref()
+        .unwrap();
+    assert_eq!(frozen.selection, selection);
+    assert!(frozen.transition.matches_exact(transition) && frozen.transition.is_active());
+    let assert_frozen_owners = |playback: &ControllerPlayback| {
+        let voice = voice(&playback.callback.mixer);
+        assert_eq!(voice.generation, generation);
+        assert_eq!(voice.stretch.native_state_address(), native);
+        assert_eq!(voice.stretch.adopted_request_id(), adopted);
+        assert!(Arc::ptr_eq(
+            &voice.sample.as_ref().unwrap().samples,
+            &a.samples
+        ));
+        let frozen = voice.frozen_stems.as_ref().expect("actual A frozen view");
+        assert_eq!(frozen.selection, selection);
+        assert!(frozen.transition.is_active());
+        let incoming = frozen.set.as_ref().unwrap();
+        let outgoing = frozen.outgoing.as_ref().unwrap();
+        assert!(
+            current
+                .identity
+                .ptr_eq(&Arc::downgrade(&incoming.complete_set_identity))
+        );
+        assert!(
+            old.identity
+                .ptr_eq(&Arc::downgrade(&outgoing.complete_set_identity))
+        );
+        assert_eq!(
+            incoming
+                .stems
+                .each_ref()
+                .map(|stem| stem.samples.as_ptr() as usize),
+            incoming_pcm
+        );
+        assert_eq!(
+            outgoing
+                .stems
+                .each_ref()
+                .map(|stem| stem.samples.as_ptr() as usize),
+            outgoing_pcm
+        );
+        assert!(
+            incoming
+                .stems
+                .iter()
+                .chain(&outgoing.stems)
+                .all(|stem| stem.same_window(&a))
+        );
+        old.assert_retained();
+        current.assert_retained();
+    };
+    assert_frozen_owners(playback);
+    let after = voice(&playback.callback.mixer);
+    assert!(after.source_playback.matches_exact(&clock));
+    assert_eq!(after.stretch.pending_fifo_frames(), fifo);
+    let after_history = after.stretch.productive_history().unwrap();
+    assert_eq!(after_history.binding, history.binding);
+    assert_eq!(after_history.next_position, history.next_position);
+    assert_eq!(after_history.fed_output_frames, history.fed_output_frames);
+    let after_dsp = playback
+        .callback
+        .mixer
+        .dsp_source_history_for_test(0)
+        .unwrap();
+    assert_eq!(after_dsp.binding, dsp.binding);
+    assert_eq!(after_dsp.next_position, dsp.next_position);
+    assert_eq!(after_dsp.fed_output_frames, dsp.fed_output_frames);
+    assert_eq!(
+        (playback.frame, playback.source_frame),
+        (output_frame, consumed)
+    );
+    assert_eq!(playback.callback.feedback.events.len(), feedback);
+    assert!(
+        other_voice(&playback.callback.mixer)
+            .source_playback
+            .matches_exact(&other_clock)
+    );
+    controller_python(
+        locals,
+        r#"
+assert candidate.claimed() and not candidate.is_current()
+assert candidate.residency_status() == 'accepted' and candidate.effective_mode_status() == 'rejected'
+assert candidate.effective_failure_reason() is None
+assert project.sample_paths[0] == frozen_saved_path and project.pad_content[0] == frozen_saved_content
+assert project.stem_cache[0].pair == disk_v2 and project.pad_stem_mix_mode[0] == 'all_stems'
+assert ('stems', 0) in controller._assets._assignments
+"#,
+    );
+    // The bank's former V1/V2 slot copies have really left the callback and
+    // worker. Only actual frozen readers and used Native/history retain them.
+    let marker = Arc::new(AtomicU8::new(0));
+    let completion = Arc::downgrade(&marker);
+    playback.callback.retirement.retire_cold_adoption(marker);
+    old.wait_for("B restore prior bank-owner FIFO retirement", || {
+        completion.strong_count() == 0
+    });
+    assert!(playback.callback.retirement.retired.is_empty());
+    assert_frozen_owners(playback);
+
+    // Seventeen productive frames exercise FrozenStemView's set AND outgoing
+    // through the independent complete A PCM/raw Native/EQ oracle. The physical
+    // source clock advances by12.75frames, leaving the128-source-frame ramp busy.
+    let (actual, full_mix) = playback.render(17, false);
+    assert!(actual.iter().any(|sample| sample.abs() > 0.001));
+    assert_ne!(actual, full_mix);
+    assert_eq!(playback.source_frame, consumed + 17);
+    assert_eq!(playback.frame, output_frame + 17);
+    assert_frozen_owners(playback);
+    let phase = (playback.source_frame as f64 * playback.ratio).rem_euclid(1500.0);
+    let position = voice(&playback.callback.mixer).source_playback.position();
+    assert_eq!(position.frame, LOOP_START + phase.floor() as usize);
+    assert_eq!(position.fraction.to_bits(), phase.fract().to_bits());
+    assert_eq!(
+        voice(&playback.callback.mixer)
+            .source_playback
+            .loop_period(),
+        None
+    );
+    let other = other_voice(&playback.callback.mixer);
+    assert_eq!(
+        other.source_playback.position().frame,
+        LOOP_START + phase.floor() as usize
+    );
+    assert_eq!(
+        other.source_playback.position().fraction.to_bits(),
+        phase.fract().to_bits()
+    );
+    assert_eq!(other.generation, other_generation);
+    assert_eq!(other.stretch.native_state_address(), other_native);
+    assert_eq!(other.stretch.pending_fifo_frames(), other_fifo);
+    assert!(Arc::ptr_eq(
+        &other.sample.as_ref().unwrap().samples,
+        &other_source.samples
+    ));
+    assert_eq!(
+        playback.callback.mixer.stem_demand_for_measurement(215),
+        other_demand
+    );
+    assert!(playback.callback.mixer.stems_for_measurement()[215].is_none());
+    controller_python(
+        locals,
+        r#"
+assert project.sample_paths[0] == frozen_saved_path and project.pad_content[0] == frozen_saved_content
+assert project.stem_cache[0].pair == disk_v2
+assert ('stems', 0) in controller._assets._assignments
+assert not session.stem_generation_errors and not session.sample_load_errors
+"#,
+    );
+    public_unload_reader_pairs(
+        engine,
+        playback,
+        (consumer, parameters),
+        locals,
+        &[old, current],
+        None,
+        true,
+    );
+    assert_eq!(
+        fs::read(&material.lease.original_path).unwrap(),
+        b_original_before
+    );
+}
+
 fn public_unload_effective_pair(
     engine: &AudioEngine,
     playback: &mut ControllerPlayback,
@@ -3193,13 +3533,44 @@ fn public_unload_effective_pair(
     current: &FinalReaderProbe,
     preserved: Option<&FinalReaderProbe>,
 ) {
+    public_unload_reader_pairs(
+        engine,
+        playback,
+        (consumer, parameters),
+        locals,
+        &[current],
+        preserved,
+        false,
+    );
+}
+
+fn public_unload_reader_pairs(
+    engine: &AudioEngine,
+    playback: &mut ControllerPlayback,
+    queues: (
+        &mut rtrb::Consumer<ControlMessage>,
+        &mut rtrb::Consumer<ControlParameterMessage>,
+    ),
+    locals: &Py<PyDict>,
+    retiring: &[&FinalReaderProbe],
+    preserved: Option<&FinalReaderProbe>,
+    frozen_unload: bool,
+) {
+    let (consumer, parameters) = queues;
+    let current = retiring.last().unwrap();
     assert!(playback.callback.retirement.actual.is_some());
     assert!(playback.callback.retirement.retired.is_empty());
-    current.assert_retained();
+    for probe in retiring {
+        probe.assert_retained();
+    }
     Python::attach(|py| {
         locals
             .bind(py)
             .set_item("preserve_saved_copy", preserved.is_some())
+            .unwrap();
+        locals
+            .bind(py)
+            .set_item("frozen_unload", frozen_unload)
             .unwrap();
     });
     let pause_gap = playback.frame - playback.source_frame;
@@ -3231,8 +3602,17 @@ effective_unload_workers = audio.worker_call_count()
 effective_other_path = project.sample_paths[215]
 effective_other_content = project.pad_content[215]
 assert effective_other_path is not None and effective_other_content is not None
-assert candidate.is_current() and candidate.claimed()
-assert candidate.effective_mode_status() == 'effective'
+assert candidate.claimed()
+if frozen_unload:
+    assert not candidate.is_current() and candidate.residency_status() == 'accepted'
+    assert candidate.effective_mode_status() == 'rejected'
+    assert candidate.error() == 'Committed stem residency or mode ownership changed'
+    assert candidate.effective_failure_reason() is None
+    assert project.stem_cache[0].pair == disk_v2
+    assert project.pad_stem_mix_mode[0] == 'all_stems'
+    assert ('stems', 0) in controller._assets._assignments
+else:
+    assert candidate.is_current() and candidate.effective_mode_status() == 'effective'
 loader.unload_sample(0)
 assert project.sample_paths[0] is None and project.pad_content[0] is None
 assert project.stem_cache[0] is None and not controller._committed_residency.contains(0)
@@ -3240,6 +3620,7 @@ assert project.pad_stem_mix_mode[0] == 'full_mix' and project.pad_key_lock[0] is
 assert 0 not in session.active_sample_ids and 215 in session.active_sample_ids
 assert not candidate.is_current()
 assert controller.stem_residency_status(0) is None
+assert ('stems', 0) not in controller._assets._assignments
 if preserve_saved_copy:
     assert project.stem_cache[copy_id] is copy_entry and copy_entry.pair == disk_v1
     assert project.pad_content[copy_id] == copy_content
@@ -3252,6 +3633,11 @@ del prepared_v2, candidate, live
     );
     if let Some(old) = preserved {
         old.assert_files_retained();
+    }
+    // Public saved custody and fixture pair/receipt aliases have ended. The
+    // actual callback/frozen/Native readers still precede their own Unload ACK.
+    for probe in retiring {
+        probe.assert_retained();
     }
     let before = playback.callback.feedback.events.len();
     crate::audio_engine::audio_stream::drain_parameter_messages(
@@ -3338,14 +3724,18 @@ del prepared_v2, candidate, live
     });
     current.wait_for("effective V2 Unload final Native/history readers", || {
         render_inactive(137);
-        current.identity.strong_count() == 0
-            && current.pcm.iter().all(|pcm| pcm.strong_count() == 0)
+        retiring.iter().all(|probe| {
+            probe.identity.strong_count() == 0
+                && probe.pcm.iter().all(|pcm| pcm.strong_count() == 0)
+        })
     });
-    current.wait_for("effective V2 Unload asset worker cleanup", || {
+    current.wait_for("effective pair Unload asset worker cleanup", || {
         if let Some(old) = preserved {
             old.assert_files_retained();
         }
-        current.areas.iter().all(|path| !path.exists())
+        retiring
+            .iter()
+            .all(|probe| probe.areas.iter().all(|path| !path.exists()))
     });
     controller_python(
         locals,
@@ -3366,9 +3756,11 @@ assert not controller._assets.retirement_errors
 "#,
     );
     assert_eq!(playback.source_frame, frozen_source_frame);
-    assert_eq!(current.identity.strong_count(), 0);
-    assert!(current.pcm.iter().all(|pcm| pcm.strong_count() == 0));
-    assert!(current.areas.iter().all(|path| !path.exists()));
+    for probe in retiring {
+        assert_eq!(probe.identity.strong_count(), 0);
+        assert!(probe.pcm.iter().all(|pcm| pcm.strong_count() == 0));
+        assert!(probe.areas.iter().all(|path| !path.exists()));
+    }
     assert!(playback.callback.retirement.retired.is_empty());
     assert!(consumer.is_empty());
     assert_other(playback);
@@ -7906,6 +8298,8 @@ fn round_trip_with_lifecycle(
     lifecycle: CandidateLifecycle,
 ) {
     let domain_final_reader = lifecycle == CandidateLifecycle::CleanupAfterClaim;
+    let frozen_final_reader = lifecycle == CandidateLifecycle::FrozenUnload;
+    assert!(!frozen_final_reader || matches!(trace, CandidateTrace::Ordinary));
     let full_track = matches!(trace, CandidateTrace::FullTrack);
     let complete_partial = matches!(trace, CandidateTrace::CompletePartial { .. });
     let stopped_partial = matches!(trace, CandidateTrace::CompletePartial { stopped: true, .. });
@@ -8014,7 +8408,8 @@ fn round_trip_with_lifecycle(
         || saved_copy
         || shared_job
         || disk_settlement
-        || domain_final_reader;
+        || domain_final_reader
+        || frozen_final_reader;
     assert!(
         !(claimed_masks
             || preclaim_masks
@@ -9527,6 +9922,46 @@ if window_change:
     assert session.stem_generation_errors == {0: window_error}
 "#,
     );
+    if frozen_final_reader {
+        let candidate: Value = Python::attach(|py| {
+            serde_json::from_str(
+                &locals
+                    .bind(py)
+                    .get_item("candidate_json")
+                    .unwrap()
+                    .unwrap()
+                    .extract::<String>()
+                    .unwrap(),
+            )
+            .unwrap()
+        });
+        let current = FinalReaderProbe::new(
+            &h.root,
+            &candidate,
+            playback.callback.mixer.stems_for_measurement()[0]
+                .as_ref()
+                .unwrap(),
+        );
+        frozen_source_final_readers_then_public_unload(
+            &engine,
+            &h.root,
+            &h.producer,
+            &mut playback,
+            (&mut h.consumer, &mut parameter_consumer),
+            &locals,
+            (final_old.as_ref().unwrap(), &current),
+        );
+        assert_eq!(
+            fs::read(&h.material.lease.original_path).unwrap(),
+            *original_before.as_ref().unwrap()
+        );
+        controller_python(
+            &locals,
+            "controller.shut_down()\ncontroller._assets.release_saved_assignments()\nowner_v1.release()\nowner_v2.release()",
+        );
+        std::env::set_current_dir(previous_cwd).unwrap();
+        return;
+    }
     if repeated_sets {
         let (v3, source_ticket) = version_files(
             &engine,
@@ -11330,6 +11765,24 @@ fn actual_python_controller_varispeed_paused_before_first_candidate_keeps_consum
 #[test]
 fn actual_public_full_track_first_and_replacement_require_own_wet_effect() {
     full_track_public_child(true);
+}
+
+#[test]
+fn actual_public_frozen_source_final_reader_unfinished_handover_unload_cleans_both_pairs() {
+    residual_domain_child(
+        "actual_public_frozen_source_final_reader_unfinished_handover_unload_cleans_both_pairs",
+        || {
+            round_trip_with_lifecycle(
+                true,
+                None,
+                true,
+                None,
+                false,
+                CandidateTrace::Ordinary,
+                CandidateLifecycle::FrozenUnload,
+            )
+        },
+    );
 }
 
 #[test]

@@ -370,6 +370,26 @@ cannot replace that lifecycle proof. Native restore with `replace_assignment=fal
 also does not establish public Loader assignment replacement. Stable OFF custody
 reuse does not establish an active ON-to-OFF control/history transition.
 
+The retained-source unfinished-Unload lifetime starts with A's genuinely claimed V2
+and outgoing V1 before its handover finishes. Existing native restore admits B
+with `replace_assignment=false`; FrozenStemView must retain both actual A sets,
+the occupied transition and used Native/history independently of B's bank.
+Real bank retirement precedes a strict short A render and continued file custody.
+The later public own Unload ends the genuine saved A selection, and its own ACK,
+audio FIFO and final Native/history/complete-reader release must precede both
+generations' identity/four-PCM Weak expiration and all six area removals. The
+bounded physical ON software proof and actual validation receipts are recorded
+in `docs/prepared-stem-publication.md`, Frozen unfinished-handover/own-Unload
+report. It does not establish public Loader B assignment, candidate adoption
+for B, active ON-to-OFF or full-L4/Human acceptance.
+
+Progressive FrozenStemView completion remains a separate gate: its own consumed
+transition retires only outgoing V1 while frozen A/V2 continues under bank B.
+Actual later retained-A Native preparation must replace the old V1 history pins
+before V1 identity/four-PCM Weak expiration and three-area cleanup; A/V2 must
+remain productive until its later own public Unload. Whole-container Unload does
+not establish that outgoing retry/FIFO or RetainedVoice-authority route.
+
 ## B1: all-loaded generation and cooperative Cancel
 
 Confirmation captures bounded all-bank slot/content/material identities, selected

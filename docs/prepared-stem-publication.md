@@ -1598,6 +1598,62 @@ active ON-to-OFF control,
 full L4/all-reader, P4b/P5a/P5b, complete musical/resource matrices and all
 final/Human gates remain open.
 
+### Frozen unfinished handover and own Unload — 2026-10-12
+
+`actual_public_frozen_source_final_reader_unfinished_handover_unload_cleans_both_pairs`
+starts with A-V1's own KEY LOCK ON wet output and a distinct V2's actual public
+Capture, worker, Adopt and claimed but unfinished 128-source-frame handover.
+The existing native restore admits genuinely different complete ON bank B with
+`replace_assignment=false`. A's genuine saved V2 assignment remains selected;
+its actual voice freezes V2 and outgoing V1 rather than reading from bank B.
+
+The test verifies both exact complete-set identities and all eight component
+PCM pointers, frozen selection and occupied transition, retained A source
+trajectory, used Native/FIFO, productive and DSP histories. A production
+audio-worker FIFO marker proves retirement of the former bank-slot copies;
+both actual frozen generations still protect their WAV, PCM and descriptor
+areas. Seventeen productive frames match independent complete A component PCM,
+raw Native/FIFO and uninterrupted nonneutral EQ while the physical source clock
+advances only12.75 frames and the handover remains unfinished. Pad215 retains
+its independent physical clock, source, voice, Native/FIFO and demand.
+
+Own public Loader Unload then ends the actual saved A-V2 assignment and fixture
+observation aliases. Both reader probes remain retained before the four own
+commands and single `SampleStopped` acknowledgement are consumed. Actual
+frozen-container, audio-worker, Native/history and complete-reader retirement
+must expire both identities and every component PCM Weak owner before the
+existing asset worker removes all six retired areas. A and B originals remain
+byte-identical, and pad215 remains usable.
+
+This is one physical ON interrupted-handover lifetime. Native B restore does
+not establish public Loader B assignment or new B candidate adoption, nor does
+it authorize B to borrow A's retained voice. Progressive frozen handover
+completion remains a separate gate: its consumed transition retires outgoing
+V1 while A/V2 continues, and a later actual retained-A Native preparation must
+replace the old V1 history pins before V1-only cleanup. Whole-container Unload
+does not prove that outgoing retry/FIFO or RetainedVoice-authority route.
+Active ON-to-OFF, full L4/all-reader, P4b/P5a/P5b, complete musical/resource and
+final/Human gates remain open.
+
+The focused Release case passes in1.97s after70s compilation. The first
+integrated residency run reports108 pass/one failure in459.00s: an unchanged
+stale-Seek negative reaches the generic10s cold-worker synchronization limit.
+Its exact unchanged focused rerun passes in18.04s; no timeout, predicate or
+test is altered, and the failure cause is not established by that pass.
+The same unchanged full profile, rerun with backtrace enabled, passes all109
+cases in461.52s after0.49s compile. The first failed receipt is retained with
+unknown cause; the repeat is not proof of timing/environment flakiness.
+The actual retirement profile passes13 cases in1.32s after0.18s compile.
+Final fmt and workspace/tests Clippy pass; Clippy finishes in8.81s with the
+existing63 warnings plus one duplicate and no changed-file diagnostics.
+Only the productive cfg(test) child changes Rust, so unchanged production1827227
+build-only Release24.18s, private API/controller/UI preflight and six Python
+files/183 tests49.61s are reused, with no fresh production build or Python run.
+Installed Human Native remains29289472 bytes with unchanged UTC write time
+2026-10-12T10:35:47.4258145Z. No installation or Human acceptance is claimed.
+Official strict and final document/coverage consistency pass. The same one
+independent final source/fact review closes with no actionable finding.
+
 ### Native current-bank eligibility does not transfer to retained A
 
 `actual_native_current_bank_candidate_cannot_borrow_frozen_old_voice_with_keylock_on`
