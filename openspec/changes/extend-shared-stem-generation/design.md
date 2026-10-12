@@ -343,6 +343,33 @@ only after the true final reader. Save/reopen, failed-native retry, shutdown and
 unknown-file tests retain source and current set. Human final tests verify UI,
 audible continuity and selected-model behavior; software gates cannot close them.
 
+The bounded domain-specific lifetime proof composes the existing public
+candidate domain with an orthogonal replacement or queued-Unload lifecycle.
+It uses eight ON replacement contexts (finite Intro/Tail, changed/equal finite
+Normal Seek, complete-source proper-partial Normal/Intro/Tail and complete-source
+Normal), plus two queued-Unload representatives in finite musical Tail and
+complete-source musical Intro. Public Pause/Resume occurs during the occupied
+replacement ramp. Real callback retirement, retained Native/history, later own
+complete Native preparation, identity/component Weak expiration and physical
+asset-worker cleanup establish final release; snapshot ownership counts alone
+are insufficient. Final V2 public Unload follows the live domain/output checks.
+Existing finite owner-family custody/preservation results can be reused only
+where their inputs and ownership topology are unchanged. All ten histories and
+the fresh108-case residency/13-case retirement profiles pass; fmt/Clippy pass
+with unchanged warnings and no changed-file diagnostics. The unchanged production
+1827227 Release/private import/preflight and183 Python results are reused.
+Exact profiles and the repaired pre-Unload Legacy(None) reference omission are
+documented in `docs/prepared-stem-publication.md`. This extends bounded task4.2/4.3
+candidate-domain software-lifecycle coverage, without a full Cartesian, full-L4
+or Human acceptance claim.
+
+Retained frozen A after actual native bank-B restore has a separate
+FrozenStemView current/outgoing owner route. Its productive final-reader cleanup
+is outside this candidate-domain gate; the existing negative/admission proof
+cannot replace that lifecycle proof. Native restore with `replace_assignment=false`
+also does not establish public Loader assignment replacement. Stable OFF custody
+reuse does not establish an active ON-to-OFF control/history transition.
+
 ## B1: all-loaded generation and cooperative Cancel
 
 Confirmation captures bounded all-bank slot/content/material identities, selected

@@ -120,13 +120,29 @@
   sharing-error retry, shutdown, unknown/external/newer file preservation.
   Bounded finite NormalLoop/off-thread lifecycle owner-family consolidation:
   `docs/prepared-stem-publication.md`, task4.2 software closure of 2026-10-12.
-  Additional3.3, whole P4b/P5a/P5b, resources and Human/full L4 remain separate.
+  That initial finite delivery left additional3.3 lifetime proofs separate.
+  The later Seek/one-shot final-reader report extends bounded4.2 software
+  lifecycle to supported task3.3 candidate domains: eight ON replacements
+  (seven87.6 musical, full-source Normal physical) and two queued-Unload
+  representatives use actual busy Pause/Resume, outgoing FIFO retirement,
+  retained Native/history, later own4096 Native, actual identity/four-PCM
+  Weak-zero, physical three-area cleanup and own V2 Unload/SampleStopped.
+  Existing finite owner-family preservation proofs are logically reused where
+  source inputs/topology are unchanged, without fresh Cartesian claims.
+  Retained FrozenStemView A after bank B final cleanup, active ON-to-OFF control,
+  full L4/all-reader, whole P4b/P5a/P5b, resources and final/Human remain open.
 - [x] 4.3 Run impact-based native/Python/static/official strict checks, inspect
   callback safety, document delivered limits and obtain independent nonauthor
   source/test review. Leave genuine Human GUI/device/hearing gates open.
   Impacted82-case residency,13-case retirement and80-case Python profiles,
   static/strict, reusable unchanged production Release/import and bounded
   nonauthor source/test reviews are documented with their actual limits.
+  The candidate-domain lifetime extension passes fresh108-case residency and
+  13-case actual retirement profiles, fmt/Clippy with unchanged warnings/no
+  changed-file diagnostics. Unchanged production1827227 Release/private
+  preflight/183 Python results are reused; exact failed fixture attempt,
+  authorized pre-Unload Legacy(None) reference repair, profiles and remaining
+  gates are recorded in the Seek/one-shot lifetime report.
 
 ## 5. X11-BULK: all-bank generation and Cancel (B1)
 

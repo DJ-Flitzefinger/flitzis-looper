@@ -780,6 +780,24 @@ Original FullMix/source PCM SHALL remain usable after stem deletion.
 - **AND** only the actual audio retirement worker and final Native/history/complete-reader release SHALL permit the off-thread asset worker to remove each retired pair's three areas
 - **AND** the current original, unrelated saved assignments and unrelated playing pads SHALL remain usable
 
+#### Scenario: Seek and one-shot replacement releases its actual final readers
+- **GIVEN** productive selected V1 KEY LOCK ON playback in a supported acknowledged changed/equal in-loop Seek, finite Intro/Tail, complete-source partial-loop Normal/Intro/Tail or complete-source Normal context, and V2's own claimed replacement
+- **WHEN** the pad is publicly paused during its consumed-source handover
+- **THEN** source phase, Native/FIFO/history, the occupied transition and both immutable generations SHALL remain frozen and their WAV, PCM and descriptor areas SHALL remain protected
+- **WHEN** own Resume finishes that handover and actual callback retirement releases the outgoing lane
+- **THEN** the still-used predecessor Native/history and complete PCM readers SHALL continue protecting V1's three areas
+- **AND** cleanup SHALL wait until V2's own later complete Native preparation and actual retirement release every remaining V1 identity and component PCM owner
+- **WHEN** the later own public V2 Unload is consumed and reports its own `SampleStopped` acknowledgement
+- **THEN** V2 cleanup SHALL likewise wait for every actual remaining Native/history/complete-reader owner; the original and unrelated playing pads SHALL remain usable throughout
+
+#### Scenario: Seek-domain queued Unload preserves both generations until final release
+- **GIVEN** effective V1 KEY LOCK ON playback in a supported finite musical Tail or actual complete-source musical Intro and a distinct unclaimed V2 Adopt in the existing FIFO
+- **WHEN** own public Unload revokes that candidate before callback command consumption
+- **THEN** actual queued V2 owners and still-productive V1 Native/history/PCM owners SHALL protect their exact three-area files
+- **AND** candidate rejection SHALL NOT substitute for the Unload's own callback `SampleStopped` acknowledgement
+- **WHEN** that Unload is consumed and actual off-thread retirement releases each generation's final identity and component PCM owners
+- **THEN** the existing asset worker SHALL clean only the eligible exact retired areas, while preserving the original and unrelated playing pads
+
 #### Scenario: Cleanup races a new generation or fails sharing
 - **WHEN** cleanup encounters a new generation, unknown file, external path, reparse point or sharing denial
 - **THEN** it preserves non-owned content and defers/report failures through bounded control status

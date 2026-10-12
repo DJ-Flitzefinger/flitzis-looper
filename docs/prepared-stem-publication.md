@@ -1523,6 +1523,81 @@ Production is unchanged, so existing production Release/import/preflight and
 unchanged Python/UI/static profiles remain reusable without installation.
 Human GUI/device/hearing gates and the broader domains above stay open.
 
+### Seek and one-shot final-reader lifetime — 2026-10-12
+
+`actual_public_domain_final_reader_replacement_cleans_after_busy_pause_and_own_unload`
+connects eight actual ON replacement histories to the existing retirement and
+asset workers:
+
+| Domain | Independent lifetime distinction |
+| --- | --- |
+| Finite musical Intro and Tail | Physical prefix/suffix plus accepted loop return retain the exact component union |
+| Changed and equal finite musical Normal Seek | Own acknowledged history cut, including equal numeric phase, precedes replacement |
+| Complete-resident proper-partial musical Normal | Complete physical residence remains distinct from the declared partial loop |
+| Complete-resident proper-partial musical Intro and Tail | Actual KeyLockFullTrack readers span the physical one-shot and later loop |
+| Complete-source physical Normal | Actual complete residence and full-source loop |
+
+`actual_public_domain_final_reader_queued_unload_cleans_finite_tail_and_complete_intro`
+adds two queued-Unload representatives in finite musical Tail and actual
+complete-source musical Intro. Domain geometry and lifecycle are orthogonal
+fixture choices. Public Unload also publishes its declared Legacy(None), gain
+and EQ defaults before the held command is consumed. Independent references
+must reflect that authorized timing reset rather than retaining the old musical
+projection; unrelated pad215 retains its own physical trajectory at its declared
+ratio. The gate
+requires public busy-handover Pause/Resume, real
+outgoing audio-worker FIFO consumption, still-retained Native/history, later own
+complete Native preparation, actual identity/four-component Weak expiration and
+physical three-area asset-worker cleanup. Replacement histories finish all live
+domain, output, seam and reopen checks before the later own public V2 Unload;
+its own SampleStopped ACK and final Native/history release precede V2 cleanup.
+Unrelated pad215 uses an independent consumed-clock ledger through the pause.
+
+Existing finite assignment/job/action/sharing/shutdown/preservation proofs remain
+reusable only where source inputs and ownership topology are unchanged. OFF has
+no additional wet source-request lane; paused-first and other musical variants
+do not add an ownership family. No fresh Cartesian execution is claimed by that
+source-grounded reuse. Retained frozen A after bank B admission has its own
+FrozenStemView owner route and remains a separate final-reader gap; this block
+does not prove that route. Active ON-to-OFF control/history retirement remains a
+separate P5a gate; stable OFF ownership reuse is not a fresh mode-switch execution.
+Complete L4/P4b/P5a/P5b, resources and Human acceptance remain open.
+
+The initial focus passes the eight replacements but fails the first queued
+musical Tail at strict callback-versus-reference SourcePlayback equality:
+the reference omitted the public pre-Unload Legacy(None) reset. Mirroring the
+declared reset in both complete-PCM references and the expected physical loop
+period repairs that fixture. The fallback rate derived from the independent
+prior projection and87.6 target must remain bit-exact; the held renders require
+accepted timing and virtual period to be absent. Complete PCM, raw Native,
+uninterrupted EQ, FIFO, source clocks and exact owners retain their strict checks.
+The first focus reports1 pass/1 failure in15.45s after77s Release compilation;
+the repaired queued-only focus passes its two histories in3.49s after70s compile.
+The fresh integrated residency run passes108 cases in458.49s after0.18s compile,
+including the new ten histories, saved C, running shared job and durable
+settlement. The separate actual `retirement_tests` profile passes13 cases
+in1.28s after0.16s compile, including shutdown, late leases, sharing denial,
+changed targets, external/reparse and custody queues. An initial filename-based
+selector matched zero tests and supplies no regression evidence.
+
+Final fmt and workspace/tests Clippy pass; Clippy reports the unchanged63
+existing warnings plus one duplicate, no changed-file diagnostics, in13.07s.
+Only the cfg(test) productive fixture changes Rust source, so the unchanged
+production1827227 build-only Release24.18s, private API/controller/UI preflight
+and six Python files/183 tests49.61s are reused, rather than freshly rerun.
+The installed Human Native remains29289472 bytes with unchanged UTC write time
+2026-10-12T10:35:47.4258145Z. No Native installation, App/device/hearing or
+full-resource measurement is performed.
+
+This extends bounded task4.2/4.3 software-lifecycle coverage to the delivered
+task3.3 candidate domains using actual final readers and source-grounded reuse
+of unchanged finite owner-family preservation proofs. Official strict validation,
+program/coverage reconciliation and the same one independent final source/fact
+review pass with no remaining finding. Retained frozen-old-source cleanup,
+active ON-to-OFF control,
+full L4/all-reader, P4b/P5a/P5b, complete musical/resource matrices and all
+final/Human gates remain open.
+
 ### Native current-bank eligibility does not transfer to retained A
 
 `actual_native_current_bank_candidate_cannot_borrow_frozen_old_voice_with_keylock_on`
