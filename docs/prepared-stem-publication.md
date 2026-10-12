@@ -531,10 +531,11 @@ Supported candidates require a current FiniteLoop/KeyLockFiniteLoop resident
 context or a physically complete FullTrack/KeyLockFullTrack view, a NormalLoop
 region including the complete `[0,N)` extent, and either no active voice or one
 current voice playing or paused. Separate candidate-only Tail paths require
-no accepted musical timing and the current acknowledged AfterLoop running voice:
+no accepted musical timing and the current acknowledged AfterLoop running or
+paused voice:
 KEY LOCK ON needs actual KeyLockFiniteLoop Tail-and-loop coverage; OFF needs a
 physically complete FullTrack `[0,N)` view. Existing
-ramps, Intro, paused or accepted-musical Tail, ordinary same-set requests in Tail,
+ramps, Intro, accepted-musical Tail, ordinary same-set requests in Tail,
 frozen old-source or multiple same-pad voices remain guarded pending their own productive new-set proofs. Ordinary active publication
 retains its existing `PadPlaying` guard; this candidate transaction supplies the
 separately proved path. This bounded delivery does not close additional-domain
@@ -612,8 +613,8 @@ The additional Native candidate domain is the current acknowledged AfterLoop
 running voice with KEY LOCK ON and no accepted musical timing. A single bounded
 mode predicate is used by Capture and Adopt alongside the existing residency and
 two-reader coverage checks. Ordinary same-set requests keep Normal-only guards;
-Intro, paused or accepted-musical Tail, frozen old-source and multiple same-pad
-voices remain unsupported. OFF uses the separate complete FullTrack proof below.
+Intro, accepted-musical Tail, frozen old-source and multiple same-pad
+voices remain unsupported. OFF and paused Tail use the separate proofs below.
 Existing source/window/launch/timing/history/capacity
 ownership is retained. SourceReadPlan permits natural phase/mode progression;
 NativeHistoryRequest still requires the advanced exact playback/plan checkpoint
@@ -643,9 +644,9 @@ provide the counterfactual. Actual source-end→loop17 return and subsequent loo
 retain the same voice, Native/FIFO and EQ chronology without another Seek/reset.
 
 `actual_tail_unsupported_candidates_preserve_their_own_voice` now keeps genuine
-accepted-musical and paused Tail guards with both KEY LOCK ON and OFF. The former
-running nonmusical OFF rejection is superseded only by the separate complete
-FullTrack OFF proof below. The existing two Intro FullMix/V1
+accepted-musical Tail guards with both KEY LOCK ON and OFF, running or paused.
+The former nonmusical running OFF and paused rejections are superseded only by
+their separate positive proofs below. The existing two Intro FullMix/V1
 histories retain fresh-candidate rejection and productive post-seek Native/FIFO/EQ
 output.
 This bounded Native evidence alone does not prove public Tail-controller gestures,
@@ -706,9 +707,10 @@ Final model-free reopen verifies V2 and the unchanged loop/KEY LOCK intent;
 another active pad retains its original source, owners, Native/FIFO and absolute
 physical phase throughout.
 
-This ON software API proof alone does not prove the separate OFF domain below.
+This running ON software API proof alone does not prove the separate OFF or
+paused domains below.
 Human GUI, CPAL, device and hearing acceptance, Tail final-reader/full-L4 lifecycle,
-paused or accepted-musical Tail, Intro, remaining Seek/Tail domains and whole3.3/P4b/P5a/P5b
+accepted-musical Tail, Intro, remaining Seek/Tail domains and whole3.3/P4b/P5a/P5b
 remain open. Existing NormalLoop and accepted-musical oracle paths are retained.
 
 Validation: the focused Release test passes both histories (2.99s, 58.68s
@@ -731,7 +733,7 @@ Tail-and-loop union; OFF Seek geometry is unchanged. Capture and Adopt share
 the same bounded mode predicate, adding only candidate/current running
 AfterLoop/no accepted musical timing/KEY LOCK OFF/physically complete FullTrack.
 All source/window/launch/timing/voice/history/capacity, exact reader and
-retirement fences remain. Intro, paused or accepted-musical Tail, ordinary
+retirement fences remain. Intro, accepted-musical Tail, ordinary
 same-set requests, frozen old-source and multiple same-pad voices stay guarded.
 
 `actual_public_tail_first_and_replacement_require_own_dry_effect_and_return`
@@ -752,7 +754,8 @@ Actual disk commit/reopen and fresh post-Seek registration remain separate from
 the own consumed-source effect receipt. The old V1 receipt stays obsolete after
 Seek. Saved reopen preserves V2, loop markers and explicit OFF intent; active
 pad215 keeps its own absolute physical phase, source, Native/FIFO and owners.
-Accepted-musical and paused Tail rejection now covers all four ON/OFF contexts.
+Accepted-musical Tail rejection now covers all four running/paused ON/OFF
+contexts. The separate nonmusical paused proof follows below.
 Full task3.3/P4b/P5a/P5b, Tail final-reader/full-L4 lifecycle, remaining domains,
 resources and Human GUI/CPAL/device/hearing acceptance remain open.
 
@@ -770,6 +773,57 @@ Release and API/controller/UI import preflight pass; six affected Python test
 files pass all 154 tests (58.40 seconds) against that separately extracted build.
 The installed extension and Human App remain untouched. These software checks
 do not close the remaining domain, lifecycle, resource or Human gates above.
+
+### Paused nonmusical Tail waits for own resumed effectiveness — 2026-10-12
+
+The same bounded candidate-only Tail transaction now accepts a single current
+paused voice after its own acknowledged Seek. ON retains the actual
+KeyLockFiniteLoop union; OFF retains complete FullTrack `[0,N)`. Removing the
+two paused non-Normal exclusions at Capture and Adopt leaves the common mode,
+source/window/timing/launch/history/capacity, exact two-reader and retirement
+checks authoritative. The effect predicate still requires an unpaused voice
+and actual ready output. Intro, accepted-musical Tail, ordinary same-set,
+frozen old-source and multiple same-pad voices remain guarded.
+
+`actual_public_paused_tail_first_and_replacement_require_own_resumed_wet_effect`
+and `actual_public_paused_tail_first_and_replacement_require_own_resumed_dry_effect`
+each run FullMix and selected V1
+histories. The actual public Tail Seek, post-Seek productive output and own
+ON preparation precede public Pause of pads0/215. Fresh V2 files, source permit,
+durable commit, registration, Capture, worker preparation and Adopt occur only
+after the two genuine Pause commands. Source fraction/rate, generation, used
+Native/FIFO and productive/filter history stay fixed; silent callback time
+advances without source reads or feeding the independent RawNative/EQ oracle.
+
+Adopt installs current V2 and, for replacement, outgoing V1 while retaining
+their exact immutable owners. The source-frame handover remains unconsumed
+through further irregular paused callbacks and controller polls. The own
+claimed receipt stays transitioning; even replacement's effective identity
+remains absent because Seek has invalidated the old V1 effect observation.
+Neither remaining Wet readiness nor disk/worker acceptance confirms V2.
+
+Pause, candidate adoption and Resume correctly invalidate preparation epochs;
+epoch equality across those actions is not required. Capture pins the actual
+post-Pause epoch and guarded Adopt rechecks it. Actual public Resume preserves
+the source/used-Native/FIFO checkpoint; subsequent independent complete PCM
+verifies the 128-consumed-source-frame blend and uninterrupted nonneutral EQ.
+OFF obtains its own distinct dry effect. ON obtains its own advanced exact-history
+4096-output-frame preparation after Resume and distinct Wet while still AfterLoop.
+Natural return and another 4096 output frames introduce no extra Seek/reset/launch.
+Pad215 keeps its own absolute consumed-source phase across the pause gap;
+real reopen separately verifies V2 and manual loop/KEY LOCK intent.
+
+Whole task3.3/full L4/P4b/P5a/P5b, remaining domains, resource and Human
+GUI/CPAL/device/hearing gates remain open. The finite task4.2/4.3 closure is
+not widened by this additional paused adoption proof.
+
+Fresh Release checks pass the two focused public paused-Tail tests (5.88 seconds,
+four FullMix/V1 histories) and all 91 committed-stem residency tests (256.56 seconds).
+Format and strict OpenSpec validation pass. Workspace/test Clippy retains the
+existing 37 warning kinds, with no diagnostics in the three changed Rust files.
+A new build-only production Release and API/controller/UI import preflight pass;
+the six affected Python test files pass all 154 tests (67.03 seconds) against
+that separately extracted build. The installed extension remains untouched.
 
 ### Consolidated task3.2 closure — 2026-10-12
 

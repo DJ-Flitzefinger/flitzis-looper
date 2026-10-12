@@ -112,7 +112,6 @@ impl RtMixer {
                 let sample = voice.sample.as_ref()?;
                 if !sample.same_window(bank)
                     || voice.frozen_stems.is_some()
-                    || (voice.paused && voice.explicit_seek_mode != ExplicitSeekMode::Normal)
                     || !committed_stem_mode_available(
                         voice.explicit_seek_mode,
                         capture.candidate.is_some(),
@@ -304,7 +303,6 @@ impl RtMixer {
                     || current_index != index
                     || voice.generation != pin.generation
                     || voice.frozen_stems.is_some()
-                    || (voice.paused && voice.explicit_seek_mode != ExplicitSeekMode::Normal)
                     || !committed_stem_mode_available(
                         voice.explicit_seek_mode,
                         transaction.candidate.is_some(),

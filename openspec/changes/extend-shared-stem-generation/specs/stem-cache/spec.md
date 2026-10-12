@@ -84,7 +84,15 @@ source layout and both exact predecessor/candidate reader generations MUST
 cover all current and future Tail/loop taps. Actual consumed-source handover and
 dry output SHALL establish OFF effectiveness without claiming Native Wet
 preparation or resetting Native/FIFO/filter history at candidate adoption.
-Intro, paused Tail, accepted-musical Tail and ordinary same-set
+The system SHALL also permit first and replacement candidate adoption while
+that own acknowledged nonmusical Tail voice is paused, with the same ON union
+or complete OFF FullTrack coverage. Paused Capture, preparation and Adopt MUST
+retain the exact source position, actual voice, Native/FIFO/filter history and
+both immutable reader owners without consuming source or reporting effective
+output. Only that voice's own Resume and subsequent consumed-source handover
+SHALL establish dry OFF effectiveness or later exact-history Native Wet ON
+effectiveness; neither callback time nor disk/preparation acceptance suffices.
+Intro, accepted-musical Tail and ordinary same-set
 mode requests SHALL retain their existing unsupported-domain guards.
 
 New-set preparation SHALL retain separate candidate and actual predecessor
@@ -170,7 +178,7 @@ immediate change SHALL NOT silently discard the command.
 - **THEN** both exact immutable generations SHALL cover all current and future Tail/loop taps throughout the 128-consumed-source-frame ramp; independent complete PCM SHALL establish the selected V2 feed and its distinct Wet effect
 - **AND** V2 adoption SHALL preserve the existing voice, source fraction, actual Native/FIFO and uninterrupted post-seek filter history; later Native adoption SHALL use its own advanced exact target checkpoint
 - **AND** the actual source-end-to-loop-start return SHALL preserve fractional playback, exact PCM, Native/FIFO and filter chronology without another seek, reset or retrigger
-- **AND** this ON candidate proof alone SHALL NOT authorize Intro, paused Tail, KEY LOCK OFF or accepted-musical Tail, ordinary same-set mode requests, frozen old-source voices, multiple same-pad voices or whole task3.3 acceptance
+- **AND** this running ON candidate proof alone SHALL NOT authorize Intro, paused Tail, KEY LOCK OFF or accepted-musical Tail, ordinary same-set mode requests, frozen old-source voices, multiple same-pad voices or whole task3.3 acceptance
 
 #### Scenario: Public StemController adopts first and replacement sets after own Tail Seek
 
@@ -190,7 +198,18 @@ immediate change SHALL NOT silently discard the command.
 - **THEN** independent complete PCM and fractional one-shot source addressing SHALL verify both exact generations through the 128-consumed-source-frame ramp, subsequent distinct dry V2 output and natural return to NormalLoop
 - **AND** adoption and continued output SHALL retain the actual voice, Native address/FIFO and uninterrupted nonneutral filter chronology; productive Native history and Wet readiness SHALL remain absent
 - **AND** disk/preparation status and obsolete V1 receipts SHALL NOT confirm V2 effectiveness before its own actual source consumption; saved reopen SHALL verify persistence separately
-- **AND** another active pad SHALL retain its absolute physical source trajectory and independent owners; paused Tail, accepted-musical Tail, Intro, ordinary same-set requests, frozen old-source and multiple same-pad voices SHALL remain guarded
+- **AND** another active pad SHALL retain its absolute physical source trajectory and independent owners; this running OFF proof alone SHALL NOT authorize paused Tail, accepted-musical Tail, Intro, ordinary same-set requests, frozen old-source or multiple same-pad voices
+
+#### Scenario: Public paused Tail adopts only through its own resumed consumption
+
+- **GIVEN** first FullMix or selected V1 has obtained its own public nonmusical Tail Seek acknowledgement with KEY LOCK ON union coverage or KEY LOCK OFF complete FullTrack coverage, then its own public Pause
+- **WHEN** a distinct complete V2 is durably committed and obtains fresh own registration, Capture, off-thread preparation and guarded Adopt while that voice remains paused
+- **THEN** irregular silent callbacks SHALL retain the exact source fraction, generation, actual Native/FIFO, productive and filter history, occupied source-frame ramp and both required immutable reader owners; the claimed receipt SHALL remain transitioning without own audible effectiveness
+- **AND** the voice's own public Resume SHALL preserve that exact checkpoint; independent complete PCM SHALL verify the subsequent 128-consumed-source-frame handover and uninterrupted nonneutral filter output
+- **AND** OFF SHALL establish its own distinct dry output without Native Wet preparation; ON SHALL establish its own advanced exact-history 4096-output-frame preparation and distinct Wet output while still AfterLoop
+- **AND** the natural Tail-to-NormalLoop return and further playback SHALL preserve the voice and source/Native/FIFO/filter chronology without another Seek, reset or launch
+- **AND** another independently paused and resumed pad SHALL retain its own absolute consumed-source trajectory and owners; saved reopen SHALL verify V2 and loop/KEY LOCK intent separately from audible acknowledgement
+- **AND** accepted-musical Tail, Intro, ordinary same-set requests, frozen old-source and multiple same-pad voices SHALL remain guarded; this bounded paused proof SHALL NOT close whole task3.3, full L4 or Human acceptance
 
 #### Scenario: Current bank B cannot authorize retained old-source voice A
 

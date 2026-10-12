@@ -1905,20 +1905,12 @@ fn actual_tail_first_and_replacement_keep_own_wet_history_through_normal_return(
 #[test]
 fn actual_tail_unsupported_candidates_preserve_their_own_voice() {
     use crate::audio_engine::source_reader::ExplicitSeekMode;
-    for (context, (key_lock, musical, paused)) in [
-        (true, true, false),
-        (false, true, false),
-        (true, false, true),
-        (false, false, true),
-    ]
-    .into_iter()
-    .enumerate()
+    for (context, (key_lock, paused)) in
+        [(true, false), (false, false), (true, true), (false, true)]
+            .into_iter()
+            .enumerate()
     {
-        let mut p = if musical {
-            bpm_productive(key_lock).0
-        } else {
-            Productive::new(key_lock, 0.73)
-        };
+        let mut p = bpm_productive(key_lock).0;
         let _seek = acknowledge_candidate_seek(&mut p, LOOP_END);
         if paused {
             p.h.callback.mixer.pause_sample_at_output_frame(0, p.frame);
@@ -1928,14 +1920,13 @@ fn actual_tail_unsupported_candidates_preserve_their_own_voice() {
             voice(&p.h.callback.mixer).explicit_seek_mode,
             ExplicitSeekMode::AfterLoop
         );
-        assert_eq!(
+        assert!(
             crate::audio_engine::input_runtime_binding::capture(&p.h.engine, 0)
                 .unwrap()
                 .unwrap()
                 .binding
                 .accepted
-                .is_some(),
-            musical
+                .is_some()
         );
         let (_pair, registration) = candidate(&mut p, 180 + context);
         let receipt = request_candidate(&mut p, &registration, 0b1010);
