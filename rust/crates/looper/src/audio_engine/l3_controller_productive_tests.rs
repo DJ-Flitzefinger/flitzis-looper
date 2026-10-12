@@ -65,6 +65,10 @@ const SOURCE_KEY_LOCK_CHILD: &str = "FLITZI_L3_CONTROLLER_SOURCE_KEY_LOCK_CHILD"
 const SOURCE_KEY_LOCK_TEST: &str = "audio_engine::cold_load::tests::stem_pair_publication_tests::committed_stem_residency_tests::l3_controller_productive_tests::actual_public_keylock_on_of_replaced_source_requires_own_wet_confirmation";
 const SOURCE_STEMS_ON_CHILD: &str = "FLITZI_L3_CONTROLLER_SOURCE_STEMS_ON_CHILD";
 const SOURCE_STEMS_ON_TEST: &str = "audio_engine::cold_load::tests::stem_pair_publication_tests::committed_stem_residency_tests::l3_controller_productive_tests::actual_public_all_of_replaced_source_requires_own_wet_stem_effect";
+const UNLOAD_ON_CHILD: &str = "FLITZI_L3_CONTROLLER_UNLOAD_ON_CHILD";
+const UNLOAD_ON_TEST: &str = "audio_engine::cold_load::tests::stem_pair_publication_tests::committed_stem_residency_tests::l3_controller_productive_tests::actual_public_unload_rejects_queued_v2_before_own_stop_with_keylock_on";
+const UNLOAD_OFF_CHILD: &str = "FLITZI_L3_CONTROLLER_UNLOAD_OFF_CHILD";
+const UNLOAD_OFF_TEST: &str = "audio_engine::cold_load::tests::stem_pair_publication_tests::committed_stem_residency_tests::l3_controller_productive_tests::actual_public_unload_rejects_queued_v2_before_own_stop_with_keylock_off";
 
 #[derive(Clone, Copy)]
 enum CandidateTrace {
@@ -86,6 +90,7 @@ enum CandidateTrace {
     SourceStemsOff,
     SourceKeyLockOn,
     SourceStemsOn,
+    Unload,
 }
 
 /// Public cold admission/event polling are unchanged. The stream-bound scalar
@@ -99,6 +104,10 @@ struct PublicLoadAudio {
 
 #[pymethods]
 impl PublicLoadAudio {
+    fn unload_sample(&self, id: usize) -> PyResult<()> {
+        crate::audio_engine::cold_load::unload_for_producer(&self.engine, id, &self.producer)
+    }
+
     #[pyo3(signature=(id, path, run_analysis=true, replace_assignment=true, source_intent="import"))]
     fn load_sample_async(
         &self,
@@ -174,11 +183,10 @@ impl PublicLoadAudio {
         let _requests = self.engine.pad_request_ids.lock().unwrap();
         let mut producer = self.producer.lock().unwrap();
         assert!(!producer.is_full());
-        let source = self.engine.sample_cache.lock().unwrap()[id]
-            .clone()
-            .unwrap();
-        assert_eq!(source.resident_start(), 0);
-        assert_eq!(source.resident_end(), source.frame_count());
+        if let Some(source) = self.engine.sample_cache.lock().unwrap()[id].as_ref() {
+            assert_eq!(source.resident_start(), 0);
+            assert_eq!(source.resident_end(), source.frame_count());
+        }
         let authority = self.engine.input_runtime_ownership.next_authority(id)?;
         self.engine.note_resident_loop_intent(id, start_s, end_s)?;
         self.engine.input_runtime_ownership.revoke(id, authority);
@@ -2176,6 +2184,292 @@ assert candidate.is_current() and not candidate.claimed() and candidate.effectiv
 assert live.control is previous_control and not live.blocked
 assert controller.stem_residency_status(0).effective_stem_set_identity == disk_v1.stem_set_identity
 assert session.stem_generation_errors == {0: deadline_error}
+"#,
+    );
+}
+
+fn public_unload_queued_candidate(
+    playback: &mut ControllerPlayback,
+    consumer: &mut rtrb::Consumer<ControlMessage>,
+    parameters: &mut rtrb::Consumer<ControlParameterMessage>,
+    locals: &Py<PyDict>,
+    key_lock: bool,
+) {
+    use crate::audio_engine::committed_stem_residency::CommittedStemRtWork;
+    assert_eq!(playback.drain(consumer), 1, "own V2 Capture before Unload");
+    wait_until(|| consumer.peek().is_ok());
+    let queued = match consumer.peek().unwrap() {
+        ControlMessage::CommittedStemWork(work) => {
+            assert!(
+                matches!(work.as_ref(), CommittedStemRtWork::Adopt(transaction)
+                if transaction.id == 0 && transaction.candidate.is_some())
+            );
+            work.as_ref() as *const CommittedStemRtWork as usize
+        }
+        _ => panic!("expected actual queued V2 Adopt"),
+    };
+    playback.callback.retirement.slots = 2;
+    assert_eq!(playback.drain(consumer), 0);
+    let bank = playback.callback.mixer.bank_for_measurement()[0]
+        .clone()
+        .unwrap();
+    let stems = playback.callback.mixer.stems_for_measurement()[0].clone();
+    let generation = voice(&playback.callback.mixer).generation;
+    let native = voice(&playback.callback.mixer)
+        .stretch
+        .native_state_address();
+    let demand = playback.callback.mixer.stem_demand_for_measurement(0);
+    let other = other_voice(&playback.callback.mixer);
+    let other_source = other.sample.clone().unwrap();
+    let other_generation = other.generation;
+    let other_native = other.stretch.native_state_address();
+    let other_fifo = other.stretch.pending_fifo_frames();
+    let other_demand = playback.callback.mixer.stem_demand_for_measurement(215);
+    controller_python(
+        locals,
+        r#"
+from flitzis_looper.controller.loader import LoaderController
+from flitzis_looper.controller.transport import TransportController
+class UnloadAudio:
+    def __getattr__(self, name):
+        for delegate in (load_audio, playback_audio, audio):
+            if hasattr(delegate, name):
+                return getattr(delegate, name)
+        raise AttributeError(name)
+unload_audio = UnloadAudio()
+unload_transport = TransportController(project, session, unload_audio)
+unload_notifications = []
+loader = LoaderController(project, session, unload_audio,
+    unload_notifications.append, persistence.mark_dirty,
+    on_stems_deleted=controller.delete_stems)
+loader.bind_asset_lifecycle(controller._assets)
+loader.set_stems_invalidated_callback(controller.invalidate_stem_cache)
+def unloaded_control(sample_id):
+    unload_transport.residency.cancel(sample_id)
+    unload_transport.playback.discard_global_restore_for_unloaded_pad(sample_id)
+loader.set_sample_unloaded_callback(unloaded_control)
+unload_candidate = candidate
+unload_registration = live.disk.selection.ticket
+unload_workers = audio.worker_call_count()
+unload_other_path = project.sample_paths[215]
+unload_other_content = project.pad_content[215]
+assert candidate.is_current() and not candidate.claimed()
+loader.unload_sample(0)
+assert not candidate.is_current() and not candidate.claimed()
+assert candidate.residency_status() == 'rejected' and candidate.effective_mode_status() == 'rejected'
+assert candidate.effective_failure_reason() is None
+assert candidate.error() == 'Committed stem residency or mode ownership changed'
+assert not unload_registration.is_current()
+assert not source_v2.same_preparation_context(source_v2)
+assert project.sample_paths[0] is None and project.pad_content[0] is None
+assert project.stem_cache[0] is None and project.pad_stem_mix_mode[0] == 'full_mix'
+assert project.pad_key_lock[0] is None
+assert 0 not in session.active_sample_ids and 215 in session.active_sample_ids
+assert not controller._committed_residency.contains(0) and controller.stem_residency_status(0) is None
+assert not session.stem_generation_errors and not session.sample_load_errors
+assert unload_notifications == [0]
+"#,
+    );
+    assert!(
+        matches!(consumer.peek(), Ok(ControlMessage::CommittedStemWork(work))
+        if work.as_ref() as *const CommittedStemRtWork as usize == queued)
+    );
+    // Unload publishes genuine parameter defaults before callback command drain.
+    // The independent filters receive declared neutral targets without reset.
+    crate::audio_engine::audio_stream::drain_parameter_messages(
+        parameters,
+        &mut playback.callback.mixer,
+        &mut playback.callback.transport,
+    );
+    assert!(parameters.is_empty());
+    for reference in [&mut playback.reference, &mut playback.full_mix] {
+        reference.set_pad_gain(0, 0.0);
+        reference.set_pad_eq(0, 0.0, 0.0, 0.0);
+    }
+    for slot in [
+        crate::audio_engine::dsp::DspParameterSlot::Slot0,
+        crate::audio_engine::dsp::DspParameterSlot::Slot1,
+        crate::audio_engine::dsp::DspParameterSlot::Slot2,
+    ] {
+        assert!(playback.filter.set_parameter(
+            DspParameterId::per_pad(0, DspNodeSlot::Slot0, slot).unwrap(),
+            0.5
+        ));
+    }
+    let assert_current = |playback: &ControllerPlayback| {
+        let current = voice(&playback.callback.mixer);
+        assert_eq!(current.generation, generation);
+        assert_eq!(current.stretch.native_state_address(), native);
+        assert!(current.sample.as_ref().unwrap().same_window(&bank));
+        assert_eq!(
+            playback.callback.mixer.stem_demand_for_measurement(0),
+            demand
+        );
+        match (&stems, &playback.callback.mixer.stems_for_measurement()[0]) {
+            (Some(before), Some(after)) => {
+                assert!(Arc::ptr_eq(
+                    &before.complete_set_identity,
+                    &after.complete_set_identity
+                ));
+                for (before, after) in before.stems.iter().zip(&after.stems) {
+                    assert!(Arc::ptr_eq(&before.samples, &after.samples));
+                }
+            }
+            (None, None) => {}
+            _ => panic!("Unload admission cannot change current stem readers"),
+        }
+    };
+    let assert_other = |playback: &ControllerPlayback| {
+        let other = other_voice(&playback.callback.mixer);
+        let phase = (playback.frame as f64 * playback.ratio).rem_euclid(1500.0);
+        assert_eq!(
+            other.source_playback.position().frame,
+            LOOP_START + phase.floor() as usize
+        );
+        assert_eq!(
+            other.source_playback.position().fraction.to_bits(),
+            phase.fract().to_bits()
+        );
+        assert_eq!(other.generation, other_generation);
+        assert_eq!(other.stretch.native_state_address(), other_native);
+        assert_eq!(other.stretch.pending_fifo_frames(), other_fifo);
+        assert!(Arc::ptr_eq(
+            &other.sample.as_ref().unwrap().samples,
+            &other_source.samples
+        ));
+        assert_eq!(
+            playback.callback.mixer.stem_demand_for_measurement(215),
+            other_demand
+        );
+    };
+    for frames in [1, 31, 137, 257] {
+        if key_lock {
+            playback.render(frames, true);
+        } else {
+            render_varispeed(playback, frames);
+        }
+        assert_current(playback);
+        assert_other(playback);
+        controller_python(
+            locals,
+            "loader.poll_loader_events()\ncontroller.on_frame_render()\nassert not session.stem_generation_errors\nassert not unload_candidate.claimed()\nassert audio.worker_call_count() == unload_workers",
+        );
+        assert_eq!(playback.drain(consumer), 0);
+    }
+    let before = voice(&playback.callback.mixer);
+    let clock = before.source_playback;
+    let fifo = before.stretch.pending_fifo_frames();
+    let history = before.stretch.productive_history();
+    let dsp = playback
+        .callback
+        .mixer
+        .dsp_source_history_for_test(0)
+        .unwrap();
+    let transition = playback.callback.mixer.stem_transition_for_measurement(0);
+    let feedback_count = playback.callback.feedback.events.len();
+    playback.callback.retirement.slots = 3;
+    assert_eq!(
+        playback.drain(consumer),
+        1,
+        "reject late V2 while own Unload remains held"
+    );
+    assert!(matches!(
+        consumer.peek(),
+        Ok(ControlMessage::UnloadSample { id: 0 })
+    ));
+    assert_current(playback);
+    let after = voice(&playback.callback.mixer);
+    assert!(after.source_playback.matches_exact(&clock));
+    assert_eq!(after.stretch.pending_fifo_frames(), fifo);
+    if let Some(history) = history {
+        let after = after.stretch.productive_history().unwrap();
+        assert_eq!(after.binding, history.binding);
+        assert_eq!(after.next_position, history.next_position);
+        assert_eq!(after.fed_output_frames, history.fed_output_frames);
+    } else {
+        assert!(after.stretch.productive_history().is_none());
+    }
+    let after_dsp = playback
+        .callback
+        .mixer
+        .dsp_source_history_for_test(0)
+        .unwrap();
+    assert_eq!(after_dsp.binding, dsp.binding);
+    assert_eq!(after_dsp.next_position, dsp.next_position);
+    assert_eq!(after_dsp.fed_output_frames, dsp.fed_output_frames);
+    assert!(
+        playback
+            .callback
+            .mixer
+            .stem_transition_for_measurement(0)
+            .matches_exact(transition)
+    );
+    assert_eq!(playback.callback.feedback.events.len(), feedback_count);
+    for frames in [31, 257] {
+        if key_lock {
+            playback.render(frames, true);
+        } else {
+            render_varispeed(playback, frames);
+        }
+        assert_current(playback);
+        assert_other(playback);
+        assert_eq!(playback.drain(consumer), 0);
+    }
+    playback.callback.retirement.slots = usize::MAX;
+    assert_eq!(
+        playback.drain(consumer),
+        4,
+        "own Unload then pair/loop/keylock defaults"
+    );
+    assert!(consumer.is_empty());
+    assert!(playback.callback.mixer.bank_for_measurement()[0].is_none());
+    assert!(playback.callback.mixer.stems_for_measurement()[0].is_none());
+    assert!(
+        !playback
+            .callback
+            .mixer
+            .voices
+            .iter()
+            .any(|voice| voice.is_playing_sample(0))
+    );
+    assert_eq!(playback.callback.feedback.events.len(), feedback_count + 1);
+    assert!(matches!(
+        playback.callback.feedback.events[feedback_count],
+        AudioMessage::SampleStopped { id: 0 }
+    ));
+    assert_other(playback);
+    for frames in [1, 31, 137, 257, 511] {
+        let mut output = vec![0.0; frames * 2];
+        playback.callback.mixer.render_rt_at_output_frame(
+            &mut output,
+            &mut [0.0; NUM_SAMPLES],
+            playback.frame,
+            &mut playback.callback.retirement,
+        );
+        assert!(output.iter().all(|sample| *sample == 0.0));
+        playback.frame += frames as u64;
+        assert_other(playback);
+        controller_python(
+            locals,
+            "loader.poll_loader_events()\ncontroller.on_frame_render()\nassert not unload_candidate.claimed()\nassert unload_candidate.residency_status() == 'rejected'\nassert controller.stem_residency_status(0) is None\nassert project.sample_paths[0] is None\nassert project.stem_cache[0] is None\nassert not session.stem_generation_errors",
+        );
+        assert!(consumer.is_empty());
+    }
+    controller_python(
+        locals,
+        r#"
+persistence.flush()
+unload_reopened = ProjectPersistence.from_config_path(persistence.config_path)
+assert unload_reopened.load_error is None
+assert unload_reopened.project.sample_paths[0] is None and unload_reopened.project.pad_content[0] is None
+assert unload_reopened.project.stem_cache[0] is None and unload_reopened.project.pad_stem_mix_mode[0] == 'full_mix'
+assert unload_reopened.project.pad_key_lock[0] is None
+assert unload_reopened.project.sample_paths[215] == unload_other_path
+assert unload_reopened.project.pad_content[215] == unload_other_content
+assert audio.worker_call_count() == unload_workers
+assert not session.stem_generation_errors and not session.sample_load_errors
+assert not unload_candidate.claimed() and not unload_candidate.is_current()
+assert unload_candidate.effective_failure_reason() is None
 "#,
     );
 }
@@ -5504,6 +5798,7 @@ fn round_trip(
     let retrigger = matches!(trace, CandidateTrace::Retrigger);
     let window_change = matches!(trace, CandidateTrace::WindowChange);
     let source_stems_off = matches!(trace, CandidateTrace::SourceStemsOff);
+    let unload = matches!(trace, CandidateTrace::Unload);
     let source_stems_on = matches!(trace, CandidateTrace::SourceStemsOn);
     let source_key_lock = matches!(
         trace,
@@ -5525,8 +5820,9 @@ fn round_trip(
             | CandidateTrace::SourceKeyLockOn
             | CandidateTrace::SourceStemsOn
     );
+    let source_controls = source_replacement || unload;
     assert!(
-        !(claimed_masks || preclaim_masks || retrigger || window_change || source_replacement)
+        !(claimed_masks || preclaim_masks || retrigger || window_change || source_controls)
             || (!paused_first && delete_pause.is_none() && stopped_before_poll.is_none())
     );
     let withdraw_preclaim = matches!(trace, CandidateTrace::WithdrawPreclaim);
@@ -5633,7 +5929,7 @@ fn round_trip(
     });
     let (parameter_producer, mut parameter_consumer) = rtrb::RingBuffer::new(8);
     let parameter_producer = Arc::new(Mutex::new(parameter_producer));
-    if source_replacement {
+    if source_controls {
         let (_feedback, feedback_rx) = rtrb::RingBuffer::new(8);
         h.engine.test_control_channels =
             Some((h.producer.clone(), Arc::new(Mutex::new(feedback_rx))));
@@ -5681,7 +5977,7 @@ fn round_trip(
         locals.set_item("preclaim_masks", preclaim_masks).unwrap();
         locals.set_item("retrigger", retrigger).unwrap();
         locals.set_item("window_change", window_change).unwrap();
-        if source_replacement {
+        if source_controls {
             locals
                 .set_item(
                     "load_audio",
@@ -6295,6 +6591,21 @@ assert previous_control.ticket.is_current()
             key_lock,
         ));
     }
+    if unload {
+        public_unload_queued_candidate(
+            &mut playback,
+            &mut h.consumer,
+            &mut parameter_consumer,
+            &locals,
+            key_lock,
+        );
+        controller_python(
+            &locals,
+            "controller.shut_down()\ncontroller._assets.release_saved_assignments()\nowner_v1.release()\nowner_v2.release()",
+        );
+        std::env::set_current_dir(previous_cwd).unwrap();
+        return;
+    }
     if source_replacement {
         let (expected_source, predecessor_generation, historical_adoption) =
             public_source_replacement(
@@ -6729,6 +7040,44 @@ assert bpm_selection.ticket is bpm_registration and bpm_selection.receipt is can
         "controller.shut_down()\ncontroller._assets.release_saved_assignments()\nowner_v1.release()\nowner_v2.release()",
     );
     std::env::set_current_dir(previous_cwd).unwrap();
+}
+
+#[test]
+fn actual_public_unload_rejects_queued_v2_before_own_stop_with_keylock_on() {
+    unload_child(true, UNLOAD_ON_CHILD, UNLOAD_ON_TEST);
+}
+
+#[test]
+fn actual_public_unload_rejects_queued_v2_before_own_stop_with_keylock_off() {
+    unload_child(false, UNLOAD_OFF_CHILD, UNLOAD_OFF_TEST);
+}
+
+fn unload_child(key_lock: bool, child: &str, test: &str) {
+    if std::env::var_os(child).is_some() {
+        for selected_v1 in [false, true] {
+            round_trip(
+                selected_v1,
+                None,
+                key_lock,
+                None,
+                false,
+                CandidateTrace::Unload,
+            );
+        }
+        return;
+    }
+    let output = std::process::Command::new(std::env::current_exe().unwrap())
+        .args(["--exact", test, "--nocapture", "--test-threads=1"])
+        .env(child, "1")
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "L3 public Unload child failed:\n{}\n{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert!(String::from_utf8_lossy(&output.stdout).contains("1 passed; 0 failed"));
 }
 
 #[test]

@@ -1101,6 +1101,51 @@ warnings (one duplicate), none in the changed test. Format, strict affected
 OpenSpec, five relative file links and whitespace pass. Production Release/
 import/Python181 checks remain reusable without Native installation or App use.
 
+### Public Unload cancels queued V2 before its own callback stop
+
+A separate bounded trace invokes actual LoaderController.unload_sample after
+genuine V2 Capture/component work has queued its unclaimed Adopt. The headless
+facade forwards the production unload_for_producer kernel; Loader uses the
+existing shared asset lifecycle and stem-deletion callback, then publishes its
+actual unloaded-pad defaults. There is no invented public stem-Cancel API.
+Four FullMix/selected-V1 histories use KEY LOCK ON.75 or OFF1.25.
+
+Native unload admission revokes source and preparation authority before its
+ordered callback command. The controller cancels its own pending registration
+and receipt; logical assignment, ALL and active-pad projections clear while
+the actual callback voice remains present until its own Unload ACK. Normal
+two-slot retirement pressure holds the old Adopt. Genuine parameter defaults
+apply through the ordinary parameter lane; independent reference filters get
+the declared neutral targets without resetting their history, raw Native FIFO,
+source phase or current component choice.
+
+Three-slot capacity rejects the unchanged late Adopt while the larger Unload
+reservation remains held. Complete independent PCM, raw Native or varispeed,
+smoothed EQ, exact retained voice/readers/history and another pad's absolute
+trajectory verify output before and after this rejection. Full retirement
+capacity then permits the actual ordered Unload and pair/loop/KEY LOCK defaults.
+Only that callback operation removes the primary bank/readers, stops its voice
+and emits its own SampleStopped. Further callbacks and real polling must keep
+pad0 silent/unassigned with no implicit retry or stale ALL restoration, while
+pad215 retains independent source, generation, Native FIFO and trajectory.
+
+Persistence reopens the cleared assignment, stem selection, FullMix and
+inherited KEY LOCK intent with the other pad unchanged. This bounded callback
+uses the existing test retirement sink and does not certify productive final
+reader deletion, full App/device or Human acceptance.
+
+The initial compile fails before runtime because the new test supplied two
+arguments to the three-argument DSP parameter-ID constructor. The corrected
+source-supported call yields two focused Release tests/four histories passing
+in5.74 seconds (57.65 compile), with no runtime failure. Final affected public
+validation passes32 tests in122.21 seconds (.18 compile); unchanged36 parent/
+Native/offline tests reuse the earlier59-test gate, not a fresh68-test run.
+One independent final review has no open findings. Workspace/tests Clippy
+exits0 in7.17 seconds with the known63 looper warnings (one duplicate), none
+in this test. Format, strict affected OpenSpec, five relative file links and
+whitespace pass. Unchanged production Release/import/Python181 checks remain
+reusable without Native installation or App use.
+
 ### Public KEY LOCK ON confirms the playing replacement original
 
 After the actual B load/window/public Play trace, a separate bounded test

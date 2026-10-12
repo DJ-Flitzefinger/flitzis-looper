@@ -301,6 +301,15 @@ immediate change SHALL NOT silently discard the command.
 - **AND** output SHALL follow independently verified complete new-original component PCM, selected mask, continuous input ramp, Native FIFO and filter chronology; the complete4096-frame preparation interval SHALL begin after its own stem adoption without borrowing predecessor or FullMix history
 - **AND** the rejected predecessor SHALL remain unclaimed, other pads SHALL retain their independent source owners and trajectory, and persistence SHALL reopen the new assignment, complete pair, ALL intent and explicit KEY LOCK ON override
 
+#### Scenario: Public Unload cancels a queued new-set adoption before its own stop
+
+- **GIVEN** a playing FullMix or selected V1 voice has an unclaimed V2 Adopt queued behind its genuine Capture and component worker, and another pad is active
+- **WHEN** public Loader Unload admits its own native source revocation and ordered unload command and invokes the existing stem cancellation and pad-default paths
+- **THEN** the earlier queued V2 SHALL remain unclaimed and rejected even when its late callback command precedes Unload in the FIFO; cancellation SHALL NOT grant residency or effectiveness
+- **AND** while retirement capacity holds the unload command, the current voice SHALL retain its source phase, Native/FIFO and filter history, with independently verified current PCM and the actually admitted default-parameter changes applied in their normal order
+- **AND** only that unload command's own callback acknowledgement SHALL stop the pad and remove its bank/readers; subsequent ordered defaults, polling or late stem work SHALL NOT restore the removed assignment or ALL intent
+- **AND** another active pad SHALL retain its independent source owners, generation and absolute trajectory, while persistence SHALL reopen the unloaded assignment, cleared stem selection and inherited KEY LOCK intent without borrowing a stem receipt as unload acknowledgement
+
 #### Scenario: First candidate is prepared after a productive FullMix voice was paused
 - **GIVEN** a current proper NormalLoop FullMix voice has produced genuine wet output and is paused before new-set registration and own Capture
 - **WHEN** its new complete-set candidate obtains own residency acceptance while the same voice remains paused
