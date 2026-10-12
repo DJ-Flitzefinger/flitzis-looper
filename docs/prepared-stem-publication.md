@@ -1059,6 +1059,48 @@ Format, strict affected OpenSpec, five relative file links and whitespace pass.
 Clippy lib/tests exits0 in9.61s with the existing31 lib/63 test warnings
 (27 duplicate test diagnostics); no warning points to the changed test.
 
+### Public Play of the acknowledged replacement original
+
+After the genuine B-assignment lifecycle above, public Transport Play obtains
+a fresh resident window for B's independently declared finite17..1517 loop.
+Real two-slot retirement pressure holds its actual relocation; admission and
+preparation leave pad0 stopped. Its own callback window ACK installs genuine
+range-read PCM for the same B source, with no old component reads, and still
+does not start a voice. Only subsequent actual Transport polling admits the
+matching source-bound TriggerInputPad; normal execution starts B's new voice
+at its own declared loop origin and emits SampleStarted.
+
+Both preceding A KEY LOCK states and first-FullMix/selected-V1 histories lead
+to B's actual inherited OFF in this fixture's global-OFF configuration. The
+old raw mode/hash cannot supply component readers or stem effectiveness.
+New complete B PCM, independently decoded from input WAV bytes, supplies two
+fresh FullMix references plus algebraic feed and neutral filter chronology.
+Absolute callback time remains intact; only B's consumed-source clock starts
+at its own genuine birth. Irregular output partitions cross a complete loop
+seam at rate0.75 or1.25 while pad215 retains its independent absolute source
+trajectory, source owner, generation, Native/FIFO and demand. Old V2 remains
+rejected and unclaimed through actual polling, without retries or borrowed ACK.
+Persisted new assignment, inherited KEY LOCK, FullMix and finite loop reopen.
+The cfg(test) last Native-adoption identifier can survive the intentional stop
+and new OFF voice. It is checked against the exact predecessor snapshot and
+remains historical: all current Wet/history/preparation flags stay clear and
+the complete B dry output, FIFO and source binding are checked independently.
+Existing OFF traces retain their exact expected identifier of None.
+
+This covers explicit Play with a declared finite intent after real Loader
+scalar defaults. Full App BPM/automatic-loop initialization, later B KEY LOCK
+ON, new B stem preparation/adoption, resource/final-reader retirement and Human
+acceptance remain separate; the cfg(test) retirement sink has the same limit.
+
+Corrected focus passes2/four cases in8.15s after1m15s compile. The final affected
+public-controller Release suite passes27 in107.25s with an unchanged-source0.20s
+compile. Unchanged36 Parent/Native/offline cases reuse the prior shared59 run;
+this is not a fresh63-case integrated run. One independent final review has no
+open findings. Clippy workspace/tests exits0 in9.21s with63 existing looper
+warnings (one duplicate), none in the changed test. Format, strict affected
+OpenSpec, five relative file links and whitespace pass. Production Release/
+import/Python181 checks remain reusable without Native installation or App use.
+
 ### Public loop expansion requires fresh V2 preparation
 
 The public loop-end path can acknowledge a genuinely changed resident window

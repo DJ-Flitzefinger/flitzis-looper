@@ -264,6 +264,15 @@ immediate change SHALL NOT silently discard the command.
 - **AND** the matching actual loader completion SHALL publish the new source identity, assignment and defaults, invalidate the old stem observation and persist the new assignment without treating this lifecycle stop as a successful live stem adoption
 - **AND** repeated polling SHALL NOT retry the old-source candidate or infer a new source's audible effect; later playback and new-source stem adoption SHALL require their own explicit authority and acknowledgement
 
+#### Scenario: Public Play starts the acknowledged replacement original with its own voice
+
+- **GIVEN** a different source assignment has obtained its own load acknowledgement, the old-source V2 is rejected and unclaimed, and the new pad inherits KEY LOCK OFF with neutral mixing defaults
+- **WHEN** explicit public Play requests a finite NormalLoop of the new original while another pad is active
+- **THEN** Play SHALL prepare the new source's own current resident window and wait for its actual acknowledgement before admitting a source-bound launch
+- **AND** neither preparation admission nor window acknowledgement SHALL start a voice; only the matching explicit launch SHALL start the new voice from the requested loop origin
+- **AND** actual output SHALL follow the new original's complete PCM, declared playback rate and fresh neutral filter chronology without old component readers, old-source stem effectiveness or predecessor wet history
+- **AND** the old rejected V2 SHALL remain rejected and unclaimed through repeated polling, and the other pad SHALL retain its independent source, voice and playback trajectory
+
 #### Scenario: First candidate is prepared after a productive FullMix voice was paused
 - **GIVEN** a current proper NormalLoop FullMix voice has produced genuine wet output and is paused before new-set registration and own Capture
 - **WHEN** its new complete-set candidate obtains own residency acceptance while the same voice remains paused
