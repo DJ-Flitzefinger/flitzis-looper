@@ -176,6 +176,7 @@ fn loop_fixture(rate: u32, ratio: f32, mode: ExplicitSeekMode, stem_mask: Option
             complete_set_identity: std::sync::Arc::new([0; 32]),
             accepted_timing: None,
             reference_samples,
+            reference_residency: None,
             publication: crate::audio_engine::prepared_source::PreparedSourcePermit::unrestricted(),
             source_version_hash: 17,
             sample_rate_hz: rate,

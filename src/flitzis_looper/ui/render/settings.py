@@ -65,6 +65,66 @@ def settings_overlay(ctx: UiContext) -> None:
         imgui.separator()
         imgui.text_colored(TEXT_MUTED_RGBA, "Stem Generation")
         _stem_generation_controls(ctx)
+        imgui.separator()
+        imgui.text_colored(TEXT_MUTED_RGBA, "Resident Audio RAM")
+        _resident_pcm_controls(ctx)
+
+
+def _resident_pcm_controls(ctx: UiContext) -> None:
+    enabled = bool(ctx.state.project.preload_stem_loops_on_startup)
+    changed, value = imgui.checkbox("Preload existing stem loops at startup", enabled)
+    if changed:
+        ctx.ui.settings.set_preload_stem_loops_on_startup(enabled=bool(value))
+        ctx.persistence.flush_if_dirty()
+    imgui.text_wrapped(
+        "Preload requests existing component loops on all eligible occupied pads. "
+        "It adds RAM use, preserves each pad's audio mode, and does not generate stems "
+        "or guarantee admission. With preload off, saved ALL STEMS waits for an explicit request."
+    )
+    budget = int(ctx.state.project.resident_pcm_budget_mib)
+    with item_width(240):
+        changed, budget_value = imgui.slider_int("Resident PCM budget (MiB)", budget, 128, 16384)
+    if changed:
+        ctx.ui.settings.set_resident_pcm_budget_mib(int(budget_value))
+    _flush_settings_edit_if_completed(ctx)
+    if ctx.state.session.resident_pcm_settings_error:
+        imgui.text_wrapped(str(ctx.state.session.resident_pcm_settings_error))
+    summary = ctx.state.stems.residency_summary()
+    imgui.text_wrapped(
+        f"Conservative all-pad FullMix + eligible components: "
+        f"{summary.estimated_pcm_bytes / 1048576:.1f} MiB; "
+        f"{summary.unknown_shapes} unknown shapes; "
+        f"{summary.full_track_exceptions} complete-track fallbacks. "
+        "Sharing can reduce PCM; context, overlap, Native state and process overhead add RAM."
+    )
+    imgui.text_wrapped(
+        f"Stem component requests {summary.requested}: queued {summary.queued}, "
+        f"preparing {summary.preparing}, ACKed {summary.acked}, "
+        f"deferred {summary.deferred}, errors {summary.errors}, "
+        f"unconfirmed in the current context {summary.unconfirmed}."
+    )
+    if summary.accounting_error:
+        imgui.text_wrapped(f"Resident accounting unavailable: {summary.accounting_error}")
+        return
+    native = summary.native
+    imgui.text_wrapped(
+        f"Exact unique resident PCM {native.get('held_unique_pcm_bytes', 0)} B; "
+        f"admitted pending PCM {native.get('pending_resident_bytes', 0)} B "
+        f"({native.get('pending_reservation_count', 0)} reservations); "
+        f"total {native.get('admitted_total_bytes', 0)} B / "
+        f"budget {native.get('budget_bytes', 0)} B."
+    )
+    if native.get("over_budget"):
+        imgui.text_wrapped(
+            "Pinned readers temporarily exceed the allowance. Current audio stays valid; "
+            "new allocations wait for safe retirement or a larger budget."
+        )
+    imgui.text_wrapped(
+        "Preparing requests can still have unknown geometry and no admitted PCM reservation. "
+        "PCM counters are not process RSS. Timing/analysis and per-job preparation have "
+        "separate limits; Native/DSP, inference and other process overhead are not included. "
+        "A larger finite allowance does not guarantee available host RAM."
+    )
 
 
 def _input_mapping_controls(ctx: UiContext) -> None:

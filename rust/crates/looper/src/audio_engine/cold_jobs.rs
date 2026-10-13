@@ -1,9 +1,14 @@
 //! Fixed cold-load lane. Reservations precede request mutations or PCM allocation.
 
+use std::cell::Cell;
 use std::collections::VecDeque;
 use std::io;
+use std::sync::mpsc;
 use std::sync::{Arc, Condvar, Mutex};
 use std::thread::{self, JoinHandle};
+use std::time::Duration;
+
+thread_local! { static ON_WORKER: Cell<usize> = const { Cell::new(0) }; }
 
 pub(super) const WORKERS: usize = 2;
 pub(super) const QUEUED_JOBS: usize = 32;
@@ -31,6 +36,96 @@ struct Shared {
 pub(super) struct ColdJobs {
     shared: Arc<Shared>,
     workers: Vec<JoinHandle<()>>,
+}
+
+/// Clone only lane admission, never worker ownership or an additional pool.
+#[derive(Clone)]
+pub(super) struct ColdJobsHandle {
+    shared: Arc<Shared>,
+}
+
+impl ColdJobsHandle {
+    /// Direct public preparation enters the same bounded workers. Nested
+    /// kernels already running there execute under their enclosing admission.
+    pub(super) fn execute_owned<T: Send + 'static>(
+        &self,
+        cancelled: impl Fn() -> bool,
+        operation: impl FnOnce() -> Result<T, String> + Send + 'static,
+    ) -> Result<T, String> {
+        if cancelled() {
+            return Err("cold preparation proposal cancelled before admission".into());
+        }
+        if ON_WORKER.with(Cell::get) == Arc::as_ptr(&self.shared) as usize {
+            return operation();
+        }
+        let reservation = reserve_shared(&self.shared)?;
+        let (sender, receiver) = mpsc::sync_channel(1);
+        {
+            let mut state = self
+                .shared
+                .state
+                .lock()
+                .map_err(|_| "cold queue lock poisoned")?;
+            if state.stopped {
+                return Err("cold lane stopped".into());
+            }
+            #[cfg(test)]
+            let preparation_observer = super::native_owned_work::take_preparation_observer();
+            state.jobs.push_back(AdmittedJob {
+                job: Box::new(move || {
+                    #[cfg(test)]
+                    let _observation =
+                        super::native_owned_work::PreparationObservationScope::install(
+                            preparation_observer,
+                        );
+                    let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(operation))
+                        .unwrap_or_else(|_| Err("cold preparation worker failed".into()));
+                    // A cancelled caller drops its receiver; the worker retires
+                    // every late owned result off realtime on send failure.
+                    let _ = sender.send(result);
+                }),
+                reservation,
+            });
+            self.shared.ready.notify_one();
+        }
+        loop {
+            if cancelled()
+                || self
+                    .shared
+                    .state
+                    .lock()
+                    .map_err(|_| "cold admission lock poisoned")?
+                    .stopped
+            {
+                return Err("cold preparation proposal cancelled while waiting".into());
+            }
+            match receiver.recv_timeout(Duration::from_millis(20)) {
+                Ok(result) => return result,
+                Err(mpsc::RecvTimeoutError::Timeout) => {}
+                Err(mpsc::RecvTimeoutError::Disconnected) => {
+                    return Err("cold preparation worker retired before delivery".into());
+                }
+            }
+        }
+    }
+}
+
+fn reserve_shared(shared: &Arc<Shared>) -> Result<Reservation, String> {
+    let mut state = shared
+        .state
+        .lock()
+        .map_err(|_| "cold admission lock poisoned")?;
+    if state.stopped {
+        return Err("cold source lane stopped".into());
+    }
+    if state.admitted - state.active >= QUEUED_JOBS {
+        return Err("cold source queue full (2 workers, 32 queued jobs)".into());
+    }
+    state.admitted += 1;
+    Ok(Reservation {
+        shared: shared.clone(),
+        running: false,
+    })
 }
 
 /// An unused reservation rolls back without advancing source/request ownership.
@@ -86,7 +181,9 @@ impl ColdJobs {
                                 }
                             };
                             // A panic retires the reservation and does not destroy a worker slot.
+                            ON_WORKER.with(|worker| worker.set(Arc::as_ptr(&shared) as usize));
                             let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(job.job));
+                            ON_WORKER.with(|worker| worker.set(0));
                             drop(job.reservation);
                         }
                     })?,
@@ -111,22 +208,12 @@ impl ColdJobs {
     }
 
     pub(super) fn reserve(&self) -> Result<Reservation, String> {
-        let mut state = self
-            .shared
-            .state
-            .lock()
-            .map_err(|_| "cold admission lock poisoned")?;
-        if state.stopped {
-            return Err("cold source lane stopped".into());
-        }
-        if state.admitted - state.active >= QUEUED_JOBS {
-            return Err("cold source queue full (2 workers, 32 queued jobs)".into());
-        }
-        state.admitted += 1;
-        Ok(Reservation {
+        reserve_shared(&self.shared)
+    }
+    pub(super) fn handle(&self) -> ColdJobsHandle {
+        ColdJobsHandle {
             shared: self.shared.clone(),
-            running: false,
-        })
+        }
     }
 
     /// Enqueue under the same reserved admission. No thread is spawned per pad.
@@ -317,5 +404,101 @@ mod tests {
         })
         .unwrap();
         rx.recv_timeout(Duration::from_secs(5)).unwrap();
+    }
+
+    #[test]
+    fn direct_owned_preparation_runs_on_existing_worker_and_nested_kernel_stays_inline() {
+        use crate::audio_engine::native_owned_work::{
+            WorkPoint, observe_preparation, set_preparation_observer,
+        };
+
+        let lane = ColdJobs::new().unwrap();
+        let handle = lane.handle();
+        let nested = handle.clone();
+        let shared = lane.shared.clone();
+        let caller = thread::current().id();
+        let (observer_sender, observer_receiver) = mpsc::channel();
+        set_preparation_observer(Some(Box::new(move |point| {
+            observer_sender
+                .send((point, thread::current().id()))
+                .unwrap();
+        })));
+        let value = handle
+            .execute_owned(
+                || false,
+                move || {
+                    assert_eq!(ON_WORKER.with(Cell::get), Arc::as_ptr(&shared) as usize);
+                    assert_eq!(shared.state.lock().unwrap().active, 1);
+                    observe_preparation(WorkPoint::LegacyStemFiles);
+                    nested.execute_owned(
+                        || false,
+                        || {
+                            assert_ne!(ON_WORKER.with(Cell::get), 0);
+                            observe_preparation(WorkPoint::StemPcmFlush);
+                            Ok(37)
+                        },
+                    )
+                },
+            )
+            .unwrap();
+        assert_eq!(value, 37);
+        let (outer, outer_thread) = observer_receiver
+            .recv_timeout(Duration::from_secs(5))
+            .unwrap();
+        let (inner, inner_thread) = observer_receiver
+            .recv_timeout(Duration::from_secs(5))
+            .unwrap();
+        assert_eq!(outer, WorkPoint::LegacyStemFiles);
+        assert_eq!(inner, WorkPoint::StemPcmFlush);
+        assert_eq!(outer_thread, inner_thread);
+        assert_ne!(outer_thread, caller);
+        assert!(matches!(
+            observer_receiver.recv_timeout(Duration::from_secs(5)),
+            Err(mpsc::RecvTimeoutError::Disconnected)
+        ));
+        assert_eq!(
+            handle
+                .execute_owned(
+                    || false,
+                    || {
+                        observe_preparation(WorkPoint::LegacyStemFiles);
+                        Ok(43)
+                    },
+                )
+                .unwrap(),
+            43
+        );
+    }
+
+    #[test]
+    fn direct_owned_closed_lane_and_cancel_reject_without_running_kernel() {
+        let mut lane = ColdJobs::new().unwrap();
+        let ran = Arc::new(AtomicUsize::new(0));
+        let cancelled_ran = ran.clone();
+        assert!(
+            lane.handle()
+                .execute_owned(
+                    || true,
+                    move || {
+                        cancelled_ran.fetch_add(1, Ordering::SeqCst);
+                        Ok(())
+                    }
+                )
+                .is_err()
+        );
+        lane.shutdown();
+        let closed_ran = ran.clone();
+        assert!(
+            lane.handle()
+                .execute_owned(
+                    || false,
+                    move || {
+                        closed_ran.fetch_add(1, Ordering::SeqCst);
+                        Ok(())
+                    }
+                )
+                .is_err()
+        );
+        assert_eq!(ran.load(Ordering::SeqCst), 0);
     }
 }

@@ -301,6 +301,7 @@ fn finite_stem_transition_uses_the_same_knots_and_releases_complete_backings() {
         complete_set_identity: Arc::new([19; 32]),
         accepted_timing: None,
         reference_samples: source.samples.clone(),
+        reference_residency: source.residency.clone(),
         publication: super::super::prepared_source::PreparedSourcePermit::unrestricted(),
         source_version_hash: 42,
         sample_rate_hz: 48_000,

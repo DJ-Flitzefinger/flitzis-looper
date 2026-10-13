@@ -26,6 +26,8 @@ mod l3_controller_productive_tests;
 mod l3_native_tests;
 #[path = "offline_stem_productive_tests.rs"]
 mod offline_stem_productive_tests;
+#[path = "p5b_resident_admission_tests.rs"]
+mod p5b_resident_admission_tests;
 #[path = "public_key_lock_off_tests.rs"]
 mod public_key_lock_off_tests;
 
@@ -253,6 +255,7 @@ impl Productive {
         let full_stems = PreparedStemSet {
             complete_set_identity: Arc::new([71; 32]),
             reference_samples: full.samples.clone(),
+            reference_residency: full.residency.clone(),
             publication: PreparedSourcePermit::unrestricted(),
             accepted_timing: None,
             source_version_hash: crate::audio_engine::stem_cache::source_version_hash(&h.version),
@@ -1508,7 +1511,9 @@ fn actual_residency_worker_read_registry_and_bounded_peak_failures_preserve_full
         assert!(
             match failure {
                 "component_read" => error.contains("component") && error.contains("read"),
-                "reader_registry" => error.contains("reader registry full"),
+                "reader_registry" => {
+                    error == "resident PCM admission capacity exceeded: asset reader registry"
+                }
                 "bounded_peak" => error.contains("transient admission"),
                 _ => false,
             },
@@ -3408,6 +3413,7 @@ fn controller_active_round_trip(stopped_start: bool) {
     let full_stems = PreparedStemSet {
         complete_set_identity: Arc::new([73; 32]),
         reference_samples: full.samples.clone(),
+        reference_residency: full.residency.clone(),
         publication: PreparedSourcePermit::unrestricted(),
         accepted_timing: None,
         source_version_hash: crate::audio_engine::stem_cache::source_version_hash(&h.version),

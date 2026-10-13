@@ -29,6 +29,7 @@ if TYPE_CHECKING:
     from flitzis_looper.controller.committed_stem_residency import StemResidencyStatus
     from flitzis_looper.controller.current_timing import CurrentPadTiming
     from flitzis_looper.controller.performance_confirmation import PerformanceConfirmation
+    from flitzis_looper.controller.stems import StemResidencySummary
     from flitzis_looper.controller.transport.key_lock_status import KeyLockStatus
     from flitzis_looper.models import (
         ProjectState,
@@ -193,6 +194,9 @@ class StemSelectors:
 
     def stem_residency_status(self, pad_id: int) -> StemResidencyStatus | None:
         return self._controller.stems.stem_residency_status(pad_id)
+
+    def residency_summary(self) -> StemResidencySummary:
+        return self._controller.stems.residency_summary()
 
     def stem_enabled_mask(self, pad_id: int) -> int:
         return self._controller.stems.stem_enabled_mask(pad_id)
@@ -1062,6 +1066,18 @@ class SettingsActions:
 
     def set_stem_separator(self, separator: StemSeparator) -> None:
         self._controller.settings.set_stem_separator(separator)
+
+    def set_preload_stem_loops_on_startup(self, *, enabled: bool) -> None:
+        self._controller.settings.set_preload_stem_loops_on_startup(enabled=enabled)
+
+    def set_resident_pcm_budget_mib(self, value: int) -> bool:
+        try:
+            self._controller.settings.set_resident_pcm_budget_mib(value)
+        except (RuntimeError, ValueError) as error:
+            self._controller.session.resident_pcm_settings_error = str(error)
+            return False
+        self._controller.session.resident_pcm_settings_error = None
+        return True
 
     def set_trigger_quantization_step(self, step: TriggerQuantizationStep) -> None:
         self._controller.transport.global_params.set_trigger_quantization_step(step)

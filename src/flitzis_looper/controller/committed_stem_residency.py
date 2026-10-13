@@ -16,6 +16,28 @@ if TYPE_CHECKING:
     )
 
 
+def resident_pcm_budget_pressure(message: object) -> bool:
+    """Recognize the Native resource codec without treating other failures as retryable."""
+    return isinstance(message, str) and message.startswith("[resident_pcm_budget_exceeded]")
+
+
+def resident_stem_capacity_pressure(message: object) -> bool:
+    """Recognize only declared worker capacity and same-pad interest-busy protocols."""
+    return isinstance(message, str) and (
+        message
+        in {
+            "cold source queue full (2 workers, 32 queued jobs)",
+            "Stem queue full (2 workers, 32 queued jobs)",
+        }
+        or message.startswith("[resident_stem_interest_busy]")
+    )
+
+
+def resident_stem_admission_pressure(message: object) -> bool:
+    """Keep recoverable admission separate from stale/data/history/terminal failures."""
+    return resident_pcm_budget_pressure(message) or resident_stem_capacity_pressure(message)
+
+
 @dataclass(frozen=True, slots=True)
 class StemResidencyStatus:
     """Separate disk registration, residency and effective-mode projections."""
@@ -30,6 +52,8 @@ class StemResidencyStatus:
     attempt_stem_set_identity: str | None = None
     desired_mode: StemMixMode | None = None
     attempt_failed: bool = False
+    demand: str | None = None
+    demand_error: str | None = None
 
 
 @dataclass(slots=True)
@@ -42,6 +66,8 @@ class _CommittedSelection:
     receipt: ResidentStemTicket | None = None
     receipt_intent: tuple[StemMixMode, int] | None = None
     candidate: bool = False
+    preload_receipt: ResidentStemTicket | None = None
+    preload_enabled: bool | None = None
 
 
 @dataclass(slots=True)
@@ -187,8 +213,76 @@ class CommittedStemResidency:
             return self._submit(selection)
         except (RuntimeError, TypeError, ValueError) as error:
             selection.desired = None
-            self._report_error(sample_id, f"Stem residency admission failed: {error}")
+            self._report_error(
+                sample_id,
+                str(error)
+                if resident_stem_admission_pressure(str(error))
+                else f"Stem residency admission failed: {error}",
+            )
             return False
+
+    def request_preload(self, sample_id: int, *, enabled: bool) -> bool:
+        """Change only Native policy interest, preserving explicit mode and actual readers."""
+        live = self._live_selections.get(sample_id)
+        if live is not None and live.disk.selection is None:
+            self._register_candidate(live)
+        selection = live.disk.selection if live is not None else self._selections.get(sample_id)
+        if (
+            selection is None
+            or not self._current(
+                sample_id, selection.entry, selection.content_id, selection.source_path
+            )
+            or not selection.ticket.is_current()
+            or selection.ticket.publication_status() != "accepted"
+        ):
+            return False
+        receipt = selection.preload_receipt
+        if selection.preload_enabled == enabled and receipt is not None:
+            if receipt.is_current() and receipt.residency_status() != "rejected":
+                return True
+            if not resident_stem_admission_pressure(receipt.error()):
+                self._report_error(sample_id, receipt.error() or "Stem preload context changed")
+                return False
+        try:
+            selection.preload_receipt = self._audio.request_committed_stem_residency(
+                selection.ticket,
+                mode="full_mix",
+                interest="preload" if enabled else "withdraw_preload",
+            )
+            selection.preload_enabled = enabled
+        except (RuntimeError, TypeError, ValueError) as error:
+            self._report_error(sample_id, str(error))
+            return False
+        return True
+
+    def preload_status(self, sample_id: int) -> tuple[str | None, str | None]:
+        """Return the policy operation's own residency ACK independently of audio mode."""
+        live = self._live_selections.get(sample_id)
+        selection = live.disk.selection if live is not None else self._selections.get(sample_id)
+        receipt = selection.preload_receipt if selection is not None else None
+        if receipt is None:
+            return None, None
+        if not receipt.is_current():
+            return "rejected", receipt.error() or "Stem preload context changed"
+        return receipt.residency_status(), receipt.error()
+
+    def component_residency_current(self, sample_id: int) -> bool:
+        """Confirm the matching selection's own current ACK without lending an old receipt."""
+        live = self._live_selections.get(sample_id)
+        selection = (
+            (live.attempt or live.control) if live is not None else self._selections.get(sample_id)
+        )
+        if selection is None or selection.receipt is None:
+            return False
+        return (
+            self._current(sample_id, selection.entry, selection.content_id, selection.source_path)
+            and selection.ticket.is_current()
+            and selection.receipt.is_current()
+            and selection.receipt_intent is not None
+            and selection.receipt_intent[0] == "all_stems"
+            and selection.receipt.residency_status() == "accepted"
+            and selection.receipt.effective_failure_reason() != "native-preparation-failed"
+        )
 
     def poll(self) -> None:
         """Observe bounded own receipts; polling never advances an audio timeline."""
@@ -356,7 +450,12 @@ class CommittedStemResidency:
             return self._submit_live(sample_id, live)
         except (RuntimeError, TypeError, ValueError) as error:
             live.blocked = True
-            self._report_error(sample_id, f"Stem residency admission failed: {error}")
+            self._report_error(
+                sample_id,
+                str(error)
+                if resident_stem_admission_pressure(str(error))
+                else f"Stem residency admission failed: {error}",
+            )
             return False
 
     @staticmethod
@@ -670,4 +769,6 @@ class CommittedStemResidency:
     def _cancel(selection: _CommittedSelection) -> None:
         if selection.receipt is not None:
             selection.receipt.cancel()
+        if selection.preload_receipt is not None:
+            selection.preload_receipt.cancel()
         selection.ticket.cancel()

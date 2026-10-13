@@ -170,38 +170,3 @@ pub(super) fn attach(sample: &mut SampleBuffer, manifest: &ColdManifest) -> Resu
     }
     Ok(())
 }
-
-pub(super) fn select(
-    sample: SampleBuffer,
-    hint: Option<ResidentLoadHint>,
-    maximum: usize,
-) -> Result<SampleBuffer, String> {
-    let Some(hint) = hint else {
-        return Ok(sample);
-    };
-    let view = sample
-        .residency
-        .as_ref()
-        .ok_or("resident selection lacks complete identity")?;
-    let (start, end, context) = hint.selection(view.source.sample_rate_hz, sample.frame_count())?;
-    if sample.resident_start() == start && sample.resident_end() == end {
-        let mut sample = sample;
-        Arc::make_mut(sample.residency.as_mut().expect("checked descriptor")).context = context;
-        return Ok(sample);
-    }
-    let overlap = sample
-        .samples
-        .len()
-        .checked_mul(4)
-        .and_then(|old| {
-            (end - start)
-                .checked_mul(sample.channels)
-                .and_then(|n| n.checked_mul(8))
-                .and_then(|new| old.checked_add(new))
-        })
-        .ok_or("resident PCM overlap overflow")?;
-    if overlap > maximum {
-        return Err("resident selection exceeds transient PCM limit".into());
-    }
-    sample.window(start, end, 1, context)
-}

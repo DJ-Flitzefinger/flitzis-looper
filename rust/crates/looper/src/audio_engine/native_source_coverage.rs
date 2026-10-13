@@ -346,6 +346,7 @@ mod tests {
                 complete_set_identity: Arc::new([19; 32]),
                 accepted_timing: None,
                 reference_samples: full.samples.clone(),
+                reference_residency: full.residency.clone(),
                 publication: PreparedSourcePermit::unrestricted(),
                 source_version_hash: 17,
                 sample_rate_hz: RATE,

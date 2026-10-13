@@ -240,6 +240,7 @@ fn productive_history_rate_ramps_pause_stem_transition_and_in_range_loop_keep_ch
     let stems = PreparedStemSet {
         complete_set_identity: std::sync::Arc::new([0; 32]),
         reference_samples: source.samples.clone(),
+        reference_residency: source.residency.clone(),
         publication: PreparedSourcePermit::unrestricted(),
         source_version_hash: 42,
         sample_rate_hz: RATE,
@@ -490,6 +491,7 @@ fn finite_productive_continuity_case() {
     let stems = PreparedStemSet {
         complete_set_identity: Arc::new([71; 32]),
         reference_samples: full.samples.clone(),
+        reference_residency: full.residency.clone(),
         publication: PreparedSourcePermit::unrestricted(),
         source_version_hash: 42,
         sample_rate_hz: RATE,

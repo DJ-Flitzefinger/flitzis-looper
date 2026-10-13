@@ -221,6 +221,7 @@ pub(super) fn prepare_stem_buffers_from_cache_at_project_root(
         complete_set_identity: std::sync::Arc::new(identity.finalize().into()),
         accepted_timing: None,
         reference_samples: reference.samples.clone(),
+        reference_residency: reference.residency.clone(),
         publication: super::prepared_source::PreparedSourcePermit::unbound(),
         source_version_hash: source_version_hash(source_version),
         sample_rate_hz: output_sample_rate,

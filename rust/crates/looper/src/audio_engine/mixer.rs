@@ -1265,6 +1265,10 @@ impl RtMixer {
         retirement: &mut impl AudioBufferRetirement,
         output_frame: u64,
     ) {
+        if capture.proposal.is_some() {
+            self.capture_resident_seek_proposal_rt(capture, retirement);
+            return;
+        }
         let id = capture.id;
         if id >= NUM_SAMPLES
             || !capture.publication.current()
@@ -1289,6 +1293,7 @@ impl RtMixer {
                     voice_index: index,
                     generation: voice.generation,
                     key_lock: self.pad_key_lock_enabled[id],
+                    stopped: false,
                     stems: if self.sample_bank[id]
                         .as_ref()
                         .is_some_and(|bank| bank.same_source(sample))
@@ -1360,6 +1365,88 @@ impl RtMixer {
         retirement.retire_resident_capture(capture);
     }
 
+    /// Capture-only proposals never seek, claim live authority or acknowledge
+    /// adoption. The admitted worker later arms the existing transaction kernel.
+    fn capture_resident_seek_proposal_rt(
+        &self,
+        capture: Arc<super::resident_seek::ResidentSeekCapture>,
+        retirement: &mut impl AudioBufferRetirement,
+    ) {
+        let id = capture.id;
+        let current = id < NUM_SAMPLES
+            && capture
+                .proposal
+                .as_ref()
+                .is_some_and(|proposal| proposal.current())
+            && capture.publication.status() != "rejected"
+            && self.source_binding_current(id, capture.binding)
+            && !(self.outgoing_stems[id].is_some() && self.stem_transitions[id].is_active());
+        let pin = if current {
+            if let Some((index, voice)) = self
+                .voices
+                .iter()
+                .enumerate()
+                .find(|(_, voice)| voice.active && voice.sample_id == id)
+            {
+                voice.sample.as_ref().and_then(|sample| {
+                    let region = voice
+                        .source_loop_region
+                        .or_else(|| self.effective_loop_region(id, sample.frame_count()))?;
+                    Some(super::resident_seek::ResidentSeekPin {
+                        sample: sample.clone(),
+                        loop_region: region,
+                        timing: self.timing_for_voice(voice),
+                        voice_index: index,
+                        generation: voice.generation,
+                        key_lock: self.pad_key_lock_enabled[id],
+                        stopped: false,
+                        stems: if self.sample_bank[id]
+                            .as_ref()
+                            .is_some_and(|bank| bank.same_source(sample))
+                        {
+                            self.prepared_stems[id].clone()
+                        } else {
+                            voice
+                                .frozen_stems
+                                .as_ref()
+                                .and_then(|view| view.set.clone())
+                        },
+                    })
+                })
+            } else {
+                self.sample_bank[id].as_ref().and_then(|sample| {
+                    Some(super::resident_seek::ResidentSeekPin {
+                        sample: sample.clone(),
+                        loop_region: self.effective_loop_region(id, sample.frame_count())?,
+                        timing: VoiceSourceTiming {
+                            accepted: self.pad_accepted_timing[id],
+                            ..VoiceSourceTiming::default()
+                        },
+                        voice_index: usize::MAX,
+                        generation: 0,
+                        key_lock: self.pad_key_lock_enabled[id],
+                        stopped: true,
+                        stems: self.prepared_stems[id].clone(),
+                    })
+                })
+            }
+        } else {
+            None
+        };
+        if let Some(pin) = pin {
+            if let Some(pin) = capture.publish(pin) {
+                retirement.retire_sample(pin.sample);
+                if let Some(stems) = pin.stems {
+                    retirement.retire_prepared_stems(stems);
+                }
+                capture.publication.cancel_unclaimed();
+            }
+        } else {
+            capture.publication.cancel_unclaimed();
+        }
+        retirement.retire_resident_capture(capture);
+    }
+
     pub(crate) fn relocate_resident_at_output_frame(
         &mut self,
         transaction: Box<crate::messages::ResidentTransaction>,
@@ -1391,6 +1478,32 @@ impl RtMixer {
         let expected_window_revision = transaction.expected_window_revision;
         let intent = transaction.intent;
         if let Some(pin) = &transaction.seek_pin {
+            if pin.stopped {
+                let current = id < NUM_SAMPLES
+                    && publication.current()
+                    && self.source_binding_current(id, binding)
+                    && !self.sample_is_active(id)
+                    && intent.loop_region.is_none()
+                    && intent.key_lock.is_none()
+                    && intent.seek_position_s.is_some()
+                    && self.sample_bank[id]
+                        .as_ref()
+                        .is_some_and(|bank| bank.same_window(&pin.sample));
+                let accepted = current
+                    && publication.claim_resident()
+                    && publication.current()
+                    && self.source_binding_current(id, binding)
+                    && !self.sample_is_active(id);
+                if accepted {
+                    publication.mark_accepted_preserved_window();
+                } else {
+                    publication.mark_rejected();
+                }
+                self.input_runtime_ownership
+                    .finish_resident_control(id, publication.expected);
+                retirement.retire_resident_transaction(transaction);
+                return accepted;
+            }
             let current = id < NUM_SAMPLES
                 && intent.loop_region.is_none()
                 && intent.key_lock.is_none()
@@ -1452,15 +1565,25 @@ impl RtMixer {
                             .sample
                             .as_ref()
                             .is_some_and(|old| old.same_window(&pin.sample))
-                        && voice.source_loop_region == Some(pin.loop_region)
+                        && voice
+                            .source_loop_region
+                            .or_else(|| self.effective_loop_region(id, pin.sample.frame_count()))
+                            == Some(pin.loop_region)
                         && timing.accepted == pin.timing.accepted
                         && timing.legacy_period_seconds == pin.timing.legacy_period_seconds
                         && timing.legacy_origin_frame == pin.timing.legacy_origin_frame
                         && match (
-                            voice
-                                .frozen_stems
+                            if self.sample_bank[id]
                                 .as_ref()
-                                .and_then(|view| view.set.as_ref()),
+                                .is_some_and(|bank| bank.same_source(&pin.sample))
+                            {
+                                self.prepared_stems[id].as_ref()
+                            } else {
+                                voice
+                                    .frozen_stems
+                                    .as_ref()
+                                    .and_then(|view| view.set.as_ref())
+                            },
                             pin.stems.as_ref(),
                         ) {
                             (None, None) => true,
@@ -1471,40 +1594,56 @@ impl RtMixer {
                             _ => false,
                         }
                 });
-            let accepted = current
-                && publication.claim_resident()
-                && publication.current()
-                && self.source_binding_current(id, binding)
-                && self.reserve_seek_cut(id);
-            if accepted {
-                let voice = &mut self.voices[pin.voice_index];
-                if let Some(old) = voice.sample.replace(sample.clone()) {
-                    retirement.retire_sample(old);
-                }
-                if let Some(view) = &mut voice.frozen_stems {
-                    if let Some(old) = view.set.take() {
-                        retirement.retire_prepared_stems(old);
+            let expands_current_bank = self
+                .sample_bank
+                .get(id)
+                .and_then(Option::as_ref)
+                .is_some_and(|bank| {
+                    bank.same_source(&pin.sample)
+                        && (sample.resident_start() != bank.resident_start()
+                            || sample.resident_end() != bank.resident_end()
+                            || sample.residency.as_ref().map(|view| view.context)
+                                != bank.residency.as_ref().map(|view| view.context))
+                });
+            if !current || !expands_current_bank {
+                let accepted = current
+                    && publication.claim_resident()
+                    && publication.current()
+                    && self.source_binding_current(id, binding)
+                    && self.reserve_seek_cut(id);
+                if accepted {
+                    let voice = &mut self.voices[pin.voice_index];
+                    if let Some(old) = voice.sample.replace(sample.clone()) {
+                        retirement.retire_sample(old);
                     }
-                    view.set = stems.clone();
+                    if let Some(view) = &mut voice.frozen_stems {
+                        if let Some(old) = view.set.take() {
+                            retirement.retire_prepared_stems(old);
+                        }
+                        view.set = stems.clone();
+                    }
+                    let did_seek = self.seek_sample_with_output_frame(
+                        id,
+                        intent.seek_position_s.expect("validated seek pin"),
+                        output_frame,
+                    );
+                    publication.record_resident_seek(
+                        did_seek.then(|| self.pad_playhead_seconds(id)).flatten(),
+                    );
+                    publication.mark_accepted_preserved_window();
+                } else {
+                    publication.mark_rejected();
                 }
-                let did_seek = self.seek_sample_with_output_frame(
-                    id,
-                    intent.seek_position_s.expect("validated seek pin"),
-                    output_frame,
-                );
-                publication.record_resident_seek(
-                    did_seek.then(|| self.pad_playhead_seconds(id)).flatten(),
-                );
-                publication.mark_accepted_preserved_window();
-            } else {
-                publication.mark_rejected();
+                if id < NUM_SAMPLES {
+                    self.input_runtime_ownership
+                        .finish_resident_control(id, publication.expected);
+                }
+                retirement.retire_resident_transaction(transaction);
+                return accepted;
             }
-            if id < NUM_SAMPLES {
-                self.input_runtime_ownership
-                    .finish_resident_control(id, publication.expected);
-            }
-            retirement.retire_resident_transaction(transaction);
-            return accepted;
+            // The captured guards above still protect the exact voice. A new
+            // current-source extent must use ordinary bank/voice adoption below;
+            // only an old source behind another bank or covered seek preserves it.
         }
         let seek_only = intent.loop_region.is_none() && intent.key_lock.is_none();
         let previous_pin_seek = seek_only
@@ -3987,6 +4126,7 @@ mod tests {
             complete_set_identity: std::sync::Arc::new([0; 32]),
             accepted_timing: None,
             reference_samples: reference.samples.clone(),
+            reference_residency: reference.residency.clone(),
             publication: crate::audio_engine::prepared_source::PreparedSourcePermit::unrestricted(),
             source_version_hash: 42,
             sample_rate_hz,
@@ -4185,6 +4325,7 @@ mod tests {
             complete_set_identity: std::sync::Arc::new([0; 32]),
             accepted_timing: None,
             reference_samples: reference.samples.clone(),
+            reference_residency: reference.residency.clone(),
             publication: crate::audio_engine::prepared_source::PreparedSourcePermit::unrestricted(),
             source_version_hash: 42,
             sample_rate_hz,
@@ -4206,6 +4347,7 @@ mod tests {
             complete_set_identity: std::sync::Arc::new([0; 32]),
             accepted_timing: None,
             reference_samples: reference.samples.clone(),
+            reference_residency: reference.residency.clone(),
             publication: crate::audio_engine::prepared_source::PreparedSourcePermit::unrestricted(),
             source_version_hash: 42,
             sample_rate_hz,
@@ -4377,6 +4519,7 @@ mod tests {
             complete_set_identity: std::sync::Arc::new([0; 32]),
             accepted_timing: None,
             reference_samples: mixer.sample_bank[0].as_ref().unwrap().samples.clone(),
+            reference_residency: mixer.sample_bank[0].as_ref().unwrap().residency.clone(),
             publication: crate::audio_engine::prepared_source::PreparedSourcePermit::unrestricted(),
             source_version_hash: 42,
             sample_rate_hz: 44_100,
@@ -5578,6 +5721,7 @@ mod tests {
             complete_set_identity: std::sync::Arc::new([0; 32]),
             accepted_timing: None,
             reference_samples: full_mix.samples.clone(),
+            reference_residency: full_mix.residency.clone(),
             publication: crate::audio_engine::prepared_source::PreparedSourcePermit::unrestricted(),
             source_version_hash: 42,
             sample_rate_hz: 10,
@@ -5718,6 +5862,7 @@ mod tests {
             complete_set_identity: std::sync::Arc::new([0; 32]),
             accepted_timing: None,
             reference_samples: full_mix.samples.clone(),
+            reference_residency: full_mix.residency.clone(),
             publication: crate::audio_engine::prepared_source::PreparedSourcePermit::unrestricted(),
             source_version_hash: 42,
             sample_rate_hz: 10,

@@ -2,7 +2,6 @@
 //!
 //! A reader pins its sealed cache lease through every read, even if its pad unloads.
 //! Projection/export scans fixed chunks rather than allocating complete playback PCM.
-use super::cold_jobs;
 use super::cold_jobs::PCM_LIMIT_BYTES;
 use super::cold_store::CommittedColdLease;
 use super::progress::LoadProgressStage;
@@ -282,7 +281,7 @@ pub(super) fn start_analysis(engine: &AudioEngine, id: usize) -> pyo3::PyResult<
 
             let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
                 reader
-                    .materialize(cold_jobs::PCM_LIMIT_BYTES, &cancelled)
+                    .materialize(super::constant_timing::MAX_PCM_BYTES, &cancelled)
                     .and_then(|sample| {
                         if cancelled() {
                             return Err("Analysis superseded by another pad request".into());

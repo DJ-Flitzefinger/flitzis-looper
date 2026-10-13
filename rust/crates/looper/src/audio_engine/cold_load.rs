@@ -8,7 +8,7 @@ use super::progress::{LoadProgressStage, ProgressReporter};
 use super::sample_loader::{SampleLoadProgress, SampleLoadSubtask};
 use super::{
     AudioEngine, LoadedSourcePublication, PadRequestAdvance, analyze_sample, pad_request_matches,
-    publish_loaded_sample,
+    publish_loaded_sample_with_arm,
 };
 use crate::messages::{ControlMessage, LoaderEvent, SampleBuffer};
 use flitzis_looper_analysis::tempo_acceptance::TimingIntent;
@@ -78,6 +78,10 @@ impl Drop for LoadingGuard {
 struct ColdLoad {
     id: usize,
     request_id: u64,
+    base_request: u64,
+    base_epoch: u64,
+    proposal: super::resident_proposal::ResidentProposal,
+    resident: super::resident_proposal::ResidentReadContext,
     adoption: Arc<AtomicU8>,
     prepared_material: Option<Arc<super::material_migration::PreparedMigrationMaterial>>,
     path: PathBuf,
@@ -412,9 +416,18 @@ fn admit_selected_material_incoming(
     if loading.contains(&id) {
         return Err(PyValueError::new_err("sample is already loading"));
     }
-    let advance = PadRequestAdvance::prepare(&mut requests[id], &engine.prepared_source_epochs[id])
+    let base_request = requests[id];
+    let base_epoch = engine.prepared_source_epochs[id].load(Ordering::Acquire);
+    let expected_epoch = {
+        let advance =
+            PadRequestAdvance::prepare(&mut requests[id], &engine.prepared_source_epochs[id])
+                .map_err(PyRuntimeError::new_err)?;
+        advance.next_epoch
+    };
+    let (proposal, request_id) = engine
+        .resident_proposals
+        .begin_source(id, base_request, base_epoch)
         .map_err(PyRuntimeError::new_err)?;
-    let request_id = advance.next_request;
     if request_id > u64::MAX / 4 {
         return Err(PyRuntimeError::new_err(
             "cold acknowledgement generation exhausted",
@@ -482,6 +495,14 @@ fn admit_selected_material_incoming(
     let work = ColdLoad {
         id,
         request_id,
+        base_request,
+        base_epoch,
+        proposal,
+        resident: super::resident_proposal::ResidentReadContext::new(
+            engine.project_assets.clone(),
+            engine.resident_account.clone(),
+        )
+        .with_history(engine.cold_pcm_history.clone(), id),
         adoption: admitted.adoption.clone(),
         prepared_material,
         path: source_path,
@@ -498,7 +519,7 @@ fn admit_selected_material_incoming(
         guard_epoch: run_analysis || restore_automatic || initial_source.is_some(),
         initial_source,
         epoch: engine.prepared_source_epochs[id].clone(),
-        expected_epoch: advance.next_epoch,
+        expected_epoch,
         intents: engine.timing_intents.clone(),
         requests: engine.pad_request_ids.clone(),
         cache: engine.sample_cache.clone(),
@@ -533,7 +554,6 @@ fn admit_selected_material_incoming(
         .map_err(PyRuntimeError::new_err)?;
     // A worker's first current-request check takes this mutex. It cannot observe
     // the reservation before the request/loading commit has finished.
-    advance.commit();
     resident_guards[id] = resident_guard;
     incoming_slots[id] = incoming;
     engine.cold_loading[id].store(request_id, Ordering::Release);
@@ -542,7 +562,6 @@ fn admit_selected_material_incoming(
     drop(resident_guards);
     drop(incoming_slots);
     drop(requests);
-    engine.offline_jobs.cancel(Some(id));
     Ok(admitted)
 }
 
@@ -643,17 +662,43 @@ fn same_source(left: Option<&SampleBuffer>, right: Option<&SampleBuffer>) -> boo
 }
 
 impl ColdLoad {
+    fn reuses_assignment(&self, sample: &SampleBuffer) -> Result<bool, String> {
+        let mut history = self
+            .pcm_history
+            .lock()
+            .map_err(|_| "PCM history lock poisoned")?;
+        history[self.id].retain(|reader| reader.strong_count() > 0);
+        Ok(same_source(self.initial_source.as_ref(), Some(sample))
+            || history[self.id]
+                .iter()
+                .any(|reader| reader.ptr_eq(&Arc::downgrade(&sample.samples))))
+    }
     fn is_cancelled(&self) -> bool {
-        self.flags_cancelled() || !pad_request_matches(&self.requests, self.id, self.request_id)
+        self.flags_cancelled()
+            || !pad_request_matches(
+                &self.requests,
+                self.id,
+                if self.proposal.armed() {
+                    self.request_id
+                } else {
+                    self.base_request
+                },
+            )
     }
 
     fn flags_cancelled(&self) -> bool {
         self.cancelled.load(Ordering::Acquire)
+            || !self.proposal.current()
             || self
                 .resident_guard
                 .as_ref()
                 .is_some_and(|guard| guard.cancelled.load(Ordering::Acquire))
-            || (self.guard_epoch && self.epoch.load(Ordering::Acquire) != self.expected_epoch)
+            || self.epoch.load(Ordering::Acquire)
+                != if self.proposal.armed() {
+                    self.expected_epoch
+                } else {
+                    self.base_epoch
+                }
     }
 
     fn prepare(&self) -> Result<PreparedColdSample, String> {
@@ -677,7 +722,7 @@ impl ColdLoad {
             };
             let mut sample = prepared
                 .lease
-                .read_window_cancellable(
+                .read_window_resident(
                     source,
                     start,
                     end,
@@ -685,22 +730,10 @@ impl ColdLoad {
                     context,
                     PCM_LIMIT_BYTES,
                     &cancelled,
+                    Some(&self.resident),
                 )
                 .map_err(|error| error.to_string())?;
-            let mut history = self
-                .pcm_history
-                .lock()
-                .map_err(|_| "PCM history lock poisoned")?;
-            history[self.id].retain(|reader| reader.strong_count() > 0);
-            if history[self.id].len() >= 128 {
-                return Err("same-pad source reader history full (128 live assignments)".into());
-            }
-            if same_source(self.initial_source.as_ref(), Some(&sample))
-                || history[self.id]
-                    .iter()
-                    .filter_map(std::sync::Weak::upgrade)
-                    .any(|reader| Arc::ptr_eq(&reader, &sample.samples))
-            {
+            if self.reuses_assignment(&sample)? {
                 let overlap = sample
                     .samples
                     .len()
@@ -709,13 +742,13 @@ impl ColdLoad {
                 if overlap > PCM_LIMIT_BYTES {
                     return Err("migration subscriber exceeds transient PCM byte limit".into());
                 }
-                sample.samples = Arc::from(sample.samples.as_ref());
+                sample = self.resident.copy_selected(&sample)?;
             }
             let lease = prepared
                 .lease
                 .subscribe_verified()
                 .map_err(|error| error.to_string())?;
-            history[self.id].push(Arc::downgrade(&sample.samples));
+            self.resident.commit_selected_history(&sample)?;
             lease.bind_pcm(&sample.samples);
             return Ok((lease, sample, None, None, None, None, None));
         }
@@ -746,7 +779,7 @@ impl ColdLoad {
                 update.percent <= 0.0 || update.percent >= 1.0,
             );
         };
-        let mut sample = super::material_migration::prepare_pcm(
+        let mut sample = super::material_migration::prepare_pcm_resident(
             &mut transaction,
             &self.path,
             self.output_rate,
@@ -755,6 +788,7 @@ impl ColdLoad {
             self.resident_hint,
             &cancelled,
             &mut report,
+            Some(&self.resident),
         )?;
         cold_residency::attach(
             &mut sample,
@@ -764,20 +798,7 @@ impl ColdLoad {
         // Share complete PCM between distinct pads, but never re-use that identity
         // for a new assignment while any previous generation is still pinned.
         {
-            let mut history = self
-                .pcm_history
-                .lock()
-                .map_err(|_| "PCM history lock poisoned")?;
-            history[self.id].retain(|reader| reader.strong_count() > 0);
-            if history[self.id].len() >= 128 {
-                return Err("same-pad source reader history full (128 live assignments)".into());
-            }
-            let reused_assignment = same_source(self.initial_source.as_ref(), Some(&sample))
-                || history[self.id]
-                    .iter()
-                    .filter_map(std::sync::Weak::upgrade)
-                    .any(|reader| Arc::ptr_eq(&reader, &sample.samples));
-            if reused_assignment {
+            if self.reuses_assignment(&sample)? {
                 let overlap = sample
                     .samples
                     .len()
@@ -786,7 +807,7 @@ impl ColdLoad {
                 if overlap > PCM_LIMIT_BYTES {
                     return Err("same-pad warm assignment exceeds transient PCM byte limit".into());
                 }
-                sample.samples = Arc::from(sample.samples.as_ref());
+                sample = self.resident.copy_selected(&sample)?;
                 transaction.record_assignment_copy((overlap / 2) as u64);
             }
         }
@@ -869,18 +890,9 @@ impl ColdLoad {
         transaction
             .commit(&cancelled)
             .map_err(|error| error.to_string())?;
-        let sample = cold_residency::select(sample, self.resident_hint, PCM_LIMIT_BYTES)?;
-        {
-            let mut history = self
-                .pcm_history
-                .lock()
-                .map_err(|_| "PCM history lock poisoned")?;
-            history[self.id].retain(|reader| reader.strong_count() > 0);
-            if history[self.id].len() >= 128 {
-                return Err("same-pad source reader history full (128 live assignments)".into());
-            }
-            history[self.id].push(Arc::downgrade(&sample.samples));
-        }
+        // prepare_pcm_resident already read the exact selected extent/context;
+        // rewriting its Arc view would invalidate the scoped owner witness.
+        self.resident.commit_selected_history(&sample)?;
         transaction.bind_pcm(&sample.samples);
         Ok((
             transaction.into_lease(),
@@ -974,10 +986,11 @@ impl ColdLoad {
                 analysis.as_ref(),
             )?;
             let candidate_stale = || cancelled() || candidate_cancelled.load(Ordering::Acquire);
-            match transaction.read_prepared_selection(
+            match transaction.read_prepared_selection_resident(
                 defaults.resident_hint(self.output_rate, source.frame_count),
                 PCM_LIMIT_BYTES,
                 &candidate_stale,
+                Some(&self.resident),
             ) {
                 Ok(sample) if !candidate_stale() => {
                     selected = Some((sample, defaults, candidate_cancelled));
@@ -992,20 +1005,7 @@ impl ColdLoad {
         let (mut sample, defaults, candidate_cancelled) =
             selected.ok_or("incoming intent kept changing during selection")?;
         {
-            let mut history = self
-                .pcm_history
-                .lock()
-                .map_err(|_| "PCM history lock poisoned")?;
-            history[self.id].retain(|reader| reader.strong_count() > 0);
-            if history[self.id].len() >= 128 {
-                return Err("same-pad source reader history full (128 live assignments)".into());
-            }
-            if same_source(self.initial_source.as_ref(), Some(&sample))
-                || history[self.id]
-                    .iter()
-                    .filter_map(std::sync::Weak::upgrade)
-                    .any(|reader| Arc::ptr_eq(&reader, &sample.samples))
-            {
+            if self.reuses_assignment(&sample)? {
                 let overlap = sample
                     .samples
                     .len()
@@ -1014,11 +1014,11 @@ impl ColdLoad {
                 if overlap > PCM_LIMIT_BYTES {
                     return Err("same-pad warm assignment exceeds transient PCM byte limit".into());
                 }
-                sample.samples = Arc::from(sample.samples.as_ref());
+                sample = self.resident.copy_selected(&sample)?;
                 transaction.record_assignment_copy((overlap / 2) as u64);
             }
-            history[self.id].push(Arc::downgrade(&sample.samples));
         }
+        self.resident.commit_selected_history(&sample)?;
         #[cfg(test)]
         super::c3_observation::owned_pcm(sample.samples.len() * 4);
         if candidate_cancelled.load(Ordering::Acquire) {
@@ -1171,20 +1171,22 @@ impl ColdLoad {
             .assets
             .acquire_pin(&self.samples_root, &lease.original_path)
             .map_err(|error| error.to_string())?;
+        let mut resident_registration = self.resident.take_registration()?;
         self.assets
-            .retain_cold(
+            .retain_cold_reserved(
                 lease.clone(),
                 &sample,
                 Arc::downgrade(&self.engine_asset_owner),
+                &mut resident_registration,
             )
             .map_err(|error| error.to_string())?;
-        let requests = self.requests.lock().map_err(|_| "request lock poisoned")?;
+        let mut requests = self.requests.lock().map_err(|_| "request lock poisoned")?;
         if self.flags_cancelled()
             || incoming_cancelled
                 .as_ref()
                 .is_some_and(|cancelled| cancelled.load(Ordering::Acquire))
-            || requests[self.id] != self.request_id
-            || (self.guard_epoch && self.epoch.load(Ordering::Acquire) != self.expected_epoch)
+            || requests[self.id] != self.base_request
+            || self.epoch.load(Ordering::Acquire) != self.base_epoch
         {
             return Err("cold request became stale".into());
         }
@@ -1212,7 +1214,10 @@ impl ColdLoad {
         let previous_generation = generations[self.id];
         let previous_digest = digests[self.id].clone();
         let previous_intent = intents[self.id];
-        let enqueue_epoch = self.epoch.load(Ordering::Acquire);
+        // Successful arming advances this exact epoch. Every post-enqueue
+        // metadata/rollback comparison must use the admitted epoch, rather
+        // than the predecessor snapshot retained for preparation validation.
+        let enqueue_epoch = self.expected_epoch;
         let project_root =
             std::fs::canonicalize(self.samples_root.parent().ok_or("samples parent missing")?)
                 .map_err(|error| error.to_string())?;
@@ -1228,7 +1233,11 @@ impl ColdLoad {
             .map(|hint| hint.region(self.output_rate, sample.frame_count()))
             .transpose()?
             .map(|region| (region.start, region.end));
-        publish_loaded_sample(
+        let advance = PadRequestAdvance::prepare(&mut requests[self.id], &self.epoch)?;
+        if advance.next_request > self.request_id || advance.next_epoch != self.expected_epoch {
+            return Err("cold proposal current authority changed before arming".into());
+        }
+        publish_loaded_sample_with_arm(
             producer,
             &self.cache,
             self.id,
@@ -1257,6 +1266,11 @@ impl ColdLoad {
                     self.restore_automatic
                         .then_some((&mut intents[self.id], TimingIntent::Automatic))
                 },
+            },
+            || {
+                self.proposal.arm()?;
+                advance.commit_reserved(self.request_id)?;
+                Ok(())
             },
         )?;
         drop(digests);

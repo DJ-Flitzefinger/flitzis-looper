@@ -27,12 +27,16 @@ struct LegacyPreparation {
     source: CompleteSampleWork,
     publication: super::prepared_source::PreparedSourcePermit,
     lease: ProjectAssetLease,
+    resident: super::resident_proposal::ResidentReadContext,
 }
 
 pub(super) struct PreparedStemsWork {
     source_version: String,
     cache_dir: String,
     preparation: Preparation,
+    lane: super::cold_jobs::ColdJobsHandle,
+    cancelled: Arc<std::sync::atomic::AtomicBool>,
+    publication: super::prepared_source::PreparedSourcePermit,
 }
 
 enum PreparedPublication {
@@ -123,20 +127,38 @@ impl PreparedStemsWork {
                 source,
                 publication: ticket.publication.clone(),
                 lease,
+                resident: super::resident_proposal::ResidentReadContext::reader(
+                    engine.project_assets.clone(),
+                    engine.resident_account.clone(),
+                ),
             }))
         };
         Ok(Self {
             source_version,
             cache_dir,
             preparation,
+            lane: engine.cold_jobs.handle(),
+            cancelled: engine.cold_cancelled.clone(),
+            publication: ticket.publication.clone(),
         })
     }
 
     pub(super) fn prepare(self) -> Result<PreparedStemsPublication, String> {
+        let lane = self.lane.clone();
+        let shutdown = self.cancelled.clone();
+        let publication = self.publication.clone();
+        lane.execute_owned(
+            || shutdown.load(std::sync::atomic::Ordering::Acquire) || !publication.current(),
+            move || self.prepare_inner(),
+        )
+    }
+
+    fn prepare_inner(self) -> Result<PreparedStemsPublication, String> {
         let Self {
             source_version,
             cache_dir,
             preparation,
+            ..
         } = self;
         let publication = match preparation {
             Preparation::Pair(work) => {
@@ -151,11 +173,31 @@ impl PreparedStemsWork {
                     source,
                     publication,
                     lease,
+                    resident,
                 } = *work;
-                let (mut stems, files) = if let Some(shared) = assets
+                let shared = assets
                     .shared_stems(&path, &sample, &source_version, rate)
-                    .map_err(|error| error.to_string())?
-                {
+                    .map_err(|error| error.to_string())?;
+                let mut reused = vec![&sample];
+                if let Some(shared) = shared.as_ref() {
+                    reused.extend(shared.stems.iter());
+                }
+                let bytes = if shared.is_some() {
+                    0
+                } else {
+                    sample
+                        .samples
+                        .len()
+                        .checked_mul(16)
+                        .ok_or("resident legacy component extent overflow")?
+                };
+                let mut reservation = resident
+                    .reserve(bytes, &reused, 5)
+                    .map_err(|error| error.to_string())?;
+                reservation
+                    .reserve_reader_slots(usize::from(shared.is_none()))
+                    .map_err(|error| error.to_string())?;
+                let (mut stems, files) = if let Some(shared) = shared {
                     (shared, None)
                 } else {
                     let files = project_assets::stem_readers::seal_stem_artifacts(&path)
@@ -189,9 +231,21 @@ impl PreparedStemsWork {
                 stems = stems.window_for(&sample)?;
                 stems.publication = publication.clone();
                 stems.accepted_timing = publication.accepted_projection();
+                let mut views = vec![&sample];
+                views.extend(stems.stems.iter());
+                reservation
+                    .commit(&views)
+                    .map_err(|error| error.to_string())?;
                 if let Some(files) = files {
                     assets
-                        .retain_shared_stems(path.clone(), &stems, &sample, &source_version, files)
+                        .retain_shared_stems_reserved(
+                            path.clone(),
+                            &stems,
+                            &sample,
+                            &source_version,
+                            files,
+                            &mut reservation,
+                        )
                         .map_err(|error| error.to_string())?;
                 }
                 PreparedPublication::Legacy(Box::new(LegacyPublication {

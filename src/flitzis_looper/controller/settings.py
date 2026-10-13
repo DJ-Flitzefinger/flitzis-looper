@@ -28,6 +28,39 @@ class SettingsController(BaseController):
         on_project_changed: Callable[[], None] | None = None,
     ) -> None:
         super().__init__(project, session, audio, on_project_changed)
+        self._on_residency_policy_changed: Callable[[], None] | None = None
+
+    def bind_residency_policy(self, callback: Callable[[], None]) -> None:
+        """Refresh background interests after a validated persistent policy edit."""
+        self._on_residency_policy_changed = callback
+
+    def set_preload_stem_loops_on_startup(self, *, enabled: bool) -> None:
+        """Set deliberate component preload without changing any pad's mix preference."""
+        if type(enabled) is not bool:
+            message = "startup stem preload must be a boolean"
+            raise TypeError(message)
+        if enabled == self._project.preload_stem_loops_on_startup:
+            return
+        self._project.preload_stem_loops_on_startup = enabled
+        self._mark_project_changed()
+        if self._on_residency_policy_changed is not None:
+            self._on_residency_policy_changed()
+
+    def set_resident_pcm_budget_mib(self, value: int) -> None:
+        """Apply Native admission allowance before committing its persistent preference."""
+        if type(value) is not int:
+            message = "resident PCM budget must be an integer"
+            raise TypeError(message)
+        if not 128 <= value <= 16384:
+            message = "resident PCM budget must be between 128 and 16384 MiB"
+            raise ValueError(message)
+        if value == self._project.resident_pcm_budget_mib:
+            return
+        self._audio.set_resident_pcm_budget_mib(value)
+        self._project.resident_pcm_budget_mib = value
+        self._mark_project_changed()
+        if self._on_residency_policy_changed is not None:
+            self._on_residency_policy_changed()
 
     def set_stem_separator(self, separator: StemSeparator) -> None:
         """Choose the separator/model for future jobs without changing existing stems."""

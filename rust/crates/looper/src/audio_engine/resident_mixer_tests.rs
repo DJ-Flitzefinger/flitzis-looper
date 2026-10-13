@@ -117,6 +117,7 @@ fn stems(sample: &SampleBuffer) -> PreparedStemSet {
         complete_set_identity: Arc::new([22; 32]),
         accepted_timing: None,
         reference_samples: sample.samples.clone(),
+        reference_residency: sample.residency.clone(),
         publication: PreparedSourcePermit::unrestricted(),
         source_version_hash: 91,
         sample_rate_hz: RATE,

@@ -10,9 +10,12 @@ const MAX_MANIFEST_BYTES: u64 = 256 * 1024;
 const MAX_CANDIDATES: usize = 4096;
 
 #[derive(Clone, Copy)]
-enum ReuseRequest {
+enum ReuseRequest<'a> {
     Prepared,
-    Selected(Option<ResidentLoadHint>),
+    Selected(
+        Option<ResidentLoadHint>,
+        Option<&'a crate::audio_engine::resident_proposal::ResidentReadContext>,
+    ),
 }
 
 enum ReusedCandidate {
@@ -221,6 +224,28 @@ impl ColdTransaction {
         self.try_reuse_selected(output_rate, output_channels, maximum, None, cancelled)
     }
 
+    pub(in crate::audio_engine) fn try_reuse_selected_resident(
+        &mut self,
+        output_rate: u32,
+        output_channels: usize,
+        maximum: usize,
+        resident_hint: Option<ResidentLoadHint>,
+        cancelled: &impl Fn() -> bool,
+        resident: Option<&crate::audio_engine::resident_proposal::ResidentReadContext>,
+    ) -> io::Result<Option<SampleBuffer>> {
+        match self.try_reuse_candidate(
+            output_rate,
+            output_channels,
+            maximum,
+            ReuseRequest::Selected(resident_hint, resident),
+            cancelled,
+        )? {
+            Some(ReusedCandidate::Selected(sample)) => Ok(Some(sample)),
+            None => Ok(None),
+            Some(ReusedCandidate::Prepared) => unreachable!("selected warm request"),
+        }
+    }
+
     pub(in crate::audio_engine) fn try_reuse_selected(
         &mut self,
         output_rate: u32,
@@ -229,17 +254,14 @@ impl ColdTransaction {
         resident_hint: Option<ResidentLoadHint>,
         cancelled: &impl Fn() -> bool,
     ) -> io::Result<Option<SampleBuffer>> {
-        match self.try_reuse_candidate(
+        self.try_reuse_selected_resident(
             output_rate,
             output_channels,
             maximum,
-            ReuseRequest::Selected(resident_hint),
+            resident_hint,
             cancelled,
-        )? {
-            Some(ReusedCandidate::Selected(sample)) => Ok(Some(sample)),
-            None => Ok(None),
-            Some(ReusedCandidate::Prepared) => unreachable!("selected warm request"),
-        }
+            None,
+        )
     }
 
     /// Complete warm integrity and retained immutable custody, without PCM selection.
@@ -266,7 +288,7 @@ impl ColdTransaction {
         output_rate: u32,
         output_channels: usize,
         maximum: usize,
-        request: ReuseRequest,
+        request: ReuseRequest<'_>,
         cancelled: &impl Fn() -> bool,
     ) -> io::Result<Option<ReusedCandidate>> {
         check_cancelled(cancelled)?;
@@ -300,7 +322,12 @@ impl ColdTransaction {
                     result = Some(sample);
                     break;
                 }
-                Err(error) if error.kind() == io::ErrorKind::Interrupted => return Err(error),
+                Err(error)
+                    if error.kind() == io::ErrorKind::Interrupted
+                        || crate::audio_engine::resident_proposal::is_admission_io(&error) =>
+                {
+                    return Err(error);
+                }
                 // Partial/corrupt/old/device-incompatible/unsealable candidates
                 // are untouched and cannot authorize source state. Regenerate.
                 Err(_) => {}
@@ -320,7 +347,7 @@ impl ColdTransaction {
         selector: &Value,
         output: (u32, usize),
         maximum: usize,
-        request: ReuseRequest,
+        request: ReuseRequest<'_>,
         cancelled: &impl Fn() -> bool,
     ) -> io::Result<ReusedCandidate> {
         let (output_rate, output_channels) = output;
@@ -458,15 +485,67 @@ impl ColdTransaction {
         }
         // Both paths establish the same complete source identity before custody.
         let source = cold_residency::identity(&manifest).map_err(io::Error::other)?;
-        let (start, end, context) = if let ReuseRequest::Selected(Some(hint)) = request {
+        let (start, end, context) = if let ReuseRequest::Selected(Some(hint), _) = request {
             hint.selection(rate, frames).map_err(io::Error::other)?
         } else {
             (0, frames, ResidentContext::FullTrack)
         };
         let finite = start != 0 || end != frames;
+        let resident = match request {
+            ReuseRequest::Selected(_, resident) => resident,
+            ReuseRequest::Prepared => None,
+        };
+        // Pin a real shared hit, then release the cache mutex before entering
+        // the asset/account gate (the collector takes these in the reverse order).
+        let shared_pcm = if !finite && let Some(shared) = existing.as_ref() {
+            let mut pcm = shared
+                .pcm
+                .lock()
+                .map_err(|_| invalid("warm PCM ownership poisoned"))?;
+            if pcm.as_ref().is_some_and(|pcm| pcm.strong_count() == 0) {
+                *pcm = None;
+            }
+            pcm.as_ref()
+                .and_then(Weak::upgrade)
+                .filter(|pcm| pcm.len() == frames * channels)
+        } else {
+            None
+        };
+        let view = Arc::new(ResidentSourceView {
+            source: source.clone(),
+            start_frame: start,
+            window_revision: 1,
+            context,
+        });
+        let reused = shared_pcm.as_ref().map(|samples| SampleBuffer {
+            channels,
+            samples: samples.clone(),
+            residency: Some(view.clone()),
+        });
+        let mut reservation = if let Some(resident) = resident {
+            let bytes = if reused.is_some() {
+                0
+            } else {
+                (end - start)
+                    .checked_mul(channels)
+                    .and_then(|n| n.checked_mul(4))
+                    .ok_or_else(|| invalid("resident selected extent overflow"))?
+            };
+            let mut token = resident
+                .reserve(bytes, &reused.iter().collect::<Vec<_>>(), 1)
+                .map_err(crate::audio_engine::resident_proposal::admission_io)?;
+            token
+                .reserve_reader_slots(1)
+                .map_err(crate::audio_engine::resident_proposal::admission_io)?;
+            Some(token)
+        } else {
+            None
+        };
         let samples = if matches!(request, ReuseRequest::Prepared) {
             None
-        } else if finite {
+        } else if let Some(samples) = shared_pcm {
+            Some(samples)
+        } else {
             Some(read_playback_range(
                 &mut readers[1],
                 start,
@@ -476,39 +555,38 @@ impl ColdTransaction {
                 cancelled,
                 &mut self.integrity,
             )?)
-        } else if let Some(shared) = existing.as_ref() {
-            let mut pcm = shared
+        };
+        if let Some(samples) = samples.as_ref()
+            && let Some(token) = reservation.as_mut()
+        {
+            let sample = SampleBuffer {
+                channels,
+                samples: samples.clone(),
+                residency: Some(view.clone()),
+            };
+            resident
+                .expect("resident token has context")
+                .commit_sample(token, &sample)
+                .map_err(crate::audio_engine::resident_proposal::admission_io)?;
+        }
+        if let Some(token) = reservation
+            && let Some(resident) = resident
+        {
+            resident
+                .retain_registration(token)
+                .map_err(io::Error::other)?;
+        }
+        // Publish reusable PCM only after its scoped registration is visible.
+        if !finite
+            && let Some(shared) = existing.as_ref()
+            && let Some(samples) = samples.as_ref()
+        {
+            *shared
                 .pcm
                 .lock()
-                .map_err(|_| invalid("warm PCM ownership poisoned"))?;
-            if let Some(samples) = pcm
-                .as_ref()
-                .and_then(Weak::upgrade)
-                .filter(|pcm| pcm.len() == frames * channels)
-            {
-                Some(samples)
-            } else {
-                let samples = read_playback(
-                    &mut readers[1],
-                    frames,
-                    channels,
-                    maximum,
-                    cancelled,
-                    &mut self.integrity,
-                )?;
-                *pcm = Some(Arc::downgrade(&samples));
-                Some(samples)
-            }
-        } else {
-            Some(read_playback(
-                &mut readers[1],
-                frames,
-                channels,
-                maximum,
-                cancelled,
-                &mut self.integrity,
-            )?)
-        };
+                .map_err(|_| invalid("warm PCM ownership poisoned"))? =
+                Some(Arc::downgrade(samples));
+        }
         // Prepared custody needs no PCM allocation. Selected requests transfer
         // the cleanup slot only after their fallible PCM admission/read work;
         // a rejected candidate keeps the reservation for the next candidate.
@@ -554,12 +632,7 @@ impl ColdTransaction {
             return Ok(ReusedCandidate::Prepared);
         };
         Ok(ReusedCandidate::Selected(SampleBuffer {
-            residency: Some(Arc::new(ResidentSourceView {
-                source,
-                start_frame: start,
-                window_revision: 1,
-                context,
-            })),
+            residency: Some(view),
             samples,
             channels,
         }))

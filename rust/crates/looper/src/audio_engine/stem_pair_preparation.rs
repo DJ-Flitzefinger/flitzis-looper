@@ -213,6 +213,11 @@ impl AudioEngine {
             publication: ticket.publication.clone(),
             cold_cancelled: self.cold_cancelled.clone(),
             assets: self.project_assets.clone(),
+            resident: super::resident_proposal::ResidentReadContext::reader(
+                self.project_assets.clone(),
+                self.resident_account.clone(),
+            ),
+            lane: self.cold_jobs.handle(),
         })
     }
 
@@ -275,10 +280,38 @@ pub(super) struct StemPairPreparationWork {
     publication: PreparedSourcePermit,
     cold_cancelled: Arc<AtomicBool>,
     assets: Arc<super::project_assets::ProjectAssets>,
+    resident: super::resident_proposal::ResidentReadContext,
+    lane: super::cold_jobs::ColdJobsHandle,
 }
 
 impl StemPairPreparationWork {
     pub(super) fn prepare(
+        self,
+        cache_dir: &str,
+        components: bool,
+        descriptor_reference: Option<&str>,
+        artifact_source_version: Option<&str>,
+    ) -> Result<PreparedStemPair, String> {
+        let lane = self.lane.clone();
+        let shutdown = self.cold_cancelled.clone();
+        let publication = self.publication.clone();
+        let cache_dir = cache_dir.to_owned();
+        let descriptor_reference = descriptor_reference.map(str::to_owned);
+        let artifact_source_version = artifact_source_version.map(str::to_owned);
+        lane.execute_owned(
+            || shutdown.load(Ordering::Acquire) || !publication.current(),
+            move || {
+                self.prepare_inner(
+                    &cache_dir,
+                    components,
+                    descriptor_reference.as_deref(),
+                    artifact_source_version.as_deref(),
+                )
+            },
+        )
+    }
+
+    fn prepare_inner(
         self,
         cache_dir: &str,
         components: bool,
@@ -294,6 +327,8 @@ impl StemPairPreparationWork {
             publication,
             cold_cancelled,
             assets,
+            resident,
+            lane: _,
         } = self;
         let root = root.as_path();
         let source_version = source_version.as_str();
@@ -420,20 +455,42 @@ impl StemPairPreparationWork {
         let wav_path = material_paths::resolve(&root, Path::new(&pair.descriptor.wav_generation))
             .map_err(|error| error.to_string())?
             .path;
+        let mut resident_reservation = None;
         let stems = if components {
             // Shared backing is reused only for this same verified complete pair/window.
-            match assets
+            let shared = assets
                 .shared_stems(&wav_path, &sample, source_version, sample_rate_hz)
                 .map_err(|error| error.to_string())?
-            {
-                Some(shared) if *shared.complete_set_identity == *identity => {
+                .filter(|shared| *shared.complete_set_identity == *identity);
+            let mut reused = vec![&sample];
+            if let Some(shared) = shared.as_ref() {
+                reused.extend(shared.stems.iter());
+            }
+            let new_bytes = if shared.is_some() {
+                0
+            } else {
+                sample
+                    .samples
+                    .len()
+                    .checked_mul(16)
+                    .ok_or("resident component byte overflow")?
+            };
+            let mut reservation = resident
+                .reserve(new_bytes, &reused, 5)
+                .map_err(|error| error.to_string())?;
+            reservation
+                .reserve_reader_slots(1)
+                .map_err(|error| error.to_string())?;
+            let set = match shared {
+                Some(shared) => {
                     identity = shared.complete_set_identity.clone();
-                    Some(shared)
+                    shared
                 }
-                _ => Some(PreparedStemSet {
+                None => PreparedStemSet {
                     complete_set_identity: identity.clone(),
                     accepted_timing: None,
                     reference_samples: sample.samples.clone(),
+                    reference_residency: sample.residency.clone(),
                     publication: PreparedSourcePermit::unbound(),
                     source_version_hash: source_version_hash(source_version),
                     sample_rate_hz,
@@ -441,8 +498,15 @@ impl StemPairPreparationWork {
                     frame_count: sample.frame_count(),
                     available_mask: 0b1111,
                     stems: pair.prepare_component_views(&sample)?,
-                }),
-            }
+                },
+            };
+            let mut views = vec![&sample];
+            views.extend(set.stems.iter());
+            reservation
+                .commit(&views)
+                .map_err(|error| error.to_string())?;
+            resident_reservation = Some(reservation);
+            Some(set)
         } else {
             None
         };
@@ -463,17 +527,34 @@ impl StemPairPreparationWork {
         if pair.created_descriptor {
             rollback.push((project_root.join(&pair.descriptor_reference), false));
         }
-        assets
-            .retain_stem_pair(
-                wav_path.clone(),
-                &sample,
-                source_version,
-                &identity,
-                stems.as_ref(),
-                pair.clone_pins(root.parent().ok_or("project root missing")?)?,
-                material.lease.clone(),
-            )
-            .map_err(|error| error.to_string())?;
+        if let Some(reservation) = resident_reservation.as_mut() {
+            assets
+                .retain_stem_pair_reserved(
+                    wav_path.clone(),
+                    super::project_assets::stem_readers::StemPairReaders {
+                        reference: &sample,
+                        version: source_version,
+                        identity: &identity,
+                        stems: stems.as_ref(),
+                    },
+                    pair.clone_pins(root.parent().ok_or("project root missing")?)?,
+                    material.lease.clone(),
+                    reservation,
+                )
+                .map_err(|error| error.to_string())?;
+        } else {
+            assets
+                .retain_stem_pair(
+                    wav_path.clone(),
+                    &sample,
+                    source_version,
+                    &identity,
+                    None,
+                    pair.clone_pins(root.parent().ok_or("project root missing")?)?,
+                    material.lease.clone(),
+                )
+                .map_err(|error| error.to_string())?;
+        }
         Ok(PreparedStemPair {
             selection,
             wav_path,

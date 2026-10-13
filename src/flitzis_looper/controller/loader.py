@@ -15,6 +15,7 @@ from flitzis_looper.controller.asset_lifecycle import (
     ProjectAssetLifecycle,
 )
 from flitzis_looper.controller.base import BaseController
+from flitzis_looper.controller.committed_stem_residency import resident_pcm_budget_pressure
 from flitzis_looper.controller.key_metadata import KeyMetadataAnalysis
 from flitzis_looper.controller.saved_residency import saved_resident_loop
 from flitzis_looper.controller.validation import normalize_bpm
@@ -462,6 +463,7 @@ class LoaderController(_IncomingIntentControl, _MaterialCreationOwnership):
         self._new_load_sample_ids: set[int] = set()
         self._incoming_loads: dict[int, _IncomingLoad] = {}
         self._deferred_restores: dict[int, Path] = {}
+        self._deferred_restore_content: dict[int, str | None] = {}
         self._analysis_request_ids: dict[int, int] = {}
         self._key_analysis = KeyMetadataAnalysis(project, audio)
         self._accepted_restore = AcceptedTimingRestore(
@@ -535,6 +537,7 @@ class LoaderController(_IncomingIntentControl, _MaterialCreationOwnership):
 
         changed = False
         defer_remaining = False
+        admissions = 0
         for sample_id, path in enumerate(self._project.sample_paths):
             if path is None:
                 continue
@@ -551,10 +554,14 @@ class LoaderController(_IncomingIntentControl, _MaterialCreationOwnership):
                 changed = True
                 continue
 
-            if defer_remaining:
+            if defer_remaining or admissions >= self._RESTORE_ADMISSIONS_PER_POLL:
                 self._defer_restored_load(sample_id, rel)
-            elif not self._schedule_restored_load(sample_id, rel, run_analysis=False):
-                defer_remaining = sample_id in self._deferred_restores
+            else:
+                admissions += 1
+                if not self._schedule_restored_load(sample_id, rel, run_analysis=False):
+                    defer_remaining = sample_id in self._deferred_restores and (
+                        sample_id not in self._session.sample_load_errors
+                    )
 
         if changed:
             self._mark_project_changed()
@@ -583,6 +590,7 @@ class LoaderController(_IncomingIntentControl, _MaterialCreationOwnership):
             return
 
         self._deferred_restores.pop(sample_id, None)
+        self._deferred_restore_content.pop(sample_id, None)
         self._session.sample_load_errors.pop(sample_id, None)
         self._session.sample_load_progress.pop(sample_id, None)
         self._session.sample_load_stage.pop(sample_id, None)
@@ -1262,12 +1270,20 @@ class LoaderController(_IncomingIntentControl, _MaterialCreationOwnership):
             reservation.close()
         if not self._matches_load_request(sample_id, event):
             return
-
+        pending = self._session.pending_sample_paths.get(sample_id)
+        restored = sample_id not in self._new_load_sample_ids and (
+            sample_id not in self._incoming_loads
+        )
         self._settle_load_request(sample_id)
 
         msg = event.get("msg")
         if isinstance(msg, str):
             self._session.sample_load_errors[sample_id] = msg
+            if restored and resident_pcm_budget_pressure(msg) and pending is not None:
+                current = self._project.sample_paths[sample_id]
+                rel = self._parse_cached_sample_path(current) if current is not None else None
+                if rel is not None and rel.as_posix() == pending:
+                    self._defer_restored_load(sample_id, rel, pressure=msg)
 
     def _handle_task_started(self, sample_id: int, event: dict[str, object]) -> None:
         task = event.get("task")
@@ -1512,10 +1528,14 @@ class LoaderController(_IncomingIntentControl, _MaterialCreationOwnership):
             if isinstance(error, RuntimeError) and str(error) == self._COLD_QUEUE_FULL:
                 self._defer_restored_load(sample_id, rel)
                 return False
+            if resident_pcm_budget_pressure(str(error)):
+                self._defer_restored_load(sample_id, rel, pressure=str(error))
+                return False
             self._cancel_deferred_restore(sample_id)
             self._session.sample_load_errors[sample_id] = str(error)
             return False
         self._deferred_restores.pop(sample_id, None)
+        self._deferred_restore_content.pop(sample_id, None)
         self._session.sample_load_errors.pop(sample_id, None)
         self._session.sample_load_progress.pop(sample_id, None)
         self._session.sample_load_stage.pop(sample_id, None)
@@ -1533,19 +1553,31 @@ class LoaderController(_IncomingIntentControl, _MaterialCreationOwnership):
             message = "Saved material identity does not match its original"
             raise ValueError(message)
 
-    def _defer_restored_load(self, sample_id: int, rel: Path) -> None:
+    def _defer_restored_load(
+        self, sample_id: int, rel: Path, *, pressure: str | None = None
+    ) -> None:
         self._deferred_restores[sample_id] = rel
+        content = self._project.pad_content[sample_id]
+        self._deferred_restore_content[sample_id] = content.instance_id if content else None
         self._session.pending_sample_paths[sample_id] = rel.as_posix()
         self._session.loading_sample_ids.add(sample_id)
-        self._session.sample_load_errors.pop(sample_id, None)
+        if pressure is None:
+            self._session.sample_load_errors.pop(sample_id, None)
+        else:
+            self._session.sample_load_errors[sample_id] = pressure
         self._session.sample_load_progress.pop(sample_id, None)
-        self._session.sample_load_stage[sample_id] = "Waiting for cold source admission"
+        self._session.sample_load_stage[sample_id] = (
+            "Waiting for resident PCM allowance"
+            if pressure is not None
+            else "Waiting for cold source admission"
+        )
         self._load_request_ids.pop(sample_id, None)
         self._new_load_sample_ids.discard(sample_id)
 
     def _cancel_deferred_restore(self, sample_id: int) -> None:
         if self._deferred_restores.pop(sample_id, None) is None:
             return
+        self._deferred_restore_content.pop(sample_id, None)
         self._session.pending_sample_paths.pop(sample_id, None)
         self._session.loading_sample_ids.discard(sample_id)
         self._session.sample_load_progress.pop(sample_id, None)
@@ -1555,12 +1587,21 @@ class LoaderController(_IncomingIntentControl, _MaterialCreationOwnership):
         pending = list(islice(self._deferred_restores.items(), self._RESTORE_ADMISSIONS_PER_POLL))
         for sample_id, rel in pending:
             current_path = self._project.sample_paths[sample_id]
-            if current_path is None or self._parse_cached_sample_path(current_path) != rel:
+            content = self._project.pad_content[sample_id]
+            current_content = content.instance_id if content else None
+            if (
+                current_path is None
+                or self._parse_cached_sample_path(current_path) != rel
+                or current_content != self._deferred_restore_content.get(sample_id)
+            ):
                 self._cancel_deferred_restore(sample_id)
                 continue
             admitted = self._schedule_restored_load(sample_id, rel, run_analysis=False)
             if not admitted and sample_id in self._deferred_restores:
-                break
+                self._deferred_restores.pop(sample_id)
+                self._deferred_restores[sample_id] = rel
+                if self._session.sample_load_errors.get(sample_id) is None:
+                    break
 
     def _record_load_request_id(self, sample_id: int, request_id: object) -> None:
         if isinstance(request_id, bool) or not isinstance(request_id, int):

@@ -553,6 +553,7 @@ pub(super) fn history_with_followup(
     let full_stems = PreparedStemSet {
         complete_set_identity: Arc::new([0x76; 32]),
         reference_samples: full.samples.clone(),
+        reference_residency: full.residency.clone(),
         publication: PreparedSourcePermit::unrestricted(),
         accepted_timing: None,
         source_version_hash: crate::audio_engine::stem_cache::source_version_hash(&h.version),
@@ -699,18 +700,24 @@ assert controller.publish_restored_stem_cache_if_available(0)
             &locals,
             "controller.on_frame_render()\nassert not session.stem_generation_errors, session.stem_generation_errors",
         );
-        Python::attach(|py| {
-            locals
-                .bind(py)
-                .get_item("controller")
-                .unwrap()
-                .unwrap()
-                .call_method1("stem_residency_status", (0,))
-                .unwrap()
-                .getattr("registration")
-                .map(|value| value.extract::<String>().unwrap() == "pending")
-                .unwrap_or(false)
-        })
+        let native_register_queued = matches!(
+            h.consumer.peek(),
+            Ok(ControlMessage::CommittedStemWork(work))
+                if matches!(work.as_ref(), crate::audio_engine::committed_stem_residency::CommittedStemRtWork::Register { id: 0, .. })
+        );
+        native_register_queued
+            && Python::attach(|py| {
+                locals
+                    .bind(py)
+                    .get_item("controller")
+                    .unwrap()
+                    .unwrap()
+                    .call_method1("stem_residency_status", (0,))
+                    .unwrap()
+                    .getattr("registration")
+                    .map(|value| value.extract::<String>().unwrap() == "pending")
+                    .unwrap_or(false)
+            })
     });
     assert_eq!(
         h.callback.drain(&mut h.consumer),

@@ -6,7 +6,7 @@ from collections.abc import Callable
 from dataclasses import dataclass, replace
 from pathlib import Path
 from queue import Empty, SimpleQueue
-from typing import TYPE_CHECKING, Literal
+from typing import TYPE_CHECKING, Literal, cast
 from uuid import uuid4
 
 from flitzis_looper.bs_input_provenance import bs_input_contract
@@ -19,7 +19,11 @@ from flitzis_looper.controller.bs_roformer_assets import MODEL_NAME as BS_ROFORM
 from flitzis_looper.controller.committed_stem_residency import (
     CommittedStemResidency,
     StemResidencyStatus,
+    resident_pcm_budget_pressure,
+    resident_stem_admission_pressure,
+    resident_stem_capacity_pressure,
 )
+from flitzis_looper.controller.saved_residency import saved_resident_loop
 from flitzis_looper.controller.stem_cache import (
     cache_dir_for_sample_id,
     cache_dir_matches_sample_id,
@@ -138,6 +142,40 @@ class _DiskSelectionSettlement:
     retirement: AssetRetirementReservation
 
 
+@dataclass(slots=True)
+class _StemDemand:
+    """One bounded control interest; PCM and callback authority stay entirely Native."""
+
+    source_version: str
+    content_id: str | None
+    source_path: str | None
+    selection_identity: str | None
+    verify_disk: bool = False
+    explicit: bool = False
+    policy: bool = False
+    withdraw_policy: bool = False
+    state: str = "queued"
+    error: str | None = None
+
+
+@dataclass(frozen=True, slots=True)
+class StemResidencySummary:
+    """Component readiness and exact Native PCM accounting, never process RAM claims."""
+
+    requested: int
+    queued: int
+    preparing: int
+    acked: int
+    deferred: int
+    errors: int
+    estimated_pcm_bytes: int
+    unknown_shapes: int
+    full_track_exceptions: int
+    native: dict[str, int | bool]
+    unconfirmed: int = 0
+    accounting_error: str | None = None
+
+
 class StemController(BaseController):  # noqa: PLR0904
     """Manage offline stem cache metadata and generation task gating."""
 
@@ -193,6 +231,8 @@ class StemController(BaseController):  # noqa: PLR0904
         self._fenced_pair_ids: set[int] = set()
         self._residency_errors: dict[int, str] = {}
         self._pending_full_mix_releases: set[int] = set()
+        self._demands: dict[int, _StemDemand] = {}
+        self._demand_direct_turn = True
         self._committed_residency = CommittedStemResidency(
             audio,
             self._committed_selection_current,
@@ -205,6 +245,7 @@ class StemController(BaseController):  # noqa: PLR0904
         self._on_frame_render_callbacks.append(self._poll_disk_selection_settlements)
         self._on_frame_render_callbacks.append(self._poll_publication_retries)
         self._on_frame_render_callbacks.append(self._committed_residency.poll)
+        self._on_frame_render_callbacks.append(self._poll_residency_demands)
 
     def shut_down(self) -> None:
         """Cancel separator publication while retaining every running file reader."""
@@ -224,6 +265,7 @@ class StemController(BaseController):  # noqa: PLR0904
         self._verified_candidates.clear()
         self._waiting_jobs.clear()
         self._committed_residency.shut_down()
+        self._demands.clear()
         for sample_id, pending in tuple(self._pending_stem_publications.items()):
             retry = self._publication_retries.pending.get(sample_id)
             if self._project.stem_cache[sample_id] is pending.entry and (
@@ -251,6 +293,317 @@ class StemController(BaseController):  # noqa: PLR0904
         """Use the project's existing fenced atomic writer for complete selections."""
         self._commit_disk_selection = commit
         self._flush_superseded_disk_selection = flush_superseded
+
+    def _remember_demand(self, sample_id: int, entry: StemCacheEntry) -> _StemDemand:
+        validate_sample_id(sample_id)
+        identity = entry.pair.stem_set_identity if entry.pair is not None else None
+        demand = self._demands.get(sample_id)
+        binding = (
+            entry.source_version,
+            self._content_id(sample_id),
+            self._project.sample_paths[sample_id],
+            identity,
+        )
+        if (
+            demand is None
+            or (
+                demand.source_version,
+                demand.content_id,
+                demand.source_path,
+                demand.selection_identity,
+            )
+            != binding
+        ):
+            demand = _StemDemand(*binding)
+            self._demands[sample_id] = demand
+        return demand
+
+    def refresh_residency_policy(self) -> None:
+        """Coalesce bounded policy interest without cancelling direct requests or voice owners."""
+        enabled = self._project.preload_stem_loops_on_startup
+        for sample_id, entry in enumerate(self._project.stem_cache):
+            if entry is None or sample_id in self._fenced_pair_ids:
+                continue
+            demand = self._demands.get(sample_id)
+            if enabled and entry.available:
+                demand = self._remember_demand(sample_id, entry)
+            if demand is None:
+                continue
+            was_enabled = demand.policy
+            demand.policy = enabled
+            demand.withdraw_policy = demand.withdraw_policy or (was_enabled and not enabled)
+            if was_enabled != enabled or demand.state == "deferred":
+                demand.state = "queued"
+                demand.error = None
+
+    def _demand_current(self, sample_id: int, demand: _StemDemand) -> bool:
+        entry = self._project.stem_cache[sample_id]
+        return (
+            not self._shutting_down
+            and entry is not None
+            and demand.content_id == self._content_id(sample_id)
+            and demand.source_path == self._project.sample_paths[sample_id]
+            and demand.source_version == entry.source_version
+            and demand.selection_identity
+            == (entry.pair.stem_set_identity if entry.pair is not None else None)
+        )
+
+    def _poll_residency_demands(self) -> None:
+        """Visit at most eight owners fairly; resource pressure never erases their interest."""
+        for sample_id, demand in tuple(self._demands.items()):
+            if not self._demand_current(sample_id, demand):
+                self._demands.pop(sample_id, None)
+        candidates = [
+            (sample_id, demand)
+            for sample_id, demand in self._demands.items()
+            if demand.state in {"queued", "deferred", "preparing"}
+        ]
+        for _ in range(min(8, len(candidates))):
+            index = next(
+                (
+                    index
+                    for index, (_, demand) in enumerate(candidates)
+                    if demand.explicit == self._demand_direct_turn
+                ),
+                0,
+            )
+            sample_id, demand = candidates.pop(index)
+            self._demand_direct_turn = not self._demand_direct_turn
+            self._demands.pop(sample_id)
+            self._demands[sample_id] = demand
+            try:
+                self._advance_residency_demand(sample_id, demand)
+            except (OSError, RuntimeError, TypeError, ValueError) as error:
+                message = str(error)
+                demand.state = self._admission_wait_state(message)
+                demand.error = message
+                self._session.stem_generation_errors[sample_id] = message
+
+    def _advance_disk_demand(self, sample_id: int, demand: _StemDemand) -> bool:
+        """Complete authoritative disk verification before component admission."""
+        entry = self._project.stem_cache[sample_id]
+        if entry is None:
+            return False
+        if demand.state == "deferred":
+            demand.state = "queued"
+        if sample_id in self._pair_preparations.pending or (
+            sample_id in self._disk_selection_settlements
+        ):
+            demand.state = "preparing"
+            return False
+        if demand.verify_disk:
+            ticket = self._capture_source_ticket(sample_id, demand.source_version)
+            self._prepare_pair(sample_id, entry, ticket, components=False)
+            demand.state = "preparing"
+            return False
+        if not demand.explicit and not demand.policy and not demand.withdraw_policy:
+            demand.state = "verified"
+            return False
+        return True
+
+    def _advance_residency_demand(self, sample_id: int, demand: _StemDemand) -> None:
+        if not self._advance_disk_demand(sample_id, demand):
+            return
+        status = self._committed_residency.status(sample_id)
+        if status is None or status.registration != "accepted":
+            demand.state = "queued"
+            if status is not None and status.registration == "rejected":
+                demand.state = "error"
+                demand.error = self._residency_errors.get(sample_id, "Stem registration rejected")
+            return
+        if demand.explicit and self._explicit_interest_pending(status):
+            demand.state = "preparing"
+            return
+        if demand.withdraw_policy:
+            if not self._advance_preload_interest(sample_id, demand, enabled=False):
+                return
+            demand.withdraw_policy = False
+        self._advance_component_interests(sample_id, demand, status)
+
+    def _advance_component_interests(
+        self, sample_id: int, demand: _StemDemand, status: StemResidencyStatus
+    ) -> None:
+        explicit_ready = not demand.explicit or self._advance_explicit_interest(
+            sample_id, demand, status
+        )
+        if demand.state in {"error", "deferred"}:
+            return
+        if demand.explicit and not explicit_ready:
+            return
+        policy_ready = not demand.policy or self._advance_preload_interest(
+            sample_id, demand, enabled=True
+        )
+        if demand.state in {"error", "deferred"}:
+            return
+        if demand.policy and not policy_ready:
+            return
+        demand.state = "acked" if explicit_ready and policy_ready else "preparing"
+        demand.error = None
+        if demand.state == "acked":
+            self._report_residency_error(sample_id, None)
+
+    def _advance_explicit_interest(
+        self, sample_id: int, demand: _StemDemand, status: StemResidencyStatus
+    ) -> bool:
+        if status.residency == "rejected" or status.effective == "rejected":
+            error = self._residency_errors.get(sample_id)
+            if not resident_stem_admission_pressure(error):
+                self._observe_demand_receipt(demand, "rejected", error)
+                return False
+        if status.requested_mode != "all_stems" or status.residency == "rejected":
+            if not self._committed_residency.request(
+                sample_id, "all_stems", self._session.pad_stem_enabled_mask[sample_id]
+            ):
+                self._defer_or_fail_demand(sample_id, demand)
+                return False
+            observed = self._committed_residency.status(sample_id)
+            if observed is None:
+                return False
+            status = observed
+        demand.state = "preparing"
+        return status.residency == "accepted"
+
+    def _advance_preload_interest(
+        self, sample_id: int, demand: _StemDemand, *, enabled: bool
+    ) -> bool:
+        if not self._committed_residency.request_preload(sample_id, enabled=enabled):
+            self._defer_or_fail_demand(sample_id, demand)
+            return False
+        state, error = self._committed_residency.preload_status(sample_id)
+        if state != "accepted":
+            self._observe_demand_receipt(demand, state, error)
+            return False
+        demand.state = "preparing"
+        return True
+
+    def _defer_or_fail_demand(self, sample_id: int, demand: _StemDemand) -> None:
+        error = self._residency_errors.get(sample_id)
+        demand.state = self._admission_wait_state(error) if error is not None else "queued"
+        demand.error = error
+
+    @staticmethod
+    def _observe_demand_receipt(demand: _StemDemand, state: str | None, error: str | None) -> None:
+        demand.state = (
+            StemController._admission_wait_state(error)
+            if resident_stem_admission_pressure(error)
+            else "error"
+            if state == "rejected"
+            else "preparing"
+        )
+        demand.error = error
+
+    @staticmethod
+    def _admission_wait_state(error: object) -> str:
+        if resident_pcm_budget_pressure(error):
+            return "deferred"
+        return "queued" if resident_stem_capacity_pressure(error) else "error"
+
+    @staticmethod
+    def _explicit_interest_pending(status: StemResidencyStatus) -> bool:
+        return status.requested_mode == "all_stems" and (
+            status.residency in {"captured", "pending"} or status.effective == "transitioning"
+        )
+
+    def residency_summary(self) -> StemResidencySummary:
+        """Project actual own ACK counts and conservative PCM demand, separate from RSS."""
+        requested = [
+            (sample_id, demand)
+            for sample_id, demand in self._demands.items()
+            if demand.explicit or demand.policy
+        ]
+        current_acks = sum(
+            demand.state == "acked" and self._demand_acked_current(sample_id, demand)
+            for sample_id, demand in requested
+        )
+        estimate, unknown, full_track = self._estimate_all_pad_pcm()
+        native: dict[str, int | bool] = {}
+        error = None
+        try:
+            native = self._resident_accounting_counters(
+                self._audio.get_resident_pcm_budget_status()
+            )
+        except (RuntimeError, TypeError, ValueError) as caught:
+            error = str(caught)
+        return StemResidencySummary(
+            len(requested),
+            sum(demand.state == "queued" for _, demand in requested),
+            sum(demand.state == "preparing" for _, demand in requested),
+            current_acks,
+            sum(demand.state == "deferred" for _, demand in requested),
+            sum(demand.state == "error" for _, demand in requested),
+            estimate,
+            unknown,
+            full_track,
+            native,
+            sum(demand.state == "acked" for _, demand in requested) - current_acks,
+            error,
+        )
+
+    @staticmethod
+    def _resident_accounting_counters(raw: object) -> dict[str, int | bool]:
+        counters = {
+            "budget_mib",
+            "budget_bytes",
+            "held_unique_pcm_bytes",
+            "pending_resident_bytes",
+            "admitted_total_bytes",
+            "unique_backing_count",
+            "pending_reservation_count",
+            "available_bytes",
+        }
+        if (
+            not isinstance(raw, dict)
+            or any(type(raw.get(key)) is not int or raw[key] < 0 for key in counters)
+            or type(raw.get("over_budget")) is not bool
+        ):
+            message = "Native resident accounting returned invalid counters"
+            raise TypeError(message)
+        return cast("dict[str, int | bool]", {key: raw[key] for key in counters | {"over_budget"}})
+
+    def _demand_acked_current(self, sample_id: int, demand: _StemDemand) -> bool:
+        try:
+            return (
+                self._demand_current(sample_id, demand)
+                and (
+                    not demand.explicit
+                    or self._committed_residency.component_residency_current(sample_id)
+                )
+                and (
+                    not demand.policy
+                    or self._committed_residency.preload_status(sample_id)[0] == "accepted"
+                )
+            )
+        except RuntimeError, TypeError, ValueError:
+            return False
+
+    def _estimate_all_pad_pcm(self) -> tuple[int, int, int]:
+        estimate = unknown = full_track = 0
+        for sample_id, path in enumerate(self._project.sample_paths):
+            if path is None:
+                continue
+            try:
+                raw = self._audio.loaded_sample_shape(sample_id)
+            except RuntimeError, TypeError, ValueError:
+                unknown += 1
+                continue
+            if (
+                not isinstance(raw, tuple)
+                or len(raw) != 3
+                or any(type(value) is not int or value <= 0 for value in raw)
+            ):
+                unknown += 1
+                continue
+            rate, channels, frames = raw
+            window = saved_resident_loop(self._project, sample_id, sample_rate_hz=rate)
+            if window is None:
+                full_track += 1
+            else:
+                frames = min(
+                    frames, max(1, round((window.end_seconds - window.start_seconds) * rate))
+                )
+            layers = 5 if self._project.stem_cache[sample_id] is not None else 1
+            estimate += frames * channels * 4 * layers
+        return estimate, unknown, full_track
 
     def generate_stems_async(self, sample_id: int) -> bool:
         """Schedule source-leased offline generation independently of pad playback."""
@@ -475,8 +828,6 @@ class StemController(BaseController):  # noqa: PLR0904
                 )
             ):
                 self._project.stem_cache[sample_id] = None
-                if self._project.pad_stem_mix_mode[sample_id] != "full_mix":
-                    self._project.pad_stem_mix_mode[sample_id] = "full_mix"
                 changed = True
                 continue
 
@@ -502,12 +853,27 @@ class StemController(BaseController):  # noqa: PLR0904
             )
 
     def publish_restored_stem_cache_if_available(self, sample_id: int) -> bool:
-        """Publish restored prepared stems after the restored full mix has loaded."""
+        """Verify saved disk artifacts after source ACK without inferring component demand."""
         validate_sample_id(sample_id)
         if sample_id in self._fenced_pair_ids:
             message = "Unsupported stem pair metadata requires explicit recovery"
             self._session.stem_generation_errors[sample_id] = message
             return False
+        if callable(getattr(self._audio, "prepare_stem_pair", None)):
+            entry = self._project.stem_cache[sample_id]
+            if entry is None:
+                return True
+            if not entry.available and self._restored_stem_candidates.get(sample_id) is not entry:
+                return True
+            demand = self._remember_demand(sample_id, entry)
+            demand.verify_disk = not entry.available or not self._committed_residency.contains(
+                sample_id
+            )
+            demand.policy = self._project.preload_stem_loops_on_startup
+            if demand.state != "preparing":
+                demand.state = "queued"
+                demand.error = None
+            return True
         return self._publish_restored_stem_cache(sample_id)
 
     def _publish_restored_stem_cache(self, sample_id: int) -> bool:
@@ -522,8 +888,6 @@ class StemController(BaseController):  # noqa: PLR0904
         source_version = self.source_version_for_pad(sample_id)
         if source_version is None or source_version != entry.source_version:
             self._project.stem_cache[sample_id] = None
-            if self._project.pad_stem_mix_mode[sample_id] != "full_mix":
-                self._project.pad_stem_mix_mode[sample_id] = "full_mix"
             self._mark_project_changed()
             self._assets.sync_assignments()
             return True
@@ -553,6 +917,7 @@ class StemController(BaseController):  # noqa: PLR0904
     def _invalidate_stem_cache(self, sample_id: int) -> None:
         self._assets.sync_assignments()
         self._committed_residency.cancel(sample_id)
+        self._demands.pop(sample_id, None)
         self._cancel_jobs(sample_id)
         self._pair_preparations.cancel(sample_id)
         self._resident_pairs.discard(sample_id)
@@ -580,10 +945,28 @@ class StemController(BaseController):  # noqa: PLR0904
         """Return own disk/residency/effective receipts independently from saved mode."""
         validate_sample_id(sample_id)
         try:
-            return self._committed_residency.status(sample_id)
+            status = self._stem_residency_projection(sample_id)
         except (RuntimeError, TypeError, ValueError) as error:
             self._report_residency_error(sample_id, f"Stem residency status failed: {error}")
             return None
+        return status
+
+    def _stem_residency_projection(self, sample_id: int) -> StemResidencyStatus | None:
+        status = self._committed_residency.status(sample_id)
+        demand = self._demands.get(sample_id)
+        if status is not None and demand is not None:
+            return replace(status, demand=demand.state, demand_error=demand.error)
+        if status is None and demand is not None:
+            return StemResidencyStatus(
+                "pending",
+                None,
+                None,
+                None,
+                desired_mode=self._project.pad_stem_mix_mode[sample_id],
+                demand=demand.state,
+                demand_error=demand.error,
+            )
+        return status
 
     def stems_available(self, sample_id: int) -> bool:
         """Return whether current stem cache metadata is available for UI controls."""
@@ -664,6 +1047,9 @@ class StemController(BaseController):  # noqa: PLR0904
         return True
 
     def _set_full_mix(self, sample_id: int) -> bool:
+        demand = self._demands.get(sample_id)
+        if demand is not None:
+            demand.explicit = False
         had_committed_selection = self._committed_residency.contains(sample_id)
         if had_committed_selection:
             if self._committed_residency.request(
@@ -704,27 +1090,20 @@ class StemController(BaseController):  # noqa: PLR0904
     def _request_pair_mode(
         self, sample_id: int, entry: StemCacheEntry, source_version: str
     ) -> bool:
-        ticket = None
-        if self._committed_residency.contains(sample_id):
-            if self._committed_residency.request(
-                sample_id, "all_stems", self._session.pad_stem_enabled_mask[sample_id]
-            ):
-                self._project.pad_stem_mix_mode[sample_id] = "all_stems"
-                self._mark_project_changed()
-                return True
-            if self._committed_residency.contains(sample_id):
-                try:
-                    ticket = self._capture_source_ticket(sample_id, source_version)
-                    if not self._committed_residency.requires_current_preparation(
-                        sample_id, ticket
-                    ):
-                        return False
-                except (OSError, RuntimeError, ValueError) as error:
-                    self._session.stem_generation_errors[sample_id] = str(error)
-                    return False
-            # This explicit gesture either withdrew terminal registration or
-            # found changed sealed preparation context on the same source.
-            # Fresh worker preparation still requires its own Native ACK.
+        demand = self._remember_demand(sample_id, entry)
+        demand.explicit = True
+        demand.state = "queued"
+        demand.error = None
+        handled, ticket = self._request_registered_pair_mode(sample_id, source_version, demand)
+        if handled is not None:
+            if handled:
+                self._save_all_stems_intent(sample_id)
+            else:
+                demand.state = "error"
+                demand.error = self._residency_errors.get(sample_id) or (
+                    self._session.stem_generation_errors.get(sample_id)
+                )
+            return handled
         try:
             if ticket is None:
                 ticket = self._capture_source_ticket(sample_id, source_version)
@@ -738,10 +1117,53 @@ class StemController(BaseController):  # noqa: PLR0904
             )
         except (OSError, RuntimeError, ValueError) as error:
             self._session.stem_generation_errors[sample_id] = str(error)
+            if resident_stem_admission_pressure(str(error)):
+                demand.state = self._admission_wait_state(str(error))
+                demand.error = str(error)
+                self._save_all_stems_intent(sample_id)
+                return True
+            demand.state = "error"
+            demand.error = str(error)
             return False
+        self._save_all_stems_intent(sample_id)
+        return True
+
+    def _request_registered_pair_mode(
+        self, sample_id: int, source_version: str, demand: _StemDemand
+    ) -> tuple[bool | None, PreparedSourceTicket | None]:
+        if not self._committed_residency.contains(sample_id):
+            return None, None
+        if self._committed_residency.request(
+            sample_id, "all_stems", self._session.pad_stem_enabled_mask[sample_id]
+        ):
+            return True, None
+        pressure = self._residency_errors.get(sample_id)
+        if resident_stem_admission_pressure(pressure):
+            demand.state = self._admission_wait_state(pressure)
+            demand.error = pressure
+            return True, None
+        if self._committed_residency.contains(sample_id):
+            return self._capture_pair_retry_ticket(sample_id, source_version)
+        # This explicit gesture withdrew terminal registration. Fresh worker
+        # preparation still requires its own source and Native ACK.
+        return None, None
+
+    def _capture_pair_retry_ticket(
+        self, sample_id: int, source_version: str
+    ) -> tuple[bool | None, PreparedSourceTicket | None]:
+        try:
+            ticket = self._capture_source_ticket(sample_id, source_version)
+            if not self._committed_residency.requires_current_preparation(sample_id, ticket):
+                return False, None
+        except (OSError, RuntimeError, ValueError) as error:
+            self._session.stem_generation_errors[sample_id] = str(error)
+            return False, None
+        # A changed sealed preparation context on the same source needs new work.
+        return None, ticket
+
+    def _save_all_stems_intent(self, sample_id: int) -> None:
         self._project.pad_stem_mix_mode[sample_id] = "all_stems"
         self._mark_project_changed()
-        return True
 
     def delete_stems(self, sample_id: int) -> bool:
         """Retire cached stems after their final reader and return to full mix."""
@@ -754,6 +1176,7 @@ class StemController(BaseController):  # noqa: PLR0904
             return False
 
     def _delete_stems(self, sample_id: int) -> bool:
+        self._demands.pop(sample_id, None)
         self._assets.sync_assignments()
 
         entry = self._project.stem_cache[sample_id]
@@ -1626,8 +2049,14 @@ class StemController(BaseController):  # noqa: PLR0904
             try:
                 self._finish_pair_preparation(request)
             except (OSError, RuntimeError, TypeError, ValueError) as error:
+                demand = self._demands.get(request.sample_id)
+                if demand is not None:
+                    demand.state = self._admission_wait_state(str(error))
+                    demand.error = str(error)
                 self._session.stem_generation_errors[request.sample_id] = (
-                    f"Complete stem preparation failed: {error}"
+                    str(error)
+                    if resident_stem_admission_pressure(str(error))
+                    else f"Complete stem preparation failed: {error}"
                 )
             finally:
                 try:
@@ -1797,6 +2226,7 @@ class StemController(BaseController):  # noqa: PLR0904
         if self._commit_disk_selection is None:
             self._mark_project_changed()
         self._register_committed_pair(sample_id, prepared, settlement.ticket)
+        self._settled_residency_demand(sample_id, settlement.entry)
         if request.residency_only or (
             request.generation_intent is not None
             and (
@@ -1805,6 +2235,15 @@ class StemController(BaseController):  # noqa: PLR0904
             )
         ):
             self._publish_all_stems_mode_if_preferred(sample_id, settlement.entry.source_version)
+
+    def _settled_residency_demand(self, sample_id: int, entry: StemCacheEntry) -> None:
+        demand = self._demands.get(sample_id)
+        if demand is not None:
+            demand.selection_identity = (
+                entry.pair.stem_set_identity if entry.pair is not None else None
+            )
+            demand.verify_disk = False
+            demand.state = "queued" if demand.explicit or demand.policy else "verified"
 
     def _retire_disk_selection_predecessor(self, settlement: _DiskSelectionSettlement) -> None:
         previous = settlement.request.previous_entry
@@ -2531,6 +2970,14 @@ class StemController(BaseController):  # noqa: PLR0904
             )
 
     def _publish_all_stems_mode_if_preferred(self, sample_id: int, source_version: str) -> bool:
+        entry = self._project.stem_cache[sample_id]
+        if entry is not None and self._committed_residency.contains(sample_id):
+            demand = self._remember_demand(sample_id, entry)
+            demand.policy = self._project.preload_stem_loops_on_startup
+            if self._project.pad_stem_mix_mode[sample_id] == "all_stems":
+                demand.explicit = True
+                demand.state = "queued"
+                demand.error = None
         if self._project.pad_stem_mix_mode[sample_id] != "all_stems":
             return True
 

@@ -80,6 +80,8 @@ mod prepared_stems_work;
 mod productive_source_history;
 mod progress;
 mod project_assets;
+mod resident_accounting;
+mod resident_proposal;
 pub(crate) mod resident_relocation;
 pub(crate) mod resident_seek;
 pub use prepared_source::PreparedSourceTicket;
@@ -254,6 +256,16 @@ impl<'a> PadRequestAdvance<'a> {
         *self.current = self.next_request;
         self.next_request
     }
+
+    /// Commit a monotone proposal ID only after final queue/resource admission.
+    fn commit_reserved(self, target: u64) -> Result<u64, String> {
+        if target < self.next_request {
+            return Err("reserved pad request was superseded".into());
+        }
+        self.epoch.store(self.next_epoch, Ordering::Release);
+        *self.current = target;
+        Ok(target)
+    }
 }
 
 fn next_pad_request_id(
@@ -354,15 +366,24 @@ fn admit_complete_analysis(
     // the separately retained finite reference during complete materialization.
     let finite = sample.resident_start() != 0 || sample.resident_end() != sample.frame_count();
     let held = if finite { reader.held_bytes()? } else { 0 };
+    admit_analysis_geometry(sample.frame_count(), sample.channels, rate, held)?;
+    Ok(())
+}
+
+fn admit_analysis_geometry(
+    frames: usize,
+    channels: usize,
+    rate: u32,
+    held: usize,
+) -> Result<usize, String> {
     analysis_pcm::default_analysis_peak(
-        sample.frame_count(),
-        sample.channels,
+        frames,
+        channels,
         rate,
         held,
-        cold_jobs::PCM_LIMIT_BYTES,
+        constant_timing::MAX_PCM_BYTES,
     )
-    .map_err(|error| error.to_string())?;
-    Ok(())
+    .map_err(|error| error.to_string())
 }
 
 fn resident_seek_available(sample: &SampleBuffer, position_s: f64, rate: u32) -> bool {
@@ -396,12 +417,24 @@ struct LoadedSourcePublication<'a> {
     )>,
 }
 
+#[cfg(test)]
 fn publish_loaded_sample(
     producer: &Arc<Mutex<Producer<ControlMessage>>>,
     sample_cache: &Arc<Mutex<Vec<Option<SampleBuffer>>>>,
     id: usize,
     sample: SampleBuffer,
     publication: LoadedSourcePublication<'_>,
+) -> Result<(), String> {
+    publish_loaded_sample_with_arm(producer, sample_cache, id, sample, publication, || Ok(()))
+}
+
+fn publish_loaded_sample_with_arm(
+    producer: &Arc<Mutex<Producer<ControlMessage>>>,
+    sample_cache: &Arc<Mutex<Vec<Option<SampleBuffer>>>>,
+    id: usize,
+    sample: SampleBuffer,
+    publication: LoadedSourcePublication<'_>,
+    arm: impl FnOnce() -> Result<(), String>,
 ) -> Result<(), String> {
     let mut cache = sample_cache
         .lock()
@@ -418,6 +451,9 @@ fn publish_loaded_sample(
         .ownership
         .next_authority(id)
         .map_err(|error| error.to_string())?;
+    // Preparatory proposals cannot invalidate the old usable source before all
+    // resource/queue/scalar admission succeeds. The caller owns its request gate.
+    arm()?;
     // Capacity is reserved under the only producer lock. Publish the source fence
     // before releasing the command so a fast callback never sees an old fence.
     publication.ownership.revoke(id, authority);
@@ -654,6 +690,8 @@ pub struct AudioEngine {
     cold_pcm_history: Arc<project_assets::PcmHistory>,
     project_assets: Arc<project_assets::ProjectAssets>,
     project_asset_engine_owner: Arc<()>,
+    resident_account: Arc<resident_accounting::ResidentAccount>,
+    resident_proposals: Arc<resident_proposal::ResidentProposals>,
     input_runtime: Option<InputRuntime>,
     input_clock: InputClock,
 }
@@ -908,6 +946,9 @@ impl AudioEngine {
 
 #[pymethods]
 impl AudioEngine {
+    /// Device-free capability proof for scoped admission and residency interests.
+    #[classattr]
+    const RESIDENT_PCM_ADMISSION_VERSION: u32 = 1;
     /// Seal an already committed immutable disk selection independently of component residency.
     pub fn register_committed_stem_pair(
         &self,
@@ -934,19 +975,58 @@ impl AudioEngine {
         )
     }
 
-    #[pyo3(signature = (selection_ticket, *, mode="all_stems", enabled_mask=15))]
+    #[pyo3(signature = (selection_ticket, *, mode="all_stems", enabled_mask=15, interest="explicit"))]
     pub fn request_committed_stem_residency(
         &self,
         selection_ticket: &CommittedStemSetTicket,
         mode: &str,
         enabled_mask: u8,
+        interest: &str,
     ) -> PyResult<ResidentStemTicket> {
-        self.request_committed_stem_residency_with_producer(
+        self.request_committed_stem_residency_with_interest_and_producer(
             selection_ticket,
             mode,
             enabled_mask,
+            interest,
             self.control_producer()?,
         )
+    }
+
+    /// Configure this ProjectState's finite resident allowance without evicting readers.
+    pub fn set_resident_pcm_budget_mib(&self, value: &Bound<'_, PyAny>) -> PyResult<()> {
+        if value.is_instance_of::<PyBool>() || !value.is_instance_of::<PyInt>() {
+            return Err(PyValueError::new_err(
+                "resident_pcm_budget_mib must be an integer in 128..16384",
+            ));
+        }
+        let mib = value.extract::<usize>().map_err(|_| {
+            PyValueError::new_err("resident_pcm_budget_mib must be an integer in 128..16384")
+        })?;
+        self.project_assets
+            .set_resident_budget_mib(&self.resident_account, mib)
+            .map_err(|error| PyValueError::new_err(error.to_string()))
+    }
+
+    /// Exact scoped PCM ownership and pending promises, separately from scratch/RSS.
+    pub fn get_resident_pcm_budget_status(&self, py: Python<'_>) -> PyResult<Py<PyDict>> {
+        let status = self
+            .project_assets
+            .resident_budget_status(&self.resident_account)
+            .map_err(|error| PyRuntimeError::new_err(error.to_string()))?;
+        let dict = PyDict::new(py);
+        dict.set_item("budget_mib", status.budget_mib)?;
+        dict.set_item("budget_bytes", status.budget_bytes)?;
+        dict.set_item("held_unique_pcm_bytes", status.held_unique_pcm_bytes)?;
+        dict.set_item("pending_resident_bytes", status.pending_resident_bytes)?;
+        dict.set_item("admitted_total_bytes", status.admitted_total_bytes)?;
+        dict.set_item("unique_backing_count", status.unique_backing_count)?;
+        dict.set_item(
+            "pending_reservation_count",
+            status.pending_reservation_count,
+        )?;
+        dict.set_item("available_bytes", status.available_bytes)?;
+        dict.set_item("over_budget", status.over_budget)?;
+        Ok(dict.unbind())
     }
 
     /// Create a new AudioEngine instance with default audio device.
@@ -1007,6 +1087,8 @@ impl AudioEngine {
             cold_pcm_history,
             project_assets,
             project_asset_engine_owner: Arc::new(()),
+            resident_account: resident_accounting::ResidentAccount::new(),
+            resident_proposals: Arc::default(),
             input_runtime: None,
             input_clock: InputClock::new(),
         })
@@ -1504,7 +1586,8 @@ impl AudioEngine {
             .pad_request_ids
             .lock()
             .map_err(|_| PyRuntimeError::new_err("request lock poisoned"))?;
-        if requests[id] != request_id {
+        if requests[id] != request_id && self.cold_loading[id].load(Ordering::Acquire) != request_id
+        {
             return Err(PyValueError::new_err("incoming request is stale"));
         }
         let incoming = self
@@ -2382,7 +2465,30 @@ impl AudioEngine {
                     (*id, *request_id)
                 }
             };
-            let stale = requests.get(id) != Some(&request_id);
+            let current_stale = requests.get(id) != Some(&request_id);
+            let stale = if matches!(&event, LoaderEvent::Error { .. }) {
+                !self
+                    .resident_proposals
+                    .source_error_matches(id, request_id)
+                    .unwrap_or(!current_stale)
+            } else if matches!(
+                &event,
+                LoaderEvent::Started { .. } | LoaderEvent::Progress { .. }
+            ) {
+                !self
+                    .resident_proposals
+                    .source_event_matches(
+                        id,
+                        request_id,
+                        requests.get(id).copied().unwrap_or(0),
+                        self.prepared_source_epochs
+                            .get(id)
+                            .map_or(0, |epoch| epoch.load(Ordering::Acquire)),
+                    )
+                    .unwrap_or(!current_stale)
+            } else {
+                current_stale
+            };
             let timing_stale = stale
                 || matches!(&event, LoaderEvent::Success { timing_epoch: Some(epoch), .. } if self.prepared_source_epochs[id].load(Ordering::Acquire) != *epoch);
             if stale {
@@ -3566,6 +3672,86 @@ impl AudioEngine {
 mod tests {
     use super::*;
     use rtrb::RingBuffer;
+
+    #[test]
+    fn explicit_analysis_preflight_rejects_between_512_mib_and_one_gib_without_advancing() {
+        let frames = 20_000_000;
+        let old_peak =
+            analysis_pcm::default_analysis_peak(frames, 2, 44_100, 128, cold_jobs::PCM_LIMIT_BYTES)
+                .unwrap();
+        assert!(old_peak > constant_timing::MAX_PCM_BYTES);
+        let mut request = 7;
+        let epoch = AtomicU64::new(9);
+        {
+            let _advance = PadRequestAdvance::prepare(&mut request, &epoch).unwrap();
+            let error = admit_analysis_geometry(frames, 2, 44_100, 128).unwrap_err();
+            assert!(error.contains("analysis PCM limit exceeded"));
+        }
+        assert_eq!(request, 7);
+        assert_eq!(epoch.load(Ordering::Acquire), 9);
+        assert!(admit_analysis_geometry(44_100, 2, 44_100, 128).is_ok());
+    }
+
+    #[test]
+    fn latest_source_proposal_error_is_delivered_after_old_control_changes() {
+        Python::initialize();
+        let engine = AudioEngine::new().unwrap();
+        engine.pad_request_ids.lock().unwrap()[0] = 7;
+        engine.prepared_source_epochs[0].store(9, Ordering::Release);
+        let (_, old_request) = engine.resident_proposals.begin_source(0, 7, 9).unwrap();
+        let (_, current_proposal) = engine.resident_proposals.begin_source(0, 7, 9).unwrap();
+        engine.pad_request_ids.lock().unwrap()[0] = 8;
+        engine.prepared_source_epochs[0].store(10, Ordering::Release);
+        for event in [
+            LoaderEvent::Error {
+                id: 0,
+                request_id: old_request,
+                error: "obsolete source proposal".into(),
+            },
+            LoaderEvent::Started {
+                id: 0,
+                request_id: current_proposal,
+            },
+            LoaderEvent::Error {
+                id: 0,
+                request_id: current_proposal,
+                error: "current source proposal became stale".into(),
+            },
+        ] {
+            engine.loader_tx.send(event).unwrap();
+        }
+        Python::attach(|py| {
+            let event = engine.poll_loader_events(py).unwrap().unwrap();
+            let dict = event.bind(py).cast::<PyDict>().unwrap();
+            assert_eq!(
+                dict.get_item("type")
+                    .unwrap()
+                    .unwrap()
+                    .extract::<String>()
+                    .unwrap(),
+                "error"
+            );
+            assert_eq!(
+                dict.get_item("request_id")
+                    .unwrap()
+                    .unwrap()
+                    .extract::<u64>()
+                    .unwrap(),
+                current_proposal
+            );
+            assert_eq!(
+                dict.get_item("msg")
+                    .unwrap()
+                    .unwrap()
+                    .extract::<String>()
+                    .unwrap(),
+                "current source proposal became stale"
+            );
+            assert!(engine.poll_loader_events(py).unwrap().is_none());
+        });
+        assert_eq!(engine.pad_request_ids.lock().unwrap()[0], 8);
+        assert_eq!(engine.prepared_source_epochs[0].load(Ordering::Acquire), 10);
+    }
 
     #[test]
     fn resident_seek_admission_keeps_complete_end_clamp_and_matches_native_rounding() {

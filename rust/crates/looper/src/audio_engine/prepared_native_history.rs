@@ -383,6 +383,7 @@ pub(super) mod tests {
             complete_set_identity: std::sync::Arc::new([0; 32]),
             accepted_timing: None,
             reference_samples: sample.samples.clone(),
+            reference_residency: sample.residency.clone(),
             publication: PreparedSourcePermit::unrestricted(),
             source_version_hash: 17,
             sample_rate_hz: rate,

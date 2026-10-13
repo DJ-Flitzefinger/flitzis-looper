@@ -214,7 +214,7 @@ pub(super) struct VerifiedFile {
 }
 
 #[derive(Default)]
-struct State {
+pub(super) struct State {
     owners: Vec<Weak<PathOwner>>,
     readers: Vec<Reader>,
     retiring: HashMap<PathBuf, Retirement>,
@@ -222,15 +222,65 @@ struct State {
     errors: Vec<String>,
     histories: Vec<Weak<PcmHistory>>,
     retirement_cursor: usize,
+    pub(super) residency: super::resident_accounting::ResidentLedger,
 }
 
 /// One process-wide worker survives engine shutdown and late Python job release.
 /// It owns no PCM and performs all file/lease retirement outside realtime code.
 pub(super) struct ProjectAssets {
-    state: Mutex<State>,
+    pub(super) state: Mutex<State>,
 }
 
 impl ProjectAssets {
+    pub(super) fn available_reader_slots(state: &State) -> usize {
+        MAX_READER_RECORDS
+            .saturating_sub(state.readers.len() + state.residency.reserved_reader_slots())
+    }
+
+    fn admit_reader(
+        &self,
+        state: &mut State,
+        reservation: Option<&mut super::resident_accounting::ResidentReservation>,
+    ) -> io::Result<()> {
+        if let Some(reservation) = reservation {
+            reservation
+                .consume_reader_slot(self, &mut state.residency)
+                .map_err(super::resident_accounting::ResidentAdmissionError::into_io_error)?;
+        } else if Self::available_reader_slots(state) == 0 {
+            return Err(io::Error::other("project asset reader registry full"));
+        }
+        Ok(())
+    }
+
+    /// Remove weak payload locators without retiring files or touching current owners.
+    /// Lock order remains asset gate -> history/cache; callers hold no reverse lock.
+    pub(super) fn prune_pcm_locators(state: &mut State) {
+        state.residency.prune();
+        state.histories.retain(|history| history.strong_count() > 0);
+        for history in state.histories.iter().filter_map(Weak::upgrade) {
+            if let Ok(mut pads) = history.lock() {
+                for pad in pads.iter_mut() {
+                    pad.retain(|pcm| pcm.strong_count() > 0);
+                }
+            }
+        }
+        for reader in &mut state.readers {
+            reader.pcm.retain(|pcm| pcm.strong_count() > 0);
+            if reader
+                .source_pcm
+                .as_ref()
+                .is_some_and(|pcm| pcm.strong_count() == 0)
+            {
+                reader.source_pcm = None;
+            }
+            if let Some(shared) = &mut reader.shared_stems {
+                shared.prune_dead_pcm();
+            }
+            if let Some(lease) = &reader.cold {
+                lease.prune_dead_pcm();
+            }
+        }
+    }
     fn reclaim_stems(&self, owner: &Arc<PathOwner>) -> io::Result<()> {
         let mut state = self
             .state
@@ -465,19 +515,38 @@ impl ProjectAssets {
         Ok(ProjectAssetLease { owner: Some(owner) })
     }
 
+    #[cfg(test)]
     pub(super) fn retain_cold(
         &self,
         lease: CommittedColdLease,
         sample: &SampleBuffer,
         engine: Weak<()>,
     ) -> io::Result<()> {
+        self.retain_cold_internal(lease, sample, engine, None)
+    }
+
+    pub(super) fn retain_cold_reserved(
+        &self,
+        lease: CommittedColdLease,
+        sample: &SampleBuffer,
+        engine: Weak<()>,
+        reservation: &mut super::resident_accounting::ResidentReservation,
+    ) -> io::Result<()> {
+        self.retain_cold_internal(lease, sample, engine, Some(reservation))
+    }
+
+    fn retain_cold_internal(
+        &self,
+        lease: CommittedColdLease,
+        sample: &SampleBuffer,
+        engine: Weak<()>,
+        reservation: Option<&mut super::resident_accounting::ResidentReservation>,
+    ) -> io::Result<()> {
         let mut state = self
             .state
             .lock()
             .map_err(|_| io::Error::other("asset gate poisoned"))?;
-        if state.readers.len() >= MAX_READER_RECORDS {
-            return Err(io::Error::other("project asset reader registry full"));
-        }
+        self.admit_reader(&mut state, reservation)?;
         let saved_claim = state
             .owners
             .iter()
@@ -496,7 +565,26 @@ impl ProjectAssets {
         Ok(())
     }
 
+    #[cfg(test)]
     pub(super) fn retain_stems(&self, path: PathBuf, stems: &PreparedStemSet) -> io::Result<()> {
+        self.retain_stems_internal(path, stems, None)
+    }
+
+    pub(super) fn retain_stems_reserved(
+        &self,
+        path: PathBuf,
+        stems: &PreparedStemSet,
+        reservation: &mut super::resident_accounting::ResidentReservation,
+    ) -> io::Result<()> {
+        self.retain_stems_internal(path, stems, Some(reservation))
+    }
+
+    fn retain_stems_internal(
+        &self,
+        path: PathBuf,
+        stems: &PreparedStemSet,
+        reservation: Option<&mut super::resident_accounting::ResidentReservation>,
+    ) -> io::Result<()> {
         let pcm = stems
             .stems
             .iter()
@@ -506,9 +594,7 @@ impl ProjectAssets {
             .state
             .lock()
             .map_err(|_| io::Error::other("asset gate poisoned"))?;
-        if state.readers.len() >= MAX_READER_RECORDS {
-            return Err(io::Error::other("project asset reader registry full"));
-        }
+        self.admit_reader(&mut state, reservation)?;
         state.readers.push(Reader {
             path,
             pcm,
@@ -1036,14 +1122,7 @@ impl ProjectAssets {
             return;
         };
         state.owners.retain(|owner| owner.strong_count() > 0);
-        state.histories.retain(|history| history.strong_count() > 0);
-        for history in state.histories.iter().filter_map(Weak::upgrade) {
-            if let Ok(mut pads) = history.lock() {
-                for pad in pads.iter_mut() {
-                    pad.retain(|pcm| pcm.strong_count() > 0);
-                }
-            }
-        }
+        Self::prune_pcm_locators(&mut state);
         let owners: Vec<_> = state.owners.iter().filter_map(Weak::upgrade).collect();
         let retiring: Vec<_> = state.retiring.keys().cloned().collect();
         let mut retained = Vec::new();

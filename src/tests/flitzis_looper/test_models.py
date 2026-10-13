@@ -818,3 +818,15 @@ def test_stem_mask_display_mode_validation(session_state: SessionState) -> None:
 
     with pytest.raises(ValidationError):
         SessionState.model_validate({"pad_stem_mask_display_mode": ["preset"] * NUM_SAMPLES})
+
+
+@pytest.mark.parametrize("budget", [True, False, 512.0, "512", None, 127, 16385])
+def test_residency_budget_model_rejects_noninteger_or_out_of_range(budget: object) -> None:
+    with pytest.raises(ValidationError):
+        ProjectState.model_validate({"resident_pcm_budget_mib": budget})
+
+
+@pytest.mark.parametrize("enabled", [0, 1, "false", "true", None])
+def test_residency_preload_model_requires_actual_boolean(enabled: object) -> None:
+    with pytest.raises(ValidationError):
+        ProjectState.model_validate({"preload_stem_loops_on_startup": enabled})

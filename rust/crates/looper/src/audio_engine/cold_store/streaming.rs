@@ -190,6 +190,16 @@ impl ColdTransaction {
         maximum: usize,
         cancelled: &impl Fn() -> bool,
     ) -> io::Result<SampleBuffer> {
+        self.read_prepared_selection_resident(hint, maximum, cancelled, None)
+    }
+
+    pub(in crate::audio_engine) fn read_prepared_selection_resident(
+        &mut self,
+        hint: Option<crate::audio_engine::cold_residency::ResidentLoadHint>,
+        maximum: usize,
+        cancelled: &impl Fn() -> bool,
+        resident: Option<&crate::audio_engine::resident_proposal::ResidentReadContext>,
+    ) -> io::Result<SampleBuffer> {
         use crate::audio_engine::cold_residency;
         use crate::messages::{ResidentContext, ResidentSourceView};
         let source = cold_residency::identity(self.manifest()?).map_err(io::Error::other)?;
@@ -202,7 +212,7 @@ impl ColdTransaction {
         check_cancelled(cancelled)?;
         let mut reader = self.prepared_playback_reader()?;
         let cache = self.reused_cache.as_ref().or(self.shared_cache.as_ref());
-        let samples = if let Some(cache) = cache {
+        let shared = if let Some(cache) = cache {
             let mut pcm = cache
                 .pcm
                 .lock()
@@ -216,36 +226,47 @@ impl ColdTransaction {
                 *pcm = None;
             }
             if start == 0 && end == source.frame_count {
-                if let Some(samples) = pcm
-                    .as_ref()
+                pcm.as_ref()
                     .and_then(Weak::upgrade)
                     .filter(|samples| samples.len() == source.frame_count * source.channels)
-                {
-                    samples
-                } else {
-                    let samples = warm::read_playback(
-                        &mut reader,
-                        source.frame_count,
-                        source.channels,
-                        maximum,
-                        cancelled,
-                        &mut self.integrity,
-                    )?;
-                    *pcm = Some(Arc::downgrade(&samples));
-                    samples
-                }
             } else {
-                drop(pcm);
-                warm::read_playback_range(
-                    &mut reader,
-                    start,
-                    end - start,
-                    source.channels,
-                    maximum,
-                    cancelled,
-                    &mut self.integrity,
-                )?
+                None
             }
+        } else {
+            None
+        };
+        let view = Arc::new(ResidentSourceView {
+            source: source.clone(),
+            start_frame: start,
+            window_revision: 1,
+            context,
+        });
+        let reused = shared.as_ref().map(|samples| SampleBuffer {
+            channels: source.channels,
+            samples: samples.clone(),
+            residency: Some(view.clone()),
+        });
+        let mut reservation = if let Some(resident) = resident {
+            let bytes = if reused.is_some() {
+                0
+            } else {
+                (end - start)
+                    .checked_mul(source.channels)
+                    .and_then(|n| n.checked_mul(4))
+                    .ok_or_else(|| invalid("resident selected extent overflow"))?
+            };
+            let mut token = resident
+                .reserve(bytes, &reused.iter().collect::<Vec<_>>(), 1)
+                .map_err(crate::audio_engine::resident_proposal::admission_io)?;
+            token
+                .reserve_reader_slots(1)
+                .map_err(crate::audio_engine::resident_proposal::admission_io)?;
+            Some(token)
+        } else {
+            None
+        };
+        let samples = if let Some(samples) = shared {
+            samples
         } else {
             warm::read_playback_range(
                 &mut reader,
@@ -258,16 +279,35 @@ impl ColdTransaction {
             )?
         };
         check_cancelled(cancelled)?;
-        Ok(SampleBuffer {
+        let sample = SampleBuffer {
             channels: source.channels,
             samples,
-            residency: Some(Arc::new(ResidentSourceView {
-                source,
-                start_frame: start,
-                window_revision: 1,
-                context,
-            })),
-        })
+            residency: Some(view),
+        };
+        if let Some(token) = reservation.as_mut() {
+            resident
+                .expect("resident token has context")
+                .commit_sample(token, &sample)
+                .map_err(crate::audio_engine::resident_proposal::admission_io)?;
+        }
+        if let Some(token) = reservation
+            && let Some(resident) = resident
+        {
+            resident
+                .retain_registration(token)
+                .map_err(io::Error::other)?;
+        }
+        if start == 0
+            && end == source.frame_count
+            && let Some(cache) = cache
+        {
+            *cache
+                .pcm
+                .lock()
+                .map_err(|_| invalid("warm PCM ownership poisoned"))? =
+                Some(Arc::downgrade(&sample.samples));
+        }
+        Ok(sample)
     }
 
     /// Scan verified complete playback in loaded-frame order without a PCM Arc.

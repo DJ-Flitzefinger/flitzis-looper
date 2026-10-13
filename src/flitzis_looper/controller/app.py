@@ -41,6 +41,7 @@ class AppController:
         self._session = SessionState()
 
         self._audio = AudioEngine()
+        self._audio.set_resident_pcm_budget_mib(self._project.resident_pcm_budget_mib)
         self._audio.run()
         self._assets = ProjectAssetLifecycle(self._project, self._audio)
         self._assets.sync_assignments()
@@ -73,6 +74,7 @@ class AppController:
         self.stems.bind_disk_selection_commit(
             self._persistence.commit_stem_selection, self._persistence.flush
         )
+        self.settings.bind_residency_policy(self.stems.refresh_residency_policy)
         self.loader = LoaderController(
             self._project,
             self._session,

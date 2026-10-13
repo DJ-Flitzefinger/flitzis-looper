@@ -94,7 +94,12 @@ def _queued(
     monkeypatch.setattr(audio, "set_stem_pair_full_mix", Mock(), raising=False)
     ticket = FakePreparedSourceTicket("pending")
     audio.capture_prepared_source.return_value = ticket
-    assert controller.stems._prepare_pair(0, entry, cast("PreparedSourceTicket", ticket)) is True
+    assert (
+        controller.stems._prepare_pair(
+            0, entry, cast("PreparedSourceTicket", ticket), components=components
+        )
+        is True
+    )
     assert controller.project.stem_cache[0] is entry
     return jobs, prepared, ticket, entry
 
@@ -806,3 +811,351 @@ def test_rejected_full_mix_retry_uses_ordered_release_despite_saved_full_mix(
         assert audio_engine_mock.set_stem_pair_full_mix.call_count == 2
     assert 0 not in controller.stems._pending_full_mix_releases
     audio_engine_mock.set_stem_mix_mode.assert_called_once_with(0, "full_mix")
+
+
+@pytest.mark.parametrize("saved_all", [False, True])
+def test_restore_verifies_complete_pair_without_component_demand_with_preload_off(
+    controller: AppController,
+    audio_engine_mock: Mock,
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    *,
+    saved_all: bool,
+) -> None:
+    source = tmp_path / "samples" / "old.wav"
+    source.parent.mkdir(parents=True, exist_ok=True)
+    source.write_bytes(b"declared controller source")
+    controller.project.sample_paths[0] = "samples/old.wav"
+    jobs, prepared, _, entry = _queued(
+        controller, audio_engine_mock, monkeypatch, tmp_path, components=False
+    )
+    # The fixture's first worker represents complete disk preparation, not residency.
+    jobs[0]()
+    controller.stems._poll_pair_preparations()
+    entry = controller.project.stem_cache[0]
+    assert entry is not None
+    saved = entry.model_copy(update={"available": False})
+    controller.project.stem_cache[0] = saved
+    controller.project.pad_stem_mix_mode[0] = "all_stems" if saved_all else "full_mix"
+    controller.stems._restored_stem_candidates[0] = saved
+    registration = Mock(**{
+        "publication_status.return_value": "accepted",
+        "is_current.return_value": True,
+    })
+    monkeypatch.setattr(
+        audio_engine_mock, "register_committed_stem_pair", Mock(return_value=registration)
+    )
+    residency = Mock()
+    monkeypatch.setattr(audio_engine_mock, "request_committed_stem_residency", residency)
+    audio_engine_mock.prepare_stem_pair.reset_mock()
+    assert controller.stems.publish_restored_stem_cache_if_available(0)
+    controller.stems._poll_residency_demands()
+    assert len(jobs) == 2
+    jobs[1]()
+    controller.stems._poll_pair_preparations()
+    controller.stems._poll_residency_demands()
+    assert audio_engine_mock.prepare_stem_pair.call_args.args[4] is False
+    assert prepared.selected
+    audio_engine_mock.publish_stem_pair.assert_not_called()
+    residency.assert_not_called()
+    assert controller.project.pad_stem_mix_mode[0] == ("all_stems" if saved_all else "full_mix")
+    assert controller.stems.stems_available(0)
+    if saved_all:
+        receipt = Mock(**{
+            "residency_status.return_value": "pending",
+            "effective_mode_status.return_value": "waiting",
+            "is_current.return_value": True,
+        })
+        residency.return_value = receipt
+        assert controller.stems.set_stem_mix_mode(0, "all_stems")
+        residency.assert_called_once_with(registration, mode="all_stems", enabled_mask=15)
+
+
+def test_policy_toggle_preserves_direct_interest_and_uses_only_policy_withdrawal(
+    controller: AppController,
+    audio_engine_mock: Mock,
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    source = tmp_path / "samples" / "old.wav"
+    source.parent.mkdir(parents=True, exist_ok=True)
+    source.write_bytes(b"declared controller source")
+    controller.project.sample_paths[0] = "samples/old.wav"
+    jobs, _, _, _ = _queued(controller, audio_engine_mock, monkeypatch, tmp_path, components=False)
+    registration = Mock(**{
+        "publication_status.return_value": "accepted",
+        "is_current.return_value": True,
+    })
+    receipt = Mock(**{
+        "residency_status.return_value": "accepted",
+        "effective_mode_status.return_value": "not_requested",
+        "is_current.return_value": True,
+    })
+    monkeypatch.setattr(
+        audio_engine_mock, "register_committed_stem_pair", Mock(return_value=registration)
+    )
+    request = Mock(return_value=receipt)
+    monkeypatch.setattr(audio_engine_mock, "request_committed_stem_residency", request)
+    jobs[0]()
+    controller.stems._poll_pair_preparations()
+    controller.project.pad_stem_mix_mode[0] = "full_mix"
+    controller.settings.set_preload_stem_loops_on_startup(enabled=True)
+    controller.stems._poll_residency_demands()
+    request.assert_called_once_with(registration, mode="full_mix", interest="preload")
+    assert controller.project.pad_stem_mix_mode[0] == "full_mix"
+    assert controller.stems.residency_summary().acked == 1
+    demand = controller.stems._demands[0]
+    demand.explicit = True
+    controller.settings.set_preload_stem_loops_on_startup(enabled=False)
+    assert demand.explicit
+    assert not demand.policy
+    assert demand.withdraw_policy
+    controller.stems._poll_residency_demands()
+    assert any(call.kwargs.get("interest") == "withdraw_preload" for call in request.call_args_list)
+
+
+def test_all216_demand_scheduling_is_bounded_fair_and_direct_request_is_not_starved(
+    controller: AppController,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Control scheduling only; no claim of actual 216 PCM/adoption/resource acceptance."""
+    pair = StemPairSelection.model_validate(_selection())
+    for sample_id in range(216):
+        entry = StemCacheEntry(
+            source_version="saved-own-source",
+            cache_dir=pair.wav_generation,
+            stems=expected_stem_files(pair.wav_generation),
+            pair=pair,
+            available=True,
+        )
+        controller.project.stem_cache[sample_id] = entry
+        controller.project.sample_paths[sample_id] = "samples/declared.wav"
+        demand = controller.stems._remember_demand(sample_id, entry)
+        demand.policy = True
+    controller.stems._demands[215].explicit = True
+    visited: list[int] = []
+
+    def blocked(sample_id: int, _demand: object) -> None:
+        visited.append(sample_id)
+        message = "[resident_pcm_budget_exceeded] declared pressure"
+        raise RuntimeError(message)
+
+    monkeypatch.setattr(controller.stems, "_advance_residency_demand", blocked)
+    controller.stems._poll_residency_demands()
+    assert len(visited) == 8
+    assert visited[0] == 215
+    for _ in range(54):
+        previous = len(visited)
+        controller.stems._poll_residency_demands()
+        assert len(visited) - previous <= 8
+    assert set(visited) == set(range(216))
+    assert len(controller.stems._demands) == 216
+    assert controller.stems._demands[215].explicit
+    assert all(entry is not None for entry in controller.project.stem_cache)
+
+
+@pytest.mark.parametrize(
+    ("message", "recoverable"),
+    [
+        ("cold source queue full (2 workers, 32 queued jobs)", True),
+        ("cold source lane stopped", False),
+        ("corrupt marker contains cold source queue full (2 workers, 32 queued jobs)", False),
+    ],
+)
+def test_async_metadata_native_capacity_retries_complete_verification_without_assignment_loss(
+    controller: AppController,
+    audio_engine_mock: Mock,
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    message: str,
+    *,
+    recoverable: bool,
+) -> None:
+    jobs, prepared, _, previous = _queued(
+        controller, audio_engine_mock, monkeypatch, tmp_path, components=False
+    )
+    demand = controller.stems._remember_demand(0, previous)
+    demand.verify_disk = True
+    audio_engine_mock.prepare_stem_pair.side_effect = RuntimeError(message)
+    jobs[0]()
+    controller.stems._poll_pair_preparations()
+    assert controller.project.stem_cache[0] is previous
+    assert controller.project.pad_stem_mix_mode[0] == "all_stems"
+    assert not controller.stems._pair_preparations.pending
+    assert controller._assets._reserved == 0
+    assert demand.state == ("queued" if recoverable else "error")
+    audio_engine_mock.prepare_stem_pair.side_effect = None
+    controller.stems._poll_residency_demands()
+    assert len(jobs) == (2 if recoverable else 1)
+    if recoverable:
+        jobs[1]()
+        controller.stems._poll_pair_preparations()
+        controller.stems._poll_residency_demands()
+        assert prepared.selected
+        assert controller.stems.stems_available(0)
+        assert demand.state == "verified"
+        assert audio_engine_mock.prepare_stem_pair.call_count == 2
+        assert all(
+            call.args[4] is False for call in audio_engine_mock.prepare_stem_pair.call_args_list
+        )
+    else:
+        assert audio_engine_mock.prepare_stem_pair.call_count == 1
+    audio_engine_mock.publish_stem_pair.assert_not_called()
+
+
+def _registered_metadata_pair(
+    controller: AppController,
+    audio: Mock,
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> Mock:
+    source = tmp_path / "samples" / "old.wav"
+    source.parent.mkdir(parents=True, exist_ok=True)
+    source.write_bytes(b"declared controller source")
+    controller.project.sample_paths[0] = "samples/old.wav"
+    jobs, _, _, _ = _queued(controller, audio, monkeypatch, tmp_path, components=False)
+    registration = Mock(**{
+        "publication_status.return_value": "accepted",
+        "is_current.return_value": True,
+    })
+    monkeypatch.setattr(audio, "register_committed_stem_pair", Mock(return_value=registration))
+    monkeypatch.setattr(audio, "request_committed_stem_residency", Mock())
+    jobs[0]()
+    controller.stems._poll_pair_preparations()
+    return registration
+
+
+@pytest.mark.parametrize(
+    ("message", "recoverable"),
+    [
+        ("cold source queue full (2 workers, 32 queued jobs)", True),
+        (
+            (
+                "[resident_stem_interest_busy] explicit stem intent is preparing "
+                "or awaiting effective acknowledgement"
+            ),
+            True,
+        ),
+        ("committed preparation deadline exceeded", False),
+        ("corrupt source contains [resident_stem_interest_busy]", False),
+    ],
+)
+def test_policy_native_admission_refusal_recovers_only_exact_capacity_then_own_ack(
+    controller: AppController,
+    audio_engine_mock: Mock,
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    message: str,
+    *,
+    recoverable: bool,
+) -> None:
+    registration = _registered_metadata_pair(controller, audio_engine_mock, monkeypatch, tmp_path)
+    receipt = Mock(**{
+        "residency_status.return_value": "pending",
+        "effective_mode_status.return_value": "not_requested",
+        "is_current.return_value": True,
+        "error.return_value": None,
+    })
+    request = audio_engine_mock.request_committed_stem_residency
+    request.side_effect = [RuntimeError(message), receipt]
+    controller.project.pad_stem_mix_mode[0] = "full_mix"
+    controller.settings.set_preload_stem_loops_on_startup(enabled=True)
+    controller.stems._poll_residency_demands()
+    demand = controller.stems._demands[0]
+    assert demand.state == ("queued" if recoverable else "error")
+    assert demand.policy
+    assert not demand.explicit
+    assert controller.project.pad_stem_mix_mode[0] == "full_mix"
+    assert controller.stems.residency_summary().acked == 0
+    controller.stems._poll_residency_demands()
+    assert request.call_count == (2 if recoverable else 1)
+    if recoverable:
+        assert demand.state == "preparing"
+        assert controller.stems.residency_summary().acked == 0
+        receipt.residency_status.return_value = "accepted"
+        controller.stems._poll_residency_demands()
+        assert demand.state == "acked"
+        assert controller.stems.residency_summary().acked == 1
+        request.assert_called_with(registration, mode="full_mix", interest="preload")
+    assert controller.project.pad_stem_mix_mode[0] == "full_mix"
+    audio_engine_mock.publish_stem_pair.assert_not_called()
+
+
+def test_pending_explicit_all_keeps_authority_and_serializes_policy_until_own_effect(
+    controller: AppController,
+    audio_engine_mock: Mock,
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    registration = _registered_metadata_pair(controller, audio_engine_mock, monkeypatch, tmp_path)
+    explicit = Mock(**{
+        "residency_status.return_value": "pending",
+        "effective_mode_status.return_value": "waiting",
+        "is_current.return_value": True,
+        "error.return_value": None,
+    })
+    policy = Mock(**{
+        "residency_status.return_value": "accepted",
+        "effective_mode_status.return_value": "not_requested",
+        "is_current.return_value": True,
+        "error.return_value": None,
+    })
+    request = audio_engine_mock.request_committed_stem_residency
+    request.side_effect = [explicit, policy]
+    assert controller.stems.set_stem_mix_mode(0, "all_stems")
+    controller.settings.set_preload_stem_loops_on_startup(enabled=True)
+    controller.stems._poll_residency_demands()
+    assert request.call_count == 1
+    explicit.residency_status.return_value = "accepted"
+    explicit.effective_mode_status.return_value = "transitioning"
+    controller.stems._poll_residency_demands()
+    assert request.call_count == 1
+    explicit.effective_mode_status.return_value = "effective"
+    controller.stems._poll_residency_demands()
+    assert request.call_count == 2
+    request.assert_called_with(registration, mode="full_mix", interest="preload")
+    assert explicit.is_current()
+    explicit.cancel.assert_not_called()
+    assert controller.stems.residency_summary().acked == 1
+
+
+@pytest.mark.parametrize("recoverable", [True, False])
+def test_public_all_request_native_lane_refusal_retains_interest_only_for_exact_capacity(
+    controller: AppController,
+    audio_engine_mock: Mock,
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    *,
+    recoverable: bool,
+) -> None:
+    registration = _registered_metadata_pair(controller, audio_engine_mock, monkeypatch, tmp_path)
+    controller.project.pad_stem_mix_mode[0] = "full_mix"
+    previous = controller.project.stem_cache[0]
+    message = (
+        "cold source queue full (2 workers, 32 queued jobs)"
+        if recoverable
+        else ("corrupt source contains cold source queue full (2 workers, 32 queued jobs)")
+    )
+    receipt = Mock(**{
+        "residency_status.return_value": "pending",
+        "effective_mode_status.return_value": "waiting",
+        "is_current.return_value": True,
+        "error.return_value": None,
+    })
+    request = audio_engine_mock.request_committed_stem_residency
+    request.side_effect = [RuntimeError(message), receipt]
+    assert controller.stems.set_stem_mix_mode(0, "all_stems") is recoverable
+    demand = controller.stems._demands[0]
+    assert demand.state == ("queued" if recoverable else "error")
+    assert controller.project.stem_cache[0] is previous
+    assert controller.project.pad_stem_mix_mode[0] == ("all_stems" if recoverable else "full_mix")
+    controller.stems._poll_residency_demands()
+    assert request.call_count == (2 if recoverable else 1)
+    if recoverable:
+        assert controller.stems.residency_summary().acked == 0
+        receipt.residency_status.return_value = "accepted"
+        receipt.effective_mode_status.return_value = "effective"
+        controller.stems._poll_residency_demands()
+        assert controller.stems.residency_summary().acked == 1
+        request.assert_called_with(registration, mode="all_stems", enabled_mask=15)
+    assert audio_engine_mock.prepare_stem_pair.call_count == 1

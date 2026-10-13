@@ -343,6 +343,21 @@ def audio_engine_mock() -> Iterator[Mock]:
             side_effect=capture_stem_ticket
         )
         audio_engine.return_value.output_sample_rate.return_value = 44_100
+        # Controller-only accounting double; this does not claim actual Native PCM/RSS.
+        audio_engine.return_value.set_resident_pcm_budget_mib = Mock()
+        audio_engine.return_value.get_resident_pcm_budget_status = Mock(
+            return_value={
+                "budget_mib": 512,
+                "budget_bytes": 512 * 1048576,
+                "held_unique_pcm_bytes": 0,
+                "pending_resident_bytes": 0,
+                "admitted_total_bytes": 0,
+                "unique_backing_count": 0,
+                "pending_reservation_count": 0,
+                "over_budget": False,
+                "available_bytes": 512 * 1048576,
+            }
+        )
         audio_engine.return_value.poll_input_events.return_value = None
         audio_engine.return_value.receive_msg.return_value = None
         audio_engine.return_value.current_constant_timing.return_value = None

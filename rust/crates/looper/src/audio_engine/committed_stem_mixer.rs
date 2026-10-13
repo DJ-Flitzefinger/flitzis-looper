@@ -63,7 +63,7 @@ impl RtMixer {
     fn capture_committed_stem_voice(&self, capture: &StemVoiceCapture) -> Option<StemVoicePin> {
         let id = capture.id;
         if id >= NUM_SAMPLES
-            || !capture.status.publication.current()
+            || !capture.status.preparation_current()
             || !self.source_binding_current(id, capture.binding)
             || !self
                 .input_runtime_ownership
@@ -253,7 +253,9 @@ impl RtMixer {
         } {
             return false;
         }
-        let target = if transaction.target == StemMixMode::AllStems {
+        let target = if transaction.policy_only {
+            pin.plan.selection
+        } else if transaction.target == StemMixMode::AllStems {
             let Some(stems) = transaction.stems.as_ref() else {
                 return false;
             };
@@ -433,7 +435,10 @@ impl RtMixer {
                     }
                 } else {
                     capture.status.reject_rt();
-                    if capture.candidate.is_none() {
+                    if capture.candidate.is_none()
+                        && capture.status.policy_epoch.is_none()
+                        && capture.status.armed()
+                    {
                         self.input_runtime_ownership.finish_resident_control(
                             capture.id,
                             capture.status.publication.expected,
@@ -448,6 +453,30 @@ impl RtMixer {
                     && transaction.status.publication.claim_resident()
                     && self.committed_stem_adoption_current(transaction);
                 if valid {
+                    if transaction.policy_only {
+                        if transaction.target == StemMixMode::AllStems {
+                            transaction.retired_stems = self.prepared_stems[id].take();
+                            self.prepared_stems[id] = transaction.stems.take();
+                            self.release_pair_components[id] = false;
+                        } else if !transaction.retain_components
+                            && self.stem_mix_mode[id] == StemMixMode::FullMix
+                        {
+                            self.release_pair_components[id] = true;
+                            if !self.stem_transitions[id].is_active() {
+                                transaction.retired_stems = self.prepared_stems[id].take();
+                            }
+                        }
+                        if let Some((epoch, expected)) = transaction.status.policy_epoch.as_ref() {
+                            epoch.store(*expected, Ordering::Release);
+                        }
+                        transaction
+                            .status
+                            .publication
+                            .mark_accepted_preserved_window();
+                        transaction.status.effective.store(4, Ordering::Release);
+                        retirement.retire_committed_stem_work(work);
+                        return;
+                    }
                     let previous = self.stem_render_selection(id);
                     if transaction.target == StemMixMode::AllStems {
                         let old = self.prepared_stems[id].take();
@@ -495,7 +524,7 @@ impl RtMixer {
                         .publication
                         .mark_accepted_preserved_window();
                     if transaction.target == StemMixMode::FullMix {
-                        self.release_pair_components[id] = true;
+                        self.release_pair_components[id] = !transaction.retain_components;
                     }
                     transaction.status.effective.store(
                         // Stopped readiness installs readers, but proves no actual output.
@@ -515,6 +544,7 @@ impl RtMixer {
                     // This transaction owns one pre-reserved retired payload. Leave unrelated
                     // release requests to the ordinary render pass so they cannot consume it.
                     if transaction.target == StemMixMode::FullMix
+                        && !transaction.retain_components
                         && !self.stem_transitions[id].is_active()
                     {
                         transaction.retired_stems = self.prepared_stems[id].take();
@@ -522,7 +552,7 @@ impl RtMixer {
                 } else {
                     transaction.status.reject_rt();
                 }
-                if id < NUM_SAMPLES && transaction.candidate.is_none() {
+                if id < NUM_SAMPLES && transaction.candidate.is_none() && !transaction.policy_only {
                     self.input_runtime_ownership
                         .finish_resident_control(id, transaction.status.publication.expected);
                 }

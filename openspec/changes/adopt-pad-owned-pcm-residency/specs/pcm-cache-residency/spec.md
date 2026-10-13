@@ -417,6 +417,38 @@ before mutation while preserving separate existing bounded preparation limits.
 - **THEN** old effective audio remains valid and above-budget state is visible
 - **AND** idle retirement and new admission honor the bound without deleting active owners
 
+### Requirement: Scoped resident admission precedes live authority changes
+The system SHALL apply the configured aggregate residency budget to one
+AudioEngine/ProjectState ownership scope. Actual shared allocations SHALL be
+charged once within that scope while a scope-owned bank, voice, Native history,
+capture, ticket, preparation or retirement reader retains them. Globally living
+PCM or historical Weak locators alone SHALL NOT imply current ownership by a
+different scope. Temporary timing, analysis, conversion and export materialization
+SHALL remain separately bounded preparation rather than resident ownership.
+
+#### Scenario: Shared allocation outlives one engine owner
+- **GIVEN** two independent engine scopes retain the same PCM through distinct real resident views
+- **WHEN** one scope unloads and its actual voice/history/job/ticket/retirement readers end
+- **THEN** that scope's charge SHALL become zero while the surviving scope retains its own charge and usable audio
+- **AND** a first shared adoption by another scope SHALL reserve its own admission cost even when no new physical PCM allocation is needed
+- **AND** component and reference owners SHALL retain truthful source/range/context witnesses without falsifying residency geometry
+
+#### Scenario: Deferred geometry is a proposal until admitted
+- **GIVEN** incoming defaults or a retained voice capture determines the final requested physical range only during preparation
+- **WHEN** source preparation, analysis or capture-only handoff starts
+- **THEN** a bounded independently supersedable proposal MAY record pending intent without changing current source/request/prepared epochs or seeking the existing voice
+- **AND** exact selected resident costs, actual sharing and registration capacity SHALL be reserved before live allocation and current authority/adoption changes
+- **AND** final arming SHALL revalidate the proposal, source/capture, current intent and queue capacity through the existing authoritative gates
+- **AND** pre-arming budget, stale, cancellation or I/O failure SHALL release only proposal/reservation resources and preserve previous usable controls and audio without epoch rollback
+
+#### Scenario: Concurrent reservations and dead Weak payloads
+- **WHEN** parallel workers prepare resident views or the performer lowers the budget
+- **THEN** unique held ownership and admitted pending reservations SHALL be counted atomically with checked byte arithmetic and reservation-to-reader transfer
+- **AND** already admitted work SHALL remain bounded by its reserved cost while new positive admission observes the reduced allowance
+- **AND** budget refusal SHALL remain a typed recoverable admission result rather than trigger cache regeneration or erase assignments
+- **AND** dead Weak payload locators SHALL be pruned off realtime before freed-capacity claims, preserving surviving readers and immutable file metadata
+- **AND** cold/warm/subscriber, window/seek/complete-context, direct component preparation and legacy publication routes SHALL NOT bypass the same resident admission policy
+
 ### Requirement: Existing bounded lanes and exact ownership capacity
 The system SHALL keep two workers,32 queued/reserved jobs,eight startup admissions
 per poll,1GiB maximum simultaneous transient scratch PCM per job and ordinary512MiB timing/analysis preparation.

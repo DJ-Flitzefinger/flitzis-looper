@@ -1,5 +1,6 @@
 """Retired native timing events settle bookkeeping without replaying legacy timing."""
 
+from pathlib import Path
 from typing import TYPE_CHECKING
 
 import pytest
@@ -10,7 +11,6 @@ from tests.flitzis_looper.conftest import FakeInputRuntimePadBinding, current_ti
 from tests.flitzis_looper.controller.transport.test_key_lock_transactions import _mode_source
 
 if TYPE_CHECKING:
-    from pathlib import Path
     from unittest.mock import Mock
 
     from flitzis_looper.controller import AppController
@@ -24,15 +24,27 @@ def _legacy_analysis() -> dict[str, object]:
     }
 
 
-def test_timing_stale_replacement_retires_old_pending_geometry_before_new_mode_failure(
+def _schedule_maintenance_load(
+    controller: AppController, audio: Mock, path: str, *, request_id: int
+) -> None:
+    """Exercise the existing saved/maintenance source admission contract."""
+    audio.load_sample_async.return_value = request_id
+    assert controller.loader._schedule_restored_load(0, Path(path), run_analysis=False)
+    call = audio.load_sample_async.call_args
+    assert call.args == (0, Path(path).as_posix())
+    assert call.kwargs["source_intent"] == "restore"
+    assert call.kwargs["replace_assignment"] is True
+    assert call.kwargs["run_analysis"] is False
+
+
+def test_timing_stale_maintenance_replacement_retires_old_geometry_before_new_mode_failure(
     controller: AppController, audio_engine_mock: Mock
 ) -> None:
     old_ticket, feedback = _mode_source(controller, audio_engine_mock)
     controller.transport.pad.set_pad_key_lock(0, enabled=True)
     controller.project.key_lock = True
     controller.project.pad_loop_end_s[0] = 7.0
-    audio_engine_mock.load_sample_async.return_value = 9
-    controller.loader.load_sample_async(0, "samples/new.wav")
+    _schedule_maintenance_load(controller, audio_engine_mock, "samples/new.wav", request_id=9)
     audio_engine_mock.current_input_runtime_pad_binding.return_value = FakeInputRuntimePadBinding(
         accepted_timing={"source_id": "new-source", "source_generation": 2}
     )
@@ -82,7 +94,7 @@ def test_failed_cold_load_settles_superseded_analysis_without_changing_effective
     controller.loader.analyze_sample_async(0)
     session.sample_analysis_progress[0] = 0.5
     old_project = project.model_dump()
-    audio_engine_mock.load_sample_async.return_value = 4
+    audio_engine_mock.load_incoming_sample_async.return_value = 4
     controller.loader.load_sample_async(0, "new.wav")
     audio_engine_mock.poll_loader_events.side_effect = [
         {"type": "error", "id": 0, "request_id": 4, "msg": "cold decode failed"},
@@ -113,7 +125,7 @@ def test_failed_cold_load_settles_superseded_analysis_without_changing_effective
 @pytest.mark.parametrize("restored", [False, True])
 @pytest.mark.parametrize("include_analysis", [False, True])
 @pytest.mark.parametrize("global_default", [False, True])
-def test_source_completion_preserves_timing_and_allows_analysis_only_after_loading(
+def test_maintenance_source_completion_preserves_timing_and_gates_analysis_until_loaded(
     controller: AppController,
     audio_engine_mock: Mock,
     tmp_path: Path,
@@ -143,7 +155,7 @@ def test_source_completion_preserves_timing_and_allows_analysis_only_after_loadi
         write_mono_pcm16_wav(cached_file, 48_000)
         controller.loader.restore_samples_from_project_state()
     else:
-        controller.loader.load_sample_async(0, cached_path)
+        _schedule_maintenance_load(controller, audio_engine_mock, cached_path, request_id=7)
     assert controller.loader._load_request_ids[0] == 7
     assert 0 in session.loading_sample_ids
     audio_engine_mock.analyze_sample_async.return_value = 9
@@ -282,10 +294,12 @@ def test_failed_cold_replacement_retains_acknowledged_automatic_authority(
     assert previous_timing is not None
     audio_engine_mock.reset_mock()
     if failure == "admission":
-        audio_engine_mock.load_sample_async.side_effect = RuntimeError("bounded source queue full")
+        audio_engine_mock.load_incoming_sample_async.side_effect = RuntimeError(
+            "bounded source queue full"
+        )
         controller.loader.load_sample_async(0, "new.wav")
     else:
-        audio_engine_mock.load_sample_async.return_value = 7
+        audio_engine_mock.load_incoming_sample_async.return_value = 7
         controller.loader.load_sample_async(0, "new.wav")
         audio_engine_mock.poll_loader_events.side_effect = [
             {"type": "error", "id": 0, "request_id": 7, "msg": failure},
@@ -293,6 +307,12 @@ def test_failed_cold_replacement_retains_acknowledged_automatic_authority(
         ]
         controller.loader.poll_loader_events()
 
+    audio_engine_mock.load_incoming_sample_async.assert_called_once_with(
+        0, "new.wav", controller.project.key_lock
+    )
+    assert controller.session.sample_load_errors[0] == (
+        "bounded source queue full" if failure == "admission" else failure
+    )
     assert controller.project.model_dump() == previous
     assert controller.transport.bpm.current_timing(0) == previous_timing
     assert audio_engine_mock.current_constant_timing.return_value is automatic_pad
@@ -304,7 +324,7 @@ def test_failed_cold_replacement_retains_acknowledged_automatic_authority(
     audio_engine_mock.unload_sample.assert_not_called()
 
 
-def test_accepted_unload_then_ordinary_reload_restores_legacy_timing(
+def test_accepted_unload_then_maintenance_reload_restores_legacy_timing(
     controller: AppController, audio_engine_mock: Mock, automatic_pad: dict[str, object]
 ) -> None:
     assert controller.transport.bpm.current_timing(0) is not None
@@ -313,8 +333,7 @@ def test_accepted_unload_then_ordinary_reload_restores_legacy_timing(
     assert audio_engine_mock.pad_timing_intent(0) == "legacy"
     assert controller.transport.bpm.current_timing(0) is None
 
-    audio_engine_mock.load_sample_async.return_value = 7
-    controller.loader.load_sample_async(0, "C:\\fixture\\ordinary.wav")
+    _schedule_maintenance_load(controller, audio_engine_mock, "samples/ordinary.wav", request_id=7)
     audio_engine_mock.poll_loader_events.side_effect = [
         {
             "type": "success",

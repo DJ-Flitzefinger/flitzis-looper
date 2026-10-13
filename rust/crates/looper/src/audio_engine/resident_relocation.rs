@@ -54,9 +54,10 @@ impl StemOwner {
         complete: &SampleBuffer,
         window: &SampleBuffer,
         rate: u32,
-        assets: &super::project_assets::ProjectAssets,
+        resident: &super::resident_proposal::ResidentReadContext,
         cancelled: &impl Fn() -> bool,
     ) -> Result<PreparedStemSet, String> {
+        let assets = &resident.assets;
         if let Some(owner) = &self.pair {
             owner
                 .source_lease
@@ -81,6 +82,25 @@ impl StemOwner {
                     && stem.resident_start() == window.resident_start()
                     && stem.resident_end() == window.resident_end()
             });
+            let mut reused = vec![window];
+            if same_range {
+                reused.extend(self.set.stems.iter());
+            }
+            let bytes = if same_range {
+                0
+            } else {
+                window
+                    .samples
+                    .len()
+                    .checked_mul(16)
+                    .ok_or("resident component window byte overflow")?
+            };
+            let mut reservation = resident
+                .reserve(bytes, &reused, 5)
+                .map_err(|error| error.to_string())?;
+            reservation
+                .reserve_reader_slots(1)
+                .map_err(|error| error.to_string())?;
             let stems = if same_range {
                 self.set
                     .stems
@@ -104,6 +124,7 @@ impl StemOwner {
                 complete_set_identity: self.set.complete_set_identity.clone(),
                 accepted_timing: self.set.accepted_timing,
                 reference_samples: window.samples.clone(),
+                reference_residency: window.residency.clone(),
                 publication: self.set.publication.clone(),
                 source_version_hash: self.set.source_version_hash,
                 sample_rate_hz: rate,
@@ -112,20 +133,39 @@ impl StemOwner {
                 available_mask: self.set.available_mask,
                 stems,
             };
+            let mut views = vec![window];
+            views.extend(set.stems.iter());
+            reservation
+                .commit(&views)
+                .map_err(|error| error.to_string())?;
             assets
-                .retain_stem_pair(
+                .retain_stem_pair_reserved(
                     self.generation_path.clone(),
-                    window,
-                    &self.source_version,
-                    &set.complete_set_identity,
-                    Some(&set),
+                    super::project_assets::stem_readers::StemPairReaders {
+                        reference: window,
+                        version: &self.source_version,
+                        identity: &set.complete_set_identity,
+                        stems: Some(&set),
+                    },
                     pair.clone_pins(owner.root.parent().ok_or("pair project root missing")?)?,
                     owner.source_lease.clone(),
+                    &mut reservation,
                 )
                 .map_err(|error| error.to_string())?;
             return Ok(set);
         }
         let path = self.cache_dir.to_str().ok_or("invalid stem cache path")?;
+        let bytes = window
+            .samples
+            .len()
+            .checked_mul(16)
+            .ok_or("resident legacy component window byte overflow")?;
+        let mut reservation = resident
+            .reserve(bytes, &[window], 5)
+            .map_err(|error| error.to_string())?;
+        reservation
+            .reserve_reader_slots(1)
+            .map_err(|error| error.to_string())?;
         let mut set = super::stem_cache::prepare_stem_buffers_from_cache(
             &self.source_version,
             complete,
@@ -136,7 +176,16 @@ impl StemOwner {
             return Err("complete accepted stem set changed".into());
         }
         set.complete_set_identity = self.set.complete_set_identity.clone();
-        set.window_for(window)
+        let set = set.window_for(window)?;
+        let mut views = vec![window];
+        views.extend(set.stems.iter());
+        reservation
+            .commit(&views)
+            .map_err(|error| error.to_string())?;
+        assets
+            .retain_stems_reserved(self.generation_path.clone(), &set, &mut reservation)
+            .map_err(|error| error.to_string())?;
+        Ok(set)
     }
 }
 
@@ -155,15 +204,16 @@ pub(super) struct ResidentStemCache {
     pub(super) accepted: Option<StemOwner>,
     pending: Option<StemOwner>,
     relocation: Option<PendingWindow>,
+    proposal: Option<PendingWindow>,
     pub(super) intent_epoch: Arc<AtomicU64>,
     history: Vec<StemDescriptor>,
     pub(super) committed: super::committed_stem_residency::CommittedStemState,
 }
 
 impl ResidentStemCache {
-    pub(super) fn cancel_window_predecessor(
+    pub(super) fn cancel_window_predecessor_for(
         &mut self,
-        engine: &AudioEngine,
+        ownership: &InputRuntimeOwnership,
         id: usize,
     ) -> PyResult<()> {
         if let Some(previous) = self.relocation.as_ref() {
@@ -173,7 +223,7 @@ impl ResidentStemCache {
                 ));
             }
             previous.state.fail(
-                &engine.input_runtime_ownership,
+                ownership,
                 id,
                 previous.publication.expected,
                 "resident preparation superseded by committed stem intent".into(),
@@ -240,6 +290,7 @@ struct WindowState {
     error: Mutex<Option<String>>,
     adopted_binding: Mutex<Option<InputPadBinding>>,
     launch_cancelled: Arc<AtomicBool>,
+    proposal: Mutex<Option<super::resident_proposal::ResidentProposal>>,
     #[cfg(test)]
     terminal_observation: Mutex<Option<terminal_order_tests::TerminalObservation>>,
     #[cfg(test)]
@@ -265,7 +316,13 @@ impl WindowState {
         error: String,
         cancelled: bool,
     ) {
-        ownership.finish_resident_control(id, expected);
+        if self
+            .proposal
+            .lock()
+            .is_ok_and(|proposal| proposal.as_ref().is_none_or(|proposal| proposal.armed()))
+        {
+            ownership.finish_resident_control(id, expected);
+        }
         if let Ok(mut message) = self.error.lock() {
             *message = Some(error);
         }
@@ -482,7 +539,13 @@ impl ResidentWindowTicket {
             } else {
                 self.binding
             };
-        self.publication.current()
+        self.publication.status() != "rejected"
+            && (self.publication.current()
+                || self.state.proposal.lock().is_ok_and(|proposal| {
+                    proposal
+                        .as_ref()
+                        .is_some_and(|proposal| !proposal.armed() && proposal.current())
+                }))
             && self.ownership.authority_current(self.id, binding)
             && self.ownership.binding_source_generation(self.id, binding)
                 == Some(self.source_generation)
@@ -491,11 +554,16 @@ impl ResidentWindowTicket {
                 == binding
                     .accepted
                     .map_or(0, |accepted| accepted.publication_epoch)
-            && self.publication.current()
     }
 
     /// A claimed callback tail cannot be cancelled or rolled back by metadata.
     pub fn cancel(&self) -> bool {
+        if let Ok(proposal) = self.state.proposal.lock()
+            && let Some(proposal) = proposal.as_ref()
+            && !proposal.armed()
+        {
+            proposal.cancel();
+        }
         let cancelled = self.publication.cancel_unclaimed();
         if cancelled {
             self.state.fail(
@@ -617,6 +685,22 @@ pub(super) fn cancel_all(engine: &AudioEngine) -> PyResult<()> {
         .map_err(|_| PyRuntimeError::new_err("resident ownership lock poisoned"))?;
     for (id, owner) in owners.iter().enumerate() {
         owner.committed.cancel_pending_shared();
+        if let Some(proposal) = &owner.proposal
+            && proposal.publication.cancel_unclaimed()
+        {
+            if let Ok(token) = proposal.state.proposal.lock()
+                && let Some(token) = token.as_ref()
+            {
+                token.cancel();
+            }
+            proposal.state.fail(
+                &engine.input_runtime_ownership,
+                id,
+                proposal.publication.expected,
+                "resident proposal cancelled by shutdown".into(),
+                true,
+            );
+        }
         if let Some(pending) = &owner.relocation
             && pending.publication.cancel_unclaimed()
         {
@@ -643,6 +727,26 @@ pub(super) fn reconcile_under_request_lock(engine: &AudioEngine) -> PyResult<()>
         .map_err(|_| PyRuntimeError::new_err("resident stem ownership lock poisoned"))?;
     for id in 0..NUM_SAMPLES {
         let owner = &mut owners[id];
+        if let Some(proposal) = owner.proposal.as_ref() {
+            if proposal.admitted.elapsed() >= ADOPTION_DEADLINE
+                && proposal.publication.cancel_unclaimed()
+            {
+                proposal.state.fail(
+                    &engine.input_runtime_ownership,
+                    id,
+                    proposal.publication.expected,
+                    "resident proposal deadline expired".into(),
+                    true,
+                );
+            }
+            let current =
+                proposal.state.proposal.lock().is_ok_and(|proposal| {
+                    proposal.as_ref().is_some_and(|proposal| proposal.current())
+                });
+            if !current || proposal.publication.status() == "rejected" {
+                owner.proposal = None;
+            }
+        }
         owner
             .committed
             .reconcile(&mut owner.accepted, cache[id].as_ref());
@@ -751,6 +855,10 @@ struct WindowWork {
     state: Arc<WindowState>,
     token: Arc<()>,
     cancelled: Arc<std::sync::atomic::AtomicBool>,
+    proposal: super::resident_proposal::ResidentProposal,
+    intent_epoch: Arc<AtomicU64>,
+    base_intent: u64,
+    resident: super::resident_proposal::ResidentReadContext,
 }
 
 #[cfg(test)]
@@ -875,7 +983,13 @@ fn ensure_window_history_capacity(
 impl WindowWork {
     fn current(&self) -> bool {
         !self.cancelled.load(Ordering::Acquire)
-            && self.publication.current()
+            && self.proposal.current()
+            && self.publication.status() != "rejected"
+            && (if self.proposal.armed() {
+                self.publication.current()
+            } else {
+                self.intent_epoch.load(Ordering::Acquire) == self.base_intent
+            })
             && self.binding.current()
     }
 
@@ -916,13 +1030,49 @@ impl WindowWork {
                             })
                     })
                     .transpose()?;
-                self.seek_pin = Some(pin.clone());
                 self.revision = self
                     .old
                     .window_revision()
                     .checked_add(1)
                     .ok_or("voice window revision exhausted")?;
             }
+            // Capture owns the actual voice view even when its complete source
+            // equals a newer bank window. Coverage and reuse follow that view.
+            self.old = pin.sample.clone();
+            self.seek_pin = Some(pin.clone());
+            if pin.stopped {
+                self.start = self.old.resident_start();
+                self.end = self.old.resident_end();
+                self.revision = self.old.window_revision();
+                self.context = self
+                    .old
+                    .residency
+                    .as_ref()
+                    .ok_or("stopped source view missing")?
+                    .context;
+            } else if super::source_reader::resident_read_context_available(
+                &pin.sample,
+                pin.loop_region,
+                super::source_reader::explicit_seek_mode_for_frame(
+                    ((self.intent.seek_position_s.expect("captured seek")
+                        * f64::from(self.binding.binding.sample_rate_hz))
+                    .round() as usize)
+                        .min(pin.sample.frame_count()),
+                    pin.loop_region,
+                    pin.sample.frame_count(),
+                ),
+                pin.key_lock,
+            ) {
+                self.start = pin.sample.resident_start();
+                self.end = pin.sample.resident_end();
+                self.revision = pin.sample.window_revision();
+                self.context = pin
+                    .sample
+                    .residency
+                    .as_ref()
+                    .ok_or("captured source view missing")?
+                    .context;
+            } else
             // A finite KEY LOCK voice owns its actual physical loop, including after bank
             // replacement. Admit its prefix/loop or loop/tail union, never a guessed halo.
             // Complete-backed and non-KEY seeks retain the explicit complete-track exception.
@@ -989,7 +1139,7 @@ impl WindowWork {
             super::cold_store::reset_window_read_observation_for_test();
             super::stem_pair::reset_range_observation_for_test();
         }
-        let sample = {
+        {
             // Reserve this existing history slot before source allocation, with no concurrent
             // same-pad append. Range I/O is worker-only; release the lock before the asset gate.
             let mut history = self
@@ -1000,24 +1150,33 @@ impl WindowWork {
                 .get_mut(self.id)
                 .ok_or("same-pad PCM history missing")?;
             ensure_window_history_capacity(pad, &self.old, self.start, self.end)?;
-            let sample = self
-                .source_lease
-                .read_window_cancellable(
-                    &self.old,
-                    self.start,
-                    self.end,
-                    self.revision,
-                    self.context,
-                    super::cold_jobs::PCM_LIMIT_BYTES,
-                    &|| !self.current(),
-                )
-                .map_err(|error| error.to_string())?;
+        }
+        let sample = self
+            .source_lease
+            .read_window_resident(
+                &self.old,
+                self.start,
+                self.end,
+                self.revision,
+                self.context,
+                super::cold_jobs::PCM_LIMIT_BYTES,
+                &|| !self.current(),
+                Some(&self.resident),
+            )
+            .map_err(|error| error.to_string())?;
+        {
+            let mut history = self
+                .pcm_history
+                .lock()
+                .map_err(|_| "PCM history lock poisoned")?;
+            let pad = history
+                .get_mut(self.id)
+                .ok_or("same-pad PCM history missing")?;
             let reader = Arc::downgrade(&sample.samples);
             if !pad.iter().any(|held| held.ptr_eq(&reader)) {
                 pad.push(reader);
             }
-            sample
-        };
+        }
         if !self.current() {
             return Err("resident preparation cancelled after range read".into());
         }
@@ -1047,7 +1206,7 @@ impl WindowWork {
                     legacy_complete.as_ref().unwrap_or(&sample),
                     &sample,
                     self.binding.binding.sample_rate_hz,
-                    &self.assets,
+                    &self.resident,
                     &|| !self.current(),
                 )?;
                 set.complete_set_identity = owner.set.complete_set_identity.clone();
@@ -1058,11 +1217,6 @@ impl WindowWork {
                 set.publication = owner.set.publication.clone();
                 // Paired preparation already registered these four PCM owners,
                 // their source lease and the paired WAV/PCM/common files.
-                if owner.pair.is_none() {
-                    self.assets
-                        .retain_stems(owner.generation_path.clone(), &set)
-                        .map_err(|error| error.to_string())?;
-                }
                 Ok(set)
             })
             .transpose()?;
@@ -1119,21 +1273,74 @@ impl WindowWork {
             .owners
             .lock()
             .map_err(|_| "resident ownership lock poisoned")?;
+        if self.intent_epoch.load(Ordering::Acquire) != self.base_intent
+            || !self.proposal.current()
+            || owners[self.id].pending.is_some()
+            || owners[self.id].committed.claimed()
+            || owners[self.id]
+                .relocation
+                .as_ref()
+                .is_some_and(|pending| pending.publication.status() == "adopting")
+        {
+            return Err("resident proposal authority changed before arming".into());
+        }
+        if let Some(request) = self.intent.key_lock_request_id
+            && self
+                .binding
+                .ownership
+                .reserve_key_lock_request(self.id)
+                .map_err(|error| error.to_string())?
+                != request
+        {
+            return Err("resident key lock proposal was superseded before arming".into());
+        }
+        let proposed = owners[self.id]
+            .proposal
+            .as_ref()
+            .filter(|pending| Arc::ptr_eq(&pending.token, &self.token))
+            .ok_or("resident proposal no longer owns preparation")?;
+        if proposed.publication.status() == "rejected" {
+            return Err("resident proposal cancelled before arming".into());
+        }
+        let mut adopted = self
+            .state
+            .adopted_binding
+            .lock()
+            .map_err(|_| "resident binding lock poisoned")?;
+        self.publication.mark_pending()?;
+        self.proposal.arm()?;
+        if let Some(previous) = owners[self.id].relocation.as_ref() {
+            if !previous.publication.cancel_unclaimed() {
+                return Err("resident native adoption is in progress".into());
+            }
+            previous.state.fail(
+                &self.binding.ownership,
+                self.id,
+                previous.publication.expected,
+                "resident preparation superseded by admitted newer intent".into(),
+                true,
+            );
+        }
+        self.intent_epoch
+            .store(self.publication.expected, Ordering::Release);
+        self.binding
+            .ownership
+            .begin_resident_control(self.id, self.publication.expected);
+        if let Some(request) = self.intent.key_lock_request_id {
+            self.binding
+                .ownership
+                .publish_key_lock_request(self.id, request);
+        }
+        owners[self.id].relocation = owners[self.id].proposal.take();
         let pending = owners[self.id]
             .relocation
             .as_mut()
-            .filter(|pending| Arc::ptr_eq(&pending.token, &self.token))
-            .ok_or("resident request no longer owns pending publication")?;
-        self.publication.mark_pending()?;
+            .expect("admitted proposal owns publication");
         pending.sample = Some(sample.clone());
         pending.stems = stems.clone();
         let mut adopted_binding = self.binding.binding;
         adopted_binding.resident = sample.resident_binding();
-        *self
-            .state
-            .adopted_binding
-            .lock()
-            .map_err(|_| "resident binding lock poisoned")? = Some(adopted_binding);
+        *adopted = Some(adopted_binding);
         producer
             .push(ControlMessage::RelocateResident(Box::new(
                 crate::messages::ResidentTransaction {
@@ -1463,7 +1670,35 @@ pub(super) fn prepare_window_with_producer(
         .key_lock
         .map(|_| engine.input_runtime_ownership.reserve_key_lock_request(id))
         .transpose()?;
-    if let Some(previous) = owners[id].relocation.as_ref() {
+    let base_intent = owners[id].intent_epoch.load(Ordering::Acquire);
+    let proposal = if reuse_window {
+        None
+    } else {
+        Some(
+            engine
+                .resident_proposals
+                .begin(id)
+                .map_err(PyRuntimeError::new_err)?
+                .with_source_epoch(
+                    engine.prepared_source_epochs[id].clone(),
+                    engine.prepared_source_epochs[id].load(Ordering::Acquire),
+                ),
+        )
+    };
+    if reuse_window {
+        let mut reused = vec![&old];
+        if let Some(set) = ready_stems.as_ref() {
+            reused.extend(set.stems.iter());
+        }
+        let mut resident = engine
+            .project_assets
+            .reserve_resident(&engine.resident_account, 0, &reused, reused.len())
+            .map_err(|error| PyRuntimeError::new_err(error.to_string()))?;
+        resident
+            .commit(&reused)
+            .map_err(|error| PyRuntimeError::new_err(error.to_string()))?;
+    }
+    if reuse_window && let Some(previous) = owners[id].relocation.as_ref() {
         if !previous.publication.cancel_unclaimed() {
             return Err(PyRuntimeError::new_err(
                 "resident native adoption is in progress",
@@ -1477,13 +1712,15 @@ pub(super) fn prepare_window_with_producer(
             true,
         );
     }
-    owners[id]
-        .intent_epoch
-        .store(next_intent, Ordering::Release);
-    engine
-        .input_runtime_ownership
-        .begin_resident_control(id, next_intent);
-    if let Some(request) = key_lock_request_id {
+    if reuse_window {
+        owners[id]
+            .intent_epoch
+            .store(next_intent, Ordering::Release);
+        engine
+            .input_runtime_ownership
+            .begin_resident_control(id, next_intent);
+    }
+    if reuse_window && let Some(request) = key_lock_request_id {
         engine
             .input_runtime_ownership
             .publish_key_lock_request(id, request);
@@ -1494,6 +1731,11 @@ pub(super) fn prepare_window_with_producer(
             engine.prepared_source_epochs[id].load(Ordering::Acquire),
         );
     let state = Arc::new(WindowState::default());
+    *state
+        .proposal
+        .lock()
+        .map_err(|_| PyRuntimeError::new_err("resident proposal lock poisoned"))? =
+        proposal.clone();
     intent.key_lock_request_id = key_lock_request_id;
     let token = Arc::new(());
     let ticket = ResidentWindowTicket {
@@ -1513,7 +1755,7 @@ pub(super) fn prepare_window_with_producer(
         key_lock_request_id: intent.key_lock_request_id,
     };
     let stem_owner = owners[id].accepted.clone();
-    owners[id].relocation = Some(PendingWindow {
+    let pending = Some(PendingWindow {
         sample: None,
         stems: None,
         publication: publication.clone(),
@@ -1522,6 +1764,11 @@ pub(super) fn prepare_window_with_producer(
         state: state.clone(),
         admitted: Instant::now(),
     });
+    if reuse_window {
+        owners[id].relocation = pending;
+    } else {
+        owners[id].proposal = pending;
+    }
     if reuse_window {
         let pending = owners[id].relocation.as_mut().expect("new resident owner");
         pending.sample = Some(old.clone());
@@ -1553,15 +1800,18 @@ pub(super) fn prepare_window_with_producer(
     let (capture, seek_receiver) = if seek_only {
         let (sender, receiver) = rtrb::RingBuffer::new(1);
         (
-            Some(Arc::new(super::resident_seek::ResidentSeekCapture::new(
-                id,
-                binding.binding,
-                publication.clone(),
-                request
-                    .seek_position_s
-                    .expect("validated seek-only request"),
-                sender,
-            ))),
+            Some(Arc::new(
+                super::resident_seek::ResidentSeekCapture::new(
+                    id,
+                    binding.binding,
+                    publication.clone(),
+                    request
+                        .seek_position_s
+                        .expect("validated seek-only request"),
+                    sender,
+                )
+                .proposal(proposal.clone().expect("worker proposal")),
+            )),
             Some(receiver),
         )
     } else {
@@ -1592,6 +1842,14 @@ pub(super) fn prepare_window_with_producer(
         state: state.clone(),
         token,
         cancelled: engine.cold_cancelled.clone(),
+        proposal: proposal.expect("worker proposal"),
+        intent_epoch: owners[id].intent_epoch.clone(),
+        base_intent,
+        resident: super::resident_proposal::ResidentReadContext::reader(
+            engine.project_assets.clone(),
+            engine.resident_account.clone(),
+        )
+        .with_history(engine.cold_pcm_history.clone(), id),
     };
     drop(owners);
     drop(cache);
@@ -1702,6 +1960,7 @@ mod tests {
                 complete_set_identity: Arc::new([0; 32]),
                 accepted_timing: None,
                 reference_samples: old.samples.clone(),
+                reference_residency: old.residency.clone(),
                 publication: PreparedSourcePermit::unbound(),
                 source_version_hash: 0,
                 sample_rate_hz: 48_000,

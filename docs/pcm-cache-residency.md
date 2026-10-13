@@ -1751,3 +1751,90 @@ checks pass. The one independent final source/evidence review passes with no
 open findings in this bounded disposition. Public Copy/ReArrange R1/R2, selected-ALL GLOBAL, finite
 cross-pad allocation reuse, accepted-musical/irregular-callback/resource216,
 disk-delete/device/listening/Human and whole E11/P4b/P5a/P5b/Goal gates remain open.
+
+## Scoped runtime admission and lazy preload policy — 2026-10-13
+
+The P5b runtime uses one engine/project resident account inside the existing
+asset registry. Actual live resident-view witnesses determine which unique PCM
+backings belong to that account. A second engine adopting shared PCM pays its
+first scoped cost; ending the first engine's real view witnesses ends its charge
+even while the second engine still retains the same physical backing. Duplicate
+views in one account charge the backing once. Pending reservations include
+prospective allocation and ownership; publication transfers them to real view
+witnesses under the asset gate. These values measure PCM, not process RSS.
+
+The persisted settings are strict `preload_stem_loops_on_startup=false` and
+`resident_pcm_budget_mib=512`, with an accepted integer range of128..16384MiB.
+Native receives the budget before the engine starts and before restore. Lowering
+the budget preserves live pins and reports above-budget occupancy; future
+admission waits or reports a typed budget error. Ordinary timing/analysis
+preparation remains separately bounded at512MiB, and paired preparation retains
+its existing separate1GiB bound. Existing2-worker/32-job lanes are reused.
+
+Incoming unknown geometry and callback-captured window/seek/stem demand start as
+bounded proposals. Exact byte/owner/reader capacity is reserved and fences are
+revalidated before live request/source/window/intent authority is armed. The
+callback captures and adopts bounded prepared payloads; it does not access the
+accounting mutex, files, Python or new job scheduling. Admission failure leaves
+the previous playable source and intent intact; no epoch rollback is used.
+
+With preload OFF, saved ALL remains durable desire while restore admits only
+required FullMix PCM and verifies available committed pairs without components.
+An explicit ALL request still needs its own residency and effective-mode receipt.
+Preload ON adds prepare/retain-only policy interest to eligible pads without
+changing their audio mode. Disabling policy removes that interest while explicit
+interests and actual readers retain their authority. Preferred-ALL generation
+uses its ordinary fenced live transaction; FullMix with preload OFF remains
+disk-only. A single bounded216-entry demand owner feeds eight initial/deferred
+items, alternates direct/policy work and rotates recoverable blocked entries.
+UI counts current own ACKs and displays exact PCM counters separately from a
+conservative demand estimate, unknown geometry and process overhead.
+
+Scoped validation:
+
+| Check | Result and scope |
+|---|---|
+| Native runtime regressions | 80 distinct passing cases across the recorded implementation/repair profiles: accounting5, proposals3, ColdJobs6, source-error/analysis2, new productive P5b5 and59 affected cases; overlapping reruns are counted once |
+| Actual216 stopped pads | 32.46s; supported128MiB budget, actual source/selection/window/policy receipts, independently deduplicated PCM costs, typed pressure and actual retirement FIFO/last-reader/account zero |
+| Seek, registry and public Generate repairs | Existing covered/current/previous finite-source checks, reader-pressure old-audio assertions and public generation with actual own Register command pass; all original admission/adoption guards remain |
+| Private production Release | Fresh optimized build35.15s, wheel extracted only into workspace scratch; Release/API/Portable/controller/UI import preflight passes without Engine/App/device construction |
+| Impacted Python controllers/UI/Portable | 492 distinct cases pass,2 device cases skipped; initial12-file run484 pass/8 fail/2 skip112.82s, then both repaired fixture files66 pass3.17s; unchanged passes are reused, not a fresh whole-pytest result |
+| Clippy workspace/all-targets | exit0,18.05s;146 diagnostics/77 message texts/117 message-file pairs, no new pairs against149/77/120 baseline; warnings remain |
+| Static checks | whole Rust formatting, Ruff281 files, impacted Mypy9 source files, official strict validation and diff whitespace pass |
+
+The two renewal rounds reuse each pad's actual compatible selection identity,
+but obtain fresh window/policy receipts. The fixture initially registers216
+sets and does not forge repeated registration acknowledgements. The PCM oracle
+counts actual independently observed backings; it does not subtract the initial
+56-byte owner retained by the collecting retirement fixture. That owner now
+ends through the real retirement FIFO and worker before its charge is expected
+to end. The216 case uses stopped pads and does not claim216 audible voices,
+full process-memory peaks, cold/warm process speed or musical acceptance.
+
+All negative compile/runtime results remain in
+`workspace/scratch/goal-p5b-runtime-20261013`. Repairs include the post-arm source
+epoch fence, independent preload authority and exact queue/busy retry codecs;
+fixture repairs retain the actual current preparation lease, idempotent native
+selection semantics and scoped transfer of test observers into existing cold
+workers. No guard, tolerance, deadline or production worker count was weakened.
+Final cfg-test/argument-bundle/lexical-scope cleanup is behavior preserving;
+the80 successful Native runtime cases are explicitly reused after that cleanup,
+with fresh all-target compilation, private Release and Python integration.
+Private Native SHA256 is
+`805909f54148e2ec90f1794095626ea62da2dc71691fb9df640f39f54c7d2516`.
+The Human's installed Native and running App/settings remain unchanged.
+
+The Python negatives exposed historical Loader fixtures that still targeted
+the prior ordinary admission route. Their full timing, cancellation and scalar
+publication assertions now exercise the actual maintenance/restore route with
+its exact Native arguments asserted. Ordinary failures use the actual incoming
+API; three previously ineffective failure cases now assert actual admission
+and the reported error. Existing incoming-default/receipt/old-feedback tests
+remain intact. The metadata queue fixture now forwards its declared components
+flag into preparation, retaining the complete all-False retry oracle.
+
+The one independent final review passes with no open findings for this scoped
+source and receipt profile. Four bounded implementation tasks close.
+The full P5b/P6 resource, musical and Human parents remain open;
+control-scheduler216 fixtures alone do not establish Native residency,216
+voices or a process-memory gate.

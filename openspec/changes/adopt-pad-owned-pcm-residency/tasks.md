@@ -293,6 +293,13 @@ Bounded software delivery and retained negative evidence:
 - [ ] Lazy savedALL/generation/explicit requests, Settings preloadOFF/budget128..16384MiB default512, fair echte216 admission
 - [ ] Exact requested/preparing/ACK/error+unique backing/old-new overlap; 2/32/8/1GiB und timing/analysis512 separat. Keine216voices/96-handle-fantasy, echter ausreichender supported Budgetfall
 
+### P5b coherent runtime policy implementation
+
+- [x] Implement engine-scoped real resident-view accounting, checked pending reservations/atomic transfer, typed recoverable admission and dead-Weak pruning through the existing ownership registry; preserve separately bounded preparation.
+- [x] Stage unknown incoming/capture geometry as bounded proposals, reserve before current authority/allocation/adoption effects and cover every productive cold/warm/subscriber/window/seek/component/legacy path without epoch rollback or old-audio loss.
+- [x] Add Native prepare/retain-only preload interest and one fair explicit/generation/policy demand owner; preserve OFF saved-ALL lazy FullMix, actual own ACKs, independent policy withdrawal and initial/deferred eight-item admission.
+- [x] Integrate strict persisted fields, effective Settings/UI and Native configuration before restore; validate impacted software/private Release/API/resource216 gates and one independent final review without claiming Human/full-parent acceptance.
+
 ### R1
 
 - [ ] Expliziter musical CopySnapshot und sourceunabhaengiger save/reopen restore

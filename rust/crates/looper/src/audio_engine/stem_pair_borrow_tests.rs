@@ -5,8 +5,7 @@
 
 use super::*;
 use crate::audio_engine::constants::NUM_SAMPLES;
-use crate::audio_engine::native_owned_work::{WorkPoint, set_observer};
-use crate::audio_engine::stem_pair::{StemPairFault, set_io_observer_for_test};
+use crate::audio_engine::native_owned_work::{WorkPoint, set_preparation_observer};
 use pyo3::{Py, Python};
 use std::sync::mpsc;
 
@@ -16,8 +15,7 @@ const BORROW_CHILD_TEST: &str = "audio_engine::cold_load::tests::stem_pair_publi
 struct ObserverReset;
 impl Drop for ObserverReset {
     fn drop(&mut self) {
-        set_io_observer_for_test(None);
-        set_observer(None);
+        set_preparation_observer(None);
     }
 }
 
@@ -268,28 +266,22 @@ fn public_pair_worker_child_allows_receive_mutable_ping_and_pad1_render() {
     let mut release = WorkerRelease(Some(release_sender));
     let (result_sender, result_receiver) = mpsc::channel();
     let worker_mode = publication_mode.clone();
+    let expected_point = if worker_mode.as_deref() == Some("legacy") {
+        WorkPoint::LegacyStemFiles
+    } else {
+        WorkPoint::StemPcmFlush
+    };
     let worker = std::thread::spawn(move || {
         let _reset = ObserverReset;
         let first = AtomicBool::new(true);
-        if worker_mode.as_deref() == Some("legacy") {
-            set_observer(Some(Box::new(move |point| {
-                if point == WorkPoint::LegacyStemFiles && first.swap(false, Ordering::AcqRel) {
-                    paused_sender.send(std::thread::current().id()).unwrap();
-                    release_receiver
-                        .recv_timeout(Duration::from_secs(20))
-                        .expect("UI oracle did not release the actual sealed legacy stem reader");
-                }
-            })));
-        } else {
-            set_io_observer_for_test(Some(Box::new(move |point| {
-                if point == StemPairFault::PcmFlush && first.swap(false, Ordering::AcqRel) {
-                    paused_sender.send(std::thread::current().id()).unwrap();
-                    release_receiver
-                        .recv_timeout(Duration::from_secs(20))
-                        .expect("UI oracle did not release the actual PCM worker");
-                }
-            })));
-        }
+        set_preparation_observer(Some(Box::new(move |point| {
+            if point == expected_point && first.swap(false, Ordering::AcqRel) {
+                paused_sender.send(std::thread::current().id()).unwrap();
+                release_receiver
+                    .recv_timeout(Duration::from_secs(20))
+                    .expect("UI oracle did not release the actual preparation worker");
+            }
+        })));
         let result = Python::attach(|py| {
             if worker_mode.is_some() {
                 worker_engine
@@ -313,9 +305,24 @@ fn public_pair_worker_child_allows_receive_mutable_ping_and_pad1_render() {
         });
         result_sender.send(result).unwrap();
     });
+    let pause_deadline = Instant::now() + Duration::from_secs(10);
     let paused_thread = paused_receiver
         .recv_timeout(Duration::from_secs(10))
-        .expect("public preparation never reached its actual PCM write/flush boundary");
+        .unwrap_or_else(|pause_error| {
+            match result_receiver
+                .recv_timeout(pause_deadline.saturating_duration_since(Instant::now()))
+            {
+                Ok(Err(error)) => {
+                    panic!("public preparation failed before {expected_point:?}: {error}")
+                }
+                Ok(Ok(_)) => {
+                    panic!("public preparation returned without reaching {expected_point:?}")
+                }
+                Err(error) => panic!(
+                    "public preparation never reached {expected_point:?}: pause {pause_error}; native result {error}"
+                ),
+            }
+        });
     assert_ne!(paused_thread, std::thread::current().id());
     assert!(matches!(
         result_receiver.try_recv(),

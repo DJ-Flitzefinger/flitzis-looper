@@ -299,6 +299,7 @@ fn bpm_productive(
     let full_stems = PreparedStemSet {
         complete_set_identity: Arc::new([71; 32]),
         reference_samples: full.samples.clone(),
+        reference_residency: full.residency.clone(),
         publication: PreparedSourcePermit::unrestricted(),
         accepted_timing: None,
         source_version_hash: crate::audio_engine::stem_cache::source_version_hash(&h.version),

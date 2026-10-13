@@ -510,6 +510,7 @@ fn prepared_native_mixer_stem_selection_ramp_defers_then_adopts_actual_stem_hist
     let stems = PreparedStemSet {
         complete_set_identity: std::sync::Arc::new([0; 32]),
         reference_samples: sample.samples.clone(),
+        reference_residency: sample.residency.clone(),
         publication: PreparedSourcePermit::unrestricted(),
         accepted_timing: Some(projection()),
         source_version_hash: 37,
@@ -1028,6 +1029,7 @@ fn musical_full_stem_transition_and_continuous_filter_output_share_one_fractiona
                 let stems = PreparedStemSet {
                     complete_set_identity: std::sync::Arc::new([0; 32]),
                     reference_samples: sample.samples.clone(),
+                    reference_residency: sample.residency.clone(),
                     publication: PreparedSourcePermit::unrestricted(),
                     accepted_timing: None,
                     source_version_hash: 37,

@@ -107,6 +107,10 @@ def test_controller_validates_restored_samples_before_projecting_audio(
     """Test startup clears invalid restored pads before applying project state."""
     monkeypatch.chdir(tmp_path)
     order: list[str] = []
+    audio_engine_mock.set_resident_pcm_budget_mib.side_effect = lambda value: order.append(
+        f"budget:{value}"
+    )
+    audio_engine_mock.run.side_effect = lambda: order.append("run")
 
     with (
         patch.object(
@@ -137,7 +141,7 @@ def test_controller_validates_restored_samples_before_projecting_audio(
         controller = app_module.AppController()
 
     assert controller._audio is audio_engine_mock
-    assert order == ["loader", "stems", "transport", "input"]
+    assert order == ["budget:512", "run", "loader", "stems", "transport", "input"]
 
 
 def test_controller_clears_missing_restored_sample_before_audio_projection(

@@ -54,6 +54,7 @@ pub(super) fn components(full: &SampleBuffer, rate: u32) -> PreparedStemSet {
     PreparedStemSet {
         complete_set_identity: Arc::new([91; 32]),
         reference_samples: full.samples.clone(),
+        reference_residency: full.residency.clone(),
         publication: PreparedSourcePermit::unrestricted(),
         accepted_timing: None,
         source_version_hash: 37,

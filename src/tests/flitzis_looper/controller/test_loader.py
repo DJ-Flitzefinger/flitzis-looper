@@ -538,15 +538,15 @@ def test_startup_restores_all_pads_through_bounded_deferred_admission(
     controller.loader.restore_samples_from_project_state()
     controller.transport.apply_project_state_to_audio()
 
-    assert len(inflight) == 32
-    assert len(controller.loader._deferred_restores) == NUM_SAMPLES - 32
+    assert len(inflight) == 8
+    assert len(controller.loader._deferred_restores) == NUM_SAMPLES - 8
     assert len(controller.session.loading_sample_ids) == NUM_SAMPLES
-    assert audio_engine_mock.load_sample_async.call_count == 33
+    assert audio_engine_mock.load_sample_async.call_count == 8
     assert project.model_dump() == previous_project
     assert not controller.session.sample_load_errors
-    assert controller.session.sample_load_stage[32] == "Waiting for cold source admission"
-    assert controller.transport.bpm.current_timing(32) is None
-    assert controller.transport.bpm.effective_bpm(32) is None
+    assert controller.session.sample_load_stage[8] == "Waiting for cold source admission"
+    assert controller.transport.bpm.current_timing(8) is None
+    assert controller.transport.bpm.effective_bpm(8) is None
     audio_engine_mock.set_pad_bpm.assert_not_called()
     audio_engine_mock.set_pad_timing_metadata.assert_not_called()
     audio_engine_mock.set_pad_loop_region.assert_not_called()
@@ -554,8 +554,8 @@ def test_startup_restores_all_pads_through_bounded_deferred_admission(
     audio_engine_mock.set_master_period.assert_not_called()
 
     controller.loader.poll_loader_events()
-    assert audio_engine_mock.load_sample_async.call_count == 34
-    assert len(controller.loader._deferred_restores) == NUM_SAMPLES - 32
+    assert audio_engine_mock.load_sample_async.call_count == 16
+    assert len(controller.loader._deferred_restores) == NUM_SAMPLES - 16
 
     _finish_deferred_restore_polling(
         controller.loader, audio_engine_mock, controller.session, inflight, admitted_ids
@@ -644,6 +644,65 @@ def test_deferred_startup_restore_treats_stopped_lane_as_terminal_failure(
     audio_engine_mock.load_sample_async.reset_mock()
     controller.loader.poll_loader_events()
     audio_engine_mock.load_sample_async.assert_not_called()
+
+
+def test_startup_budget_pressure_rotates_without_losing_any_saved_assignment(
+    controller: AppController,
+    audio_engine_mock: Mock,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    original = tmp_path / "samples" / "old.wav"
+    _populate_saved_automatic_sources(controller.project, "/")
+    _install_fixed_original_locator(controller, original, monkeypatch)
+    before = controller.project.model_dump()
+    admitted: list[int] = []
+
+    def admit(sample_id: int, _path: str, **_kwargs: object) -> int:
+        if sample_id == 0:
+            message = "[resident_pcm_budget_exceeded] requested=4096 budget=2048"
+            raise RuntimeError(message)
+        admitted.append(sample_id)
+        return sample_id + 1
+
+    audio_engine_mock.load_sample_async.side_effect = admit
+    audio_engine_mock.poll_loader_events.return_value = None
+    controller.loader.restore_samples_from_project_state()
+    assert admitted == list(range(1, 8))
+    assert controller.project.model_dump() == before
+    assert 0 in controller.loader._deferred_restores
+    assert "resident PCM allowance" in controller.session.sample_load_stage[0]
+    controller.loader.poll_loader_events()
+    assert admitted == list(range(1, 15))
+    assert list(controller.loader._deferred_restores)[-1] == 0
+    assert controller.project.model_dump() == before
+
+
+@pytest.mark.parametrize("pressure", [True, False])
+def test_matching_async_restore_budget_failure_is_deferred_only_for_typed_codec(
+    controller: AppController, audio_engine_mock: Mock, tmp_path: Path, *, pressure: bool
+) -> None:
+    original = tmp_path / "samples" / "old.wav"
+    original.parent.mkdir(parents=True)
+    original.write_bytes(b"saved source")
+    controller.project.sample_paths[0] = "samples/old.wav"
+    before = controller.project.model_dump()
+    audio_engine_mock.load_sample_async.return_value = 1
+    controller.loader.restore_samples_from_project_state()
+    message = (
+        "[resident_pcm_budget_exceeded] requested=4096 budget=2048"
+        if pressure
+        else ("corrupt source: path contains [resident_pcm_budget_exceeded]")
+    )
+    audio_engine_mock.load_sample_async.side_effect = RuntimeError(message)
+    audio_engine_mock.poll_loader_events.side_effect = [
+        {"type": "error", "id": 0, "request_id": 1, "msg": message},
+        None,
+    ]
+    controller.loader.poll_loader_events()
+    assert (0 in controller.loader._deferred_restores) is pressure
+    assert controller.project.model_dump() == before
+    assert controller.session.sample_load_errors[0] == message
 
 
 def test_unload_admission_failure_preserves_source_session_and_deferred_restore(

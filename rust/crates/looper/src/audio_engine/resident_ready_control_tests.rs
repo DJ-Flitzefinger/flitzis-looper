@@ -84,6 +84,7 @@ fn prepared_stems(
         complete_set_identity: Arc::new([identity; 32]),
         accepted_timing: ticket.publication.accepted_projection(),
         reference_samples: reference.samples.clone(),
+        reference_residency: reference.residency.clone(),
         publication: ticket.publication.clone(),
         source_version_hash: 17,
         sample_rate_hz: 48_000,

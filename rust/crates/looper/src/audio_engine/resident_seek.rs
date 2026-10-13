@@ -16,6 +16,7 @@ pub(crate) struct ResidentSeekPin {
     pub(crate) voice_index: usize,
     pub(crate) generation: u64,
     pub(crate) key_lock: bool,
+    pub(crate) stopped: bool,
     pub(crate) stems: Option<PreparedStemSet>,
 }
 
@@ -24,6 +25,7 @@ pub(crate) struct ResidentSeekCapture {
     pub(crate) binding: InputPadBinding,
     pub(crate) publication: PreparedSourcePermit,
     pub(crate) position_s: f64,
+    pub(crate) proposal: Option<super::resident_proposal::ResidentProposal>,
     sender: UnsafeCell<Producer<ResidentSeekPin>>,
     used: AtomicBool,
 }
@@ -55,9 +57,15 @@ impl ResidentSeekCapture {
             binding,
             publication,
             position_s,
+            proposal: None,
             sender: UnsafeCell::new(sender),
             used: AtomicBool::new(false),
         }
+    }
+
+    pub(crate) fn proposal(mut self, proposal: super::resident_proposal::ResidentProposal) -> Self {
+        self.proposal = Some(proposal);
+        self
     }
 
     /// None means the preallocated handoff accepted ownership. A returned pin

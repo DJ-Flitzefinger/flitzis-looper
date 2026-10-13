@@ -4,6 +4,7 @@
 import argparse
 import ctypes
 import importlib
+import inspect
 import json
 import os
 import runpy
@@ -77,12 +78,27 @@ def private_dlls(runtime: Path, checkout: Path) -> dict[str, str]:
     return dlls
 
 
+def check_resident_api(engine_type: type) -> None:
+    """Reject an incompatible Native before activation without constructing an engine."""
+    assert getattr(engine_type, "RESIDENT_PCM_ADMISSION_VERSION", 0) >= 1, (
+        "Native residency admission protocol missing"
+    )
+    for method in ("set_resident_pcm_budget_mib", "get_resident_pcm_budget_status"):
+        assert callable(getattr(engine_type, method, None)), (
+            f"Native residency API missing: {method}"
+        )
+    assert (
+        "interest" in inspect.signature(engine_type.request_committed_stem_residency).parameters
+    ), "Native residency API missing independent preload interest"
+
+
 def check_runtime(root: Path, checkout: Path, runtime: Path) -> None:
     # Runtime imports must follow private-path/DLL setup, before any GUI/device opens.
     native_module = importlib.import_module("flitzis_looper_audio")
     native = physical_path(Path(native_module.flitzis_looper_audio.__file__))
     assert native.is_relative_to(physical_path(checkout / "src/flitzis_looper_audio")), native
     assert native_module.native_build_profile() == "release"
+    check_resident_api(native_module.AudioEngine)
     assert physical_path(Path(sys.executable)).is_relative_to(physical_path(runtime / "python"))
     customization = importlib.import_module("sitecustomize")
     assert physical_path(Path(customization.__file__)).is_relative_to(

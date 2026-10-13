@@ -253,6 +253,7 @@ fn actual_finite_selection_commands_keep_native_ramps_then_retire_from_job_and_h
     let control_stems = PreparedStemSet {
         complete_set_identity: Arc::new([97; 32]),
         reference_samples: full.samples.clone(),
+        reference_residency: full.residency.clone(),
         publication: PreparedSourcePermit::unrestricted(),
         accepted_timing: None,
         source_version_hash: hash,

@@ -232,6 +232,9 @@ pub(crate) struct PreparedStemSet {
     /// only by successful callback timing adoption/clear. Never a raw revision.
     pub(crate) accepted_timing: Option<AcceptedTimingProjection>,
     pub reference_samples: Arc<[f32]>,
+    /// Semantic source view retained with the reference PCM, including when
+    /// component windows carry independently rebound scope ownership.
+    pub(crate) reference_residency: Option<Arc<ResidentSourceView>>,
     pub publication: PreparedSourcePermit,
     pub source_version_hash: u64,
     pub sample_rate_hz: u32,
@@ -266,6 +269,7 @@ impl PreparedStemSet {
             }
         }
         self.reference_samples = reference.samples.clone();
+        self.reference_residency = reference.residency.clone();
         Ok(self)
     }
 }
@@ -980,6 +984,7 @@ mod tests {
             complete_set_identity: std::sync::Arc::new([0; 32]),
             accepted_timing: None,
             reference_samples: buffer.samples.clone(),
+            reference_residency: buffer.residency.clone(),
             publication: PreparedSourcePermit::unrestricted(),
             source_version_hash: 42,
             sample_rate_hz: 44_100,
@@ -1020,6 +1025,7 @@ mod tests {
             complete_set_identity: std::sync::Arc::new([0; 32]),
             accepted_timing: None,
             reference_samples: buffer.samples.clone(),
+            reference_residency: buffer.residency.clone(),
             publication: PreparedSourcePermit::unrestricted(),
             source_version_hash: 42,
             sample_rate_hz: 44_100,

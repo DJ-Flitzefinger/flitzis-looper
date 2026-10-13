@@ -349,6 +349,79 @@ def test_queue_failure_is_visible_and_needs_explicit_retry(residency: _Harness) 
     assert residency.audio.request_committed_stem_residency.call_count == 2
 
 
+def test_preload_has_own_ack_without_requesting_or_relabelling_audio_mode(
+    residency: _Harness,
+) -> None:
+    registration = _RegistrationTicket(state="accepted")
+    residency.bind(registration)
+    explicit = _ResidencyReceipt(residency="accepted", effective="effective")
+    policy = _ResidencyReceipt(effective="not_requested")
+    withdrawal = _ResidencyReceipt(effective="not_requested")
+    residency.audio.request_committed_stem_residency.side_effect = [explicit, policy, withdrawal]
+    assert residency.helper.request(0, "all_stems", 5)
+    assert residency.helper.request_preload(0, enabled=True)
+    assert residency.helper.preload_status(0) == ("pending", None)
+    status = residency.helper.status(0)
+    assert status is not None
+    assert status.requested_mode == "all_stems"
+    assert status.effective == "effective"
+    policy.residency = "accepted"
+    assert residency.helper.preload_status(0) == ("accepted", None)
+    assert residency.helper.request_preload(0, enabled=False)
+    assert explicit.cancellations == 0
+    assert explicit.reader_active
+    assert residency.audio.request_committed_stem_residency.call_args_list == [
+        call(registration, mode="all_stems", enabled_mask=5),
+        call(registration, mode="full_mix", interest="preload"),
+        call(registration, mode="full_mix", interest="withdraw_preload"),
+    ]
+
+
+@pytest.mark.parametrize("recoverable", [True, False])
+def test_preload_retries_only_exact_native_budget_codec(
+    residency: _Harness, *, recoverable: bool
+) -> None:
+    registration = _RegistrationTicket(state="accepted")
+    residency.bind(registration)
+    message = (
+        "[resident_pcm_budget_exceeded] requested=4096 budget=2048"
+        if recoverable
+        else ("corrupt marker contains [resident_pcm_budget_exceeded]")
+    )
+    failed = _ResidencyReceipt(residency="rejected", message=message)
+    fresh = _ResidencyReceipt(effective="not_requested")
+    residency.audio.request_committed_stem_residency.side_effect = [failed, fresh]
+    assert residency.helper.request_preload(0, enabled=True)
+    assert residency.helper.request_preload(0, enabled=True) is recoverable
+    assert residency.audio.request_committed_stem_residency.call_count == (2 if recoverable else 1)
+
+
+@pytest.mark.parametrize(
+    "message",
+    [
+        "cold source queue full (2 workers, 32 queued jobs)",
+        (
+            "[resident_stem_interest_busy] explicit stem intent is preparing "
+            "or awaiting effective acknowledgement"
+        ),
+    ],
+)
+def test_known_native_capacity_codec_survives_admission_error_reporting(
+    residency: _Harness,
+    message: str,
+) -> None:
+    residency.bind(_RegistrationTicket(state="accepted"))
+    residency.audio.request_committed_stem_residency.side_effect = RuntimeError(message)
+    assert not residency.helper.request(0, "all_stems", 15)
+    assert residency.errors[-1] == (0, message)
+    for _ in range(3):
+        residency.helper.poll()
+    assert residency.audio.request_committed_stem_residency.call_count == 1
+    residency.audio.request_committed_stem_residency.side_effect = None
+    assert residency.helper.request(0, "all_stems", 15)
+    assert residency.audio.request_committed_stem_residency.call_count == 2
+
+
 def test_rejected_registration_never_admits_residency(residency: _Harness) -> None:
     registration = _RegistrationTicket(
         state="rejected", current=False, message="source request changed"

@@ -14,6 +14,14 @@ pub(in crate::audio_engine) struct PairPins {
     pub descriptor_path: PathBuf,
 }
 
+/// The exact source and optional component readers for one verified pair.
+pub(in crate::audio_engine) struct StemPairReaders<'a> {
+    pub reference: &'a SampleBuffer,
+    pub version: &'a str,
+    pub identity: &'a Arc<[u8; 32]>,
+    pub stems: Option<&'a PreparedStemSet>,
+}
+
 struct PairedStemFiles {
     root: PathBuf,
     paths: [PathBuf; 3],
@@ -151,7 +159,7 @@ pub(super) struct SharedStemReaders {
     version: String,
     rate: u32,
     source: Option<Arc<CompleteSourceIdentity>>,
-    reference: Weak<[f32]>,
+    reference: Option<Weak<[f32]>>,
     start: usize,
     end: usize,
     identity: Weak<[u8; 32]>,
@@ -187,6 +195,7 @@ mod tests {
             complete_set_identity: Arc::new([7; 32]),
             accepted_timing: None,
             reference_samples: reference.samples.clone(),
+            reference_residency: reference.residency.clone(),
             publication: PreparedSourcePermit::new(Arc::new(AtomicU64::new(1)), 1),
             source_version_hash: 1,
             sample_rate_hz: 8_000,
@@ -425,6 +434,24 @@ mod tests {
 }
 
 impl SharedStemReaders {
+    pub(super) fn prune_dead_pcm(&mut self) {
+        if self
+            .reference
+            .as_ref()
+            .is_some_and(|pcm| pcm.strong_count() == 0)
+        {
+            self.reference = None;
+        }
+        // A partial set can never bind four actual components. Reader.pcm still
+        // protects every surviving component independently of this reuse locator.
+        if self
+            .pcm
+            .as_ref()
+            .is_some_and(|pcm| pcm.iter().any(|pcm| pcm.strong_count() == 0))
+        {
+            self.pcm = None;
+        }
+    }
     pub(super) fn belongs_to_assignments(
         &self,
         sources: &[CommittedColdLease],
@@ -467,7 +494,10 @@ impl SharedStemReaders {
             && self.end == reference.resident_end()
             && match (&self.source, &reference.residency) {
                 (Some(source), Some(view)) => source.as_ref() == view.source.as_ref(),
-                (None, None) => self.reference.ptr_eq(&Arc::downgrade(&reference.samples)),
+                (None, None) => self
+                    .reference
+                    .as_ref()
+                    .is_some_and(|held| held.ptr_eq(&Arc::downgrade(&reference.samples))),
                 _ => false,
             }
     }
@@ -497,6 +527,7 @@ impl SharedStemReaders {
             complete_set_identity: identity,
             accepted_timing: None,
             reference_samples: reference.samples.clone(),
+            reference_residency: reference.residency.clone(),
             publication: crate::audio_engine::prepared_source::PreparedSourcePermit::unbound(),
             source_version_hash: crate::audio_engine::stem_cache::source_version_hash(version),
             sample_rate_hz: rate,
@@ -542,6 +573,7 @@ impl ProjectAssets {
             .find_map(|reader| reader.shared_stems.as_ref()?.bind(reference, version, rate)))
     }
 
+    #[cfg(test)]
     pub(in crate::audio_engine) fn retain_shared_stems(
         &self,
         path: PathBuf,
@@ -550,11 +582,35 @@ impl ProjectAssets {
         version: &str,
         files: Vec<fs::File>,
     ) -> io::Result<()> {
+        self.retain_shared_stems_internal(path, stems, reference, version, files, None)
+    }
+
+    pub(in crate::audio_engine) fn retain_shared_stems_reserved(
+        &self,
+        path: PathBuf,
+        stems: &PreparedStemSet,
+        reference: &SampleBuffer,
+        version: &str,
+        files: Vec<fs::File>,
+        reservation: &mut super::super::resident_accounting::ResidentReservation,
+    ) -> io::Result<()> {
+        self.retain_shared_stems_internal(path, stems, reference, version, files, Some(reservation))
+    }
+
+    fn retain_shared_stems_internal(
+        &self,
+        path: PathBuf,
+        stems: &PreparedStemSet,
+        reference: &SampleBuffer,
+        version: &str,
+        files: Vec<fs::File>,
+        reservation: Option<&mut super::super::resident_accounting::ResidentReservation>,
+    ) -> io::Result<()> {
         let shared = SharedStemReaders {
             version: version.to_owned(),
             rate: stems.sample_rate_hz,
             source: reference.residency.as_ref().map(|view| view.source.clone()),
-            reference: Arc::downgrade(&reference.samples),
+            reference: Some(Arc::downgrade(&reference.samples)),
             start: reference.resident_start(),
             end: reference.resident_end(),
             identity: Arc::downgrade(&stems.complete_set_identity),
@@ -574,9 +630,7 @@ impl ProjectAssets {
             .state
             .lock()
             .map_err(|_| io::Error::other("asset gate poisoned"))?;
-        if state.readers.len() >= MAX_READER_RECORDS {
-            return Err(io::Error::other("project asset reader registry full"));
-        }
+        self.admit_reader(&mut state, reservation)?;
         state.readers.push(Reader {
             path,
             pcm,
@@ -599,9 +653,49 @@ impl ProjectAssets {
         version: &str,
         identity: &Arc<[u8; 32]>,
         stems: Option<&PreparedStemSet>,
-        mut pins: PairPins,
+        pins: PairPins,
         source_lease: CommittedColdLease,
     ) -> io::Result<()> {
+        self.retain_stem_pair_internal(
+            path,
+            StemPairReaders {
+                reference,
+                version,
+                identity,
+                stems,
+            },
+            pins,
+            source_lease,
+            None,
+        )
+    }
+
+    /// Transfer an already reserved registry slot; all file proof remains unchanged.
+    pub(in crate::audio_engine) fn retain_stem_pair_reserved(
+        &self,
+        path: PathBuf,
+        readers: StemPairReaders<'_>,
+        pins: PairPins,
+        source_lease: CommittedColdLease,
+        reservation: &mut super::super::resident_accounting::ResidentReservation,
+    ) -> io::Result<()> {
+        self.retain_stem_pair_internal(path, readers, pins, source_lease, Some(reservation))
+    }
+
+    fn retain_stem_pair_internal(
+        &self,
+        path: PathBuf,
+        readers: StemPairReaders<'_>,
+        mut pins: PairPins,
+        source_lease: CommittedColdLease,
+        reservation: Option<&mut super::super::resident_accounting::ResidentReservation>,
+    ) -> io::Result<()> {
+        let StemPairReaders {
+            reference,
+            version,
+            identity,
+            stems,
+        } = readers;
         if pins.files.len() > MAX_PAIR_PINS {
             return Err(io::Error::other(
                 "complete stem pair file pin bound exceeded",
@@ -806,7 +900,7 @@ impl ProjectAssets {
             version: version.to_owned(),
             rate: view.source.sample_rate_hz,
             source: Some(view.source.clone()),
-            reference: Arc::downgrade(&reference.samples),
+            reference: Some(Arc::downgrade(&reference.samples)),
             start: reference.resident_start(),
             end: reference.resident_end(),
             identity: Arc::downgrade(identity),
@@ -835,12 +929,18 @@ impl ProjectAssets {
             .state
             .lock()
             .map_err(|_| io::Error::other("asset gate poisoned"))?;
-        // Replace only a dead same-pair file representative. New handles are
-        // already sealed before old handles end; live windows stay independent.
+        // A still-current complete-set identity can outlive its old PCM window.
+        // Replace that dead window only for the SAME real identity owner and
+        // verified immutable pair, or for a fully dead file representative.
+        // Old/new sealed guards overlap; live component readers stay independent.
         let replacement = state.readers.iter().position(|existing| {
             existing.pcm.iter().all(|pcm| pcm.strong_count() == 0)
                 && existing.shared_stems.as_ref().is_some_and(|old| {
-                    !old.native_live()
+                    (!old.native_live()
+                        || reader
+                            .shared_stems
+                            .as_ref()
+                            .is_some_and(|new| old.identity.ptr_eq(&new.identity)))
                         && old.identity_value == *identity.as_ref()
                         && old
                             .pair
@@ -859,9 +959,7 @@ impl ProjectAssets {
         if let Some(index) = replacement {
             state.readers[index] = reader;
         } else {
-            if state.readers.len() >= MAX_READER_RECORDS {
-                return Err(io::Error::other("project asset reader registry full"));
-            }
+            self.admit_reader(&mut state, reservation)?;
             state.readers.push(reader);
         }
         Ok(())
@@ -1075,6 +1173,7 @@ mod paired_owner_tests {
                 complete_set_identity: identity.clone(),
                 accepted_timing: None,
                 reference_samples: reference.samples.clone(),
+                reference_residency: reference.residency.clone(),
                 publication: PreparedSourcePermit::unbound(),
                 source_version_hash: source_version_hash(runtime_version),
                 sample_rate_hz: RATE,

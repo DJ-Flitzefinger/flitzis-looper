@@ -5614,6 +5614,7 @@ assert source_candidate.residency_status() == 'rejected' and not source_candidat
         PreparedStemSet {
             complete_set_identity: Arc::new([0xb4; 32]),
             reference_samples: independent.samples.clone(),
+            reference_residency: independent.residency.clone(),
             publication: PreparedSourcePermit::unrestricted(),
             accepted_timing: None,
             source_version_hash: crate::audio_engine::stem_cache::source_version_hash(&version),
@@ -9096,6 +9097,7 @@ fn round_trip_with_lifecycle(
     let full_stems = PreparedStemSet {
         complete_set_identity: Arc::new([0x74; 32]),
         reference_samples: full.samples.clone(),
+        reference_residency: full.residency.clone(),
         publication: PreparedSourcePermit::unrestricted(),
         accepted_timing: None,
         source_version_hash: crate::audio_engine::stem_cache::source_version_hash(&h.version),

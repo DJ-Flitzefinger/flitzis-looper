@@ -1160,6 +1160,10 @@ pub(super) fn prepare_complete_pair_with_reader(
             }
             #[cfg(test)]
             fail_at(StemPairFault::PcmFlush)?;
+            #[cfg(test)]
+            super::native_owned_work::observe_preparation(
+                super::native_owned_work::WorkPoint::StemPcmFlush,
+            );
             file.sync_all().map_err(error)?;
         }
         write_new(

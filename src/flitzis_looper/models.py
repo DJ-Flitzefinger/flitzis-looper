@@ -576,6 +576,10 @@ class ProjectState(BaseModel):
     """Enable performer MIDI/keyboard input mappings."""
     stem_separator: StemSeparator = "demucs:htdemucs"
     """Separator/model used by future offline stem-generation requests."""
+    preload_stem_loops_on_startup: bool = Field(default=False, strict=True)
+    """Deliberately retain eligible existing component loops without changing stem mode."""
+    resident_pcm_budget_mib: int = Field(default=512, strict=True, ge=128, le=16384)
+    """Aggregate unique resident PCM allowance, independent of preparation and process RSS."""
     demucs_shifts: int = Field(
         default=DEFAULT_DEMUCS_SHIFTS,
         ge=MIN_DEMUCS_SHIFTS,
@@ -891,6 +895,8 @@ class SessionState(BaseModel):
 
     settings_open: bool = False
     """Whether the Settings overlay is open."""
+    resident_pcm_settings_error: str | None = None
+    """Transient rejected Settings admission; never persisted as project intent."""
 
     input_learn_active: bool = False
     """Whether input mapping Learn mode is waiting for an input/action."""

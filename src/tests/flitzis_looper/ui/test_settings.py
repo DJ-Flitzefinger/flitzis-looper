@@ -105,3 +105,51 @@ def test_settings_separator_combo_switches_and_persists_only_future_job_choice(
         quality.assert_called_once_with(ctx)
     else:
         quality.assert_not_called()
+
+
+def test_settings_renders_exact_pcm_and_pinned_over_budget_without_process_ram_claim(
+    controller: AppController,
+    audio_engine_mock: Mock,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    ctx = UiContext(controller)
+    audio_engine_mock.get_resident_pcm_budget_status.return_value = {
+        "budget_mib": 512,
+        "budget_bytes": 512 * 1048576,
+        "held_unique_pcm_bytes": 600 * 1048576,
+        "pending_resident_bytes": 0,
+        "admitted_total_bytes": 600 * 1048576,
+        "unique_backing_count": 1,
+        "pending_reservation_count": 0,
+        "over_budget": True,
+        "available_bytes": 0,
+    }
+    text: list[str] = []
+    monkeypatch.setattr(settings, "item_width", lambda _width: nullcontext())
+    monkeypatch.setattr(imgui, "checkbox", Mock(return_value=(False, False)))
+    monkeypatch.setattr(imgui, "slider_int", Mock(return_value=(False, 512)))
+    monkeypatch.setattr(imgui, "is_item_deactivated_after_edit", Mock(return_value=False))
+    monkeypatch.setattr(imgui, "text_wrapped", text.append)
+    settings._resident_pcm_controls(ctx)
+    assert any("629145600 B" in message for message in text)
+    assert any("Pinned readers temporarily exceed" in message for message in text)
+    assert any("PCM counters are not process RSS" in message for message in text)
+    assert any("separate limits" in message for message in text)
+
+
+def test_settings_accounting_failure_never_renders_invented_zero_bytes(
+    controller: AppController,
+    audio_engine_mock: Mock,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    ctx = UiContext(controller)
+    audio_engine_mock.get_resident_pcm_budget_status.return_value = {}
+    text: list[str] = []
+    monkeypatch.setattr(settings, "item_width", lambda _width: nullcontext())
+    monkeypatch.setattr(imgui, "checkbox", Mock(return_value=(False, False)))
+    monkeypatch.setattr(imgui, "slider_int", Mock(return_value=(False, 512)))
+    monkeypatch.setattr(imgui, "is_item_deactivated_after_edit", Mock(return_value=False))
+    monkeypatch.setattr(imgui, "text_wrapped", text.append)
+    settings._resident_pcm_controls(ctx)
+    assert any("Resident accounting unavailable" in message for message in text)
+    assert not any("Exact unique resident PCM" in message for message in text)

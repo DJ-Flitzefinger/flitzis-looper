@@ -865,7 +865,7 @@ def test_restore_invalidates_legacy_stat_identity_without_promoting_timing(
     assert controller.stems.publish_restored_stem_cache_if_available(0) is True
 
     assert controller.project.stem_cache[0] is None
-    assert controller.project.pad_stem_mix_mode[0] == "full_mix"
+    assert controller.project.pad_stem_mix_mode[0] == "all_stems"
     assert controller.project.manual_bpm[0] == 123.5
     audio_engine_mock.capture_prepared_source.assert_not_called()
     audio_engine_mock.publish_prepared_stems.assert_not_called()

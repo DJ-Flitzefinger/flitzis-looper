@@ -622,6 +622,12 @@ fn actual_worker_capture_pressure_cancel_shutdown_and_stopped_seek_preserve_effe
         ..WindowRequest::default()
     });
     assert_eq!(stopped.callback.drain(&mut stopped.consumer), 1);
+    assert_ne!(
+        seek.publication_status(),
+        "accepted",
+        "capture is not adoption"
+    );
+    stopped.adopt(&seek);
     assert_eq!(seek.publication_status(), "accepted");
     assert_eq!(seek.effective_seek_seconds(), None);
     reconcile(&stopped.engine).unwrap();
@@ -658,6 +664,12 @@ fn actual_worker_resident_seek_acks_without_copying_current_or_previous_finite_p
         assert_eq!(seek.publication_status(), "preparing");
         loaded.callback.retirement.capacity = usize::MAX;
         assert_eq!(loaded.callback.drain(&mut loaded.consumer), 1);
+        assert_ne!(
+            seek.publication_status(),
+            "accepted",
+            "capture is not adoption"
+        );
+        loaded.adopt(&seek);
         assert_eq!(seek.publication_status(), "accepted");
         assert_eq!(seek.effective_seek_seconds(), Some(48.0 / 48_000.0));
         reconcile(&loaded.engine).unwrap();

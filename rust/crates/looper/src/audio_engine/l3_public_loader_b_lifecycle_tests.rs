@@ -1057,6 +1057,7 @@ assert 0 not in session.active_sample_ids
     let stems = PreparedStemSet {
         complete_set_identity: Arc::new([0xb5; 32]),
         reference_samples: source.samples.clone(),
+        reference_residency: source.residency.clone(),
         publication: PreparedSourcePermit::unrestricted(),
         accepted_timing: None,
         source_version_hash: hash,

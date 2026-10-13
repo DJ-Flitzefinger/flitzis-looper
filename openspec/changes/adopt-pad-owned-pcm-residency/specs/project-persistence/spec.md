@@ -266,6 +266,37 @@ timing/analysis/per-job bounds and constrain unique backing plus pending/live ov
 - **THEN** it SHALL preserve pinned readers and show temporary over-budget state until safe retirement
 - **AND** these fields SHALL use ProjectState without machine/credential configuration or persisted runtime readiness
 
+#### Scenario: Native allowance is applied before startup admission
+- **WHEN** the application restores a project or the performer edits its RAM allowance through Settings
+- **THEN** the validated Native allowance SHALL be applied before the first startup source/stem admission or before persisting the edited value
+- **AND** Settings SHALL distinguish exact resident/pending PCM counters and temporary above-budget state from estimates, preparation peaks and whole-process RSS
+- **AND** the configured allowance SHALL NOT alter existing timing, analysis or per-job scratch limits
+
+### Requirement: Bounded stem demand preserves lazy restore and audible preference
+The system SHALL use one bounded demand owner for explicit/current-generation
+interests and independently removable preload policy interests. With startup
+preload disabled, restored saved ALL desire SHALL remain durable while FullMix
+is effective until an explicit request obtains its own ACK. Metadata-only
+complete disk/source verification SHALL establish eligibility independently of
+component PCM. Enabled preload SHALL prepare and retain eligible component
+windows through the existing Native ownership/admission path without changing
+audible FullMix preference or creating a second Python PCM cache.
+
+#### Scenario: Policy demand and explicit demand are independent
+- **WHEN** preload is enabled for eligible existing sets or a current generation completes
+- **THEN** enabled policy MAY request component residency without inference or audible mode changes, while a current completion with preferred ALL SHALL retain its guarded own ALL transaction
+- **AND** FullMix generation with preload disabled SHALL remain disk-only
+- **WHEN** preload is disabled while an explicit request or actual readers remain
+- **THEN** only policy interest SHALL be withdrawn; explicit intent, active work readers and pinned effective audio SHALL remain protected through actual retirement
+
+#### Scenario: Fair startup and recoverable resource pressure
+- **WHEN** occupied slots or eligible component demands span all banks
+- **THEN** initial startup and each admission poll SHALL admit at most eight items through the existing bounded pools and a fair bounded scheduling table
+- **AND** direct demand SHALL NOT starve behind background preload and background demand SHALL eventually progress when resources permit
+- **AND** a temporarily oversized or budget-blocked item SHALL NOT prevent admissible later items from progressing
+- **AND** source/content/window/selected-set revisions and own residency/effective ACKs SHALL remain authoritative; recoverable pressure SHALL retain deferred intent without treating stale/corrupt/terminal rejection as automatic success
+- **AND** requested, queued, preparing, deferred, ACKed and error counts SHALL remain distinct, and partial readiness SHALL NOT satisfy required all216 acceptance
+
 ### Requirement: E11-10 Readable-layout migration preserves current owners and intent
 The system SHALL migrate existing M-ID and legacy source/WAV/PCM references to the readable source layout through the existing verified material-wise journal/config/reference transaction and fresh native source/timing/window ACKs without data reset.
 

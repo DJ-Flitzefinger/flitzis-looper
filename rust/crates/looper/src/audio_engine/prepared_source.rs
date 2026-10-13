@@ -619,6 +619,7 @@ mod tests {
         crate::messages::PreparedStemSet {
             complete_set_identity: std::sync::Arc::new([0; 32]),
             reference_samples: ticket.sample.samples.clone(),
+            reference_residency: ticket.sample.residency.clone(),
             publication: ticket.publication.clone(),
             accepted_timing: ticket.publication.accepted_projection(),
             source_version_hash: source_version_hash(&ticket.source_version),

@@ -112,6 +112,13 @@ paths or FFmpeg must review the BAT, `scripts/portable`, focused tests and this
 document together. Keep the Native relocation contract authoritative; installer
 code must not copy sample trees or rewrite JSON references independently.
 
+The runtime activation preflight also checks Native resident-admission protocol
+version 1, the budget setter/status API and the independent preload-interest
+parameter. This checks the built Release class without constructing an engine or
+opening an audio device; an older incompatible extension cannot activate the
+current Python controls. The source installer builds this API from the selected
+main checkout through its existing private-runtime pipeline.
+
 Focused missing-tool, deep-path/SUBST, DLL isolation, unchanged-main model repair,
 update/failure/recovery, legacy migration, ownership and actual-process lifetime
 checks are required when these paths change. Passing tests on a configured

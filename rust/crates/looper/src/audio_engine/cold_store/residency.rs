@@ -62,6 +62,7 @@ impl CommittedColdLease {
 
     /// Read final absolute source coordinates under this verified immutable lease.
     /// The independent file cursor and all allocations stay on the calling worker.
+    #[cfg(test)]
     pub(in crate::audio_engine) fn read_window_cancellable(
         &self,
         reference: &SampleBuffer,
@@ -71,6 +72,23 @@ impl CommittedColdLease {
         context: ResidentContext,
         maximum: usize,
         cancelled: &dyn Fn() -> bool,
+    ) -> io::Result<SampleBuffer> {
+        self.read_window_resident(
+            reference, start, end, revision, context, maximum, cancelled, None,
+        )
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    pub(in crate::audio_engine) fn read_window_resident(
+        &self,
+        reference: &SampleBuffer,
+        start: usize,
+        end: usize,
+        revision: u64,
+        context: ResidentContext,
+        maximum: usize,
+        cancelled: &dyn Fn() -> bool,
+        resident: Option<&crate::audio_engine::resident_proposal::ResidentReadContext>,
     ) -> io::Result<SampleBuffer> {
         if cancelled() {
             return Err(invalid("resident source read cancelled"));
@@ -125,6 +143,32 @@ impl CommittedColdLease {
         if peak > maximum {
             return Err(invalid("resident range exceeds transient PCM admission"));
         }
+        let residency = Arc::new(ResidentSourceView {
+            source: view.source.clone(),
+            start_frame: start,
+            window_revision: revision,
+            context,
+        });
+        let reused = same_range.then(|| SampleBuffer {
+            channels: reference.channels,
+            samples: reference.samples.clone(),
+            residency: Some(residency.clone()),
+        });
+        let mut reservation = if let Some(resident) = resident {
+            let mut token = resident
+                .reserve(
+                    if same_range { 0 } else { length },
+                    &reused.iter().collect::<Vec<_>>(),
+                    1,
+                )
+                .map_err(crate::audio_engine::resident_proposal::admission_io)?;
+            token
+                .reserve_reader_slots(resident.reader_slots())
+                .map_err(crate::audio_engine::resident_proposal::admission_io)?;
+            Some(token)
+        } else {
+            None
+        };
         // Even the sharing path validates the actual held FileID and full extent.
         let mut reader = self.open_complete_reader(reference)?;
         if cancelled() {
@@ -148,16 +192,25 @@ impl CommittedColdLease {
         if cancelled() {
             return Err(invalid("resident source read cancelled"));
         }
-        Ok(SampleBuffer {
+        let sample = SampleBuffer {
             channels: reference.channels,
             samples,
-            residency: Some(Arc::new(ResidentSourceView {
-                source: view.source.clone(),
-                start_frame: start,
-                window_revision: revision,
-                context,
-            })),
-        })
+            residency: Some(residency),
+        };
+        if let Some(token) = reservation.as_mut() {
+            resident
+                .expect("resident token has context")
+                .commit_sample(token, &sample)
+                .map_err(crate::audio_engine::resident_proposal::admission_io)?;
+        }
+        if let Some(token) = reservation
+            && let Some(resident) = resident
+        {
+            resident
+                .retain_registration(token)
+                .map_err(io::Error::other)?;
+        }
+        Ok(sample)
     }
 
     pub(in crate::audio_engine) fn verify_reference(

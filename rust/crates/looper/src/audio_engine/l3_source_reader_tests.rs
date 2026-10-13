@@ -33,6 +33,7 @@ fn stems(reference: &SampleBuffer, generation: f32) -> PreparedStemSet {
         complete_set_identity: Arc::new([61; 32]),
         accepted_timing: None,
         reference_samples: reference.samples.clone(),
+        reference_residency: reference.residency.clone(),
         publication: super::prepared_source::PreparedSourcePermit::unrestricted(),
         source_version_hash: 42,
         sample_rate_hz: 48_000,

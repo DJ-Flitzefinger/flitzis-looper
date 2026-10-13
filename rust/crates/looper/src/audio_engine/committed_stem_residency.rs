@@ -157,6 +157,8 @@ pub(crate) struct ResidencyStatus {
     /// A real source-Native failure remains distinguishable from retired receipt authority.
     pub(crate) effective_failure: AtomicBool,
     error: Mutex<Option<String>>,
+    proposal: Option<super::resident_proposal::ResidentProposal>,
+    pub(crate) policy_epoch: Option<(Arc<AtomicU64>, u64)>,
 }
 impl std::fmt::Debug for ResidencyStatus {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
@@ -166,6 +168,20 @@ impl std::fmt::Debug for ResidencyStatus {
     }
 }
 impl ResidencyStatus {
+    pub(crate) fn preparation_current(&self) -> bool {
+        if let Some(proposal) = self.proposal.as_ref()
+            && !proposal.armed()
+        {
+            self.publication.status() != "rejected" && proposal.current()
+        } else {
+            self.publication.current()
+        }
+    }
+    pub(crate) fn armed(&self) -> bool {
+        self.proposal
+            .as_ref()
+            .is_none_or(|proposal| proposal.armed())
+    }
     pub(crate) fn reject_rt(&self) {
         self.publication.mark_rejected();
         self.effective.store(3, Ordering::Release);
@@ -189,6 +205,7 @@ pub struct ResidentStemTicket {
     launch_revision: u64,
     acknowledgements: Arc<CurrentTimingAcknowledgements>,
     candidate: Option<Arc<CandidateAuthority>>,
+    policy_only: bool,
 }
 #[pymethods]
 impl ResidentStemTicket {
@@ -199,6 +216,9 @@ impl ResidentStemTicket {
         }
     }
     pub fn effective_mode_status(&self) -> &'static str {
+        if self.policy_only {
+            return "not_requested";
+        }
         if !self.is_current() {
             return "rejected";
         }
@@ -230,11 +250,17 @@ impl ResidentStemTicket {
             })
     }
     pub fn is_current(&self) -> bool {
-        self.status.publication.current()
-            && self
-                .candidate
+        (if self.policy_only && self.status.publication.status() == "accepted" {
+            self.status
+                .policy_epoch
                 .as_ref()
-                .is_none_or(|candidate| candidate.receipt_current())
+                .is_some_and(|(epoch, expected)| epoch.load(Ordering::Acquire) == *expected)
+        } else {
+            self.status.preparation_current()
+        }) && self
+            .candidate
+            .as_ref()
+            .is_none_or(|candidate| candidate.receipt_current())
             && self.owner.source_current()
             && (self.full_mix
                 || self.owner.current()
@@ -256,16 +282,22 @@ impl ResidentStemTicket {
                     .binding
                     .accepted
                     .map_or(0, |accepted| accepted.publication_epoch)
-            && self
-                .owner
-                .ownership
-                .launch_current(self.owner.id, self.launch_revision)
+            && (self.policy_only
+                || self
+                    .owner
+                    .ownership
+                    .launch_current(self.owner.id, self.launch_revision))
     }
     pub fn cancel(&self) -> bool {
         self.withdraw()
     }
     /// True only when this caller actually won cancellation before callback claim.
     pub fn withdraw(&self) -> bool {
+        if let Some(proposal) = self.status.proposal.as_ref()
+            && !proposal.armed()
+        {
+            proposal.cancel();
+        }
         let cancelled = self.status.publication.cancel_unclaimed();
         if cancelled {
             self.status.effective.store(3, Ordering::Release);
@@ -289,6 +321,9 @@ struct PendingResidency {
     full_mix: bool,
     admitted: Instant,
     candidate: Option<Arc<CandidateAuthority>>,
+    policy_only: bool,
+    retain_components: bool,
+    preload: bool,
 }
 
 #[derive(Default)]
@@ -299,16 +334,69 @@ pub(super) struct CommittedStemState {
     selection_epoch: Arc<AtomicU64>,
     candidate_epoch: Arc<AtomicU64>,
     pending: Option<PendingResidency>,
+    proposal: Option<PendingResidency>,
+    policy_pending: Option<PendingResidency>,
+    policy_proposal: Option<PendingResidency>,
+    policy_operation_epoch: Arc<AtomicU64>,
+    policy_interest: bool,
+    explicit_interest: bool,
+    policy_epoch: Arc<AtomicU64>,
     /// The real admission calculation is exercised without allocating a GiB fixture.
     #[cfg(test)]
     pub(super) pcm_limit_for_test: Option<usize>,
 }
 impl CommittedStemState {
+    fn proposal_slot(&mut self, policy: bool) -> &mut Option<PendingResidency> {
+        if policy {
+            &mut self.policy_proposal
+        } else {
+            &mut self.proposal
+        }
+    }
+    fn pending_slot(&mut self, policy: bool) -> &mut Option<PendingResidency> {
+        if policy {
+            &mut self.policy_pending
+        } else {
+            &mut self.pending
+        }
+    }
+    fn explicit_busy(&self) -> bool {
+        self.proposal
+            .as_ref()
+            .is_some_and(|proposal| proposal.status.preparation_current())
+            || self.pending.as_ref().is_some_and(|pending| {
+                matches!(
+                    pending.status.publication.status(),
+                    "captured" | "pending" | "adopting"
+                ) || (pending.status.publication.status() == "accepted"
+                    && pending.status.effective.load(Ordering::Acquire) == 1)
+            })
+    }
     pub(super) fn reconcile(
         &mut self,
         accepted: &mut Option<StemOwner>,
         sample: Option<&SampleBuffer>,
     ) {
+        if let Some(proposal) = self.proposal.as_ref() {
+            if proposal.admitted.elapsed() >= DEADLINE {
+                proposal
+                    .status
+                    .fail("Committed stem proposal deadline expired".into());
+            }
+            if !proposal.status.preparation_current() || !proposal.owner.source_current() {
+                self.proposal = None;
+            }
+        }
+        if let Some(proposal) = self.policy_proposal.as_ref() {
+            if proposal.admitted.elapsed() >= DEADLINE {
+                proposal
+                    .status
+                    .fail("Committed policy proposal deadline expired".into());
+            }
+            if !proposal.status.preparation_current() || !proposal.owner.source_current() {
+                self.policy_proposal = None;
+            }
+        }
         if let Some(registration) = &self.registration {
             match registration.publication.status() {
                 "accepted" if registration.owner.current() => {
@@ -326,6 +414,8 @@ impl CommittedStemState {
         }
         if self.accepted.as_ref().is_some_and(|owner| !owner.current()) {
             self.accepted = None;
+            self.policy_interest = false;
+            self.explicit_interest = false;
         }
         // Accepted means that this request once installed readers; it does not grant
         // authority to re-promote them after a newer ordered release or cancellation.
@@ -358,6 +448,11 @@ impl CommittedStemState {
                     .fail("Committed stem residency superseded".into());
             }
             if pending.status.publication.status() == "accepted" {
+                if pending.policy_only {
+                    self.policy_interest = pending.preload;
+                } else {
+                    self.explicit_interest = !pending.full_mix;
+                }
                 if pending
                     .candidate
                     .as_ref()
@@ -366,13 +461,13 @@ impl CommittedStemState {
                 {
                     self.accepted = Some(pending.owner.clone());
                 }
-                if pending.full_mix {
+                if pending.full_mix && !pending.retain_components {
                     if matches!(pending.status.effective.load(Ordering::Acquire), 2 | 4) {
                         *accepted = None;
                         pending.stems = None;
                     }
-                } else if let Some(set) = pending.stems.as_ref() {
-                    if sample.is_some_and(|sample| {
+                } else if let Some(set) = pending.stems.as_ref()
+                    && sample.is_some_and(|sample| {
                         super::source_reader::prepared_stem_set_matches_sample(
                             set,
                             sample,
@@ -380,15 +475,15 @@ impl CommittedStemState {
                             pending.owner.binding.sample_rate_hz as f32,
                             sample.frame_count(),
                         )
-                    }) {
-                        *accepted = Some(StemOwner {
-                            set: set.clone(),
-                            source_version: pending.owner.source_version.clone(),
-                            cache_dir: pending.owner.generation_path.clone(),
-                            generation_path: pending.owner.generation_path.clone(),
-                            pair: Some(pending.owner.pair.clone()),
-                        });
-                    }
+                    })
+                {
+                    *accepted = Some(StemOwner {
+                        set: set.clone(),
+                        source_version: pending.owner.source_version.clone(),
+                        cache_dir: pending.owner.generation_path.clone(),
+                        generation_path: pending.owner.generation_path.clone(),
+                        pair: Some(pending.owner.pair.clone()),
+                    });
                 }
             }
             if pending.status.publication.status() == "rejected"
@@ -397,21 +492,85 @@ impl CommittedStemState {
                 self.pending = None;
             }
         }
+        if let Some(pending) = self.policy_pending.as_ref() {
+            if pending.admitted.elapsed() >= DEADLINE {
+                pending
+                    .status
+                    .fail("Committed policy residency deadline expired".into());
+            }
+            if !pending.status.publication.current() || !pending.owner.current() {
+                pending
+                    .status
+                    .fail("Committed policy residency superseded".into());
+                self.policy_pending = None;
+            } else if pending.status.publication.status() == "accepted" {
+                self.policy_interest = pending.preload;
+                if pending.full_mix && !pending.retain_components {
+                    *accepted = None;
+                    // A settled explicit FullMix receipt owns no audible stem
+                    // interest. Its bookkeeping must not keep policy PCM alive.
+                    if let Some(explicit) = self.pending.as_mut()
+                        && explicit.full_mix
+                        && matches!(explicit.status.effective.load(Ordering::Acquire), 2 | 4)
+                    {
+                        explicit.stems = None;
+                        explicit.retain_components = false;
+                    }
+                } else if let Some(set) = pending.stems.as_ref()
+                    && sample.is_some_and(|sample| {
+                        super::source_reader::prepared_stem_set_matches_sample(
+                            set,
+                            sample,
+                            sample.channels,
+                            pending.owner.binding.sample_rate_hz as f32,
+                            sample.frame_count(),
+                        )
+                    })
+                {
+                    *accepted = Some(StemOwner {
+                        set: set.clone(),
+                        source_version: pending.owner.source_version.clone(),
+                        cache_dir: pending.owner.generation_path.clone(),
+                        generation_path: pending.owner.generation_path.clone(),
+                        pair: Some(pending.owner.pair.clone()),
+                    });
+                }
+                // The acknowledged bank/accepted StemOwner retains actual
+                // readers. Policy receipt status alone owns no PCM.
+                self.policy_pending = None;
+            } else if pending.status.publication.status() == "rejected" {
+                self.policy_pending = None;
+            }
+        }
     }
     pub(super) fn cancel_pending_shared(&self) {
+        if let Some(proposal) = self.proposal.as_ref() {
+            proposal
+                .status
+                .fail("Committed stem proposal cancelled by shutdown".into());
+        }
         if let Some(pending) = &self.pending {
             pending
                 .status
                 .fail("Committed stem request cancelled by shutdown".into());
+        }
+        for pending in [self.policy_proposal.as_ref(), self.policy_pending.as_ref()]
+            .into_iter()
+            .flatten()
+        {
+            pending
+                .status
+                .fail("Committed policy request cancelled by shutdown".into());
         }
         if let Some(registration) = &self.registration {
             registration.publication.cancel_unclaimed();
         }
     }
     pub(super) fn claimed(&self) -> bool {
-        self.pending
-            .as_ref()
-            .is_some_and(|pending| pending.status.publication.status() == "adopting")
+        [self.pending.as_ref(), self.policy_pending.as_ref()]
+            .into_iter()
+            .flatten()
+            .any(|pending| pending.status.publication.status() == "adopting")
     }
     fn handover_pending(&self) -> bool {
         self.pending.as_ref().is_some_and(|pending| {
@@ -495,6 +654,8 @@ pub(crate) struct StemResidencyTransaction {
     pub(crate) stems: Option<PreparedStemSet>,
     pub(crate) retired_stems: Option<PreparedStemSet>,
     pub(crate) retired_status: Option<StemModeReceipt>,
+    pub(crate) policy_only: bool,
+    pub(crate) retain_components: bool,
 }
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) struct SelectedStemIdentity {
@@ -744,6 +905,7 @@ impl AudioEngine {
         })
     }
 
+    #[cfg(test)]
     pub(super) fn request_committed_stem_residency_with_producer(
         &self,
         selection: &CommittedStemSetTicket,
@@ -751,7 +913,35 @@ impl AudioEngine {
         enabled_mask: u8,
         producer: &Arc<Mutex<Producer<ControlMessage>>>,
     ) -> PyResult<ResidentStemTicket> {
+        self.request_committed_stem_residency_with_interest_and_producer(
+            selection,
+            mode,
+            enabled_mask,
+            "explicit",
+            producer,
+        )
+    }
+
+    pub(super) fn request_committed_stem_residency_with_interest_and_producer(
+        &self,
+        selection: &CommittedStemSetTicket,
+        mode: &str,
+        enabled_mask: u8,
+        interest: &str,
+        producer: &Arc<Mutex<Producer<ControlMessage>>>,
+    ) -> PyResult<ResidentStemTicket> {
+        let policy_only = match interest {
+            "explicit" => false,
+            "preload" | "withdraw_preload" if mode == "full_mix" => true,
+            _ => {
+                return Err(PyValueError::new_err(
+                    "invalid committed resident interest or policy mode",
+                ));
+            }
+        };
+        let preload = interest == "preload";
         let target = match mode {
+            "full_mix" if preload => StemMixMode::AllStems,
             "full_mix" => StemMixMode::FullMix,
             "all_stems" => StemMixMode::AllStems,
             _ => return Err(PyValueError::new_err("invalid committed stem mode")),
@@ -769,6 +959,11 @@ impl AudioEngine {
             .as_ref()
             .filter(|candidate| !candidate.adopted())
             .cloned();
+        if policy_only && candidate.is_some() {
+            return Err(PyValueError::new_err(
+                "unadopted candidate requires explicit all_stems intent",
+            ));
+        }
         if candidate.is_some() && target != StemMixMode::AllStems {
             return Err(PyValueError::new_err(
                 "unadopted candidate requires all_stems intent",
@@ -798,6 +993,11 @@ impl AudioEngine {
             .lock()
             .map_err(|_| PyRuntimeError::new_err("resident ownership lock poisoned"))?;
         let owner = &mut owners[id];
+        if policy_only && owner.committed.explicit_busy() {
+            return Err(PyRuntimeError::new_err(
+                "[resident_stem_interest_busy] explicit stem intent is preparing or awaiting effective acknowledgement",
+            ));
+        }
         if owner.ordinary_publication_pending()
             || owner.committed.claimed()
             || (candidate.is_some() && owner.committed.handover_pending())
@@ -810,13 +1010,27 @@ impl AudioEngine {
             .pcm_limit_for_test
             .unwrap_or(super::cold_jobs::PCM_LIMIT_BYTES)
             .min(super::cold_jobs::PCM_LIMIT_BYTES);
-        let (epoch, expected) = if candidate.is_some() {
+        let base_intent = owner.intent_epoch.load(Ordering::Acquire);
+        let proposal = if policy_only {
+            self.resident_proposals.begin_policy(id)
+        } else {
+            self.resident_proposals.begin_stems(id)
+        }
+        .map_err(PyRuntimeError::new_err)?
+        .with_source_epoch(
+            self.prepared_source_epochs[id].clone(),
+            self.prepared_source_epochs[id].load(Ordering::Acquire),
+        );
+        let (epoch, expected) = if policy_only {
+            let expected = next_epoch(&owner.committed.policy_operation_epoch)
+                .map_err(PyRuntimeError::new_err)?;
+            (owner.committed.policy_operation_epoch.clone(), expected)
+        } else if candidate.is_some() {
             // An independent permit is essential: a candidate number is not an
             // ordinary resident-control token and cannot invalidate V1 history.
             (Arc::new(AtomicU64::new(1)), 1)
         } else {
             let expected = next_epoch(&owner.intent_epoch).map_err(PyRuntimeError::new_err)?;
-            owner.cancel_window_predecessor(self, id)?;
             (owner.intent_epoch.clone(), expected)
         };
         let publication = PreparedSourcePermit::new(epoch, expected).with_source_epoch(
@@ -828,6 +1042,15 @@ impl AudioEngine {
             effective: AtomicU8::new(0),
             effective_failure: AtomicBool::new(false),
             error: Mutex::new(None),
+            proposal: Some(proposal.clone()),
+            policy_epoch: if policy_only {
+                Some((
+                    owner.committed.policy_epoch.clone(),
+                    next_epoch(&owner.committed.policy_epoch).map_err(PyRuntimeError::new_err)?,
+                ))
+            } else {
+                None
+            },
         });
         let (sender, receiver) = rtrb::RingBuffer::new(1);
         let launch_revision = self.input_runtime_ownership.launch_revision(id);
@@ -842,23 +1065,16 @@ impl AudioEngine {
             sender: UnsafeCell::new(sender),
             used: AtomicBool::new(false),
         });
-        if candidate.is_none() {
-            owner.intent_epoch.store(expected, Ordering::Release);
-            self.input_runtime_ownership
-                .begin_resident_control(id, expected);
-        }
-        if let Some(previous) = &owner.committed.pending {
-            previous
-                .status
-                .fail("Committed stem request superseded".into());
-        }
-        owner.committed.pending = Some(PendingResidency {
+        *owner.committed.proposal_slot(policy_only) = Some(PendingResidency {
             owner: selection.owner.clone(),
             status: status.clone(),
             stems: None,
             full_mix: target == StemMixMode::FullMix,
             admitted: Instant::now(),
             candidate: candidate.clone(),
+            policy_only,
+            retain_components: false,
+            preload,
         });
         producer_guard
             .push(ControlMessage::CommittedStemWork(Box::new(
@@ -880,6 +1096,15 @@ impl AudioEngine {
             owners: self.resident_stem_cache.clone(),
             producer: producer.clone(),
             cancelled: self.cold_cancelled.clone(),
+            proposal,
+            intent_epoch: owner.intent_epoch.clone(),
+            base_intent,
+            resident: super::resident_proposal::ResidentReadContext::reader(
+                self.project_assets.clone(),
+                self.resident_account.clone(),
+            ),
+            policy_only,
+            preload,
             #[cfg(test)]
             pcm_limit,
         };
@@ -891,7 +1116,7 @@ impl AudioEngine {
             ownership: self.input_runtime_ownership.clone(),
             id,
             enqueued: false,
-            resident_control: candidate.is_none(),
+            resident_control: candidate.is_none() && !policy_only,
         };
         self.cold_jobs
             .submit(reservation, move || {
@@ -910,6 +1135,7 @@ impl AudioEngine {
             launch_revision,
             acknowledgements: binding.acknowledgements.clone(),
             candidate,
+            policy_only,
         })
     }
 }
@@ -926,7 +1152,7 @@ impl Drop for ResidencyJobGuard {
         if !self.enqueued {
             self.status
                 .fail("Committed stem worker ended before publication".into());
-            if self.resident_control {
+            if self.resident_control && self.status.armed() {
                 self.ownership
                     .finish_resident_control(self.id, self.status.publication.expected);
             }
@@ -948,13 +1174,22 @@ struct ResidencyWork {
     owners: Arc<Mutex<Vec<super::resident_relocation::ResidentStemCache>>>,
     producer: Arc<Mutex<Producer<ControlMessage>>>,
     cancelled: Arc<AtomicBool>,
+    proposal: super::resident_proposal::ResidentProposal,
+    intent_epoch: Arc<AtomicU64>,
+    base_intent: u64,
+    resident: super::resident_proposal::ResidentReadContext,
+    policy_only: bool,
+    preload: bool,
     #[cfg(test)]
     pcm_limit: usize,
 }
 impl ResidencyWork {
     fn current(&self) -> bool {
         !self.cancelled.load(Ordering::Acquire)
-            && self.status.publication.current()
+            && self.status.preparation_current()
+            && self.proposal.current()
+            && (self.proposal.armed()
+                || self.intent_epoch.load(Ordering::Acquire) == self.base_intent)
             && self.selection.source_current()
             && (self.target == StemMixMode::FullMix
                 || self.selection.current()
@@ -1043,7 +1278,45 @@ impl ResidencyWork {
             {
                 return Err("committed stem residency exceeds 1-GiB transient admission".into());
             }
-            let mut set = if let Some(set) = &pin.stems
+            let shared = if pin.stems.is_none() && self.candidate.is_none() {
+                self.assets
+                    .shared_stems(
+                        &self.selection.generation_path,
+                        &pin.sample,
+                        &self.selection.source_version,
+                        self.binding.sample_rate_hz,
+                    )
+                    .map_err(|error| error.to_string())?
+                    .filter(|set| *set.complete_set_identity == *self.selection.identity)
+            } else {
+                None
+            };
+            let existing = if self.candidate.is_none() {
+                pin.stems.as_ref().or(shared.as_ref())
+            } else {
+                None
+            };
+            let mut reused = vec![&pin.sample];
+            if let Some(set) = existing {
+                reused.extend(set.stems.iter());
+            }
+            let bytes = if existing.is_some() {
+                0
+            } else {
+                pin.sample
+                    .samples
+                    .len()
+                    .checked_mul(16)
+                    .ok_or("resident component byte overflow")?
+            };
+            let mut resident = self
+                .resident
+                .reserve(bytes, &reused, 5)
+                .map_err(|error| error.to_string())?;
+            resident
+                .reserve_reader_slots(1)
+                .map_err(|error| error.to_string())?;
+            let mut set = if let Some(set) = existing
                 && self.candidate.is_none()
             {
                 if *set.complete_set_identity != *self.selection.identity {
@@ -1060,6 +1333,7 @@ impl ResidencyWork {
                     complete_set_identity: self.selection.identity.clone(),
                     accepted_timing: pin.accepted,
                     reference_samples: pin.sample.samples.clone(),
+                    reference_residency: pin.sample.residency.clone(),
                     publication: self.status.publication.clone(),
                     source_version_hash: super::stem_cache::source_version_hash(
                         &self.selection.source_version,
@@ -1075,14 +1349,21 @@ impl ResidencyWork {
             // an independent disk-selection receipt seals equal content at new refs.
             // First None->Some construction above alone takes the selected owner.
             set.accepted_timing = pin.accepted;
+            set.reference_samples = pin.sample.samples.clone();
+            set.reference_residency = pin.sample.residency.clone();
             set.publication = self.status.publication.clone();
+            resident
+                .commit_stems(&set)
+                .map_err(|error| error.to_string())?;
             self.assets
-                .retain_stem_pair(
+                .retain_stem_pair_reserved(
                     self.selection.generation_path.clone(),
-                    &pin.sample,
-                    &self.selection.source_version,
-                    &set.complete_set_identity,
-                    Some(&set),
+                    super::project_assets::stem_readers::StemPairReaders {
+                        reference: &pin.sample,
+                        version: &self.selection.source_version,
+                        identity: &set.complete_set_identity,
+                        stems: Some(&set),
+                    },
                     self.selection.pair.reader.clone_pins(
                         self.selection
                             .pair
@@ -1091,6 +1372,7 @@ impl ResidencyWork {
                             .ok_or("pair project root missing")?,
                     )?,
                     self.selection.pair.source_lease.clone(),
+                    &mut resident,
                 )
                 .map_err(|error| error.to_string())?;
             Some(set)
@@ -1105,14 +1387,81 @@ impl ResidencyWork {
                     .owners
                     .lock()
                     .map_err(|_| "resident ownership lock poisoned")?;
+                if !self.proposal.current()
+                    || self.intent_epoch.load(Ordering::Acquire) != self.base_intent
+                    || owners[self.id].ordinary_publication_pending()
+                    || owners[self.id].committed.claimed()
+                {
+                    return Err("committed proposal authority changed before arming".into());
+                }
+                if self.policy_only && owners[self.id].committed.explicit_busy() {
+                    return Err("[resident_stem_interest_busy] explicit stem intent is preparing or awaiting effective acknowledgement".into());
+                }
+                let proposed = owners[self.id]
+                    .committed
+                    .proposal_slot(self.policy_only)
+                    .as_ref()
+                    .filter(|pending| Arc::ptr_eq(&pending.status, &self.status))
+                    .ok_or("committed preparation proposal changed")?;
+                if !proposed.owner.source_current()
+                    || self.status.publication.status() == "rejected"
+                {
+                    return Err("committed proposal source changed before arming".into());
+                }
+                let retain_components = if self.policy_only {
+                    self.preload
+                        || owners[self.id].committed.explicit_interest
+                        || pin.plan.selection.required_stem_hash().is_some()
+                } else {
+                    self.target == StemMixMode::AllStems
+                        || owners[self.id].committed.policy_interest
+                };
+                if let Some((epoch, expected)) = self.status.policy_epoch.as_ref()
+                    && next_epoch(epoch)? != *expected
+                {
+                    return Err("committed policy interest changed before arming".into());
+                }
+                self.status.publication.mark_pending()?;
+                self.proposal.arm()?;
+                if self.candidate.is_none() && !self.policy_only {
+                    owners[self.id]
+                        .cancel_window_predecessor_for(&self.selection.ownership, self.id)
+                        .map_err(|error| error.to_string())?;
+                }
+                if let Some(previous) = owners[self.id]
+                    .committed
+                    .pending_slot(self.policy_only)
+                    .as_ref()
+                {
+                    previous
+                        .status
+                        .fail("Committed stem request superseded by admitted newer intent".into());
+                }
+                if self.policy_only {
+                    self.status
+                        .publication
+                        .epoch
+                        .store(self.status.publication.expected, Ordering::Release);
+                } else if self.candidate.is_none() {
+                    self.intent_epoch
+                        .store(self.status.publication.expected, Ordering::Release);
+                    self.selection
+                        .ownership
+                        .begin_resident_control(self.id, self.status.publication.expected);
+                }
+                let prepared = owners[self.id]
+                    .committed
+                    .proposal_slot(self.policy_only)
+                    .take();
+                *owners[self.id].committed.pending_slot(self.policy_only) = prepared;
                 let pending = owners[self.id]
                     .committed
-                    .pending
+                    .pending_slot(self.policy_only)
                     .as_mut()
                     .filter(|pending| Arc::ptr_eq(&pending.status, &self.status))
                     .ok_or("committed stem request owner changed")?;
                 pending.stems = stems.clone();
-                self.status.publication.mark_pending()?;
+                pending.retain_components = retain_components;
                 producer
                     .push(ControlMessage::CommittedStemWork(Box::new(
                         CommittedStemRtWork::Adopt(StemResidencyTransaction {
@@ -1128,6 +1477,8 @@ impl ResidencyWork {
                             stems,
                             retired_stems: None,
                             retired_status: None,
+                            policy_only: self.policy_only,
+                            retain_components,
                         }),
                     )))
                     .map_err(|_| "reserved committed adoption capacity lost")?;

@@ -976,6 +976,20 @@ def _render_stem_status(ctx: UiContext, info: _SidebarPadInfo) -> None:
     _labeled_value_row("Stems", "Unavailable", avail_x=info.avail_x)
 
 
+def _pending_stem_audio_description(
+    status: StemResidencyStatus, *, confirmed_full_mix: bool
+) -> str | None:
+    if status.demand == "deferred":
+        return "Stems waiting for resident PCM allowance"
+    if status.registration == "rejected" and not confirmed_full_mix:
+        return "Audio: stem selection rejected"
+    if status.attempt_failed or status.effective == "rejected" or status.residency == "rejected":
+        return "Audio: stem switch rejected"
+    if status.registration != "accepted" and not confirmed_full_mix:
+        return "Audio: stem selection pending"
+    return None
+
+
 def _stem_audio_description(status: StemResidencyStatus, *, previous_set: bool) -> str:
     confirmed_full_mix = (
         status.requested_mode == "full_mix"
@@ -983,12 +997,9 @@ def _stem_audio_description(status: StemResidencyStatus, *, previous_set: bool) 
         and status.effective == "effective"
         and not status.attempt_failed
     )
-    if status.registration == "rejected" and not confirmed_full_mix:
-        return "Audio: stem selection rejected"
-    if status.attempt_failed or status.effective == "rejected" or status.residency == "rejected":
-        return "Audio: stem switch rejected"
-    if status.registration != "accepted" and not confirmed_full_mix:
-        return "Audio: stem selection pending"
+    pending = _pending_stem_audio_description(status, confirmed_full_mix=confirmed_full_mix)
+    if pending is not None:
+        return pending
     if status.requested_mode is None:
         return "Stems saved; audio mode unconfirmed"
     if (
@@ -1014,7 +1025,7 @@ def _render_stem_mix_mode(ctx: UiContext, info: _SidebarPadInfo) -> None:
 
             style_name: ButtonStyleName = "mode-on" if current_mode == mode else "mode-off"
             with button_style(style_name):
-                imgui.begin_disabled(disabled=not has_stems)
+                imgui.begin_disabled(disabled=not has_stems and mode == "all_stems")
                 if imgui.button(f"{label}##stem_mix_{mode}", (button_width, 0)):
                     ctx.audio.stems.set_stem_mix_mode(info.pad_id, mode)
                 imgui.end_disabled()
@@ -1036,6 +1047,8 @@ def _render_stem_mix_mode(ctx: UiContext, info: _SidebarPadInfo) -> None:
             imgui.text_colored(
                 TEXT_MUTED_RGBA, _stem_audio_description(status, previous_set=previous_set)
             )
+            if status.demand_error:
+                imgui.text_wrapped(status.demand_error)
         finally:
             imgui.pop_text_wrap_pos()
 

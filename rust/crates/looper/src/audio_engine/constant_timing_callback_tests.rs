@@ -814,6 +814,7 @@ fn prepared_stems_actual_callback_backpressure_and_stale_revision_preserve_exist
         PreparedStemSet {
             complete_set_identity: std::sync::Arc::new([0; 32]),
             reference_samples: source.samples.clone(),
+            reference_residency: source.residency.clone(),
             publication: permit,
             accepted_timing: Some(projection),
             source_version_hash: 42,

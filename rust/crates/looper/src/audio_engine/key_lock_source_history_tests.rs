@@ -83,6 +83,7 @@ impl Fixture {
                 complete_set_identity: std::sync::Arc::new([0; 32]),
                 accepted_timing: None,
                 reference_samples,
+                reference_residency: None,
                 publication:
                     crate::audio_engine::prepared_source::PreparedSourcePermit::unrestricted(),
                 source_version_hash: 17,
