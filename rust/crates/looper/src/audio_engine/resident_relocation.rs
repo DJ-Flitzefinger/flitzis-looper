@@ -1291,7 +1291,11 @@ pub(super) fn prepare_window_with_producer(
             region.start,
             region.end,
             if key_lock {
-                ResidentContext::KeyLockFiniteLoop
+                super::cold_residency::key_lock_context_for_range(
+                    region.start,
+                    region.end,
+                    old.frame_count(),
+                )
             } else if region.start == 0 && region.end == old.frame_count() {
                 ResidentContext::FullTrack
             } else {
@@ -1305,7 +1309,7 @@ pub(super) fn prepare_window_with_producer(
             start,
             end,
             if key_lock {
-                ResidentContext::KeyLockFiniteLoop
+                super::cold_residency::key_lock_context_for_range(start, end, old.frame_count())
             } else if start == 0 && end == old.frame_count() {
                 ResidentContext::FullTrack
             } else {
@@ -1315,14 +1319,14 @@ pub(super) fn prepare_window_with_producer(
     } else if request.key_lock.is_some() {
         // A mode change prepares the actual installed physical extent. It is
         // neither an implicit loop edit nor permission to widen finite readers.
-        let context = if view.context.permits_finite_range() {
-            if key_lock {
-                ResidentContext::KeyLockFiniteLoop
-            } else {
-                ResidentContext::FiniteLoop
-            }
-        } else if key_lock {
-            ResidentContext::KeyLockFullTrack
+        let context = if key_lock {
+            super::cold_residency::key_lock_context_for_range(
+                old.resident_start(),
+                old.resident_end(),
+                old.frame_count(),
+            )
+        } else if view.context.permits_finite_range() {
+            ResidentContext::FiniteLoop
         } else {
             ResidentContext::FullTrack
         };

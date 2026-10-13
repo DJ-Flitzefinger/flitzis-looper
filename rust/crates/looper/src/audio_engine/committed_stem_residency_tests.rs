@@ -18,6 +18,8 @@ use crate::audio_engine::source_reader::{
 use crate::messages::StemMixMode;
 use std::collections::VecDeque;
 
+#[path = "committed_stem_public_complete_tests.rs"]
+mod committed_stem_public_complete_tests;
 #[path = "l3_controller_productive_tests.rs"]
 mod l3_controller_productive_tests;
 #[path = "l3_native_tests.rs"]
@@ -299,7 +301,8 @@ impl Productive {
         }
         if complete_resident && key_lock {
             // A real mode-only request preserves the FullTrack geometry/tag;
-            // an ON loop edit would deliberately produce KeyLockFiniteLoop.
+            // a proper partial ON loop edit produces KeyLockFiniteLoop, while
+            // an explicitly complete ON loop retains KeyLockFullTrack.
             let mode = prepare_window_with_producer(
                 &h.engine,
                 0,

@@ -481,6 +481,21 @@ retains its unchanged HEAD lint baseline. The same independent final review pass
 four child tasks close only the bounded ordinary incoming software scope;
 source/default ACK cannot substitute for wet output or later own Native adoption.
 
+### Public complete-source Play and unchanged ALL return — bounded software gate PASS
+
+- [x] Prove genuine complete OFF/ON first Play through Loader receipt projection and the public Transport ALL/Play route, including pre-adoption and Native-ACK-before-Python-receipt rejection, actual window/launch/START feedback, complete PCM/raw-Native/FIFO/EQ/wrap/later Native and unrelated-pad oracles.
+- [x] Reconcile reproduced complete ON classification through one native physical selection policy shared with incoming demand; preserve proper partial ON, existing OFF hint interpretation, all budget/source/timing/window/launch guards and callback containment.
+- [x] Prove complete unchanged committed StemSet ALL STEMS to FULL MIX to fresh ALL STEMS with distinct own current residency/effect receipts, actual component/ramp/final-reader ownership and paused/resumed chronology; preserve finite return and scheduled ordinary/exclusive supersession before unrelated-stop effects.
+- [x] Run focused meaningful regressions, affected integration and the needed private Release/API preflight, official strict and one independent final review; record honest bounded software disposition while full P4b/P5b/E11/music/resources216/Human gates remain open.
+
+The [bounded public complete report](../../../docs/pcm-cache-residency.md#public-complete-source-play-and-unchanged-all-return--2026-10-13)
+records 34 focused actual histories, 113 affected integrated Rust cases, fresh
+private Release/API preflight and retained failed attempts. The one independent
+final source/evidence review passes with no actionable findings. Actual public births/receipts replace
+neither the historical harness/finite proofs nor any full parent/resource/music/
+Human gate. The proper finite excursion is ACK-only; separate actual finite
+continuation evidence remains required.
+
 - [ ] X11-MATERIAL M1: readable contained roots, full-SHA cross-name dedup/unsafe-case collisions, exact original preservation and independent content settings/DSP/owners through copy/move/origin-delete.
 - [ ] X11-MATERIAL M2: existing M-ID/legacy journal/config/current-reference migration with fresh native ACK and fault/reopen/latest-intent/unknown/true-last-reader proof; no rename beneath owners or reset.
 

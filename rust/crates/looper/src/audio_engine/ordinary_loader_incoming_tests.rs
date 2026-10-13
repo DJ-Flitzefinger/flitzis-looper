@@ -2066,3 +2066,8 @@ fn predecessor_scheduled_start_history(exclusive: bool) {
     fixture.assert_other();
     fixture.assert_disk(false);
 }
+
+#[path = "ordinary_loader_public_all_tests.rs"]
+mod ordinary_loader_public_all_tests;
+#[path = "ordinary_loader_public_schedule_tests.rs"]
+mod ordinary_loader_public_schedule_tests;

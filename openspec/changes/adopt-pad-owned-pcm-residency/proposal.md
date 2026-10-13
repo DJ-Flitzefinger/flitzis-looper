@@ -39,6 +39,13 @@ ON evidence remains separately scoped;
 source ACK does not establish wet output or later source-specific Native adoption.
 Whole P4b/P5b, aggregate resource/music and Human gates remain open.
 
+The public complete-source Play and unchanged ALL STEMS return block now has its
+own bounded actual controller/callback proof, independent audio/reader oracles,
+affected integration and private Release/API receipts. It corrects reproduced
+complete ON classification through the shared physical selection policy. The
+[public complete report](../../../docs/pcm-cache-residency.md#public-complete-source-play-and-unchanged-all-return--2026-10-13)
+keeps final review disposition and full parent/music/resource/Human gates separate.
+
 P0 is the historical published plan. R0 revises its incompatible physical topology
 after independent bounded P0 and complete C1 plan acceptance; R0's separate native
 nonauthor closure and publication are required before J0/P1a/P1b. The extended

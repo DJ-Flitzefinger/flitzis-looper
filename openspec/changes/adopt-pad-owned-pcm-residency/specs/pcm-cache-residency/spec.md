@@ -189,6 +189,38 @@ or later source-specific Native adoption.
 - **AND** prior confirmed source, audio and readers and newer assignment or intent SHALL remain intact
 - **AND** no guessed musical endpoint, predecessor timing or missing-input silence SHALL authorize readiness
 
+### Requirement: Public complete-source Play retains its own residency and effect
+An explicitly requested complete `[0,N)` source loop SHALL obtain the existing
+source-bound window/control authority and actual complete byte/overlap admission
+before ordinary public transport Play. Complete ON demand SHALL retain genuine
+`KeyLockFullTrack` through the shared verified physical selection policy;
+proper partial ON and existing OFF hint interpretation SHALL remain unchanged.
+The same controller and Native ownership paths SHALL govern first Play and the
+unchanged committed StemSet's ALL STEMS, FULL MIX and fresh ALL STEMS return.
+
+#### Scenario: First complete-source Play follows its matching assignment receipt
+- **GIVEN** a cold or verified warm incoming complete source has resolved OFF or ON demand
+- **WHEN** the public waveform ALL action requests `[0,N)` and ordinary public transport Play starts that pad
+- **THEN** actual own residency/control ACK and usable Native readiness SHALL precede the queued launch and actual matching START feedback
+- **AND** Play before source adoption or before matching Python Loader receipt projection SHALL have no project, replacement-source or unrelated-pad effects
+- **AND** a genuinely unassigned first Play SHALL remain an effect-free no-op, while Play with a confirmed predecessor and pending source-derived gestures SHALL reject through the existing assignment barrier before derived Project reads or Native calls
+- **AND** a harness-created voice, manually asserted session activity, source ACK alone or another voice's wet history SHALL NOT prove successful public Play
+- **AND** complete PCM/raw-Native/FIFO/EQ/source-clock, full-source wrap, own later Native adoption and unrelated-pad chronology SHALL have independent actual rendering checks
+
+#### Scenario: Complete unchanged-set return retains distinct current receipts
+- **GIVEN** public complete-source playback owns a selected verified committed StemSet
+- **WHEN** public ALL STEMS, FULL MIX and fresh ALL STEMS actions execute, including a paused/resumed history
+- **THEN** the disk selection and registration SHALL remain unchanged while each residency/effect confirmation follows its own current callback receipt
+- **AND** complete component views, the existing consumed-source-frame ramp, Native/FIFO/filter history and actual final-reader retirement SHALL retain the existing source/set/timing/window/history guards
+- **AND** historical, pending, rejected or stopped receipts SHALL NOT become current effect claims or authorize implicit retry
+- **AND** a subsequent proper partial loop SHALL retain the existing finite ON/OFF selection and coverage guards
+
+#### Scenario: A complete-source scheduled launch is superseded
+- **WHEN** a queued ordinary or exclusive complete-source launch becomes due after source replacement or launch authority changes
+- **THEN** actual scheduled execution SHALL reject before a new START, replacement-source mutation or exclusive stopping of unrelated voices
+- **AND** the same captured source generation and launch/window authority SHALL remain attached without recapture
+- **AND** this bounded public complete-source proof SHALL NOT close whole P4b/P5b, accepted-musical, all216 resource/music or Human/device/hearing gates
+
 ### Requirement: Finite DSP coverage is a feature completion gate
 The system SHALL prove and implement finite source-domain supply for the supported
 loop/DSP context before claiming completion of shared-material loop residency.

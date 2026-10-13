@@ -718,6 +718,25 @@ source-specific Native history adoption remain distinct. Independent complete
 PCM/raw-Native/EQ/FIFO/source-clock and unrelated215 oracles remain required;
 this block does not close whole P4b/P5b, aggregate resource/music or Human gates.
 
+### Public complete-source Play and unchanged ALL return
+
+The existing Loader and Transport controllers now prove matching assignment
+projection, public waveform ALL, resident/control ACK, guarded ordinary Play and
+actual START feedback on complete OFF/ON sources. A shared off-realtime physical
+ON classifier corrects the reproduced complete-context error without changing
+partial ON, OFF hints, geometry, admission or finite Seek captured-pin lowering.
+Independent complete PCM/raw Native/FIFO/EQ/phase/wrap/later4096 and Pad215 oracles
+retain exact audio. Tracked ON has its own armed receipt before launch and actual
+waiting/dry-to-wet readiness after birth; no harness creates the tested Pad0 voice.
+The actual selected committed set retains its disk/registration identity through
+ALL STEMS, FULL MIX and fresh ALL, distinct current receipts, paused consumed-frame
+ramp/Resume and actual final-reader retirement. Public finite excursion checks
+only own geometry/context/window ACK; separate finite rendering suites remain
+required. Actual quantized rendering rejects captured stale source/window/launch
+authority before ordinary START or exclusive unrelated STOP, with valid due starts
+as counterexamples. See the bounded public report for final validation disposition.
+No new loader, worker pool, lifecycle framework, callback work or parent closure.
+
 ### KEYLOCK feedback/preparation phases
 
 An existing warmed unique Native handle can render initial wet audio from the actual current feed after a supported mode/window change; a later source-specific preparation candidate adopts only at its exact output-frame/SourcePlayback/read-plan match (existing4096 output-frame horizon). Mode/window callback ACK, actual wet processing and source-candidate adoption are distinct. Do not add an unconditional candidate wait or treat WindowACK as source Native adoption. Pause/resume follows actual SourcePlayback, not elapsed global clock. Existing Residency requested/previous/owner, effective/error/unconfirmed, eight-attempt/30-second retry and claimed-tail semantics remain the authoritative status pipeline. Global default changes collect bounded per-pad outcomes only for targeted inherited requests and expose partial/mixed failures separately from the default and explicit overrides; unchanged requested values are not proof of convergence. Current controller/UI source seams must be reread against the implemented result.

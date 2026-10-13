@@ -41,6 +41,20 @@ pub(super) struct ResidentLoadHint {
     pub key_lock: bool,
 }
 
+/// Classify already resolved physical ON coverage without changing geometry.
+/// Callers retain their distinct OFF hint/control policy and admission guards.
+pub(super) fn key_lock_context_for_range(
+    start: usize,
+    end: usize,
+    full_frames: usize,
+) -> ResidentContext {
+    if start == 0 && end == full_frames {
+        ResidentContext::KeyLockFullTrack
+    } else {
+        ResidentContext::KeyLockFiniteLoop
+    }
+}
+
 impl ResidentLoadHint {
     pub(super) fn parse(
         start: Option<f64>,
@@ -87,11 +101,7 @@ impl ResidentLoadHint {
     ) -> Result<(usize, usize, ResidentContext), String> {
         let region = self.region(rate, frames)?;
         let context = if self.key_lock {
-            if region.start == 0 && region.end == frames {
-                ResidentContext::KeyLockFullTrack
-            } else {
-                ResidentContext::KeyLockFiniteLoop
-            }
+            key_lock_context_for_range(region.start, region.end, frames)
         } else {
             ResidentContext::FiniteLoop
         };

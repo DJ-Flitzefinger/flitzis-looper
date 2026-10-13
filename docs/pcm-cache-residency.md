@@ -765,6 +765,105 @@ P4b/P5b, X11-LONG/MATERIAL, E11-03, accepted-musical or aggregate all216 resourc
 gate. Human App/device/visual/hearing and final program gates remain open, with
 the existing stop before full Rust-port planning/implementation or Slice8.
 
+## Public complete-source Play and unchanged ALL return — 2026-10-13
+
+The public Loader/Transport first-Play subset passes eight actual histories:
+cold/warm, first assignment/replacement and OFF/ON. The public waveform ALL action
+requests the real complete `[0,N)` window; own source/default projection, resident
+ACK, guarded launch and actual START feedback remain separate. Before source ACK
+and before the Python Loader receipt is consumed, the assignment barrier prevents
+derived Project reads, mutations and Native calls. The first unassigned Play is
+an unchanged no-op; a replacement with a confirmed predecessor is rejected.
+
+This exposed a production classification error: a genuine complete ON window
+was retagged `KeyLockFiniteLoop` after its resident ACK. Incoming selection and
+public loop/storage/mode preparation now share the existing physical ON policy:
+exact `0..N` is `KeyLockFullTrack`, otherwise `KeyLockFiniteLoop`. Geometry,
+rounding, byte/overlap admission, OFF hint interpretation and finite Seek's
+captured prefix/loop/tail lowering remain unchanged. Classification adds no
+callback work, allocation, I/O or new ownership mechanism.
+
+The Release Rust test binary passes the four OFF histories in 2.71 seconds and
+the four ON histories in 2.91 seconds. It runs actual headless public Engine and
+Python controllers with the callback kernels; it is not a device or installed
+wheel callback test. Independent complete PCM, Raw Native/FIFO, continuous EQ,
+full-source wrap, exact source phase, own later 4096-frame Native adoption and
+unrelated Pad 215 checks pass. ON obtains its own armed receipt before launch,
+then reports waiting/dry until its first independently determined Native block
+has warmed; actual chosen wet output settles its own readiness.
+
+Earlier negative attempts remain recorded: Windows path-prefix projection failed
+before product execution; the initial ON test reproduced the wrong complete
+context; the first corrected-context render exposed an untracked reference's
+incorrect immediate-wet startup expectation. Only the child reference gained its
+own tracked request and independent startup boundary. Exact audio tolerances,
+parent incoming histories and production startup behavior were preserved.
+
+The separate actual scheduled-renderer subset passes 24 histories in 4.06 seconds
+OFF and 4.16 seconds ON. Four current-authority ordinary/exclusive starts produce
+their actual due START, including ordered exclusive STOP215 then START0. Twenty
+stale starts cover replacement source, a newer complete intent, a newer finite
+window, ticket launch cancellation and the public pad-launch revision fence.
+They reach due through real rendering across an in-buffer boundary without
+recapturing source/window/launch authority, creating Pad0 or stopping Pad215.
+Independent complete PCM/phase and Native/FIFO checks accompany valid starts;
+stale starts retain their actual replacement state and unrelated voice chronology.
+The initial stale test incorrectly expected a no-BPM default's end to be `N`;
+it now retains `None` while the separate explicit complete ticket still requires
+`0..N`. This child-only correction leaves Native behavior unchanged.
+
+The complete unchanged committed StemSet subset passes OFF in 1.53 seconds and
+ON in 1.72 seconds. Actual public Transport starts the complete `0..4096` source;
+actual callback START/STOP objects feed the normal Python handlers. ALL STEMS,
+FULL MIX and fresh ALL retain the saved disk selection and registration, while
+each action obtains its distinct current residency/effect receipt. Pause partway
+through the 128-consumed-source-frame component ramp freezes its progression,
+source/FIFO/Native/filter history and both voices until public Resume.
+
+Independent complete component allocations prevent the reference from pinning
+actual readers. FULL MIX withdraws the bank components; ON's actual ALL Native/
+history owners survive that withdrawal and retire only after own later FullMix
+Native adoption. After real final-reader release, fresh ALL keeps the unchanged
+complete-set identity but obtains new component allocations and its own effect
+confirmation. Independent complete PCM/Raw Native/FIFO/EQ, nonzero ALL versus
+FullMix output, later 4096-frame preparation after Resume, fractional full-source
+wrap and Pad215 chronology checks remain exact.
+
+A final bounded public loop excursion acknowledges `17..N`, then `17..1517`,
+then `0..N`, checking actual bytes/context/current window, voice phase and retained
+Native/FIFO guards at each ACK. This excursion does not claim finite rendered
+effect; the existing finite continuation suites retain that separate obligation.
+The test's initial enum adapter created a base object instead of the actual START
+variant. It now uses the same variant conversion as public return values, with a
+strong type guard. The OFF oracle also inspects every bounded actual scratch
+chunk while retaining the caller's complete output partition and continuous EQ.
+Both earlier fixture failures remain recorded; no product startup, guard or
+audio tolerance was changed for either correction.
+
+Affected integrated Release test-binary checks pass 113 Rust cases: control
+workers 43, resident mixer/parity 16, finite context proofs 4, Native source
+coverage 9, relocation unit admission 7, four selected hint/saved/warm/budget
+cases, five ordinary/public wrappers covering 54 histories, committed-set parent
+23 and two finite component continuation/retirement cases. The committed parent
+excludes its unchanged L3 controller/Native and offline-generation siblings;
+this is not a fresh complete cold-load, all216 or whole-workspace run.
+
+Fresh locked private production Release passes in 23.07 seconds, followed by
+Native API/controller/UI import preflight without App/device start or installation.
+The unchanged 716-case Python controller test-double result/two device exclusions
+from the preceding ordinary delivery is reused, not relabelled as a new binary
+test run. Clippy workspace/all-targets exits zero in 13.54 seconds with the exact
+unchanged warning-message/file counters: 149 literal warnings, 77 message kinds;
+warnings remain. Rust formatting and official strict validation pass. The
+installed Human extension's length and exact UTC timestamp remain unchanged.
+
+The one independent final source/evidence review passes with no unresolved
+actionable findings. The normative first-Play scenario preserves the effect-free
+unassigned no-op and the confirmed predecessor assignment barrier explicitly.
+These bounded software checks close no whole P4b/P5b/E11,
+accepted-musical, all216 resources/music or Human/device/hearing acceptance.
+Full Rust-port planning/implementation and Slice8 remain out of scope.
+
 ## Complete access and acknowledged controls (C2b)
 
 `complete_context::CompleteSourceReader` captures the immutable complete playback
