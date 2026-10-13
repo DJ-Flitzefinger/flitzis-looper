@@ -26,6 +26,8 @@ mod l3_controller_productive_tests;
 mod l3_native_tests;
 #[path = "offline_stem_productive_tests.rs"]
 mod offline_stem_productive_tests;
+#[path = "public_key_lock_off_tests.rs"]
+mod public_key_lock_off_tests;
 
 const LOOP_START: usize = 17;
 const LOOP_END: usize = 1517;

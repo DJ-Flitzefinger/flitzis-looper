@@ -737,6 +737,23 @@ authority before ordinary START or exclusive unrelated STOP, with valid due star
 as counterexamples. See the bounded public report for final validation disposition.
 No new loader, worker pool, lifecycle framework, callback work or parent closure.
 
+### Public active ON-to-OFF proof
+
+The existing public complete-source birth has an optional test-only follow-up;
+the original two histories retain their full chronology. Four actual public pad
+OFF representatives cover running/paused FullMix and ALL at nonneutral rate.
+Own requested intent remains separate from pre-ACK wet truth. The actual own
+mode/window ACK preserves voice/source/loop/EQ and clears current FIFO/history/
+wet readiness; historical adopted request and reusable handle are not wet truth.
+Independent complete PCM/dry/EQ/source chronology and unrelated215 remain exact.
+The old ON view retires through the collecting callback sink/reconcile and real
+Native preparation worker, while shared current PCM/components stay owned.
+Subsequent own public FULL MIX and actual final readers release ALL components
+before STOP. This is not production retirement-queue pressure or every reader/
+domain/music/device proof. No production code/build input or lifecycle changes.
+The bounded report records integration/review disposition and unchanged evidence
+reuse; full E11-01/P4b/P5a/P5b and Human gates remain required.
+
 ### KEYLOCK feedback/preparation phases
 
 An existing warmed unique Native handle can render initial wet audio from the actual current feed after a supported mode/window change; a later source-specific preparation candidate adopts only at its exact output-frame/SourcePlayback/read-plan match (existing4096 output-frame horizon). Mode/window callback ACK, actual wet processing and source-candidate adoption are distinct. Do not add an unconditional candidate wait or treat WindowACK as source Native adoption. Pause/resume follows actual SourcePlayback, not elapsed global clock. Existing Residency requested/previous/owner, effective/error/unconfirmed, eight-attempt/30-second retry and claimed-tail semantics remain the authoritative status pipeline. Global default changes collect bounded per-pad outcomes only for targeted inherited requests and expose partial/mixed failures separately from the default and explicit overrides; unchanged requested values are not proof of convergence. Current controller/UI source seams must be reread against the implemented result.

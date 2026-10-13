@@ -46,6 +46,12 @@ complete ON classification through the shared physical selection policy. The
 [public complete report](../../../docs/pcm-cache-residency.md#public-complete-source-play-and-unchanged-all-return--2026-10-13)
 keeps final review disposition and full parent/music/resource/Human gates separate.
 
+The subsequent [public active ON-to-OFF proof](../../../docs/pcm-cache-residency.md#public-active-key-lock-on-to-off--2026-10-13)
+connects actual public-born ON, public pad OFF, own feedback, independent dry
+audio and mode-specific reader retirement for running/paused FullMix and ALL
+representatives. It changes only test/specification evidence; integration and
+final review disposition remain in that report, with wider gates separate.
+
 P0 is the historical published plan. R0 revises its incompatible physical topology
 after independent bounded P0 and complete C1 plan acceptance; R0's separate native
 nonauthor closure and publication are required before J0/P1a/P1b. The extended

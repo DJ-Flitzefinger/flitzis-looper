@@ -42,7 +42,7 @@ fn isolated(key_lock: bool, test: &str) {
 
 /// Deliver the actual callback objects to the same handlers used by the App.
 /// The collecting sink only replaces the device feedback FIFO in this child.
-fn feedback(locals: &Py<PyDict>, callback: &mut Callback) {
+pub(super) fn feedback(locals: &Py<PyDict>, callback: &mut Callback) {
     let events = std::mem::take(&mut callback.feedback.events);
     Python::attach(|py| {
         let events = events
@@ -69,7 +69,7 @@ controller.on_frame_render()
     );
 }
 
-fn other(mixer: &RtMixer) -> &crate::audio_engine::voice_slot::VoiceSlot {
+pub(super) fn other(mixer: &RtMixer) -> &crate::audio_engine::voice_slot::VoiceSlot {
     mixer
         .voices
         .iter()
@@ -106,12 +106,12 @@ fn assert_extent(
     );
 }
 
-fn reference(
+fn reference_with_ownership(
     full: &SampleBuffer,
     stems: &PreparedStemSet,
     ratio: f64,
     key_lock: bool,
-) -> Box<RtMixer> {
+) -> (Box<RtMixer>, Arc<InputRuntimeOwnership>) {
     let mut mixer = Box::new(RtMixer::new(2, RATE as f32));
     let ownership = Arc::new(InputRuntimeOwnership::tracked());
     ownership.publish_source(0, full, RATE, 1);
@@ -139,7 +139,7 @@ fn reference(
     );
     mixer.set_pad_eq(0, -12.0, -3.0, 4.0);
     assert!(mixer.play_sample_at_output_frame(0, 1.0, 0));
-    mixer
+    (mixer, ownership)
 }
 
 fn render(
@@ -150,6 +150,15 @@ fn render(
     if key_lock {
         return playback.render(frames, true);
     }
+    render_off_with_historical_adoption(playback, frames, None)
+}
+
+pub(super) fn render_off_with_historical_adoption(
+    playback: &mut ControllerPlayback,
+    frames: usize,
+    historical_adoption: Option<u64>,
+) -> (Vec<f32>, Vec<f32>) {
+    assert!(!playback.callback.mixer.key_lock_for_measurement(0));
     // Inspect the actual OFF scratch for each bounded mixer chunk, while
     // retaining the caller's full partition and uninterrupted PCM/EQ oracle.
     let capacity = playback.callback.mixer.max_realtime_render_frames();
@@ -159,7 +168,8 @@ fn render(
         let mut remaining = frames;
         while remaining > 0 {
             let count = remaining.min(capacity);
-            let (output, counterfactual) = render(playback, false, count);
+            let (output, counterfactual) =
+                render_off_with_historical_adoption(playback, count, historical_adoption);
             actual.extend(output);
             full_mix.extend(counterfactual);
             remaining -= count;
@@ -216,8 +226,9 @@ fn render(
     assert_eq!(current.stretch.pending_fifo_frames(), fifo);
     assert!(current.stretch.productive_history().is_none());
     assert!(!current.stretch.wet_render_ready());
+    assert!(!current.stretch.wet_output_ready());
     assert!(!current.stretch.wet_current_source_output_ready());
-    assert!(current.stretch.adopted_request_id().is_none());
+    assert_eq!(current.stretch.adopted_request_id(), historical_adoption);
     for mixer in [&playback.reference, &playback.full_mix] {
         assert!(
             current
@@ -509,7 +520,24 @@ fn public_window_ack(
     );
 }
 
+pub(super) type PublicCompleteFollowup = fn(
+    &mut ControllerPlayback,
+    &mut rtrb::Consumer<ControlMessage>,
+    &Py<PyDict>,
+    &Arc<AudioEngine>,
+    &[Arc<InputRuntimeOwnership>; 2],
+);
+
 fn history(key_lock: bool) {
+    history_with_followup(key_lock, None);
+}
+
+/// Reuse the actual public birth, optionally ending after one bounded follow-up.
+/// Existing complete histories pass None and retain their original chronology.
+pub(super) fn history_with_followup(
+    key_lock: bool,
+    followup: Option<(bool, PublicCompleteFollowup)>,
+) {
     let previous_cwd = std::env::current_dir().unwrap();
     let mut h = long_harness();
     std::env::set_current_dir(h.root.parent().unwrap()).unwrap();
@@ -754,11 +782,18 @@ assert birth is not None and 0 not in session.active_sample_ids
         "assert session.active_sample_ids == {0, 215}\nassert transport_events == [('started', 215), ('started', 0)]",
     );
     let generation = voice(&h.callback.mixer).generation;
-    let source = h.callback.mixer.bank_for_measurement()[0].clone().unwrap();
+    // A follow-up measuring reader retirement must not keep a test-owned pin.
+    let source = followup
+        .is_none()
+        .then(|| h.callback.mixer.bank_for_measurement()[0].clone().unwrap());
+    let (reference, reference_owner) =
+        reference_with_ownership(&full, &full_stems, ratio, key_lock);
+    let (full_mix, full_mix_owner) = reference_with_ownership(&full, &full_stems, ratio, key_lock);
+    let reference_owners = [reference_owner, full_mix_owner];
     let mut playback = ControllerPlayback {
         callback: h.callback,
-        reference: reference(&full, &full_stems, ratio, key_lock),
-        full_mix: reference(&full, &full_stems, ratio, key_lock),
+        reference,
+        full_mix,
         frame: 0,
         source_frame: 0,
         resumed_at: None,
@@ -783,6 +818,19 @@ assert birth is not None and 0 not in session.active_sample_ids
     render(&mut playback, key_lock, 13);
     if key_lock {
         playback.adopt_native(true);
+    }
+    if let Some((false, run)) = followup {
+        run(
+            &mut playback,
+            &mut h.consumer,
+            &locals,
+            &engine,
+            &reference_owners,
+        );
+        finish_history(&mut playback, &locals);
+        drop(locals);
+        std::env::set_current_dir(previous_cwd).unwrap();
+        return;
     }
     controller_python(
         &locals,
@@ -813,6 +861,19 @@ assert project.pad_stem_mix_mode[0] == 'all_stems'
     playback.select(Some(0b1010));
     pause_ramp(&mut playback, &mut h.consumer, &locals, key_lock);
     settle(&mut playback, &locals, "first", key_lock);
+    if let Some((true, run)) = followup {
+        run(
+            &mut playback,
+            &mut h.consumer,
+            &locals,
+            &engine,
+            &reference_owners,
+        );
+        finish_history(&mut playback, &locals);
+        drop(locals);
+        std::env::set_current_dir(previous_cwd).unwrap();
+        return;
+    }
     let old = playback.callback.mixer.stems_for_measurement()[0]
         .as_ref()
         .unwrap()
@@ -912,6 +973,7 @@ assert audio.worker_call_count() == 1 and audio.prepared_only_on_pool_threads()
         "independent complete end-to-start interpolation knots"
     );
     assert_eq!(voice(&playback.callback.mixer).generation, generation);
+    let source = source.unwrap();
     assert!(Arc::ptr_eq(
         &source.samples,
         &playback.callback.mixer.bank_for_measurement()[0]
@@ -1034,9 +1096,17 @@ assert project.pad_loop_start_s[0] == 0. and project.pad_loop_end_s[0] == fixtur
 assert session.active_sample_ids == {0, 215}
 assert transport_events == [('started', 215), ('started', 0)]
 assert not session.stem_generation_errors, session.stem_generation_errors
-controller.shut_down()
-controller._assets.release_saved_assignments()
 "#,
+    );
+    finish_history(&mut playback, &locals);
+    drop(locals);
+    std::env::set_current_dir(previous_cwd).unwrap();
+}
+
+fn finish_history(playback: &mut ControllerPlayback, locals: &Py<PyDict>) {
+    controller_python(
+        locals,
+        "controller.shut_down()\ncontroller._assets.release_saved_assignments()",
     );
     playback
         .callback
@@ -1047,6 +1117,4 @@ controller._assets.release_saved_assignments()
         .mixer
         .stop_sample_rt(215, &mut playback.callback.retirement);
     playback.callback.retirement.retired.clear();
-    drop(locals);
-    std::env::set_current_dir(previous_cwd).unwrap();
 }

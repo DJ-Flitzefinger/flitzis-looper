@@ -864,6 +864,65 @@ These bounded software checks close no whole P4b/P5b/E11,
 accepted-musical, all216 resources/music or Human/device/hearing acceptance.
 Full Rust-port planning/implementation and Slice8 remain out of scope.
 
+## Public active KEY LOCK ON-to-OFF — 2026-10-13
+
+Four bounded Release Rust test-binary histories pass in 6.52 seconds: FullMix
+and selected ALL STEMS, each running or paused. The tested voice is born through
+the actual public Transport and emits its own nonneutral-rate Native output
+before the public pad controller requests OFF. Actual Python controllers and
+headless Engine/callback kernels form this profile; it is not a production
+wheel callback, CPAL/device or hearing test.
+
+Requested OFF remains separate from prior effective wet truth while the own
+resident command waits for the collecting callback sink's retirement admission.
+The matching source/window/request ACK settles dry OFF without START, STOP,
+retrigger, voice-generation, source-phase or loop changes. EQ history continues.
+The actual Native FIFOs and productive wet history clear; all current wet-ready
+flags are false. The reusable Native handle and historical adopted request may
+remain, so neither is treated as current wet readiness.
+
+Independent complete PCM and an uninterrupted EQ oracle match every dry output
+sample at rate 0.75, across partitions `[1,31,137,512,777]` and at least three
+fractional complete-source wraps. Pausing only Pad0 freezes its consumed source
+and EQ history. Native/FIFO state stays fixed within each paused phase, with own
+OFF ACK performing the declared retirement/reset. Public Resume continues
+source/EQ chronology.
+Unrelated running Pad215 keeps its own generation, source phase/rate, mode,
+Native/FIFO and source identity. Saved assignment, disk selection and registration
+remain current, and OFF starts no new stem-generation worker.
+
+Same-range OFF deliberately shares admitted immutable PCM and selected ALL
+components. The old ON `ResidentSourceView` differs from the own OFF view and
+reaches zero actual strong readers after the collecting callback sink is cleared,
+control reconciliation and real Native preparation-worker retirement. Current
+PCM remains owned. ALL components stay retained through dry use; a subsequent
+own public FULL MIX receipt and consumed-source-frame ramp releases their bank
+ownership. Their actual component Weaks reach zero after final-reader retirement,
+before common STOP cleanup. This proves those readers, not production retirement
+queue saturation, every owner family or disk-generation deletion.
+
+The existing two public complete-set histories retain their chronology through
+a test-only optional follow-up seam. All modified Rust is reachable only through
+`cfg(test)`; production Python/Rust/build inputs are unchanged. The preceding
+private production Release/API preflight and 716-case Python controller
+test-double profile with two device exclusions retain their declared scopes and
+are reused, not relabelled as new runs.
+
+Affected integrated Release test-binary checks pass 86 cases: control workers
+43 in 52.12 seconds, resident mixer/parity 16 in 9.83 seconds and committed-set
+parent 27 in 35.32 seconds, including all four OFF cases and the unchanged two
+public complete histories. Unchanged L3 controller/Native and offline-generation
+siblings are excluded; this is not a fresh whole-parent/workspace run. Clippy
+workspace/all-targets exits zero in 8.45 seconds with exact unchanged diagnostic
+message/file counters (149 warnings, 77 kinds); warnings remain. Rustfmt and
+official strict validation pass. The one independent final source/evidence
+review passes with no unresolved actionable findings.
+Broader global/inheritance/override, finite/candidate-domain, accepted-musical,
+resource216, E11-01/P4b/P5a/P5b and Human/program gates remain open. Ordinary
+Loader B replacement preserves A until its own assignment ACK and then stops A;
+the separate native non-replacing frozen-A proof does not change that contract.
+Full Rust-port planning/implementation and Slice8 remain out of scope.
+
 ## Complete access and acknowledged controls (C2b)
 
 `complete_context::CompleteSourceReader` captures the immutable complete playback

@@ -507,6 +507,16 @@ The system SHALL apply resolved global-default KEYLOCK changes only to inheritin
 - **AND** stale, failed or superseded work SHALL leave effective audio intact with truthful pending/error state
 - **AND** supported fixed NormalLoop correction SHALL NOT open unproved seek/intro/tail, nonzero-pitch, P5a or whole-P4b guards
 
+#### Scenario: Public addressed OFF retires only mode-specific audio ownership
+- **GIVEN** an actual publicly started current-source ON voice has emitted its own nonneutral-rate Native output with FullMix or selected ALL STEMS
+- **WHEN** the public pad controller requests addressed OFF during playback or pause
+- **THEN** prior wet state SHALL remain truthful before that request's own callback mode/window ACK, separately from requested OFF intent
+- **AND** own source/window/request feedback SHALL settle OFF without START, STOP, retrigger, source-phase or loop changes and with continuous EQ
+- **AND** actual subsequent dry output SHALL match independent complete PCM and the declared source trajectory while mode-specific Native/FIFO/history ownership retires through the existing off-thread path
+- **AND** historical Native adoption metadata SHALL NOT be interpreted as current wet readiness
+- **AND** current ALL component readers SHALL remain owned while still selected, and only a subsequent own FULL MIX release plus actual final-reader retirement SHALL release those component owners
+- **AND** unrelated pads and saved source/set identity SHALL remain intact, while broader global/override/domain/music/resource/Human and whole-parent gates remain separate
+
 #### Scenario: First wet readiness and failures retain truthful audio ownership
 - **WHEN** an ON request has its own callback ACK but has not emitted successful wet output
 - **THEN** playing nonneutral-rate audio SHALL retain its previous dry feed and continuous source/EQ chronology while the actual Native handle warms

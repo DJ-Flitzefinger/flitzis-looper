@@ -496,6 +496,18 @@ neither the historical harness/finite proofs nor any full parent/resource/music/
 Human gate. The proper finite excursion is ACK-only; separate actual finite
 continuation evidence remains required.
 
+### Public active ON-to-OFF — passing bounded software block
+
+- [x] Prove public pad-to-residency OFF from actual public-born own ON FullMix and ALL STEMS voices in running/paused representatives, own pre-ACK versus effective feedback, exact complete PCM/dry/EQ/phase output and no START/STOP/retrigger.
+- [x] Prove actual mode-specific Native/FIFO/history retirement without treating historical adoption metadata as current wet readiness; retain selected ALL components through use and release only after own public FULL MIX and actual final readers, preserving unrelated-pad/source/set identity.
+- [x] Validate affected meaningful regressions, official strict/static and one independent final source/evidence review; reuse unchanged production Release/Python evidence only where inputs remain unchanged and keep whole E11-01/P4b/P5a/P5b/global/domain/music/resources216/Human gates open.
+
+Native mode workers and Python controller test doubles retain their passing
+scopes. This block requires the actual public controller-to-Native route and
+does not infer it from those separate profiles. Public Loader B replacement
+stops A at B's matching assignment ACK by its existing contract; post-ACK
+frozen-A native restore remains a distinct previously bounded source path.
+
 - [ ] X11-MATERIAL M1: readable contained roots, full-SHA cross-name dedup/unsafe-case collisions, exact original preservation and independent content settings/DSP/owners through copy/move/origin-delete.
 - [ ] X11-MATERIAL M2: existing M-ID/legacy journal/config/current-reference migration with fresh native ACK and fault/reopen/latest-intent/unknown/true-last-reader proof; no rename beneath owners or reset.
 
