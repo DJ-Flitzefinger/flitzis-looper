@@ -44,12 +44,15 @@ impl Default for CqtParams {
 ///
 /// Returns empty vec if the signal is too short to produce any frames.
 pub fn compute_cqt(samples: &[f32], sample_rate: u32, params: &CqtParams) -> Vec<f32> {
+    let samples_f64: Vec<f64> = samples.iter().map(|&v| f64::from(v)).collect();
+    compute_cqt_f64(&samples_f64, sample_rate, params)
+}
+
+/// The same frontend for an already widened complete shared mono signal.
+pub fn compute_cqt_f64(samples: &[f64], sample_rate: u32, params: &CqtParams) -> Vec<f32> {
     if samples.is_empty() {
         return Vec::new();
     }
-
-    // Convert f32 → f64 for librosa-compatible computation
-    let samples_f64: Vec<f64> = samples.iter().map(|&v| v as f64).collect();
 
     // Build librosa CQT config
     let config = CqtConfig {
@@ -65,7 +68,7 @@ pub fn compute_cqt(samples: &[f32], sample_rate: u32, params: &CqtParams) -> Vec
     };
 
     // Compute CQT magnitude (shape: n_bins × n_frames, row-major)
-    let magnitude = librosa_cqt(&samples_f64, &config);
+    let magnitude = librosa_cqt(samples, &config);
 
     if magnitude.is_empty() {
         return Vec::new();
@@ -118,6 +121,19 @@ mod tests {
             "output length {} should be divisible by 104",
             output.len()
         );
+    }
+
+    #[test]
+    fn already_widened_frontend_matches_full_f32_input_bits() {
+        let mut samples = sine_wave(523.25, 44_100, 2.37);
+        samples[..193].fill(0.0);
+        *samples.last_mut().unwrap() = -0.731;
+        let params = CqtParams::default();
+        let expected = compute_cqt(&samples, 44_100, &params);
+        let widened: Vec<f64> = samples.iter().map(|sample| f64::from(*sample)).collect();
+        let actual = compute_cqt_f64(&widened, 44_100, &params);
+        assert!(!actual.is_empty());
+        assert_eq!(actual, expected);
     }
 
     #[test]

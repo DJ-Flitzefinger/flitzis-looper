@@ -23,56 +23,17 @@ const MAX_CHANNELS: usize = 32;
 const MIN_RATE_HZ: u32 = 8000;
 const MAX_RATE_HZ: u32 = 384_000;
 
-/// Conservative executed default-analyzer PCM admission, before conversion or FFT.
-/// Includes stereo conversion overlap, source-length mono, delayed output, cloned
-/// f32/f64 inputs and the pinned FFT workspace; model/spectral storage is separate.
-pub(super) fn default_analysis_peak(
-    frames: usize,
-    channels: usize,
-    rate_hz: u32,
-    extra_held_bytes: usize,
-    maximum: usize,
-) -> Result<usize, PcmError> {
-    validate_rate(rate_hz)?;
-    if frames == 0 || !matches!(channels, 1 | 2) {
-        return Err(PcmError::InvalidInput("default analysis source geometry"));
-    }
-    let converted = (frames as u128 * 44_100).div_ceil(u128::from(rate_hz));
-    let (input, output) = if rate_hz == 44_100 {
-        (0, 0)
-    } else {
-        fft::fft_dimensions(rate_hz, 44_100)
-    };
-    let fft_workspace = (input as u128 + output as u128) * 64 * 4;
-    let delayed_output = output as u128 * 2 * 4;
-    let peak = frames as u128 * channels as u128 * 8
-        + frames as u128 * 4
-        + converted * 24
-        + fft_workspace
-        + delayed_output
-        + 1024 * 1024
-        + extra_held_bytes as u128;
-    if peak > maximum as u128 {
-        return Err(PcmError::Limit(
-            "complete automatic analysis transient bytes",
-        ));
-    }
-    usize::try_from(peak).map_err(|_| PcmError::Limit("default analysis reservation overflow"))
-}
+mod default;
+pub(super) use default::{default_analysis_peak, prepare_default_mono_f64};
 
 #[cfg(test)]
 mod admission_tests {
     use super::*;
 
     #[test]
-    fn default_analysis_admission_covers_stereo_mono_overlap_and_coprime_fft_workspace() {
+    fn default_analysis_admission_covers_complete_workspace_and_coprime_fft() {
         let maximum = 1024 * 1024 * 1024;
-        // This geometry's old source+target-only estimate admitted it, although
-        // channel conversion simultaneously owns another 220 MB source mono.
-        let frames = 55_000_000;
-        let old =
-            frames as u128 * 2 * 8 + (frames as u128 * 44_100).div_ceil(384_000) * 24 + 1024 * 1024;
-        assert!(old < maximum as u128);
+        let frames = 110_000_000;
         assert!(matches!(
             default_analysis_peak(frames, 2, 384_000, 0, maximum),
             Err(PcmError::Limit(_))
@@ -84,7 +45,20 @@ mod admission_tests {
         for rate in [44_100, 48_000, 96_000] {
             assert!(
                 default_analysis_peak(rate as usize * 2, 2, rate, 256, maximum).unwrap()
-                    < 16 * 1024 * 1024
+                    < 80 * 1024 * 1024
+            );
+        }
+        // 383999 has gcd 7 with 44100; this rate really needs full coprime units.
+        assert_eq!(fft::fft_dimensions(383_981, 44_100), (383_981, 44_100));
+        assert!(default_analysis_peak(1, 2, 383_981, 0, 80 * 1024 * 1024).is_err());
+        assert!(default_analysis_peak(usize::MAX, 2, 8_000, usize::MAX, usize::MAX).is_err());
+        for rate in [44_100, 48_000] {
+            let frames = (16_600_184_u128 * u128::from(rate)).div_ceil(44_100) as usize;
+            let peak = default_analysis_peak(frames, 2, rate, 0, 512 * 1024 * 1024).unwrap();
+            assert!(peak > frames * 8 + 16_600_184 * 8);
+            assert!(
+                default_analysis_peak(frames, 2, rate, 128 * 1024 * 1024, 512 * 1024 * 1024)
+                    .is_err()
             );
         }
     }

@@ -20,10 +20,10 @@ pub mod tempo_summary;
 mod tempotrack;
 
 // Re-export public API surface
-pub use bpm_pipeline::{QmRawAnalysis, analyze_bpm, analyze_bpm_raw};
+pub use bpm_pipeline::{QmRawAnalysis, analyze_bpm, analyze_bpm_raw, default_bpm_working_bytes};
 pub use detection_function::DetectionFunction;
 pub use downbeat::DownBeat;
-pub use key_detection::{KeyError, KeyResult, camelot_index_to_key, detect_key};
+pub use key_detection::{KeyError, KeyResult, camelot_index_to_key, detect_key, detect_key_f64};
 pub use tempotrack::TempoTrackV2;
 
 pub mod math_utils;

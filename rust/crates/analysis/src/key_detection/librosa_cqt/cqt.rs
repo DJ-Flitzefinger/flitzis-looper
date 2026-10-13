@@ -3,12 +3,45 @@
 //! Combines wavelet construction and VQT/CQT transform into a single module.
 
 use realfft::RealFftPlanner;
+use std::borrow::Cow;
 
 use super::convert::cqt_frequencies;
 use super::dsp::tiny;
 use super::matrix::Matrix;
-use super::stft::{StftParams, stft_as_real_imag};
+use super::stft::{StftFrames, StftParams};
 use super::windows::hann;
+
+/// Checked allocation reservation for the pinned 44100-Hz KeyNet frontend.
+/// This is working storage in addition to the caller's shared complete f64 mono;
+/// the separately cached ONNX model and its inference arena are not PCM/CQT.
+///
+/// The default 105 bins / 24 bins per octave / 65-Hz fmin / 8820 hop has no
+/// early downsampling. Its first octave borrows mono; two subsequent even hops
+/// retain at most ceil(N/2) + ceil(N/4) f64 samples during replacement (6N
+/// bytes, with rounding covered below). The later 2205 hop is odd. Each Sinc
+/// result has exactly the requested capacity, including zero-filled tail.
+///
+/// 52 bytes per bin/frame cover all retained octave re/im responses (16),
+/// stacked re/im (16), magnitude (8), and f32 frontend output (4), with another
+/// eight bytes for conservative overlap. Ceil(N/8820)+1 also covers the two
+/// rounded half lengths. No FFT-bin-by-time matrix is retained.
+///
+/// The maximum default FFT is 32768. The fixed reservation is derived from
+/// three simultaneous-storage envelopes: 1024 bytes/FFT point for the original
+/// and scaled 24-row bases, magnitude basis, padded wavelet filters and their
+/// construction vectors; 512 bytes/point for the FFT plans, scratch, window,
+/// real input and complex output; 512 bytes/point for the pinned 256x256 Sinc
+/// tables, construction scratch, input/result chunks, vector headers and ceil
+/// rounding. These sum to 64 MiB and dominate the smaller later octave plans.
+pub fn default_cqt_working_bytes(input_frames: usize) -> Option<usize> {
+    let time_frames = input_frames.div_ceil(8820).checked_add(1)?;
+    let resampling = input_frames.checked_mul(6)?;
+    let responses = time_frames.checked_mul(105)?.checked_mul(52)?;
+    let fixed_workspace = 32768_usize.checked_mul(1024 + 512 + 512)?;
+    resampling
+        .checked_add(responses)?
+        .checked_add(fixed_workspace)
+}
 
 // ============================================================================
 // Wavelet construction
@@ -291,12 +324,12 @@ pub(crate) fn cqt_response(
         center: true,
         window: None, // default Hann
     };
-    let (stft_re, stft_im) = stft_as_real_imag(y, &stft_params);
+    let mut stft = StftFrames::new(y, &stft_params);
 
     // Magnitude-only matmul: |basis| @ |STFT|
     let n_freqs = basis_re.rows();
     let n_bins_fft = basis_re.cols();
-    let n_frames = stft_re.cols();
+    let n_frames = stft.frame_count();
 
     // Precompute |basis| and |STFT| magnitudes
     let basis_mag: Vec<Vec<f64>> = (0..n_freqs)
@@ -307,21 +340,23 @@ pub(crate) fn cqt_response(
         })
         .collect();
 
-    let stft_mag: Vec<Vec<f64>> = (0..n_frames)
-        .map(|f| {
-            (0..n_bins_fft)
-                .map(|k| (stft_re.get(k, f).powi(2) + stft_im.get(k, f).powi(2)).sqrt())
-                .collect()
-        })
-        .collect();
+    let mut stft_mag = vec![0.0; n_bins_fft];
 
     // Real matmul: resp[b, f] = sum_k basis_mag[b, k] * stft_mag[k, f]
-    let mut resp_data = vec![0.0; n_freqs * n_frames];
+    let response_len = n_freqs
+        .checked_mul(n_frames)
+        .expect("CQT response dimensions overflow");
+    let mut resp_data = vec![0.0; response_len];
     for f in 0..n_frames {
+        let spectrum = stft.process_frame(f);
+        for k in 0..n_bins_fft {
+            // Preserve the dense reference's operations and summation order.
+            stft_mag[k] = (spectrum[k].re.powi(2) + spectrum[k].im.powi(2)).sqrt();
+        }
         for b in 0..n_freqs {
             let mut sum = 0.0f64;
             for k in 0..n_bins_fft {
-                sum += basis_mag[b][k] * stft_mag[f][k];
+                sum += basis_mag[b][k] * stft_mag[k];
             }
             resp_data[b * n_frames + f] = sum;
         }
@@ -389,16 +424,20 @@ pub(crate) fn resample_half(y: &[f64]) -> Vec<f64> {
         window: WindowFunction::BlackmanHarris2,
     };
 
+    if y.is_empty() {
+        return Vec::new();
+    }
+    let expected_len = y.len().div_ceil(2);
+    let mut output = bounded_resample_output(expected_len).expect("resample output allocation");
     let chunk_size = 1024.min(y.len());
     let mut resampler =
         SincFixedIn::<f64>::new(0.5, 2.0, params, chunk_size, 1).expect("resampler");
 
-    let mut output = Vec::new();
     let mut pos = 0;
     while pos + chunk_size <= y.len() {
         let chunk = vec![y[pos..pos + chunk_size].to_vec()];
         let result = resampler.process(&chunk, None).expect("resample");
-        output.extend_from_slice(&result[0]);
+        append_resampled_prefix(&mut output, &result[0], expected_len);
         pos += chunk_size;
     }
 
@@ -408,16 +447,14 @@ pub(crate) fn resample_half(y: &[f64]) -> Vec<f64> {
         let result = resampler
             .process_partial(Some(&chunk), None)
             .expect("resample");
-        output.extend_from_slice(&result[0]);
+        append_resampled_prefix(&mut output, &result[0], expected_len);
     } else {
         let result = resampler
             .process_partial::<Vec<f64>>(None, None)
             .expect("resample");
-        output.extend_from_slice(&result[0]);
+        append_resampled_prefix(&mut output, &result[0], expected_len);
     }
 
-    let expected_len = (y.len() as f64 * 0.5).ceil() as usize;
-    output.truncate(expected_len);
     output.resize(expected_len, 0.0);
     output
 }
@@ -514,18 +551,18 @@ pub fn cqt_complex(y: &[f64], config: &CqtConfig) -> (Matrix, Matrix) {
         0
     };
 
-    let mut my_y: Vec<f64>;
+    let mut my_y: Cow<'_, [f64]>;
     let mut my_sr: f64;
     let mut my_hop: usize;
 
     if downsample_count > 0 {
         let factor = 1u32 << downsample_count;
         let new_sr = (config.sr as u32) / factor;
-        my_y = resample_by_factor(y, config.sr as u32, new_sr).expect("resample");
+        my_y = Cow::Owned(resample_by_factor(y, config.sr as u32, new_sr).expect("resample"));
         my_sr = new_sr as f64;
         my_hop = config.hop_length >> downsample_count;
     } else {
-        my_y = y.to_vec();
+        my_y = Cow::Borrowed(y);
         my_sr = config.sr;
         my_hop = config.hop_length;
     }
@@ -570,7 +607,7 @@ pub fn cqt_complex(y: &[f64], config: &CqtConfig) -> (Matrix, Matrix) {
 
         // Downsample for next octave (if hop_length is even)
         if oct < n_octaves - 1 && my_hop.is_multiple_of(2) {
-            my_y = resample_half(&my_y);
+            my_y = Cow::Owned(resample_half(&my_y));
             my_sr /= 2.0;
             my_hop /= 2;
         }
@@ -626,11 +663,17 @@ fn find_octave_nfft(bin: usize, responses: &[(Matrix, Matrix, usize, usize)]) ->
 
 pub(crate) fn resample_by_factor(y: &[f64], orig_sr: u32, target_sr: u32) -> Option<Vec<f64>> {
     if orig_sr == target_sr {
-        return Some(y.to_vec());
+        let mut output = bounded_resample_output(y.len())?;
+        output.extend_from_slice(y);
+        return Some(output);
     }
 
     let ratio = target_sr as f64 / orig_sr as f64;
     let expected_len = (y.len() as f64 * ratio).ceil() as usize;
+    let mut output = bounded_resample_output(expected_len)?;
+    if y.is_empty() {
+        return Some(output);
+    }
 
     use rubato::{
         Resampler, SincFixedIn, SincInterpolationParameters, SincInterpolationType, WindowFunction,
@@ -647,12 +690,11 @@ pub(crate) fn resample_by_factor(y: &[f64], orig_sr: u32, target_sr: u32) -> Opt
     let chunk_size = 1024.min(y.len());
     let mut resampler = SincFixedIn::<f64>::new(ratio, 2.0, params, chunk_size, 1).ok()?;
 
-    let mut output = Vec::new();
     let mut pos = 0;
     while pos + chunk_size <= y.len() {
         let chunk = vec![y[pos..pos + chunk_size].to_vec()];
         let result = resampler.process(&chunk, None).ok()?;
-        output.extend_from_slice(&result[0]);
+        append_resampled_prefix(&mut output, &result[0], expected_len);
         pos += chunk_size;
     }
 
@@ -660,13 +702,221 @@ pub(crate) fn resample_by_factor(y: &[f64], orig_sr: u32, target_sr: u32) -> Opt
         let remaining = &y[pos..];
         let chunk = vec![remaining.to_vec()];
         let result = resampler.process_partial(Some(&chunk), None).ok()?;
-        output.extend_from_slice(&result[0]);
+        append_resampled_prefix(&mut output, &result[0], expected_len);
     } else {
         let result = resampler.process_partial::<Vec<f64>>(None, None).ok()?;
-        output.extend_from_slice(&result[0]);
+        append_resampled_prefix(&mut output, &result[0], expected_len);
     }
 
-    output.truncate(expected_len);
     output.resize(expected_len, 0.0);
     Some(output)
+}
+
+/// Reserve once before constructing a resampler, with no geometric Vec growth.
+fn bounded_resample_output(expected_len: usize) -> Option<Vec<f64>> {
+    expected_len.checked_mul(size_of::<f64>())?;
+    let mut output = Vec::new();
+    output.try_reserve_exact(expected_len).ok()?;
+    // Admission accounts for capacities, rather than only final lengths.
+    if output.capacity() != expected_len {
+        return None;
+    }
+    Some(output)
+}
+
+fn append_resampled_prefix(output: &mut Vec<f64>, result: &[f64], expected_len: usize) {
+    let remaining = expected_len - output.len();
+    output.extend_from_slice(&result[..result.len().min(remaining)]);
+}
+
+#[cfg(test)]
+mod bounded_tests {
+    use super::super::stft::stft_as_real_imag;
+    use super::*;
+
+    #[test]
+    fn pinned_default_octave_dimensions_fit_the_working_reservation() {
+        let freqs = cqt_frequencies(105, 65.0, 24, 0.0);
+        let (_, cutoff) = wavelet_lengths(&freqs, 44100.0, 1.0, 0.0);
+        let maximum_early_halves = ((22050.0 / cutoff).log2().floor() as isize - 1 - 4).max(0);
+        assert_eq!(maximum_early_halves, 0);
+        let mut rate = 44100.0;
+        let mut hop = 8820_usize;
+        for (octave, expected_fft) in [32768, 16384, 8192, 8192, 8192].into_iter().enumerate() {
+            let start = 105_usize.saturating_sub((octave + 1) * 24);
+            let end = 105_usize.saturating_sub(octave * 24);
+            let (real, imaginary, n_fft, _) =
+                vqt_filter_fft(rate, &freqs[start..end], 1.0, Some(1.0), hop, 0.0);
+            assert_eq!(n_fft, expected_fft);
+            // Two original bases, two mapped bases and the magnitude basis are
+            // the largest simultaneous filter data during a response.
+            let basis_overlap =
+                (real.as_slice().len() + imaginary.as_slice().len()) * size_of::<f64>() * 5 / 2;
+            assert!(basis_overlap < 32768 * 1024);
+            if hop.is_multiple_of(2) {
+                rate /= 2.0;
+                hop /= 2;
+            }
+        }
+    }
+
+    /// Dense pre-streaming response, independent of StftFrames and its indexing.
+    fn dense_response(
+        samples: &[f64],
+        n_fft: usize,
+        hop_length: usize,
+        basis_re: &Matrix,
+        basis_im: &Matrix,
+    ) -> Vec<f64> {
+        let (real, imaginary) = stft_as_real_imag(
+            samples,
+            &StftParams {
+                n_fft,
+                hop_length,
+                win_length: n_fft,
+                center: true,
+                window: None,
+            },
+        );
+        let n_bins_fft = basis_re.cols();
+        let basis_mag: Vec<Vec<f64>> = (0..basis_re.rows())
+            .map(|bin| {
+                (0..n_bins_fft)
+                    .map(|index| {
+                        (basis_re.get(bin, index).powi(2) + basis_im.get(bin, index).powi(2)).sqrt()
+                    })
+                    .collect()
+            })
+            .collect();
+        let magnitude: Vec<Vec<f64>> = (0..real.cols())
+            .map(|frame| {
+                (0..n_bins_fft)
+                    .map(|bin| {
+                        (real.get(bin, frame).powi(2) + imaginary.get(bin, frame).powi(2)).sqrt()
+                    })
+                    .collect()
+            })
+            .collect();
+        let mut response = vec![0.0; basis_re.rows() * real.cols()];
+        for frame in 0..real.cols() {
+            for bin in 0..basis_re.rows() {
+                let mut sum = 0.0;
+                for index in 0..n_bins_fft {
+                    sum += basis_mag[bin][index] * magnitude[frame][index];
+                }
+                response[bin * real.cols() + frame] = sum;
+            }
+        }
+        response
+    }
+
+    #[test]
+    fn streamed_cqt_response_preserves_dense_accumulation_bits() {
+        for (n_fft, hop_length) in [(32768, 8820), (16384, 4410), (8192, 2205)] {
+            let samples: Vec<f64> = (0..2 * hop_length + 29)
+                .map(|index| (index as f64 * 0.053).sin() + (index as f64 * 0.071).cos())
+                .collect();
+            let n_bins_fft = n_fft / 2 + 1;
+            let basis_re = Matrix::from_vec(
+                (0..3 * n_bins_fft)
+                    .map(|index| (index as f64 * 0.37).sin() * 0.01)
+                    .collect(),
+                3,
+                n_bins_fft,
+            );
+            let basis_im = Matrix::from_vec(
+                (0..3 * n_bins_fft)
+                    .map(|index| (index as f64 * 0.17).cos() * 0.02)
+                    .collect(),
+                3,
+                n_bins_fft,
+            );
+            let expected = dense_response(&samples, n_fft, hop_length, &basis_re, &basis_im);
+            let (actual, imaginary) =
+                cqt_response(&samples, n_fft, hop_length, &basis_re, &basis_im);
+            assert_eq!(actual.as_slice().len(), expected.len());
+            for (actual, expected) in actual.as_slice().iter().zip(expected) {
+                assert_eq!(actual.to_bits(), expected.to_bits());
+            }
+            assert!(
+                imaginary
+                    .as_slice()
+                    .iter()
+                    .all(|value| value.to_bits() == 0)
+            );
+        }
+    }
+
+    /// Original growing/truncating Sinc adapter, including the same final flush.
+    fn growing_resample_reference(samples: &[f64], ratio: f64) -> Vec<f64> {
+        use rubato::{
+            Resampler, SincFixedIn, SincInterpolationParameters, SincInterpolationType,
+            WindowFunction,
+        };
+        let chunk_size = 1024.min(samples.len());
+        let mut resampler = SincFixedIn::<f64>::new(
+            ratio,
+            2.0,
+            SincInterpolationParameters {
+                sinc_len: 256,
+                f_cutoff: 0.95,
+                interpolation: SincInterpolationType::Linear,
+                oversampling_factor: 256,
+                window: WindowFunction::BlackmanHarris2,
+            },
+            chunk_size,
+            1,
+        )
+        .unwrap();
+        // The default downsampler's process allocations fit the fixed envelope.
+        assert!(resampler.output_frames_max() <= 2048);
+        let mut output = Vec::new();
+        let mut position = 0;
+        while position + chunk_size <= samples.len() {
+            let result = resampler
+                .process(&[samples[position..position + chunk_size].to_vec()], None)
+                .unwrap();
+            output.extend_from_slice(&result[0]);
+            position += chunk_size;
+        }
+        let result = if position < samples.len() {
+            resampler
+                .process_partial(Some(&[samples[position..].to_vec()]), None)
+                .unwrap()
+        } else {
+            resampler.process_partial::<Vec<f64>>(None, None).unwrap()
+        };
+        output.extend_from_slice(&result[0]);
+        let expected_len = (samples.len() as f64 * ratio).ceil() as usize;
+        output.truncate(expected_len);
+        output.resize(expected_len, 0.0);
+        output
+    }
+
+    #[test]
+    fn exact_capacity_sinc_outputs_preserve_complete_reference_bits() {
+        for length in [1, 1023, 1024, 1025, 8193] {
+            let samples: Vec<f64> = (0..length)
+                .map(|index| (index as f64 * 0.071).sin())
+                .collect();
+            for target_rate in [11025, 22050] {
+                let expected = growing_resample_reference(&samples, target_rate as f64 / 44100.0);
+                let actual = resample_by_factor(&samples, 44100, target_rate).unwrap();
+                assert_eq!(actual.capacity(), actual.len());
+                assert_eq!(actual.len(), expected.len());
+                for (actual, expected) in actual.iter().zip(&expected) {
+                    assert_eq!(actual.to_bits(), expected.to_bits());
+                }
+                if target_rate == 22050 {
+                    let half = resample_half(&samples);
+                    assert_eq!(half.capacity(), half.len());
+                    for (actual, expected) in half.iter().zip(expected) {
+                        assert_eq!(actual.to_bits(), expected.to_bits());
+                    }
+                }
+            }
+        }
+        assert!(bounded_resample_output(usize::MAX).is_none());
+        assert!(default_cqt_working_bytes(usize::MAX).is_none());
+    }
 }

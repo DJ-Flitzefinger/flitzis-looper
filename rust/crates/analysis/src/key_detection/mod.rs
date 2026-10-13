@@ -80,23 +80,42 @@ fn softmax_single(logits: &[f32], index: usize) -> f32 {
 /// * `ModelError` — ONNX model failed to load or run.
 /// * `CqtError` — CQT computation failed.
 pub fn detect_key(samples: &[f32], sample_rate_hz: u32) -> Result<KeyResult, KeyError> {
+    detect_key_with_frontend(
+        samples.len(),
+        samples.iter().all(|s| s.abs() < 1e-6_f32),
+        || cqt::compute_cqt(samples, sample_rate_hz, &CqtParams::default()),
+    )
+}
+
+/// Detect key from the same widened f32 mono input used by the BPM pipeline.
+/// This avoids another complete input allocation without changing CQT or inference.
+pub fn detect_key_f64(samples: &[f64], sample_rate_hz: u32) -> Result<KeyResult, KeyError> {
+    detect_key_with_frontend(
+        samples.len(),
+        samples.iter().all(|s| s.abs() < f64::from(1e-6_f32)),
+        || cqt::compute_cqt_f64(samples, sample_rate_hz, &CqtParams::default()),
+    )
+}
+
+fn detect_key_with_frontend(
+    input_frames: usize,
+    is_silent: bool,
+    frontend: impl FnOnce() -> Vec<f32>,
+) -> Result<KeyResult, KeyError> {
     // 1. Validate input length.
     // Minimum: at least one hop_length worth of samples to produce a CQT frame.
     let min_samples = CqtParams::default().hop_length;
-    if samples.len() < min_samples {
+    if input_frames < min_samples {
         return Err(KeyError::InsufficientData);
     }
 
     // 2. Check for silence (all samples within epsilon of zero).
-    let epsilon = 1e-6f32;
-    let is_silent = samples.iter().all(|s| s.abs() < epsilon);
     if is_silent {
         return Err(KeyError::SilentAudio);
     }
 
     // 3. Compute CQT spectrogram.
-    let params = CqtParams::default();
-    let cqt_data = cqt::compute_cqt(samples, sample_rate_hz, &params);
+    let cqt_data = frontend();
 
     // CQT returns empty vec if signal is too short for any frames.
     if cqt_data.is_empty() {

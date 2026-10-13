@@ -1,7 +1,10 @@
 //! STFT implementation matching librosa (extracted from rosa).
 
 use realfft::RealFftPlanner;
+use rustfft::num_complex::Complex;
+use std::sync::Arc;
 
+#[cfg(test)]
 use super::matrix::Matrix;
 
 /// STFT parameters with librosa-compatible defaults.
@@ -18,9 +21,82 @@ pub struct StftParams {
     pub window: Option<Vec<f64>>,
 }
 
+/// The same centered, windowed FFT as the dense STFT, retaining one frame.
+/// Center padding is addressed virtually so it never copies the complete audio.
+pub(crate) struct StftFrames<'a> {
+    signal: &'a [f64],
+    pad: usize,
+    hop_length: usize,
+    n_frames: usize,
+    window: Vec<f64>,
+    fft: Arc<dyn realfft::RealToComplex<f64>>,
+    scratch: Vec<Complex<f64>>,
+    input: Vec<f64>,
+    output: Vec<Complex<f64>>,
+}
+
+impl<'a> StftFrames<'a> {
+    pub(crate) fn new(signal: &'a [f64], params: &StftParams) -> Self {
+        let win = match &params.window {
+            Some(window) => window.clone(),
+            None => super::windows::hann(params.win_length, true),
+        };
+        let window = super::dsp::pad_center(&win, params.n_fft);
+        let pad = if params.center { params.n_fft / 2 } else { 0 };
+        let signal_len = signal
+            .len()
+            .checked_add(pad.checked_mul(2).expect("STFT padding overflow"))
+            .expect("STFT signal length overflow");
+        let n_frames = if signal_len < params.n_fft {
+            0
+        } else {
+            1 + (signal_len - params.n_fft) / params.hop_length
+        };
+        let mut planner = RealFftPlanner::<f64>::new();
+        let fft = planner.plan_fft_forward(params.n_fft);
+        let scratch = fft.make_scratch_vec();
+        let input = fft.make_input_vec();
+        let output = fft.make_output_vec();
+        Self {
+            signal,
+            pad,
+            hop_length: params.hop_length,
+            n_frames,
+            window,
+            fft,
+            scratch,
+            input,
+            output,
+        }
+    }
+
+    pub(crate) fn frame_count(&self) -> usize {
+        self.n_frames
+    }
+
+    pub(crate) fn process_frame(&mut self, index: usize) -> &[Complex<f64>] {
+        assert!(index < self.n_frames, "STFT frame outside signal");
+        let start = index * self.hop_length;
+        for (offset, destination) in self.input.iter_mut().enumerate() {
+            let padded_index = start + offset;
+            let sample = padded_index
+                .checked_sub(self.pad)
+                .and_then(|source_index| self.signal.get(source_index))
+                .copied()
+                .unwrap_or(0.0);
+            *destination = sample * self.window[offset];
+        }
+        self.fft
+            .process_with_scratch(&mut self.input, &mut self.output, &mut self.scratch)
+            .expect("FFT failed");
+        &self.output
+    }
+}
+
 /// Compute the complex STFT, returning real and imaginary parts as separate matrices.
 ///
 /// Both matrices have shape `(1 + n_fft/2, n_frames)`.
+#[cfg(test)]
 pub fn stft_as_real_imag(y: &[f64], params: &StftParams) -> (Matrix, Matrix) {
     let n_fft = params.n_fft;
     let hop_length = params.hop_length;
@@ -90,4 +166,67 @@ pub fn stft_as_real_imag(y: &[f64], params: &StftParams) -> (Matrix, Matrix) {
         Matrix::from_vec(real_data, n_bins, n_frames),
         Matrix::from_vec(imag_data, n_bins, n_frames),
     )
+}
+
+#[cfg(test)]
+mod streamed_tests {
+    use super::*;
+
+    #[test]
+    fn streamed_frames_match_dense_fft_bits_at_centered_boundaries_and_tail() {
+        for (n_fft, hop_length) in [(32768, 8820), (16384, 4410), (8192, 2205)] {
+            for length in [1, hop_length - 1, hop_length, 2 * hop_length + 17] {
+                let samples: Vec<f64> = (0..length)
+                    .map(|index| {
+                        (index as f64 * 0.173).sin() * 0.25
+                            + if index % 37 == 0 { -0.75 } else { 0.0 }
+                    })
+                    .collect();
+                let params = StftParams {
+                    n_fft,
+                    hop_length,
+                    win_length: n_fft,
+                    center: true,
+                    window: None,
+                };
+                let (real, imaginary) = stft_as_real_imag(&samples, &params);
+                let mut streamed = StftFrames::new(&samples, &params);
+                assert_eq!(streamed.frame_count(), real.cols());
+                let workspace = size_of::<f64>()
+                    * (streamed.input.capacity() + streamed.window.capacity())
+                    + size_of::<Complex<f64>>()
+                        * (streamed.scratch.capacity() + streamed.output.capacity());
+                assert!(workspace <= n_fft * 512);
+                for frame in 0..streamed.frame_count() {
+                    for (bin, spectrum) in streamed.process_frame(frame).iter().enumerate() {
+                        assert_eq!(spectrum.re.to_bits(), real.get(bin, frame).to_bits());
+                        assert_eq!(spectrum.im.to_bits(), imaginary.get(bin, frame).to_bits());
+                    }
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn streamed_frames_match_uncentered_and_custom_window_contracts() {
+        let samples: Vec<f64> = (0..79).map(|index| (index as f64 * 0.39).cos()).collect();
+        for center in [true, false] {
+            let params = StftParams {
+                n_fft: 32,
+                hop_length: 7,
+                win_length: 18,
+                center,
+                window: Some(super::super::windows::hann(18, true)),
+            };
+            let (real, imaginary) = stft_as_real_imag(&samples, &params);
+            let mut streamed = StftFrames::new(&samples, &params);
+            assert_eq!(streamed.frame_count(), real.cols());
+            for frame in 0..streamed.frame_count() {
+                for (bin, spectrum) in streamed.process_frame(frame).iter().enumerate() {
+                    assert_eq!(spectrum.re.to_bits(), real.get(bin, frame).to_bits());
+                    assert_eq!(spectrum.im.to_bits(), imaginary.get(bin, frame).to_bits());
+                }
+            }
+        }
+    }
 }

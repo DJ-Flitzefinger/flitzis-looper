@@ -931,3 +931,7 @@ mod stem_pair_publication_tests;
 #[cfg(windows)]
 #[path = "long_source_streaming_tests.rs"]
 mod long_source_streaming_tests;
+
+#[cfg(windows)]
+#[path = "automatic_analysis_tests.rs"]
+mod automatic_analysis_tests;

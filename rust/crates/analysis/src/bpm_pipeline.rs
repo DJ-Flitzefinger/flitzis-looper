@@ -159,6 +159,27 @@ pub fn analyze_bpm(
     Ok(analyze_bpm_raw(audio, sample_rate_hz, config)?.legacy_result())
 }
 
+/// Conservative owned storage for the pinned 44100-Hz default BPM pipeline.
+/// Excludes the borrowed mono input. Every length below is an upper bound; no
+/// stage overlap is subtracted. Dynamic Vec growth is charged at twice length.
+pub fn default_bpm_working_bytes(frames: usize) -> Option<usize> {
+    let odf = (frames as u128).div_ceil(512) + 1;
+    let trellis_rows = odf.div_ceil(128);
+    // ODF, DP score/backlink, backtracked indices/beats, spectral beat changes,
+    // raw downbeat indices and legacy beat/downbeat/bar/BPM interval results.
+    let timelines = odf * 128;
+    // RCF, delta and psi: 128 f64/usize states per row; four outer Vec headers
+    // include the growing RCF matrix at twice length, plus beat-period storage.
+    let trellis = trellis_rows * (3 * 128 * 8 + 4 * 24 + 2 * 8);
+    // DownBeat averages complete blocks of sixteen into an exact-size Vec.
+    let decimation = frames as u128 / 16 * 8;
+    // 1024-point ODF, 4096-point downbeat FFT plans/scratch/history/frames,
+    // 128x128 transition matrix, threshold copies, 512-element RCF frames and
+    // at most 192 transition weights. A 2-MiB reserve exceeds their combined
+    // arrays/plans even at 64 bytes per FFT point and two transition matrices.
+    usize::try_from(timelines + trellis + decimation + 2 * 1024 * 1024).ok()
+}
+
 /// Capture complete qm-dsp evidence before the legacy binary32 conversion.
 ///
 /// The ODF, tracker and downbeat detector run once using the existing pipeline.

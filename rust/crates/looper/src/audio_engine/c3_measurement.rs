@@ -8,8 +8,7 @@ use serde_json::{Value, json};
 use std::collections::HashSet;
 use std::ffi::CString;
 
-#[path = "c3_process_metrics.rs"]
-mod process;
+use crate::audio_engine::c3_process_metrics as process;
 
 #[path = "c3_analysis_measurement.rs"]
 mod analysis;

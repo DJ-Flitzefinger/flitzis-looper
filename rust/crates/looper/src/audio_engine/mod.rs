@@ -9,7 +9,6 @@ use crate::audio_engine::timing::{InputClock, validated_input_timestamp};
 use crate::audio_engine::transport::QuantizeGrid;
 use flitzis_looper_analysis as analysis;
 
-use crate::audio_engine::channels::map_channels;
 use crate::messages::{
     AudioMessage, BackgroundTaskKind, ControlMessage, ControlParameterMessage, LoaderEvent,
     STEM_COMPONENT_MASK, SampleAnalysis, SampleBuffer, StemMixMode, TriggerQuantization,
@@ -37,6 +36,8 @@ pub use analysis_jobs::OfflineAnalysisJob;
 mod buffer_retirement;
 #[cfg(test)]
 mod c3_observation;
+#[cfg(all(test, windows))]
+mod c3_process_metrics;
 mod channels;
 mod cold_jobs;
 mod cold_load;
@@ -501,6 +502,7 @@ fn publish_loaded_sample_with_arm(
 /// Resample mono f32 audio to a target sample rate using rubato.
 ///
 /// Returns the original buffer unchanged if `src_rate` already equals `target_rate`.
+#[cfg(test)]
 fn resample_mono_to_target(
     mono: Vec<f32>,
     src_rate: u32,
@@ -513,24 +515,24 @@ fn resample_mono_to_target(
 ///
 /// Returns `(bpm, beat_grid)` on success.
 fn run_bpm_pipeline(
-    mono_f64: Vec<f64>,
+    mono_f64: &[f64],
     sample_rate_hz: u32,
 ) -> Result<(f32, analysis::BeatGrid), String> {
     analysis::analyze_bpm(
-        &mono_f64,
+        mono_f64,
         sample_rate_hz,
         &analysis::AnalysisConfig::default(),
     )
 }
 
-/// Run the key detection pipeline on mono f32 audio at 44100 Hz.
+/// Run the key detection pipeline on the shared widened mono at 44100 Hz.
 ///
 /// Returns the key string (e.g., "Am", "C", or "unknown" on failure).
-fn run_key_detection(mono_44100: Vec<f32>) -> String {
+fn run_key_detection(mono_44100: &[f64]) -> String {
     #[cfg(debug_assertions)]
     let _timer = std::time::Instant::now();
 
-    match analysis::detect_key(&mono_44100, 44_100) {
+    match analysis::detect_key_f64(mono_44100, 44_100) {
         Ok(result) => {
             #[cfg(debug_assertions)]
             eprintln!(
@@ -558,7 +560,7 @@ fn run_key_detection(mono_44100: Vec<f32>) -> String {
 
 /// Analyze a sample buffer for BPM, beat grid, and key.
 ///
-/// Shared preprocessing (decode -> mono -> resample to 44100) runs once, then
+/// Shared preprocessing (borrowed PCM -> mono -> resample to 44100) runs once, then
 /// the BPM pipeline and key detection pipeline execute concurrently via
 /// `std::thread::scope`. Total analysis time is bounded by the slower pipeline.
 fn analyze_sample(sample: &SampleBuffer, sample_rate_hz: u32) -> Result<SampleAnalysis, String> {
@@ -566,24 +568,8 @@ fn analyze_sample(sample: &SampleBuffer, sample_rate_hz: u32) -> Result<SampleAn
         return Err("analysis failed: empty sample or zero sample rate".to_string());
     }
 
-    // Shared preprocessing: convert to mono.
-    let mono = map_channels(sample.samples.to_vec(), sample.channels, 1)
-        .map_err(|err| format!("analysis failed: {err}"))?;
-
-    if mono.is_empty() {
-        return Err("analysis failed: mono conversion produced empty buffer".to_string());
-    }
-
-    // Resample to 44100 Hz if needed (shared step before fork).
-    let mono_44100 = resample_mono_to_target(mono, sample_rate_hz, 44_100)
-        .map_err(|e| format!("analysis failed: {e}"))?;
-
-    // Clone for parallel pipelines.
-    let mono_44100_bpm = mono_44100.clone();
-    let mono_44100_key = mono_44100;
-
-    // Convert BPM copy to f64 (qm-dsp expects f64).
-    let mono_f64: Vec<f64> = mono_44100_bpm.iter().map(|s| *s as f64).collect();
+    let mono_f64 = analysis_pcm::prepare_default_mono_f64(sample, sample_rate_hz)
+        .map_err(|error| format!("analysis failed: {error}"))?;
 
     // Measure total analysis time in debug builds.
     #[cfg(debug_assertions)]
@@ -597,12 +583,12 @@ fn analyze_sample(sample: &SampleBuffer, sample_rate_hz: u32) -> Result<SampleAn
         std::thread::scope(|s| {
             // BPM pipeline thread.
             s.spawn(|| {
-                bpm_result = Some(run_bpm_pipeline(mono_f64, 44_100));
+                bpm_result = Some(run_bpm_pipeline(&mono_f64, 44_100));
             });
 
             // Key detection thread.
             s.spawn(|| {
-                key_result = Some(run_key_detection(mono_44100_key));
+                key_result = Some(run_key_detection(&mono_f64));
             });
         });
 
@@ -3675,7 +3661,7 @@ mod tests {
 
     #[test]
     fn explicit_analysis_preflight_rejects_between_512_mib_and_one_gib_without_advancing() {
-        let frames = 20_000_000;
+        let frames = 24_000_000;
         let old_peak =
             analysis_pcm::default_analysis_peak(frames, 2, 44_100, 128, cold_jobs::PCM_LIMIT_BYTES)
                 .unwrap();
