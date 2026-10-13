@@ -211,3 +211,9 @@ non-replacing frozen-A restore proof remains separate.
   current architecture/UI/setup docs with actual supported domains and measured
   bounds. Integrate genuine V0/H-LIVE/H-FINAL/C-FINAL coverage; do not infer Human
   acceptance or full Rust-port authorization from software completion.
+
+## Ordinary public Generate to actual live adoption — bounded software block
+
+- [x] Prove one actual public Generate worker/source-lease/event/durable-pair flow from public-born ON FullMix to first own public ALL adoption in supported NormalLoop, retaining prior effective audio through preparation and validating independent complete PCM/raw-Native/FIFO/EQ/source receipts and continuation.
+- [x] Change the separator through public Settings and generate a distinct replacement while preferred ALL remains active; prove automatic fresh candidate registration/Capture/preparation/Adopt and own two-set ramp/Native/current identity, actual final readers and compatible repeated-Generate skip without another backend job.
+- [x] Run affected meaningful integration, official strict/static and one independent final source/evidence review; label the declared inference-output boundary and unchanged evidence reuse, preserve ordinary active-publication/unsupported-domain guards and all neural/music/resource216/Human/full-parent gates.

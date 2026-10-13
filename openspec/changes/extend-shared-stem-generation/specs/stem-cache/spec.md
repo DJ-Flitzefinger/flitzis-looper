@@ -66,6 +66,18 @@ effective audio with visible status; no stop/retrigger or position jump SHALL be
 used to claim successful live adoption. Old voice A SHALL retain its own frozen
 source/set/timing/history even after current bank B changes.
 
+#### Scenario: Public Generate completion drives first and preferred replacement adoption
+- **GIVEN** a publicly started current-source ON FullMix voice is producing nonneutral-rate audio in supported NormalLoop and owns its source/window/history authority
+- **WHEN** public Generate captures its real offline source lease and completes through the existing worker, event processing, verified complete pair preparation and fenced durable selection
+- **THEN** FullMix SHALL remain effective until the performer's own public ALL request obtains its own candidate residency/effective receipts and actual independently verified audio
+- **WHEN** the performer changes the selected separator through public Settings and generates a replacement while that ALL voice continues playing
+- **THEN** ordinary completion SHALL request the still-preferred ALL through fresh own pending registration, Capture, off-thread preparation and guarded Adopt, retaining previous audio until actual handover
+- **AND** first and replacement Native/FIFO/EQ/source trajectories and consumed two-set ramps SHALL match independent complete PCM and raw-Native chronology without START, STOP, retrigger or phase jumps
+- **AND** superseded or unsupported publication SHALL retain usable prior audio and truthful status; disk preparation with components disabled SHALL NOT waive ordinary active-publication or domain guards
+- **AND** current requested separator/model revision and generation identity SHALL bind the job and its subscriber, and a repeated Generate for an already current compatible set SHALL NOT launch another physical backend job
+- **AND** old set owners SHALL retire only after their actual final Native/history/reader use, while the replacement remains usable through own public unload
+- **AND** declared output at the inference boundary SHALL establish only the controller-to-disk-to-Native flow; actual neural execution, model quality, musical/resource/device/Human and whole-parent acceptance SHALL remain separate
+
 The system SHALL permit first and replacement new-complete-set adoption on a
 physically complete resident NormalLoop `[0,N)` with KEY LOCK OFF or ON through
 the same own Capture, off-thread preparation and guarded Adopt transaction.

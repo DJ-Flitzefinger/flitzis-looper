@@ -3021,3 +3021,103 @@ scopes and are explicitly reused. Broader paused/musical/seek/global/default
 admission, ordinary publication, all216/resource/music, full E11/P4b/P5a/P5b and
 Human/program gates remain open. Full Rust-port planning/implementation and
 Slice8 remain out of scope.
+
+## Public Generate completion and live model replacement — 2026-10-13
+
+The bounded [public Generate test](../rust/crates/looper/src/audio_engine/public_generate_adoption_tests.rs) connects the existing public request to
+completed disk selection and actual live adoption. The production path was already
+implemented: `generate_stems_async` captures a real `OfflineStemSourceLease`,
+the two-worker pool resolves immutable job/subscriber intent, worker completion
+prepares a verified disk-only pair, and the fenced selection settlement registers
+a pending candidate. A still-preferred ALL request then uses fresh Capture,
+off-thread component preparation and guarded Adopt. This delivery changes only
+test code, normative scenarios and evidence documentation. Ordinary active
+`components=True` publication and unsupported-domain guards remain required.
+
+The existing complete public history supplies actual acknowledged source/window
+adoption and public Transport Play for ON pad0, complete `[0,4096)` at48kHz,
+rate0.75, with fixture EQ(-12,-3,+4). Its Project/source setup and restored unused
+baseline pair are fixtures. The first generated V1 is the first performer ALL
+request for that new set, not a pristine no-stems/None-to-Some bank birth. Pending
+registration deliberately preserves the exact previous control/effective owner
+while FullMix remains audible. Pad215 has gain0: it proves independent phase,
+source/Native/FIFO/owner preservation, not audible multi-pad mixing. Feedback
+uses actual callback message variants through the existing collecting sink and
+real Python handlers; this is device-free, not a real device feedback-FIFO test.
+
+Both jobs enter through public `generate_stems_async`; neither directly invokes
+`_prepare_pair`. The first job must be admissible and enter the real pool rather
+than skip the baseline. It holds a real source lease while callbacks continue,
+then common promotion computes all five WAV hashes, exclusively creates and
+fsyncs the completion marker and atomically publishes the ready generation.
+Actual `ProjectPersistence.commit_stem_selection` is bound; reopening the saved
+Config validates each newly selected pair. Before own public ALL, the new V1
+remains disk-only and preserves the baseline FullMix control. ALL must obtain a
+distinct current waiting/pending/accepted/transitioning/effective receipt for V1.
+
+After V1 is actually effective, public `SettingsController.set_stem_separator`
+selects BS-RoFormer and increments the processing intent. One new selected-backend
+job completes while ALL keeps playing. Ordinary completion automatically requests
+preferred ALL for V2; the test requires distinct set/fingerprint/producer identity,
+its own Capture/Adopt and actual two-set handover without another Play/Stop.
+Repeated public Generate on each current compatible set reports the duplicate
+diagnostic and launches no physical backend job: exactly one Demucs-adapter call
+and one BS-adapter call occur. Original path/content/source/window/KEYLOCK
+authority and the own voice generation remain unchanged until public unload.
+
+Independent component PCM is decoded from the known serialized PCM16 fixture
+bytes with their declared normalization, separately allocated and compared with
+the static baseline. V2 swaps vocals/melody and adjusts instrumental: actual mask
+1010 corresponds to independent V1 mask1001, giving a different audible feed
+while preserving complete alignment. The existing algebraic source feed, raw
+Native, exact FIFO and uninterrupted EQ oracle check actual output. Each ramp
+consumes128 source frames (171 output frames at0.75); the counted end precedes the
+first settled feed and establishes its own4096-frame Native target. Prepared
+Native address, later adoption and wet current-source output must actually change.
+
+Retirement explicitly enables the production buffer-retirement sink/worker.
+Outgoing V1 transfer completes through a real FIFO marker before V2 Native
+adoption; actual V1 identity/component Weak probes remain held by old Native
+readers through the target boundary. They disappear only after actual V2 adoption
+and reconciliation. V1 WAV/PCM/descriptor areas then clean up while V2 continues
+playing. V2 stays retained until public Loader unload receives its own STOP/default
+ACK, followed by actual final-reader and three-area cleanup while Engine/Native/
+retirement workers remain alive. No final original-source PCM release or Copy/R1/R2
+claim follows from this case.
+
+The inference boundary is explicitly declared. The two adapters supply five known
+WAVs and encoder/decoder receipt flags; six producer-resolution/input-contract/
+file-capture functions use three synthetic sealed producer-role files. Each
+adapter checks its encoder path, branch contract, source roots and held role bytes.
+Actual Native `SealedProcessingFiles` verification, offline-source verification,
+production provenance validation, common marker publication, fenced persistence
+and Capture/Adopt remain unchanged. These receipts establish the controller flow
+relative to the declared producer identities. They do not attest installed-model
+discovery, real encoder/decoder verification, neural execution or model quality.
+
+Retained negative runs: the first fixture wrote `.complete.json` prematurely and
+was correctly rejected by exclusive promotion (Errno17). After output-contract
+repair, an incorrect baseline-control-is-None assertion failed; source review
+confirmed deliberate previous-control retention in `_register_live`. Both repairs
+change fixture expectations only; audio tolerances, deadlines and production
+guards remain unchanged. Logs stay in `scratch/goal-public-generate-20261013`.
+
+The final focused Release test-binary case passes2.37s after compile1m09. Six
+fresh affected integration cases pass: existing public worker completion4.15s,
+shared running-job/final-unload custody2.48s, durable disk settlement1.88s,
+ordinary active-new-set guard1.55s, public complete ON return1.69s and existing
+controller first/replacement Native chronology5.42s. This is seven passing cases
+including the focused case, not a whole L3/workspace or neural/resource suite.
+Clippy workspace/all-targets exits0 in9.84s with exactly unchanged149 diagnostics,
+77 distinct messages/120 message-file pairs (lib-test62 including26 duplicates);
+warnings remain. Rustfmt, official strict, diff and staged link/scope checks pass.
+The one final independent source/evidence review passes with no unresolved
+findings; only the three bounded tasks close.
+Production Rust/Python/build inputs remain unchanged; the previous7b6c7fd private
+production Release/API preflight (Native SHA
+`a9a9329dd36bf9c3e173a1cf0a3d8ef5476c6e9d43574d348e8c2671bc817bab`)
+and716 Python controller-double checks/two device exclusions are explicitly reused,
+not fresh results. No Native installation, App/device/listening acceptance, actual
+neural execution, full musical/resource216 matrix or whole E11/program/Goal
+closure is claimed. P5b/R1/R2 and all remaining full-parent/Human gates stay open;
+STOP before full Rust-port planning/implementation or Slice8.

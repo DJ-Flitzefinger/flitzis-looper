@@ -12,6 +12,8 @@ use crate::audio_engine::buffer_retirement::AudioBufferRetirement;
 mod l4_disk_settlement_tests;
 #[path = "l4_shared_job_tests.rs"]
 mod l4_shared_job_tests;
+#[path = "public_generate_adoption_tests.rs"]
+mod public_generate_adoption_tests;
 #[path = "saved_keylock_controller_tests.rs"]
 mod saved_keylock_controller_tests;
 
