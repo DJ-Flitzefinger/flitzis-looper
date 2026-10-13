@@ -11227,7 +11227,7 @@
       "work": "Prioritized controller/global/pad intent -> productive finite Native prepare/adopt -> truthful effective/pending/error UI correction at k=0 fixed NormalLoop.",
       "gates": [
         "Uses accepted NormalLoop/lifecycle proofs as narrow explicit input, never requires whole P4b or B5 first.",
-        "Actual installed controller/native routes, independent wet output both directions and override/stale matrix; closes only reported fixed-domain defect, all remaining P4b/P5a/nonzero gates open."
+        "Actual installed controller/native routes, independent wet output both directions and override/stale matrix; closes only reported fixed-domain defect, all remaining P4b/P5a/nonzero gates open. Bounded public GLOBAL multi-voice evidence: docs/pcm-cache-residency.md#public-global-with-independently-audible-voices--2026-10-13; two finite one-frame histories and 24 affected Rust cases pass, actual per-voice Native/dry/FIFO/EQ/phase and audible sum, inherited running/paused targets, explicit ON/OFF peers, target-local reserve failure/stale supersession and actual mode-view retirement with current own bank/voice PCM retained. All actual cross-pad PCM pairs were false; conditional other-pad shared backing remains open. Unchanged production Release/API/Python-double evidence and histories across a type-only alias are explicitly reused. Final review disposition remains in the report; complete/ALL/global-domain/music/resource216/Human/full-parent gates remain open."
       ]
     },
     {
@@ -11992,7 +11992,10 @@
     "status": "VALIDATED_BOUNDED_SOFTWARE_ONLY",
     "baseline": "b6048e488d965fd3103c6df723cd9ac265415cf1",
     "scope": "Production k=0 finite Seek/Intro/Tail, physical-domain edits and return from explicitly admitted complete-track exceptions; current and retained source voices, own window/control ACK, real Native/FIFO preparation/adoption and sustained wet continuation under the source-bound software tests.",
-    "coverage_reference_ids": ["FINITE-DSP-CONTEXT", "E11-03"],
+    "coverage_reference_ids": [
+      "FINITE-DSP-CONTEXT",
+      "E11-03"
+    ],
     "evidence_document": "docs/finite-seek-domain-validation.md",
     "parent_completion_claimed": false,
     "remaining_gates": [

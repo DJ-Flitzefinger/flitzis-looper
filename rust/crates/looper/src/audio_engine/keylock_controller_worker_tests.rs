@@ -1,6 +1,9 @@
 //! Controller -> PyO3 -> WindowWork -> callback ACK -> genuine wet/dry render.
 //! Device startup is replaced only by the engine's existing test producer seam.
 
+#[path = "public_global_voice_tests.rs"]
+mod public_global_voice_tests;
+
 use super::*;
 use crate::audio_engine::audio_stream::{drain_parameter_messages, render_scheduled_audio};
 use crate::audio_engine::resident_relocation::ResidentWindowTicket;

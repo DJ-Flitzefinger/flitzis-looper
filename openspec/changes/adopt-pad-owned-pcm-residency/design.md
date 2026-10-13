@@ -609,6 +609,18 @@ and pending/error feedback. There is no separate mutable inheritance flag. The a
 NormalLoop/lifecycle checkpoint is the narrow prerequisite; seek/intro/tail/new pitch,
 full P4b and P5a guards do not open wholesale.
 
+The public multi-target continuation composes the existing Python Transport,
+per-pad WindowWork and real callback/retirement worker without another global
+audio switch. Several inherited targets and explicit ON/OFF peers retain
+independent consumed-source clocks, Native/FIFO state and filter history even
+when their immutable PCM is shared. Test references allocate independent complete
+PCM, raw Native chronology and EQ chains per voice; each pre-EQ contribution,
+post-EQ pad peak and audible mixed output is checked separately. One paused
+target and one actual failed preparation target exercise different ownership
+boundaries. Own pad/source/window/request feedback remains required; equal
+numeric request IDs or shared PCM do not merge voice authority. Finite test
+representatives do not establish complete/ALL, resource216 or Human acceptance.
+
 E11-03 replaces complete arrays in stem_cache.rs::prepare_complete_stems_at_project_root and the full-extent warm gate in stem_pair.rs with retained-reader streaming passes. Full reference/mono scans first determine the exact global peak and then the first threshold crossing (including all-silent behavior). Retained positioned reads extract the existing pre-onset 0.5-second and four-second bounded region for the exact +/-0.25-second alignment oracle. A subsequent streaming output pass applies one signed loaded-frame offset, exact PCM16 normalization and edge zero padding while writing five immutable f32 derivatives and full digests. The old complete-array conversion is the independent small-fixture oracle. Warm verification streams all leaves through EOF before reuse. Use existing sealed/source/range readers and job lanes; no callback file access or new pool. Memory peaks include scratch, worker overlap, resident old/new users and process RSS separately; actual Demucs inference remains a separate measured limitation. No total-duration cap, cap raise or complete multi-GB allocation substitutes for the streaming implementation. User loop/ALL demand and aggregate budget remain authoritative.
 
 The same bounded preparation also covers upstream FullMix import: sealed original

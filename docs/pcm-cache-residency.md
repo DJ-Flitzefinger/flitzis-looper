@@ -1572,3 +1572,93 @@ subscribers, actions/holds/history/native unload ACK participate in true last us
 Move/Swap carries exact DSP/history/cohort; all36 operations preflight full capacity,
 acquire refs first and never free unconfirmed native claims. Origin bank deletion
 and new-process restore require actual evidence; full finite216/P6/V0 proofs remain.
+
+
+## Public GLOBAL with independently audible voices — 2026-10-13
+
+This bounded software block verifies the actual Python Transport GLOBAL/Pad
+routes through the current PyO3 engine, WindowWork and scheduled callback for
+several simultaneous finite NormalLoop voices. Existing stopped all-bank,
+override/failure and single-voice public GLOBAL tests remain their own genuine
+Native evidence. The 716 Python controller tests remain separate test-double
+evidence; they do not establish this concurrent audio path.
+
+The new child `public_global_voice_tests.rs` reuses the existing real Native-load
+and Project-fixture Harness. Device startup alone is replaced by its existing
+test control/parameter producer seams; ordinary Python Loader birth is not part
+of this fixture. Pads 0/36 inherit, 72 is explicit ON and 215 explicit OFF. Each
+starts through public Transport at a staggered time, at volume1 and rate.73,
+with its own phase in physical32..224 at48kHz. Nonneutral EQ setup enters the real
+typed parameter queue; this is not a new public-EQ gesture proof.
+
+Each pad's reference owns separately allocated original PCM, an algebraic consumed-source
+clock, raw Native adapter and EQ state. Every actual one-frame scheduled render
+checks each running voice's chosen pre-EQ dry/warming/wet buffers, its post-EQ
+pad peak and the audible filtered sum. Independent first-block dry guarding and
+4096-frame candidate feeding determine each own Native chronology, FIFO,
+productive history, physical phase and current-source readiness. Preparation is
+awaited after its first actual feed, without advancing callback time. Own source
+and window/request receipts, launch generation and geometry remain distinct from
+wet success; numeric request IDs need not be globally unique.
+
+The successful history starts inherited OFF, enables GLOBAL ON while pad36 is
+paused, resumes it publicly, proves all own wet outputs/adoptions, then applies
+GLOBAL OFF across running0/paused36 and resumes dry36. Paused ON is truthfully
+armed/effective/ready before its first live wet output. Source and EQ stay fixed
+through its own mode ACK; Native/FIFO remain fixed within the paused phases,
+while own OFF legitimately clears mode state. Explicit72 retains wet processing
+and explicit215 retains dry processing throughout. No START/STOP/retrigger is
+introduced by GLOBAL, and all running contributions remain audible.
+
+The partial-failure history exhausts only pad36's actual warmed reserve after
+the real pre-ACK capacity gate. Its original generation/source/window and own
+failed request remain authoritative; dry source/EQ audio continues with requested
+inherited ON and truthful error. Pad0's queued global request is superseded by
+public local OFF then clear-override; the stale ticket loses authority and its
+fresh inherited request independently reaches own wet output. Explicit peers'
+separate lanes continue successfully. This is target-local reserve admission
+exhaustion. The initially proposed worker crash was rejected before execution:
+its worker_failed Arc is shared by every mixer lane, so it could not certify an
+isolated target failure. Production failure scope and lane wiring are unchanged.
+
+Outgoing inherited ON ResidentSourceView Weak owners reach zero after actual OFF,
+receipt-alias release, production retirement FIFO completion and real relocation
+reconciliation while callbacks and preparation workers remain alive. Each current
+immutable PCM allocation remains directly shared by its own bank and publicly started
+voice. All six measured cross-pad PCM pointer pairs were FALSE in both histories.
+The conditional cross-pad shared-owner branch was therefore not exercised;
+shared backing used by another pad remains a separate open coverage case. No
+shared cross-pad allocation, disk deletion or every-owner proof is inferred.
+
+Validation:
+
+| Check | Result and profile |
+|---|---|
+| Focused public GLOBAL histories | 2 pass, 1.69s, after Release TEST compile1m14; headless actual PyO3/controller/callback kernels |
+| Public controller parent | 13 pass, 6.19s, includes the same two new cases |
+| Native mode chronology | 9 pass, 18.56s, existing independent physical/raw-Native/FIFO/EQ workers |
+| Production buffer retirement | 2 pass, 0.00s, this module's focused cases |
+| Final Clippy workspace/all-targets | exit0, 7.56s; unchanged149 diagnostic warnings/77 message kinds, lib-test62 including26 duplicates; warnings remain |
+
+The 24 integrated cases include the new two rather than adding another two to
+the count. The first compile failed only on an invalid test import; no audio
+ran in that attempt. The oracle now normalizes its bounded fixture EQ independently.
+Initial Clippy passed with one additional tuple-complexity warning. A descriptive
+`PreviousOnOwners` alias removes it without suppression or runtime changes;
+final all-targets Clippy compiles that source. The successful audio histories are
+reused across this type-annotation-only change, not relabelled as a fresh Release
+run. Logs are in workspace/scratch/goal-public-global-20261013.
+
+Only the new cfg(test,windows)-reachable child and its parent registration alter
+Rust inputs; production Rust/Python/build inputs remain unchanged. The earlier
+7b6c7fd private production Release23.07s/API preflight and Native SHA
+`a9a9329dd36bf9c3e173a1cf0a3d8ef5476c6e9d43574d348e8c2671bc817bab`, plus
+716 Python controller-double checks with two device cases excluded, are explicitly
+reused. The Human extension is not installed or started by this block.
+
+Official affected strict validation, whole Rust formatting, document/link/JSON
+consistency and actual final diff checks pass. The one independent final
+source/evidence review passes with no open findings in this bounded result.
+These one-frame finite k=0 representatives do not establish fresh irregular
+callback, complete-source/ALL GLOBAL, cross-pad shared backing, accepted-musical,
+aggregate216-resource, device/listening/Human or whole E11/P4b/P5a/P5b/Goal gates.

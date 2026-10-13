@@ -508,6 +508,14 @@ does not infer it from those separate profiles. Public Loader B replacement
 stops A at B's matching assignment ACK by its existing contract; post-ACK
 frozen-A native restore remains a distinct previously bounded source path.
 
+### Public GLOBAL with independently audible targets — passing bounded software block
+
+- [x] Prove actual public GLOBAL ON/OFF for multiple inherited running/paused targets and independent explicit ON/OFF voices across banks, with each own source/window/request ACK, complete PCM/raw-Native/FIFO/EQ/phase and audible mixed output.
+- [x] Prove actual target-local reserve admission exhaustion and superseded requests preserve usable per-voice audio and other targets' successful processing, plus actual off-thread mode-view retirement with current own bank/voice PCM owners retained; report observed cross-pad sharing separately and keep unexercised other-pad shared-backing coverage open.
+- [x] Validate affected meaningful regressions, official strict/static and one independent final source/evidence review; distinguish unchanged production/Python evidence and keep complete/ALL/domain/music/resource216/Human and whole-parent gates open.
+
+The [public GLOBAL report](../../../docs/pcm-cache-residency.md#public-global-with-independently-audible-voices--2026-10-13) records two focused histories, 24 affected integrated cases, final unchanged-baseline Clippy and official strict/static checks. The one independent final source/evidence review passes with no open findings. Only current own bank/voice PCM continuity is established: every measured cross-pad sharing pair was false. Other-pad shared backing, complete/ALL/global-domain/music/resource216/Human and whole-parent gates remain open. Passing audio histories are explicitly reused across the final type-annotation-only alias; production Release/API and Python-double profiles are unchanged and separately reused.
+
 - [ ] X11-MATERIAL M1: readable contained roots, full-SHA cross-name dedup/unsafe-case collisions, exact original preservation and independent content settings/DSP/owners through copy/move/origin-delete.
 - [ ] X11-MATERIAL M2: existing M-ID/legacy journal/config/current-reference migration with fresh native ACK and fault/reopen/latest-intent/unknown/true-last-reader proof; no rename beneath owners or reset.
 

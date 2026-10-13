@@ -572,6 +572,17 @@ mutable flag. Native feedback SHALL NOT rewrite requested origin.
 - **AND** the global default and every other pad's override SHALL remain unchanged
 - **AND** failure SHALL retain inherited origin and the previous confirmed Native state with visible error
 
+#### Scenario: Public global changes preserve several independently audible voices
+- **GIVEN** at least two publicly started inherited pads and separately started explicit ON and explicit OFF pads in different banks have independent source phases at a nonneutral rate
+- **WHEN** public GLOBAL ON and OFF actions cross ongoing playback and an inherited pad's public pause and resume
+- **THEN** each inherited target SHALL obtain its own current source/window/request acknowledgement without START, STOP, retrigger or source-phase changes
+- **AND** each running voice's actual dry, warming or Native/FIFO output and continuous EQ contribution SHALL match its independently consumed complete PCM and raw-Native chronology; audible summed output SHALL retain all running contributions
+- **AND** the paused voice SHALL retain source and filter history while other voices continue, and its own resume SHALL continue from that retained history
+- **AND** explicit ON and explicit OFF voices SHALL retain their own origin, mode, current Native/FIFO/history and uninterrupted audio under the global actions
+- **AND** mode-specific source-view owners SHALL retire through the existing off-thread path only after their actual final readers, while shared immutable PCM still used by another voice SHALL remain owned
+- **AND** an inherited target's actual preparation failure or superseded request SHALL preserve its usable audio and truthful error or pending status without aborting another inherited target's own successful processing or borrowing another pad's acknowledgement
+- **AND** this finite NormalLoop multi-target scenario SHALL NOT establish complete-source, selected-stem, musical, aggregate-resource, device or Human acceptance
+
 ### Requirement: E11-03 Complete source extent is independent of scratch admission
 The system SHALL prepare and verify complete FullMix, all five aligned stem WAV/PCM derivatives and mono integrity through bounded streaming blocks and disk-backed immutable generations without an artificial duration or total-PCM 1-GiB limit.
 
