@@ -31,6 +31,15 @@ it does not prove adopting newly generated content.
   216-slot, all-bank inventory, bounded fair job admission, progress, partial
   results, visible errors and batch-interest cancellation.
 
+The bounded public A-to-B lifecycle proof composes existing assignment, playback
+and candidate controls. Actual publicly born ON A remains productive until
+ordinary B's own assignment ACK deliberately stops it. B then requires its own
+public window/START, addressed ON confirmation when requested, first/replacement
+live pair receipts and actual final-reader retirement. This proof changes no
+production lifecycle or publication domain; queued old-source fences, native
+non-replacing frozen-A restore and broader resource/music/Human gates keep their
+separate scopes. Its [bounded report](../../../docs/prepared-stem-publication.md#public-a-birth-ordinary-b-assignment-and-candidate-readers--2026-10-13) records actual focused/affected validation and the final review disposition; only its three child tasks may close.
+
 ## Contract lineage
 
 These are pending targets, not claims that published runtime guards are already

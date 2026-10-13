@@ -3,6 +3,9 @@
 //! algebraic feed, raw Native/FIFO or dry Varispeed, and uninterrupted EQ oracle.
 
 use super::*;
+
+#[path = "l3_public_loader_b_lifecycle_tests.rs"]
+mod l3_public_loader_b_lifecycle_tests;
 use crate::audio_engine::buffer_retirement::AudioBufferRetirement;
 
 #[path = "l4_disk_settlement_tests.rs"]

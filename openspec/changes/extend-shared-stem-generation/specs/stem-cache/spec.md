@@ -534,6 +534,19 @@ immediate change SHALL NOT silently discard the command.
 - **AND** output SHALL follow independently verified complete new-original component PCM, selected mask, continuous input ramp, Native FIFO and filter chronology; the complete4096-frame preparation interval SHALL begin after its own stem adoption without borrowing predecessor or FullMix history
 - **AND** the rejected predecessor SHALL remain unclaimed, other pads SHALL retain their independent source owners and trajectory, and persistence SHALL reopen the new assignment, complete pair, ALL intent and explicit KEY LOCK ON override
 
+#### Scenario: Publicly born A and ordinary B replacement retain separate audio lifecycles
+
+- **GIVEN** source A was started through actual public Transport, has its own effective nonneutral KEY LOCK ON output with FullMix or selected ALL, and an unrelated pad retains its independent source trajectory
+- **WHEN** ordinary public Loader admits different source B and subsequently receives its matching assignment acknowledgement
+- **THEN** A SHALL remain productive through preparation and pending acknowledgement; only B's own assignment acknowledgement SHALL stop A and install B without automatically starting B
+- **AND** actual Loader completion SHALL project B's own identity and incoming defaults before later public Play derives B controls; B SHALL obtain its own window acknowledgement, explicit launch and actual START feedback
+- **AND** addressed B ON, when requested, SHALL confirm its own actual wet output separately from the source/window acknowledgement and from A's historical Native adoption
+- **AND** B's first and replacement live stem selections SHALL obtain distinct durable source-bound pairs and own Capture/worker/Adopt receipts, preserve B voice/source/filter chronology through each handover and confirm only their own dry or subsequently prepared wet effect
+- **AND** output SHALL match independent complete B original/component PCM, declared per-voice source trajectories, Native/FIFO and uninterrupted EQ without borrowing A or another pad's rate, loop or receipt
+- **AND** actual outgoing, Native/history and asset owners SHALL retain B's predecessor set until final use; production off-thread retirement and actual final readers SHALL precede cleanup of its WAV, PCM and descriptor areas
+- **AND** B's current pair SHALL remain usable until its own public Unload acknowledgement and actual final-reader retirement, while the unrelated pad and persistence retain their own state
+- **AND** separately proved queued predecessor fences and native non-replacing frozen-A restore SHALL retain their scopes; this ordinary assignment replacement SHALL NOT create post-acknowledgement frozen-A playback or close full domain/music/resource/Human gates
+
 #### Scenario: Public Unload cancels a queued new-set adoption before its own stop
 
 - **GIVEN** a playing FullMix or selected V1 voice has an unclaimed V2 Adopt queued behind its genuine Capture and component worker, and another pad is active

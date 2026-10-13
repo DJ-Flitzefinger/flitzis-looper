@@ -106,6 +106,19 @@
   musical/resource matrices, whole P4b/P5a/P5b and all final/Human gates remain
   separate; no full Rust-port/Slice8 work follows.
 
+### Public A birth and ordinary B lifecycle — passing bounded software block
+
+- [x] Reuse actual public-born own ON A FullMix/ALL and prove ordinary Loader B preparation, A continuation until matching B assignment ACK then deliberate STOP, own incoming defaults and B public window/START, with addressed B ON requiring its own wet truth.
+- [x] Prove B first and replacement source-bound live pairs/own receipts, independent complete PCM/dry or Native/FIFO/EQ/source trajectories and real outgoing/Native/final-reader retirement through production off-thread audio retirement; remove predecessor three-area artifacts only after final readers and release current B only after own public Unload.
+- [x] Validate four bounded histories (A FullMix/ALL to B OFF/ON), affected meaningful integration, needed production Release/API or source-grounded unchanged reuse, strict/static and one independent final source/evidence review, keeping complete domain/music/resource216/Human and parent gates open.
+
+The public complete-source follow-up seam supplies actual A birth and feedback.
+Existing finite B helpers and queued old-source fences keep their separate
+passing scope; their harness A birth does not establish this composed lifecycle.
+The unrelated pad has its own full-source rate/clock and is not relabelled as B's
+finite loop. Ordinary assignment replacement stops A at B's own ACK; the native
+non-replacing frozen-A restore proof remains separate.
+
 ## 4. X11-LIVE-STEMS: current model and actual reader retirement (L4)
 
 - [x] 4.1 Separate committed disk selection, pending publication and actual

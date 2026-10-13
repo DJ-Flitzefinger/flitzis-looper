@@ -407,6 +407,38 @@ reader-family consolidation are recorded in the progressive Frozen report in
 `docs/prepared-stem-publication.md`. Public Loader/default-Play admission, active
 ON-to-OFF, full L4 and other parents, later V0 and final/Human gates remain open.
 
+## Public A birth and ordinary B lifecycle
+
+The existing complete-source public birth has a test-only follow-up after own
+FullMix or selected ALL ON effect. Four bounded histories compose it with the
+ordinary Loader B assignment, own defaults/ACK and deliberate A STOP, B's own
+public window/START and optional addressed ON, then first/replacement B live
+candidate effects and final readers. The global nonneutral rate remains0.75;
+the unrelated pad retains its complete4096-frame source and independent consumed
+clock, including the earlier ALL pause gap. B has its own finite17..1517 loop
+and new birth chronology. No oracle may reuse B's loop for the unrelated pad.
+
+Complete B original/component WAVs and independent PCM references bind the actual
+new source. A changed B component permutation with a fresh verified set marker
+distinguishes replacement effect while retaining original alignment. Durable
+selection, Capture/worker/Adopt, source-frame ramp and subsequent own Native
+preparation remain separate. The fixture enters the existing controller
+`_prepare_pair(..., components=False)` disk-candidate path for both sets; it
+does not infer active ordinary component publication or neural inference from
+that explicit path. Later actual candidate residency still requires its own
+Capture/worker/Adopt. The production audio retirement worker and actual
+Native/history readers protect predecessor WAV/PCM/descriptor areas until final
+use; later B2 effect releases B1, and own B2 public Unload precedes its final
+reader cleanup. Shared A and unrelated-pad owners remain legitimate readers.
+The shared helper's final unrelated-pad cleanup is separate from the B proof.
+
+Existing queued A-candidate source-fence negatives retain their passing profile
+through source-grounded reuse. Actual public A birth is not inferred from their
+harness setup, and ordinary assignment replacement cannot be relabelled as the
+native non-replacing frozen-A restore. This introduces only bounded test/spec
+evidence, with no new callback work, worker pool, lifecycle or domain. Complete
+paused/musical/seek/resource216/Human and whole-parent gates remain required.
+
 ## B1: all-loaded generation and cooperative Cancel
 
 Confirmation captures bounded all-bank slot/content/material identities, selected

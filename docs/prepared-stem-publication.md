@@ -2930,3 +2930,94 @@ with no remaining issue. Formatting, official strict validation and whitespace
 pass; Clippy tests exit0 with the existing63 warnings (one duplicate), none in the
 changed test. Prior unchanged production Release/import/Python checks and verified
 relative-file links remain reusable.
+
+## Public A birth, ordinary B assignment and candidate readers — 2026-10-13
+
+Four isolated histories compose actual public ON A FullMix or selected ALL with
+ordinary Loader B, then B OFF or its own addressed ON. The existing complete-source
+follow-up supplies A's public START and own audible wet output. B preparation and
+its pending load command leave A's actual voice, source, Native/FIFO and EQ
+productive; only B's matching assignment ACK stops A. It installs B without
+starting a voice. Own incoming receipt/default projection precedes B's public
+finite-window ACK, source-bound launch and actual START feedback. Ordinary
+assignment replacement is distinct from the native non-replacing frozen-A route.
+
+B initially inherits Global OFF, Auto8/no-BPM defaults and neutral EQ, even though
+A's saved pad override was ON. Actual B dry output proves the old source/filter
+reset. Public Pad EQ then enters the real parameter lane and establishes
+nonneutral uninterrupted filters. Optional public B ON acknowledges its own
+source/window/request and retains exact voice, phase and DSP history. Its dirty
+historical Native may exchange with an existing warmed reserve; metadata ACK
+remains dry/not-ready. B's own later finite4096-frame preparation and actual
+current-source wet feedback confirm ON independently of A's historical adoption.
+
+Global rate remains0.75. B reads its own finite17..1517 window of the new4096-frame
+original; Pad215 keeps its complete4096-frame source, independent absolute
+consumption including A's earlier ALL pause gap, rate, generation, Native/FIFO,
+mode and backing. B birth resets only B chronology. Independent complete original
+PCM16 uses32768, component PCM uses32767, and actual finite bytes match those
+separate references. Complete PCM/Raw Native/FIFO, every rendered output sample,
+uninterrupted EQ, source fractions and finite preparation taps remain exact.
+Global tap observations cover the union of both voices, rather than attributing
+Pad215's complete taps to finite B.
+
+Both verified five-WAV/SHA sets enter the existing controller
+`_prepare_pair(..., components=False)` disk-candidate worker path. It retains
+fenced-source/content/path/intent checks and prepares on the real bounded pool;
+this fixture does not prove neural inference or implicit active ordinary component
+publication. B's first and replacement selections have different durable identities,
+current native registrations and their own Capture/worker/Adopt receipts. The
+128-consumed-source-frame handover precedes own dry effectiveness or subsequent
+source-specific Native preparation/wet effectiveness. Persistence reopens the
+new assignment, pair, ALL intent, ON inheritance/override and nonneutral EQ.
+
+B2 permutes B1's actual melody/bass components5/6 and renews the integrity marker,
+keeping complete original and accompaniment alignment. Actual mask1010 changes
+output; independent B1 complete components with scalar reference mask1100 produce
+the same declared B2 feed without publishing a synthetic new set into the DUT.
+The source, voice and filter chronology continue through that distinct receipt.
+
+Production audio retirement transfers actual outgoing B1 ownership off-thread,
+with a FIFO completion marker. ON's used B1 Native/history still retains its
+identity and components after outgoing transfer; only B2's own later Native and
+actual final readers permit B1 WAV/PCM/descriptor cleanup while B2 continues.
+OFF likewise requires actual final-reader release. B2 stays retained and usable
+until its own public Unload/STOP acknowledgement, production FIFO and actual final
+readers release it. The test removes the drained retirement sink and ends its
+worker after proven B cleanup; the shared helper's later Pad215 STOP/cleanup is
+outside this B lifetime proof.
+
+Initial failures are retained. The first combined accepted/current assertion did
+not identify whether it was the first or replacement registration, or which
+current fence failed; its precise cause remains unresolved. Native pending
+registration returns accepted-fixed and requires no callback registration ACK.
+The explicit disk-candidate route retains every required accepted/current check.
+Other corrected fixture assumptions were preserving a dirty OFF Native pointer,
+comparing a full render call with scratch that holds only its last internal
+chunk, and measuring B2's ramp-end minimum after the first settled frame had
+already started its own Native request. Scratch expectations now derive solely
+from the independent raw Native block/input FIFO before processing, retain the
+actual original render partition, and add per-render raw FIFO equality. The
+strict Native minimum uses the true completed128-source-frame boundary before
+that first settled frame, with initial ON/B1 bounds unchanged. A test-owned
+`pair_selection` receipt alias ends before B2 final-reader assertions. No product
+startup, guard, tolerance or deadline was changed for these corrections.
+
+The profile is the Release Rust test binary with actual headless Engine/Python
+controllers and callback kernels; it is not a production wheel callback or
+CPAL/device/hearing test. All four focused cases pass together in16.23s on the
+final test source, after the preceding exact ON2 pass6.06s. All28 affected cases
+pass in11 filters: seven existing public source/Play/ON/first-B-stem wrappers
+retain their14 histories, two productive final-reader/Unload cases, two actual
+buffer retirement cases and17 paired-reader asset cases. This is not a fresh
+whole L3/cold-load/workspace or13-case broad retirement run. Clippy workspace/
+all-targets exits0 in14.79s with exactly unchanged149 diagnostic warnings/77kinds
+and message/file counters (lib-test62,26 duplicates); warnings remain. Rustfmt
+and official strict pass. The one independent final source/evidence review
+passes with no unresolved actionable findings. Production Python/Rust/build inputs are
+unchanged: the preceding private production Release/API preflight and716-case
+Python controller test-double profile with two device exclusions retain their
+scopes and are explicitly reused. Broader paused/musical/seek/global/default
+admission, ordinary publication, all216/resource/music, full E11/P4b/P5a/P5b and
+Human/program gates remain open. Full Rust-port planning/implementation and
+Slice8 remain out of scope.
