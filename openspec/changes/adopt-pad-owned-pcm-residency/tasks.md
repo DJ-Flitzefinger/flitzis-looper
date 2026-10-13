@@ -516,6 +516,14 @@ frozen-A native restore remains a distinct previously bounded source path.
 
 The [public GLOBAL report](../../../docs/pcm-cache-residency.md#public-global-with-independently-audible-voices--2026-10-13) records two focused histories, 24 affected integrated cases, final unchanged-baseline Clippy and official strict/static checks. The one independent final source/evidence review passes with no open findings. Only current own bank/voice PCM continuity is established: every measured cross-pad sharing pair was false. Other-pad shared backing, complete/ALL/global-domain/music/resource216/Human and whole-parent gates remain open. Passing audio histories are explicitly reused across the final type-annotation-only alias; production Release/API and Python-double profiles are unchanged and separately reused.
 
+### Public complete restore sharing — passing bounded software block
+
+- [x] Prove one actual public complete FullMix restore history with unconditional shared bank/voice PCM across inherited and explicit ON/OFF pads, independently audible phased public starts, own receipts and complete PCM/raw-Native/FIFO/EQ/source oracles through public GLOBAL ON/OFF.
+- [x] Prove actual outgoing mode-view/history retirement while explicit peers retain and use the identical immutable allocation, then public per-pad unload and actual final shared PCM reader release with preparation/receipt aliases ended; no public Copy, disk deletion or whole-domain claim.
+- [x] Run affected meaningful integration, official strict/static and one independent final source/evidence review; declare unchanged-input reuse and preserve R1/R2/ALL/finite-sharing/music/resource216/Human/full-parent gates.
+
+The [complete Restore sharing report](../../../docs/pcm-cache-residency.md#public-complete-restore-sharing-and-final-pcm-readers--2026-10-13) records one focused and 17 integrated cases, exact unchanged Clippy baseline and official strict/static checks. The one independent final source/evidence review passes with no open findings. The sole public Restore unconditionally shares complete PCM; stopped actual source-message relay and post-START OFF contexts are explicit. Only this complete FullMix sharing/independent GLOBAL/final-reader composition passes; public Copy/ReArrange, selected-ALL, finite sharing, musical/resource216/Human and whole-parent requirements remain open.
+
 - [ ] X11-MATERIAL M1: readable contained roots, full-SHA cross-name dedup/unsafe-case collisions, exact original preservation and independent content settings/DSP/owners through copy/move/origin-delete.
 - [ ] X11-MATERIAL M2: existing M-ID/legacy journal/config/current-reference migration with fresh native ACK and fault/reopen/latest-intent/unknown/true-last-reader proof; no rename beneath owners or reset.
 

@@ -621,6 +621,17 @@ boundaries. Own pad/source/window/request feedback remains required; equal
 numeric request IDs or shared PCM do not merge voice authority. Finite test
 representatives do not establish complete/ALL, resource216 or Human acceptance.
 
+Complete sharing is composed through one public Restore of fresh distinct pads.
+The existing digest/device preparation gate registers complete PCM Weak before
+releasing preparation, while the first producer retains its sample/lease through
+own ACK waiting. Complete followers share that allocation; finite ranges and
+pinned same-pad replacements retain their existing distinct-allocation policy.
+The bounded test observes stopped setup source transactions through unchanged
+one-message production-drain partitions, then uses normal drains for public
+playback/GLOBAL/unload. It proves own mode-view retirement with audible shared
+peers and final PCM readers; it neither implements public Copy nor changes OFF
+saved-hint classification. Whole-domain/resource/Human gates stay separate.
+
 E11-03 replaces complete arrays in stem_cache.rs::prepare_complete_stems_at_project_root and the full-extent warm gate in stem_pair.rs with retained-reader streaming passes. Full reference/mono scans first determine the exact global peak and then the first threshold crossing (including all-silent behavior). Retained positioned reads extract the existing pre-onset 0.5-second and four-second bounded region for the exact +/-0.25-second alignment oracle. A subsequent streaming output pass applies one signed loaded-frame offset, exact PCM16 normalization and edge zero padding while writing five immutable f32 derivatives and full digests. The old complete-array conversion is the independent small-fixture oracle. Warm verification streams all leaves through EOF before reuse. Use existing sealed/source/range readers and job lanes; no callback file access or new pool. Memory peaks include scratch, worker overlap, resident old/new users and process RSS separately; actual Demucs inference remains a separate measured limitation. No total-duration cap, cap raise or complete multi-GB allocation substitutes for the streaming implementation. User loop/ALL demand and aggregate budget remain authoritative.
 
 The same bounded preparation also covers upstream FullMix import: sealed original

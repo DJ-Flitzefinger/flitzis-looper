@@ -583,6 +583,16 @@ mutable flag. Native feedback SHALL NOT rewrite requested origin.
 - **AND** an inherited target's actual preparation failure or superseded request SHALL preserve its usable audio and truthful error or pending status without aborting another inherited target's own successful processing or borrowing another pad's acknowledgement
 - **AND** this finite NormalLoop multi-target scenario SHALL NOT establish complete-source, selected-stem, musical, aggregate-resource, device or Human acceptance
 
+#### Scenario: Public complete restore shares PCM without merging voice authority
+- **GIVEN** public saved-project restore admits the same verified canonical original with complete physical 0..N demand into an inherited pad and separate explicit ON and explicit OFF pads
+- **WHEN** those pads obtain their own source/window receipts and start publicly at staggered phases and a nonneutral rate
+- **THEN** their actual bank and voice PCM allocations SHALL be shared while source generations, requested origin, Native/FIFO, consumed-source clocks and EQ histories remain independently owned
+- **AND** public GLOBAL ON then OFF SHALL change only the inherited voice through its own acknowledgement and actual independently verified Native or dry output, without retrigger or changes to the explicit peers' processing
+- **AND** actual retirement SHALL release the inherited outgoing mode view and history while the explicit voices continue audibly using the same immutable allocation
+- **AND** public unload of one pad SHALL release only its own assignment and readers while the other voices remain usable; only the actual final shared reader end SHALL release the complete PCM allocation through the existing off-thread path
+- **AND** fixture preparation and receipt aliases SHALL NOT supply the asserted live sharing or obscure final-reader release
+- **AND** this complete FullMix restore scenario SHALL NOT establish public Copy/ReArrange birth, selected-stem GLOBAL, finite cross-pad allocation reuse, musical, aggregate-resource, disk deletion or Human acceptance
+
 ### Requirement: E11-03 Complete source extent is independent of scratch admission
 The system SHALL prepare and verify complete FullMix, all five aligned stem WAV/PCM derivatives and mono integrity through bounded streaming blocks and disk-backed immutable generations without an artificial duration or total-PCM 1-GiB limit.
 

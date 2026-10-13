@@ -1662,3 +1662,92 @@ source/evidence review passes with no open findings in this bounded result.
 These one-frame finite k=0 representatives do not establish fresh irregular
 callback, complete-source/ALL GLOBAL, cross-pad shared backing, accepted-musical,
 aggregate216-resource, device/listening/Human or whole E11/P4b/P5a/P5b/Goal gates.
+
+
+## Public complete restore sharing and final PCM readers — 2026-10-13
+
+One actual public saved-project Restore history supplies the complete physical
+0..N sharing case left unexercised by the preceding finite GLOBAL fixture. The
+canonical original is restored into fresh pads0 inherited,36 explicit ON and215
+explicit OFF. The preparation PCM Weak is zero before the sole public
+`Loader.restore_samples_from_project_state` call. All three actual bank and
+publicly started voice PCM pointers are unconditionally equal; no fixture owner
+or conditional branch supplies this result.
+
+Existing digest/device preparation serializes the same original. `ColdLoad::prepare`
+holds its preparation gate through `transaction.bind_pcm`; complete PCM Weak and
+sealed cache ownership register before the gate releases, and the returned sample/
+lease remain strong while that producer awaits its own Native ACK. Distinct fresh
+pad histories permit followers' complete warm loads to upgrade that same Arc.
+Finite warm selections intentionally read their own ranges. A second whole
+Restore would deliberately copy a pinned same-pad reassignment, so that proposed
+setup was rejected before execution. No private restore subset, dummy PCM seed,
+new API or public Copy birth is used.
+
+The stopped setup observes each real LoadColdSample generation/adoption0→2 by
+relaying its unchanged actual head message through a one-item ring into the
+unmodified production control drain, at the same frame with the same scheduler,
+transport, mixer, feedback and retirement owners. Original-ring retirement
+capacity0 first proves the own source remains unclaimed. FIFO order remains;
+this observational partition does not claim normal production callback batches
+adopt exactly one source. Original normal drains handle all later playback,
+GLOBAL and unload. Only the initially empty control/parameter test queues grow
+to carry restored scalar defaults. The existing real feedback ring/Rx and real
+Loader success/Transport handlers remain authoritative. Stream-bound gain/EQ/
+loop/timing scalar kernels use the established saved-restore bridge to actual
+queues, including current source-generation guards.
+
+Each voice starts publicly at a staggered phase, volume1 and rate.73 over4096
+physical frames at48kHz. Its separately allocated reference owns complete original
+PCM, an algebraic consumed-source clock, raw Native/FIFO and EQ state. Every actual
+one-frame scheduled callback checks each pre-EQ dry/warming/wet feed, post-EQ
+pad peak and audible sum; own independently fed4096-frame candidates, FIFO,
+productive/filter history, source trajectory, Native address and own source/
+window/request receipts remain separate from shared immutable samples.
+
+Saved OFF0..N hints initially retain the existing FiniteLoop classifier even
+though their actual extent and shared allocation are complete. After coupled
+ordinary public START acknowledgements, bank0/215 are observed FullTrack and36
+KeyLockFullTrack. GLOBAL ON then OFF affects only inherited0 through its own
+pending/ACK and actual Native/dry output; its post-OFF context is observed
+FullTrack. Explicit36 continues its own wet processing and215 its own dry output,
+without retrigger, phase/FIFO/filter resets or origin changes.
+
+Old0 ON mode-view Weak reaches zero through actual production retirement FIFO,
+relocation reconciliation and Native worker retirement while36/215 audibly retain
+the same PCM. Public Loader unload0 retains both peers; unload36 retains dry215;
+unload215 obtains its own ordered STOP/unload ACK and actual final shared PCM Weak
+zero. Preparation, receipt and independent reference aliases have ended at their
+declared checkpoints. Engine, cold, Native preparation and retirement workers
+remain alive at final Weak-zero. Disk deletion is not asserted.
+
+Validation:
+
+| Check | Result and profile |
+|---|---|
+| Focused shared restore history | 1 pass, 1.09s, after Release TEST compile1m22; actual public controller/PyO3/callback kernels |
+| Public key-lock parent | 14 pass, 6.96s, includes this case and both preceding finite GLOBAL histories |
+| Existing public saved ON restore/Play | 1 wrapper pass, 3.86s, preserves its existing own Native chronology scope |
+| Full-content warm sharing at device rates | 1 pass, 1.61s, retained complete integrity/Arc/lease checks |
+| Productive warm subscriber/cancel/final readers | 1 pass, 0.32s, actual Native adoption and cleanup |
+| Clippy workspace/all-targets | exit0, 9.36s; unchanged149 diagnostics/77 message texts/120 message-file pairs, lib-test62 including26 duplicates; warnings remain |
+
+The 17 integrated Rust cases include the new one. No compile or runtime failure
+occurred in this block. Pre-build source corrections preserve the rejected second
+Restore proposal and the actual classifier/ACK-partition anchors. The only
+existing helper changes parameterize its source range and split complete versus
+finite prepared-tap observations; the prior finite32..224 bounds, real taps and
+strict assertions remain unchanged and pass again. Complete prepared workers
+report no finite tap observation; independent full PCM/raw-Native output remains
+required. Logs are in workspace/scratch/goal-public-global-20261013, with
+public-shared-restore-first.log and shared-restore-* integration/Clippy files.
+
+Production Rust/Python/build inputs remain unchanged under the existing
+cfg(all(test,windows)) parent. Earlier private production Release/API Native SHA
+`a9a9329dd36bf9c3e173a1cf0a3d8ef5476c6e9d43574d348e8c2671bc817bab` and716
+Python controller-double cases/two device exclusions are explicitly reused.
+Affected official strict, whole Rust formatting and final document/link/JSON/diff
+checks pass. The one independent final source/evidence review passes with no
+open findings in this bounded disposition. Public Copy/ReArrange R1/R2, selected-ALL GLOBAL, finite
+cross-pad allocation reuse, accepted-musical/irregular-callback/resource216,
+disk-delete/device/listening/Human and whole E11/P4b/P5a/P5b/Goal gates remain open.

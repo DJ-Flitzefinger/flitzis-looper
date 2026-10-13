@@ -2,6 +2,9 @@
 //! This bounded fixture uses one-frame scheduled callbacks and the production retirement worker.
 //! Expected PCM, clocks, Native adapters and EQ state are independently owned by each pad.
 
+#[path = "public_shared_restore_global_tests.rs"]
+mod public_shared_restore_global_tests;
+
 use super::*;
 use crate::audio_engine::dsp::{DspNodeSlot, DspParameterId, DspParameterSlot, PerPadDspChain};
 use crate::audio_engine::mixer::prepared_native_mixer_tests::finite_lifecycle_tests::{
@@ -178,6 +181,8 @@ struct ExpectedVoice {
     generation: u64,
     receipt: [u64; 4],
     source: SampleBuffer,
+    start: usize,
+    end: usize,
     clock: AlgebraicClock,
     raw: RawChronology,
     filter: PerPadDspChain,
@@ -196,6 +201,11 @@ struct ExpectedVoice {
 
 impl ExpectedVoice {
     fn new(harness: &Harness, id: usize, enabled: bool) -> Self {
+        Self::new_at_range(harness, id, enabled, START, END)
+    }
+
+    fn new_at_range(harness: &Harness, id: usize, enabled: bool, start: usize, end: usize) -> Self {
+        assert!(start < end && end <= harness.mono.len());
         let raw = RawChronology::new(RATIO, false);
         let own = voice(harness, id);
         assert_eq!(own.volume, 1.0, "public START must keep this pad audible");
@@ -212,7 +222,9 @@ impl ExpectedVoice {
                 residency: None,
                 samples: harness.mono.clone().into(),
             },
-            clock: AlgebraicClock::physical(START, END, RATIO),
+            start,
+            end,
+            clock: AlgebraicClock::physical(start, end, RATIO),
             warm: if enabled { raw.block_size() } else { 0 },
             raw,
             filter: PerPadDspChain::new(id, RATE as f32, 2),
@@ -313,7 +325,7 @@ impl ExpectedVoice {
         assert_eq!(own.source_playback.tempo_ratio(), RATIO);
         assert_eq!(
             harness.callback.mixer.loop_region_frames(self.id),
-            (START, Some(END))
+            (self.start, Some(self.end))
         );
         if !self.paused {
             if self.enabled {
@@ -574,11 +586,15 @@ impl GlobalVoices {
                 live.stretch.prepared_fifo_frames(),
                 Some((HISTORY % block, block - 1 - HISTORY % block))
             );
-            let taps = live.stretch.prepared_tap_observation().unwrap();
-            assert_eq!(taps.left_reads, HISTORY * 2);
-            assert_eq!(taps.missing_reads, 0);
-            assert!(taps.min_frame.is_some_and(|frame| frame >= START));
-            assert!(taps.max_frame.is_some_and(|frame| frame < END));
+            if own.start == 0 && own.end == own.source.frame_count() {
+                assert!(live.stretch.prepared_tap_observation().is_none());
+            } else {
+                let taps = live.stretch.prepared_tap_observation().unwrap();
+                assert_eq!(taps.left_reads, HISTORY * 2);
+                assert_eq!(taps.missing_reads, 0);
+                assert!(taps.min_frame.is_some_and(|frame| frame >= own.start));
+                assert!(taps.max_frame.is_some_and(|frame| frame < own.end));
+            }
         }
     }
 

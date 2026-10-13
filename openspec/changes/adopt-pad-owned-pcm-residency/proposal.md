@@ -54,6 +54,8 @@ final review disposition remain in that report, with wider gates separate.
 
 The [public GLOBAL multi-voice proof](../../../docs/pcm-cache-residency.md#public-global-with-independently-audible-voices--2026-10-13) composes actual inherited running/paused targets with independently audible explicit ON/OFF peers, own acknowledgements and raw-Native/dry/EQ/history references. Target-local reserve admission failure and stale supersession retain usable audio; actual retirement frees obsolete mode views while current own PCM remains used. Cross-pad shared PCM was not observed and remains a separate coverage case. This finite one-frame test/specification block leaves wider domains and final Human gates open.
 
+The separate [public complete Restore sharing proof](../../../docs/pcm-cache-residency.md#public-complete-restore-sharing-and-final-pcm-readers--2026-10-13) supplies unconditional cross-pad PCM identity, independent actual public GLOBAL audio and actual final-reader release through one fresh public Restore. Existing OFF saved-hint classification is preserved; START and GLOBAL OFF contexts are observed at their own anchors. This adds only bounded test/specification evidence and leaves public Copy/ReArrange, ALL, finite sharing and full musical/resource/Human requirements open.
+
 P0 is the historical published plan. R0 revises its incompatible physical topology
 after independent bounded P0 and complete C1 plan acceptance; R0's separate native
 nonauthor closure and publication are required before J0/P1a/P1b. The extended
