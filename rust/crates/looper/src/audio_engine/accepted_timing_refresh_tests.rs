@@ -378,6 +378,7 @@ fn accepted_refresh_coupled_master_replaces_foreign_pending_bootstrap_before_sou
         .schedule(
             1,
             ScheduledCommand::PlaySample {
+                expected_source_generation: None,
                 id: 1,
                 volume: 1.0,
                 received_at_ns: None,

@@ -47,8 +47,8 @@ and exact EOF before selected residency can be published.
 | --- | --- |
 | Public Native import with finite bounds and automatic analysis | Stream complete storage; retain the requested loop. Attempt separately admitted analysis, then return matching analysis or a visible analysis error with source success. |
 | Public Native import without analysis | Stream complete storage; read supplied finite bounds, or the complete source when bounds are absent. |
-| Ordinary UI import | `LoaderController.load_sample_async` currently supplies no resident bounds. Initial live allocation therefore still requests the complete source and can exceed its genuine RAM budget before default-loop initialization. |
-| Canonical restore / fresh warm | Fully verify sealed complete storage; restore the actual finite hint or genuine ALL demand. Known physical saved ON demand now selects KeyLockFiniteLoop for a proper partial range and KeyLockFullTrack for a complete range; its current runtime gates are [pending below](#initial-saved-finite-keylock-on--2026-10-12). |
+| Ordinary UI import | Prepare and fully verify complete disk storage first; resolve genuine incoming activity/analysis and Auto8bars or newer addressed demand before the selected live read. Finite ON/OFF selection, actual initial BPM lock and source-bound controls have a [passing bounded software gate](#ordinary-incoming-loader--2026-10-13). |
+| Canonical restore / fresh warm | Fully verify sealed complete storage; restore the actual finite hint or genuine ALL demand. Known physical saved ON demand selects KeyLockFiniteLoop for a proper partial range and KeyLockFullTrack for a complete range; its separate passing bounded software gates are [reported below](#initial-saved-finite-keylock-on--2026-10-12). |
 | Noncanonical migration | Prepare a one-frame identity seed and complete lease. Read the subscriber's captured current finite range when adopting. |
 | Complete stem preparation | Use the complete source lease, full WAV scans and bounded alignment/conversion; the metadata seed is never an analysis or playback choice. |
 | Complete pair reopening | Fully verify all five WAV/PCM leaves and the common descriptor; prepare four matching selected component views. |
@@ -59,13 +59,12 @@ still read the complete source under its actual live budget. Known proper partia
 physical ON demand uses the shared finite selection; no unknown geometry is guessed.
 One-frame material metadata preparation grants no ALL
 residency. Warm verification scratch is 64 KiB, independent of disk extent.
-The ordinary UI/default-eight-bars integration remains open within the existing
-P4b/P5b work: the default loop is initialized after source success and cannot
-repair a failed initial whole-source allocation. Bounded complete storage and
-the historical finite Native/restore paths with KEYLOCK off do not complete that import
-UX or all of E11-03/X11-LONG. The bounded initial saved ON implementation below has
-pending runtime gates; ordinary external Loader/default-loop and initial BPM-lock/
-accepted-musical admission remain required within P4b/P5b.
+Ordinary UI/default-eight-bars preparation now resolves the physical selection
+before live allocation. Its [bounded incoming report](#ordinary-incoming-loader--2026-10-13)
+records bounded ON/OFF, actual initial BPM-lock evidence and its final passing
+software gate. Complete storage, the historical OFF
+paths and the separate saved ON delivery do not close full E11-03/X11-LONG,
+whole P4b/P5b or accepted-musical/resource/Human gates.
 Stem alignment performs full global-maxima and first-threshold scans before
 retaining a four-second onset/correlation window. Previous absolute envelopes
 cross scan blocks; ordered f32 component summation, ascending lag ties, PCM16
@@ -662,11 +661,109 @@ ordered 216-pad test and the separate actual paired relocation test. Ignored lon
 resource/model helpers remain required at their respective final gates; these
 bounded results do not claim those runs or process RAM, hearing or device acceptance.
 
-Ordinary external Loader incoming-timing/default-eight-bars preparation, initial
-BPM-lock/accepted-musical admission, whole P4b/P5b, X11-LONG/MATERIAL, aggregate
-resources/music and Human/device/hearing gates remain OPEN. Historical
+The separate [ordinary incoming follow-up](#ordinary-incoming-loader--2026-10-13)
+now implements preparation before live selection and actual initial BPM lock,
+with a passing bounded software gate. Accepted-
+musical admission, whole P4b/P5b, X11-LONG/MATERIAL, aggregate resources/music and
+Human/device/hearing gates remain OPEN. Historical
 2026-10-11 OFF storage measurements remain unchanged in the
 [complete-source streaming report](long-source-streaming-validation.md).
+
+<a id="ordinary-incoming-loader--2026-10-13"></a>
+
+## Ordinary incoming Loader — 2026-10-13, bounded software gate PASS
+
+Ordinary external import now uses a disk-only preparation seam before selecting
+live PCM. Cold conversion and fresh-warm reuse retain the complete original,
+decoder and playback artifacts with the existing schema, digest, exact EOF,
+finite-sample and actual FileID checks. Dirty or corrupt candidates still take
+the normal cold fallback. The activity scan reads verified playback in bounded
+chunks and shares the finite any-channel strict `abs(sample) > 0.01`, preceding-
+frame rule with the existing detector. Complete analysis uses its separate
+existing admission and releases its temporary complete evidence buffer before
+the selected live read. A complete disk artifact is never a hidden complete
+live backing or permission to exceed live/overlap/analysis budgets.
+
+Incoming defaults use the genuine activity/BPM result and Auto eight-bar intent,
+or a newer demand addressed to that incoming request. The adopted physical end
+is bounded by the verified complete source extent; Auto and eight bars remain
+intent. Python's effective/requested projection applies that same physical
+source-end bound. The shared verified selection policy admits partial finite
+ON and OFF views, with genuine complete/ALL demand retaining its real budget.
+No-BPM, no-activity and short-source cases retain their declared fallbacks.
+
+One request/revision owner carries the existing global/pad-override resolution,
+latest incoming edits and source/loop/scalar-period/grid-origin transaction.
+Own callback ACK precedes the Python defaults projection. Receipt ordering keeps
+the prior confirmed assignment and its settings separate until that ACK; a
+matching replacement retires only its predecessor override. A source ACK proves
+source/default installation. It does not prove wet output or later Native
+history/window adoption: public first Play, actual rendered continuation and
+later own 4096-frame history adoption have separate assertions.
+
+Live loop, BPM, timing-origin, timing-intent, Key Lock, resident preparation,
+normal/exclusive Play and Seek accept an optional expected source generation.
+Captured controls require an actually current binding. Native checks that
+generation under pad-request admission before intent notes, revocation or queue
+publication and checks the actual source again at callback consumption. BPM
+coalescing rejects stale entries before replacement and application; quantized
+normal/exclusive triggers retain the guard until due execution, before stopping
+other voices. Saved/unbound calls retain their explicit legacy `None` path.
+
+Python projects the new assignment only after its matching Loader receipt, which
+can follow Native source ACK. Until that projection, generic mode/loop/timing/
+Start/Seek and Gain/EQ gestures reject before reading or mutating predecessor
+Project state, even when the incoming Native binding is already current. MIDI
+readiness/retry and atomic global start use the same receipt barrier. Explicit
+request-addressed incoming edits remain valid; the incoming resolver alone owns
+pending Global inheritance. This barrier grants no additional Gain/EQ Native
+source-generation API contract.
+
+The public Native wrapper executes 22 cold/warm first/replacement and negative
+histories, including inherited/explicit ON/OFF, held latest demand, initial
+actual BPM lock and nonunity SPEED, genuine source-bound admission and deferred
+trigger rejection. Complete-PCM/raw-Native/FIFO/EQ/source-clock and independent
+pad215 checks remain distinct from ACK/default metadata. The older saved ON
+report above still uses manual source BPM plus a display target to derive SPEED;
+its four histories are not relabelled as initial BPM-lock evidence.
+
+| Current ordinary incoming gate | Software receipt |
+| --- | --- |
+| Public Native wrapper | PASS: one registered wrapper executes all 22 histories; initial pass 18.80 seconds, current integrated rerun 16.64 seconds. These are not 22 Rust test functions |
+| Verified disk seam | Reused unchanged cold-store receipt: 95 passed; complete integrity, bounded activity and disk-only/selected-read separation remain covered |
+| Private Release and API import | PASS: private Release build, 20.22 seconds, and full current API/controller/UI preflight (private Native identity prefix `e8395d91`); no installed Native replacement or App/device start |
+| Python controller coverage | Current private-Release 11-file integration: 716 passed, two device cases excluded, 32.69 seconds. Earlier receipt-barrier profile: 714 passed/two excluded; separate focused control/Gain/EQ profile: 155 passed. These totals are separate profiles, not additive unique cases or a whole-Python claim |
+| Current integrated Native results | Audio-stream: 63 passed with device coverage excluded; scheduler: nine passed; messages: 14 passed |
+| Resident mixer and source coverage | PASS: resident mixer 16 cases/9.99 seconds; source-reader mixer 11 cases/6.88 seconds. First resident-mixer result remains 15 passed/one failed: its ownerless oracle omitted the actual complete-set owner. The independent fixture-owner expectation now strengthens identity without changing render/transition/retirement assertions; prior negative-oracle attempts remain retained |
+| Remaining impacted Native integration | PASS with declared reuse: basic mixer 97; constant-timing parent 111/four explicit ignored gates; resident relocation 12. Cold residency covers 68 cases using its unchanged 66 PASS and three-case adapter rerun, including both failures, with eight explicit ignored gates. Cold load covers 200 cases using its unchanged 191 PASS and all nine failed-case reruns, with four explicit ignored gates; this is not a fresh 200-case parent run |
+| Static and official strict gates | PASS: production Python Ruff/format/Mypy, Rustfmt, both affected strict changes and current workspace/all-targets Clippy exit zero with warnings. The included legacy Python probe retains its unchanged HEAD Ruff/format/Mypy baseline; its three-line forwarding change passes actual Native execution |
+| Independent final review | PASS: one independent read-only review of the actual production, specification, test and final report deltas, including runtime/static receipts, closed with no remaining actionable finding. The four ordinary incoming child tasks are accepted at this bounded software scope |
+
+The Native callback/history proofs run in the Release Rust test binary with
+hardware-free test-channel injection into the actual public Engine and callback
+kernels. The production private wheel supplies the independent API/import
+preflight; the Python suites exercise controller flow with their declared test
+doubles. Neither profile certifies a production device callback or Human hearing.
+
+The two resident-mixer negative attempts exposed omitted complete-set identity
+in the expected selection and distinct fixture owners in the exact transition
+comparison. One complete set now supplies independent complete/finite readers;
+all exact output, transition and retirement checks remain, with added identity
+retirement. Cold-residency and eight cold-load failures exposed test adapters
+missing the new keyword or actual incoming API; faithful forwarding and actual
+queued defaults/matching receipts replace obsolete post-ACK defaults expectations.
+One unchanged saved-ON case timed out in the integrated run, then passed its
+focused four-history gate twice in 3.68 and 3.72 seconds. Its first timeout cause
+remains unresolved; no assertion, timeout or production behavior was changed to
+make it pass. These earlier outcomes remain part of the evidence.
+
+The initial public attempt retained four successful cold histories before an
+invalid warm-seed fixture stopped the run. The corrected seed uses actual
+copy-first disk preparation, commit and sealed lease; the later 22-history PASS
+does not erase that failed attempt. These bounded receipts close no whole
+P4b/P5b, X11-LONG/MATERIAL, E11-03, accepted-musical or aggregate all216 resource
+gate. Human App/device/visual/hearing and final program gates remain open, with
+the existing stop before full Rust-port planning/implementation or Slice8.
 
 ## Complete access and acknowledged controls (C2b)
 

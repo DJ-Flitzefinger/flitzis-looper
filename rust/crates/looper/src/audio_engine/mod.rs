@@ -56,9 +56,12 @@ mod dsp;
 mod errors;
 pub(crate) mod global_playback_batch;
 pub use global_playback_batch::GlobalPlaybackBatchTicket;
+mod incoming_load;
 mod initial_loop_start;
 mod input_mapping;
 pub(crate) mod input_runtime_binding;
+#[cfg(all(test, windows))]
+mod ordinary_loader_incoming_tests;
 pub use input_runtime_binding::InputRuntimePadBinding;
 mod key_lock_feedback;
 pub(crate) mod key_lock_preparation;
@@ -386,6 +389,7 @@ struct LoadedSourcePublication<'a> {
     replace_assignment: bool,
     loop_region: Option<(usize, usize)>,
     resident_cancelled: Option<Arc<AtomicBool>>,
+    incoming_defaults: Option<crate::messages::IncomingLoadDefaults>,
     intent: Option<(
         &'a mut analysis::tempo_acceptance::TimingIntent,
         analysis::tempo_acceptance::TimingIntent,
@@ -446,6 +450,7 @@ fn publish_loaded_sample(
             replace_assignment: publication.replace_assignment,
             loop_region: publication.loop_region,
             resident_cancelled: publication.resident_cancelled,
+            incoming_defaults: publication.incoming_defaults,
         }
     } else {
         ControlMessage::LoadSample { id, sample }
@@ -644,6 +649,7 @@ pub struct AudioEngine {
     cold_leases: Arc<Mutex<Vec<Option<cold_store::CommittedColdLease>>>>,
     resident_stem_cache: Arc<Mutex<Vec<resident_relocation::ResidentStemCache>>>,
     resident_restore_guards: Mutex<Vec<Option<Arc<cold_residency::ResidentLoadGuard>>>>,
+    incoming_loads: Mutex<Vec<Option<Arc<incoming_load::IncomingLoad>>>>,
     cold_lease_generations: Arc<Vec<AtomicU64>>,
     cold_pcm_history: Arc<project_assets::PcmHistory>,
     project_assets: Arc<project_assets::ProjectAssets>,
@@ -653,6 +659,138 @@ pub struct AudioEngine {
 }
 
 impl AudioEngine {
+    pub fn play_sample(
+        &mut self,
+        id: usize,
+        volume: f32,
+        received_at_ns: Option<&Bound<'_, PyAny>>,
+    ) -> PyResult<()> {
+        self.play_sample_with_source(id, volume, received_at_ns, None)
+    }
+
+    pub fn play_sample_exclusive(
+        &mut self,
+        id: usize,
+        volume: f32,
+        received_at_ns: Option<&Bound<'_, PyAny>>,
+    ) -> PyResult<()> {
+        self.play_sample_exclusive_with_source(id, volume, received_at_ns, None)
+    }
+
+    pub fn seek_sample(&mut self, id: usize, position_s: f64) -> PyResult<()> {
+        self.seek_sample_with_source(id, position_s, None)
+    }
+
+    pub fn prepare_resident_control(
+        &self,
+        id: usize,
+        start_s: Option<f64>,
+        end_s: Option<f64>,
+        position_s: Option<f64>,
+        key_lock: Option<bool>,
+    ) -> PyResult<resident_relocation::ResidentWindowTicket> {
+        self.prepare_resident_control_with_source(id, start_s, end_s, position_s, key_lock, None)
+    }
+
+    pub fn set_pad_timing_intent(&self, sample_id: usize, intent: &str) -> PyResult<()> {
+        self.set_pad_timing_intent_with_source(sample_id, intent, None)
+    }
+
+    pub fn set_pad_key_lock(&mut self, id: usize, enabled: bool) -> PyResult<u64> {
+        self.set_pad_key_lock_with_source(id, enabled, None)
+    }
+
+    pub fn set_pad_bpm(&mut self, id: usize, bpm: Option<f64>) -> PyResult<()> {
+        self.set_pad_bpm_with_source(id, bpm, None)
+    }
+
+    pub fn set_pad_timing_metadata(&mut self, id: usize, phase_anchor_s: f64) -> PyResult<()> {
+        self.set_pad_timing_metadata_with_source(id, phase_anchor_s, None)
+    }
+
+    pub fn set_pad_loop_region(
+        &mut self,
+        id: usize,
+        start_s: f64,
+        end_s: Option<f64>,
+    ) -> PyResult<()> {
+        self.set_pad_loop_region_with_source(id, start_s, end_s, None)
+    }
+
+    /// The public API and headless controller bridges share this admission path.
+    fn publish_pad_loop_region_with_source(
+        &self,
+        id: usize,
+        start_s: f64,
+        end_s: Option<f64>,
+        expected_source_generation: Option<u64>,
+        queue: Option<(u32, &Arc<Mutex<Producer<ControlMessage>>>)>,
+    ) -> PyResult<()> {
+        if id >= NUM_SAMPLES {
+            return Err(PyValueError::new_err("id out of range"));
+        }
+        if !start_s.is_finite() || start_s < 0.0 {
+            return Err(PyValueError::new_err("start_s out of range"));
+        }
+        if end_s.is_some_and(|end| !end.is_finite() || end < 0.0) {
+            return Err(PyValueError::new_err("end_s out of range"));
+        }
+        resident_relocation::reconcile(self)?;
+        let _requests = self
+            .pad_request_ids
+            .lock()
+            .map_err(|_| PyRuntimeError::new_err("request lock poisoned"))?;
+        input_runtime_binding::validate_expected_source_generation_under_request_lock(
+            self,
+            id,
+            expected_source_generation,
+        )?;
+        let output_sample_rate = match queue {
+            Some((rate, _)) => rate,
+            None => self.output_sample_rate()?,
+        };
+        if let Some(sample) = self
+            .sample_cache
+            .lock()
+            .map_err(|_| PyRuntimeError::new_err("sample cache lock poisoned"))?[id]
+            .as_ref()
+        {
+            let start = (start_s * f64::from(output_sample_rate)).round() as usize;
+            let end = end_s.map(|end| (end * f64::from(output_sample_rate)).round() as usize);
+            if let Some(region) =
+                source_reader::effective_loop_region(start, end, sample.frame_count())
+                && (region.start < sample.resident_start() || region.end > sample.resident_end())
+            {
+                return Err(PyValueError::new_err(
+                    "loop requires a matching prepared resident window",
+                ));
+            }
+        }
+        let producer = match queue {
+            Some((_, producer)) => producer,
+            None => self.control_producer()?,
+        };
+        let mut producer = producer
+            .lock()
+            .map_err(|_| PyRuntimeError::new_err("Failed to acquire producer lock"))?;
+        if producer.is_full() {
+            return Err(PyRuntimeError::new_err(
+                "Failed to send SetPadLoopRegion - buffer may be full",
+            ));
+        }
+        let input_authority = self.input_runtime_ownership.next_authority(id)?;
+        self.note_resident_loop_intent(id, start_s, end_s)?;
+        self.input_runtime_ownership.revoke(id, input_authority);
+        producer
+            .push(ControlMessage::SetPadLoopRegion {
+                id,
+                start_s,
+                end_s,
+                expected_source_generation,
+            })
+            .map_err(|_| PyRuntimeError::new_err("reserved single-producer capacity lost"))
+    }
+
     fn parameter_producer(&self) -> PyResult<&Arc<Mutex<Producer<ControlParameterMessage>>>> {
         if let Some(handle) = &self.stream_handle {
             return Ok(&handle.parameter_producer);
@@ -864,6 +1002,7 @@ impl AudioEngine {
                     .collect(),
             )),
             resident_restore_guards: Mutex::new((0..NUM_SAMPLES).map(|_| None).collect()),
+            incoming_loads: Mutex::new((0..NUM_SAMPLES).map(|_| None).collect()),
             cold_lease_generations: Arc::new((0..NUM_SAMPLES).map(|_| AtomicU64::new(0)).collect()),
             cold_pcm_history,
             project_assets,
@@ -921,11 +1060,14 @@ impl AudioEngine {
     }
 
     pub fn output_sample_rate(&self) -> PyResult<u32> {
-        let handle = self
-            .stream_handle
-            .as_ref()
-            .ok_or_else(|| PyRuntimeError::new_err("Audio engine not initialized"))?;
-        Ok(handle.output_sample_rate)
+        if let Some(handle) = &self.stream_handle {
+            return Ok(handle.output_sample_rate);
+        }
+        #[cfg(test)]
+        if self.test_control_channels.is_some() {
+            return Ok(48_000);
+        }
+        Err(PyRuntimeError::new_err("Audio engine not initialized"))
     }
 
     /// Request one fixed callback observation. No playback action is performed.
@@ -1328,6 +1470,68 @@ impl AudioEngine {
         )
     }
 
+    /// Ordinary incoming assignment uses its own analysed defaults before live selection.
+    pub fn load_incoming_sample_async(
+        &self,
+        id: usize,
+        path: String,
+        key_lock: bool,
+    ) -> PyResult<u64> {
+        cold_load::admit_incoming(self, id, path, key_lock)
+    }
+
+    /// Update only an explicitly addressed incoming request, never its predecessor.
+    #[allow(clippy::too_many_arguments)]
+    #[pyo3(signature = (id, request_id, revision, key_lock, loop_start_s=None, loop_end_s=None, loop_auto=true, loop_bars=8.0, timing_override=false, period_seconds=None, grid_origin_s=None))]
+    pub fn update_incoming_load_intent(
+        &self,
+        id: usize,
+        request_id: u64,
+        revision: u64,
+        key_lock: bool,
+        loop_start_s: Option<f64>,
+        loop_end_s: Option<f64>,
+        loop_auto: bool,
+        loop_bars: f64,
+        timing_override: bool,
+        period_seconds: Option<f64>,
+        grid_origin_s: Option<f64>,
+    ) -> PyResult<bool> {
+        if id >= NUM_SAMPLES {
+            return Err(PyValueError::new_err("id out of range"));
+        }
+        let requests = self
+            .pad_request_ids
+            .lock()
+            .map_err(|_| PyRuntimeError::new_err("request lock poisoned"))?;
+        if requests[id] != request_id {
+            return Err(PyValueError::new_err("incoming request is stale"));
+        }
+        let incoming = self
+            .incoming_loads
+            .lock()
+            .map_err(|_| PyRuntimeError::new_err("incoming intent lock poisoned"))?;
+        let incoming = incoming[id]
+            .as_ref()
+            .filter(|incoming| incoming.request == request_id)
+            .ok_or_else(|| PyValueError::new_err("incoming request is unavailable"))?;
+        let intent = incoming_load::IncomingIntent {
+            revision,
+            key_lock,
+            loop_start_s,
+            loop_end_s,
+            loop_auto,
+            loop_bars,
+            timing_override,
+            period_seconds,
+            grid_origin_s,
+        };
+        intent
+            .validate_for_rate(self.output_sample_rate()?)
+            .map_err(PyValueError::new_err)?;
+        incoming.update(intent).map_err(PyValueError::new_err)
+    }
+
     pub fn hold_material_migration(&self, ids: Vec<usize>) -> PyResult<MaterialMigrationHold> {
         material_migration_control::hold(self, ids)
     }
@@ -1470,14 +1674,15 @@ impl AudioEngine {
 
     /// Prepare one source-bound control transaction; native ACK publishes its
     /// storage and complete loop/seek/Key Lock effect together.
-    #[pyo3(signature = (id, start_s=None, end_s=None, position_s=None, key_lock=None))]
-    pub fn prepare_resident_control(
+    #[pyo3(name = "prepare_resident_control", signature = (id, start_s=None, end_s=None, position_s=None, key_lock=None, *, expected_source_generation=None))]
+    pub fn prepare_resident_control_with_source(
         &self,
         id: usize,
         start_s: Option<f64>,
         end_s: Option<f64>,
         position_s: Option<f64>,
         key_lock: Option<bool>,
+        expected_source_generation: Option<u64>,
     ) -> PyResult<resident_relocation::ResidentWindowTicket> {
         if start_s.is_none() && end_s.is_some() {
             return Err(PyValueError::new_err("end_s requires start_s"));
@@ -1489,6 +1694,7 @@ impl AudioEngine {
                 loop_region: start_s.map(|start| (start, end_s)),
                 seek_position_s: position_s,
                 key_lock,
+                expected_source_generation,
                 ..resident_relocation::WindowRequest::default()
             },
         )
@@ -1651,12 +1857,24 @@ impl AudioEngine {
     }
 
     /// Declare automatic/manual/TAP/legacy timing authority under the native owner.
-    pub fn set_pad_timing_intent(&self, sample_id: usize, intent: &str) -> PyResult<()> {
+    #[pyo3(name = "set_pad_timing_intent", signature = (sample_id, intent, *, expected_source_generation=None))]
+    pub fn set_pad_timing_intent_with_source(
+        &self,
+        sample_id: usize,
+        intent: &str,
+        expected_source_generation: Option<u64>,
+    ) -> PyResult<()> {
         if sample_id >= NUM_SAMPLES {
             return Err(PyValueError::new_err("id out of range"));
         }
         let intent = constant_timing::parse_intent(intent)?;
-        constant_timing::set_intent(self, self.control_producer()?, sample_id, intent)
+        constant_timing::set_intent_with_source(
+            self,
+            self.control_producer()?,
+            sample_id,
+            intent,
+            expected_source_generation,
+        )
     }
 
     /// Read declared native authority without claiming callback adoption or changing it.
@@ -2259,6 +2477,7 @@ impl AudioEngine {
                 analysis_error,
                 timing_epoch: _,
                 original_lease,
+                incoming_defaults,
             } => {
                 dict.set_item("type", "success")?;
                 dict.set_item("id", id)?;
@@ -2266,6 +2485,25 @@ impl AudioEngine {
                 dict.set_item("duration_s", duration_s)?;
                 dict.set_item("detected_loop_start_s", detected_loop_start_s)?;
                 dict.set_item("cached_path", cached_path)?;
+                if let Some(defaults) = incoming_defaults {
+                    let rate = defaults.sample_rate_hz;
+                    if rate == 0 {
+                        return Err(PyRuntimeError::new_err("incoming source rate unavailable"));
+                    }
+                    let receipt = PyDict::new(py);
+                    receipt.set_item("revision", defaults.revision)?;
+                    receipt.set_item("key_lock", defaults.key_lock)?;
+                    receipt.set_item("start_s", defaults.start_frame as f64 / f64::from(rate))?;
+                    receipt.set_item(
+                        "end_s",
+                        defaults.end_frame.map(|end| end as f64 / f64::from(rate)),
+                    )?;
+                    receipt.set_item("period_seconds", defaults.period_seconds)?;
+                    receipt.set_item("grid_origin_s", defaults.origin_frame / f64::from(rate))?;
+                    receipt.set_item("loop_auto", defaults.loop_auto)?;
+                    receipt.set_item("loop_bars", defaults.loop_bars)?;
+                    dict.set_item("incoming_defaults", receipt)?;
+                }
                 if let Some(error) = analysis_error {
                     dict.set_item("analysis_error", error)?;
                 }
@@ -2391,12 +2629,13 @@ impl AudioEngine {
     }
 
     /// Trigger playback of a previously loaded sample.
-    #[pyo3(signature = (id, volume, *, received_at_ns=None))]
-    pub fn play_sample(
+    #[pyo3(name = "play_sample", signature = (id, volume, *, received_at_ns=None, expected_source_generation=None))]
+    pub fn play_sample_with_source(
         &mut self,
         id: usize,
         volume: f32,
         received_at_ns: Option<&Bound<'_, PyAny>>,
+        expected_source_generation: Option<u64>,
     ) -> PyResult<()> {
         let received_at_ns = validated_input_timestamp(
             parse_input_timestamp(received_at_ns)?,
@@ -2409,14 +2648,17 @@ impl AudioEngine {
         if !volume.is_finite() || !(VOLUME_MIN..=VOLUME_MAX).contains(&volume) {
             return Err(PyValueError::new_err("volume out of range"));
         }
-
-        let handle = self
-            .stream_handle
-            .as_ref()
-            .ok_or_else(|| PyRuntimeError::new_err("Audio engine not initialized"))?;
-
-        let mut producer_guard = handle
-            .producer
+        let _requests = self
+            .pad_request_ids
+            .lock()
+            .map_err(|_| PyRuntimeError::new_err("request lock poisoned"))?;
+        input_runtime_binding::validate_expected_source_generation_under_request_lock(
+            self,
+            id,
+            expected_source_generation,
+        )?;
+        let mut producer_guard = self
+            .control_producer()?
             .lock()
             .map_err(|_| PyRuntimeError::new_err("Failed to acquire producer lock"))?;
 
@@ -2425,17 +2667,19 @@ impl AudioEngine {
                 id,
                 volume,
                 received_at_ns,
+                expected_source_generation,
             })
             .map_err(|_| PyRuntimeError::new_err("Failed to send PlaySample - buffer may be full"))
     }
 
     /// Stop all active voices and play a sample as one audio-thread command.
-    #[pyo3(signature = (id, volume, *, received_at_ns=None))]
-    pub fn play_sample_exclusive(
+    #[pyo3(name = "play_sample_exclusive", signature = (id, volume, *, received_at_ns=None, expected_source_generation=None))]
+    pub fn play_sample_exclusive_with_source(
         &mut self,
         id: usize,
         volume: f32,
         received_at_ns: Option<&Bound<'_, PyAny>>,
+        expected_source_generation: Option<u64>,
     ) -> PyResult<()> {
         let received_at_ns = validated_input_timestamp(
             parse_input_timestamp(received_at_ns)?,
@@ -2449,13 +2693,17 @@ impl AudioEngine {
             return Err(PyValueError::new_err("volume out of range"));
         }
 
-        let handle = self
-            .stream_handle
-            .as_ref()
-            .ok_or_else(|| PyRuntimeError::new_err("Audio engine not initialized"))?;
-
-        let mut producer_guard = handle
-            .producer
+        let _requests = self
+            .pad_request_ids
+            .lock()
+            .map_err(|_| PyRuntimeError::new_err("request lock poisoned"))?;
+        input_runtime_binding::validate_expected_source_generation_under_request_lock(
+            self,
+            id,
+            expected_source_generation,
+        )?;
+        let mut producer_guard = self
+            .control_producer()?
             .lock()
             .map_err(|_| PyRuntimeError::new_err("Failed to acquire producer lock"))?;
 
@@ -2464,6 +2712,7 @@ impl AudioEngine {
                 id,
                 volume,
                 received_at_ns,
+                expected_source_generation,
             })
             .map_err(|_| {
                 PyRuntimeError::new_err("Failed to send PlaySampleExclusive - buffer may be full")
@@ -2619,13 +2868,8 @@ impl AudioEngine {
             .pad_request_ids
             .lock()
             .map_err(|_| PyRuntimeError::new_err("request lock poisoned"))?;
-        let handle = self
-            .stream_handle
-            .as_ref()
-            .ok_or_else(|| PyRuntimeError::new_err("Audio engine not initialized"))?;
-
-        let mut producer_guard = handle
-            .producer
+        let mut producer_guard = self
+            .control_producer()?
             .lock()
             .map_err(|_| PyRuntimeError::new_err("Failed to acquire producer lock"))?;
 
@@ -2669,14 +2913,21 @@ impl AudioEngine {
 
     /// Enqueue source-bound mode intent; only matching callback feedback confirms it.
     /// Zero denotes saved intent admitted before a current loaded source exists.
-    pub fn set_pad_key_lock(&mut self, id: usize, enabled: bool) -> PyResult<u64> {
+    #[pyo3(name = "set_pad_key_lock", signature = (id, enabled, *, expected_source_generation=None))]
+    pub fn set_pad_key_lock_with_source(
+        &mut self,
+        id: usize,
+        enabled: bool,
+        expected_source_generation: Option<u64>,
+    ) -> PyResult<u64> {
         if id >= NUM_SAMPLES {
             return Err(PyValueError::new_err("id out of range"));
         }
         resident_relocation::reconcile(self)?;
-        self.admit_resident_key_lock(id, enabled)?;
-
-        key_lock_feedback::enqueue(self, id, enabled)
+        if expected_source_generation.is_none() {
+            self.admit_resident_key_lock(id, enabled)?;
+        }
+        key_lock_feedback::enqueue_with_source(self, id, enabled, expected_source_generation)
     }
 
     /// Observe actual current-source mode/processing feedback, independently of enqueue.
@@ -2693,17 +2944,14 @@ impl AudioEngine {
             .pad_request_ids
             .lock()
             .map_err(|_| PyRuntimeError::new_err("request lock poisoned"))?;
-        let handle = self
-            .stream_handle
-            .as_ref()
-            .ok_or_else(|| PyRuntimeError::new_err("Audio engine not initialized"))?;
+        let output_rate = self.output_sample_rate()?;
 
-        if !((60.0 / bpm) * f64::from(handle.output_sample_rate) * 4.0).is_finite() {
+        if !((60.0 / bpm) * f64::from(output_rate) * 4.0).is_finite() {
             return Err(PyValueError::new_err("bpm output period out of range"));
         }
 
-        let mut producer_guard = handle
-            .parameter_producer
+        let mut producer_guard = self
+            .parameter_producer()?
             .lock()
             .map_err(|_| PyRuntimeError::new_err("Failed to acquire producer lock"))?;
 
@@ -2725,17 +2973,14 @@ impl AudioEngine {
             .pad_request_ids
             .lock()
             .map_err(|_| PyRuntimeError::new_err("request lock poisoned"))?;
-        let handle = self
-            .stream_handle
-            .as_ref()
-            .ok_or_else(|| PyRuntimeError::new_err("Audio engine not initialized"))?;
+        let output_rate = self.output_sample_rate()?;
 
-        if !(period_seconds * f64::from(handle.output_sample_rate) * 4.0).is_finite() {
+        if !(period_seconds * f64::from(output_rate) * 4.0).is_finite() {
             return Err(PyValueError::new_err("master output period out of range"));
         }
 
-        let mut producer = handle
-            .parameter_producer
+        let mut producer = self
+            .parameter_producer()?
             .lock()
             .map_err(|_| PyRuntimeError::new_err("Failed to acquire producer lock"))?;
 
@@ -2759,15 +3004,12 @@ impl AudioEngine {
             .pad_request_ids
             .lock()
             .map_err(|_| PyRuntimeError::new_err("request lock poisoned"))?;
-        let handle = self
-            .stream_handle
-            .as_ref()
-            .ok_or_else(|| PyRuntimeError::new_err("Audio engine not initialized"))?;
-        if !(period_seconds * f64::from(handle.output_sample_rate) * 4.0).is_finite() {
+        let output_rate = self.output_sample_rate()?;
+        if !(period_seconds * f64::from(output_rate) * 4.0).is_finite() {
             return Err(PyValueError::new_err("master output period out of range"));
         }
-        let mut producer = handle
-            .parameter_producer
+        let mut producer = self
+            .parameter_producer()?
             .lock()
             .map_err(|_| PyRuntimeError::new_err("Failed to acquire producer lock"))?;
         push_global_timing_message(
@@ -2781,7 +3023,13 @@ impl AudioEngine {
         )
     }
 
-    pub fn set_pad_bpm(&mut self, id: usize, bpm: Option<f64>) -> PyResult<()> {
+    #[pyo3(name = "set_pad_bpm", signature = (id, bpm=None, *, expected_source_generation=None))]
+    pub fn set_pad_bpm_with_source(
+        &mut self,
+        id: usize,
+        bpm: Option<f64>,
+        expected_source_generation: Option<u64>,
+    ) -> PyResult<()> {
         if id >= NUM_SAMPLES {
             return Err(PyValueError::new_err("id out of range"));
         }
@@ -2792,21 +3040,28 @@ impl AudioEngine {
             return Err(PyValueError::new_err("bpm out of range"));
         }
 
-        let handle = self
-            .stream_handle
-            .as_ref()
-            .ok_or_else(|| PyRuntimeError::new_err("Audio engine not initialized"))?;
+        let output_rate = self.output_sample_rate()?;
 
-        if bpm.is_some_and(|value| {
-            !((60.0 / value) * f64::from(handle.output_sample_rate)).is_finite()
-        }) {
+        if bpm.is_some_and(|value| !((60.0 / value) * f64::from(output_rate)).is_finite()) {
             return Err(PyValueError::new_err("bpm source period out of range"));
         }
 
-        constant_timing::publish_legacy_bpm(self, &handle.parameter_producer, id, bpm)
+        constant_timing::publish_legacy_bpm_with_source(
+            self,
+            self.parameter_producer()?,
+            id,
+            bpm,
+            expected_source_generation,
+        )
     }
 
-    pub fn set_pad_timing_metadata(&mut self, id: usize, phase_anchor_s: f64) -> PyResult<()> {
+    #[pyo3(name = "set_pad_timing_metadata", signature = (id, phase_anchor_s, *, expected_source_generation=None))]
+    pub fn set_pad_timing_metadata_with_source(
+        &mut self,
+        id: usize,
+        phase_anchor_s: f64,
+        expected_source_generation: Option<u64>,
+    ) -> PyResult<()> {
         if id >= NUM_SAMPLES {
             return Err(PyValueError::new_err("id out of range"));
         }
@@ -2815,12 +3070,13 @@ impl AudioEngine {
             return Err(PyValueError::new_err("phase_anchor_s out of range"));
         }
 
-        let handle = self
-            .stream_handle
-            .as_ref()
-            .ok_or_else(|| PyRuntimeError::new_err("Audio engine not initialized"))?;
-
-        constant_timing::publish_legacy_origin(self, &handle.producer, id, phase_anchor_s)
+        constant_timing::publish_legacy_origin_with_source(
+            self,
+            self.control_producer()?,
+            id,
+            phase_anchor_s,
+            expected_source_generation,
+        )
     }
 
     pub fn anchor_transport_phase_from_pad(&mut self, id: usize) -> PyResult<()> {
@@ -2942,74 +3198,31 @@ impl AudioEngine {
         )
     }
 
-    pub fn set_pad_loop_region(
+    #[pyo3(name = "set_pad_loop_region", signature = (id, start_s, end_s=None, *, expected_source_generation=None))]
+    pub fn set_pad_loop_region_with_source(
         &mut self,
         id: usize,
         start_s: f64,
         end_s: Option<f64>,
+        expected_source_generation: Option<u64>,
     ) -> PyResult<()> {
-        if id >= NUM_SAMPLES {
-            return Err(PyValueError::new_err("id out of range"));
-        }
-
-        if !start_s.is_finite() || start_s < 0.0 {
-            return Err(PyValueError::new_err("start_s out of range"));
-        }
-
-        if end_s.is_some_and(|end_s| !end_s.is_finite() || end_s < 0.0) {
-            return Err(PyValueError::new_err("end_s out of range"));
-        }
-        resident_relocation::reconcile(self)?;
-
-        let _requests = self
-            .pad_request_ids
-            .lock()
-            .map_err(|_| PyRuntimeError::new_err("request lock poisoned"))?;
-
-        let handle = self
-            .stream_handle
-            .as_ref()
-            .ok_or_else(|| PyRuntimeError::new_err("Audio engine not initialized"))?;
-
-        if let Some(sample) = self
-            .sample_cache
-            .lock()
-            .map_err(|_| PyRuntimeError::new_err("sample cache lock poisoned"))?[id]
-            .as_ref()
-        {
-            let start = (start_s * f64::from(handle.output_sample_rate)).round() as usize;
-            let end =
-                end_s.map(|end| (end * f64::from(handle.output_sample_rate)).round() as usize);
-            if let Some(region) =
-                source_reader::effective_loop_region(start, end, sample.frame_count())
-                && (region.start < sample.resident_start() || region.end > sample.resident_end())
-            {
-                return Err(PyValueError::new_err(
-                    "loop requires a matching prepared resident window",
-                ));
-            }
-        }
-
-        let mut producer_guard = handle
-            .producer
-            .lock()
-            .map_err(|_| PyRuntimeError::new_err("Failed to acquire producer lock"))?;
-
-        if producer_guard.is_full() {
-            return Err(PyRuntimeError::new_err(
-                "Failed to send SetPadLoopRegion - buffer may be full",
-            ));
-        }
-        let input_authority = self.input_runtime_ownership.next_authority(id)?;
-        self.note_resident_loop_intent(id, start_s, end_s)?;
-        self.input_runtime_ownership.revoke(id, input_authority);
-        producer_guard
-            .push(ControlMessage::SetPadLoopRegion { id, start_s, end_s })
-            .map_err(|_| PyRuntimeError::new_err("reserved single-producer capacity lost"))
+        self.publish_pad_loop_region_with_source(
+            id,
+            start_s,
+            end_s,
+            expected_source_generation,
+            None,
+        )
     }
 
     /// Seek an active or paused sample voice to a source position in seconds.
-    pub fn seek_sample(&mut self, id: usize, position_s: f64) -> PyResult<()> {
+    #[pyo3(name = "seek_sample", signature = (id, position_s, *, expected_source_generation=None))]
+    pub fn seek_sample_with_source(
+        &mut self,
+        id: usize,
+        position_s: f64,
+        expected_source_generation: Option<u64>,
+    ) -> PyResult<()> {
         if id >= NUM_SAMPLES {
             return Err(PyValueError::new_err("id out of range"));
         }
@@ -3018,31 +3231,40 @@ impl AudioEngine {
             return Err(PyValueError::new_err("position_s out of range"));
         }
 
-        let handle = self
-            .stream_handle
-            .as_ref()
-            .ok_or_else(|| PyRuntimeError::new_err("Audio engine not initialized"))?;
-
         resident_relocation::reconcile(self)?;
+        let _requests = self
+            .pad_request_ids
+            .lock()
+            .map_err(|_| PyRuntimeError::new_err("request lock poisoned"))?;
+        input_runtime_binding::validate_expected_source_generation_under_request_lock(
+            self,
+            id,
+            expected_source_generation,
+        )?;
+        let output_sample_rate = self.output_sample_rate()?;
         if let Some(sample) = self
             .sample_cache
             .lock()
             .map_err(|_| PyRuntimeError::new_err("sample cache lock poisoned"))?[id]
             .as_ref()
-            && !resident_seek_available(sample, position_s, handle.output_sample_rate)
+            && !resident_seek_available(sample, position_s, output_sample_rate)
         {
             return Err(PyValueError::new_err(
                 "seek requires a matching prepared resident window",
             ));
         }
 
-        let mut producer_guard = handle
-            .producer
+        let mut producer_guard = self
+            .control_producer()?
             .lock()
             .map_err(|_| PyRuntimeError::new_err("Failed to acquire producer lock"))?;
 
         producer_guard
-            .push(ControlMessage::SeekSample { id, position_s })
+            .push(ControlMessage::SeekSample {
+                id,
+                position_s,
+                expected_source_generation,
+            })
             .map_err(|_| PyRuntimeError::new_err("Failed to send SeekSample - buffer may be full"))
     }
 
@@ -3429,6 +3651,7 @@ mod tests {
                         cached_path: "samples/new.wav".to_owned(),
                         analysis: None,
                         analysis_error: None,
+                        incoming_defaults: None,
                     })
                     .unwrap();
                 let event = engine.poll_loader_events(py).unwrap().unwrap();
@@ -3481,6 +3704,7 @@ mod tests {
                             cached_path: "samples/long.wav".to_owned(),
                             analysis: None,
                             analysis_error: None,
+                            incoming_defaults: None,
                         })
                         .unwrap();
                     let event = engine.poll_loader_events(py).unwrap().unwrap();
@@ -3519,6 +3743,7 @@ mod tests {
                         cached_path: "samples/long.wav".into(),
                         analysis: None,
                         analysis_error: Some("automatic analysis budget exceeded".into()),
+                        incoming_defaults: None,
                     })
                     .unwrap();
                 let event = engine.poll_loader_events(py).unwrap().unwrap();
@@ -3897,6 +4122,7 @@ mod tests {
                 replace_assignment: false,
                 loop_region: None,
                 resident_cancelled: None,
+                incoming_defaults: None,
                 intent: None,
             },
         );

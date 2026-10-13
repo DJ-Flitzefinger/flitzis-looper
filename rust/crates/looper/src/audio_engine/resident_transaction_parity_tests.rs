@@ -151,14 +151,14 @@ fn plain(sample: &SampleBuffer) -> RtMixer {
     mixer
 }
 
-fn wait_released(backing: &std::sync::Weak<[f32]>) {
+fn wait_released<T: ?Sized>(backing: &std::sync::Weak<T>) {
     let deadline = Instant::now() + Duration::from_secs(5);
     while backing.upgrade().is_some() && Instant::now() < deadline {
         std::thread::sleep(Duration::from_millis(1));
     }
     assert!(
         backing.upgrade().is_none(),
-        "retired immutable PCM still has an owner"
+        "retired immutable reader still has an owner"
     );
 }
 
@@ -794,11 +794,16 @@ fn native_bank_replacement_keeps_old_stems_transition_and_retires_voice_owners_o
     let finite = full
         .window(START, END, 1, ResidentContext::FiniteLoop)
         .unwrap();
-    let finite_set = stems(&full).window_for(&finite).unwrap();
+    // Compare the complete and finite readers of the same immutable StemSet;
+    // transition equality includes its owner identity as well as the ramp.
+    let complete_set = stems(&full);
+    let finite_set = complete_set.clone().window_for(&finite).unwrap();
+    let expected_frozen_selection = StemRenderSelection::for_stems(&finite_set, 0b0101);
+    let old_set_identity = Arc::downgrade(&finite_set.complete_set_identity);
     let old_stem_backing = Arc::downgrade(&finite_set.stems[1].samples);
     let old_pcm_backing = Arc::downgrade(&finite.samples);
     let mut actual = fixture(&finite, Some(finite_set), false);
-    let mut reference = fixture(&full, Some(stems(&full)), false);
+    let mut reference = fixture(&full, Some(complete_set), false);
     drop(finite);
     let mut queue = NativeQueue::new();
     assert_eq!(
@@ -843,10 +848,7 @@ fn native_bank_replacement_keeps_old_stems_transition_and_retires_voice_owners_o
     queue.retirement.capacity = usize::MAX;
     assert_eq!(queue.drain(&mut actual, 185), 1);
     let frozen = voice(&actual).frozen_stems.as_ref().unwrap();
-    assert_eq!(
-        frozen.selection,
-        StemRenderSelection::from_state(StemMixMode::AllStems, 91, 0b0101)
-    );
+    assert_eq!(frozen.selection, expected_frozen_selection);
     assert!(
         frozen
             .transition
@@ -854,6 +856,7 @@ fn native_bank_replacement_keeps_old_stems_transition_and_retires_voice_owners_o
     );
     assert!(old_stem_backing.upgrade().is_some());
     assert!(old_pcm_backing.upgrade().is_some());
+    assert!(old_set_identity.upgrade().is_some());
     // New bank controls are deliberately different; only its future launch uses them.
     actual.set_stem_mix_mode(0, StemMixMode::FullMix, 0);
     actual.set_stem_enabled_mask(0, 0, 0);
@@ -906,8 +909,12 @@ fn native_bank_replacement_keeps_old_stems_transition_and_retires_voice_owners_o
             .iter()
             .all(|voice| voice.frozen_stems.is_none())
     );
+    // The complete reference has finished every output/transition assertion.
+    // Release its shared identity before testing the actual final retirement.
+    drop(reference);
     wait_released(&old_stem_backing);
     wait_released(&old_pcm_backing);
+    wait_released(&old_set_identity);
 }
 
 #[test]
@@ -929,6 +936,7 @@ fn native_old_complete_stem_seek_reads_original_knots_with_new_bank_selection() 
     queue
         .producer
         .push(ControlMessage::PlaySample {
+            expected_source_generation: None,
             id: 0,
             volume: 1.0,
             received_at_ns: None,

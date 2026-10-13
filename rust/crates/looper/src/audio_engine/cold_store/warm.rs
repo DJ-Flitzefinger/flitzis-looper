@@ -9,6 +9,17 @@ use crate::messages::{ResidentContext, ResidentSourceView};
 const MAX_MANIFEST_BYTES: u64 = 256 * 1024;
 const MAX_CANDIDATES: usize = 4096;
 
+#[derive(Clone, Copy)]
+enum ReuseRequest {
+    Prepared,
+    Selected(Option<ResidentLoadHint>),
+}
+
+enum ReusedCandidate {
+    Prepared,
+    Selected(SampleBuffer),
+}
+
 /// Range I/O observations are independent of fresh complete integrity work.
 #[cfg(test)]
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -218,6 +229,46 @@ impl ColdTransaction {
         resident_hint: Option<ResidentLoadHint>,
         cancelled: &impl Fn() -> bool,
     ) -> io::Result<Option<SampleBuffer>> {
+        match self.try_reuse_candidate(
+            output_rate,
+            output_channels,
+            maximum,
+            ReuseRequest::Selected(resident_hint),
+            cancelled,
+        )? {
+            Some(ReusedCandidate::Selected(sample)) => Ok(Some(sample)),
+            None => Ok(None),
+            Some(ReusedCandidate::Prepared) => unreachable!("selected warm request"),
+        }
+    }
+
+    /// Complete warm integrity and retained immutable custody, without PCM selection.
+    pub(in crate::audio_engine) fn try_reuse_prepared(
+        &mut self,
+        output_rate: u32,
+        output_channels: usize,
+        maximum: usize,
+        cancelled: &impl Fn() -> bool,
+    ) -> io::Result<bool> {
+        Ok(self
+            .try_reuse_candidate(
+                output_rate,
+                output_channels,
+                maximum,
+                ReuseRequest::Prepared,
+                cancelled,
+            )?
+            .is_some())
+    }
+
+    fn try_reuse_candidate(
+        &mut self,
+        output_rate: u32,
+        output_channels: usize,
+        maximum: usize,
+        request: ReuseRequest,
+        cancelled: &impl Fn() -> bool,
+    ) -> io::Result<Option<ReusedCandidate>> {
         check_cancelled(cancelled)?;
         let started = Instant::now();
         let cpu = thread_cpu_nanos()?;
@@ -242,7 +293,7 @@ impl ColdTransaction {
                 &selector,
                 (output_rate, output_channels),
                 maximum,
-                resident_hint,
+                request,
                 cancelled,
             ) {
                 Ok(sample) => {
@@ -269,9 +320,9 @@ impl ColdTransaction {
         selector: &Value,
         output: (u32, usize),
         maximum: usize,
-        resident_hint: Option<ResidentLoadHint>,
+        request: ReuseRequest,
         cancelled: &impl Fn() -> bool,
-    ) -> io::Result<SampleBuffer> {
+    ) -> io::Result<ReusedCandidate> {
         let (output_rate, output_channels) = output;
         let _admission = OpeningGuard::acquire(path, cancelled)?;
         reject_links(path)?;
@@ -398,15 +449,25 @@ impl ColdTransaction {
                 .map_err(|_| invalid("warm ownership poisoned"))?;
             state.caches.get(path).and_then(Weak::upgrade)
         };
+        if let Some(shared) = existing.as_ref()
+            && (shared.identity != directory_identity || shared.file_identities != file_identities)
+        {
+            return Err(invalid(
+                "warm held FileID disagrees with verified candidate",
+            ));
+        }
+        // Both paths establish the same complete source identity before custody.
         let source = cold_residency::identity(&manifest).map_err(io::Error::other)?;
-        let (start, end, context) = if let Some(hint) = resident_hint {
+        let (start, end, context) = if let ReuseRequest::Selected(Some(hint)) = request {
             hint.selection(rate, frames).map_err(io::Error::other)?
         } else {
             (0, frames, ResidentContext::FullTrack)
         };
         let finite = start != 0 || end != frames;
-        let samples = if finite {
-            read_playback_range(
+        let samples = if matches!(request, ReuseRequest::Prepared) {
+            None
+        } else if finite {
+            Some(read_playback_range(
                 &mut readers[1],
                 start,
                 end - start,
@@ -414,7 +475,7 @@ impl ColdTransaction {
                 maximum,
                 cancelled,
                 &mut self.integrity,
-            )?
+            )?)
         } else if let Some(shared) = existing.as_ref() {
             let mut pcm = shared
                 .pcm
@@ -425,7 +486,7 @@ impl ColdTransaction {
                 .and_then(Weak::upgrade)
                 .filter(|pcm| pcm.len() == frames * channels)
             {
-                samples
+                Some(samples)
             } else {
                 let samples = read_playback(
                     &mut readers[1],
@@ -436,20 +497,21 @@ impl ColdTransaction {
                     &mut self.integrity,
                 )?;
                 *pcm = Some(Arc::downgrade(&samples));
-                samples
+                Some(samples)
             }
         } else {
-            read_playback(
+            Some(read_playback(
                 &mut readers[1],
                 frames,
                 channels,
                 maximum,
                 cancelled,
                 &mut self.integrity,
-            )?
+            )?)
         };
-        // Transfer a cleanup slot only after all fallible PCM admission/read work.
-        // A rejected candidate leaves this reservation available to the next one.
+        // Prepared custody needs no PCM allocation. Selected requests transfer
+        // the cleanup slot only after their fallible PCM admission/read work;
+        // a rejected candidate keeps the reservation for the next candidate.
         let shared = if let Some(shared) = existing {
             shared
         } else {
@@ -463,7 +525,7 @@ impl ColdTransaction {
                 root: self.cache_root.clone(),
                 readers,
                 directories: vec![directory],
-                pcm: Mutex::new((!finite).then(|| Arc::downgrade(&samples))),
+                pcm: Mutex::new(samples.as_ref().filter(|_| !finite).map(Arc::downgrade)),
                 retired: AtomicBool::new(retiring),
                 durable_assignments: Mutex::new(HashSet::new()),
                 identity: directory_identity,
@@ -488,7 +550,10 @@ impl ColdTransaction {
         self.manifest = Some(manifest);
         self.reused_cache = Some(shared);
         self.committed_cache = Some(path.to_owned());
-        Ok(SampleBuffer {
+        let Some(samples) = samples else {
+            return Ok(ReusedCandidate::Prepared);
+        };
+        Ok(ReusedCandidate::Selected(SampleBuffer {
             residency: Some(Arc::new(ResidentSourceView {
                 source,
                 start_frame: start,
@@ -497,7 +562,7 @@ impl ColdTransaction {
             })),
             samples,
             channels,
-        })
+        }))
     }
 }
 

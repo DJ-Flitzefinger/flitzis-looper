@@ -8,12 +8,24 @@ use pyo3::exceptions::{PyRuntimeError, PyValueError};
 use pyo3::prelude::*;
 use pyo3::types::PyDict;
 
-pub(super) fn enqueue(engine: &AudioEngine, id: usize, enabled: bool) -> PyResult<u64> {
+pub(super) fn enqueue_with_source(
+    engine: &AudioEngine,
+    id: usize,
+    enabled: bool,
+    expected_source_generation: Option<u64>,
+) -> PyResult<u64> {
     let _requests = engine
         .pad_request_ids
         .lock()
         .map_err(|_| PyRuntimeError::new_err("request lock poisoned"))?;
     let binding = input_runtime_binding::capture_under_request_lock(engine, id)?;
+    input_runtime_binding::validate_expected_source_generation(
+        binding.as_ref(),
+        expected_source_generation,
+    )?;
+    if expected_source_generation.is_some() {
+        engine.admit_resident_key_lock(id, enabled)?;
+    }
     let mut producer = engine
         .control_producer()?
         .lock()
@@ -22,6 +34,9 @@ pub(super) fn enqueue(engine: &AudioEngine, id: usize, enabled: bool) -> PyResul
         return Err(PyRuntimeError::new_err(
             "Failed to send SetPadKeyLock - buffer may be full",
         ));
+    }
+    if binding.as_ref().is_some_and(|binding| !binding.current()) {
+        return Err(PyValueError::new_err("current complete source changed"));
     }
     engine.note_resident_key_lock_intent(id, enabled)?;
     let Some(binding) = binding else {
@@ -34,9 +49,6 @@ pub(super) fn enqueue(engine: &AudioEngine, id: usize, enabled: bool) -> PyResul
         )?;
         return Ok(0);
     };
-    if !binding.current() {
-        return Err(PyValueError::new_err("current complete source changed"));
-    }
     let request_id = engine.input_runtime_ownership.next_key_lock_request(id)?;
     super::push_control_message(
         &mut producer,

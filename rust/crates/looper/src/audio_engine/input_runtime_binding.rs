@@ -8,7 +8,7 @@ use super::constants::NUM_SAMPLES;
 use super::prepared_source::next_epoch;
 use crate::messages::SampleBuffer;
 use flitzis_looper_analysis::tempo_acceptance::TimingIntent;
-use pyo3::exceptions::PyRuntimeError;
+use pyo3::exceptions::{PyRuntimeError, PyValueError};
 use pyo3::prelude::*;
 use pyo3::types::PyDict;
 use std::sync::{
@@ -608,6 +608,11 @@ impl InputRuntimePadBinding {
 
 #[pymethods]
 impl InputRuntimePadBinding {
+    /// Confirm the actual native source/authority before capturing live intent.
+    pub fn is_current(&self) -> bool {
+        self.current()
+    }
+
     /// Fresh copies of complete native metadata; historical bindings confer no authority.
     pub fn metadata(&self, py: Python<'_>) -> PyResult<Py<PyAny>> {
         let metadata = PyDict::new(py);
@@ -685,6 +690,34 @@ pub(super) fn capture(engine: &AudioEngine, id: usize) -> PyResult<Option<InputR
         .lock()
         .map_err(|_| PyRuntimeError::new_err("request lock poisoned"))?;
     capture_under_request_lock(engine, id)
+}
+
+/// Optional live controls must still name the actual current source. Saved and
+/// legacy controls omit the guard and retain their existing admission behavior.
+pub(super) fn validate_expected_source_generation(
+    binding: Option<&InputRuntimePadBinding>,
+    expected_source_generation: Option<u64>,
+) -> PyResult<()> {
+    if let Some(expected) = expected_source_generation
+        && !binding
+            .is_some_and(|binding| binding.source_generation == expected && binding.current())
+    {
+        return Err(PyValueError::new_err("current complete source changed"));
+    }
+    Ok(())
+}
+
+/// The caller holds pad_requests before this check and through its mutation.
+pub(super) fn validate_expected_source_generation_under_request_lock(
+    engine: &AudioEngine,
+    id: usize,
+    expected_source_generation: Option<u64>,
+) -> PyResult<()> {
+    if expected_source_generation.is_none() {
+        return Ok(());
+    }
+    let binding = capture_under_request_lock(engine, id)?;
+    validate_expected_source_generation(binding.as_ref(), expected_source_generation)
 }
 
 /// Shared current-source resolver for preparation and MIDI. The caller retains

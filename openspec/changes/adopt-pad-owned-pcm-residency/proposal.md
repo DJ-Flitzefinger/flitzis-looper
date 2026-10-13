@@ -29,6 +29,15 @@ a required case. Faster triggers and lower RAM require actual measured evidence.
   Settings surface, with resource estimates and deliberate bounded RAM policy.
 - Prove complete 216-slot admission, changed-pad-only refresh, Windows ownership,
   finite DSP coverage, migration/rollback and cold/warm resource/performance behavior.
+- Prepare ordinary incoming activity/BPM/default-eight-bar demand before selected
+  live PCM allocation, preserving latest request-bound global/pad/loop/timing intent
+  through own source ACK and first public Play, including actual initial BPM lock.
+
+The ordinary incoming Loader delta is implemented with bounded public Native and
+controller evidence and a passing integrated software gate. Saved physical
+ON evidence remains separately scoped;
+source ACK does not establish wet output or later source-specific Native adoption.
+Whole P4b/P5b, aggregate resource/music and Human gates remain open.
 
 P0 is the historical published plan. R0 revises its incompatible physical topology
 after independent bounded P0 and complete C1 plan acceptance; R0's separate native

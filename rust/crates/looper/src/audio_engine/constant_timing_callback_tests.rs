@@ -65,6 +65,7 @@ fn productive_history_native_loaded_source_publication_fences_new_launch_during_
             replace_assignment: false,
             loop_region: None,
             resident_cancelled: None,
+            incoming_defaults: None,
             intent: None,
             ownership: &ownership,
             generation: 1,
@@ -104,6 +105,7 @@ fn productive_history_native_loaded_source_publication_fences_new_launch_during_
             replace_assignment: false,
             loop_region: None,
             resident_cancelled: None,
+            incoming_defaults: None,
             intent: None,
             ownership: &ownership,
             generation: 1,
@@ -131,6 +133,7 @@ fn productive_history_native_loaded_source_publication_fences_new_launch_during_
     assert_eq!(state.acknowledgements.current_epoch(0), 2); // old effective timing/audio survives
     assert!(!state.mixer.play_sample(0, 1.0));
     let launch = ScheduledCommand::StopAllThenPlaySample {
+        expected_source_generation: None,
         id: 0,
         volume: 1.0,
         received_at_ns: None,
@@ -181,6 +184,7 @@ fn productive_history_native_loaded_source_publication_fences_new_launch_during_
             replace_assignment: false,
             loop_region: None,
             resident_cancelled: None,
+            incoming_defaults: None,
             intent: None,
             ownership: &ownership,
             generation: 3,
@@ -508,6 +512,7 @@ fn productive_history_exclusive_commit_uses_admitted_source_when_authority_chang
         &mut state.transport,
         3,
         ScheduledCommand::StopAllThenPlaySample {
+            expected_source_generation: None,
             id: 0,
             volume: 1.0,
             received_at_ns: None,
@@ -634,6 +639,7 @@ fn constant_timing_actual_callback_drains_protect_newer_grid_from_old_parameter_
             id: 0,
             bpm: Some(60.0),
             through_epoch: 1,
+            expected_source_generation: None,
         })
         .unwrap();
     let mut state = CallbackState::new(source);
@@ -672,6 +678,7 @@ fn constant_timing_actual_callback_drains_protect_newer_grid_from_old_parameter_
             id: 0,
             bpm: Some(90.0),
             through_epoch: 3,
+            expected_source_generation: None,
         })
         .unwrap();
     drain_parameter_messages(
@@ -706,6 +713,7 @@ fn constant_timing_legacy_origin_is_one_effect_at_actual_command_budget_boundary
                 phase_anchor_s: 0.25,
             },
             through_epoch: 3,
+            expected_source_generation: None,
         })
         .unwrap();
     assert_eq!(
@@ -884,6 +892,7 @@ fn constant_timing_parameter_coalescing_retains_latest_clear_epoch() {
             id: 0,
             bpm: Some(60.0),
             through_epoch: 1,
+            expected_source_generation: None,
         })
         .unwrap();
     producer
@@ -891,6 +900,7 @@ fn constant_timing_parameter_coalescing_retains_latest_clear_epoch() {
             id: 0,
             bpm: Some(90.0),
             through_epoch: 3,
+            expected_source_generation: None,
         })
         .unwrap();
     let result = drain_parameter_messages(&mut consumer, &mut state.mixer, &mut state.transport);

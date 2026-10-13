@@ -33,11 +33,13 @@ pub(crate) enum ScheduledCommand {
         id: usize,
         volume: f32,
         received_at_ns: Option<u64>,
+        expected_source_generation: Option<u64>,
     },
     StopAllThenPlaySample {
         id: usize,
         volume: f32,
         received_at_ns: Option<u64>,
+        expected_source_generation: Option<u64>,
     },
     StopSample {
         id: usize,
@@ -208,6 +210,7 @@ mod tests {
 
     fn play(id: usize) -> ScheduledCommand {
         ScheduledCommand::PlaySample {
+            expected_source_generation: None,
             id,
             volume: 1.0,
             received_at_ns: None,
@@ -296,6 +299,7 @@ mod tests {
             .schedule(
                 10,
                 ScheduledCommand::StopAllThenPlaySample {
+                    expected_source_generation: None,
                     id: 3,
                     volume: 1.0,
                     received_at_ns: None,
@@ -310,6 +314,7 @@ mod tests {
                 ScheduledCommand::StopSample { id: 2 },
                 ScheduledCommand::StopAll,
                 ScheduledCommand::StopAllThenPlaySample {
+                    expected_source_generation: None,
                     id: 3,
                     volume: 1.0,
                     received_at_ns: None

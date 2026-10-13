@@ -13,6 +13,22 @@ use crate::messages::SampleBuffer;
 
 const NEAR_ZERO_TOLERANCE: f32 = 0.01;
 
+/// One channel's finite amplitude is sufficient; opposite signs never cancel.
+pub(super) fn frame_has_initial_activity(frame: impl IntoIterator<Item = f32>) -> bool {
+    frame
+        .into_iter()
+        .any(|value| value.is_finite() && value.abs() > NEAR_ZERO_TOLERANCE)
+}
+
+/// Loaded-frame N-1 placement is shared by borrowed and disk-backed scans.
+pub(super) fn initial_loop_start_for_activity(
+    activity_frame: usize,
+    sample_rate_hz: u32,
+) -> Option<f64> {
+    (sample_rate_hz != 0)
+        .then(|| activity_frame.saturating_sub(1) as f64 / f64::from(sample_rate_hz))
+}
+
 /// Return the loaded frame preceding the first across-channel tolerance crossing.
 ///
 /// One borrowed pass inspects finite amplitudes without cancellation between
@@ -32,13 +48,8 @@ pub(super) fn detect_initial_loop_start(sample: &SampleBuffer, sample_rate_hz: u
     let activity_frame = sample
         .samples
         .chunks_exact(sample.channels)
-        .position(|frame| {
-            frame
-                .iter()
-                .any(|value| value.is_finite() && value.abs() > NEAR_ZERO_TOLERANCE)
-        })?;
-    let start_frame = activity_frame.saturating_sub(1);
-    Some(start_frame as f64 / f64::from(sample_rate_hz))
+        .position(|frame| frame_has_initial_activity(frame.iter().copied()))?;
+    initial_loop_start_for_activity(activity_frame, sample_rate_hz)
 }
 
 #[cfg(test)]

@@ -1261,6 +1261,7 @@ impl Harness {
                     replace_assignment: false,
                     loop_region: None,
                     resident_cancelled: None,
+                    incoming_defaults: None,
                     intent: None,
                 },
             )
@@ -1416,10 +1417,12 @@ fn actual_python_legacy_scalar_requires_own_callback_ack_and_wet_output() {
                 id: 0,
                 start_s: START as f64 / f64::from(RATE),
                 end_s: Some(END as f64 / f64::from(RATE)),
+                expected_source_generation: None,
             })
             .unwrap();
         producer
             .push(ControlMessage::PlaySample {
+                expected_source_generation: None,
                 id: 0,
                 volume: 1.0,
                 received_at_ns: None,

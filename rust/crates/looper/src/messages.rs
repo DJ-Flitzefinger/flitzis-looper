@@ -421,6 +421,7 @@ pub(crate) enum ControlParameterMessage {
         id: usize,
         bpm: Option<f64>,
         through_epoch: u64,
+        expected_source_generation: Option<u64>,
     },
 
     /// Set per-pad Gain/Trim in dB.
@@ -502,12 +503,14 @@ pub enum ControlMessage {
         id: usize,
         metadata: PadTimingMetadata,
         through_epoch: u64,
+        expected_source_generation: Option<u64>,
     },
 
     /// Clear precise timing through this native publication epoch without erasing newer state.
     ClearPadConstantTiming {
         id: usize,
         through_epoch: u64,
+        expected_source_generation: Option<u64>,
     },
 
     /// Coupled derived controls from current acknowledged timing.
@@ -538,6 +541,7 @@ pub enum ControlMessage {
         id: usize,
         start_s: f64,
         end_s: Option<f64>,
+        expected_source_generation: Option<u64>,
     },
 
     /// Set Rust-side trigger quantization mode for future pad triggers.
@@ -590,6 +594,7 @@ pub enum ControlMessage {
         replace_assignment: bool,
         loop_region: Option<(usize, usize)>,
         resident_cancelled: Option<Arc<std::sync::atomic::AtomicBool>>,
+        incoming_defaults: Option<IncomingLoadDefaults>,
     },
 
     RelocateResident(Box<ResidentTransaction>),
@@ -615,6 +620,7 @@ pub enum ControlMessage {
         id: usize,
         volume: f32,
         received_at_ns: Option<u64>,
+        expected_source_generation: Option<u64>,
     },
 
     /// Stop all active voices, then play a loaded sample as one audio-thread command.
@@ -626,6 +632,7 @@ pub enum ControlMessage {
         id: usize,
         volume: f32,
         received_at_ns: Option<u64>,
+        expected_source_generation: Option<u64>,
     },
 
     /// One guarded native MIDI loop/play effect, retained through quantized scheduling.
@@ -676,6 +683,7 @@ pub enum ControlMessage {
     SeekSample {
         id: usize,
         position_s: f64,
+        expected_source_generation: Option<u64>,
     },
 
     /// Unload a sample slot.
@@ -732,6 +740,20 @@ impl ControlMessage {
 
 /// Re-export from the analysis crate.
 pub(crate) use flitzis_looper_analysis::SampleAnalysis;
+
+/// Validated request-owned scalar defaults, installed with its source before ACK.
+#[derive(Clone, Copy, Debug)]
+pub(crate) struct IncomingLoadDefaults {
+    pub sample_rate_hz: u32,
+    pub revision: u64,
+    pub key_lock: bool,
+    pub start_frame: usize,
+    pub end_frame: Option<usize>,
+    pub period_seconds: Option<f64>,
+    pub origin_frame: f64,
+    pub loop_auto: bool,
+    pub loop_bars: f64,
+}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum BackgroundTaskKind {
@@ -790,6 +812,7 @@ pub enum LoaderEvent {
         /// Automatic analysis failed independently of successful source adoption.
         /// Delivered only for the matching source and timing request.
         analysis_error: Option<String>,
+        incoming_defaults: Option<IncomingLoadDefaults>,
     },
 
     /// Loading failed.
@@ -845,9 +868,14 @@ mod tests {
                 for frame in first..first + 16 {
                     let position_s = frame as f64 / f64::from(rate);
                     producer
-                        .push(ControlMessage::SeekSample { id: 3, position_s })
+                        .push(ControlMessage::SeekSample {
+                            expected_source_generation: None,
+                            id: 3,
+                            position_s,
+                        })
                         .unwrap();
                     let ControlMessage::SeekSample {
+                        expected_source_generation: None,
                         id,
                         position_s: accepted,
                     } = consumer.pop().unwrap()
@@ -893,6 +921,7 @@ mod tests {
     #[test]
     fn play_sample_exclusive_message_carries_fixed_size_trigger() {
         let message = ControlMessage::PlaySampleExclusive {
+            expected_source_generation: None,
             id: 3,
             volume: 0.75,
             received_at_ns: None,
@@ -900,7 +929,7 @@ mod tests {
 
         assert!(matches!(
             message,
-            ControlMessage::PlaySampleExclusive { id: 3, volume, received_at_ns: None } if volume == 0.75
+            ControlMessage::PlaySampleExclusive { expected_source_generation: None, id: 3, volume, received_at_ns: None } if volume == 0.75
         ));
     }
 
@@ -1063,6 +1092,7 @@ mod tests {
     fn control_messages_classify_ordered_and_parameter_semantics() {
         assert_eq!(
             ControlMessage::PlaySample {
+                expected_source_generation: None,
                 id: 1,
                 volume: 1.0,
                 received_at_ns: None
@@ -1072,6 +1102,7 @@ mod tests {
         );
         assert_eq!(
             ControlMessage::SeekSample {
+                expected_source_generation: None,
                 id: 1,
                 position_s: 2.5,
             }
@@ -1095,6 +1126,7 @@ mod tests {
                 id: 1,
                 start_s: 0.0,
                 end_s: None,
+                expected_source_generation: None,
             }
             .class(),
             ControlMessageClass::OrderedState

@@ -2158,7 +2158,7 @@ impl ReadyPlaybackAudio {
     fn pad_timing_intent(&self, id: usize) -> PyResult<&'static str> {
         self.engine.pad_timing_intent(id)
     }
-    #[pyo3(signature=(id, start_s=None, end_s=None, position_s=None, key_lock=None))]
+    #[pyo3(signature=(id, start_s=None, end_s=None, position_s=None, key_lock=None, *, expected_source_generation=None))]
     fn prepare_resident_control(
         &self,
         id: usize,
@@ -2166,6 +2166,7 @@ impl ReadyPlaybackAudio {
         end_s: Option<f64>,
         position_s: Option<f64>,
         key_lock: Option<bool>,
+        expected_source_generation: Option<u64>,
     ) -> PyResult<crate::audio_engine::resident_relocation::ResidentWindowTicket> {
         prepare_window_with_producer(
             &self.engine,
@@ -2174,6 +2175,7 @@ impl ReadyPlaybackAudio {
                 loop_region: start_s.map(|start| (start, end_s)),
                 seek_position_s: position_s,
                 key_lock,
+                expected_source_generation,
                 ..WindowRequest::default()
             },
             self.producer.clone(),

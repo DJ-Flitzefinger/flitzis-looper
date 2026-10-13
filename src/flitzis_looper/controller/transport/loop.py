@@ -113,6 +113,7 @@ class PadLoopController:
     def set_full_track_region(self, sample_id: int) -> None:
         """Store and publish an explicit full-track loop region for a loaded pad."""
         validate_sample_id(sample_id)
+        generation = self._transport.capture_current_pad_edit_generation(sample_id)
         self._transport.residency.remember(sample_id)
 
         if self._project.sample_paths[sample_id] is None:
@@ -142,7 +143,10 @@ class PadLoopController:
         if changed:
             self._transport._mark_project_changed()
 
-        self._apply_effective_pad_loop_region_to_audio(sample_id, timing=timing)
+        self._apply_effective_pad_loop_region_to_audio(
+            sample_id, timing=timing, expected_source_generation=generation
+        )
+        self._transport.record_current_pad_edit(sample_id, generation, "loop")
 
     def _resolve_timing(
         self, sample_id: int, timing: CurrentPadTiming | UnresolvedTiming | None
@@ -158,17 +162,21 @@ class PadLoopController:
         sample_id: int,
         *,
         timing: CurrentPadTiming | UnresolvedTiming | None = UNRESOLVED_TIMING,
+        expected_source_generation: int | None = None,
     ) -> None:
         if self._project.sample_paths[sample_id] is None:
             return
         start_s, end_s = self._effective_pad_loop_region(sample_id, timing=timing)
-        self._transport.residency.publish_loop(sample_id, start_s, end_s)
+        self._transport.residency.publish_loop(
+            sample_id, start_s, end_s, expected_source_generation=expected_source_generation
+        )
 
     def apply_grid_anchor_to_audio(
         self,
         sample_id: int,
         *,
         timing: CurrentPadTiming | UnresolvedTiming | None = UNRESOLVED_TIMING,
+        expected_source_generation: int | None = None,
     ) -> None:
         """Publish legacy origins without revoking current accepted timing."""
         validate_sample_id(sample_id)
@@ -182,7 +190,11 @@ class PadLoopController:
         timing = self._resolve_timing(sample_id, timing)
         if timing is not None and timing.accepted_revision is not None:
             return
-        self._audio.set_pad_timing_metadata(sample_id, self._legacy_grid_anchor_sec(sample_id))
+        self._audio.set_pad_timing_metadata(
+            sample_id,
+            self._legacy_grid_anchor_sec(sample_id),
+            **self._transport.source_generation_options(expected_source_generation),
+        )
 
     def _grid_offset_samples(self, sample_id: int) -> int:
         return int(self._project.pad_grid_offset_samples[sample_id])
@@ -231,6 +243,7 @@ class PadLoopController:
         sample_id: int,
         *,
         timing: CurrentPadTiming | UnresolvedTiming | None = UNRESOLVED_TIMING,
+        expected_source_generation: int | None = None,
     ) -> bool:
         """Re-clamp the stored grid offset when effective BPM changes."""
         validate_sample_id(sample_id)
@@ -243,12 +256,17 @@ class PadLoopController:
 
         self._project.pad_grid_offset_samples[sample_id] = clamped
         self._transport._mark_project_changed()
-        self.apply_grid_anchor_to_audio(sample_id, timing=timing)
-        self._apply_effective_pad_loop_region_to_audio(sample_id, timing=timing)
+        self.apply_grid_anchor_to_audio(
+            sample_id, timing=timing, expected_source_generation=expected_source_generation
+        )
+        self._apply_effective_pad_loop_region_to_audio(
+            sample_id, timing=timing, expected_source_generation=expected_source_generation
+        )
         return True
 
     def set_grid_offset_samples(self, sample_id: int, grid_offset_samples: int) -> None:
         validate_sample_id(sample_id)
+        generation = self._transport.capture_current_pad_edit_generation(sample_id)
 
         timing = self._bpm.current_timing(sample_id)
         grid_offset_samples = self._clamp_grid_offset_samples(
@@ -268,11 +286,13 @@ class PadLoopController:
                     sample_rate_hz=self._timing_sample_rate_hz(timing),
                     grid_offset_samples=grid_offset_samples,
                 ),
+                **self._transport.source_generation_options(generation),
             )
         self._project.pad_grid_offset_samples[sample_id] = grid_offset_samples
         self._project.pad_timing_intent[sample_id] = "legacy"
+        self._transport.record_current_pad_edit(sample_id, generation, "timing")
         self._transport._mark_project_changed()
-        self._bpm.on_pad_bpm_changed(sample_id)
+        self._bpm.on_pad_bpm_changed(sample_id, expected_source_generation=generation)
 
     def grid_anchor_sec(self, sample_id: int) -> float:
         """Return the current accepted signed origin or the durable legacy origin."""
@@ -444,8 +464,20 @@ class PadLoopController:
         if end_s_effective is None:
             return (start_s, None)
         end_s_effective = physical_source_marker_s(end_s_effective, sample_rate_hz=sample_rate_hz)
+        duration_s = self._source_duration_s(sample_id, timing)
+        physical_end = (
+            physical_source_marker_s(duration_s, sample_rate_hz=sample_rate_hz)
+            if duration_s is not None and math.isfinite(duration_s) and duration_s > 0.0
+            else None
+        )
+        if physical_end is not None:
+            # Keep even an out-of-range generic marker within the last physical sample.
+            start_s = min(start_s, max(0.0, physical_end - one_sample_s))
+            end_s_effective = min(end_s_effective, physical_end)
         if end_s_effective <= start_s:
             end_s_effective = start_s + one_sample_s
+        if physical_end is not None:
+            end_s_effective = min(end_s_effective, physical_end)
         return (start_s, end_s_effective)
 
     def effective_region(
@@ -472,6 +504,7 @@ class PadLoopController:
 
     def set_auto(self, sample_id: int, *, enabled: bool) -> None:
         validate_sample_id(sample_id)
+        generation = self._transport.capture_current_pad_edit_generation(sample_id)
         self._transport.residency.remember(sample_id)
         if enabled == self._transport._project.pad_loop_auto[sample_id]:
             return
@@ -487,10 +520,14 @@ class PadLoopController:
             self._transport._project.pad_loop_start_s[sample_id] = start_s
 
         self._transport._mark_project_changed()
-        self._apply_effective_pad_loop_region_to_audio(sample_id, timing=timing)
+        self._apply_effective_pad_loop_region_to_audio(
+            sample_id, timing=timing, expected_source_generation=generation
+        )
+        self._transport.record_current_pad_edit(sample_id, generation, "loop")
 
     def set_bars(self, sample_id: int, *, bars: float) -> None:
         validate_sample_id(sample_id)
+        generation = self._transport.capture_current_pad_edit_generation(sample_id)
         self._transport.residency.remember(sample_id)
 
         bars = self._normalize_requested_bars(bars)
@@ -504,10 +541,14 @@ class PadLoopController:
 
         self._transport._project.pad_loop_bars[sample_id] = bars
         self._transport._mark_project_changed()
-        self._apply_effective_pad_loop_region_to_audio(sample_id, timing=timing)
+        self._apply_effective_pad_loop_region_to_audio(
+            sample_id, timing=timing, expected_source_generation=generation
+        )
+        self._transport.record_current_pad_edit(sample_id, generation, "loop")
 
     def set_start(self, sample_id: int, start_s: float) -> None:
         validate_sample_id(sample_id)
+        generation = self._transport.capture_current_pad_edit_generation(sample_id)
         self._transport.residency.remember(sample_id)
         ensure_finite(start_s)
 
@@ -529,10 +570,14 @@ class PadLoopController:
             self._transport._project.pad_loop_end_s[sample_id] = start_s + one_sample_s
 
         self._transport._mark_project_changed()
-        self._apply_effective_pad_loop_region_to_audio(sample_id, timing=timing)
+        self._apply_effective_pad_loop_region_to_audio(
+            sample_id, timing=timing, expected_source_generation=generation
+        )
+        self._transport.record_current_pad_edit(sample_id, generation, "loop")
 
     def set_end(self, sample_id: int, end_s: float | None) -> None:
         validate_sample_id(sample_id)
+        generation = self._transport.capture_current_pad_edit_generation(sample_id)
         self._transport.residency.remember(sample_id)
 
         timing = self._bpm.current_timing(sample_id)
@@ -559,4 +604,7 @@ class PadLoopController:
 
         self._transport._project.pad_loop_end_s[sample_id] = end_s
         self._transport._mark_project_changed()
-        self._apply_effective_pad_loop_region_to_audio(sample_id, timing=timing)
+        self._apply_effective_pad_loop_region_to_audio(
+            sample_id, timing=timing, expected_source_generation=generation
+        )
+        self._transport.record_current_pad_edit(sample_id, generation, "loop")

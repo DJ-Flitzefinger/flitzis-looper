@@ -357,6 +357,7 @@ impl ModeOracle {
             .lock()
             .unwrap()
             .push(ControlMessage::PlaySample {
+                expected_source_generation: None,
                 id: 0,
                 volume: 1.0,
                 received_at_ns: None,
@@ -1245,6 +1246,7 @@ fn actual_neutral_origin_queued_speed_and_bpm_targets_guard_first_wet_and_failur
                             id: 0,
                             bpm: Some(120.0),
                             through_epoch: 0,
+                            expected_source_generation: None,
                         })
                         .unwrap();
                     parameters

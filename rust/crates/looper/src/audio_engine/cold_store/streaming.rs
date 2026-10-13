@@ -199,37 +199,65 @@ impl ColdTransaction {
         } else {
             (0, source.frame_count, ResidentContext::FullTrack)
         };
-        let mut reader = if let Some(cache) = self.reused_cache.as_ref() {
-            let reader = sealed_reader(&cache.path.join("playback.f32le"))?;
-            if cache.file_identities.get(1) != Some(&file_identity(&reader)?) {
-                return Err(invalid("prepared playback FileID changed"));
-            }
-            reader
-        } else {
-            let retained = self
-                .artifact_readers
-                .get(1)
-                .ok_or_else(|| invalid("prepared playback reader missing"))?;
-            let path = self
-                .staging
+        check_cancelled(cancelled)?;
+        let mut reader = self.prepared_playback_reader()?;
+        let cache = self.reused_cache.as_ref().or(self.shared_cache.as_ref());
+        let samples = if let Some(cache) = cache {
+            let mut pcm = cache
+                .pcm
+                .lock()
+                .map_err(|_| invalid("warm PCM ownership poisoned"))?;
+            // A dead Weak still retains its Arc backing allocation. Release it
+            // before a new live view follows temporary complete analysis.
+            if pcm
                 .as_ref()
-                .or(self.committed_cache.as_ref())
-                .ok_or_else(|| invalid("prepared playback path missing"))?;
-            let reader = sealed_reader(&path.join("playback.f32le"))?;
-            if file_identity(retained)? != file_identity(&reader)? {
-                return Err(invalid("prepared playback FileID changed"));
+                .is_some_and(|samples| samples.strong_count() == 0)
+            {
+                *pcm = None;
             }
-            reader
+            if start == 0 && end == source.frame_count {
+                if let Some(samples) = pcm
+                    .as_ref()
+                    .and_then(Weak::upgrade)
+                    .filter(|samples| samples.len() == source.frame_count * source.channels)
+                {
+                    samples
+                } else {
+                    let samples = warm::read_playback(
+                        &mut reader,
+                        source.frame_count,
+                        source.channels,
+                        maximum,
+                        cancelled,
+                        &mut self.integrity,
+                    )?;
+                    *pcm = Some(Arc::downgrade(&samples));
+                    samples
+                }
+            } else {
+                drop(pcm);
+                warm::read_playback_range(
+                    &mut reader,
+                    start,
+                    end - start,
+                    source.channels,
+                    maximum,
+                    cancelled,
+                    &mut self.integrity,
+                )?
+            }
+        } else {
+            warm::read_playback_range(
+                &mut reader,
+                start,
+                end - start,
+                source.channels,
+                maximum,
+                cancelled,
+                &mut self.integrity,
+            )?
         };
-        let samples = warm::read_playback_range(
-            &mut reader,
-            start,
-            end - start,
-            source.channels,
-            maximum,
-            cancelled,
-            &mut self.integrity,
-        )?;
+        check_cancelled(cancelled)?;
         Ok(SampleBuffer {
             channels: source.channels,
             samples,
@@ -241,7 +269,111 @@ impl ColdTransaction {
             })),
         })
     }
+
+    /// Scan verified complete playback in loaded-frame order without a PCM Arc.
+    pub(in crate::audio_engine) fn detect_prepared_initial_loop_start(
+        &mut self,
+        cancelled: &impl Fn() -> bool,
+    ) -> io::Result<Option<f64>> {
+        use crate::audio_engine::initial_loop_start::{
+            frame_has_initial_activity, initial_loop_start_for_activity,
+        };
+        check_cancelled(cancelled)?;
+        let (channels, frames, rate, length) =
+            warm::dimensions(&self.manifest()?.descriptor["playback"]["pcm"], CHUNK_BYTES)?;
+        let mut reader = self.prepared_playback_reader()?;
+        self.record_streaming_scratch(CHUNK_BYTES);
+        let mut bytes = [0_u8; CHUNK_BYTES];
+        let frame_bytes = channels * 4;
+        let chunk_bytes = CHUNK_BYTES / frame_bytes * frame_bytes;
+        let mut left = length;
+        let mut first_frame = 0;
+        while left > 0 {
+            check_cancelled(cancelled)?;
+            let count = usize::try_from(left.min(chunk_bytes as u64))
+                .map_err(|_| invalid("activity scan read extent"))?;
+            reader.read_exact(&mut bytes[..count])?;
+            self.integrity.playback_read_bytes = self
+                .integrity
+                .playback_read_bytes
+                .saturating_add(count as u64);
+            check_cancelled(cancelled)?;
+            let activity = bytes[..count].chunks_exact(frame_bytes).position(|frame| {
+                frame_has_initial_activity(
+                    frame
+                        .chunks_exact(4)
+                        .map(|sample| f32::from_le_bytes(sample.try_into().expect("f32 bytes"))),
+                )
+            });
+            if let Some(activity) = activity {
+                check_cancelled(cancelled)?;
+                return Ok(initial_loop_start_for_activity(
+                    first_frame + activity,
+                    rate,
+                ));
+            }
+            first_frame += count / frame_bytes;
+            left -= count as u64;
+        }
+        if first_frame != frames || reader.read(&mut bytes[..1])? != 0 {
+            return Err(invalid("activity scan complete EOF mismatch"));
+        }
+        check_cancelled(cancelled)?;
+        Ok(None)
+    }
+
+    /// Independent cursor under the fully verified handle's exact identity/extent.
+    fn prepared_playback_reader(&self) -> io::Result<File> {
+        let (_, _, _, expected_bytes) =
+            warm::dimensions(&self.manifest()?.descriptor["playback"]["pcm"], CHUNK_BYTES)?;
+        let cache = self.reused_cache.as_ref().or(self.shared_cache.as_ref());
+        let (path, retained, expected_identity) = if let Some(cache) = cache {
+            if self.committed_cache.as_ref() != Some(&cache.path) {
+                return Err(invalid("prepared cache disagrees with held ownership"));
+            }
+            (
+                cache.path.join("playback.f32le"),
+                cache.readers.get(1),
+                Some(
+                    cache
+                        .file_identities
+                        .get(1)
+                        .ok_or_else(|| invalid("prepared playback FileID missing"))?
+                        .clone(),
+                ),
+            )
+        } else {
+            let path = self
+                .staging
+                .as_ref()
+                .or(self.committed_cache.as_ref())
+                .ok_or_else(|| invalid("prepared playback path missing"))?;
+            (
+                path.join("playback.f32le"),
+                self.artifact_readers.get(1),
+                self.artifact_identities.get(1).cloned(),
+            )
+        };
+        let retained = retained.ok_or_else(|| invalid("prepared playback reader missing"))?;
+        let retained_identity = file_identity(retained)?;
+        reject_links(&path)?;
+        let reader = sealed_reader(&path)?;
+        if expected_identity.is_some_and(|identity| identity != retained_identity)
+            || file_identity(&reader)? != retained_identity
+            || retained.metadata()?.len() != expected_bytes
+            || reader.metadata()?.len() != expected_bytes
+        {
+            return Err(invalid(
+                "prepared playback FileID or complete extent changed",
+            ));
+        }
+        Ok(reader)
+    }
 }
+
+#[cfg(test)]
+#[path = "disk_preparation_tests.rs"]
+mod disk_preparation_tests;
 
 #[cfg(test)]
 #[cfg(windows)]

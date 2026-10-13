@@ -23,6 +23,16 @@ use std::sync::{
     mpsc::Sender,
 };
 
+type PreparedColdSample = (
+    CommittedColdLease,
+    SampleBuffer,
+    Option<crate::messages::SampleAnalysis>,
+    Option<f64>,
+    Option<String>,
+    Option<crate::messages::IncomingLoadDefaults>,
+    Option<Arc<AtomicBool>>,
+);
+
 struct LoadingGuard {
     id: usize,
     request_id: u64,
@@ -80,6 +90,7 @@ struct ColdLoad {
     replace_assignment: bool,
     resident_hint: Option<ResidentLoadHint>,
     resident_guard: Option<Arc<ResidentLoadGuard>>,
+    incoming: Option<Arc<super::incoming_load::IncomingLoad>>,
     intents: Arc<Mutex<Vec<TimingIntent>>>,
     initial_source: Option<SampleBuffer>,
     requests: Arc<Mutex<Vec<u64>>>,
@@ -239,6 +250,73 @@ pub(super) fn admit_selected_material(
     source_intent: &str,
     prepared_material: Option<Arc<super::material_migration::PreparedMigrationMaterial>>,
 ) -> PyResult<AdmittedMaterial> {
+    admit_selected_material_incoming(
+        engine,
+        id,
+        path,
+        selection,
+        producer,
+        output,
+        source_intent,
+        prepared_material,
+        None,
+    )
+}
+
+pub(super) fn admit_incoming(
+    engine: &AudioEngine,
+    id: usize,
+    path: String,
+    key_lock: bool,
+) -> PyResult<u64> {
+    let producer = engine.control_producer()?.clone();
+    #[cfg(test)]
+    let output = if engine.test_control_channels.is_some() {
+        (2, 48_000)
+    } else {
+        let handle = engine
+            .stream_handle
+            .as_ref()
+            .ok_or_else(|| PyRuntimeError::new_err("Audio engine not initialized"))?;
+        (handle.output_channels, handle.output_sample_rate)
+    };
+    #[cfg(not(test))]
+    let output = {
+        let handle = engine
+            .stream_handle
+            .as_ref()
+            .ok_or_else(|| PyRuntimeError::new_err("Audio engine not initialized"))?;
+        (handle.output_channels, handle.output_sample_rate)
+    };
+    let samples = std::env::current_dir()
+        .map_err(|error| PyRuntimeError::new_err(error.to_string()))?
+        .join("samples");
+    admit_selected_material_incoming(
+        engine,
+        id,
+        path,
+        (true, false, true, None),
+        producer,
+        (output.0, output.1, samples),
+        "import",
+        None,
+        Some(super::incoming_load::IncomingIntent::initial(key_lock)),
+    )
+    .map(|admitted| admitted.request_id)
+}
+
+#[allow(clippy::too_many_arguments)]
+fn admit_selected_material_incoming(
+    engine: &AudioEngine,
+    id: usize,
+    path: String,
+    selection: (bool, bool, bool, Option<ResidentLoadHint>),
+    producer: Arc<Mutex<Producer<ControlMessage>>>,
+    output: (usize, u32, PathBuf),
+    source_intent: &str,
+    prepared_material: Option<Arc<super::material_migration::PreparedMigrationMaterial>>,
+    incoming_intent: Option<super::incoming_load::IncomingIntent>,
+) -> PyResult<AdmittedMaterial> {
     let (output_channels, output_rate, samples_root) = output;
     let (run_analysis, restore_automatic, replace_assignment, resident_hint) = selection;
     if id >= super::constants::NUM_SAMPLES {
@@ -390,6 +468,17 @@ pub(super) fn admit_selected_material(
             .map_err(|_| PyRuntimeError::new_err("cold lease lock poisoned"))?[id]
             .clone(),
     };
+    let incoming = incoming_intent.map(|intent| {
+        Arc::new(super::incoming_load::IncomingLoad::new(
+            request_id,
+            intent,
+            admitted.adoption.clone(),
+        ))
+    });
+    let mut incoming_slots = engine
+        .incoming_loads
+        .lock()
+        .map_err(|_| PyRuntimeError::new_err("incoming intent lock poisoned"))?;
     let work = ColdLoad {
         id,
         request_id,
@@ -405,6 +494,7 @@ pub(super) fn admit_selected_material(
         replace_assignment,
         resident_hint,
         resident_guard: resident_guard.clone(),
+        incoming: incoming.clone(),
         guard_epoch: run_analysis || restore_automatic || initial_source.is_some(),
         initial_source,
         epoch: engine.prepared_source_epochs[id].clone(),
@@ -445,10 +535,12 @@ pub(super) fn admit_selected_material(
     // the reservation before the request/loading commit has finished.
     advance.commit();
     resident_guards[id] = resident_guard;
+    incoming_slots[id] = incoming;
     engine.cold_loading[id].store(request_id, Ordering::Release);
     loading.insert(id);
     drop(loading);
     drop(resident_guards);
+    drop(incoming_slots);
     drop(requests);
     engine.offline_jobs.cancel(Some(id));
     Ok(admitted)
@@ -564,18 +656,7 @@ impl ColdLoad {
             || (self.guard_epoch && self.epoch.load(Ordering::Acquire) != self.expected_epoch)
     }
 
-    fn prepare(
-        &self,
-    ) -> Result<
-        (
-            CommittedColdLease,
-            SampleBuffer,
-            Option<crate::messages::SampleAnalysis>,
-            Option<f64>,
-            Option<String>,
-        ),
-        String,
-    > {
+    fn prepare(&self) -> Result<PreparedColdSample, String> {
         let cancelled = || self.is_cancelled();
         if let Some(prepared) = &self.prepared_material {
             if cancelled() {
@@ -636,7 +717,11 @@ impl ColdLoad {
                 .map_err(|error| error.to_string())?;
             history[self.id].push(Arc::downgrade(&sample.samples));
             lease.bind_pcm(&sample.samples);
-            return Ok((lease, sample, None, None, None));
+            return Ok((lease, sample, None, None, None, None, None));
+        }
+
+        if self.incoming.is_some() {
+            return self.prepare_incoming();
         }
 
         let mut transaction =
@@ -803,6 +888,160 @@ impl ColdLoad {
             analysis,
             detected,
             analysis_error,
+            None,
+            None,
+        ))
+    }
+
+    fn prepare_incoming(&self) -> Result<PreparedColdSample, String> {
+        let cancelled = || self.is_cancelled();
+        let mut transaction =
+            ColdTransaction::capture(&self.samples_root, &self.path, !self.restore, &cancelled)
+                .map_err(|error| error.to_string())?;
+        let _preparation = transaction
+            .preparation_gate(self.output_rate, self.output_channels, &cancelled)
+            .map_err(|error| error.to_string())?;
+        let mut progress = ProgressReporter::new(self.id, self.request_id, self.events.clone());
+        let mut report = |update: SampleLoadProgress| {
+            let stage = match update.subtask {
+                SampleLoadSubtask::Decoding => LoadProgressStage::Decoding,
+                SampleLoadSubtask::Resampling => LoadProgressStage::Resampling,
+                SampleLoadSubtask::ChannelMapping => LoadProgressStage::ChannelMapping,
+            };
+            progress.emit(
+                stage,
+                update.percent,
+                update.resampling_required,
+                update.percent <= 0.0 || update.percent >= 1.0,
+            );
+        };
+        super::material_migration::prepare_disk_pcm(
+            &mut transaction,
+            &self.path,
+            self.output_rate,
+            self.output_channels,
+            PCM_LIMIT_BYTES,
+            &cancelled,
+            &mut report,
+        )?;
+        let source =
+            cold_residency::identity(transaction.manifest().map_err(|error| error.to_string())?)?;
+        let detected = transaction
+            .detect_prepared_initial_loop_start(&cancelled)
+            .map_err(|error| error.to_string())?;
+        let resampling_required = transaction
+            .playback_transform()
+            .map_err(|error| error.to_string())?["source_rate_hz"]
+            .as_u64()
+            .ok_or("missing prepared source rate")?
+            != u64::from(self.output_rate);
+        // This separate bounded complete-input analysis is retired before any
+        // selected live allocation. An analysis failure cannot invent an end.
+        let analysis_result = (|| -> Result<crate::messages::SampleAnalysis, String> {
+            super::analysis_pcm::default_analysis_peak(
+                source.frame_count,
+                source.channels,
+                self.output_rate,
+                0,
+                super::constant_timing::MAX_PCM_BYTES,
+            )
+            .map_err(|error| {
+                format!("automatic analysis exceeds its PCM preparation budget: {error}")
+            })?;
+            progress.emit(LoadProgressStage::Analyzing, 0.0, resampling_required, true);
+            let complete = transaction
+                .read_prepared_selection(None, super::constant_timing::MAX_PCM_BYTES, &cancelled)
+                .map_err(|error| format!("automatic analysis PCM preparation failed: {error}"))?;
+            analyze_sample(&complete, self.output_rate)
+        })();
+        if cancelled() {
+            return Err("cold load cancelled".into());
+        }
+        let (analysis, analysis_error) = match analysis_result {
+            Ok(result) => (Some(result), None),
+            Err(error) => (None, Some(error)),
+        };
+        let incoming = self.incoming.as_ref().expect("incoming request");
+        let mut selected = None;
+        // Bounded retries use one already verified complete artifact. Rapid
+        // continuing edits truthfully reject rather than spin or adopt stale PCM.
+        for _ in 0..4 {
+            let (intent, candidate_cancelled) = incoming.snapshot()?;
+            let defaults = intent.defaults(
+                self.output_rate,
+                source.frame_count,
+                detected,
+                analysis.as_ref(),
+            )?;
+            let candidate_stale = || cancelled() || candidate_cancelled.load(Ordering::Acquire);
+            match transaction.read_prepared_selection(
+                defaults.resident_hint(self.output_rate, source.frame_count),
+                PCM_LIMIT_BYTES,
+                &candidate_stale,
+            ) {
+                Ok(sample) if !candidate_stale() => {
+                    selected = Some((sample, defaults, candidate_cancelled));
+                    break;
+                }
+                _ if cancelled() => return Err("cold load cancelled".into()),
+                _ if candidate_cancelled.load(Ordering::Acquire) => continue,
+                Err(error) => return Err(error.to_string()),
+                Ok(_) => return Err("incoming selection became stale".into()),
+            }
+        }
+        let (mut sample, defaults, candidate_cancelled) =
+            selected.ok_or("incoming intent kept changing during selection")?;
+        {
+            let mut history = self
+                .pcm_history
+                .lock()
+                .map_err(|_| "PCM history lock poisoned")?;
+            history[self.id].retain(|reader| reader.strong_count() > 0);
+            if history[self.id].len() >= 128 {
+                return Err("same-pad source reader history full (128 live assignments)".into());
+            }
+            if same_source(self.initial_source.as_ref(), Some(&sample))
+                || history[self.id]
+                    .iter()
+                    .filter_map(std::sync::Weak::upgrade)
+                    .any(|reader| Arc::ptr_eq(&reader, &sample.samples))
+            {
+                let overlap = sample
+                    .samples
+                    .len()
+                    .checked_mul(8)
+                    .ok_or("assignment PCM extent overflow")?;
+                if overlap > PCM_LIMIT_BYTES {
+                    return Err("same-pad warm assignment exceeds transient PCM byte limit".into());
+                }
+                sample.samples = Arc::from(sample.samples.as_ref());
+                transaction.record_assignment_copy((overlap / 2) as u64);
+            }
+            history[self.id].push(Arc::downgrade(&sample.samples));
+        }
+        #[cfg(test)]
+        super::c3_observation::owned_pcm(sample.samples.len() * 4);
+        if candidate_cancelled.load(Ordering::Acquire) {
+            return Err("incoming intent became stale".into());
+        }
+        progress.emit(
+            LoadProgressStage::Publishing,
+            0.0,
+            resampling_required,
+            true,
+        );
+        transaction
+            .commit(&cancelled)
+            .map_err(|error| error.to_string())?;
+        transaction.bind_pcm(&sample.samples);
+        Ok((
+            transaction.into_lease(),
+            sample,
+            analysis,
+            detected,
+            analysis_error,
+            Some(defaults),
+            Some(candidate_cancelled),
         ))
     }
 
@@ -904,7 +1143,15 @@ impl ColdLoad {
     }
 
     fn publish(&self, producer: &Arc<Mutex<Producer<ControlMessage>>>) -> Result<(), String> {
-        let (lease, sample, analysis, detected_loop_start_s, analysis_error) = self.prepare()?;
+        let (
+            lease,
+            sample,
+            analysis,
+            detected_loop_start_s,
+            analysis_error,
+            incoming_defaults,
+            incoming_cancelled,
+        ) = self.prepare()?;
         let source_digest = lease.manifest.descriptor["decoder"]["original"]["sha256"]
             .as_str()
             .ok_or("prepared original digest missing")?
@@ -933,6 +1180,9 @@ impl ColdLoad {
             .map_err(|error| error.to_string())?;
         let requests = self.requests.lock().map_err(|_| "request lock poisoned")?;
         if self.flags_cancelled()
+            || incoming_cancelled
+                .as_ref()
+                .is_some_and(|cancelled| cancelled.load(Ordering::Acquire))
             || requests[self.id] != self.request_id
             || (self.guard_epoch && self.epoch.load(Ordering::Acquire) != self.expected_epoch)
         {
@@ -995,13 +1245,18 @@ impl ColdLoad {
                 cold_adoption: Some(self.adoption.clone()),
                 replace_assignment: self.replace_assignment,
                 loop_region,
-                resident_cancelled: self
-                    .resident_guard
-                    .as_ref()
-                    .map(|guard| guard.cancelled.clone()),
-                intent: self
-                    .restore_automatic
-                    .then_some((&mut intents[self.id], TimingIntent::Automatic)),
+                incoming_defaults,
+                resident_cancelled: incoming_cancelled.or_else(|| {
+                    self.resident_guard
+                        .as_ref()
+                        .map(|guard| guard.cancelled.clone())
+                }),
+                intent: if incoming_defaults.is_some() {
+                    Some((&mut intents[self.id], TimingIntent::Legacy))
+                } else {
+                    self.restore_automatic
+                        .then_some((&mut intents[self.id], TimingIntent::Automatic))
+                },
             },
         )?;
         drop(digests);
@@ -1073,6 +1328,7 @@ impl ColdLoad {
                 original_lease: Some(original_lease),
                 analysis,
                 analysis_error,
+                incoming_defaults,
             })
             .map_err(|_| "native adoption metadata receiver closed")?;
         publication.adopted = true;

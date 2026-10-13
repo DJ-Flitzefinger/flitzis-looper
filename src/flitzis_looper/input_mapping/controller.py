@@ -404,6 +404,7 @@ class InputMappingController(BaseController):
             return
         try:
             received_at_ns = validate_input_timestamp_ns(timestamp)
+            self._app.transport.ensure_current_source_assignment_ready(sample_id)
             if not self._refresh_rust_runtime_state():
                 return
             dispatched = self._audio.trigger_input_runtime_pad(
@@ -427,6 +428,7 @@ class InputMappingController(BaseController):
         self._midi_cc_directions.pop(binding_key, None)
 
     def _trigger_current_midi(self, sample_id: int, received_at_ns: int | None) -> None:
+        self._app.transport.ensure_current_source_assignment_ready(sample_id)
         if not self._refresh_rust_runtime_state() or not self._audio.trigger_input_runtime_pad(
             sample_id, received_at_ns=received_at_ns
         ):
@@ -587,6 +589,11 @@ class InputMappingController(BaseController):
         pad_signatures: list[_InputRuntimePadSignature] = []
         for sample_id, sample_path in enumerate(self._project.sample_paths):
             if sample_path is None:
+                pad_signatures.append(_InputRuntimePadSignature())
+                continue
+            try:
+                self._app.transport.ensure_current_source_assignment_ready(sample_id)
+            except ValueError:
                 pad_signatures.append(_InputRuntimePadSignature())
                 continue
 

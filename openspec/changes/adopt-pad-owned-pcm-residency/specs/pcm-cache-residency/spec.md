@@ -114,6 +114,81 @@ integrity and absolute metadata SHALL remain independent of the selected range.
 - **THEN** the existing transaction SHALL reject or settle only its own request and preserve prior effective audio, source readers and newer assignment or intent
 - **AND** no callback disk work, allocation, blocking lock or Python call SHALL be introduced
 
+### Requirement: Ordinary incoming loads determine demand before live PCM selection
+For an ordinary external first assignment or replacement, the system SHALL
+determine incoming activity, available source BPM and effective Auto8bars or
+newer addressed loop/timing intent from the incoming verified complete source
+before allocating its selected live PCM. Cold and verified warm paths SHALL
+share the same selection policy. Incoming demand SHALL resolve KEYLOCK through
+the existing global-default and nullable pad-override authority, without
+borrowing predecessor geometry, BPM or Native readiness.
+
+Each candidate SHALL remain bound to its own source, request and intent revision.
+A newer relevant intent SHALL cause off-thread reselection or truthful rejection
+before the callback's atomic source claim. An edit after that claim SHALL be
+reported as separately pending on the owned incoming source; the older source
+receipt SHALL NOT acknowledge that edit. Existing source, timing, cancellation, PCM, command, feedback
+and retirement guards SHALL remain effective. Heavy preparation and analysis
+SHALL remain off the UI and realtime callback.
+
+Own native adoption SHALL install the validated incoming source, loop bounds,
+scalar source timing and grid origin together before its matching source ACK.
+Loader Success and project projections SHALL follow that ACK and SHALL NOT
+overwrite a newer intent. Source ACK SHALL NOT certify successful wet output
+or later source-specific Native adoption.
+
+#### Scenario: Cold and warm incoming finite demand
+- **GIVEN** incoming analysis supplies valid BPM and a proper partial Auto8bars interval
+- **WHEN** ordinary cold or verified warm first-assignment or replacement loading resolves inherited or addressed explicit KEYLOCK ON or OFF
+- **THEN** only its own selected live interval SHALL be allocated through the common verified policy, with proper partial ON selecting genuine KeyLockFiniteLoop
+- **AND** complete artifacts, absolute source geometry and identity SHALL remain intact without a hidden complete live PCM backing
+- **AND** source and Load admission SHALL agree on the incoming bounds before own callback ACK, independently of the predecessor's markers
+
+#### Scenario: Incoming intent changes during held preparation
+- **WHEN** inherited or explicitly incoming ON/OFF, loop or timing intent changes before the callback claims adoption
+- **THEN** an older candidate SHALL NOT become effective or erase the newer intent
+- **AND** the latest inherited demand SHALL resolve the current global default while an explicitly incoming override remains authoritative
+- **AND** prior confirmed audio, source readers and assignment SHALL survive until legitimate replacement adoption
+
+#### Scenario: Addressed intent arrives after the callback claims its source
+- **GIVEN** the callback has atomically claimed the incoming source candidate
+- **WHEN** a newer addressed mode, loop or timing edit arrives before its source receipt is delivered
+- **THEN** the update SHALL truthfully identify already claimed ownership without cancelling that candidate or claiming the edit was adopted
+- **AND** the matching source receipt SHALL retain its actual older revision while the newer control domain settles through the existing source-bound transaction
+- **AND** rejected intent updates or a callback rejecting an updating candidate SHALL NOT leave a retired message waiting for acknowledgement
+- **AND** invalid periods or origins whose source-frame or BPM representation overflows SHALL be rejected before intent mutation or source adoption
+
+#### Scenario: First public Play uses its own initial timing
+- **GIVEN** matching source ACK and required own Native readiness
+- **WHEN** first public Play uses nonunity SPEED or enabled BPM lock with a valid master target
+- **THEN** source rate and phase SHALL derive from incoming source timing and current global controls rather than the predecessor's period or a display-only BPM target
+- **AND** actual ON Native/FIFO/EQ continuation SHALL retain independent complete-PCM/raw-Native regression parity, own later source-specific Native adoption and unchanged unrelated-pad chronology
+- **AND** queued intent, source ACK, dry fallback or another voice's wet receipt SHALL NOT establish successful ON output
+
+#### Scenario: A predecessor gesture races incoming adoption
+- **GIVEN** a live PAD mode, loop, BPM, grid, start or seek gesture captures the actual current source generation
+- **WHEN** that source changes before admission, callback application or a scheduled start becomes due
+- **THEN** the gesture SHALL be rejected before modifying the replacement source, its intent, preparation ownership or unrelated voices
+- **AND** the captured generation SHALL remain attached through scalar fallback, resident preparation, retries and deferred launch execution without recapture
+- **AND** a pending ordinary load with no actual current binding SHALL reject a generic gesture before project or session mutation rather than granting unbound incoming authority
+- **AND** a generic Python mode, loop, timing, Start, Seek, Gain or EQ control SHALL reject before predecessor project reads or mutations until the matching Loader receipt, even when the new Native source binding is already current; MIDI and global-start project projections SHALL retain the same pending boundary
+- **AND** the pending Gain/EQ boundary SHALL preserve the incoming mix defaults installed before source ACK without granting an additional generic Native Gain/EQ source-generation API contract
+- **AND** the matching receipt SHALL preserve concrete newer source-bound loop, mode, timing or seek work while retiring predecessor work; assignment projection SHALL NOT cancel or relabel the newer source transaction
+- **AND** stale parameter rows SHALL be rejected before coalescing so they cannot replace a valid newer-source BPM edit
+- **AND** saved and maintenance calls without a live source guard SHALL retain their established behavior
+
+#### Scenario: Missing BPM preserves genuine complete admission
+- **WHEN** incoming BPM is unavailable and no newer trustworthy physical range supplies finite demand
+- **THEN** the active activity-placement rules SHALL retain Auto8bars without inventing a musical endpoint or BPM
+- **AND** genuine complete live demand SHALL retain its actual bounded allocation and overlap admission, with complete ON retaining KeyLockFullTrack
+- **AND** invalid activity SHALL retain the existing loop-zero and grid-base fallback without modifying source audio
+
+#### Scenario: Incoming adoption is cancelled, stale or capacity constrained
+- **WHEN** cancellation, stale source/request/intent, or unavailable worker, PCM, command, feedback or retirement capacity prevents own adoption
+- **THEN** only that request SHALL settle with truthful pending/error state and no premature Loader Success
+- **AND** prior confirmed source, audio and readers and newer assignment or intent SHALL remain intact
+- **AND** no guessed musical endpoint, predecessor timing or missing-input silence SHALL authorize readiness
+
 ### Requirement: Finite DSP coverage is a feature completion gate
 The system SHALL prove and implement finite source-domain supply for the supported
 loop/DSP context before claiming completion of shared-material loop residency.
@@ -426,7 +501,9 @@ mutable flag. Native feedback SHALL NOT rewrite requested origin.
 
 #### Scenario: New source inherits only after matching successful completion
 - **WHEN** a matching new-source load completes successfully
-- **THEN** its prior track override SHALL clear and the latest global default SHALL resolve
+- **THEN** its predecessor track override SHALL clear and the latest global default SHALL resolve unless a newer explicit override belongs to that incoming request
+- **AND** a newer explicitly incoming ON/OFF override SHALL survive matching completion and subsequent global changes
+- **AND** an action bound only to the still-current predecessor SHALL NOT silently become an incoming override
 - **AND** admission failure or stale completion SHALL retain prior origin and confirmed Native state
 
 #### Scenario: Remaining contract constraints hold for every operation

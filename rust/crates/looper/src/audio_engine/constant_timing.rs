@@ -1129,16 +1129,32 @@ pub(super) fn publish_record(
 }
 
 /// Publish authority and an ordered clear transaction; every edit invalidates old tickets.
+#[cfg(test)]
 pub(super) fn set_intent(
     engine: &AudioEngine,
     producer: &Arc<Mutex<Producer<ControlMessage>>>,
     id: usize,
     intent: TimingIntent,
 ) -> PyResult<()> {
+    set_intent_with_source(engine, producer, id, intent, None)
+}
+
+pub(super) fn set_intent_with_source(
+    engine: &AudioEngine,
+    producer: &Arc<Mutex<Producer<ControlMessage>>>,
+    id: usize,
+    intent: TimingIntent,
+    expected_source_generation: Option<u64>,
+) -> PyResult<()> {
     let _requests = engine
         .pad_request_ids
         .lock()
         .map_err(|_| PyRuntimeError::new_err("request lock poisoned"))?;
+    super::input_runtime_binding::validate_expected_source_generation_under_request_lock(
+        engine,
+        id,
+        expected_source_generation,
+    )?;
     let mut intents = engine
         .timing_intents
         .lock()
@@ -1164,20 +1180,37 @@ pub(super) fn set_intent(
         .push(ControlMessage::ClearPadConstantTiming {
             id,
             through_epoch: next,
+            expected_source_generation,
         })
         .map_err(|_| PyRuntimeError::new_err("reserved single-producer capacity lost"))
 }
 
+#[cfg(test)]
 pub(super) fn publish_legacy_bpm(
     engine: &AudioEngine,
     parameters: &Arc<Mutex<Producer<ControlParameterMessage>>>,
     id: usize,
     bpm: Option<f64>,
 ) -> PyResult<()> {
+    publish_legacy_bpm_with_source(engine, parameters, id, bpm, None)
+}
+
+pub(super) fn publish_legacy_bpm_with_source(
+    engine: &AudioEngine,
+    parameters: &Arc<Mutex<Producer<ControlParameterMessage>>>,
+    id: usize,
+    bpm: Option<f64>,
+    expected_source_generation: Option<u64>,
+) -> PyResult<()> {
     let _requests = engine
         .pad_request_ids
         .lock()
         .map_err(|_| PyRuntimeError::new_err("request lock poisoned"))?;
+    super::input_runtime_binding::validate_expected_source_generation_under_request_lock(
+        engine,
+        id,
+        expected_source_generation,
+    )?;
     let mut intents = engine
         .timing_intents
         .lock()
@@ -1206,20 +1239,37 @@ pub(super) fn publish_legacy_bpm(
             id,
             bpm,
             through_epoch: next,
+            expected_source_generation,
         })
         .map_err(|_| PyRuntimeError::new_err("reserved parameter capacity lost"))
 }
 
+#[cfg(test)]
 pub(super) fn publish_legacy_origin(
     engine: &AudioEngine,
     ordered: &Arc<Mutex<Producer<ControlMessage>>>,
     id: usize,
     phase_anchor_s: f64,
 ) -> PyResult<()> {
+    publish_legacy_origin_with_source(engine, ordered, id, phase_anchor_s, None)
+}
+
+pub(super) fn publish_legacy_origin_with_source(
+    engine: &AudioEngine,
+    ordered: &Arc<Mutex<Producer<ControlMessage>>>,
+    id: usize,
+    phase_anchor_s: f64,
+    expected_source_generation: Option<u64>,
+) -> PyResult<()> {
     let _requests = engine
         .pad_request_ids
         .lock()
         .map_err(|_| PyRuntimeError::new_err("request lock poisoned"))?;
+    super::input_runtime_binding::validate_expected_source_generation_under_request_lock(
+        engine,
+        id,
+        expected_source_generation,
+    )?;
     let mut intents = engine
         .timing_intents
         .lock()
@@ -1248,6 +1298,7 @@ pub(super) fn publish_legacy_origin(
             id,
             metadata: crate::messages::PadTimingMetadata { phase_anchor_s },
             through_epoch: next,
+            expected_source_generation,
         })
         .map_err(|_| PyRuntimeError::new_err("reserved ordered capacity lost"))
 }

@@ -37,31 +37,44 @@ class BpmController:
     def set_manual_bpm(self, sample_id: int, bpm: float) -> None:
         """Set a pad's manual BPM override."""
         validate_sample_id(sample_id)
+        generation = self._transport.capture_current_pad_edit_generation(sample_id)
         ensure_finite(bpm)
         if bpm <= 0:
             msg = f"bpm must be > 0, got {bpm!r}"
             raise ValueError(msg)
         # Failed admission must leave both the current accepted record and intent intact.
-        self._audio.set_pad_bpm(sample_id, float(bpm))
+        self._audio.set_pad_bpm(
+            sample_id, float(bpm), **self._transport.source_generation_options(generation)
+        )
         self._project.manual_bpm[sample_id] = float(bpm)
-        self.on_pad_bpm_changed(sample_id, publish_bpm=False)
-        self._audio.set_pad_timing_intent(sample_id, "manual")
+        self._transport.record_current_pad_edit(sample_id, generation, "timing")
+        self.on_pad_bpm_changed(sample_id, publish_bpm=False, expected_source_generation=generation)
+        self._audio.set_pad_timing_intent(
+            sample_id, "manual", **self._transport.source_generation_options(generation)
+        )
         self._project.pad_timing_intent[sample_id] = "manual"
         self._transport._mark_project_changed()
 
     def clear_manual_bpm(self, sample_id: int) -> None:
         """Clear a pad's manual BPM override."""
         validate_sample_id(sample_id)
+        generation = self._transport.capture_current_pad_edit_generation(sample_id)
         analysis = self._project.sample_analysis[sample_id]
-        self._audio.set_pad_bpm(sample_id, normalize_bpm(analysis.bpm if analysis else None))
+        self._audio.set_pad_bpm(
+            sample_id,
+            normalize_bpm(analysis.bpm if analysis else None),
+            **self._transport.source_generation_options(generation),
+        )
         self._project.manual_bpm[sample_id] = None
         self._project.pad_timing_intent[sample_id] = "legacy"
-        self.on_pad_bpm_changed(sample_id, publish_bpm=False)
+        self._transport.record_current_pad_edit(sample_id, generation, "timing")
+        self.on_pad_bpm_changed(sample_id, publish_bpm=False, expected_source_generation=generation)
         self._transport._mark_project_changed()
 
     def tap_bpm(self, sample_id: int) -> float | None:
         """Register a Tap BPM event and update manual BPM."""
         validate_sample_id(sample_id)
+        generation = self._transport.capture_current_pad_edit_generation(sample_id)
 
         now = monotonic()
         if self._session.tap_bpm_pad_id != sample_id:
@@ -89,10 +102,15 @@ class BpmController:
         if not math.isfinite(bpm):
             return None
 
-        self._audio.set_pad_bpm(sample_id, bpm)
+        self._audio.set_pad_bpm(
+            sample_id, bpm, **self._transport.source_generation_options(generation)
+        )
         self._project.manual_bpm[sample_id] = bpm
-        self.on_pad_bpm_changed(sample_id, publish_bpm=False)
-        self._audio.set_pad_timing_intent(sample_id, "tap")
+        self._transport.record_current_pad_edit(sample_id, generation, "timing")
+        self.on_pad_bpm_changed(sample_id, publish_bpm=False, expected_source_generation=generation)
+        self._audio.set_pad_timing_intent(
+            sample_id, "tap", **self._transport.source_generation_options(generation)
+        )
         self._project.pad_timing_intent[sample_id] = "tap"
         self._transport._mark_project_changed()
         return bpm
@@ -207,7 +225,13 @@ class BpmController:
         if anchor_pad_id is not None:
             self._audio.bootstrap_transport_from_pad(anchor_pad_id)
 
-    def on_pad_bpm_changed(self, sample_id: int, *, publish_bpm: bool = True) -> None:
+    def on_pad_bpm_changed(
+        self,
+        sample_id: int,
+        *,
+        publish_bpm: bool = True,
+        expected_source_generation: int | None = None,
+    ) -> None:
         """Refresh derived controls without replaying legacy values over accepted timing."""
         timing = self.current_timing(sample_id)
         if (
@@ -229,12 +253,22 @@ class BpmController:
             else self._legacy_bpm(sample_id)
         )
         if publish_bpm and (timing is None or timing.accepted_revision is None):
-            self._audio.set_pad_bpm(sample_id, bpm)
+            self._audio.set_pad_bpm(
+                sample_id,
+                bpm,
+                **self._transport.source_generation_options(expected_source_generation),
+            )
 
         # Grid offset clamp depends on effective BPM, so re-clamp on changes.
-        self._transport.loop.reclamp_grid_offset_samples(sample_id, timing=timing)
-        self._transport.loop.apply_grid_anchor_to_audio(sample_id, timing=timing)
-        self._transport.loop._apply_effective_pad_loop_region_to_audio(sample_id, timing=timing)
+        self._transport.loop.reclamp_grid_offset_samples(
+            sample_id, timing=timing, expected_source_generation=expected_source_generation
+        )
+        self._transport.loop.apply_grid_anchor_to_audio(
+            sample_id, timing=timing, expected_source_generation=expected_source_generation
+        )
+        self._transport.loop._apply_effective_pad_loop_region_to_audio(
+            sample_id, timing=timing, expected_source_generation=expected_source_generation
+        )
 
         if publish_bpm and (
             self._project.manual_bpm[sample_id] is not None
@@ -243,7 +277,11 @@ class BpmController:
             intent: TimingIntent = (
                 "tap" if self._project.pad_timing_intent[sample_id] == "tap" else "manual"
             )
-            self._audio.set_pad_timing_intent(sample_id, intent)
+            self._audio.set_pad_timing_intent(
+                sample_id,
+                intent,
+                **self._transport.source_generation_options(expected_source_generation),
+            )
             self._project.pad_timing_intent[sample_id] = intent
 
         if self._session.bpm_lock_anchor_pad_id != sample_id:

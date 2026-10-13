@@ -87,13 +87,14 @@ class GlobalPlaybackController:
 
     def _poll_deferred(self) -> None:
         deferred = self._deferred
-        if deferred is None:
-            return
-        if deferred.restore_revision != self._restore_revision:
+        if deferred is None or deferred.restore_revision != self._restore_revision:
             self._deferred = None
             return
         if time.monotonic() >= deferred.deadline:
             self._retire_deferred(deferred, "global playback readiness deadline expired")
+            return
+        if any(not self._incoming_target_ready(sample_id) for sample_id, _, _ in deferred.sources):
+            self._deferred = None
             return
         entries: list[tuple[InputRuntimePadBinding, float, float | None]] = []
         for sample_id, signature, accepted in deferred.sources:
@@ -115,6 +116,14 @@ class GlobalPlaybackController:
             start_s, end_s = self._transport.loop.effective_region(sample_id, timing=timing)
             entries.append((snapshot.binding, start_s, end_s))
         self._admit_start(entries, deferred, from_poll=True)
+
+    def _incoming_target_ready(self, sample_id: int) -> bool:
+        try:
+            self._transport.ensure_current_source_assignment_ready(sample_id)
+        except ValueError as error:
+            self._transport.residency.report_launch_error(sample_id, str(error))
+            return False
+        return True
 
     def _retire_deferred(self, deferred: _DeferredStart, error: str) -> None:
         self._deferred = None
@@ -168,6 +177,8 @@ class GlobalPlaybackController:
             else self._session.active_sample_ids - self._session.paused_sample_ids
         )
         if not target_ids:
+            return
+        if any(not self._incoming_target_ready(sample_id) for sample_id in sorted(target_ids)):
             return
         entries: list[tuple[InputRuntimePadBinding, float, float | None]] = []
         deferred_sources: list[tuple[int, tuple[object, ...], object]] = []

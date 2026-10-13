@@ -477,12 +477,24 @@ class ProjectState(BaseModel):
     )
     """Per-pad explicit ON/OFF, or None to inherit the global Key Lock default."""
 
-    def resolve_pad_key_lock(self, sample_id: int) -> bool:
-        """Resolve requested processing without claiming native audio confirmation."""
+    def resolve_pad_key_lock(
+        self,
+        sample_id: int,
+        *,
+        assignment_override: bool | Literal["current"] | None = "current",
+    ) -> bool:
+        """Resolve current or explicitly projected assignment intent, without claiming ACK.
+
+        Passing an override projects an incoming assignment even while its pad is
+        empty. ``None`` projects inheritance without transferring an old override.
+        """
         validate_sample_id(sample_id)
-        if self.sample_paths[sample_id] is None:
-            return False
-        override = self.pad_key_lock[sample_id]
+        if assignment_override == "current":
+            if self.sample_paths[sample_id] is None:
+                return False
+            override = self.pad_key_lock[sample_id]
+        else:
+            override = assignment_override
         return self.key_lock if override is None else override
 
     manual_bpm: list[float | None] = Field(default_factory=_default_manual_bpm)

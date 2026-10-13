@@ -253,8 +253,8 @@ def test_set_key_lock_enable(controller: AppController, audio_engine_mock: Mock)
 
     audio_engine_mock.set_key_lock.assert_not_called()
     assert audio_engine_mock.set_pad_key_lock.call_count == 2
-    audio_engine_mock.set_pad_key_lock.assert_any_call(3, enabled)
-    audio_engine_mock.set_pad_key_lock.assert_any_call(4, enabled)
+    audio_engine_mock.set_pad_key_lock.assert_any_call(3, enabled, expected_source_generation=1)
+    audio_engine_mock.set_pad_key_lock.assert_any_call(4, enabled, expected_source_generation=1)
     assert controller.project.key_lock is True
     assert controller.project.pad_key_lock[3] is None
     assert controller.project.pad_key_lock[4] is None
@@ -275,8 +275,8 @@ def test_set_key_lock_disable(controller: AppController, audio_engine_mock: Mock
 
     audio_engine_mock.set_key_lock.assert_not_called()
     assert audio_engine_mock.set_pad_key_lock.call_count == 2
-    audio_engine_mock.set_pad_key_lock.assert_any_call(3, disabled)
-    audio_engine_mock.set_pad_key_lock.assert_any_call(4, disabled)
+    audio_engine_mock.set_pad_key_lock.assert_any_call(3, disabled, expected_source_generation=1)
+    audio_engine_mock.set_pad_key_lock.assert_any_call(4, disabled, expected_source_generation=1)
     assert controller.project.key_lock is False
     assert all(value is None for value in controller.project.pad_key_lock)
     assert controller.project.resolve_pad_key_lock(3) is False
@@ -298,7 +298,9 @@ def test_set_key_lock_preserves_explicit_on_off_and_changes_only_inherited_pad(
     controller.transport.global_params.set_key_lock(enabled=enabled)
 
     audio_engine_mock.set_key_lock.assert_not_called()
-    assert audio_engine_mock.set_pad_key_lock.call_args_list == [call(2, enabled)]
+    assert audio_engine_mock.set_pad_key_lock.call_args_list == [
+        call(2, enabled, expected_source_generation=1)
+    ]
     assert controller.project.pad_key_lock[2] is None
     assert controller.project.resolve_pad_key_lock(2) is enabled
     assert controller.project.pad_key_lock[3] is False
@@ -433,7 +435,9 @@ def test_same_global_intent_without_native_confirmation_is_rebroadcast(
     assert controller.project.key_lock is True
     audio_engine_mock.set_key_lock.assert_not_called()
     enabled = True
-    audio_engine_mock.set_pad_key_lock.assert_called_once_with(1, enabled)
+    audio_engine_mock.set_pad_key_lock.assert_called_once_with(
+        1, enabled, expected_source_generation=1
+    )
 
 
 def test_set_bpm_lock_no_op(controller: AppController, audio_engine_mock: Mock) -> None:

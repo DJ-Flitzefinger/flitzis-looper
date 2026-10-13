@@ -76,17 +76,36 @@ pub(super) fn prepare_pcm(
     cancelled: &impl Fn() -> bool,
     progress: &mut impl FnMut(SampleLoadProgress),
 ) -> Result<SampleBuffer, String> {
-    if let Some(sample) = transaction
-        .try_reuse_selected(
-            output_rate,
-            output_channels,
-            maximum,
-            resident_hint,
-            cancelled,
-        )
+    prepare_disk_pcm(
+        transaction,
+        source,
+        output_rate,
+        output_channels,
+        maximum,
+        cancelled,
+        progress,
+    )?;
+    transaction
+        .read_prepared_selection(resident_hint, maximum, cancelled)
+        .map_err(|error| error.to_string())
+}
+
+/// Prepare and verify complete immutable disk PCM without allocating a live view.
+/// Callers can perform activity/analysis preparation before selecting actual demand.
+pub(super) fn prepare_disk_pcm(
+    transaction: &mut ColdTransaction,
+    source: &Path,
+    output_rate: u32,
+    output_channels: usize,
+    maximum: usize,
+    cancelled: &impl Fn() -> bool,
+    progress: &mut impl FnMut(SampleLoadProgress),
+) -> Result<(), String> {
+    if transaction
+        .try_reuse_prepared(output_rate, output_channels, maximum, cancelled)
         .map_err(|error| error.to_string())?
     {
-        return Ok(sample);
+        return Ok(());
     }
     let (decoder_path, playback_path) = transaction
         .streamed_artifact_paths()
@@ -117,9 +136,7 @@ pub(super) fn prepare_pcm(
     transaction
         .finish_streamed_artifacts(decoded.artifact, playback, transform.to_json(), cancelled)
         .map_err(|error| error.to_string())?;
-    transaction
-        .read_prepared_selection(resident_hint, maximum, cancelled)
-        .map_err(|error| error.to_string())
+    Ok(())
 }
 
 fn reference(samples_root: &Path, path: &Path) -> Result<String, String> {

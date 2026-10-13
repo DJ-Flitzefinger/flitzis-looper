@@ -47,7 +47,9 @@ def test_tap_bpm_computes_on_second_tap(
 
     assert bpm == pytest.approx(120.0, abs=0.01)
     assert controller.project.manual_bpm[sample_id] == pytest.approx(120.0, abs=0.01)
-    audio_engine_mock.set_pad_bpm.assert_called_with(sample_id, pytest.approx(120.0, abs=0.01))
+    audio_engine_mock.set_pad_bpm.assert_called_with(
+        sample_id, pytest.approx(120.0, abs=0.01), expected_source_generation=1
+    )
 
 
 def test_tap_bpm_fits_constant_tempo_across_all_taps(
@@ -317,19 +319,25 @@ def test_manual_bpm_override_keeps_signed_grid_and_explicit_loop_markers(
     controller.transport.bpm.set_manual_bpm(sample_id, 123.5)
 
     assert controller.transport.bpm.effective_bpm(sample_id) == 123.5
-    audio_engine_mock.set_pad_bpm.assert_called_with(sample_id, 123.5)
-    audio_engine_mock.set_pad_timing_metadata.assert_called_with(sample_id, -0.125)
+    audio_engine_mock.set_pad_bpm.assert_called_with(sample_id, 123.5, expected_source_generation=1)
+    audio_engine_mock.set_pad_timing_metadata.assert_called_with(
+        sample_id, -0.125, expected_source_generation=1
+    )
     assert controller.transport.loop.grid_anchor_sec(sample_id) == -0.125
     assert controller.project.pad_loop_start_s[sample_id] == 1.0
     assert controller.project.pad_loop_end_s[sample_id] == 9.0
-    audio_engine_mock.set_pad_loop_region.assert_called_with(sample_id, 1.0, 9.0)
+    audio_engine_mock.set_pad_loop_region.assert_called_with(
+        sample_id, 1.0, 9.0, expected_source_generation=1
+    )
 
     controller.transport.bpm.clear_manual_bpm(sample_id)
 
     assert controller.transport.bpm.effective_bpm(sample_id) == 90.0
     assert controller.project.pad_grid_offset_samples[sample_id] == -18_000
-    audio_engine_mock.set_pad_bpm.assert_called_with(sample_id, 90.0)
-    audio_engine_mock.set_pad_timing_metadata.assert_called_with(sample_id, -0.125)
+    audio_engine_mock.set_pad_bpm.assert_called_with(sample_id, 90.0, expected_source_generation=1)
+    audio_engine_mock.set_pad_timing_metadata.assert_called_with(
+        sample_id, -0.125, expected_source_generation=1
+    )
     assert controller.project.pad_loop_start_s[sample_id] == 1.0
     assert controller.project.pad_loop_end_s[sample_id] == 9.0
 

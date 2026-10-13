@@ -32,6 +32,27 @@ if TYPE_CHECKING:
     from flitzis_looper.controller import AppController
 
 
+def _native_defaults(
+    *,
+    start_s: float = 0.0,
+    end_s: float | None = None,
+    period: float | None = None,
+    key_lock: bool = False,
+    revision: int = 0,
+) -> dict[str, object]:
+    """Independent scalar callback receipt for controller-only completion tests."""
+    return {
+        "revision": revision,
+        "key_lock": key_lock,
+        "start_s": start_s,
+        "end_s": end_s,
+        "period_seconds": period,
+        "grid_origin_s": start_s,
+        "loop_auto": True,
+        "loop_bars": 8.0,
+    }
+
+
 def _running_audio_engine_or_skip() -> AudioEngine:
     audio = AudioEngine()
     try:
@@ -49,12 +70,10 @@ def test_load_sample_async(controller: AppController, audio_engine_mock: Mock) -
 
     controller.loader.load_sample_async(sample_id, path)
 
-    audio_engine_mock.load_sample_async.assert_called_with(
+    audio_engine_mock.load_incoming_sample_async.assert_called_with(
         sample_id,
         path,
-        run_analysis=True,
-        replace_assignment=True,
-        source_intent="import",
+        controller.project.key_lock,
     )
     assert controller.session.pending_sample_paths[sample_id] == path
     assert sample_id in controller.session.loading_sample_ids
@@ -78,12 +97,10 @@ def test_load_sample_async_preserves_existing_until_success(
     controller.loader.load_sample_async(sample_id, new_path)
 
     audio_engine_mock.unload_sample.assert_not_called()
-    audio_engine_mock.load_sample_async.assert_called_with(
+    audio_engine_mock.load_incoming_sample_async.assert_called_with(
         sample_id,
         new_path,
-        run_analysis=True,
-        replace_assignment=True,
-        source_intent="import",
+        controller.project.key_lock,
     )
     assert controller.project.sample_paths[sample_id] == old_path
     assert controller.project.stem_cache[sample_id] is not None
@@ -122,7 +139,7 @@ def test_load_admission_failure_preserves_project_session_and_pending_request(
     previous_project = project.model_dump()
     previous_session = session.model_dump(exclude={"sample_load_errors"})
     audio_engine_mock.reset_mock()
-    audio_engine_mock.load_sample_async.side_effect = failure
+    audio_engine_mock.load_incoming_sample_async.side_effect = failure
 
     controller.loader.load_sample_async(0, "missing-or-over-budget.wav")
 
@@ -182,7 +199,7 @@ def test_async_cold_failure_preserves_complete_old_source_state(
     }
     previous_session = session.model_dump(exclude=transient_load_fields)
     audio_engine_mock.reset_mock()
-    audio_engine_mock.load_sample_async.return_value = 7
+    audio_engine_mock.load_incoming_sample_async.return_value = 7
     controller.loader.load_sample_async(0, "new.wav")
     audio_engine_mock.poll_loader_events.side_effect = [
         {"type": "started", "id": 0, "request_id": 7},
@@ -225,11 +242,12 @@ def test_successful_replacement_resets_retired_state_without_deleting_owned_file
     controller.session.waveform_editor_open = True
     controller.session.waveform_editor_pad_id = 0
     audio_engine_mock.reset_mock()
-    audio_engine_mock.load_sample_async.return_value = 7
+    audio_engine_mock.load_incoming_sample_async.return_value = 7
     controller.loader.load_sample_async(0, "new.wav")
     audio_engine_mock.poll_loader_events.side_effect = [
         {
             "type": "success",
+            "incoming_defaults": _native_defaults(),
             "id": 0,
             "request_id": 7,
             "cached_path": "samples/new.wav",
@@ -258,12 +276,15 @@ def test_derived_refresh_queue_failure_keeps_matching_loaded_metadata(
 ) -> None:
     controller.project.sample_paths[0] = "samples/old.wav"
     controller.project.sample_durations[0] = 600.0
-    audio_engine_mock.load_sample_async.return_value = 7
+    audio_engine_mock.load_incoming_sample_async.return_value = 7
     controller.loader.load_sample_async(0, "new.wav")
-    audio_engine_mock.set_pad_gain.side_effect = RuntimeError("parameter queue full")
+    controller.stems.reuse_compatible_stems_on_load = Mock(
+        side_effect=RuntimeError("parameter queue full")
+    )
     audio_engine_mock.poll_loader_events.side_effect = [
         {
             "type": "success",
+            "incoming_defaults": _native_defaults(),
             "id": 0,
             "request_id": 7,
             "cached_path": "samples/new.wav",
@@ -292,13 +313,14 @@ def test_selected_same_project_path_is_new_assignment_after_native_success(
     controller.project.key_lock = True
     controller.project.pad_key_lock[0] = False
     controller.project.pad_loop_start_s[0] = 20.0
-    audio_engine_mock.load_sample_async.return_value = 7
+    audio_engine_mock.load_incoming_sample_async.return_value = 7
     controller.loader.load_sample_async(0, "samples/same.wav")
     assert controller.project.manual_bpm[0] == 90.0
     assert controller.project.pad_key_lock[0] is False
     audio_engine_mock.poll_loader_events.side_effect = [
         {
             "type": "success",
+            "incoming_defaults": _native_defaults(),
             "id": 0,
             "request_id": 7,
             "cached_path": "samples/same.wav",
@@ -327,7 +349,7 @@ def test_new_load_inherits_global_default_at_success(
     project.key_lock = not final_default
     project.sample_paths[0] = "samples/old.wav"
     project.pad_key_lock[0] = not final_default
-    audio_engine_mock.load_sample_async.return_value = 7
+    audio_engine_mock.load_incoming_sample_async.return_value = 7
 
     controller.loader.load_sample_async(0, "new.wav")
     assert project.pad_key_lock[0] is not final_default
@@ -337,6 +359,7 @@ def test_new_load_inherits_global_default_at_success(
     audio_engine_mock.poll_loader_events.side_effect = [
         {
             "type": "success",
+            "incoming_defaults": _native_defaults(key_lock=final_default, revision=1),
             "id": 0,
             "request_id": 7,
             "cached_path": "samples/new.wav",
@@ -351,7 +374,7 @@ def test_new_load_inherits_global_default_at_success(
     assert project.pad_key_lock[0] is None
     assert project.key_lock is final_default
     assert project.resolve_pad_key_lock(0) is final_default
-    audio_engine_mock.set_pad_key_lock.assert_called_with(0, final_default)
+    audio_engine_mock.set_pad_key_lock.assert_not_called()
 
 
 @pytest.mark.parametrize("failure_stage", ["admission", "worker"])
@@ -370,9 +393,9 @@ def test_failed_replacement_preserves_key_lock_origin(
     before = project.model_dump()
     audio_engine_mock.reset_mock()
     if failure_stage == "admission":
-        audio_engine_mock.load_sample_async.side_effect = RuntimeError("cold queue full")
+        audio_engine_mock.load_incoming_sample_async.side_effect = RuntimeError("cold queue full")
     else:
-        audio_engine_mock.load_sample_async.return_value = 7
+        audio_engine_mock.load_incoming_sample_async.return_value = 7
 
     controller.loader.load_sample_async(0, "new.wav")
     if failure_stage == "worker":
@@ -570,7 +593,7 @@ def test_deferred_startup_restore_cannot_replace_later_user_assignment(
     controller.loader.restore_samples_from_project_state()
     assert 0 in controller.loader._deferred_restores
     audio_engine_mock.load_sample_async.side_effect = None
-    audio_engine_mock.load_sample_async.return_value = 9
+    audio_engine_mock.load_incoming_sample_async.return_value = 9
 
     if action == "new_selection":
         controller.loader.load_sample_async(0, "new.wav")
@@ -699,12 +722,13 @@ def test_load_success_resets_stale_empty_pad_settings(
     controller.project.pad_grid_anchor_s[sample_id] = 0.024
 
     old_project = controller.project.model_dump()
-    audio_engine_mock.load_sample_async.return_value = 1
+    audio_engine_mock.load_incoming_sample_async.return_value = 1
     controller.loader.load_sample_async(sample_id, "/path/to/new.wav")
     assert controller.project.model_dump() == old_project
     audio_engine_mock.poll_loader_events.side_effect = [
         {
             "type": "success",
+            "incoming_defaults": _native_defaults(),
             "id": sample_id,
             "request_id": 1,
             "cached_path": "samples/new.wav",
@@ -725,23 +749,20 @@ def test_load_success_resets_stale_empty_pad_settings(
     assert controller.project.pad_loop_start_s[sample_id] == defaults.pad_loop_start_s[sample_id]
     assert controller.project.pad_loop_end_s[sample_id] == defaults.pad_loop_end_s[sample_id]
     assert controller.project.pad_loop_bars[sample_id] == defaults.pad_loop_bars[sample_id]
-    assert controller.project.pad_grid_anchor_s[sample_id] is None
+    assert controller.project.pad_grid_anchor_s[sample_id] == 0.0
     assert (
         controller.project.pad_grid_offset_samples[sample_id]
         == defaults.pad_grid_offset_samples[sample_id]
     )
-    audio_engine_mock.set_pad_bpm.assert_called_with(sample_id, None)
-    audio_engine_mock.set_pad_gain.assert_called_with(sample_id, defaults.pad_gain_db[sample_id])
-    audio_engine_mock.set_pad_eq.assert_called_with(sample_id, 0.0, 0.0, 0.0)
-    audio_engine_mock.set_pad_loop_region.assert_called_with(sample_id, 0.0, None)
-    disabled = False
-    audio_engine_mock.set_pad_key_lock.assert_called_with(sample_id, disabled)
-    audio_engine_mock.load_sample_async.assert_called_with(
+    audio_engine_mock.set_pad_bpm.assert_not_called()
+    audio_engine_mock.set_pad_gain.assert_not_called()
+    audio_engine_mock.set_pad_eq.assert_not_called()
+    audio_engine_mock.set_pad_loop_region.assert_not_called()
+    audio_engine_mock.set_pad_key_lock.assert_not_called()
+    audio_engine_mock.load_incoming_sample_async.assert_called_with(
         sample_id,
         "/path/to/new.wav",
-        run_analysis=True,
-        replace_assignment=True,
-        source_intent="import",
+        controller.project.key_lock,
     )
 
 
@@ -810,7 +831,7 @@ def test_loaded_source_reports_automatic_analysis_failure_independently(
     timing_stale: bool,
 ) -> None:
     _admit_predecessor_analysis(controller, audio_engine_mock)
-    audio_engine_mock.load_sample_async.return_value = 17
+    audio_engine_mock.load_incoming_sample_async.return_value = 17
     controller.loader.load_sample_async(0, "/path/to/current.wav")
     audio_engine_mock.analyze_sample_async.reset_mock()
     controller.loader.analyze_sample_async(0)
@@ -820,6 +841,7 @@ def test_loaded_source_reports_automatic_analysis_failure_independently(
     audio_engine_mock.poll_loader_events.side_effect = [
         {
             "type": "success",
+            "incoming_defaults": _native_defaults(),
             "id": 0,
             "request_id": 17,
             "duration_s": 2800.0,
@@ -865,61 +887,68 @@ def test_loaded_source_reports_automatic_analysis_failure_independently(
     assert controller.session.sample_analysis_errors.get(0) == analysis_error
 
 
+def _install_native_replacement_automatic_timing(controller: AppController, audio: Mock) -> None:
+    """Represent actual new Native authority independently of generic Project gestures."""
+    controller.project.pad_timing_intent[0] = "automatic"
+    audio.pad_timing_intent.return_value = "automatic"
+    accepted = current_timing_metadata(period=0.4375, revision="replacement-current-accepted")
+    accepted.update(
+        source_generation=17,
+        source_sha256="b" * 64,
+        frame_count=48_000 * 32,
+        accepted_request_id=19,
+    )
+    audio.current_constant_timing.return_value = accepted
+    controller.project.pad_grid_anchor_s[0] = 0.125
+
+
 @pytest.mark.parametrize("intent", ["manual", "tap", "automatic"])
-def test_new_source_invalidates_predecessor_analysis_without_replaying_newer_timing(
+def test_new_source_invalidates_predecessor_analysis_and_gates_generic_timing_until_receipt(
     controller: AppController,
     audio_engine_mock: Mock,
     monkeypatch: pytest.MonkeyPatch,
     intent: str,
 ) -> None:
     _admit_predecessor_analysis(controller, audio_engine_mock)
-    audio_engine_mock.load_sample_async.return_value = 17
+    audio_engine_mock.load_incoming_sample_async.return_value = 17
     controller.loader.load_sample_async(0, "replacement.wav")
     audio_engine_mock.waveform_source_identity.return_value = (17, "b" * 64, 48_000 * 32, 48_000)
+    audio_engine_mock.current_input_runtime_pad_binding.side_effect = None
+    audio_engine_mock.current_input_runtime_pad_binding.return_value = Mock(
+        is_current=Mock(return_value=True), metadata=Mock(return_value={"source_generation": 17})
+    )
     if intent == "manual":
-        controller.transport.bpm.set_manual_bpm(0, 123.456)
-        audio_engine_mock.pad_timing_intent.return_value = "manual"
+        with pytest.raises(ValueError, match="receipt is pending"):
+            controller.transport.bpm.set_manual_bpm(0, 123.456)
     elif intent == "tap":
         controller.session.tap_bpm_pad_id = 0
         controller.session.tap_bpm_timestamps[:] = [1.0]
         monkeypatch.setattr("flitzis_looper.controller.transport.bpm.monotonic", lambda: 1.5)
-        assert controller.transport.bpm.tap_bpm(0) == 120.0
-        audio_engine_mock.pad_timing_intent.return_value = "tap"
+        with pytest.raises(ValueError, match="receipt is pending"):
+            controller.transport.bpm.tap_bpm(0)
     else:
-        controller.project.pad_timing_intent[0] = "automatic"
-        audio_engine_mock.pad_timing_intent.return_value = "automatic"
-        accepted = current_timing_metadata(period=0.4375, revision="replacement-current-accepted")
-        accepted.update(
-            source_generation=17,
-            source_sha256="b" * 64,
-            frame_count=48_000 * 32,
-            accepted_request_id=19,
-        )
-        audio_engine_mock.current_constant_timing.return_value = accepted
-    controller.project.pad_grid_anchor_s[0] = 0.125
-    controller.project.pad_loop_auto[0] = False
-    controller.project.pad_loop_start_s[0] = 3.25
-    controller.project.pad_loop_end_s[0] = 5.75
+        _install_native_replacement_automatic_timing(controller, audio_engine_mock)
+    with pytest.raises(ValueError, match="receipt is pending"):
+        controller.transport.loop.set_auto(0, enabled=False)
+    with pytest.raises(ValueError, match="receipt is pending"):
+        controller.transport.loop.set_start(0, 3.25)
+    with pytest.raises(ValueError, match="receipt is pending"):
+        controller.transport.loop.set_end(0, 5.75)
     previous_timing = controller.transport.bpm.current_timing(0)
-    assert previous_timing is not None
-    timing_fields = (
-        controller.project.manual_bpm[0],
-        controller.project.pad_timing_intent[0],
-        controller.project.pad_grid_offset_samples[0],
-        controller.project.pad_grid_anchor_s[0],
-        controller.project.pad_loop_auto[0],
-        controller.project.pad_loop_start_s[0],
-        controller.project.pad_loop_end_s[0],
-    )
+    if intent == "tap":
+        assert controller.session.tap_bpm_timestamps == [1.0]
+    audio_engine_mock.set_pad_bpm.assert_not_called()
+    audio_engine_mock.set_pad_loop_region.assert_not_called()
     audio_engine_mock.reset_mock()
     audio_engine_mock.poll_loader_events.side_effect = [
         {
             "type": "success",
+            "incoming_defaults": _native_defaults(),
             "id": 0,
             "request_id": 17,
             "cached_path": "samples/replacement.wav",
             "duration_s": 32.0,
-            "timing_stale": True,
+            "timing_stale": intent == "automatic",
         },
         None,
     ]
@@ -928,29 +957,33 @@ def test_new_source_invalidates_predecessor_analysis_without_replaying_newer_tim
 
     assert controller.project.sample_paths[0] == "samples/replacement.wav"
     assert controller.project.sample_analysis[0] is None
-    assert controller.transport.bpm.current_timing(0) == previous_timing
     assert (
         controller.project.manual_bpm[0],
-        controller.project.pad_timing_intent[0],
-        controller.project.pad_grid_offset_samples[0],
-        controller.project.pad_grid_anchor_s[0],
         controller.project.pad_loop_auto[0],
         controller.project.pad_loop_start_s[0],
         controller.project.pad_loop_end_s[0],
-    ) == timing_fields
+    ) == (None, True, 0.0, None)
     assert 0 not in controller.session.sample_analysis_errors
     assert 0 not in controller.session.analyzing_sample_ids
     assert 0 not in controller.loader._analysis_request_ids
     if intent == "tap":
-        assert controller.session.tap_bpm_timestamps == [1.0, 1.5]
+        assert controller.session.tap_bpm_timestamps == []
     if intent == "automatic":
+        assert controller.transport.bpm.current_timing(0) == previous_timing
         timing = controller.transport.bpm.current_timing(0)
         assert timing is not None
         assert timing.accepted_revision == "replacement-current-accepted"
-    audio_engine_mock.set_pad_bpm.assert_not_called()
-    audio_engine_mock.set_pad_timing_intent.assert_not_called()
-    audio_engine_mock.set_pad_timing_metadata.assert_not_called()
-    audio_engine_mock.set_pad_loop_region.assert_not_called()
+        assert controller.project.pad_grid_anchor_s[0] == 0.125
+    else:
+        assert controller.project.pad_timing_intent[0] == "legacy"
+        assert controller.project.pad_grid_anchor_s[0] == 0.0
+    for method in (
+        "set_pad_bpm",
+        "set_pad_timing_intent",
+        "set_pad_timing_metadata",
+        "set_pad_loop_region",
+    ):
+        getattr(audio_engine_mock, method).assert_not_called()
 
 
 def test_analysis_admitted_after_source_completion_survives_delayed_old_load_feedback(
@@ -968,7 +1001,7 @@ def test_analysis_admitted_after_source_completion_survives_delayed_old_load_fee
         extra_shift=2,
         retrigger=True,
     )
-    audio_engine_mock.load_sample_async.return_value = 7
+    audio_engine_mock.load_incoming_sample_async.return_value = 7
     controller.loader.load_sample_async(0, "replacement.wav")
     adopted_source = (7, "b" * 64, 48_000 * 32, 48_000)
     audio_engine_mock.waveform_source_identity.return_value = adopted_source
@@ -977,6 +1010,7 @@ def test_analysis_admitted_after_source_completion_survives_delayed_old_load_fee
     audio_engine_mock.pad_timing_intent.return_value = "manual"
     completed_load = {
         "type": "success",
+        "incoming_defaults": _native_defaults(),
         "id": 0,
         "request_id": 7,
         "cached_path": "samples/replacement.wav",
@@ -1081,12 +1115,13 @@ def test_stale_loader_success_with_old_request_id_is_ignored(
 ) -> None:
     previous_analysis = _admit_predecessor_analysis(controller, audio_engine_mock)
     previous_project = controller.project.model_dump()
-    audio_engine_mock.load_sample_async.return_value = 7
+    audio_engine_mock.load_incoming_sample_async.return_value = 7
     controller.loader.load_sample_async(0, "/path/to/current.wav")
 
     audio_engine_mock.poll_loader_events.side_effect = [
         {
             "type": "success",
+            "incoming_defaults": _native_defaults(),
             "id": 0,
             "request_id": 6,
             "duration_s": 1.0,
@@ -1114,7 +1149,7 @@ def test_stale_loader_progress_after_unload_is_ignored(
     controller: AppController,
     audio_engine_mock: Mock,
 ) -> None:
-    audio_engine_mock.load_sample_async.return_value = 7
+    audio_engine_mock.load_incoming_sample_async.return_value = 7
     controller.loader.load_sample_async(0, "/path/to/current.wav")
 
     controller.loader.unload_sample(0)
@@ -1210,7 +1245,7 @@ def test_loader_success_initializes_activity_candidate_with_or_without_bpm(
     analysis_bpm: float | None,
 ) -> None:
     audio_engine_mock.output_sample_rate.return_value = 48_000
-    audio_engine_mock.load_sample_async.return_value = 3
+    audio_engine_mock.load_incoming_sample_async.return_value = 3
     controller.loader.load_sample_async(0, "/path/to/original.wav")
     start_s = 1_151 / 48_000
     analysis = (
@@ -1222,9 +1257,15 @@ def test_loader_success_initializes_activity_candidate_with_or_without_bpm(
         if analysis_bpm is not None
         else None
     )
+    expected_end_s = 3.0 if analysis_bpm is not None else None
     audio_engine_mock.poll_loader_events.side_effect = [
         {
             "type": "success",
+            "incoming_defaults": _native_defaults(
+                start_s=start_s,
+                end_s=expected_end_s,
+                period=60.0 / analysis_bpm if analysis_bpm is not None else None,
+            ),
             "id": 0,
             "request_id": 3,
             "duration_s": 3.0,
@@ -1243,13 +1284,9 @@ def test_loader_success_initializes_activity_candidate_with_or_without_bpm(
     assert controller.project.pad_grid_anchor_s[0] == start_s
     assert controller.transport.loop.grid_anchor_sec(0) == start_s
     assert controller.project.pad_grid_offset_samples[0] == 0
-    audio_engine_mock.set_pad_timing_metadata.assert_called_with(0, start_s)
-    expected_end_s = (
-        round((start_s + 32 * 60 / analysis_bpm) * 48_000) / 48_000
-        if analysis_bpm is not None
-        else None
-    )
-    audio_engine_mock.set_pad_loop_region.assert_called_with(0, start_s, expected_end_s)
+    audio_engine_mock.set_pad_timing_metadata.assert_not_called()
+    audio_engine_mock.set_pad_loop_region.assert_not_called()
+    assert controller.project.pad_loop_end_s[0] == expected_end_s
 
 
 @pytest.mark.parametrize("candidate", [None, "invalid", True, float("nan"), -0.1, 3.0])

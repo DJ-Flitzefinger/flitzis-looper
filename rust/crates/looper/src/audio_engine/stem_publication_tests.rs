@@ -185,7 +185,9 @@ impl NativeBridge {
         Ok((RATE, sample.channels, sample.frame_count()))
     }
 
-    #[pyo3(signature = (id, start_s=None, end_s=None, position_s=None, key_lock=None))]
+    #[pyo3(signature = (id, start_s=None, end_s=None, position_s=None, key_lock=None, *, expected_source_generation=None))]
+    // Preserve the public PyO3 argument shape, including its source guard.
+    #[allow(clippy::too_many_arguments)]
     fn prepare_resident_control(
         &self,
         py: Python<'_>,
@@ -194,6 +196,7 @@ impl NativeBridge {
         end_s: Option<f64>,
         position_s: Option<f64>,
         key_lock: Option<bool>,
+        expected_source_generation: Option<u64>,
     ) -> PyResult<ResidentWindowTicket> {
         super::super::resident_relocation::prepare_window_with_producer(
             &self.engine.borrow(py),
@@ -202,6 +205,7 @@ impl NativeBridge {
                 loop_region: start_s.map(|start| (start, end_s)),
                 seek_position_s: position_s,
                 key_lock,
+                expected_source_generation,
                 ..WindowRequest::default()
             },
             self.producer.clone(),

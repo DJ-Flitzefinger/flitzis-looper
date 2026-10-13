@@ -54,7 +54,9 @@ def test_set_pad_key_lock_updates_only_one_pad(
 
     controller.transport.pad.set_pad_key_lock(3, enabled=enabled)
 
-    audio_engine_mock.set_pad_key_lock.assert_called_once_with(3, enabled)
+    audio_engine_mock.set_pad_key_lock.assert_called_once_with(
+        3, enabled, expected_source_generation=1
+    )
     assert controller.project.pad_key_lock[3] is True
     assert controller.project.pad_key_lock[4] is True
     assert controller.project.pad_key_lock[2] is None
@@ -66,7 +68,9 @@ def test_toggle_pad_key_lock(controller: AppController, audio_engine_mock: Mock)
 
     controller.transport.pad.toggle_pad_key_lock(3)
 
-    audio_engine_mock.set_pad_key_lock.assert_called_once_with(3, enabled)
+    audio_engine_mock.set_pad_key_lock.assert_called_once_with(
+        3, enabled, expected_source_generation=1
+    )
     assert controller.project.pad_key_lock[3] is True
 
 
@@ -101,7 +105,9 @@ def test_set_pad_key_lock_resets_stale_unloaded_pad(
 
     controller.transport.pad.set_pad_key_lock(3, enabled=True)
 
-    audio_engine_mock.set_pad_key_lock.assert_called_once_with(3, disabled)
+    audio_engine_mock.set_pad_key_lock.assert_called_once_with(
+        3, disabled, expected_source_generation=1
+    )
     assert controller.project.pad_key_lock[3] is None
 
 
@@ -115,7 +121,9 @@ def test_toggle_pad_key_lock_uses_inherited_requested_mode(
 
     assert controller.project.pad_key_lock[3] is False
     disabled = False
-    audio_engine_mock.set_pad_key_lock.assert_called_once_with(3, disabled)
+    audio_engine_mock.set_pad_key_lock.assert_called_once_with(
+        3, disabled, expected_source_generation=1
+    )
 
 
 @pytest.mark.parametrize("enabled", [False, True])
@@ -151,7 +159,9 @@ def test_clear_pad_key_lock_override_requests_current_global_mode(
 
     assert controller.project.pad_key_lock[3] is None
     assert controller.project.resolve_pad_key_lock(3) is enabled
-    audio_engine_mock.set_pad_key_lock.assert_called_once_with(3, enabled)
+    audio_engine_mock.set_pad_key_lock.assert_called_once_with(
+        3, enabled, expected_source_generation=1
+    )
 
 
 def test_poll_audio_messages_updates_session_peak(

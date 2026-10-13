@@ -125,8 +125,10 @@ def test_mapped_global_key_lock_uses_existing_broadcast_and_learn_suppresses_it(
 
     deliver()
     assert controller.project.key_lock
-    assert controller.project.pad_key_lock[0]
-    assert controller.project.pad_key_lock[37]
+    assert controller.project.pad_key_lock[0] is None
+    assert controller.project.pad_key_lock[37] is None
+    assert controller.project.resolve_pad_key_lock(0)
+    assert controller.project.resolve_pad_key_lock(37)
     assert audio_engine_mock.set_pad_key_lock.call_count == 2
     controller.input_mapping.toggle_learn()
     deliver()
@@ -488,7 +490,9 @@ def test_keyboard_mapping_executes_action_when_not_typing(
     )
 
     assert handled is True
-    audio_engine_mock.play_sample_exclusive.assert_called_once_with(0, 1.0)
+    audio_engine_mock.play_sample_exclusive.assert_called_once_with(
+        0, 1.0, expected_source_generation=1
+    )
 
 
 def test_keyboard_mapping_executes_tap_bpm(controller: AppController) -> None:
@@ -1458,7 +1462,9 @@ def test_keyboard_mapping_preserves_captured_input_time(
     )
 
     assert handled is True
-    audio_engine_mock.play_sample_exclusive.assert_called_once_with(0, 1.0, received_at_ns=41)
+    audio_engine_mock.play_sample_exclusive.assert_called_once_with(
+        0, 1.0, received_at_ns=41, expected_source_generation=1
+    )
 
 
 def test_midi_controller_owned_global_restart_preserves_timestamp_for_batch(

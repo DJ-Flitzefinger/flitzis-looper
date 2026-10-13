@@ -113,6 +113,7 @@ fn schedule_immediate_command<
 
 // Keep callback hot-path state borrows explicit instead of hiding them in a context struct.
 #[allow(clippy::too_many_arguments)]
+#[cfg(test)]
 fn schedule_play_sample_command<
     const CAPACITY: usize,
     S: AudioMessageSink,
@@ -129,10 +130,47 @@ fn schedule_play_sample_command<
     retirement: &mut R,
     received_at_ns: Option<u64>,
 ) {
+    schedule_play_sample_command_with_source(
+        scheduler,
+        callback_start_frame,
+        trigger_quantization,
+        transport,
+        id,
+        volume,
+        mixer,
+        audio_messages,
+        retirement,
+        received_at_ns,
+        None,
+    );
+}
+
+#[allow(clippy::too_many_arguments)]
+fn schedule_play_sample_command_with_source<
+    const CAPACITY: usize,
+    S: AudioMessageSink,
+    R: AudioBufferRetirement,
+>(
+    scheduler: &mut FixedCapacityScheduler<CAPACITY>,
+    callback_start_frame: u64,
+    trigger_quantization: TriggerQuantization,
+    transport: &mut TransportTimeline,
+    id: usize,
+    volume: f32,
+    mixer: &mut RtMixer,
+    audio_messages: &mut S,
+    retirement: &mut R,
+    received_at_ns: Option<u64>,
+    expected_source_generation: Option<u64>,
+) {
+    if !mixer.expected_source_generation_current(id, expected_source_generation) {
+        return;
+    }
     let command = ScheduledCommand::PlaySample {
         id,
         volume,
         received_at_ns,
+        expected_source_generation,
     };
 
     let Some(target_frame) = quantized_target_frame(transport, trigger_quantization) else {
@@ -162,6 +200,7 @@ fn schedule_play_sample_command<
 
 // Keep callback hot-path state borrows explicit instead of hiding them in a context struct.
 #[allow(clippy::too_many_arguments)]
+#[cfg(test)]
 fn schedule_exclusive_play_sample_command<
     const CAPACITY: usize,
     S: AudioMessageSink,
@@ -178,10 +217,47 @@ fn schedule_exclusive_play_sample_command<
     retirement: &mut R,
     received_at_ns: Option<u64>,
 ) {
+    schedule_exclusive_play_sample_command_with_source(
+        scheduler,
+        callback_start_frame,
+        trigger_quantization,
+        transport,
+        id,
+        volume,
+        mixer,
+        audio_messages,
+        retirement,
+        received_at_ns,
+        None,
+    );
+}
+
+#[allow(clippy::too_many_arguments)]
+fn schedule_exclusive_play_sample_command_with_source<
+    const CAPACITY: usize,
+    S: AudioMessageSink,
+    R: AudioBufferRetirement,
+>(
+    scheduler: &mut FixedCapacityScheduler<CAPACITY>,
+    callback_start_frame: u64,
+    trigger_quantization: TriggerQuantization,
+    transport: &mut TransportTimeline,
+    id: usize,
+    volume: f32,
+    mixer: &mut RtMixer,
+    audio_messages: &mut S,
+    retirement: &mut R,
+    received_at_ns: Option<u64>,
+    expected_source_generation: Option<u64>,
+) {
+    if !mixer.expected_source_generation_current(id, expected_source_generation) {
+        return;
+    }
     let command = ScheduledCommand::StopAllThenPlaySample {
         id,
         volume,
         received_at_ns,
+        expected_source_generation,
     };
 
     let Some(target_frame) = quantized_target_frame(transport, trigger_quantization) else {
@@ -388,7 +464,11 @@ pub(super) fn execute_scheduled_command<S: AudioMessageSink, R: AudioBufferRetir
             id,
             volume,
             received_at_ns: _,
+            expected_source_generation,
         } => {
+            if !mixer.expected_source_generation_current(id, expected_source_generation) {
+                return;
+            }
             let started =
                 mixer.play_sample_at_output_frame_rt(id, volume, output_frame, retirement);
 
@@ -402,7 +482,11 @@ pub(super) fn execute_scheduled_command<S: AudioMessageSink, R: AudioBufferRetir
             id,
             volume,
             received_at_ns: _,
+            expected_source_generation,
         } => {
+            if !mixer.expected_source_generation_current(id, expected_source_generation) {
+                return;
+            }
             if retirement.available_retirement_slots() < 3 * MAX_VOICES {
                 return;
             }
@@ -914,6 +998,7 @@ struct PendingPadBpm {
     id: usize,
     bpm: Option<f64>,
     through_epoch: Option<u64>,
+    expected_source_generation: Option<u64>,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -952,6 +1037,7 @@ impl Default for PendingControlParameters {
                 id: 0,
                 bpm: None,
                 through_epoch: None,
+                expected_source_generation: None,
             }; MAX_PARAMETER_MESSAGES_PER_CALLBACK],
             pad_bpm_count: 0,
             pad_gain: [PendingPadGain {
@@ -971,7 +1057,7 @@ impl Default for PendingControlParameters {
 }
 
 impl PendingControlParameters {
-    fn record(&mut self, message: ControlParameterMessage) {
+    fn record(&mut self, message: ControlParameterMessage, mixer: &RtMixer) {
         match message {
             ControlParameterMessage::SetVolume(volume) => self.volume = Some(volume),
             ControlParameterMessage::SetSpeed(speed) => self.speed = Some(speed),
@@ -990,14 +1076,19 @@ impl PendingControlParameters {
             }
             #[cfg(test)]
             ControlParameterMessage::SetPadBpm { id, bpm } => {
-                self.record_pad_bpm(id, bpm, None);
+                self.record_pad_bpm(id, bpm, None, None);
             }
             ControlParameterMessage::SetLegacyPadBpm {
                 id,
                 bpm,
                 through_epoch,
+                expected_source_generation,
             } => {
-                self.record_pad_bpm(id, bpm, Some(through_epoch));
+                // Reject before coalescing: an old gesture must not replace a
+                // valid pending edit for the newly adopted source in this pad.
+                if mixer.expected_source_generation_current(id, expected_source_generation) {
+                    self.record_pad_bpm(id, bpm, Some(through_epoch), expected_source_generation);
+                }
             }
             ControlParameterMessage::SetPadGain { id, gain_db } => {
                 self.record_pad_gain(id, gain_db);
@@ -1013,7 +1104,13 @@ impl PendingControlParameters {
         }
     }
 
-    fn record_pad_bpm(&mut self, id: usize, bpm: Option<f64>, through_epoch: Option<u64>) {
+    fn record_pad_bpm(
+        &mut self,
+        id: usize,
+        bpm: Option<f64>,
+        through_epoch: Option<u64>,
+        expected_source_generation: Option<u64>,
+    ) {
         if id >= NUM_SAMPLES {
             return;
         }
@@ -1023,6 +1120,7 @@ impl PendingControlParameters {
         {
             pending.bpm = bpm;
             pending.through_epoch = through_epoch;
+            pending.expected_source_generation = expected_source_generation;
             return;
         }
         if self.pad_bpm_count < self.pad_bpm.len() {
@@ -1030,6 +1128,7 @@ impl PendingControlParameters {
                 id,
                 bpm,
                 through_epoch,
+                expected_source_generation,
             };
             self.pad_bpm_count += 1;
         }
@@ -1097,6 +1196,11 @@ impl PendingControlParameters {
             applied += 1;
         }
         for pending in self.pad_bpm[..self.pad_bpm_count].iter().copied() {
+            if !mixer
+                .expected_source_generation_current(pending.id, pending.expected_source_generation)
+            {
+                continue;
+            }
             mixer.set_pad_bpm(pending.id, pending.bpm);
             if let Some(epoch) = pending.through_epoch {
                 mixer.clear_constant_timing(pending.id, epoch);
@@ -1129,7 +1233,7 @@ pub(super) fn drain_parameter_messages(
             break;
         };
 
-        pending.record(message);
+        pending.record(message, mixer);
         messages_drained += 1;
     }
 
@@ -1228,6 +1332,7 @@ pub(super) fn process_control_message<
             replace_assignment,
             loop_region,
             resident_cancelled,
+            incoming_defaults,
         } => {
             let epoch_current = || {
                 resident_cancelled
@@ -1238,7 +1343,12 @@ pub(super) fn process_control_message<
                     })
             };
             if epoch_current()
-                && mixer.cold_source_current(id, &sample, source_generation)
+                && mixer.cold_source_current_with_defaults(
+                    id,
+                    &sample,
+                    source_generation,
+                    incoming_defaults,
+                )
                 && adoption
                     .compare_exchange(
                         0,
@@ -1248,10 +1358,17 @@ pub(super) fn process_control_message<
                     )
                     .is_ok()
             {
+                #[cfg(test)]
+                super::incoming_load::observe_callback_claim();
                 // A concurrent control change after claim must still reject before effects.
                 if !mixer.claim_cold(id, source_generation)
                     || !epoch_current()
-                    || !mixer.cold_source_current(id, &sample, source_generation)
+                    || !mixer.cold_source_current_with_defaults(
+                        id,
+                        &sample,
+                        source_generation,
+                        incoming_defaults,
+                    )
                 {
                     mixer.reject_claimed_cold(id, source_generation);
                     adoption.store(3, std::sync::atomic::Ordering::Release);
@@ -1266,7 +1383,7 @@ pub(super) fn process_control_message<
                     transport.clear_pending_bootstrap_for_pad(id);
                     mixer.stop_sample_rt(id, retirement);
                 }
-                mixer.load_sample_rt(id, sample, retirement);
+                mixer.load_sample_with_defaults_rt(id, sample, incoming_defaults, retirement);
                 if let Some((start, end)) = loop_region {
                     mixer.set_loop_region_frames(id, start, Some(end));
                 }
@@ -1277,12 +1394,21 @@ pub(super) fn process_control_message<
                 }
             } else {
                 mixer.cancel_cold(id, source_generation);
-                let _ = adoption.compare_exchange(
-                    0,
-                    3,
-                    std::sync::atomic::Ordering::Release,
-                    std::sync::atomic::Ordering::Acquire,
-                );
+                if incoming_defaults.is_some() {
+                    // This incoming request publishes exactly one source message,
+                    // consumed by this sole callback owner. Only this message can
+                    // claim 0 -> 1; this branch has not claimed it. Atomically reject
+                    // either 0 or the updater's 4 so a concurrent 4 -> 0 cannot
+                    // leave a retired message waiting for ACK.
+                    adoption.swap(3, std::sync::atomic::Ordering::AcqRel);
+                } else {
+                    let _ = adoption.compare_exchange(
+                        0,
+                        3,
+                        std::sync::atomic::Ordering::Release,
+                        std::sync::atomic::Ordering::Acquire,
+                    );
+                }
                 retirement.retire_sample(sample);
             }
             retirement.retire_cold_adoption(adoption);
@@ -1305,8 +1431,14 @@ pub(super) fn process_control_message<
         ControlMessage::PublishConstantTiming { id, timing } => {
             mixer.publish_constant_timing_rt(id, timing, retirement);
         }
-        ControlMessage::ClearPadConstantTiming { id, through_epoch } => {
-            mixer.clear_constant_timing(id, through_epoch);
+        ControlMessage::ClearPadConstantTiming {
+            id,
+            through_epoch,
+            expected_source_generation,
+        } => {
+            if mixer.expected_source_generation_current(id, expected_source_generation) {
+                mixer.clear_constant_timing(id, through_epoch);
+            }
         }
         ControlMessage::SetStemMixMode {
             id,
@@ -1332,8 +1464,9 @@ pub(super) fn process_control_message<
             id,
             volume,
             received_at_ns,
+            expected_source_generation,
         } => {
-            schedule_play_sample_command(
+            schedule_play_sample_command_with_source(
                 scheduler,
                 callback_start_frame,
                 *trigger_quantization,
@@ -1344,6 +1477,7 @@ pub(super) fn process_control_message<
                 audio_messages,
                 retirement,
                 received_at_ns,
+                expected_source_generation,
             );
         }
         ControlMessage::TriggerInputPad {
@@ -1402,8 +1536,9 @@ pub(super) fn process_control_message<
             id,
             volume,
             received_at_ns,
+            expected_source_generation,
         } => {
-            schedule_exclusive_play_sample_command(
+            schedule_exclusive_play_sample_command_with_source(
                 scheduler,
                 callback_start_frame,
                 *trigger_quantization,
@@ -1414,6 +1549,7 @@ pub(super) fn process_control_message<
                 audio_messages,
                 retirement,
                 received_at_ns,
+                expected_source_generation,
             );
         }
         ControlMessage::StopSample { id } => {
@@ -1470,9 +1606,12 @@ pub(super) fn process_control_message<
             id,
             metadata,
             through_epoch,
+            expected_source_generation,
         } => {
-            mixer.set_pad_timing_metadata(id, metadata);
-            mixer.clear_constant_timing(id, through_epoch);
+            if mixer.expected_source_generation_current(id, expected_source_generation) {
+                mixer.set_pad_timing_metadata(id, metadata);
+                mixer.clear_constant_timing(id, through_epoch);
+            }
         }
         ControlMessage::BootstrapTransportFromPad { id } => {
             if id < NUM_SAMPLES {
@@ -1482,8 +1621,15 @@ pub(super) fn process_control_message<
         ControlMessage::AnchorTransportPhaseFromPad { id } => {
             anchor_transport_phase_from_pad(mixer, transport, id);
         }
-        ControlMessage::SetPadLoopRegion { id, start_s, end_s } => {
-            mixer.set_pad_loop_region(id, start_s, end_s);
+        ControlMessage::SetPadLoopRegion {
+            id,
+            start_s,
+            end_s,
+            expected_source_generation,
+        } => {
+            if mixer.expected_source_generation_current(id, expected_source_generation) {
+                mixer.set_pad_loop_region(id, start_s, end_s);
+            }
         }
         ControlMessage::SetTriggerQuantization(mode) => {
             *trigger_quantization = mode;
@@ -1494,8 +1640,14 @@ pub(super) fn process_control_message<
         ControlMessage::ResumeSample { id } => {
             mixer.resume_sample_at_output_frame(id, callback_start_frame);
         }
-        ControlMessage::SeekSample { id, position_s } => {
-            mixer.seek_sample_at_output_frame(id, position_s, callback_start_frame);
+        ControlMessage::SeekSample {
+            id,
+            position_s,
+            expected_source_generation,
+        } => {
+            if mixer.expected_source_generation_current(id, expected_source_generation) {
+                mixer.seek_sample_at_output_frame(id, position_s, callback_start_frame);
+            }
         }
     }
 }
@@ -1748,12 +1900,14 @@ mod tests {
                 let mut mode = TriggerQuantization::Grid { step_64ths: 4 };
                 let command = if exclusive {
                     ControlMessage::PlaySampleExclusive {
+                        expected_source_generation: None,
                         id: 0,
                         volume: 1.0,
                         received_at_ns,
                     }
                 } else {
                     ControlMessage::PlaySample {
+                        expected_source_generation: None,
                         id: 0,
                         volume: 1.0,
                         received_at_ns,
@@ -2397,6 +2551,7 @@ mod tests {
         );
         assert_eq!(
             control_message_retirement_slots_needed(&ControlMessage::PlaySampleExclusive {
+                expected_source_generation: None,
                 id: 0,
                 volume: 1.0,
                 received_at_ns: None
@@ -2526,6 +2681,7 @@ mod tests {
             &mut scheduler,
             12,
             ScheduledCommand::PlaySample {
+                expected_source_generation: None,
                 id: 0,
                 volume: 1.0,
                 received_at_ns: None,
@@ -2559,6 +2715,7 @@ mod tests {
             &mut scheduler,
             12,
             ScheduledCommand::PlaySample {
+                expected_source_generation: None,
                 id: 0,
                 volume: 1.0,
                 received_at_ns: None,
@@ -3275,6 +3432,7 @@ mod tests {
             .schedule(
                 10,
                 ScheduledCommand::PlaySample {
+                    expected_source_generation: None,
                     id: 0,
                     volume: 1.0,
                     received_at_ns: Some(123),
@@ -3311,6 +3469,7 @@ mod tests {
         transport.advance_by_rendered_frames(4);
         let mut scheduler = FixedCapacityScheduler::<8>::new();
         let command = ScheduledCommand::PlaySample {
+            expected_source_generation: None,
             id: 0,
             volume: 1.0,
             received_at_ns: Some(123),
@@ -3712,6 +3871,7 @@ mod tests {
             .schedule(
                 4,
                 ScheduledCommand::PlaySample {
+                    expected_source_generation: None,
                     id: 0,
                     volume: 1.0,
                     received_at_ns: None,
@@ -3754,6 +3914,7 @@ mod tests {
             .schedule(
                 600,
                 ScheduledCommand::PlaySample {
+                    expected_source_generation: None,
                     id: 0,
                     volume: 1.0,
                     received_at_ns: None,
@@ -3869,6 +4030,7 @@ mod tests {
             .schedule(
                 0,
                 ScheduledCommand::PlaySample {
+                    expected_source_generation: None,
                     id: 1,
                     volume: 1.0,
                     received_at_ns: None,

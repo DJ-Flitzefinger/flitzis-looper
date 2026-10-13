@@ -531,6 +531,7 @@ fn c3_productive_200_pad_measurement() {
                             id,
                             start_s: 42.0,
                             end_s: Some(42.5),
+                            expected_source_generation: None,
                         })
                         .unwrap();
                     loop_commands[id] = true;

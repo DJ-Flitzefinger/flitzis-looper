@@ -45,11 +45,11 @@ class GlobalParametersController:
 
     def set_key_lock(self, *, enabled: bool) -> None:
         """Change the default and publish only pads that inherit it."""
-        for sample_id, path in enumerate(self._project.sample_paths):
-            if path is not None and self._project.pad_key_lock[sample_id] is None:
-                self._transport.residency.remember(sample_id)
+        generations = self._capture_inherited_generations()
         changed = enabled != self._project.key_lock
         self._project.key_lock = enabled
+        if self._transport._on_global_key_lock_changed is not None:
+            self._transport._on_global_key_lock_changed()
 
         for sample_id in range(len(self._project.pad_key_lock)):
             if self._project.sample_paths[sample_id] is None:
@@ -57,11 +57,13 @@ class GlobalParametersController:
                     self._project.pad_key_lock[sample_id] = None
                     changed = True
                 continue
-            if self._project.pad_key_lock[sample_id] is not None:
+            if self._project.pad_key_lock[sample_id] is not None or sample_id not in generations:
                 continue
 
             try:
-                self._transport.residency.apply_key_lock(sample_id)
+                self._transport.residency.apply_key_lock(
+                    sample_id, expected_source_generation=generations[sample_id]
+                )
             except (RuntimeError, ValueError) as error:
                 self._transport.residency.report_key_lock_error(sample_id, str(error))
             changed = True
@@ -70,6 +72,25 @@ class GlobalParametersController:
             return
 
         self._transport._mark_project_changed()
+
+    def _capture_inherited_generations(self) -> dict[int, int | None]:
+        generations: dict[int, int | None] = {}
+        for sample_id, path in enumerate(self._project.sample_paths):
+            if path is None or self._project.pad_key_lock[sample_id] is not None:
+                continue
+            provider = self._transport._incoming_load_request
+            if provider is not None and provider(sample_id) is not None:
+                # Only the request-bound resolver owns incoming Global inheritance.
+                continue
+            try:
+                generations[sample_id] = self._transport.capture_current_pad_edit_generation(
+                    sample_id
+                )
+            except (RuntimeError, ValueError) as error:
+                self._transport.residency.report_key_lock_error(sample_id, str(error))
+                continue
+            self._transport.residency.remember(sample_id)
+        return generations
 
     def key_lock_status(self) -> KeyLockStatus:
         """Summarize current per-target confirmations across all banks without rolling them back."""

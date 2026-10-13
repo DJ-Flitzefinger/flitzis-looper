@@ -101,6 +101,7 @@ class NativeProducerBridge(Protocol):
         end_s: float | None,
         position_s: float | None,
         key_lock: bool | None,
+        expected_source_generation: int | None = None,
     ) -> ResidentWindowTicket: ...
 
     def play_resident_control(
@@ -204,6 +205,7 @@ class Audio:
         end_s: float | None,
         position_s: float | None,
         key_lock: bool | None,
+        expected_source_generation: int | None = None,
     ) -> ResidentWindowTicket:
         return self.bridge.prepare_resident_control(
             sample_id,
@@ -211,6 +213,7 @@ class Audio:
             end_s=end_s,
             position_s=position_s,
             key_lock=key_lock,
+            expected_source_generation=expected_source_generation,
         )
 
     def play_resident_control(

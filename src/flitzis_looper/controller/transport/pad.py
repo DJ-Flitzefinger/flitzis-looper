@@ -22,6 +22,7 @@ class PadController:
 
     def set_pad_gain(self, sample_id: int, gain_db: float) -> None:
         validate_sample_id(sample_id)
+        self._transport.ensure_current_source_assignment_ready(sample_id)
         ensure_finite(gain_db)
         clamped = clamp_gain_db(gain_db)
         self._audio.set_pad_gain(sample_id, clamped)
@@ -30,6 +31,7 @@ class PadController:
 
     def set_pad_eq(self, sample_id: int, low_db: float, mid_db: float, high_db: float) -> None:
         validate_sample_id(sample_id)
+        self._transport.ensure_current_source_assignment_ready(sample_id)
         for value in (low_db, mid_db, high_db):
             ensure_finite(value)
 
@@ -53,26 +55,42 @@ class PadController:
 
     def _set_key_lock_override(self, sample_id: int, *, override: bool | None) -> None:
         validate_sample_id(sample_id)
+        generation = self._transport.capture_current_pad_edit_generation(sample_id)
+        self._apply_key_lock_override(sample_id, override=override, generation=generation)
+
+    def _apply_key_lock_override(
+        self, sample_id: int, *, override: bool | None, generation: int | None
+    ) -> None:
         if self._project.sample_paths[sample_id] is None:
             if self._project.pad_key_lock[sample_id] is not None:
                 disabled = False
-                self._audio.set_pad_key_lock(sample_id, disabled)
+                self._audio.set_pad_key_lock(
+                    sample_id, disabled, **self._transport.source_generation_options(generation)
+                )
                 self._project.pad_key_lock[sample_id] = None
                 self._transport._mark_project_changed()
             return
 
         self._transport.residency.remember(sample_id)
         self._project.pad_key_lock[sample_id] = override
+        self._transport.record_current_pad_edit(sample_id, generation, "key_lock")
         self._transport._mark_project_changed()
         try:
-            self._transport.residency.apply_key_lock(sample_id)
+            self._transport.residency.apply_key_lock(
+                sample_id, expected_source_generation=generation
+            )
         except (RuntimeError, ValueError) as error:
             self._transport.residency.report_key_lock_error(sample_id, str(error))
 
     def toggle_pad_key_lock(self, sample_id: int) -> None:
         """Toggle Key Lock for one pad."""
         validate_sample_id(sample_id)
-        self.set_pad_key_lock(sample_id, enabled=not self._project.resolve_pad_key_lock(sample_id))
+        generation = self._transport.capture_current_pad_edit_generation(sample_id)
+        self._apply_key_lock_override(
+            sample_id,
+            override=not self._project.resolve_pad_key_lock(sample_id),
+            generation=generation,
+        )
 
     def set_manual_key(self, sample_id: int, key: str) -> None:
         """Set a pad's manual key override."""

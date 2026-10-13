@@ -172,9 +172,12 @@ P4b, later stages and final Human/hearing acceptance remain open.
 The bounded [initial saved physical ON report](../../../docs/pcm-cache-residency.md#initial-saved-finite-keylock-on--2026-10-12)
 records the shared selection implementation, required oracles and passing bounded
 software gates. Its inherited/explicit ON x public SPEED/manual source BPM plus
-display target histories describe physical NormalLoop continuation. Initial
-BPM-lock/accepted-musical admission and ordinary external Loader incoming-timing/
-default-eight-bars preparation remain open; no P4b/P5b parent closure follows.
+display target histories describe physical NormalLoop continuation and do not
+establish initial BPM-lock admission.
+The separate [ordinary incoming report](../../../docs/pcm-cache-residency.md#ordinary-incoming-loader--2026-10-13)
+records implemented incoming-timing/default-eight-bars preparation and actual
+initial BPM lock with focused passing receipts and a pending final integrated
+software gate. Accepted-musical admission remains open; no P4b/P5b parent closure follows.
 
 The first vertical is bounded to NormalLoop and storage-only current-source ACK.
 First-vertical validation passed51 focused native cases,168 Analysis,3318 Python/FFI
@@ -441,16 +444,42 @@ The [full extension](../../../docs/pre-rust-extension-20261011.md) and [additive
 
 Bounded complete-storage conversion and finite Native/restore preparation are
 implemented; [the validation report](../../../docs/long-source-streaming-validation.md)
-records their actual evidence and final software gates. Ordinary UI import still
-passes no resident hint and may fail initial whole-source live admission before
-the default eight-bar loop is initialized. The 2026-10-11 storage/finite restore
+records their actual evidence and final software gates. Ordinary UI import now
+prepares verified complete disk storage, resolves genuine incoming activity/BPM
+and default/user demand, then reads the selected live view. Its separate bounded
+incoming software report below records a passing bounded gate. The 2026-10-11 storage/finite restore
 proofs use KEYLOCK off. Current known saved physical ON demand now selects proper
 partial KeyLockFiniteLoop or complete KeyLockFullTrack through the shared verified
-policy, with unknown demand still complete and bounded runtime gates passing. Ordinary
-external/default-user-loop preparation, initial BPM-lock/accepted-musical admission
-and full finite KEYLOCK/DSP integration remain required P4b/P5b work, so this task
+policy, with unknown demand still complete and bounded runtime gates passing.
+Ordinary external/default-user-loop preparation and actual initial BPM lock have
+a passing bounded software gate. Accepted-musical admission and full finite
+KEYLOCK/DSP integration remain required P4b/P5b work, so this task
 and full E11-03 stay unchecked. Storage evidence does not close
 aggregate resources, model inference or Human/device gates.
+
+### Ordinary incoming Loader follow-up — bounded software gate PASS
+
+- [x] Separate verified cold/warm complete disk preparation from selected live read; determine genuine incoming activity/BPM/Auto8bars or newer addressed physical/timing demand first through the existing analysis budgets and common verified selection policy, retaining no guessed geometry or hidden complete live backing.
+- [x] Bind incoming demand to its own request/revision and existing Global/PADoverride resolver; preserve newer incoming ON/OFF/loop/timing intent and prior confirmed source through reselection, stale rejection, cancellation and exact bounded admission. Retire only the predecessor override on matching replacement, never transfer predecessor-only actions.
+- [x] Install incoming source/loop/scalar-period/grid-origin together before own callback ACK; project the actually adopted defaults after ACK and prove first public Play with nonunity SPEED and actual initial BPM lock, separate own wet output/later4096 Native adoption and independent complete-PCM/raw-Native/EQ/FIFO/source-clock/215 checks.
+- [x] Validate ordinary external cold/warm first/replacement inherited/explicit ON/OFF histories, held latest-intent edits, no-BPM/activity/short-source fallbacks and stale/cancel/queue/retirement negatives with focused production regressions and impacted integration. Keep whole P4b/P5b, accepted-musical, all216 aggregate resource/music and Human gates open unless their independent required evidence is completed.
+
+The [bounded incoming report](../../../docs/pcm-cache-residency.md#ordinary-incoming-loader--2026-10-13)
+records current implementation and software receipts: the actual public Native
+wrapper passes all 22 histories (18.80 seconds initially, current rerun 16.64);
+private Release/API/controller/UI preflight passes. Current 11-file Python passes
+716 cases/two device exclusions in 32.69 seconds; the separate focused control/
+Gain/EQ profile passes 155. Current audio-stream 63, scheduler 9, messages 14,
+resident-mixer 16 and source 11 pass with device coverage separate.
+Verified disk preparation reuses the unchanged cold-store 95 result. Remaining
+impacted integration passes: basic mixer 97, constant timing 111/four ignored,
+resident relocation 12; cold residency 68 and cold load 200 combine unchanged
+66/191 successful cases with every affected failed-case rerun, retaining eight/
+four explicit ignored gates. Current source static checks and both final strict
+validations pass; Clippy exits zero with warnings, and the included Python probe
+retains its unchanged HEAD lint baseline. The same independent final review passes with no actionable findings. These
+four child tasks close only the bounded ordinary incoming software scope;
+source/default ACK cannot substitute for wet output or later own Native adoption.
 
 - [ ] X11-MATERIAL M1: readable contained roots, full-SHA cross-name dedup/unsafe-case collisions, exact original preservation and independent content settings/DSP/owners through copy/move/origin-delete.
 - [ ] X11-MATERIAL M2: existing M-ID/legacy journal/config/current-reference migration with fresh native ACK and fault/reopen/latest-intent/unknown/true-last-reader proof; no rename beneath owners or reset.
@@ -468,8 +497,10 @@ coherent publication and clean-main/fresh-remote verification in local receipts:
 - [x] MATERIAL software validation: current LONG/RF64 regression, broad Debug/Release, installed Python/static/scoped-format, Cargo check, Release build-only/preflight, official strict and independent whole-source/evidence review with all prior FAIL/UNKNOWN scopes retained. The LONG children prove source callback ACK and pair preparation/reopening; separate Native tests prove pair callback/adoption and physical retirement.
 
 X11-MATERIAL keeps its X11-LONG/P1b/P2b dependencies. Ordinary external Loader
-incoming-timing/default-eight-bar admission, initial BPM-lock/accepted-musical
-admission and full finite KEYLOCK/DSP remain REQUIRED OPEN in P4b/P5b. The bounded
+incoming-timing/default-eight-bar admission and actual initial BPM lock now have
+a passing bounded software gate.
+Accepted-musical admission and full finite KEYLOCK/DSP remain REQUIRED OPEN in
+P4b/P5b. The bounded
 saved physical ON vertical records its separate bounded software admission gate.
 Bounded software acceptance cannot complete the two full MATERIAL checkboxes
 above, copy/move/Re-Arrange, E11-19/20/current-model controls, active new-generation

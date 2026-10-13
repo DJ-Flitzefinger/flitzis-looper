@@ -237,6 +237,9 @@ class FakeInputRuntimePadBinding:
             "accepted_timing": accepted_timing,
         }
 
+    def is_current(self) -> bool:
+        return True
+
     def metadata(self) -> dict[str, object]:
         return dict(self._metadata)
 
@@ -312,6 +315,8 @@ def audio_engine_mock() -> Iterator[Mock]:
     with patch("flitzis_looper.controller.app.AudioEngine", autospec=True) as audio_engine:
         loaded_sources = FakeLoadedSourceDigests()
         audio_engine.return_value.load_sample_async.side_effect = loaded_sources.load
+        audio_engine.return_value.load_incoming_sample_async = Mock(side_effect=loaded_sources.load)
+        audio_engine.return_value.update_incoming_load_intent = Mock(return_value=True)
         audio_engine.return_value.unload_sample.side_effect = loaded_sources.unload
         # Install explicitly even when the currently loaded extension predates
         # the metadata getter. Tests may still replace native admission behavior.

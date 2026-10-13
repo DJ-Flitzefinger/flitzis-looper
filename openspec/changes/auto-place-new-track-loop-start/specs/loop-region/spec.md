@@ -19,6 +19,21 @@ beat/downbeat analysis. Other pads SHALL remain unchanged.
 Absent or invalid optional candidates SHALL retain loop-zero and legacy grid-base
 fallback. Without BPM, Auto SHALL remain enabled at 8.0 bars with no musical end.
 
+For ordinary external cold or verified warm loading, the system SHALL determine
+these incoming defaults from verified complete playback PCM before selecting
+live PCM. Own native source adoption SHALL install the validated source, loop
+geometry, scalar timing and grid origin before its matching ACK. Subsequent
+Loader/project projection SHALL reflect that adoption without replaying stale
+defaults over newer incoming loop or timing intent. Source ACK SHALL NOT establish
+successful wet processing or later source-specific Native adoption.
+
+#### Scenario: Incoming defaults precede cold or warm live selection
+- **GIVEN** a genuinely new source has valid incoming activity and BPM
+- **WHEN** ordinary cold or verified warm preparation selects its live interval
+- **THEN** activity and Auto8bars SHALL determine that interval before its live PCM allocation
+- **AND** the same incoming geometry and source timing SHALL become effective before own source ACK
+- **AND** first public Play SHALL retain its source, timing, window and Native readiness guards without borrowing predecessor defaults
+
 #### Scenario: Small precursor ripples stay inside the widened deadzone
 - **GIVEN** precursor samples remain between -0.005 and +0.005 full scale
 - **AND** frame N is the first finite channel amplitude outside [-0.01, +0.01]
@@ -66,6 +81,7 @@ fallback. Without BPM, Auto SHALL remain enabled at 8.0 bars with no musical end
 - **WHEN** defaults are initialized
 - **THEN** loop and grid base retain that position without inventing BPM
 - **AND** musical loop end remains unavailable until BPM is supplied
+- **AND** absent a newer trustworthy physical range, live demand SHALL use genuine bounded complete admission rather than a guessed eight-bar interval
 
 ## ADDED Requirements
 
@@ -75,6 +91,8 @@ preserve saved/manual loop, grid-base, offset and BPM intent on project restore,
 same-source reload, reanalysis and subsequent manual loop edits.
 The candidate SHALL share existing source/request stale-result rejection.
 The independent base SHALL remain unaffected by the manual offset's one-bar clamp.
+Newer loop, grid or timing intent explicitly addressed to an incoming load SHALL
+survive its matching completion; activity defaults SHALL NOT replace that intent.
 
 #### Scenario: Restoration preserves manually chosen source positions
 - **GIVEN** saved loop and grid intent differ from newly detected activity

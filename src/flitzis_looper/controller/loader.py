@@ -1,4 +1,6 @@
 import json
+import math
+from dataclasses import dataclass, field, replace
 from itertools import islice
 from pathlib import Path
 from typing import TYPE_CHECKING, Literal, NotRequired, TypedDict, TypeVar
@@ -6,6 +8,7 @@ from uuid import uuid4
 
 from pydantic import ValidationError
 
+from flitzis_looper.constants import PAD_LOOP_BARS_DEFAULT
 from flitzis_looper.controller.accepted_restore import AcceptedTimingRestore
 from flitzis_looper.controller.asset_lifecycle import (
     AssetRetirementReservation,
@@ -22,6 +25,7 @@ from flitzis_looper.models import (
     ProjectState,
     SampleAnalysis,
     SessionState,
+    TimingIntent,
     validate_sample_id,
 )
 from flitzis_looper.project_materials import original_asset
@@ -34,6 +38,83 @@ if TYPE_CHECKING:
 
 
 _PadValue = TypeVar("_PadValue")
+
+
+@dataclass(frozen=True, slots=True)
+class _IncomingIntent:
+    request_id: int
+    revision: int
+    override: bool | None
+    key_lock: bool
+    start_s: float | None = None
+    end_s: float | None = None
+    auto: bool = True
+    bars: float = PAD_LOOP_BARS_DEFAULT
+    timing_override: bool = False
+    period_seconds: float | None = None
+    grid_origin_s: float | None = None
+    key_lock_revision: int = 0
+    loop_revision: int = 0
+    timing_revision: int = 0
+
+
+@dataclass(frozen=True, slots=True)
+class _IncomingLoad:
+    intent: _IncomingIntent
+    current_source_revisions: dict[Literal["key_lock", "loop", "timing"], int] = field(
+        default_factory=dict
+    )
+
+
+@dataclass(frozen=True, slots=True)
+class _IncomingDefaults:
+    revision: int
+    key_lock: bool
+    start_s: float
+    end_s: float | None
+    period_seconds: float | None
+    grid_origin_s: float
+    auto: bool
+    bars: float
+
+
+def _incoming_scalar(value: object, *, nullable: bool = False) -> float | None:
+    if value is None and nullable:
+        return None
+    if isinstance(value, bool) or not isinstance(value, (int, float)) or not math.isfinite(value):
+        message = "Incoming source receipt has an invalid scalar"
+        raise ValueError(message)
+    return float(value)
+
+
+def _incoming_defaults(value: object) -> _IncomingDefaults:
+    """Validate the complete native receipt before mutating project projections."""
+    if not isinstance(value, dict):
+        message = "Incoming source has no adopted defaults receipt"
+        raise TypeError(message)
+    revision = value.get("revision")
+    if isinstance(revision, bool) or not isinstance(revision, int) or not 0 <= revision < 2**64:
+        message = "Incoming source receipt has an invalid revision"
+        raise ValueError(message)
+    key_lock, auto = value.get("key_lock"), value.get("loop_auto")
+    if not isinstance(key_lock, bool) or not isinstance(auto, bool):
+        message = "Incoming source receipt has an invalid mode"
+        raise TypeError(message)
+    start = _incoming_scalar(value.get("start_s"))
+    end = _incoming_scalar(value.get("end_s"), nullable=True)
+    period = _incoming_scalar(value.get("period_seconds"), nullable=True)
+    origin = _incoming_scalar(value.get("grid_origin_s"))
+    bars = _incoming_scalar(value.get("loop_bars"))
+    if start is None or bars is None or origin is None:
+        message = "Incoming source receipt has missing geometry or timing"
+        raise ValueError(message)
+    if start < 0.0 or (end is not None and end <= start):
+        message = "Incoming source receipt has invalid geometry"
+        raise ValueError(message)
+    if (period is not None and period <= 0.0) or bars <= 0.0:
+        message = "Incoming source receipt has invalid geometry or timing"
+        raise ValueError(message)
+    return _IncomingDefaults(revision, key_lock, start, end, period, origin, auto, bars)
 
 
 def _parse_sample_analysis(analysis: object) -> SampleAnalysis | None:
@@ -150,7 +231,199 @@ class _MaterialCreationOwnership(BaseController):
             raise ValueError(message)
 
 
-class LoaderController(_MaterialCreationOwnership):
+class _IncomingIntentControl:
+    """Request-addressed incoming control; current-source transport stays independent."""
+
+    _project: ProjectState
+    _session: SessionState
+    _audio: AudioEngine
+    _incoming_loads: dict[int, _IncomingLoad]
+
+    def record_current_pad_edit(
+        self,
+        sample_id: int,
+        source_generation: int | None,
+        domain: Literal["key_lock", "loop", "timing"],
+    ) -> None:
+        """Retain only generic gestures proven to address the adopted incoming source."""
+        incoming = self._incoming_loads.get(sample_id)
+        if (
+            incoming is None
+            or isinstance(source_generation, bool)
+            or source_generation != incoming.intent.request_id
+        ):
+            return
+        revision = incoming.intent.revision + 1
+        intent = replace(incoming.intent, revision=revision)
+        if domain == "key_lock":
+            override = self._project.pad_key_lock[sample_id]
+            intent = replace(
+                intent,
+                override=override,
+                key_lock=self._project.resolve_pad_key_lock(
+                    sample_id, assignment_override=override
+                ),
+            )
+        self._incoming_loads[sample_id] = replace(
+            incoming,
+            intent=intent,
+            current_source_revisions={**incoming.current_source_revisions, domain: revision},
+        )
+
+    def incoming_load_request_id(self, sample_id: int) -> int | None:
+        """Return the request address required for explicit incoming-source edits."""
+        validate_sample_id(sample_id)
+        incoming = self._incoming_loads.get(sample_id)
+        return incoming.intent.request_id if incoming is not None else None
+
+    def set_incoming_key_lock_override(
+        self, sample_id: int, request_id: int, *, override: bool | None
+    ) -> None:
+        """Address ON/OFF/inheritance to the incoming source without editing its predecessor."""
+        if override is not None and not isinstance(override, bool):
+            message = "Incoming Key Lock override must be ON, OFF or inheritance"
+            raise ValueError(message)
+        intent = self._incoming_intent(sample_id, request_id)
+        self._update_incoming_intent(
+            sample_id,
+            replace(
+                intent,
+                override=override,
+                key_lock=self._project.resolve_pad_key_lock(
+                    sample_id, assignment_override=override
+                ),
+            ),
+            domain="key_lock",
+        )
+
+    def set_incoming_loop_intent(
+        self,
+        sample_id: int,
+        request_id: int,
+        *,
+        start_s: float | None,
+        end_s: float | None,
+        auto: bool,
+        bars: float,
+    ) -> None:
+        """Address loop demand to one incoming load; None start retains activity default."""
+        intent = self._incoming_intent(sample_id, request_id)
+        self._update_incoming_intent(
+            sample_id,
+            replace(intent, start_s=start_s, end_s=end_s, auto=auto, bars=bars),
+            domain="loop",
+        )
+
+    def set_incoming_timing_intent(
+        self,
+        sample_id: int,
+        request_id: int,
+        *,
+        period_seconds: float,
+        grid_origin_s: float | None,
+    ) -> None:
+        """Address scalar timing demand to incoming material.
+
+        Accepted predecessor timing never establishes incoming authority.
+        An explicit absent period cannot be represented by durable Legacy intent.
+        """
+        if (
+            isinstance(period_seconds, bool)
+            or not isinstance(period_seconds, (int, float))
+            or not math.isfinite(period_seconds)
+            or period_seconds <= 0.0
+        ):
+            message = "Incoming timing period must be positive and finite"
+            raise ValueError(message)
+        intent = self._incoming_intent(sample_id, request_id)
+        self._update_incoming_intent(
+            sample_id,
+            replace(
+                intent,
+                timing_override=True,
+                period_seconds=period_seconds,
+                grid_origin_s=grid_origin_s,
+            ),
+            domain="timing",
+        )
+
+    def _incoming_intent(self, sample_id: int, request_id: int) -> _IncomingIntent:
+        validate_sample_id(sample_id)
+        incoming = self._incoming_loads.get(sample_id)
+        if (
+            isinstance(request_id, bool)
+            or incoming is None
+            or incoming.intent.request_id != request_id
+        ):
+            message = "Incoming source request is no longer current"
+            raise ValueError(message)
+        return incoming.intent
+
+    def _update_incoming_intent(
+        self,
+        sample_id: int,
+        intent: _IncomingIntent,
+        *,
+        domain: Literal["key_lock", "loop", "timing"],
+    ) -> None:
+        incoming = self._incoming_loads[sample_id]
+        updated = replace(intent, revision=incoming.intent.revision + 1)
+        if domain == "key_lock":
+            updated = replace(updated, key_lock_revision=updated.revision)
+        elif domain == "loop":
+            updated = replace(updated, loop_revision=updated.revision)
+        else:
+            updated = replace(updated, timing_revision=updated.revision)
+        self._audio.update_incoming_load_intent(
+            sample_id,
+            updated.request_id,
+            updated.revision,
+            updated.key_lock,
+            loop_start_s=updated.start_s,
+            loop_end_s=updated.end_s,
+            loop_auto=updated.auto,
+            loop_bars=updated.bars,
+            timing_override=updated.timing_override,
+            period_seconds=updated.period_seconds,
+            grid_origin_s=updated.grid_origin_s,
+        )
+        self._incoming_loads[sample_id] = replace(incoming, intent=updated)
+
+    def _refresh_incoming_global_intent(self) -> None:
+        for sample_id, incoming in tuple(self._incoming_loads.items()):
+            intent = incoming.intent
+            if intent.override is not None:
+                continue
+            enabled = self._project.resolve_pad_key_lock(sample_id, assignment_override=None)
+            if enabled == intent.key_lock:
+                continue
+            try:
+                self._update_incoming_intent(
+                    sample_id, replace(intent, key_lock=enabled), domain="key_lock"
+                )
+            except (RuntimeError, ValueError) as error:
+                self._session.sample_load_errors[sample_id] = str(error)
+
+    def _incoming_loop_signature(self, sample_id: int) -> tuple[float, float | None, bool, float]:
+        return (
+            self._project.pad_loop_start_s[sample_id],
+            self._project.pad_loop_end_s[sample_id],
+            self._project.pad_loop_auto[sample_id],
+            self._project.pad_loop_bars[sample_id],
+        )
+
+    def _incoming_timing_signature(
+        self, sample_id: int
+    ) -> tuple[float | None, TimingIntent, float | None, int]:
+        return (
+            self._project.manual_bpm[sample_id],
+            self._project.pad_timing_intent[sample_id],
+            self._project.pad_grid_anchor_s[sample_id],
+            self._project.pad_grid_offset_samples[sample_id],
+        )
+
+
+class LoaderController(_IncomingIntentControl, _MaterialCreationOwnership):
     _COLD_QUEUE_FULL = "cold source queue full (2 workers, 32 queued jobs)"
     _RESTORE_ADMISSIONS_PER_POLL = 8
 
@@ -179,6 +452,7 @@ class LoaderController(_MaterialCreationOwnership):
         self._on_stems_invalidated: Callable[[int], None] | None = None
         self._on_restored_sample_loaded: Callable[[int], bool] | None = None
         self._on_new_sample_loaded: Callable[[int, float | None], None] | None = None
+        self._on_incoming_sample_loaded: Callable[[int], None] | None = None
         self._on_loaded_key_lock: Callable[[int], None] | None = None
         self._on_sample_unloaded: Callable[[int], None] | None = None
         self._on_accepted_timing_refresh: Callable[[int], None] | None = None
@@ -186,6 +460,7 @@ class LoaderController(_MaterialCreationOwnership):
         self._migration_event_handler: Callable[[dict[str, object]], bool] | None = None
         self._load_retirements: dict[tuple[int, int | None], AssetRetirementReservation] = {}
         self._new_load_sample_ids: set[int] = set()
+        self._incoming_loads: dict[int, _IncomingLoad] = {}
         self._deferred_restores: dict[int, Path] = {}
         self._analysis_request_ids: dict[int, int] = {}
         self._key_analysis = KeyMetadataAnalysis(project, audio)
@@ -218,16 +493,19 @@ class LoaderController(_MaterialCreationOwnership):
         for reservation in self._load_retirements.values():
             reservation.close()
         self._load_retirements.clear()
+        self._incoming_loads.clear()
 
     def set_new_sample_loaded_callback(
         self,
         callback: Callable[[int, float | None], None],
         *,
         key_lock_callback: Callable[[int], None] | None = None,
+        incoming_callback: Callable[[int], None] | None = None,
     ) -> None:
         """Register behavior that runs after a newly assigned sample finishes loading."""
         self._on_new_sample_loaded = callback
         self._on_loaded_key_lock = key_lock_callback
+        self._on_incoming_sample_loaded = incoming_callback
 
     def bind_asset_lifecycle(self, lifecycle: ProjectAssetLifecycle) -> None:
         """Share assignment and separator owners with the application controller."""
@@ -296,9 +574,8 @@ class LoaderController(_MaterialCreationOwnership):
         reservation = None
         try:
             reservation = self._assets.reserve()
-            request_id = self._audio.load_sample_async(
-                sample_id, path, run_analysis=True, replace_assignment=True, source_intent="import"
-            )
+            key_lock = self._project.resolve_pad_key_lock(sample_id, assignment_override=None)
+            request_id = self._audio.load_incoming_sample_async(sample_id, path, key_lock)
         except (RuntimeError, ValueError) as error:
             if reservation is not None:
                 reservation.close()
@@ -316,6 +593,10 @@ class LoaderController(_MaterialCreationOwnership):
         self._new_load_sample_ids.add(sample_id)
         self._record_load_request_id(sample_id, request_id)
         self._record_load_retirement(sample_id, reservation)
+        if isinstance(request_id, int) and not isinstance(request_id, bool):
+            self._incoming_loads[sample_id] = _IncomingLoad(
+                _IncomingIntent(request_id, 0, None, key_lock),
+            )
 
     def unload_sample(self, sample_id: int) -> None:
         """Stop playback and unload a sample slot."""
@@ -335,6 +616,7 @@ class LoaderController(_MaterialCreationOwnership):
         self._session.pending_sample_paths.pop(sample_id, None)
         self._load_request_ids.pop(sample_id, None)
         self._new_load_sample_ids.discard(sample_id)
+        self._incoming_loads.pop(sample_id, None)
         self._session.sample_load_progress.pop(sample_id, None)
         self._session.sample_load_stage.pop(sample_id, None)
         self._session.sample_load_errors.pop(sample_id, None)
@@ -379,6 +661,7 @@ class LoaderController(_MaterialCreationOwnership):
 
     def poll_loader_events(self) -> None:
         """Drain pending loader events from the Rust audio engine."""
+        self._refresh_incoming_global_intent()
         self._accepted_restore.poll()
         self._poll_material_creation()
         self._assets.retry_retirements()
@@ -618,6 +901,8 @@ class LoaderController(_MaterialCreationOwnership):
                 self._assets.retire_unassigned_original(cached_path)
             return
 
+        incoming = self._incoming_loads.get(sample_id)
+
         pending = self._session.pending_sample_paths.get(sample_id)
         cached_path = event.get("cached_path")
         target_path = cached_path if isinstance(cached_path, str) else pending
@@ -626,11 +911,12 @@ class LoaderController(_MaterialCreationOwnership):
             self._session.sample_load_errors[sample_id] = "Loaded source has no original reference"
             return
         try:
+            adopted = self._validate_incoming_receipt(incoming, event)
             self._assets.sync_assignments()
             target_path, previous_path, new_assignment, content, prepared = (
                 self._prepare_completed_assignment(sample_id, target_path, event)
             )
-        except (OSError, RuntimeError, ValueError) as error:
+        except (OSError, RuntimeError, TypeError, ValueError) as error:
             self._settle_load_request(sample_id)
             self._session.sample_load_errors[sample_id] = (
                 f"Loaded source assignment failed: {error}"
@@ -641,12 +927,13 @@ class LoaderController(_MaterialCreationOwnership):
         self._session.sample_load_errors.pop(sample_id, None)
         restored_assignment = not new_assignment
         timing_stale = event.get("timing_stale") is True
+        incoming_refresh = (False, False)
         if new_assignment:
-            # Source adoption is complete even if a newer timing edit owns timing now.
-            self._project.pad_key_lock[sample_id] = None
+            incoming_refresh = self._reset_completed_source(
+                sample_id, event, incoming, adopted, timing_stale=timing_stale
+            )
             self._project.pad_key_intent[sample_id] = PadKeyIntent()
             self._key_analysis.cancel(sample_id)
-            self._reset_completed_assignment(sample_id, timing_stale=timing_stale)
             self._project.sample_paths[sample_id] = target_path
             self._clear_stem_cache(sample_id)
         elif restored_assignment and previous_path != target_path:
@@ -656,12 +943,13 @@ class LoaderController(_MaterialCreationOwnership):
             sample_id, content, prepared, changed=new_assignment or previous_path != target_path
         )
 
-        duration_s = event.get("duration_s")
-        if isinstance(duration_s, float):
-            self._project.sample_durations[sample_id] = duration_s
+        self._record_completed_duration(sample_id, event)
 
         try:
             self._assets.sync_assignments()
+            if incoming is not None and adopted is not None:
+                self._finish_incoming_load(sample_id, event, incoming_refresh)
+                return
             if new_assignment and not timing_stale:
                 self._publish_unloaded_pad_audio_defaults(sample_id, ProjectState())
             self._finish_loaded_timing(
@@ -676,6 +964,40 @@ class LoaderController(_MaterialCreationOwnership):
                 f"Loaded source control refresh failed: {error}"
             )
 
+    @staticmethod
+    def _validate_incoming_receipt(
+        incoming: _IncomingLoad | None, event: dict[str, object]
+    ) -> _IncomingDefaults | None:
+        if incoming is None:
+            return None
+        adopted = _incoming_defaults(event.get("incoming_defaults"))
+        if adopted.revision > incoming.intent.revision:
+            message = "Incoming source receipt refers to an unknown intent revision"
+            raise ValueError(message)
+        return adopted
+
+    def _record_completed_duration(self, sample_id: int, event: dict[str, object]) -> None:
+        duration_s = event.get("duration_s")
+        if isinstance(duration_s, float):
+            self._project.sample_durations[sample_id] = duration_s
+
+    def _reset_completed_source(
+        self,
+        sample_id: int,
+        event: dict[str, object],
+        incoming: _IncomingLoad | None,
+        adopted: _IncomingDefaults | None,
+        *,
+        timing_stale: bool,
+    ) -> tuple[bool, bool]:
+        if incoming is not None and adopted is not None:
+            return self._project_incoming_defaults(
+                sample_id, event, incoming, adopted, timing_stale=timing_stale
+            )
+        self._project.pad_key_lock[sample_id] = None
+        self._reset_completed_assignment(sample_id, timing_stale=timing_stale)
+        return False, False
+
     def _settle_load_request(self, sample_id: int) -> None:
         self._session.loading_sample_ids.discard(sample_id)
         self._session.sample_load_progress.pop(sample_id, None)
@@ -683,6 +1005,115 @@ class LoaderController(_MaterialCreationOwnership):
         self._session.pending_sample_paths.pop(sample_id, None)
         self._load_request_ids.pop(sample_id, None)
         self._new_load_sample_ids.discard(sample_id)
+        self._incoming_loads.pop(sample_id, None)
+
+    def _project_incoming_defaults(
+        self,
+        sample_id: int,
+        event: dict[str, object],
+        incoming: _IncomingLoad,
+        adopted: _IncomingDefaults,
+        *,
+        timing_stale: bool,
+    ) -> tuple[bool, bool]:
+        """Project own receipt and preserve subsequent, separately addressed control domains."""
+        loop = self._incoming_loop_signature(sample_id)
+        timing = self._incoming_timing_signature(sample_id)
+        intent = incoming.intent
+        revisions = incoming.current_source_revisions
+        preserve_override = revisions.get("key_lock", -1) > intent.key_lock_revision
+        preserve_loop = revisions.get("loop", -1) > intent.loop_revision
+        override = self._project.pad_key_lock[sample_id]
+        later_mode = intent.key_lock_revision > adopted.revision
+        later_loop = intent.loop_revision > adopted.revision
+        later_timing = intent.timing_revision > adopted.revision
+        preserve_timing = (timing_stale and not later_timing) or (
+            revisions.get("timing", -1) > intent.timing_revision
+        )
+        self._reset_completed_assignment(sample_id, timing_stale=timing_stale)
+        self._project.pad_key_lock[sample_id] = override if preserve_override else intent.override
+        if preserve_loop:
+            self._set_incoming_loop_projection(sample_id, loop)
+        else:
+            self._project.pad_loop_start_s[sample_id] = (
+                intent.start_s if later_loop and intent.start_s is not None else adopted.start_s
+            )
+            self._project.pad_loop_end_s[sample_id] = intent.end_s if later_loop else adopted.end_s
+            self._project.pad_loop_auto[sample_id] = intent.auto if later_loop else adopted.auto
+            self._project.pad_loop_bars[sample_id] = intent.bars if later_loop else adopted.bars
+        if preserve_timing:
+            self._set_incoming_timing_projection(sample_id, timing)
+        else:
+            period = intent.period_seconds if later_timing else adopted.period_seconds
+            self._project.manual_bpm[sample_id] = (
+                60.0 / period if intent.timing_override and period is not None else None
+            )
+            self._project.pad_timing_intent[sample_id] = (
+                "manual" if self._project.manual_bpm[sample_id] is not None else "legacy"
+            )
+            origin = (
+                intent.grid_origin_s
+                if later_timing and intent.grid_origin_s is not None
+                else adopted.grid_origin_s
+            )
+            self._set_incoming_grid_projection(sample_id, origin)
+        parsed = _parse_sample_analysis(event.get("analysis"))
+        self._project.sample_analysis[sample_id] = parsed
+        # Later current-source edits have already obtained their own Native authority.
+        # Only explicitly incoming edits newer than the receipt need post-ACK work.
+        return preserve_override or later_mode, (later_loop and not preserve_loop) or (
+            later_timing and not preserve_timing
+        )
+
+    def _set_incoming_grid_projection(self, sample_id: int, origin: float) -> None:
+        """Preserve signed scalar origins within the durable nonnegative base/offset format."""
+        rate = self._output_sample_rate_hz()
+        self._project.pad_grid_anchor_s[sample_id] = max(0.0, origin)
+        self._project.pad_grid_offset_samples[sample_id] = (
+            round(origin * rate) if origin < 0.0 and rate is not None else 0
+        )
+
+    def _set_incoming_loop_projection(
+        self, sample_id: int, values: tuple[float, float | None, bool, float]
+    ) -> None:
+        # The tuple contains the already validated ProjectState fields captured above.
+        (
+            self._project.pad_loop_start_s[sample_id],
+            self._project.pad_loop_end_s[sample_id],
+            self._project.pad_loop_auto[sample_id],
+            self._project.pad_loop_bars[sample_id],
+        ) = values
+
+    def _set_incoming_timing_projection(
+        self, sample_id: int, values: tuple[float | None, TimingIntent, float | None, int]
+    ) -> None:
+        (
+            self._project.manual_bpm[sample_id],
+            self._project.pad_timing_intent[sample_id],
+            self._project.pad_grid_anchor_s[sample_id],
+            self._project.pad_grid_offset_samples[sample_id],
+        ) = values
+
+    def _finish_incoming_load(
+        self, sample_id: int, event: dict[str, object], refresh: tuple[bool, bool]
+    ) -> None:
+        """Finish source bookkeeping without republishing the already adopted defaults."""
+        parsed = self._project.sample_analysis[sample_id]
+        if parsed is not None and self._key_analysis.loaded(
+            sample_id, event.get("request_id"), parsed.key
+        ):
+            self._mark_project_changed()
+        self._clear_analysis_task_state(sample_id)
+        analysis_error = event.get("analysis_error")
+        if isinstance(analysis_error, str):
+            self._session.sample_analysis_errors[sample_id] = analysis_error
+        if self._on_incoming_sample_loaded is not None:
+            self._on_incoming_sample_loaded(sample_id)
+        if refresh[0] and self._on_loaded_key_lock is not None:
+            self._on_loaded_key_lock(sample_id)
+        if refresh[1]:
+            self._on_pad_bpm_changed(sample_id)
+        self._mark_project_changed()
 
     def _record_completed_identity(
         self,
@@ -1159,6 +1590,13 @@ class LoaderController(_MaterialCreationOwnership):
 
     def _matches_load_request(self, sample_id: int, event: dict[str, object]) -> bool:
         request_id = event.get("request_id")
+        incoming = self._incoming_loads.get(sample_id)
+        if incoming is not None:
+            return (
+                isinstance(request_id, int)
+                and not isinstance(request_id, bool)
+                and request_id == incoming.intent.request_id
+            )
         if isinstance(request_id, bool) or not isinstance(request_id, int):
             return True
         return self._load_request_ids.get(sample_id) == request_id

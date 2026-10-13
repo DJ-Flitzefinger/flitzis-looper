@@ -82,6 +82,8 @@ class PadPlaybackController:
         exclusive: bool = False,
         received_at_ns: int | None = None,
     ) -> None:
+        generation = self._transport.capture_current_pad_edit_generation(sample_id)
+        options = self._transport.source_generation_options(generation)
         start_s, end_s = self._loop.requested_region(sample_id)
         play = self._audio.play_sample_exclusive if exclusive else self._audio.play_sample
         self._transport.residency.start(
@@ -89,10 +91,11 @@ class PadPlaybackController:
             start_s,
             end_s,
             lambda: (
-                play(sample_id, 1.0)
+                play(sample_id, 1.0, **options)
                 if received_at_ns is None
-                else play(sample_id, 1.0, received_at_ns=received_at_ns)
+                else play(sample_id, 1.0, received_at_ns=received_at_ns, **options)
             ),
+            expected_source_generation=generation,
             prepared_play=lambda ticket: self._audio.play_resident_control(
                 ticket, exclusive=exclusive, received_at_ns=received_at_ns
             ),
@@ -164,8 +167,9 @@ class PadPlaybackController:
         if sample_id not in self._session.active_sample_ids:
             return
 
+        generation = self._transport.capture_current_pad_edit_generation(sample_id)
         target_s = max(0.0, float(position_s))
-        self._transport.residency.seek(sample_id, target_s)
+        self._transport.residency.seek(sample_id, target_s, expected_source_generation=generation)
 
     def handle_sample_started_message(self, msg: AudioMessage.SampleStarted) -> None:
         pad_id = msg.sample_id()

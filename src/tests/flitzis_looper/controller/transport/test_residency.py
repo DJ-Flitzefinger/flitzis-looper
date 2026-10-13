@@ -322,7 +322,7 @@ def test_seek_preserves_markers_pause_and_uses_actual_ack_clamp(
     controller.session.pad_playhead_s[0] = 3.5
     controller.transport.playback.seek_pad(0, 1000.0)
     audio_engine_mock.prepare_resident_control.assert_called_once_with(
-        0, start_s=None, end_s=None, position_s=1000.0, key_lock=None
+        0, start_s=None, end_s=None, position_s=1000.0, key_lock=None, expected_source_generation=1
     )
     assert controller.session.pad_playhead_s[0] == 3.5
     ticket.status, ticket.effective_seek_seconds = "accepted", 30.0
@@ -456,7 +456,7 @@ def test_key_lock_context_shares_loop_transaction_and_retains_rejected_intent(
     ticket = resident(controller, audio_engine_mock)
     controller.transport.pad.set_pad_key_lock(0, enabled=True)
     audio_engine_mock.prepare_resident_control.assert_called_once_with(
-        0, start_s=None, end_s=None, position_s=None, key_lock=True
+        0, start_s=None, end_s=None, position_s=None, key_lock=True, expected_source_generation=1
     )
     assert controller.project.pad_key_lock[0]
     ticket.status = "failed"

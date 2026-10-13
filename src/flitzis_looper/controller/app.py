@@ -86,12 +86,19 @@ class AppController:
             on_stems_deleted=self.stems.delete_stems,
         )
         self.loader.bind_asset_lifecycle(self._assets)
+        self.transport.bind_incoming_global_key_lock(self.loader._refresh_incoming_global_intent)
+        self.transport.bind_current_pad_edit(
+            self.loader.record_current_pad_edit,
+            incoming_request=self.loader.incoming_load_request_id,
+        )
         self.loader.set_stems_invalidated_callback(self.stems.invalidate_stem_cache)
         self.loader.set_restored_sample_loaded_callback(
             self.stems.publish_restored_stem_cache_if_available
         )
         self.loader.set_new_sample_loaded_callback(
-            self._on_new_sample_loaded, key_lock_callback=self._refresh_loaded_key_lock
+            self._on_new_sample_loaded,
+            key_lock_callback=self._refresh_loaded_key_lock,
+            incoming_callback=self._on_incoming_sample_loaded,
         )
         self.loader.set_sample_unloaded_callback(self._on_sample_unloaded)
         self.loader.set_accepted_timing_refresh_callback(self._refresh_restored_accepted_timing)
@@ -168,6 +175,14 @@ class AppController:
 
     def _on_new_sample_loaded(self, sample_id: int, detected_start: float | None) -> None:
         self.transport.loop.initialize_loaded_pad_defaults(sample_id, detected_start)
+        self.stems.reuse_compatible_stems_on_load(sample_id)
+
+    def _on_incoming_sample_loaded(self, sample_id: int) -> None:
+        """Refresh derived master and stem work after Native has adopted incoming defaults."""
+        self.transport.residency.cancel(sample_id)
+        self.transport.residency.remember(sample_id)
+        if self._session.bpm_lock_anchor_pad_id == sample_id:
+            self.transport.bpm.recompute_master_bpm()
         self.stems.reuse_compatible_stems_on_load(sample_id)
 
     def _refresh_loaded_key_lock(self, sample_id: int) -> None:

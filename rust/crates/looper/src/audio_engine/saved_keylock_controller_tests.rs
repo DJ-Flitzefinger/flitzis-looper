@@ -60,12 +60,14 @@ impl SavedRestoreAudio {
         )
     }
 
+    #[pyo3(signature=(id, start_s, end_s=None, *, expected_source_generation=None))]
     fn set_pad_loop_region(
         &self,
         py: Python<'_>,
         id: usize,
         start_s: f64,
         end_s: Option<f64>,
+        expected_source_generation: Option<u64>,
     ) -> PyResult<()> {
         if id >= NUM_SAMPLES
             || !start_s.is_finite()
@@ -77,6 +79,15 @@ impl SavedRestoreAudio {
             ));
         }
         let engine = self.engine.borrow(py);
+        if expected_source_generation.is_some() {
+            return engine.publish_pad_loop_region_with_source(
+                id,
+                start_s,
+                end_s,
+                expected_source_generation,
+                Some((RATE, &self.producer)),
+            );
+        }
         reconcile(&engine)?;
         let _requests = engine.pad_request_ids.lock().unwrap();
         if let Some(sample) = engine.sample_cache.lock().unwrap()[id].as_ref() {
@@ -104,31 +115,47 @@ impl SavedRestoreAudio {
         engine.input_runtime_ownership.revoke(id, authority);
         crate::audio_engine::push_control_message(
             &mut producer,
-            ControlMessage::SetPadLoopRegion { id, start_s, end_s },
+            ControlMessage::SetPadLoopRegion {
+                id,
+                start_s,
+                end_s,
+                expected_source_generation: None,
+            },
             "SetPadLoopRegion",
         )
     }
 
-    fn set_pad_bpm(&self, py: Python<'_>, id: usize, bpm: Option<f64>) -> PyResult<()> {
-        crate::audio_engine::constant_timing::publish_legacy_bpm(
+    #[pyo3(signature=(id, bpm=None, *, expected_source_generation=None))]
+    fn set_pad_bpm(
+        &self,
+        py: Python<'_>,
+        id: usize,
+        bpm: Option<f64>,
+        expected_source_generation: Option<u64>,
+    ) -> PyResult<()> {
+        crate::audio_engine::constant_timing::publish_legacy_bpm_with_source(
             &self.engine.borrow(py),
             &self.parameters,
             id,
             bpm,
+            expected_source_generation,
         )
     }
 
+    #[pyo3(signature=(id, phase_anchor_s, *, expected_source_generation=None))]
     fn set_pad_timing_metadata(
         &self,
         py: Python<'_>,
         id: usize,
         phase_anchor_s: f64,
+        expected_source_generation: Option<u64>,
     ) -> PyResult<()> {
-        crate::audio_engine::constant_timing::publish_legacy_origin(
+        crate::audio_engine::constant_timing::publish_legacy_origin_with_source(
             &self.engine.borrow(py),
             &self.producer,
             id,
             phase_anchor_s,
+            expected_source_generation,
         )
     }
 }
@@ -610,6 +637,7 @@ assert abs(project.speed - .73) < 1e-15
         .lock()
         .unwrap()
         .push(ControlMessage::PlaySample {
+            expected_source_generation: None,
             id: 215,
             volume: 0.0,
             received_at_ns: None,

@@ -438,6 +438,28 @@ impl RtMixer {
             })
     }
 
+    /// These edits intentionally revoke timing authority at admission, so their
+    /// callback guard compares only the actual source generation and PCM shape.
+    pub(crate) fn expected_source_generation_current(
+        &self,
+        id: usize,
+        expected_source_generation: Option<u64>,
+    ) -> bool {
+        let Some(expected) = expected_source_generation else {
+            return true;
+        };
+        self.sample_bank
+            .get(id)
+            .and_then(Option::as_ref)
+            .is_some_and(|sample| {
+                self.input_runtime_ownership.source_generation(
+                    id,
+                    sample,
+                    self.sample_rate_hz as u32,
+                ) == Some(expected)
+            })
+    }
+
     /// Controller batches share source/authority/accepted guards without owning MIDI intent.
     pub(crate) fn source_binding_current(
         &self,
@@ -1049,19 +1071,53 @@ impl RtMixer {
             ))
     }
 
-    fn cold_sample_geometry_available(&self, id: usize, sample: &SampleBuffer) -> bool {
+    fn cold_sample_geometry_for_mode(
+        &self,
+        id: usize,
+        sample: &SampleBuffer,
+        incoming_mode: Option<bool>,
+    ) -> bool {
         id < NUM_SAMPLES
             && sample.valid_residency(self.sample_rate_hz as u32, self.channels)
-            && (!self.pad_key_lock_enabled[id] || Self::initial_key_lock_geometry_available(sample))
+            && (!incoming_mode.unwrap_or(self.pad_key_lock_enabled[id])
+                || Self::initial_key_lock_geometry_available(sample))
     }
 
+    #[cfg(test)]
     pub(crate) fn cold_source_current(
         &self,
         id: usize,
         sample: &SampleBuffer,
         generation: u64,
     ) -> bool {
-        self.cold_sample_geometry_available(id, sample)
+        self.cold_source_current_for_mode(id, sample, generation, None)
+    }
+
+    pub(crate) fn cold_source_current_with_defaults(
+        &self,
+        id: usize,
+        sample: &SampleBuffer,
+        generation: u64,
+        defaults: Option<crate::messages::IncomingLoadDefaults>,
+    ) -> bool {
+        defaults
+            .is_none_or(|defaults| defaults.valid_for_sample(sample, self.sample_rate_hz as u32))
+            && self.cold_source_current_for_mode(
+                id,
+                sample,
+                generation,
+                defaults.map(|defaults| defaults.key_lock),
+            )
+    }
+
+    pub(crate) fn cold_source_current_for_mode(
+        &self,
+        id: usize,
+        sample: &SampleBuffer,
+        generation: u64,
+        incoming_mode: Option<bool>,
+    ) -> bool {
+        self.cold_sample_geometry_for_mode(id, sample, incoming_mode)
             && self.input_runtime_ownership.source_generation(
                 id,
                 sample,
@@ -1075,12 +1131,29 @@ impl RtMixer {
         sample: SampleBuffer,
         retirement: &mut impl AudioBufferRetirement,
     ) -> bool {
+        self.load_sample_with_defaults_rt(id, sample, None, retirement)
+    }
+
+    pub(crate) fn load_sample_with_defaults_rt(
+        &mut self,
+        id: usize,
+        sample: SampleBuffer,
+        defaults: Option<crate::messages::IncomingLoadDefaults>,
+        retirement: &mut impl AudioBufferRetirement,
+    ) -> bool {
         if id >= NUM_SAMPLES {
             retirement.retire_sample(sample);
             return false;
         }
 
-        if !self.cold_sample_geometry_available(id, &sample) {
+        if defaults
+            .is_some_and(|defaults| !defaults.valid_for_sample(&sample, self.sample_rate_hz as u32))
+            || !self.cold_sample_geometry_for_mode(
+                id,
+                &sample,
+                defaults.map(|defaults| defaults.key_lock),
+            )
+        {
             retirement.retire_sample(sample);
             return false;
         }
@@ -1150,6 +1223,17 @@ impl RtMixer {
             self.pad_loop_end_frame[id] = Some(sample.resident_end());
         }
         self.pad_accepted_timing[id] = None;
+        if let Some(defaults) = defaults {
+            self.pad_loop_start_frame[id] = defaults.start_frame;
+            self.pad_loop_end_frame[id] = defaults.end_frame;
+            self.pad_period_seconds[id] = defaults.period_seconds;
+            self.pad_phase_anchor_frame[id] = defaults.origin_frame;
+            // Replacement stops the old voices before this call. An incoming
+            // mode is source-owned geometry, not wet-output/readiness authority.
+            self.apply_pad_key_lock_mode(id, defaults.key_lock);
+            self.set_pad_gain(id, PAD_GAIN_DB_DEFAULT);
+            self.set_pad_eq(id, 0.0, 0.0, 0.0);
+        }
         self.current_timing_acknowledgements.clear(id);
         self.stem_enabled_mask[id] = STEM_COMPONENT_MASK;
         self.stem_transitions[id].clear();

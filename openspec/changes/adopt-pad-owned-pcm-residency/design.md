@@ -665,6 +665,59 @@ Current evidence and pending final gates are maintained in
 
 Concrete implementation slices, dependencies, source seams and full acceptance gates are in [the extension](../../../docs/pre-rust-extension-20261011.md). This is engineering planning only; original accepted/negative evidence remains scoped and immutable.
 
+### Ordinary incoming Loader preparation
+
+This bounded delta is implemented with a passing software gate and independent
+final review. Split the existing cold/warm
+verified disk-artifact preparation from selected live PCM reading. Determine
+incoming activity with the active fixed any-channel tolerance rule and incoming
+BPM with the existing analysis and separate budgets; release temporary complete
+analysis PCM before reading the final live interval. Cold and warm use one
+verified selection policy. No predecessor range, BPM or Native receipt supplies
+incoming authority. Unknown BPM retains Auto8bars without a musical endpoint;
+absent newer trustworthy physical geometry, complete demand remains genuinely
+allocated and bounded. Saved explicit geometry/material subscribers retain their
+separately verified paths.
+
+Use the existing ProjectState global-default/nullable-override resolver for
+request-bound incoming demand, with a revision covering relevant mode, loop and
+timing edits. Reselect off-thread or reject stale work before adoption. At matching
+source claim, an off-thread intent-update CAS and callback claim have one atomic
+order. An edit after the claim returns already-owned status without cancelling
+the actual candidate; its later domain revision settles after the matching old
+source receipt through the existing source-bound controls. Rejection retires the
+single actual incoming message atomically, including a raced intent-update gate.
+Source timing validates finite positive period, frame extent and representable
+BPM before mutation and again before callback effects. At matching
+replacement completion only the predecessor override ends; an explicitly newer
+incoming override survives. An action bound only to the current old source cannot
+silently transfer to the new assignment. Do not add another inheritance flag or
+mode authority.
+
+Generic live gestures capture a validated actual current source generation before
+reading or changing project intent. The same generation travels through native
+admission, queued scalar controls, resident retries and delayed start execution.
+A pending ordinary source without an actual current binding rejects before
+project/session mutation. Project-derived generic controls and starts also reject
+until the matching Loader receipt when Native has already adopted the new source;
+MIDI readiness and global starts use that same boundary. Pending global defaults
+update the existing addressed incoming resolver rather than predecessor project
+overrides. Callback checks use the actual source generation;
+intent admission may already have revoked the prior timing authority. Stale BPM
+rows are rejected before coalescing and again before application. Saved and
+maintenance callers retain the existing optional-guard default.
+
+The existing bounded source publication carries validated incoming geometry,
+scalar period and grid origin so actual adoption installs them with the source
+before own ACK. Python then projects the adopted result without recomputing stale
+defaults or clearing newer incoming intent. Keep every source/request/epoch,
+timing, capacity, cancellation and retirement guard. First public Play must prove
+nonunity SPEED and genuinely enabled initial BPM lock using incoming timing and
+the current master target. Own source ACK, actual wet output and later exact
+source-specific Native history adoption remain distinct. Independent complete
+PCM/raw-Native/EQ/FIFO/source-clock and unrelated215 oracles remain required;
+this block does not close whole P4b/P5b, aggregate resource/music or Human gates.
+
 ### KEYLOCK feedback/preparation phases
 
 An existing warmed unique Native handle can render initial wet audio from the actual current feed after a supported mode/window change; a later source-specific preparation candidate adopts only at its exact output-frame/SourcePlayback/read-plan match (existing4096 output-frame horizon). Mode/window callback ACK, actual wet processing and source-candidate adoption are distinct. Do not add an unconditional candidate wait or treat WindowACK as source Native adoption. Pause/resume follows actual SourcePlayback, not elapsed global clock. Existing Residency requested/previous/owner, effective/error/unconfirmed, eight-attempt/30-second retry and claimed-tail semantics remain the authoritative status pipeline. Global default changes collect bounded per-pad outcomes only for targeted inherited requests and expose partial/mixed failures separately from the default and explicit overrides; unchanged requested values are not proof of convergence. Current controller/UI source seams must be reread against the implemented result.

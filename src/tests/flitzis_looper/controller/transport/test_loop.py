@@ -177,7 +177,9 @@ def test_activity_grid_base_survives_bpm_clamp_and_later_loop_edits(
     assert controller.project.pad_grid_offset_samples[0] == 48_000
     assert controller.transport.loop.grid_anchor_sec(0) == base_s + 1.0
     assert controller.project.pad_loop_start_s[0] == base_s
-    audio_engine_mock.set_pad_timing_metadata.assert_called_with(0, base_s + 1.0)
+    audio_engine_mock.set_pad_timing_metadata.assert_called_with(
+        0, base_s + 1.0, expected_source_generation=1
+    )
 
     controller.transport.loop.set_start(0, base_s + 4.0)
 
@@ -199,7 +201,9 @@ def test_activity_grid_supports_negative_signed_offset_without_near_start_snap(
 
     assert controller.project.pad_grid_anchor_s[0] == 1_151 / 48_000
     assert controller.transport.loop.grid_anchor_sec(0) == -49 / 48_000
-    audio_engine_mock.set_pad_timing_metadata.assert_called_with(0, -49 / 48_000)
+    audio_engine_mock.set_pad_timing_metadata.assert_called_with(
+        0, -49 / 48_000, expected_source_generation=1
+    )
 
 
 @pytest.mark.parametrize("anchor_s", [math.nan, math.inf, -0.1])
@@ -393,7 +397,9 @@ def test_set_grid_offset_samples_publishes_shifted_grid_anchor(
 
     controller.transport.loop.set_grid_offset_samples(sample_id, 240)
 
-    audio_engine_mock.set_pad_timing_metadata.assert_called_with(sample_id, 10.005)
+    audio_engine_mock.set_pad_timing_metadata.assert_called_with(
+        sample_id, 10.005, expected_source_generation=1
+    )
     audio_engine_mock.set_pad_loop_region.assert_called()
 
 
@@ -448,8 +454,12 @@ def test_negative_grid_origin_drives_editor_snapping_and_native_metadata(
 
     assert controller.transport.loop.grid_anchor_sec(sample_id) == -0.005
     assert controller.project.pad_loop_start_s[sample_id] == 1_260 / 48_000
-    audio_engine_mock.set_pad_timing_metadata.assert_called_with(sample_id, -0.005)
-    audio_engine_mock.set_pad_loop_region.assert_called_with(sample_id, 1_260 / 48_000, 16.02625)
+    audio_engine_mock.set_pad_timing_metadata.assert_called_with(
+        sample_id, -0.005, expected_source_generation=1
+    )
+    audio_engine_mock.set_pad_loop_region.assert_called_with(
+        sample_id, 1_260 / 48_000, 16.02625, expected_source_generation=1
+    )
 
 
 def test_effective_bpm_change_reclamps_grid_offset_samples(
@@ -611,7 +621,8 @@ def test_manual_120_snap_and_auto_end_match_every_reference_pulse(
         start_s, end_s = controller.transport.loop.effective_region(0)
         assert start_s * 48_000 == expected_frame
         assert end_s is not None
-        assert end_s * 48_000 == (pulse + 2) * 24_000
+        # The final nominal two-beat endpoint stops at the actual PCM extent.
+        assert end_s * 48_000 == min((pulse + 2) * 24_000, 600 * 48_000)
 
 
 @pytest.mark.parametrize("sample_rate_hz", [44_100, 48_000, 96_000])
@@ -713,7 +724,9 @@ def test_set_full_track_region_disables_auto_and_publishes_duration(
     assert controller.project.pad_loop_bars[sample_id] == 8.0
     assert controller.project.pad_loop_start_s[sample_id] == pytest.approx(0.0)
     assert controller.project.pad_loop_end_s[sample_id] == pytest.approx(42.0)
-    audio_engine_mock.set_pad_loop_region.assert_called_with(sample_id, 0.0, 42.0)
+    audio_engine_mock.set_pad_loop_region.assert_called_with(
+        sample_id, 0.0, 42.0, expected_source_generation=1
+    )
 
 
 def test_set_full_track_region_no_ops_without_loaded_duration(
@@ -964,7 +977,9 @@ def test_long_source_markers_publish_exact_frames_to_audio_and_direct_input(
 
     assert controller.project.pad_loop_start_s[sample_id] == start_s
     assert controller.project.pad_loop_end_s[sample_id] == end_s
-    audio_engine_mock.set_pad_loop_region.assert_called_with(sample_id, start_s, end_s)
+    audio_engine_mock.set_pad_loop_region.assert_called_with(
+        sample_id, start_s, end_s, expected_source_generation=1
+    )
     _, loaded, loop_starts, loop_ends, _bindings = (
         audio_engine_mock.set_input_runtime_state.call_args.args
     )
@@ -1170,7 +1185,7 @@ def test_accepted_loop_projection_uses_signed_origin_period_and_loaded_rate(
         expected_end_frame / 44_100,
     )
     audio_engine_mock.set_pad_loop_region.assert_called_with(
-        0, expected_start_frame / 44_100, expected_end_frame / 44_100
+        0, expected_start_frame / 44_100, expected_end_frame / 44_100, expected_source_generation=1
     )
     assert controller.transport.loop.max_auto_loop_bars(0) == (
         60.0 - expected_start_frame / 44_100
@@ -1247,7 +1262,9 @@ def test_explicit_grid_offset_publishes_legacy_intent_and_failed_edit_keeps_save
     assert controller.project.pad_grid_offset_samples[0] == 240
     assert controller.transport.loop.grid_anchor_sec(0) == -0.1
     audio_engine_mock.set_pad_loop_region.assert_not_called()
-    audio_engine_mock.set_pad_timing_metadata.assert_called_with(0, 10 + 480 / 44_100)
+    audio_engine_mock.set_pad_timing_metadata.assert_called_with(
+        0, 10 + 480 / 44_100, expected_source_generation=1
+    )
 
 
 def test_current_accepted_loop_state_is_not_cached_after_resolver_retires_it(
@@ -1314,7 +1331,7 @@ def test_explicit_offset_edit_resumes_legacy_tempo_and_refreshes_locked_master(
     controller.project.bpm_lock = True
     controller.session.bpm_lock_anchor_pad_id = 0
 
-    def revoke_current(_sample_id: int, _origin: float) -> None:
+    def revoke_current(_sample_id: int, _origin: float, **_kwargs: object) -> None:
         audio_engine_mock.current_constant_timing.return_value = None
         audio_engine_mock.pad_timing_intent.return_value = "legacy"
 
@@ -1329,7 +1346,7 @@ def test_explicit_offset_edit_resumes_legacy_tempo_and_refreshes_locked_master(
     assert controller.transport.loop.effective_region(0) == (0.0, 64_000 / 48_000)
     assert controller.session.master_bpm == 90.0
     assert controller.session.bpm_lock_anchor_revision is None
-    audio_engine_mock.set_pad_bpm.assert_called_with(0, 90.0)
+    audio_engine_mock.set_pad_bpm.assert_called_with(0, 90.0, expected_source_generation=7)
     audio_engine_mock.set_master_bpm.assert_called_with(90.0)
     audio_engine_mock.bootstrap_transport_from_pad.assert_called_with(0)
 
@@ -1397,10 +1414,48 @@ def test_current_accepted_extent_controls_max_bars_and_all_region(
     assert controller.project.pad_loop_auto[0] is False
     assert controller.project.pad_loop_start_s[0] == 0.0
     assert controller.project.pad_loop_end_s[0] == 600.0
-    audio_engine_mock.set_pad_loop_region.assert_called_once_with(0, 0.0, 600.0)
+    audio_engine_mock.set_pad_loop_region.assert_called_once_with(
+        0, 0.0, 600.0, expected_source_generation=7
+    )
     assert controller.project.sample_durations[0] == project_duration_s
     timing = controller.transport.bpm.current_timing(0)
     assert timing is not None
     assert timing.accepted_revision == "current-source-extent-revision"
     audio_engine_mock.set_pad_bpm.assert_not_called()
     audio_engine_mock.set_pad_timing_metadata.assert_not_called()
+
+
+@pytest.mark.parametrize("project_duration_s", [None, 10.0, 900.0])
+def test_current_accepted_extent_clamps_auto_end_before_project_duration(
+    controller: AppController, audio_engine_mock: Mock, project_duration_s: float | None
+) -> None:
+    audio_engine_mock.output_sample_rate.return_value = 48_000
+    audio_engine_mock.current_constant_timing.return_value = current_timing_metadata(
+        period=0.5, rate=44_100, revision="current-source-extent-revision"
+    )
+    controller.project.sample_paths[0] = "samples/current.wav"
+    controller.project.sample_durations[0] = project_duration_s
+    controller.project.pad_loop_start_s[0] = 595.0
+    controller.project.pad_loop_auto[0] = True
+    controller.project.pad_loop_bars[0] = 8.0
+
+    assert controller.transport.loop.requested_region(0) == (595.0, 600.0)
+    assert controller.project.sample_durations[0] == project_duration_s
+
+
+@pytest.mark.parametrize("start_s", [600.0, 601.0])
+def test_auto_marker_beyond_source_keeps_single_sample_region_inside_physical_extent(
+    controller: AppController, audio_engine_mock: Mock, start_s: float
+) -> None:
+    audio_engine_mock.output_sample_rate.return_value = 48_000
+    controller.project.sample_paths[0] = "samples/current.wav"
+    controller.project.sample_durations[0] = 600.0
+    controller.project.manual_bpm[0] = 120.0
+    controller.project.pad_loop_start_s[0] = start_s
+    controller.project.pad_loop_auto[0] = True
+
+    start, end = controller.transport.loop.requested_region(0)
+
+    assert end == 600.0
+    assert round(start * 48_000) == 600 * 48_000 - 1
+    assert start < end

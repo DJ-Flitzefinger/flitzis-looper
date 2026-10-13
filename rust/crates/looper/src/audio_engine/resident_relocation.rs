@@ -1191,6 +1191,7 @@ pub(super) struct WindowRequest {
     pub(super) loop_region: Option<(f64, Option<f64>)>,
     pub(super) seek_position_s: Option<f64>,
     pub(super) key_lock: Option<bool>,
+    pub(super) expected_source_generation: Option<u64>,
 }
 
 pub(super) fn prepare_control(
@@ -1227,9 +1228,6 @@ pub(super) fn prepare_window_with_producer(
         && request.loop_region.is_none()
         && request.key_lock.is_none()
         && request.storage_range.is_none();
-    let binding = input_runtime_binding::capture(engine, id)?
-        .filter(|current| (seek_only || current.available()) && current.current())
-        .ok_or_else(|| PyValueError::new_err("current complete source/timing unavailable"))?;
     if producer
         .lock()
         .map_err(|_| PyRuntimeError::new_err("producer lock poisoned"))?
@@ -1241,6 +1239,14 @@ pub(super) fn prepare_window_with_producer(
         .pad_request_ids
         .lock()
         .map_err(|_| PyRuntimeError::new_err("request lock poisoned"))?;
+    let binding = input_runtime_binding::capture_under_request_lock(engine, id)?;
+    input_runtime_binding::validate_expected_source_generation(
+        binding.as_ref(),
+        request.expected_source_generation,
+    )?;
+    let binding = binding
+        .filter(|current| (seek_only || current.available()) && current.current())
+        .ok_or_else(|| PyValueError::new_err("current complete source/timing unavailable"))?;
     let cache = engine
         .sample_cache
         .lock()

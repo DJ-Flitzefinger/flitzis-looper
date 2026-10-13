@@ -34,6 +34,7 @@ class _Pending:
     position: float | None
     after_ack: Callable[[ResidentWindowTicket], bool | None] | None
     owner: tuple[object, ...]
+    expected_source_generation: int | None = None
     seek_only: bool = False
     key_lock_only: bool = False
     scalar: bool = False
@@ -87,6 +88,10 @@ class ResidencyController:
             intent = self._intent(sample_id)
             mode = self._observe_mode(sample_id)
             self._effective[sample_id] = intent if mode is None else replace(intent, key_lock=mode)
+
+    def ensure_start_assignment_ready(self, sample_id: int) -> None:
+        """An implicit Project loop cannot start until its incoming receipt is projected."""
+        self._transport.ensure_current_source_assignment_ready(sample_id)
 
     def _mode_feedback(self, sample_id: int) -> dict[str, object] | None:
         """Read only the engine snapshot belonging to this actual current source."""
@@ -275,15 +280,29 @@ class ResidencyController:
             self._project.pad_grid_offset_samples[sample_id],
         )
 
-    def publish_loop(self, sample_id: int, start: float, end: float | None) -> None:
+    def publish_loop(
+        self,
+        sample_id: int,
+        start: float,
+        end: float | None,
+        *,
+        expected_source_generation: int | None = None,
+    ) -> None:
         """Publish loop and requested Key Lock together through one native transaction."""
         if not self._cache_backed(sample_id):
-            self._audio.set_pad_loop_region(sample_id, start, end)
+            self._audio.set_pad_loop_region(
+                sample_id,
+                start,
+                end,
+                **self._transport.source_generation_options(expected_source_generation),
+            )
             self._effective[sample_id] = self._intent(sample_id)
             return
-        self._request(sample_id, start, end)
+        self._request(sample_id, start, end, expected_source_generation=expected_source_generation)
 
-    def apply_key_lock(self, sample_id: int, *, force: bool = False) -> None:
+    def apply_key_lock(
+        self, sample_id: int, *, force: bool = False, expected_source_generation: int | None = None
+    ) -> None:
         """Admit resolved intent without changing its inherited or explicit origin."""
         enabled = self._project.resolve_pad_key_lock(sample_id)
         self.remember(sample_id)
@@ -298,6 +317,10 @@ class ResidencyController:
                 previous.requested = requested
         if (
             self._reusable_mode_request(sample_id, previous)
+            and (
+                previous is None
+                or previous.expected_source_generation == expected_source_generation
+            )
             and previous is not None
             and previous.requested.key_lock is enabled
         ):
@@ -321,6 +344,7 @@ class ResidencyController:
                 previous.end,
                 position=previous.position,
                 after_ack=previous.after_ack,
+                expected_source_generation=expected_source_generation,
             )
         else:
             start, end = self._transport.loop.requested_region(sample_id)
@@ -330,6 +354,7 @@ class ResidencyController:
                 end,
                 key_lock_only=True,
                 scalar=not self._cache_backed(sample_id),
+                expected_source_generation=expected_source_generation,
             )
 
     def _settled_mode(self, sample_id: int) -> bool | None:
@@ -357,18 +382,30 @@ class ResidencyController:
             and ticket.publication_status() in {"preparing", "pending", "adopting", "accepted"}
         )
 
-    def seek(self, sample_id: int, position: float) -> None:
+    def seek(
+        self, sample_id: int, position: float, *, expected_source_generation: int | None = None
+    ) -> None:
         """Update a seek projection only after matching adoption acknowledgement."""
         if not self._cache_backed(sample_id):
             duration = self._project.sample_durations[sample_id]
             if duration is not None and math.isfinite(duration) and duration >= 0:
                 position = min(position, duration)
-            self._audio.seek_sample(sample_id, position)
+            self._audio.seek_sample(
+                sample_id,
+                position,
+                **self._transport.source_generation_options(expected_source_generation),
+            )
             self._transport._session.pad_playhead_s[sample_id] = position
             return
         self.remember(sample_id)
         start, end = self._transport.loop.requested_region(sample_id)
-        self._request(sample_id, start, end, position=position)
+        self._request(
+            sample_id,
+            start,
+            end,
+            position=position,
+            expected_source_generation=expected_source_generation,
+        )
 
     def start(
         self,
@@ -378,10 +415,17 @@ class ResidencyController:
         play: Callable[[], None],
         *,
         prepared_play: Callable[[ResidentWindowTicket], bool] | None = None,
+        expected_source_generation: int | None = None,
     ) -> None:
         """Retain the input's launch intent until the required source context is ready."""
+        self.ensure_start_assignment_ready(sample_id)
         if not self._cache_backed(sample_id):
-            self._audio.set_pad_loop_region(sample_id, start, end)
+            self._audio.set_pad_loop_region(
+                sample_id,
+                start,
+                end,
+                **self._transport.source_generation_options(expected_source_generation),
+            )
             play()
             return
         self.remember(sample_id)
@@ -389,7 +433,9 @@ class ResidencyController:
             lambda _ticket: play()
         )
         pending = self._pending.get(sample_id)
-        if self._continue_start(sample_id, pending, start, end):
+        if self._continue_start(
+            sample_id, pending, start, end, expected_source_generation=expected_source_generation
+        ):
             assert pending is not None
             # An identical gesture changes launch time, not preparation ownership.
             # Keep the existing retry budget/deadline and actual native ACK gate.
@@ -398,16 +444,29 @@ class ResidencyController:
             if pending.ticket is not None and pending.ticket.publication_status() == "accepted":
                 self._poll_one(sample_id, pending)
             return
-        self._request(sample_id, start, end, after_ack=launch)
+        self._request(
+            sample_id,
+            start,
+            end,
+            after_ack=launch,
+            expected_source_generation=expected_source_generation,
+        )
 
     def _continue_start(
-        self, sample_id: int, pending: _Pending | None, start: float, end: float | None
+        self,
+        sample_id: int,
+        pending: _Pending | None,
+        start: float,
+        end: float | None,
+        *,
+        expected_source_generation: int | None = None,
     ) -> bool:
         if (
             pending is None
             or pending.unconfirmed
             or pending.position is not None
             or pending.key_lock_only
+            or pending.expected_source_generation != expected_source_generation
         ):
             return False
         if (
@@ -433,6 +492,7 @@ class ResidencyController:
         after_ack: Callable[[ResidentWindowTicket], bool | None] | None = None,
         key_lock_only: bool = False,
         scalar: bool = False,
+        expected_source_generation: int | None = None,
     ) -> None:
         if self._closed:
             return
@@ -468,6 +528,7 @@ class ResidencyController:
             position,
             after_ack,
             self._owner(sample_id),
+            expected_source_generation=expected_source_generation,
             seek_only=position is not None and previous is None,
             key_lock_only=key_lock_only,
             scalar=scalar,
@@ -511,6 +572,7 @@ class ResidencyController:
         self, sample_id: int, start: float, end: float | None, play: Callable[[], None]
     ) -> bool:
         """Let guarded MIDI fallback use the same prepared launch transaction."""
+        self.ensure_start_assignment_ready(sample_id)
         if not self._cache_backed(sample_id):
             return False
         self.start(sample_id, start, end, play)
@@ -520,7 +582,11 @@ class ResidencyController:
         pending.attempts += 1
         try:
             if pending.scalar:
-                request = self._audio.set_pad_key_lock(sample_id, pending.requested.key_lock)
+                request = self._audio.set_pad_key_lock(
+                    sample_id,
+                    pending.requested.key_lock,
+                    **self._transport.source_generation_options(pending.expected_source_generation),
+                )
                 pending.scalar_request = request if type(request) is int and request > 0 else None
                 pending.scalar_submitted = True
                 self._errors.pop(sample_id, None)
@@ -531,6 +597,7 @@ class ResidencyController:
                 end_s=None if pending.seek_only or pending.key_lock_only else pending.end,
                 position_s=pending.position,
                 key_lock=None if pending.seek_only else pending.requested.key_lock,
+                **self._transport.source_generation_options(pending.expected_source_generation),
             )
         except (RuntimeError, ValueError) as error:
             message = str(error)

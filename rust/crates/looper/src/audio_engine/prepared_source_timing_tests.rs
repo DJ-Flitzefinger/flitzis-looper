@@ -90,7 +90,9 @@ fn prepared_capture_rejects_unavailable_automatic_but_preserves_manual_tap_legac
         TimingIntent::Legacy,
     ] {
         set_intent(&engine, &producer, 0, intent).unwrap();
-        let ControlMessage::ClearPadConstantTiming { id, through_epoch } = consumer.pop().unwrap()
+        let ControlMessage::ClearPadConstantTiming {
+            id, through_epoch, ..
+        } = consumer.pop().unwrap()
         else {
             panic!("timing authority clear");
         };
@@ -376,6 +378,7 @@ fn legacy_parameter_lane_gap_rejects_fresh_preparation_and_keeps_previous_stem_a
         id,
         bpm,
         through_epoch,
+        ..
     } = parameter_consumer.pop().unwrap()
     else {
         panic!("legacy BPM parameter");

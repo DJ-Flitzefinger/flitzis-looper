@@ -213,6 +213,41 @@ impl PublicLoadAudio {
         )
     }
 
+    fn load_incoming_sample_async(&self, id: usize, path: String, key_lock: bool) -> PyResult<u64> {
+        self.engine.load_incoming_sample_async(id, path, key_lock)
+    }
+
+    #[allow(clippy::too_many_arguments)] // Mirror the public request-owned incoming API.
+    #[pyo3(signature=(id, request_id, revision, key_lock, loop_start_s=None, loop_end_s=None, loop_auto=true, loop_bars=8.0, timing_override=false, period_seconds=None, grid_origin_s=None))]
+    fn update_incoming_load_intent(
+        &self,
+        id: usize,
+        request_id: u64,
+        revision: u64,
+        key_lock: bool,
+        loop_start_s: Option<f64>,
+        loop_end_s: Option<f64>,
+        loop_auto: bool,
+        loop_bars: f64,
+        timing_override: bool,
+        period_seconds: Option<f64>,
+        grid_origin_s: Option<f64>,
+    ) -> PyResult<bool> {
+        self.engine.update_incoming_load_intent(
+            id,
+            request_id,
+            revision,
+            key_lock,
+            loop_start_s,
+            loop_end_s,
+            loop_auto,
+            loop_bars,
+            timing_override,
+            period_seconds,
+            grid_origin_s,
+        )
+    }
+
     fn poll_loader_events(&self, py: Python<'_>) -> PyResult<Option<Py<PyAny>>> {
         self.engine.poll_loader_events(py)
     }
@@ -225,12 +260,19 @@ impl PublicLoadAudio {
         self.engine.waveform_source_identity(id)
     }
 
-    fn set_pad_bpm(&self, id: usize, bpm: Option<f64>) -> PyResult<()> {
-        crate::audio_engine::constant_timing::publish_legacy_bpm(
+    #[pyo3(signature=(id, bpm=None, *, expected_source_generation=None))]
+    fn set_pad_bpm(
+        &self,
+        id: usize,
+        bpm: Option<f64>,
+        expected_source_generation: Option<u64>,
+    ) -> PyResult<()> {
+        crate::audio_engine::constant_timing::publish_legacy_bpm_with_source(
             &self.engine,
             &self.parameters,
             id,
             bpm,
+            expected_source_generation,
         )
     }
 
@@ -257,9 +299,25 @@ impl PublicLoadAudio {
         )
     }
 
-    fn set_pad_loop_region(&self, id: usize, start_s: f64, end_s: Option<f64>) -> PyResult<()> {
+    #[pyo3(signature=(id, start_s, end_s=None, *, expected_source_generation=None))]
+    fn set_pad_loop_region(
+        &self,
+        id: usize,
+        start_s: f64,
+        end_s: Option<f64>,
+        expected_source_generation: Option<u64>,
+    ) -> PyResult<()> {
         assert_eq!(start_s, 0.0);
         assert_eq!(end_s, None);
+        if expected_source_generation.is_some() {
+            return self.engine.publish_pad_loop_region_with_source(
+                id,
+                start_s,
+                end_s,
+                expected_source_generation,
+                Some((RATE, &self.producer)),
+            );
+        }
         reconcile(&self.engine)?;
         let _requests = self.engine.pad_request_ids.lock().unwrap();
         let mut producer = self.producer.lock().unwrap();
@@ -272,17 +330,35 @@ impl PublicLoadAudio {
         self.engine.note_resident_loop_intent(id, start_s, end_s)?;
         self.engine.input_runtime_ownership.revoke(id, authority);
         producer
-            .push(ControlMessage::SetPadLoopRegion { id, start_s, end_s })
+            .push(ControlMessage::SetPadLoopRegion {
+                id,
+                start_s,
+                end_s,
+                expected_source_generation: None,
+            })
             .map_err(|_| {
                 pyo3::exceptions::PyRuntimeError::new_err("source default loop queue full")
             })
     }
 
-    fn set_pad_key_lock(&self, id: usize, enabled: bool) -> PyResult<u64> {
+    #[pyo3(signature=(id, enabled, *, expected_source_generation=None))]
+    fn set_pad_key_lock(
+        &self,
+        id: usize,
+        enabled: bool,
+        expected_source_generation: Option<u64>,
+    ) -> PyResult<u64> {
         assert!(!enabled);
         reconcile(&self.engine)?;
-        self.engine.admit_resident_key_lock(id, enabled)?;
-        crate::audio_engine::key_lock_feedback::enqueue(&self.engine, id, enabled)
+        if expected_source_generation.is_none() {
+            self.engine.admit_resident_key_lock(id, enabled)?;
+        }
+        crate::audio_engine::key_lock_feedback::enqueue_with_source(
+            &self.engine,
+            id,
+            enabled,
+            expected_source_generation,
+        )
     }
 }
 
@@ -4827,11 +4903,21 @@ fn public_source_replacement(
         r#"
 from flitzis_looper.controller.loader import LoaderController
 class SourceLoadAudio:
+    def __init__(self):
+        self.success_receipts = []
     def __getattr__(self, name):
         for delegate in (load_audio, playback_audio, audio):
             if hasattr(delegate, name):
                 return getattr(delegate, name)
         raise AttributeError(name)
+    def poll_loader_events(self):
+        event = load_audio.poll_loader_events()
+        if event is not None and event.get('type') == 'success':
+            # Keep only scalar receipt evidence, not the original lease or PCM custody.
+            self.success_receipts.append((event['request_id'], dict(event['incoming_defaults'])))
+            assert event['analysis']['bpm'] == 0
+            assert event['analysis']['beat_grid']['beats'] == []
+        return event
 source_audio = SourceLoadAudio()
 source_bpm_notifications = []
 loader = LoaderController(project, session, source_audio,
@@ -4847,6 +4933,11 @@ source_worker_calls = audio.worker_call_count()
 loader.load_sample_async(0, source_input)
 assert not session.sample_load_errors, session.sample_load_errors
 source_request = loader._load_request_ids[0]
+source_expected_defaults = {'revision': 0, 'key_lock': False, 'start_s': 0.0,
+    'end_s': None, 'period_seconds': None, 'grid_origin_s': 0.0,
+    'loop_auto': True, 'loop_bars': 8.0}
+assert not project.key_lock and project.pad_key_lock[0] is None
+assert not source_audio.success_receipts
 assert 0 in session.loading_sample_ids and session.pending_sample_paths[0] == source_input
 assert project.sample_paths[0] == source_path_before and project.pad_content[0] == source_content_before
 assert project.stem_cache[0].pair == disk_v2
@@ -4914,6 +5005,7 @@ assert not source_candidate.claimed() and source_candidate.error() == 'Committed
 assert source_candidate.effective_failure_reason() is None
 assert live.control is previous_control and live.disk.selection is source_selection
 assert audio.worker_call_count() == source_worker_calls
+assert not source_audio.success_receipts
 "#,
         );
         assert_eq!(
@@ -4939,18 +5031,23 @@ assert audio.worker_call_count() == source_worker_calls
         1,
         "old Adopt rejects before source ACK"
     );
-    let (new_source, adoption) = match consumer.peek().unwrap() {
+    let (new_source, adoption, incoming_defaults) = match consumer.peek().unwrap() {
         ControlMessage::LoadColdSample {
             id,
             sample,
             adoption,
             replace_assignment,
+            incoming_defaults,
             ..
         } => {
             assert_eq!(*id, 0);
             assert!(*replace_assignment);
             assert_eq!(adoption.load(Ordering::Acquire), 0);
-            (sample.clone(), adoption.clone())
+            (
+                sample.clone(),
+                adoption.clone(),
+                incoming_defaults.expect("actual incoming source-owned defaults"),
+            )
         }
         _ => panic!("expected genuine new-source preparation behind rejected Adopt"),
     };
@@ -4959,6 +5056,18 @@ assert audio.worker_call_count() == source_worker_calls
     assert_eq!(new_source.frame_count(), 4096);
     assert_eq!(new_source.resident_start(), 0);
     assert_eq!(new_source.resident_end(), 4096);
+    // B is active at frame zero. Its 4096-frame input yields only seven
+    // resampled ODF frames: one tracker column cannot establish a BPM/end.
+    assert!(expected_source[1].abs() > 0.01);
+    assert_eq!(incoming_defaults.sample_rate_hz, RATE);
+    assert_eq!(incoming_defaults.revision, 0);
+    assert!(!incoming_defaults.key_lock);
+    assert_eq!(incoming_defaults.start_frame, 0);
+    assert_eq!(incoming_defaults.end_frame, None);
+    assert_eq!(incoming_defaults.period_seconds, None);
+    assert_eq!(incoming_defaults.origin_frame, 0.0);
+    assert!(incoming_defaults.loop_auto);
+    assert_eq!(incoming_defaults.loop_bars, 8.0);
     assert_eq!(
         new_source.samples.as_ref(),
         expected_source.as_slice(),
@@ -5027,6 +5136,7 @@ assert 0 in session.loading_sample_ids
 assert source_candidate.residency_status() == 'rejected' and not source_candidate.claimed()
 assert source_candidate.error() == 'Committed stem residency or mode ownership changed'
 assert source_candidate.effective_failure_reason() is None
+assert not source_audio.success_receipts
 "#,
     );
     for frames in [1, 31, 137, 257, 511] {
@@ -5047,6 +5157,8 @@ assert source_candidate.effective_failure_reason() is None
     assert_eq!(playback.drain(consumer), 1, "actual replacement source ACK");
     assert!(consumer.is_empty());
     assert_eq!(adoption.load(Ordering::Acquire), 2);
+    assert_eq!(playback.callback.mixer.loop_region_frames(0), (0, None));
+    assert!(!playback.callback.mixer.key_lock_for_measurement(0));
     assert!(
         !playback
             .callback
@@ -5114,7 +5226,14 @@ assert source_candidate.residency_status() == 'rejected'
 assert source_candidate.error() == 'Committed stem residency or mode ownership changed'
 assert source_candidate.effective_failure_reason() is None
 assert not session.stem_generation_errors and not session.sample_load_errors
-assert source_bpm_notifications and set(source_bpm_notifications) == {0}
+assert source_audio.success_receipts == [(source_request, source_expected_defaults)]
+assert source_bpm_notifications == []
+assert project.pad_loop_start_s[0] == 0.0 and project.pad_loop_end_s[0] is None
+assert project.pad_loop_auto[0] and project.pad_loop_bars[0] == 8.0
+assert project.manual_bpm[0] is None and project.pad_timing_intent[0] == 'legacy'
+assert project.pad_grid_anchor_s[0] == 0.0 and project.pad_grid_offset_samples[0] == 0
+assert project.pad_gain_db[0] == 0
+assert (project.pad_eq_low_db[0], project.pad_eq_mid_db[0], project.pad_eq_high_db[0]) == (0, 0, 0)
 source_version_now = controller.source_version_for_pad(0)
 source_identity_now = source_audio.waveform_source_identity(0)
 assert source_identity_now[0] == source_request
@@ -5134,11 +5253,13 @@ assert source_reopened.project.pad_stem_mix_mode[0] == 'full_mix'
 assert source_reopened.project.pad_key_lock[0] is None
 "#,
     );
-    assert!(
-        playback.drain(consumer) >= 2,
-        "real loop/keylock defaults drain normally"
+    assert_eq!(
+        playback.drain(consumer),
+        0,
+        "own source ACK already installed its defaults"
     );
     assert!(consumer.is_empty());
+    assert!(parameters.is_empty());
     crate::audio_engine::audio_stream::drain_parameter_messages(
         parameters,
         &mut playback.callback.mixer,

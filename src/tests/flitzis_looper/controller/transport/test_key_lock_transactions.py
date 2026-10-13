@@ -44,7 +44,7 @@ def test_window_ack_waits_for_own_actual_processing_feedback(
     residency = controller.transport.residency
     controller.transport.pad.set_pad_key_lock(0, enabled=True)
     audio_engine_mock.prepare_resident_control.assert_called_once_with(
-        0, start_s=None, end_s=None, position_s=None, key_lock=True
+        0, start_s=None, end_s=None, position_s=None, key_lock=True, expected_source_generation=1
     )
     assert residency.key_lock_status(0).requested is True
     assert residency.key_lock_status(0).effective is False
@@ -156,7 +156,9 @@ def test_terminal_own_mode_error_reconciles_actual_audio_even_when_ready_was_not
     assert not state.pending
     if scalar:
         requested_mode = True
-        audio_engine_mock.set_pad_key_lock.assert_called_once_with(0, requested_mode)
+        audio_engine_mock.set_pad_key_lock.assert_called_once_with(
+            0, requested_mode, expected_source_generation=1
+        )
     else:
         audio_engine_mock.set_pad_key_lock.assert_not_called()
 
@@ -261,6 +263,7 @@ def test_mode_keeps_actual_pending_loop_or_seek_coupled(
         end_s=7.0 if coupled == "loop" else 4.0,
         position_s=3.25 if coupled == "seek" else None,
         key_lock=True,
+        expected_source_generation=1,
     )
 
 
@@ -428,7 +431,15 @@ def test_global_continues_after_target_reject_and_reports_actual_mixed_outcome(
     global_params = controller.transport.global_params
     global_params.set_key_lock(enabled=True)
     assert audio_engine_mock.prepare_resident_control.call_args_list == [
-        call(pad, start_s=None, end_s=None, position_s=None, key_lock=True) for pad in (0, 37, 215)
+        call(
+            pad,
+            start_s=None,
+            end_s=None,
+            position_s=None,
+            key_lock=True,
+            expected_source_generation=1,
+        )
+        for pad in (0, 37, 215)
     ]
     for pad in (37, 215):
         tickets[pad].status = "accepted"
@@ -519,7 +530,7 @@ def test_origin_changes_with_same_pending_mode_preserve_native_work_and_budget(
     assert pending.requested.key_lock_override is None
     assert (pending.ticket, pending.attempts, pending.deadline) == before
     audio_engine_mock.prepare_resident_control.assert_called_once_with(
-        0, start_s=None, end_s=None, position_s=None, key_lock=enabled
+        0, start_s=None, end_s=None, position_s=None, key_lock=enabled, expected_source_generation=1
     )
 
     ticket.status = "accepted"
@@ -637,10 +648,17 @@ def test_off_retires_native_only_on_work_despite_current_dry_output(
     assert controller.transport.residency.key_lock_status(0).pending
     if scalar:
         disabled = False
-        audio_engine_mock.set_pad_key_lock.assert_called_once_with(0, disabled)
+        audio_engine_mock.set_pad_key_lock.assert_called_once_with(
+            0, disabled, expected_source_generation=1
+        )
     else:
         audio_engine_mock.prepare_resident_control.assert_called_once_with(
-            0, start_s=None, end_s=None, position_s=None, key_lock=False
+            0,
+            start_s=None,
+            end_s=None,
+            position_s=None,
+            key_lock=False,
+            expected_source_generation=1,
         )
 
 
