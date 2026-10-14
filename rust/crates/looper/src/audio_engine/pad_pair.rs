@@ -78,7 +78,25 @@ impl PairParticipantGuard {
         reservation: u64,
     ) -> bool {
         ownership.pair_control_projection_current(&self.control, reservation)
-            && self.preparation_epoch.load(Ordering::Acquire) == self.captured_preparation_epoch
+            && self.preparation_and_selection_current(ownership, acknowledgements)
+    }
+
+    pub(crate) fn current_for_copy(
+        &self,
+        ownership: &InputRuntimeOwnership,
+        acknowledgements: &CurrentTimingAcknowledgements,
+        reservation: u64,
+    ) -> bool {
+        ownership.recovered_copy_control_projection_current(&self.control, reservation)
+            && self.preparation_and_selection_current(ownership, acknowledgements)
+    }
+
+    fn preparation_and_selection_current(
+        &self,
+        ownership: &InputRuntimeOwnership,
+        acknowledgements: &CurrentTimingAcknowledgements,
+    ) -> bool {
+        self.preparation_epoch.load(Ordering::Acquire) == self.captured_preparation_epoch
             && self.selection_fences.len() <= MAX_PAIR_SELECTION_FENCES
             && self
                 .selection_fences

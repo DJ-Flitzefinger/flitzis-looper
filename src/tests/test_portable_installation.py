@@ -951,16 +951,20 @@ def test_running_app_stops_update_and_is_not_terminated(
     )
     executable.parent.mkdir(parents=True, exist_ok=True)
     executable.unlink(missing_ok=True)
+    compiled = tmp_path / "live-python.exe"
     compiler = tmp_path / "compile-live.ps1"
     compiler.write_text(
+        "$ErrorActionPreference = 'Stop'\n"
         "Add-Type -TypeDefinition @'\n"
         + LIVE_PYTHON
         + "'@ -OutputAssembly "
-        + _ps_string(executable)
+        + _ps_string(compiled)
         + " -OutputType ConsoleApplication",
         encoding="utf-8-sig",
     )
     require_success(_run_powershell(["-File", str(compiler)]))
+    assert compiled.is_file(), "Owned private live fixture was not compiled"
+    compiled.replace(executable)
     environment = _git_environment() | {
         "LOOPER_TEST_READY": str(ready),
         "LOOPER_TEST_EXIT": str(leave),

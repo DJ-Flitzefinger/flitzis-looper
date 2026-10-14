@@ -1,7 +1,6 @@
 """Inspect bounded durable intent without restoring a runtime ticket or ACK."""
 
 import hashlib
-import json
 import os
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -9,6 +8,10 @@ from pathlib import Path
 from pydantic import ValidationError
 
 import flitzis_looper_audio
+from flitzis_looper.controller.copy_arrangement_journal import (
+    CopyArrangementJournal,
+    validated_copy_history,
+)
 from flitzis_looper.controller.pair_arrangement_journal import (
     PairArrangementJournal,
     strict_json_object,
@@ -26,15 +29,16 @@ class MigrationRecovery:
     pending: list[MaterialMigrationJournal] = field(default_factory=list)
     settled: list[MaterialMigrationJournal] = field(default_factory=list)
     pair_journals: list[PairArrangementJournal] = field(default_factory=list)
+    copy_journals: list[CopyArrangementJournal] = field(default_factory=list)
     errors: list[str] = field(default_factory=list)
     intent: ProjectState | None = None
 
 
-type TransactionJournal = MaterialMigrationJournal | PairArrangementJournal
+type TransactionJournal = MaterialMigrationJournal | PairArrangementJournal | CopyArrangementJournal
 
 
 def parse_transaction_journal(raw: str) -> TransactionJournal:
-    """Route missing-kind valid Legacy or strict pad_pair v1; unknown evidence is unresolved."""
+    """Route only known strict kinds; unknown durable evidence remains unresolved."""
     data = strict_json_object(raw)
     if "kind" not in data:
         return MaterialMigrationJournal.model_validate_json(raw)
@@ -44,6 +48,12 @@ def parse_transaction_journal(raw: str) -> TransactionJournal:
         and data["schema_version"] == 1
     ):
         return PairArrangementJournal.model_validate_json(raw, strict=True)
+    if (
+        data.get("kind") == "pad_copy_overwrite"
+        and type(data.get("schema_version")) is int
+        and data["schema_version"] == 1
+    ):
+        return CopyArrangementJournal.model_validate_json(raw, strict=True)
     message = "Unknown migration transaction kind or schema version retained unresolved"
     raise ValueError(message)
 
@@ -70,6 +80,8 @@ def validated_transaction_history(
         raise ValueError(message)
     if isinstance(first, PairArrangementJournal):
         validated_pair_history(encoded, transaction_id)
+    elif isinstance(first, CopyArrangementJournal):
+        validated_copy_history(encoded, transaction_id)
     return encoded, journals
 
 
@@ -121,14 +133,14 @@ def config_reference_matches(samples: Path, current: str, historical: str | None
 
 
 def _record_for_config(raw: str, samples: Path, config_reference: str) -> dict[str, object] | None:
-    record = json.loads(raw)
+    record = strict_json_object(raw)
     if not isinstance(record, dict):
         message = "Migration scan record is not a recognized object"
         raise TypeError(message)
     journal_text = record.get("record")
     if not isinstance(journal_text, str):
         return record
-    data = json.loads(journal_text)
+    data = strict_json_object(journal_text)
     if not isinstance(data, dict):
         message = "Migration journal is not a recognized object"
         raise TypeError(message)
@@ -221,7 +233,19 @@ def inspect_migration_recovery(samples: Path, config: Path) -> MigrationRecovery
                 # Pair evidence never enters Legacy alias/artifact cleanup or its source router.
                 result.pair_journals.append(journal)
                 continue
+            if isinstance(journal, CopyArrangementJournal):
+                result.copy_journals.append(journal)
+                continue
             _include_legacy_journal(result, journal, current, digest)
         except (KeyError, OSError, RuntimeError, TypeError, ValueError, ValidationError) as error:
             result.errors.append(str(error))
+    unfinished_kinds = sum((
+        bool(result.pending),
+        any(item.phase not in {"settled", "cancelled"} for item in result.pair_journals),
+        any(item.phase not in {"settled", "cancelled"} for item in result.copy_journals),
+    ))
+    if unfinished_kinds > 1:
+        result.errors.append(
+            "Incompatible unfinished Material/Pair/Copy owners retain every history"
+        )
     return result

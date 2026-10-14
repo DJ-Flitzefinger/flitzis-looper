@@ -140,6 +140,69 @@ class CommittedStemResidency:
         """Return whether the pad has a tracked current disk selection receipt."""
         return sample_id in self._selections or sample_id in self._live_selections
 
+    def registered_selection_current(self, sample_id: int, entry: StemCacheEntry) -> bool:
+        """Project verified disk eligibility from the exact current registration owner."""
+        return self._current_registered_selection(sample_id, entry) is not None
+
+    def _current_registered_selection(
+        self, sample_id: int, entry: StemCacheEntry
+    ) -> _CommittedSelection | None:
+        live = self._live_selections.get(sample_id)
+        selection = live.disk.selection if live is not None else self._selections.get(sample_id)
+        if (
+            selection is None
+            or selection.entry.model_dump(exclude={"available"})
+            != entry.model_dump(exclude={"available"})
+            or not self._current(
+                sample_id, selection.entry, selection.content_id, selection.source_path
+            )
+            or selection.ticket.publication_status() != "accepted"
+            or not selection.ticket.is_current()
+        ):
+            return None
+        return selection
+
+    def recovered_selection_ready(
+        self,
+        sample_id: int,
+        entry: StemCacheEntry,
+        *,
+        mode: StemMixMode,
+        enabled_mask: int,
+        preload: bool,
+    ) -> bool:
+        """Require the exact restored disk owner and its own demanded current ACKs."""
+        live = self._live_selections.get(sample_id)
+        selection = self._current_registered_selection(sample_id, entry)
+        if selection is None:
+            return False
+        if mode == "all_stems":
+            observed = (live.attempt or live.control) if live is not None else selection
+            if (
+                observed is None
+                or observed.ticket is not selection.ticket
+                or observed.receipt is None
+            ):
+                return False
+            receipt = observed.receipt
+            if (
+                observed.receipt_intent != (mode, enabled_mask)
+                or not receipt.is_current()
+                or receipt.residency_status() != "accepted"
+                or receipt.effective_failure_reason() == "native-preparation-failed"
+            ):
+                return False
+        if preload:
+            preload_receipt = selection.preload_receipt
+            if (
+                selection.preload_enabled is not True
+                or preload_receipt is None
+                or not preload_receipt.is_current()
+                or preload_receipt.residency_status() != "accepted"
+            ):
+                return False
+        return True
+
     def _pair_control_rows(
         self, sample_id: int
     ) -> tuple[_CommittedSelection | _DiskCandidate | _LiveSelection, ...]:

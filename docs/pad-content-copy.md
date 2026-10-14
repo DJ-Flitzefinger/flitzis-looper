@@ -42,10 +42,23 @@ An already captured terminal delivery cannot absorb another subscriber. Cancelle
 or obsolete running readers retain their real custody while newer intent waits in
 the existing material-serialized queue.
 
-This is an internal software foundation. Public Re-Arrange gestures, occupied-Copy
-journal/restart recovery, complete selection/Hold matrices and whole R2 acceptance
-remain open, as do musical, resource, device and Human gates. It does not expose
-the pending Key/transposition performance milestone.
+Occupied Copy now retains its own strict `pad_copy_overwrite` journal, immutable
+A/B musical seals and one fixed fresh C through preparation, own Native ACK,
+actual Config receipt and terminal settlement. Independent A/B/C original and
+stem readers survive queued old-target cleanup and uncertain append retries.
+Restart distinguishes exact original-input replay from a recognized written C:
+replay needs the original A/B; recognized C obtains fresh target-only Native
+acceptance while surviving-source changes remain intact. Saved selected stems
+must acquire their own current registration and demanded component/preload ACKs
+through the existing verification path before settlement. Complete history,
+lineage or custody conflicts retain visible fences. See
+[startup ownership](architecture.md#persistence-and-restore) for the controller
+sequence and [Portable validation](portable-windows.md) for kind routing.
+
+This is an internal software foundation. Public Re-Arrange gestures, complete
+selection/Hold matrices and whole R2 acceptance remain open, as do musical,
+resource, device and Human gates. It does not expose the pending
+Key/transposition performance milestone.
 
 ## Durable intent and the snapshot
 

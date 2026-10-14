@@ -35,6 +35,15 @@ if TYPE_CHECKING:
     )
 
 
+@pytest.fixture(autouse=True)
+def _isolated_copy_samples(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.chdir(tmp_path)
+    samples = tmp_path / "samples"
+    samples.mkdir()
+    (samples / "source.wav").write_bytes(b"source custody fixture")
+    (samples / "target.wav").write_bytes(b"predecessor custody fixture")
+
+
 class _Capture:
     def __init__(self) -> None:
         self.phase = "captured"
@@ -165,6 +174,12 @@ class _Assets:
 
     def reserve(self) -> AssetRetirementReservation:
         return cast("AssetRetirementReservation", self.retirement)
+
+    def acquire(self, path: Path) -> ProjectAssetLease:
+        assert path.is_file() or path.is_dir()
+        lease = _Lease()
+        self.leases.append(lease)
+        return cast("ProjectAssetLease", lease)
 
     def prepare_assignment_image(self, project: ProjectState) -> AssignmentImage:
         if self.prepare_error is not None:

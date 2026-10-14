@@ -164,6 +164,8 @@ class _DiskSelectionSettlement:
     previous_lease: ProjectAssetLease | None
     retirement: AssetRetirementReservation
     content_retired: bool = False
+    verified_restore: bool = False
+    assignment_adopted: bool = False
 
 
 @dataclass(slots=True)
@@ -215,6 +217,7 @@ class StemController(BaseController):  # noqa: PLR0904
     ) -> None:
         super().__init__(project, session, audio, on_project_changed)
         self._pad_edit_guard: Callable[[int], None] | None = None
+        self._restored_assignment_held: Callable[[int], bool] = lambda sample_id: False
         self._assets = asset_lifecycle or ProjectAssetLifecycle(project, audio)
         self._jobs: dict[Path, StemGenerationJob] = {}
         self._intents = StemIntentRegistry()
@@ -404,6 +407,54 @@ class StemController(BaseController):  # noqa: PLR0904
         self._commit_disk_selection = commit
         self._flush_superseded_disk_selection = flush_superseded
 
+    def bind_restored_assignment_guard(self, held: Callable[[int], bool]) -> None:
+        """Preserve journal-held saved metadata while fresh source custody is unresolved."""
+        self._restored_assignment_held = held
+
+    def recovered_copy_selection_ready(
+        self, sample_id: int, expected_entry: StemCacheEntry | None
+    ) -> bool:
+        """Queue exact saved verification and require own registration/component ACKs."""
+        validate_sample_id(sample_id)
+        if expected_entry is None:
+            return True
+        current = self._project.stem_cache[sample_id]
+        if (
+            current is None
+            or expected_entry.pair is None
+            or current.model_dump(exclude={"available"})
+            != expected_entry.model_dump(exclude={"available"})
+            or not self._committed_residency.supported
+        ):
+            self._session.stem_generation_errors[sample_id] = (
+                "Recovered Copy stem selection is missing, unsupported or changed"
+            )
+            return False
+        demand = self._remember_demand(sample_id, current)
+        demand.explicit = self._project.pad_stem_mix_mode[sample_id] == "all_stems"
+        demand.policy = self._project.preload_stem_loops_on_startup
+        if not self._committed_residency.contains(sample_id):
+            if not self._entry_files_available(current):
+                self._session.stem_generation_errors[sample_id] = (
+                    "Recovered Copy selected stem custody is unavailable"
+                )
+                return False
+            self._restored_stem_candidates[sample_id] = current
+            demand.verify_disk = True
+            if demand.state != "preparing":
+                demand.state = "queued"
+        try:
+            return self._committed_residency.recovered_selection_ready(
+                sample_id,
+                current,
+                mode=self._project.pad_stem_mix_mode[sample_id],
+                enabled_mask=self._project.pad_stem_intent[sample_id].enabled_mask,
+                preload=demand.policy,
+            )
+        except (RuntimeError, TypeError, ValueError) as error:
+            self._session.stem_generation_errors[sample_id] = str(error)
+            return False
+
     def _remember_demand(self, sample_id: int, entry: StemCacheEntry) -> _StemDemand:
         validate_sample_id(sample_id)
         identity = entry.pair.stem_set_identity if entry.pair is not None else None
@@ -534,7 +585,12 @@ class StemController(BaseController):  # noqa: PLR0904
             return False
         if demand.verify_disk:
             ticket = self._capture_source_ticket(sample_id, demand.source_version)
-            self._prepare_pair(sample_id, entry, ticket, components=False)
+            self._prepare_pair(
+                sample_id,
+                entry,
+                ticket,
+                components=False,
+            )
             demand.state = "preparing"
             return False
         if not demand.explicit and not demand.policy and not demand.withdraw_policy:
@@ -969,6 +1025,11 @@ class StemController(BaseController):  # noqa: PLR0904
                     )
                 )
             ):
+                if self._restored_assignment_held(sample_id):
+                    self._session.stem_generation_errors[sample_id] = (
+                        "Saved stem assignment retained by transaction recovery"
+                    )
+                    continue
                 self._project.stem_cache[sample_id] = None
                 changed = True
                 continue
@@ -1029,10 +1090,7 @@ class StemController(BaseController):  # noqa: PLR0904
 
         source_version = self.source_version_for_pad(sample_id)
         if source_version is None or source_version != entry.source_version:
-            self._project.stem_cache[sample_id] = None
-            self._mark_project_changed()
-            self._assets.sync_assignments()
-            return True
+            return self._settle_mismatched_restored_cache(sample_id)
 
         if not self._entry_files_available(entry):
             self._project.stem_cache[sample_id] = entry.model_copy(update={"available": False})
@@ -1049,6 +1107,17 @@ class StemController(BaseController):  # noqa: PLR0904
             )
             self._mark_project_changed()
             return False
+
+    def _settle_mismatched_restored_cache(self, sample_id: int) -> bool:
+        if self._restored_assignment_held(sample_id):
+            self._session.stem_generation_errors[sample_id] = (
+                "Saved stem assignment retained by transaction recovery"
+            )
+            return False
+        self._project.stem_cache[sample_id] = None
+        self._mark_project_changed()
+        self._assets.sync_assignments()
+        return True
 
     def invalidate_stem_cache(self, sample_id: int) -> None:
         """Mark cached stem metadata unavailable for a pad."""
@@ -1118,7 +1187,9 @@ class StemController(BaseController):  # noqa: PLR0904
         if entry.available:
             return True
         try:
-            return self._committed_residency.component_residency_current(sample_id)
+            return self._committed_residency.registered_selection_current(
+                sample_id, entry
+            ) or self._committed_residency.component_residency_current(sample_id)
         except RuntimeError, TypeError, ValueError:
             return False
 
@@ -2468,6 +2539,12 @@ class StemController(BaseController):  # noqa: PLR0904
                 own_source_version=own_source_version,
                 artifact_source_version=artifact_source_version,
                 source_path=self._project.sample_paths[sample_id],
+                verify_saved_selection=entry.pair is not None
+                and self._restored_stem_candidates.get(sample_id) is entry
+                and generation_intent is None
+                and processing_request is None
+                and own_source_version is None
+                and artifact_source_version is None,
             ),
         )
         return True
@@ -2548,6 +2625,9 @@ class StemController(BaseController):  # noqa: PLR0904
         if not request.ticket.same_source_request(ticket):
             message = "Stem source request changed during complete pair preparation"
             raise RuntimeError(message)
+        if request.verify_saved_selection:
+            self._retain_verified_restored_pair(request, selected, ticket)
+            return
         with request.retirement.activate():
             if (
                 not request.residency_only
@@ -2563,6 +2643,77 @@ class StemController(BaseController):  # noqa: PLR0904
                 )
                 return
             self._select_prepared_disk_pair(request, selected, ticket)
+
+    def _retain_verified_restored_pair(
+        self, request: PairPreparation, selected: StemCacheEntry, ticket: PreparedSourceTicket
+    ) -> None:
+        """Verify unchanged durable selection, retaining its exact preparation until admission."""
+        current = self._project.stem_cache[request.sample_id]
+        if (
+            current is not request.previous_entry
+            or current is None
+            or current.pair is None
+            or selected.model_dump(exclude={"available"})
+            != current.model_dump(exclude={"available"})
+        ):
+            message = "Restored stem verification changed the saved immutable selection"
+            raise RuntimeError(message)
+        with request.retirement.activate():
+            lease = self._assets.acquire(Path(current.cache_dir))
+            try:
+                retirement = request.retirement.split(16)
+            except BaseException:
+                lease.release()
+                raise
+            settlement = _DiskSelectionSettlement(
+                request, current, ticket, lease, None, retirement, verified_restore=True
+            )
+            self._disk_selection_settlements[request.sample_id] = settlement
+            self._settle_verified_restored_pair(settlement)
+
+    def _settle_verified_restored_pair(self, settlement: _DiskSelectionSettlement) -> None:
+        request = settlement.request
+        prepared = request.prepared
+        if prepared is None:
+            return
+        sample_id = request.sample_id
+        try:
+            self._require_restored_pair_current(settlement)
+            with settlement.retirement.activate():
+                prepared.select()
+                if not settlement.assignment_adopted:
+                    self._assets.adopt_stems(
+                        sample_id, (Path(settlement.entry.cache_dir).absolute(), settlement.lease)
+                    )
+                    settlement.assignment_adopted = True
+                self._committed_residency.register(
+                    sample_id,
+                    prepared,
+                    settlement.ticket,
+                    settlement.entry,
+                    self._content_id(sample_id),
+                    self._project.sample_paths[sample_id],
+                    active=sample_id in self._session.active_sample_ids,
+                )
+        except (OSError, RuntimeError, TypeError, ValueError) as error:
+            self._session.stem_generation_errors[sample_id] = (
+                f"Restored stem registration deferred: {error}"
+            )
+            return
+        self._disk_selection_settlements.pop(sample_id, None)
+        settlement.retirement.close()
+        if self._session.stem_generation_errors.get(sample_id, "").startswith(
+            "Restored stem registration deferred:"
+        ):
+            self._session.stem_generation_errors.pop(sample_id, None)
+        self._remember_verified_selection(sample_id, settlement.entry)
+        self._restored_stem_candidates.pop(sample_id, None)
+        self._settled_residency_demand(sample_id, settlement.entry)
+
+    def _require_restored_pair_current(self, settlement: _DiskSelectionSettlement) -> None:
+        if not self._pair_disk_commit_current(settlement.request, settlement.ticket):
+            message = "Restored stem source or saved selection changed before registration"
+            raise RuntimeError(message)
 
     def _select_prepared_disk_pair(
         self, request: PairPreparation, selected: StemCacheEntry, ticket: PreparedSourceTicket
@@ -2634,6 +2785,12 @@ class StemController(BaseController):  # noqa: PLR0904
             self._settle_disk_selection(settlement)
 
     def _settle_disk_selection(self, settlement: _DiskSelectionSettlement) -> None:
+        if settlement.verified_restore:
+            self._settle_verified_restored_pair(settlement)
+        else:
+            self._settle_written_disk_selection(settlement)
+
+    def _settle_written_disk_selection(self, settlement: _DiskSelectionSettlement) -> None:
         request = settlement.request
         prepared = request.prepared
         if prepared is None:

@@ -358,6 +358,54 @@ The system SHALL apply Move to empty or Swap to occupied target as one guarded n
 - **AND** playback effect feedback SHALL capture its originating transport revision inside the same Native effect claim; later control admission between effect and feedback SHALL NOT retag the earlier outcome as that newer gesture
 
 ### Requirement: Copy overwrite removes only the old target
+The occupied Copy transaction SHALL have its own strict versioned durable journal,
+separate from Move/Swap lineage. Its immutable evidence SHALL retain original
+source A and predecessor B, one fixed fresh stopped successor C, resolved KEY LOCK,
+the captured complete project image, actual Config binding/digest/revisions and
+successor lineage. Runtime tokens SHALL NOT be persisted or reconstructed as authority.
+Later precommit images and actual receipts SHALL retain legitimate surviving-source
+and unrelated intent; the fixed C seal SHALL NOT be regenerated from newer A.
+
+#### Scenario: Occupied Copy records its irreversible boundaries
+- **GIVEN** one complete captured occupied-target Copy owns its before/after source and stem leases
+- **WHEN** it prepares, publishes, observes its own Native acknowledgement, writes Config and settles
+- **THEN** the distinct schema1 kind pad_copy_overwrite SHALL record captured before preparation, publication_pending before enqueue and native_ack_observed before predecessor-controller retirement
+- **AND** config_committed SHALL require the actual same-owner ConfigCommitReceipt and settled SHALL follow complete model, asset and Native finish
+- **AND** cancellation SHALL record terminal cancellation only after proven preclaim cancellation and worker return
+- **AND** uncertain append SHALL retain the exact original bytes and same journal owner for reopen/retry
+- **AND** independent original/stem leases for A, B and fixed C SHALL survive through actual terminal append, even if old-target retirement is already queued
+
+#### Scenario: Copy restart distinguishes original input from its written successor
+- **GIVEN** complete strict Copy journal history and actual Config bytes are retained across process exit
+- **WHEN** startup reconciles the original captured digest, recorded pre-C intent or deterministic fixed-C afterimage
+- **THEN** recognized C SHALL NOT be recopied or assigned a new durable identity
+- **AND** the actual target SHALL obtain fresh current Native source/selection/timing acceptance before durable settlement, without claiming currentness from historical tokens or ordinary source enqueue
+- **AND** original-input replay SHALL require the restored original A and B seals rather than copy changed material from their numeric slots
+- **AND** source A changes or deletion in a recognized afterimage SHALL be preserved while only C is reserved for recovery
+- **AND** different Config, unknown schema/history, missing original/stem custody, missing ancestor, fork, cycle, ABA or incompatible unfinished Material/Pair/Copy owners SHALL retain evidence and visibly fence conflicts without stealing a writer or declaring success/rollback
+
+#### Scenario: Recovered Copy waits for its actual selected stems
+- **WHEN** recognized fixed C contains a saved immutable StemPair selection
+- **THEN** recovery SHALL keep ordinary source, timing and stem observers reachable until the existing preparation and registration path has verified exactly that selection against C's fresh own source
+- **AND** verification of an unchanged already saved selection MUST retain its prepared registration and disk readers without replacing metadata, generating another set, committing another disk selection, or competing with the recovery Config writer
+- **AND** the existing selection owner MUST prove its current own Native registration, content, source, path and full immutable pair binding before recovery captures C
+- **AND** saved ALL STEMS desire SHALL additionally require the current own component and effective-mask acknowledgement; enabled startup preload SHALL require its own accepted preload result
+- **AND** FullMix with preload disabled MUST require the selected disk registration without adding a component or preload request
+- **AND** missing or stale selections, Pending and rejected component results SHALL retain the recovery fence and exact journal; a stable empty selection epoch or ordinary source ACK alone MUST NOT certify the selected C
+
+#### Scenario: Recovery owns custody before ordinary restore and cleanup
+- **WHEN** startup finds unresolved occupied Copy evidence for the current Config
+- **THEN** it SHALL reconstruct the original before/after pins before loader restore and artifact cleanup
+- **AND** startup gesture fences SHALL NOT block the genuine fresh loader/selection acceptance that recovery requires
+- **AND** close, status and conflicting global KEY LOCK edits SHALL observe the same recovery owner until terminal settlement
+
+#### Scenario: Portable relocation recognizes complete transaction kinds
+- **GIVEN** sealed Native journal stores contain valid Legacy Material, schema1 Pair and schema1 occupied Copy evidence
+- **WHEN** Native portable capture and same-FileID relocation validate those journals
+- **THEN** each kind SHALL use its own exact schema, immutable seals, complete history and successor checks while preserving original bytes and Config references
+- **AND** unknown kinds, changed kinds, malformed or incomplete records SHALL reject before relocation output rather than weaken Legacy exact-field validation
+- **AND** relocation SHALL NOT grant runtime acceptance or inspect a known foreign Config's contents
+
 The system SHALL leave source content/playback/holds unchanged when copying to empty or occupied target and SHALL stop/fence only the removed target lifetime in the same atomic commit creating a fresh stopped copy.
 
 #### Scenario: Playing source copied over playing target

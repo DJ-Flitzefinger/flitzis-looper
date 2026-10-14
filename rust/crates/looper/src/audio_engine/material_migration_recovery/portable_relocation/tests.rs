@@ -1130,3 +1130,627 @@ fn unknown_pending_updates_and_changed_native_custody_preserve_every_file() {
         assert!(fixture.record.with_extension("pending").is_file());
     }
 }
+
+const PAIR_TRANSACTION: &str = "11111111111111111111111111111111";
+const COPY_TRANSACTION: &str = "22222222222222222222222222222222";
+const CHILD_TRANSACTION: &str = "33333333333333333333333333333333";
+const SECOND_CHILD: &str = "44444444444444444444444444444444";
+
+fn musical_slot(instance: Option<&str>, path: Option<&str>) -> Value {
+    json!({
+        "source_path":path,"source_identity":instance.map(|instance| json!({"instance_id":instance,"material_id":null,"material_creation":null,"copied_from":null})),
+        "duration":instance.map(|_| 1.0),"analysis":null,"stem_cache":null,"stem_mix_mode":"full_mix",
+        "stem_intent":{"schema_version":1,"enabled_mask":15,"last_custom_mask":15,"display_mode":"all"},
+        "key_lock":null,"manual_bpm":null,"timing_intent":"legacy",
+        "key_intent":{"schema_version":1,"source":null,"correction":null,"analysis_epoch":0,"correction_epoch":0,"base_shift":0,"extra_shift":0,"retrigger":false},
+        "gain_db":0.0,"eq_low_db":0.0,"eq_mid_db":0.0,"eq_high_db":0.0,
+        "loop_start_s":0.0,"loop_end_s":null,"loop_auto":false,"loop_bars":8.0,"grid_offset_samples":0,"grid_anchor_s":null
+    })
+}
+
+const MUSICAL_FIELDS: &[(&str, &str)] = &[
+    ("source_path", "sample_paths"),
+    ("source_identity", "pad_content"),
+    ("duration", "sample_durations"),
+    ("analysis", "sample_analysis"),
+    ("stem_cache", "stem_cache"),
+    ("stem_mix_mode", "pad_stem_mix_mode"),
+    ("stem_intent", "pad_stem_intent"),
+    ("key_lock", "pad_key_lock"),
+    ("manual_bpm", "manual_bpm"),
+    ("timing_intent", "pad_timing_intent"),
+    ("key_intent", "pad_key_intent"),
+    ("gain_db", "pad_gain_db"),
+    ("eq_low_db", "pad_eq_low_db"),
+    ("eq_mid_db", "pad_eq_mid_db"),
+    ("eq_high_db", "pad_eq_high_db"),
+    ("loop_start_s", "pad_loop_start_s"),
+    ("loop_end_s", "pad_loop_end_s"),
+    ("loop_auto", "pad_loop_auto"),
+    ("loop_bars", "pad_loop_bars"),
+    ("grid_offset_samples", "pad_grid_offset_samples"),
+    ("grid_anchor_s", "pad_grid_anchor_s"),
+];
+
+fn project_with_slots(source: &Value, target: &Value, revision: u64) -> Value {
+    let empty = musical_slot(None, None);
+    let mut project = json!({
+        "config_revision":revision,"material_migrations":{},"key_lock_intent_version":2,
+        "multi_loop":false,"key_lock":false,"bpm_lock":false,"trigger_quantization_enabled":false,
+        "trigger_quantization_step":"1_32","input_mapping_enabled":true,"stem_separator":"demucs:htdemucs",
+        "preload_stem_loops_on_startup":false,"resident_pcm_budget_mib":512,"demucs_shifts":1,
+        "demucs_overlap":0.5,"volume":1.0,"speed":1.0,"selected_pad":0,"selected_bank":0,
+        "sidebar_left_expanded":true,"sidebar_right_expanded":true
+    });
+    for (name, field) in MUSICAL_FIELDS {
+        let mut array = vec![empty[*name].clone(); 216];
+        array[0] = source[*name].clone();
+        array[1] = target[*name].clone();
+        project[*field] = json!(array);
+    }
+    project
+}
+
+fn sealed(value: &Value) -> Value {
+    json!({"schema_version":1,"payload_json":value.to_string()})
+}
+
+fn arrangement(fixture: &Fixture, kind: &str, transaction: &str) -> Value {
+    let source = musical_slot(
+        Some("55555555555555555555555555555555"),
+        Some("samples/original.wav"),
+    );
+    let target = musical_slot(
+        Some("66666666666666666666666666666666"),
+        Some("samples/predecessor.wav"),
+    );
+    let project = project_with_slots(&source, &target, 1);
+    let mut record = json!({
+        "kind":kind,"schema_version":1,"transaction_id":transaction,"resume_of":null,
+        "config_reference":plain_path(&fixture.source.join(CONFIG)),"captured_revision":1,"intent_revision":1,
+        "captured_config_sha256":format!("{:x}",Sha256::digest(project.to_string().as_bytes())),
+        "project_image_json":project.to_string(),"image_role":"before","phase":"captured",
+        "committed_revision":null,"committed_config_sha256":null,"error":null
+    });
+    if kind == "pad_pair" {
+        record["before"] = sealed(
+            &json!({"operation":"swap","source_id":0,"target_id":1,"source":source,"target":target}),
+        );
+        record["after"] =
+            sealed(&json!({"source_id":0,"target_id":1,"source":target,"target":source}));
+    } else {
+        let mut after = source.clone();
+        after["source_identity"]["instance_id"] = json!("77777777777777777777777777777777");
+        after["source_identity"]["copied_from"] = source["source_identity"]["instance_id"].clone();
+        record["source_id"] = json!(0);
+        record["target_id"] = json!(1);
+        record["source"] = sealed(&source);
+        record["predecessor"] = sealed(&target);
+        record["after"] = sealed(&after);
+        record["resolved_key_lock"] = json!(false);
+        record["captured_project_image_json"] = json!(project.to_string());
+    }
+    record
+}
+
+fn append_records(fixture: &Fixture, transaction: &str, records: &[Value]) {
+    let store = MaterialMigrationJournalStore::new(plain_path(&fixture.source), transaction.into())
+        .unwrap();
+    for record in records {
+        store.append(record.to_string()).unwrap();
+    }
+    drop(store);
+}
+
+fn through_phase(initial: &Value, phase: &str) -> Vec<Value> {
+    let phases = if phase == "cancelled" {
+        vec!["captured", "publication_pending", "cancelled"]
+    } else {
+        vec![
+            "captured",
+            "publication_pending",
+            "native_ack_observed",
+            "config_committed",
+            "settled",
+        ]
+    };
+    let mut records = Vec::new();
+    for current in phases {
+        let mut record = initial.clone();
+        record["phase"] = json!(current);
+        if ["config_committed", "settled"].contains(&current) {
+            let after: Value =
+                serde_json::from_str(initial["after"]["payload_json"].as_str().unwrap()).unwrap();
+            let (source, target) = if initial["kind"] == "pad_pair" {
+                (after["source"].clone(), after["target"].clone())
+            } else {
+                (
+                    serde_json::from_str::<Value>(
+                        initial["source"]["payload_json"].as_str().unwrap(),
+                    )
+                    .unwrap(),
+                    after,
+                )
+            };
+            let project = project_with_slots(
+                &source,
+                &target,
+                initial["intent_revision"].as_u64().unwrap(),
+            );
+            let text = project.to_string();
+            record["project_image_json"] = json!(text);
+            record["image_role"] = json!("after");
+            record["committed_revision"] = initial["intent_revision"].clone();
+            record["committed_config_sha256"] =
+                json!(format!("{:x}", Sha256::digest(text.as_bytes())));
+        }
+        records.push(record);
+        if current == phase {
+            break;
+        }
+    }
+    records
+}
+
+#[test]
+fn native_portable_material_pair_copy_histories_keep_exact_bytes_and_fileids() {
+    let fixture = Fixture::new(true);
+    fs::write(
+        fixture.source.join("predecessor.wav"),
+        b"retained displaced predecessor",
+    )
+    .unwrap();
+    let pair = arrangement(&fixture, "pad_pair", PAIR_TRANSACTION);
+    let mut copy = arrangement(&fixture, "pad_copy_overwrite", COPY_TRANSACTION);
+    // A known different owner deliberately has unreadable JSON. Relocation only
+    // binds its exact physical file, never interprets that foreign Config intent.
+    copy["config_reference"] = json!(plain_path(&fixture.source.join("projects/same.json")));
+    fs::write(
+        fixture.source.join("projects/same.json"),
+        b"private foreign Config preserved verbatim",
+    )
+    .unwrap();
+    append_records(
+        &fixture,
+        PAIR_TRANSACTION,
+        &through_phase(&pair, "publication_pending"),
+    );
+    append_records(
+        &fixture,
+        COPY_TRANSACTION,
+        &through_phase(&copy, "native_ack_observed"),
+    );
+    let before = snapshot(&fixture.source, false);
+    fixture.move_samples();
+    assert_eq!(snapshot(&fixture.target, false), before);
+    assert!(!fixture.source.exists());
+    let projection = verified_projection(&fixture.target).unwrap().unwrap();
+    // projection_bytes retains each historical address and adds the actual
+    // moved address as an alias, both bound to the same captured file custody.
+    let mut expected_bindings = BTreeSet::new();
+    for relative in [CONFIG, "projects/same.json"] {
+        for root in [&fixture.source, &fixture.target] {
+            expected_bindings.insert((reference_key(&root.join(relative)), relative.to_owned()));
+        }
+    }
+    let actual_bindings: BTreeSet<_> = projection
+        .bindings
+        .iter()
+        .map(|binding| {
+            (
+                reference_key(Path::new(&binding.config_reference)),
+                binding.config_path.clone(),
+            )
+        })
+        .collect();
+    assert_eq!(actual_bindings, expected_bindings);
+    assert_eq!(projection.bindings.len(), expected_bindings.len());
+    for binding in &projection.bindings {
+        assert_eq!(binding.config_identity, before[&binding.config_path].0);
+        assert_eq!(binding.parent_identity, before["projects"].0);
+        let resolved =
+            config_location::resolve(&fixture.target, Path::new(&binding.config_reference))
+                .unwrap();
+        assert_eq!(
+            resolved,
+            fs::canonicalize(fixture.target.join(&binding.config_path)).unwrap()
+        );
+    }
+    for transaction in [TRANSACTION, PAIR_TRANSACTION, COPY_TRANSACTION] {
+        let store =
+            MaterialMigrationJournalStore::open(plain_path(&fixture.target), transaction.into())
+                .unwrap();
+        assert!(!store.history().unwrap().is_empty());
+    }
+    assert_eq!(phase(fixture.act("rollback").unwrap()), "rolled_back");
+    assert_eq!(snapshot(&fixture.source, true), before);
+}
+
+#[test]
+fn malformed_arrangement_histories_stop_before_any_native_relocation_output() {
+    for kind in ["pad_pair", "pad_copy_overwrite"] {
+        for fault in [
+            "kind",
+            "version",
+            "bool_version",
+            "extra",
+            "token",
+            "digest",
+            "revision",
+            "phase",
+            "ordinal_binding",
+            "changed_seal",
+            "project_field",
+            "missing_parent",
+        ] {
+            let fixture = Fixture::new(true);
+            let initial = arrangement(&fixture, kind, PAIR_TRANSACTION);
+            let mut records = through_phase(&initial, "native_ack_observed");
+            let last = records.last_mut().unwrap();
+            match fault {
+                "kind" => last["kind"] = json!("unknown_kind"),
+                "version" => last["schema_version"] = json!(2),
+                "bool_version" => last["schema_version"] = json!(true),
+                "extra" => last["unknown"] = json!(true),
+                "token" => {
+                    let key = if kind == "pad_pair" {
+                        "before"
+                    } else {
+                        "source"
+                    };
+                    let mut seal: Value =
+                        serde_json::from_str(last[key]["payload_json"].as_str().unwrap()).unwrap();
+                    if kind == "pad_pair" {
+                        seal["source"]["source_identity"]["runtime_key"] = json!(12);
+                    } else {
+                        seal["source_identity"]["runtime_key"] = json!(12);
+                    }
+                    last[key] = sealed(&seal);
+                }
+                "digest" => {
+                    records = through_phase(&initial, "config_committed");
+                    records.last_mut().unwrap()["committed_config_sha256"] = json!("0".repeat(64));
+                }
+                "revision" => last["intent_revision"] = json!(0),
+                "phase" => {
+                    records = vec![
+                        initial.clone(),
+                        through_phase(&initial, "settled").pop().unwrap(),
+                    ]
+                }
+                "ordinal_binding" => {
+                    last["config_reference"] =
+                        json!(plain_path(&fixture.source.join("projects/same.json")))
+                }
+                "changed_seal" => {
+                    let mut after: Value =
+                        serde_json::from_str(last["after"]["payload_json"].as_str().unwrap())
+                            .unwrap();
+                    if kind == "pad_pair" {
+                        after["target"]["gain_db"] = json!(-3.0);
+                    } else {
+                        after["gain_db"] = json!(-3.0);
+                    }
+                    last["after"] = sealed(&after);
+                }
+                "project_field" => {
+                    let mut project: Value =
+                        serde_json::from_str(last["project_image_json"].as_str().unwrap()).unwrap();
+                    project["native_ticket"] = json!(12);
+                    last["project_image_json"] = json!(project.to_string());
+                }
+                "missing_parent" => {
+                    for record in &mut records {
+                        record["resume_of"] = json!(CHILD_TRANSACTION);
+                    }
+                }
+                _ => unreachable!(),
+            }
+            append_records(&fixture, PAIR_TRANSACTION, &records);
+            let before = snapshot(&fixture.source, true);
+            assert!(
+                fixture.act("capture").is_err(),
+                "{kind}:{fault} was admitted"
+            );
+            assert_eq!(snapshot(&fixture.source, true), before);
+            assert!(!fixture.record.exists());
+            assert!(!capture_stream(&fixture.source).exists());
+            assert!(!fixture.target.exists());
+        }
+    }
+}
+
+#[test]
+fn ambiguous_embedded_json_and_changed_known_kind_remain_preserved() {
+    for fault in [
+        "duplicate_record",
+        "duplicate_seal",
+        "duplicate_project",
+        "nonfinite",
+        "changed_kind",
+        "missing_field",
+    ] {
+        let fixture = Fixture::new(true);
+        let initial = arrangement(&fixture, "pad_copy_overwrite", COPY_TRANSACTION);
+        let mut changed = initial.clone();
+        let mut raw = changed.to_string();
+        match fault {
+            "duplicate_record" => raw = raw.replacen("{", "{\"kind\":\"pad_copy_overwrite\",", 1),
+            "duplicate_seal" => {
+                let payload = changed["source"]["payload_json"]
+                    .as_str()
+                    .unwrap()
+                    .replacen("{", "{\"gain_db\":0.0,", 1);
+                changed["source"]["payload_json"] = json!(payload);
+                raw = changed.to_string();
+            }
+            "duplicate_project" => {
+                changed["project_image_json"] =
+                    json!(changed["project_image_json"].as_str().unwrap().replacen(
+                        "{",
+                        "{\"key_lock\":false,",
+                        1
+                    ));
+                raw = changed.to_string();
+            }
+            "nonfinite" => {
+                changed["source"]["payload_json"] = json!(
+                    changed["source"]["payload_json"]
+                        .as_str()
+                        .unwrap()
+                        .replace("\"gain_db\":0.0", "\"gain_db\":NaN")
+                );
+                raw = changed.to_string();
+            }
+            "changed_kind" => {
+                changed["kind"] = json!("pad_pair");
+                raw = changed.to_string();
+            }
+            "missing_field" => {
+                changed.as_object_mut().unwrap().remove("resolved_key_lock");
+                raw = changed.to_string();
+            }
+            _ => unreachable!(),
+        }
+        let store = MaterialMigrationJournalStore::new(
+            plain_path(&fixture.source),
+            COPY_TRANSACTION.into(),
+        )
+        .unwrap();
+        store.append(initial.to_string()).unwrap();
+        store.append(raw).unwrap();
+        drop(store);
+        let before = snapshot(&fixture.source, true);
+        assert!(fixture.act("capture").is_err(), "{fault} was admitted");
+        assert_eq!(snapshot(&fixture.source, true), before);
+        assert!(!fixture.record.exists());
+        assert!(!capture_stream(&fixture.source).exists());
+    }
+}
+
+#[test]
+fn native_arrangement_successor_graph_rejects_forks_cycles_and_cross_kind_edges() {
+    for fault in ["fork", "cycle", "cross_kind", "changed_original"] {
+        let fixture = Fixture::new(true);
+        let mut parent = arrangement(&fixture, "pad_copy_overwrite", COPY_TRANSACTION);
+        let mut child = parent.clone();
+        child["transaction_id"] = json!(CHILD_TRANSACTION);
+        child["resume_of"] = json!(COPY_TRANSACTION);
+        if fault == "cycle" {
+            parent["resume_of"] = json!(CHILD_TRANSACTION);
+        }
+        if fault == "cross_kind" {
+            child = arrangement(&fixture, "pad_pair", CHILD_TRANSACTION);
+            child["resume_of"] = json!(COPY_TRANSACTION);
+        }
+        if fault == "changed_original" {
+            child["resolved_key_lock"] = json!(true);
+        }
+        append_records(
+            &fixture,
+            COPY_TRANSACTION,
+            &through_phase(&parent, "native_ack_observed"),
+        );
+        append_records(
+            &fixture,
+            CHILD_TRANSACTION,
+            &through_phase(&child, "native_ack_observed"),
+        );
+        if fault == "fork" {
+            let mut second = child.clone();
+            second["transaction_id"] = json!(SECOND_CHILD);
+            append_records(
+                &fixture,
+                SECOND_CHILD,
+                &through_phase(&second, "native_ack_observed"),
+            );
+        }
+        let before = snapshot(&fixture.source, true);
+        assert!(fixture.act("capture").is_err(), "{fault} was admitted");
+        assert_eq!(snapshot(&fixture.source, true), before);
+        assert!(!fixture.record.exists());
+        assert!(!capture_stream(&fixture.source).exists());
+    }
+}
+
+#[test]
+fn valid_successors_and_self_contained_compacted_terminal_tails_relocate() {
+    for kind in ["pad_pair", "pad_copy_overwrite"] {
+        for phase in ["native_ack_observed", "settled", "cancelled"] {
+            let fixture = Fixture::new(true);
+            let parent = arrangement(&fixture, kind, PAIR_TRANSACTION);
+            let mut child = parent.clone();
+            child["transaction_id"] = json!(CHILD_TRANSACTION);
+            child["resume_of"] = json!(PAIR_TRANSACTION);
+            child["captured_revision"] = json!(2);
+            child["intent_revision"] = json!(2);
+            if phase == "native_ack_observed" {
+                append_records(
+                    &fixture,
+                    PAIR_TRANSACTION,
+                    &through_phase(&parent, "native_ack_observed"),
+                );
+            }
+            append_records(&fixture, CHILD_TRANSACTION, &through_phase(&child, phase));
+            let before = snapshot(&fixture.source, false);
+            fixture.move_samples();
+            assert_eq!(snapshot(&fixture.target, false), before);
+        }
+    }
+}
+
+#[test]
+fn copy_preserves_newer_source_intent_and_strictly_newer_receipt_retries() {
+    let fixture = Fixture::new(true);
+    let initial = arrangement(&fixture, "pad_copy_overwrite", COPY_TRANSACTION);
+    let mut records = through_phase(&initial, "config_committed");
+    let mut retry = initial.clone();
+    let mut before: Value =
+        serde_json::from_str(retry["project_image_json"].as_str().unwrap()).unwrap();
+    before["pad_gain_db"][0] = json!(-6.0);
+    before["volume"] = json!(0.7);
+    before["config_revision"] = json!(2);
+    retry["project_image_json"] = json!(before.to_string());
+    retry["phase"] = json!("native_ack_observed");
+    retry["intent_revision"] = json!(2);
+    records.push(retry.clone());
+    let mut committed = through_phase(&retry, "config_committed").pop().unwrap();
+    let mut after: Value =
+        serde_json::from_str(committed["project_image_json"].as_str().unwrap()).unwrap();
+    after["pad_gain_db"][0] = json!(-6.0);
+    after["volume"] = json!(0.7);
+    let text = after.to_string();
+    committed["project_image_json"] = json!(text);
+    committed["committed_config_sha256"] = json!(format!("{:x}", Sha256::digest(text.as_bytes())));
+    records.push(committed.clone());
+    committed["phase"] = json!("settled");
+    records.push(committed);
+    append_records(&fixture, COPY_TRANSACTION, &records);
+    let before = snapshot(&fixture.source, false);
+    fixture.move_samples();
+    assert_eq!(snapshot(&fixture.target, false), before);
+}
+
+#[test]
+fn native_pair_move_keeps_independent_empty_defaults_and_written_normalization() {
+    let fixture = Fixture::new(true);
+    let mut initial = arrangement(&fixture, "pad_pair", PAIR_TRANSACTION);
+    let mut before: Value =
+        serde_json::from_str(initial["before"]["payload_json"].as_str().unwrap()).unwrap();
+    let empty = musical_slot(None, None);
+    before["operation"] = json!("move");
+    before["target"] = empty.clone();
+    initial["before"] = sealed(&before);
+    initial["after"] =
+        sealed(&json!({"source_id":0,"target_id":1,"source":empty,"target":before["source"]}));
+    initial["project_image_json"] =
+        json!(project_with_slots(&before["source"], &before["target"], 1).to_string());
+    let mut records = through_phase(&initial, "config_committed");
+    let committed = records.last_mut().unwrap();
+    let mut written: Value =
+        serde_json::from_str(committed["project_image_json"].as_str().unwrap()).unwrap();
+    written["sample_paths"][1] = json!(plain_path(&fixture.source.join(ORIGINAL)));
+    written["sample_analysis"][1] = json!({"bpm":0.0,"key":"","beat_grid":{"beats":[],"downbeats":[],"bars":[]},
+        "accepted_timing":{"schema_version":1,"encoding":"accepted-constant-timing-qm-raw-v1","record":{"historical":true}}});
+    let text = written.to_string();
+    committed["project_image_json"] = json!(text);
+    committed["committed_config_sha256"] = json!(format!("{:x}", Sha256::digest(text.as_bytes())));
+    let mut settled = committed.clone();
+    settled["phase"] = json!("settled");
+    records.push(settled);
+    append_records(&fixture, PAIR_TRANSACTION, &records);
+    let before = snapshot(&fixture.source, false);
+    fixture.move_samples();
+    assert_eq!(snapshot(&fixture.target, false), before);
+}
+
+#[test]
+fn missing_unfinished_copy_ancestor_and_unproved_direct_receipt_update_stay_fenced() {
+    for fault in [
+        "missing_committed_parent",
+        "same_revision_ack",
+        "direct_newer_receipt",
+    ] {
+        let fixture = Fixture::new(true);
+        let mut initial = arrangement(&fixture, "pad_copy_overwrite", COPY_TRANSACTION);
+        if fault == "missing_committed_parent" {
+            initial["resume_of"] = json!(CHILD_TRANSACTION);
+        }
+        let mut records = through_phase(&initial, "config_committed");
+        if fault == "same_revision_ack" {
+            let mut retry = initial.clone();
+            retry["phase"] = json!("native_ack_observed");
+            records.push(retry);
+        }
+        if fault == "direct_newer_receipt" {
+            let mut next = initial.clone();
+            next["intent_revision"] = json!(2);
+            records.push(through_phase(&next, "config_committed").pop().unwrap());
+        }
+        append_records(&fixture, COPY_TRANSACTION, &records);
+        let before = snapshot(&fixture.source, true);
+        assert!(fixture.act("capture").is_err(), "{fault} was admitted");
+        assert_eq!(snapshot(&fixture.source, true), before);
+        assert!(!fixture.record.exists());
+        assert!(!capture_stream(&fixture.source).exists());
+    }
+}
+
+#[test]
+fn copy_fixed_c_retains_effective_key_lock_across_pending_and_written_images() {
+    for explicit in [false, true] {
+        for phase in [
+            "publication_pending",
+            "native_ack_observed",
+            "config_committed",
+            "cancelled",
+        ] {
+            let fixture = Fixture::new(true);
+            let mut initial = arrangement(&fixture, "pad_copy_overwrite", COPY_TRANSACTION);
+            if explicit {
+                // A and fixed C explicitly disable KEY LOCK, independently of
+                // the global inherited mode used by the surviving other pads.
+                for name in ["source", "after"] {
+                    let mut seal: Value =
+                        serde_json::from_str(initial[name]["payload_json"].as_str().unwrap())
+                            .unwrap();
+                    seal["key_lock"] = json!(false);
+                    initial[name] = sealed(&seal);
+                }
+                let mut project: Value =
+                    serde_json::from_str(initial["captured_project_image_json"].as_str().unwrap())
+                        .unwrap();
+                project["pad_key_lock"][0] = json!(false);
+                let text = project.to_string();
+                initial["captured_project_image_json"] = json!(text);
+                initial["project_image_json"] = json!(text);
+            }
+            let mut records = through_phase(&initial, phase);
+            let current = records.last_mut().unwrap();
+            let mut project: Value =
+                serde_json::from_str(current["project_image_json"].as_str().unwrap()).unwrap();
+            project["key_lock"] = json!(true);
+            let text = project.to_string();
+            current["project_image_json"] = json!(text);
+            if phase == "config_committed" {
+                current["committed_config_sha256"] =
+                    json!(format!("{:x}", Sha256::digest(text.as_bytes())));
+            }
+            append_records(&fixture, COPY_TRANSACTION, &records);
+            let before = snapshot(&fixture.source, false);
+            if explicit || phase == "cancelled" {
+                fixture.move_samples();
+                assert_eq!(snapshot(&fixture.target, false), before);
+            } else {
+                assert!(
+                    fixture.act("capture").is_err(),
+                    "inherited C changed KEY LOCK at {phase}"
+                );
+                assert_eq!(snapshot(&fixture.source, false), before);
+                assert!(!fixture.record.exists());
+                assert!(!capture_stream(&fixture.source).exists());
+                assert!(!fixture.target.exists());
+            }
+        }
+    }
+}

@@ -44,6 +44,7 @@ class StemPairIntentBinding:
     own_source_version: str | None = None
     artifact_source_version: str | None = None
     source_path: str | None = None
+    verify_saved_selection: bool = False
 
 
 @dataclass(slots=True)
@@ -64,6 +65,7 @@ class PairPreparation:
     prepared: PreparedStemPair | None = None
     error: str | None = None
     residency_only: bool = False
+    verify_saved_selection: bool = False
     generation_intent: StemGenerationIntent | None = None
     own_source_version: str | None = None
     artifact_source_version: str | None = None
@@ -148,6 +150,7 @@ class StemPairPreparationQueue:
             processing_request,
             regenerate_on_incompatible,
             residency_only=residency_only,
+            verify_saved_selection=captured.verify_saved_selection,
             generation_intent=captured.generation_intent,
             own_source_version=captured.own_source_version,
             artifact_source_version=captured.artifact_source_version,

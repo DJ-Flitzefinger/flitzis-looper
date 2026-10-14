@@ -243,7 +243,7 @@ def test_newer_unrelated_commit_retry_keeps_pair_seals_and_settles_latest_receip
     assert PairJournalOwner.open(tmp_path / "samples", _TRANSACTION).journal == settled
 
 
-def test_legacy_and_pair_coexist_without_pair_entering_legacy_cleanup(
+def test_unfinished_legacy_and_pair_fence_without_cross_kind_cleanup(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -269,7 +269,11 @@ def test_legacy_and_pair_coexist_without_pair_entering_legacy_cleanup(
     assert recovered.pair_journals == [journal]
     assert recovered.pending == [legacy]
     assert recovered.settled == []
-    assert recovered.errors == []
+    assert recovered.errors == [
+        "Incompatible unfinished Material/Pair/Copy owners retain every history"
+    ]
+    assert len(legacy_store.history()) == 1
+    assert PairJournalOwner.open(tmp_path / "samples", _TRANSACTION).journal == journal
 
 
 @pytest.mark.parametrize(

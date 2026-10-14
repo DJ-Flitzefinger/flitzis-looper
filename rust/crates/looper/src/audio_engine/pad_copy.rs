@@ -259,6 +259,7 @@ impl PadCopyRtWork {
 
 mod control;
 mod intent;
+pub(crate) mod recovery;
 pub use control::{CapturedPadCopy, PadCopyTicket};
 pub(super) use control::{
     PadCopyState, cancel, capture, finish, prepare, prepare_detached, publish, reconcile,

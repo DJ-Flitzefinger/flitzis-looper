@@ -18,11 +18,58 @@ use serde_json::json;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 
-struct RecoveredCustody {
+pub(in crate::audio_engine) struct RecoveredCustody {
     binding: Option<InputRuntimePadBinding>,
     _sample: Option<SampleBuffer>,
     _lease: Option<CommittedColdLease>,
     _stems: Option<StemOwner>,
+}
+
+impl RecoveredCustody {
+    pub(in crate::audio_engine) fn new(
+        binding: Option<InputRuntimePadBinding>,
+        sample: Option<SampleBuffer>,
+        lease: Option<CommittedColdLease>,
+        stems: Option<StemOwner>,
+    ) -> Self {
+        Self {
+            binding,
+            _sample: sample,
+            _lease: lease,
+            _stems: stems,
+        }
+    }
+
+    /// Shared restored participant custody, placement and actual source/request acceptance.
+    /// Callers additionally validate their exact complete participant and reservation guards.
+    pub(in crate::audio_engine) fn current_under_request_lock(
+        &self,
+        ownership: &InputRuntimeOwnership,
+        placement: SlotSnapshot,
+        requests: &[u64],
+        request: u64,
+        request_incarnation: Option<u64>,
+    ) -> bool {
+        requests.get(placement.slot()) == Some(&request)
+            && placement.content_key().is_none_or(|key| {
+                matches!(ownership.observe_control_key(key),
+                    PlacementObservation::Current(current) if current.same_projection(placement))
+            })
+            && ownership
+                .slot_snapshot(placement.slot())
+                .is_some_and(|current| current.same_projection(placement))
+            && ownership.control_slot_for_cell(placement.cell()) == placement.slot()
+            && match self.binding.as_ref() {
+                Some(binding) => {
+                    ownership.binding_source_adoption_accepted(placement.slot(), binding.binding)
+                        && placement
+                            .content_key()
+                            .and_then(|key| ownership.key_source_request_incarnation(key))
+                            == request_incarnation
+                }
+                None => placement.lifetime() == 0 && request_incarnation.is_none(),
+            }
+    }
 }
 
 /// Both restored original participants are retained under one existing Pair reservation.
@@ -60,25 +107,24 @@ impl RecoveredPairAcceptance {
 
     fn current_under_request_lock(&self, requests: &[u64]) -> bool {
         !self.released.load(Ordering::Acquire)
-            && self.participants.iter().enumerate().all(|(index, participant)| {
-                let placement = participant.placement();
-                requests.get(placement.slot()) == Some(&self.requests[index])
-                    && placement.content_key().is_none_or(|key| {
-                        matches!(self.ownership.observe_control_key(key),
-                            PlacementObservation::Current(current) if current.same_projection(placement))
-                    })
-                    && self.ownership.slot_snapshot(placement.slot()).is_some_and(|current| current.same_projection(placement))
-                    && self.ownership.control_slot_for_cell(placement.cell()) == placement.slot()
-                    && participant.current(&self.ownership, &self.acknowledgements, self.reservation)
-                    && match self.custody[index].binding.as_ref() {
-                        Some(binding) => {
-                            self.ownership.binding_source_adoption_accepted(placement.slot(), binding.binding)
-                                && placement.content_key().and_then(|key| self.ownership.key_source_request_incarnation(key))
-                                    == self.request_incarnations[index]
-                        }
-                        None => placement.lifetime() == 0 && self.request_incarnations[index].is_none(),
-                    }
-            })
+            && self
+                .participants
+                .iter()
+                .enumerate()
+                .all(|(index, participant)| {
+                    let placement = participant.placement();
+                    self.custody[index].current_under_request_lock(
+                        &self.ownership,
+                        placement,
+                        requests,
+                        self.requests[index],
+                        self.request_incarnations[index],
+                    ) && participant.current(
+                        &self.ownership,
+                        &self.acknowledgements,
+                        self.reservation,
+                    )
+                })
     }
 }
 
@@ -211,12 +257,12 @@ pub(crate) fn capture_recovered(
             )
             .map_err(|error| PyRuntimeError::new_err(error.to_string()))?,
         );
-        custody.push(RecoveredCustody {
-            binding: current.cloned(),
-            _sample: cache[slot].clone(),
-            _lease: leases[slot].clone(),
-            _stems: resident[slot].accepted.clone(),
-        });
+        custody.push(RecoveredCustody::new(
+            current.cloned(),
+            cache[slot].clone(),
+            leases[slot].clone(),
+            resident[slot].accepted.clone(),
+        ));
     }
     let participants = participants
         .try_into()

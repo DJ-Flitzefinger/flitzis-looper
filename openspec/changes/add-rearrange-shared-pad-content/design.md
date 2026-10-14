@@ -138,8 +138,15 @@ stopped successor and retires only its old Hold/cohort/readers. Target observers
 stay fenced through own-ACK/control/config/asset settlement; controller retirement
 is delayed until own Native acceptance and shared jobs lose only that subscriber.
 The occupied asset publication retains its exact prepared table and retirement
-cursor across interrupted return and unrelated newer intent. Public gesture and
-occupied journal/restart proofs remain separate open R2 obligations.
+cursor across interrupted return and unrelated newer intent. Its distinct strict
+`pad_copy_overwrite` journal retains immutable A/B, fixed C, independent source/stem
+pins and actual Config receipts through terminal settlement. Startup validates
+complete history and lineage before ordinary restore. Original-input replay needs
+the captured A/B; recognized C acquires fresh target-only Native acceptance and
+its actual saved selection's own registration/component/preload acknowledgements.
+Portable relocation dispatches each complete Legacy/Pair/Copy history through its
+own strict schema without granting runtime authority. Public gestures and complete
+selection/Hold acceptance remain separate open R2 obligations.
 Mutable settings become independent; immutable disk/input backing stays shared.
 New copy is stopped with fresh current guards/native ACK, no cursor/voice/DSP
 history/meters/progress/pressed/HoldAction/tempjobhandle/runtime-token clone.

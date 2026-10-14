@@ -51,6 +51,8 @@ mod flitzis_looper_audio {
     #[pymodule_export]
     use super::audio_engine::PadPairTicket;
     #[pymodule_export]
+    use super::audio_engine::RecoveredCopyAcceptance;
+    #[pymodule_export]
     use super::audio_engine::RecoveredPairAcceptance;
 
     #[pymodule_export]

@@ -3,24 +3,34 @@
 import json
 import threading
 from dataclasses import dataclass, field
+from pathlib import Path
 from queue import Empty, SimpleQueue
 from typing import TYPE_CHECKING, Protocol
 from uuid import uuid4
 
 from flitzis_looper.constants import NUM_SAMPLES
+from flitzis_looper.controller.copy_arrangement_custody import CopyJournalCustody
+from flitzis_looper.controller.copy_arrangement_journal import (
+    CopyArrangementJournal,
+    CopyJournalOwner,
+    copy_after_snapshot,
+)
+from flitzis_looper.controller.copy_arrangement_recovery import copy_before_project
+from flitzis_looper.controller.copy_arrangement_startup import CopyArrangementStartup
 from flitzis_looper.copy_snapshot import capture_copy_snapshot, project_with_copy_snapshot
 from flitzis_looper.models import PadContentIdentity
 
 if TYPE_CHECKING:
     from collections.abc import Callable
-    from pathlib import Path
 
+    from flitzis_looper.controller.app import AppController
     from flitzis_looper.controller.asset_lifecycle import (
         AssetRetirementReservation,
         AssignmentPublicationPlan,
         ProjectAssetLifecycle,
     )
-    from flitzis_looper.controller.persistence import ProjectPersistence
+    from flitzis_looper.controller.copy_arrangement_startup import OriginalCopyRecoveryHandoff
+    from flitzis_looper.controller.persistence import ConfigCommitReceipt, ProjectPersistence
     from flitzis_looper.controller.stems import StemTaskRunner
     from flitzis_looper.copy_snapshot import CopySnapshot
     from flitzis_looper.models import ProjectState, SessionState
@@ -104,6 +114,13 @@ class _Copy:
     retirement: AssetRetirementReservation
     resolved_key_lock: bool
     predecessor: CopySnapshot | None = None
+    initial_journal: CopyArrangementJournal | None = None
+    journal: CopyJournalOwner | None = None
+    journal_custody: CopyJournalCustody = field(default_factory=CopyJournalCustody)
+    receipt: ConfigCommitReceipt | None = None
+    recovery_handoff: OriginalCopyRecoveryHandoff | None = None
+    source_binding: InputRuntimePadBinding | None = None
+    target_binding: InputRuntimePadBinding | None = None
     predecessor_retired: bool = False
     captured: CapturedPadCopy | None = None
     ticket: PadCopyTicket | None = None
@@ -263,11 +280,16 @@ class PadArrangementController:
         self._closing = False
         self._status = "idle"
         self.error: str | None = None
+        self._startup: CopyArrangementStartup | None = None
+
+    def bind_startup(self, app: AppController) -> None:
+        """Inspect and pin durable evidence before ordinary Loader restore/cleanup."""
+        self._startup = CopyArrangementStartup(app)
 
     @property
     def active(self) -> bool:
         """Whether this transaction still owns reservations and the writer fence."""
-        return self._copy is not None
+        return self._copy is not None or (self._startup is not None and self._startup.active)
 
     @property
     def pending(self) -> bool:
@@ -277,6 +299,8 @@ class PadArrangementController:
     @property
     def status(self) -> str:
         """Current control phase or the most recent settled outcome."""
+        if self._copy is None and self._startup is not None and self._startup.active:
+            return self._startup.status
         return self._status
 
     @property
@@ -287,10 +311,21 @@ class PadArrangementController:
     @property
     def fenced_sample_ids(self) -> frozenset[int]:
         """Targets whose assignment and musical edits must wait for settlement."""
-        return frozenset() if self._copy is None else frozenset({self._copy.target_id})
+        if self._copy is not None:
+            return frozenset({self._copy.target_id})
+        return frozenset() if self._startup is None else self._startup.fenced_sample_ids
+
+    @property
+    def observer_fenced_sample_ids(self) -> frozenset[int]:
+        """Keep fresh restore observers reachable before startup owns actual C."""
+        if self._copy is not None:
+            return self.fenced_sample_ids
+        return frozenset() if self._startup is None else self._startup.observer_fenced_sample_ids
 
     def ensure_global_key_lock_edit_allowed(self) -> None:
         """Fence inheritance changes while a captured Copy uses the global default."""
+        if self._startup is not None:
+            self._startup.ensure_global_key_lock_edit_allowed()
         if self._copy is not None and self._copy.snapshot.projected().key_lock is None:
             message = "Key Lock inheritance is reserved by a pending Copy"
             raise RuntimeError(message)
@@ -376,7 +411,7 @@ class PadArrangementController:
             copied_from=source.instance_id,
         )
         owner = uuid4().hex
-        self._persistence.capture_migration(owner)
+        revision, project_image, digest = self._persistence.capture_migration(owner)
         try:
             retirement = self._assets.reserve()
         except OSError, RuntimeError, TypeError, ValueError:
@@ -391,8 +426,33 @@ class PadArrangementController:
             retirement,
             resolved_key_lock=False,
             predecessor=predecessor,
+            source_binding=binding,
+            target_binding=target_binding,
         )
         copy.resolved_key_lock = _resolved_key_lock(self._project, copy)
+        if predecessor is not None:
+            try:
+                copy.initial_journal = CopyArrangementJournal(
+                    transaction_id=owner,
+                    config_reference=self._persistence.config_reference,
+                    captured_revision=revision,
+                    intent_revision=revision,
+                    captured_config_sha256=digest,
+                    source_id=source_id,
+                    target_id=target_id,
+                    source=snapshot,
+                    predecessor=predecessor,
+                    after=copy_after_snapshot(snapshot, identity),
+                    resolved_key_lock=copy.resolved_key_lock,
+                    captured_project_image_json=project_image.model_dump_json(),
+                    project_image_json=project_image.model_dump_json(),
+                    image_role="before",
+                    phase="captured",
+                )
+            except OSError, RuntimeError, TypeError, ValueError:
+                retirement.close()
+                self._persistence.release_migration(owner)
+                raise
         self._copy = copy
         self.error = None
         self._session.sample_load_errors.pop(target_id, None)
@@ -400,41 +460,86 @@ class PadArrangementController:
         self._session.sample_load_stage[target_id] = "Copy preparing"
         self._status = "preparing"
         try:
-            envelope = json.dumps(
-                {
-                    "schema_version": 1,
-                    "snapshot": json.loads(snapshot.payload_json),
-                    "resolved_key_lock": copy.resolved_key_lock,
-                },
-                sort_keys=True,
-                separators=(",", ":"),
-                allow_nan=False,
-            )
-            copy.captured = (
-                self._audio.capture_pad_copy(
-                    binding, target_id, envelope, target_binding=target_binding
-                )
-                if target_binding is not None
-                else self._audio.capture_pad_copy(binding, target_id, envelope)
-            )
-            captured = copy.captured
-            audio = self._audio
-            results = self._results
-            copy.worker_done = False
-            self._runner(lambda: _prepare_copy(audio, captured, owner, results))
+            self._ensure_journal(copy)
+            self._start_preparation(copy)
         except (OSError, RuntimeError, TypeError, ValueError) as error:
-            # The established bounded runner raises before admitting a worker.
-            copy.worker_done = True
+            # The bounded runner raises before admitting a worker. Journal uncertainty
+            # still retains its exact intended bytes, readers and Config owner.
             copy.cancel_requested = True
             self._report(copy, str(error))
             self._cancel_unclaimed(copy)
             return False
         return True
 
+    def _ensure_journal(self, copy: _Copy) -> CopyJournalOwner | None:
+        initial = copy.initial_journal
+        if initial is None:
+            return None
+        if (
+            copy.journal is not None
+            and copy.journal.journal is not None
+            and (
+                copy.journal.journal.phase in {"settled", "cancelled"}
+                and copy.journal.intended is None
+            )
+        ):
+            return copy.journal
+        copy.journal_custody.acquire(
+            self._assets, Path.cwd(), (initial.source, initial.predecessor, initial.after)
+        )
+        if copy.journal is None:
+            copy.journal = CopyJournalOwner(Path.cwd() / "samples", initial)
+        journal = copy.journal
+        if journal.intended is not None:
+            journal.append(
+                CopyArrangementJournal.model_validate_json(journal.intended, strict=True)
+            )
+        if journal.journal is None:
+            journal.append(initial)
+        return journal
+
+    def _start_preparation(self, copy: _Copy) -> None:
+        if copy.captured is not None:
+            return
+        binding, target_binding = copy.source_binding, copy.target_binding
+        if binding is None:
+            message = "Copy lost its original source binding before preparation"
+            raise RuntimeError(message)
+        envelope = json.dumps(
+            {
+                "schema_version": 1,
+                "snapshot": json.loads(copy.snapshot.payload_json),
+                "resolved_key_lock": copy.resolved_key_lock,
+            },
+            sort_keys=True,
+            separators=(",", ":"),
+            allow_nan=False,
+        )
+        copy.captured = (
+            self._audio.capture_pad_copy(
+                binding, copy.target_id, envelope, target_binding=target_binding
+            )
+            if target_binding is not None
+            else self._audio.capture_pad_copy(binding, copy.target_id, envelope)
+        )
+        captured, audio, results, owner = copy.captured, self._audio, self._results, copy.owner
+        copy.worker_done = False
+        try:
+            self._runner(lambda: _prepare_copy(audio, captured, owner, results))
+        except OSError, RuntimeError, TypeError, ValueError:
+            copy.worker_done = True
+            copy.cancel_requested = True
+            raise
+
     def poll(self) -> None:
         """Collect worker completion and reconcile only genuine complete-target ACKs."""
         self._require_control_thread()
         self._collect()
+        if self._copy is None and self._startup is not None and self._startup.active:
+            handoff = self._startup.poll()
+            self.error = self._startup.error
+            if handoff is not None:
+                self._adopt_handoff(handoff)
         copy = self._copy
         if copy is None:
             return
@@ -445,6 +550,28 @@ class PadArrangementController:
             if not copy.acknowledged and not copy.config_committed:
                 copy.cancel_requested = True
                 self._cancel_unclaimed(copy)
+
+    def _adopt_handoff(self, handoff: OriginalCopyRecoveryHandoff) -> None:
+        initial = handoff.initial
+        self._copy = _Copy(
+            initial.transaction_id,
+            initial.source_id,
+            initial.target_id,
+            initial.source,
+            initial.target_identity,
+            handoff.retirement,
+            initial.resolved_key_lock,
+            predecessor=initial.predecessor,
+            initial_journal=initial,
+            journal=handoff.journal,
+            journal_custody=handoff.custody,
+            recovery_handoff=handoff,
+        )
+        copy = self._copy
+        copy.source_binding = handoff.source_binding
+        copy.target_binding = handoff.target_binding
+        self._session.loading_sample_ids.add(initial.target_id)
+        self._status = "preparing"
 
     def cancel(self) -> bool:
         """Cancel only after Native proves no claim and the worker has returned."""
@@ -466,7 +593,8 @@ class PadArrangementController:
         self._closing = True
         copy = self._copy
         if copy is None:
-            return True
+            self.poll()
+            return not self.active
         copy.cancel_requested = True
         self._status = "cancel_pending"
         try:
@@ -508,18 +636,16 @@ class PadArrangementController:
                 self._report(copy, result.error)
 
     def _advance(self, copy: _Copy) -> None:
+        journal = self._ensure_journal(copy)
         if copy.cancel_requested and self._cancel_unclaimed(copy):
             return
+        if not copy.cancel_requested:
+            self._start_preparation(copy)
         if not copy.worker_done or copy.ticket is None:
             return
         phase = copy.ticket.publication_status()
         if phase == "rejected":
-            if copy.acknowledged or copy.config_committed:
-                message = "Previously acknowledged Native Copy was rejected; owners remain fenced"
-                raise RuntimeError(message)
-            self._report(copy, "Native Copy was rejected without target adoption")
-            copy.cancel_requested = True
-            self._cancel_unclaimed(copy)
+            self._reject(copy)
             return
         if phase not in {"captured", "preparing", "pending", "adopting", "accepted"}:
             message = f"Native Copy returned an unsupported publication status: {phase}"
@@ -528,14 +654,34 @@ class PadArrangementController:
             self._publish(copy)
         if not copy.published and phase in {"captured", "preparing", "pending"}:
             return
-        if not copy.acknowledged:
-            if not self._audio.reconcile_pad_copy(copy.ticket):
-                self._status = "adopting" if phase in {"adopting", "accepted"} else "pending"
-                return
-            copy.acknowledged = True
+        if not self._observe_ack(copy, phase):
+            return
+        if (
+            journal is not None
+            and journal.journal is not None
+            and journal.journal.phase == "publication_pending"
+        ):
+            journal.append(self._before_record(copy, "native_ack_observed"))
         self._retire_predecessor(copy)
         self._status = "commit_pending"
         self._commit(copy)
+
+    def _reject(self, copy: _Copy) -> None:
+        if copy.acknowledged or copy.config_committed:
+            message = "Previously acknowledged Native Copy was rejected; owners remain fenced"
+            raise RuntimeError(message)
+        self._report(copy, "Native Copy was rejected without target adoption")
+        copy.cancel_requested = True
+        self._cancel_unclaimed(copy)
+
+    def _observe_ack(self, copy: _Copy, phase: str) -> bool:
+        if not copy.acknowledged:
+            assert copy.ticket is not None
+            if not self._audio.reconcile_pad_copy(copy.ticket):
+                self._status = "adopting" if phase in {"adopting", "accepted"} else "pending"
+                return False
+            copy.acknowledged = True
+        return True
 
     def _retire_predecessor(self, copy: _Copy) -> None:
         if copy.predecessor is None or copy.predecessor_retired:
@@ -552,6 +698,8 @@ class PadArrangementController:
         image = self._assets.prepare_assignment_image(candidate)
         copy.images.append(image)
         copy.initial_image = image
+        if copy.journal is not None:
+            copy.journal.append(self._before_record(copy, "publication_pending"))
         self._audio.publish_pad_copy(copy.ticket)
         copy.published = True
         self._status = "pending"
@@ -643,7 +791,14 @@ class PadArrangementController:
         if not copy.config_committed or copy.committed_revision != revision:
             self._prepare_occupied_assignment(copy, revision)
             assert copy.candidate is not None
-            self._persistence.commit_migration(copy.owner, revision, copy.candidate)
+            assert copy.journal is not None
+            assert copy.initial_journal is not None
+            if copy.receipt is None or copy.receipt.revision != revision:
+                copy.journal.append(self._before_record(copy, "native_ack_observed"))
+                copy.receipt = self._persistence.commit_migration_receipt(
+                    copy.owner, revision, copy.candidate
+                )
+            copy.journal.append(copy.initial_journal.committed(copy.receipt))
             if self._persistence.revision != revision:
                 message = (
                     "Newer project intent arrived during the atomic occupied Copy config write"
@@ -674,13 +829,37 @@ class PadArrangementController:
         if not copy.native_finished:
             self._audio.finish_pad_copy(copy.ticket)
             copy.native_finished = True
+        if copy.journal is not None:
+            assert copy.receipt is not None
+            assert copy.initial_journal is not None
+            copy.journal.append(
+                copy.initial_journal.committed(copy.receipt).changed(phase="settled")
+            )
         self._settle(copy, "completed")
+
+    def _before_record(self, copy: _Copy, phase: str) -> CopyArrangementJournal:
+        assert copy.initial_journal is not None
+        initial = copy.initial_journal
+        image = copy_before_project(self._project, initial)
+        return initial.changed(
+            project_image_json=image.model_dump_json(),
+            intent_revision=self._persistence.revision,
+            image_role="before",
+            phase=phase,
+            committed_revision=None,
+            committed_config_sha256=None,
+            error=copy.failure,
+        )
 
     def _cancel_unclaimed(self, copy: _Copy) -> bool:
         if not copy.worker_done or copy.acknowledged or copy.config_committed:
             return False
         if not self._prove_cancellation(copy):
             return False
+        if copy.initial_journal is not None:
+            journal = self._ensure_journal(copy)
+            assert journal is not None
+            journal.append(self._before_record(copy, "cancelled"))
         self._settle(copy, "failed" if copy.failure is not None else "cancelled")
         return True
 
@@ -699,6 +878,10 @@ class PadArrangementController:
 
     def _settle(self, copy: _Copy, status: str) -> None:
         _release_images(self._assets, copy)
+        if copy.recovery_handoff is not None:
+            assert self._startup is not None
+            self._startup.complete_original(copy.recovery_handoff)
+        copy.journal_custody.release()
         if not copy.writer_released:
             self._persistence.release_migration(copy.owner)
             copy.writer_released = True

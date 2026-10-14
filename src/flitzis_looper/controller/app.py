@@ -173,7 +173,7 @@ class AppController:
             self,
             on_project_changed=self._persistence.mark_dirty,
         )
-        self.pairs = PairArrangementController(self)
+        self._prepare_arrangement_recovery()
 
         self._controllers: set[BaseController] = {
             self.transport,
@@ -189,6 +189,16 @@ class AppController:
         self.material_migration.schedule_after_restore()
         self.transport.apply_project_state_to_audio()
         self.input_mapping.apply_project_state_to_input_runtime()
+
+    def _prepare_arrangement_recovery(self) -> None:
+        """Acquire Copy/Pair startup ownership before ordinary Loader restoration."""
+        self.arrangement.bind_startup(self)
+        self.pairs = PairArrangementController(self)
+        self.loader._bind_restored_assignment_guard(self._restored_assignment_held)
+        self.stems.bind_restored_assignment_guard(self._restored_assignment_held)
+
+    def _restored_assignment_held(self, sample_id: int) -> bool:
+        return sample_id in self.arrangement.fenced_sample_ids | self.pairs.fenced_sample_ids
 
     def prepare_shutdown(self, *, holds_polled: bool = False) -> bool:
         """Settle complete Copy ownership while its workers and callback remain alive."""
@@ -267,7 +277,9 @@ class AppController:
         self._sync_arrangement_observers()
 
     def _sync_arrangement_observers(self) -> None:
-        deferred = self.pairs.observer_fenced_sample_ids | self.arrangement.fenced_sample_ids
+        deferred = (
+            self.pairs.observer_fenced_sample_ids | self.arrangement.observer_fenced_sample_ids
+        )
         for component in (self.transport, self.loader, self.accepted_timing, self.stems):
             component._pair_deferred_sample_ids = deferred
 

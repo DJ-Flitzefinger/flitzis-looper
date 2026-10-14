@@ -114,7 +114,8 @@ code must not copy sample trees or rewrite JSON references independently.
 
 The runtime activation preflight checks the complete Native pad Copy and internal
 Pair capture/prepare/publish/reconcile/finish/cancel interfaces, including opaque
-Pair acknowledgement validation and fresh recovery acceptance. It also checks
+Pair acknowledgement validation and fresh Pair and target-only occupied Copy
+recovery acceptance. It also checks
 original-ticket Hold release, captured MIDI trigger/window admission, owned pad
 feedback, original timing-ticket/refresh Pending observations and the Native
 placement-marker/read-token queries, resident-admission protocol version 1, the
@@ -125,6 +126,14 @@ incompatible extension cannot activate the current Python controls. The source
 installer builds these APIs from the selected main checkout through its existing
 private-runtime pipeline. The installer BAT and dependency/toolchain inputs do not
 need a new installation stage for these control APIs.
+
+Native Samples relocation validates complete Legacy Material, Pair and occupied
+Copy journal histories with their distinct schemas before creating relocation
+output. Musical seals, actual receipts and successor lineage remain intact across
+the directory move and rollback, with original journal bytes and FileIDs preserved.
+Historical Config addresses and their moved aliases resolve to the same held files.
+Known foreign Config contents are not read. These installer checks grant no runtime
+source, timing or stem acceptance; the application acquires fresh owners on restore.
 
 Focused missing-tool, deep-path/SUBST, DLL isolation, unchanged-main model repair,
 update/failure/recovery, legacy migration, ownership and actual-process lifetime

@@ -86,6 +86,7 @@ pub use hold_action::HoldActionTicket;
 pub use input_mapping::CapturedInputPadTrigger;
 pub use loader_events::LoaderEventDelivery;
 pub use offline_stem_source::OfflineStemSourceLease;
+pub use pad_copy::recovery::RecoveredCopyAcceptance;
 pub use pad_copy::{CapturedPadCopy, PadCopyTicket};
 pub use pad_pair::recovery::RecoveredPairAcceptance;
 pub use pad_pair::{CapturedPadPair, PadPairAcknowledgement, PadPairTicket};
@@ -2529,6 +2530,27 @@ impl AudioEngine {
 
     pub fn _cancel_pad_pair(&self, captured: &CapturedPadPair) -> PyResult<bool> {
         pad_pair::control::cancel(self, captured)
+    }
+
+    pub fn capture_recovered_pad_copy(
+        &self,
+        target: &InputRuntimePadBinding,
+    ) -> PyResult<RecoveredCopyAcceptance> {
+        pad_copy::recovery::capture_recovered(self, target)
+    }
+
+    pub fn validate_recovered_pad_copy(
+        &self,
+        acceptance: &RecoveredCopyAcceptance,
+    ) -> PyResult<bool> {
+        pad_copy::recovery::validate_recovered(self, acceptance)
+    }
+
+    pub fn release_recovered_pad_copy(
+        &self,
+        acceptance: &RecoveredCopyAcceptance,
+    ) -> PyResult<bool> {
+        pad_copy::recovery::release_recovered(self, acceptance)
     }
 
     pub fn capture_recovered_pad_pair(

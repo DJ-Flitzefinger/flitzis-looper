@@ -457,6 +457,7 @@ class LoaderController(_IncomingIntentControl, _MaterialCreationOwnership):
         self._on_stems_deleted = on_stems_deleted
         self._on_stems_invalidated: Callable[[int], None] | None = None
         self._on_restored_sample_loaded: Callable[[int], bool] | None = None
+        self._restored_assignment_held: Callable[[int], bool] = lambda _sample_id: False
         self._on_new_sample_loaded: Callable[[int, float | None], None] | None = None
         self._on_incoming_sample_loaded: Callable[[int], None] | None = None
         self._on_loaded_key_lock: Callable[[int], None] | None = None
@@ -523,6 +524,10 @@ class LoaderController(_IncomingIntentControl, _MaterialCreationOwnership):
         """Register behavior that runs after a restored sample finishes loading."""
         self._on_restored_sample_loaded = callback
 
+    def _bind_restored_assignment_guard(self, held: Callable[[int], bool]) -> None:
+        """Preserve recovery-owned assignments while genuine restore observers run."""
+        self._restored_assignment_held = held
+
     def set_sample_unloaded_callback(self, callback: Callable[[int], None]) -> None:
         """Register control-intent cleanup after a native unload is admitted."""
         self._on_sample_unloaded = callback
@@ -549,13 +554,9 @@ class LoaderController(_IncomingIntentControl, _MaterialCreationOwnership):
                 continue
 
             rel = self._parse_cached_sample_path(path)
-            if rel is None:
-                self._clear_restored_pad(sample_id)
-                changed = True
-                continue
-
-            abs_path = Path.cwd() / rel
-            if not abs_path.is_file():
+            if rel is None or not (Path.cwd() / rel).is_file():
+                if self._preserve_recovery_restore(sample_id, rel):
+                    continue
                 self._clear_restored_pad(sample_id)
                 changed = True
                 continue
@@ -571,6 +572,16 @@ class LoaderController(_IncomingIntentControl, _MaterialCreationOwnership):
 
         if changed:
             self._mark_project_changed()
+
+    def _preserve_recovery_restore(self, sample_id: int, rel: Path | None) -> bool:
+        if not self._restored_assignment_held(sample_id):
+            return False
+        message = "Recovery retains saved assignment; original source is missing or unrecognized"
+        if rel is not None:
+            self._defer_restored_load(sample_id, rel, pressure=message)
+        else:
+            self._session.sample_load_errors[sample_id] = message
+        return True
 
     def load_sample_async(self, sample_id: int, path: str) -> None:
         """Load an audio file into a sample slot asynchronously.
@@ -1661,6 +1672,8 @@ class LoaderController(_IncomingIntentControl, _MaterialCreationOwnership):
                 or current_content != self._deferred_restore_content.get(sample_id)
             ):
                 self._cancel_deferred_restore(sample_id)
+                continue
+            if not (Path.cwd() / rel).is_file() and self._preserve_recovery_restore(sample_id, rel):
                 continue
             admitted = self._schedule_restored_load(sample_id, rel, run_analysis=False)
             if not admitted and sample_id in self._deferred_restores:

@@ -10,6 +10,8 @@ const MAX_ENTRIES: usize = 8192;
 const MAX_BYTES: u64 = 512 * 1024 * 1024 * 1024;
 const RECORD_BYTES: u64 = 16 * 1024 * 1024;
 
+mod journal;
+
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 struct Entry {
@@ -428,6 +430,7 @@ fn config_bindings(source: &Path) -> io::Result<Vec<LocationBinding>> {
     let journals = source.join(".material-migrations");
     if journals.exists() {
         let mut count = 0;
+        let mut histories = BTreeMap::new();
         for entry in fs::read_dir(&journals)? {
             count += 1;
             if count > RECORD_LIMIT {
@@ -443,96 +446,20 @@ fn config_bindings(source: &Path) -> io::Result<Vec<LocationBinding>> {
                     id.clone(),
                 )
                 .map_err(|error| invalid(error.to_string()))?;
-            for encoded in store
+            let encoded = store
                 .history()
-                .map_err(|error| invalid(error.to_string()))?
-            {
-                let record: Value = serde_json::from_str(&encoded).map_err(io::Error::other)?;
-                exact_keys(
-                    &record,
-                    &[
-                        "schema_version",
-                        "transaction_id",
-                        "phase",
-                        "config_reference",
-                        "captured_revision",
-                        "intent_revision",
-                        "config_sha256",
-                        "snapshot_json",
-                        "assignments",
-                        "alias",
-                        "committed_revision",
-                        "committed_config_sha256",
-                        "artifacts",
-                        "resume_of",
-                        "cleanup_complete",
-                        "error",
-                    ],
-                )?;
-                if record["schema_version"] != 1
-                    || record["transaction_id"] != id
-                    || record["captured_revision"].as_u64().is_none()
-                    || record["intent_revision"].as_u64().is_none()
-                    || record["cleanup_complete"].as_bool().is_none()
-                    || !record["snapshot_json"].as_str().is_some_and(|text| {
-                        text.len() <= 8 * 1024 * 1024
-                            && serde_json::from_str::<Value>(text)
-                                .is_ok_and(|value| value.is_object())
-                    })
-                    || !record["assignments"].as_array().is_some_and(|items| {
-                        !items.is_empty()
-                            && items.len() <= 216
-                            && items.iter().all(|item| {
-                                item["sample_id"].as_u64().is_some_and(|id| id < 216)
-                                    && item["instance_id"]
-                                        .as_str()
-                                        .is_some_and(material_paths::valid_id)
-                                    && item["old_reference"]
-                                        .as_str()
-                                        .is_some_and(|value| !value.is_empty())
-                            })
-                    })
-                    || !record["artifacts"].as_array().is_some_and(|items| {
-                        items.len() <= 1024
-                            && items.iter().all(|item| {
-                                ["target", "rollback"]
-                                    .contains(&item["role"].as_str().unwrap_or(""))
-                                    && item["created"].as_bool().is_some()
-                                    && serde_json::from_value::<Receipt>(item["evidence"].clone())
-                                        .is_ok()
-                            })
-                    })
-                    || record["phase"] == "config_committed"
-                        && (record["committed_revision"].as_u64().is_none()
-                            || !record["committed_config_sha256"]
-                                .as_str()
-                                .is_some_and(digest_valid))
-                    || !record["phase"].as_str().is_some_and(|phase| {
-                        [
-                            "captured",
-                            "material_verified",
-                            "references_prepared",
-                            "adoption_pending",
-                            "ack_confirmed",
-                            "config_committed",
-                            "failed",
-                            "unresolved",
-                        ]
-                        .contains(&phase)
-                    })
-                {
-                    return Err(invalid(
-                        "unrecognized journal history blocks portable relocation; preserved",
-                    ));
-                }
-                references.insert(
-                    record["config_reference"]
-                        .as_str()
-                        .ok_or_else(|| invalid("journal config binding missing"))?
-                        .to_owned(),
-                );
-            }
+                .map_err(|error| invalid(error.to_string()))?;
+            histories.insert(
+                id.clone(),
+                journal::History::validate(source, &id, &encoded)?,
+            );
         }
+        journal::validate_successors(source, &histories)?;
+        references.extend(
+            histories
+                .into_values()
+                .map(|history| history.config_reference),
+        );
     }
     let mut bindings: BTreeMap<String, LocationBinding> = BTreeMap::new();
     if let Some(previous) = verified_projection(source)? {

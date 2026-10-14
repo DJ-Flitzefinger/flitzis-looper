@@ -1069,9 +1069,11 @@ Startup order:
 1. Load and validate `ProjectState`.
 2. Create fresh `SessionState`.
 3. Start `AudioEngine`.
-4. Construct controllers.
-5. Validate restored sample assignments, clear missing or unusable pads with
-   explicit neutral Rust state, and schedule cached sample loads.
+4. Construct controllers, inspect complete current-Config arrangement journal histories,
+   and retain their original/stem readers before ordinary restore and cleanup.
+5. Validate restored sample assignments, retain recovery-owned missing assignments,
+   clear other missing or unusable pads with explicit neutral Rust state, and
+   schedule cached sample loads.
 6. Validate restored stem cache metadata; publish restored prepared stems only
    after each matching full-mix sample load succeeds.
 7. Publish restored global settings and non-stem loaded-pad live-audio state to
@@ -1084,6 +1086,35 @@ clear, or force-reset paths still publish the bounded neutral state needed to
 remove stale Rust live-audio state for that pad. Stem cleanup additionally
 removes the project metadata that would otherwise make a later restored-load
 callback eligible to republish prepared stems.
+
+Occupied Copy uses a distinct `pad_copy_overwrite` journal with immutable source A,
+predecessor B and one fixed fresh successor C. The controller records preparation,
+publication and its own complete Native ACK before removing B's controller owners.
+Every new Config revision first records the latest full pre-C intent, preserving
+newer A and unrelated edits; only an actual `ConfigCommitReceipt` records the
+written after image. Independent A/B/C original and stem readers survive model,
+asset and Native settlement through the terminal journal append.
+
+`CopyArrangementStartup` reads entire bounded Native histories and validates
+Config custody and successor lineage before restoring intent. Original-input
+recovery requires the captured A/B musical seals and transfers one writer to the
+existing live Copy path with the same C identity. A recognized written C receives
+fresh target-only source, selection and timing acceptance; it never copies A again.
+A may have changed or disappeared. Unknown histories, missing custody, ambiguous
+lineages and incompatible unfinished Material/Pair/Copy owners retain visible
+fences. Missing recovery-owned assignments and stem metadata remain intact while
+ordinary loader observers perform genuine restore; custody retry keeps all available
+readers and the same writer.
+
+A saved immutable stem selection is verified through the existing preparation and
+registration path without another selection Config commit. Registration pressure
+retains the prepared owner and disk lease. Recovery waits for the exact current own
+Native registration and, for ALL STEMS, the own component/mask acknowledgement.
+Startup preload requires its own acknowledgement only when enabled. FullMix with
+preload disabled verifies registration without requesting components or preload.
+Restore observers stay reachable until these requirements pass. Historical journal
+tokens and a stable empty selection epoch confer no current acceptance. The broader
+R2 selection/Hold matrix, public gestures and musical/resource/Human gates remain open.
 
 Audio-to-control telemetry is best-effort and controller-owned. Dropped
 telemetry must not silently change durable project intent.

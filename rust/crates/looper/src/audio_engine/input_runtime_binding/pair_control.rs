@@ -238,6 +238,26 @@ impl InputRuntimeOwnership {
         projection: &PairControlProjection,
         reservation: u64,
     ) -> bool {
+        self.participant_control_fields_current(projection)
+            && self.copy_reservations[projection.placement.slot()].load(Ordering::Acquire)
+                == projection.copy_reservation
+            && self.pair_reservation(projection.placement.slot()) == reservation
+    }
+
+    /// The same exact participant fields, with only its own single-target Copy fence.
+    pub(crate) fn recovered_copy_control_projection_current(
+        &self,
+        projection: &PairControlProjection,
+        reservation: u64,
+    ) -> bool {
+        reservation != 0
+            && projection.copy_reservation == 0
+            && self.participant_control_fields_current(projection)
+            && self.copy_reservation(projection.placement.slot()) == reservation
+            && self.pair_reservation(projection.placement.slot()) == 0
+    }
+
+    fn participant_control_fields_current(&self, projection: &PairControlProjection) -> bool {
         let placement = projection.placement;
         let cell = placement.cell().index();
         self.slot_snapshot_fields_current(placement)
@@ -255,9 +275,6 @@ impl InputRuntimeOwnership {
             && self.parameter_intents[cell].load(Ordering::Acquire) == projection.parameter_intent
             && self.copy_parameter_epochs[cell].load(Ordering::Acquire)
                 == projection.parameter_epoch
-            && self.copy_reservations[placement.slot()].load(Ordering::Acquire)
-                == projection.copy_reservation
-            && self.pair_reservation(placement.slot()) == reservation
     }
 
     pub(crate) fn pair_reservation(&self, slot: usize) -> u64 {

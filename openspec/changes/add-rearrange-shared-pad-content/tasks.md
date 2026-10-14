@@ -19,12 +19,13 @@ Use canonical program/coverage, not a new parallel order. R0 is docs/spec-only.
   Execute all R2 HC cases, release-before-ACK, both layout/release orderings, saturation,
   superseding intent, repeated mutations/ABA/stale telemetry/ACK; separate closure beforeR3/R4.
   Internal occupied Copy uses exact target binding and one fresh stopped successor;
-  retain dedicated journal/restart recovery and full R2 selection/Hold acceptance
-  before public gestures. Bounded Native/controller proofs do not close this parent.
+  distinct fixed-C Copy journal/restart recovery uses actual Config receipts, independent
+  before/after pins, fresh target-only selection acceptance and strict Portable routing.
+  Full R2 selection/Hold acceptance remains required before public gestures.
+  Bounded Native/controller/recovery proofs do not close this parent.
   Finished timing evidence and dispatched publication retain their original owners
   through Native Pending; own timing/derived acknowledgements still control projection.
-  These bounded continuation proofs do not supply the dedicated Copy restart or
-  complete selection/Hold acceptance.
+  These bounded continuation proofs do not supply complete selection/Hold acceptance.
 - [ ] R3: modeOFF/warning/help/left-right gestures/target feedback; branch before
   trigger/stop, cancel/self/invalid/empty no-op, existing control tick outside release
   even after editor close/focus/selection; global mute/latest volume regression.
