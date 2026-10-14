@@ -596,7 +596,7 @@ fn publication(
 
 struct CallbackState {
     acknowledgements: Arc<CurrentTimingAcknowledgements>,
-    mixer: RtMixer,
+    mixer: Box<RtMixer>,
     scheduler: FixedCapacityScheduler<8>,
     transport: TransportTimeline,
     quantization: TriggerQuantization,
@@ -605,9 +605,15 @@ struct CallbackState {
 
 impl CallbackState {
     fn new(source: SampleBuffer) -> Self {
-        let mut mixer = RtMixer::new(1, RATE as f32);
         let acknowledgements = Arc::default();
-        mixer.set_current_timing_acknowledgements(Arc::clone(&acknowledgements));
+        let mut mixer = crate::audio_engine::audio_stream::create_stream_mixer(
+            1,
+            RATE,
+            Arc::clone(&acknowledgements),
+            Arc::default(),
+            (0..NUM_SAMPLES).map(|_| Arc::default()).collect(),
+        )
+        .unwrap();
         mixer.load_sample(0, source);
         mixer.set_pad_bpm(0, Some(120.0));
         Self {

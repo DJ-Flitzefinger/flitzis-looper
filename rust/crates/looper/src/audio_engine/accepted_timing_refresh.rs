@@ -71,6 +71,22 @@ pub struct AcceptedTimingRefreshTicket {
 
 #[pymethods]
 impl AcceptedTimingRefreshTicket {
+    /// Observe the retained original lifetime's placement gap without granting
+    /// fresh authority or treating a retired original content as Pending.
+    pub fn placement_pending(&self) -> bool {
+        self.binding
+            .placement
+            .and_then(|snapshot| snapshot.content_key())
+            .is_some_and(|key| {
+                self.ownership.content_key_current(key)
+                    && matches!(
+                        self.ownership.observe_control_key(key),
+                        super::content_placement::PlacementObservation::Pending
+                    )
+                    && self.ownership.content_key_current(key)
+            })
+    }
+
     pub fn publication_status(&self) -> &'static str {
         match self.status.load(Ordering::Acquire) {
             ACCEPTED => "accepted",

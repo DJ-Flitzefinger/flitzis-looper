@@ -182,12 +182,28 @@ pub(super) fn accept_message(mixer: &mut RtMixer, message: ControlMessage) -> bo
     mixer.publish_constant_timing_rt(id, timing, &mut ImmediateAudioBufferRetirement)
 }
 
-pub(super) fn acknowledged_mixer(engine: &AudioEngine) -> RtMixer {
-    let mut mixer = RtMixer::new(1, RATE as f32);
-    mixer.set_input_runtime_ownership(engine.input_runtime_ownership.clone());
-    mixer.set_current_timing_acknowledgements(engine.current_timing_acknowledgements.clone());
+pub(super) fn acknowledged_mixer(engine: &AudioEngine) -> Box<RtMixer> {
+    let mut mixer = crate::audio_engine::audio_stream::create_stream_mixer(
+        1,
+        RATE,
+        engine.current_timing_acknowledgements.clone(),
+        engine.input_runtime_ownership.clone(),
+        engine.prepared_source_epochs.clone(),
+    )
+    .unwrap();
     mixer.load_sample(0, engine.sample_cache.lock().unwrap()[0].clone().unwrap());
     mixer
+}
+
+fn standalone_mixer() -> Box<RtMixer> {
+    crate::audio_engine::audio_stream::create_stream_mixer(
+        1,
+        RATE,
+        Arc::default(),
+        Arc::default(),
+        (0..NUM_SAMPLES).map(|_| Arc::default()).collect(),
+    )
+    .unwrap()
 }
 
 fn current_record(engine: &AudioEngine) -> Option<(String, f64, u64)> {
@@ -787,7 +803,7 @@ fn callback_rejects_retired_intent_or_changed_source_and_preserves_previous_grid
             decision(),
         )
         .unwrap();
-        let mut mixer = RtMixer::new(1, RATE as f32);
+        let mut mixer = standalone_mixer();
         mixer.load_sample(0, ticket.sample.clone());
         mixer.set_pad_bpm(0, Some(120.0));
         if change_source {
@@ -975,7 +991,7 @@ fn constant_timing_normal_analysis_admission_rejects_pending_and_queued_and_chec
         assert_eq!(rate, RATE);
         assert!(Arc::ptr_eq(&sample.samples, &ticket.sample.samples));
         if queued {
-            let mut mixer = RtMixer::new(1, RATE as f32);
+            let mut mixer = standalone_mixer();
             mixer.load_sample(0, sample);
             assert!(!accept_message(&mut mixer, consumer.pop().unwrap()));
             assert_eq!(ticket.publication_status().unwrap(), "rejected");

@@ -1,5 +1,34 @@
 use super::*;
-use std::cell::Cell;
+use std::cell::{Cell, RefCell};
+
+thread_local! {
+    static BEFORE_MARKER_COMPARE_EXCHANGE: RefCell<Option<Box<dyn FnOnce()>>> = RefCell::new(None);
+}
+
+pub(super) fn before_marker_compare_exchange() {
+    let hook = BEFORE_MARKER_COMPARE_EXCHANGE.with(|slot| slot.borrow_mut().take());
+    if let Some(hook) = hook {
+        hook();
+    }
+}
+
+fn with_before_marker_compare_exchange<T>(
+    hook: impl FnOnce() + 'static,
+    action: impl FnOnce() -> T,
+) -> T {
+    struct Reset;
+    impl Drop for Reset {
+        fn drop(&mut self) {
+            BEFORE_MARKER_COMPARE_EXCHANGE.with(|slot| *slot.borrow_mut() = None);
+        }
+    }
+    BEFORE_MARKER_COMPARE_EXCHANGE.with(|slot| {
+        assert!(slot.borrow().is_none());
+        *slot.borrow_mut() = Some(Box::new(hook));
+    });
+    let _reset = Reset;
+    action()
+}
 
 struct Fixture {
     owner: Arc<()>,
@@ -116,6 +145,395 @@ fn complete_initial_permutation_has_empty_cells_and_no_content_authority() {
             .capture_slot(fixture.identity(), &fixture.lifetimes, NUM_SAMPLES),
         PlacementObservation::Stale
     );
+}
+
+#[test]
+fn read_token_is_stable_for_unchanged_complete_reads_without_creating_content_authority() {
+    let fixture = Fixture::new();
+    let before = fixture.image();
+    let token = fixture.placement.read_token().unwrap();
+    assert_eq!(fixture.placement.read_token(), Some(token));
+    assert_eq!(fixture.placement.read_token(), Some(token));
+    assert_eq!(fixture.image(), before);
+    assert!(
+        before
+            .iter()
+            .all(|snapshot| snapshot.content_key().is_none())
+    );
+}
+
+#[test]
+fn pair_marker_read_token_changes_on_success_and_on_rejection_with_exact_snapshot_rollback() {
+    let fixture = Fixture::new();
+    let key = fixture.assign(0, 10);
+    let prepared = fixture.prepare(0, 36);
+    let before = fixture.image();
+    let token = fixture.placement.read_token().unwrap();
+    assert_eq!(
+        fixture.placement.commit_with(
+            fixture.identity(),
+            &fixture.lifetimes,
+            &prepared,
+            false,
+            || panic!("unavailable capacity must not claim"),
+            || panic!("unavailable capacity must not apply"),
+        ),
+        Err(PlacementError::CapacityUnavailable)
+    );
+    assert_eq!(fixture.placement.read_token(), Some(token));
+    assert_eq!(
+        fixture.placement.commit_with(
+            fixture.identity(),
+            &fixture.lifetimes,
+            &prepared,
+            true,
+            || {
+                assert!(fixture.placement.pending());
+                assert_eq!(fixture.placement.read_token(), None);
+                assert!(
+                    fixture
+                        .placement
+                        .key_current(fixture.identity(), &fixture.lifetimes, key)
+                );
+                false
+            },
+            || panic!("rejected claim must not apply"),
+        ),
+        Err(PlacementError::ClaimRejected)
+    );
+    assert_eq!(fixture.image(), before);
+    assert!(!fixture.placement.pending());
+    let rejected = fixture.placement.read_token().unwrap();
+    assert_ne!(rejected, token);
+    assert_eq!(fixture.placement.read_token(), Some(rejected));
+    fixture
+        .placement
+        .commit_with(
+            fixture.identity(),
+            &fixture.lifetimes,
+            &prepared,
+            true,
+            || {
+                assert_eq!(fixture.placement.read_token(), None);
+                true
+            },
+            || assert_eq!(fixture.placement.read_token(), None),
+        )
+        .unwrap();
+    assert_ne!(fixture.placement.read_token().unwrap(), rejected);
+    assert_eq!(current(fixture.observe(key)).unwrap().slot(), 36);
+    fixture.assert_permutation();
+}
+
+#[test]
+fn slot_marker_read_token_changes_on_success_and_on_rejection_with_exact_snapshot_rollback() {
+    let fixture = Fixture::new();
+    let key = fixture.assign(0, 11);
+    let before = fixture.image();
+    let prepared = fixture
+        .placement
+        .prepare_slot_write(
+            fixture.identity(),
+            &fixture.lifetimes,
+            fixture.snapshot(0),
+            11,
+        )
+        .unwrap();
+    let token = fixture.placement.read_token().unwrap();
+    assert_eq!(
+        fixture.placement.commit_slot_write(
+            fixture.identity(),
+            &fixture.lifetimes,
+            &prepared,
+            || {
+                assert!(fixture.placement.pending());
+                assert_eq!(fixture.placement.read_token(), None);
+                false
+            },
+            |_| panic!("rejected claim must not apply"),
+        ),
+        Err(PlacementError::ClaimRejected)
+    );
+    assert_eq!(fixture.image(), before);
+    assert!(!fixture.placement.pending());
+    let rejected = fixture.placement.read_token().unwrap();
+    assert_ne!(rejected, token);
+    fixture
+        .placement
+        .commit_slot_write(
+            fixture.identity(),
+            &fixture.lifetimes,
+            &prepared,
+            || {
+                assert_eq!(fixture.placement.read_token(), None);
+                true
+            },
+            |_| assert_eq!(fixture.placement.read_token(), None),
+        )
+        .unwrap();
+    assert_ne!(fixture.placement.read_token().unwrap(), rejected);
+    assert!(
+        fixture
+            .placement
+            .key_current(fixture.identity(), &fixture.lifetimes, key)
+    );
+    fixture.assert_permutation();
+}
+
+#[test]
+fn exhausted_observation_generation_rejects_both_writers_without_callbacks_or_content_mutation() {
+    let fixture = Fixture::new();
+    fixture.assign(0, 12);
+    let pair = fixture.prepare(0, 36);
+    let slot = fixture
+        .placement
+        .prepare_slot_write(
+            fixture.identity(),
+            &fixture.lifetimes,
+            fixture.snapshot(0),
+            13,
+        )
+        .unwrap();
+    let before = fixture.image();
+    fixture
+        .placement
+        .observation_generation
+        .store(u64::MAX, Ordering::SeqCst);
+    assert_eq!(fixture.placement.read_token(), None);
+    assert_eq!(
+        fixture.placement.commit_with(
+            fixture.identity(),
+            &fixture.lifetimes,
+            &pair,
+            true,
+            || panic!("exhaustion must precede claim"),
+            || panic!("exhaustion must precede apply"),
+        ),
+        Err(PlacementError::ObservationGenerationExhausted)
+    );
+    assert_eq!(
+        fixture.placement.commit_slot_write(
+            fixture.identity(),
+            &fixture.lifetimes,
+            &slot,
+            || panic!("exhaustion must precede claim"),
+            |_| panic!("exhaustion must precede apply"),
+        ),
+        Err(PlacementError::ObservationGenerationExhausted)
+    );
+    assert_eq!(fixture.image(), before);
+    assert!(!fixture.placement.pending());
+    assert_eq!(
+        fixture
+            .placement
+            .observation_generation
+            .load(Ordering::SeqCst),
+        u64::MAX
+    );
+    assert_eq!(fixture.placement.read_token(), None);
+}
+
+#[test]
+fn final_observation_generation_is_permanently_unobservable_after_rejected_claim() {
+    let fixture = Fixture::new();
+    fixture.assign(0, 14);
+    let pair = fixture.prepare(0, 36);
+    let before = fixture.image();
+    fixture
+        .placement
+        .observation_generation
+        .store(u64::MAX - 1, Ordering::SeqCst);
+    assert_eq!(fixture.placement.read_token(), Some(u64::MAX - 1));
+    assert_eq!(
+        fixture.placement.commit_with(
+            fixture.identity(),
+            &fixture.lifetimes,
+            &pair,
+            true,
+            || {
+                assert_eq!(fixture.placement.read_token(), None);
+                false
+            },
+            || panic!("rejected claim must not apply"),
+        ),
+        Err(PlacementError::ClaimRejected)
+    );
+    assert_eq!(fixture.image(), before);
+    assert!(!fixture.placement.pending());
+    assert_eq!(fixture.placement.read_token(), None);
+    assert_eq!(
+        fixture
+            .placement
+            .observation_generation
+            .load(Ordering::SeqCst),
+        u64::MAX
+    );
+    assert_eq!(
+        fixture.placement.commit_with(
+            fixture.identity(),
+            &fixture.lifetimes,
+            &pair,
+            true,
+            || panic!("already exhausted generation must not claim again"),
+            || panic!("already exhausted generation must not apply"),
+        ),
+        Err(PlacementError::ObservationGenerationExhausted)
+    );
+    assert_eq!(fixture.image(), before);
+}
+
+#[test]
+fn rejected_marker_between_capacity_check_and_cas_cannot_wrap_or_call_stale_writer() {
+    let fixture = Arc::new(Fixture::new());
+    fixture.assign(0, 15);
+    fixture
+        .placement
+        .observation_generation
+        .store(u64::MAX - 1, Ordering::SeqCst);
+    let before = fixture.image();
+    let pair = fixture.prepare(0, 36);
+    let crossed = fixture.clone();
+    let result = with_before_marker_compare_exchange(
+        move || {
+            let slot = crossed
+                .placement
+                .prepare_slot_write(
+                    crossed.identity(),
+                    &crossed.lifetimes,
+                    crossed.snapshot(0),
+                    15,
+                )
+                .unwrap();
+            assert_eq!(
+                crossed.placement.commit_slot_write(
+                    crossed.identity(),
+                    &crossed.lifetimes,
+                    &slot,
+                    || false,
+                    |_| panic!("intervening rejected marker must not apply"),
+                ),
+                Err(PlacementError::ClaimRejected)
+            );
+        },
+        || {
+            fixture.placement.commit_with(
+                fixture.identity(),
+                &fixture.lifetimes,
+                &pair,
+                true,
+                || panic!("post-CAS actual exhaustion must precede claim"),
+                || panic!("post-CAS actual exhaustion must precede apply"),
+            )
+        },
+    );
+    assert_eq!(result, Err(PlacementError::ObservationGenerationExhausted));
+    assert_eq!(fixture.image(), before);
+    assert!(!fixture.placement.pending());
+    assert_eq!(
+        fixture
+            .placement
+            .observation_generation
+            .load(Ordering::SeqCst),
+        u64::MAX
+    );
+    assert_eq!(fixture.placement.read_token(), None);
+}
+
+#[test]
+fn rejected_marker_between_capture_and_cas_is_counted_separately_from_outer_rejection() {
+    let fixture = Arc::new(Fixture::new());
+    fixture.assign(0, 16);
+    let before = fixture.image();
+    let token = fixture.placement.read_token().unwrap();
+    let pair = fixture.prepare(0, 36);
+    let crossed = fixture.clone();
+    let result = with_before_marker_compare_exchange(
+        move || {
+            let slot = crossed
+                .placement
+                .prepare_slot_write(
+                    crossed.identity(),
+                    &crossed.lifetimes,
+                    crossed.snapshot(0),
+                    16,
+                )
+                .unwrap();
+            assert_eq!(
+                crossed.placement.commit_slot_write(
+                    crossed.identity(),
+                    &crossed.lifetimes,
+                    &slot,
+                    || false,
+                    |_| panic!("intervening rejected marker must not apply"),
+                ),
+                Err(PlacementError::ClaimRejected)
+            );
+            assert_eq!(crossed.placement.read_token(), Some(token + 1));
+        },
+        || {
+            fixture.placement.commit_with(
+                fixture.identity(),
+                &fixture.lifetimes,
+                &pair,
+                true,
+                || false,
+                || panic!("outer rejected marker must not apply"),
+            )
+        },
+    );
+    assert_eq!(result, Err(PlacementError::ClaimRejected));
+    assert_eq!(fixture.image(), before);
+    assert!(!fixture.placement.pending());
+    assert_eq!(fixture.placement.read_token(), Some(token + 2));
+}
+
+#[test]
+fn final_successful_claim_may_consume_max_but_later_content_mutation_is_fenced() {
+    let fixture = Fixture::new();
+    let key = fixture.assign(0, 17);
+    fixture
+        .placement
+        .observation_generation
+        .store(u64::MAX - 1, Ordering::SeqCst);
+    let pair = fixture.prepare(0, 36);
+    fixture
+        .placement
+        .commit_with(
+            fixture.identity(),
+            &fixture.lifetimes,
+            &pair,
+            true,
+            || {
+                assert_eq!(fixture.placement.read_token(), None);
+                true
+            },
+            || assert_eq!(fixture.placement.read_token(), None),
+        )
+        .unwrap();
+    assert!(!fixture.placement.pending());
+    assert_eq!(fixture.placement.read_token(), None);
+    assert_eq!(current(fixture.observe(key)).unwrap().slot(), 36);
+    assert_eq!(
+        fixture
+            .placement
+            .observation_generation
+            .load(Ordering::SeqCst),
+        u64::MAX
+    );
+    let before = fixture.image();
+    let later = fixture.prepare(36, 215);
+    assert_eq!(
+        fixture.placement.commit_with(
+            fixture.identity(),
+            &fixture.lifetimes,
+            &later,
+            true,
+            || panic!("MAX must fence subsequent content mutation"),
+            || panic!("MAX must fence subsequent content mutation"),
+        ),
+        Err(PlacementError::ObservationGenerationExhausted)
+    );
+    assert_eq!(fixture.image(), before);
 }
 
 #[test]

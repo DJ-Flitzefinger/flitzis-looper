@@ -647,6 +647,73 @@ fn newer_requests_and_successful_adoption_invalidate_old_or_reused_tickets() {
 }
 
 #[test]
+fn prepared_adoption_drop_preserves_ticket_and_commit_returns_displaced_evidence() {
+    let (pcm, times, _) = fixture(8_000, 0.5);
+    let binding = PcmBinding::verify(&pcm, metadata(&pcm, 8_000)).unwrap();
+    let accepted = accept(evidence(&binding, &times));
+    let mut guard = TimingAdoptionGuard::new(&binding, TimingIntent::Automatic).unwrap();
+    let first = guard.issue_ticket().unwrap();
+    drop(guard.prepare_adoption(&first, accepted.clone()).unwrap());
+    assert!(guard.accepted().is_none());
+    assert!(
+        guard
+            .prepare_adoption(&first, accepted.clone())
+            .unwrap()
+            .commit()
+            .is_none()
+    );
+    let old_revision = guard.accepted().unwrap().revision().to_owned();
+    let next = guard.issue_ticket().unwrap();
+    drop(guard.prepare_adoption(&next, accepted.clone()).unwrap());
+    assert_eq!(guard.accepted().unwrap().revision(), old_revision);
+    let displaced = guard
+        .prepare_adoption(&next, accepted.clone())
+        .unwrap()
+        .commit()
+        .unwrap();
+    assert_eq!(displaced.revision(), old_revision);
+    assert_eq!(guard.accepted().unwrap().revision(), accepted.revision());
+    assert!(matches!(
+        guard.prepare_adoption(&next, accepted),
+        Err(TimingAdoptionError::StaleTicket)
+    ));
+}
+
+#[test]
+fn prepared_source_verified_adoption_drop_keeps_original_saved_revision_and_ticket() {
+    let (pcm, times, _) = fixture(8_000, 0.5);
+    let binding = PcmBinding::verify(&pcm, metadata(&pcm, 8_000)).unwrap();
+    let accepted = accept(evidence(&binding, &times));
+    let mut current_metadata = binding.metadata().clone();
+    current_metadata.job.request_id += 1;
+    let current = PcmBinding::verify(&pcm, current_metadata).unwrap();
+    let mut guard = TimingAdoptionGuard::new(&current, TimingIntent::Automatic).unwrap();
+    let ticket = guard.issue_ticket().unwrap();
+    assert!(matches!(
+        guard.prepare_adoption(&ticket, accepted.clone()),
+        Err(TimingAdoptionError::BindingMismatch)
+    ));
+    drop(
+        guard
+            .prepare_source_verified_adoption(&ticket, accepted.clone())
+            .unwrap(),
+    );
+    assert!(guard.accepted().is_none());
+    assert!(
+        guard
+            .prepare_source_verified_adoption(&ticket, accepted.clone())
+            .unwrap()
+            .commit()
+            .is_none()
+    );
+    assert_eq!(guard.accepted().unwrap().revision(), accepted.revision());
+    assert!(matches!(
+        guard.prepare_source_verified_adoption(&ticket, accepted),
+        Err(TimingAdoptionError::StaleTicket)
+    ));
+}
+
+#[test]
 fn manual_tap_and_legacy_intents_reject_and_cannot_revive_automatic_work() {
     let (pcm, times, _) = fixture(8_000, 0.5);
     let binding = PcmBinding::verify(&pcm, metadata(&pcm, 8_000)).unwrap();

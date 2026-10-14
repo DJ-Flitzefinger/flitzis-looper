@@ -2,7 +2,7 @@
 
 use super::analysis_pcm::{LoadedPcmSnapshot, PcmIdentity, resample_mono_cancellable};
 use super::constants::NUM_SAMPLES;
-use super::content_placement::{ContentKey, SlotSnapshot};
+use super::content_placement::{ContentKey, PlacementError, PlacementObservation, SlotSnapshot};
 use super::input_runtime_binding::{InputPadBinding, InputRuntimeOwnership};
 use super::prepared_source::{PreparedSourcePermit, next_epoch};
 use super::{AudioEngine, PadRequestAdvance};
@@ -20,7 +20,7 @@ use flitzis_looper_analysis::{
     },
     tempo_summary::{MAX_HYPOTHESES, QuarterNoteHypothesis, QuarterNoteVerification},
 };
-use pyo3::exceptions::{PyRuntimeError, PyValueError};
+use pyo3::exceptions::{PyBlockingIOError, PyRuntimeError, PyValueError};
 use pyo3::prelude::*;
 use pyo3::types::PyDict;
 use rtrb::Producer;
@@ -484,6 +484,21 @@ pub struct ConstantTimingTicket {
 
 #[pymethods]
 impl ConstantTimingTicket {
+    /// A bounded wait observation for this retained original lifetime. It grants
+    /// no source or publication authority and never treats retirement as Pending.
+    pub fn placement_pending(&self) -> bool {
+        self.placement
+            .and_then(|snapshot| snapshot.content_key())
+            .is_some_and(|key| {
+                self.ownership.content_key_current(key)
+                    && matches!(
+                        self.ownership.observe_control_key(key),
+                        PlacementObservation::Pending
+                    )
+                    && self.ownership.content_key_current(key)
+            })
+    }
+
     /// Original Native source placement, never metadata-pad-id permission.
     pub fn current_control_slot(&self) -> Option<usize> {
         if !self.ownership.is_source_tracked() {
@@ -958,7 +973,7 @@ impl PreparedTimingEvidence {
             .pad_request_ids
             .lock()
             .map_err(|_| "request lock poisoned")?;
-        validate_current(engine, &self.ticket, &requests)?;
+        validate_evidence_admission(engine, &self.ticket, &requests)?;
         Ok(self.ticket)
     }
 }
@@ -1187,6 +1202,180 @@ fn validate_current(
     Ok(id)
 }
 
+enum TimingEvidenceAdmission {
+    Current(usize),
+    Pending,
+}
+
+/// Original immutable work can finish during a placement gap. This grants no
+/// publication: source, request, epoch and intent are checked at their captured
+/// stable cell, without recapturing permission from a current numeric slot.
+fn validate_intrinsic_timing_identity(
+    engine: &AudioEngine,
+    ticket: &ConstantTimingTicket,
+) -> Result<(), &'static str> {
+    if !Arc::ptr_eq(&ticket.ownership, &engine.input_runtime_ownership) {
+        return Err("stale or foreign constant timing ticket");
+    }
+    if !ticket.ownership.is_source_tracked() {
+        return if engine
+            .prepared_source_epochs
+            .get(ticket.id)
+            .is_some_and(|epoch| Arc::ptr_eq(epoch, &ticket.epoch))
+            && ticket.epoch.load(Ordering::Acquire) == ticket.captured_epoch
+        {
+            Ok(())
+        } else {
+            Err("stale or foreign constant timing ticket")
+        };
+    }
+    let original = ticket
+        .placement
+        .ok_or("stale or foreign constant timing ticket")?;
+    let key = original
+        .content_key()
+        .filter(|key| ticket.ownership.content_key_current(*key))
+        .ok_or("stale or foreign constant timing ticket")?;
+    if !engine
+        .prepared_source_epochs
+        .get(key.cell().index())
+        .is_some_and(|epoch| Arc::ptr_eq(epoch, &ticket.epoch))
+        || ticket.epoch.load(Ordering::Acquire) != ticket.captured_epoch
+        || ticket.request_incarnation.is_none()
+        || ticket.ownership.key_source_request_incarnation(key) != ticket.request_incarnation
+    {
+        return Err("stale or foreign constant timing ticket");
+    }
+    let binding = InputPadBinding {
+        placement: Some(original),
+        resident: ticket.sample.resident_binding(),
+        source_address: ticket.sample.source_address(),
+        sample_count: ticket.sample.source_sample_count(),
+        channels: ticket.sample.channels,
+        sample_rate_hz: ticket.sample_rate_hz,
+        authority_revision: 0,
+        runtime_revision: 0,
+        accepted: None,
+    };
+    if ticket
+        .ownership
+        .binding_source_generation(ticket.id, binding)
+        != Some(ticket.source_generation)
+    {
+        return Err("current loaded source owner changed");
+    }
+    if ticket.ownership.binding_timing_intent(ticket.id, binding) != Some(1) {
+        return Err("current timing intent is not automatic");
+    }
+    if !ticket.ownership.content_key_current(key)
+        || ticket.ownership.key_source_request_incarnation(key) != ticket.request_incarnation
+        || ticket.epoch.load(Ordering::Acquire) != ticket.captured_epoch
+    {
+        return Err("stale or foreign constant timing ticket");
+    }
+    Ok(())
+}
+
+fn validate_evidence_admission(
+    engine: &AudioEngine,
+    ticket: &ConstantTimingTicket,
+    requests: &[u64],
+) -> Result<TimingEvidenceAdmission, String> {
+    if !Arc::ptr_eq(&ticket.ownership, &engine.input_runtime_ownership) {
+        return Err("stale or foreign constant timing ticket".into());
+    }
+    if !ticket.ownership.is_source_tracked() {
+        return validate_current(engine, ticket, requests).map(TimingEvidenceAdmission::Current);
+    }
+    let key = ticket
+        .placement
+        .and_then(|snapshot| snapshot.content_key())
+        .ok_or("stale or foreign constant timing ticket")?;
+    match ticket.ownership.observe_control_key(key) {
+        PlacementObservation::Current(_) => match validate_current(engine, ticket, requests) {
+            Ok(id) => Ok(TimingEvidenceAdmission::Current(id)),
+            Err(_)
+                if matches!(
+                    ticket.ownership.observe_control_key(key),
+                    PlacementObservation::Pending
+                ) =>
+            {
+                validate_pending_timing_evidence(engine, ticket, key)
+            }
+            Err(error) => Err(error),
+        },
+        PlacementObservation::Pending => validate_pending_timing_evidence(engine, ticket, key),
+        PlacementObservation::Stale | PlacementObservation::Retired => {
+            Err("stale or foreign constant timing ticket".into())
+        }
+    }
+}
+
+fn validate_pending_timing_evidence(
+    engine: &AudioEngine,
+    ticket: &ConstantTimingTicket,
+    key: ContentKey,
+) -> Result<TimingEvidenceAdmission, String> {
+    validate_intrinsic_timing_identity(engine, ticket)?;
+    // The request owner serializes the complete control mirror. Its current
+    // custody row validates retained evidence during the gap, but cannot grant
+    // publication at that old physical placement.
+    let id = ticket.ownership.control_slot_for_cell(key.cell());
+    if engine
+        .timing_intents
+        .lock()
+        .map_err(|_| "timing intent lock poisoned")?
+        .get(id)
+        != Some(&TimingIntent::Automatic)
+    {
+        return Err("current timing intent is not automatic".into());
+    }
+    let cache = engine
+        .sample_cache
+        .lock()
+        .map_err(|_| "sample cache lock poisoned")?;
+    if !cache
+        .get(id)
+        .and_then(Option::as_ref)
+        .is_some_and(|source| source.same_source(&ticket.sample))
+    {
+        return Err("current loaded source owner changed".into());
+    }
+    if engine
+        .loaded_source_generations
+        .lock()
+        .map_err(|_| "source generation lock poisoned")?
+        .get(id)
+        != Some(&(ticket.source_generation, ticket.sample_rate_hz))
+        || engine
+            .loaded_source_digests
+            .lock()
+            .map_err(|_| "source digest lock poisoned")?
+            .get(id)
+            .and_then(Option::as_ref)
+            != Some(&ticket.source_digest)
+    {
+        return Err("current source digest, generation or rate changed".into());
+    }
+    validate_intrinsic_timing_identity(engine, ticket)?;
+    Ok(TimingEvidenceAdmission::Pending)
+}
+
+fn timing_publication_placement_error(
+    engine: &AudioEngine,
+    ticket: &ConstantTimingTicket,
+    error: PlacementError,
+) -> PyErr {
+    if error == PlacementError::Pending {
+        if let Err(error) = validate_intrinsic_timing_identity(engine, ticket) {
+            return PyValueError::new_err(error);
+        }
+        PyBlockingIOError::new_err("constant timing content placement pending")
+    } else {
+        PyValueError::new_err(error.to_string())
+    }
+}
+
 struct OwnedHypothesis {
     id: String,
     provenance: String,
@@ -1326,7 +1515,16 @@ pub(super) fn publish_record(
         .pad_request_ids
         .lock()
         .map_err(|_| PyRuntimeError::new_err("request lock poisoned"))?;
-    let id = validate_current(engine, ticket, &requests).map_err(PyValueError::new_err)?;
+    let id = match validate_evidence_admission(engine, ticket, &requests)
+        .map_err(PyValueError::new_err)?
+    {
+        TimingEvidenceAdmission::Current(id) => id,
+        TimingEvidenceAdmission::Pending => {
+            return Err(PyBlockingIOError::new_err(
+                "constant timing content placement pending",
+            ));
+        }
+    };
     let mut guard = ticket
         .guard
         .lock()
@@ -1362,26 +1560,56 @@ pub(super) fn publish_record(
     let record = CurrentConstantTimingRecord::new(&timing, ticket, next, permit.clone(), projected);
     permit.mark_pending().map_err(PyRuntimeError::new_err)?;
     let adoption = if source_verified_restore {
-        guard.adopt_source_verified(&ticket.adoption_ticket, timing)
+        guard.prepare_source_verified_adoption(&ticket.adoption_ticket, timing)
     } else {
-        guard.adopt(&ticket.adoption_ticket, timing)
+        guard.prepare_adoption(&ticket.adoption_ticket, timing)
+    }
+    .map_err(|e| PyValueError::new_err(e.to_string()))?;
+    let message = ControlMessage::PublishConstantTiming {
+        id,
+        timing: PreparedConstantTiming {
+            reference: ticket.sample.clone(),
+            publication: permit.clone(),
+            projection: projected,
+            content_key: ticket.placement.and_then(|snapshot| snapshot.content_key()),
+        },
     };
-    adoption.map_err(|e| PyValueError::new_err(e.to_string()))?;
-    retire_old_current_records(engine, &mut current_records[id]);
-    current_records[id].push(record);
-    ticket.epoch.store(next, Ordering::Release);
-    *publication = Some(permit.clone());
-    producer
-        .push(ControlMessage::PublishConstantTiming {
-            id,
-            timing: PreparedConstantTiming {
-                reference: ticket.sample.clone(),
-                publication: permit,
-                projection: projected,
-                content_key: ticket.placement.and_then(|snapshot| snapshot.content_key()),
+    let ownership = &ticket.ownership;
+    let placement = ownership.slot_snapshot(id).ok_or_else(|| {
+        timing_publication_placement_error(engine, ticket, PlacementError::Pending)
+    })?;
+    let prepared = ownership
+        .prepare_slot_write_fixed(placement, placement.lifetime())
+        .map_err(|error| timing_publication_placement_error(engine, ticket, error))?;
+    #[cfg(test)]
+    completion_tests::before_publication_claim();
+    let mut displaced = None;
+    ownership
+        .commit_slot_write_fixed(
+            &prepared,
+            || {
+                ownership.slot_snapshot_fields_current(placement)
+                    && ownership.control_slot_for_cell(placement.cell()) == id
+                    && validate_intrinsic_timing_identity(engine, ticket).is_ok()
             },
-        })
-        .map_err(|_| PyRuntimeError::new_err("reserved single-producer capacity lost"))
+            |_| {
+                displaced = adoption.commit();
+                current_records[id].push(record);
+                ticket.epoch.store(next, Ordering::Release);
+                *publication = Some(permit);
+                // Capacity was checked under this same sole-producer mutex;
+                // the consumer can only make more space before this fixed push.
+                producer
+                    .push(message)
+                    .unwrap_or_else(|_| unreachable!("reserved single-producer capacity lost"));
+            },
+        )
+        .map_err(|error| timing_publication_placement_error(engine, ticket, error))?;
+    // Neither a displaced guard record nor obsolete registry evidence may have
+    // its final destructor run inside the shared publication marker.
+    drop(displaced);
+    retire_old_current_records(engine, &mut current_records[id]);
+    Ok(())
 }
 
 /// All fallible admission, locks and queue capacity checks precede this bounded mutation.
@@ -1643,6 +1871,10 @@ mod content_ack_tests;
 #[cfg(test)]
 #[path = "constant_timing/content_epoch_tests.rs"]
 mod content_epoch_tests;
+
+#[cfg(test)]
+#[path = "constant_timing/completion_tests.rs"]
+mod completion_tests;
 
 #[cfg(test)]
 #[path = "constant_timing/control_write_tests.rs"]

@@ -116,8 +116,10 @@ The runtime activation preflight checks the complete Native pad Copy and interna
 Pair capture/prepare/publish/reconcile/finish/cancel interfaces, including opaque
 Pair acknowledgement validation and fresh recovery acceptance. It also checks
 original-ticket Hold release, captured MIDI trigger/window admission, owned pad
-feedback, resident-admission protocol version 1, the budget setter/status API and
-the independent preload-interest parameter. These checks inspect the built Release
+feedback, original timing-ticket/refresh Pending observations and the Native
+placement-marker/read-token queries, resident-admission protocol version 1, the
+budget setter/status API and the independent preload-interest parameter. These
+checks inspect the built Release
 class without constructing an engine or opening an audio device; an older
 incompatible extension cannot activate the current Python controls. The source
 installer builds these APIs from the selected main checkout through its existing

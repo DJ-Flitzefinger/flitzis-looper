@@ -109,6 +109,26 @@ Retained voices already have independent stretch preparation epoch owners;
 placement preserves those exact owners and actual voice generations. A reused
 cell cannot turn an old current permission into authority over its new lifetime.
 
+Finished QM retains its original immutable ticket when placement is temporarily
+Pending. Request ownership checks the actual control custody plus original
+content lifetime, request incarnation, source geometry/digest/rate, preparation
+epoch and Automatic intent. This grants no new publication authority. Accepted
+publication prepares allocation, adoption and queue resources before claiming
+the same-content marker; guard consumption and record/epoch/queue publication
+commit together, and displaced evidence retires after the marker closes.
+Only a valid Pending publication raises the typed BlockingIOError. The existing
+controller keeps that worker outcome, ticket and immutable assessment for one
+retry per poll through its existing worker. Native Pending observations retain
+publication and derived-refresh observers through unreadable readers; own
+record ACK and own derived ACK still precede saved grid/master projection.
+The poll brackets its Native reads with a stable observation generation, separate
+from layout revision or source authority. Both marker entry sites increment that
+generation under their owned odd marker before claim; rejection restores layout
+but retains the generation crossing. The increment uses checked bounded scalar
+work. MAX is reserved as unobservable, so exhaustion cannot wrap or certify a
+failed reader interval. A token mismatch retains the observer even if Boolean
+Pending is already false; the next poll rechecks actual ownership.
+
 CopySnapshot captures source, valid analysis, selected available StemSet, loop/
 excerpt/grid/timing/manualTAP, source correction/numericbase/extra/KeyLock/other
 playback/GainEQ/current musical mask/custommask/preset/mutes/retrigger checkbox.

@@ -223,7 +223,6 @@ fn saved_finite_resident_timing_uses_complete_evidence_without_complete_ticket_p
     use crate::audio_engine::buffer_retirement::ImmediateAudioBufferRetirement;
     use crate::audio_engine::cold_load::admit_for_format_selected;
     use crate::audio_engine::cold_residency::ResidentLoadHint;
-    use crate::audio_engine::mixer::RtMixer;
     use crate::audio_engine::scheduler::FixedCapacityScheduler;
     use crate::audio_engine::transport::TransportTimeline;
     use crate::messages::{AudioMessage, TriggerQuantization};
@@ -255,9 +254,14 @@ fn saved_finite_resident_timing_uses_complete_evidence_without_complete_ticket_p
         (1, RATE, directory.path().join("samples")),
     )
     .unwrap();
-    let mut mixer = RtMixer::new(1, RATE as f32);
-    mixer.set_input_runtime_ownership(engine.input_runtime_ownership.clone());
-    mixer.set_current_timing_acknowledgements(engine.current_timing_acknowledgements.clone());
+    let mut mixer = crate::audio_engine::audio_stream::create_stream_mixer(
+        1,
+        RATE,
+        engine.current_timing_acknowledgements.clone(),
+        engine.input_runtime_ownership.clone(),
+        engine.prepared_source_epochs.clone(),
+    )
+    .unwrap();
     let mut scheduler = FixedCapacityScheduler::<8>::new();
     let mut transport = TransportTimeline::new(RATE);
     let mut quantization = TriggerQuantization::Immediate;

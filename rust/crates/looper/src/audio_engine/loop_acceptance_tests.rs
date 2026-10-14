@@ -4,7 +4,7 @@
 use super::*;
 use crate::audio_engine::loop_acceptance;
 
-fn fixture() -> (AudioEngine, RtMixer) {
+fn fixture() -> (AudioEngine, Box<RtMixer>) {
     let engine = test_engine();
     let (producer, mut consumer) = queue(2);
     let mut mixer = acknowledged_mixer(&engine);

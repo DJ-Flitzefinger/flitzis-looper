@@ -18,7 +18,7 @@ struct Fixture {
     consumer: rtrb::Consumer<ControlMessage>,
     parameter_producer: rtrb::Producer<ControlParameterMessage>,
     parameter_consumer: rtrb::Consumer<ControlParameterMessage>,
-    mixer: RtMixer,
+    mixer: Box<RtMixer>,
     transport: TransportTimeline,
     scheduler: FixedCapacityScheduler<4>,
     mode: TriggerQuantization,

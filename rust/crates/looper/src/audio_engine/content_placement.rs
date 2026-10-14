@@ -160,6 +160,7 @@ pub(crate) enum PlacementError {
     Retired,
     SlotEpochExhausted,
     LayoutRevisionExhausted,
+    ObservationGenerationExhausted,
     CapacityUnavailable,
     ClaimRejected,
 }
@@ -176,6 +177,9 @@ impl fmt::Display for PlacementError {
             Self::Retired => "content placement lifetime has retired",
             Self::SlotEpochExhausted => "content placement slot epoch exhausted",
             Self::LayoutRevisionExhausted => "content placement revision exhausted",
+            Self::ObservationGenerationExhausted => {
+                "content placement observation generation exhausted"
+            }
             Self::CapacityUnavailable => "content placement capacity is unavailable",
             Self::ClaimRejected => "content placement native claim was rejected",
         })
@@ -247,6 +251,9 @@ pub(crate) struct ContentPlacement {
     slot_epochs: [AtomicU64; NUM_SAMPLES],
     // Even is complete; odd is a single callback writer's in-progress publication.
     revision: AtomicU64,
+    // Every acquired marker is observable even when a false claim restores the
+    // original layout revision. MAX is permanently unavailable to read tokens.
+    observation_generation: AtomicU64,
 }
 
 impl Default for ContentPlacement {
@@ -258,6 +265,63 @@ impl Default for ContentPlacement {
 impl ContentPlacement {
     pub(crate) fn pending(&self) -> bool {
         self.revision.load(Ordering::SeqCst) & 1 != 0
+    }
+
+    /// Bracket control reads without granting content or source authority. A
+    /// marker crossing changes this token even when its claim rolls back with
+    /// unchanged layout, slot epochs and lifetimes. Reads are bounded and never retry.
+    pub(crate) fn read_token(&self) -> Option<u64> {
+        let revision = self.revision.load(Ordering::SeqCst);
+        if revision & 1 != 0 {
+            return None;
+        }
+        let generation = self.observation_generation.load(Ordering::SeqCst);
+        (generation != u64::MAX
+            && self.revision.load(Ordering::SeqCst) == revision
+            && self.observation_generation.load(Ordering::SeqCst) == generation)
+            .then_some(generation)
+    }
+
+    /// One nonblocking entry for all source and pair writers. Generation is
+    /// loaded again only after this writer owns the odd marker: a competing
+    /// rejected claim may have restored the same even revision since capture.
+    fn enter_marker(&self, revision: u64) -> Result<u64, PlacementError> {
+        let next_revision = revision
+            .checked_add(2)
+            .ok_or(PlacementError::LayoutRevisionExhausted)?;
+        if self.observation_generation.load(Ordering::SeqCst) == u64::MAX {
+            return Err(PlacementError::ObservationGenerationExhausted);
+        }
+        #[cfg(test)]
+        tests::before_marker_compare_exchange();
+        self.revision
+            .compare_exchange(
+                revision,
+                next_revision - 1,
+                Ordering::SeqCst,
+                Ordering::SeqCst,
+            )
+            .map_err(|revision| {
+                if revision & 1 != 0 {
+                    PlacementError::Pending
+                } else {
+                    PlacementError::Stale
+                }
+            })?;
+        let Some(next_generation) = self
+            .observation_generation
+            .load(Ordering::SeqCst)
+            .checked_add(1)
+        else {
+            // Another rejected claim exhausted the counter after the first
+            // capacity check. MAX already prevents every stable read token;
+            // restore only this unchanged marker without invoking claim/apply.
+            self.revision.store(revision, Ordering::SeqCst);
+            return Err(PlacementError::ObservationGenerationExhausted);
+        };
+        self.observation_generation
+            .store(next_generation, Ordering::SeqCst);
+        Ok(next_revision)
     }
 
     /// Only the callback may mutate placement. A concurrent control source write cannot change
@@ -299,6 +363,7 @@ impl ContentPlacement {
             cell_to_slot: std::array::from_fn(|index| AtomicU16::new(index as u16)),
             slot_epochs: std::array::from_fn(|_| AtomicU64::new(1)),
             revision: AtomicU64::new(2),
+            observation_generation: AtomicU64::new(1),
         }
     }
 
@@ -345,24 +410,7 @@ impl ContentPlacement {
         apply: impl FnOnce(ContentCell),
     ) -> Result<SlotSnapshot, PlacementError> {
         let observed = current(self.observe_snapshot(owner, lifetimes, prepared.before))?;
-        let next_revision = observed
-            .layout_revision
-            .checked_add(2)
-            .ok_or(PlacementError::LayoutRevisionExhausted)?;
-        self.revision
-            .compare_exchange(
-                observed.layout_revision,
-                next_revision - 1,
-                Ordering::SeqCst,
-                Ordering::SeqCst,
-            )
-            .map_err(|revision| {
-                if revision & 1 != 0 {
-                    PlacementError::Pending
-                } else {
-                    PlacementError::Stale
-                }
-            })?;
+        let next_revision = self.enter_marker(observed.layout_revision)?;
         if !claim() {
             self.revision
                 .store(observed.layout_revision, Ordering::SeqCst);
@@ -578,24 +626,7 @@ impl ContentPlacement {
         // Unrelated same-content writes and already-admitted Hold release may advance
         // the exclusion marker. Original cells/lifetimes/physical epochs were validated
         // above; they grant no new authority. Claim that latest even marker once.
-        let next_revision = source
-            .layout_revision
-            .checked_add(2)
-            .ok_or(PlacementError::LayoutRevisionExhausted)?;
-        self.revision
-            .compare_exchange(
-                source.layout_revision,
-                next_revision - 1,
-                Ordering::SeqCst,
-                Ordering::SeqCst,
-            )
-            .map_err(|revision| {
-                if revision & 1 != 0 {
-                    PlacementError::Pending
-                } else {
-                    PlacementError::Stale
-                }
-            })?;
+        let next_revision = self.enter_marker(source.layout_revision)?;
         if !claim() {
             self.revision
                 .store(source.layout_revision, Ordering::SeqCst);

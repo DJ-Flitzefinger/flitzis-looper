@@ -2,7 +2,7 @@
 
 use super::*;
 use crate::audio_engine::{
-    audio_stream::drain_control_messages,
+    audio_stream::{create_stream_mixer, drain_control_messages},
     buffer_retirement::ImmediateAudioBufferRetirement,
     cold_load::admit_for_format_selected,
     cold_residency::ResidentLoadHint,
@@ -44,8 +44,71 @@ impl Drop for WorkerRelease {
     }
 }
 
+#[derive(Clone, Copy)]
+struct OriginalStopFeedback {
+    id: usize,
+    owner: usize,
+    key: ContentKey,
+    transport_revision: u64,
+}
+
+impl OriginalStopFeedback {
+    fn capture(engine: &Py<AudioEngine>, id: usize) -> Self {
+        Python::attach(|py| {
+            let engine = engine.borrow(py);
+            let ownership = &engine.input_runtime_ownership;
+            let key = ownership.slot_snapshot(id).unwrap().content_key().unwrap();
+            Self {
+                id,
+                owner: ownership.owner_identity().diagnostic(),
+                key,
+                transport_revision: ownership
+                    .transport_intent_for_cell(key.cell())
+                    .load(Ordering::Acquire),
+            }
+        })
+    }
+
+    fn assert_message(
+        &self,
+        engine: &AudioEngine,
+        message: &AudioMessage,
+        projected: Option<usize>,
+    ) {
+        let AudioMessage::ContentFeedback {
+            id,
+            owner,
+            cell,
+            lifetime,
+            transport_revision,
+            value,
+            ..
+        } = message
+        else {
+            panic!("actual tracked callback must retain original owning STOP feedback");
+        };
+        assert_eq!(message.feedback_kind(), Some("stopped"));
+        assert_eq!(
+            (*id, *owner, *cell, *lifetime, *transport_revision),
+            (
+                self.id,
+                self.owner,
+                self.key.cell().index(),
+                self.key.lifetime(),
+                self.transport_revision,
+            )
+        );
+        assert_eq!(value.to_bits(), 0.0_f64.to_bits());
+        assert_eq!(
+            engine.input_runtime_ownership.content_key_current(self.key),
+            projected.is_some(),
+        );
+        assert_eq!(engine._resolve_pad_feedback(message).unwrap(), projected);
+    }
+}
+
 pub(super) struct Callback {
-    mixer: RtMixer,
+    mixer: Box<RtMixer>,
     scheduler: FixedCapacityScheduler<8>,
     transport: TransportTimeline,
     quantization: TriggerQuantization,
@@ -175,9 +238,14 @@ pub(super) fn engine_at(
         (1, RATE, directory.join("samples")),
     )
     .unwrap();
-    let mut mixer = RtMixer::new(1, RATE as f32);
-    mixer.set_input_runtime_ownership(engine.input_runtime_ownership.clone());
-    mixer.set_current_timing_acknowledgements(engine.current_timing_acknowledgements.clone());
+    let mixer = create_stream_mixer(
+        1,
+        RATE,
+        engine.current_timing_acknowledgements.clone(),
+        engine.input_runtime_ownership.clone(),
+        engine.prepared_source_epochs.clone(),
+    )
+    .unwrap();
     wait_until(|| consumer.slots() == 2);
     let mut callback = Callback {
         mixer,

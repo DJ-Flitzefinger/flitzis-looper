@@ -107,6 +107,7 @@ fn public_native_background_borrow_material_restore_and_supersession() {
                 .unwrap()
                 .unbind()
         });
+        let original_stop = OriginalStopFeedback::capture(&engine, 0);
         let result = held_call(
             &engine,
             &mut callback,
@@ -169,10 +170,11 @@ fn public_native_background_borrow_material_restore_and_supersession() {
                 assert!(result.unwrap_err().contains("fresh current source missing"));
                 Python::attach(|py| {
                     let message = engine.call_method0(py, "receive_msg").unwrap();
-                    assert!(matches!(
-                        &*message.extract::<PyRef<AudioMessage>>(py).unwrap(),
-                        AudioMessage::SampleStopped { id: 0 }
-                    ));
+                    original_stop.assert_message(
+                        &engine.borrow(py),
+                        &message.extract::<PyRef<AudioMessage>>(py).unwrap(),
+                        None,
+                    );
                 });
             }
             _ => unreachable!(),

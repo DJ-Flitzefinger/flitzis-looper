@@ -31,6 +31,26 @@ Requests, source changes, unload, cancellation and timing edits SHALL revoke
 pending work. Manual/Tap/Legacy SHALL block automatic adoption; returning to
 Automatic SHALL NOT revive tickets. Failure/full queues SHALL preserve effective
 state and counters SHALL reject wrap.
+Valid completed evidence SHALL retain its original opaque ticket through
+temporarily Pending placement without recapturing source or issuing new
+authority. Publication SHALL prepare fallible adoption and resources before
+the shared mutation claim, consume ownership only on success, and retire
+displaced evidence after the claim closes. Only intrinsically current Pending
+publication SHALL report a typed transient result; stale ownership SHALL reject.
+
+#### Scenario: Placement is temporarily unpublished after QM completion
+- **GIVEN** completed lossless QM evidence for the original current content lifetime
+- **WHEN** a Native placement marker makes its slot temporarily unreadable
+- **THEN** completion retains the same evidence and request-bound opaque ticket
+- **AND** no accepted record, publication epoch or callback acknowledgement is created
+- **AND** a stale lifetime, source, request, epoch or intent still rejects
+
+#### Scenario: Placement contends after assessment but before publication claim
+- **GIVEN** an original valid ticket with independently assessed acceptance
+- **WHEN** a Native writer acquires the shared placement marker before its claim
+- **THEN** publication returns the typed transient result without consuming its guard
+- **AND** a retry must use the same original ticket and explicit assessment
+- **AND** effective availability still requires actual mixer acceptance
 
 #### Scenario: A timing edit occurs while preparation runs
 - **GIVEN** accepted-timing preparation for an actual loaded pad

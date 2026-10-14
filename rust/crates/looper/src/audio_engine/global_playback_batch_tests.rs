@@ -15,7 +15,7 @@ struct Fixture {
     engine: AudioEngine,
     producer: Arc<Mutex<Producer<ControlMessage>>>,
     consumer: rtrb::Consumer<ControlMessage>,
-    mixer: RtMixer,
+    mixer: Box<RtMixer>,
     transport: TransportTimeline,
     scheduler: FixedCapacityScheduler<4>,
     mode: TriggerQuantization,

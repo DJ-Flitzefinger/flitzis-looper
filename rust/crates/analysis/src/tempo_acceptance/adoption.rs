@@ -40,6 +40,23 @@ pub struct TimingAdoptionGuard {
     accepted: Option<AcceptedConstantTiming>,
 }
 
+/// Fully checked adoption held under the caller's exclusive guard borrow.
+/// Dropping it leaves the guard unchanged; commit only swaps prepared owners.
+pub struct PreparedTimingAdoption<'guard> {
+    guard: &'guard mut TimingAdoptionGuard,
+    next_revision: u64,
+    timing: AcceptedConstantTiming,
+}
+
+impl PreparedTimingAdoption<'_> {
+    /// Commit after the caller claims its publication boundary. The displaced
+    /// record is returned so its potentially large evidence retires after that boundary.
+    pub fn commit(self) -> Option<AcceptedConstantTiming> {
+        self.guard.revision = self.next_revision;
+        self.guard.accepted.replace(self.timing)
+    }
+}
+
 impl TimingAdoptionGuard {
     /// Retain verified metadata for one source under the caller's explicit intent.
     pub fn new(
@@ -122,19 +139,18 @@ impl TimingAdoptionGuard {
         ticket: &TimingAdoptionTicket,
         timing: AcceptedConstantTiming,
     ) -> Result<(), TimingAdoptionError> {
-        if ticket.guard_id != self.guard_id || ticket.revision != self.revision {
-            return Err(TimingAdoptionError::StaleTicket);
-        }
-        if self.intent != TimingIntent::Automatic {
-            return Err(TimingAdoptionError::IntentNotAutomatic);
-        }
-        let binding = self.binding.as_ref().ok_or(TimingAdoptionError::NoSource)?;
-        timing
-            .check_binding(binding)
-            .map_err(|_| TimingAdoptionError::BindingMismatch)?;
-        self.advance()?;
-        self.accepted = Some(timing);
+        drop(self.prepare_adoption(ticket, timing)?.commit());
         Ok(())
+    }
+
+    /// Check a complete adoption before an external publication claim, without
+    /// advancing the guard or consuming the ticket until the prepared commit.
+    pub fn prepare_adoption(
+        &mut self,
+        ticket: &TimingAdoptionTicket,
+        timing: AcceptedConstantTiming,
+    ) -> Result<PreparedTimingAdoption<'_>, TimingAdoptionError> {
+        self.prepare_adoption_inner(ticket, timing, false)
     }
 
     /// Adopt a source-verified saved record under this fresh guard's request.
@@ -147,6 +163,29 @@ impl TimingAdoptionGuard {
         ticket: &TimingAdoptionTicket,
         timing: AcceptedConstantTiming,
     ) -> Result<(), TimingAdoptionError> {
+        drop(
+            self.prepare_source_verified_adoption(ticket, timing)?
+                .commit(),
+        );
+        Ok(())
+    }
+
+    /// Prepare the same source-verified saved-record transition before the
+    /// caller's claim, preserving the historical accepted revision unchanged.
+    pub fn prepare_source_verified_adoption(
+        &mut self,
+        ticket: &TimingAdoptionTicket,
+        timing: AcceptedConstantTiming,
+    ) -> Result<PreparedTimingAdoption<'_>, TimingAdoptionError> {
+        self.prepare_adoption_inner(ticket, timing, true)
+    }
+
+    fn prepare_adoption_inner(
+        &mut self,
+        ticket: &TimingAdoptionTicket,
+        timing: AcceptedConstantTiming,
+        source_verified: bool,
+    ) -> Result<PreparedTimingAdoption<'_>, TimingAdoptionError> {
         if ticket.guard_id != self.guard_id || ticket.revision != self.revision {
             return Err(TimingAdoptionError::StaleTicket);
         }
@@ -154,12 +193,21 @@ impl TimingAdoptionGuard {
             return Err(TimingAdoptionError::IntentNotAutomatic);
         }
         let binding = self.binding.as_ref().ok_or(TimingAdoptionError::NoSource)?;
-        timing
-            .check_source_binding(binding)
-            .map_err(|_| TimingAdoptionError::BindingMismatch)?;
-        self.advance()?;
-        self.accepted = Some(timing);
-        Ok(())
+        if source_verified {
+            timing.check_source_binding(binding)
+        } else {
+            timing.check_binding(binding)
+        }
+        .map_err(|_| TimingAdoptionError::BindingMismatch)?;
+        let next_revision = self
+            .revision
+            .checked_add(1)
+            .ok_or(TimingAdoptionError::RevisionExhausted)?;
+        Ok(PreparedTimingAdoption {
+            guard: self,
+            next_revision,
+            timing,
+        })
     }
 
     /// Borrow the currently accepted record without allowing identity mutation.

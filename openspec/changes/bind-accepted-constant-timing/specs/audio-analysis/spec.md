@@ -50,6 +50,22 @@ successful adoption SHALL revoke tickets. It SHALL reject wrap and preserve
 state on failure. Manual/TAP/Legacy SHALL block automatic adoption. Live
 publication SHALL require actual engine source/request/intent ownership from
 the integration slice.
+Prepared adoption SHALL retain the original guard's exclusive ownership and
+validate ticket, intent, binding and revision capacity before an external claim.
+Dropping that preparation SHALL preserve guard state. Its commit SHALL exchange
+only prepared owners and return displaced evidence for later retirement.
+
+#### Scenario: An external publication claim cannot complete
+- **GIVEN** a fully validated adoption prepared under the original guard and ticket
+- **WHEN** the caller abandons preparation before committing its external claim
+- **THEN** guard revision, accepted record and original ticket authority are unchanged
+- **AND** a later successful commit consumes that original ticket once
+
+#### Scenario: Source-verified saved evidence uses prepared adoption
+- **GIVEN** saved evidence with verified matching source and historical accepted revision
+- **WHEN** the fresh guard prepares and commits source-verified adoption
+- **THEN** only historical job tokens may differ from the verified binding
+- **AND** the accepted revision remains unchanged and does not grant currentness
 
 #### Scenario: An old result returns after a new request or source change
 - **GIVEN** a ticket issued for an earlier source/request revision

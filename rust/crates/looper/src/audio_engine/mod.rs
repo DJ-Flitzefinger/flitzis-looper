@@ -2150,6 +2150,18 @@ impl AudioEngine {
         prepared.finish(&*slf.try_borrow()?, &producer)
     }
 
+    /// Read the actual shared Native marker when no derived ticket exists yet.
+    /// This wait observation never captures a new content or timing authority.
+    pub fn _content_placement_pending(&self) -> bool {
+        self.input_runtime_ownership.placement_pending()
+    }
+
+    /// Preserve an observation of marker contention across control reads, even
+    /// after a rejected claim has restored the original complete layout.
+    pub fn _content_placement_read_token(&self) -> Option<u64> {
+        self.input_runtime_ownership.placement_read_token()
+    }
+
     /// Explicitly run complete native QM evidence on the actual current loaded source.
     pub fn prepare_constant_timing(
         slf: &Bound<'_, Self>,

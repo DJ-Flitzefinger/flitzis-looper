@@ -67,7 +67,7 @@ struct RuntimeFixture {
     producer: Arc<Mutex<Producer<ControlMessage>>>,
     consumer: rtrb::Consumer<ControlMessage>,
     runtime: InputRuntime,
-    mixer: RtMixer,
+    mixer: Box<RtMixer>,
     transport: TransportTimeline,
     scheduler: FixedCapacityScheduler<8>,
     mode: TriggerQuantization,

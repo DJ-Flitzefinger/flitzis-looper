@@ -54,6 +54,9 @@ class _Publication:
     ticket: ConstantTimingTicket
     path: str
     request_metadata: dict[str, object]
+    assessment: ExplicitTimingAssessment | None = None
+    original_future: Future[None] | None = None
+    retry_requested: bool = False
 
 
 @dataclass
@@ -74,6 +77,12 @@ class _Refresh:
 
 def _scalar_signature(value: object) -> object:
     return struct.pack("!d", value) if isinstance(value, float) else value
+
+
+def _placement_pending(ticket: ConstantTimingTicket | AcceptedTimingRefreshTicket) -> bool:
+    """Observe only a Native-owned transient marker, including older API compatibility."""
+    observe = getattr(ticket, "placement_pending", None)
+    return callable(observe) and observe() is True
 
 
 class AcceptedTimingController:
@@ -98,6 +107,7 @@ class AcceptedTimingController:
         self._publications: dict[int, _Publication] = {}
         self._waiting_refresh: dict[int, _RefreshRequest] = {}
         self._refreshes: dict[int, _Refresh] = {}
+        self._poll_placement_token: int | None = None
 
     def _executor(self) -> ThreadPoolExecutor:
         if self._worker is None:
@@ -165,7 +175,12 @@ class AcceptedTimingController:
     def publish(
         self, sample_id: int, ticket: ConstantTimingTicket, assessment: ExplicitTimingAssessment
     ) -> Future[None]:
-        """Publish an explicit assessment and own its actual completion refresh."""
+        """Submit the original attempt and retain transient publication until own acceptance.
+
+        The returned Future reports that original worker attempt. Native Pending
+        is transient; the Controller keeps that outcome and exact assessment for
+        retry, while genuine Native acknowledgement controls effective completion.
+        """
         validate_sample_id(sample_id)
         if (
             sample_id in self._publications
@@ -175,6 +190,9 @@ class AcceptedTimingController:
             msg = "explicit timing completion is already pending for this pad"
             raise RuntimeError(msg)
         path = self._project.sample_paths[sample_id]
+        if _placement_pending(ticket) or self._native_placement_pending():
+            message = "Explicit timing publication is waiting for Native placement"
+            raise BlockingIOError(message)
         if path is None or ticket.current_control_slot() != sample_id:
             msg = "explicit timing ticket does not identify this loaded pad"
             raise ValueError(msg)
@@ -182,7 +200,24 @@ class AcceptedTimingController:
             msg = "explicit timing publication requires current Automatic intent"
             raise RuntimeError(msg)
         captured = ticket.metadata()
-        future = self._executor().submit(
+        future = self._submit_assessment(ticket, assessment)
+        preparation = self._preparations.pop(sample_id, None)
+        if preparation is not None:
+            preparation.cancel()
+        self._publications[sample_id] = _Publication(
+            future,
+            ticket,
+            path,
+            {"request_id": captured.get("request_id")},
+            assessment,
+            future,
+        )
+        return future
+
+    def _submit_assessment(
+        self, ticket: ConstantTimingTicket, assessment: ExplicitTimingAssessment
+    ) -> Future[None]:
+        return self._executor().submit(
             self._audio.publish_constant_timing,
             ticket,
             assessment.hypotheses_json,
@@ -191,13 +226,6 @@ class AcceptedTimingController:
             assessment.acceptance_policy_version,
             assessment.acceptance_provenance,
         )
-        preparation = self._preparations.pop(sample_id, None)
-        if preparation is not None:
-            preparation.cancel()
-        self._publications[sample_id] = _Publication(
-            future, ticket, path, {"request_id": captured.get("request_id")}
-        )
-        return future
 
     def refresh_current(
         self, sample_id: int, *, on_refreshed: Callable[[int], None] | None = None
@@ -224,23 +252,40 @@ class AcceptedTimingController:
 
     def poll(self) -> None:
         """Observe owned operations and acknowledgements, never infer new acceptance."""
-        self._poll_publications()
-        self._poll_refreshes()
+        token = self._native_placement_read_token()
+        if token is None or self._native_placement_pending():
+            return
+        previous_token = self._poll_placement_token
+        self._poll_placement_token = token if isinstance(token, int) else None
+        try:
+            self._poll_publications()
+            self._poll_refreshes()
+            self._poll_waiting_refreshes()
+        finally:
+            self._poll_placement_token = previous_token
+
+    def _poll_waiting_refreshes(self) -> None:
         for sample_id, request in list(self._waiting_refresh.items()):
             if sample_id in getattr(self._transport, "_pair_deferred_sample_ids", ()):
                 continue
             if not self._request_is_current(sample_id, request):
+                if self._native_placement_pending():
+                    continue
                 self._waiting_refresh.pop(sample_id)
                 continue
             try:
                 self._admit_refresh(sample_id, request)
             except RuntimeError as error:
+                if self._native_placement_pending():
+                    continue
                 # Retry only this still-current explicit request, with a finite bound.
                 request.admission_failures += 1
                 if request.admission_failures >= self._MAX_ADMISSION_FAILURES:
                     self._waiting_refresh.pop(sample_id)
                 self._session.sample_analysis_errors[sample_id] = str(error)
             except ValueError as error:
+                if self._native_placement_pending():
+                    continue
                 self._waiting_refresh.pop(sample_id)
                 self._session.sample_analysis_errors[sample_id] = str(error)
 
@@ -248,41 +293,75 @@ class AcceptedTimingController:
         for sample_id, publication in list(self._publications.items()):
             if sample_id in getattr(self._transport, "_pair_deferred_sample_ids", ()):
                 continue
+            if _placement_pending(publication.ticket):
+                continue
             if self._project.sample_paths[sample_id] != publication.path or not self._automatic(
                 sample_id
             ):
+                if _placement_pending(publication.ticket) or self._native_placement_pending():
+                    continue
                 self.cancel(sample_id)
                 continue
-            if not publication.future.done():
-                continue
-            if publication.future.cancelled():
-                self._publications.pop(sample_id)
-                continue
+            self._advance_publication(sample_id, publication)
+
+    def _advance_publication(self, sample_id: int, publication: _Publication) -> None:
+        if publication.retry_requested:
             try:
-                publication.future.result()
-                status = publication.ticket.publication_status()
-                if status == "pending":
-                    continue
-                self._publications.pop(sample_id)
-                if status != "accepted":
-                    self._session.sample_analysis_errors[sample_id] = (
-                        "Explicit timing publication was rejected"
-                    )
-                    continue
-                if _matches_adopted_request(
-                    self._audio.current_constant_timing(sample_id),
-                    publication.request_metadata,
-                    publication.ticket.accepted_metadata(),
-                ):
-                    self.refresh_current(sample_id)
-            except (RuntimeError, ValueError) as error:
+                assert publication.assessment is not None
+                publication.future = self._submit_assessment(
+                    publication.ticket, publication.assessment
+                )
+                publication.retry_requested = False
+            except RuntimeError as error:
                 self._publications.pop(sample_id, None)
                 self._session.sample_analysis_errors[sample_id] = str(error)
+            return
+        if not publication.future.done():
+            return
+        if publication.future.cancelled():
+            self._publications.pop(sample_id)
+            return
+        try:
+            publication.future.result()
+            self._observe_publication_acceptance(sample_id, publication)
+        except BlockingIOError as error:
+            if publication.assessment is None:
+                self._publications.pop(sample_id, None)
+            else:
+                publication.retry_requested = True
+            self._session.sample_analysis_errors[sample_id] = str(error)
+        except (RuntimeError, ValueError) as error:
+            self._publications.pop(sample_id, None)
+            self._session.sample_analysis_errors[sample_id] = str(error)
+
+    def _observe_publication_acceptance(self, sample_id: int, publication: _Publication) -> None:
+        status = publication.ticket.publication_status()
+        if status == "pending" or _placement_pending(publication.ticket):
+            return
+        if status != "accepted":
+            self._publications.pop(sample_id)
+            self._session.sample_analysis_errors[sample_id] = (
+                "Explicit timing publication was rejected"
+            )
+            return
+        current = self._audio.current_constant_timing(sample_id)
+        if _placement_pending(publication.ticket) or self._native_placement_pending():
+            return
+        if _matches_adopted_request(
+            current,
+            publication.request_metadata,
+            publication.ticket.accepted_metadata(),
+        ):
+            self.refresh_current(sample_id)
+        if _placement_pending(publication.ticket) or self._native_placement_pending():
+            return
+        self._publications.pop(sample_id)
 
     def _admit_refresh(self, sample_id: int, request: _RefreshRequest) -> None:
         snapshot = capture_current_pad_binding(self._audio, sample_id, timing=request.timing)
         if snapshot is None or snapshot.accepted_timing is None:
-            self._waiting_refresh.pop(sample_id)
+            if not self._native_placement_pending():
+                self._waiting_refresh.pop(sample_id)
             return
         start_s, end_s = self._transport.loop._effective_pad_loop_region(
             sample_id, timing=snapshot.accepted_timing
@@ -307,31 +386,45 @@ class AcceptedTimingController:
         for sample_id, refresh in list(self._refreshes.items()):
             if sample_id in getattr(self._transport, "_pair_deferred_sample_ids", ()):
                 continue
-            if not self._request_is_current(sample_id, refresh.request):
+            if _placement_pending(refresh.ticket):
+                continue
+            self._advance_refresh(sample_id, refresh)
+
+    def _refresh_placement_pending(self, refresh: _Refresh) -> bool:
+        return _placement_pending(refresh.ticket) or self._native_placement_pending()
+
+    def _advance_refresh(self, sample_id: int, refresh: _Refresh) -> None:
+        if not self._request_is_current(sample_id, refresh.request):
+            if not self._refresh_placement_pending(refresh):
                 self._refreshes.pop(sample_id)
-                continue
-            status = refresh.ticket.publication_status()
-            if status == "pending":
-                continue
+            return
+        status = refresh.ticket.publication_status()
+        if status == "pending":
+            return
+        if status != "accepted":
             self._refreshes.pop(sample_id)
-            if status != "accepted":
-                self._session.sample_analysis_errors[sample_id] = (
-                    "Accepted timing derived refresh was rejected"
-                )
-                continue
-            if not refresh.ticket.is_current():
-                continue
-            self._project.pad_grid_offset_samples[sample_id] = refresh.grid_offset_samples
-            if refresh.master_period_seconds is not None:
-                timing = refresh.request.timing
-                self._session.master_period_seconds = refresh.master_period_seconds
-                self._session.master_bpm = 60.0 / refresh.master_period_seconds
-                self._session.bpm_lock_anchor_bpm = timing.bpm
-                self._session.bpm_lock_anchor_revision = timing.accepted_revision
-            self._session.sample_analysis_errors.pop(sample_id, None)
-            self._transport._mark_project_changed()
-            for callback in refresh.request.callbacks:
-                callback(sample_id)
+            self._session.sample_analysis_errors[sample_id] = (
+                "Accepted timing derived refresh was rejected"
+            )
+            return
+        if not refresh.ticket.is_current():
+            if not self._refresh_placement_pending(refresh):
+                self._refreshes.pop(sample_id)
+            return
+        if self._refresh_placement_pending(refresh):
+            return
+        self._refreshes.pop(sample_id)
+        self._project.pad_grid_offset_samples[sample_id] = refresh.grid_offset_samples
+        if refresh.master_period_seconds is not None:
+            timing = refresh.request.timing
+            self._session.master_period_seconds = refresh.master_period_seconds
+            self._session.master_bpm = 60.0 / refresh.master_period_seconds
+            self._session.bpm_lock_anchor_bpm = timing.bpm
+            self._session.bpm_lock_anchor_revision = timing.accepted_revision
+        self._session.sample_analysis_errors.pop(sample_id, None)
+        self._transport._mark_project_changed()
+        for callback in refresh.request.callbacks:
+            callback(sample_id)
 
     def _automatic(self, sample_id: int) -> bool:
         return (
@@ -340,6 +433,24 @@ class AcceptedTimingController:
             and self._project.pad_timing_intent[sample_id] == "automatic"
             and self._audio.pad_timing_intent(sample_id) == "automatic"
         )
+
+    def _native_placement_pending(self) -> bool:
+        observe = getattr(self._audio, "_content_placement_pending", None)
+        if callable(observe) and observe() is True:
+            return True
+        return (
+            self._poll_placement_token is not None
+            and self._native_placement_read_token() != self._poll_placement_token
+        )
+
+    def _native_placement_read_token(self) -> int | Literal["unsupported"] | None:
+        """Bracket unreadable control results even if their marker has already closed."""
+        observe = getattr(self._audio, "_content_placement_read_token", None)
+        if callable(observe):
+            token = observe()
+            if token is None or type(token) is int:
+                return token
+        return "unsupported"
 
     def _request_is_current(self, sample_id: int, request: _RefreshRequest) -> bool:
         if not self._automatic(sample_id):

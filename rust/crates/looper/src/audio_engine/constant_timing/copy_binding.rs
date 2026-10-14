@@ -379,12 +379,14 @@ mod tests {
             );
             publication.mark_pending().unwrap();
             publication.epoch.store(future_epoch, Ordering::Release);
-            let mut mixer =
-                crate::audio_engine::mixer::RtMixer::new(1, super::super::tests::RATE as f32);
-            mixer.set_input_runtime_ownership(fixture.engine.input_runtime_ownership.clone());
-            mixer.set_current_timing_acknowledgements(
+            let mut mixer = crate::audio_engine::audio_stream::create_stream_mixer(
+                1,
+                super::super::tests::RATE,
                 fixture.engine.current_timing_acknowledgements.clone(),
-            );
+                fixture.engine.input_runtime_ownership.clone(),
+                fixture.engine.prepared_source_epochs.clone(),
+            )
+            .unwrap();
             mixer.load_sample(id, sample.clone());
             assert!(super::super::tests::accept_message(
                 &mut mixer,

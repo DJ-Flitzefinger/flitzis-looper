@@ -133,6 +133,57 @@ _CompatiblePairHoldEngine = type(
     dict.fromkeys(_PAIR_HOLD_METHODS, _forbidden_native_work),
 )
 
+_CompatibleTimingEngine = type(
+    "CompatibleTimingEngine",
+    (_CompatiblePairHoldEngine,),
+    {
+        "_content_placement_pending": _forbidden_native_work,
+        "_content_placement_read_token": _forbidden_native_work,
+    },
+)
+_CompatibleTimingTicket = type(
+    "CompatibleTimingTicket", (), {"placement_pending": _forbidden_native_work}
+)
+
+
+def test_timing_completion_interface_is_reflected_without_native_work() -> None:
+    check = runpy.run_path(str(REPO / "scripts/portable/bootstrap.py"))[
+        "check_timing_completion_api"
+    ]
+    check(
+        SimpleNamespace(
+            AudioEngine=_CompatibleTimingEngine,
+            ConstantTimingTicket=_CompatibleTimingTicket,
+            AcceptedTimingRefreshTicket=_CompatibleTimingTicket,
+        )
+    )
+
+
+@pytest.mark.parametrize(
+    ("class_name", "method"),
+    [
+        ("AudioEngine", "_content_placement_pending"),
+        ("AudioEngine", "_content_placement_read_token"),
+        ("ConstantTimingTicket", "placement_pending"),
+        ("AcceptedTimingRefreshTicket", "placement_pending"),
+    ],
+)
+@pytest.mark.parametrize("missing", [False, True], ids=["not-callable", "absent"])
+def test_incomplete_timing_completion_interface_cannot_activate(
+    class_name: str, method: str, *, missing: bool
+) -> None:
+    classes = {
+        "AudioEngine": _CompatibleTimingEngine,
+        "ConstantTimingTicket": _CompatibleTimingTicket,
+        "AcceptedTimingRefreshTicket": _CompatibleTimingTicket,
+    }
+    classes[class_name] = type("IncompleteTimingType", (), {} if missing else {method: None})
+    check = runpy.run_path(str(REPO / "scripts/portable/bootstrap.py"))[
+        "check_timing_completion_api"
+    ]
+    with pytest.raises(AssertionError, match=class_name):
+        check(SimpleNamespace(**classes))
+
 
 def test_complete_pair_hold_input_interface_is_reflected_without_native_work() -> None:
     bootstrap = runpy.run_path(str(REPO / "scripts/portable/bootstrap.py"))
@@ -196,7 +247,9 @@ def test_runtime_preflight_accepts_complete_reflected_native_before_activation(
             __file__=str(checkout / "src/flitzis_looper_audio/native.pyd")
         ),
         native_build_profile=lambda: "release",
-        AudioEngine=_CompatiblePairHoldEngine,
+        AudioEngine=_CompatibleTimingEngine,
+        ConstantTimingTicket=_CompatibleTimingTicket,
+        AcceptedTimingRefreshTicket=_CompatibleTimingTicket,
     )
     modules: dict[str, object] = {
         "flitzis_looper_audio": native,

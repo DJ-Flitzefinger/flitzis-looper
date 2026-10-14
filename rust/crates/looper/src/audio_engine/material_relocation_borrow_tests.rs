@@ -468,9 +468,14 @@ fn fresh_engine(root: &Path, saved: &SavedBirth) -> (Py<AudioEngine>, Callback, 
             .unwrap()
         })
         .collect::<Vec<_>>();
-    let mut mixer = RtMixer::new(1, RATE as f32);
-    mixer.set_input_runtime_ownership(engine.input_runtime_ownership.clone());
-    mixer.set_current_timing_acknowledgements(engine.current_timing_acknowledgements.clone());
+    let mixer = create_stream_mixer(
+        1,
+        RATE,
+        engine.current_timing_acknowledgements.clone(),
+        engine.input_runtime_ownership.clone(),
+        engine.prepared_source_epochs.clone(),
+    )
+    .unwrap();
     let callback = Callback {
         mixer,
         scheduler: FixedCapacityScheduler::new(),
@@ -725,11 +730,12 @@ fn public_native_background_borrow_material_restore_after_native_root_relocation
             );
         }
     });
+    let fresh_stops = [0, 215].map(|id| OriginalStopFeedback::capture(&fresh, id));
     assert!(callback.mixer.can_play_sample(215, 1.0));
     assert!(callback.mixer.play_sample(215, 1.0));
     callback.render();
     let timing_request = accept_current_source_timing(&fresh, &mut callback);
-    // Both actual replacement LoadColdSample ACKs publish SampleStopped even
+    // Both actual replacement LoadColdSample ACKs publish owning STOP feedback even
     // without an old voice. Reconcile those public events before the held-call
     // oracle requires an otherwise empty feedback FIFO and its own exact Pong.
     Python::attach(|py| {
@@ -741,12 +747,15 @@ fn public_native_background_borrow_material_restore_after_native_root_relocation
                 "fresh own-source ACK feedback {index} missing; received={stopped:?}"
             );
             let event = message.extract::<PyRef<AudioMessage>>(py).unwrap();
-            match &*event {
-                AudioMessage::SampleStopped { id } => stopped.push(*id),
-                actual => panic!(
-                    "unexpected fresh own-source ACK feedback {index}: {actual:?}; received={stopped:?}"
-                ),
-            }
+            let original = fresh_stops
+                .iter()
+                .find(|original| event.sample_id() == Some(original.id))
+                .unwrap_or_else(|| panic!(
+                    "unexpected fresh own-source ACK feedback {index}: {:?}; received={stopped:?}",
+                    &*event,
+                ));
+            original.assert_message(&fresh.borrow(py), &event, Some(original.id));
+            stopped.push(original.id);
         }
         let received = stopped.clone();
         stopped.sort_unstable();

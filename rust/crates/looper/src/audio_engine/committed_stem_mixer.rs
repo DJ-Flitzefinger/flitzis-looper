@@ -475,7 +475,8 @@ impl RtMixer {
                 Err(PlacementError::Pending
                     | PlacementError::Stale
                     | PlacementError::Retired
-                    | PlacementError::LayoutRevisionExhausted)
+                    | PlacementError::LayoutRevisionExhausted
+                    | PlacementError::ObservationGenerationExhausted)
             ));
             self.defer_control(ControlMessage::CommittedStemWork(work));
         }

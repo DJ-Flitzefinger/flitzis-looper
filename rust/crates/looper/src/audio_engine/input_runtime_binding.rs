@@ -414,6 +414,9 @@ impl InputRuntimeOwnership {
     pub(crate) fn placement_pending(&self) -> bool {
         self.placement.pending()
     }
+    pub(crate) fn placement_read_token(&self) -> Option<u64> {
+        self.placement.read_token()
+    }
     pub(crate) fn callback_cell(&self, id: usize) -> Option<ContentCell> {
         self.placement.callback_cell(id)
     }

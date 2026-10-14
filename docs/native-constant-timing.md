@@ -97,6 +97,33 @@ while the callback clear waits; returning to Automatic cannot revive old timing.
 Full queues and failed edits preserve the previous current result. Retention and
 pruning occur outside realtime processing.
 
+Completed QM evidence retains its original opaque ticket through a temporary
+Native placement marker, after checks of its content lifetime, source, request,
+epoch and Automatic intent. This does not publish or acknowledge timing.
+`publish_constant_timing` reports a valid placement gap as `BlockingIOError`;
+stale source/request/intent failures remain terminal. The accepted-timing
+controller retains the exact independent assessment and original worker outcome,
+and retries publication through its existing worker and poll after placement is
+readable. It never captures a new ticket or reruns QM to recover that gap.
+The public controller Future describes the first worker attempt; its completion
+does not substitute for either native publication or derived-control ACK.
+
+`ConstantTimingTicket.placement_pending()` and
+`AcceptedTimingRefreshTicket.placement_pending()` observe their retained content
+lifetime. The internal engine marker query covers waiting derived requests that
+do not yet have a native refresh ticket. Temporarily unavailable readers cannot
+discard these observers or commit saved grid/master values. Genuine stale
+ownership is checked again after placement becomes readable, and current timing
+still requires its own acknowledged record followed by its own derived refresh.
+
+The internal `_content_placement_read_token()` brackets a control poll with a
+checked Native observation generation. A marker crossing changes that generation
+even when the writer rejects its claim and restores the same layout revision.
+Thus an unavailable read retains its provenance after the marker has closed.
+The token grants no source/timing authority, never wraps and is unavailable at
+observation-generation exhaustion. Callback marker entry uses only bounded atomic
+loads/stores; evidence and Python work remain outside the callback.
+
 The mixer creates SourceGrid directly from the accepted period multiplied by the
 actual loaded rate and the independent signed origin. It does not derive the
 period through binary32 BPM. Publication leaves source zero, stored physical loop

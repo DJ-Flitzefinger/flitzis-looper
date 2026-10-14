@@ -131,6 +131,20 @@ def check_pad_pair_hold_api(engine_type: type) -> None:
         )
 
 
+def check_timing_completion_api(native_module: object) -> None:
+    """Require original-ticket Pending observations before activating timing controls."""
+    for class_name, method in (
+        ("AudioEngine", "_content_placement_pending"),
+        ("AudioEngine", "_content_placement_read_token"),
+        ("ConstantTimingTicket", "placement_pending"),
+        ("AcceptedTimingRefreshTicket", "placement_pending"),
+    ):
+        native_type = getattr(native_module, class_name, None)
+        assert callable(getattr(native_type, method, None)), (
+            f"Native timing completion API missing: {class_name}.{method}"
+        )
+
+
 def check_runtime(root: Path, checkout: Path, runtime: Path) -> None:
     # Runtime imports must follow private-path/DLL setup, before any GUI/device opens.
     native_module = importlib.import_module("flitzis_looper_audio")
@@ -140,6 +154,7 @@ def check_runtime(root: Path, checkout: Path, runtime: Path) -> None:
     check_resident_api(native_module.AudioEngine)
     check_pad_copy_api(native_module.AudioEngine)
     check_pad_pair_hold_api(native_module.AudioEngine)
+    check_timing_completion_api(native_module)
     assert physical_path(Path(sys.executable)).is_relative_to(physical_path(runtime / "python"))
     customization = importlib.import_module("sitecustomize")
     assert physical_path(Path(customization.__file__)).is_relative_to(

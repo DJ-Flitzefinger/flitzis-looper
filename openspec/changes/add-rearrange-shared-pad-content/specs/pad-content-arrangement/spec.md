@@ -202,6 +202,32 @@ The system SHALL apply Move to empty or Swap to occupied target as one guarded n
 - **AND** a successful same-content edit SHALL preserve the content lifetime and slot-binding epoch and queue the actual committed snapshot
 - **AND** an empty slot edit SHALL NOT inherit the replaced content's timing ACK
 
+#### Scenario: Finished timing evidence survives a temporarily unpublished placement
+- **GIVEN** an admitted preparation has completed actual raw backend evidence for its original content
+- **WHEN** an unrelated mutation marker or a Move/Swap control mirror is Pending at preparation finish
+- **THEN** finish SHALL retain and return the same immutable evidence ticket only after checking the original Native engine, nonreused content key/lifetime, logical request incarnation, direct preparation epoch owner/value, source/PCM/rate/extent/custody and Automatic intent
+- **AND** Pending SHALL NOT create a publication permit, accepted record, queue command, acknowledgement or new source request
+- **AND** removal, equal-PCM refill, changed request/epoch/source or Manual/TAP/Legacy intent SHALL remain stale and SHALL NOT be accepted merely because placement is Pending
+- **AND** later publication SHALL require complete current placement and one shared same-content mutation claim; all fallible adoption checks, allocation, resource and queue preparation SHALL precede that claim and displaced large owners SHALL retire after the marker closes
+
+#### Scenario: A dispatched timing publication retains its original retry owner
+- **GIVEN** explicit timing publication already owns its original evidence ticket, independent assessment and actual worker Future
+- **WHEN** intrinsically valid placement Pending prevents publication before claim
+- **THEN** Native SHALL report a distinct typed transient result without consuming adoption authority or changing epoch, record, permit, queue or acknowledgement
+- **AND** the existing Controller SHALL retain the same publication owner, original worker outcome, ticket, request metadata and immutable assessment through Move/Swap and retry the same arguments at most once per existing control poll after the owning placement is observable
+- **AND** retry SHALL NOT recapture a slot/source, rerun raw backend analysis, invent a new request or grant authority to equal numeric material
+- **AND** an own Pending placement SHALL defer publication and derived-refresh observer interpretation rather than treat a temporarily unavailable lookup as removal
+- **AND** terminal worker errors, stale/removal/refill and superseding intent SHALL remain failures; a retry or completed worker alone SHALL NOT certify acceptance or derived timing without the existing genuine Native acknowledgements
+
+#### Scenario: Pending closes before an unavailable reader is interpreted
+- **GIVEN** a control poll owns an original publication or waiting/active derived-refresh observer
+- **WHEN** a Native read returns unavailable during a marker that closes before later Boolean Pending probes
+- **THEN** a checked Native observation generation SHALL preserve that marker crossing for the entire control read interval
+- **AND** both successful and rejected claims SHALL change that observation generation even if rejected layout revision is restored unchanged
+- **AND** the poll SHALL retain its original observer without consuming an admission-failure budget, committing saved grid/master state or invoking completion callbacks
+- **AND** the next readable poll SHALL freshly check the original ownership and retire genuine stale state rather than infer authority from the observation token
+- **AND** observation generation SHALL NOT wrap or grant source/timing authority; already exhausted generation SHALL yield no certifiable read token and prevent further content mutation
+
 #### Scenario: An admitted empty-slot BPM survives an unrelated pending source write
 - **GIVEN** an admitted legacy BPM names an empty slot's Native owner, stable cell, binding epoch and empty lifetime
 - **WHEN** an unrelated source writer holds the global publication marker during dequeue, coalescing or parameter application
