@@ -1,5 +1,6 @@
 //! Bounded preparation proposals and explicit resident allocation context.
 //! Proposal admission never advances current source or live control authority.
+use super::content_placement::ContentCell;
 use super::project_assets::ProjectAssets;
 use super::resident_accounting::{ResidentAccount, ResidentAdmissionError, ResidentReservation};
 use crate::messages::SampleBuffer;
@@ -42,12 +43,59 @@ pub(crate) struct ResidentProposal {
 }
 
 impl ResidentProposals {
+    /// Preparation domains belong to stable content cells. Physical loader request
+    /// filters below remain at their original slots and are never permuted.
+    pub(super) fn capture_pair_fences_for_cell(
+        &self,
+        cell: ContentCell,
+    ) -> Option<[(Arc<AtomicU64>, u64); 4]> {
+        self.capture_pair_fences(cell.index())
+    }
+    pub(super) fn begin_for_cell(&self, cell: ContentCell) -> Result<ResidentProposal, String> {
+        self.begin_domain(cell.index(), 1)
+    }
+    pub(super) fn begin_stems_for_cell(
+        &self,
+        cell: ContentCell,
+    ) -> Result<ResidentProposal, String> {
+        self.begin_domain(cell.index(), 2)
+    }
+    pub(super) fn begin_policy_for_cell(
+        &self,
+        cell: ContentCell,
+    ) -> Result<ResidentProposal, String> {
+        self.begin_domain(cell.index(), 3)
+    }
+    pub(super) fn begin_source_for_cell(
+        &self,
+        id: usize,
+        cell: ContentCell,
+        base_request: u64,
+        base_epoch: u64,
+    ) -> Result<(ResidentProposal, u64), String> {
+        self.begin_source_in_cell(id, cell.index(), base_request, base_epoch)
+    }
+    pub(super) fn capture_pair_fences(&self, id: usize) -> Option<[(Arc<AtomicU64>, u64); 4]> {
+        Some(self.epochs.get(id)?.clone().map(|epoch| {
+            let expected = epoch.load(Ordering::Acquire);
+            (epoch, expected)
+        }))
+    }
     pub(super) fn begin(&self, id: usize) -> Result<ResidentProposal, String> {
         self.begin_domain(id, 1)
     }
     pub(super) fn begin_source(
         &self,
         id: usize,
+        base_request: u64,
+        base_epoch: u64,
+    ) -> Result<(ResidentProposal, u64), String> {
+        self.begin_source_in_cell(id, id, base_request, base_epoch)
+    }
+    fn begin_source_in_cell(
+        &self,
+        id: usize,
+        cell: usize,
         base_request: u64,
         base_epoch: u64,
     ) -> Result<(ResidentProposal, u64), String> {
@@ -63,7 +111,7 @@ impl ResidentProposals {
             .checked_add(1)
             .filter(|request| *request <= u64::MAX / 4)
             .ok_or("cold acknowledgement generation exhausted")?;
-        let proposal = self.begin_domain(id, 0)?;
+        let proposal = self.begin_domain(cell, 0)?;
         *source = Some(SourceEventFence {
             proposal: proposal.clone(),
             request,
@@ -140,11 +188,17 @@ impl ResidentProposal {
         self.armed.load(Ordering::Acquire)
     }
     pub(super) fn arm(&self) -> Result<(), String> {
-        if !self.current() {
+        if !self.try_arm() {
             return Err("resident proposal superseded before arming".into());
         }
-        self.armed.store(true, Ordering::Release);
         Ok(())
+    }
+    pub(super) fn try_arm(&self) -> bool {
+        if !self.current() {
+            return false;
+        }
+        self.armed.store(true, Ordering::Release);
+        true
     }
     pub(super) fn cancel(&self) {
         self.cancelled.store(true, Ordering::Release);

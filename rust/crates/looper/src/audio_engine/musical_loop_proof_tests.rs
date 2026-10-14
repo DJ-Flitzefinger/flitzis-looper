@@ -154,7 +154,7 @@ fn accepted_mixer(case: Case) -> (AudioEngine, ConstantTimingTicket, RtMixer) {
         .set_timing_intent(0, TimingIntent::Automatic);
     engine
         .input_runtime_ownership
-        .publish_source(0, &sample, case.sample_rate, 7);
+        .publish_test_source(0, &sample, case.sample_rate, 7);
     let binding = PcmBinding::verify(
         &sample.samples,
         PcmBindingMetadata {
@@ -220,8 +220,14 @@ fn accepted_mixer(case: Case) -> (AudioEngine, ConstantTimingTicket, RtMixer) {
     let mut guard = TimingAdoptionGuard::new(&binding, TimingIntent::Automatic).unwrap();
     let adoption_ticket = guard.issue_ticket().unwrap();
     let ticket = ConstantTimingTicket {
+        placement: engine.input_runtime_ownership.binding_placement(0),
+        ownership: engine.input_runtime_ownership.clone(),
         id: 0,
         request_id: 7,
+        request_incarnation: timing_request_incarnation(
+            &engine.input_runtime_ownership,
+            engine.input_runtime_ownership.binding_placement(0),
+        ),
         source_generation: 7,
         sample_rate_hz: case.sample_rate,
         source_digest: generated_digest_hex,
@@ -266,7 +272,12 @@ fn accepted_mixer(case: Case) -> (AudioEngine, ConstantTimingTicket, RtMixer) {
         },
     )
     .unwrap();
-    assert_eq!(engine.current_timing_acknowledgements.current_epoch(0), 0);
+    assert_eq!(
+        engine
+            .current_timing_acknowledgements
+            .current_for_slot(&engine.input_runtime_ownership, 0),
+        0
+    );
     assert!(accept_message(&mut mixer, consumer.pop().unwrap()));
     assert_eq!(ticket.publication_status().unwrap(), "accepted");
     Python::attach(|py| {
@@ -316,7 +327,9 @@ fn accepted_mixer(case: Case) -> (AudioEngine, ConstantTimingTicket, RtMixer) {
             .accepted
             .unwrap()
             .publication_epoch,
-        engine.current_timing_acknowledgements.current_epoch(0)
+        engine
+            .current_timing_acknowledgements
+            .current_for_slot(&engine.input_runtime_ownership, 0)
     );
     assert!((mixer.voices[0].source_playback.tempo_ratio() - case.ratio()).abs() < 1e-14);
     (engine, ticket, mixer)
@@ -539,7 +552,7 @@ fn render(case: Case, partition: &[usize], cycles: usize) -> (Vec<f32>, serde_js
         "source_generation": 7, "source_id": ticket.binding.job.source_id,
         "source_sha256": ticket.binding.source_sha256, "pcm_sha256": ticket.binding.pcm_sha256,
         "source_frame_count": ticket.binding.frame_count, "accepted_revision": accepted.revision(),
-        "acknowledged_epoch": engine.current_timing_acknowledgements.current_epoch(0),
+        "acknowledged_epoch": engine.current_timing_acknowledgements.current_for_slot(&engine.input_runtime_ownership, 0),
         "current_metadata_available": Python::attach(|py| current_metadata(&engine, py, 0).unwrap().is_some()),
         "source_pin_matches": Arc::ptr_eq(&mixer.voices[0].sample.as_ref().unwrap().samples, &ticket.sample.samples),
         "final_source_frame": position.frame, "final_source_fraction": position.fraction,

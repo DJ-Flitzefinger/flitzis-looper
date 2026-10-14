@@ -120,14 +120,10 @@ def test_newer_current_config_wins_over_relocated_pending_snapshot(
             MigrationAssignment(sample_id=0, instance_id="2" * 32, old_reference="samples/old.wav"),
         ),
     )
-    record = json.dumps({
-        "transaction_id": journal.transaction_id,
-        "record": journal.model_dump_json(),
-        "error": None,
-    })
-    monkeypatch.setattr(
-        recovery, "MaterialMigrationJournalStore", Mock(scan=Mock(return_value=[record]))
-    )
+    encoded = journal.model_dump_json()
+    store = recovery.MaterialMigrationJournalStore(str(samples), journal.transaction_id)
+    store.append(encoded)
+    history = store.history()
     before = config.read_bytes()
 
     result = recovery.inspect_migration_recovery(samples, config)
@@ -135,8 +131,15 @@ def test_newer_current_config_wins_over_relocated_pending_snapshot(
     assert not result.errors
     assert result.pending == [journal]
     assert result.intent is None
+    assert result.settled == []
+    assert result.pair_journals == []
     assert config.read_bytes() == before
     assert result.pending[0].config_reference == historical
+    assert (
+        recovery.MaterialMigrationJournalStore.open(str(samples), journal.transaction_id).history()
+        == history
+        == [encoded]
+    )
 
 
 def test_alias_location_comparison_delegates_both_addresses_to_native(

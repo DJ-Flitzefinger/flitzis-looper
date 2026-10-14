@@ -128,7 +128,7 @@ fn import_and_ack(source: &Path, output_rate: u32, public_incoming: bool) -> Val
         engine.loaded_source_generations.lock().unwrap()[0] = (7, output_rate);
         engine
             .input_runtime_ownership
-            .publish_source(0, &previous, output_rate, 7);
+            .publish_test_source(0, &previous, output_rate, 7);
         callback.mixer = RtMixer::new(2, output_rate as f32);
         callback
             .mixer
@@ -186,7 +186,13 @@ fn import_and_ack(source: &Path, output_rate: u32, public_incoming: bool) -> Val
     // Full CPU CQT/BPM work may precede publication for minutes. This deadline
     // bounds only the opt-in integration fixture; the native ACK stays unchanged.
     wait_until_for(Duration::from_secs(3600), || {
-        while let Ok(event) = engine.loader_rx.lock().unwrap().try_recv() {
+        while let Ok(event) = engine
+            .loader_rx
+            .lock()
+            .unwrap()
+            .try_recv()
+            .map(LoaderEvent::into_test_payload)
+        {
             assert!(
                 !matches!(
                     event,

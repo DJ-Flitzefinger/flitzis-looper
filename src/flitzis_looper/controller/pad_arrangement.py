@@ -217,6 +217,7 @@ class PadArrangementController:
         *,
         stem_task_runner: StemTaskRunner,
         on_copy_committed: Callable[[int, PadCopyTicket], None] | None = None,
+        can_admit: Callable[[], bool] | None = None,
     ) -> None:
         self._persistence = persistence
         self._project = persistence.project
@@ -225,6 +226,7 @@ class PadArrangementController:
         self._assets = assets
         self._runner = stem_task_runner
         self._on_copy_committed = on_copy_committed
+        self._can_admit = can_admit or (lambda: True)
         self._results: SimpleQueue[_PreparedCopy] = SimpleQueue()
         self._copy: _Copy | None = None
         self._control_thread = threading.get_ident()
@@ -266,7 +268,7 @@ class PadArrangementController:
     def copy_to_empty(self, source_id: int, target_id: int) -> bool:
         """Admit an asynchronous complete Copy, returning False for unsupported targets."""
         self._require_control_thread()
-        if self._closing:
+        if self._closing or not self._can_admit():
             return False
         if (
             self.active

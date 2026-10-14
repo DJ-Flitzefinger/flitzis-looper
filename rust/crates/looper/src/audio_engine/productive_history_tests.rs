@@ -145,6 +145,10 @@ fn adopt(mixer: &mut RtMixer, source: &SampleBuffer, projection: AcceptedTimingP
     mixer.publish_constant_timing_rt(
         0,
         PreparedConstantTiming {
+            content_key: mixer
+                .input_runtime_ownership
+                .binding_placement(0)
+                .and_then(|snapshot| snapshot.content_key()),
             reference: source.clone(),
             publication: permit,
             projection,
@@ -348,7 +352,7 @@ fn finite_history_mixer(source: &SampleBuffer, start: usize, end: usize) -> Box<
     let mut mixer = Box::new(RtMixer::new(1, RATE as f32));
     let ownership =
         Arc::new(crate::audio_engine::input_runtime_binding::InputRuntimeOwnership::tracked());
-    ownership.publish_source(0, source, RATE, 1);
+    ownership.publish_test_source(0, source, RATE, 1);
     mixer.set_input_runtime_ownership(ownership);
     mixer.load_sample(0, source.clone());
     mixer.set_pad_loop_region(
@@ -447,7 +451,7 @@ fn finite_productive_seek_cases() {
     for mixer in [&mut actual, &mut complete] {
         mixer
             .input_runtime_ownership
-            .publish_source(0, &replacement, RATE, 2);
+            .publish_test_source(0, &replacement, RATE, 2);
         mixer.load_sample(0, replacement.clone());
         wait_for_cut_reserve(mixer);
         assert!(mixer.seek_sample_at_output_frame(0, 1.5, frame));

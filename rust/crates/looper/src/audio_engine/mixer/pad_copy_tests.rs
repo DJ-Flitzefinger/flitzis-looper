@@ -77,7 +77,7 @@ fn fixture() -> (RtMixer, Box<PadCopyRtWork>, HoldingRetirement) {
         residency: None,
     }
     .with_complete_source(RATE);
-    ownership.publish_source(SOURCE, &source, RATE, 1);
+    ownership.publish_test_source(SOURCE, &source, RATE, 1);
     mixer.load_sample(SOURCE, source.clone());
     let mut target = source.clone();
     let view = source.residency.as_ref().unwrap();
@@ -88,13 +88,14 @@ fn fixture() -> (RtMixer, Box<PadCopyRtWork>, HoldingRetirement) {
         context: view.context,
     }));
     let source_binding = InputPadBinding {
+        placement: ownership.slot_snapshot(SOURCE),
         resident: source.resident_binding(),
         source_address: source.source_address(),
         sample_count: source.source_sample_count(),
         channels: source.channels,
         sample_rate_hz: RATE,
-        authority_revision: ownership.authority[SOURCE].load(Ordering::Acquire),
-        runtime_revision: ownership.runtime[SOURCE].load(Ordering::Acquire),
+        authority_revision: ownership.authority_revision(SOURCE),
+        runtime_revision: ownership.runtime_revision(SOURCE),
         accepted: None,
     };
     ownership.reserve_copy(TARGET, 17).unwrap();
@@ -108,14 +109,22 @@ fn fixture() -> (RtMixer, Box<PadCopyRtWork>, HoldingRetirement) {
         source_selection_fences: None,
         target_epoch: mixer.prepared_source_epochs[TARGET].clone(),
         captured_target_epoch: 0,
-        target_authority: ownership.authority[TARGET].load(Ordering::Acquire),
-        target_runtime: ownership.runtime[TARGET].load(Ordering::Acquire),
+        target_authority: ownership.authority_revision(TARGET),
+        target_runtime: ownership.runtime_revision(TARGET),
+        target_placement: ownership.slot_snapshot(TARGET).unwrap(),
         reservation: 17,
         phase: Arc::new(AtomicU8::new(0)),
         ownership,
         acknowledgements: mixer.current_timing_acknowledgements.clone(),
     };
+    let content_lifetime = crate::audio_engine::content_lifetime::reserve().unwrap();
     let work = Box::new(PadCopyRtWork {
+        content_key: guard
+            .target_placement
+            .for_lifetime(content_lifetime)
+            .unwrap()
+            .content_key()
+            .unwrap(),
         target: TARGET,
         sample: target,
         stems: None,
@@ -123,7 +132,7 @@ fn fixture() -> (RtMixer, Box<PadCopyRtWork>, HoldingRetirement) {
         selection_fences: None,
         projection: None,
         source_generation: 2,
-        content_lifetime: 29,
+        content_lifetime,
         prepared_epoch: 1,
         authority_revision: 2,
         publication: PreparedSourcePermit::new(guard.target_epoch.clone(), 1),
@@ -180,7 +189,7 @@ fn stopped_complete_copy_keeps_running_source_and_owns_fresh_target_image() {
     let source_voice = mixer.voices.iter().position(|voice| voice.active).unwrap();
     let position = mixer.voices[source_voice].source_playback.position();
     let generation = mixer.voices[source_voice].generation;
-    let source_authority = mixer.input_runtime_ownership.authority[SOURCE].load(Ordering::Acquire);
+    let source_authority = mixer.input_runtime_ownership.authority_revision(SOURCE);
     let source_sample = mixer.sample_bank[SOURCE].as_ref().unwrap().clone();
     let phase = work.guard.phase.clone();
 
@@ -200,7 +209,7 @@ fn stopped_complete_copy_keeps_running_source_and_owns_fresh_target_image() {
             .any(|voice| voice.active && voice.sample_id == TARGET)
     );
     assert_eq!(
-        mixer.input_runtime_ownership.authority[SOURCE].load(Ordering::Acquire),
+        mixer.input_runtime_ownership.authority_revision(SOURCE),
         source_authority
     );
     let target = mixer.sample_bank[TARGET].as_ref().unwrap();
@@ -246,7 +255,9 @@ fn stopped_complete_copy_keeps_running_source_and_owns_fresh_target_image() {
     assert_eq!(mixer.stem_enabled_mask[TARGET], 0);
     assert_eq!(mixer.stem_mix_mode[TARGET], StemMixMode::FullMix);
     assert_eq!(
-        mixer.current_timing_acknowledgements.current_epoch(TARGET),
+        mixer
+            .current_timing_acknowledgements
+            .current_for_slot(&mixer.input_runtime_ownership, TARGET),
         0
     );
     assert_eq!(mixer.input_runtime_ownership.copy_reservation(TARGET), 17);
@@ -327,7 +338,18 @@ fn automatic_copy_acknowledges_only_the_fresh_target_publication() {
         publication_epoch: 7,
     };
     mixer.pad_accepted_timing[SOURCE] = Some(source);
-    mixer.current_timing_acknowledgements.acknowledge(SOURCE, 7);
+    assert!(
+        mixer.current_timing_acknowledgements.acknowledge_for_key(
+            &mixer.input_runtime_ownership,
+            work.guard
+                .source_binding
+                .placement
+                .unwrap()
+                .content_key()
+                .unwrap(),
+            7
+        )
+    );
     work.guard.source_binding.accepted = Some(source);
     work.projection = Some(AcceptedTimingProjection {
         publication_epoch: 11,
@@ -336,11 +358,15 @@ fn automatic_copy_acknowledges_only_the_fresh_target_publication() {
     work.intent.timing_intent = TimingIntent::Automatic;
     assert!(mixer.copy_pad_rt(work, &mut retirement));
     assert_eq!(
-        mixer.current_timing_acknowledgements.current_epoch(SOURCE),
+        mixer
+            .current_timing_acknowledgements
+            .current_for_slot(&mixer.input_runtime_ownership, SOURCE),
         7
     );
     assert_eq!(
-        mixer.current_timing_acknowledgements.current_epoch(TARGET),
+        mixer
+            .current_timing_acknowledgements
+            .current_for_slot(&mixer.input_runtime_ownership, TARGET),
         11
     );
     assert_eq!(
@@ -358,10 +384,7 @@ fn missing_retirement_capacity_rejects_before_any_target_epoch_or_image_change()
     assert_eq!(phase.load(Ordering::Acquire), 3);
     assert!(retirement.held.is_some());
     assert!(mixer.sample_bank[TARGET].is_none());
-    assert_eq!(
-        mixer.input_runtime_ownership.authority[TARGET].load(Ordering::Acquire),
-        1
-    );
+    assert_eq!(mixer.input_runtime_ownership.authority_revision(TARGET), 1);
     assert_eq!(
         mixer.prepared_source_epochs[TARGET].load(Ordering::Acquire),
         0
@@ -414,13 +437,12 @@ fn malformed_copy_geometry_backing_and_historical_timing_never_install_a_partial
         assert_eq!(phase.load(Ordering::Acquire), 3);
         assert!(mixer.sample_bank[TARGET].is_none());
         assert_eq!(
-            mixer.current_timing_acknowledgements.current_epoch(TARGET),
+            mixer
+                .current_timing_acknowledgements
+                .current_for_slot(&mixer.input_runtime_ownership, TARGET),
             0
         );
-        assert_eq!(
-            mixer.input_runtime_ownership.authority[TARGET].load(Ordering::Acquire),
-            1
-        );
+        assert_eq!(mixer.input_runtime_ownership.authority_revision(TARGET), 1);
         assert!(retirement.held.is_some());
     }
 }
@@ -460,8 +482,7 @@ fn real_control_copy_then_parameter_drain_rejects_prior_gain_eq_and_empty_target
         work.guard.captured_target_epoch =
             engine.prepared_source_epochs[TARGET].load(Ordering::Acquire);
         work.prepared_epoch = work.guard.captured_target_epoch + 1;
-        work.guard.target_authority =
-            engine.input_runtime_ownership.authority[TARGET].load(Ordering::Acquire);
+        work.guard.target_authority = engine.input_runtime_ownership.authority_revision(TARGET);
         work.authority_revision = work.guard.target_authority + 1;
         work.publication =
             PreparedSourcePermit::new(work.guard.target_epoch.clone(), work.prepared_epoch);
@@ -551,6 +572,10 @@ fn later_actual_gain_eq_admissions_survive_stale_entries_before_coalescing() {
             .unwrap();
         producer
             .push(ControlParameterMessage::SetPadGainGuarded {
+                placement: engine
+                    .input_runtime_ownership
+                    .slot_snapshot(TARGET)
+                    .unwrap(),
                 id: TARGET,
                 gain_db: -18.0,
                 expected_epoch: 0,
@@ -558,6 +583,10 @@ fn later_actual_gain_eq_admissions_survive_stale_entries_before_coalescing() {
             .unwrap();
         producer
             .push(ControlParameterMessage::SetPadEqGuarded {
+                placement: engine
+                    .input_runtime_ownership
+                    .slot_snapshot(TARGET)
+                    .unwrap(),
                 id: TARGET,
                 low_db: -10.0,
                 mid_db: -5.0,
@@ -631,7 +660,7 @@ fn pending_copy_rejects_direct_admissions_without_queue_or_epoch_changes() {
         let (parameters, mut parameter_consumer) = RingBuffer::<ControlParameterMessage>::new(8);
         let mut engine = parameter_engine(&mixer, parameters, controls);
         let requests = engine.pad_request_ids.lock().unwrap().clone();
-        let authority = engine.input_runtime_ownership.authority[TARGET].load(Ordering::Acquire);
+        let authority = engine.input_runtime_ownership.authority_revision(TARGET);
         let prepared = engine.prepared_source_epochs[TARGET].load(Ordering::Acquire);
         assert!(
             engine
@@ -700,7 +729,7 @@ fn pending_copy_rejects_direct_admissions_without_queue_or_epoch_changes() {
         assert!(control_consumer.pop().is_err());
         assert_eq!(*engine.pad_request_ids.lock().unwrap(), requests);
         assert_eq!(
-            engine.input_runtime_ownership.authority[TARGET].load(Ordering::Acquire),
+            engine.input_runtime_ownership.authority_revision(TARGET),
             authority
         );
         assert_eq!(

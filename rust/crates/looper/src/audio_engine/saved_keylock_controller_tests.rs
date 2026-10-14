@@ -231,7 +231,7 @@ fn modes_settled(locals: &Py<PyDict>) -> bool {
 fn reference(source: &SampleBuffer, ratio: f64) -> Box<RtMixer> {
     let mut reference = Box::new(RtMixer::new(2, RATE as f32));
     let ownership = Arc::new(InputRuntimeOwnership::tracked());
-    ownership.publish_source(0, source, RATE, 1);
+    ownership.publish_test_source(0, source, RATE, 1);
     reference.set_input_runtime_ownership(ownership.clone());
     reference.load_sample(0, source.clone());
     reference.set_loop_region_frames(0, LOOP_START, Some(LOOP_END));
@@ -242,12 +242,13 @@ fn reference(source: &SampleBuffer, ratio: f64) -> Box<RtMixer> {
         true,
         request,
         InputPadBinding {
+            placement: ownership.binding_placement(0),
             resident: source.resident_binding(),
             source_address: source.source_address(),
             sample_count: source.source_sample_count(),
             channels: 2,
             sample_rate_hz: RATE,
-            authority_revision: ownership.authority[0].load(Ordering::Acquire),
+            authority_revision: ownership.authority_revision(0),
             runtime_revision: 0,
             accepted: None,
         },
@@ -446,10 +447,10 @@ assert audio.pad_key_lock_status(0) is None
     );
     assert!(matches!(
         consumer.peek(),
-        Ok(ControlMessage::SetPadKeyLock {
-            id: 0,
+        Ok(ControlMessage::SetPadKeyLockSavedIntent {
+            placement,
             enabled: true
-        })
+        }) if placement.slot() == 0 && placement.lifetime() == 0
     ));
     assert_eq!(
         callback.drain(&mut consumer),
@@ -484,6 +485,8 @@ assert not loader._deferred_restores, restore_state
 assert set(loader._load_request_ids) == {0, 215}, restore_state
 "#,
     );
+    // Wait for both source writers to close their markers before one-shot ACKs.
+    wait_until(|| consumer.slots() >= 2 && producer.try_lock().is_ok());
     let mut captured = [false; 2];
     wait_until(|| {
         if let Ok(ControlMessage::LoadColdSample { id, sample, .. }) = consumer.peek() {
@@ -545,6 +548,7 @@ assert set(loader._load_request_ids) == {0, 215}, restore_state
                 == 0
         }) && consumer.is_empty()
             && modes_settled(&locals)
+            && producer.try_lock().is_ok()
     });
     controller_python(
         &locals,
@@ -584,7 +588,10 @@ assert abs(project.speed - .73) < 1e-15
         );
         callback.drain(&mut consumer);
         poll(&locals, &mut callback, &mut feedback);
-        consumer.is_empty() && parameter_consumer.is_empty() && modes_settled(&locals)
+        consumer.is_empty()
+            && parameter_consumer.is_empty()
+            && modes_settled(&locals)
+            && producer.try_lock().is_ok()
     });
     callback.mixer.set_pad_eq(0, -12.0, -3.0, 4.0);
     controller_python(&locals, "transport.playback.trigger_pad_keep_others(0)");

@@ -152,7 +152,8 @@ impl ProductiveOffline {
         }
 
         let other = p.h.material.sample.clone();
-        p.reference_ownership.publish_source(215, &other, RATE, 1);
+        p.reference_ownership
+            .publish_test_source(215, &other, RATE, 1);
         p.reference.load_sample(215, other);
         for mixer in [&mut p.h.callback.mixer, p.reference.as_mut()] {
             // Pad215 is independently ACKed by the real cold harness. Its dry

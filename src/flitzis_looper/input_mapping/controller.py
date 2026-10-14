@@ -39,7 +39,7 @@ if TYPE_CHECKING:
 
     from flitzis_looper.controller import AppController
     from flitzis_looper.controller.current_timing import CurrentPadTiming
-    from flitzis_looper_audio import InputRuntimePadBinding
+    from flitzis_looper_audio import CapturedInputPadTrigger, InputRuntimePadBinding
 
 type InputSource = Literal["midi", "keyboard"]
 
@@ -370,7 +370,9 @@ class InputMappingController(BaseController):
 
         action_key = event.get("action_key")
         if isinstance(action_key, str):
-            if self._execute_bound_midi_playback(action_key, event.get("received_at_ns")):
+            if self._execute_bound_midi_playback(
+                action_key, event.get("received_at_ns"), event.get("captured_trigger")
+            ):
                 return
             if self._execute_relative_midi_action(
                 action_key,
@@ -385,9 +387,11 @@ class InputMappingController(BaseController):
                 received_at_ns = None
             self.execute_action(LooperAction.from_key(action_key), received_at_ns=received_at_ns)
 
-    def _execute_bound_midi_playback(self, action_key: str, timestamp: object) -> bool:
+    def _execute_bound_midi_playback(
+        self, action_key: str, timestamp: object, captured_trigger: object = None
+    ) -> bool:
         if action_key.startswith("pad.trigger:"):
-            self._retry_guarded_midi_trigger(action_key, timestamp)
+            self._retry_guarded_midi_trigger(action_key, timestamp, captured_trigger)
             return True
         if action_key not in {"global.start_stop", "global.stop_all"}:
             return False
@@ -398,26 +402,28 @@ class InputMappingController(BaseController):
             self._session.input_mapping_error = str(err)
         return True
 
-    def _retry_guarded_midi_trigger(self, action_key: str, timestamp: object) -> None:
-        sample_id = _parse_prefixed_sample_id(action_key, "pad.trigger:")
-        if sample_id is None:
+    def _retry_guarded_midi_trigger(
+        self, _action_key: str, _timestamp: object, captured_trigger: object = None
+    ) -> None:
+        if captured_trigger is None:
+            self._session.input_mapping_error = "MIDI trigger has no original Native gesture owner"
             return
+        trigger = cast("CapturedInputPadTrigger", captured_trigger)
         try:
-            received_at_ns = validate_input_timestamp_ns(timestamp)
-            self._app.transport.ensure_current_source_assignment_ready(sample_id)
-            if not self._refresh_rust_runtime_state():
+            if self._app.transport.residency.owns_captured_trigger(trigger):
                 return
-            dispatched = self._audio.trigger_input_runtime_pad(
-                sample_id, received_at_ns=received_at_ns
-            )
+            sample_id = trigger.diagnostic_slot
+            if sample_id is None:
+                self._app.transport.residency.prepare_captured_trigger(trigger)
+                return
+            self._app.transport.ensure_current_source_assignment_ready(sample_id)
+            try:
+                dispatched = self._audio.trigger_captured_input_pad(trigger)
+            except RuntimeError:
+                self._app.transport.residency.prepare_captured_trigger(trigger)
+                raise
             if not dispatched:
-                start, end = self._app.transport.loop.requested_region(sample_id)
-                self._app.transport.residency.prepare_trigger(
-                    sample_id,
-                    start,
-                    end,
-                    lambda: self._trigger_current_midi(sample_id, received_at_ns),
-                )
+                self._app.transport.residency.prepare_captured_trigger(trigger)
         except (RuntimeError, ValueError, TypeError) as err:
             self._session.input_mapping_error = str(err)
 
@@ -426,14 +432,6 @@ class InputMappingController(BaseController):
             return
         self._midi_cc_values[binding_key] = value
         self._midi_cc_directions.pop(binding_key, None)
-
-    def _trigger_current_midi(self, sample_id: int, received_at_ns: int | None) -> None:
-        self._app.transport.ensure_current_source_assignment_ready(sample_id)
-        if not self._refresh_rust_runtime_state() or not self._audio.trigger_input_runtime_pad(
-            sample_id, received_at_ns=received_at_ns
-        ):
-            msg = "prepared MIDI launch remains unavailable"
-            raise RuntimeError(msg)
 
     def _execute_relative_midi_action(
         self,

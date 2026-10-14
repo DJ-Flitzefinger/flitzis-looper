@@ -1,15 +1,29 @@
 """Current native source and timing ownership in productive MIDI publication."""
 
 from typing import TYPE_CHECKING
+from unittest.mock import Mock
 
 import pytest
 
 from tests.flitzis_looper.conftest import FakeInputRuntimePadBinding, current_timing_metadata
 
 if TYPE_CHECKING:
-    from unittest.mock import Mock
-
     from flitzis_looper.controller import AppController
+
+
+class _CapturedRuntimeGesture:
+    """Facade-only original token; real Native supersession has its own unit proofs."""
+
+    def __init__(self) -> None:
+        self.owner_identity = object()
+        self.diagnostic_slot = 0
+        self.owner_status = "current"
+
+    def original_owner_status(self) -> str:
+        return self.owner_status
+
+    def metadata(self) -> dict[str, object]:
+        pytest.fail("An original gesture must not be replaced by a numeric binding capture")
 
 
 def _configure_accepted_pad(controller: AppController, audio: Mock) -> dict[str, object]:
@@ -207,9 +221,19 @@ def test_rejected_publication_is_retried_and_never_launches_from_previous_runtim
     controller.input_mapping.set_enabled(enabled=True)
     controller.project.sample_paths[0] = "samples/unchanged.wav"
     controller.input_mapping._sync_rust_runtime_state()
+    original = _CapturedRuntimeGesture()
     controller.project.pad_loop_start_s[0] = 1.0
+    audio_engine_mock.current_input_runtime_pad_binding.side_effect = None
+    audio_engine_mock.current_input_runtime_pad_binding.return_value = FakeInputRuntimePadBinding(
+        authority_revision=2
+    )
+    original.owner_status = "superseded"
+    audio_engine_mock.trigger_captured_input_pad = Mock(return_value=False)
+    audio_engine_mock.prepare_captured_input_trigger = Mock(return_value=None)
+    audio_engine_mock.trigger_prepared_input_pad = Mock(return_value=False)
     audio_engine_mock.set_input_runtime_state.side_effect = RuntimeError("runtime source retired")
     audio_engine_mock.reset_mock()
+    controller.input_mapping._sync_rust_runtime_state()
 
     controller.input_mapping._handle_rust_input_event({
         "source": "midi",
@@ -218,9 +242,15 @@ def test_rejected_publication_is_retried_and_never_launches_from_previous_runtim
         "received_at_ns": 123,
         "direct": True,
         "dispatched": False,
+        "captured_trigger": original,
     })
 
     audio_engine_mock.set_input_runtime_state.assert_called_once()
+    audio_engine_mock.trigger_captured_input_pad.assert_called_once_with(original)
+    controller.transport.residency.poll()
+    assert not controller.transport.residency._captured_triggers
+    audio_engine_mock.prepare_captured_input_trigger.assert_not_called()
+    audio_engine_mock.trigger_prepared_input_pad.assert_not_called()
     audio_engine_mock.trigger_input_runtime_pad.assert_not_called()
     audio_engine_mock.play_sample_exclusive.assert_not_called()
     audio_engine_mock.set_pad_loop_region.assert_not_called()
@@ -236,10 +266,19 @@ def test_failed_guarded_trigger_never_falls_back_to_unbound_loop_and_play(
 ) -> None:
     controller.input_mapping.set_enabled(enabled=True)
     _configure_accepted_pad(controller, audio_engine_mock)
+    controller.input_mapping._sync_rust_runtime_state()
+    original = _CapturedRuntimeGesture()
     if unavailable:
         audio_engine_mock.current_constant_timing.return_value = None
-    audio_engine_mock.trigger_input_runtime_pad.return_value = False
+        original.owner_status = "superseded"
+    audio_engine_mock.trigger_captured_input_pad = Mock(return_value=False)
+    audio_engine_mock.prepare_captured_input_trigger = Mock(return_value=None)
+    audio_engine_mock.trigger_prepared_input_pad = Mock(return_value=False)
     audio_engine_mock.reset_mock()
+    controller.input_mapping._sync_rust_runtime_state()
+    loaded = controller.input_mapping._last_input_runtime_state_signature
+    assert loaded is not None
+    assert loaded[2][0].ready is not unavailable
 
     controller.input_mapping._handle_rust_input_event({
         "source": "midi",
@@ -248,10 +287,19 @@ def test_failed_guarded_trigger_never_falls_back_to_unbound_loop_and_play(
         "received_at_ns": 456,
         "direct": True,
         "dispatched": False,
+        "captured_trigger": original,
     })
 
-    audio_engine_mock.trigger_input_runtime_pad.assert_called_once_with(0, received_at_ns=456)
-    assert audio_engine_mock.set_input_runtime_state.call_args.args[1][0] is not unavailable
+    audio_engine_mock.trigger_captured_input_pad.assert_called_once_with(original)
+    audio_engine_mock.trigger_input_runtime_pad.assert_not_called()
+    if unavailable:
+        controller.transport.residency.poll()
+        assert not controller.transport.residency._captured_triggers
+        audio_engine_mock.prepare_captured_input_trigger.assert_not_called()
+    else:
+        pending = controller.transport.residency._captured_triggers[id(original)]
+        assert pending.trigger is original
+        assert pending.ticket is None
     audio_engine_mock.set_pad_loop_region.assert_not_called()
     audio_engine_mock.play_sample.assert_not_called()
     audio_engine_mock.play_sample_exclusive.assert_not_called()

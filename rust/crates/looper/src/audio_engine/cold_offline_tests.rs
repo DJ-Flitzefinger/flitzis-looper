@@ -78,7 +78,14 @@ impl ColdOffline {
         .unwrap();
         wait_until(|| self.engine.input_runtime_ownership.cold_status(0, request) == Some(0));
         wait_until(|| self.consumer.slots() >= expected_commands);
-        while let Ok(event) = self.engine.loader_rx.lock().unwrap().try_recv() {
+        while let Ok(event) = self
+            .engine
+            .loader_rx
+            .lock()
+            .unwrap()
+            .try_recv()
+            .map(LoaderEvent::into_test_payload)
+        {
             assert!(!matches!(event, LoaderEvent::Success { .. }));
         }
         assert_eq!(self.callback.drain(&mut self.consumer), expected_commands);

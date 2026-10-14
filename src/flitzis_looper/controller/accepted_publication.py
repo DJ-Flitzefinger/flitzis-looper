@@ -86,6 +86,7 @@ class AcceptedTimingController:
     """
 
     _MAX_ADMISSION_FAILURES = 3
+    _pair_deferred_sample_ids: frozenset[int] = frozenset()
 
     def __init__(self, transport: TransportController) -> None:
         self._transport = transport
@@ -174,13 +175,13 @@ class AcceptedTimingController:
             msg = "explicit timing completion is already pending for this pad"
             raise RuntimeError(msg)
         path = self._project.sample_paths[sample_id]
-        captured = ticket.metadata()
-        if path is None or captured.get("pad_id") != sample_id:
+        if path is None or ticket.current_control_slot() != sample_id:
             msg = "explicit timing ticket does not identify this loaded pad"
             raise ValueError(msg)
         if not self._automatic(sample_id):
             msg = "explicit timing publication requires current Automatic intent"
             raise RuntimeError(msg)
+        captured = ticket.metadata()
         future = self._executor().submit(
             self._audio.publish_constant_timing,
             ticket,
@@ -226,6 +227,8 @@ class AcceptedTimingController:
         self._poll_publications()
         self._poll_refreshes()
         for sample_id, request in list(self._waiting_refresh.items()):
+            if sample_id in getattr(self._transport, "_pair_deferred_sample_ids", ()):
+                continue
             if not self._request_is_current(sample_id, request):
                 self._waiting_refresh.pop(sample_id)
                 continue
@@ -243,6 +246,8 @@ class AcceptedTimingController:
 
     def _poll_publications(self) -> None:
         for sample_id, publication in list(self._publications.items()):
+            if sample_id in getattr(self._transport, "_pair_deferred_sample_ids", ()):
+                continue
             if self._project.sample_paths[sample_id] != publication.path or not self._automatic(
                 sample_id
             ):
@@ -300,6 +305,8 @@ class AcceptedTimingController:
 
     def _poll_refreshes(self) -> None:
         for sample_id, refresh in list(self._refreshes.items()):
+            if sample_id in getattr(self._transport, "_pair_deferred_sample_ids", ()):
+                continue
             if not self._request_is_current(sample_id, refresh.request):
                 self._refreshes.pop(sample_id)
                 continue

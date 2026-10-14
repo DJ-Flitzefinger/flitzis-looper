@@ -53,7 +53,7 @@ pub(super) fn test_engine() -> AudioEngine {
         .set_timing_intent(0, TimingIntent::Automatic);
     engine
         .input_runtime_ownership
-        .publish_source(0, &loaded, RATE, 7);
+        .publish_test_source(0, &loaded, RATE, 7);
     engine
 }
 
@@ -125,8 +125,14 @@ pub(super) fn synthetic_ticket(engine: &AudioEngine) -> ConstantTimingTicket {
     let mut guard = TimingAdoptionGuard::new(&binding, TimingIntent::Automatic).unwrap();
     let adoption_ticket = guard.issue_ticket().unwrap();
     ConstantTimingTicket {
+        placement: engine.input_runtime_ownership.binding_placement(0),
+        ownership: engine.input_runtime_ownership.clone(),
         id: 0,
         request_id,
+        request_incarnation: timing_request_incarnation(
+            &engine.input_runtime_ownership,
+            engine.input_runtime_ownership.binding_placement(0),
+        ),
         source_generation: 7,
         sample_rate_hz: RATE,
         source_digest: "a".repeat(64),
@@ -178,6 +184,7 @@ pub(super) fn accept_message(mixer: &mut RtMixer, message: ControlMessage) -> bo
 
 pub(super) fn acknowledged_mixer(engine: &AudioEngine) -> RtMixer {
     let mut mixer = RtMixer::new(1, RATE as f32);
+    mixer.set_input_runtime_ownership(engine.input_runtime_ownership.clone());
     mixer.set_current_timing_acknowledgements(engine.current_timing_acknowledgements.clone());
     mixer.load_sample(0, engine.sample_cache.lock().unwrap()[0].clone().unwrap());
     mixer
@@ -377,7 +384,11 @@ fn current_registry_cannot_pin_unloaded_pcm_and_shutdown_retires_pending_record_
     mixer.unload_sample(0);
     assert!(current_record(&engine).is_none());
 
-    engine.sample_cache.lock().unwrap()[0] = Some(source());
+    let reloaded = source();
+    engine
+        .input_runtime_ownership
+        .publish_test_source(0, &reloaded, RATE, 7);
+    engine.sample_cache.lock().unwrap()[0] = Some(reloaded);
     let pending = synthetic_ticket(&engine);
     publish(
         &engine,
@@ -391,7 +402,12 @@ fn current_registry_cannot_pin_unloaded_pcm_and_shutdown_retires_pending_record_
     assert_eq!(engine.current_constant_timing.lock().unwrap()[0].len(), 1);
     engine.shut_down().unwrap();
     assert!(engine.current_constant_timing.lock().unwrap()[0].is_empty());
-    assert_eq!(engine.current_timing_acknowledgements.current_epoch(0), 0);
+    assert_eq!(
+        engine
+            .current_timing_acknowledgements
+            .current_for_slot(&engine.input_runtime_ownership, 0),
+        0
+    );
 }
 
 #[test]
@@ -511,8 +527,7 @@ fn real_native_qm_preparation_binds_complete_actual_loaded_pcm_and_request() {
     let explicit = json!([{"id":"independently-generated-fixture-quarter-association","provenance":"mapping to independently generated pulse/quarter coordinates, not ordinal detector inference","verification":"verified","quarter_note_denominator":1,"quarter_counts":counts}]).to_string();
     let (producer, mut consumer) = queue(1);
     publish(&engine, &producer, &ticket, &explicit, origin(), decision()).unwrap();
-    let mut mixer = RtMixer::new(1, RATE as f32);
-    mixer.load_sample(0, ticket.sample.clone());
+    let mut mixer = acknowledged_mixer(&engine);
     assert!(accept_message(&mut mixer, consumer.pop().unwrap()));
     assert_eq!(ticket.publication_status().unwrap(), "accepted");
 }
@@ -533,8 +548,7 @@ fn actual_publication_uses_guard_acknowledgement_and_binary64_source_grid() {
     .unwrap();
     assert_eq!(ticket.publication_status().unwrap(), "pending");
     Python::attach(|py| assert!(ticket.accepted_metadata(py).unwrap().is_none()));
-    let mut mixer = RtMixer::new(1, RATE as f32);
-    mixer.load_sample(0, ticket.sample.clone());
+    let mut mixer = acknowledged_mixer(&engine);
     mixer.set_pad_bpm(0, Some(119.999));
     assert!(accept_message(&mut mixer, consumer.pop().unwrap()));
     assert_eq!(ticket.publication_status().unwrap(), "accepted");
@@ -803,8 +817,7 @@ fn old_cross_ring_clear_or_bpm_cannot_erase_newer_precise_adoption() {
         decision(),
     )
     .unwrap();
-    let mut mixer = RtMixer::new(1, RATE as f32);
-    mixer.load_sample(0, ticket.sample.clone());
+    let mut mixer = acknowledged_mixer(&engine);
     assert!(accept_message(&mut mixer, consumer.pop().unwrap()));
     mixer.set_pad_bpm(0, Some(60.0)); // older parameter ring can drain after the command ring
     mixer.clear_constant_timing(0, ticket.captured_epoch);

@@ -3,6 +3,7 @@
 
 use super::committed_stem_residency::{SelectedStemIdentity, StemModeReceipt};
 use super::constant_timing::{AcceptedTimingProjection, CurrentTimingAcknowledgements};
+use super::content_placement::{ContentKey, SlotSnapshot};
 use super::input_runtime_binding::{InputPadBinding, InputRuntimeOwnership};
 use super::prepared_source::PreparedSourcePermit;
 use crate::messages::{PreparedStemSet, SampleBuffer, StemMixMode};
@@ -44,6 +45,7 @@ pub(super) struct CopyRtGuard {
     pub(super) captured_target_epoch: u64,
     pub(super) target_authority: u64,
     pub(super) target_runtime: u64,
+    pub(super) target_placement: SlotSnapshot,
     pub(super) reservation: u64,
     pub(super) phase: Arc<AtomicU8>,
     pub(super) ownership: Arc<InputRuntimeOwnership>,
@@ -63,12 +65,26 @@ impl std::fmt::Debug for CopyRtGuard {
 }
 
 impl CopyRtGuard {
-    pub(super) fn current(&self) -> bool {
-        self.ownership.copy_reservation(self.target) == self.reservation
-            && self.ownership.copy_target_empty(self.target)
-            && self.ownership.authority[self.target].load(Ordering::Acquire)
+    pub(super) fn stable_current(&self) -> bool {
+        let cell = self.target_placement.cell();
+        self.ownership
+            .slot_snapshot_fields_current(self.target_placement)
+            && self
+                .source_binding
+                .placement
+                .is_some_and(|snapshot| self.ownership.slot_snapshot_fields_current(snapshot))
+            && self.ownership.copy_reservation(self.target) == self.reservation
+            && self.ownership.source_cell_empty(cell)
+            && self
+                .ownership
+                .authority_for_cell(cell)
+                .load(Ordering::Acquire)
                 == self.target_authority
-            && self.ownership.runtime[self.target].load(Ordering::Acquire) == self.target_runtime
+            && self
+                .ownership
+                .runtime_for_cell(cell)
+                .load(Ordering::Acquire)
+                == self.target_runtime
             && self.target_epoch.load(Ordering::Acquire) == self.captured_target_epoch
             && self.source_epoch.load(Ordering::Acquire) == self.captured_source_epoch
             && self.source_selection_fences.as_ref().is_none_or(|fences| {
@@ -81,13 +97,61 @@ impl CopyRtGuard {
                 .ownership
                 .binding_source_generation(self.source, self.source_binding)
                 == Some(self.source_generation)
-            && self.acknowledgements.current_epoch(self.source)
-                == self
-                    .source_binding
-                    .accepted
-                    .map_or(0, |projection| projection.publication_epoch)
+            && self.acknowledgements.current_for_binding(
+                &self.ownership,
+                self.source,
+                self.source_binding,
+            ) == self
+                .source_binding
+                .accepted
+                .map_or(0, |projection| projection.publication_epoch)
+    }
+    pub(super) fn claim_stable(&self) -> bool {
+        if !self.stable_current()
+            || self
+                .phase
+                .compare_exchange(0, 1, Ordering::AcqRel, Ordering::Acquire)
+                .is_err()
+        {
+            return false;
+        }
+        if !self.stable_current() {
+            self.phase.store(3, Ordering::Release);
+            return false;
+        }
+        true
+    }
+    pub(super) fn current(&self) -> bool {
+        self.ownership.copy_reservation(self.target) == self.reservation
+            && self.ownership.slot_snapshot_current(self.target_placement)
+            && self.ownership.copy_target_empty(self.target)
+            && self.ownership.authority_revision(self.target) == self.target_authority
+            && self.ownership.runtime_revision(self.target) == self.target_runtime
+            && self.target_epoch.load(Ordering::Acquire) == self.captured_target_epoch
+            && self.source_epoch.load(Ordering::Acquire) == self.captured_source_epoch
+            && self.source_selection_fences.as_ref().is_none_or(|fences| {
+                fences
+                    .iter()
+                    .all(|(epoch, expected)| epoch.load(Ordering::Acquire) == *expected)
+            })
+            && self
+                .ownership
+                .admission_current(self.source, self.source_binding)
+            && self
+                .ownership
+                .binding_source_generation(self.source, self.source_binding)
+                == Some(self.source_generation)
+            && self.acknowledgements.current_for_binding(
+                &self.ownership,
+                self.source,
+                self.source_binding,
+            ) == self
+                .source_binding
+                .accepted
+                .map_or(0, |projection| projection.publication_epoch)
     }
 
+    #[cfg(test)]
     pub(super) fn claim(&self) -> bool {
         if !self.current()
             || self
@@ -127,6 +191,7 @@ pub(super) struct CopySelectionFences {
 
 #[derive(Debug, Clone)]
 pub(crate) struct PadCopyRtWork {
+    pub(super) content_key: ContentKey,
     pub(super) target: usize,
     pub(super) sample: SampleBuffer,
     pub(super) publication: PreparedSourcePermit,

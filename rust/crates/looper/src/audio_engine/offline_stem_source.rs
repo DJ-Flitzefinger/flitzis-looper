@@ -2,18 +2,21 @@
 //! Capture is bounded metadata/ownership work; full verification runs on a worker.
 
 use super::cold_store::CommittedColdLease;
+use super::complete_context::CompleteSourceGuard;
+use super::content_placement::PlacementObservation;
 use super::prepared_source::version_matches_digest;
 use super::{AudioEngine, constants::NUM_SAMPLES, has_active_task_for_id};
 use pyo3::exceptions::{PyRuntimeError, PyValueError};
 use pyo3::prelude::*;
 use std::path::Path;
+use std::sync::Arc;
 use std::sync::atomic::Ordering;
 
 /// The actual loaded original/cache/marker readers, retained through backend read end.
 /// This object grants no assignment, timing, window or stem publication authority.
 #[pyclass(frozen)]
 pub struct OfflineStemSourceLease {
-    id: usize,
+    source: CompleteSourceGuard,
     lease: CommittedColdLease,
     source_version: String,
     source_request: u64,
@@ -45,7 +48,12 @@ impl OfflineStemSourceLease {
             .active_tasks
             .lock()
             .map_err(|_| PyRuntimeError::new_err("task lock poisoned"))?;
-        if has_active_task_for_id(&tasks, id) {
+        if has_active_task_for_id(
+            &tasks,
+            engine
+                .active_task_cell(id)
+                .map_err(PyRuntimeError::new_err)?,
+        ) {
             return Err(PyValueError::new_err("sample task already running"));
         }
         let cache = engine
@@ -60,8 +68,7 @@ impl OfflineStemSourceLease {
             .lock()
             .map_err(|_| PyRuntimeError::new_err("source generation lock poisoned"))?;
         let (generation, rate) = generations[id];
-        if requests[id] == 0
-            || generation == 0
+        if generation == 0
             || rate == 0
             || engine
                 .input_runtime_ownership
@@ -73,6 +80,8 @@ impl OfflineStemSourceLease {
                 "actual loaded source lease unavailable",
             ));
         }
+        let source = CompleteSourceGuard::capture(engine, id, sample, generation, rate)
+            .map_err(PyValueError::new_err)?;
         let digests = engine
             .loaded_source_digests
             .lock()
@@ -138,7 +147,7 @@ impl OfflineStemSourceLease {
             return Err(PyValueError::new_err("loaded source geometry unavailable"));
         }
         Ok(Self {
-            id,
+            source,
             lease: lease.clone(),
             source_version,
             source_request: requests[id],
@@ -173,10 +182,22 @@ fn current_under_request_lock(
     engine: &AudioEngine,
     id: usize,
     source: &OfflineStemSourceLease,
-    request_id: u64,
 ) -> PyResult<bool> {
-    if id != source.id || request_id == 0 {
+    if !Arc::ptr_eq(&source.source.ownership, &engine.input_runtime_ownership)
+        || !source.source.current()
+    {
         return Ok(false);
+    }
+    match source.source.observe_control() {
+        PlacementObservation::Current(placement) if placement.slot() == id => {}
+        PlacementObservation::Pending => {
+            return Err(PyRuntimeError::new_err(
+                "offline stem source placement is pending",
+            ));
+        }
+        PlacementObservation::Current(_)
+        | PlacementObservation::Stale
+        | PlacementObservation::Retired => return Ok(false),
     }
     let loading = engine
         .loading_sample_ids
@@ -189,7 +210,12 @@ fn current_under_request_lock(
         .active_tasks
         .lock()
         .map_err(|_| PyRuntimeError::new_err("task lock poisoned"))?;
-    if has_active_task_for_id(&tasks, id) {
+    if has_active_task_for_id(
+        &tasks,
+        engine
+            .active_task_cell(id)
+            .map_err(PyRuntimeError::new_err)?,
+    ) {
         return Ok(false);
     }
     let cache = engine
@@ -248,11 +274,11 @@ pub(super) fn is_current(
         if !idle {
             return Ok(false);
         }
-        let requests = engine
+        let _requests = engine
             .pad_request_ids
             .lock()
             .map_err(|_| PyRuntimeError::new_err("request lock poisoned"))?;
-        current_under_request_lock(engine, id, source, requests[id])
+        current_under_request_lock(engine, id, source)
     })
 }
 
@@ -274,7 +300,7 @@ pub(super) fn capture_prepared(
             .pad_request_ids
             .lock()
             .map_err(|_| PyRuntimeError::new_err("request lock poisoned"))?;
-        if !current_under_request_lock(engine, id, source, requests[id])? {
+        if !current_under_request_lock(engine, id, source)? {
             return Err(PyValueError::new_err(
                 "offline stem source admission is stale",
             ));

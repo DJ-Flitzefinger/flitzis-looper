@@ -2,6 +2,9 @@
 //! No CPAL/device, model inference, invented acceptance, or duplicate test-module includes.
 #![cfg(windows)]
 
+#[path = "midi_binding_tests.rs"]
+mod midi_binding_tests;
+
 use super::{CapturedPadCopy, PadCopyTicket};
 use crate::audio_engine::AudioEngine;
 use crate::audio_engine::audio_stream::{
@@ -275,7 +278,13 @@ impl Fixture {
             std::thread::sleep(Duration::from_millis(1));
         }
         let mut success = false;
-        while let Ok(event) = engine.loader_rx.lock().unwrap().try_recv() {
+        while let Ok(event) = engine
+            .loader_rx
+            .lock()
+            .unwrap()
+            .try_recv()
+            .map(LoaderEvent::into_test_payload)
+        {
             match event {
                 LoaderEvent::Success { request_id, .. } if request_id == loaded.request_id() => {
                     success = true
@@ -544,9 +553,8 @@ fn actual_public_copy_to_36_and_215_keeps_source_voice_and_independent_shared_cu
                 let original_demand = fixture.callback.mixer.stem_demand_for_measurement(0);
                 let generation = fixture.source_voice().generation;
                 let position = fixture.source_voice().source_playback.position();
-                let authority = fixture.with_engine(|engine| {
-                    engine.input_runtime_ownership.authority[0].load(Ordering::Acquire)
-                });
+                let authority = fixture
+                    .with_engine(|engine| engine.input_runtime_ownership.authority_revision(0));
                 let mut lifetimes = Vec::new();
                 let mut copied_selections = Vec::new();
                 for target in [36, 215] {
@@ -668,7 +676,15 @@ fn actual_public_copy_to_36_and_215_keeps_source_voice_and_independent_shared_cu
                 assert_eq!(fixture.source_voice().generation, generation);
                 assert_eq!(fixture.source_voice().source_playback.position(), position);
                 assert_eq!(
-                    fixture.with_engine(|engine| engine.input_runtime_ownership.authority[0]
+                    fixture.with_engine(|engine| engine
+                        .input_runtime_ownership
+                        .authority_for_cell(
+                            engine
+                                .input_runtime_ownership
+                                .slot_snapshot(0)
+                                .unwrap()
+                                .cell()
+                        )
                         .load(Ordering::Acquire)),
                     authority
                 );

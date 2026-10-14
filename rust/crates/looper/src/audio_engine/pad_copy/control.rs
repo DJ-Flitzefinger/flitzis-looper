@@ -153,7 +153,7 @@ pub(in crate::audio_engine) fn capture(
         .filter(|current| current.available() && current.current())
         .ok_or_else(|| PyValueError::new_err("copy source is unavailable"))?;
     if !binding.current()
-        || binding.binding != current.binding
+        || !binding.binding.same_projection(&current.binding)
         || binding.source_generation != current.source_generation
         || !Arc::ptr_eq(&binding.ownership, &engine.input_runtime_ownership)
     {
@@ -222,8 +222,15 @@ pub(in crate::audio_engine) fn capture(
         .checked_add(1)
         .filter(|request| *request <= u64::MAX / 4)
         .ok_or_else(|| PyRuntimeError::new_err("copy request identity exhausted"))?;
-    let future_epoch =
-        next_epoch(&engine.prepared_source_epochs[target]).map_err(PyRuntimeError::new_err)?;
+    let source_epoch = engine
+        .prepared_source_epoch(binding.id)
+        .map_err(PyRuntimeError::new_err)?
+        .clone();
+    let target_epoch = engine
+        .prepared_source_epoch(target)
+        .map_err(PyRuntimeError::new_err)?
+        .clone();
+    let future_epoch = next_epoch(&target_epoch).map_err(PyRuntimeError::new_err)?;
     let future_authority = engine.input_runtime_ownership.next_authority(target)?;
     drop(cache);
     let selection = committed_stem_residency::capture_copy_selection(
@@ -249,18 +256,27 @@ pub(in crate::audio_engine) fn capture(
     drop(owners);
     let lifetime =
         crate::audio_engine::content_lifetime::reserve().map_err(PyRuntimeError::new_err)?;
+    // Public control bindings deliberately omit the MIDI publication revision. Copy must
+    // capture its actual current value under this same request mutex, rather than treating
+    // that control-only zero as the admitted runtime. Later runtime edits still fence Copy.
+    let mut source_binding = current.binding;
+    source_binding.runtime_revision = engine.input_runtime_ownership.runtime_revision(binding.id);
     let guard = CopyRtGuard {
         source: binding.id,
         target,
-        source_binding: binding.binding,
+        source_binding,
         source_generation: binding.source_generation,
-        source_epoch: engine.prepared_source_epochs[binding.id].clone(),
-        captured_source_epoch: engine.prepared_source_epochs[binding.id].load(Ordering::Acquire),
+        captured_source_epoch: source_epoch.load(Ordering::Acquire),
+        source_epoch,
         source_selection_fences: Some(source_selection_fences),
-        target_epoch: engine.prepared_source_epochs[target].clone(),
-        captured_target_epoch: engine.prepared_source_epochs[target].load(Ordering::Acquire),
-        target_authority: engine.input_runtime_ownership.authority[target].load(Ordering::Acquire),
-        target_runtime: engine.input_runtime_ownership.runtime[target].load(Ordering::Acquire),
+        captured_target_epoch: target_epoch.load(Ordering::Acquire),
+        target_epoch,
+        target_authority: engine.input_runtime_ownership.authority_revision(target),
+        target_runtime: engine.input_runtime_ownership.runtime_revision(target),
+        target_placement: engine
+            .input_runtime_ownership
+            .slot_snapshot(target)
+            .ok_or_else(|| PyRuntimeError::new_err("copy target placement is pending"))?,
         reservation: lifetime,
         phase: Arc::new(AtomicU8::new(0)),
         ownership: engine.input_runtime_ownership.clone(),
@@ -399,7 +415,7 @@ fn prepare_owned(state: &Arc<PadCopyState>) -> Result<PreparedCopyOwners, String
         .map_err(|error| error.to_string())?;
     let publication =
         PreparedSourcePermit::new(state.guard.target_epoch.clone(), capture.future_epoch);
-    let timing = capture
+    let mut timing = capture
         .timing
         .as_ref()
         .map(|record| {
@@ -415,11 +431,21 @@ fn prepare_owned(state: &Arc<PadCopyState>) -> Result<PreparedCopyOwners, String
             )
         })
         .transpose()?;
+    let placement = state
+        .guard
+        .ownership
+        .prepare_slot_write(state.guard.target_placement, capture.lifetime)?
+        .after();
+    if let Some((record, prepared)) = &mut timing {
+        record.content_key = placement.content_key();
+        prepared.content_key = placement.content_key();
+    }
     let projection = timing.as_ref().map(|(_, timing)| timing.projection);
     let mut intent = capture
         .intent
         .rt_intent(&sample, capture.rate, projection)?;
     let binding = InputPadBinding {
+        placement: Some(placement),
         resident: sample.resident_binding(),
         source_address: sample.source_address(),
         sample_count: sample.source_sample_count(),
@@ -472,6 +498,9 @@ fn prepare_owned(state: &Arc<PadCopyState>) -> Result<PreparedCopyOwners, String
         return Err("copy preparation cancelled or stale".into());
     }
     let rt = Box::new(PadCopyRtWork {
+        content_key: placement
+            .content_key()
+            .ok_or("copy target lifetime is missing")?,
         target: state.guard.target,
         sample: sample.clone(),
         publication,
@@ -606,14 +635,15 @@ pub(in crate::audio_engine) fn reconcile(
         || cache[target].is_some()
         || state.guard.ownership.copy_reservation(target) != capture.lifetime
         || state.guard.target_epoch.load(Ordering::Acquire) != capture.future_epoch
-        || state.guard.ownership.authority[target].load(Ordering::Acquire)
-            != capture.future_authority
+        || state.guard.ownership.authority_revision(target) != capture.future_authority
         || state
             .guard
             .ownership
             .source_generation(target, &owners.sample, capture.rate)
             != Some(capture.request)
-        || engine.current_timing_acknowledgements.current_epoch(target)
+        || engine
+            .current_timing_acknowledgements
+            .current_for_slot(&engine.input_runtime_ownership, target)
             != owners
                 .timing
                 .as_ref()

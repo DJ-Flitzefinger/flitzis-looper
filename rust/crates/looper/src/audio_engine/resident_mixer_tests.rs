@@ -39,20 +39,26 @@ fn accepted() -> AcceptedTimingProjection {
 fn fixture(sample: &SampleBuffer, stems: Option<PreparedStemSet>, wet: bool) -> RtMixer {
     let mut mixer = RtMixer::new(1, RATE as f32);
     let ownership = Arc::new(InputRuntimeOwnership::tracked());
-    ownership.publish_source(0, sample, RATE, 1);
+    ownership.publish_test_source(0, sample, RATE, 1);
     mixer.set_input_runtime_ownership(ownership);
     mixer.load_sample(0, sample.clone());
     let permit = PreparedSourcePermit::unrestricted();
     permit.mark_pending().unwrap();
-    assert!(mixer.publish_constant_timing_rt(
-        0,
-        PreparedConstantTiming {
-            reference: sample.clone(),
-            publication: permit,
-            projection: accepted(),
-        },
-        &mut ImmediateAudioBufferRetirement
-    ));
+    assert!(
+        mixer.publish_constant_timing_rt(
+            0,
+            PreparedConstantTiming {
+                content_key: mixer
+                    .input_runtime_ownership
+                    .binding_placement(0)
+                    .and_then(|snapshot| snapshot.content_key()),
+                reference: sample.clone(),
+                publication: permit,
+                projection: accepted(),
+            },
+            &mut ImmediateAudioBufferRetirement
+        )
+    );
     if let Some(mut stems) = stems {
         stems.accepted_timing = Some(accepted());
         assert!(mixer.publish_prepared_stems(0, stems));
@@ -88,12 +94,13 @@ fn render(mixer: &mut RtMixer, start: u64, frames: usize) -> Vec<f32> {
 fn binding(mixer: &RtMixer) -> InputPadBinding {
     let sample = mixer.sample_bank[0].as_ref().unwrap();
     InputPadBinding {
+        placement: mixer.input_runtime_ownership.binding_placement(0),
         resident: sample.resident_binding(),
         source_address: sample.source_address(),
         sample_count: sample.source_sample_count(),
         channels: 1,
         sample_rate_hz: RATE,
-        authority_revision: mixer.input_runtime_ownership.authority[0].load(Ordering::Acquire),
+        authority_revision: mixer.input_runtime_ownership.authority_revision(0),
         runtime_revision: 0,
         accepted: mixer.pad_accepted_timing[0],
     }

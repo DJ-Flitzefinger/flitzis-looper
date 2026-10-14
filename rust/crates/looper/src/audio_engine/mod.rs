@@ -19,11 +19,11 @@ use pyo3::exceptions::{PyRuntimeError, PyTypeError, PyValueError};
 use pyo3::prelude::*;
 use pyo3::types::{PyBool, PyDict, PyInt};
 use rtrb::Producer;
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{
     Arc, Mutex,
-    mpsc::{Receiver, Sender, TryRecvError},
+    mpsc::{Receiver, Sender},
 };
 
 pub(crate) mod accepted_timing_refresh;
@@ -48,15 +48,18 @@ mod cold_store;
 pub(crate) mod committed_stem_residency;
 mod complete_context;
 pub use committed_stem_residency::{CommittedStemSetTicket, ResidentStemTicket};
+pub(crate) use complete_context::NativeAnalysisOwner;
 pub(crate) mod constant_timing;
 mod constants;
 mod content_lifetime;
+pub(crate) mod content_placement;
 pub use constant_timing::CapturedConstantTiming;
 pub use constant_timing::ConstantTimingTicket;
 pub use constant_timing::SavedConstantTimingTicket;
 mod dsp;
 mod errors;
 pub(crate) mod global_playback_batch;
+pub(crate) mod hold_action;
 pub use global_playback_batch::GlobalPlaybackBatchTicket;
 mod incoming_load;
 mod initial_loop_start;
@@ -64,11 +67,13 @@ mod input_mapping;
 pub(crate) mod input_runtime_binding;
 #[cfg(all(test, windows))]
 mod ordinary_loader_incoming_tests;
+mod transport_intent_control;
 pub use input_runtime_binding::InputRuntimePadBinding;
 mod key_lock_feedback;
 pub(crate) mod key_lock_preparation;
 #[cfg(test)]
 mod key_lock_source_preparation;
+mod loader_events;
 mod loop_acceptance;
 mod mixer;
 mod native_history_permit;
@@ -76,8 +81,14 @@ mod native_owned_work;
 mod native_source_coverage;
 mod offline_stem_source;
 pub(crate) mod pad_copy;
+pub(crate) mod pad_pair;
+pub use hold_action::HoldActionTicket;
+pub use input_mapping::CapturedInputPadTrigger;
+pub use loader_events::LoaderEventDelivery;
 pub use offline_stem_source::OfflineStemSourceLease;
 pub use pad_copy::{CapturedPadCopy, PadCopyTicket};
+pub use pad_pair::recovery::RecoveredPairAcceptance;
+pub use pad_pair::{CapturedPadPair, PadPairAcknowledgement, PadPairTicket};
 mod prepared_native_history;
 pub(crate) mod prepared_source;
 mod prepared_stems_work;
@@ -219,11 +230,19 @@ struct PadTaskGuard {
     id: usize,
     task: BackgroundTaskKind,
     active_tasks: Arc<Mutex<HashSet<(usize, BackgroundTaskKind)>>>,
+    task_token: Arc<()>,
+    task_tokens: Arc<Mutex<HashMap<(usize, BackgroundTaskKind), Arc<()>>>>,
 }
 
 impl Drop for PadTaskGuard {
     fn drop(&mut self) {
-        if let Ok(mut set) = self.active_tasks.lock() {
+        if let Ok(mut set) = self.active_tasks.lock()
+            && let Ok(mut tokens) = self.task_tokens.lock()
+            && tokens
+                .get(&(self.id, self.task))
+                .is_some_and(|token| Arc::ptr_eq(token, &self.task_token))
+        {
+            tokens.remove(&(self.id, self.task));
             set.remove(&(self.id, self.task));
         }
     }
@@ -261,14 +280,9 @@ impl<'a> PadRequestAdvance<'a> {
         self.next_request
     }
 
-    /// Commit a monotone proposal ID only after final queue/resource admission.
-    fn commit_reserved(self, target: u64) -> Result<u64, String> {
-        if target < self.next_request {
-            return Err("reserved pad request was superseded".into());
-        }
+    fn commit_reserved_prechecked(self, target: u64) {
         self.epoch.store(self.next_epoch, Ordering::Release);
         *self.current = target;
-        Ok(target)
     }
 }
 
@@ -323,7 +337,10 @@ fn admit_sample_analysis(
         .active_tasks
         .lock()
         .map_err(|_| PyRuntimeError::new_err("task lock poisoned"))?;
-    if has_active_task_for_id(&tasks, id) {
+    let task_cell = engine
+        .active_task_cell(id)
+        .map_err(PyRuntimeError::new_err)?;
+    if has_active_task_for_id(&tasks, task_cell) {
         return Err(PyValueError::new_err("sample task already running"));
     }
     let cache = engine
@@ -333,7 +350,7 @@ fn admit_sample_analysis(
     let sample = cache[id]
         .clone()
         .ok_or_else(|| PyValueError::new_err("sample is not loaded"))?;
-    let reader = complete_context::CompleteSourceReader::capture(engine, id, sample)
+    let mut reader = complete_context::CompleteSourceReader::capture(engine, id, sample)
         .map_err(PyValueError::new_err)?;
     let generations = engine
         .loaded_source_generations
@@ -344,10 +361,35 @@ fn admit_sample_analysis(
         return Err(PyValueError::new_err("loaded source identity unavailable"));
     }
     admit_complete_analysis(&reader, rate).map_err(PyValueError::new_err)?;
-    let advance = PadRequestAdvance::prepare(&mut requests[id], &engine.prepared_source_epochs[id])
+    let source_guard = reader
+        .guard
+        .clone()
+        .ok_or_else(|| PyRuntimeError::new_err("analysis Native source owner unavailable"))?;
+    let prepared_epoch = engine
+        .prepared_source_epoch(id)
+        .map_err(PyRuntimeError::new_err)?
+        .clone();
+    let task_token = Arc::new(());
+    let mut task_tokens = engine
+        .analysis_task_tokens
+        .lock()
+        .map_err(|_| PyRuntimeError::new_err("analysis task owner lock poisoned"))?;
+    let advance = PadRequestAdvance::prepare(
+        &mut requests[id],
+        engine
+            .prepared_source_epoch(id)
+            .map_err(PyRuntimeError::new_err)?,
+    )
+    .map_err(PyRuntimeError::new_err)?;
+    let logical_advance = engine
+        .input_runtime_ownership
+        .prepare_source_request_advance(id)
         .map_err(PyRuntimeError::new_err)?;
+    logical_advance.commit();
     let request_id = advance.commit();
-    tasks.insert((id, BackgroundTaskKind::Analysis));
+    reader.analysis_owner = Some(NativeAnalysisOwner::new(source_guard, prepared_epoch));
+    task_tokens.insert((task_cell, BackgroundTaskKind::Analysis), task_token);
+    tasks.insert((task_cell, BackgroundTaskKind::Analysis));
     Ok((reader, request_id, rate))
 }
 
@@ -402,7 +444,8 @@ fn resident_seek_available(sample: &SampleBuffer, position_s: f64, rate: u32) ->
 }
 
 struct LoadedSourcePublication<'a> {
-    ownership: &'a input_runtime_binding::InputRuntimeOwnership,
+    ownership: &'a Arc<input_runtime_binding::InputRuntimeOwnership>,
+    placement: content_placement::SlotSnapshot,
     generation: u64,
     rate: u32,
     generation_slot: &'a mut (u64, u32),
@@ -430,6 +473,7 @@ fn publish_loaded_sample(
     publication: LoadedSourcePublication<'_>,
 ) -> Result<(), String> {
     publish_loaded_sample_with_arm(producer, sample_cache, id, sample, publication, || Ok(()))
+        .map(|_| ())
 }
 
 fn publish_loaded_sample_with_arm(
@@ -439,7 +483,7 @@ fn publish_loaded_sample_with_arm(
     sample: SampleBuffer,
     publication: LoadedSourcePublication<'_>,
     arm: impl FnOnce() -> Result<(), String>,
-) -> Result<(), String> {
+) -> Result<input_runtime_binding::SourcePublication, String> {
     let mut cache = sample_cache
         .lock()
         .map_err(|_| "sample cache lock poisoned")?;
@@ -451,43 +495,63 @@ fn publish_loaded_sample_with_arm(
     if producer_guard.is_full() {
         return Err("Failed to send LoadSample - buffer may be full".into());
     }
-    let authority = publication
+    publication
         .ownership
-        .next_authority(id)
+        .ensure_no_copy_reservation(id)
         .map_err(|error| error.to_string())?;
+    let authority = next_epoch(
+        publication
+            .ownership
+            .authority_for_cell(publication.placement.cell()),
+    )?;
     let content_lifetime = content_lifetime::for_assignment(
-        publication.ownership.content_lifetime(id),
+        publication.placement.lifetime(),
         publication.replace_assignment
             || slot.is_none()
             || publication.digest_slot.as_ref() != Some(&publication.digest),
     )?;
     // Preparatory proposals cannot invalidate the old usable source before all
     // resource/queue/scalar admission succeeds. The caller owns its request gate.
-    arm()?;
+    let write = publication
+        .ownership
+        .prepare_slot_write(publication.placement, content_lifetime)?;
     // Capacity is reserved under the only producer lock. Publish the source fence
     // before releasing the command so a fast callback never sees an old fence.
-    publication.ownership.revoke(id, authority);
-    publication
+    let intent = publication.intent.as_ref().map(|(_, intent)| *intent);
+    let mut arm_error = None;
+    let published = publication
         .ownership
-        .publish_content_lifetime(id, content_lifetime);
+        .publish_source_write(
+            &write,
+            &sample,
+            publication.rate,
+            publication.generation,
+            authority,
+            intent,
+            publication.cold,
+            || match arm() {
+                Ok(()) => true,
+                Err(error) => {
+                    arm_error = Some(error);
+                    false
+                }
+            },
+        )
+        .map_err(|error| arm_error.unwrap_or(error))?;
     if let Some((slot, intent)) = publication.intent {
         *slot = intent;
-        publication.ownership.set_timing_intent(id, intent);
     }
     *publication.generation_slot = (publication.generation, publication.rate);
     *publication.digest_slot = Some(publication.digest);
     *slot = Some(sample.clone());
-    publication
-        .ownership
-        .publish_source(id, &sample, publication.rate, publication.generation);
 
     let message = if publication.cold {
-        publication.ownership.begin_cold(id, publication.generation);
         let epoch = publication.cold_epoch;
         let captured_epoch = epoch
             .as_ref()
             .map_or(0, |epoch| epoch.load(Ordering::Acquire));
         ControlMessage::LoadColdSample {
+            publication: published.clone(),
             id,
             sample,
             source_generation: publication.generation,
@@ -503,13 +567,17 @@ fn publish_loaded_sample_with_arm(
             incoming_defaults: publication.incoming_defaults,
         }
     } else {
-        ControlMessage::LoadSample { id, sample }
+        ControlMessage::LoadSample {
+            id,
+            sample,
+            publication: Some(published.clone()),
+        }
     };
     producer_guard
         .push(message)
         .expect("reserved single-producer capacity");
 
-    Ok(())
+    Ok(published)
 }
 
 /// Resample mono f32 audio to a target sample rate using rubato.
@@ -662,13 +730,16 @@ pub struct AudioEngine {
     is_playing: bool,
     loader_tx: Sender<LoaderEvent>,
     loader_rx: Mutex<Receiver<LoaderEvent>>,
+    pending_loader_event: Mutex<Option<LoaderEvent>>,
     sample_cache: Arc<Mutex<Vec<Option<SampleBuffer>>>>,
     loading_sample_ids: Arc<Mutex<HashSet<usize>>>,
     active_tasks: Arc<Mutex<HashSet<(usize, BackgroundTaskKind)>>>,
+    analysis_task_tokens: Arc<Mutex<HashMap<(usize, BackgroundTaskKind), Arc<()>>>>,
     pad_request_ids: Arc<Mutex<Vec<u64>>>,
     loaded_source_generations: Arc<Mutex<Vec<(u64, u32)>>>,
     loaded_source_digests: Arc<Mutex<Vec<Option<String>>>>,
     prepared_source_epochs: Vec<Arc<AtomicU64>>,
+    pending_prepared_stems: Mutex<Vec<Option<Box<prepared_stems_work::PendingPreparedStems>>>>,
     timing_intents: Arc<Mutex<Vec<analysis::tempo_acceptance::TimingIntent>>>,
     current_timing_acknowledgements: Arc<constant_timing::CurrentTimingAcknowledgements>,
     loop_acceptance: Arc<loop_acceptance::SharedLoopAcceptance>,
@@ -697,6 +768,23 @@ pub struct AudioEngine {
 }
 
 impl AudioEngine {
+    /// Native background tasks occupy stable cells, independently of physical request ids.
+    fn active_task_cell(&self, id: usize) -> Result<usize, String> {
+        self.input_runtime_ownership
+            .slot_snapshot(id)
+            .map(|snapshot| snapshot.cell().index())
+            .ok_or_else(|| "background task placement is pending".into())
+    }
+    pub(super) fn prepared_source_epoch(&self, id: usize) -> Result<&Arc<AtomicU64>, String> {
+        let snapshot = self
+            .input_runtime_ownership
+            .slot_snapshot(id)
+            .ok_or("content placement is pending or unavailable")?;
+        self.prepared_source_epochs
+            .get(snapshot.cell().index())
+            .ok_or_else(|| "content epoch cell is unavailable".into())
+    }
+
     pub fn play_sample(
         &mut self,
         id: usize,
@@ -874,6 +962,9 @@ impl AudioEngine {
         source_ticket: &PreparedSourceTicket,
         producer: &Arc<Mutex<Producer<ControlMessage>>>,
     ) -> PyResult<()> {
+        if prepared_stems_work::has_pending(self, source_ticket)? {
+            return prepared_stems_work::reconcile(self);
+        }
         let work = prepared_stems_work::PreparedStemsWork::capture(
             self,
             id,
@@ -1048,15 +1139,18 @@ impl AudioEngine {
             is_playing: false,
             loader_tx,
             loader_rx: Mutex::new(loader_rx),
+            pending_loader_event: Mutex::new(None),
             sample_cache: Arc::new(Mutex::new(vec![None; NUM_SAMPLES])),
             loading_sample_ids: Arc::new(Mutex::new(HashSet::new())),
             active_tasks: Arc::new(Mutex::new(HashSet::new())),
+            analysis_task_tokens: Arc::new(Mutex::new(HashMap::new())),
             pad_request_ids: Arc::new(Mutex::new(vec![0; NUM_SAMPLES])),
             loaded_source_generations: Arc::new(Mutex::new(vec![(0, 0); NUM_SAMPLES])),
             loaded_source_digests: Arc::new(Mutex::new(vec![None; NUM_SAMPLES])),
             prepared_source_epochs: (0..NUM_SAMPLES)
                 .map(|_| Arc::new(AtomicU64::new(1)))
                 .collect(),
+            pending_prepared_stems: Mutex::new((0..NUM_SAMPLES).map(|_| None).collect()),
             timing_intents: Arc::new(Mutex::new(vec![
                 analysis::tempo_acceptance::TimingIntent::Legacy;
                 NUM_SAMPLES
@@ -1375,10 +1469,12 @@ impl AudioEngine {
         input_runtime_binding::cancel_launches_before_shutdown(
             &self.input_runtime_ownership,
             self.stream_handle.as_ref().map(|handle| &handle.producer),
-        );
+        )
+        .map_err(PyRuntimeError::new_err)?;
         self.cold_jobs.close_admission();
         self.cold_cancelled.store(true, Ordering::Release);
         self.waveform_requests.cancel_all();
+        prepared_stems_work::cancel_all(self)?;
         resident_relocation::cancel_all(self)?;
         self.cold_jobs.shutdown();
         self.offline_jobs.cancel(None);
@@ -1908,7 +2004,7 @@ impl AudioEngine {
                 .active_tasks
                 .lock()
                 .map_err(|_| PyRuntimeError::new_err("task lock poisoned"))?,
-            id,
+            self.active_task_cell(id).map_err(PyRuntimeError::new_err)?,
         ) {
             return Err(PyValueError::new_err("sample task already running"));
         }
@@ -1933,7 +2029,10 @@ impl AudioEngine {
                 generation,
                 analysis_jobs::OfflineRequestOwner {
                     request_ids: self.pad_request_ids.clone(),
-                    prepared_epoch: self.prepared_source_epochs[id].clone(),
+                    prepared_epoch: self
+                        .prepared_source_epoch(id)
+                        .map_err(PyRuntimeError::new_err)?
+                        .clone(),
                 },
                 self.loader_tx.clone(),
             )
@@ -2314,6 +2413,9 @@ impl AudioEngine {
         project_stem_cache_dir(&cache_dir).map_err(PyValueError::new_err)?;
         let (work, producer) = {
             let engine = slf.try_borrow()?;
+            if prepared_stems_work::has_pending(&engine, source_ticket)? {
+                return prepared_stems_work::reconcile(&engine);
+            }
             let producer = engine.control_producer()?.clone();
             let work = prepared_stems_work::PreparedStemsWork::capture(
                 &engine,
@@ -2368,6 +2470,148 @@ impl AudioEngine {
 
     pub fn cancel_pad_copy(&self, captured: &CapturedPadCopy) -> PyResult<bool> {
         pad_copy::cancel(self, captured)
+    }
+
+    // Internal integration lane. UI admission stays fenced until the whole Pair/Hold path closes.
+    pub fn _capture_pad_pair(
+        &self,
+        source_id: usize,
+        target_id: usize,
+    ) -> PyResult<CapturedPadPair> {
+        pad_pair::control::capture(self, source_id, target_id)
+    }
+
+    pub fn _prepare_pad_pair(&self, captured: &CapturedPadPair) -> PyResult<PadPairTicket> {
+        let channels = self
+            .stream_handle
+            .as_ref()
+            .map_or(2, |handle| handle.output_channels);
+        pad_pair::control::prepare(self, captured, self.output_sample_rate()?, channels)
+    }
+
+    pub fn _publish_pad_pair(&self, ticket: &PadPairTicket) -> PyResult<()> {
+        pad_pair::control::publish(self, ticket)
+    }
+
+    pub fn _reconcile_pad_pair(&self, ticket: &PadPairTicket) -> PyResult<bool> {
+        pad_pair::control::reconcile(self, ticket)
+    }
+
+    pub fn _validate_pad_pair_acknowledgement(
+        &self,
+        ticket: &PadPairTicket,
+        ack: &PadPairAcknowledgement,
+    ) -> PyResult<bool> {
+        pad_pair::control::validate_acknowledgement(self, ticket, ack)
+    }
+
+    pub fn _finish_pad_pair(
+        &self,
+        ticket: &PadPairTicket,
+        ack: &PadPairAcknowledgement,
+    ) -> PyResult<()> {
+        pad_pair::control::finish(self, ticket, ack)
+    }
+
+    pub fn _cancel_pad_pair(&self, captured: &CapturedPadPair) -> PyResult<bool> {
+        pad_pair::control::cancel(self, captured)
+    }
+
+    pub fn capture_recovered_pad_pair(
+        &self,
+        source_id: usize,
+        target_id: usize,
+    ) -> PyResult<RecoveredPairAcceptance> {
+        pad_pair::recovery::capture_recovered(self, source_id, target_id)
+    }
+
+    pub fn validate_recovered_pad_pair(
+        &self,
+        acceptance: &RecoveredPairAcceptance,
+    ) -> PyResult<bool> {
+        pad_pair::recovery::validate_recovered(self, acceptance)
+    }
+
+    pub fn release_recovered_pad_pair(
+        &self,
+        acceptance: &RecoveredPairAcceptance,
+    ) -> PyResult<bool> {
+        pad_pair::recovery::release_recovered(self, acceptance)
+    }
+
+    /// Resolve diagnostic feedback only to its original living content and transport intent.
+    pub fn _resolve_pad_feedback(&self, message: &AudioMessage) -> PyResult<Option<usize>> {
+        let AudioMessage::ContentFeedback {
+            owner,
+            cell,
+            lifetime,
+            transport_revision,
+            ..
+        } = message
+        else {
+            return Ok(None);
+        };
+        let ownership = &self.input_runtime_ownership;
+        if *owner != ownership.owner_identity().diagnostic() {
+            return Ok(None);
+        }
+        let Some(cell) = content_placement::ContentCell::from_index(*cell) else {
+            return Ok(None);
+        };
+        let Some(key) =
+            content_placement::ContentKey::new(ownership.owner_identity(), cell, *lifetime)
+        else {
+            return Ok(None);
+        };
+        match ownership.observe_control_key(key) {
+            content_placement::PlacementObservation::Current(snapshot) => Ok((ownership
+                .transport_intent_for_cell(cell)
+                .load(Ordering::Acquire)
+                == *transport_revision)
+                .then_some(snapshot.slot())),
+            content_placement::PlacementObservation::Pending => Err(PyRuntimeError::new_err(
+                "content feedback placement pending",
+            )),
+            _ => Ok(None),
+        }
+    }
+
+    #[pyo3(signature = (sample_id, physical_press_id, received_at_ns=None))]
+    pub fn pause_waveform_hold(
+        &self,
+        sample_id: usize,
+        physical_press_id: &Bound<'_, PyAny>,
+        received_at_ns: Option<&Bound<'_, PyAny>>,
+    ) -> PyResult<HoldActionTicket> {
+        if physical_press_id.is_instance_of::<PyBool>()
+            || !physical_press_id.is_instance_of::<PyInt>()
+        {
+            return Err(PyTypeError::new_err(
+                "physical press ID must be a nonzero u64 integer",
+            ));
+        }
+        let press = physical_press_id.extract::<u64>().map_err(|_| {
+            PyValueError::new_err("physical press ID must be a nonzero u64 integer")
+        })?;
+        if press == 0 {
+            return Err(PyValueError::new_err(
+                "physical press ID must be a nonzero u64 integer",
+            ));
+        }
+        let now = self.input_clock.capture_ns();
+        let timestamp =
+            validated_input_timestamp(parse_input_timestamp(received_at_ns)?, now).unwrap_or(now);
+        hold_action::control::pause_for_producer(
+            self,
+            self.control_producer()?,
+            sample_id,
+            press,
+            timestamp,
+        )
+    }
+
+    pub fn release_waveform_hold(&self, ticket: &HoldActionTicket) -> PyResult<bool> {
+        hold_action::control::release_for_producer(self, self.control_producer()?, ticket)
     }
 
     /// Select whether a pad renders from the loaded full mix or all prepared stems.
@@ -2490,276 +2734,16 @@ impl AudioEngine {
     ///
     /// Returns `None` when no events are available.
     pub fn poll_loader_events(&self, py: Python<'_>) -> PyResult<Option<Py<PyAny>>> {
-        resident_relocation::reconcile(self)?;
-        let loader_rx = self
-            .loader_rx
-            .lock()
-            .map_err(|_| PyRuntimeError::new_err("Failed to acquire loader receiver lock"))?;
-
-        let requests = self
-            .pad_request_ids
-            .lock()
-            .map_err(|_| PyRuntimeError::new_err("request lock poisoned"))?;
-        let (event, timing_stale) = loop {
-            let mut event = match loader_rx.try_recv() {
-                Ok(event) => event,
-                Err(TryRecvError::Empty | TryRecvError::Disconnected) => return Ok(None),
-            };
-            let (id, request_id) = match &event {
-                LoaderEvent::Started { id, request_id }
-                | LoaderEvent::Progress { id, request_id, .. }
-                | LoaderEvent::Success { id, request_id, .. }
-                | LoaderEvent::Error { id, request_id, .. }
-                | LoaderEvent::TaskStarted { id, request_id, .. }
-                | LoaderEvent::TaskProgress { id, request_id, .. }
-                | LoaderEvent::TaskSuccess { id, request_id, .. }
-                | LoaderEvent::TaskError { id, request_id, .. }
-                | LoaderEvent::OfflineAnalysisCompleted { id, request_id, .. } => {
-                    (*id, *request_id)
-                }
-            };
-            let current_stale = requests.get(id) != Some(&request_id);
-            let stale = if matches!(&event, LoaderEvent::Error { .. }) {
-                !self
-                    .resident_proposals
-                    .source_error_matches(id, request_id)
-                    .unwrap_or(!current_stale)
-            } else if matches!(
-                &event,
-                LoaderEvent::Started { .. } | LoaderEvent::Progress { .. }
-            ) {
-                !self
-                    .resident_proposals
-                    .source_event_matches(
-                        id,
-                        request_id,
-                        requests.get(id).copied().unwrap_or(0),
-                        self.prepared_source_epochs
-                            .get(id)
-                            .map_or(0, |epoch| epoch.load(Ordering::Acquire)),
-                    )
-                    .unwrap_or(!current_stale)
-            } else {
-                current_stale
-            };
-            let timing_stale = stale
-                || matches!(&event, LoaderEvent::Success { timing_epoch: Some(epoch), .. } if self.prepared_source_epochs[id].load(Ordering::Acquire) != *epoch);
-            if stale {
-                match &mut event {
-                    LoaderEvent::Success {
-                        analysis,
-                        analysis_error,
-                        ..
-                    } => {
-                        let cache = self
-                            .sample_cache
-                            .lock()
-                            .map_err(|_| PyRuntimeError::new_err("sample cache lock poisoned"))?;
-                        let generations = self.loaded_source_generations.lock().map_err(|_| {
-                            PyRuntimeError::new_err("source generation lock poisoned")
-                        })?;
-                        if cache.get(id).is_none_or(Option::is_none)
-                            || generations
-                                .get(id)
-                                .is_none_or(|current| current.0 != request_id)
-                        {
-                            continue;
-                        }
-                        *analysis = None;
-                        *analysis_error = None;
-                    }
-                    LoaderEvent::TaskSuccess {
-                        task: BackgroundTaskKind::Analysis,
-                        analysis,
-                        ..
-                    } => *analysis = None,
-                    LoaderEvent::TaskError {
-                        task: BackgroundTaskKind::Analysis,
-                        ..
-                    } => {}
-                    _ => continue,
-                }
-            }
-            if timing_stale
-                && !stale
-                && let LoaderEvent::Success {
-                    analysis,
-                    analysis_error,
-                    ..
-                } = &mut event
-            {
-                *analysis = None;
-                *analysis_error = None;
-            }
-            break (event, timing_stale);
-        };
-
-        let dict = PyDict::new(py);
-        if timing_stale {
-            dict.set_item("timing_stale", true)?;
-        }
-        match event {
-            LoaderEvent::OfflineAnalysisCompleted {
-                id,
-                request_id,
-                result_json,
-            } => {
-                dict.set_item("type", "offline_analysis_completed")?;
-                dict.set_item("id", id)?;
-                dict.set_item("request_id", request_id)?;
-                dict.set_item("result_json", result_json)?;
-            }
-            LoaderEvent::Started { id, request_id } => {
-                dict.set_item("type", "started")?;
-                dict.set_item("id", id)?;
-                dict.set_item("request_id", request_id)?;
-            }
-            LoaderEvent::Progress {
-                id,
-                request_id,
-                percent,
-                stage,
-            } => {
-                dict.set_item("type", "progress")?;
-                dict.set_item("id", id)?;
-                dict.set_item("request_id", request_id)?;
-                dict.set_item("percent", percent)?;
-                dict.set_item("stage", stage)?;
-            }
-            LoaderEvent::Success {
-                id,
-                request_id,
-                duration_s,
-                detected_loop_start_s,
-                cached_path,
-                analysis,
-                analysis_error,
-                timing_epoch: _,
-                original_lease,
-                incoming_defaults,
-            } => {
-                dict.set_item("type", "success")?;
-                dict.set_item("id", id)?;
-                dict.set_item("request_id", request_id)?;
-                dict.set_item("duration_s", duration_s)?;
-                dict.set_item("detected_loop_start_s", detected_loop_start_s)?;
-                dict.set_item("cached_path", cached_path)?;
-                if let Some(defaults) = incoming_defaults {
-                    let rate = defaults.sample_rate_hz;
-                    if rate == 0 {
-                        return Err(PyRuntimeError::new_err("incoming source rate unavailable"));
-                    }
-                    let receipt = PyDict::new(py);
-                    receipt.set_item("revision", defaults.revision)?;
-                    receipt.set_item("key_lock", defaults.key_lock)?;
-                    receipt.set_item("start_s", defaults.start_frame as f64 / f64::from(rate))?;
-                    receipt.set_item(
-                        "end_s",
-                        defaults.end_frame.map(|end| end as f64 / f64::from(rate)),
-                    )?;
-                    receipt.set_item("period_seconds", defaults.period_seconds)?;
-                    receipt.set_item("grid_origin_s", defaults.origin_frame / f64::from(rate))?;
-                    receipt.set_item("loop_auto", defaults.loop_auto)?;
-                    receipt.set_item("loop_bars", defaults.loop_bars)?;
-                    dict.set_item("incoming_defaults", receipt)?;
-                }
-                if let Some(error) = analysis_error {
-                    dict.set_item("analysis_error", error)?;
-                }
-                if let Some(lease) = original_lease {
-                    dict.set_item("original_lease", Py::new(py, lease)?)?;
-                }
-
-                if let Some(analysis) = analysis {
-                    let analysis_dict = PyDict::new(py);
-                    analysis_dict.set_item("bpm", analysis.bpm)?;
-                    analysis_dict.set_item("key", analysis.key)?;
-
-                    let beat_grid_dict = PyDict::new(py);
-                    beat_grid_dict.set_item("beats", &analysis.beat_grid.beats)?;
-                    beat_grid_dict.set_item("downbeats", &analysis.beat_grid.downbeats)?;
-                    beat_grid_dict.set_item("bars", &analysis.beat_grid.bars)?;
-                    analysis_dict.set_item("beat_grid", beat_grid_dict)?;
-
-                    dict.set_item("analysis", analysis_dict)?;
-                }
-            }
-            LoaderEvent::Error {
-                id,
-                request_id,
-                error,
-            } => {
-                dict.set_item("type", "error")?;
-                dict.set_item("id", id)?;
-                dict.set_item("request_id", request_id)?;
-                dict.set_item("msg", error)?;
-            }
-            LoaderEvent::TaskStarted {
-                id,
-                request_id,
-                task,
-            } => {
-                dict.set_item("type", "task_started")?;
-                dict.set_item("id", id)?;
-                dict.set_item("request_id", request_id)?;
-                dict.set_item("task", task_to_str(task))?;
-            }
-            LoaderEvent::TaskProgress {
-                id,
-                request_id,
-                task,
-                percent,
-                stage,
-            } => {
-                dict.set_item("type", "task_progress")?;
-                dict.set_item("id", id)?;
-                dict.set_item("request_id", request_id)?;
-                dict.set_item("task", task_to_str(task))?;
-                dict.set_item("percent", percent)?;
-                dict.set_item("stage", stage)?;
-            }
-            LoaderEvent::TaskSuccess {
-                id,
-                request_id,
-                task,
-                analysis,
-            } => {
-                dict.set_item("type", "task_success")?;
-                dict.set_item("id", id)?;
-                dict.set_item("request_id", request_id)?;
-                dict.set_item("task", task_to_str(task))?;
-
-                if let Some(analysis) = analysis {
-                    let analysis_dict = PyDict::new(py);
-                    analysis_dict.set_item("bpm", analysis.bpm)?;
-                    analysis_dict.set_item("key", analysis.key)?;
-
-                    let beat_grid_dict = PyDict::new(py);
-                    beat_grid_dict.set_item("beats", &analysis.beat_grid.beats)?;
-                    beat_grid_dict.set_item("downbeats", &analysis.beat_grid.downbeats)?;
-                    beat_grid_dict.set_item("bars", &analysis.beat_grid.bars)?;
-                    analysis_dict.set_item("beat_grid", beat_grid_dict)?;
-
-                    dict.set_item("analysis", analysis_dict)?;
-                }
-            }
-            LoaderEvent::TaskError {
-                id,
-                request_id,
-                task,
-                error,
-            } => {
-                dict.set_item("type", "task_error")?;
-                dict.set_item("id", id)?;
-                dict.set_item("request_id", request_id)?;
-                dict.set_item("task", task_to_str(task))?;
-                dict.set_item("msg", error)?;
-            }
-        }
-
-        Ok(Some(dict.into_any().unbind()))
+        prepared_stems_work::reconcile(self)?;
+        loader_events::poll(self, py, || {})
     }
-
+    /// Resolve only an original Native event owner retained by the Controller.
+    pub fn _resolve_loader_event(
+        &self,
+        delivery: &LoaderEventDelivery,
+    ) -> PyResult<Option<(usize, bool)>> {
+        loader_events::resolve_delivery(self, delivery)
+    }
     /// Poll for pending normalized input mapping events.
     ///
     /// Returns `None` when no input events are available.
@@ -2780,11 +2764,42 @@ impl AudioEngine {
         dict.set_item("received_at_ns", event.received_at_ns)?;
         dict.set_item("dispatched", event.dispatched)?;
         dict.set_item("direct", event.direct)?;
+        if let Some(trigger) = event.captured_trigger {
+            dict.set_item("captured_trigger", trigger)?;
+        }
         if let Some(action_key) = event.action_key {
             dict.set_item("action_key", action_key)?;
         }
 
         Ok(Some(dict.into_any().unbind()))
+    }
+
+    pub fn trigger_captured_input_pad(&self, trigger: &CapturedInputPadTrigger) -> PyResult<bool> {
+        self.input_runtime
+            .as_ref()
+            .ok_or_else(|| PyRuntimeError::new_err("Audio engine not initialized"))?
+            .trigger_captured_pad(trigger)
+    }
+
+    pub fn prepare_captured_input_trigger(
+        &self,
+        trigger: &CapturedInputPadTrigger,
+    ) -> PyResult<resident_relocation::ResidentWindowTicket> {
+        self.input_runtime
+            .as_ref()
+            .ok_or_else(|| PyRuntimeError::new_err("Audio engine not initialized"))?
+            .prepare_captured_trigger(self, trigger)
+    }
+
+    pub fn trigger_prepared_input_pad(
+        &self,
+        trigger: &CapturedInputPadTrigger,
+        window: &resident_relocation::ResidentWindowTicket,
+    ) -> PyResult<bool> {
+        self.input_runtime
+            .as_ref()
+            .ok_or_else(|| PyRuntimeError::new_err("Audio engine not initialized"))?
+            .trigger_prepared_pad(self, trigger, window)
     }
 
     /// Trigger playback of a previously loaded sample.
@@ -3318,20 +3333,41 @@ impl AudioEngine {
         self.input_runtime_ownership
             .ensure_no_copy_reservation(id)?;
         let expected_epoch = self.input_runtime_ownership.copy_parameter_epoch(id);
+        let placement = self
+            .input_runtime_ownership
+            .slot_snapshot(id)
+            .ok_or_else(|| PyRuntimeError::new_err("content placement is pending"))?;
         let mut producer_guard = self
             .parameter_producer()?
             .lock()
             .map_err(|_| PyRuntimeError::new_err("Failed to acquire producer lock"))?;
 
-        push_parameter_message(
-            &mut producer_guard,
-            ControlParameterMessage::SetPadGainGuarded {
-                id,
-                gain_db,
+        if producer_guard.slots() == 0 {
+            return Err(PyRuntimeError::new_err(
+                "Failed to send SetPadGain - buffer may be full",
+            ));
+        }
+        let mut result = Ok(());
+        self.input_runtime_ownership
+            .commit_parameter_intent(
+                placement,
                 expected_epoch,
-            },
-            "SetPadGain",
-        )
+                || true,
+                || {
+                    result = push_parameter_message(
+                        &mut producer_guard,
+                        ControlParameterMessage::SetPadGainGuarded {
+                            placement,
+                            id,
+                            gain_db,
+                            expected_epoch,
+                        },
+                        "SetPadGain",
+                    );
+                },
+            )
+            .map_err(|error| PyRuntimeError::new_err(error.to_string()))?;
+        result
     }
 
     pub fn set_pad_eq(
@@ -3360,22 +3396,43 @@ impl AudioEngine {
         self.input_runtime_ownership
             .ensure_no_copy_reservation(id)?;
         let expected_epoch = self.input_runtime_ownership.copy_parameter_epoch(id);
+        let placement = self
+            .input_runtime_ownership
+            .slot_snapshot(id)
+            .ok_or_else(|| PyRuntimeError::new_err("content placement is pending"))?;
         let mut producer_guard = self
             .parameter_producer()?
             .lock()
             .map_err(|_| PyRuntimeError::new_err("Failed to acquire producer lock"))?;
 
-        push_parameter_message(
-            &mut producer_guard,
-            ControlParameterMessage::SetPadEqGuarded {
-                id,
-                low_db,
-                mid_db,
-                high_db,
+        if producer_guard.slots() == 0 {
+            return Err(PyRuntimeError::new_err(
+                "Failed to send SetPadEq - buffer may be full",
+            ));
+        }
+        let mut result = Ok(());
+        self.input_runtime_ownership
+            .commit_parameter_intent(
+                placement,
                 expected_epoch,
-            },
-            "SetPadEq",
-        )
+                || true,
+                || {
+                    result = push_parameter_message(
+                        &mut producer_guard,
+                        ControlParameterMessage::SetPadEqGuarded {
+                            placement,
+                            id,
+                            low_db,
+                            mid_db,
+                            high_db,
+                            expected_epoch,
+                        },
+                        "SetPadEq",
+                    );
+                },
+            )
+            .map_err(|error| PyRuntimeError::new_err(error.to_string()))?;
+        result
     }
 
     #[pyo3(name = "set_pad_loop_region", signature = (id, start_s, end_s=None, *, expected_source_generation=None))]
@@ -3439,13 +3496,15 @@ impl AudioEngine {
             .lock()
             .map_err(|_| PyRuntimeError::new_err("Failed to acquire producer lock"))?;
 
-        producer_guard
-            .push(ControlMessage::SeekSample {
-                id,
+        transport_intent_control::publish_under_request_lock(
+            self,
+            &mut producer_guard,
+            id,
+            crate::messages::TransportContentEffect::Seek {
                 position_s,
                 expected_source_generation,
-            })
-            .map_err(|_| PyRuntimeError::new_err("Failed to send SeekSample - buffer may be full"))
+            },
+        )
     }
 
     pub fn set_trigger_quantization(&mut self, mode: &str) -> PyResult<()> {
@@ -3525,9 +3584,12 @@ impl AudioEngine {
             .lock()
             .map_err(|_| PyRuntimeError::new_err("Failed to acquire producer lock"))?;
 
-        producer_guard
-            .push(ControlMessage::PauseSample { id })
-            .map_err(|_| PyRuntimeError::new_err("Failed to send PauseSample - buffer may be full"))
+        transport_intent_control::publish_under_request_lock(
+            self,
+            &mut producer_guard,
+            id,
+            crate::messages::TransportContentEffect::Pause,
+        )
     }
 
     /// Resume playback of a paused sample from its saved position.
@@ -3553,11 +3615,12 @@ impl AudioEngine {
             .lock()
             .map_err(|_| PyRuntimeError::new_err("Failed to acquire producer lock"))?;
 
-        producer_guard
-            .push(ControlMessage::ResumeSample { id })
-            .map_err(|_| {
-                PyRuntimeError::new_err("Failed to send ResumeSample - buffer may be full")
-            })
+        transport_intent_control::publish_under_request_lock(
+            self,
+            &mut producer_guard,
+            id,
+            crate::messages::TransportContentEffect::Resume,
+        )
     }
 
     /// Unload a sample slot.
@@ -3698,14 +3761,14 @@ impl AudioEngine {
             return Ok(("pending".into(), None));
         }
         self.waveform_requests
-            .status(sample_id)
+            .status(self, sample_id)
             .map_err(PyRuntimeError::new_err)
     }
 
     /// Explicit retry of a failed view; cancels only that editor request.
     pub fn retry_waveform(&self, sample_id: usize) -> PyResult<()> {
         self.waveform_requests
-            .cancel(sample_id)
+            .cancel(self, sample_id)
             .map_err(PyRuntimeError::new_err)
     }
 
@@ -4373,7 +4436,7 @@ mod tests {
             samples: Arc::from([0.0_f32, 0.0].as_slice()),
         };
 
-        let ownership = input_runtime_binding::InputRuntimeOwnership::tracked();
+        let ownership = Arc::new(input_runtime_binding::InputRuntimeOwnership::tracked());
         let mut generation = (0, 0);
         let mut digest = None;
         let result = publish_loaded_sample(
@@ -4382,6 +4445,7 @@ mod tests {
             0,
             sample.clone(),
             LoadedSourcePublication {
+                placement: ownership.slot_snapshot(0).unwrap(),
                 ownership: &ownership,
                 generation: 1,
                 rate: 48_000,
@@ -4452,7 +4516,7 @@ impl Drop for AudioEngine {
         if let Some(runtime) = self.input_runtime.as_ref() {
             runtime.set_enabled(false);
         }
-        input_runtime_binding::cancel_launches_before_shutdown(
+        let _ = input_runtime_binding::cancel_launches_before_shutdown(
             &self.input_runtime_ownership,
             self.stream_handle.as_ref().map(|handle| &handle.producer),
         );

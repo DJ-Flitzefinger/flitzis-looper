@@ -11,7 +11,7 @@ if TYPE_CHECKING:
     from collections.abc import Callable
 
     from flitzis_looper.controller.transport import TransportController
-    from flitzis_looper_audio import ResidentWindowTicket
+    from flitzis_looper_audio import CapturedInputPadTrigger, ResidentWindowTicket
 
 
 @dataclass(frozen=True, slots=True)
@@ -49,6 +49,15 @@ class _Pending:
     unconfirmed: bool = False
 
 
+@dataclass(slots=True)
+class _CapturedTrigger:
+    trigger: CapturedInputPadTrigger
+    ticket: ResidentWindowTicket | None = None
+    attempts: int = 0
+    deadline: float = 0.0
+    cancel_requested: bool = False
+
+
 class ResidencyController:
     """Keep requested project intent separate from native acknowledged playback.
 
@@ -69,6 +78,7 @@ class ResidencyController:
         self._launch_errors: dict[int, str] = {}
         self._confirmed_modes: dict[int, tuple[tuple[object, ...], bool]] = {}
         self._closed = False
+        self._captured_triggers: dict[int, _CapturedTrigger] = {}
         transport._on_frame_render_callbacks.append(self.poll)
 
     def _intent(self, sample_id: int) -> _Intent:
@@ -568,15 +578,118 @@ class ResidencyController:
         except RuntimeError, ValueError:
             return False
 
-    def prepare_trigger(
-        self, sample_id: int, start: float, end: float | None, play: Callable[[], None]
-    ) -> bool:
-        """Let guarded MIDI fallback use the same prepared launch transaction."""
-        self.ensure_start_assignment_ready(sample_id)
-        if not self._cache_backed(sample_id):
+    def prepare_captured_trigger(self, trigger: CapturedInputPadTrigger) -> None:
+        """Retain the exact original MIDI gesture through its own resident window ACK."""
+        identity = id(trigger)
+        if identity in self._captured_triggers:
+            return
+        if len(self._captured_triggers) >= 256:
+            message = "Captured MIDI trigger capacity exhausted"
+            raise RuntimeError(message)
+        self._captured_triggers[identity] = _CapturedTrigger(
+            trigger, deadline=time.monotonic() + 30.0
+        )
+
+    def owns_captured_trigger(self, trigger: CapturedInputPadTrigger) -> bool:
+        """Keep duplicate delivery under its original bounded readiness owner."""
+        pending = self._captured_triggers.get(id(trigger))
+        return pending is not None and pending.trigger is trigger
+
+    def _poll_captured_triggers(self) -> None:
+        for identity, pending in tuple(self._captured_triggers.items()):
+            try:
+                completed = self._poll_captured_trigger(pending)
+            except (RuntimeError, ValueError) as error:
+                self._report_captured_trigger_error(pending, str(error))
+                continue
+            if completed:
+                self._captured_triggers.pop(identity, None)
+
+    def _poll_captured_trigger(self, pending: _CapturedTrigger) -> bool:
+        """Advance one exact gesture owner; false observations retain its original ticket."""
+        owner_status = pending.trigger.original_owner_status()
+        if owner_status in {"retired", "superseded", "admitted"}:
+            return True
+        if owner_status == "pending":
             return False
-        self.start(sample_id, start, end, play)
-        return True
+        if self._closed or pending.cancel_requested:
+            return self._cancel_captured_trigger_window(pending)
+        return self._advance_captured_trigger(pending)
+
+    def _advance_captured_trigger(self, pending: _CapturedTrigger) -> bool:
+        sample_id = pending.trigger.diagnostic_slot
+        if sample_id is None:
+            return False
+        if time.monotonic() >= pending.deadline:
+            self._report_captured_trigger_error(pending, "Captured MIDI readiness deadline expired")
+            pending.cancel_requested = True
+            return self._cancel_captured_trigger_window(pending)
+        self.ensure_start_assignment_ready(sample_id)
+        if pending.ticket is None:
+            return self._prepare_captured_trigger_window(pending)
+        return self._launch_captured_trigger_window(pending, sample_id)
+
+    def _prepare_captured_trigger_window(self, pending: _CapturedTrigger) -> bool:
+        if pending.attempts >= 8:
+            message = "Captured MIDI admission retry limit reached"
+            self._report_captured_trigger_error(pending, message)
+            pending.cancel_requested = True
+            return self._cancel_captured_trigger_window(pending)
+        pending.attempts += 1
+        pending.ticket = self._audio.prepare_captured_input_trigger(pending.trigger)
+        return False
+
+    def _launch_captured_trigger_window(self, pending: _CapturedTrigger, sample_id: int) -> bool:
+        ticket = pending.ticket
+        if ticket is None:
+            return False
+        status = ticket.publication_status()
+        if status != "accepted":
+            if status in {"failed", "cancelled", "rejected"}:
+                self._report_captured_trigger_error(
+                    pending, ticket.error() or "Captured MIDI window rejected"
+                )
+                return True
+            return False
+        try:
+            launched = self._audio.trigger_prepared_input_pad(pending.trigger, ticket)
+        except (RuntimeError, ValueError) as error:
+            self._report_captured_trigger_error(pending, str(error))
+            retryable = isinstance(error, RuntimeError) and any(
+                marker in str(error)
+                for marker in ("queue is full", "buffer may be full", "launch remains unavailable")
+            )
+            return self._retry_captured_trigger_launch(pending, retryable=retryable)
+        if launched:
+            self.report_launch_error(sample_id, None)
+            return True
+        self._report_captured_trigger_error(pending, "Captured MIDI launch remains unavailable")
+        return self._retry_captured_trigger_launch(pending, retryable=True)
+
+    def _retry_captured_trigger_launch(self, pending: _CapturedTrigger, *, retryable: bool) -> bool:
+        if pending.trigger.original_owner_status() == "pending":
+            return False
+        if retryable and pending.attempts < 8 and time.monotonic() < pending.deadline:
+            pending.attempts += 1
+            return False
+        pending.cancel_requested = True
+        return self._cancel_captured_trigger_window(pending)
+
+    def _report_captured_trigger_error(self, pending: _CapturedTrigger, message: str) -> None:
+        sample_id = pending.trigger.diagnostic_slot
+        if sample_id is not None:
+            self.report_launch_error(sample_id, message)
+
+    @staticmethod
+    def _cancel_captured_trigger_window(pending: _CapturedTrigger) -> bool:
+        if pending.ticket is None:
+            # There is no window whose Native launch cancellation can supersede
+            # this token. Retain this bounded exhausted owner until its original
+            # Native source/mapping/gesture itself becomes terminal.
+            return False
+        pending.ticket.cancel_launch()
+        pending.ticket.cancel()
+        return pending.ticket.publication_status() in {"failed", "cancelled", "rejected"}
 
     def _submit(self, sample_id: int, pending: _Pending) -> None:
         pending.attempts += 1
@@ -658,7 +771,10 @@ class ResidencyController:
 
     def poll(self) -> None:
         """Observe bounded native completion, stale ownership and admission retries."""
+        self._poll_captured_triggers()
         for sample_id, pending in tuple(self._pending.items()):
+            if sample_id in getattr(self._transport, "_pair_deferred_sample_ids", ()):
+                continue
             if self._intent(sample_id) != pending.requested:
                 self.cancel(sample_id)
                 continue
@@ -867,5 +983,10 @@ class ResidencyController:
         """Stop admission before native ownership and source readers are drained."""
         self._closed = True
         self._audio.cancel_all_launches()
+        for pending in tuple(self._captured_triggers.values()):
+            try:
+                self._cancel_captured_trigger_window(pending)
+            except (RuntimeError, ValueError) as error:
+                self._report_captured_trigger_error(pending, str(error))
         for sample_id in self._pending.keys() | self._launched.keys():
             self.cancel(sample_id)

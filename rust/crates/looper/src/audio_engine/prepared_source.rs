@@ -3,6 +3,7 @@
 use super::AudioEngine;
 use super::constant_timing::{AcceptedTimingProjection, CurrentTimingAcknowledgements};
 use super::constants::NUM_SAMPLES;
+use super::content_placement::{ContentKey, PlacementObservation, SlotSnapshot};
 use super::input_runtime_binding::{self, InputPadBinding, InputRuntimeOwnership};
 use crate::messages::ControlMessage;
 use crate::messages::SampleBuffer;
@@ -18,9 +19,12 @@ use std::sync::{Arc, Mutex};
 
 /// Opaque engine-owned admission snapshot. Never constructed from Python numbers.
 #[pyclass(frozen)]
+#[derive(Clone)]
 pub struct PreparedSourceTicket {
+    pub(super) admission: super::input_runtime_binding::InputRuntimePadBinding,
     pub(super) id: usize,
     pub(super) request_id: u64,
+    pub(super) request_incarnation: u64,
     pub(super) sample: SampleBuffer,
     pub(super) sample_rate_hz: u32,
     pub(super) source_version: String,
@@ -41,8 +45,25 @@ impl PreparedSourceTicket {
 
     /// Same actual source/request, allowing a freshly acknowledged resident window.
     pub fn same_source_request(&self, other: &PreparedSourceTicket) -> bool {
-        self.id == other.id
-            && self.request_id == other.request_id
+        Arc::ptr_eq(&self.admission.ownership, &other.admission.ownership)
+            && self
+                .admission
+                .binding
+                .placement
+                .and_then(|p| p.content_key())
+                .is_some()
+            && self
+                .admission
+                .binding
+                .placement
+                .and_then(|p| p.content_key())
+                == other
+                    .admission
+                    .binding
+                    .placement
+                    .and_then(|p| p.content_key())
+            && self.admission.source_generation == other.admission.source_generation
+            && self.request_incarnation == other.request_incarnation
             && self.source_version == other.source_version
             && self.sample_rate_hz == other.sample_rate_hz
             && Arc::ptr_eq(&self.publication.epoch, &other.publication.epoch)
@@ -84,6 +105,12 @@ impl PreparedStemRejection {
 }
 
 impl PreparedSourcePermit {
+    pub(super) fn same_publication(&self, other: &Self) -> bool {
+        Arc::ptr_eq(&self.status, &other.status)
+            && Arc::ptr_eq(&self.epoch, &other.epoch)
+            && self.expected == other.expected
+            && self.content_key() == other.content_key()
+    }
     pub(super) fn accepted_fixed() -> Self {
         let permit = Self::new(Arc::new(AtomicU64::new(1)), 1);
         permit.mark_accepted();
@@ -149,6 +176,7 @@ struct PreparedTimingPermit {
     binding: InputPadBinding,
     ownership: Arc<InputRuntimeOwnership>,
     acknowledgements: Arc<CurrentTimingAcknowledgements>,
+    source_generation: u64,
 }
 
 impl std::fmt::Debug for PreparedTimingPermit {
@@ -163,12 +191,15 @@ impl std::fmt::Debug for PreparedTimingPermit {
 
 impl PreparedTimingPermit {
     fn current(&self) -> bool {
-        self.ownership.authority[self.id].load(Ordering::Acquire) == self.binding.authority_revision
+        self.ownership.authority_current(self.id, self.binding)
             && self
                 .ownership
                 .binding_source_generation(self.id, self.binding)
-                .is_some()
-            && self.acknowledgements.current_epoch(self.id)
+                == Some(self.source_generation)
+            && self.ownership.binding_window_current(self.id, self.binding)
+            && self
+                .acknowledgements
+                .current_for_binding(&self.ownership, self.id, self.binding)
                 == self
                     .binding
                     .accepted
@@ -177,6 +208,44 @@ impl PreparedTimingPermit {
 }
 
 impl PreparedSourcePermit {
+    pub(crate) fn content_key(&self) -> Option<ContentKey> {
+        self.timing
+            .as_ref()
+            .and_then(|timing| timing.binding.placement)
+            .and_then(|placement| placement.content_key())
+    }
+
+    pub(crate) fn callback_slot(
+        &self,
+        ownership: &InputRuntimeOwnership,
+        id: usize,
+    ) -> Option<usize> {
+        if !ownership.is_source_tracked() {
+            return (id < NUM_SAMPLES).then_some(id);
+        }
+        let timing = self.timing.as_ref()?;
+        std::ptr::eq(timing.ownership.as_ref(), ownership)
+            .then(|| ownership.callback_key_slot(self.content_key()?))
+            .flatten()
+    }
+
+    pub(super) fn control_placement(
+        &self,
+        engine: &AudioEngine,
+    ) -> Result<PlacementObservation<SlotSnapshot>, String> {
+        let timing = self
+            .timing
+            .as_ref()
+            .ok_or("prepared Native source owner unavailable")?;
+        if !Arc::ptr_eq(&timing.ownership, &engine.input_runtime_ownership) {
+            return Err("foreign prepared Native source owner".into());
+        }
+        Ok(timing.ownership.observe_control_key(
+            self.content_key()
+                .ok_or("prepared Native content key unavailable")?,
+        ))
+    }
+
     pub(super) fn unbound() -> Self {
         Self::new(Arc::new(AtomicU64::new(0)), 1)
     }
@@ -242,7 +311,7 @@ impl PreparedSourcePermit {
             timing
                 .ownership
                 .binding_source_generation(timing.id, timing.binding)
-                .is_none()
+                != Some(timing.source_generation)
         }) {
             Some(PreparedStemRejection::SourceRequestChanged)
         } else if self.timing.as_ref().is_some_and(|timing| !timing.current()) {
@@ -313,6 +382,43 @@ impl PreparedSourcePermit {
         Self::new(epoch, expected)
     }
 
+    /// Mixer fixtures retain the same actual Native source and timing owners as
+    /// productive capture. A contentless fixed permit cannot publish into a tracked bank.
+    #[cfg(test)]
+    pub(crate) fn for_native_binding_for_test(
+        id: usize,
+        binding: InputPadBinding,
+        ownership: Arc<InputRuntimeOwnership>,
+        acknowledgements: Arc<CurrentTimingAcknowledgements>,
+        epoch: Arc<AtomicU64>,
+    ) -> Result<Self, String> {
+        if binding
+            .placement
+            .and_then(|placement| placement.content_key())
+            .is_none()
+            || !ownership.current(id, binding)
+            || acknowledgements.current_for_binding(&ownership, id, binding)
+                != binding
+                    .accepted
+                    .map_or(0, |accepted| accepted.publication_epoch)
+        {
+            return Err("test publication lacks its actual Native source/timing owner".into());
+        }
+        let source_generation = ownership
+            .binding_source_generation(id, binding)
+            .ok_or("test publication source generation is unavailable")?;
+        let mut permit = Self::new(epoch.clone(), epoch.load(Ordering::Acquire));
+        permit.timing = Some(PreparedTimingPermit {
+            id,
+            binding,
+            ownership,
+            acknowledgements,
+            source_generation,
+        });
+        permit.mark_pending()?;
+        Ok(permit)
+    }
+
     #[cfg(test)]
     pub(crate) fn unrestricted() -> Self {
         Self::for_epoch(Arc::new(AtomicU64::new(1)), 1)
@@ -334,8 +440,28 @@ pub(super) fn validate_prepared_ticket(
     epoch: &Arc<AtomicU64>,
     sample: &SampleBuffer,
 ) -> Result<(), String> {
-    if ticket.id != id
-        || ticket.request_id != request_id
+    let timing = ticket
+        .publication
+        .timing
+        .as_ref()
+        .ok_or("prepared Native source owner unavailable")?;
+    let original = timing
+        .binding
+        .placement
+        .ok_or("prepared Native placement unavailable")?;
+    let resolved = match timing.ownership.observe_control_key(
+        original
+            .content_key()
+            .ok_or("prepared Native content key unavailable")?,
+    ) {
+        PlacementObservation::Current(resolved) => resolved,
+        PlacementObservation::Pending => {
+            return Err("prepared source control placement is pending".into());
+        }
+        _ => return Err("stale prepared source content key".into()),
+    };
+    if resolved.slot() != id
+        || (original.same_projection(resolved) && ticket.request_id != request_id)
         || ticket.source_version != version
         || !Arc::ptr_eq(&ticket.publication.epoch, epoch)
         || !ticket.publication.current()
@@ -466,14 +592,54 @@ fn enqueue_prepared_stems(
         Option<super::resident_relocation::StemPairOwner>,
     )>,
 ) -> PyResult<()> {
-    let id = ticket.id;
+    if try_enqueue_prepared_stems(
+        engine,
+        producer,
+        ticket,
+        source_version,
+        stems,
+        registration,
+    )? {
+        Ok(())
+    } else {
+        Err(PyRuntimeError::new_err(
+            "Failed to send PublishPreparedStems - placement pending or buffer may be full",
+        ))
+    }
+}
+
+pub(super) fn try_enqueue_prepared_stems(
+    engine: &AudioEngine,
+    producer: &Arc<Mutex<Producer<ControlMessage>>>,
+    ticket: &PreparedSourceTicket,
+    source_version: &str,
+    stems: crate::messages::PreparedStemSet,
+    registration: Option<(
+        PathBuf,
+        PathBuf,
+        Option<super::resident_relocation::StemPairOwner>,
+    )>,
+) -> PyResult<bool> {
     let requests = engine
         .pad_request_ids
         .lock()
         .map_err(|_| PyRuntimeError::new_err("request lock poisoned"))?;
-    engine
-        .input_runtime_ownership
-        .ensure_no_copy_reservation(id)?;
+    let id = match ticket
+        .publication
+        .control_placement(engine)
+        .map_err(PyValueError::new_err)?
+    {
+        PlacementObservation::Current(current) => current.slot(),
+        PlacementObservation::Pending => return Ok(false),
+        _ => {
+            return Err(PyValueError::new_err(
+                "prepared source content key is stale",
+            ));
+        }
+    };
+    if engine.input_runtime_ownership.copy_reservation(id) != 0 {
+        return Err(PyRuntimeError::new_err("pad content copy is pending"));
+    }
     let cache = engine
         .sample_cache
         .lock()
@@ -481,35 +647,54 @@ fn enqueue_prepared_stems(
     let current = cache[id]
         .as_ref()
         .ok_or_else(|| PyValueError::new_err("sample is not loaded"))?;
-    validate_prepared_ticket(
+    let validation = validate_prepared_ticket(
         ticket,
         id,
         source_version,
         requests[id],
-        &engine.prepared_source_epochs[id],
+        engine
+            .prepared_source_epochs
+            .get(
+                ticket
+                    .publication
+                    .content_key()
+                    .ok_or_else(|| PyValueError::new_err("prepared Native key unavailable"))?
+                    .cell()
+                    .index(),
+            )
+            .ok_or_else(|| PyValueError::new_err("prepared Native epoch owner unavailable"))?,
         current,
-    )
-    .map_err(PyValueError::new_err)?;
+    );
+    if let Err(error) = validation {
+        if matches!(
+            ticket.publication.control_placement(engine),
+            Ok(PlacementObservation::Pending)
+        ) {
+            return Ok(false);
+        }
+        return Err(PyValueError::new_err(error));
+    }
     let mut producer = producer
         .lock()
         .map_err(|_| PyRuntimeError::new_err("Failed to acquire producer lock"))?;
     if producer.is_full() {
-        return Err(PyRuntimeError::new_err(
-            "Failed to send PublishPreparedStems - buffer may be full",
-        ));
+        return Ok(false);
     }
-    super::resident_relocation::admit_stem_publication(
+    if !super::resident_relocation::admit_stem_publication(
         engine,
         id,
         &stems,
         source_version,
         registration,
-    )?;
+    )? {
+        return Ok(false);
+    }
     producer
         .push(ControlMessage::PublishPreparedStems { id, stems })
         .map_err(|_| {
             PyRuntimeError::new_err("Failed to send PublishPreparedStems - buffer may be full")
-        })
+        })?;
+    Ok(true)
 }
 
 pub(super) fn capture_prepared_source(
@@ -566,33 +751,51 @@ pub(super) fn capture_prepared_source_under_request_lock(
             "source content does not match loaded source",
         ));
     }
-    if request_id == 0 || generations[id].0 == 0 || generations[id].1 == 0 {
+    if generations[id].0 == 0 || generations[id].1 == 0 {
         return Err(PyValueError::new_err("loaded source identity unavailable"));
     }
-    if !timing.current() {
+    if !timing.current()
+        || timing
+            .ownership
+            .binding_source_generation(id, timing.binding)
+            != Some(generations[id].0)
+    {
         return Err(PyValueError::new_err(
             "current source timing changed during capture",
         ));
     }
-    let mut publication = PreparedSourcePermit::new(
-        engine.prepared_source_epochs[id].clone(),
-        engine.prepared_source_epochs[id].load(Ordering::Acquire),
-    );
+    let epoch = engine
+        .prepared_source_epoch(id)
+        .map_err(PyValueError::new_err)?
+        .clone();
+    let mut publication = PreparedSourcePermit::new(epoch.clone(), epoch.load(Ordering::Acquire));
+    let admission = timing.clone();
+    let request_incarnation = timing
+        .ownership
+        .binding_source_request_incarnation(id, timing.binding)
+        .ok_or_else(|| PyValueError::new_err("source request incarnation unavailable"))?;
     publication.timing = Some(PreparedTimingPermit {
         id,
         binding: timing.binding,
         ownership: timing.ownership,
         acknowledgements: timing.acknowledgements,
+        source_generation: generations[id].0,
     });
     Ok(PreparedSourceTicket {
+        admission,
         id,
         request_id,
+        request_incarnation,
         sample,
         sample_rate_hz: generations[id].1,
         source_version,
         publication,
     })
 }
+
+#[cfg(test)]
+#[path = "prepared_source_content_tests.rs"]
+pub(super) mod content_tests;
 
 #[cfg(test)]
 mod tests {
@@ -614,7 +817,7 @@ mod tests {
         engine.loaded_source_digests.lock().unwrap()[0] = Some(digest.clone());
         engine
             .input_runtime_ownership
-            .publish_source(0, &sample, 44_100, 7);
+            .publish_test_source(0, &sample, 44_100, 7);
         (engine, format!("samples/a.wav|sha256-v1:{digest}"), sample)
     }
 
@@ -688,7 +891,7 @@ mod tests {
         super::super::cold_load::unload_for_producer(&engine, 0, &producer).unwrap();
         assert!(matches!(
             consumer.pop().unwrap(),
-            ControlMessage::UnloadSample { id: 0 }
+            ControlMessage::UnloadSample { id: 0, .. }
         ));
         assert_eq!(
             engine.loaded_source_generations.lock().unwrap()[0],

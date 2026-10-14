@@ -400,7 +400,13 @@ fn productive_long_cold_restore_has_full_decoder_and_playback_artifacts_before_a
     )
     .unwrap();
     wait_until_for(Duration::from_secs(300), || {
-        while let Ok(event) = engine.loader_rx.lock().unwrap().try_recv() {
+        while let Ok(event) = engine
+            .loader_rx
+            .lock()
+            .unwrap()
+            .try_recv()
+            .map(LoaderEvent::into_test_payload)
+        {
             assert!(
                 !matches!(
                     event,
@@ -508,6 +514,9 @@ impl Retirement {
             // The original collecting fixture remains unchanged when absent.
             match value {
                 RetiredAudioBuffer::Sample(value) => actual.retire_sample(value),
+                RetiredAudioBuffer::SourcePublication(value) => {
+                    actual.retire_source_publication(value)
+                }
                 RetiredAudioBuffer::ColdAdoption(value) => actual.retire_cold_adoption(value),
                 RetiredAudioBuffer::PreparedStems(value) => actual.retire_prepared_stems(value),
                 RetiredAudioBuffer::ConstantTiming(value) => actual.retire_constant_timing(value),
@@ -530,6 +539,8 @@ impl Retirement {
                     actual.retire_committed_stem_work(value)
                 }
                 RetiredAudioBuffer::PadCopy(value) => actual.retire_pad_copy(value),
+                RetiredAudioBuffer::PadPair(value) => actual.retire_pad_pair(value),
+                RetiredAudioBuffer::HoldAction(value) => actual.retire_hold_action(value),
             }
         } else {
             self.retired.push(value);
@@ -688,7 +699,12 @@ fn wav(path: &std::path::Path, rate: u32) -> Vec<u8> {
 fn terminal(engine: &AudioEngine, request: u64) -> LoaderEvent {
     let deadline = Instant::now() + Duration::from_secs(10);
     loop {
-        if let Ok(event) = engine.loader_rx.lock().unwrap().try_recv()
+        if let Ok(event) = engine
+            .loader_rx
+            .lock()
+            .unwrap()
+            .try_recv()
+            .map(LoaderEvent::into_test_payload)
             && matches!(&event, LoaderEvent::Success { request_id, .. } | LoaderEvent::Error { request_id, .. } if *request_id == request)
         {
             return event;
@@ -710,7 +726,7 @@ fn old(engine: &AudioEngine) -> SampleBuffer {
     engine.pad_request_ids.lock().unwrap()[0] = 7;
     engine
         .input_runtime_ownership
-        .publish_source(0, &sample, 48_000, 7);
+        .publish_test_source(0, &sample, 48_000, 7);
     sample
 }
 
@@ -745,7 +761,13 @@ fn productive_cold_load_commits_exact_original_full_artifacts_and_guarded_comman
         );
         assert!(engine.cold_leases.lock().unwrap()[0].is_none());
         callback.assert_old_voice(&previous);
-        while let Ok(event) = engine.loader_rx.lock().unwrap().try_recv() {
+        while let Ok(event) = engine
+            .loader_rx
+            .lock()
+            .unwrap()
+            .try_recv()
+            .map(LoaderEvent::into_test_payload)
+        {
             assert!(!matches!(
                 event,
                 LoaderEvent::Success { .. } | LoaderEvent::Error { .. }
@@ -807,7 +829,12 @@ fn productive_cold_load_commits_exact_original_full_artifacts_and_guarded_comman
             &voice.sample.as_ref().unwrap().samples,
             &sample.samples
         ));
-        assert_eq!(engine.current_timing_acknowledgements.current_epoch(0), 0);
+        assert_eq!(
+            engine
+                .current_timing_acknowledgements
+                .current_for_slot(&engine.input_runtime_ownership, 0),
+            0
+        );
         drop(leases);
     }
 }

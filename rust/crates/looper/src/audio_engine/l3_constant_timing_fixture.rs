@@ -116,8 +116,11 @@ pub(crate) fn publish_synthetic_loaded_timing(
     let mut guard = TimingAdoptionGuard::new(&binding, TimingIntent::Automatic).unwrap();
     let adoption_ticket = guard.issue_ticket().unwrap();
     let ticket = ConstantTimingTicket {
+        placement: captured.placement,
+        ownership: captured.ownership,
         id,
         request_id: captured.request_id,
+        request_incarnation: captured.request_incarnation,
         source_generation: captured.source_generation,
         sample_rate_hz: captured.sample_rate_hz,
         source_digest: captured.source_digest,

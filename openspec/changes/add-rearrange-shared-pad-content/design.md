@@ -1,8 +1,10 @@
 # Content lifetime and native mutation linearization
 
-Status: R0 target only. Current source uses slot-only pause/resume and pad-bound
-stem eligibility. Reuse asset_lifecycle/project_assets/cold_store/stem_cache and
-existing command/poll/ACK/journal paths; no framework or new scheduler.
+Status: durable independent Copy (R1) is implemented. R2 placement/authority and
+live-image groundwork is in progress; no public live Move/Swap or caused Hold
+remap is enabled. Pause/resume still requires the caused-effect implementation
+below. Reuse asset_lifecycle/project_assets/cold_store/stem_cache and existing
+command/poll/ACK/journal paths; no framework or new scheduler.
 
 PadSlotId is fixed0..215 controller layout; slot epoch changes with successful
 occupant mutation. ContentInstanceId/lifetime owns mutable musical intent and
@@ -16,6 +18,96 @@ authority is current per-content proof, not copied historical evidence. R2 must
 prove native remap including sample routing/SourcePlayback/DSP/history/FIFO/filter/
 warm processors/GainEQ ramps/loop/STOP guards/pending results/telemetry; changing
 Python arrays or voice.sample_id alone is insufficient.
+
+Native placement uses a preallocated complete permutation of all216 physical
+slots and authority cells, including empty cells. ContentKey names the engine
+owner, stable cell and nonzero lifetime; each permit separately retains the
+actual engine ownership Arc. SlotSnapshot separately captures
+the physical slot and its monotone binding epoch. A preparation snapshot cannot
+be reused as a new destination admission after remap. Existing accepted source,
+timing, history and selection guards retain the same actual owners and resolve
+their stable cell without scanning, allocation or locks. Actual source/timing/
+window/intent changes still invalidate their original complete guards.
+
+Pair publication and source assignment share a bounded Native mutation claim.
+All fallible resource/queue/overflow checks precede claim; a failed claim changes
+no image, while an interrupted irreversible apply remains visibly Pending.
+Actual assignment advances the affected physical binding epoch; same-content
+maintenance preserves it. Source payloads and rollback retain their committed
+incarnation and Native ownership through the existing retirement lane.
+
+Explicit intent, legacy BPM and legacy origin control writers use that same
+same-content SlotWrite claim. All locks, capacity and overflow checks precede
+entry; ACK revocation, cell authority, declared intent and prepared epoch are
+fixed stores inside it. Queued clears carry the returned committed snapshot.
+Source cleanup retains its original source/slot identity independently of later
+timing intent, so a legitimate post-unload default edit cannot strand its unload.
+
+KeyLock control admission captures a real slot snapshot even for empty saved
+intent; Pending is not an empty occupant. Original request and intent counters,
+restore guards, geometry, locks, resource/ACK/proposal preparation and the complete
+queue payload precede one same-content claim. Direct captured cells publish the
+intent/request and prepared resident owner/command together. Loaded actions retain
+their content key; empty actions retain their empty snapshot. Worker final arming
+uses the same boundary. External resident failure/finish uses a captured-key outer
+claim and retains Pending settlement for polling retry before publishing terminal
+state. Existing Cold/resident callback tails already own the marker and retain
+their direct-cell completion, without attempting a nested claim.
+
+A callback that loses the marker after dequeue retains exactly one complete
+control payload ahead of the remaining queue. Retirement/feedback capacity is
+rechecked before each retry. Loader delivery likewise retains an already popped
+event during Pending rather than dropping or reordering it. At stream closure,
+the unique preallocated callback-state box transfers over a separate one-slot
+close lane to the existing retirement worker. This box owns deferred/queued/
+scheduled payloads, the mixer and retirement backlog. The worker remains alive
+through the close handoff and drains remaining normal retirement owners before
+joining on the control thread. Worker creation is fallible before CPAL receives
+the callback; no backend destructor thread releases the final state owners.
+
+Launch admission and cancellation capture original stable-cell flags/revisions and
+hold owners. Single and bulk operations use one same-content marker; bulk validates
+the entire prepared participant image before any store. Payloads and cancellation
+result arrays are prepared first. Pure cancellation preserves admitted flags for
+an ordered stop. Terminal counters never wrap, and fresh lifetimes cannot inherit
+old exhausted launch permission. Admitted callback actions resolve their retained
+content keys at both dequeue and scheduled execution, while new fixed-slot inputs
+still require current physical bindings.
+
+Committed-stem worker arming uses that boundary with complete original source/ACK
+and control guards. Displaced owners leave the marker before failure settlement or
+final release. External failure keeps a captured retry owner through Pending and
+publishes terminal rejection only after settlement. Callback committed work uses
+its own outer claim and the existing single deferred lane. Public preparation
+currentness follows the valid proposal until its own control-published flag is
+stored after the captured control epochs; proposal arming alone cannot switch
+readers to an epoch that has not been published yet. Cancelled or superseded
+unpublished proposals still reject.
+The existing off-realtime failure-settlement gate also covers final control
+arming, acquired before the Native marker and released after it closes. External
+cancellation cannot settle a status as unpublished while that transaction can
+still publish its captured control. Callback paths use the existing private CAS
+and direct captured-cell finish without taking this gate.
+
+Cold/migration tickets
+retain their private adoption state plus the actual eventual SourcePublication;
+pre-arm cancellation prevents publication, and published cancellation settles that
+captured incarnation together with its original adoption state under the marker.
+
+The existing complete MIDI runtime replacement captures every slot snapshot and
+original runtime revision before publication. One same-content mutation claim
+validates the complete 216-cell image and all loaded source permissions; it then
+stores the prepared revisions directly in those captured cells and exchanges the
+runtime state. The previous state is destroyed after leaving the marker. A
+transient marker, late overflow or stale participant leaves both views unchanged;
+unchanged entries retain their established revisions and permissions.
+
+Current-content preparation epoch arrays belong to stable cells. Control
+lookups resolve the current slot once under existing request ownership, and
+queued work keeps its captured Arc rather than looking up a later occupant.
+Retained voices already have independent stretch preparation epoch owners;
+placement preserves those exact owners and actual voice generations. A reused
+cell cannot turn an old current permission into authority over its new lifetime.
 
 CopySnapshot captures source, valid analysis, selected available StemSet, loop/
 excerpt/grid/timing/manualTAP, source correction/numericbase/extra/KeyLock/other

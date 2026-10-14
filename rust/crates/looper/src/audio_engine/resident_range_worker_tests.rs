@@ -275,7 +275,7 @@ fn actual_finite_selection_commands_keep_native_ramps_then_retire_from_job_and_h
     };
     let mut reference = RtMixer::new(2, RATE as f32);
     let ownership = Arc::new(InputRuntimeOwnership::tracked());
-    ownership.publish_source(0, &full, RATE, 1);
+    ownership.publish_test_source(0, &full, RATE, 1);
     reference.set_input_runtime_ownership(ownership);
     reference.load_sample(0, full);
     assert!(reference.publish_prepared_stems(0, control_stems));
@@ -693,7 +693,7 @@ fn actual_finite_pair_keylock_window_ack_reads_four_components_then_preserves_na
     let mut reference = RtMixer::new(2, RATE as f32);
     let ownership =
         Arc::new(crate::audio_engine::input_runtime_binding::InputRuntimeOwnership::tracked());
-    ownership.publish_source(0, &full, RATE, 1);
+    ownership.publish_test_source(0, &full, RATE, 1);
     reference.set_input_runtime_ownership(ownership);
     reference.load_sample(0, full);
     let mut control_stems = full_stems;
@@ -1108,7 +1108,9 @@ fn acknowledge_full_mix_window(h: &mut Harness, id: usize, frames: usize) {
     assert!(binding.current() && binding.available());
     assert!(binding.binding.accepted.is_none());
     assert_eq!(
-        h.engine.current_timing_acknowledgements.current_epoch(id),
+        h.engine
+            .current_timing_acknowledgements
+            .current_for_slot(&h.engine.input_runtime_ownership, id),
         0
     );
     assert!(Arc::ptr_eq(
@@ -1141,7 +1143,9 @@ fn snapshot(h: &Harness, id: usize) -> PadSnapshot {
         (StemMixMode::AllStems, 0b1111, stems.source_version_hash)
     );
     assert_eq!(
-        h.engine.current_timing_acknowledgements.current_epoch(id),
+        h.engine
+            .current_timing_acknowledgements
+            .current_for_slot(&h.engine.input_runtime_ownership, id),
         0
     );
     assert!(Arc::ptr_eq(&sample.samples, &stems.reference_samples));
@@ -1166,7 +1170,10 @@ fn snapshot(h: &Harness, id: usize) -> PadSnapshot {
             .clone()
             .unwrap(),
         preparation_epoch: h.engine.prepared_source_epochs[id].load(Ordering::Acquire),
-        timing_epoch: h.engine.current_timing_acknowledgements.current_epoch(id),
+        timing_epoch: h
+            .engine
+            .current_timing_acknowledgements
+            .current_for_slot(&h.engine.input_runtime_ownership, id),
         stem_demand,
     }
 }

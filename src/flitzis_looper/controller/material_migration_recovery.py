@@ -9,6 +9,11 @@ from pathlib import Path
 from pydantic import ValidationError
 
 import flitzis_looper_audio
+from flitzis_looper.controller.pair_arrangement_journal import (
+    PairArrangementJournal,
+    strict_json_object,
+    validated_pair_history,
+)
 from flitzis_looper.material_migration_model import MaterialMigrationJournal
 from flitzis_looper.models import ProjectState
 from flitzis_looper_audio import MaterialMigrationJournalStore
@@ -20,20 +25,69 @@ class MigrationRecovery:
 
     pending: list[MaterialMigrationJournal] = field(default_factory=list)
     settled: list[MaterialMigrationJournal] = field(default_factory=list)
+    pair_journals: list[PairArrangementJournal] = field(default_factory=list)
     errors: list[str] = field(default_factory=list)
     intent: ProjectState | None = None
 
 
-def _validated_record(record: dict[str, object]) -> MaterialMigrationJournal:
+type TransactionJournal = MaterialMigrationJournal | PairArrangementJournal
+
+
+def parse_transaction_journal(raw: str) -> TransactionJournal:
+    """Route missing-kind valid Legacy or strict pad_pair v1; unknown evidence is unresolved."""
+    data = strict_json_object(raw)
+    if "kind" not in data:
+        return MaterialMigrationJournal.model_validate_json(raw)
+    if (
+        data.get("kind") == "pad_pair"
+        and type(data.get("schema_version")) is int
+        and data["schema_version"] == 1
+    ):
+        return PairArrangementJournal.model_validate_json(raw, strict=True)
+    message = "Unknown migration transaction kind or schema version retained unresolved"
+    raise ValueError(message)
+
+
+def validated_transaction_history(
+    store: MaterialMigrationJournalStore,
+    transaction_id: str,
+) -> tuple[list[str], list[TransactionJournal]]:
+    """Read all sealed ordinals before accepting any selected transaction tail."""
+    encoded = store.history()
+    if not encoded:
+        message = "Migration journal has no complete history"
+        raise ValueError(message)
+    journals = [parse_transaction_journal(text) for text in encoded]
+    first = journals[0]
+    if any(
+        type(item) is not type(first)
+        or item.schema_version != first.schema_version
+        or item.transaction_id != transaction_id
+        or item.config_reference != first.config_reference
+        for item in journals
+    ):
+        message = "Migration history changes kind, version, Config or directory transaction binding"
+        raise ValueError(message)
+    if isinstance(first, PairArrangementJournal):
+        validated_pair_history(encoded, transaction_id)
+    return encoded, journals
+
+
+def _validated_record(record: dict[str, object], samples: Path) -> TransactionJournal:
     raw = record["record"]
     if not isinstance(raw, str):
         message = "Migration journal has no complete record"
         raise TypeError(message)
-    journal = MaterialMigrationJournal.model_validate_json(raw)
+    journal = parse_transaction_journal(raw)
     if journal.transaction_id != record["transaction_id"]:
         message = "Migration journal transaction identity does not match its directory"
         raise ValueError(message)
-    return journal
+    store = MaterialMigrationJournalStore.open(str(samples), journal.transaction_id)
+    encoded, history = validated_transaction_history(store, journal.transaction_id)
+    if encoded[-1] != raw or history[-1] != journal:
+        message = "Migration history changed since scan; evidence retained unresolved"
+        raise ValueError(message)
+    return history[-1]
 
 
 def _committed_current(journal: MaterialMigrationJournal, current: ProjectState | None) -> bool:
@@ -118,6 +172,25 @@ def _settled(
     )
 
 
+def _include_legacy_journal(
+    result: MigrationRecovery,
+    journal: MaterialMigrationJournal,
+    current: ProjectState | None,
+    digest: str | None,
+) -> None:
+    if _settled(journal, current, digest):
+        result.settled.append(journal)
+        return
+    result.pending.append(journal)
+    # Only the exact captured disk image admits recovery of unsaved current intent.
+    # A different config remains current; no historical snapshot overwrites it.
+    if journal.config_sha256 == digest:
+        intent = ProjectState.model_validate_json(journal.snapshot_json)
+        intent.config_revision = max(intent.config_revision, journal.intent_revision)
+        if result.intent is None or intent.config_revision > result.intent.config_revision:
+            result.intent = intent
+
+
 def inspect_migration_recovery(samples: Path, config: Path) -> MigrationRecovery:
     """Keep incomplete/unknown journal data visible and leave every artifact untouched."""
     result = MigrationRecovery()
@@ -143,18 +216,12 @@ def inspect_migration_recovery(samples: Path, config: Path) -> MigrationRecovery
             if record["error"] is not None or record["record"] is None:
                 result.errors.append(f"Unresolved migration journal: {record['transaction_id']}")
                 continue
-            journal = _validated_record(record)
-            if _settled(journal, current, digest):
-                result.settled.append(journal)
+            journal = _validated_record(record, samples)
+            if isinstance(journal, PairArrangementJournal):
+                # Pair evidence never enters Legacy alias/artifact cleanup or its source router.
+                result.pair_journals.append(journal)
                 continue
-            result.pending.append(journal)
-            # Only the exact captured disk image admits recovery of unsaved current intent.
-            # A different config remains current; no historical snapshot overwrites it.
-            if journal.config_sha256 == digest:
-                intent = ProjectState.model_validate_json(journal.snapshot_json)
-                intent.config_revision = max(intent.config_revision, journal.intent_revision)
-                if result.intent is None or intent.config_revision > result.intent.config_revision:
-                    result.intent = intent
+            _include_legacy_journal(result, journal, current, digest)
         except (KeyError, OSError, RuntimeError, TypeError, ValueError, ValidationError) as error:
             result.errors.append(str(error))
     return result

@@ -136,7 +136,7 @@ fn install(
     engine.pad_request_ids.lock().unwrap()[0] = request;
     engine
         .input_runtime_ownership
-        .publish_source(0, &sample, RATE, generation);
+        .publish_test_source(0, &sample, RATE, generation);
 }
 
 fn fixture() -> &'static Fixture {
@@ -289,7 +289,13 @@ fn saved_finite_resident_timing_uses_complete_evidence_without_complete_ticket_p
         1
     );
     let loaded = loop {
-        if let Ok(event) = engine.loader_rx.lock().unwrap().try_recv() {
+        if let Ok(event) = engine
+            .loader_rx
+            .lock()
+            .unwrap()
+            .try_recv()
+            .map(LoaderEvent::into_test_payload)
+        {
             match event {
                 LoaderEvent::Success { request_id, .. } if request_id == request => break true,
                 LoaderEvent::Error { error, .. } => panic!("finite cold load failed: {error}"),
@@ -732,13 +738,17 @@ fn saved_timing_pending_failed_and_rejected_replacement_preserve_previous_curren
     let saved = capture_saved(&engine, 0, &f.envelope, f.path.clone()).unwrap();
     let first = restore_saved(&engine, &producer, &saved).unwrap();
     assert!(accept_message(&mut mixer, consumer.pop().unwrap()));
-    let previous = engine.current_timing_acknowledgements.current_epoch(0);
+    let previous = engine
+        .current_timing_acknowledgements
+        .current_for_slot(&engine.input_runtime_ownership, 0);
     let saved = capture_saved(&engine, 0, &f.envelope, f.path.clone()).unwrap();
     engine.constant_timing_busy.store(true, Ordering::Release);
     assert!(restore_saved(&engine, &producer, &saved).is_err());
     assert!(export_current(&engine, 0, f.path.clone()).is_err());
     assert_eq!(
-        engine.current_timing_acknowledgements.current_epoch(0),
+        engine
+            .current_timing_acknowledgements
+            .current_for_slot(&engine.input_runtime_ownership, 0),
         previous
     );
     assert!(engine.constant_timing_busy.load(Ordering::Acquire));
@@ -751,7 +761,9 @@ fn saved_timing_pending_failed_and_rejected_replacement_preserve_previous_curren
     assert!(restore_saved(&engine, &producer, &saved).is_err());
     consumer.pop().unwrap();
     assert_eq!(
-        engine.current_timing_acknowledgements.current_epoch(0),
+        engine
+            .current_timing_acknowledgements
+            .current_for_slot(&engine.input_runtime_ownership, 0),
         previous
     );
     assert_eq!(
@@ -761,7 +773,9 @@ fn saved_timing_pending_failed_and_rejected_replacement_preserve_previous_curren
     let pending = restore_saved(&engine, &producer, &saved).unwrap();
     assert_eq!(pending.publication_status().unwrap(), "pending");
     assert_eq!(
-        engine.current_timing_acknowledgements.current_epoch(0),
+        engine
+            .current_timing_acknowledgements
+            .current_for_slot(&engine.input_runtime_ownership, 0),
         previous
     );
     assert_eq!(
@@ -772,7 +786,9 @@ fn saved_timing_pending_failed_and_rejected_replacement_preserve_previous_curren
     assert!(!accept_message(&mut mixer, consumer.pop().unwrap()));
     assert_eq!(pending.publication_status().unwrap(), "rejected");
     assert_eq!(
-        engine.current_timing_acknowledgements.current_epoch(0),
+        engine
+            .current_timing_acknowledgements
+            .current_for_slot(&engine.input_runtime_ownership, 0),
         previous
     );
     assert_eq!(
@@ -783,7 +799,9 @@ fn saved_timing_pending_failed_and_rejected_replacement_preserve_previous_curren
     assert!(accept_message(&mut mixer, consumer.pop().unwrap()));
     assert_eq!(final_ticket.publication_status().unwrap(), "accepted");
     assert_ne!(
-        engine.current_timing_acknowledgements.current_epoch(0),
+        engine
+            .current_timing_acknowledgements
+            .current_for_slot(&engine.input_runtime_ownership, 0),
         previous
     );
     assert_eq!(first.publication_status().unwrap(), "accepted");

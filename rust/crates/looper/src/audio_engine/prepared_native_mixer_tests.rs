@@ -45,20 +45,26 @@ fn projection() -> AcceptedTimingProjection {
 fn fixture(sample: &SampleBuffer) -> RtMixer {
     let mut mixer = RtMixer::new(1, RATE as f32);
     let ownership = Arc::new(InputRuntimeOwnership::tracked());
-    ownership.publish_source(0, sample, RATE, 3);
+    ownership.publish_test_source(0, sample, RATE, 3);
     mixer.set_input_runtime_ownership(ownership);
     mixer.load_sample(0, sample.clone());
     let publication = PreparedSourcePermit::unrestricted();
     publication.mark_pending().unwrap();
-    assert!(mixer.publish_constant_timing_rt(
-        0,
-        PreparedConstantTiming {
-            reference: sample.clone(),
-            publication,
-            projection: projection(),
-        },
-        &mut ImmediateAudioBufferRetirement
-    ));
+    assert!(
+        mixer.publish_constant_timing_rt(
+            0,
+            PreparedConstantTiming {
+                content_key: mixer
+                    .input_runtime_ownership
+                    .binding_placement(0)
+                    .and_then(|snapshot| snapshot.content_key()),
+                reference: sample.clone(),
+                publication,
+                projection: projection(),
+            },
+            &mut ImmediateAudioBufferRetirement
+        )
+    );
     mixer.set_speed(1.371_234_567_890_123);
     mixer.set_pad_key_lock(0, true);
     mixer.set_pad_loop_region(0, 0.003125, Some(0.300125));
@@ -147,20 +153,26 @@ fn finite_mixer(
     assert_eq!(sample.samples.len(), (end - start) * sample.channels);
     let mut mixer = RtMixer::new(sample.channels, rate as f32);
     let ownership = Arc::new(InputRuntimeOwnership::tracked());
-    ownership.publish_source(0, sample, rate, 3);
+    ownership.publish_test_source(0, sample, rate, 3);
     mixer.set_input_runtime_ownership(ownership);
     mixer.load_sample(0, sample.clone());
     let publication = PreparedSourcePermit::unrestricted();
     publication.mark_pending().unwrap();
-    assert!(mixer.publish_constant_timing_rt(
-        0,
-        PreparedConstantTiming {
-            reference: sample.clone(),
-            publication,
-            projection: timing,
-        },
-        &mut ImmediateAudioBufferRetirement,
-    ));
+    assert!(
+        mixer.publish_constant_timing_rt(
+            0,
+            PreparedConstantTiming {
+                content_key: mixer
+                    .input_runtime_ownership
+                    .binding_placement(0)
+                    .and_then(|snapshot| snapshot.content_key()),
+                reference: sample.clone(),
+                publication,
+                projection: timing,
+            },
+            &mut ImmediateAudioBufferRetirement,
+        )
+    );
     mixer.set_speed(ratio);
     mixer.set_pad_loop_region(
         0,
@@ -412,18 +424,36 @@ fn prepared_native_mixer_rejects_actual_source_request_authority_and_control_cha
                     mixer.prepared_source_epochs[0].fetch_add(1, Ordering::AcqRel);
                 }
                 1 => {
-                    mixer.input_runtime_ownership.authority[0].fetch_add(1, Ordering::AcqRel);
+                    mixer
+                        .input_runtime_ownership
+                        .authority_for_cell(
+                            mixer
+                                .input_runtime_ownership
+                                .slot_snapshot(0)
+                                .unwrap()
+                                .cell(),
+                        )
+                        .fetch_add(1, Ordering::AcqRel);
                 }
                 2 => {
-                    mixer.input_runtime_ownership.runtime[0].fetch_add(1, Ordering::AcqRel);
+                    mixer
+                        .input_runtime_ownership
+                        .runtime_for_cell(
+                            mixer
+                                .input_runtime_ownership
+                                .slot_snapshot(0)
+                                .unwrap()
+                                .cell(),
+                        )
+                        .fetch_add(1, Ordering::AcqRel);
                 }
                 3 => mixer.input_runtime_ownership.revoke_source(0),
                 4 => mixer
                     .input_runtime_ownership
-                    .publish_source(0, &sample, RATE, 4),
+                    .publish_test_source(0, &sample, RATE, 4),
                 5 => mixer
                     .input_runtime_ownership
-                    .publish_source(0, &sample, RATE * 2, 3),
+                    .publish_test_source(0, &sample, RATE * 2, 3),
                 6 => mixer.set_speed(1.371_234_567_890_123), // equal edit still fences preparation
                 // A real one-frame geometry edit fences the candidate; identical
                 // Normal markers preserve its canonical clock and are a no-op.
@@ -439,25 +469,31 @@ fn prepared_native_mixer_rejects_actual_source_request_authority_and_control_cha
                 10 => {
                     let publication = PreparedSourcePermit::unrestricted();
                     publication.mark_pending().unwrap();
-                    assert!(mixer.publish_constant_timing_rt(
-                        0,
-                        PreparedConstantTiming {
-                            reference: sample.clone(),
-                            publication,
-                            projection: AcceptedTimingProjection {
-                                revision: [18; 32],
-                                publication_epoch: 10,
-                                ..projection()
+                    assert!(
+                        mixer.publish_constant_timing_rt(
+                            0,
+                            PreparedConstantTiming {
+                                content_key: mixer
+                                    .input_runtime_ownership
+                                    .binding_placement(0)
+                                    .and_then(|snapshot| snapshot.content_key()),
+                                reference: sample.clone(),
+                                publication,
+                                projection: AcceptedTimingProjection {
+                                    revision: [18; 32],
+                                    publication_epoch: 10,
+                                    ..projection()
+                                },
                             },
-                        },
-                        &mut ImmediateAudioBufferRetirement
-                    ));
+                            &mut ImmediateAudioBufferRetirement
+                        )
+                    );
                 }
                 11 => {
                     let replacement = source();
                     mixer
                         .input_runtime_ownership
-                        .publish_source(0, &replacement, RATE, 4);
+                        .publish_test_source(0, &replacement, RATE, 4);
                     mixer.load_sample(0, replacement);
                 }
                 12 => mixer.current_timing_acknowledgements.clear(0),
@@ -472,15 +508,21 @@ fn prepared_native_mixer_rejects_actual_source_request_authority_and_control_cha
                     } else {
                         changed.origin_seconds = 0.0;
                     }
-                    assert!(mixer.publish_constant_timing_rt(
-                        0,
-                        PreparedConstantTiming {
-                            reference: sample.clone(),
-                            publication,
-                            projection: changed,
-                        },
-                        &mut ImmediateAudioBufferRetirement
-                    ));
+                    assert!(
+                        mixer.publish_constant_timing_rt(
+                            0,
+                            PreparedConstantTiming {
+                                content_key: mixer
+                                    .input_runtime_ownership
+                                    .binding_placement(0)
+                                    .and_then(|snapshot| snapshot.content_key()),
+                                reference: sample.clone(),
+                                publication,
+                                projection: changed,
+                            },
+                            &mut ImmediateAudioBufferRetirement
+                        )
+                    );
                 }
                 _ => unreachable!(),
             }
@@ -776,7 +818,7 @@ fn musical_mixer_with_stems(
 ) -> RtMixer {
     let mut mixer = RtMixer::new(1, rate as f32);
     let ownership = Arc::new(InputRuntimeOwnership::tracked());
-    ownership.publish_source(0, sample, rate, 3);
+    ownership.publish_test_source(0, sample, rate, 3);
     mixer.set_input_runtime_ownership(ownership);
     mixer.load_sample(0, sample.clone());
     if let Some(stems) = stems {
@@ -786,15 +828,21 @@ fn musical_mixer_with_stems(
     }
     let publication = PreparedSourcePermit::unrestricted();
     publication.mark_pending().unwrap();
-    assert!(mixer.publish_constant_timing_rt(
-        0,
-        PreparedConstantTiming {
-            reference: sample.clone(),
-            publication,
-            projection: musical_projection(rate, period),
-        },
-        &mut ImmediateAudioBufferRetirement,
-    ));
+    assert!(
+        mixer.publish_constant_timing_rt(
+            0,
+            PreparedConstantTiming {
+                content_key: mixer
+                    .input_runtime_ownership
+                    .binding_placement(0)
+                    .and_then(|snapshot| snapshot.content_key()),
+                reference: sample.clone(),
+                publication,
+                projection: musical_projection(rate, period),
+            },
+            &mut ImmediateAudioBufferRetirement,
+        )
+    );
     mixer.set_speed(ratio);
     mixer.set_pad_key_lock(0, wet);
     mixer.set_pad_loop_region(
@@ -1164,7 +1212,7 @@ fn replacement_bank_cannot_relabel_pinned_musical_source_domain_or_actual_pcm() 
     let old_position = voice(&mixer).source_playback.position();
     mixer
         .input_runtime_ownership
-        .publish_source(0, &replacement, rate, 4);
+        .publish_test_source(0, &replacement, rate, 4);
     mixer.load_sample(0, replacement.clone());
     let publication = PreparedSourcePermit::unrestricted();
     publication.mark_pending().unwrap();
@@ -1173,15 +1221,21 @@ fn replacement_bank_cannot_relabel_pinned_musical_source_domain_or_actual_pcm() 
         publication_epoch: 18,
         ..musical_projection(rate, new_period)
     };
-    assert!(mixer.publish_constant_timing_rt(
-        0,
-        PreparedConstantTiming {
-            reference: replacement.clone(),
-            publication,
-            projection: accepted
-        },
-        &mut ImmediateAudioBufferRetirement,
-    ));
+    assert!(
+        mixer.publish_constant_timing_rt(
+            0,
+            PreparedConstantTiming {
+                content_key: mixer
+                    .input_runtime_ownership
+                    .binding_placement(0)
+                    .and_then(|snapshot| snapshot.content_key()),
+                reference: replacement.clone(),
+                publication,
+                projection: accepted
+            },
+            &mut ImmediateAudioBufferRetirement,
+        )
+    );
     assert_eq!(voice(&mixer).source_playback.position(), old_position);
     assert!(Arc::ptr_eq(
         &voice(&mixer).sample.as_ref().unwrap().samples,
@@ -1345,15 +1399,21 @@ fn prove_virtual_seam_native_and_filter_chronology(direct_clear: bool) {
             if !direct_clear {
                 let publication = PreparedSourcePermit::unrestricted();
                 publication.mark_pending().unwrap();
-                assert!(mixer.publish_constant_timing_rt(
-                    0,
-                    PreparedConstantTiming {
-                        reference: sample.clone(),
-                        publication,
-                        projection: changed
-                    },
-                    &mut ImmediateAudioBufferRetirement,
-                ));
+                assert!(
+                    mixer.publish_constant_timing_rt(
+                        0,
+                        PreparedConstantTiming {
+                            content_key: mixer
+                                .input_runtime_ownership
+                                .binding_placement(0)
+                                .and_then(|snapshot| snapshot.content_key()),
+                            reference: sample.clone(),
+                            publication,
+                            projection: changed
+                        },
+                        &mut ImmediateAudioBufferRetirement,
+                    )
+                );
                 // AcceptedLoopRefresh also republishes these unchanged physical markers.
                 // That control route must retain the old virtual seam phase until configure
                 // admits the new period, rather than discarding the domain as an explicit seek.

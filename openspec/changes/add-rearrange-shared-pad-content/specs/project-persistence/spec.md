@@ -36,6 +36,40 @@ The system SHALL serialize layout/reference/config/journal/autosave revisions an
 - **THEN** verified recovery preserves old/new pins/current intent and obtains genuine fresh native ACK
 - **AND** uncertainty stays visible/fenced until settled; no partial bank or rollback guess is published
 
+#### Scenario: Complete pair projection preserves the surviving content identities
+- **GIVEN** two captured participant slots contain A and either B or an empty target
+- **WHEN** a complete Move or Swap receives its matching Native pair acknowledgement
+- **THEN** one validated project candidate SHALL move the complete musical images with their unchanged content identities, birth metadata and lineage
+- **AND** Move SHALL clear the former source to independent empty defaults while Swap SHALL exchange both complete images without changing unrelated slots or newer unrelated project intent
+- **AND** a changed participant identity, occupancy or musical seal SHALL reject an obsolete candidate rather than overwrite newer participant intent
+- **AND** persisted musical metadata SHALL NOT clone live voices, DSP, holds, workers or current Native authority; availability and current selection projections SHALL require the actual matching Native owners
+- **AND** duplicate content identities or invalid contained participant data SHALL reject before any project mutation
+
+### Requirement: Pair settlement owns complete durable history and actual receipts
+The system SHALL retain the original Config writer, assignment and retirement owners until one strict bounded Pair journal, complete controller mirror and Native finish settle together. Pair journal records MUST bind kind, supported schema, transaction directory, actual Config location, unchanged original musical seals and bounded project before/after images. Persisted Native acknowledgements, keys, lifetimes, tickets or Hold permits MUST NOT restore live authority.
+
+#### Scenario: Config normalization and retry use the actual written image
+- **WHEN** an acknowledged Pair commits through the existing common Config writer
+- **THEN** assignment image preparation SHALL precede atomic commit and the receipt SHALL retain the same current intent revision and the digest of the actual normalized timing-verified written text
+- **AND** the journal SHALL advance captured, publication_pending before enqueue, native_ack_observed, config_committed and settled only after their actual outcomes
+- **AND** unchanged retry errors SHALL NOT consume bounded journal capacity
+- **AND** a failed append SHALL reopen and validate complete history and compare exact intended bytes before another append, retaining owners on partial evidence or capacity exhaustion
+
+#### Scenario: Fresh recovery recognizes an afterimage without another Swap
+- **WHEN** a fresh process opens complete Pair history after Config replacement or before a successful journal append
+- **THEN** it SHALL recognize an exact original pending Config or an exact recorded afterimage using actual Config evidence and obtain fresh Native acceptance before further settlement
+- **AND** it SHALL NOT apply a second Swap to an already recognized afterimage or overwrite newer, unknown or differently located Config
+- **AND** unknown versions, malformed seals, inconsistent histories, missing ordinal records and substituted directories SHALL remain visible unresolved without cleanup
+- **AND** missing transaction kind SHALL accept only a fully valid legacy MaterialMigrationJournal through the same strict history router
+
+#### Scenario: Restart interrupts an original recovery handoff
+- **GIVEN** complete original and successor Pair histories bind the same Config and musical seals through one unambiguous resume lineage
+- **WHEN** a process exits after the successor history was written or its writer ownership transferred
+- **THEN** fresh recovery SHALL select the exact validated lineage tip while retaining every ancestor until actual terminal settlement and identity-checked compaction
+- **AND** a terminal cancelled successor SHALL prevent replay of the original request and SHALL require exact unchanged original Config and current intent before cleanup
+- **AND** a terminal settled successor SHALL require its actual written Config and genuine fresh source/timing acceptance without another Pair publication
+- **AND** forks, cycles, missing ancestors, substituted histories and multiple independent unfinished owners SHALL remain fenced without guessed lineage selection
+
 ### Requirement: Musical stem selection has one durable content intent
 The system SHALL persist one validated per-content stem-selection intent containing
 the enabled component mask, remembered custom mask and displayed custom/instrumental/all

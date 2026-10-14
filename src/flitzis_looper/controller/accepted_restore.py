@@ -99,9 +99,11 @@ class AcceptedTimingRestore:
         future = self._worker.submit(self._audio.restore_constant_timing, captured)
         self._pending[sample_id] = _Restore(future, path)
 
-    def poll(self) -> None:
+    def poll(self, *, deferred_sample_ids: frozenset[int] = frozenset()) -> None:
         """Observe genuine adoption; polling never publishes accepted audio truth."""
         for sample_id, restore in list(self._pending.items()):
+            if sample_id in deferred_sample_ids:
+                continue
             if (
                 self._project.sample_paths[sample_id] != restore.path
                 or self._project.manual_bpm[sample_id] is not None

@@ -483,7 +483,15 @@ fn run_publication_and_mouse_proof(test_name: &str, accepted_only: bool, shared:
     let deadline = Instant::now() + Duration::from_secs(10);
     let cached_path = loop {
         callback.drain(&mut consumer);
-        let event = Python::attach(|py| engine.borrow(py).loader_rx.lock().unwrap().try_recv());
+        let event = Python::attach(|py| {
+            engine
+                .borrow(py)
+                .loader_rx
+                .lock()
+                .unwrap()
+                .try_recv()
+                .map(LoaderEvent::into_test_payload)
+        });
         match event {
             Ok(LoaderEvent::Success {
                 request_id,
@@ -769,7 +777,15 @@ fn load_slot(
     let deadline = Instant::now() + Duration::from_secs(10);
     loop {
         callback.drain(consumer);
-        let event = Python::attach(|py| engine.borrow(py).loader_rx.lock().unwrap().try_recv());
+        let event = Python::attach(|py| {
+            engine
+                .borrow(py)
+                .loader_rx
+                .lock()
+                .unwrap()
+                .try_recv()
+                .map(LoaderEvent::into_test_payload)
+        });
         match event {
             Ok(LoaderEvent::Success { request_id, .. }) if request_id == request => break,
             Ok(LoaderEvent::Error { error, .. }) => {

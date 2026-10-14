@@ -8,6 +8,7 @@ use crate::audio_engine::native_source_coverage::{
     complete_view_available, normal_loop_feed_available, normal_loop_feed_available_with_readers,
 };
 use crate::audio_engine::source_reader::StemReadSets;
+use crate::messages::ControlMessage;
 use std::sync::atomic::Ordering;
 
 fn candidate_residency_available(sample: &SampleBuffer) -> bool {
@@ -60,14 +61,11 @@ impl RtMixer {
             })
     }
 
-    fn capture_committed_stem_voice(&self, capture: &StemVoiceCapture) -> Option<StemVoicePin> {
-        let id = capture.id;
+    fn committed_stem_capture_current(&self, capture: &StemVoiceCapture, id: usize) -> bool {
         if id >= NUM_SAMPLES
             || !capture.status.preparation_current()
-            || !self.source_binding_current(id, capture.binding)
-            || !self
-                .input_runtime_ownership
-                .launch_current(id, capture.launch_revision)
+            || !self.admitted_source_binding_current(id, capture.binding)
+            || !self.admitted_launch_current(id, capture.binding, capture.launch_revision)
             || (capture.target != StemMixMode::FullMix
                 && !if let Some(candidate) = &capture.candidate {
                     candidate.current()
@@ -79,6 +77,17 @@ impl RtMixer {
                     self.committed_selection_matches(id, &capture.selection)
                 })
         {
+            return false;
+        }
+        true
+    }
+
+    fn capture_committed_stem_voice(
+        &self,
+        capture: &StemVoiceCapture,
+        id: usize,
+    ) -> Option<StemVoicePin> {
+        if !self.committed_stem_capture_current(capture, id) {
             return None;
         }
         let bank = self.sample_bank[id].as_ref()?;
@@ -185,13 +194,23 @@ impl RtMixer {
         ) {
             return None;
         }
+        let cell = self
+            .input_runtime_ownership
+            .binding_cell(id, capture.binding)?;
         let context = NativeHistoryContext {
             id,
             ownership: &self.input_runtime_ownership,
             acknowledgements: &self.current_timing_acknowledgements,
-            preparation_epoch: &self.prepared_source_epochs[id],
+            preparation_epoch: &self.prepared_source_epochs[cell.index()],
         };
-        let permit = context.capture(sample, self.sample_rate_hz as u32, timing.accepted)?;
+        let permit = context.capture_admitted(
+            sample,
+            self.sample_rate_hz as u32,
+            crate::audio_engine::input_runtime_binding::InputPadBinding {
+                accepted: timing.accepted,
+                ..capture.binding
+            },
+        )?;
         Some(StemVoicePin {
             sample: sample.clone(),
             stems: stems.cloned(),
@@ -212,10 +231,9 @@ impl RtMixer {
         let pin = &transaction.pin;
         if id >= NUM_SAMPLES
             || !transaction.status.publication.current()
-            || !self.source_binding_current(id, transaction.binding)
-            || !self
-                .input_runtime_ownership
-                .launch_current(id, transaction.launch_revision)
+            || !transaction.status.preparation_current()
+            || !self.admitted_source_binding_current(id, transaction.binding)
+            || !self.admitted_launch_current(id, transaction.binding, transaction.launch_revision)
             || (transaction.target != StemMixMode::FullMix
                 && !if let Some(candidate) = &transaction.candidate {
                     candidate.current()
@@ -374,6 +392,101 @@ impl RtMixer {
         mut work: Box<CommittedStemRtWork>,
         retirement: &mut impl AudioBufferRetirement,
     ) {
+        use crate::audio_engine::content_placement::{PlacementError, PlacementObservation};
+        let (original_id, binding) = match work.as_ref() {
+            CommittedStemRtWork::Register { id, binding, .. } => (*id, *binding),
+            CommittedStemRtWork::Capture(capture) => (capture.id, capture.binding),
+            CommittedStemRtWork::Adopt(transaction) => (transaction.id, transaction.binding),
+            CommittedStemRtWork::RetiredPin { .. } => {
+                retirement.retire_committed_stem_work(work);
+                return;
+            }
+        };
+        let ownership = self.input_runtime_ownership.clone();
+        let snapshot = match binding
+            .placement
+            .and_then(|placement| placement.content_key())
+        {
+            Some(key) => match ownership.observe_content_key(key) {
+                PlacementObservation::Current(snapshot) => Some(snapshot),
+                PlacementObservation::Pending => {
+                    self.defer_control(ControlMessage::CommittedStemWork(work));
+                    return;
+                }
+                PlacementObservation::Stale | PlacementObservation::Retired => {
+                    // The captured lifetime is gone. No current control cell can be settled here.
+                    match work.as_ref() {
+                        CommittedStemRtWork::Register { publication, .. } => {
+                            publication.mark_rejected();
+                        }
+                        CommittedStemRtWork::Capture(capture) => {
+                            capture.status.reject_retired_rt();
+                        }
+                        CommittedStemRtWork::Adopt(transaction) => {
+                            transaction.status.reject_retired_rt();
+                        }
+                        CommittedStemRtWork::RetiredPin { .. } => {}
+                    }
+                    retirement.retire_committed_stem_work(work);
+                    return;
+                }
+            },
+            None if !ownership.is_source_tracked() => None,
+            None => {
+                retirement.retire_committed_stem_work(work);
+                return;
+            }
+        };
+        if retirement.available_retirement_slots() < 3 {
+            self.defer_control(ControlMessage::CommittedStemWork(work));
+            return;
+        }
+        let id = snapshot.map_or(original_id, |snapshot| snapshot.slot());
+        match work.as_mut() {
+            CommittedStemRtWork::Register { id: target, .. } => *target = id,
+            CommittedStemRtWork::Adopt(transaction) => transaction.id = id,
+            _ => {}
+        }
+        let Some(snapshot) = snapshot else {
+            self.apply_committed_stem_work_claimed(work, id, retirement);
+            return;
+        };
+        let prepared = ownership.prepare_slot_write_fixed(snapshot, snapshot.lifetime());
+        let mut retained = Some(work);
+        let result = match prepared {
+            Ok(prepared) => ownership.commit_slot_write_fixed(
+                &prepared,
+                || true,
+                |_| {
+                    self.apply_committed_stem_work_claimed(
+                        retained.take().expect("one committed callback payload"),
+                        id,
+                        retirement,
+                    );
+                },
+            ),
+            Err(error) => Err(error),
+        };
+        if let Some(work) = retained {
+            // A concurrent marker, changed complete revision or exhausted marker still owns
+            // exactly this payload; retry before any later control work.
+            debug_assert!(matches!(
+                result,
+                Err(PlacementError::Pending
+                    | PlacementError::Stale
+                    | PlacementError::Retired
+                    | PlacementError::LayoutRevisionExhausted)
+            ));
+            self.defer_control(ControlMessage::CommittedStemWork(work));
+        }
+    }
+
+    fn apply_committed_stem_work_claimed(
+        &mut self,
+        mut work: Box<CommittedStemRtWork>,
+        captured_id: usize,
+        retirement: &mut impl AudioBufferRetirement,
+    ) {
         match work.as_mut() {
             CommittedStemRtWork::Register {
                 id,
@@ -384,7 +497,7 @@ impl RtMixer {
                 let current = *id < NUM_SAMPLES
                     && publication.current()
                     && !selection.revoked.load(Ordering::Acquire)
-                    && self.source_binding_current(*id, *binding)
+                    && self.admitted_source_binding_current(*id, *binding)
                     && self
                         .input_runtime_ownership
                         .binding_source_generation(*id, *binding)
@@ -411,7 +524,7 @@ impl RtMixer {
                     && publication.claim_resident()
                     && publication.current()
                     && !selection.revoked.load(Ordering::Acquire)
-                    && self.source_binding_current(*id, *binding)
+                    && self.admitted_source_binding_current(*id, *binding)
                 {
                     self.committed_stem_selection[*id] = Some(SelectedStemIdentity {
                         identity: selection.identity,
@@ -425,8 +538,15 @@ impl RtMixer {
                 }
             }
             CommittedStemRtWork::Capture(capture) => {
-                if let Some(pin) = self.capture_committed_stem_voice(capture) {
-                    if let Some(pin) = capture.publish(pin) {
+                if let Some(pin) = self.capture_committed_stem_voice(capture, captured_id) {
+                    let current = self.committed_stem_capture_current(capture, captured_id)
+                        && pin.permit.current(&pin.sample, self.sample_rate_hz as u32);
+                    let retired = if current {
+                        capture.publish(pin)
+                    } else {
+                        Some(pin)
+                    };
+                    if let Some(pin) = retired {
                         capture.status.reject_rt();
                         *work = CommittedStemRtWork::RetiredPin {
                             _pin: pin,
@@ -435,15 +555,6 @@ impl RtMixer {
                     }
                 } else {
                     capture.status.reject_rt();
-                    if capture.candidate.is_none()
-                        && capture.status.policy_epoch.is_none()
-                        && capture.status.armed()
-                    {
-                        self.input_runtime_ownership.finish_resident_control(
-                            capture.id,
-                            capture.status.publication.expected,
-                        );
-                    }
                 }
             }
             CommittedStemRtWork::Adopt(transaction) => {
@@ -519,6 +630,7 @@ impl RtMixer {
                             .store(transaction.selection.expected, Ordering::Release);
                         candidate.mark_adopted();
                     }
+                    transaction.status.finish_control_rt();
                     transaction
                         .status
                         .publication
@@ -552,10 +664,7 @@ impl RtMixer {
                 } else {
                     transaction.status.reject_rt();
                 }
-                if id < NUM_SAMPLES && transaction.candidate.is_none() && !transaction.policy_only {
-                    self.input_runtime_ownership
-                        .finish_resident_control(id, transaction.status.publication.expected);
-                }
+                transaction.status.finish_control_rt();
             }
             CommittedStemRtWork::RetiredPin { .. } => {}
         }
@@ -574,10 +683,8 @@ impl RtMixer {
                 .candidate
                 .as_ref()
                 .is_none_or(|candidate| candidate.receipt_current())
-            && self.source_binding_current(id, receipt.binding)
-            && self
-                .input_runtime_ownership
-                .launch_current(id, receipt.launch_revision)
+            && self.admitted_source_binding_current(id, receipt.binding)
+            && self.admitted_launch_current(id, receipt.binding, receipt.launch_revision)
             && (receipt.target == StemMixMode::FullMix
                 || self.committed_selection_matches(id, &receipt.selection));
         if !current {

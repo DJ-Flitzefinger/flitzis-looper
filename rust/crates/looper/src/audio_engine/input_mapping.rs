@@ -1,6 +1,6 @@
 use crate::audio_engine::constants::NUM_SAMPLES;
 use crate::audio_engine::input_runtime_binding::{
-    InputPadBinding, InputRuntimeOwnership, InputRuntimePadBinding,
+    InputPadBinding, InputRuntimeOwnership, InputRuntimePadBinding, LaunchWriteKind,
 };
 use crate::audio_engine::timing::InputClock;
 use crate::messages::ControlMessage;
@@ -61,6 +61,7 @@ struct InputMapping {
     binding_key: String,
     action_key: String,
     action: InputAction,
+    owner: Arc<AtomicBool>,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -69,6 +70,20 @@ struct RuntimePadState {
     loop_start_s: f64,
     loop_end_s: Option<f64>,
     binding: Option<InputPadBinding>,
+}
+
+impl RuntimePadState {
+    fn same_projection(&self, other: &Self) -> bool {
+        let binding_matches = match (&self.binding, &other.binding) {
+            (Some(left), Some(right)) => left.same_projection(right),
+            (None, None) => true,
+            _ => false,
+        };
+        self.loaded == other.loaded
+            && self.loop_start_s == other.loop_start_s
+            && self.loop_end_s == other.loop_end_s
+            && binding_matches
+    }
 }
 
 impl Default for RuntimePadState {
@@ -87,6 +102,11 @@ struct RuntimeState {
     multi_loop: bool,
     pads: Vec<RuntimePadState>,
 }
+
+mod pair_mirror;
+pub(super) use pair_mirror::CapturedPairRuntime;
+mod captured_trigger;
+pub use captured_trigger::CapturedInputPadTrigger;
 
 impl Default for RuntimeState {
     fn default() -> Self {
@@ -112,6 +132,7 @@ pub(crate) struct InputRuntimeEvent {
     pub action_key: Option<String>,
     pub dispatched: bool,
     pub direct: bool,
+    pub captured_trigger: Option<CapturedInputPadTrigger>,
 }
 
 pub(crate) struct InputRuntime {
@@ -190,11 +211,23 @@ impl InputRuntime {
     }
 
     pub fn replace_mappings(&self, mappings: Vec<(String, String)>) {
-        let parsed = mappings
+        let Ok(mut guard) = self.mappings.lock() else {
+            return;
+        };
+        let parsed: Vec<_> = mappings
             .into_iter()
             .map(|(binding_key, action_key)| {
                 let action = parse_input_action(&action_key);
                 InputMapping {
+                    owner: guard
+                        .iter()
+                        .find(|mapping| {
+                            mapping.binding_key == binding_key && mapping.action_key == action_key
+                        })
+                        .map_or_else(
+                            || Arc::new(AtomicBool::new(true)),
+                            |mapping| mapping.owner.clone(),
+                        ),
                     binding_key,
                     action_key,
                     action,
@@ -202,9 +235,15 @@ impl InputRuntime {
             })
             .collect();
 
-        if let Ok(mut guard) = self.mappings.lock() {
-            *guard = parsed;
+        for previous in guard.iter() {
+            if !parsed
+                .iter()
+                .any(|next| Arc::ptr_eq(&previous.owner, &next.owner))
+            {
+                previous.owner.store(false, Ordering::Release);
+            }
         }
+        *guard = parsed;
     }
 
     pub fn set_runtime_state(
@@ -214,6 +253,25 @@ impl InputRuntime {
         loop_starts: Vec<f64>,
         loop_ends: Vec<Option<f64>>,
         bindings: Vec<Option<&InputRuntimePadBinding>>,
+    ) -> Result<(), String> {
+        self.set_runtime_state_before_commit(
+            multi_loop,
+            loaded,
+            loop_starts,
+            loop_ends,
+            bindings,
+            || {},
+        )
+    }
+
+    fn set_runtime_state_before_commit(
+        &self,
+        multi_loop: bool,
+        loaded: Vec<bool>,
+        loop_starts: Vec<f64>,
+        loop_ends: Vec<Option<f64>>,
+        bindings: Vec<Option<&InputRuntimePadBinding>>,
+        before_commit: impl FnOnce(),
     ) -> Result<(), String> {
         if loaded.len() != NUM_SAMPLES
             || loop_starts.len() != NUM_SAMPLES
@@ -268,27 +326,61 @@ impl InputRuntime {
                     .binding
                     .map_or(0, |old| old.runtime_revision);
             }
-            let changed = guard.multi_loop != multi_loop || guard.pads[idx] != *pad;
-            let revision = if changed {
-                super::prepared_source::next_epoch(&self.ownership.runtime[idx])?
-            } else {
-                self.ownership.runtime[idx].load(Ordering::Acquire)
-            };
+            let changed = guard.multi_loop != multi_loop || !guard.pads[idx].same_projection(pad);
+            let placement = self
+                .ownership
+                .slot_snapshot(idx)
+                .ok_or("runtime content placement is pending")?;
+            let prepared = self
+                .ownership
+                .prepare_runtime_revision_write(placement, changed)?;
             if let Some(binding) = &mut pad.binding {
-                binding.runtime_revision = revision;
+                binding.runtime_revision = prepared.revision();
             }
-            revisions.push(revision);
+            revisions.push(prepared);
         }
+        let anchor = revisions[0].placement();
+        let write = self
+            .ownership
+            .prepare_slot_write_fixed(anchor, anchor.lifetime())
+            .map_err(|error| error.to_string())?;
         // Validate the whole replacement before revoking any previous pad publication.
         for (idx, binding) in bindings.iter().enumerate() {
             if loaded[idx] && binding.is_none_or(|binding| !binding.current()) {
                 return Err("MIDI binding changed during runtime publication".into());
             }
         }
-        for (idx, revision) in revisions.into_iter().enumerate() {
-            self.ownership.runtime[idx].store(revision, Ordering::Release);
-        }
-        *guard = RuntimeState { multi_loop, pads };
+        let mut replacement = Some(RuntimeState { multi_loop, pads });
+        let mut previous = None;
+        before_commit();
+        self.ownership
+            .commit_slot_write_fixed(
+                &write,
+                || {
+                    revisions
+                        .iter()
+                        .all(|prepared| self.ownership.runtime_revision_write_current(*prepared))
+                        && bindings.iter().enumerate().all(|(idx, binding)| {
+                            !loaded[idx]
+                                || binding.is_some_and(|binding| {
+                                    Arc::ptr_eq(&binding.ownership, &self.ownership)
+                                        && binding.runtime_publication_current()
+                                })
+                        })
+                },
+                |_| {
+                    for prepared in &revisions {
+                        self.ownership.apply_runtime_revision_write(*prepared);
+                    }
+                    previous = Some(std::mem::replace(
+                        &mut *guard,
+                        replacement.take().expect("prepared runtime state"),
+                    ));
+                },
+            )
+            .map_err(|error| error.to_string())?;
+        // Vec storage and its previous bindings are released only after the marker completes.
+        drop(previous);
         Ok(())
     }
 
@@ -445,17 +537,40 @@ impl InputDispatcher {
 
             let mut dispatched = false;
             let mut direct = false;
+            let mut captured_trigger = None;
             let action_key = mapping.as_ref().map(|m| m.action_key.clone());
 
             if let Some(mapping) = mapping {
-                let result = dispatch_action(
-                    &mapping.action,
-                    event.received_at_ns,
-                    &self.runtime_state,
-                    &self.ownership,
-                    &self.audio_producer,
-                    Some(self.enabled.as_ref()),
-                );
+                if matches!(mapping.action, InputAction::TriggerPad { .. }) {
+                    captured_trigger = CapturedInputPadTrigger::capture(
+                        &mapping,
+                        event.received_at_ns,
+                        &self.runtime_state,
+                        &self.ownership,
+                        &self.enabled,
+                        &self.learn_capture_active,
+                    );
+                }
+                let result = if let Some(trigger) = captured_trigger.as_ref() {
+                    DispatchResult {
+                        dispatched: trigger.dispatch(&self.audio_producer).unwrap_or(false),
+                        direct: true,
+                    }
+                } else if matches!(mapping.action, InputAction::TriggerPad { .. }) {
+                    DispatchResult {
+                        dispatched: false,
+                        direct: true,
+                    }
+                } else {
+                    dispatch_action(
+                        &mapping.action,
+                        event.received_at_ns,
+                        &self.runtime_state,
+                        &self.ownership,
+                        &self.audio_producer,
+                        Some(self.enabled.as_ref()),
+                    )
+                };
                 dispatched = result.dispatched;
                 direct = result.direct;
             }
@@ -467,6 +582,7 @@ impl InputDispatcher {
                 action_key,
                 dispatched,
                 direct,
+                captured_trigger,
             });
         }
     }
@@ -539,6 +655,26 @@ fn dispatch_trigger_pad(
     audio_producer: &Arc<Mutex<Producer<ControlMessage>>>,
     admission_enabled: Option<&AtomicBool>,
 ) -> DispatchResult {
+    dispatch_trigger_pad_before_commit(
+        id,
+        received_at_ns,
+        runtime_state,
+        ownership,
+        audio_producer,
+        admission_enabled,
+        || {},
+    )
+}
+
+fn dispatch_trigger_pad_before_commit(
+    id: usize,
+    received_at_ns: u64,
+    runtime_state: &Arc<Mutex<RuntimeState>>,
+    ownership: &Arc<InputRuntimeOwnership>,
+    audio_producer: &Arc<Mutex<Producer<ControlMessage>>>,
+    admission_enabled: Option<&AtomicBool>,
+    before_commit: impl FnOnce(),
+) -> DispatchResult {
     let Ok(state) = runtime_state.lock() else {
         return DispatchResult {
             dispatched: false,
@@ -555,7 +691,7 @@ fn dispatch_trigger_pad(
         || ownership.resident_control_pending(id)
         || pad
             .binding
-            .is_none_or(|binding| !ownership.current(id, binding))
+            .is_none_or(|binding| !ownership.admission_current(id, binding))
         || pad.binding.is_some_and(|binding| {
             binding.resident.is_some_and(|resident| {
                 let frames = binding.sample_count / binding.channels.max(1);
@@ -591,28 +727,46 @@ fn dispatch_trigger_pad(
             direct: true,
         };
     }
-    let launch_revision = ownership.launch_revision(id);
-    if !ownership.launch_current(id, launch_revision) {
+    let binding = pad.binding.expect("validated loaded binding");
+    let Some(placement) = binding.placement.or_else(|| ownership.slot_snapshot(id)) else {
         return DispatchResult {
             dispatched: false,
             direct: true,
         };
-    }
+    };
+    let Ok(prepared) = ownership.prepare_launch_write(placement, LaunchWriteKind::Admit) else {
+        return DispatchResult {
+            dispatched: false,
+            direct: true,
+        };
+    };
     let trigger = ControlMessage::TriggerInputPad {
         id,
         start_s: pad.loop_start_s,
         end_s: pad.loop_end_s,
         exclusive: !state.multi_loop,
-        binding: pad.binding.expect("validated loaded binding"),
+        binding,
         received_at_ns,
         resident_control: None,
-        launch_revision,
+        launch_revision: prepared.previous_revision,
     };
-    drop(state);
-
-    ownership.mark_launch_admitted(id);
+    before_commit();
+    let dispatched = ownership
+        .commit_launch_write(
+            prepared,
+            || {
+                ownership.admission_fields_current(id, binding)
+                    && admission_enabled.is_none_or(|enabled| enabled.load(Ordering::Acquire))
+            },
+            || {
+                // The sole producer retains a free slot; the consumer only frees capacity.
+                let sent = producer.push(trigger);
+                debug_assert!(sent.is_ok());
+            },
+        )
+        .is_ok();
     DispatchResult {
-        dispatched: producer.push(trigger).is_ok(),
+        dispatched,
         direct: true,
     }
 }
@@ -963,6 +1117,7 @@ mod tests {
         let (producer, mut consumer) = RingBuffer::<ControlMessage>::new(8);
         let producer = Arc::new(Mutex::new(producer));
         let state = Arc::new(Mutex::new(RuntimeState::default()));
+        let ownership = Arc::new(InputRuntimeOwnership::default());
         {
             let mut guard = state.lock().unwrap();
             guard.multi_loop = false;
@@ -970,11 +1125,11 @@ mod tests {
                 loaded: true,
                 loop_start_s: 1.25,
                 loop_end_s: Some(4.0),
-                binding: Some(InputRuntimePadBinding::for_test(3, Arc::default()).binding),
+                binding: Some(InputRuntimePadBinding::for_test(3, ownership.clone()).binding),
             };
         }
 
-        let result = dispatch_trigger_pad(3, 42, &state, &Arc::default(), &producer, None);
+        let result = dispatch_trigger_pad(3, 42, &state, &ownership, &producer, None);
 
         assert_eq!(
             result,
@@ -999,15 +1154,16 @@ mod tests {
         let (producer, mut consumer) = RingBuffer::<ControlMessage>::new(8);
         let producer = Arc::new(Mutex::new(producer));
         let state = Arc::new(Mutex::new(RuntimeState::default()));
+        let ownership = Arc::new(InputRuntimeOwnership::default());
         {
             let mut guard = state.lock().unwrap();
             guard.multi_loop = true;
             guard.pads[1].loaded = true;
             guard.pads[1].binding =
-                Some(InputRuntimePadBinding::for_test(1, Arc::default()).binding);
+                Some(InputRuntimePadBinding::for_test(1, ownership.clone()).binding);
         }
 
-        let result = dispatch_trigger_pad(1, 42, &state, &Arc::default(), &producer, None);
+        let result = dispatch_trigger_pad(1, 42, &state, &ownership, &producer, None);
 
         assert!(result.dispatched);
         assert!(matches!(
@@ -1156,7 +1312,7 @@ mod tests {
             )
             .unwrap();
         assert!(runtime.ownership.current(0, original));
-        let previous_revision = runtime.ownership.runtime[0].load(Ordering::Acquire);
+        let previous_revision = runtime.ownership.runtime_revision(0);
         let foreign = InputRuntimePadBinding::for_test(0, Arc::default());
         let mut mixed: Vec<_> = bindings.iter().map(Some).collect();
         mixed[0] = Some(&foreign);
@@ -1172,10 +1328,7 @@ mod tests {
                 )
                 .is_err()
         );
-        assert_eq!(
-            runtime.ownership.runtime[0].load(Ordering::Acquire),
-            previous_revision
-        );
+        assert_eq!(runtime.ownership.runtime_revision(0), previous_revision);
         assert!(runtime.ownership.current(0, original));
     }
 
@@ -1321,3 +1474,11 @@ mod tests {
         assert!(consumer.pop().is_err());
     }
 }
+
+#[cfg(test)]
+#[path = "runtime_publication_tests.rs"]
+mod runtime_publication_tests;
+
+#[cfg(test)]
+#[path = "launch_admission_tests.rs"]
+pub(super) mod launch_admission_tests;

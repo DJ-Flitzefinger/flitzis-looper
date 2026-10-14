@@ -1051,8 +1051,9 @@ assert 0 not in session.active_sample_ids
     let version = python_string(locals, "b_version");
     let components =
         std::array::from_fn(|index| replacement_component_pcm(&signal_wav(4096, index + 4)));
+    // Independent immutable B renderers have unrestricted reference component permits.
     let owners: [Arc<InputRuntimeOwnership>; 2] =
-        std::array::from_fn(|_| Arc::new(InputRuntimeOwnership::tracked()));
+        std::array::from_fn(|_| Arc::new(InputRuntimeOwnership::default()));
     let hash = crate::audio_engine::stem_cache::source_version_hash(&version);
     let stems = PreparedStemSet {
         complete_set_identity: Arc::new([0xb5; 32]),
@@ -1069,7 +1070,7 @@ assert 0 not in session.active_sample_ids
     };
     let reference = |index: usize| {
         let mut mixer = Box::new(RtMixer::new(2, RATE as f32));
-        owners[index].publish_source(0, &source, RATE, 1);
+        owners[index].publish_test_source(0, &source, RATE, 1);
         mixer.set_input_runtime_ownership(owners[index].clone());
         mixer.load_sample(0, source.clone());
         mixer.set_loop_region_frames(0, LOOP_START, Some(LOOP_END));
@@ -1451,12 +1452,13 @@ assert transport.residency.key_lock_status(0).pending
             true,
             request,
             InputPadBinding {
+                placement: owner.binding_placement(0),
                 resident: playback.source.resident_binding(),
                 source_address: playback.source.source_address(),
                 sample_count: playback.source.source_sample_count(),
                 channels: 2,
                 sample_rate_hz: RATE,
-                authority_revision: owner.authority[0].load(Ordering::Acquire),
+                authority_revision: owner.authority_revision(0),
                 runtime_revision: 0,
                 accepted: None,
             },

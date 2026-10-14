@@ -1,5 +1,6 @@
 //! Bounded off-thread material preparation and held, actual source adoption phases.
 use super::cold_store::CommittedColdLease;
+use super::content_placement::{ContentCell, PlacementObservation};
 use super::material_migration::PreparedMigrationMaterial;
 pub use super::material_migration_journal::MaterialMigrationJournalStore;
 use super::{AudioEngine, cold_load, material_migration};
@@ -14,11 +15,18 @@ use std::sync::{
 
 type PreparationOutcome = Result<Arc<PreparedMigrationMaterial>, String>;
 
+struct MigrationAdmission {
+    adoption: Arc<std::sync::atomic::AtomicU8>,
+    publication: Arc<Mutex<Option<super::input_runtime_binding::SourcePublication>>>,
+    cancellation_settled: Arc<AtomicBool>,
+}
+
 #[pyclass]
 pub struct MaterialMigrationPreparation {
     result: Arc<Mutex<Option<PreparationOutcome>>>,
     cancelled: Arc<AtomicBool>,
-    admissions: Mutex<Vec<Arc<std::sync::atomic::AtomicU8>>>,
+    admissions: Mutex<Vec<MigrationAdmission>>,
+    requests: Arc<Mutex<Vec<u64>>>,
     _old_original_pin: Arc<super::project_assets::ProjectAssetLease>,
 }
 
@@ -97,13 +105,23 @@ impl MaterialMigrationPreparation {
             .admissions
             .lock()
             .map_err(|_| PyRuntimeError::new_err("migration admission lock poisoned"))?;
-        if admissions
-            .iter()
-            .any(|phase| phase.load(Ordering::Acquire) != 3)
-        {
-            return Err(PyValueError::new_err(
-                "migration source claim or acknowledgement is unresolved",
-            ));
+        let _requests = self
+            .requests
+            .lock()
+            .map_err(|_| PyRuntimeError::new_err("request lock poisoned"))?;
+        for admission in admissions.iter() {
+            let publication = admission
+                .publication
+                .lock()
+                .map_err(|_| PyRuntimeError::new_err("cold publication lock poisoned"))?;
+            if admission.adoption.load(Ordering::Acquire) != 3
+                || (publication.is_some()
+                    && !admission.cancellation_settled.load(Ordering::Acquire))
+            {
+                return Err(PyValueError::new_err(
+                    "migration source claim or acknowledgement is unresolved",
+                ));
+            }
         }
         let material = self.material()?;
         material.lease.rollback_unadopted_original();
@@ -145,10 +163,20 @@ impl MaterialMigrationSourceTicket {
         self.id
     }
     pub fn phase(&self) -> PyResult<&'static str> {
+        let publication = self
+            .admitted
+            .publication
+            .lock()
+            .map_err(|_| PyRuntimeError::new_err("cold publication lock poisoned"))?;
         match self.admitted.adoption.load(Ordering::Acquire) {
             0 => Ok("pending"),
             1 => Ok("claimed"),
             2 => Ok("acknowledged"),
+            3 if publication.is_some()
+                && !self.admitted.cancellation_settled.load(Ordering::Acquire) =>
+            {
+                Ok("pending")
+            }
             3 => Ok("rejected"),
             _ => Err(PyRuntimeError::new_err(
                 "unknown native migration adoption phase",
@@ -156,18 +184,13 @@ impl MaterialMigrationSourceTicket {
         }
     }
     pub fn cancel_unclaimed(&self) -> bool {
-        if self
-            .admitted
-            .adoption
-            .compare_exchange(0, 3, Ordering::AcqRel, Ordering::Acquire)
-            .is_ok()
-        {
-            self.ownership
-                .cancel_cold(self.id, self.admitted.request_id);
-            true
-        } else {
-            self.admitted.adoption.load(Ordering::Acquire) == 3
-        }
+        cold_load::cancel_unclaimed_material(
+            &self.requests,
+            &self.admitted.publication,
+            &self.admitted.adoption,
+            &self.admitted.cancellation_settled,
+            &self.ownership,
+        )
     }
     /// Feedback/request advancement cannot substitute for current source identity.
     pub fn is_current(&self) -> PyResult<bool> {
@@ -175,6 +198,25 @@ impl MaterialMigrationSourceTicket {
             .requests
             .lock()
             .map_err(|_| PyRuntimeError::new_err("request lock poisoned"))?;
+        let publication = self
+            .admitted
+            .publication
+            .lock()
+            .map_err(|_| PyRuntimeError::new_err("cold publication lock poisoned"))?;
+        let Some(publication) = publication.as_ref() else {
+            return Ok(false);
+        };
+        if !Arc::ptr_eq(&publication.ownership, &self.ownership) {
+            return Ok(false);
+        }
+        let Some(key) = publication.key() else {
+            return Ok(false);
+        };
+        let id = match self.ownership.observe_control_key(key) {
+            PlacementObservation::Current(snapshot) => snapshot.slot(),
+            PlacementObservation::Pending => return Ok(false),
+            PlacementObservation::Stale | PlacementObservation::Retired => return Ok(false),
+        };
         let cache = self
             .cache
             .lock()
@@ -189,15 +231,24 @@ impl MaterialMigrationSourceTicket {
             .map_err(|_| PyRuntimeError::new_err("source digest lock poisoned"))?;
         let original =
             self.material.lease.manifest.descriptor["decoder"]["original"]["sha256"].as_str();
-        Ok(self.admitted.adoption.load(Ordering::Acquire) == 2
-            && generations[self.id] == (self.admitted.request_id, self.rate)
-            && digests[self.id].as_deref() == original
-            && cache[self.id].as_ref().is_some_and(|sample| {
-                self.ownership.source_generation(self.id, sample, self.rate)
-                    == Some(self.admitted.request_id)
+        let current = self.admitted.adoption.load(Ordering::Acquire) == 2
+            && generations[id] == (self.admitted.request_id, self.rate)
+            && digests[id].as_deref() == original
+            && cache[id].as_ref().is_some_and(|sample| {
+                // Retain the original publication key/binding. Its physical slot
+                // snapshot expires on Pair, while its cell/source/window fences survive.
+                let binding = publication.binding(sample, self.rate);
+                self.ownership.binding_source_generation(id, binding)
+                    == Some(publication.source_generation)
+                    && self.ownership.binding_window_current(id, binding)
                     && sample.frame_count() == self.material.sample.frame_count()
                     && sample.channels == self.material.sample.channels
-            }))
+            });
+        match self.ownership.observe_control_key(key) {
+            PlacementObservation::Current(snapshot) if snapshot.slot() == id => Ok(current),
+            PlacementObservation::Pending => Ok(false),
+            _ => Ok(false),
+        }
     }
 }
 
@@ -265,6 +316,7 @@ pub(super) fn prepare(
         result,
         cancelled,
         admissions: Mutex::new(Vec::new()),
+        requests: engine.pad_request_ids.clone(),
         _old_original_pin: held_source_pin,
     })
 }
@@ -325,7 +377,11 @@ pub(super) fn adopt_for_format(
         "restore",
         Some(material.clone()),
     )?;
-    admissions.push(admitted.adoption.clone());
+    admissions.push(MigrationAdmission {
+        adoption: admitted.adoption.clone(),
+        publication: admitted.publication.clone(),
+        cancellation_settled: admitted.cancellation_settled.clone(),
+    });
     Ok(MaterialMigrationSourceTicket {
         _old_source: admitted.old_source.clone(),
         _old_lease: admitted.old_lease.clone(),
@@ -345,7 +401,7 @@ pub(super) fn adopt_for_format(
 #[pyclass]
 pub struct MaterialMigrationHold {
     owner: u64,
-    ids: Vec<usize>,
+    cells: Vec<(usize, ContentCell)>,
     ownership: Arc<super::input_runtime_binding::InputRuntimeOwnership>,
 }
 
@@ -356,34 +412,41 @@ impl MaterialMigrationHold {
         if ids.is_empty()
             || ids.iter().collect::<std::collections::HashSet<_>>().len() != ids.len()
             || ids.iter().any(|id| {
-                !self.ids.contains(id) || self.ownership.migration_hold(*id) != self.owner
+                self.cells
+                    .iter()
+                    .find(|(admitted, _)| admitted == id)
+                    .is_none_or(|(_, cell)| {
+                        self.ownership.migration_hold_for_cell(*cell) != self.owner
+                    })
             })
         {
             return Err(PyValueError::new_err(
                 "migration hold transfer is outside its actual owner set",
             ));
         }
-        self.ids.retain(|id| !ids.contains(id));
+        let cells = self
+            .cells
+            .iter()
+            .copied()
+            .filter(|(id, _)| ids.contains(id))
+            .collect();
+        self.cells.retain(|(id, _)| !ids.contains(id));
         Ok(Self {
             owner: self.owner,
-            ids,
+            cells,
             ownership: self.ownership.clone(),
         })
     }
     pub fn release(&self) -> PyResult<()> {
-        if self
-            .ids
-            .iter()
-            .any(|&id| self.ownership.migration_hold(id) != self.owner)
-        {
-            return Err(PyValueError::new_err("migration hold owner changed"));
+        if self.cells.is_empty() {
+            return Ok(());
         }
-        for &id in &self.ids {
-            self.ownership
-                .release_migration(id, self.owner)
-                .map_err(PyRuntimeError::new_err)?;
-        }
-        Ok(())
+        self.ownership
+            .release_migration_hold_cells(
+                &self.cells.iter().map(|(_, cell)| *cell).collect::<Vec<_>>(),
+                self.owner,
+            )
+            .map_err(PyRuntimeError::new_err)
     }
 }
 
@@ -417,25 +480,39 @@ pub(super) fn hold_for_producer(
     let producer = producer
         .lock()
         .map_err(|_| PyRuntimeError::new_err("producer lock poisoned"))?;
-    if ids
-        .iter()
-        .any(|&id| engine.input_runtime_ownership.migration_hold(id) != 0)
-    {
-        return Err(PyValueError::new_err("pad already held by a migration"));
-    }
     let owner = NEXT_HOLD
         .fetch_update(Ordering::AcqRel, Ordering::Acquire, |owner| {
             owner.checked_add(1)
         })
         .map_err(|_| PyRuntimeError::new_err("migration hold generation exhausted"))?;
-    for &id in &ids {
-        engine.input_runtime_ownership.hold_migration(id, owner);
-    }
+    let cells = ids
+        .iter()
+        .map(|id| {
+            let snapshot = engine
+                .input_runtime_ownership
+                .slot_snapshot(*id)
+                .ok_or_else(|| PyRuntimeError::new_err("migration hold placement is pending"))?;
+            if engine
+                .input_runtime_ownership
+                .control_slot_for_cell(snapshot.cell())
+                != *id
+            {
+                return Err(PyRuntimeError::new_err(
+                    "migration hold control placement is pending",
+                ));
+            }
+            Ok((*id, snapshot.cell()))
+        })
+        .collect::<PyResult<Vec<_>>>()?;
+    engine
+        .input_runtime_ownership
+        .commit_migration_holds(&ids, owner, true)
+        .map_err(PyRuntimeError::new_err)?;
     drop(producer);
     drop(requests);
     Ok(MaterialMigrationHold {
         owner,
-        ids,
+        cells,
         ownership: engine.input_runtime_ownership.clone(),
     })
 }
@@ -583,6 +660,7 @@ pub(super) fn prepared_for_test(
         result: Arc::new(Mutex::new(Some(Ok(Arc::new(material))))),
         cancelled: Arc::new(AtomicBool::new(false)),
         admissions: Mutex::new(Vec::new()),
+        requests: engine.pad_request_ids.clone(),
         _old_original_pin: Arc::new(pin),
     })
 }

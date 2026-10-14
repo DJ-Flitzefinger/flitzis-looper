@@ -61,6 +61,74 @@ pub(crate) struct NativeHistoryPermit {
 }
 
 impl NativeHistoryContext<'_> {
+    /// Retain the caller's actual captured key, source and timing while its outer marker is owned.
+    /// Runtime rows are MIDI intent; source-only callers take their current scalar for fresh history.
+    pub(crate) fn capture_admitted(
+        &self,
+        sample: &SampleBuffer,
+        rate: u32,
+        binding: InputPadBinding,
+    ) -> Option<NativeHistoryPermit> {
+        let cell = self.ownership.binding_cell(self.id, binding)?;
+        if binding.placement.is_some_and(|placement| {
+            placement
+                .content_key()
+                .is_none_or(|key| self.ownership.callback_key_slot(key) != Some(self.id))
+        }) {
+            return None;
+        }
+        let source_generation = self.ownership.binding_source_generation(self.id, binding)?;
+        let permit = NativeHistoryPermit {
+            id: self.id,
+            binding: InputPadBinding {
+                runtime_revision: self
+                    .ownership
+                    .runtime_for_cell(cell)
+                    .load(Ordering::Acquire),
+                ..binding
+            },
+            source_generation,
+            preparation_epoch: self.preparation_epoch.clone(),
+            expected_epoch: self.preparation_epoch.load(Ordering::Acquire),
+            authority: NativeHistoryAuthority::Current {
+                ownership: self.ownership.clone(),
+                acknowledgements: self.acknowledgements.clone(),
+            },
+        };
+        permit.current(sample, rate).then_some(permit)
+    }
+
+    pub(crate) fn capture_admitted_source(
+        &self,
+        sample: &SampleBuffer,
+        rate: u32,
+        binding: InputPadBinding,
+        strict_runtime: bool,
+    ) -> Option<NativeSourceAdmission> {
+        self.ownership.binding_cell(self.id, binding)?;
+        if binding.placement.is_some_and(|placement| {
+            placement
+                .content_key()
+                .is_none_or(|key| self.ownership.callback_key_slot(key) != Some(self.id))
+        }) {
+            return None;
+        }
+        let admission = NativeSourceAdmission {
+            id: self.id,
+            binding,
+            source_generation: self.ownership.binding_source_generation(self.id, binding)?,
+        };
+        admission
+            .current_for_birth(
+                self.ownership,
+                self.acknowledgements,
+                sample,
+                rate,
+                strict_runtime,
+            )
+            .then_some(admission)
+    }
+
     pub(crate) fn capture_source_admission(
         &self,
         sample: &SampleBuffer,
@@ -82,16 +150,29 @@ impl NativeHistoryContext<'_> {
         accepted: Option<AcceptedTimingProjection>,
     ) -> Option<NativeHistoryPermit> {
         let source_generation = self.ownership.source_generation(self.id, sample, rate)?;
+        let placement = self.ownership.slot_snapshot(self.id);
+        if self.ownership.is_source_tracked()
+            && placement
+                .and_then(|snapshot| snapshot.content_key())
+                .is_none()
+        {
+            return None;
+        }
         let permit = NativeHistoryPermit {
             id: self.id,
             binding: InputPadBinding {
+                placement: self
+                    .ownership
+                    .is_source_tracked()
+                    .then_some(placement)
+                    .flatten(),
                 resident: sample.resident_binding(),
                 source_address: sample.source_address(),
                 sample_count: sample.source_sample_count(),
                 channels: sample.channels,
                 sample_rate_hz: rate,
-                authority_revision: self.ownership.authority[self.id].load(Ordering::Acquire),
-                runtime_revision: self.ownership.runtime[self.id].load(Ordering::Acquire),
+                authority_revision: self.ownership.authority_revision(self.id),
+                runtime_revision: self.ownership.runtime_revision(self.id),
                 accepted,
             },
             source_generation,
@@ -103,6 +184,50 @@ impl NativeHistoryContext<'_> {
             },
         };
         permit.current(sample, rate).then_some(permit)
+    }
+}
+
+impl NativeSourceAdmission {
+    pub(crate) fn content_key(&self) -> Option<super::content_placement::ContentKey> {
+        self.binding
+            .placement
+            .and_then(|placement| placement.content_key())
+    }
+    pub(crate) fn current_for_birth(
+        &self,
+        ownership: &InputRuntimeOwnership,
+        acknowledgements: &CurrentTimingAcknowledgements,
+        sample: &SampleBuffer,
+        rate: u32,
+        strict_runtime: bool,
+    ) -> bool {
+        sample.source_address() == self.binding.source_address
+            && sample.source_sample_count() == self.binding.sample_count
+            && sample.channels == self.binding.channels
+            && sample.resident_binding() == self.binding.resident
+            && rate == self.binding.sample_rate_hz
+            && ownership.authority_current(self.id, self.binding)
+            && ownership.binding_source_generation(self.id, self.binding)
+                == Some(self.source_generation)
+            && ownership.binding_window_current(self.id, self.binding)
+            && (!strict_runtime || ownership.current(self.id, self.binding))
+            && acknowledgements.current_for_binding(ownership, self.id, self.binding)
+                == self
+                    .binding
+                    .accepted
+                    .map_or(0, |accepted| accepted.publication_epoch)
+            && ownership.source_timing_available_for_binding(
+                self.id,
+                self.binding,
+                acknowledgements,
+            )
+    }
+
+    #[cfg(test)]
+    pub(crate) fn content_key_for_test(&self) -> Option<super::content_placement::ContentKey> {
+        self.binding
+            .placement
+            .and_then(|placement| placement.content_key())
     }
 }
 
@@ -161,16 +286,16 @@ impl NativeHistoryPermit {
                     ownership.current(self.id, self.binding)
                 } else {
                     ownership.authority_current(self.id, self.binding)
-                }) && ownership.source_generation(self.id, sample, rate)
+                }) && ownership.binding_source_generation(self.id, self.binding)
                     == Some(self.source_generation)
-                    && acknowledgements.current_epoch(self.id)
+                    && acknowledgements.current_for_binding(ownership, self.id, self.binding)
                         == self
                             .binding
                             .accepted
                             .map_or(0, |value| value.publication_epoch)
-                    && ownership.source_timing_available(
+                    && ownership.source_timing_available_for_binding(
                         self.id,
-                        self.binding.accepted,
+                        self.binding,
                         acknowledgements,
                     )
             }
@@ -203,6 +328,129 @@ mod tests {
     use flitzis_looper_analysis::tempo_acceptance::TimingIntent;
 
     #[test]
+    fn admitted_history_follows_its_content_cell_while_old_slot_admission_stays_stale_after_aba() {
+        let sample = SampleBuffer {
+            residency: None,
+            samples: Arc::from([0.25; 32]),
+            channels: 1,
+        };
+        let other = SampleBuffer {
+            samples: Arc::from([0.5; 32]),
+            ..sample.clone()
+        };
+        let ownership = Arc::new(InputRuntimeOwnership::tracked());
+        ownership.publish_test_source(0, &sample, 48_000, 3);
+        ownership.publish_test_source(36, &other, 48_000, 7);
+        let acknowledgements = Arc::new(CurrentTimingAcknowledgements::default());
+        let epoch = Arc::new(AtomicU64::new(2));
+        let projection = AcceptedTimingProjection {
+            revision: [7; 32],
+            period_seconds: 0.5,
+            origin_seconds: 0.0,
+            sample_rate_hz: 48_000,
+            publication_epoch: 11,
+        };
+        let original = ownership.slot_snapshot(0).unwrap();
+        let other_slot = ownership.slot_snapshot(36).unwrap();
+        let unrelated = ownership.slot_snapshot(215).unwrap();
+        assert!(acknowledgements.acknowledge_for_key(
+            &ownership,
+            original.content_key().unwrap(),
+            11
+        ));
+        let context = NativeHistoryContext {
+            id: 0,
+            ownership: &ownership,
+            acknowledgements: &acknowledgements,
+            preparation_epoch: &epoch,
+        };
+        let permit = context.capture(&sample, 48_000, Some(projection)).unwrap();
+        assert!(ownership.admission_current(0, permit.binding));
+        let prepared = ownership
+            .prepare_placement_pair(original, other_slot)
+            .unwrap();
+        // Preparing and even the callback's short publication marker leave established effects
+        // on their stable cell. New slot admissions must wait for the complete publication.
+        assert!(permit.current(&sample, 48_000));
+        ownership
+            .commit_placement_pair(
+                &prepared,
+                true,
+                || {
+                    assert!(permit.current(&sample, 48_000));
+                    assert!(!ownership.admission_current(0, permit.binding));
+                    true
+                },
+                || {
+                    assert!(permit.current_effective_source(&sample, 48_000));
+                },
+            )
+            .unwrap();
+        assert!(permit.current(&sample, 48_000));
+        assert!(!permit.current(&other, 48_000));
+        assert!(!ownership.admission_current(0, permit.binding));
+        assert!(ownership.slot_snapshot_current(unrelated));
+        assert_eq!(
+            ownership.slot_snapshot(36).unwrap().content_key(),
+            original.content_key()
+        );
+        assert!(context.capture(&sample, 48_000, Some(projection)).is_none());
+
+        let returned = ownership
+            .prepare_placement_pair(
+                ownership.slot_snapshot(36).unwrap(),
+                ownership.slot_snapshot(0).unwrap(),
+            )
+            .unwrap();
+        ownership
+            .commit_placement_pair(&returned, true, || true, || {})
+            .unwrap();
+        assert!(permit.current(&sample, 48_000));
+        assert!(!ownership.admission_current(0, permit.binding));
+        let fresh = context.capture(&sample, 48_000, Some(projection)).unwrap();
+        assert!(ownership.admission_current(0, fresh.binding));
+        assert_ne!(
+            fresh.binding.placement.unwrap().binding_epoch(),
+            original.binding_epoch()
+        );
+        // A real lifetime retirement revokes both historical candidates; placement alone did not.
+        ownership.publish_content_lifetime(0, super::super::content_lifetime::reserve().unwrap());
+        assert!(!permit.current_effective_source(&sample, 48_000));
+        assert!(!fresh.current(&sample, 48_000));
+    }
+
+    #[test]
+    fn tracked_history_cannot_gain_content_authority_from_zero_lifetime_or_foreign_owner() {
+        let sample = SampleBuffer {
+            residency: None,
+            samples: Arc::from([0.25; 32]),
+            channels: 1,
+        };
+        let ownership = Arc::new(InputRuntimeOwnership::tracked());
+        ownership.publish_source(0, &sample, 48_000, 3);
+        let acknowledgements = Arc::new(CurrentTimingAcknowledgements::default());
+        let epoch = Arc::new(AtomicU64::new(2));
+        let context = NativeHistoryContext {
+            id: 0,
+            ownership: &ownership,
+            acknowledgements: &acknowledgements,
+            preparation_epoch: &epoch,
+        };
+        assert!(context.capture(&sample, 48_000, None).is_none());
+        ownership.publish_test_source(0, &sample, 48_000, 3);
+        let permit = context.capture(&sample, 48_000, None).unwrap();
+        let foreign = Arc::new(InputRuntimeOwnership::tracked());
+        foreign.publish_test_source(0, &sample, 48_000, 3);
+        let foreign_binding = InputPadBinding {
+            placement: foreign.binding_placement(0),
+            ..permit.binding
+        };
+        assert!(!ownership.authority_current(0, foreign_binding));
+        assert!(!ownership.binding_source_current(0, foreign_binding));
+        assert!(permit.current(&sample, 48_000));
+    }
+
+    #[test]
     fn retained_pin_cannot_authorize_replaced_generation_or_new_request() {
         let sample = SampleBuffer {
             residency: None,
@@ -212,7 +460,7 @@ mod tests {
         let ownership = Arc::new(InputRuntimeOwnership::tracked());
         let acknowledgements = Arc::default();
         let epoch = Arc::new(AtomicU64::new(7));
-        ownership.publish_source(0, &sample, 44_100, 3);
+        ownership.publish_test_source(0, &sample, 44_100, 3);
         let context = NativeHistoryContext {
             id: 0,
             ownership: &ownership,
@@ -224,7 +472,7 @@ mod tests {
         epoch.store(8, Ordering::Release);
         assert!(!permit.current(&sample, 44_100));
         let request = context.capture(&sample, 44_100, None).unwrap();
-        ownership.publish_source(0, &sample, 44_100, 4);
+        ownership.publish_test_source(0, &sample, 44_100, 4);
         assert!(!request.current(&sample, 44_100));
         ownership.revoke_source(0);
         assert!(context.capture(&sample, 44_100, None).is_none());
@@ -253,8 +501,12 @@ mod tests {
             sample_rate_hz: 48_000,
             publication_epoch: 3,
         };
-        ownership.publish_source(0, &original, 48_000, 3);
-        acknowledgements.acknowledge(0, accepted.publication_epoch);
+        ownership.publish_test_source(0, &original, 48_000, 3);
+        acknowledgements.acknowledge_for_key(
+            &ownership,
+            ownership.slot_snapshot(0).unwrap().content_key().unwrap(),
+            accepted.publication_epoch,
+        );
         let current = NativeHistoryContext {
             id: 0,
             ownership: &ownership,
@@ -268,10 +520,16 @@ mod tests {
 
         // Control has already published B before its callback load. A's actual admitted birth,
         // effective timing and local voice lifetime remain distinct from B's new authority.
-        ownership.publish_source(0, &replacement, 48_000, 4);
-        ownership.authority[0].fetch_add(1, Ordering::AcqRel);
+        ownership.publish_test_source(0, &replacement, 48_000, 4);
+        ownership
+            .authority_for_cell(ownership.slot_snapshot(0).unwrap().cell())
+            .fetch_add(1, Ordering::AcqRel);
         bank_epoch.fetch_add(1, Ordering::AcqRel);
-        acknowledgements.acknowledge(0, 9);
+        acknowledgements.acknowledge_for_key(
+            &ownership,
+            ownership.slot_snapshot(0).unwrap().content_key().unwrap(),
+            9,
+        );
         let retained = NativeVoiceHistoryContext {
             admission: &admission,
             lifetime: &lifetime,
@@ -338,7 +596,7 @@ mod tests {
         let ownership = Arc::new(InputRuntimeOwnership::tracked());
         let acknowledgements = Arc::default();
         let bank_epoch = Arc::new(AtomicU64::new(1));
-        ownership.publish_source(0, &original, 48_000, 3);
+        ownership.publish_test_source(0, &original, 48_000, 3);
         let admission = NativeHistoryContext {
             id: 0,
             ownership: &ownership,
@@ -418,7 +676,9 @@ mod tests {
             ..accepted
         })));
         assert!(!permit.current(&sample, 44_100));
-        ownership.authority[0].fetch_add(1, Ordering::AcqRel);
+        ownership
+            .authority_for_cell(ownership.slot_snapshot(0).unwrap().cell())
+            .fetch_add(1, Ordering::AcqRel);
         assert!(!permit.current(&sample, 48_000));
         acknowledgements.clear(0);
         ownership.set_timing_intent(0, TimingIntent::Automatic);

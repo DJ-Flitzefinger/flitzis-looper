@@ -28,9 +28,36 @@ pub(crate) enum RetiredAudioBuffer {
     ResidentSeekCapture(Arc<super::resident_seek::ResidentSeekCapture>),
     CommittedStemWork(Box<super::committed_stem_residency::CommittedStemRtWork>),
     PadCopy(Box<super::pad_copy::PadCopyRtWork>),
+    PadPair(Box<super::pad_pair::PadPairRtWork>),
+    HoldAction(Box<super::hold_action::HoldActionRtWork>),
+    SourcePublication(super::input_runtime_binding::SourcePublication),
 }
 
 pub(crate) trait AudioBufferRetirement {
+    #[cfg(test)]
+    fn retire_pad_pair(&mut self, work: Box<super::pad_pair::PadPairRtWork>) {
+        drop(work);
+    }
+    #[cfg(not(test))]
+    fn retire_pad_pair(&mut self, work: Box<super::pad_pair::PadPairRtWork>);
+    #[cfg(test)]
+    fn retire_hold_action(&mut self, work: Box<super::hold_action::HoldActionRtWork>) {
+        drop(work);
+    }
+    #[cfg(not(test))]
+    fn retire_hold_action(&mut self, work: Box<super::hold_action::HoldActionRtWork>);
+    #[cfg(test)]
+    fn retire_source_publication(
+        &mut self,
+        publication: super::input_runtime_binding::SourcePublication,
+    ) {
+        drop(publication);
+    }
+    #[cfg(not(test))]
+    fn retire_source_publication(
+        &mut self,
+        publication: super::input_runtime_binding::SourcePublication,
+    );
     #[cfg(test)]
     fn retire_pad_copy(&mut self, work: Box<super::pad_copy::PadCopyRtWork>) {
         drop(work);
@@ -170,6 +197,18 @@ impl RtAudioBufferRetirement {
 }
 
 impl AudioBufferRetirement for RtAudioBufferRetirement {
+    fn retire_pad_pair(&mut self, work: Box<super::pad_pair::PadPairRtWork>) {
+        self.retire_buffer(RetiredAudioBuffer::PadPair(work));
+    }
+    fn retire_hold_action(&mut self, work: Box<super::hold_action::HoldActionRtWork>) {
+        self.retire_buffer(RetiredAudioBuffer::HoldAction(work));
+    }
+    fn retire_source_publication(
+        &mut self,
+        publication: super::input_runtime_binding::SourcePublication,
+    ) {
+        self.retire_buffer(RetiredAudioBuffer::SourcePublication(publication));
+    }
     fn retire_pad_copy(&mut self, work: Box<super::pad_copy::PadCopyRtWork>) {
         self.retire_buffer(RetiredAudioBuffer::PadCopy(work));
     }
@@ -232,31 +271,130 @@ pub(crate) struct AudioBufferRetirementWorker {
 }
 
 impl AudioBufferRetirementWorker {
-    fn spawn(mut consumer: Consumer<RetiredAudioBuffer>) -> Self {
+    fn spawn<T: Send + 'static>(
+        mut consumer: Consumer<RetiredAudioBuffer>,
+        mut callback_close: Option<Consumer<Box<T>>>,
+        callback_closed: Option<Arc<AtomicBool>>,
+        worker_start: impl FnOnce() + Send + 'static,
+    ) -> std::io::Result<Self> {
         let running = Arc::new(AtomicBool::new(true));
         let thread_running = running.clone();
         let join_handle = thread::Builder::new()
             .name("flitzis-audio-buffer-retirement".to_string())
             .spawn(move || {
-                while thread_running.load(Ordering::Acquire) || !consumer.is_empty() {
+                worker_start();
+                // Stream drop may return before another thread destroys CPAL's closure. Keep
+                // both consumers alive until its unique close producer has been dropped.
+                while thread_running.load(Ordering::Acquire)
+                    || !consumer.is_empty()
+                    || callback_closed
+                        .as_ref()
+                        .is_some_and(|closed| !closed.load(Ordering::Acquire))
+                    || callback_close
+                        .as_ref()
+                        .is_some_and(|close| !close.is_empty())
+                {
                     let mut drained = false;
                     while let Ok(buffer) = consumer.pop() {
                         drop(buffer);
                         drained = true;
                     }
-
+                    if let Some(close) = &mut callback_close {
+                        if let Ok(state) = close.pop() {
+                            // This also drops a full retirement backlog, queued commands,
+                            // scheduled commands, Native voices and the one deferred payload.
+                            drop(state);
+                            drained = true;
+                        }
+                    }
                     if !drained {
                         thread::sleep(Duration::from_millis(5));
                     }
                 }
-            })
-            .ok();
-
-        Self {
+            })?;
+        Ok(Self {
             running,
-            join_handle,
-        }
+            join_handle: Some(join_handle),
+        })
     }
+}
+
+/// Unique callback owner. Its preallocated box leaves CPAL's destructor thread intact;
+/// only the existing retirement worker destroys its state and any nested Native pins.
+/// This producer has exactly one write for one initially empty slot, independent of
+/// normal retirement queue/backlog capacity.
+pub(crate) struct CallbackCloseOwner<T: Send + 'static> {
+    state: Option<Box<T>>,
+    close: Option<Producer<Box<T>>>,
+    closed: Arc<AtomicBool>,
+}
+
+impl<T: Send + 'static> CallbackCloseOwner<T> {
+    pub(crate) fn state_mut(&mut self) -> &mut T {
+        self.state
+            .as_deref_mut()
+            .expect("live callback owns its state")
+    }
+}
+
+impl<T: Send + 'static> Drop for CallbackCloseOwner<T> {
+    fn drop(&mut self) {
+        if let Some(state) = self.state.take() {
+            if let Some(mut close) = self.close.take() {
+                if let Err(PushError::Full(state)) = close.push(state) {
+                    // A second write is structurally impossible. Even a broken internal
+                    // invariant must not destroy the complete callback image on realtime.
+                    std::mem::forget(state);
+                }
+                // The worker retains its consumer until after this producer is gone, so
+                // neither the close ring nor a state payload can die on this thread.
+                drop(close);
+            } else {
+                std::mem::forget(state);
+            }
+        }
+        self.closed.store(true, Ordering::Release);
+    }
+}
+
+fn create_audio_buffer_retirement_with_callback_start<T: Send + 'static>(
+    build: impl FnOnce(RtAudioBufferRetirement) -> Box<T>,
+    worker_start: impl FnOnce() + Send + 'static,
+) -> std::io::Result<(CallbackCloseOwner<T>, AudioBufferRetirementWorker)> {
+    let (producer, consumer) = RingBuffer::new(RETIRED_AUDIO_BUFFER_QUEUE_CAPACITY);
+    let state = build(RtAudioBufferRetirement::new(producer));
+    let (close, close_consumer) = RingBuffer::new(1);
+    let closed = Arc::new(AtomicBool::new(false));
+    // Failure drops the still-local state on the caller's control thread. No device
+    // callback has been registered and no producer can outlive a missing worker.
+    let worker = AudioBufferRetirementWorker::spawn(
+        consumer,
+        Some(close_consumer),
+        Some(closed.clone()),
+        worker_start,
+    )?;
+    Ok((
+        CallbackCloseOwner {
+            state: Some(state),
+            close: Some(close),
+            closed,
+        },
+        worker,
+    ))
+}
+
+pub(crate) fn create_audio_buffer_retirement_with_callback<T: Send + 'static>(
+    build: impl FnOnce(RtAudioBufferRetirement) -> Box<T>,
+) -> std::io::Result<(CallbackCloseOwner<T>, AudioBufferRetirementWorker)> {
+    create_audio_buffer_retirement_with_callback_start(build, || {})
+}
+
+#[cfg(test)]
+pub(super) fn create_audio_buffer_retirement_with_callback_paused<T: Send + 'static>(
+    build: impl FnOnce(RtAudioBufferRetirement) -> Box<T>,
+    worker_start: impl FnOnce() + Send + 'static,
+) -> std::io::Result<(CallbackCloseOwner<T>, AudioBufferRetirementWorker)> {
+    create_audio_buffer_retirement_with_callback_start(build, worker_start)
 }
 
 impl Drop for AudioBufferRetirementWorker {
@@ -268,12 +406,14 @@ impl Drop for AudioBufferRetirementWorker {
     }
 }
 
+#[cfg(test)]
 pub(crate) fn create_audio_buffer_retirement()
 -> (RtAudioBufferRetirement, AudioBufferRetirementWorker) {
     let (producer, consumer) = RingBuffer::new(RETIRED_AUDIO_BUFFER_QUEUE_CAPACITY);
     (
         RtAudioBufferRetirement::new(producer),
-        AudioBufferRetirementWorker::spawn(consumer),
+        AudioBufferRetirementWorker::spawn(consumer, None::<Consumer<Box<()>>>, None, || {})
+            .expect("audio retirement worker unavailable"),
     )
 }
 

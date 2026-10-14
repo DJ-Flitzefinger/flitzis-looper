@@ -50,7 +50,7 @@ fn full_oracle(loaded: &Loaded, start: usize, end: usize) -> RtMixer {
     .with_complete_source(48_000);
     let mut mixer = RtMixer::new(2, 48_000.0);
     let ownership = Arc::new(InputRuntimeOwnership::tracked());
-    ownership.publish_source(0, &sample, 48_000, 1);
+    ownership.publish_test_source(0, &sample, 48_000, 1);
     mixer.set_input_runtime_ownership(ownership);
     mixer.load_sample(0, sample);
     mixer.set_pad_loop_region(0, start as f64 / 48_000.0, Some(end as f64 / 48_000.0));

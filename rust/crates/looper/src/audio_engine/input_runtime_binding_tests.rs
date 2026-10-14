@@ -34,7 +34,7 @@ fn resident_context_metadata_and_window_fences_distinguish_every_context() {
         engine.loaded_source_digests.lock().unwrap()[0] = Some("a".repeat(64));
         engine
             .input_runtime_ownership
-            .publish_source(0, &sample, 48_000, 1);
+            .publish_test_source(0, &sample, 48_000, 1);
         let binding = input_runtime_binding::capture(&engine, 0).unwrap().unwrap();
         assert!(binding.current());
         Python::attach(|py| {
@@ -212,7 +212,7 @@ impl RuntimeFixture {
         self.engine.loaded_source_digests.lock().unwrap()[id] = Some("a".repeat(64));
         self.engine
             .input_runtime_ownership
-            .publish_source(id, &sample, RATE, 1);
+            .publish_test_source(id, &sample, RATE, 1);
         self.mixer.load_sample(id, sample);
     }
 
@@ -441,10 +441,10 @@ fn same_value_legacy_edits_revoke_midi_and_invalid_refresh_preserves_runtime_rev
     let origin_message = fixture.consumer.pop().unwrap();
     fixture.apply(origin_message);
     fixture.refresh(0.125, Some(3.0)).unwrap();
-    let old_revision = fixture.engine.input_runtime_ownership.runtime[0].load(Ordering::Acquire);
+    let old_revision = fixture.engine.input_runtime_ownership.runtime_revision(0);
     assert!(fixture.refresh(-1.0, Some(3.0)).is_err());
     assert_eq!(
-        fixture.engine.input_runtime_ownership.runtime[0].load(Ordering::Acquire),
+        fixture.engine.input_runtime_ownership.runtime_revision(0),
         old_revision
     );
     let (parameters, _) = rtrb::RingBuffer::new(1);

@@ -32,7 +32,7 @@ pub struct PreparedStemPair {
     pub(super) source_version: String,
     pub(super) reference: SampleBuffer,
     pub(super) _identity: Arc<[u8; 32]>,
-    stems: Option<PreparedStemSet>,
+    pub(super) stems: Option<PreparedStemSet>,
     assets: Arc<super::project_assets::ProjectAssets>,
     pub(super) root: PathBuf,
     rollback: Vec<(PathBuf, bool)>,
@@ -178,11 +178,19 @@ impl AudioEngine {
         if id >= super::constants::NUM_SAMPLES {
             return Err("id out of range".into());
         }
+        let id = match ticket.publication.control_placement(self)? {
+            super::content_placement::PlacementObservation::Current(current) => current.slot(),
+            super::content_placement::PlacementObservation::Pending => {
+                return Err("prepared source control placement is pending".into());
+            }
+            _ => return Err("prepared source content key is stale".into()),
+        };
         let (sample, lease) = {
             let requests = self
                 .pad_request_ids
                 .lock()
                 .map_err(|_| "request lock poisoned")?;
+            let source_epoch = self.prepared_source_epoch(id)?;
             let cache = self
                 .sample_cache
                 .lock()
@@ -193,7 +201,7 @@ impl AudioEngine {
                 id,
                 source_version,
                 requests[id],
-                &self.prepared_source_epochs[id],
+                source_epoch,
                 &sample,
             )?;
             let lease = self

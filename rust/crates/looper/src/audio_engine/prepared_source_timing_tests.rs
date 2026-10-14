@@ -92,12 +92,15 @@ fn prepared_capture_rejects_unavailable_automatic_but_preserves_manual_tap_legac
     ] {
         set_intent(&engine, &producer, 0, intent).unwrap();
         let ControlMessage::ClearPadConstantTiming {
-            id, through_epoch, ..
+            placement,
+            id,
+            through_epoch,
+            ..
         } = consumer.pop().unwrap()
         else {
             panic!("timing authority clear");
         };
-        mixer.clear_constant_timing(id, through_epoch);
+        mixer.clear_constant_timing_for_placement(id, through_epoch, placement);
         if let Some(previous) = previous.take() {
             assert!(!previous.publication.current());
         }
@@ -376,6 +379,7 @@ fn legacy_parameter_lane_gap_rejects_fresh_preparation_and_keeps_previous_stem_a
     mixer.stop_sample(0);
 
     let ControlParameterMessage::SetLegacyPadBpm {
+        placement,
         id,
         bpm,
         through_epoch,
@@ -384,7 +388,7 @@ fn legacy_parameter_lane_gap_rejects_fresh_preparation_and_keeps_previous_stem_a
     else {
         panic!("legacy BPM parameter");
     };
-    mixer.clear_constant_timing(id, through_epoch);
+    mixer.clear_constant_timing_for_placement(id, through_epoch, placement);
     mixer.set_pad_bpm(id, bpm);
     let current = engine.capture_prepared_source(0, version()).unwrap();
     enqueue_current_prepared_stems(&engine, &producer, &current, &version(), prepared(&current))

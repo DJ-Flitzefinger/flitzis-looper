@@ -48,6 +48,12 @@ struct RetirementGate {
 }
 
 impl AudioBufferRetirement for RetirementGate {
+    fn retire_source_publication(
+        &mut self,
+        value: super::input_runtime_binding::SourcePublication,
+    ) {
+        self.actual.retire_source_publication(value);
+    }
     fn retire_committed_stem_work(
         &mut self,
         work: Box<super::committed_stem_residency::CommittedStemRtWork>,
@@ -210,7 +216,12 @@ fn wait_until(timeout: Duration, mut condition: impl FnMut() -> bool) {
 fn terminal(engine: &AudioEngine, request: u64) -> LoaderEvent {
     let deadline = Instant::now() + Duration::from_secs(10);
     loop {
-        if let Ok(event) = engine.loader_rx.lock().unwrap().try_recv()
+        if let Ok(event) = engine
+            .loader_rx
+            .lock()
+            .unwrap()
+            .try_recv()
+            .map(LoaderEvent::into_test_payload)
             && matches!(&event, LoaderEvent::Success { request_id, .. } | LoaderEvent::Error { request_id, .. } if *request_id == request)
         {
             return event;
@@ -221,7 +232,13 @@ fn terminal(engine: &AudioEngine, request: u64) -> LoaderEvent {
 }
 
 fn assert_no_terminal(engine: &AudioEngine) {
-    while let Ok(event) = engine.loader_rx.lock().unwrap().try_recv() {
+    while let Ok(event) = engine
+        .loader_rx
+        .lock()
+        .unwrap()
+        .try_recv()
+        .map(LoaderEvent::into_test_payload)
+    {
         assert!(
             !matches!(
                 event,
@@ -315,7 +332,7 @@ fn public_load_malformed_resident_hints_reject_before_request_cache_or_job_effec
         engine.pad_request_ids.lock().unwrap()[0] = 7;
         engine
             .input_runtime_ownership
-            .publish_source(0, &previous, 48_000, 7);
+            .publish_test_source(0, &previous, 48_000, 7);
         let (mut producer, mut consumer) = rtrb::RingBuffer::new(4);
         producer.push(ControlMessage::Ping()).unwrap();
         let producer = Arc::new(Mutex::new(producer));
@@ -394,7 +411,15 @@ fn public_load_malformed_resident_hints_reject_before_request_cache_or_job_effec
                 assert_eq!(producer.lock().unwrap().slots(), producer_slots);
                 assert_eq!(consumer.slots(), 1);
                 assert!(matches!(consumer.peek(), Ok(ControlMessage::Ping())));
-                assert!(engine.loader_rx.lock().unwrap().try_recv().is_err());
+                assert!(
+                    engine
+                        .loader_rx
+                        .lock()
+                        .unwrap()
+                        .try_recv()
+                        .map(LoaderEvent::into_test_payload)
+                        .is_err()
+                );
             }
         }
         assert!(matches!(consumer.pop(), Ok(ControlMessage::Ping())));
@@ -718,7 +743,7 @@ fn seed_old(engine: &AudioEngine, callback: &mut Callback) -> SampleBuffer {
     engine.pad_request_ids.lock().unwrap()[0] = 7;
     engine
         .input_runtime_ownership
-        .publish_source(0, &previous, 48_000, 7);
+        .publish_test_source(0, &previous, 48_000, 7);
     callback
         .mixer
         .load_sample_rt(0, previous.clone(), &mut callback.retirement);

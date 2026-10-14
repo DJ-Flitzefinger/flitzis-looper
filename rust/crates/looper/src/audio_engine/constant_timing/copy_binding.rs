@@ -125,6 +125,7 @@ pub(in crate::audio_engine) fn rebind_copy_timing(
         .map_err(|error| error.to_string())?;
     let projection = projection(&captured.accepted, source.sample_rate_hz, future_epoch)?;
     let record = CurrentConstantTimingRecord {
+        content_key: None,
         source_address: target.source_address(),
         sample_count,
         channels: target.channels,
@@ -137,6 +138,7 @@ pub(in crate::audio_engine) fn rebind_copy_timing(
     Ok((
         record,
         PreparedConstantTiming {
+            content_key: None,
             reference: target.clone(),
             publication,
             projection,
@@ -207,9 +209,12 @@ mod tests {
             engine.cold_leases.lock().unwrap()[0] = Some(lease.clone());
             engine.cold_lease_generations[0].store(7, Ordering::Release);
             engine.timing_intents.lock().unwrap()[0] = TimingIntent::Automatic;
-            engine
-                .input_runtime_ownership
-                .publish_source(0, &sample, super::super::tests::RATE, 7);
+            engine.input_runtime_ownership.publish_test_source(
+                0,
+                &sample,
+                super::super::tests::RATE,
+                7,
+            );
             engine
                 .input_runtime_ownership
                 .set_timing_intent(0, TimingIntent::Automatic);
@@ -270,6 +275,15 @@ mod tests {
         let fixture = Fixture::new();
         for (id, finite) in [(36, false), (215, true)] {
             let (sample, lease) = fixture.target(finite);
+            let lifetime = crate::audio_engine::content_lifetime::reserve().unwrap();
+            let target = fixture
+                .engine
+                .input_runtime_ownership
+                .slot_snapshot(id)
+                .unwrap()
+                .for_lifetime(lifetime)
+                .unwrap();
+            let target_key = target.content_key().unwrap();
             let base_epoch = fixture.engine.prepared_source_epochs[id].load(Ordering::Acquire);
             let future_epoch = base_epoch + 1;
             let publication = PreparedSourcePermit::new(
@@ -278,7 +292,7 @@ mod tests {
             );
             let source_epoch = fixture.captured.publication.epoch.load(Ordering::Acquire);
             reset_window_read_observation_for_test();
-            let (record, prepared) = rebind_copy_timing(
+            let (mut record, mut prepared) = rebind_copy_timing(
                 &fixture.captured,
                 &sample,
                 &lease,
@@ -289,6 +303,15 @@ mod tests {
                 publication.clone(),
             )
             .unwrap();
+            assert!(prepared.content_key.is_none());
+            prepared.content_key = Some(target_key);
+            record.content_key = Some(target_key);
+            assert!(
+                !fixture
+                    .engine
+                    .input_runtime_ownership
+                    .content_key_current(target_key)
+            );
             let observed = window_read_observation_for_test();
             assert_eq!(observed.read_bytes, 0);
             assert_eq!(observed.allocated_bytes, 0);
@@ -315,7 +338,7 @@ mod tests {
                 fixture
                     .engine
                     .current_timing_acknowledgements
-                    .current_epoch(id),
+                    .current_for_slot(&fixture.engine.input_runtime_ownership, id),
                 0,
             );
             assert!(!Arc::ptr_eq(
@@ -336,10 +359,29 @@ mod tests {
                 .is_none()
             );
             // Exercise the genuine timing handler/ACK. This does not assert a Copy ACK.
+            // Its target source must first acquire the reserved Native incarnation, exactly
+            // as the complete Copy publisher does before acknowledging target timing.
+            fixture
+                .engine
+                .input_runtime_ownership
+                .publish_content_lifetime(id, lifetime);
+            fixture.engine.input_runtime_ownership.publish_source(
+                id,
+                &sample,
+                source_rate(&sample),
+                19,
+            );
+            assert!(
+                fixture
+                    .engine
+                    .input_runtime_ownership
+                    .content_key_current(target_key)
+            );
             publication.mark_pending().unwrap();
             publication.epoch.store(future_epoch, Ordering::Release);
             let mut mixer =
                 crate::audio_engine::mixer::RtMixer::new(1, super::super::tests::RATE as f32);
+            mixer.set_input_runtime_ownership(fixture.engine.input_runtime_ownership.clone());
             mixer.set_current_timing_acknowledgements(
                 fixture.engine.current_timing_acknowledgements.clone(),
             );

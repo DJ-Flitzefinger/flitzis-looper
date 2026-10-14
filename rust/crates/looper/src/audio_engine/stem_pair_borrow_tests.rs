@@ -201,11 +201,15 @@ fn public_pair_worker_child_allows_receive_mutable_ping_and_pad1_render() {
         engine.pad_request_ids.lock().unwrap()[1] = 19;
         engine
             .input_runtime_ownership
-            .publish_source(1, &sample, RATE, 19);
+            .publish_test_source(1, &sample, RATE, 19);
         producer
             .lock()
             .unwrap()
-            .push(ControlMessage::LoadSample { id: 1, sample })
+            .push(ControlMessage::LoadSample {
+                id: 1,
+                sample,
+                publication: None,
+            })
             .unwrap();
         assert_eq!(callback.drain(&mut consumer), 1);
     } else {

@@ -32,6 +32,31 @@ if TYPE_CHECKING:
     from flitzis_looper.controller import AppController
 
 
+class _OriginalMidiGesture:
+    """Explicit facade fake; the original Native owner/time are never reconstructed."""
+
+    def __init__(self, received_at_ns: int, *, exclusive: bool) -> None:
+        self.owner_identity = object()
+        self._native_intent = ("midi:note:1:60", received_at_ns, exclusive, self.owner_identity)
+        self.diagnostic_slot = 0
+        self.owner_status = "current"
+
+    def original_owner_status(self) -> str:
+        return self.owner_status
+
+    def is_current(self) -> bool:
+        pytest.fail("Original-window currency cannot recapture the opaque gesture")
+
+    def metadata(self) -> dict[str, object]:
+        pytest.fail("Only Native reads the original mapping/time/exclusive intent")
+
+
+def _captured_api(audio: Mock) -> None:
+    audio.trigger_captured_input_pad = Mock(return_value=False)
+    audio.prepare_captured_input_trigger = Mock(return_value=None)
+    audio.trigger_prepared_input_pad = Mock(return_value=False)
+
+
 def test_learn_saves_midi_mapping_and_refreshes_rust_snapshot(
     controller: AppController,
     audio_engine_mock: Mock,
@@ -1367,6 +1392,9 @@ def test_failed_direct_rust_midi_event_retries_guarded_native_trigger(
     controller.input_mapping.set_enabled(enabled=True)
     controller.project.sample_paths[0] = "samples/foo.wav"
     audio_engine_mock.reset_mock()
+    _captured_api(audio_engine_mock)
+    original = _OriginalMidiGesture(42, exclusive=True)
+    audio_engine_mock.trigger_captured_input_pad.return_value = True
 
     controller.input_mapping._handle_rust_input_event({
         "source": "midi",
@@ -1374,9 +1402,11 @@ def test_failed_direct_rust_midi_event_retries_guarded_native_trigger(
         "action_key": "pad.trigger:0",
         "direct": True,
         "dispatched": False,
+        "captured_trigger": original,
     })
 
-    audio_engine_mock.trigger_input_runtime_pad.assert_called_once_with(0, received_at_ns=None)
+    audio_engine_mock.trigger_captured_input_pad.assert_called_once_with(original)
+    audio_engine_mock.trigger_input_runtime_pad.assert_not_called()
     audio_engine_mock.set_pad_loop_region.assert_not_called()
     audio_engine_mock.play_sample_exclusive.assert_not_called()
 
@@ -1393,28 +1423,40 @@ def test_midi_fallback_preserves_original_timestamp(
 ) -> None:
     controller.input_mapping.set_enabled(enabled=True)
     controller.project.sample_paths[0] = "samples/foo.wav"
+    _captured_api(audio_engine_mock)
+    original = _OriginalMidiGesture(received_at_ns, exclusive=True)
+    observed: list[tuple[object, ...]] = []
+
+    def native_trigger(token: object) -> bool:
+        assert token is original
+        observed.append(original._native_intent)
+        return True
+
+    audio_engine_mock.trigger_captured_input_pad.side_effect = native_trigger
 
     controller.input_mapping._handle_rust_input_event({
         "source": "midi",
         "binding_key": "midi:note:1:60",
         "action_key": "pad.trigger:0",
-        "received_at_ns": received_at_ns,
+        "received_at_ns": "altered diagnostic metadata",
         "direct": direct,
         "dispatched": dispatched,
+        "captured_trigger": original,
     })
 
-    audio_engine_mock.trigger_input_runtime_pad.assert_called_once_with(
-        0, received_at_ns=received_at_ns
-    )
+    audio_engine_mock.trigger_captured_input_pad.assert_called_once_with(original)
+    assert observed == [("midi:note:1:60", received_at_ns, True, original.owner_identity)]
+    audio_engine_mock.trigger_input_runtime_pad.assert_not_called()
     audio_engine_mock.play_sample_exclusive.assert_not_called()
 
 
 @pytest.mark.parametrize("received_at_ns", [-1, True, 1.5, "12", 1 << 64])
-def test_invalid_midi_timestamp_reports_error_and_refuses_guarded_retry(
+def test_invalid_midi_timestamp_without_original_owner_refuses_guarded_retry(
     controller: AppController, audio_engine_mock: Mock, received_at_ns: object
 ) -> None:
     controller.input_mapping.set_enabled(enabled=True)
     controller.project.sample_paths[0] = "samples/foo.wav"
+    _captured_api(audio_engine_mock)
 
     controller.input_mapping._handle_rust_input_event({
         "source": "midi",
@@ -1426,8 +1468,13 @@ def test_invalid_midi_timestamp_reports_error_and_refuses_guarded_retry(
     })
 
     audio_engine_mock.trigger_input_runtime_pad.assert_not_called()
+    audio_engine_mock.trigger_captured_input_pad.assert_not_called()
+    audio_engine_mock.prepare_captured_input_trigger.assert_not_called()
+    audio_engine_mock.trigger_prepared_input_pad.assert_not_called()
     audio_engine_mock.play_sample_exclusive.assert_not_called()
-    assert "received_at_ns" in str(controller.session.input_mapping_error)
+    assert controller.session.input_mapping_error == (
+        "MIDI trigger has no original Native gesture owner"
+    )
 
 
 def test_successful_direct_midi_dispatch_is_not_replayed_even_with_invalid_timestamp(

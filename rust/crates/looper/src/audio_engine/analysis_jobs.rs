@@ -8,8 +8,11 @@ use super::analysis_pcm::{
     key_input_from_f32_le, staging_plan,
 };
 use super::analysis_predictions::validate_predictions;
-use super::complete_context::{CompleteSourceGuard, CompleteSourceReader};
-use super::{PadRequestAdvance, current_pad_request_id, next_pad_request_id, pad_request_matches};
+use super::complete_context::{CompleteSourceReader, NativeAnalysisOwner};
+use super::content_placement::PlacementObservation;
+#[cfg(test)]
+use super::next_pad_request_id;
+use super::{PadRequestAdvance, current_pad_request_id, pad_request_matches};
 use crate::messages::{BackgroundTaskKind, CompleteSourceIdentity, LoaderEvent, SampleBuffer};
 use flitzis_looper_analysis as analysis;
 use pyo3::exceptions::{PyRuntimeError, PyValueError};
@@ -43,7 +46,7 @@ impl OfflineJobs {
     pub fn cancel(&self, pad: Option<usize>) {
         if let Ok(slot) = self.current.lock()
             && let Some(job) = slot.upgrade()
-            && pad.is_none_or(|id| id == job.identity.pad_id)
+            && pad.is_none_or(|id| job.targets_pad(id))
         {
             let _ = job.cancel_request();
         }
@@ -51,9 +54,8 @@ impl OfflineJobs {
 
     pub fn has_pad(&self, id: usize) -> bool {
         self.current.lock().is_ok_and(|slot| {
-            slot.upgrade().is_some_and(|job| {
-                job.identity.pad_id == id && !job.finished.load(Ordering::Acquire)
-            })
+            slot.upgrade()
+                .is_some_and(|job| job.blocks_pad(id) && !job.finished.load(Ordering::Acquire))
         })
     }
 
@@ -70,7 +72,7 @@ impl OfflineJobs {
             .map_err(|_| PyRuntimeError::new_err("offline job lock poisoned"))?;
         let running = slot
             .upgrade()
-            .is_some_and(|job| job.identity.pad_id == id && !job.finished.load(Ordering::Acquire));
+            .is_some_and(|job| job.blocks_pad(id) && !job.finished.load(Ordering::Acquire));
         let result = capture(!running);
         drop(slot);
         result
@@ -145,6 +147,9 @@ impl OfflineJobs {
         };
         // Validate before changing accepted request intent.
         let source_guard = reader.as_ref().and_then(|reader| reader.guard.clone());
+        let request_owner = source_guard
+            .as_ref()
+            .map(|guard| (guard.ownership.clone(), guard.binding));
         let complete_source = sample.residency.as_ref().map(|view| view.source.clone());
         let snapshot = if let Some(reader) = reader {
             if sample
@@ -168,7 +173,22 @@ impl OfflineJobs {
             return Err("offline analysis PCM byte limit exceeded".into());
         }
         let retained_bytes = snapshot.retained_bytes()?;
-        let request_id = next_pad_request_id(&request_ids, id, &prepared_epoch)?;
+        let mut requests = request_ids.lock().map_err(|_| "request lock poisoned")?;
+        if source_guard.as_ref().is_some_and(|guard| !guard.current()) {
+            return Err("complete analysis source assignment changed before admission".into());
+        }
+        let logical_advance = request_owner
+            .as_ref()
+            .map(|(ownership, _)| ownership.prepare_source_request_advance(id))
+            .transpose()?;
+        let advance = PadRequestAdvance::prepare(&mut requests[id], &prepared_epoch)?;
+        if let Some(logical_advance) = logical_advance {
+            logical_advance.commit();
+        }
+        let request_id = advance.commit();
+        let native_owner =
+            source_guard.map(|guard| NativeAnalysisOwner::new(guard, prepared_epoch.clone()));
+        drop(requests);
         let identity = PcmIdentity {
             request_id,
             ..identity
@@ -187,7 +207,8 @@ impl OfflineJobs {
             pcm_retired: AtomicBool::new(false),
             request_ids,
             prepared_epoch,
-            source_guard,
+            native_owner,
+            request_owner,
             complete_source,
             tx,
             cancelled: AtomicBool::new(false),
@@ -284,7 +305,11 @@ struct JobState {
     pcm_retired: AtomicBool,
     request_ids: Arc<Mutex<Vec<u64>>>,
     prepared_epoch: Arc<AtomicU64>,
-    source_guard: Option<CompleteSourceGuard>,
+    native_owner: Option<NativeAnalysisOwner>,
+    request_owner: Option<(
+        Arc<super::input_runtime_binding::InputRuntimeOwnership>,
+        super::input_runtime_binding::InputPadBinding,
+    )>,
     complete_source: Option<Arc<CompleteSourceIdentity>>,
     tx: Sender<LoaderEvent>,
     cancelled: AtomicBool,
@@ -302,6 +327,25 @@ struct JobState {
 }
 
 impl JobState {
+    fn targets_pad(&self, id: usize) -> bool {
+        self.native_owner
+            .as_ref()
+            .map_or(self.identity.pad_id == id, |owner| owner.blocks_pad(id))
+    }
+
+    fn blocks_pad(&self, id: usize) -> bool {
+        self.native_owner
+            .as_ref()
+            .map_or(self.identity.pad_id == id, |owner| owner.blocks_pad(id))
+    }
+
+    fn owned_event(&self, event: LoaderEvent) -> LoaderEvent {
+        match self.native_owner.as_ref() {
+            Some(owner) => owner.event(event),
+            None => event,
+        }
+    }
+
     fn cancel_request(&self) -> Result<(), String> {
         // Serialize cancellation against publication. Invalidating the request
         // also rejects a queued completion if cancellation wins the race.
@@ -315,11 +359,31 @@ impl JobState {
             .request_ids
             .lock()
             .map_err(|_| "request lock poisoned")?;
-        if !self.finished.load(Ordering::Acquire)
-            && let Some(current) = requests.get_mut(self.identity.pad_id)
-            && *current == self.identity.request_id
-        {
-            PadRequestAdvance::prepare(current, &self.prepared_epoch)?.commit();
+        if !self.finished.load(Ordering::Acquire) {
+            let target = self
+                .native_owner
+                .as_ref()
+                .map_or(Some(self.identity.pad_id), |owner| {
+                    match owner.observe_control() {
+                        PlacementObservation::Current(snapshot) => Some(snapshot.slot()),
+                        _ => None,
+                    }
+                });
+            if let Some(id) = target
+                && let Some(current) = requests.get_mut(id)
+                && (self.native_owner.is_some() || *current == self.identity.request_id)
+            {
+                let logical_advance = self
+                    .request_owner
+                    .as_ref()
+                    .map(|(ownership, _)| ownership.prepare_source_request_advance(id))
+                    .transpose()?;
+                let advance = PadRequestAdvance::prepare(current, &self.prepared_epoch)?;
+                if let Some(logical_advance) = logical_advance {
+                    logical_advance.commit();
+                }
+                advance.commit();
+            }
         }
         Ok(())
     }
@@ -333,25 +397,26 @@ impl JobState {
     fn cancelled(&self) -> bool {
         self.cancelled.load(Ordering::Acquire)
             || self
-                .source_guard
+                .native_owner
                 .as_ref()
                 .is_some_and(|guard| !guard.current())
-            || !pad_request_matches(
-                &self.request_ids,
-                self.identity.pad_id,
-                self.identity.request_id,
-            )
+            || (self.native_owner.is_none()
+                && !pad_request_matches(
+                    &self.request_ids,
+                    self.identity.pad_id,
+                    self.identity.request_id,
+                ))
     }
 
     fn progress(&self, stage: &str) {
         if !self.cancelled() && !self.finished.load(Ordering::Acquire) {
-            let _ = self.tx.send(LoaderEvent::TaskProgress {
+            let _ = self.tx.send(self.owned_event(LoaderEvent::TaskProgress {
                 id: self.identity.pad_id,
                 request_id: self.identity.request_id,
                 task: BackgroundTaskKind::OfflineAnalysis,
                 percent: 0.0,
                 stage: stage.to_owned(),
-            });
+            }));
         }
     }
 
@@ -551,20 +616,23 @@ impl JobState {
             .map_err(|_| "request lock poisoned")?;
         let accepted = !self.cancelled.load(Ordering::Acquire)
             && self
-                .source_guard
+                .native_owner
                 .as_ref()
                 .is_none_or(|guard| guard.current())
-            && requests.get(self.identity.pad_id) == Some(&self.identity.request_id);
+            && (self.native_owner.is_some()
+                || requests.get(self.identity.pad_id) == Some(&self.identity.request_id));
         if accepted {
-            let _ = self.tx.send(LoaderEvent::OfflineAnalysisCompleted {
-                id: self.identity.pad_id,
-                request_id: self.identity.request_id,
-                result_json: if legacy {
-                    result.to_owned()
-                } else {
-                    parsed.to_string()
-                },
-            });
+            let _ = self
+                .tx
+                .send(self.owned_event(LoaderEvent::OfflineAnalysisCompleted {
+                    id: self.identity.pad_id,
+                    request_id: self.identity.request_id,
+                    result_json: if legacy {
+                        result.to_owned()
+                    } else {
+                        parsed.to_string()
+                    },
+                }));
         }
         self.finished.store(true, Ordering::Release);
         self.release_reservation();

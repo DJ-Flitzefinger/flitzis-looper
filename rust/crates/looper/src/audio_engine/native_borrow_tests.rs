@@ -197,7 +197,13 @@ pub(super) fn engine_at(
     assert_eq!(callback.drain(), 2);
     let mut success = [false; 2];
     wait_until(|| {
-        while let Ok(event) = engine.loader_rx.lock().unwrap().try_recv() {
+        while let Ok(event) = engine
+            .loader_rx
+            .lock()
+            .unwrap()
+            .try_recv()
+            .map(LoaderEvent::into_test_payload)
+        {
             match event {
                 LoaderEvent::Success {
                     id: 0, request_id, ..

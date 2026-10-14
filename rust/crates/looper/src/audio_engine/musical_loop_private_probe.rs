@@ -172,6 +172,7 @@ fn publish_actual_acceptance(
         0,
         sample.clone(),
         LoadedSourcePublication {
+            placement: engine.input_runtime_ownership.slot_snapshot(0).unwrap(),
             cold: false,
             cold_epoch: None,
             cold_adoption: None,
@@ -191,7 +192,10 @@ fn publish_actual_acceptance(
     .unwrap();
     drop(generations);
     drop(digests);
-    let ControlMessage::LoadSample { id, sample: loaded } = consumer.pop().unwrap() else {
+    let ControlMessage::LoadSample {
+        id, sample: loaded, ..
+    } = consumer.pop().unwrap()
+    else {
         panic!("native source publication must precede timing");
     };
     mixer.load_sample(id, loaded);
@@ -241,8 +245,14 @@ fn publish_actual_acceptance(
     let mut guard = TimingAdoptionGuard::new(&binding, TimingIntent::Automatic).unwrap();
     let adoption_ticket = guard.issue_ticket().unwrap();
     let ticket = ConstantTimingTicket {
+        placement: engine.input_runtime_ownership.binding_placement(0),
+        ownership: engine.input_runtime_ownership.clone(),
         id: 0,
         request_id: original_job.request_id,
+        request_incarnation: timing_request_incarnation(
+            &engine.input_runtime_ownership,
+            engine.input_runtime_ownership.binding_placement(0),
+        ),
         source_generation: original_job.source_generation,
         sample_rate_hz: RATE,
         source_digest: text(gate, "source_sha256"),
@@ -263,7 +273,9 @@ fn publish_actual_acceptance(
     };
     assert!(mixer.publish_constant_timing_rt(id, timing, &mut ImmediateAudioBufferRetirement));
     assert_eq!(ticket.publication_status().unwrap(), "accepted");
-    let epoch = engine.current_timing_acknowledgements.current_epoch(0);
+    let epoch = engine
+        .current_timing_acknowledgements
+        .current_for_slot(&engine.input_runtime_ownership, 0);
     assert_ne!(epoch, 0);
     drop(ticket);
     Python::attach(|py| {
@@ -683,6 +695,7 @@ fn private_actual_wav_pcm_budget_capture_prepare_publish_export() {
         0,
         sample.clone(),
         LoadedSourcePublication {
+            placement: engine.input_runtime_ownership.slot_snapshot(0).unwrap(),
             cold: false,
             cold_epoch: None,
             cold_adoption: None,
@@ -702,7 +715,10 @@ fn private_actual_wav_pcm_budget_capture_prepare_publish_export() {
     .unwrap();
     drop(generations);
     drop(digests);
-    let ControlMessage::LoadSample { id, sample: loaded } = consumer.pop().unwrap() else {
+    let ControlMessage::LoadSample {
+        id, sample: loaded, ..
+    } = consumer.pop().unwrap()
+    else {
         panic!("native source publication must precede timing");
     };
     mixer.load_sample(id, loaded);

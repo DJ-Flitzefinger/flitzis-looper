@@ -71,6 +71,15 @@ class GlobalPlaybackController:
 
     def poll(self) -> None:
         """Observe completion without projecting pending/rejected work as effective."""
+        deferred_ids = getattr(self._transport, "_pair_deferred_sample_ids", ())
+        if self._pending is not None and (
+            self._pending.restore_ids | self._pending.start_ids
+        ).intersection(deferred_ids):
+            return
+        if self._deferred is not None and any(
+            sample_id in deferred_ids for sample_id, _, _ in self._deferred.sources
+        ):
+            return
         if self._pending is None:
             self._poll_deferred()
         pending = self._pending

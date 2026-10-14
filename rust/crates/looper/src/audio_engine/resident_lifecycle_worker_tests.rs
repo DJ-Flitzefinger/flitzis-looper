@@ -85,7 +85,7 @@ fn complete_mixer(mono: &[f32], start: usize, end: usize) -> RtMixer {
     let mut mixer = RtMixer::new(2, 48_000.0);
     let ownership =
         Arc::new(crate::audio_engine::input_runtime_binding::InputRuntimeOwnership::tracked());
-    ownership.publish_source(0, &source, 48_000, 1);
+    ownership.publish_test_source(0, &source, 48_000, 1);
     mixer.set_input_runtime_ownership(ownership);
     mixer.load_sample(0, source);
     mixer.set_pad_loop_region(0, start as f64 / 48_000.0, Some(end as f64 / 48_000.0));

@@ -1028,7 +1028,7 @@ impl Playback {
         let end = defaults.end_frame.unwrap_or(fixture.complete.frame_count());
         let mut reference = Box::new(RtMixer::new(2, RATE as f32));
         let ownership = Arc::new(input_runtime_binding::InputRuntimeOwnership::tracked());
-        ownership.publish_source(0, &fixture.complete, RATE, 1);
+        ownership.publish_test_source(0, &fixture.complete, RATE, 1);
         reference.set_input_runtime_ownership(ownership);
         reference.load_sample(0, fixture.complete.clone());
         reference.set_loop_region_frames(0, start, defaults.end_frame);
@@ -1875,7 +1875,7 @@ fn reject_predecessor_edits(fixture: &Fixture, generation: u64) {
         let engine = fixture.engine.borrow(py);
         (
             engine.prepared_source_epochs[0].load(Ordering::Acquire),
-            engine.input_runtime_ownership.authority[0].load(Ordering::Acquire),
+            engine.input_runtime_ownership.authority_revision(0),
         )
     });
     for result in [
@@ -1908,7 +1908,7 @@ fn reject_predecessor_edits(fixture: &Fixture, generation: u64) {
             before,
             (
                 engine.prepared_source_epochs[0].load(Ordering::Acquire),
-                engine.input_runtime_ownership.authority[0].load(Ordering::Acquire)
+                engine.input_runtime_ownership.authority_revision(0)
             )
         );
     });

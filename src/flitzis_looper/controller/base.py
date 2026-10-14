@@ -8,6 +8,8 @@ if TYPE_CHECKING:
 
 
 class BaseController:
+    _pair_deferred_sample_ids: frozenset[int] = frozenset()
+
     def __init__(
         self,
         project: ProjectState,

@@ -676,7 +676,7 @@ fn assert_complete_window(sample: &SampleBuffer, fixture: &Fixture, key_lock: bo
 fn oracle_after_public_birth(fixture: &Fixture, key_lock: bool) -> Playback {
     let mut reference = Box::new(RtMixer::new(2, RATE as f32));
     let ownership = Arc::new(input_runtime_binding::InputRuntimeOwnership::tracked());
-    ownership.publish_source(0, &fixture.complete, RATE, 1);
+    ownership.publish_test_source(0, &fixture.complete, RATE, 1);
     reference.set_input_runtime_ownership(ownership.clone());
     reference.load_sample(0, fixture.complete.clone());
     reference.set_loop_region_frames(0, 0, Some(COMPLETE_FRAMES));
@@ -690,12 +690,13 @@ fn oracle_after_public_birth(fixture: &Fixture, key_lock: bool) -> Playback {
             true,
             own_request,
             input_runtime_binding::InputPadBinding {
+                placement: ownership.binding_placement(0),
                 resident: fixture.complete.resident_binding(),
                 source_address: fixture.complete.source_address(),
                 sample_count: fixture.complete.source_sample_count(),
                 channels: fixture.complete.channels,
                 sample_rate_hz: RATE,
-                authority_revision: ownership.authority[0].load(Ordering::Acquire),
+                authority_revision: ownership.authority_revision(0),
                 runtime_revision: 0,
                 accepted: None,
             },

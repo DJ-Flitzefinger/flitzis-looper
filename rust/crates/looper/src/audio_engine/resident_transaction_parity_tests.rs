@@ -7,6 +7,7 @@ use crate::audio_engine::buffer_retirement::{
     AudioBufferRetirement, AudioBufferRetirementWorker, RtAudioBufferRetirement,
     create_audio_buffer_retirement,
 };
+use crate::audio_engine::input_runtime_binding::SourcePublication;
 use crate::messages::{ResidentControlIntent, ResidentTransaction};
 use std::sync::atomic::{AtomicBool, AtomicU8};
 
@@ -16,6 +17,10 @@ struct RetirementGate {
 }
 
 impl AudioBufferRetirement for RetirementGate {
+    fn retire_source_publication(&mut self, publication: SourcePublication) {
+        self.actual.retire_source_publication(publication);
+    }
+
     fn retire_resident_capture(
         &mut self,
         value: Arc<crate::audio_engine::resident_seek::ResidentSeekCapture>,
@@ -139,7 +144,7 @@ impl NativeQueue {
 fn plain(sample: &SampleBuffer) -> RtMixer {
     let mut mixer = RtMixer::new(1, RATE as f32);
     let ownership = Arc::new(InputRuntimeOwnership::tracked());
-    ownership.publish_source(0, sample, RATE, 1);
+    ownership.publish_test_source(0, sample, RATE, 1);
     mixer.set_input_runtime_ownership(ownership);
     mixer.load_sample(0, sample.clone());
     mixer.set_pad_loop_region(
@@ -149,6 +154,27 @@ fn plain(sample: &SampleBuffer) -> RtMixer {
     );
     assert!(mixer.play_sample_at_output_frame(0, 1.0, 0));
     mixer
+}
+
+fn tagged_bank_replacement(mixer: &RtMixer, sample: &SampleBuffer) -> SourcePublication {
+    let ownership = &mixer.input_runtime_ownership;
+    let before = ownership.slot_snapshot(0).unwrap();
+    let lifetime = crate::audio_engine::content_lifetime::reserve().unwrap();
+    assert_ne!(before.lifetime(), 0);
+    assert_ne!(before.lifetime(), lifetime);
+    let write = ownership.prepare_slot_write(before, lifetime).unwrap();
+    let authority = ownership.next_authority(0).unwrap();
+    let publication = ownership
+        .publish_source_write(&write, sample, RATE, 2, authority, None, false, || true)
+        .unwrap();
+    assert_eq!(publication.placement.cell(), before.cell());
+    assert_eq!(
+        publication.placement.binding_epoch(),
+        before.binding_epoch() + 1
+    );
+    assert_eq!(publication.placement.lifetime(), lifetime);
+    assert!(publication.current(sample, RATE));
+    publication
 }
 
 fn wait_released<T: ?Sized>(backing: &std::sync::Weak<T>) {
@@ -728,12 +754,11 @@ fn native_previous_complete_voice_seek_keeps_new_bank_window_and_clamps_to_origi
         .window(100, 300, 1, ResidentContext::FiniteLoop)
         .unwrap();
     for mixer in [&mut actual, &mut reference] {
-        mixer
-            .input_runtime_ownership
-            .publish_source(0, &next_bank, RATE, 2);
+        let publication = tagged_bank_replacement(mixer, &next_bank);
         apply(
             mixer,
             ControlMessage::LoadSample {
+                publication: Some(publication),
                 id: 0,
                 sample: next_bank.clone(),
             },
@@ -829,12 +854,11 @@ fn native_bank_replacement_keeps_old_stems_transition_and_retires_voice_owners_o
     let next_bank = replacement
         .window(100, 300, 1, ResidentContext::FiniteLoop)
         .unwrap();
-    actual
-        .input_runtime_ownership
-        .publish_source(0, &next_bank, RATE, 2);
+    let publication = tagged_bank_replacement(&actual, &next_bank);
     queue
         .producer
         .push(ControlMessage::LoadSample {
+            publication: Some(publication),
             id: 0,
             sample: next_bank,
         })
@@ -957,12 +981,11 @@ fn native_old_complete_stem_seek_reads_original_knots_with_new_bank_selection() 
     let next_bank = replacement
         .window(100, 300, 1, ResidentContext::FiniteLoop)
         .unwrap();
-    actual
-        .input_runtime_ownership
-        .publish_source(0, &next_bank, RATE, 2);
+    let publication = tagged_bank_replacement(&actual, &next_bank);
     queue
         .producer
         .push(ControlMessage::LoadSample {
+            publication: Some(publication),
             id: 0,
             sample: next_bank,
         })

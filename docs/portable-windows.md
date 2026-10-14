@@ -112,13 +112,17 @@ paths or FFmpeg must review the BAT, `scripts/portable`, focused tests and this
 document together. Keep the Native relocation contract authoritative; installer
 code must not copy sample trees or rewrite JSON references independently.
 
-The runtime activation preflight also checks the complete Native pad Copy
-capture/prepare/publish/reconcile/finish/cancel interface and resident-admission protocol
-version 1, the budget setter/status API and the independent preload-interest
-parameter. This checks the built Release class without constructing an engine or
-opening an audio device; an older incompatible extension cannot activate the
-current Python controls. The source installer builds this API from the selected
-main checkout through its existing private-runtime pipeline.
+The runtime activation preflight checks the complete Native pad Copy and internal
+Pair capture/prepare/publish/reconcile/finish/cancel interfaces, including opaque
+Pair acknowledgement validation and fresh recovery acceptance. It also checks
+original-ticket Hold release, captured MIDI trigger/window admission, owned pad
+feedback, resident-admission protocol version 1, the budget setter/status API and
+the independent preload-interest parameter. These checks inspect the built Release
+class without constructing an engine or opening an audio device; an older
+incompatible extension cannot activate the current Python controls. The source
+installer builds these APIs from the selected main checkout through its existing
+private-runtime pipeline. The installer BAT and dependency/toolchain inputs do not
+need a new installation stage for these control APIs.
 
 Focused missing-tool, deep-path/SUBST, DLL isolation, unchanged-main model repair,
 update/failure/recovery, legacy migration, ownership and actual-process lifetime

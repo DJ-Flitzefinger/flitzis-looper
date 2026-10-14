@@ -44,6 +44,65 @@ class Ticket:
         return True
 
 
+class CapturedMidiGesture:
+    """Explicit opaque Native facade fixture, with no numeric recapture authority."""
+
+    def __init__(self, received_at_ns: int) -> None:
+        self.owner_identity = object()
+        self.native_intent = ("midi:note:1:60", received_at_ns, True, self.owner_identity)
+        self.diagnostic_slot: int | None = 0
+        self.owner_status = "current"
+
+    def original_owner_status(self) -> str:
+        return self.owner_status
+
+    def is_current(self) -> bool:
+        pytest.fail("Original-window currency cannot replace the own WindowACK launch route")
+
+    def metadata(self) -> dict[str, object]:
+        pytest.fail("Only Native reads the original MIDI mapping, timestamp and exclusive intent")
+
+
+def captured_midi(audio: Mock, ticket: Ticket, received_at_ns: int) -> CapturedMidiGesture:
+    original = CapturedMidiGesture(received_at_ns)
+    audio.trigger_captured_input_pad = Mock(return_value=False)
+    audio.prepare_captured_input_trigger = Mock(return_value=ticket)
+    audio.trigger_prepared_input_pad = Mock(return_value=False)
+    return original
+
+
+def midi_event(original: CapturedMidiGesture) -> dict[str, object]:
+    return {
+        "source": "midi",
+        "binding_key": "midi:note:1:60",
+        "action_key": "pad.trigger:0",
+        "received_at_ns": "untrusted diagnostic metadata",
+        "direct": True,
+        "dispatched": False,
+        "captured_trigger": original,
+    }
+
+
+def native_cancel_captured_launch(
+    audio: Mock, original: CapturedMidiGesture, ticket: Ticket
+) -> None:
+    """Fake only the original Native cancellation result, never controller authority."""
+
+    def cancel_owned(sample_id: int) -> bool:
+        assert sample_id == original.diagnostic_slot
+        original.owner_status = "superseded"
+        ticket.cancel_launch()
+        return True
+
+    def cancel_all_owned() -> list[int]:
+        cancel_owned(0)
+        return [0]
+
+    audio.cancel_pad_launches.side_effect = cancel_owned
+    audio.cancel_all_launches.side_effect = cancel_all_owned
+    audio.admitted_launch_ids.return_value = [0]
+
+
 def resident(controller: AppController, audio: Mock) -> Ticket:
     controller.project.sample_paths[0] = "samples/source.wav"
     controller.project.sample_durations[0] = 12.0
@@ -558,28 +617,32 @@ def test_post_ack_launch_capacity_retry_is_bounded_and_preserves_input_time(
     assert controller.transport.residency.status(0) == (None, message)
 
 
-def test_midi_unprepared_context_uses_same_ack_route_and_fresh_guard(
+def test_midi_unprepared_context_uses_own_ack_route_and_original_guard(
     controller: AppController, audio_engine_mock: Mock
 ) -> None:
     ticket = resident(controller, audio_engine_mock)
     controller.input_mapping.set_enabled(enabled=True)
-    audio_engine_mock.trigger_input_runtime_pad.side_effect = [False, True]
-    controller.input_mapping._handle_rust_input_event({
-        "source": "midi",
-        "binding_key": "midi:note:1:60",
-        "action_key": "pad.trigger:0",
-        "received_at_ns": 456,
-        "direct": True,
-        "dispatched": False,
-    })
-    assert audio_engine_mock.prepare_resident_control.call_count == 1
+    original = captured_midi(audio_engine_mock, ticket, 456)
+    audio_engine_mock.trigger_prepared_input_pad.return_value = True
+    controller.input_mapping._handle_rust_input_event(midi_event(original))
+    residency = controller.transport.residency
+    retained = residency._captured_triggers[id(original)]
+    assert retained.trigger is original
+    residency.poll()
+    audio_engine_mock.prepare_captured_input_trigger.assert_called_once_with(original)
+    assert retained.ticket is ticket
+    audio_engine_mock.prepare_resident_control.assert_not_called()
     audio_engine_mock.play_sample_exclusive.assert_not_called()
     audio_engine_mock.play_resident_control.assert_not_called()
-    assert audio_engine_mock.trigger_input_runtime_pad.call_count == 1
+    audio_engine_mock.trigger_captured_input_pad.assert_called_once_with(original)
+    audio_engine_mock.trigger_prepared_input_pad.assert_not_called()
+    audio_engine_mock.trigger_input_runtime_pad.assert_not_called()
     ticket.status = "accepted"
+    ticket.current = False  # Its own accepted window does not recapture an old original window.
     controller.transport.residency.poll()
-    assert audio_engine_mock.trigger_input_runtime_pad.call_count == 2
-    audio_engine_mock.trigger_input_runtime_pad.assert_called_with(0, received_at_ns=456)
+    audio_engine_mock.trigger_prepared_input_pad.assert_called_once_with(original, ticket)
+    assert original.native_intent == ("midi:note:1:60", 456, True, original.owner_identity)
+    assert not residency._captured_triggers
 
 
 def test_global_start_waits_for_pending_region_without_splitting_native_batch(
@@ -600,31 +663,45 @@ def test_global_start_waits_for_pending_region_without_splitting_native_batch(
 
 
 @pytest.mark.parametrize("ready", [False, True])
-def test_midi_post_ack_pressure_retries_fresh_guard_with_same_timestamp(
+def test_midi_post_ack_pressure_retries_original_guard_with_same_timestamp(
     controller: AppController, audio_engine_mock: Mock, *, ready: bool
 ) -> None:
     ticket = resident(controller, audio_engine_mock)
     controller.input_mapping.set_enabled(enabled=True)
-    audio_engine_mock.trigger_input_runtime_pad.side_effect = (
-        [False, False, True] if ready else None
-    )
-    audio_engine_mock.trigger_input_runtime_pad.return_value = False
-    controller.input_mapping._handle_rust_input_event({
-        "source": "midi",
-        "binding_key": "midi:note:1:60",
-        "action_key": "pad.trigger:0",
-        "received_at_ns": 456,
-        "direct": True,
-        "dispatched": False,
-    })
+    original = captured_midi(audio_engine_mock, ticket, 456)
+    outcomes = iter([False, True]) if ready else None
+    observed: list[tuple[object, ...]] = []
+
+    def native_launch(token: object, own_window: object) -> bool:
+        assert token is original
+        assert own_window is ticket
+        observed.append(original.native_intent)
+        return next(outcomes) if outcomes is not None else False
+
+    audio_engine_mock.trigger_prepared_input_pad.side_effect = native_launch
+    controller.input_mapping._handle_rust_input_event(midi_event(original))
+    controller.transport.residency.poll()
+    pending = controller.transport.residency._captured_triggers[id(original)]
+    assert pending.ticket is ticket
     ticket.status = "accepted"
     for _ in range(20):
         controller.transport.residency.poll()
-    assert audio_engine_mock.trigger_input_runtime_pad.call_count == (3 if ready else 9)
-    assert all(
-        call.kwargs["received_at_ns"] == 456
-        for call in audio_engine_mock.trigger_input_runtime_pad.call_args_list
-    )
+    audio_engine_mock.trigger_captured_input_pad.assert_called_once_with(original)
+    assert audio_engine_mock.trigger_prepared_input_pad.call_count == (2 if ready else 8)
+    assert observed == [original.native_intent] * (2 if ready else 8)
+    assert original.native_intent == ("midi:note:1:60", 456, True, original.owner_identity)
+    if ready:
+        assert not controller.transport.residency._captured_triggers
+    else:
+        assert controller.transport.residency._captured_triggers[id(original)] is pending
+        assert pending.ticket is ticket
+        assert pending.cancel_requested
+        assert ticket.launch_cancelled
+        original.owner_status = "superseded"
+        controller.transport.residency.poll()
+        assert not controller.transport.residency._captured_triggers
+    audio_engine_mock.prepare_captured_input_trigger.assert_called_once_with(original)
+    audio_engine_mock.trigger_input_runtime_pad.assert_not_called()
     audio_engine_mock.play_sample_exclusive.assert_not_called()
     audio_engine_mock.play_resident_control.assert_not_called()
 
@@ -833,19 +910,22 @@ def test_stop_after_ack_revokes_queued_launch_before_active_feedback(
         controller.transport.playback.trigger_pad(0, received_at_ns=123)
     else:
         controller.input_mapping.set_enabled(enabled=True)
-        audio_engine_mock.trigger_input_runtime_pad.side_effect = [False, True]
-        controller.input_mapping._handle_rust_input_event({
-            "source": "midi",
-            "binding_key": "midi:note:1:60",
-            "action_key": "pad.trigger:0",
-            "received_at_ns": 123,
-            "direct": True,
-            "dispatched": False,
-        })
+        original = captured_midi(audio_engine_mock, ticket, 123)
+        audio_engine_mock.trigger_prepared_input_pad.return_value = True
+        controller.input_mapping._handle_rust_input_event(midi_event(original))
+        controller.transport.residency.poll()
+        audio_engine_mock.prepare_captured_input_trigger.assert_called_once_with(original)
+        native_cancel_captured_launch(audio_engine_mock, original, ticket)
     ticket.status = "accepted"
     controller.transport.residency.poll()
     assert controller.transport.residency.status(0) == (None, None)
     assert not controller.session.active_sample_ids
+    if input_kind == "midi":
+        audio_engine_mock.trigger_captured_input_pad.assert_called_once_with(original)
+        audio_engine_mock.trigger_prepared_input_pad.assert_called_once_with(original, ticket)
+        audio_engine_mock.trigger_input_runtime_pad.assert_not_called()
+        audio_engine_mock.play_resident_control.assert_not_called()
+        assert not controller.transport.residency._captured_triggers
     if stop == "pad":
         controller.transport.playback.stop_pad(0)
         audio_engine_mock.cancel_pad_launches.assert_called_once_with(0)
@@ -857,6 +937,8 @@ def test_stop_after_ack_revokes_queued_launch_before_active_feedback(
         bindings = audio_engine_mock.stop_global_playback_batch.call_args.args[0]
         assert [binding.metadata()["pad_id"] for binding in bindings] == [0]
     assert ticket.launch_cancelled
+    if input_kind == "midi":
+        assert original.owner_status == "superseded"
     assert ticket.status == "accepted"
     assert ticket.is_current()
     assert not controller.transport.residency._launched

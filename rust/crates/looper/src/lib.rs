@@ -41,7 +41,17 @@ mod flitzis_looper_audio {
     #[pymodule_export]
     use super::audio_engine::CapturedPadCopy;
     #[pymodule_export]
+    use super::audio_engine::CapturedPadPair;
+    #[pymodule_export]
+    use super::audio_engine::LoaderEventDelivery;
+    #[pymodule_export]
     use super::audio_engine::PadCopyTicket;
+    #[pymodule_export]
+    use super::audio_engine::PadPairAcknowledgement;
+    #[pymodule_export]
+    use super::audio_engine::PadPairTicket;
+    #[pymodule_export]
+    use super::audio_engine::RecoveredPairAcceptance;
 
     #[pymodule_export]
     use super::audio_engine::ProjectAssetLease;
@@ -94,6 +104,10 @@ mod flitzis_looper_audio {
     #[pymodule_export]
     use super::audio_engine::SavedConstantTimingTicket;
 
+    #[pymodule_export]
+    use super::audio_engine::CapturedInputPadTrigger;
+    #[pymodule_export]
+    use super::audio_engine::HoldActionTicket;
     #[pymodule_export]
     use super::audio_engine::InputRuntimePadBinding;
 

@@ -92,14 +92,16 @@ def test_app_binds_copy_to_existing_assets_runner_and_callback(controller: AppCo
     assert controller.stems._pad_edit_guard == controller.ensure_not_copy_target
     assert (
         controller.transport._global_key_lock_edit_guard
-        == arrangement.ensure_global_key_lock_edit_allowed
+        == controller._ensure_global_key_lock_edit_allowed
     )
 
 
-def test_copy_poll_runs_after_runtime_events_and_before_frame_controllers(
+def test_runtime_poll_settles_pairs_and_copy_before_observers_and_frame_controllers(
     controller: AppController, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     events: list[str] = []
+    monkeypatch.setattr(controller.transport.waveform, "poll_holds", lambda: events.append("hold"))
+    monkeypatch.setattr(controller.pairs, "poll", lambda: events.append("pair"))
     monkeypatch.setattr(controller.loader, "poll_loader_events", lambda: events.append("loader"))
     monkeypatch.setattr(controller.material_migration, "poll", lambda: events.append("migration"))
     monkeypatch.setattr(controller, "_poll_audio_messages", lambda: events.append("audio"))
@@ -109,14 +111,24 @@ def test_copy_poll_runs_after_runtime_events_and_before_frame_controllers(
 
     controller.poll_runtime_events()
 
-    assert events == ["loader", "migration", "audio", "timing", "residency", "copy"]
+    assert events == [
+        "hold",
+        "pair",
+        "copy",
+        "loader",
+        "migration",
+        "audio",
+        "timing",
+        "residency",
+        "copy",
+    ]
     events.clear()
     for component in controller._controllers:
         monkeypatch.setattr(component, "on_frame_render", lambda: events.append("frame"))
 
     controller.on_frame_render()
 
-    assert events == ["copy", "frame", "frame", "frame", "frame", "frame"]
+    assert events == ["pair", "copy", "frame", "frame", "frame", "frame", "frame"]
 
 
 @pytest.mark.parametrize("action", ["gain", "eq", "mask", "mode", "delete", "generate"])
@@ -166,14 +178,22 @@ def test_target_guard_precedes_current_source_generation_capture(
     audio_engine_mock.current_input_runtime_pad_binding.assert_not_called()
 
 
+@pytest.mark.parametrize("reservation", ["arrangement", "pairs"])
 def test_global_key_lock_guard_precedes_generation_capture_and_project_change(
-    controller: AppController, audio_engine_mock: Mock, monkeypatch: pytest.MonkeyPatch
+    controller: AppController,
+    audio_engine_mock: Mock,
+    monkeypatch: pytest.MonkeyPatch,
+    reservation: str,
 ) -> None:
     def reserved_inheritance() -> None:
         message = "Key Lock inheritance is reserved by a pending Copy"
         raise RuntimeError(message)
 
-    controller.transport.bind_global_key_lock_edit_guard(reserved_inheritance)
+    monkeypatch.setattr(
+        getattr(controller, reservation),
+        "ensure_global_key_lock_edit_allowed",
+        reserved_inheritance,
+    )
     capture = Mock()
     monkeypatch.setattr(
         controller.transport.global_params, "_capture_inherited_generations", capture

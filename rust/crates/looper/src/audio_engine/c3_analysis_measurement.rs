@@ -74,7 +74,15 @@ pub(super) fn analyze(engine: &Py<AudioEngine>, root: &Path, expected: &Value) -
         let deadline = Instant::now() + Duration::from_secs(3600);
         let mut stages = Vec::new();
         loop {
-            let event = Python::attach(|py| engine.borrow(py).loader_rx.lock().unwrap().try_recv());
+            let event = Python::attach(|py| {
+                engine
+                    .borrow(py)
+                    .loader_rx
+                    .lock()
+                    .unwrap()
+                    .try_recv()
+                    .map(LoaderEvent::into_test_payload)
+            });
             if let Ok(event) = event {
                 match event {
                     LoaderEvent::TaskSuccess {

@@ -72,7 +72,7 @@ impl ModeOracle {
         .with_complete_source(48_000);
         let mut complete = Box::new(RtMixer::new(2, 48_000.0));
         let ownership = Arc::new(InputRuntimeOwnership::tracked());
-        ownership.publish_source(0, &full, 48_000, 1);
+        ownership.publish_test_source(0, &full, 48_000, 1);
         complete.set_input_runtime_ownership(ownership.clone());
         complete.load_sample(0, full);
         complete.set_pad_loop_region(0, 24.0 / 48_000.0, Some(96.0 / 48_000.0));
@@ -86,6 +86,12 @@ impl ModeOracle {
         }
         let raw = RawChronology::new(ratio, false);
         let dry_warm_remaining = if initial { raw.block_size() } else { 0 };
+        // Observe the genuine completed initial start before later STOP/mode gestures.
+        assert!(matches!(
+            loaded.callback.feedback_rx.pop(),
+            Ok(AudioMessage::SampleStarted { id: 0 })
+        ));
+        assert!(loaded.callback.feedback_rx.is_empty());
         Self {
             loaded,
             complete,
@@ -173,6 +179,11 @@ impl ModeOracle {
             .push(ControlMessage::StopSample { id: 0 })
             .unwrap();
         assert_eq!(self.loaded.callback.drain(&mut self.loaded.consumer), 1);
+        assert!(matches!(
+            self.loaded.callback.feedback_rx.pop(),
+            Ok(AudioMessage::SampleStopped { id: 0 })
+        ));
+        assert!(self.loaded.callback.feedback_rx.is_empty());
         self.complete.stop_sample(0);
         assert!(
             !self
@@ -243,6 +254,11 @@ impl ModeOracle {
                 .push(ControlMessage::StopSample { id: 0 })
                 .unwrap();
             assert_eq!(self.loaded.callback.drain(&mut self.loaded.consumer), 1);
+            assert!(matches!(
+                self.loaded.callback.feedback_rx.pop(),
+                Ok(AudioMessage::SampleStopped { id: 0 })
+            ));
+            assert!(self.loaded.callback.feedback_rx.is_empty());
             let status = self
                 .loaded
                 .engine
@@ -570,7 +586,7 @@ impl ModeOracle {
         }
         .with_complete_source(48_000);
         self.complete_ownership
-            .publish_source(0, &replacement, 48_000, 2);
+            .publish_test_source(0, &replacement, 48_000, 2);
         self.complete.load_sample(0, replacement);
         self.complete
             .set_pad_loop_region(0, 100.0 / 48_000.0, Some(300.0 / 48_000.0));
@@ -1243,6 +1259,11 @@ fn actual_neutral_origin_queued_speed_and_bpm_targets_guard_first_wet_and_failur
                 if bpm {
                     parameters
                         .push(ControlParameterMessage::SetLegacyPadBpm {
+                            placement: oracle
+                                .loaded
+                                .engine
+                                .input_runtime_ownership
+                                .slot_snapshot(0),
                             id: 0,
                             bpm: Some(120.0),
                             through_epoch: 0,

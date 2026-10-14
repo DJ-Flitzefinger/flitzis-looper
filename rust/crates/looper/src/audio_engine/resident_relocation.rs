@@ -4,6 +4,8 @@ use super::AudioEngine;
 use super::cold_store::CommittedColdLease;
 use super::constant_timing::CurrentTimingAcknowledgements;
 use super::constants::NUM_SAMPLES;
+use super::content_placement::{PlacementError, PlacementObservation, SlotSnapshot};
+use super::input_mapping::CapturedInputPadTrigger;
 use super::input_runtime_binding::{
     self, InputPadBinding, InputRuntimeOwnership, InputRuntimePadBinding,
 };
@@ -22,6 +24,53 @@ use std::sync::{
 use std::time::{Duration, Instant};
 
 const ADOPTION_DEADLINE: Duration = Duration::from_secs(30);
+
+/// Preparation owns its result through a control mirror gap. This off-thread
+/// clock excludes only time waiting on the original key's Pending placement.
+#[derive(Default)]
+pub(super) struct ResidentPreparationClock {
+    paused: Mutex<(Option<Instant>, Duration)>,
+}
+impl ResidentPreparationClock {
+    pub(super) fn observe_at(&self, pending: bool, now: Instant) -> Result<(), String> {
+        let mut clock = self
+            .paused
+            .lock()
+            .map_err(|_| "resident preparation clock poisoned")?;
+        if pending {
+            if clock.0.is_none() {
+                clock.0 = Some(now);
+            }
+        } else if let Some(started) = clock.0.take() {
+            clock.1 = clock
+                .1
+                .saturating_add(now.saturating_duration_since(started));
+        }
+        Ok(())
+    }
+    pub(super) fn expired_at(
+        &self,
+        admitted: Instant,
+        pending: bool,
+        deadline: Duration,
+        now: Instant,
+    ) -> Result<bool, String> {
+        self.observe_at(pending, now)?;
+        let clock = self
+            .paused
+            .lock()
+            .map_err(|_| "resident preparation clock poisoned")?;
+        let paused = clock
+            .1
+            .saturating_add(clock.0.map_or(Duration::ZERO, |started| {
+                now.saturating_duration_since(started)
+            }));
+        Ok(now
+            .saturating_duration_since(admitted)
+            .saturating_sub(paused)
+            >= deadline)
+    }
+}
 
 #[derive(Clone)]
 pub(super) struct StemPairOwner {
@@ -210,27 +259,43 @@ pub(super) struct ResidentStemCache {
     pub(super) committed: super::committed_stem_residency::CommittedStemState,
 }
 
+/// Small cancellation handle staged before a control claim. Large window owners
+/// stay in the cache and are settled only after the shared marker is released.
+pub(super) struct WindowPredecessor {
+    publication: PreparedSourcePermit,
+    state: Arc<WindowState>,
+}
+
+impl WindowPredecessor {
+    pub(super) fn claim(&self) -> bool {
+        self.publication.status() == "rejected" || self.publication.cancel_unclaimed()
+    }
+
+    pub(super) fn finish(&self, ownership: &InputRuntimeOwnership, id: usize) {
+        self.state.fail(
+            ownership,
+            id,
+            self.publication.expected,
+            "resident preparation superseded by committed stem intent".into(),
+            true,
+        );
+    }
+}
+
 impl ResidentStemCache {
-    pub(super) fn cancel_window_predecessor_for(
-        &mut self,
-        ownership: &InputRuntimeOwnership,
-        id: usize,
-    ) -> PyResult<()> {
-        if let Some(previous) = self.relocation.as_ref() {
-            if !previous.publication.cancel_unclaimed() {
-                return Err(PyRuntimeError::new_err(
-                    "resident native adoption is in progress",
-                ));
-            }
-            previous.state.fail(
-                ownership,
-                id,
-                previous.publication.expected,
-                "resident preparation superseded by committed stem intent".into(),
-                true,
-            );
+    pub(super) fn prepare_window_supersession(&self) -> PyResult<Option<WindowPredecessor>> {
+        let Some(previous) = self.relocation.as_ref() else {
+            return Ok(None);
+        };
+        if matches!(previous.publication.status(), "adopting" | "accepted") {
+            return Err(PyRuntimeError::new_err(
+                "resident native adoption is in progress",
+            ));
         }
-        Ok(())
+        Ok(Some(WindowPredecessor {
+            publication: previous.publication.clone(),
+            state: previous.state.clone(),
+        }))
     }
     pub(super) fn ordinary_publication_pending(&self) -> bool {
         self.pending.is_some()
@@ -286,7 +351,12 @@ impl ResidentStemCache {
 
 #[derive(Default)]
 struct WindowState {
+    placement: Option<SlotSnapshot>,
+    source_generation: u64,
+    preparation_clock: ResidentPreparationClock,
+    control_published: AtomicBool,
     terminal: AtomicU8,
+    failed_settlement: Mutex<Option<(usize, u64, u8)>>,
     error: Mutex<Option<String>>,
     adopted_binding: Mutex<Option<InputPadBinding>>,
     launch_cancelled: Arc<AtomicBool>,
@@ -295,6 +365,8 @@ struct WindowState {
     terminal_observation: Mutex<Option<terminal_order_tests::TerminalObservation>>,
     #[cfg(test)]
     range_observation: Mutex<Option<WindowReadObservation>>,
+    #[cfg(test)]
+    control_wait_observed: AtomicBool,
 }
 
 #[cfg(test)]
@@ -306,6 +378,83 @@ pub(super) struct WindowReadObservation {
 }
 
 impl WindowState {
+    fn for_placement(placement: SlotSnapshot, source_generation: u64) -> Self {
+        Self {
+            placement: Some(placement),
+            source_generation,
+            ..Self::default()
+        }
+    }
+
+    /// External settlement shares the source/pair marker. Callback tails use their
+    /// existing direct-cell completion instead. Pending retains this state for polling.
+    fn finish_control(&self, ownership: &InputRuntimeOwnership, _id: usize, expected: u64) -> bool {
+        if self.placement.is_some() && !self.control_published.load(Ordering::Acquire) {
+            return true;
+        }
+        let placement = self.placement;
+        #[cfg(test)]
+        let placement = placement.or_else(|| ownership.slot_snapshot(_id));
+        let Some(captured) = placement else {
+            return true;
+        };
+        let observed = if let Some(key) = captured.content_key() {
+            ownership.observe_control_key(key)
+        } else if ownership.slot_snapshot_current(captured) {
+            PlacementObservation::Current(captured)
+        } else if ownership.placement_pending() {
+            PlacementObservation::Pending
+        } else {
+            PlacementObservation::Stale
+        };
+        let current = match observed {
+            PlacementObservation::Current(current) => current,
+            PlacementObservation::Pending => return false,
+            PlacementObservation::Stale | PlacementObservation::Retired => return true,
+        };
+        let prepared = match ownership.prepare_slot_write_fixed(current, current.lifetime()) {
+            Ok(prepared) => prepared,
+            Err(_) => return false,
+        };
+        match ownership.commit_slot_write_fixed(
+            &prepared,
+            || true,
+            |cell| {
+                let _ = ownership.resident_control_for_cell(cell).compare_exchange(
+                    expected,
+                    0,
+                    Ordering::AcqRel,
+                    Ordering::Acquire,
+                );
+            },
+        ) {
+            Ok(_) => true,
+            Err(PlacementError::Retired | PlacementError::Stale) => captured
+                .content_key()
+                .is_some_and(|key| !ownership.content_key_current(key)),
+            Err(_) => false,
+        }
+    }
+
+    fn retry_failure(&self, ownership: &InputRuntimeOwnership) {
+        let Ok(mut settlement) = self.failed_settlement.lock() else {
+            return;
+        };
+        let Some((id, expected, terminal)) = *settlement else {
+            return;
+        };
+        if !self.finish_control(ownership, id, expected) {
+            return;
+        }
+        *settlement = None;
+        self.terminal.store(terminal, Ordering::Release);
+        drop(settlement);
+        #[cfg(test)]
+        if let Some(observation) = self.terminal_observation.lock().unwrap().take() {
+            observation.observe();
+        }
+    }
+
     /// Settle this exact control intent before publishing terminal failure.
     /// This scalar CAS neither clears a replacement intent nor retires job/read pins.
     fn fail(
@@ -316,22 +465,22 @@ impl WindowState {
         error: String,
         cancelled: bool,
     ) {
+        if let Ok(mut message) = self.error.lock() {
+            *message = Some(error);
+        }
         if self
             .proposal
             .lock()
             .is_ok_and(|proposal| proposal.as_ref().is_none_or(|proposal| proposal.armed()))
         {
-            ownership.finish_resident_control(id, expected);
+            if let Ok(mut settlement) = self.failed_settlement.lock() {
+                *settlement = Some((id, expected, if cancelled { 2 } else { 1 }));
+            }
+        } else {
+            self.terminal
+                .store(if cancelled { 2 } else { 1 }, Ordering::Release);
         }
-        if let Ok(mut message) = self.error.lock() {
-            *message = Some(error);
-        }
-        self.terminal
-            .store(if cancelled { 2 } else { 1 }, Ordering::Release);
-        #[cfg(test)]
-        if let Some(observation) = self.terminal_observation.lock().unwrap().take() {
-            observation.observe();
-        }
+        self.retry_failure(ownership);
     }
 }
 
@@ -393,6 +542,7 @@ impl ResidentLaunchGuard {
 
 #[pyclass(frozen)]
 pub struct ResidentWindowTicket {
+    input_trigger: Option<CapturedInputPadTrigger>,
     publication: PreparedSourcePermit,
     state: Arc<WindowState>,
     #[pyo3(get)]
@@ -417,6 +567,16 @@ pub struct ResidentWindowTicket {
 
 impl ResidentWindowTicket {
     #[cfg(test)]
+    pub(super) fn control_published_for_test(&self) -> bool {
+        self.state.control_published.load(Ordering::Acquire)
+    }
+
+    #[cfg(test)]
+    pub(super) fn control_wait_observed_for_test(&self) -> bool {
+        self.state.control_wait_observed.load(Ordering::Acquire)
+    }
+
+    #[cfg(test)]
     pub(super) fn key_lock_request_id_for_test(&self) -> Option<u64> {
         self.key_lock_request_id
     }
@@ -429,36 +589,70 @@ impl ResidentWindowTicket {
         &self,
         exclusive: bool,
         received_at_ns: u64,
-    ) -> Option<ControlMessage> {
-        if self.publication.status() != "accepted"
+    ) -> Option<(ControlMessage, input_runtime_binding::PreparedLaunchWrite)> {
+        if self.input_trigger.is_some()
+            || self.publication.status() != "accepted"
             || !self.is_current()
             || self.state.launch_cancelled.load(Ordering::Acquire)
         {
             return None;
         }
         let (start_s, end_s) = self.loop_region?;
-        let launch_revision = self.ownership.launch_revision(self.id);
-        if !self.ownership.launch_current(self.id, launch_revision) {
-            return None;
-        }
         let binding = if self.publication.preserved_window() {
             self.binding
         } else {
             (*self.state.adopted_binding.lock().ok()?)?
         };
-        Some(ControlMessage::TriggerInputPad {
-            id: self.id,
-            start_s,
-            end_s,
-            exclusive,
-            binding,
-            received_at_ns,
-            resident_control: Some(ResidentLaunchGuard {
-                publication: self.publication.resident_launch_permit()?,
-                cancelled: self.state.launch_cancelled.clone(),
-            }),
-            launch_revision,
-        })
+        let placement = binding
+            .placement
+            .or_else(|| self.ownership.slot_snapshot(self.id))?;
+        let prepared = self
+            .ownership
+            .prepare_launch_write(placement, input_runtime_binding::LaunchWriteKind::Admit)
+            .ok()?;
+        Some((
+            ControlMessage::TriggerInputPad {
+                id: self.id,
+                start_s,
+                end_s,
+                exclusive,
+                binding,
+                received_at_ns,
+                resident_control: Some(ResidentLaunchGuard {
+                    publication: self.publication.resident_launch_permit()?,
+                    cancelled: self.state.launch_cancelled.clone(),
+                }),
+                launch_revision: prepared.previous_revision,
+            },
+            prepared,
+        ))
+    }
+
+    /// All locks and payload preparation precede entry; this uses only original scalar owners.
+    fn launch_binding_current(&self, binding: InputPadBinding) -> bool {
+        let ownership = &self.ownership;
+        let placement_current =
+            binding
+                .placement
+                .map_or(!ownership.is_source_tracked(), |placement| {
+                    placement.slot() == self.id
+                        && placement.content_key().is_some()
+                        && ownership.slot_snapshot_fields_current(placement)
+                });
+        placement_current
+            && self.publication.status() == "accepted"
+            && self.publication.current()
+            && !self.state.launch_cancelled.load(Ordering::Acquire)
+            && ownership.copy_reservation(self.id) == 0
+            && ownership.authority_current(self.id, binding)
+            && ownership.binding_source_generation(self.id, binding) == Some(self.source_generation)
+            && ownership.binding_window_current(self.id, binding)
+            && self
+                .acknowledgements
+                .current_for_binding(ownership, self.id, binding)
+                == binding
+                    .accepted
+                    .map_or(0, |accepted| accepted.publication_epoch)
     }
 }
 
@@ -469,6 +663,121 @@ pub(super) fn launch_with_producer(
     received_at_ns: u64,
     producer: &Arc<Mutex<Producer<ControlMessage>>>,
 ) -> PyResult<bool> {
+    launch_with_producer_before_commit(engine, ticket, exclusive, received_at_ns, producer, || {})
+}
+
+/// Original MIDI fallback uses the same launch publication, with its own actual WindowACK.
+pub(super) fn launch_captured_with_producer(
+    engine: &AudioEngine,
+    trigger: &CapturedInputPadTrigger,
+    ticket: &ResidentWindowTicket,
+    producer: &Arc<Mutex<Producer<ControlMessage>>>,
+) -> PyResult<bool> {
+    if !Arc::ptr_eq(&ticket.ownership, &engine.input_runtime_ownership)
+        || !trigger.belongs_to(&engine.input_runtime_ownership)
+        || ticket
+            .input_trigger
+            .as_ref()
+            .is_none_or(|original| !original.same_owner(trigger))
+        || ticket.publication.status() != "accepted"
+        || !ticket.is_current()
+        || ticket.state.launch_cancelled.load(Ordering::Acquire)
+        || ticket.loop_region != Some(trigger.loop_region())
+    {
+        return Ok(false);
+    }
+    let window_binding = if ticket.publication.preserved_window() {
+        ticket.binding
+    } else {
+        let Some(binding) = *ticket
+            .state
+            .adopted_binding
+            .lock()
+            .map_err(|_| PyRuntimeError::new_err("resident binding lock poisoned"))?
+        else {
+            return Ok(false);
+        };
+        binding
+    };
+    let Some(guard) = trigger.launch_guard(Some(window_binding))? else {
+        return Ok(false);
+    };
+    let mut producer = producer
+        .lock()
+        .map_err(|_| PyRuntimeError::new_err("producer lock poisoned"))?;
+    if producer.is_full() {
+        return Err(PyRuntimeError::new_err("resident command queue is full"));
+    }
+    let Some(placement) = guard.binding.placement else {
+        return Ok(false);
+    };
+    let prepared = ticket
+        .ownership
+        .prepare_launch_write(placement, input_runtime_binding::LaunchWriteKind::Admit)
+        .map_err(PyRuntimeError::new_err)?;
+    let Some(publication) = ticket.publication.resident_launch_permit() else {
+        return Ok(false);
+    };
+    let (start_s, end_s) = trigger.loop_region();
+    let message = ControlMessage::TriggerInputPad {
+        id: guard.id,
+        start_s,
+        end_s,
+        exclusive: trigger.exclusive(),
+        binding: guard.binding,
+        received_at_ns: trigger.received_at_ns(),
+        resident_control: Some(ResidentLaunchGuard {
+            publication,
+            cancelled: ticket.state.launch_cancelled.clone(),
+        }),
+        launch_revision: prepared.previous_revision,
+    };
+    Ok(ticket
+        .ownership
+        .commit_launch_write(
+            prepared,
+            || {
+                guard.current()
+                    && ticket.publication.status() == "accepted"
+                    && ticket.publication.current()
+                    && !ticket.state.launch_cancelled.load(Ordering::Acquire)
+                    && ticket.ownership.slot_snapshot_fields_current(placement)
+                    && ticket.ownership.copy_reservation(guard.id) == 0
+                    && ticket.ownership.authority_current(guard.id, guard.binding)
+                    && ticket
+                        .ownership
+                        .binding_source_generation(guard.id, guard.binding)
+                        == Some(ticket.source_generation)
+                    && ticket
+                        .ownership
+                        .binding_window_current(guard.id, guard.binding)
+                    && ticket.acknowledgements.current_for_binding(
+                        &ticket.ownership,
+                        guard.id,
+                        guard.binding,
+                    ) == guard
+                        .binding
+                        .accepted
+                        .map_or(0, |accepted| accepted.publication_epoch)
+            },
+            || {
+                guard.mark_admitted();
+                producer
+                    .push(message)
+                    .expect("reserved MIDI resident capacity");
+            },
+        )
+        .is_ok())
+}
+
+fn launch_with_producer_before_commit(
+    engine: &AudioEngine,
+    ticket: &ResidentWindowTicket,
+    exclusive: bool,
+    received_at_ns: u64,
+    producer: &Arc<Mutex<Producer<ControlMessage>>>,
+    before_commit: impl FnOnce(),
+) -> PyResult<bool> {
     if !Arc::ptr_eq(&ticket.ownership, &engine.input_runtime_ownership) {
         return Ok(false);
     }
@@ -478,17 +787,30 @@ pub(super) fn launch_with_producer(
     if producer.is_full() {
         return Err(PyRuntimeError::new_err("resident command queue is full"));
     }
-    let Some(message) = ticket.launch_message(exclusive, received_at_ns) else {
+    let Some((message, prepared)) = ticket.launch_message(exclusive, received_at_ns) else {
         return Ok(false);
     };
-    engine
+    let binding = match &message {
+        ControlMessage::TriggerInputPad { binding, .. } => *binding,
+        _ => unreachable!("resident launch preparation has one message kind"),
+    };
+    before_commit();
+    Ok(engine
         .input_runtime_ownership
-        .mark_launch_admitted(ticket.id);
-    producer
-        .push(message)
-        .map_err(|_| PyRuntimeError::new_err("resident command queue is full"))?;
-    Ok(true)
+        .commit_launch_write(
+            prepared,
+            || ticket.launch_binding_current(binding),
+            || {
+                let sent = producer.push(message);
+                debug_assert!(sent.is_ok());
+            },
+        )
+        .is_ok())
 }
+
+#[cfg(test)]
+#[path = "resident_launch_publication_tests.rs"]
+mod resident_launch_publication_tests;
 
 #[pymethods]
 impl ResidentWindowTicket {
@@ -507,6 +829,15 @@ impl ResidentWindowTicket {
     }
 
     pub fn publication_status(&self) -> &'static str {
+        self.state.retry_failure(&self.ownership);
+        if self
+            .state
+            .failed_settlement
+            .lock()
+            .is_ok_and(|pending| pending.is_some())
+        {
+            return "pending";
+        }
         match self.state.terminal.load(Ordering::Acquire) {
             1 => "failed",
             2 => "cancelled",
@@ -542,15 +873,17 @@ impl ResidentWindowTicket {
         self.publication.status() != "rejected"
             && (self.publication.current()
                 || self.state.proposal.lock().is_ok_and(|proposal| {
-                    proposal
-                        .as_ref()
-                        .is_some_and(|proposal| !proposal.armed() && proposal.current())
+                    proposal.as_ref().is_some_and(|proposal| {
+                        !self.state.control_published.load(Ordering::Acquire) && proposal.current()
+                    })
                 }))
             && self.ownership.authority_current(self.id, binding)
             && self.ownership.binding_source_generation(self.id, binding)
                 == Some(self.source_generation)
             && self.ownership.binding_window_current(self.id, binding)
-            && self.acknowledgements.current_epoch(self.id)
+            && self
+                .acknowledgements
+                .current_for_binding(&self.ownership, self.id, binding)
                 == binding
                     .accepted
                     .map_or(0, |accepted| accepted.publication_epoch)
@@ -587,42 +920,93 @@ pub(super) fn admit_stem_publication(
     set: &PreparedStemSet,
     source_version: &str,
     registration: Option<(PathBuf, PathBuf, Option<StemPairOwner>)>,
-) -> PyResult<()> {
-    engine
-        .input_runtime_ownership
-        .ensure_no_copy_reservation(id)?;
+) -> PyResult<bool> {
+    let ownership = &engine.input_runtime_ownership;
+    let resolved = match set
+        .publication
+        .control_placement(engine)
+        .map_err(PyValueError::new_err)?
+    {
+        PlacementObservation::Current(resolved) => resolved,
+        PlacementObservation::Pending => return Ok(false),
+        _ => {
+            return Err(PyValueError::new_err(
+                "admitted stem publication content owner changed",
+            ));
+        }
+    };
+    if id >= NUM_SAMPLES
+        || resolved.slot() != id
+        || !set.publication.current()
+        || ownership.copy_reservation(id) != 0
+    {
+        return Err(PyValueError::new_err(
+            "admitted stem publication source or copy owner changed",
+        ));
+    }
     let mut owners = engine
         .resident_stem_cache
         .lock()
         .map_err(|_| PyRuntimeError::new_err("resident stem ownership lock poisoned"))?;
     let owner = &mut owners[id];
+    let intent_epoch = owner.intent_epoch.clone();
+    let original_intent = owner.intent_epoch.load(Ordering::Acquire);
     let next_intent =
         super::prepared_source::next_epoch(&owner.intent_epoch).map_err(PyRuntimeError::new_err)?;
-    set.publication
-        .mark_pending()
-        .map_err(PyValueError::new_err)?;
-    if let Some(pending) = &owner.relocation
-        && pending.publication.cancel_unclaimed()
-    {
-        pending.state.fail(
-            &engine.input_runtime_ownership,
-            id,
-            pending.publication.expected,
-            "resident preparation superseded by stem publication".into(),
-            true,
-        );
+    let predecessor = owner.prepare_window_supersession()?;
+    let mut prepared_owner = registration.map(|(cache_dir, generation_path, pair)| StemOwner {
+        set: set.clone(),
+        source_version: source_version.to_owned(),
+        cache_dir,
+        generation_path,
+        pair,
+    });
+    let write = match ownership.prepare_slot_write_fixed(resolved, resolved.lifetime()) {
+        Ok(write) => write,
+        Err(PlacementError::Pending | PlacementError::Stale) => return Ok(false),
+        Err(error) => return Err(PyValueError::new_err(error.to_string())),
+    };
+    let mut retired_owner = None;
+    let outcome = ownership.commit_slot_write_fixed(
+        &write,
+        || {
+            ownership.slot_snapshot_fields_current(resolved)
+                && ownership.control_slot_for_cell(resolved.cell()) == id
+                && resolved.content_key() == set.publication.content_key()
+                && set.publication.current()
+                && set.publication.status() == "captured"
+                && ownership.copy_reservation(id) == 0
+                && intent_epoch.load(Ordering::Acquire) == original_intent
+                && predecessor.as_ref().is_none_or(|previous| {
+                    matches!(
+                        previous.publication.status(),
+                        "captured" | "pending" | "rejected"
+                    )
+                })
+                && set.publication.mark_pending().is_ok()
+        },
+        |_| {
+            if let Some(previous) = predecessor.as_ref() {
+                previous.publication.cancel_unclaimed();
+            }
+            intent_epoch.store(next_intent, Ordering::Release);
+            if let Some(next) = prepared_owner.take() {
+                retired_owner = owner.pending.replace(next);
+            }
+        },
+    );
+    drop(owners);
+    drop(retired_owner);
+    match outcome {
+        Ok(_) => {
+            if let Some(previous) = predecessor {
+                previous.finish(ownership, id);
+            }
+            Ok(true)
+        }
+        Err(PlacementError::Pending | PlacementError::Stale) => Ok(false),
+        Err(error) => Err(PyValueError::new_err(error.to_string())),
     }
-    owner.intent_epoch.store(next_intent, Ordering::Release);
-    if let Some((cache_dir, generation_path, pair)) = registration {
-        owner.pending = Some(StemOwner {
-            set: set.clone(),
-            source_version: source_version.to_owned(),
-            cache_dir,
-            generation_path,
-            pair,
-        });
-    }
-    Ok(())
 }
 
 pub(super) fn set_stem_pair_full_mix_with_producer(
@@ -722,6 +1106,122 @@ pub(super) fn cancel_all(engine: &AudioEngine) -> PyResult<()> {
     Ok(())
 }
 
+/// A real Window ACK can arrive after Native Pair placement but before the complete
+/// control mirror. Settle only that accepted window into its still-owning custody row.
+/// The original key and every adopted source/timing field remain the authority;
+/// no fresh ticket, slot occupant or PCM equality can authorize this catch-up.
+fn catch_up_pair_window_custody(
+    engine: &AudioEngine,
+    id: usize,
+    pending: &PendingWindow,
+    cache: &mut Option<SampleBuffer>,
+    accepted: &mut Option<StemOwner>,
+) -> PyResult<bool> {
+    let ownership = &engine.input_runtime_ownership;
+    let Some(key) = pending
+        .state
+        .placement
+        .and_then(|placement| placement.content_key())
+    else {
+        return Ok(false);
+    };
+    if !matches!(
+        ownership.observe_control_key(key),
+        PlacementObservation::Pending
+    ) || ownership.control_slot_for_cell(key.cell()) != id
+    {
+        return Ok(false);
+    }
+    let PlacementObservation::Current(native) = ownership.observe_content_key(key) else {
+        return Ok(false);
+    };
+    if native.slot() == id || pending.publication.preserved_window() {
+        return Ok(false);
+    }
+    let Some(next) = pending.sample.as_ref() else {
+        return Ok(false);
+    };
+    let adopted = *pending
+        .state
+        .adopted_binding
+        .lock()
+        .map_err(|_| PyRuntimeError::new_err("resident binding lock poisoned"))?;
+    let Some(binding) = adopted else {
+        return Ok(false);
+    };
+    let owns_cache = cache.as_ref().is_some_and(|sample| {
+        sample.same_source(next) && sample.window_revision() == pending.expected_revision
+    });
+    let owns_binding = binding
+        .placement
+        .and_then(|placement| placement.content_key())
+        == Some(key)
+        && binding.resident == next.resident_binding()
+        && binding.source_address == next.source_address()
+        && binding.sample_count == next.source_sample_count()
+        && binding.channels == next.channels;
+    if !owns_cache || !owns_binding || pending.state.source_generation == 0 {
+        return Ok(false);
+    }
+    let write = match ownership.prepare_slot_write_fixed(native, native.lifetime()) {
+        Ok(write) => write,
+        Err(PlacementError::Pending | PlacementError::Stale | PlacementError::Retired) => {
+            return Ok(false);
+        }
+        Err(error) => return Err(PyRuntimeError::new_err(error.to_string())),
+    };
+    let replacement = next.clone();
+    let stems = pending.stems.clone();
+    let mut retired_sample = None;
+    let mut retired_stems = None;
+    let outcome = ownership.commit_slot_write_fixed(
+        &write,
+        || {
+            owns_cache
+                && owns_binding
+                && ownership.slot_snapshot_fields_current(native)
+                && ownership.control_slot_for_cell(key.cell()) == id
+                && pending.state.control_published.load(Ordering::Acquire)
+                && pending.publication.status() == "accepted"
+                && pending.publication.current()
+                && ownership.authority_current(id, binding)
+                && ownership.binding_source_generation(id, binding)
+                    == Some(pending.state.source_generation)
+                && ownership.binding_window_current(id, binding)
+                && engine
+                    .current_timing_acknowledgements
+                    .current_for_binding(ownership, id, binding)
+                    == binding
+                        .accepted
+                        .map_or(0, |accepted| accepted.publication_epoch)
+        },
+        |_| {
+            retired_sample = cache.replace(replacement);
+            if let Some(owner) = accepted.as_mut()
+                && let Some(stems) = stems
+                && Arc::ptr_eq(
+                    &owner.set.complete_set_identity,
+                    &stems.complete_set_identity,
+                )
+            {
+                retired_stems = Some(std::mem::replace(&mut owner.set, stems));
+            }
+        },
+    );
+    drop(retired_sample);
+    drop(retired_stems);
+    match outcome {
+        Ok(_) => Ok(true),
+        Err(
+            PlacementError::Pending
+            | PlacementError::Stale
+            | PlacementError::Retired
+            | PlacementError::ClaimRejected,
+        ) => Ok(false),
+        Err(error) => Err(PyRuntimeError::new_err(error.to_string())),
+    }
+}
+
 pub(super) fn reconcile_under_request_lock(engine: &AudioEngine) -> PyResult<()> {
     let mut cache = engine
         .sample_cache
@@ -734,7 +1234,27 @@ pub(super) fn reconcile_under_request_lock(engine: &AudioEngine) -> PyResult<()>
     for id in 0..NUM_SAMPLES {
         let owner = &mut owners[id];
         if let Some(proposal) = owner.proposal.as_ref() {
-            if proposal.admitted.elapsed() >= ADOPTION_DEADLINE
+            let mirror_pending = !proposal.state.control_published.load(Ordering::Acquire)
+                && proposal
+                    .state
+                    .placement
+                    .and_then(|placement| placement.content_key())
+                    .is_some_and(|key| {
+                        matches!(
+                            engine.input_runtime_ownership.observe_control_key(key),
+                            PlacementObservation::Pending
+                        )
+                    });
+            if proposal
+                .state
+                .preparation_clock
+                .expired_at(
+                    proposal.admitted,
+                    mirror_pending,
+                    ADOPTION_DEADLINE,
+                    Instant::now(),
+                )
+                .map_err(PyRuntimeError::new_err)?
                 && proposal.publication.cancel_unclaimed()
             {
                 proposal.state.fail(
@@ -789,9 +1309,22 @@ pub(super) fn reconcile_under_request_lock(engine: &AudioEngine) -> PyResult<()>
             }
             let status = pending.publication.status();
             if status == "accepted" {
-                engine
-                    .input_runtime_ownership
-                    .finish_resident_control(id, pending.publication.expected);
+                if catch_up_pair_window_custody(
+                    engine,
+                    id,
+                    pending,
+                    &mut cache[id],
+                    &mut owner.accepted,
+                )? {
+                    continue;
+                }
+                if !pending.state.finish_control(
+                    &engine.input_runtime_ownership,
+                    id,
+                    pending.publication.expected,
+                ) {
+                    continue;
+                }
                 let current = pending.sample.as_ref().is_some_and(|next| {
                     cache[id].as_ref().is_some_and(|sample| {
                         sample.same_source(next)
@@ -812,9 +1345,14 @@ pub(super) fn reconcile_under_request_lock(engine: &AudioEngine) -> PyResult<()>
                     }
                 }
             } else if status == "rejected" {
-                engine
-                    .input_runtime_ownership
-                    .finish_resident_control(id, pending.publication.expected);
+                pending.state.retry_failure(&engine.input_runtime_ownership);
+                if !pending.state.finish_control(
+                    &engine.input_runtime_ownership,
+                    id,
+                    pending.publication.expected,
+                ) {
+                    continue;
+                }
                 owner.relocation = None;
             }
         }
@@ -836,6 +1374,118 @@ pub(super) fn reconcile_under_request_lock(engine: &AudioEngine) -> PyResult<()>
     Ok(())
 }
 
+/// Prepared control publication keeps original scalars in their captured cells.
+struct ResidentControlWrite {
+    placement: SlotSnapshot,
+    original_intent: u64,
+    original_control: u64,
+    original_request: u64,
+    next_intent: u64,
+    next_request: Option<u64>,
+}
+
+impl ResidentControlWrite {
+    fn capture(
+        binding: &InputRuntimePadBinding,
+        intent: u64,
+        next_intent: u64,
+        key_lock: bool,
+    ) -> Result<Self, String> {
+        let placement = binding
+            .binding
+            .placement
+            .ok_or("resident source has no captured content placement")?;
+        let original_request = binding
+            .ownership
+            .key_lock_request_for_cell(placement.cell())
+            .load(Ordering::Acquire);
+        let next_request = if key_lock {
+            Some(
+                original_request
+                    .checked_add(1)
+                    .ok_or("Key Lock request exhausted")?,
+            )
+        } else {
+            None
+        };
+        Ok(Self {
+            placement,
+            original_intent: intent,
+            original_control: binding
+                .ownership
+                .resident_control_for_cell(placement.cell())
+                .load(Ordering::Acquire),
+            original_request,
+            next_intent,
+            next_request,
+        })
+    }
+
+    fn commit(
+        &self,
+        binding: &InputRuntimePadBinding,
+        intent_epoch: &AtomicU64,
+        claim: impl FnOnce() -> bool,
+        apply: impl FnOnce(),
+    ) -> Result<(), PlacementError> {
+        let ownership = &binding.ownership;
+        let key = self.placement.content_key().ok_or(PlacementError::Stale)?;
+        let resolved = match ownership.observe_control_key(key) {
+            PlacementObservation::Current(resolved) => resolved,
+            PlacementObservation::Pending => return Err(PlacementError::Pending),
+            PlacementObservation::Stale => return Err(PlacementError::Stale),
+            PlacementObservation::Retired => return Err(PlacementError::Retired),
+        };
+        self.commit_at(binding, intent_epoch, resolved, claim, apply)
+    }
+
+    fn commit_at(
+        &self,
+        binding: &InputRuntimePadBinding,
+        intent_epoch: &AtomicU64,
+        resolved: SlotSnapshot,
+        claim: impl FnOnce() -> bool,
+        apply: impl FnOnce(),
+    ) -> Result<(), PlacementError> {
+        let ownership = &binding.ownership;
+        if resolved.content_key() != self.placement.content_key() {
+            return Err(PlacementError::Stale);
+        }
+        let prepared = ownership.prepare_slot_write_fixed(resolved, resolved.lifetime())?;
+        #[cfg(test)]
+        control_publication_tests::before_commit();
+        ownership.commit_slot_write_fixed(
+            &prepared,
+            || {
+                binding.admitted_publication_current(resolved)
+                    && intent_epoch.load(Ordering::Acquire) == self.original_intent
+                    && ownership
+                        .resident_control_for_cell(self.placement.cell())
+                        .load(Ordering::Acquire)
+                        == self.original_control
+                    && ownership
+                        .key_lock_request_for_cell(self.placement.cell())
+                        .load(Ordering::Acquire)
+                        == self.original_request
+                    && claim()
+            },
+            |cell| {
+                intent_epoch.store(self.next_intent, Ordering::Release);
+                ownership
+                    .resident_control_for_cell(cell)
+                    .store(self.next_intent, Ordering::Release);
+                if let Some(request) = self.next_request {
+                    ownership
+                        .key_lock_request_for_cell(cell)
+                        .store(request, Ordering::Release);
+                }
+                apply();
+            },
+        )?;
+        Ok(())
+    }
+}
+
 struct WindowWork {
     id: usize,
     old: SampleBuffer,
@@ -847,8 +1497,9 @@ struct WindowWork {
     revision: u64,
     context: ResidentContext,
     intent: ResidentControlIntent,
-    request: u64,
+    _original_request: u64,
     binding: InputRuntimePadBinding,
+    control: ResidentControlWrite,
     source_lease: CommittedColdLease,
     stem_owner: Option<StemOwner>,
     requests: Arc<Mutex<Vec<u64>>>,
@@ -991,12 +1642,64 @@ impl WindowWork {
         !self.cancelled.load(Ordering::Acquire)
             && self.proposal.current()
             && self.publication.status() != "rejected"
-            && (if self.proposal.armed() {
+            && (if self.state.control_published.load(Ordering::Acquire) {
                 self.publication.current()
             } else {
                 self.intent_epoch.load(Ordering::Acquire) == self.base_intent
             })
-            && self.binding.current()
+            && self.binding.admitted_current()
+    }
+
+    fn observe_control(&self) -> PlacementObservation<SlotSnapshot> {
+        self.control
+            .placement
+            .content_key()
+            .map_or(PlacementObservation::Stale, |key| {
+                self.binding.ownership.observe_control_key(key)
+            })
+    }
+
+    /// The cache lock pins the current custody row; Pending never holds it while waiting.
+    fn current_owners(
+        &self,
+    ) -> Result<
+        (
+            std::sync::MutexGuard<'_, Vec<ResidentStemCache>>,
+            SlotSnapshot,
+        ),
+        String,
+    > {
+        loop {
+            if !self.current() {
+                return Err("resident source/window was superseded".into());
+            }
+            let owners = self
+                .owners
+                .lock()
+                .map_err(|_| "resident ownership lock poisoned")?;
+            match self.observe_control() {
+                PlacementObservation::Current(resolved) => {
+                    self.state
+                        .preparation_clock
+                        .observe_at(false, Instant::now())?;
+                    return Ok((owners, resolved));
+                }
+                PlacementObservation::Pending => {
+                    self.state
+                        .preparation_clock
+                        .observe_at(true, Instant::now())?;
+                    #[cfg(test)]
+                    self.state
+                        .control_wait_observed
+                        .store(true, Ordering::Release);
+                    drop(owners);
+                }
+                PlacementObservation::Stale | PlacementObservation::Retired => {
+                    return Err("resident content owner was retired".into());
+                }
+            }
+            std::thread::sleep(Duration::from_millis(1));
+        }
     }
 
     fn prepare(&mut self) -> Result<(), String> {
@@ -1027,13 +1730,10 @@ impl WindowWork {
                     .stems
                     .as_ref()
                     .map(|set| {
-                        self.owners
-                            .lock()
-                            .map_err(|_| "resident ownership lock poisoned".to_string())?[self.id]
-                            .owner_for(set)
-                            .ok_or_else(|| {
-                                "captured stem set has no retained immutable descriptor".to_string()
-                            })
+                        let (owners, resolved) = self.current_owners()?;
+                        owners[resolved.slot()].owner_for(set).ok_or_else(|| {
+                            "captured stem set has no retained immutable descriptor".to_string()
+                        })
                     })
                     .transpose()?;
                 self.revision = self
@@ -1122,16 +1822,21 @@ impl WindowWork {
         // the worker's peak snapshot until every source/component allocation is registered, so
         // another queued WindowWork cannot overlook partial or cancelled pair preparation.
         // This serializes window preparation off-thread; the callback never enters this gate.
-        let preparation_owners = self
-            .owners
-            .lock()
-            .map_err(|_| "resident ownership lock poisoned")?;
+        let (preparation_owners, preparation_slot) = self.current_owners()?;
+        let resident = self
+            .resident
+            .clone()
+            .with_history(self.pcm_history.clone(), preparation_slot.slot());
         if !self.current() {
             return Err("resident source/window was superseded before allocation".into());
         }
         let held_readers = self
             .assets
-            .held_same_pad_reader_backings(&self.pcm_history, self.id, &self.source_lease)
+            .held_same_pad_reader_backings(
+                &self.pcm_history,
+                preparation_slot.slot(),
+                &self.source_lease,
+            )
             .map_err(|error| error.to_string())?;
         let peak = admitted_window_peak_with_readers(
             &self.old,
@@ -1153,7 +1858,7 @@ impl WindowWork {
                 .lock()
                 .map_err(|_| "PCM history lock poisoned")?;
             let pad = history
-                .get_mut(self.id)
+                .get_mut(preparation_slot.slot())
                 .ok_or("same-pad PCM history missing")?;
             ensure_window_history_capacity(pad, &self.old, self.start, self.end)?;
         }
@@ -1167,7 +1872,7 @@ impl WindowWork {
                 self.context,
                 super::cold_jobs::PCM_LIMIT_BYTES,
                 &|| !self.current(),
-                Some(&self.resident),
+                Some(&resident),
             )
             .map_err(|error| error.to_string())?;
         {
@@ -1176,7 +1881,7 @@ impl WindowWork {
                 .lock()
                 .map_err(|_| "PCM history lock poisoned")?;
             let pad = history
-                .get_mut(self.id)
+                .get_mut(preparation_slot.slot())
                 .ok_or("same-pad PCM history missing")?;
             let reader = Arc::downgrade(&sample.samples);
             if !pad.iter().any(|held| held.ptr_eq(&reader)) {
@@ -1212,7 +1917,7 @@ impl WindowWork {
                     legacy_complete.as_ref().unwrap_or(&sample),
                     &sample,
                     self.binding.binding.sample_rate_hz,
-                    &self.resident,
+                    &resident,
                     &|| !self.current(),
                 )?;
                 set.complete_set_identity = owner.set.complete_set_identity.clone();
@@ -1237,131 +1942,190 @@ impl WindowWork {
         #[cfg(not(test))]
         let _ = peak;
         drop(preparation_owners);
-        // Preparation owns the already-admitted payload while the realtime command
-        // lane is briefly full. Retry is bounded, off-thread and cancellable.
-        for attempt in 0..8 {
-            if !self.current() {
-                return Err(
-                    "resident preparation superseded while waiting for command capacity".into(),
-                );
-            }
-            if !self
-                .producer
-                .lock()
-                .map_err(|_| "producer lock poisoned")?
-                .is_full()
-            {
-                break;
-            }
-            if attempt == 7 {
-                return Err("resident command queue is full".into());
-            }
-            std::thread::sleep(Duration::from_millis(5));
-        }
-        let requests = self.requests.lock().map_err(|_| "request lock poisoned")?;
-        let cache = self
-            .cache
-            .lock()
-            .map_err(|_| "sample cache lock poisoned")?;
-        if requests[self.id] != self.request
-            || !self.current()
-            || !cache[self.id]
-                .as_ref()
-                .is_some_and(|current| current.same_window(&self.bank))
-        {
-            return Err("stale resident source/window preparation".into());
-        }
-        let mut producer = self.producer.lock().map_err(|_| "producer lock poisoned")?;
-        if producer.is_full() {
-            return Err("resident command queue is full".into());
-        }
-        let mut owners = self
-            .owners
-            .lock()
-            .map_err(|_| "resident ownership lock poisoned")?;
-        if self.intent_epoch.load(Ordering::Acquire) != self.base_intent
-            || !self.proposal.current()
-            || owners[self.id].pending.is_some()
-            || owners[self.id].committed.claimed()
-            || owners[self.id]
-                .relocation
-                .as_ref()
-                .is_some_and(|pending| pending.publication.status() == "adopting")
-        {
-            return Err("resident proposal authority changed before arming".into());
-        }
-        if let Some(request) = self.intent.key_lock_request_id
-            && self
-                .binding
-                .ownership
-                .reserve_key_lock_request(self.id)
-                .map_err(|error| error.to_string())?
-                != request
-        {
-            return Err("resident key lock proposal was superseded before arming".into());
-        }
-        let proposed = owners[self.id]
-            .proposal
-            .as_ref()
-            .filter(|pending| Arc::ptr_eq(&pending.token, &self.token))
-            .ok_or("resident proposal no longer owns preparation")?;
-        if proposed.publication.status() == "rejected" {
-            return Err("resident proposal cancelled before arming".into());
-        }
-        let mut adopted = self
-            .state
-            .adopted_binding
-            .lock()
-            .map_err(|_| "resident binding lock poisoned")?;
-        self.publication.mark_pending()?;
-        self.proposal.arm()?;
-        if let Some(previous) = owners[self.id].relocation.as_ref() {
-            if !previous.publication.cancel_unclaimed() {
-                return Err("resident native adoption is in progress".into());
-            }
-            previous.state.fail(
-                &self.binding.ownership,
-                self.id,
-                previous.publication.expected,
-                "resident preparation superseded by admitted newer intent".into(),
-                true,
-            );
-        }
-        self.intent_epoch
-            .store(self.publication.expected, Ordering::Release);
-        self.binding
-            .ownership
-            .begin_resident_control(self.id, self.publication.expected);
-        if let Some(request) = self.intent.key_lock_request_id {
-            self.binding
-                .ownership
-                .publish_key_lock_request(self.id, request);
-        }
-        owners[self.id].relocation = owners[self.id].proposal.take();
-        let pending = owners[self.id]
-            .relocation
-            .as_mut()
-            .expect("admitted proposal owns publication");
-        pending.sample = Some(sample.clone());
-        pending.stems = stems.clone();
+        self.publish_prepared(sample, stems)
+    }
+
+    fn publish_prepared(
+        &self,
+        sample: SampleBuffer,
+        stems: Option<PreparedStemSet>,
+    ) -> Result<(), String> {
         let mut adopted_binding = self.binding.binding;
         adopted_binding.resident = sample.resident_binding();
-        *adopted = Some(adopted_binding);
-        producer
-            .push(ControlMessage::RelocateResident(Box::new(
-                crate::messages::ResidentTransaction {
-                    id: self.id,
-                    sample,
+        let mut prepared_views = Some((sample.clone(), stems.clone()));
+        let mut message = Some(ControlMessage::RelocateResident(Box::new(
+            crate::messages::ResidentTransaction {
+                id: self.id,
+                sample,
+                stems,
+                binding: self.binding.binding,
+                publication: self.publication.clone(),
+                expected_window_revision: self.bank.window_revision(),
+                intent: self.intent,
+                seek_pin: self.seek_pin.clone(),
+            },
+        )));
+        let mut pending = None;
+        let mut predecessor = None;
+        let mut queue_attempts = 0;
+        loop {
+            if !self.current() {
+                return Err("resident preparation superseded before publication".into());
+            }
+            // Physical request rows stay physical. The original source epoch/generation
+            // fences freshness; this lock only serializes cache/mirror publication.
+            let requests = self.requests.lock().map_err(|_| "request lock poisoned")?;
+            let cache = self
+                .cache
+                .lock()
+                .map_err(|_| "sample cache lock poisoned")?;
+            let mut producer = self.producer.lock().map_err(|_| "producer lock poisoned")?;
+            let mut owners = self
+                .owners
+                .lock()
+                .map_err(|_| "resident ownership lock poisoned")?;
+            let resolved = match self.observe_control() {
+                PlacementObservation::Current(resolved) => {
+                    self.state
+                        .preparation_clock
+                        .observe_at(false, Instant::now())?;
+                    resolved
+                }
+                PlacementObservation::Pending => {
+                    self.state
+                        .preparation_clock
+                        .observe_at(true, Instant::now())?;
+                    #[cfg(test)]
+                    self.state
+                        .control_wait_observed
+                        .store(true, Ordering::Release);
+                    drop(owners);
+                    drop(producer);
+                    drop(cache);
+                    drop(requests);
+                    std::thread::sleep(Duration::from_millis(1));
+                    continue;
+                }
+                _ => return Err("resident content owner was retired".into()),
+            };
+            let slot = resolved.slot();
+            if !self.current()
+                || !cache[slot]
+                    .as_ref()
+                    .is_some_and(|current| current.same_window(&self.bank))
+            {
+                return Err("stale resident source/window preparation".into());
+            }
+            if producer.is_full() {
+                queue_attempts += 1;
+                if queue_attempts >= 8 {
+                    return Err("resident command queue is full".into());
+                }
+                drop(owners);
+                drop(producer);
+                drop(cache);
+                drop(requests);
+                std::thread::sleep(Duration::from_millis(5));
+                continue;
+            }
+            if self.intent_epoch.load(Ordering::Acquire) != self.base_intent
+                || !self.proposal.current()
+                || owners[slot].pending.is_some()
+                || owners[slot].committed.claimed()
+                || owners[slot]
+                    .relocation
+                    .as_ref()
+                    .is_some_and(|pending| pending.publication.status() == "adopting")
+            {
+                return Err("resident proposal authority changed before arming".into());
+            }
+            let proposed = owners[slot]
+                .proposal
+                .as_ref()
+                .filter(|pending| Arc::ptr_eq(&pending.token, &self.token))
+                .ok_or("resident proposal no longer owns preparation")?;
+            if proposed.publication.status() == "rejected" {
+                return Err("resident proposal cancelled before arming".into());
+            }
+            if pending.is_none() {
+                let (sample, stems) = prepared_views.take().expect("one prepared window payload");
+                pending = Some(PendingWindow {
+                    sample: Some(sample),
                     stems,
-                    binding: self.binding.binding,
-                    publication: self.publication.clone(),
-                    expected_window_revision: self.bank.window_revision(),
-                    intent: self.intent,
-                    seek_pin: self.seek_pin.clone(),
+                    publication: proposed.publication.clone(),
+                    expected_revision: proposed.expected_revision,
+                    token: proposed.token.clone(),
+                    state: proposed.state.clone(),
+                    admitted: proposed.admitted,
+                });
+                predecessor = owners[slot]
+                    .relocation
+                    .as_ref()
+                    .map(|previous| previous.publication.clone());
+                self.publication.mark_pending()?;
+                self.proposal.arm()?;
+            }
+            let mut adopted = self
+                .state
+                .adopted_binding
+                .lock()
+                .map_err(|_| "resident binding lock poisoned")?;
+            let mut displaced = None;
+            let mut proposal_owner = None;
+            pending.as_mut().expect("held window payload").admitted = Instant::now();
+            let outcome = self.control.commit_at(
+                &self.binding,
+                &self.intent_epoch,
+                resolved,
+                || {
+                    !self.cancelled.load(Ordering::Acquire)
+                        && self.proposal.current()
+                        && self.publication.status() == "pending"
+                        && predecessor
+                            .as_ref()
+                            .is_none_or(|previous| previous.cancel_unclaimed())
                 },
-            )))
-            .map_err(|_| "reserved single-producer capacity lost")?;
-        Ok(())
+                || {
+                    displaced = owners[slot]
+                        .relocation
+                        .replace(pending.take().expect("held window payload"));
+                    proposal_owner = owners[slot].proposal.take();
+                    *adopted = Some(adopted_binding);
+                    self.state.control_published.store(true, Ordering::Release);
+                    producer
+                        .push(message.take().expect("held resident message"))
+                        .expect("reserved single-producer capacity");
+                },
+            );
+            drop(adopted);
+            drop(owners);
+            drop(producer);
+            drop(cache);
+            drop(requests);
+            if let Some(previous) = displaced.as_ref() {
+                previous.state.fail(
+                    &self.binding.ownership,
+                    slot,
+                    previous.publication.expected,
+                    "resident preparation superseded by admitted newer intent".into(),
+                    true,
+                );
+            }
+            // Final owners and failed payloads are released outside the marker.
+            drop(proposal_owner);
+            drop(displaced);
+            match outcome {
+                Ok(()) => return Ok(()),
+                Err(PlacementError::Pending) => std::thread::sleep(Duration::from_millis(1)),
+                Err(PlacementError::Stale)
+                    if self.current()
+                        && !self.binding.ownership.slot_snapshot_current(resolved) =>
+                {
+                    std::thread::sleep(Duration::from_millis(1));
+                }
+                Err(error) => return Err(error.to_string()),
+            }
+        }
     }
 }
 
@@ -1421,6 +2185,35 @@ pub(super) fn prepare_window_with_producer(
     request: WindowRequest,
     producer: Arc<Mutex<Producer<ControlMessage>>>,
 ) -> PyResult<ResidentWindowTicket> {
+    prepare_window_with_producer_and_trigger(engine, id, request, producer, None)
+}
+
+pub(super) fn prepare_captured_control(
+    engine: &AudioEngine,
+    trigger: &CapturedInputPadTrigger,
+) -> PyResult<ResidentWindowTicket> {
+    let id = trigger.preparation_slot(engine)?;
+    let ticket = prepare_window_with_producer_and_trigger(
+        engine,
+        id,
+        WindowRequest {
+            loop_region: Some(trigger.loop_region()),
+            ..WindowRequest::default()
+        },
+        engine.control_producer()?.clone(),
+        Some(trigger),
+    )?;
+    trigger.note_window_prepared();
+    Ok(ticket)
+}
+
+fn prepare_window_with_producer_and_trigger(
+    engine: &AudioEngine,
+    id: usize,
+    request: WindowRequest,
+    producer: Arc<Mutex<Producer<ControlMessage>>>,
+    input_trigger: Option<&CapturedInputPadTrigger>,
+) -> PyResult<ResidentWindowTicket> {
     if id >= NUM_SAMPLES
         || request.storage_range.is_some_and(|(start, end)| {
             !start.is_finite() || !end.is_finite() || start < 0.0 || end <= start
@@ -1452,9 +2245,16 @@ pub(super) fn prepare_window_with_producer(
         .pad_request_ids
         .lock()
         .map_err(|_| PyRuntimeError::new_err("request lock poisoned"))?;
+    let id = match input_trigger {
+        Some(trigger) => trigger.preparation_slot(engine)?,
+        None => id,
+    };
     engine
         .input_runtime_ownership
         .ensure_no_copy_reservation(id)?;
+    let source_epoch = engine
+        .prepared_source_epoch(id)
+        .map_err(PyRuntimeError::new_err)?;
     let binding = input_runtime_binding::capture_under_request_lock(engine, id)?;
     input_runtime_binding::validate_expected_source_generation(
         binding.as_ref(),
@@ -1463,6 +2263,13 @@ pub(super) fn prepare_window_with_producer(
     let binding = binding
         .filter(|current| (seek_only || current.available()) && current.current())
         .ok_or_else(|| PyValueError::new_err("current complete source/timing unavailable"))?;
+    if input_trigger
+        .is_some_and(|trigger| !trigger.validates_preparation_binding(id, binding.binding))
+    {
+        return Err(PyValueError::new_err(
+            "captured MIDI preparation source or intent changed",
+        ));
+    }
     let cache = engine
         .sample_cache
         .lock()
@@ -1619,7 +2426,7 @@ pub(super) fn prepare_window_with_producer(
         engine
             .cold_jobs
             .ensure_open()
-            .map_err(PyRuntimeError::new_err)?;
+            .map_err(|error| PyRuntimeError::new_err(error.to_string()))?;
         None
     } else {
         let reservation = engine
@@ -1649,7 +2456,7 @@ pub(super) fn prepare_window_with_producer(
                 owners[id].accepted.as_ref(),
                 &held_readers,
             )
-            .map_err(PyRuntimeError::new_err)?;
+            .map_err(|error| PyRuntimeError::new_err(error.to_string()))?;
         }
         Some(reservation)
     };
@@ -1675,23 +2482,24 @@ pub(super) fn prepare_window_with_producer(
     // All scalar exhaustion checks precede cancellation/publication effects.
     // Producer capacity is still exclusively held, and an unclaimed predecessor
     // must actually cancel before this reservation becomes current.
-    let key_lock_request_id = request
-        .key_lock
-        .map(|_| engine.input_runtime_ownership.reserve_key_lock_request(id))
-        .transpose()?;
     let base_intent = owners[id].intent_epoch.load(Ordering::Acquire);
+    let control = ResidentControlWrite::capture(
+        &binding,
+        base_intent,
+        next_intent,
+        request.key_lock.is_some(),
+    )
+    .map_err(PyRuntimeError::new_err)?;
+    let key_lock_request_id = control.next_request;
     let proposal = if reuse_window {
         None
     } else {
         Some(
             engine
                 .resident_proposals
-                .begin(id)
+                .begin_for_cell(control.placement.cell())
                 .map_err(PyRuntimeError::new_err)?
-                .with_source_epoch(
-                    engine.prepared_source_epochs[id].clone(),
-                    engine.prepared_source_epochs[id].load(Ordering::Acquire),
-                ),
+                .with_source_epoch(source_epoch.clone(), source_epoch.load(Ordering::Acquire)),
         )
     };
     if reuse_window {
@@ -1707,39 +2515,12 @@ pub(super) fn prepare_window_with_producer(
             .commit(&reused)
             .map_err(|error| PyRuntimeError::new_err(error.to_string()))?;
     }
-    if reuse_window && let Some(previous) = owners[id].relocation.as_ref() {
-        if !previous.publication.cancel_unclaimed() {
-            return Err(PyRuntimeError::new_err(
-                "resident native adoption is in progress",
-            ));
-        }
-        previous.state.fail(
-            &engine.input_runtime_ownership,
-            id,
-            previous.publication.expected,
-            "resident preparation superseded by newer intent".into(),
-            true,
-        );
-    }
-    if reuse_window {
-        owners[id]
-            .intent_epoch
-            .store(next_intent, Ordering::Release);
-        engine
-            .input_runtime_ownership
-            .begin_resident_control(id, next_intent);
-    }
-    if reuse_window && let Some(request) = key_lock_request_id {
-        engine
-            .input_runtime_ownership
-            .publish_key_lock_request(id, request);
-    }
     let publication = PreparedSourcePermit::new(owners[id].intent_epoch.clone(), next_intent)
-        .with_source_epoch(
-            engine.prepared_source_epochs[id].clone(),
-            engine.prepared_source_epochs[id].load(Ordering::Acquire),
-        );
-    let state = Arc::new(WindowState::default());
+        .with_source_epoch(source_epoch.clone(), source_epoch.load(Ordering::Acquire));
+    let state = Arc::new(WindowState::for_placement(
+        control.placement,
+        binding.source_generation,
+    ));
     *state
         .proposal
         .lock()
@@ -1748,6 +2529,7 @@ pub(super) fn prepare_window_with_producer(
     intent.key_lock_request_id = key_lock_request_id;
     let token = Arc::new(());
     let ticket = ResidentWindowTicket {
+        input_trigger: input_trigger.cloned(),
         publication: publication.clone(),
         state: state.clone(),
         window_revision: revision,
@@ -1764,7 +2546,7 @@ pub(super) fn prepare_window_with_producer(
         key_lock_request_id: intent.key_lock_request_id,
     };
     let stem_owner = owners[id].accepted.clone();
-    let pending = Some(PendingWindow {
+    let mut pending = PendingWindow {
         sample: None,
         stems: None,
         publication: publication.clone(),
@@ -1772,14 +2554,8 @@ pub(super) fn prepare_window_with_producer(
         token: token.clone(),
         state: state.clone(),
         admitted: Instant::now(),
-    });
+    };
     if reuse_window {
-        owners[id].relocation = pending;
-    } else {
-        owners[id].proposal = pending;
-    }
-    if reuse_window {
-        let pending = owners[id].relocation.as_mut().expect("new resident owner");
         pending.sample = Some(old.clone());
         pending.stems = ready_stems.clone();
         *state
@@ -1789,23 +2565,55 @@ pub(super) fn prepare_window_with_producer(
             Some(binding.binding);
         publication
             .mark_pending()
-            .map_err(PyRuntimeError::new_err)?;
-        admission_producer
-            .push(ControlMessage::RelocateResident(Box::new(
-                crate::messages::ResidentTransaction {
-                    id,
-                    sample: old,
-                    stems: ready_stems,
-                    binding: binding.binding,
-                    publication,
-                    expected_window_revision: revision,
-                    intent,
-                    seek_pin: None,
+            .map_err(|error| PyRuntimeError::new_err(error.to_string()))?;
+        let message =
+            ControlMessage::RelocateResident(Box::new(crate::messages::ResidentTransaction {
+                id,
+                sample: old,
+                stems: ready_stems,
+                binding: binding.binding,
+                publication,
+                expected_window_revision: revision,
+                intent,
+                seek_pin: None,
+            }));
+        let predecessor = owners[id]
+            .relocation
+            .as_ref()
+            .map(|previous| previous.publication.clone());
+        let intent_epoch = owners[id].intent_epoch.clone();
+        let mut displaced = None;
+        control
+            .commit(
+                &binding,
+                &intent_epoch,
+                || {
+                    predecessor
+                        .as_ref()
+                        .is_none_or(|previous| previous.cancel_unclaimed())
                 },
-            )))
-            .map_err(|_| PyRuntimeError::new_err("reserved single-producer capacity lost"))?;
+                || {
+                    displaced = owners[id].relocation.replace(pending);
+                    state.control_published.store(true, Ordering::Release);
+                    admission_producer
+                        .push(message)
+                        .expect("reserved single-producer capacity");
+                },
+            )
+            .map_err(|error| PyRuntimeError::new_err(error.to_string()))?;
+        if let Some(previous) = displaced.as_ref() {
+            previous.state.fail(
+                &engine.input_runtime_ownership,
+                id,
+                previous.publication.expected,
+                "resident preparation superseded by newer intent".into(),
+                true,
+            );
+        }
+        drop(displaced);
         return Ok(ticket);
     }
+    owners[id].proposal = Some(pending);
     let (capture, seek_receiver) = if seek_only {
         let (sender, receiver) = rtrb::RingBuffer::new(1);
         (
@@ -1837,8 +2645,9 @@ pub(super) fn prepare_window_with_producer(
         revision,
         context,
         intent,
-        request: requests[id],
+        _original_request: requests[id],
         binding,
+        control,
         source_lease,
         stem_owner,
         requests: engine.pad_request_ids.clone(),
@@ -1908,6 +2717,10 @@ pub(super) fn prepare_window_with_producer(
         .map_err(PyRuntimeError::new_err)?;
     Ok(ticket)
 }
+
+#[cfg(test)]
+#[path = "resident_control_publication_tests.rs"]
+pub(super) mod control_publication_tests;
 
 #[cfg(test)]
 #[path = "resident_terminal_order_tests.rs"]

@@ -113,8 +113,9 @@ fn reference_with_ownership(
     key_lock: bool,
 ) -> (Box<RtMixer>, Arc<InputRuntimeOwnership>) {
     let mut mixer = Box::new(RtMixer::new(2, RATE as f32));
-    let ownership = Arc::new(InputRuntimeOwnership::tracked());
-    ownership.publish_source(0, full, RATE, 1);
+    // Immutable standalone PCM oracle: its unrestricted permit has no Engine source owner.
+    let ownership = Arc::new(InputRuntimeOwnership::default());
+    ownership.publish_test_source(0, full, RATE, 1);
     mixer.set_input_runtime_ownership(ownership.clone());
     mixer.load_sample(0, full.clone());
     assert!(mixer.publish_prepared_stems(0, stems.clone()));
@@ -126,12 +127,13 @@ fn reference_with_ownership(
         key_lock,
         request,
         InputPadBinding {
+            placement: ownership.binding_placement(0),
             resident: full.resident_binding(),
             source_address: full.source_address(),
             sample_count: full.source_sample_count(),
             channels: full.channels,
             sample_rate_hz: RATE,
-            authority_revision: ownership.authority[0].load(Ordering::Acquire),
+            authority_revision: ownership.authority_revision(0),
             runtime_revision: 0,
             accepted: None,
         },
@@ -740,7 +742,9 @@ birth = transport.residency._pending[0].ticket
 assert birth is not None and 0 not in session.active_sample_ids
 "#,
     );
-    wait_until(|| h.consumer.peek().is_ok());
+    // Adopt becomes visible while its worker still owns the publication marker.
+    // Wait for the producer transaction to close before this one-shot ACK.
+    wait_until(|| h.consumer.peek().is_ok() && h.producer.try_lock().is_ok());
     assert!(
         h.callback
             .mixer
@@ -761,6 +765,24 @@ assert birth is not None and 0 not in session.active_sample_ids
             .all(|voice| !voice.is_playing_sample(0))
     );
     feedback(&locals, &mut h.callback);
+    // An unrelated off-RT marker may still be closing after the native ACK.
+    // Observe the exact ticket's current guards after that bounded settlement.
+    wait_until(|| {
+        Python::attach(|py| {
+            let birth = locals.bind(py).get_item("birth").unwrap().unwrap();
+            birth
+                .call_method0("publication_status")
+                .unwrap()
+                .extract::<String>()
+                .unwrap()
+                == "accepted"
+                && birth
+                    .call_method0("is_current")
+                    .unwrap()
+                    .extract::<bool>()
+                    .unwrap()
+        })
+    });
     controller_python(
         &locals,
         "assert birth.publication_status() == 'accepted' and birth.is_current()\nassert 0 not in session.active_sample_ids",

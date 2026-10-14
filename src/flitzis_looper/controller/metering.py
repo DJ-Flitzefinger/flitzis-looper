@@ -22,10 +22,10 @@ class MeteringController(BaseController):
         self._on_frame_render_callbacks.append(self._decay_pad_peaks)
         self._on_frame_render_callbacks.append(self._decay_master_peak)
 
-    def handle_pad_peak_message(self, msg: AudioMessage.PadPeak) -> None:
+    def handle_pad_peak_message(self, msg: AudioMessage, *, sample_id: int | None = None) -> None:
         now = monotonic()
 
-        sample_id = msg.sample_id()
+        sample_id = msg.sample_id() if sample_id is None else sample_id
         if sample_id is None or not 0 <= sample_id < len(self._session.pad_peak):
             return
 
@@ -64,10 +64,12 @@ class MeteringController(BaseController):
     def master_clip_active(self) -> bool:
         return self._session.master_output_clip_hold_until > monotonic()
 
-    def handle_pad_playhead_message(self, msg: AudioMessage.PadPlayhead) -> None:
+    def handle_pad_playhead_message(
+        self, msg: AudioMessage, *, sample_id: int | None = None
+    ) -> None:
         now = monotonic()
 
-        sample_id = msg.sample_id()
+        sample_id = msg.sample_id() if sample_id is None else sample_id
         if sample_id is None or not 0 <= sample_id < len(self._session.pad_peak):
             return
 

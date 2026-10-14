@@ -219,7 +219,6 @@ def render_ui(ctx: UiContext) -> None:
     """Main application render entrypoint."""
     ctx.on_frame_render()
     _poll_keyboard_input(ctx)
-    ctx.audio.poll.poll()
 
     with default_style():
         _main(ctx)

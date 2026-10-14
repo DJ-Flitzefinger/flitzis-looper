@@ -29,7 +29,7 @@ from flitzis_looper.models import (
 )
 from flitzis_looper.stem_intent import PadStemIntent
 
-_CONTENT_FIELDS = (
+CONTENT_FIELDS = (
     ("source_path", "sample_paths"),
     ("source_identity", "pad_content"),
     ("duration", "sample_durations"),
@@ -54,7 +54,7 @@ _CONTENT_FIELDS = (
 )
 
 
-def _canonical_json(value: object) -> str:
+def canonical_snapshot_json(value: object) -> str:
     return json.dumps(value, sort_keys=True, separators=(",", ":"), allow_nan=False)
 
 
@@ -70,13 +70,13 @@ def _reject_unknown_model_fields(value: object, model: type[BaseModel]) -> None:
         raise ValueError(message)
 
 
-class CopySnapshotData(BaseModel):
-    """Fresh typed musical projection; its mutable children never belong to the seal."""
+class MusicalSnapshotData(BaseModel):
+    """One complete musical schema shared by occupied Copy and pair slot images."""
 
     model_config = ConfigDict(extra="forbid", strict=True, revalidate_instances="always")
 
-    source_path: str = Field(min_length=1)
-    source_identity: PadContentIdentity
+    source_path: str | None = Field(min_length=1)
+    source_identity: PadContentIdentity | None
     duration: float | None = Field(ge=0, allow_inf_nan=False)
     analysis: SampleAnalysis | None
     stem_cache: StemCacheEntry | None
@@ -111,7 +111,9 @@ class CopySnapshotData(BaseModel):
         # Return a newly validated typed receipt so Python revalidation keeps tuples.
         data = _model_data(value)
         if isinstance(data, dict):
-            return PadContentIdentity.model_validate_json(_canonical_json(data), strict=True)
+            return PadContentIdentity.model_validate_json(
+                canonical_snapshot_json(data), strict=True
+            )
         return data
 
     @field_validator("analysis", mode="before")
@@ -153,6 +155,13 @@ class CopySnapshotData(BaseModel):
         return float(round(steps) * PAD_LOOP_BARS_GRANULARITY)
 
 
+class CopySnapshotData(MusicalSnapshotData):
+    """Fresh occupied musical projection; mutable children never belong to the seal."""
+
+    source_path: str = Field(min_length=1)
+    source_identity: PadContentIdentity
+
+
 class CopySnapshot(BaseModel):
     """Immutable canonical JSON seal with independently validated typed projections."""
 
@@ -165,7 +174,7 @@ class CopySnapshot(BaseModel):
     @classmethod
     def _validate_and_seal_payload(cls, value: str) -> str:
         projected = CopySnapshotData.model_validate_json(value, strict=True)
-        return _canonical_json(projected.model_dump(mode="json", warnings="error"))
+        return canonical_snapshot_json(projected.model_dump(mode="json", warnings="error"))
 
     def projected(self) -> CopySnapshotData:
         """Return fresh typed data after checking even unchecked wrapper instances."""
@@ -175,24 +184,31 @@ class CopySnapshot(BaseModel):
     @classmethod
     def from_data(cls, data: CopySnapshotData) -> Self:
         """Seal typed data after independently revalidating its full JSON projection."""
-        return cls(payload_json=_canonical_json(data.model_dump(mode="json", warnings="error")))
+        return cls(
+            payload_json=canonical_snapshot_json(data.model_dump(mode="json", warnings="error"))
+        )
 
 
-def _strict_sample_id(sample_id: int) -> int:
+def strict_snapshot_sample_id(sample_id: int) -> int:
     if type(sample_id) is not int:
         message = "Copy sample_id must be an integer"
         raise ValueError(message)
     return validate_sample_id(sample_id)
 
 
-def _content_data(project: ProjectState, sample_id: int) -> dict[str, object]:
+def musical_content_data(project: ProjectState, sample_id: int) -> dict[str, object]:
+    """Read the one complete musical field table without claiming runtime availability."""
+    sample_id = strict_snapshot_sample_id(sample_id)
     data: dict[str, object] = {}
-    for name, project_field in _CONTENT_FIELDS:
+    for name, project_field in CONTENT_FIELDS:
         table = getattr(project, project_field)
         if not isinstance(table, list) or len(table) != NUM_SAMPLES:
             message = f"Copy {project_field} must contain exactly {NUM_SAMPLES} slots"
             raise ValueError(message)
         data[name] = _model_data(table[sample_id])
+    stems = data["stem_cache"]
+    if isinstance(stems, dict):
+        data["stem_cache"] = stems | {"available": False}
     return data
 
 
@@ -206,14 +222,11 @@ def capture_copy_snapshot(project: ProjectState, source_id: int) -> CopySnapshot
     Returns:
         An independent seal preserving source metadata and all musical settings.
     """
-    source_id = _strict_sample_id(source_id)
-    data = _content_data(project, source_id)
+    source_id = strict_snapshot_sample_id(source_id)
+    data = musical_content_data(project, source_id)
     if data["source_path"] is None or data["source_identity"] is None:
         message = "Copy source must contain loaded content with a durable identity"
         raise ValueError(message)
-    stems = data["stem_cache"]
-    if isinstance(stems, dict):
-        data["stem_cache"] = stems | {"available": False}
     return CopySnapshot.from_data(CopySnapshotData.model_validate(data, strict=True))
 
 
@@ -221,7 +234,7 @@ def _validate_target_identity(
     project: ProjectState, captured: PadContentIdentity, target_identity: PadContentIdentity
 ) -> PadContentIdentity:
     identity = PadContentIdentity.model_validate_json(
-        _canonical_json(_model_data(target_identity)), strict=True
+        canonical_snapshot_json(_model_data(target_identity)), strict=True
     )
     if identity.instance_id == captured.instance_id or any(
         content is not None and content.instance_id == identity.instance_id
@@ -259,13 +272,13 @@ def project_with_copy_snapshot(
     Returns:
         A fully revalidated project candidate with target stem availability unclaimed.
     """
-    target_id = _strict_sample_id(target_id)
+    target_id = strict_snapshot_sample_id(target_id)
     captured = CopySnapshot.model_validate(snapshot).projected()
     identity = _validate_target_identity(project, captured.source_identity, target_identity)
-    _content_data(project, target_id)
+    musical_content_data(project, target_id)
     data = project.model_dump(mode="python", exclude_computed_fields=True, warnings="error")
     projection = captured.model_dump(mode="python", warnings="error")
     projection["source_identity"] = identity.model_dump(mode="python", warnings="error")
-    for name, project_field in _CONTENT_FIELDS:
+    for name, project_field in CONTENT_FIELDS:
         data[project_field][target_id] = projection[name]
-    return ProjectState.model_validate_json(_canonical_json(data), strict=True)
+    return ProjectState.model_validate_json(canonical_snapshot_json(data), strict=True)

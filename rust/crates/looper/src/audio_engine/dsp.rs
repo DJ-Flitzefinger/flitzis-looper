@@ -301,6 +301,12 @@ pub(crate) struct PerPadDspChain {
 }
 
 impl PerPadDspChain {
+    /// Change only the validated physical routing label during a claimed pair placement.
+    /// Filter history, parameter ramps and source chronology remain owned by this chain.
+    pub(crate) fn retarget_pad_id(&mut self, pad_id: u16) {
+        self.pad_id = pad_id;
+    }
+
     /// Observe applied and pending isolator values without advancing the smoother.
     pub(crate) fn loop_acceptance_parameters(&self) -> ([f32; 3], [f32; 3]) {
         (

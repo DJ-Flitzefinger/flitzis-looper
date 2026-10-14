@@ -346,8 +346,10 @@ def test_withdrawal_cannot_retire_a_different_binding_or_newer_intent(
     monkeypatch: pytest.MonkeyPatch,
     changed: dict[str, object],
 ) -> None:
-    _, _, request = _bind(controller, audio_engine_mock, monkeypatch, active=False)
+    receipt, registration, request = _bind(controller, audio_engine_mock, monkeypatch, active=False)
     entry = controller.project.stem_cache[0]
+    original_intent = controller.project.pad_stem_intent[0]
+    original_source = controller.project.sample_paths[0]
     assert entry is not None
     assert entry.pair is not None
     event = WithdrawnStemIntent(
@@ -359,11 +361,30 @@ def test_withdrawal_cannot_retire_a_different_binding_or_newer_intent(
         "all_stems",
         10,
     )
-    monkeypatch.setattr(
-        controller.stems._committed_residency, "poll", lambda: (replace(event, **changed),)
-    )
+    polls: list[frozenset[int]] = []
+
+    def poll(
+        *, deferred_sample_ids: frozenset[int] = frozenset()
+    ) -> tuple[WithdrawnStemIntent, ...]:
+        polls.append(deferred_sample_ids)
+        if event.sample_id in deferred_sample_ids:
+            return ()
+        return (replace(event, **changed),)
+
+    monkeypatch.setattr(controller.stems._committed_residency, "poll", poll)
+    controller.stems._pair_deferred_sample_ids = frozenset((0,))
+    controller.stems._poll_committed_residency()
+    assert controller.stems._demands[0].explicit
+    assert request.call_count == 1
+    controller.stems._pair_deferred_sample_ids = frozenset()
 
     controller.stems._poll_committed_residency()
 
     assert controller.stems._demands[0].explicit
     assert request.call_count == 1
+    assert polls == [frozenset((0,)), frozenset()]
+    assert controller.project.sample_paths[0] == original_source
+    assert controller.project.stem_cache[0] is entry
+    assert controller.project.pad_stem_intent[0] is original_intent
+    registration.cancel.assert_not_called()
+    assert receipt.cancellations == 0

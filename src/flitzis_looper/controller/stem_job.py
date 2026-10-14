@@ -3,6 +3,7 @@ import threading
 from dataclasses import dataclass, replace
 from typing import TYPE_CHECKING, Literal
 
+from flitzis_looper.constants import NUM_SAMPLES
 from flitzis_looper.controller.stem_identity import request_fingerprint, request_signature
 
 if TYPE_CHECKING:
@@ -38,6 +39,39 @@ class StemSubscriber:
         if self.source_lease is not None:
             self.source_lease.release()
         self.retirement.close()
+
+
+@dataclass(frozen=True, slots=True)
+class _PreparedStemSubscribers:
+    """Captured participant interests; the enclosing mirror owns ACK validation."""
+
+    job: StemGenerationJob
+    source_id: int
+    target_id: int
+    source: StemSubscriber | None
+    target: StemSubscriber | None
+    moved_source: StemSubscriber | None
+    moved_target: StemSubscriber | None
+
+    def merged_locked(self) -> dict[int, StemSubscriber]:
+        """Validate under the job lock and prepare a merge preserving unrelated interests."""
+        current = self.job._subscribers
+        if (
+            self.job._cancelled
+            or self.job._disposed
+            or current.get(self.source_id) is not self.source
+            or current.get(self.target_id) is not self.target
+        ):
+            message = "Stem pair subscriber ownership changed after mirror preparation"
+            raise RuntimeError(message)
+        merged = current.copy()
+        merged.pop(self.source_id, None)
+        merged.pop(self.target_id, None)
+        if self.moved_source is not None:
+            merged[self.target_id] = self.moved_source
+        if self.moved_target is not None:
+            merged[self.source_id] = self.moved_target
+        return merged
 
 
 class StemGenerationJob:
@@ -163,6 +197,57 @@ class StemGenerationJob:
                 message = "Resolved stem intent differs from its own captured request"
                 raise ValueError(message)
             self._subscribers[sample_id] = replace(subscriber, intent=intent)
+
+    def prepare_pair_subscribers(
+        self,
+        source_id: int,
+        target_id: int,
+        source_content_id: str,
+        target_content_id: str | None,
+    ) -> _PreparedStemSubscribers:
+        """Prepare surviving placements without changing requests or releasing any owner.
+
+        The source and target name controller placements, not Native permissions.
+        The enclosing private Pair mirror must validate its own opaque Native ACK
+        and hold every involved job lock before exchanging any subscriber table.
+        """
+        if (
+            source_id == target_id
+            or any(
+                type(value) is not int or not 0 <= value < NUM_SAMPLES
+                for value in (source_id, target_id)
+            )
+            or not source_content_id
+            or source_content_id == target_content_id
+        ):
+            message = "Stem pair subscribers require distinct participants"
+            raise ValueError(message)
+        with self._lock:
+            if self._cancelled or self._disposed:
+                message = "Stem pair cannot prepare a cancelled or disposed job"
+                raise RuntimeError(message)
+            source = self._subscribers.get(source_id)
+            target = self._subscribers.get(target_id)
+            if (source is not None and source.content_id != source_content_id) or (
+                target is not None
+                and (target_content_id is None or target.content_id != target_content_id)
+            ):
+                message = "Stem pair subscriber belongs to another captured content"
+                raise RuntimeError(message)
+            if (source is not None and source.sample_id != source_id) or (
+                target is not None and target.sample_id != target_id
+            ):
+                message = "Stem pair subscriber has a conflicting current placement"
+                raise RuntimeError(message)
+            return _PreparedStemSubscribers(
+                self,
+                source_id,
+                target_id,
+                source,
+                target,
+                replace(source, sample_id=target_id) if source is not None else None,
+                replace(target, sample_id=source_id) if target is not None else None,
+            )
 
     def transfer_subscribers_to(self, target: StemGenerationJob) -> tuple[StemSubscriber, ...]:
         """Move exact interests after resolution without releasing their independent custody."""

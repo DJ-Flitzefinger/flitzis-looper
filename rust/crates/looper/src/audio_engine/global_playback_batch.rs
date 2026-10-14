@@ -2,7 +2,9 @@
 
 use super::AudioEngine;
 use super::constants::{MAX_VOICES, NUM_SAMPLES};
-use super::input_runtime_binding::{self, InputPadBinding, InputRuntimePadBinding};
+use super::input_runtime_binding::{
+    self, InputPadBinding, InputRuntimePadBinding, LaunchWriteKind,
+};
 use crate::messages::ControlMessage;
 use pyo3::exceptions::{PyRuntimeError, PyValueError};
 use pyo3::prelude::*;
@@ -81,6 +83,17 @@ pub(super) fn enqueue(
     start: bool,
     received_at_ns: Option<u64>,
 ) -> PyResult<GlobalPlaybackBatchTicket> {
+    enqueue_before_commit(engine, producer, entries, start, received_at_ns, || {})
+}
+
+fn enqueue_before_commit(
+    engine: &AudioEngine,
+    producer: &Arc<Mutex<Producer<ControlMessage>>>,
+    entries: Vec<(&InputRuntimePadBinding, f64, Option<f64>)>,
+    start: bool,
+    received_at_ns: Option<u64>,
+    before_commit: impl FnOnce(),
+) -> PyResult<GlobalPlaybackBatchTicket> {
     if (start && (entries.len() > MAX_VOICES || entries.is_empty()))
         || (!start && entries.len() > NUM_SAMPLES)
     {
@@ -94,6 +107,7 @@ pub(super) fn enqueue(
         .map_err(|_| PyRuntimeError::new_err("request lock poisoned"))?;
     let mut seen = [false; NUM_SAMPLES];
     let mut effects = Vec::with_capacity(entries.len());
+    let mut captures = Vec::with_capacity(entries.len());
     for (binding, start_s, end_s) in &entries {
         let id = binding.id;
         if id >= NUM_SAMPLES
@@ -112,7 +126,7 @@ pub(super) fn enqueue(
         if !Arc::ptr_eq(&binding.ownership, &engine.input_runtime_ownership)
             || !binding.current()
             || !binding.available()
-            || binding.binding != current.binding
+            || !binding.binding.same_projection(&current.binding)
             || !current.current()
             || !current.available()
         {
@@ -127,6 +141,7 @@ pub(super) fn enqueue(
             end_s: *end_s,
             launch_revision: 0,
         });
+        captures.push(current);
     }
     let mut producer = producer
         .lock()
@@ -141,32 +156,35 @@ pub(super) fn enqueue(
             "Failed to send global playback batch - buffer may be full",
         ));
     }
+    let ownership = &engine.input_runtime_ownership;
+    let mut writes = Vec::with_capacity(effects.len());
     for entry in &mut effects {
-        if start {
-            entry.launch_revision = engine.input_runtime_ownership.launch_revision(entry.id);
-            if !engine
-                .input_runtime_ownership
-                .launch_current(entry.id, entry.launch_revision)
-            {
-                return Err(PyRuntimeError::new_err(
-                    "global playback launch revision exhausted",
-                ));
-            }
-        } else {
-            engine.input_runtime_ownership.cancel_launches(entry.id);
-        }
+        let placement = entry
+            .binding
+            .placement
+            .or_else(|| ownership.slot_snapshot(entry.id))
+            .ok_or_else(|| PyRuntimeError::new_err("global playback placement is pending"))?;
+        let prepared = ownership
+            .prepare_launch_write(
+                placement,
+                if start {
+                    LaunchWriteKind::Admit
+                } else {
+                    LaunchWriteKind::Stop
+                },
+            )
+            .map_err(PyRuntimeError::new_err)?;
+        entry.launch_revision = prepared.previous_revision;
+        writes.push(prepared);
     }
-    for entry in &effects {
-        if start {
-            engine
-                .input_runtime_ownership
-                .mark_launch_admitted(entry.id);
-        } else {
-            engine
-                .input_runtime_ownership
-                .clear_launch_admitted(entry.id);
-        }
-    }
+    let anchor = writes
+        .first()
+        .map(|prepared| prepared.placement)
+        .or_else(|| ownership.slot_snapshot(0))
+        .ok_or_else(|| PyRuntimeError::new_err("global playback placement is pending"))?;
+    let write = ownership
+        .prepare_slot_write_fixed(anchor, anchor.lifetime())
+        .map_err(|error| PyRuntimeError::new_err(error.to_string()))?;
     let status = Arc::new(AtomicU8::new(PENDING));
     let batch = Arc::new(GlobalPlaybackBatch {
         entries: effects.into_boxed_slice(),
@@ -174,10 +192,31 @@ pub(super) fn enqueue(
         received_at_ns,
         status: status.clone(),
     });
-    producer
-        .push(ControlMessage::GlobalPlaybackBatch(batch))
-        .map_err(|_| {
-            PyRuntimeError::new_err("Failed to send global playback batch - buffer may be full")
-        })?;
+    let message = ControlMessage::GlobalPlaybackBatch(batch);
+    before_commit();
+    ownership
+        .commit_slot_write_fixed(
+            &write,
+            || {
+                writes
+                    .iter()
+                    .all(|prepared| ownership.launch_write_current(*prepared))
+                    && captures
+                        .iter()
+                        .all(InputRuntimePadBinding::control_publication_current)
+            },
+            |_| {
+                for prepared in &writes {
+                    ownership.apply_launch_write(*prepared);
+                }
+                let sent = producer.push(message);
+                debug_assert!(sent.is_ok());
+            },
+        )
+        .map_err(|error| PyRuntimeError::new_err(error.to_string()))?;
     Ok(GlobalPlaybackBatchTicket { status })
 }
+
+#[cfg(test)]
+#[path = "global_launch_publication_tests.rs"]
+mod global_launch_publication_tests;

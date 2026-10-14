@@ -97,6 +97,7 @@ class StemPairPreparationQueue:
         self._assets = assets
         self._runner = runner
         self._results: SimpleQueue[PairPreparation] = SimpleQueue()
+        self._held_results: list[PairPreparation] = []
         self.pending: dict[int, PairPreparation] = {}
         self._discard_retries: dict[int, tuple[int, PreparedStemPair]] = {}
 
@@ -236,17 +237,37 @@ class StemPairPreparationQueue:
             message = "saved stem provenance differs from its complete verified marker"
             raise ValueError(message)
 
-    def collect(self) -> tuple[PairPreparation, ...]:
+    def collect(
+        self, deferred_sample_ids: frozenset[int] = frozenset()
+    ) -> tuple[PairPreparation, ...]:
         """Collect only returned workers; each result still owns its rollback reservation."""
         ready: list[PairPreparation] = []
+        held, self._held_results = self._held_results, []
+        for request in held:
+            self._collect_returned(request, deferred_sample_ids, ready)
         while True:
             try:
                 request = self._results.get_nowait()
             except Empty:
                 return tuple(ready)
-            if self.pending.get(request.sample_id) is request:
-                self.pending.pop(request.sample_id)
-            ready.append(request)
+            self._collect_returned(request, deferred_sample_ids, ready)
+
+    def _collect_returned(
+        self,
+        request: PairPreparation,
+        deferred_sample_ids: frozenset[int],
+        ready: list[PairPreparation],
+    ) -> None:
+        delivery_id = next(
+            (sample_id for sample_id, owned in self.pending.items() if owned is request),
+            request.sample_id,
+        )
+        if delivery_id in deferred_sample_ids:
+            self._held_results.append(request)
+            return
+        if self.pending.get(request.sample_id) is request:
+            self.pending.pop(request.sample_id)
+        ready.append(request)
 
     def cancel(self, sample_id: int) -> None:
         """Withdraw interest without releasing a queued/running reader prematurely."""

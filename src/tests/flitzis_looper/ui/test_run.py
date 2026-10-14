@@ -1,5 +1,6 @@
 """Close requests keep the UI loop alive until the controller can release ownership."""
 
+from types import SimpleNamespace
 from typing import TYPE_CHECKING
 from unittest.mock import Mock
 
@@ -11,6 +12,12 @@ if TYPE_CHECKING:
     from imgui_bundle.hello_imgui import RunnerParams
 
     from flitzis_looper.controller import AppController
+
+
+@pytest.fixture(autouse=True)
+def _runtime_input_without_native_imgui(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(run.imgui, "get_io", lambda: SimpleNamespace(app_focus_lost=False))
+    monkeypatch.setattr(run.imgui, "is_mouse_down", lambda _button: True)
 
 
 @pytest.mark.parametrize("sticky_os_close", [False, True])
@@ -95,3 +102,28 @@ def test_pending_close_keeps_native_error_visible_and_balances_popup(
     assert text.call_count == 2
     assert "own Copy acknowledgement pending" in text.call_args.args[0]
     ended.assert_called_once()
+
+
+@pytest.mark.parametrize("cancellation", ["button_up", "focus_cancel", "editor_hidden", "close"])
+def test_global_runtime_tick_delivers_release_before_poll_even_without_toolbar(
+    monkeypatch: pytest.MonkeyPatch, cancellation: str
+) -> None:
+    order = []
+    release = Mock(side_effect=order.append)
+    poll = Mock(side_effect=lambda: order.append("poll"))
+    context = SimpleNamespace(
+        ui=SimpleNamespace(waveform=SimpleNamespace(pause_selected_pad_hold_on_release=release)),
+        audio=SimpleNamespace(poll=SimpleNamespace(poll=poll)),
+        state=SimpleNamespace(
+            session=SimpleNamespace(
+                settings_open=cancellation == "editor_hidden", waveform_editor_open=True
+            )
+        ),
+    )
+    monkeypatch.setattr(
+        run.imgui, "get_io", lambda: SimpleNamespace(app_focus_lost=cancellation == "focus_cancel")
+    )
+    monkeypatch.setattr(run.imgui, "is_mouse_down", lambda _button: cancellation != "button_up")
+    run._poll_runtime_tick(context, closing=cancellation == "close")
+    assert order == [cancellation, "poll"]
+    poll.assert_called_once()

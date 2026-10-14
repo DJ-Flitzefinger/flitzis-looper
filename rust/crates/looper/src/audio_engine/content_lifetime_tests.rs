@@ -65,6 +65,11 @@ impl Fixture {
             0,
             self.sample.clone(),
             LoadedSourcePublication {
+                placement: self
+                    .engine
+                    .input_runtime_ownership
+                    .slot_snapshot(0)
+                    .unwrap(),
                 ownership: &self.engine.input_runtime_ownership,
                 generation,
                 rate: RATE,

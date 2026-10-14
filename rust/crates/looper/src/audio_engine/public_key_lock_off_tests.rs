@@ -319,9 +319,6 @@ off_window = transport.residency._pending[0].ticket
 assert off_window is not None and off_window.key_lock_request_id is not None
 assert off_window.key_lock_request_id != off_source['request_id']
 assert project.pad_key_lock[0] is False
-status = transport.residency.key_lock_status(0)
-assert not status.requested and status.pending and status.effective is True and status.error is None
-assert project.stem_cache[0].pair == disk_selection and registration.is_current()
 "#,
     );
     wait_until(|| consumer.peek().is_ok());
@@ -329,6 +326,17 @@ assert project.stem_cache[0].pair == disk_selection and registration.is_current(
         consumer.peek(),
         Ok(ControlMessage::RelocateResident(_))
     ));
+    // The own payload precedes completion of the worker's publication marker.
+    // Its request guard is retained through that commit and predecessor settlement.
+    drop(engine.pad_request_ids.lock().unwrap());
+    controller_python(
+        locals,
+        r#"
+status = transport.residency.key_lock_status(0)
+assert not status.requested and status.pending and status.effective is True and status.error is None, repr(status)
+assert project.stem_cache[0].pair == disk_selection and registration.is_current()
+"#,
+    );
     playback.callback.retirement.slots = 0;
     assert_eq!(
         playback.drain(consumer),
@@ -465,12 +473,13 @@ assert registration.is_current() and project.stem_cache[0].pair == disk_selectio
             false,
             request,
             InputPadBinding {
+                placement: owner.binding_placement(0),
                 resident: source.resident_binding(),
                 source_address: source.source_address(),
                 sample_count: source.source_sample_count(),
                 channels: source.channels,
                 sample_rate_hz: RATE,
-                authority_revision: owner.authority[0].load(Ordering::Acquire),
+                authority_revision: owner.authority_revision(0),
                 runtime_revision: 0,
                 accepted: None,
             },

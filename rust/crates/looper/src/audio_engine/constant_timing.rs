@@ -2,6 +2,8 @@
 
 use super::analysis_pcm::{LoadedPcmSnapshot, PcmIdentity, resample_mono_cancellable};
 use super::constants::NUM_SAMPLES;
+use super::content_placement::{ContentKey, SlotSnapshot};
+use super::input_runtime_binding::{InputPadBinding, InputRuntimeOwnership};
 use super::prepared_source::{PreparedSourcePermit, next_epoch};
 use super::{AudioEngine, PadRequestAdvance};
 use crate::messages::{ControlMessage, ControlParameterMessage, SampleBuffer};
@@ -56,6 +58,8 @@ pub(super) fn validated_pcm_limit_bytes(limit_bytes: usize) -> Result<usize, Str
 pub(crate) struct CurrentTimingAcknowledgements {
     epochs: [AtomicU64; NUM_SAMPLES],
     revoked_through: [AtomicU64; NUM_SAMPLES],
+    acknowledged_lifetimes: [AtomicU64; NUM_SAMPLES],
+    revoked_lifetimes: [AtomicU64; NUM_SAMPLES],
 }
 
 impl Default for CurrentTimingAcknowledgements {
@@ -63,11 +67,131 @@ impl Default for CurrentTimingAcknowledgements {
         Self {
             epochs: std::array::from_fn(|_| AtomicU64::new(0)),
             revoked_through: std::array::from_fn(|_| AtomicU64::new(0)),
+            acknowledged_lifetimes: std::array::from_fn(|_| AtomicU64::new(0)),
+            revoked_lifetimes: std::array::from_fn(|_| AtomicU64::new(0)),
         }
     }
 }
 
 impl CurrentTimingAcknowledgements {
+    /// The one callback writer publishes only the captured content incarnation.
+    /// Revocation has its own lifetime tag, so initializing a later ACK cannot
+    /// erase an already queued explicit revocation for that same new content.
+    pub(crate) fn acknowledge_for_key(
+        &self,
+        ownership: &InputRuntimeOwnership,
+        key: ContentKey,
+        publication_epoch: u64,
+    ) -> bool {
+        if !ownership.content_key_current(key) || publication_epoch == 0 {
+            return false;
+        }
+        let cell = key.cell().index();
+        self.acknowledged_lifetimes[cell].store(0, Ordering::SeqCst);
+        self.epochs[cell].store(publication_epoch, Ordering::SeqCst);
+        self.acknowledged_lifetimes[cell].store(key.lifetime(), Ordering::SeqCst);
+        ownership.content_key_current(key)
+    }
+
+    /// Fixed content lookup, independent of a pending placement publication.
+    pub(crate) fn current_for_key(
+        &self,
+        ownership: &InputRuntimeOwnership,
+        key: ContentKey,
+    ) -> u64 {
+        let cell = key.cell().index();
+        if !ownership.content_key_current(key)
+            || self.acknowledged_lifetimes[cell].load(Ordering::SeqCst) != key.lifetime()
+        {
+            return 0;
+        }
+        let epoch = self.epochs[cell].load(Ordering::SeqCst);
+        let revoked_lifetime = self.revoked_lifetimes[cell].load(Ordering::SeqCst);
+        let through = self.revoked_through[cell].load(Ordering::SeqCst);
+        if self.acknowledged_lifetimes[cell].load(Ordering::SeqCst) != key.lifetime()
+            || self.revoked_lifetimes[cell].load(Ordering::SeqCst) != revoked_lifetime
+            || !ownership.content_key_current(key)
+            || (revoked_lifetime == key.lifetime() && epoch <= through)
+        {
+            0
+        } else {
+            epoch
+        }
+    }
+
+    pub(crate) fn current_for_binding(
+        &self,
+        ownership: &InputRuntimeOwnership,
+        id: usize,
+        binding: InputPadBinding,
+    ) -> u64 {
+        if let Some(key) = binding
+            .placement
+            .and_then(|snapshot| snapshot.content_key())
+        {
+            self.current_for_key(ownership, key)
+        } else if !ownership.is_source_tracked() {
+            self.current_epoch(id)
+        } else {
+            0
+        }
+    }
+
+    /// Control routing is resolved afresh; an odd layout publication grants no ACK.
+    pub(crate) fn current_for_slot(&self, ownership: &InputRuntimeOwnership, id: usize) -> u64 {
+        if !ownership.is_source_tracked() {
+            return self.current_epoch(id);
+        }
+        ownership
+            .slot_snapshot(id)
+            .and_then(|snapshot| snapshot.content_key())
+            .map_or(0, |key| self.current_for_key(ownership, key))
+    }
+
+    /// Callback clear of one captured incarnation, never a late numeric slot.
+    pub(crate) fn clear_for_key(&self, ownership: &InputRuntimeOwnership, key: ContentKey) -> bool {
+        if !ownership.content_key_current(key) {
+            return false;
+        }
+        let cell = key.cell().index();
+        if self.acknowledged_lifetimes[cell].load(Ordering::SeqCst) == key.lifetime() {
+            self.epochs[cell].store(0, Ordering::SeqCst);
+        }
+        ownership.content_key_current(key)
+    }
+
+    /// Called under the existing request owner, which serializes source/lifetime
+    /// changes and explicit revocation. The callback writes only ACK fields.
+    #[cfg(test)]
+    pub(crate) fn revoke_for_key(
+        &self,
+        ownership: &InputRuntimeOwnership,
+        key: ContentKey,
+        through_epoch: u64,
+    ) -> bool {
+        if !ownership.content_key_current(key) {
+            return false;
+        }
+        self.revoke_captured_key(key, through_epoch);
+        ownership.content_key_current(key)
+    }
+
+    /// Fixed stores after the caller has claimed this exact captured incarnation.
+    /// The shared mutation marker prevents a lifetime replacement until publication.
+    fn revoke_captured_key(&self, key: ContentKey, through_epoch: u64) {
+        let cell = key.cell().index();
+        let through = if self.revoked_lifetimes[cell].load(Ordering::SeqCst) == key.lifetime() {
+            through_epoch.max(self.revoked_through[cell].load(Ordering::SeqCst))
+        } else {
+            through_epoch
+        };
+        self.revoked_lifetimes[cell].store(0, Ordering::SeqCst);
+        self.revoked_through[cell].store(through, Ordering::SeqCst);
+        self.revoked_lifetimes[cell].store(key.lifetime(), Ordering::SeqCst);
+    }
+
+    // Raw cell methods support untracked standalone mixers and their fixtures.
+    // Real engine readers/writers use the lifetime-bound methods above.
     pub(crate) fn acknowledge(&self, id: usize, publication_epoch: u64) {
         self.epochs[id].store(publication_epoch, Ordering::Release);
     }
@@ -85,13 +209,6 @@ impl CurrentTimingAcknowledgements {
         }
     }
 
-    /// Successful explicit authority edits revoke previous acknowledgement even
-    /// while their callback clears remain queued. Automatic roundtrips cannot
-    /// resurrect it. A new preparation/request alone never invokes this path.
-    fn revoke_authority(&self, id: usize, through_epoch: u64) {
-        self.revoked_through[id].store(through_epoch, Ordering::Release);
-    }
-
     pub(super) fn clear_all(&self) {
         for id in 0..NUM_SAMPLES {
             self.clear(id);
@@ -105,6 +222,8 @@ impl CurrentTimingAcknowledgements {
 /// The complete immutable accepted evidence is retained independently of tickets.
 #[derive(Clone)]
 pub(super) struct CurrentConstantTimingRecord {
+    pub(super) content_key: Option<ContentKey>,
+    ownership: Arc<InputRuntimeOwnership>,
     source_address: usize,
     sample_count: usize,
     channels: usize,
@@ -132,6 +251,8 @@ impl CurrentConstantTimingRecord {
         projection: AcceptedTimingProjection,
     ) -> Self {
         Self {
+            content_key: ticket.placement.and_then(|snapshot| snapshot.content_key()),
+            ownership: ticket.ownership.clone(),
             source_address: ticket.sample.source_address(),
             sample_count: ticket.sample.source_sample_count(),
             channels: ticket.sample.channels,
@@ -149,11 +270,37 @@ impl CurrentConstantTimingRecord {
         }
     }
 
-    pub(super) fn metadata(&self, py: Python<'_>) -> PyResult<Py<PyAny>> {
+    fn acknowledged_epoch(&self, engine: &AudioEngine) -> u64 {
+        if !Arc::ptr_eq(&self.ownership, &engine.input_runtime_ownership) {
+            return 0;
+        }
+        self.content_key.map_or(0, |key| {
+            engine
+                .current_timing_acknowledgements
+                .current_for_key(&self.ownership, key)
+        })
+    }
+
+    fn occupies_slot(&self, engine: &AudioEngine, id: usize) -> bool {
+        Arc::ptr_eq(&self.ownership, &engine.input_runtime_ownership)
+            && self.content_key.is_some_and(|key| {
+                engine
+                    .input_runtime_ownership
+                    .slot_snapshot(id)
+                    .and_then(|snapshot| snapshot.content_key())
+                    == Some(key)
+            })
+    }
+
+    /// Project current placement without rewriting the immutable accepted evidence.
+    pub(super) fn metadata_for_slot(&self, py: Python<'_>, id: usize) -> PyResult<Py<PyAny>> {
         let dict = PyDict::new(py);
-        dict.set_item("pad_id", self.binding.job.pad_id)?;
+        dict.set_item("pad_id", id)?;
         dict.set_item("pcm_limit_bytes", self.pcm_budget.limit_bytes())?;
-        dict.set_item("source_id", &self.binding.job.source_id)?;
+        dict.set_item(
+            "source_id",
+            format!("loaded-{id}-{}", self.binding.job.source_generation),
+        )?;
         dict.set_item("source_generation", self.binding.job.source_generation)?;
         dict.set_item("accepted_request_id", self.binding.job.request_id)?;
         dict.set_item("publication_epoch", self.publication_epoch)?;
@@ -180,15 +327,13 @@ impl CurrentConstantTimingRecord {
 /// cannot become current later. Pending records survive this off-RT retirement.
 pub(super) fn retire_old_current_records(
     engine: &AudioEngine,
-    id: usize,
     records: &mut Vec<CurrentConstantTimingRecord>,
 ) {
     records.retain(|record| {
         let status = record.publication.status();
         status == "pending"
             || (status == "accepted"
-                && engine.current_timing_acknowledgements.current_epoch(id)
-                    == record.publication_epoch)
+                && record.acknowledged_epoch(engine) == record.publication_epoch)
     });
 }
 
@@ -225,7 +370,7 @@ pub(super) fn current_metadata(
         .lock()
         .map_err(|_| PyRuntimeError::new_err("current timing lock poisoned"))?;
     let records = &mut all_records[id];
-    retire_old_current_records(engine, id, records);
+    retire_old_current_records(engine, records);
     if intents[id] != TimingIntent::Automatic {
         return Ok(None);
     }
@@ -235,7 +380,9 @@ pub(super) fn current_metadata(
     // A changed callback epoch during lookup yields no accepted claim from this
     // poll. The next poll observes the new acknowledged record; audio progresses
     // independently. No spin/retry or callback lock is required.
-    let acknowledged = engine.current_timing_acknowledgements.current_epoch(id);
+    let acknowledged = engine
+        .current_timing_acknowledgements
+        .current_for_slot(&engine.input_runtime_ownership, id);
     let Some(record) = current_record_for_source(
         engine,
         id,
@@ -246,8 +393,12 @@ pub(super) fn current_metadata(
     ) else {
         return Ok(None);
     };
-    let metadata = record.metadata(py)?;
-    if engine.current_timing_acknowledgements.current_epoch(id) != acknowledged {
+    let metadata = record.metadata_for_slot(py, id)?;
+    if engine
+        .current_timing_acknowledgements
+        .current_for_slot(&engine.input_runtime_ownership, id)
+        != acknowledged
+    {
         return Ok(None);
     }
     Ok(Some(metadata))
@@ -262,9 +413,12 @@ pub(super) fn current_record_for_source<'a>(
     digest: Option<&str>,
     records: &'a [CurrentConstantTimingRecord],
 ) -> Option<&'a CurrentConstantTimingRecord> {
-    let acknowledged = engine.current_timing_acknowledgements.current_epoch(id);
+    let acknowledged = engine
+        .current_timing_acknowledgements
+        .current_for_slot(&engine.input_runtime_ownership, id);
     records.iter().find(|record| {
-        record.publication_epoch == acknowledged
+        record.occupies_slot(engine, id)
+            && record.publication_epoch == acknowledged
             && record.channels == source.channels
             && record.source_address == source.source_address()
             && record.sample_count == source.source_sample_count()
@@ -303,13 +457,17 @@ pub(crate) struct PreparedConstantTiming {
     pub(crate) reference: SampleBuffer,
     pub(crate) publication: PreparedSourcePermit,
     pub(crate) projection: AcceptedTimingProjection,
+    pub(crate) content_key: Option<ContentKey>,
 }
 
 /// Opaque native analysis and adoption ticket. Python cannot replace its evidence or identity.
 #[pyclass(frozen)]
 pub struct ConstantTimingTicket {
     id: usize,
+    placement: Option<SlotSnapshot>,
+    ownership: Arc<InputRuntimeOwnership>,
     request_id: u64,
+    request_incarnation: Option<u64>,
     source_generation: u64,
     sample_rate_hz: u32,
     source_digest: String,
@@ -326,6 +484,19 @@ pub struct ConstantTimingTicket {
 
 #[pymethods]
 impl ConstantTimingTicket {
+    /// Original Native source placement, never metadata-pad-id permission.
+    pub fn current_control_slot(&self) -> Option<usize> {
+        if !self.ownership.is_source_tracked() {
+            return Some(self.id);
+        }
+        let key = self.placement?.content_key()?;
+        match self.ownership.observe_control_key(key) {
+            super::content_placement::PlacementObservation::Current(snapshot) => {
+                Some(snapshot.slot())
+            }
+            _ => None,
+        }
+    }
     /// Complete native source/PCM/timebase and original QM arrays, outside realtime work.
     pub fn metadata(&self, py: Python<'_>) -> PyResult<Py<PyAny>> {
         let binding = &self.binding;
@@ -528,11 +699,14 @@ pub(super) fn parse_intent(value: &str) -> PyResult<TimingIntent> {
 #[derive(Clone)]
 pub struct CapturedConstantTiming {
     id: usize,
+    placement: Option<SlotSnapshot>,
+    ownership: Arc<InputRuntimeOwnership>,
     sample: SampleBuffer,
     source_generation: u64,
     sample_rate_hz: u32,
     source_digest: String,
     request_id: u64,
+    request_incarnation: Option<u64>,
     captured_epoch: u64,
     epoch: Arc<AtomicU64>,
     timing_bound: TimingBound,
@@ -578,7 +752,16 @@ pub(super) fn capture_preparation_with_limit(
     {
         return Err("invalid explicit timing error declaration".into());
     }
-    let (sample, source_generation, sample_rate_hz, source_digest, request_id, captured_epoch) = {
+    let (
+        sample,
+        source_generation,
+        sample_rate_hz,
+        source_digest,
+        request_id,
+        captured_epoch,
+        placement,
+        epoch,
+    ) = {
         let mut requests = engine
             .pad_request_ids
             .lock()
@@ -590,7 +773,7 @@ pub(super) fn capture_preparation_with_limit(
             if expected.id != id
                 || !Arc::ptr_eq(&expected.ownership, &engine.input_runtime_ownership)
                 || !expected.current()
-                || expected.binding != current.binding
+                || !expected.binding.same_projection(&current.binding)
                 || !current.current()
             {
                 return Err("stale or foreign constant timing preparation binding".into());
@@ -616,7 +799,7 @@ pub(super) fn capture_preparation_with_limit(
                 .active_tasks
                 .lock()
                 .map_err(|_| "task lock poisoned")?,
-            id,
+            engine.active_task_cell(id)?,
         ) {
             return Err("sample task already running".into());
         }
@@ -637,7 +820,7 @@ pub(super) fn capture_preparation_with_limit(
         let digest = digests[id]
             .clone()
             .ok_or("loaded source digest unavailable")?;
-        if source_generation == 0 || requests[id] == 0 {
+        if source_generation == 0 || sample_rate_hz == 0 {
             return Err("loaded source identity unavailable".into());
         }
         let frames = sample.frame_count();
@@ -647,8 +830,27 @@ pub(super) fn capture_preparation_with_limit(
         if timing_bound.halfwidth_seconds > frames as f64 / f64::from(sample_rate_hz) {
             return Err("timing error exceeds source duration".into());
         }
-        let advance =
-            PadRequestAdvance::prepare(&mut requests[id], &engine.prepared_source_epochs[id])?;
+        super::complete_context::CompleteSourceGuard::capture(
+            engine,
+            id,
+            &sample,
+            source_generation,
+            sample_rate_hz,
+        )?;
+        let placement = engine.input_runtime_ownership.slot_snapshot(id);
+        if engine.input_runtime_ownership.is_source_tracked()
+            && placement
+                .and_then(|snapshot| snapshot.content_key())
+                .is_none()
+        {
+            return Err("constant timing source has no current content lifetime".into());
+        }
+        let epoch = engine.prepared_source_epoch(id)?.clone();
+        let advance = PadRequestAdvance::prepare(&mut requests[id], &epoch)?;
+        let logical_advance = engine
+            .input_runtime_ownership
+            .prepare_source_request_advance(id)?;
+        logical_advance.commit();
         let request_id = advance.commit();
         (
             sample,
@@ -656,19 +858,24 @@ pub(super) fn capture_preparation_with_limit(
             sample_rate_hz,
             digest,
             request_id,
-            engine.prepared_source_epochs[id].load(Ordering::Acquire),
+            epoch.load(Ordering::Acquire),
+            placement,
+            epoch,
         )
     };
     engine.offline_jobs.cancel(Some(id));
     Ok(CapturedConstantTiming {
         id,
+        placement,
+        ownership: engine.input_runtime_ownership.clone(),
         sample,
         source_generation,
         sample_rate_hz,
         source_digest,
         request_id,
+        request_incarnation: timing_request_incarnation(&engine.input_runtime_ownership, placement),
         captured_epoch,
-        epoch: engine.prepared_source_epochs[id].clone(),
+        epoch,
         timing_bound,
         pcm_budget,
     })
@@ -716,17 +923,19 @@ impl ConstantTimingPreparationWork {
         engine: &AudioEngine,
         captured: &CapturedConstantTiming,
     ) -> Result<Self, String> {
-        if !Arc::ptr_eq(&captured.epoch, &engine.prepared_source_epochs[captured.id])
+        let (id, _) =
+            resolve_timing_owner(engine, captured.placement, &captured.ownership, captured.id)?;
+        if !Arc::ptr_eq(&captured.ownership, &engine.input_runtime_ownership)
+            || !Arc::ptr_eq(&captured.epoch, engine.prepared_source_epoch(id)?)
             || captured.epoch.load(Ordering::Acquire) != captured.captured_epoch
+            || timing_request_incarnation(&captured.ownership, captured.placement)
+                != captured.request_incarnation
         {
             return Err("stale or foreign captured constant timing preparation".into());
         }
         let lease = PreparationLease::capture(engine)?;
-        let source = super::native_owned_work::CompleteSampleWork::capture(
-            engine,
-            captured.id,
-            &captured.sample,
-        )?;
+        let source =
+            super::native_owned_work::CompleteSampleWork::capture(engine, id, &captured.sample)?;
         Ok(Self {
             captured: captured.clone(),
             source,
@@ -872,7 +1081,10 @@ fn prepare_captured_inner(
     let adoption_ticket = guard.issue_ticket().map_err(|e| e.to_string())?;
     let ticket = ConstantTimingTicket {
         id,
+        placement: captured.placement,
+        ownership: captured.ownership.clone(),
         request_id,
+        request_incarnation: captured.request_incarnation,
         source_generation,
         sample_rate_hz,
         source_digest,
@@ -889,14 +1101,55 @@ fn prepare_captured_inner(
     Ok(ticket)
 }
 
+fn timing_request_incarnation(
+    ownership: &InputRuntimeOwnership,
+    placement: Option<SlotSnapshot>,
+) -> Option<u64> {
+    placement
+        .and_then(|snapshot| snapshot.content_key())
+        .and_then(|key| ownership.key_source_request_incarnation(key))
+}
+
+fn resolve_timing_owner(
+    engine: &AudioEngine,
+    original: Option<SlotSnapshot>,
+    ownership: &Arc<InputRuntimeOwnership>,
+    diagnostic_id: usize,
+) -> Result<(usize, bool), String> {
+    if !Arc::ptr_eq(ownership, &engine.input_runtime_ownership) {
+        return Err("stale or foreign constant timing ticket".into());
+    }
+    if !ownership.is_source_tracked() {
+        return Ok((diagnostic_id, true));
+    }
+    let original = original.ok_or("stale or foreign constant timing ticket")?;
+    let key = original
+        .content_key()
+        .ok_or("stale or foreign constant timing ticket")?;
+    match ownership.observe_control_key(key) {
+        super::content_placement::PlacementObservation::Current(current) => {
+            Ok((current.slot(), original.same_projection(current)))
+        }
+        super::content_placement::PlacementObservation::Pending => {
+            Err("constant timing content placement pending".into())
+        }
+        _ => Err("stale or foreign constant timing ticket".into()),
+    }
+}
+
 fn validate_current(
     engine: &AudioEngine,
     ticket: &ConstantTimingTicket,
     requests: &[u64],
-) -> Result<(), String> {
-    let id = ticket.id;
-    if !Arc::ptr_eq(&engine.prepared_source_epochs[id], &ticket.epoch)
-        || requests[id] != ticket.request_id
+) -> Result<usize, String> {
+    let (id, original_slot) =
+        resolve_timing_owner(engine, ticket.placement, &ticket.ownership, ticket.id)?;
+    if !Arc::ptr_eq(&ticket.ownership, &engine.input_runtime_ownership)
+        || (engine.input_runtime_ownership.is_source_tracked() && ticket.placement.is_none())
+        || !Arc::ptr_eq(engine.prepared_source_epoch(id)?, &ticket.epoch)
+        || (original_slot && requests[id] != ticket.request_id)
+        || timing_request_incarnation(&ticket.ownership, ticket.placement)
+            != ticket.request_incarnation
         || ticket.epoch.load(Ordering::Acquire) != ticket.captured_epoch
     {
         return Err("stale or foreign constant timing ticket".into());
@@ -931,7 +1184,7 @@ fn validate_current(
     {
         return Err("current source digest, generation or rate changed".into());
     }
-    Ok(())
+    Ok(id)
 }
 
 struct OwnedHypothesis {
@@ -1073,7 +1326,7 @@ pub(super) fn publish_record(
         .pad_request_ids
         .lock()
         .map_err(|_| PyRuntimeError::new_err("request lock poisoned"))?;
-    validate_current(engine, ticket, &requests).map_err(PyValueError::new_err)?;
+    let id = validate_current(engine, ticket, &requests).map_err(PyValueError::new_err)?;
     let mut guard = ticket
         .guard
         .lock()
@@ -1103,7 +1356,7 @@ pub(super) fn publish_record(
         .current_constant_timing
         .lock()
         .map_err(|_| PyRuntimeError::new_err("current timing lock poisoned"))?;
-    current_records[ticket.id]
+    current_records[id]
         .try_reserve(1)
         .map_err(|_| PyRuntimeError::new_err("current timing record allocation failed"))?;
     let record = CurrentConstantTimingRecord::new(&timing, ticket, next, permit.clone(), projected);
@@ -1114,20 +1367,71 @@ pub(super) fn publish_record(
         guard.adopt(&ticket.adoption_ticket, timing)
     };
     adoption.map_err(|e| PyValueError::new_err(e.to_string()))?;
-    retire_old_current_records(engine, ticket.id, &mut current_records[ticket.id]);
-    current_records[ticket.id].push(record);
+    retire_old_current_records(engine, &mut current_records[id]);
+    current_records[id].push(record);
     ticket.epoch.store(next, Ordering::Release);
     *publication = Some(permit.clone());
     producer
         .push(ControlMessage::PublishConstantTiming {
-            id: ticket.id,
+            id,
             timing: PreparedConstantTiming {
                 reference: ticket.sample.clone(),
                 publication: permit,
                 projection: projected,
+                content_key: ticket.placement.and_then(|snapshot| snapshot.content_key()),
             },
         })
         .map_err(|_| PyRuntimeError::new_err("reserved single-producer capacity lost"))
+}
+
+/// All fallible admission, locks and queue capacity checks precede this bounded mutation.
+/// A callback source/window writer and a pair writer use the same marker. Once claimed,
+/// only the captured cell is touched and the returned snapshot names the complete edit.
+fn commit_timing_intent_under_request_lock(
+    engine: &AudioEngine,
+    placement: SlotSnapshot,
+    epoch: &AtomicU64,
+    next: u64,
+    intents: &mut [TimingIntent],
+    intent: TimingIntent,
+) -> PyResult<SlotSnapshot> {
+    let ownership = &engine.input_runtime_ownership;
+    let prepared = ownership
+        .prepare_slot_write_fixed(placement, placement.lifetime())
+        .map_err(|error| PyRuntimeError::new_err(error.to_string()))?;
+    let authority = ownership.authority_for_cell(placement.cell());
+    let captured_authority = authority.load(Ordering::Acquire);
+    let next_authority = next_epoch(authority).map_err(PyRuntimeError::new_err)?;
+    let declared_intent = intents
+        .get_mut(placement.slot())
+        .ok_or_else(|| PyValueError::new_err("Invalid sample id"))?;
+    ownership
+        .commit_slot_write_fixed(
+            &prepared,
+            || {
+                authority.load(Ordering::Acquire) == captured_authority
+                    && epoch.load(Ordering::Acquire) == next - 1
+            },
+            |cell| {
+                if let Some(key) = placement.content_key() {
+                    engine
+                        .current_timing_acknowledgements
+                        .revoke_captured_key(key, next);
+                }
+                authority.store(next_authority, Ordering::Release);
+                epoch.store(next, Ordering::Release);
+                *declared_intent = intent;
+                ownership.set_timing_intent_for_cell(cell, intent);
+            },
+        )
+        .map_err(|error| PyRuntimeError::new_err(error.to_string()))
+}
+
+fn capture_timing_edit_placement(engine: &AudioEngine, id: usize) -> PyResult<SlotSnapshot> {
+    engine
+        .input_runtime_ownership
+        .slot_snapshot(id)
+        .ok_or_else(|| PyRuntimeError::new_err("current timing placement is pending or invalid"))
 }
 
 /// Publish authority and an ordered clear transaction; every edit invalidates old tickets.
@@ -1152,6 +1456,7 @@ pub(super) fn set_intent_with_source(
         .pad_request_ids
         .lock()
         .map_err(|_| PyRuntimeError::new_err("request lock poisoned"))?;
+    let placement = capture_timing_edit_placement(engine, id)?;
     super::input_runtime_binding::validate_expected_source_generation_under_request_lock(
         engine,
         id,
@@ -1164,23 +1469,25 @@ pub(super) fn set_intent_with_source(
     let mut producer = producer
         .lock()
         .map_err(|_| PyRuntimeError::new_err("producer lock poisoned"))?;
-    let next = next_epoch(&engine.prepared_source_epochs[id]).map_err(PyRuntimeError::new_err)?;
+    let epoch = &engine.prepared_source_epochs[placement.cell().index()];
+    let next = next_epoch(epoch).map_err(PyRuntimeError::new_err)?;
     if producer.is_full() {
         return Err(PyRuntimeError::new_err(
             "Failed to send timing intent - buffer may be full",
         ));
     }
-    let input_authority = engine.input_runtime_ownership.next_authority(id)?;
-    engine.input_runtime_ownership.revoke(id, input_authority);
-    engine.prepared_source_epochs[id].store(next, Ordering::Release);
-    engine
-        .current_timing_acknowledgements
-        .revoke_authority(id, next);
-    intents[id] = intent;
-    engine.input_runtime_ownership.set_timing_intent(id, intent);
+    let placement = commit_timing_intent_under_request_lock(
+        engine,
+        placement,
+        epoch,
+        next,
+        &mut intents,
+        intent,
+    )?;
     producer
         .push(ControlMessage::ClearPadConstantTiming {
             id,
+            placement: Some(placement),
             through_epoch: next,
             expected_source_generation,
         })
@@ -1208,6 +1515,7 @@ pub(super) fn publish_legacy_bpm_with_source(
         .pad_request_ids
         .lock()
         .map_err(|_| PyRuntimeError::new_err("request lock poisoned"))?;
+    let placement = capture_timing_edit_placement(engine, id)?;
     super::input_runtime_binding::validate_expected_source_generation_under_request_lock(
         engine,
         id,
@@ -1220,25 +1528,25 @@ pub(super) fn publish_legacy_bpm_with_source(
     let mut parameters = parameters
         .lock()
         .map_err(|_| PyRuntimeError::new_err("parameter producer lock poisoned"))?;
-    let next = next_epoch(&engine.prepared_source_epochs[id]).map_err(PyRuntimeError::new_err)?;
+    let epoch = &engine.prepared_source_epochs[placement.cell().index()];
+    let next = next_epoch(epoch).map_err(PyRuntimeError::new_err)?;
     if parameters.is_full() {
         return Err(PyRuntimeError::new_err(
             "Failed to send SetPadBpm - buffer may be full",
         ));
     }
-    let input_authority = engine.input_runtime_ownership.next_authority(id)?;
-    engine.input_runtime_ownership.revoke(id, input_authority);
-    engine.prepared_source_epochs[id].store(next, Ordering::Release);
-    engine
-        .current_timing_acknowledgements
-        .revoke_authority(id, next);
-    intents[id] = TimingIntent::Legacy;
-    engine
-        .input_runtime_ownership
-        .set_timing_intent(id, TimingIntent::Legacy);
+    let placement = commit_timing_intent_under_request_lock(
+        engine,
+        placement,
+        epoch,
+        next,
+        &mut intents,
+        TimingIntent::Legacy,
+    )?;
     parameters
         .push(ControlParameterMessage::SetLegacyPadBpm {
             id,
+            placement: Some(placement),
             bpm,
             through_epoch: next,
             expected_source_generation,
@@ -1267,6 +1575,7 @@ pub(super) fn publish_legacy_origin_with_source(
         .pad_request_ids
         .lock()
         .map_err(|_| PyRuntimeError::new_err("request lock poisoned"))?;
+    let placement = capture_timing_edit_placement(engine, id)?;
     super::input_runtime_binding::validate_expected_source_generation_under_request_lock(
         engine,
         id,
@@ -1279,25 +1588,25 @@ pub(super) fn publish_legacy_origin_with_source(
     let mut ordered = ordered
         .lock()
         .map_err(|_| PyRuntimeError::new_err("producer lock poisoned"))?;
-    let next = next_epoch(&engine.prepared_source_epochs[id]).map_err(PyRuntimeError::new_err)?;
+    let epoch = &engine.prepared_source_epochs[placement.cell().index()];
+    let next = next_epoch(epoch).map_err(PyRuntimeError::new_err)?;
     if ordered.is_full() {
         return Err(PyRuntimeError::new_err(
             "Failed to send SetPadTimingMetadata - buffer may be full",
         ));
     }
-    let input_authority = engine.input_runtime_ownership.next_authority(id)?;
-    engine.input_runtime_ownership.revoke(id, input_authority);
-    engine.prepared_source_epochs[id].store(next, Ordering::Release);
-    engine
-        .current_timing_acknowledgements
-        .revoke_authority(id, next);
-    intents[id] = TimingIntent::Legacy;
-    engine
-        .input_runtime_ownership
-        .set_timing_intent(id, TimingIntent::Legacy);
+    let placement = commit_timing_intent_under_request_lock(
+        engine,
+        placement,
+        epoch,
+        next,
+        &mut intents,
+        TimingIntent::Legacy,
+    )?;
     ordered
         .push(ControlMessage::SetLegacyPadTimingMetadata {
             id,
+            placement: Some(placement),
             metadata: crate::messages::PadTimingMetadata { phase_anchor_s },
             through_epoch: next,
             expected_source_generation,
@@ -1326,6 +1635,18 @@ pub(super) fn copy_records_share_accepted_for_test(
 #[cfg(test)]
 #[path = "constant_timing_tests.rs"]
 mod tests;
+
+#[cfg(test)]
+#[path = "constant_timing/content_ack_tests.rs"]
+mod content_ack_tests;
+
+#[cfg(test)]
+#[path = "constant_timing/content_epoch_tests.rs"]
+mod content_epoch_tests;
+
+#[cfg(test)]
+#[path = "constant_timing/control_write_tests.rs"]
+mod control_write_tests;
 
 #[cfg(all(test, windows))]
 #[path = "native_borrow_tests.rs"]

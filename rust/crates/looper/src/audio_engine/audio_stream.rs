@@ -10,28 +10,35 @@ use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
 use cpal::{BufferSize, Stream, StreamConfig};
 use env_logger::{Builder, Env};
 use rtrb::{Consumer, Producer, RingBuffer};
+use std::sync::atomic::Ordering;
 use std::sync::{Arc, Mutex};
 
 use crate::audio_engine::buffer_retirement::{
-    AudioBufferRetirement, AudioBufferRetirementWorker, create_audio_buffer_retirement,
+    AudioBufferRetirement, AudioBufferRetirementWorker, CallbackCloseOwner,
+    RtAudioBufferRetirement, create_audio_buffer_retirement_with_callback,
 };
 use crate::audio_engine::constant_timing::CurrentTimingAcknowledgements;
 use crate::audio_engine::constants::{MAX_VOICES, NUM_SAMPLES};
+use crate::audio_engine::content_placement::PlacementError;
+use crate::audio_engine::content_placement::SlotSnapshot;
 use crate::audio_engine::mixer::{RtMixer, RtRenderPadActivity};
 use crate::audio_engine::scheduler::{
-    FixedCapacityScheduler, ScheduledCommand, TransportScheduler,
+    DueEvent, FixedCapacityScheduler, ScheduledCommand, TransportScheduler,
 };
 use crate::audio_engine::timing::{
     InputClock, OutputClockMapper, OutputClockSnapshot, SharedOutputClock,
 };
 use crate::audio_engine::transport::{QuantizeGrid, TransportTimeline};
 use crate::messages::{AudioMessage, ControlMessage, ControlParameterMessage, TriggerQuantization};
+use std::cell::RefCell;
 
 pub(crate) const MAX_CONTROL_MESSAGES_PER_CALLBACK: usize = 64;
 pub(crate) const MAX_PARAMETER_MESSAGES_PER_CALLBACK: usize = 64;
 
 /// Handle to the audio stream with associated message channels
 pub struct AudioStreamHandle {
+    // Declaration order is intentional: stream closure hands its box to the still-live
+    // worker before the control thread requests worker drain/join.
     pub stream: Stream,
     _retirement_worker: AudioBufferRetirementWorker,
     pub producer: Arc<Mutex<Producer<ControlMessage>>>,
@@ -64,6 +71,76 @@ pub fn setup_logger() {
 pub(super) trait AudioMessageSink {
     fn push_audio_message(&mut self, message: AudioMessage);
     fn available_audio_message_slots(&mut self) -> usize;
+
+    /// An effect owns these tags already. Publication must never recapture current intent.
+    fn push_captured_pad_feedback(
+        &mut self,
+        captured: Option<AudioMessage>,
+        _diagnostic: AudioMessage,
+    ) {
+        if let Some(message) = captured {
+            self.push_audio_message(message);
+        }
+    }
+}
+
+fn content_feedback_message(
+    id: usize,
+    owner: usize,
+    key: super::content_placement::ContentKey,
+    transport_revision: u64,
+    kind: u8,
+    value: f64,
+) -> AudioMessage {
+    AudioMessage::ContentFeedback {
+        id,
+        owner,
+        cell: key.cell().index(),
+        lifetime: key.lifetime(),
+        transport_revision,
+        kind,
+        value,
+    }
+}
+
+/// Inside an effect marker these scalar reads belong to that exact effect. Telemetry
+/// uses the same bounded capture at observation and fails closed on a concurrent edit.
+fn capture_pad_feedback(
+    ownership: &super::input_runtime_binding::InputRuntimeOwnership,
+    id: usize,
+    kind: u8,
+    value: f64,
+) -> Option<AudioMessage> {
+    if !ownership.is_source_tracked() {
+        return Some(match kind {
+            1 => AudioMessage::SampleStarted { id },
+            2 => AudioMessage::SampleStopped { id },
+            3 => AudioMessage::PadPeak {
+                id,
+                peak: value as f32,
+            },
+            4 => AudioMessage::PadPlayhead {
+                id,
+                position_s: value,
+            },
+            _ => return None,
+        });
+    }
+    let key = ownership.callback_feedback_key(id)?;
+    let transport = ownership.transport_intent_for_cell(key.cell());
+    let revision = transport.load(Ordering::Acquire);
+    (ownership.callback_feedback_key(id) == Some(key)
+        && transport.load(Ordering::Acquire) == revision)
+        .then(|| {
+            content_feedback_message(
+                id,
+                ownership.owner_identity().diagnostic(),
+                key,
+                revision,
+                kind,
+                value,
+            )
+        })
 }
 
 impl AudioMessageSink for Producer<AudioMessage> {
@@ -73,6 +150,34 @@ impl AudioMessageSink for Producer<AudioMessage> {
 
     fn available_audio_message_slots(&mut self) -> usize {
         self.slots()
+    }
+}
+
+/// Allocated with the callback owner; tagging takes fixed atomic reads only.
+struct ContentFeedbackProducer {
+    producer: Producer<AudioMessage>,
+    ownership: Arc<super::input_runtime_binding::InputRuntimeOwnership>,
+}
+
+impl AudioMessageSink for ContentFeedbackProducer {
+    fn push_audio_message(&mut self, message: AudioMessage) {
+        let (id, kind, value) = match message {
+            AudioMessage::SampleStarted { id } => (id, 1, 0.0),
+            AudioMessage::SampleStopped { id } => (id, 2, 0.0),
+            AudioMessage::PadPeak { id, peak } => (id, 3, f64::from(peak)),
+            AudioMessage::PadPlayhead { id, position_s } => (id, 4, position_s),
+            other => {
+                let _ = self.producer.push(other);
+                return;
+            }
+        };
+        if let Some(message) = capture_pad_feedback(&self.ownership, id, kind, value) {
+            let _ = self.producer.push(message);
+        }
+    }
+
+    fn available_audio_message_slots(&mut self) -> usize {
+        self.producer.slots()
     }
 }
 
@@ -100,11 +205,17 @@ fn schedule_immediate_command<
             retirement,
         );
     } else {
-        execute_scheduled_command(
+        execute_due_event(
+            scheduler,
+            callback_start_frame,
+            DueEvent {
+                target_frame: callback_start_frame,
+                execution_frame: callback_start_frame,
+                was_late: false,
+                command,
+            },
             mixer,
             transport,
-            callback_start_frame,
-            command,
             audio_messages,
             retirement,
         );
@@ -361,30 +472,304 @@ fn drain_scheduler_due_at_callback_start<
     retirement: &mut R,
 ) {
     while let Some(event) = scheduler.pop_due_at_callback_start(callback_start_frame) {
-        execute_scheduled_command(
+        if !execute_due_event(
+            scheduler,
+            callback_start_frame,
+            event,
             mixer,
             transport,
-            event.execution_frame,
-            event.command,
             audio_messages,
             retirement,
-        );
+        ) {
+            break;
+        }
     }
 }
 
-fn trigger_binding_current(
+pub(super) enum ScheduledExecution {
+    Complete,
+    Pending(ScheduledCommand),
+}
+
+enum CallbackEffectResult {
+    Settled(bool),
+    Pending,
+}
+
+// Feedback is published after the complete marker closes. The callback reserves its queue
+// capacity before claim and captures only bounded scalar STOP events while applying effects.
+struct StoppedFeedback {
+    events: [Option<(Option<AudioMessage>, usize)>; MAX_VOICES],
+    len: usize,
+}
+
+impl StoppedFeedback {
+    fn new() -> Self {
+        Self {
+            events: std::array::from_fn(|_| None),
+            len: 0,
+        }
+    }
+
+    fn publish(&mut self, sink: &mut impl AudioMessageSink) {
+        for event in &mut self.events[..self.len] {
+            if let Some((captured, id)) = event.take() {
+                sink.push_captured_pad_feedback(captured, AudioMessage::SampleStopped { id });
+            }
+        }
+    }
+}
+
+impl AudioMessageSink for StoppedFeedback {
+    fn push_audio_message(&mut self, message: AudioMessage) {
+        let (captured, id) = match message {
+            AudioMessage::ContentFeedback { id, kind: 2, .. } => (Some(message), id),
+            // A diagnostic id alone must never acquire a later occupant's receipt.
+            AudioMessage::SampleStopped { id } => (None, id),
+            _ => return,
+        };
+        debug_assert!(self.len < MAX_VOICES);
+        self.events[self.len] = Some((captured, id));
+        self.len += 1;
+    }
+
+    fn push_captured_pad_feedback(
+        &mut self,
+        captured: Option<AudioMessage>,
+        diagnostic: AudioMessage,
+    ) {
+        if let AudioMessage::SampleStopped { id } = diagnostic {
+            debug_assert!(self.len < MAX_VOICES);
+            self.events[self.len] = Some((captured, id));
+            self.len += 1;
+        }
+    }
+
+    fn available_audio_message_slots(&mut self) -> usize {
+        MAX_VOICES - self.len
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
+fn execute_due_event<const CAPACITY: usize, S: AudioMessageSink, R: AudioBufferRetirement>(
+    scheduler: &mut FixedCapacityScheduler<CAPACITY>,
+    callback_frame: u64,
+    event: DueEvent,
+    mixer: &mut RtMixer,
+    transport: &mut TransportTimeline,
+    audio_messages: &mut S,
+    retirement: &mut R,
+) -> bool {
+    match execute_scheduled_command(
+        mixer,
+        transport,
+        event.execution_frame,
+        event.command,
+        audio_messages,
+        retirement,
+    ) {
+        ScheduledExecution::Complete => true,
+        ScheduledExecution::Pending(command) => {
+            scheduler.defer_due(DueEvent { command, ..event }, callback_frame);
+            false
+        }
+    }
+}
+
+fn execute_admitted_trigger<S: AudioMessageSink, R: AudioBufferRetirement>(
+    mixer: &mut RtMixer,
+    output_frame: u64,
+    command: &ScheduledCommand,
+    audio_messages: &mut S,
+    retirement: &mut R,
+) -> CallbackEffectResult {
+    let ScheduledCommand::TriggerInputPad {
+        id,
+        start_s,
+        end_s,
+        exclusive,
+        binding,
+        resident_control,
+        launch_revision,
+        ..
+    } = command
+    else {
+        unreachable!("trigger command")
+    };
+    let ownership = mixer.input_ownership_for_effect();
+    if ownership.placement_pending() {
+        return CallbackEffectResult::Pending;
+    }
+    let Some(id) = trigger_binding_slot(
+        mixer,
+        *id,
+        *binding,
+        resident_control.as_ref(),
+        *launch_revision,
+    ) else {
+        return CallbackEffectResult::Settled(false);
+    };
+    let retirement_needed = if *exclusive { 3 * MAX_VOICES } else { 3 };
+    let feedback_needed = if *exclusive {
+        mixer.voices.iter().filter(|voice| voice.active).count() + 1
+    } else {
+        1
+    };
+    if retirement.available_retirement_slots() < retirement_needed
+        || audio_messages.available_audio_message_slots() < feedback_needed
+    {
+        return CallbackEffectResult::Pending;
+    }
+    if !mixer.admitted_trigger_loop_context_available(id, *start_s, *end_s, *binding)
+        || (!*exclusive
+            && !mixer
+                .voices
+                .iter()
+                .any(|voice| !voice.active || voice.sample_id == id))
+    {
+        return CallbackEffectResult::Settled(false);
+    }
+    let Some(prepared) =
+        mixer.prepare_admitted_play_sample_rt(id, 1.0, output_frame, *binding, retirement)
+    else {
+        return if ownership.placement_pending() {
+            CallbackEffectResult::Pending
+        } else {
+            CallbackEffectResult::Settled(false)
+        };
+    };
+    let Some(snapshot) = ownership.slot_snapshot(id) else {
+        return CallbackEffectResult::Pending;
+    };
+    let write = match ownership.prepare_slot_write_fixed(snapshot, snapshot.lifetime()) {
+        Ok(write) => write,
+        Err(PlacementError::Pending | PlacementError::Stale) => {
+            return CallbackEffectResult::Pending;
+        }
+        Err(_) => return CallbackEffectResult::Settled(false),
+    };
+    let prepared = RefCell::new(Some(prepared));
+    let mixer = RefCell::new(mixer);
+    let mut stopped = StoppedFeedback::new();
+    let mut started_feedback = None;
+    #[cfg(test)]
+    launch_callback_tests::before_claim();
+    let result = ownership.commit_slot_write_fixed(
+        &write,
+        || {
+            let mixer = mixer.borrow();
+            trigger_binding_slot(
+                &mixer,
+                id,
+                *binding,
+                resident_control.as_ref(),
+                *launch_revision,
+            ) == Some(id)
+                && mixer.admit_prepared_source_birth(
+                    prepared.borrow_mut().as_mut().unwrap(),
+                    *binding,
+                    resident_control.is_none(),
+                )
+        },
+        |_| {
+            let mut mixer = mixer.borrow_mut();
+            let mut config = prepared.borrow_mut().take().unwrap();
+            mixer.apply_prepared_loop_region(&mut config, *start_s, *end_s);
+            if *exclusive {
+                stop_all_samples(&mut mixer, &mut stopped, retirement);
+            }
+            let started = mixer.play_prepared_sample_rt(config, retirement);
+            debug_assert!(started, "complete trigger capacity was prepared");
+            started_feedback = capture_pad_feedback(&ownership, id, 1, 0.0);
+        },
+    );
+    match result {
+        Ok(_) => {
+            #[cfg(test)]
+            content_feedback_tests::after_effect();
+            stopped.publish(audio_messages);
+            audio_messages
+                .push_captured_pad_feedback(started_feedback, AudioMessage::SampleStarted { id });
+            CallbackEffectResult::Settled(true)
+        }
+        Err(PlacementError::Pending | PlacementError::Stale) => CallbackEffectResult::Pending,
+        Err(_) => CallbackEffectResult::Settled(false),
+    }
+}
+
+fn trigger_binding_slot(
     mixer: &RtMixer,
     id: usize,
     binding: super::input_runtime_binding::InputPadBinding,
     resident_control: Option<&super::resident_relocation::ResidentLaunchGuard>,
     launch_revision: u64,
-) -> bool {
-    if !mixer.launch_current(id, launch_revision) {
-        return false;
+) -> Option<usize> {
+    let id = mixer.timing_effect_slot(id, binding.placement)?;
+    if !mixer.admitted_launch_current(id, binding, launch_revision) {
+        return None;
     }
-    match resident_control {
-        Some(guard) => guard.current() && mixer.source_binding_current(id, binding),
-        None => mixer.input_binding_current(id, binding),
+    let current = match resident_control {
+        Some(guard) => guard.current() && mixer.admitted_source_binding_current(id, binding),
+        None => mixer.admitted_input_binding_current(id, binding),
+    };
+    current.then_some(id)
+}
+
+fn execute_admitted_stop<S: AudioMessageSink, R: AudioBufferRetirement>(
+    mixer: &mut RtMixer,
+    placement: SlotSnapshot,
+    audio_messages: &mut S,
+    retirement: &mut R,
+) -> CallbackEffectResult {
+    let ownership = mixer.input_ownership_for_effect();
+    if ownership.placement_pending() {
+        return CallbackEffectResult::Pending;
+    }
+    let Some(id) = mixer.timing_effect_slot(placement.slot(), Some(placement)) else {
+        return CallbackEffectResult::Settled(false);
+    };
+    if retirement.available_retirement_slots() < 3 * MAX_VOICES
+        || audio_messages.available_audio_message_slots() < 1
+    {
+        return CallbackEffectResult::Pending;
+    }
+    let Some(snapshot) = ownership.slot_snapshot(id) else {
+        return CallbackEffectResult::Pending;
+    };
+    let write = match ownership.prepare_slot_write_fixed(snapshot, snapshot.lifetime()) {
+        Ok(write) => write,
+        Err(PlacementError::Pending | PlacementError::Stale) => {
+            return CallbackEffectResult::Pending;
+        }
+        Err(_) => return CallbackEffectResult::Settled(false),
+    };
+    let mixer = RefCell::new(mixer);
+    let mut stopped_feedback = None;
+    #[cfg(test)]
+    launch_callback_tests::before_claim();
+    let result = ownership.commit_slot_write_fixed(
+        &write,
+        || {
+            mixer
+                .borrow()
+                .timing_effect_slot(placement.slot(), Some(placement))
+                == Some(id)
+        },
+        |_| {
+            stopped_feedback = capture_pad_feedback(&ownership, id, 2, 0.0);
+            mixer.borrow_mut().stop_sample_rt(id, retirement);
+        },
+    );
+    match result {
+        Ok(_) => {
+            #[cfg(test)]
+            content_feedback_tests::after_effect();
+            audio_messages
+                .push_captured_pad_feedback(stopped_feedback, AudioMessage::SampleStopped { id });
+            CallbackEffectResult::Settled(true)
+        }
+        Err(PlacementError::Pending | PlacementError::Stale) => CallbackEffectResult::Pending,
+        Err(_) => CallbackEffectResult::Settled(false),
     }
 }
 
@@ -395,7 +780,7 @@ pub(super) fn execute_scheduled_command<S: AudioMessageSink, R: AudioBufferRetir
     command: ScheduledCommand,
     audio_messages: &mut S,
     retirement: &mut R,
-) {
+) -> ScheduledExecution {
     match command {
         ScheduledCommand::RefreshAcceptedTiming(refresh) => {
             let accepted = execute_accepted_timing_refresh(
@@ -409,55 +794,30 @@ pub(super) fn execute_scheduled_command<S: AudioMessageSink, R: AudioBufferRetir
             retirement.retire_accepted_timing_refresh(refresh);
         }
         ScheduledCommand::GlobalPlaybackBatch(batch) => {
-            let accepted = execute_global_playback_batch(
+            if retirement.available_retirement_slots() == 0 {
+                // Even a genuinely stale event retains its final owner until the
+                // retirement lane can accept the rejection payload.
+                return ScheduledExecution::Pending(ScheduledCommand::GlobalPlaybackBatch(batch));
+            }
+            let result = execute_global_playback_batch(
                 mixer,
                 output_frame,
                 &batch,
                 audio_messages,
                 retirement,
             );
+            let CallbackEffectResult::Settled(accepted) = result else {
+                return ScheduledExecution::Pending(ScheduledCommand::GlobalPlaybackBatch(batch));
+            };
             batch.finish(accepted);
             retirement.retire_global_playback_batch(batch);
         }
-        ScheduledCommand::TriggerInputPad {
-            id,
-            start_s,
-            end_s,
-            exclusive,
-            binding,
-            received_at_ns: _,
-            resident_control,
-            launch_revision,
-        } => {
-            if !trigger_binding_current(
-                mixer,
-                id,
-                binding,
-                resident_control.as_ref(),
-                launch_revision,
-            ) || !mixer.trigger_loop_context_available(id, start_s, end_s)
-                || (exclusive && retirement.available_retirement_slots() < 3 * MAX_VOICES)
-                || (!exclusive
-                    && !mixer
-                        .voices
-                        .iter()
-                        .any(|voice| !voice.active || voice.sample_id == id))
-            {
-                return;
-            }
-            let Some(mut prepared) =
-                mixer.prepare_play_sample_rt(id, 1.0, output_frame, retirement)
-            else {
-                return;
-            };
-            // No fallible authority recheck follows the loop/stop effects. They commit the actual
-            // source and complete effective timing admitted above as one callback transaction.
-            mixer.apply_prepared_loop_region(&mut prepared, start_s, end_s);
-            if exclusive {
-                stop_all_samples(mixer, audio_messages, retirement);
-            }
-            if mixer.play_prepared_sample_rt(prepared, retirement) {
-                audio_messages.push_audio_message(AudioMessage::SampleStarted { id });
+        command @ ScheduledCommand::TriggerInputPad { .. } => {
+            if matches!(
+                execute_admitted_trigger(mixer, output_frame, &command, audio_messages, retirement),
+                CallbackEffectResult::Pending
+            ) {
+                return ScheduledExecution::Pending(command);
             }
         }
         ScheduledCommand::PlaySample {
@@ -467,15 +827,25 @@ pub(super) fn execute_scheduled_command<S: AudioMessageSink, R: AudioBufferRetir
             expected_source_generation,
         } => {
             if !mixer.expected_source_generation_current(id, expected_source_generation) {
-                return;
+                return ScheduledExecution::Complete;
             }
+            let ownership = mixer.input_ownership_for_effect();
+            let started_feedback = capture_pad_feedback(&ownership, id, 1, 0.0);
+            let stopped_feedback = capture_pad_feedback(&ownership, id, 2, 0.0);
             let started =
                 mixer.play_sample_at_output_frame_rt(id, volume, output_frame, retirement);
-
+            #[cfg(test)]
+            content_feedback_tests::after_effect();
             if started {
-                audio_messages.push_audio_message(AudioMessage::SampleStarted { id });
+                audio_messages.push_captured_pad_feedback(
+                    started_feedback,
+                    AudioMessage::SampleStarted { id },
+                );
             } else {
-                audio_messages.push_audio_message(AudioMessage::SampleStopped { id });
+                audio_messages.push_captured_pad_feedback(
+                    stopped_feedback,
+                    AudioMessage::SampleStopped { id },
+                );
             }
         }
         ScheduledCommand::StopAllThenPlaySample {
@@ -485,31 +855,50 @@ pub(super) fn execute_scheduled_command<S: AudioMessageSink, R: AudioBufferRetir
             expected_source_generation,
         } => {
             if !mixer.expected_source_generation_current(id, expected_source_generation) {
-                return;
+                return ScheduledExecution::Complete;
             }
             if retirement.available_retirement_slots() < 3 * MAX_VOICES {
-                return;
+                return ScheduledExecution::Complete;
             }
             let Some(prepared) = mixer.prepare_play_sample_rt(id, volume, output_frame, retirement)
             else {
-                return;
+                return ScheduledExecution::Complete;
             };
-
+            let ownership = mixer.input_ownership_for_effect();
+            let started_feedback = capture_pad_feedback(&ownership, id, 1, 0.0);
             stop_all_samples(mixer, audio_messages, retirement);
             let started = mixer.play_prepared_sample_rt(prepared, retirement);
-
+            #[cfg(test)]
+            content_feedback_tests::after_effect();
             if started {
-                audio_messages.push_audio_message(AudioMessage::SampleStarted { id });
+                audio_messages.push_captured_pad_feedback(
+                    started_feedback,
+                    AudioMessage::SampleStarted { id },
+                );
             }
         }
+        #[cfg(test)]
         ScheduledCommand::StopSample { id } => {
+            let ownership = mixer.input_ownership_for_effect();
+            let stopped_feedback = capture_pad_feedback(&ownership, id, 2, 0.0);
             mixer.stop_sample_rt(id, retirement);
-            audio_messages.push_audio_message(AudioMessage::SampleStopped { id });
+            content_feedback_tests::after_effect();
+            audio_messages
+                .push_captured_pad_feedback(stopped_feedback, AudioMessage::SampleStopped { id });
+        }
+        command @ ScheduledCommand::StopSampleForPlacement { placement } => {
+            if matches!(
+                execute_admitted_stop(mixer, placement, audio_messages, retirement),
+                CallbackEffectResult::Pending
+            ) {
+                return ScheduledExecution::Pending(command);
+            }
         }
         ScheduledCommand::StopAll => {
             stop_all_samples(mixer, audio_messages, retirement);
         }
     }
+    ScheduledExecution::Complete
 }
 
 fn execute_accepted_timing_refresh<R: AudioBufferRetirement>(
@@ -553,18 +942,50 @@ fn execute_accepted_timing_refresh<R: AudioBufferRetirement>(
     true
 }
 
+fn global_playback_entry_slot(
+    mixer: &RtMixer,
+    entry: &super::global_playback_batch::GlobalPlaybackEntry,
+    start: bool,
+) -> Option<usize> {
+    let id = mixer.timing_effect_slot(entry.id, entry.binding.placement)?;
+    (mixer.admitted_source_binding_current(id, entry.binding)
+        && (!start || mixer.admitted_launch_current(id, entry.binding, entry.launch_revision)))
+    .then_some(id)
+}
+
 fn execute_global_playback_batch<S: AudioMessageSink, R: AudioBufferRetirement>(
     mixer: &mut RtMixer,
     output_frame: u64,
     batch: &super::global_playback_batch::GlobalPlaybackBatch,
     audio_messages: &mut S,
     retirement: &mut R,
-) -> bool {
+) -> CallbackEffectResult {
     // Captured input time is diagnostic context; transport owns execution quantization.
     let _received_at_ns = batch.received_at_ns;
+    let ownership = mixer.input_ownership_for_effect();
+    if ownership.placement_pending() {
+        return CallbackEffectResult::Pending;
+    }
+    if batch.entries.len() > NUM_SAMPLES || (batch.start && batch.entries.len() > MAX_VOICES) {
+        return CallbackEffectResult::Settled(false);
+    }
+    let mut resolved = [usize::MAX; NUM_SAMPLES];
+    for (index, entry) in batch.entries.iter().enumerate() {
+        let Some(id) = global_playback_entry_slot(mixer, entry, batch.start) else {
+            return CallbackEffectResult::Settled(false);
+        };
+        resolved[index] = id;
+    }
     // One fixed retirement reservation covers every old pin plus this immutable payload.
-    if retirement.available_retirement_slots() < 3 * MAX_VOICES + 1 {
-        return false;
+    let retirement_slots = retirement.available_retirement_slots();
+    if retirement_slots < 3 * MAX_VOICES + 1 {
+        // Preserve the existing atomic capacity rejection. Only an unavailable
+        // payload-retirement slot must retain the event to avoid a final RT drop.
+        return if retirement_slots == 0 {
+            CallbackEffectResult::Pending
+        } else {
+            CallbackEffectResult::Settled(false)
+        };
     }
     let feedback_needed = if batch.start {
         batch.entries.len()
@@ -574,66 +995,132 @@ fn execute_global_playback_batch<S: AudioMessageSink, R: AudioBufferRetirement>(
     // The callback is the only writer. The consumer can only increase this capacity
     // until all transaction feedback is published, so no accepted effect loses its state events.
     if audio_messages.available_audio_message_slots() < feedback_needed {
-        return false;
+        return CallbackEffectResult::Settled(false);
     }
-    if !batch.start {
-        if !mixer.global_stop_bindings_current(&batch.entries) {
-            return false;
-        }
-        stop_all_samples(mixer, audio_messages, retirement);
-        return true;
+    if !batch.start && !mixer.global_stop_bindings_current(&batch.entries) {
+        return CallbackEffectResult::Settled(false);
     }
-    if !batch.entries.iter().all(|entry| {
-        mixer.source_binding_current(entry.id, entry.binding)
-            && mixer.launch_current(entry.id, entry.launch_revision)
-            && mixer.loop_intent_context_available(entry.id, entry.start_s, entry.end_s)
-    }) {
-        return false;
+    if batch.start
+        && !batch.entries.iter().enumerate().all(|(index, entry)| {
+            mixer.loop_intent_context_available(resolved[index], entry.start_s, entry.end_s)
+        })
+    {
+        return CallbackEffectResult::Settled(false);
     }
     let free = mixer.voices.iter().filter(|voice| !voice.active).count();
     let new = batch
         .entries
         .iter()
-        .filter(|entry| {
+        .enumerate()
+        .filter(|(index, _)| {
             !mixer
                 .voices
                 .iter()
-                .any(|voice| voice.active && voice.sample_id == entry.id)
+                .any(|voice| voice.active && voice.sample_id == resolved[*index])
         })
         .count();
-    if new > free {
-        return false;
+    if batch.start && new > free {
+        return CallbackEffectResult::Settled(false);
     }
     // Preparing clones immutable PCM pins and fixed configs only; no active history mutates.
     let mut prepared: [Option<super::voice_slot::VoiceStartConfig>; MAX_VOICES] =
         std::array::from_fn(|_| None);
-    for (index, entry) in batch.entries.iter().enumerate() {
-        let Some(config) = mixer.prepare_play_sample_rt(entry.id, 1.0, output_frame, retirement)
-        else {
-            return false;
-        };
-        prepared[index] = Some(config);
+    if batch.start {
+        for (index, entry) in batch.entries.iter().enumerate() {
+            let Some(config) = mixer.prepare_admitted_play_sample_rt(
+                resolved[index],
+                1.0,
+                output_frame,
+                entry.binding,
+                retirement,
+            ) else {
+                return CallbackEffectResult::Settled(false);
+            };
+            prepared[index] = Some(config);
+        }
     }
-    // A control revocation during preparation rejects the whole effect before its first mutation.
-    if !batch.entries.iter().all(|entry| {
-        mixer.source_binding_current(entry.id, entry.binding)
-            && mixer.launch_current(entry.id, entry.launch_revision)
-    }) {
-        return false;
+    // The complete original-source guard is rechecked under the one mutation marker below.
+    let anchor = if batch.entries.is_empty() {
+        0
+    } else {
+        resolved[0]
+    };
+    let Some(snapshot) = ownership.slot_snapshot(anchor) else {
+        return CallbackEffectResult::Pending;
+    };
+    let write = match ownership.prepare_slot_write_fixed(snapshot, snapshot.lifetime()) {
+        Ok(write) => write,
+        Err(PlacementError::Pending | PlacementError::Stale) => {
+            return CallbackEffectResult::Pending;
+        }
+        Err(_) => return CallbackEffectResult::Settled(false),
+    };
+    let prepared = RefCell::new(prepared);
+    let mixer = RefCell::new(mixer);
+    let mut stopped = StoppedFeedback::new();
+    let mut started_feedback: [Option<AudioMessage>; MAX_VOICES] = std::array::from_fn(|_| None);
+    #[cfg(test)]
+    launch_callback_tests::before_claim();
+    let result = ownership.commit_slot_write_fixed(
+        &write,
+        || {
+            let mixer = mixer.borrow();
+            if !batch.entries.iter().enumerate().all(|(index, entry)| {
+                global_playback_entry_slot(&mixer, entry, batch.start) == Some(resolved[index])
+            }) {
+                return false;
+            }
+            if !batch.start {
+                return mixer.global_stop_bindings_current(&batch.entries);
+            }
+            let mut prepared = prepared.borrow_mut();
+            batch.entries.iter().enumerate().all(|(index, entry)| {
+                mixer.admit_prepared_source_birth(
+                    prepared[index].as_mut().unwrap(),
+                    entry.binding,
+                    false,
+                )
+            })
+        },
+        |_| {
+            let mut mixer = mixer.borrow_mut();
+            if !batch.start {
+                stop_all_samples(&mut mixer, &mut stopped, retirement);
+                return;
+            }
+            let mut prepared = prepared.borrow_mut();
+            for (index, entry) in batch.entries.iter().enumerate() {
+                let mut config = prepared[index]
+                    .take()
+                    .expect("validated prepared batch entry");
+                mixer.apply_prepared_loop_region(&mut config, entry.start_s, entry.end_s);
+                let started = mixer.play_prepared_sample_rt(config, retirement);
+                debug_assert!(
+                    started,
+                    "capacity was reserved for the complete global batch"
+                );
+                started_feedback[index] = capture_pad_feedback(&ownership, resolved[index], 1, 0.0);
+            }
+        },
+    );
+    match result {
+        Ok(_) => {
+            #[cfg(test)]
+            content_feedback_tests::after_effect();
+            stopped.publish(audio_messages);
+            if batch.start {
+                for (index, id) in resolved[..batch.entries.len()].iter().enumerate() {
+                    audio_messages.push_captured_pad_feedback(
+                        started_feedback[index].take(),
+                        AudioMessage::SampleStarted { id: *id },
+                    );
+                }
+            }
+            CallbackEffectResult::Settled(true)
+        }
+        Err(PlacementError::Pending | PlacementError::Stale) => CallbackEffectResult::Pending,
+        Err(_) => CallbackEffectResult::Settled(false),
     }
-    for (index, entry) in batch.entries.iter().enumerate() {
-        let mut config = prepared[index]
-            .take()
-            .expect("validated prepared batch entry");
-        mixer.apply_prepared_loop_region(&mut config, entry.start_s, entry.end_s);
-        let started = mixer.play_prepared_sample_rt(config, retirement);
-        debug_assert!(
-            started,
-            "capacity was reserved for the complete global batch"
-        );
-        audio_messages.push_audio_message(AudioMessage::SampleStarted { id: entry.id });
-    }
-    true
 }
 
 fn stop_all_samples<S: AudioMessageSink, R: AudioBufferRetirement>(
@@ -644,8 +1131,11 @@ fn stop_all_samples<S: AudioMessageSink, R: AudioBufferRetirement>(
     for index in 0..MAX_VOICES {
         if mixer.voices[index].active {
             let id = mixer.voices[index].sample_id;
+            let ownership = mixer.input_ownership_for_effect();
+            let stopped_feedback = capture_pad_feedback(&ownership, id, 2, 0.0);
             mixer.stop_sample_rt(id, retirement);
-            audio_messages.push_audio_message(AudioMessage::SampleStopped { id });
+            audio_messages
+                .push_captured_pad_feedback(stopped_feedback, AudioMessage::SampleStopped { id });
         }
     }
 }
@@ -780,14 +1270,32 @@ fn render_scheduled_audio_tracking_pads<
         while let Some(event) =
             scheduler.pop_due_through(callback_start_frame, rendered_until_frame)
         {
-            execute_scheduled_command(
+            if !execute_due_event(
+                scheduler,
+                callback_start_frame,
+                event,
                 mixer,
                 transport,
-                event.execution_frame,
-                event.command,
                 audio_messages,
                 retirement,
+            ) {
+                break;
+            }
+        }
+        if scheduler.deferred_due().is_some() {
+            render_mixer_segment(
+                mixer,
+                output,
+                pad_peaks,
+                &mut segment_peaks,
+                pad_activity,
+                callback_start_frame,
+                rendered_until_frame,
+                callback_end_frame,
+                channels,
+                retirement,
             );
+            break;
         }
     }
 }
@@ -872,16 +1380,24 @@ fn publish_pad_telemetry<S: AudioMessageSink>(
     *last_pad_emit_frame = frame_clock;
 
     for id in pad_activity.iter() {
+        let ownership = mixer.input_ownership_for_effect();
         let peak = pad_peaks[id];
         if peak > 0.0 && peak.is_finite() {
             let peak = peak.clamp(0.0, 1.0);
-            audio_messages.push_audio_message(AudioMessage::PadPeak { id, peak });
+            let observed = capture_pad_feedback(&ownership, id, 3, f64::from(peak));
+            #[cfg(test)]
+            content_feedback_tests::after_effect();
+            audio_messages.push_captured_pad_feedback(observed, AudioMessage::PadPeak { id, peak });
         }
 
         if let Some(position_s) = mixer.pad_playhead_seconds(id)
             && position_s.is_finite()
         {
-            audio_messages.push_audio_message(AudioMessage::PadPlayhead { id, position_s });
+            let observed = capture_pad_feedback(&ownership, id, 4, position_s);
+            #[cfg(test)]
+            content_feedback_tests::after_effect();
+            audio_messages
+                .push_captured_pad_feedback(observed, AudioMessage::PadPlayhead { id, position_s });
         }
     }
 }
@@ -893,6 +1409,9 @@ fn control_message_retirement_slots_needed(message: &ControlMessage) -> usize {
         ControlMessage::CaptureResidentSeek(_) => 3,
         ControlMessage::CommittedStemWork(_) => 3,
         ControlMessage::PadCopy(_) => 1,
+        ControlMessage::PadPair(_) => 1,
+        ControlMessage::HoldAction(_) => 2,
+        ControlMessage::TransportForPlacement { .. } => 1,
         ControlMessage::LoadColdSample {
             replace_assignment: true,
             ..
@@ -911,7 +1430,9 @@ fn control_message_retirement_slots_needed(message: &ControlMessage) -> usize {
         | ControlMessage::TriggerInputPad {
             exclusive: false, ..
         } => 3,
+        #[cfg(test)]
         ControlMessage::StopSample { .. } => 3 * MAX_VOICES,
+        ControlMessage::StopSampleForPlacement { .. } => 3 * MAX_VOICES,
         ControlMessage::UnloadSample { .. } => 3 * MAX_VOICES + 3,
         ControlMessage::StopAll()
         | ControlMessage::PlaySampleExclusive { .. }
@@ -919,6 +1440,165 @@ fn control_message_retirement_slots_needed(message: &ControlMessage) -> usize {
             exclusive: true, ..
         } => 3 * MAX_VOICES,
         _ => 0,
+    }
+}
+
+fn apply_hold_action_message(
+    mixer: &mut RtMixer,
+    work: Box<super::hold_action::HoldActionRtWork>,
+    output_frame: u64,
+    retirement: &mut impl AudioBufferRetirement,
+) {
+    use super::hold_action::{HoldActionState, HoldWorkKind};
+    let ownership = mixer.input_ownership_for_effect();
+    if retirement.available_retirement_slots() < 2 || ownership.placement_pending() {
+        mixer.defer_control(ControlMessage::HoldAction(work));
+        return;
+    }
+    if !Arc::ptr_eq(&ownership, work.action.ownership()) {
+        work.action.settle(HoldActionState::Rejected, output_frame);
+        retirement.retire_hold_action(work);
+        return;
+    }
+    let key = work.action.key();
+    let Some(id) = ownership.callback_key_slot(key) else {
+        mixer.retire_content_actions_rt(key, HoldActionState::Retired, output_frame, retirement);
+        work.action.settle(HoldActionState::Retired, output_frame);
+        retirement.retire_hold_action(work);
+        return;
+    };
+    let Some(placement) = ownership.slot_snapshot(id) else {
+        mixer.defer_control(ControlMessage::HoldAction(work));
+        return;
+    };
+    let Ok(write) = ownership.prepare_slot_write_fixed(placement, placement.lifetime()) else {
+        mixer.defer_control(ControlMessage::HoldAction(work));
+        return;
+    };
+    let mut pending = Some(work);
+    let result = ownership.commit_slot_write_fixed(
+        &write,
+        || {
+            ownership.slot_snapshot_fields_current(placement)
+                && placement.content_key() == Some(key)
+        },
+        |_| {
+            let work = pending.take().unwrap();
+            match work.kind {
+                HoldWorkKind::Pause => {
+                    mixer.apply_pause_hold_rt(work, output_frame, retirement);
+                }
+                HoldWorkKind::Release => {
+                    mixer.apply_release_hold_rt(work, output_frame, retirement);
+                }
+            }
+        },
+    );
+    if result.is_err()
+        && let Some(work) = pending
+    {
+        // The exact owner retries under the next current placement; no resynthesized action.
+        mixer.defer_control(ControlMessage::HoldAction(work));
+    }
+}
+
+fn same_parameter_participant(
+    old_id: usize,
+    old: Option<SlotSnapshot>,
+    id: usize,
+    current: Option<SlotSnapshot>,
+) -> bool {
+    match (old, current) {
+        (Some(old), Some(current)) => match (old.content_key(), current.content_key()) {
+            (Some(old), Some(current)) => old == current,
+            (None, None) => old.same_projection(current),
+            _ => false,
+        },
+        (None, None) => old_id == id,
+        _ => false,
+    }
+}
+
+fn apply_transport_content_message(
+    mixer: &mut RtMixer,
+    original: SlotSnapshot,
+    revision: u64,
+    effect: crate::messages::TransportContentEffect,
+    output_frame: u64,
+    retirement: &mut impl AudioBufferRetirement,
+) {
+    let ownership = mixer.input_ownership_for_effect();
+    if revision == 0 || original.owner() != ownership.owner_identity() {
+        return;
+    }
+    if retirement.available_retirement_slots() == 0 || ownership.placement_pending() {
+        mixer.defer_control(ControlMessage::TransportForPlacement {
+            placement: original,
+            transport_revision: revision,
+            effect,
+        });
+        return;
+    }
+    let key = original.content_key();
+    let target = match key {
+        Some(key) => ownership.callback_key_slot(key),
+        None => ownership
+            .slot_snapshot_fields_current(original)
+            .then_some(original.slot()),
+    };
+    let Some(target) = target else {
+        return;
+    };
+    if ownership
+        .transport_intent_for_cell(original.cell())
+        .load(Ordering::Acquire)
+        < revision
+    {
+        return;
+    }
+    let Some(current) = ownership.slot_snapshot(target) else {
+        mixer.defer_control(ControlMessage::TransportForPlacement {
+            placement: original,
+            transport_revision: revision,
+            effect,
+        });
+        return;
+    };
+    let Ok(write) = ownership.prepare_slot_write_fixed(current, current.lifetime()) else {
+        mixer.defer_control(ControlMessage::TransportForPlacement {
+            placement: original,
+            transport_revision: revision,
+            effect,
+        });
+        return;
+    };
+    let result = ownership.commit_slot_write_fixed(
+        &write,
+        || {
+            ownership.slot_snapshot_fields_current(current)
+                && current.cell() == original.cell()
+                && current.content_key() == key
+                && ownership
+                    .transport_intent_for_cell(original.cell())
+                    .load(Ordering::Acquire)
+                    >= revision
+        },
+        |_| {
+            if let Some(key) = key {
+                mixer.apply_transport_content_rt(key, effect, output_frame, retirement);
+            }
+        },
+    );
+    if matches!(
+        result,
+        Err(super::content_placement::PlacementError::Pending)
+            | Err(super::content_placement::PlacementError::Stale)
+    ) {
+        mixer.defer_control(ControlMessage::TransportForPlacement {
+            placement: original,
+            transport_revision: revision,
+            effect,
+        });
     }
 }
 
@@ -944,20 +1624,54 @@ pub(super) fn drain_control_messages<
 ) -> usize {
     let mut processed = 0;
 
+    // An already due payload gets its one bounded retry before later queued effects.
+    if scheduler.deferred_due().is_some() {
+        drain_scheduler_due_at_callback_start(
+            scheduler,
+            callback_start_frame,
+            mixer,
+            transport,
+            audio_messages,
+            retirement,
+        );
+        if scheduler.deferred_due().is_some() {
+            return 0;
+        }
+    }
+
     while processed < MAX_CONTROL_MESSAGES_PER_CALLBACK {
-        let (needed_retirement_slots, needed_feedback_slots) = match consumer.peek() {
-            Ok(message) => (
-                control_message_retirement_slots_needed(message),
-                usize::from(matches!(
-                    message,
-                    ControlMessage::UnloadSample { .. }
-                        | ControlMessage::LoadColdSample {
-                            replace_assignment: true,
-                            ..
-                        }
-                )),
-            ),
-            Err(_) => break,
+        if scheduler.deferred_due().is_some() {
+            break;
+        }
+        if mixer.placement_pending() {
+            break;
+        }
+        let next = mixer.deferred_control().or_else(|| consumer.peek().ok());
+        let (needed_retirement_slots, needed_feedback_slots) = match next {
+            Some(message) => {
+                let source = match message {
+                    ControlMessage::LoadSample { publication, .. }
+                    | ControlMessage::UnloadSample { publication, .. } => publication.as_ref(),
+                    ControlMessage::LoadColdSample { publication, .. } => Some(publication),
+                    _ => None,
+                };
+                if source.is_some_and(|source| mixer.source_publication_pending(source)) {
+                    break;
+                }
+                (
+                    control_message_retirement_slots_needed(message)
+                        + usize::from(source.is_some()),
+                    usize::from(matches!(
+                        message,
+                        ControlMessage::UnloadSample { .. }
+                            | ControlMessage::LoadColdSample {
+                                replace_assignment: true,
+                                ..
+                            }
+                    )),
+                )
+            }
+            None => break,
         };
 
         if (needed_retirement_slots > 0
@@ -968,8 +1682,13 @@ pub(super) fn drain_control_messages<
             break;
         }
 
-        let Ok(message) = consumer.pop() else {
-            break;
+        let message = if let Some(message) = mixer.take_deferred_control() {
+            message
+        } else {
+            let Ok(message) = consumer.pop() else {
+                break;
+            };
+            message
         };
 
         process_control_message(
@@ -982,6 +1701,9 @@ pub(super) fn drain_control_messages<
             audio_messages,
             retirement,
         );
+        if mixer.deferred_control().is_some() {
+            break;
+        }
         processed += 1;
     }
 
@@ -996,6 +1718,7 @@ pub(super) struct ParameterDrainResult {
 
 #[derive(Debug, Clone, Copy)]
 struct PendingPadBpm {
+    placement: Option<SlotSnapshot>,
     id: usize,
     bpm: Option<f64>,
     through_epoch: Option<u64>,
@@ -1004,6 +1727,7 @@ struct PendingPadBpm {
 
 #[derive(Debug, Clone, Copy)]
 struct PendingPadGain {
+    placement: Option<SlotSnapshot>,
     id: usize,
     gain_db: f32,
     expected_epoch: Option<u64>,
@@ -1011,6 +1735,7 @@ struct PendingPadGain {
 
 #[derive(Debug, Clone, Copy)]
 struct PendingPadEq {
+    placement: Option<SlotSnapshot>,
     id: usize,
     low_db: f32,
     mid_db: f32,
@@ -1037,6 +1762,7 @@ impl Default for PendingControlParameters {
             speed: None,
             master_period_seconds: None,
             pad_bpm: [PendingPadBpm {
+                placement: None,
                 id: 0,
                 bpm: None,
                 through_epoch: None,
@@ -1044,12 +1770,14 @@ impl Default for PendingControlParameters {
             }; MAX_PARAMETER_MESSAGES_PER_CALLBACK],
             pad_bpm_count: 0,
             pad_gain: [PendingPadGain {
+                placement: None,
                 id: 0,
                 gain_db: 0.0,
                 expected_epoch: None,
             }; MAX_PARAMETER_MESSAGES_PER_CALLBACK],
             pad_gain_count: 0,
             pad_eq: [PendingPadEq {
+                placement: None,
                 id: 0,
                 low_db: 0.0,
                 mid_db: 0.0,
@@ -1081,9 +1809,10 @@ impl PendingControlParameters {
             }
             #[cfg(test)]
             ControlParameterMessage::SetPadBpm { id, bpm } => {
-                self.record_pad_bpm(id, bpm, None, None);
+                self.record_pad_bpm(id, bpm, None, None, None);
             }
             ControlParameterMessage::SetLegacyPadBpm {
+                placement,
                 id,
                 bpm,
                 through_epoch,
@@ -1091,23 +1820,33 @@ impl PendingControlParameters {
             } => {
                 // Reject before coalescing: an old gesture must not replace a
                 // valid pending edit for the newly adopted source in this pad.
-                if mixer.expected_source_generation_current(id, expected_source_generation)
-                    && mixer.legacy_parameter_after_copy(id, through_epoch)
+                if let Some(target) = mixer.timing_effect_slot(id, placement)
+                    && mixer.expected_source_generation_current(target, expected_source_generation)
+                    && mixer.legacy_parameter_after_copy(target, through_epoch)
                 {
-                    self.record_pad_bpm(id, bpm, Some(through_epoch), expected_source_generation);
+                    self.record_pad_bpm(
+                        id,
+                        bpm,
+                        Some(through_epoch),
+                        expected_source_generation,
+                        placement,
+                    );
                 }
             }
             #[cfg(test)]
             ControlParameterMessage::SetPadGain { id, gain_db } => {
-                self.record_pad_gain(id, gain_db, None);
+                self.record_pad_gain(id, gain_db, None, None);
             }
             ControlParameterMessage::SetPadGainGuarded {
+                placement,
                 id,
                 gain_db,
                 expected_epoch,
             } => {
-                if mixer.pad_parameter_epoch_current(id, expected_epoch) {
-                    self.record_pad_gain(id, gain_db, Some(expected_epoch));
+                if let Some(target) = mixer.timing_effect_slot(id, Some(placement))
+                    && mixer.pad_parameter_epoch_current(target, expected_epoch)
+                {
+                    self.record_pad_gain(id, gain_db, Some(expected_epoch), Some(placement));
                 }
             }
             #[cfg(test)]
@@ -1117,17 +1856,27 @@ impl PendingControlParameters {
                 mid_db,
                 high_db,
             } => {
-                self.record_pad_eq(id, low_db, mid_db, high_db, None);
+                self.record_pad_eq(id, low_db, mid_db, high_db, None, None);
             }
             ControlParameterMessage::SetPadEqGuarded {
+                placement,
                 id,
                 low_db,
                 mid_db,
                 high_db,
                 expected_epoch,
             } => {
-                if mixer.pad_parameter_epoch_current(id, expected_epoch) {
-                    self.record_pad_eq(id, low_db, mid_db, high_db, Some(expected_epoch));
+                if let Some(target) = mixer.timing_effect_slot(id, Some(placement))
+                    && mixer.pad_parameter_epoch_current(target, expected_epoch)
+                {
+                    self.record_pad_eq(
+                        id,
+                        low_db,
+                        mid_db,
+                        high_db,
+                        Some(expected_epoch),
+                        Some(placement),
+                    );
                 }
             }
         }
@@ -1139,13 +1888,14 @@ impl PendingControlParameters {
         bpm: Option<f64>,
         through_epoch: Option<u64>,
         expected_source_generation: Option<u64>,
+        placement: Option<SlotSnapshot>,
     ) {
         if id >= NUM_SAMPLES {
             return;
         }
         if let Some(pending) = self.pad_bpm[..self.pad_bpm_count]
             .iter_mut()
-            .find(|pending| pending.id == id)
+            .find(|pending| pending.id == id && pending.placement == placement)
         {
             pending.bpm = bpm;
             pending.through_epoch = through_epoch;
@@ -1154,6 +1904,7 @@ impl PendingControlParameters {
         }
         if self.pad_bpm_count < self.pad_bpm.len() {
             self.pad_bpm[self.pad_bpm_count] = PendingPadBpm {
+                placement,
                 id,
                 bpm,
                 through_epoch,
@@ -1163,13 +1914,22 @@ impl PendingControlParameters {
         }
     }
 
-    fn record_pad_gain(&mut self, id: usize, gain_db: f32, expected_epoch: Option<u64>) {
+    fn record_pad_gain(
+        &mut self,
+        id: usize,
+        gain_db: f32,
+        expected_epoch: Option<u64>,
+        placement: Option<SlotSnapshot>,
+    ) {
         if id >= NUM_SAMPLES {
             return;
         }
         if let Some(pending) = self.pad_gain[..self.pad_gain_count]
             .iter_mut()
-            .find(|pending| pending.id == id)
+            .find(|pending| {
+                same_parameter_participant(pending.id, pending.placement, id, placement)
+                    && pending.expected_epoch == expected_epoch
+            })
         {
             pending.gain_db = gain_db;
             pending.expected_epoch = expected_epoch;
@@ -1177,6 +1937,7 @@ impl PendingControlParameters {
         }
         if self.pad_gain_count < self.pad_gain.len() {
             self.pad_gain[self.pad_gain_count] = PendingPadGain {
+                placement,
                 id,
                 gain_db,
                 expected_epoch,
@@ -1192,14 +1953,15 @@ impl PendingControlParameters {
         mid_db: f32,
         high_db: f32,
         expected_epoch: Option<u64>,
+        placement: Option<SlotSnapshot>,
     ) {
         if id >= NUM_SAMPLES {
             return;
         }
-        if let Some(pending) = self.pad_eq[..self.pad_eq_count]
-            .iter_mut()
-            .find(|pending| pending.id == id)
-        {
+        if let Some(pending) = self.pad_eq[..self.pad_eq_count].iter_mut().find(|pending| {
+            same_parameter_participant(pending.id, pending.placement, id, placement)
+                && pending.expected_epoch == expected_epoch
+        }) {
             pending.low_db = low_db;
             pending.mid_db = mid_db;
             pending.high_db = high_db;
@@ -1208,6 +1970,7 @@ impl PendingControlParameters {
         }
         if self.pad_eq_count < self.pad_eq.len() {
             self.pad_eq[self.pad_eq_count] = PendingPadEq {
+                placement,
                 id,
                 low_db,
                 mid_db,
@@ -1239,38 +2002,62 @@ impl PendingControlParameters {
             applied += 1;
         }
         for pending in self.pad_bpm[..self.pad_bpm_count].iter().copied() {
-            if !mixer
-                .expected_source_generation_current(pending.id, pending.expected_source_generation)
+            let target = if pending.through_epoch.is_none() {
+                // Only the cfg(test) unguarded SetPadBpm constructor has no retirement epoch.
+                Some(pending.id)
+            } else {
+                mixer.timing_effect_slot(pending.id, pending.placement)
+            };
+            let Some(target) = target else {
+                continue;
+            };
+            if !mixer.expected_source_generation_current(target, pending.expected_source_generation)
                 || pending
                     .through_epoch
-                    .is_some_and(|epoch| !mixer.legacy_parameter_after_copy(pending.id, epoch))
+                    .is_some_and(|epoch| !mixer.legacy_parameter_after_copy(target, epoch))
             {
                 continue;
             }
-            mixer.set_pad_bpm(pending.id, pending.bpm);
+            mixer.set_pad_bpm(target, pending.bpm);
             if let Some(epoch) = pending.through_epoch {
-                mixer.clear_constant_timing(pending.id, epoch);
+                mixer.clear_constant_timing_for_placement(pending.id, epoch, pending.placement);
             }
             applied += 1;
         }
         for pending in self.pad_gain[..self.pad_gain_count].iter().copied() {
+            let target = if pending.expected_epoch.is_none() {
+                Some(pending.id)
+            } else {
+                mixer.timing_effect_slot(pending.id, pending.placement)
+            };
+            let Some(target) = target else {
+                continue;
+            };
             if pending
                 .expected_epoch
-                .is_some_and(|epoch| !mixer.pad_parameter_epoch_current(pending.id, epoch))
+                .is_some_and(|epoch| !mixer.pad_parameter_epoch_current(target, epoch))
             {
                 continue;
             }
-            mixer.set_pad_gain(pending.id, pending.gain_db);
+            mixer.set_pad_gain(target, pending.gain_db);
             applied += 1;
         }
         for pending in self.pad_eq[..self.pad_eq_count].iter().copied() {
+            let target = if pending.expected_epoch.is_none() {
+                Some(pending.id)
+            } else {
+                mixer.timing_effect_slot(pending.id, pending.placement)
+            };
+            let Some(target) = target else {
+                continue;
+            };
             if pending
                 .expected_epoch
-                .is_some_and(|epoch| !mixer.pad_parameter_epoch_current(pending.id, epoch))
+                .is_some_and(|epoch| !mixer.pad_parameter_epoch_current(target, epoch))
             {
                 continue;
             }
-            mixer.set_pad_eq(pending.id, pending.low_db, pending.mid_db, pending.high_db);
+            mixer.set_pad_eq(target, pending.low_db, pending.mid_db, pending.high_db);
             applied += 1;
         }
 
@@ -1318,6 +2105,10 @@ pub(super) fn process_control_message<
     audio_messages: &mut S,
     retirement: &mut R,
 ) {
+    if mixer.placement_pending() || scheduler.deferred_due().is_some() {
+        mixer.defer_control(message);
+        return;
+    }
     match message {
         ControlMessage::RefreshAcceptedTiming(refresh) => {
             // The next frame is after this callback's bounded parameter drain. Existing
@@ -1338,10 +2129,10 @@ pub(super) fn process_control_message<
         ControlMessage::GlobalPlaybackBatch(batch) => {
             // Admission and execution both check current actual source/authority/projection.
             if scheduler.is_full()
-                || !batch.entries.iter().all(|entry| {
-                    mixer.source_binding_current(entry.id, entry.binding)
-                        && (!batch.start || mixer.launch_current(entry.id, entry.launch_revision))
-                })
+                || !batch
+                    .entries
+                    .iter()
+                    .all(|entry| global_playback_entry_slot(mixer, entry, batch.start).is_some())
             {
                 batch.finish(false);
                 retirement.retire_global_playback_batch(batch);
@@ -1377,11 +2168,91 @@ pub(super) fn process_control_message<
         ControlMessage::Ping() => {
             audio_messages.push_audio_message(AudioMessage::Pong());
         }
-        ControlMessage::LoadSample { id, sample } => {
-            mixer.load_sample_rt(id, sample, retirement);
+        ControlMessage::LoadSample {
+            id,
+            sample,
+            publication,
+        } => {
+            let Some(publication) = publication else {
+                if !mixer.source_tracking() {
+                    mixer.load_sample_rt(id, sample, retirement);
+                } else {
+                    retirement.retire_sample(sample);
+                }
+                return;
+            };
+            let ownership = publication.ownership.clone();
+            let target = mixer
+                .source_publication_target(&publication, &sample)
+                .filter(|target| {
+                    mixer.cold_source_current_with_defaults(
+                        *target,
+                        &sample,
+                        publication.source_generation,
+                        None,
+                    )
+                });
+            let write = match ownership.observe_source_publication(&publication) {
+                super::content_placement::PlacementObservation::Current(snapshot)
+                    if target.is_some() =>
+                {
+                    ownership.prepare_slot_write_fixed(snapshot, snapshot.lifetime())
+                }
+                super::content_placement::PlacementObservation::Pending
+                    if mixer.owns_source_publication(&publication) =>
+                {
+                    mixer.defer_control(ControlMessage::LoadSample {
+                        id,
+                        sample,
+                        publication: Some(publication),
+                    });
+                    return;
+                }
+                _ => Err(super::content_placement::PlacementError::ClaimRejected),
+            };
+            let mut pending_sample = Some(sample);
+            let rate = mixer.sample_rate_hz_for_publication();
+            let binding =
+                publication.binding(pending_sample.as_ref().expect("unclaimed source"), rate);
+            let result = match write {
+                Ok(write) => ownership.commit_slot_write_fixed(
+                    &write,
+                    || ownership.source_publication_binding_current(&publication, binding),
+                    |_| {
+                        mixer.load_sample_rt(
+                            target.expect("validated source target"),
+                            pending_sample.take().expect("single source adoption"),
+                            retirement,
+                        );
+                        if let Some(key) = publication.key() {
+                            ownership.acknowledge_callback_source(key);
+                        }
+                    },
+                ),
+                Err(error) => Err(error),
+            };
+            if matches!(
+                result,
+                Err(super::content_placement::PlacementError::Pending
+                    | super::content_placement::PlacementError::Stale)
+            ) && pending_sample.is_some()
+            {
+                mixer.defer_control(ControlMessage::LoadSample {
+                    id,
+                    sample: pending_sample.take().expect("unclaimed source"),
+                    publication: Some(publication),
+                });
+                return;
+            }
+            if let Some(sample) = pending_sample {
+                retirement.retire_sample(sample);
+            }
+            drop(ownership);
+            retirement.retire_source_publication(publication);
         }
         ControlMessage::LoadColdSample {
-            id,
+            publication,
+            id: original_id,
             sample,
             source_generation,
             content_lifetime,
@@ -1393,6 +2264,67 @@ pub(super) fn process_control_message<
             resident_cancelled,
             incoming_defaults,
         } => {
+            let ownership = publication.ownership.clone();
+            let snapshot = match ownership.observe_source_publication(&publication) {
+                super::content_placement::PlacementObservation::Current(snapshot) => Some(snapshot),
+                super::content_placement::PlacementObservation::Pending
+                    if mixer.owns_source_publication(&publication) =>
+                {
+                    mixer.defer_control(ControlMessage::LoadColdSample {
+                        publication,
+                        id: original_id,
+                        sample,
+                        source_generation,
+                        content_lifetime,
+                        adoption,
+                        epoch,
+                        captured_epoch,
+                        replace_assignment,
+                        loop_region,
+                        resident_cancelled,
+                        incoming_defaults,
+                    });
+                    return;
+                }
+                _ => None,
+            };
+            let target = mixer.cold_publication_target(&publication, &sample, epoch.is_some());
+            let id = target.unwrap_or(original_id);
+            let rate = mixer.sample_rate_hz_for_publication();
+            let geometry = target.is_some()
+                && publication.source_generation == source_generation
+                && publication.placement.lifetime() == content_lifetime
+                && mixer.cold_source_current_with_defaults(
+                    id,
+                    &sample,
+                    source_generation,
+                    incoming_defaults,
+                );
+            let write = match snapshot
+                .filter(|_| geometry)
+                .map(|snapshot| ownership.prepare_slot_write_fixed(snapshot, snapshot.lifetime()))
+                .transpose()
+            {
+                Ok(write) => write,
+                Err(super::content_placement::PlacementError::Pending) => {
+                    mixer.defer_control(ControlMessage::LoadColdSample {
+                        publication,
+                        id: original_id,
+                        sample,
+                        source_generation,
+                        content_lifetime,
+                        adoption,
+                        epoch,
+                        captured_epoch,
+                        replace_assignment,
+                        loop_region,
+                        resident_cancelled,
+                        incoming_defaults,
+                    });
+                    return;
+                }
+                Err(_) => None,
+            };
             let epoch_current = || {
                 resident_cancelled
                     .as_ref()
@@ -1401,66 +2333,132 @@ pub(super) fn process_control_message<
                         epoch.load(std::sync::atomic::Ordering::Acquire) == captured_epoch
                     })
             };
-            if epoch_current()
-                && mixer.content_lifetime_current(id, content_lifetime)
-                && mixer.cold_source_current_with_defaults(
-                    id,
-                    &sample,
-                    source_generation,
-                    incoming_defaults,
+            let source_binding = publication.binding(&sample, rate);
+            let mut pending_sample = Some(sample);
+            let accepted = std::cell::Cell::new(false);
+            let mut stopped_feedback = None;
+            let result = if let Some(write) = &write {
+                ownership.commit_slot_write_fixed(
+                    write,
+                    || {
+                        if !geometry
+                            || !epoch_current()
+                            || !ownership.source_publication_identity_binding_current(
+                                &publication,
+                                source_binding,
+                            )
+                            || (epoch.is_some()
+                                && !ownership.source_publication_binding_current(
+                                    &publication,
+                                    source_binding,
+                                ))
+                        {
+                            return false;
+                        }
+                        if adoption
+                            .compare_exchange(
+                                0,
+                                1,
+                                std::sync::atomic::Ordering::AcqRel,
+                                std::sync::atomic::Ordering::Acquire,
+                            )
+                            .is_err()
+                        {
+                            return false;
+                        }
+                        #[cfg(test)]
+                        super::incoming_load::observe_callback_claim();
+                        if !ownership.claim_cold_publication(&publication) || !epoch_current() {
+                            ownership.finish_cold_publication(&publication, true, false);
+                            adoption.store(3, std::sync::atomic::Ordering::Release);
+                            return false;
+                        }
+                        true
+                    },
+                    |_| {
+                        if replace_assignment {
+                            transport.clear_pending_bootstrap_for_pad(id);
+                            mixer.stop_sample_rt(id, retirement);
+                        }
+                        mixer.load_sample_with_defaults_rt(
+                            id,
+                            pending_sample
+                                .take()
+                                .expect("single claimed source payload"),
+                            incoming_defaults,
+                            retirement,
+                        );
+                        if let Some((start, end)) = loop_region {
+                            mixer.set_loop_region_frames(id, start, Some(end));
+                        }
+                        accepted.set(ownership.finish_cold_publication(&publication, true, true));
+                        if replace_assignment && accepted.get() {
+                            stopped_feedback = capture_pad_feedback(&ownership, id, 2, 0.0);
+                        }
+                    },
                 )
-                && adoption
-                    .compare_exchange(
-                        0,
-                        1,
-                        std::sync::atomic::Ordering::AcqRel,
-                        std::sync::atomic::Ordering::Acquire,
-                    )
-                    .is_ok()
+            } else {
+                Err(super::content_placement::PlacementError::ClaimRejected)
+            };
+            if matches!(
+                result,
+                Err(super::content_placement::PlacementError::Pending
+                    | super::content_placement::PlacementError::Stale)
+            ) && pending_sample.is_some()
             {
-                #[cfg(test)]
-                super::incoming_load::observe_callback_claim();
-                // A concurrent control change after claim must still reject before effects.
-                if !mixer.claim_cold(id, source_generation)
-                    || !epoch_current()
-                    || !mixer.content_lifetime_current(id, content_lifetime)
-                    || !mixer.cold_source_current_with_defaults(
-                        id,
-                        &sample,
-                        source_generation,
-                        incoming_defaults,
-                    )
-                {
-                    mixer.reject_claimed_cold(id, source_generation);
-                    adoption.store(3, std::sync::atomic::Ordering::Release);
-                    retirement.retire_sample(sample);
-                    retirement.retire_cold_adoption(adoption);
-                    if let Some(cancelled) = resident_cancelled {
-                        retirement.retire_resident_cancellation(cancelled);
-                    }
-                    return;
-                }
-                if replace_assignment {
-                    transport.clear_pending_bootstrap_for_pad(id);
-                    mixer.stop_sample_rt(id, retirement);
-                }
-                mixer.load_sample_with_defaults_rt(id, sample, incoming_defaults, retirement);
-                if let Some((start, end)) = loop_region {
-                    mixer.set_loop_region_frames(id, start, Some(end));
-                }
-                mixer.accept_cold(id, source_generation);
+                mixer.defer_control(ControlMessage::LoadColdSample {
+                    publication,
+                    id: original_id,
+                    sample: pending_sample.take().expect("unclaimed source payload"),
+                    source_generation,
+                    content_lifetime,
+                    adoption,
+                    epoch,
+                    captured_epoch,
+                    replace_assignment,
+                    loop_region,
+                    resident_cancelled,
+                    incoming_defaults,
+                });
+                return;
+            }
+            if accepted.get() {
                 adoption.store(2, std::sync::atomic::Ordering::Release);
                 if replace_assignment {
-                    audio_messages.push_audio_message(AudioMessage::SampleStopped { id });
+                    #[cfg(test)]
+                    content_feedback_tests::after_effect();
+                    audio_messages.push_captured_pad_feedback(
+                        stopped_feedback,
+                        AudioMessage::SampleStopped { id },
+                    );
                 }
-            } else {
-                mixer.cancel_cold(id, source_generation);
+            } else if pending_sample.is_some() {
+                // No native image was changed. A concurrent writer is retried with this exact
+                // payload; cancellation itself must never race a new incarnation's row.
+                if mixer.owns_source_publication(&publication)
+                    && matches!(
+                        ownership.cancel_cold_publication_fixed(&publication),
+                        Err(super::content_placement::PlacementError::Pending
+                            | super::content_placement::PlacementError::Stale)
+                    )
+                {
+                    mixer.defer_control(ControlMessage::LoadColdSample {
+                        publication,
+                        id: original_id,
+                        sample: pending_sample.take().expect("unclaimed source payload"),
+                        source_generation,
+                        content_lifetime,
+                        adoption,
+                        epoch,
+                        captured_epoch,
+                        replace_assignment,
+                        loop_region,
+                        resident_cancelled,
+                        incoming_defaults,
+                    });
+                    return;
+                }
                 if incoming_defaults.is_some() {
-                    // This incoming request publishes exactly one source message,
-                    // consumed by this sole callback owner. Only this message can
-                    // claim 0 -> 1; this branch has not claimed it. Atomically reject
-                    // either 0 or the updater's 4 so a concurrent 4 -> 0 cannot
-                    // leave a retired message waiting for ACK.
                     adoption.swap(3, std::sync::atomic::Ordering::AcqRel);
                 } else {
                     let _ = adoption.compare_exchange(
@@ -1470,8 +2468,12 @@ pub(super) fn process_control_message<
                         std::sync::atomic::Ordering::Acquire,
                     );
                 }
+            }
+            if let Some(sample) = pending_sample {
                 retirement.retire_sample(sample);
             }
+            drop(ownership);
+            retirement.retire_source_publication(publication);
             retirement.retire_cold_adoption(adoption);
             if let Some(cancelled) = resident_cancelled {
                 retirement.retire_resident_cancellation(cancelled);
@@ -1489,6 +2491,12 @@ pub(super) fn process_control_message<
         ControlMessage::PadCopy(work) => {
             mixer.copy_pad_rt(work, retirement);
         }
+        ControlMessage::PadPair(work) => {
+            mixer.pair_pad_rt(work, retirement);
+        }
+        ControlMessage::HoldAction(work) => {
+            apply_hold_action_message(mixer, work, callback_start_frame, retirement);
+        }
         ControlMessage::CommittedStemWork(work) => {
             mixer.apply_committed_stem_work(work, retirement);
         }
@@ -1496,12 +2504,15 @@ pub(super) fn process_control_message<
             mixer.publish_constant_timing_rt(id, timing, retirement);
         }
         ControlMessage::ClearPadConstantTiming {
+            placement,
             id,
             through_epoch,
             expected_source_generation,
         } => {
-            if mixer.expected_source_generation_current(id, expected_source_generation) {
-                mixer.clear_constant_timing(id, through_epoch);
+            if let Some(target) = mixer.timing_effect_slot(id, placement)
+                && mixer.expected_source_generation_current(target, expected_source_generation)
+            {
+                mixer.clear_constant_timing_for_placement(id, through_epoch, placement);
             }
         }
         ControlMessage::SetStemMixMode {
@@ -1554,13 +2565,15 @@ pub(super) fn process_control_message<
             resident_control,
             launch_revision,
         } => {
-            if !trigger_binding_current(
+            if trigger_binding_slot(
                 mixer,
                 id,
                 binding,
                 resident_control.as_ref(),
                 launch_revision,
-            ) {
+            )
+            .is_none()
+            {
                 return;
             }
             let command = ScheduledCommand::TriggerInputPad {
@@ -1616,11 +2629,23 @@ pub(super) fn process_control_message<
                 expected_source_generation,
             );
         }
+        #[cfg(test)]
         ControlMessage::StopSample { id } => {
             schedule_immediate_command(
                 scheduler,
                 callback_start_frame,
                 ScheduledCommand::StopSample { id },
+                mixer,
+                transport,
+                audio_messages,
+                retirement,
+            );
+        }
+        ControlMessage::StopSampleForPlacement { placement } => {
+            schedule_immediate_command(
+                scheduler,
+                callback_start_frame,
+                ScheduledCommand::StopSampleForPlacement { placement },
                 mixer,
                 transport,
                 audio_messages,
@@ -1638,11 +2663,61 @@ pub(super) fn process_control_message<
                 retirement,
             );
         }
-        ControlMessage::UnloadSample { id } => {
-            mixer.unload_sample_rt(id, retirement);
-            transport.clear_pending_bootstrap_for_pad(id);
-            // The command drain reserved this final ordered state event before mutation.
-            audio_messages.push_audio_message(AudioMessage::SampleStopped { id });
+        ControlMessage::UnloadSample { id, publication } => {
+            let Some(publication) = publication else {
+                if !mixer.source_tracking() {
+                    mixer.unload_sample_rt(id, retirement);
+                    transport.clear_pending_bootstrap_for_pad(id);
+                    audio_messages.push_audio_message(AudioMessage::SampleStopped { id });
+                }
+                return;
+            };
+            let ownership = publication.ownership.clone();
+            let target = mixer.source_retirement_target(&publication);
+            let write = if target.is_some() {
+                ownership.prepare_slot_write_fixed(publication.placement, 0)
+            } else if mixer.source_publication_pending(&publication) {
+                Err(super::content_placement::PlacementError::Pending)
+            } else {
+                Err(super::content_placement::PlacementError::ClaimRejected)
+            };
+            let result = match write {
+                Ok(write) => ownership.commit_slot_write_fixed(
+                    &write,
+                    || ownership.source_retirement_fields_current(&publication),
+                    |_| {
+                        let id = target.expect("validated empty source target");
+                        mixer.unload_sample_rt(id, retirement);
+                        transport.clear_pending_bootstrap_for_pad(id);
+                    },
+                ),
+                Err(error) => Err(error),
+            };
+            if matches!(
+                result,
+                Err(super::content_placement::PlacementError::Pending
+                    | super::content_placement::PlacementError::Stale)
+            ) {
+                mixer.defer_control(ControlMessage::UnloadSample {
+                    id,
+                    publication: Some(publication),
+                });
+                return;
+            }
+            if result.is_ok() {
+                if let Some((key, transport_revision)) = publication.retired_feedback {
+                    audio_messages.push_audio_message(content_feedback_message(
+                        target.expect("accepted retirement target"),
+                        ownership.owner_identity().diagnostic(),
+                        key,
+                        transport_revision,
+                        2,
+                        0.0,
+                    ));
+                }
+            }
+            drop(ownership);
+            retirement.retire_source_publication(publication);
         }
         ControlMessage::SetBpmLock(enabled) => {
             mixer.set_bpm_lock(enabled);
@@ -1650,8 +2725,12 @@ pub(super) fn process_control_message<
         ControlMessage::SetKeyLock(enabled) => {
             mixer.set_key_lock(enabled);
         }
+        #[cfg(test)]
         ControlMessage::SetPadKeyLock { id, enabled } => {
             mixer.set_pad_key_lock(id, enabled);
+        }
+        ControlMessage::SetPadKeyLockSavedIntent { placement, enabled } => {
+            mixer.set_pad_key_lock_saved_intent(placement, enabled);
         }
         ControlMessage::SetPadKeyLockRequest {
             id,
@@ -1667,14 +2746,17 @@ pub(super) fn process_control_message<
             mixer.set_pad_timing_metadata(id, metadata);
         }
         ControlMessage::SetLegacyPadTimingMetadata {
+            placement,
             id,
             metadata,
             through_epoch,
             expected_source_generation,
         } => {
-            if mixer.expected_source_generation_current(id, expected_source_generation) {
-                mixer.set_pad_timing_metadata(id, metadata);
-                mixer.clear_constant_timing(id, through_epoch);
+            if let Some(target) = mixer.timing_effect_slot(id, placement)
+                && mixer.expected_source_generation_current(target, expected_source_generation)
+            {
+                mixer.set_pad_timing_metadata(target, metadata);
+                mixer.clear_constant_timing_for_placement(id, through_epoch, placement);
             }
         }
         ControlMessage::BootstrapTransportFromPad { id } => {
@@ -1698,12 +2780,15 @@ pub(super) fn process_control_message<
         ControlMessage::SetTriggerQuantization(mode) => {
             *trigger_quantization = mode;
         }
+        #[cfg(test)]
         ControlMessage::PauseSample { id } => {
             mixer.pause_sample_at_output_frame(id, callback_start_frame);
         }
+        #[cfg(test)]
         ControlMessage::ResumeSample { id } => {
             mixer.resume_sample_at_output_frame(id, callback_start_frame);
         }
+        #[cfg(test)]
         ControlMessage::SeekSample {
             id,
             position_s,
@@ -1713,8 +2798,27 @@ pub(super) fn process_control_message<
                 mixer.seek_sample_at_output_frame(id, position_s, callback_start_frame);
             }
         }
+        ControlMessage::TransportForPlacement {
+            placement,
+            transport_revision,
+            effect,
+        } => {
+            apply_transport_content_message(
+                mixer,
+                placement,
+                transport_revision,
+                effect,
+                callback_start_frame,
+                retirement,
+            );
+        }
     }
+    mixer.settle_invalid_hold_actions_rt(callback_start_frame, retirement);
 }
+
+#[cfg(test)]
+#[path = "launch_callback_tests.rs"]
+mod launch_callback_tests;
 
 /// Construct the callback's unique mixer owner on the control thread. Keeping the owner
 /// boxed prevents CPAL's generic callback setup from moving copies of its fixed pad/voice
@@ -1731,6 +2835,66 @@ fn create_stream_mixer(
     mixer.set_input_runtime_ownership(input_runtime_ownership);
     mixer.set_prepared_source_epochs(prepared_source_epochs);
     Ok(mixer)
+}
+
+/// Every unique owner captured by the device callback leaves that callback as one box.
+/// In particular, pending commands, the deferred payload and the full retirement backlog
+/// cannot be destroyed by an unspecified CPAL closure-destructor thread.
+struct AudioCallbackState {
+    consumer_in: Consumer<ControlMessage>,
+    parameter_consumer_in: Consumer<ControlParameterMessage>,
+    producer_out: ContentFeedbackProducer,
+    mixer: Box<RtMixer>,
+    transport: TransportTimeline,
+    scheduler: TransportScheduler,
+    trigger_quantization: TriggerQuantization,
+    callback_clock: Arc<SharedOutputClock>,
+    clock_mapper: OutputClockMapper,
+    loop_acceptance: Arc<super::loop_acceptance::SharedLoopAcceptance>,
+    pad_peaks: [f32; NUM_SAMPLES],
+    pad_activity: RtRenderPadActivity,
+    last_pad_emit_frame: u64,
+    last_master_emit_frame: u64,
+    retired_buffers: RtAudioBufferRetirement,
+}
+
+/// Build the same complete boxed callback owner before any device registration. The
+/// device-free startup regression uses this exact path on its fixed two-MiB stack.
+fn create_stream_callback_owner(
+    consumer_in: Consumer<ControlMessage>,
+    parameter_consumer_in: Consumer<ControlParameterMessage>,
+    producer_out: Producer<AudioMessage>,
+    mixer: Box<RtMixer>,
+    sample_rate_hz: u32,
+    callback_clock: Arc<SharedOutputClock>,
+    loop_acceptance: Arc<super::loop_acceptance::SharedLoopAcceptance>,
+) -> std::io::Result<(
+    CallbackCloseOwner<AudioCallbackState>,
+    AudioBufferRetirementWorker,
+)> {
+    let producer_out = ContentFeedbackProducer {
+        producer: producer_out,
+        ownership: mixer.input_ownership_for_effect(),
+    };
+    create_audio_buffer_retirement_with_callback(|retired_buffers| {
+        Box::new(AudioCallbackState {
+            consumer_in,
+            parameter_consumer_in,
+            producer_out,
+            mixer,
+            transport: TransportTimeline::new(sample_rate_hz),
+            scheduler: TransportScheduler::new(),
+            trigger_quantization: TriggerQuantization::Immediate,
+            callback_clock,
+            clock_mapper: OutputClockMapper::new(),
+            loop_acceptance,
+            pad_peaks: [0.0; NUM_SAMPLES],
+            pad_activity: RtRenderPadActivity::default(),
+            last_pad_emit_frame: 0,
+            last_master_emit_frame: 0,
+            retired_buffers,
+        })
+    })
 }
 
 /// Create and configure the audio stream
@@ -1777,34 +2941,34 @@ pub fn create_audio_stream(
     );
 
     // Create ring buffer for incoming messages (Python->Rust)
-    let (producer_in, mut consumer_in) = RingBuffer::new(1024);
+    let (producer_in, consumer_in) = RingBuffer::new(1024);
 
     // Create ring buffer for fast parameter updates (Python->Rust)
-    let (parameter_producer_in, mut parameter_consumer_in) = RingBuffer::new(1024);
+    let (parameter_producer_in, parameter_consumer_in) = RingBuffer::new(1024);
 
     // Create ring buffer for outgoing messages (Rust->Python)
-    let (mut producer_out, consumer_out) = RingBuffer::new(1024);
+    let (producer_out, consumer_out) = RingBuffer::new(1024);
 
-    let mut mixer = create_stream_mixer(
+    let mixer = create_stream_mixer(
         channels as usize,
         sample_rate_hz,
         current_timing_acknowledgements,
         input_runtime_ownership,
         prepared_source_epochs,
     )?;
-    let mut transport = TransportTimeline::new(sample_rate_hz);
-    let mut scheduler = TransportScheduler::new();
-    let mut trigger_quantization = TriggerQuantization::Immediate;
     let output_clock = Arc::new(SharedOutputClock::new());
     let callback_clock = output_clock.clone();
-    let mut clock_mapper = OutputClockMapper::new();
-    let (mut retired_buffers, retirement_worker) = create_audio_buffer_retirement();
 
     let emit_interval_frames: u64 = (sample_rate_hz as u64 / 10).max(1);
-    let mut pad_peaks = [0.0_f32; NUM_SAMPLES];
-    let mut pad_activity = RtRenderPadActivity::default();
-    let mut last_pad_emit_frame = 0_u64;
-    let mut last_master_emit_frame = 0_u64;
+    let (mut callback_owner, retirement_worker) = create_stream_callback_owner(
+        consumer_in,
+        parameter_consumer_in,
+        producer_out,
+        mixer,
+        sample_rate_hz,
+        callback_clock,
+        loop_acceptance,
+    )?;
 
     // Create stream config
     let stream_config = StreamConfig {
@@ -1817,10 +2981,11 @@ pub fn create_audio_stream(
     let stream = device.build_output_stream(
         &stream_config,
         move |data: &mut [f32], info: &cpal::OutputCallbackInfo| {
+            let state = callback_owner.state_mut();
             let observed_at_ns = input_clock.capture_ns();
-            let buffer_start_frame = transport.output_frame();
+            let buffer_start_frame = state.transport.output_frame();
 
-            let snapshot = clock_mapper.observe_callback(
+            let snapshot = state.clock_mapper.observe_callback(
                 info,
                 OutputClockSnapshot {
                     valid: true,
@@ -1828,9 +2993,10 @@ pub fn create_audio_stream(
                     audible_at_ns: observed_at_ns,
                     output_frame: buffer_start_frame,
                     sample_rate_hz,
-                    master_period_seconds: transport.master_period_seconds(),
-                    downbeat_frame: transport.downbeat_frame(),
-                    master_beat: transport
+                    master_period_seconds: state.transport.master_period_seconds(),
+                    downbeat_frame: state.transport.downbeat_frame(),
+                    master_beat: state
+                        .transport
                         .beat_position_at_frame(buffer_start_frame)
                         .unwrap_or(0.0),
                     freshness_ns: 0,
@@ -1839,25 +3005,34 @@ pub fn create_audio_stream(
             );
 
             drain_control_messages(
-                &mut consumer_in,
-                &mut scheduler,
+                &mut state.consumer_in,
+                &mut state.scheduler,
                 buffer_start_frame,
-                &mut trigger_quantization,
-                &mut transport,
-                &mut mixer,
-                &mut producer_out,
-                &mut retired_buffers,
+                &mut state.trigger_quantization,
+                &mut state.transport,
+                &mut state.mixer,
+                &mut state.producer_out,
+                &mut state.retired_buffers,
             );
 
-            drain_parameter_messages(&mut parameter_consumer_in, &mut mixer, &mut transport);
+            drain_parameter_messages(
+                &mut state.parameter_consumer_in,
+                &mut state.mixer,
+                &mut state.transport,
+            );
 
-            try_bootstrap_transport_from_reference(&mixer, &mut transport, buffer_start_frame);
+            try_bootstrap_transport_from_reference(
+                &state.mixer,
+                &mut state.transport,
+                buffer_start_frame,
+            );
 
             // Publish the same clock estimate with the accepted current grid.
-            callback_clock.publish(OutputClockSnapshot {
-                master_period_seconds: transport.master_period_seconds(),
-                downbeat_frame: transport.downbeat_frame(),
-                master_beat: transport
+            state.callback_clock.publish(OutputClockSnapshot {
+                master_period_seconds: state.transport.master_period_seconds(),
+                downbeat_frame: state.transport.downbeat_frame(),
+                master_beat: state
+                    .transport
                     .beat_position_at_frame(buffer_start_frame)
                     .unwrap_or(0.0),
                 ..snapshot
@@ -1865,40 +3040,42 @@ pub fn create_audio_stream(
 
             // Render audio + compute per-pad peaks.
             render_scheduled_audio_tracking_pads(
-                &mut mixer,
-                &mut scheduler,
+                &mut state.mixer,
+                &mut state.scheduler,
                 data,
-                &mut pad_peaks,
-                &mut pad_activity,
+                &mut state.pad_peaks,
+                &mut state.pad_activity,
                 buffer_start_frame,
                 channels as usize,
-                &mut transport,
-                &mut producer_out,
-                &mut retired_buffers,
+                &mut state.transport,
+                &mut state.producer_out,
+                &mut state.retired_buffers,
             );
             let master_peak = master_output_peak(data);
 
             let frames = data.len() / channels as usize;
-            transport.advance_by_rendered_frames(frames);
-            let frame_clock = transport.output_frame();
-            loop_acceptance.observe(&mixer, observed_at_ns, frame_clock, frames);
+            state.transport.advance_by_rendered_frames(frames);
+            let frame_clock = state.transport.output_frame();
+            state
+                .loop_acceptance
+                .observe(&state.mixer, observed_at_ns, frame_clock, frames);
 
             publish_pad_telemetry(
-                &mut producer_out,
-                &mixer,
-                &pad_peaks,
-                &pad_activity,
+                &mut state.producer_out,
+                &state.mixer,
+                &state.pad_peaks,
+                &state.pad_activity,
                 frame_clock,
                 emit_interval_frames,
-                &mut last_pad_emit_frame,
+                &mut state.last_pad_emit_frame,
             );
 
             publish_master_peak_telemetry(
-                &mut producer_out,
+                &mut state.producer_out,
                 master_peak,
                 frame_clock,
                 emit_interval_frames,
-                &mut last_master_emit_frame,
+                &mut state.last_master_emit_frame,
             );
         },
         |err| {
@@ -1940,6 +3117,15 @@ mod tests {
         }
         fn push_audio_message(&mut self, message: AudioMessage) {
             self.push(message);
+        }
+        fn push_captured_pad_feedback(
+            &mut self,
+            _captured: Option<AudioMessage>,
+            diagnostic: AudioMessage,
+        ) {
+            // These standalone PCM/reference fixtures inspect diagnostic signals. Ownership
+            // projections are tested with the actual production ContentFeedbackProducer.
+            self.push(diagnostic);
         }
     }
 
@@ -2600,13 +3786,104 @@ mod tests {
     }
 
     #[test]
+    fn popped_cold_payload_defers_pending_then_owns_one_ack_before_later_commands() {
+        use crate::audio_engine::content_placement::PlacementError;
+        use crate::audio_engine::input_runtime_binding::InputRuntimeOwnership;
+        use std::sync::atomic::{AtomicU8, Ordering};
+        let ownership = Arc::new(InputRuntimeOwnership::tracked());
+        let sample = create_test_sample(1, 128, 0.25);
+        let lifetime = crate::audio_engine::content_lifetime::reserve().unwrap();
+        let original = ownership.slot_snapshot(0).unwrap();
+        let prepared = ownership.prepare_slot_write(original, lifetime).unwrap();
+        let publication = ownership
+            .publish_source_write(&prepared, &sample, 48_000, 7, 2, None, true, || true)
+            .unwrap();
+        let adoption = Arc::new(AtomicU8::new(0));
+        let mut mixer = RtMixer::new(1, 48_000.0);
+        mixer.set_input_runtime_ownership(ownership.clone());
+        let mut scheduler = FixedCapacityScheduler::<8>::new();
+        let mut mode = TriggerQuantization::Immediate;
+        let mut transport = TransportTimeline::new(48_000);
+        let mut feedback = Vec::new();
+        let mut retirement = ImmediateAudioBufferRetirement;
+        let (mut producer, mut consumer) = RingBuffer::new(2);
+        producer
+            .push(ControlMessage::LoadColdSample {
+                publication: publication.clone(),
+                id: 0,
+                sample: sample.clone(),
+                source_generation: 7,
+                content_lifetime: lifetime,
+                adoption: adoption.clone(),
+                epoch: None,
+                captured_epoch: 0,
+                replace_assignment: false,
+                loop_region: None,
+                resident_cancelled: None,
+                incoming_defaults: None,
+            })
+            .unwrap();
+        // The message has actually left the queue before another source writer starts.
+        let popped = consumer.pop().unwrap();
+        producer.push(ControlMessage::Ping()).unwrap();
+        let unrelated = ownership.slot_snapshot(215).unwrap();
+        let other_write = ownership.prepare_slot_write_fixed(unrelated, 0).unwrap();
+        assert_eq!(ownership.commit_slot_write_fixed(&other_write,|| {
+            process_control_message(popped,&mut scheduler,0,&mut mode,&mut transport,&mut mixer,&mut feedback,&mut retirement);
+            assert_eq!(adoption.load(Ordering::Acquire),0);
+            assert!(!mixer.can_play_sample(0,1.0));
+            assert!(feedback.is_empty());
+            assert!(matches!(mixer.deferred_control(),Some(ControlMessage::LoadColdSample { publication:held,sample:held_sample,adoption:held_adoption,.. })
+                if held.key()==publication.key() && Arc::ptr_eq(&held_sample.samples,&sample.samples) && Arc::ptr_eq(held_adoption,&adoption)));
+            false
+        },|_|panic!("rejected unrelated writer must not apply")),Err(PlacementError::ClaimRejected));
+        assert_eq!(
+            drain_control_messages(
+                &mut consumer,
+                &mut scheduler,
+                0,
+                &mut mode,
+                &mut transport,
+                &mut mixer,
+                &mut feedback,
+                &mut retirement
+            ),
+            2
+        );
+        assert!(mixer.deferred_control().is_none());
+        assert_eq!(adoption.load(Ordering::Acquire), 2);
+        assert_eq!(ownership.cold_status(0, 7), Some(2));
+        assert!(mixer.can_play_sample(0, 1.0));
+        assert_eq!(feedback.len(), 1);
+        assert!(matches!(feedback[0], AudioMessage::Pong()));
+        assert_eq!(
+            drain_control_messages(
+                &mut consumer,
+                &mut scheduler,
+                0,
+                &mut mode,
+                &mut transport,
+                &mut mixer,
+                &mut feedback,
+                &mut retirement
+            ),
+            0
+        );
+        assert_eq!(adoption.load(Ordering::Acquire), 2);
+        assert_eq!(feedback.len(), 1);
+    }
+
+    #[test]
     fn retirement_slot_estimate_covers_polyphonic_stop_paths() {
         assert_eq!(
             control_message_retirement_slots_needed(&ControlMessage::StopSample { id: 0 }),
             3 * MAX_VOICES
         );
         assert_eq!(
-            control_message_retirement_slots_needed(&ControlMessage::UnloadSample { id: 0 }),
+            control_message_retirement_slots_needed(&ControlMessage::UnloadSample {
+                id: 0,
+                publication: None
+            }),
             3 * MAX_VOICES + 3
         );
         assert_eq!(
@@ -2668,7 +3945,7 @@ mod tests {
             .stack_size(2 * 1024 * 1024)
             .spawn(|| {
                 for (channels, sample_rate_hz) in [(1, 44_100), (2, 48_000)] {
-                    let mut mixer = create_stream_mixer(
+                    let mixer = create_stream_mixer(
                         channels,
                         sample_rate_hz,
                         Arc::default(),
@@ -2678,27 +3955,52 @@ mod tests {
                     .unwrap();
                     let storage = mixer.as_ref() as *const RtMixer as usize;
 
-                    // Move the actual production owner through a generic callback capture,
-                    // as CPAL startup does. Only its heap pointer enters the closure.
-                    fn capture<F: FnMut(&mut [f32]) -> usize>(callback: F) -> F {
+                    let (_commands, consumer_in) = RingBuffer::new(1);
+                    let (_parameters, parameter_consumer_in) = RingBuffer::new(1);
+                    let (producer_out, _feedback) = RingBuffer::new(1);
+                    let (mut owner, worker) = create_stream_callback_owner(
+                        consumer_in,
+                        parameter_consumer_in,
+                        producer_out,
+                        mixer,
+                        sample_rate_hz,
+                        Arc::new(SharedOutputClock::new()),
+                        Arc::default(),
+                    )
+                    .unwrap();
+                    let state_storage = owner.state_mut() as *mut AudioCallbackState as usize;
+
+                    // CPAL captures this actual complete-state owner. Unique Native images
+                    // stay boxed; its destructor forwards the box to the retirement worker.
+                    fn capture<F: FnMut(&mut [f32]) -> (usize, usize)>(callback: F) -> F {
                         callback
                     }
                     let mut callback = capture(move |data: &mut [f32]| {
-                        mixer.render_rt_at_output_frame(
+                        let state = owner.state_mut();
+                        let state_storage = state as *mut AudioCallbackState as usize;
+                        state.mixer.render_rt_at_output_frame(
                             data,
-                            &mut [0.0; NUM_SAMPLES],
+                            &mut state.pad_peaks,
                             0,
-                            &mut ImmediateAudioBufferRetirement,
+                            &mut state.retired_buffers,
                         );
-                        mixer.as_ref() as *const RtMixer as usize
+                        (
+                            state.mixer.as_ref() as *const RtMixer as usize,
+                            state_storage,
+                        )
                     });
-                    assert_eq!(size_of_val(&callback), size_of::<Box<RtMixer>>());
+                    assert_eq!(
+                        size_of_val(&callback),
+                        size_of::<CallbackCloseOwner<AudioCallbackState>>()
+                    );
+                    assert!(size_of_val(&callback) < size_of::<AudioCallbackState>());
                     let mut output = [1.0_f32; 64];
                     for _ in 0..3 {
-                        assert_eq!(callback(&mut output), storage);
+                        assert_eq!(callback(&mut output), (storage, state_storage));
                         assert!(output.iter().all(|value| *value == 0.0));
                     }
                     drop(callback);
+                    drop(worker);
                 }
             })
             .unwrap()
@@ -4134,3 +5436,19 @@ mod tests {
         assert_started(&messages, 1, 1);
     }
 }
+
+#[cfg(test)]
+#[path = "source_callback_close_tests.rs"]
+mod source_callback_close_tests;
+
+#[cfg(test)]
+#[path = "parameter_placement_tests.rs"]
+mod parameter_placement_tests;
+
+#[cfg(test)]
+#[path = "content_feedback_tests.rs"]
+mod content_feedback_tests;
+
+#[cfg(test)]
+#[path = "pair_saved_timing_tests.rs"]
+mod pair_saved_timing_tests;

@@ -105,7 +105,13 @@ fn canonical_wav_reference(material: &PreparedMigrationMaterial) -> String {
 fn source_successes(engine: &AudioEngine, requests: &[u64]) {
     let mut seen = Vec::new();
     wait_until(|| {
-        while let Ok(event) = engine.loader_rx.lock().unwrap().try_recv() {
+        while let Ok(event) = engine
+            .loader_rx
+            .lock()
+            .unwrap()
+            .try_recv()
+            .map(LoaderEvent::into_test_payload)
+        {
             if let LoaderEvent::Success { request_id, .. } = event {
                 if requests.contains(&request_id) {
                     seen.push(request_id);
@@ -1260,7 +1266,12 @@ fn ordinary_pair_new_process_child_reopens_selection_with_own_source_timing_and_
     assert!(engine.sample_cache.lock().unwrap()[0].is_none());
     assert!(engine.cold_leases.lock().unwrap()[0].is_none());
     assert_eq!(engine.loaded_source_generations.lock().unwrap()[0], (0, 0));
-    assert_eq!(engine.current_timing_acknowledgements.current_epoch(0), 0);
+    assert_eq!(
+        engine
+            .current_timing_acknowledgements
+            .current_for_slot(&engine.input_runtime_ownership, 0),
+        0
+    );
     let material = prepare_material(&root, &original, 8_000, 1, &|| false).unwrap();
     assert_eq!(canonical_version(&material), version);
     let preparation = control::prepared_for_test(&engine, material, &root).unwrap();

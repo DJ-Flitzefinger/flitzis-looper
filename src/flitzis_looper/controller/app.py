@@ -1,4 +1,5 @@
 import json
+from collections import deque
 from contextlib import suppress
 from typing import TYPE_CHECKING
 
@@ -8,6 +9,7 @@ from flitzis_looper.controller.loader import LoaderController
 from flitzis_looper.controller.material_migration import MaterialMigrationController
 from flitzis_looper.controller.metering import MeteringController
 from flitzis_looper.controller.pad_arrangement import PadArrangementController
+from flitzis_looper.controller.pair_arrangement import PairArrangementController
 from flitzis_looper.controller.performance_confirmation import PerformanceConfirmationController
 from flitzis_looper.controller.persistence import ProjectPersistence
 from flitzis_looper.controller.settings import SettingsController
@@ -22,6 +24,7 @@ if TYPE_CHECKING:
 
     from flitzis_looper.controller.base import BaseController
     from flitzis_looper.controller.stem_generation import StemGenerationBackend
+    from flitzis_looper.ui.context import WaveformEditorActions
     from flitzis_looper_audio import PadCopyTicket
 
 
@@ -75,6 +78,8 @@ class AppController:
         self._shutdown_preparing = False
         self._shutdown_running = False
         self._shutdown_complete = False
+        self._pair_waveform_views: list[WaveformEditorActions] = []
+        self._pending_content_feedback: deque[AudioMessage] = deque()
 
         self._audio = AudioEngine()
         self._audio.set_resident_pcm_budget_mib(self._project.resident_pcm_budget_mib)
@@ -117,12 +122,11 @@ class AppController:
             self._assets,
             stem_task_runner=self.stems._stem_task_runner,
             on_copy_committed=self._on_copy_committed,
+            can_admit=lambda: not self.pairs.active,
         )
         self.transport.bind_pad_edit_guard(self.ensure_not_copy_target)
         self.stems.bind_pad_edit_guard(self.ensure_not_copy_target)
-        self.transport.bind_global_key_lock_edit_guard(
-            self.arrangement.ensure_global_key_lock_edit_allowed
-        )
+        self.transport.bind_global_key_lock_edit_guard(self._ensure_global_key_lock_edit_allowed)
         self.settings.bind_residency_policy(self.stems.refresh_residency_policy)
         self.loader = LoaderController(
             self._project,
@@ -167,6 +171,7 @@ class AppController:
             self,
             on_project_changed=self._persistence.mark_dirty,
         )
+        self.pairs = PairArrangementController(self)
 
         self._controllers: set[BaseController] = {
             self.transport,
@@ -183,7 +188,7 @@ class AppController:
         self.transport.apply_project_state_to_audio()
         self.input_mapping.apply_project_state_to_input_runtime()
 
-    def prepare_shutdown(self) -> bool:
+    def prepare_shutdown(self, *, holds_polled: bool = False) -> bool:
         """Settle complete Copy ownership while its workers and callback remain alive."""
         if self._shutdown_complete:
             return True
@@ -192,10 +197,17 @@ class AppController:
             raise RuntimeError(message)
         self._shutdown_preparing = True
         try:
+            self.transport.waveform.request_hold_release("close")
+            if not holds_polled:
+                self.transport.waveform.poll_holds()
             if not self._close_requested:
                 self._audio.set_input_mapping_enabled(False)
                 self._close_requested = True
-            return self.arrangement.prepare_shutdown()
+            return (
+                self.pairs.prepare_shutdown()
+                and self.arrangement.prepare_shutdown()
+                and not self.transport.waveform.has_pending_holds
+            )
         finally:
             self._shutdown_preparing = False
 
@@ -230,12 +242,19 @@ class AppController:
         self._session.sample_analysis_errors[sample_id] = message
 
     def on_frame_render(self) -> None:
+        self.pairs.poll()
         self.arrangement.poll()
         for controller in self._controllers:
             controller.on_frame_render()
 
     def poll_runtime_events(self) -> None:
         """Poll runtime event sources and update controller-owned state projections."""
+        self.transport.waveform.poll_holds()
+        self.pairs.poll()
+        self.arrangement.poll()
+        deferred = self.pairs.observer_fenced_sample_ids
+        for component in (self.transport, self.loader, self.accepted_timing, self.stems):
+            component._pair_deferred_sample_ids = deferred
         self.loader.poll_loader_events()
         self.material_migration.poll()
         self._poll_audio_messages()
@@ -244,11 +263,16 @@ class AppController:
         self.arrangement.poll()
 
     def ensure_not_copy_target(self, sample_id: int) -> None:
-        """Reject a target gesture while its complete Copy transaction remains fenced."""
+        """Reject participant gestures while a complete arrangement owns the slot."""
         validate_sample_id(sample_id)
-        if sample_id in self.arrangement.fenced_sample_ids:
-            message = "Complete Copy target receipt is pending; current-pad gesture rejected"
+        if sample_id in self.arrangement.fenced_sample_ids | self.pairs.fenced_sample_ids:
+            kind = "Copy target" if sample_id in self.arrangement.fenced_sample_ids else "Pair"
+            message = f"Complete {kind} receipt is pending; current-pad gesture rejected"
             raise ValueError(message)
+
+    def _ensure_global_key_lock_edit_allowed(self) -> None:
+        self.arrangement.ensure_global_key_lock_edit_allowed()
+        self.pairs.ensure_global_key_lock_edit_allowed()
 
     def _on_copy_committed(self, sample_id: int, ticket: PadCopyTicket) -> None:
         """Project the durable stopped target before its Native reservation is released."""
@@ -279,6 +303,7 @@ class AppController:
         )
 
     def _on_sample_unloaded(self, sample_id: int) -> None:
+        self.transport.waveform.request_hold_release("unload")
         if self._session.waveform_editor_pad_id == sample_id:
             self.transport.waveform.close_editor()
         self.transport.residency.cancel(sample_id)
@@ -304,32 +329,70 @@ class AppController:
         self.transport.residency.apply_key_lock(sample_id, force=True)
 
     def _poll_audio_messages(self) -> None:
+        for _ in range(len(self._pending_content_feedback)):
+            msg = self._pending_content_feedback.popleft()
+            self._handle_audio_message(msg)
         while True:
-            msg = self._audio.receive_msg()
-            if msg is None:
+            incoming = self._audio.receive_msg()
+            if incoming is None:
                 return
 
-            self._handle_audio_message(msg)
+            self._handle_audio_message(incoming)
 
-    def _handle_audio_message(self, msg: object) -> None:
+    def _handle_audio_message(self, msg: AudioMessage) -> None:
+        if self._handle_content_feedback(msg):
+            return
         if isinstance(msg, AudioMessage.PadPeak):
             self.metering.handle_pad_peak_message(msg)
-
         if isinstance(msg, AudioMessage.MasterPeak):
             self.metering.handle_master_peak_message(msg)
-
         if isinstance(msg, AudioMessage.PadPlayhead):
             self.metering.handle_pad_playhead_message(msg)
-
         if isinstance(msg, AudioMessage.SampleStarted):
             self.transport.playback.handle_sample_started_message(msg)
-
         if isinstance(msg, AudioMessage.SampleStopped):
             self.transport.playback.handle_sample_stopped_message(msg)
+
+    def _handle_content_feedback(self, msg: AudioMessage) -> bool:
+        kind = getattr(msg, "feedback_kind", lambda: None)()
+        if kind is None:
+            return False
+        try:
+            sample_id = self._audio._resolve_pad_feedback(msg)
+        except RuntimeError as error:
+            if "content feedback placement pending" not in str(error):
+                raise
+            self._retain_content_feedback(msg)
+            return True
+        if sample_id is None:
+            return True
+        if sample_id in self.pairs.observer_fenced_sample_ids:
+            self._retain_content_feedback(msg)
+            return True
+        handlers = {
+            "started": self.transport.playback.handle_sample_started_message,
+            "stopped": self.transport.playback.handle_sample_stopped_message,
+            "peak": self.metering.handle_pad_peak_message,
+            "playhead": self.metering.handle_pad_playhead_message,
+        }
+        if (handler := handlers.get(kind)) is not None:
+            handler(msg, sample_id=sample_id)
+        return True
+
+    def _retain_content_feedback(self, msg: AudioMessage) -> None:
+        if len(self._pending_content_feedback) < 1024:
+            self._pending_content_feedback.append(msg)
 
     @property
     def project(self) -> ProjectState:
         return self._project
+
+    @property
+    def pending_pad_error(self) -> str | None:
+        """Expose the existing owning settlement error while Close waits."""
+        return (
+            self.pairs.error or self.transport.waveform.hold_status()[1] or self.arrangement.error
+        )
 
     @property
     def session(self) -> SessionState:

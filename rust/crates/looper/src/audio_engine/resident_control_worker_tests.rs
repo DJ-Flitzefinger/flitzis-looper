@@ -5,6 +5,8 @@ mod resident_key_lock_worker_tests;
 mod resident_lifecycle_worker_tests;
 #[path = "resident_native_worker_tests.rs"]
 mod resident_native_worker_tests;
+#[path = "resident_publication_worker_tests.rs"]
+mod resident_publication_worker_tests;
 #[path = "resident_ready_control_tests.rs"]
 mod resident_ready_control_tests;
 #[path = "resident_seek_native_worker_tests.rs"]
@@ -26,6 +28,7 @@ struct Loaded {
 
 impl Loaded {
     fn new() -> Self {
+        pyo3::Python::initialize();
         let directory = tempfile::tempdir().unwrap();
         let source = directory.path().join("control.wav");
         let mono = wav(&source, 48_000);
@@ -51,6 +54,13 @@ impl Loaded {
         wait_until(Duration::from_secs(10), || {
             engine.cold_loading[0].load(Ordering::Acquire) == 0
         });
+        // The real control tick observes completed Cold replacement feedback before a new
+        // gesture. Keep the one-slot queue so explicit pressure tests still exercise it.
+        assert!(matches!(
+            callback.feedback_rx.pop(),
+            Ok(AudioMessage::SampleStopped { id: 0 })
+        ));
+        assert!(callback.feedback_rx.is_empty());
         let (producer, consumer) = rtrb::RingBuffer::new(8);
         Self {
             directory,
@@ -74,11 +84,16 @@ impl Loaded {
             ) {
                 self.callback.drain(&mut self.consumer);
             }
-            (ticket.publication_status() == "pending" && !self.consumer.is_empty())
-                || matches!(
-                    ticket.publication_status(),
-                    "accepted" | "failed" | "cancelled"
-                )
+            if ticket.publication_status() == "pending" && ticket.control_published_for_test() {
+                // The worker holds this producer through its own queue publication
+                // and displaced predecessor settlement, after the scalar flag store.
+                let _published = self.producer.lock().unwrap();
+                return ticket.is_current() && !self.consumer.is_empty();
+            }
+            matches!(
+                ticket.publication_status(),
+                "accepted" | "failed" | "cancelled"
+            )
         });
         assert!(
             matches!(ticket.publication_status(), "pending" | "accepted"),
@@ -462,6 +477,11 @@ fn actual_worker_native_midi_stop_dispatch_revokes_scheduled_launch_without_chan
     assert_eq!(loaded.engine.admitted_launch_ids(), vec![0]);
     assert_eq!(loaded.callback.drain(&mut loaded.consumer), 1);
     assert_eq!(loaded.callback.scheduler.len(), 1);
+    let original_stop_placement = loaded
+        .engine
+        .input_runtime_ownership
+        .slot_snapshot(0)
+        .unwrap();
     assert!(midi.inject_midi_message(&[0x90, 61, 100]));
     let mut stopped = None;
     wait_until(Duration::from_secs(3), || {
@@ -473,7 +493,9 @@ fn actual_worker_native_midi_stop_dispatch_revokes_scheduled_launch_without_chan
     assert!(loaded.engine.admitted_launch_ids().is_empty());
     assert!(matches!(
         loaded.consumer.peek(),
-        Ok(ControlMessage::StopSample { id: 0 })
+        Ok(ControlMessage::StopSampleForPlacement { placement })
+            if *placement == original_stop_placement
+                && placement.content_key() == original_stop_placement.content_key()
     ));
     assert_eq!(loaded.callback.drain(&mut loaded.consumer), 1);
     while loaded.callback.feedback_rx.pop().is_ok() {}
@@ -825,7 +847,18 @@ fn actual_worker_guarded_ui_launch_keeps_timestamp_survives_runtime_refresh_and_
         assert_eq!(loaded.callback.scheduler.len(), 1);
         match change {
             0 => {
-                loaded.engine.input_runtime_ownership.runtime[0].fetch_add(1, Ordering::AcqRel);
+                loaded
+                    .engine
+                    .input_runtime_ownership
+                    .runtime_for_cell(
+                        loaded
+                            .engine
+                            .input_runtime_ownership
+                            .slot_snapshot(0)
+                            .unwrap()
+                            .cell(),
+                    )
+                    .fetch_add(1, Ordering::AcqRel);
             }
             1 => {
                 let (request, mut load) = selected_load(
@@ -859,10 +892,23 @@ fn actual_worker_guarded_ui_launch_keeps_timestamp_survives_runtime_refresh_and_
                     loop_region: Some((80.0 / 48_000.0, Some(111.0 / 48_000.0))),
                     ..WindowRequest::default()
                 });
+                // Only an actually armed newer control can retire the prior ACK.
+                loaded.pending(&cancelled);
                 assert!(cancelled.cancel());
             }
             _ => {
-                loaded.engine.input_runtime_ownership.authority[0].fetch_add(1, Ordering::AcqRel);
+                loaded
+                    .engine
+                    .input_runtime_ownership
+                    .authority_for_cell(
+                        loaded
+                            .engine
+                            .input_runtime_ownership
+                            .slot_snapshot(0)
+                            .unwrap()
+                            .cell(),
+                    )
+                    .fetch_add(1, Ordering::AcqRel);
             }
         }
         let target = loaded.callback.scheduler.peek_next_target_frame().unwrap();
@@ -930,6 +976,7 @@ fn actual_worker_captured_old_pin_rejects_stop_seek_aba_and_new_source_before_ac
         });
         loaded.pending(&seek);
         assert_eq!(seek.publication_status(), "pending");
+        assert!(loaded.sample().same_window(&bank));
         let mut replacement_load = None;
         match change {
             0 => loaded
@@ -951,21 +998,45 @@ fn actual_worker_captured_old_pin_rejects_stop_seek_aba_and_new_source_before_ac
                         key_lock: false,
                     },
                 );
-                replacement_load = Some((request, load));
+                // The source proposal itself preserves the preceding authority.
+                // Wait for its actual publication before testing a stale seek ACK.
+                wait_until(Duration::from_secs(10), || !load.is_empty());
+                let ControlMessage::LoadColdSample { sample, .. } = load.peek().unwrap() else {
+                    panic!("replacement must use the actual tagged cold publication");
+                };
+                let published = sample.clone();
+                assert!(loaded.sample().same_window(&published));
+                assert!(!published.same_window(&bank));
+                assert!(
+                    loaded.callback.mixer.bank_for_measurement()[0]
+                        .as_ref()
+                        .unwrap()
+                        .same_window(&bank)
+                );
+                replacement_load = Some((request, load, published));
             }
         }
         assert_eq!(loaded.callback.drain(&mut loaded.consumer), 1);
         assert_ne!(seek.publication_status(), "accepted");
         assert!(!seek.is_current());
         reconcile(&loaded.engine).unwrap();
-        assert!(loaded.sample().same_window(&bank));
+        assert!(
+            loaded.callback.mixer.bank_for_measurement()[0]
+                .as_ref()
+                .unwrap()
+                .same_window(&bank)
+        );
+        if let Some((_, _, published)) = &replacement_load {
+            assert!(loaded.sample().same_window(published));
+        } else {
+            assert!(loaded.sample().same_window(&bank));
+        }
         if change == 1 {
             loaded
                 .callback
                 .render_continuation(&loaded.mono[32..64], 16, 97);
         }
-        if let Some((request, mut load)) = replacement_load {
-            wait_until(Duration::from_secs(10), || !load.is_empty());
+        if let Some((request, mut load, published)) = replacement_load {
             while loaded.callback.feedback_rx.pop().is_ok() {}
             assert_eq!(loaded.callback.drain(&mut load), 1);
             assert!(matches!(
@@ -973,6 +1044,12 @@ fn actual_worker_captured_old_pin_rejects_stop_seek_aba_and_new_source_before_ac
                 LoaderEvent::Success { .. }
             ));
             assert!(!seek.is_current());
+            assert!(
+                loaded.callback.mixer.bank_for_measurement()[0]
+                    .as_ref()
+                    .unwrap()
+                    .same_window(&published)
+            );
         }
     }
 }
@@ -1299,7 +1376,12 @@ fn actual_executor_same_normal_markers_after_accepted_period_seam_keep_native_fi
     .with_complete_source(48_000);
     let mut complete = Box::new(RtMixer::new(2, 48_000.0));
     let ownership = Arc::new(InputRuntimeOwnership::tracked());
-    ownership.publish_source(0, &full, 48_000, 1);
+    ownership.publish_test_source(0, &full, 48_000, 1);
+    let reference_key = ownership
+        .binding_placement(0)
+        .unwrap()
+        .content_key()
+        .unwrap();
     complete.set_input_runtime_ownership(ownership);
     complete.load_sample(0, full.clone());
     complete.set_pad_loop_region(0, 32.0 / 48_000.0, Some(64.0 / 48_000.0));
@@ -1319,6 +1401,11 @@ fn actual_executor_same_normal_markers_after_accepted_period_seam_keep_native_fi
         .push(ControlMessage::PublishConstantTiming {
             id: 0,
             timing: PreparedConstantTiming {
+                content_key: loaded
+                    .engine
+                    .input_runtime_ownership
+                    .binding_placement(0)
+                    .and_then(|snapshot| snapshot.content_key()),
                 reference: finite.clone(),
                 publication: first_publication.clone(),
                 projection: first,
@@ -1332,6 +1419,7 @@ fn actual_executor_same_normal_markers_after_accepted_period_seam_keep_native_fi
     assert!(complete.publish_constant_timing_rt(
         0,
         PreparedConstantTiming {
+            content_key: Some(reference_key),
             reference: full.clone(),
             publication: reference_publication,
             projection: first,
@@ -1437,6 +1525,11 @@ fn actual_executor_same_normal_markers_after_accepted_period_seam_keep_native_fi
         .push(ControlMessage::PublishConstantTiming {
             id: 0,
             timing: PreparedConstantTiming {
+                content_key: loaded
+                    .engine
+                    .input_runtime_ownership
+                    .binding_placement(0)
+                    .and_then(|snapshot| snapshot.content_key()),
                 reference: finite.clone(),
                 publication: publication.clone(),
                 projection: refreshed,
@@ -1450,6 +1543,7 @@ fn actual_executor_same_normal_markers_after_accepted_period_seam_keep_native_fi
     assert!(complete.publish_constant_timing_rt(
         0,
         PreparedConstantTiming {
+            content_key: Some(reference_key),
             reference: full,
             publication: reference_publication,
             projection: refreshed,
@@ -1587,9 +1681,10 @@ fn actual_worker_supersession_cancel_admission_pressure_and_aba_never_promote_ol
         loop_region: Some((120.0 / 48_000.0, Some(151.0 / 48_000.0))),
         ..WindowRequest::default()
     });
+    // Preparing a proposal preserves its predecessor until final native admission.
+    loaded.pending(&second);
     assert_eq!(first.publication_status(), "cancelled");
     assert!(!first.is_current());
-    loaded.pending(&second);
     wait_until(Duration::from_secs(10), || loaded.consumer.slots() >= 2);
     assert_eq!(loaded.callback.drain(&mut loaded.consumer), 2);
     assert_eq!(second.publication_status(), "accepted");
@@ -1661,8 +1756,8 @@ fn actual_worker_supersession_cancel_admission_pressure_and_aba_never_promote_ol
             key_lock: false,
         },
     );
-    assert!(!pending.is_current());
     wait_until(Duration::from_secs(10), || load.peek().is_ok());
+    assert!(!pending.is_current());
     assert_eq!(loaded.callback.drain(&mut load), 1);
     assert!(matches!(
         terminal(&loaded.engine, request),
@@ -1903,6 +1998,12 @@ fn actual_worker_full_queue_cancel_capture_retains_ordered_stop_target() {
                 .any(|voice| voice.active)
         );
         assert_eq!(loaded.engine.admitted_launch_ids(), targets);
+        // The completed queue-pressure stage left exactly one known Pong in Ring1.
+        assert!(matches!(
+            loaded.callback.feedback_rx.pop(),
+            Ok(AudioMessage::Pong())
+        ));
+        assert!(loaded.callback.feedback_rx.is_empty());
         assert!(enqueue_stop_with_producer(
             &loaded.engine.input_runtime_ownership,
             &mut loaded.producer.lock().unwrap(),
@@ -1912,6 +2013,18 @@ fn actual_worker_full_queue_cancel_capture_retains_ordered_stop_target() {
         assert!(loaded.engine.admitted_launch_ids().is_empty());
         assert!(ready.is_current());
         assert_eq!(ready.publication_status(), "accepted");
+        if all {
+            assert!(
+                loaded.callback.feedback_rx.is_empty(),
+                "global STOP had no active voices"
+            );
+        } else {
+            assert!(matches!(
+                loaded.callback.feedback_rx.pop(),
+                Ok(AudioMessage::SampleStopped { id: 0 })
+            ));
+            assert!(loaded.callback.feedback_rx.is_empty());
+        }
         assert!(midi.trigger_pad(0, 124));
         assert_eq!(loaded.callback.drain(&mut loaded.consumer), 1);
         assert!(
@@ -1942,7 +2055,8 @@ fn actual_worker_disabled_dispatcher_rejects_captured_mapping_after_shutdown_fen
     cancel_launches_before_shutdown(
         &loaded.engine.input_runtime_ownership,
         Some(&loaded.producer),
-    );
+    )
+    .unwrap();
     assert!(!late_dispatch());
     assert!(loaded.consumer.is_empty());
     assert!(loaded.engine.admitted_launch_ids().is_empty());

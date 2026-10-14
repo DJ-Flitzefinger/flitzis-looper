@@ -105,6 +105,32 @@ def check_pad_copy_api(engine_type: type) -> None:
         assert callable(getattr(engine_type, method, None)), f"Native Copy API missing: {method}"
 
 
+def check_pad_pair_hold_api(engine_type: type) -> None:
+    """Require the complete opaque Pair/Hold/input interface without running Native work."""
+    for method in (
+        "_capture_pad_pair",
+        "_prepare_pad_pair",
+        "_publish_pad_pair",
+        "_reconcile_pad_pair",
+        "_validate_pad_pair_acknowledgement",
+        "_finish_pad_pair",
+        "_cancel_pad_pair",
+        "capture_recovered_pad_pair",
+        "validate_recovered_pad_pair",
+        "release_recovered_pad_pair",
+        "pause_waveform_hold",
+        "release_waveform_hold",
+        "trigger_captured_input_pad",
+        "prepare_captured_input_trigger",
+        "trigger_prepared_input_pad",
+        "_resolve_pad_feedback",
+        "_resolve_loader_event",
+    ):
+        assert callable(getattr(engine_type, method, None)), (
+            f"Native Pair/Hold API missing: {method}"
+        )
+
+
 def check_runtime(root: Path, checkout: Path, runtime: Path) -> None:
     # Runtime imports must follow private-path/DLL setup, before any GUI/device opens.
     native_module = importlib.import_module("flitzis_looper_audio")
@@ -113,6 +139,7 @@ def check_runtime(root: Path, checkout: Path, runtime: Path) -> None:
     assert native_module.native_build_profile() == "release"
     check_resident_api(native_module.AudioEngine)
     check_pad_copy_api(native_module.AudioEngine)
+    check_pad_pair_hold_api(native_module.AudioEngine)
     assert physical_path(Path(sys.executable)).is_relative_to(physical_path(runtime / "python"))
     customization = importlib.import_module("sitecustomize")
     assert physical_path(Path(customization.__file__)).is_relative_to(

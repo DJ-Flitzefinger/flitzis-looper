@@ -26,7 +26,7 @@ def _loaded_birth(controller: AppController, audio: Mock) -> tuple[str, Material
     artifact, alias = _policy_birth(samples)
     creation = artifact.evidence.material_creation
     assert creation is not None
-    audio.load_sample_async.return_value = 71
+    audio.load_incoming_sample_async.return_value = 71
     audio.cold_source_manifest.return_value = None
     controller.loader.load_sample_async(215, alias.old_reference)
     audio.poll_loader_events.side_effect = [
@@ -36,6 +36,16 @@ def _loaded_birth(controller: AppController, audio: Mock) -> tuple[str, Material
             "request_id": 71,
             "cached_path": alias.new_reference,
             "duration_s": 1.0,
+            "incoming_defaults": {
+                "revision": 0,
+                "key_lock": False,
+                "start_s": 0.0,
+                "end_s": 1.0,
+                "period_seconds": None,
+                "grid_origin_s": 0.0,
+                "loop_auto": True,
+                "loop_bars": controller.project.pad_loop_bars[215],
+            },
         },
         None,
     ]

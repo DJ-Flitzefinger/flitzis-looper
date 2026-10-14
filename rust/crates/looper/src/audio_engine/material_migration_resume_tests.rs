@@ -584,7 +584,12 @@ fn material_migration_resume_new_process_child() {
         assert!(engine.cold_leases.lock().unwrap()[id].is_none());
         assert_eq!(engine.loaded_source_generations.lock().unwrap()[id], (0, 0));
         assert_eq!(engine.pad_request_ids.lock().unwrap()[id], 0);
-        assert_eq!(engine.current_timing_acknowledgements.current_epoch(id), 0);
+        assert_eq!(
+            engine
+                .current_timing_acknowledgements
+                .current_for_slot(&engine.input_runtime_ownership, id),
+            0
+        );
         assert_eq!(engine.input_runtime_ownership.migration_hold(id), 0);
     }
     let (producer, mut consumer) = rtrb::RingBuffer::new(32);
@@ -593,7 +598,12 @@ fn material_migration_resume_new_process_child() {
     // Normal saved-intent startup through the actual native parameter queue.
     constant_timing::set_intent(&engine, &producer, 0, TimingIntent::Automatic).unwrap();
     assert_eq!(callback.drain(&mut consumer), 1);
-    assert_eq!(engine.current_timing_acknowledgements.current_epoch(0), 0);
+    assert_eq!(
+        engine
+            .current_timing_acknowledgements
+            .current_for_slot(&engine.input_runtime_ownership, 0),
+        0
+    );
     let locals = Python::attach(|py| {
         let locals = migration_python_locals(py, &root);
         resume_python(
@@ -757,7 +767,12 @@ assert audio.current_constant_timing(0) is None
 "#,
                     )
                 });
-                assert_eq!(engine.current_timing_acknowledgements.current_epoch(0), 0);
+                assert_eq!(
+                    engine
+                        .current_timing_acknowledgements
+                        .current_for_slot(&engine.input_runtime_ownership, 0),
+                    0
+                );
                 assert_eq!(callback.drain(&mut consumer), 2);
                 source_gate_checked = true;
             }
@@ -794,9 +809,19 @@ current_source_requests = [(i,s.source.request_id) for i,s in service._subscribe
                         (request, 8_000)
                     );
                 }
-                assert_eq!(engine.current_timing_acknowledgements.current_epoch(0), 0);
+                assert_eq!(
+                    engine
+                        .current_timing_acknowledgements
+                        .current_for_slot(&engine.input_runtime_ownership, 0),
+                    0
+                );
                 assert_eq!(callback.drain(&mut consumer), 1);
-                assert_ne!(engine.current_timing_acknowledgements.current_epoch(0), 0);
+                assert_ne!(
+                    engine
+                        .current_timing_acknowledgements
+                        .current_for_slot(&engine.input_runtime_ownership, 0),
+                    0
+                );
                 timing_gate_checked = true;
             }
         } else {

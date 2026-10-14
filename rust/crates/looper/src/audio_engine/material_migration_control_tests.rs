@@ -54,7 +54,17 @@ fn ready_material(engine: &AudioEngine, root: &Path) -> ReadyMaterial {
 fn terminals(engine: &AudioEngine, requests: &[u64]) -> Vec<LoaderEvent> {
     let mut output = Vec::new();
     wait_until(|| {
-        while let Ok(event) = engine.loader_rx.lock().unwrap().try_recv() {
+        while let Ok(event) = engine
+            .loader_rx
+            .lock()
+            .unwrap()
+            .try_recv()
+            .map(LoaderEvent::into_test_payload)
+        {
+            let event = match event {
+                LoaderEvent::NativeOwned { event, .. } => *event,
+                event => event,
+            };
             if matches!(&event,
                 LoaderEvent::Success { request_id, .. } | LoaderEvent::Error { request_id, .. }
                     if requests.contains(request_id))
@@ -391,6 +401,145 @@ fn material_migration_hold_transfer_retains_each_real_owner_without_reopening_la
             .input_runtime_ownership
             .launch_current(0, engine.input_runtime_ownership.launch_revision(0))
     );
+}
+
+#[test]
+fn migration_hold_release_keeps_original_cell_through_pair_and_source_replacement() {
+    use crate::audio_engine::complete_context::source_custody_tests::own_pair_ack;
+    use crate::audio_engine::input_mapping::launch_admission_tests::LaunchFixture;
+    use crate::audio_engine::pad_pair;
+    let mut fixture = LaunchFixture::new(4);
+    let mut parent =
+        control::hold_for_producer(&fixture.engine, vec![0, 215], &fixture.producer).unwrap();
+    let owner = fixture.engine.input_runtime_ownership.migration_hold(0);
+    let pair_participants = [0, 1].map(|id| {
+        fixture
+            .engine
+            .input_runtime_ownership
+            .slot_snapshot(id)
+            .unwrap()
+    });
+    let mut mixer = fixture.mixer();
+    mixer.set_prepared_source_epochs(fixture.engine.prepared_source_epochs.clone());
+    let ticket = own_pair_ack(&mut fixture, &mut mixer);
+    assert!(pad_pair::reconcile(&fixture.engine, &ticket).unwrap());
+    // This fixture owns the internal Pair. Release only its exact reservation to
+    // admit the later replacement; this does not certify outer durable settlement.
+    let reservation = fixture.engine.input_runtime_ownership.pair_reservation(0);
+    assert_ne!(reservation, 0);
+    fixture
+        .engine
+        .input_runtime_ownership
+        .release_pair(&pair_participants, reservation)
+        .unwrap();
+    assert_eq!(fixture.engine.input_runtime_ownership.migration_hold(0), 0);
+    assert_eq!(
+        fixture.engine.input_runtime_ownership.migration_hold(1),
+        owner
+    );
+    let child = parent.take(vec![0]).unwrap();
+    let other = control::hold_for_producer(&fixture.engine, vec![0], &fixture.producer).unwrap();
+    let other_owner = fixture.engine.input_runtime_ownership.migration_hold(0);
+    assert_ne!(owner, other_owner);
+    // Migration intentionally replaces its source lifetime inside the held cell.
+    fixture.publish(1, 0.25, 7);
+    fixture.publish(215, 0.25, 7); // the originally EMPTY held cell is now populated
+    assert_eq!(
+        fixture.engine.input_runtime_ownership.migration_hold(1),
+        owner
+    );
+    assert_eq!(
+        fixture.engine.input_runtime_ownership.migration_hold(215),
+        owner
+    );
+    parent.release().unwrap();
+    assert_eq!(
+        fixture.engine.input_runtime_ownership.migration_hold(215),
+        0
+    );
+    child.release().unwrap();
+    assert_eq!(fixture.engine.input_runtime_ownership.migration_hold(1), 0);
+    assert_eq!(
+        fixture.engine.input_runtime_ownership.migration_hold(0),
+        other_owner
+    );
+    other.release().unwrap();
+}
+
+#[test]
+fn actual_migration_source_ticket_follows_pair_but_rejects_equal_new_incarnation() {
+    use crate::audio_engine::pad_pair;
+    use crate::messages::AudioMessage;
+    let directory = tempfile::tempdir().unwrap();
+    let root = directory.path().join("samples");
+    let mut engine = AudioEngine::new().unwrap();
+    let previous = old(&engine);
+    let mut callback = Callback::new(&engine, &previous);
+    let ready = ready_material(&engine, &root);
+    let (producer, mut consumer) = rtrb::RingBuffer::new(4);
+    let producer = Arc::new(Mutex::new(producer));
+    let source = control::adopt_for_format(
+        &engine,
+        0,
+        &ready.preparation,
+        producer.clone(),
+        (2, 48_000, root),
+    )
+    .unwrap();
+    wait_until(|| consumer.peek().is_ok());
+    assert_eq!(callback.drain(&mut consumer), 1);
+    assert!(matches!(
+        terminals(&engine, &[source.request_id()])[0],
+        LoaderEvent::Success { .. }
+    ));
+    wait_until(|| engine.cold_loading[0].load(Ordering::Acquire) == 0);
+    assert!(source.is_current().unwrap());
+    let original_key = engine
+        .input_runtime_ownership
+        .slot_snapshot(0)
+        .unwrap()
+        .content_key()
+        .unwrap();
+    let pair_participants =
+        [0, 1].map(|id| engine.input_runtime_ownership.slot_snapshot(id).unwrap());
+    let (_, feedback) = rtrb::RingBuffer::<AudioMessage>::new(8);
+    engine.test_control_channels = Some((producer, Arc::new(std::sync::Mutex::new(feedback))));
+    callback
+        .mixer
+        .set_prepared_source_epochs(engine.prepared_source_epochs.clone());
+    let captured = pad_pair::capture(&engine, 0, 1).unwrap();
+    let pair = pad_pair::prepare(&engine, &captured, 48_000, 2).unwrap();
+    pad_pair::publish(&engine, &pair).unwrap();
+    assert_eq!(callback.drain(&mut consumer), 1);
+    assert!(pair.native_acknowledgement().is_some());
+    assert!(!source.is_current().unwrap());
+    assert!(pad_pair::reconcile(&engine, &pair).unwrap());
+    assert!(source.is_current().unwrap());
+    assert!(engine.sample_cache.lock().unwrap()[0].is_none());
+    let reservation = engine.input_runtime_ownership.pair_reservation(0);
+    assert_ne!(reservation, 0);
+    engine
+        .input_runtime_ownership
+        .release_pair(&pair_participants, reservation)
+        .unwrap();
+    let equal = engine.sample_cache.lock().unwrap()[1].clone().unwrap();
+    engine.input_runtime_ownership.revoke_source(1);
+    engine
+        .input_runtime_ownership
+        .publish_test_source(1, &equal, 48_000, source.request_id());
+    assert_ne!(
+        engine
+            .input_runtime_ownership
+            .slot_snapshot(1)
+            .unwrap()
+            .content_key(),
+        Some(original_key)
+    );
+    assert_eq!(
+        engine.loaded_source_generations.lock().unwrap()[1],
+        (source.request_id(), 48_000)
+    );
+    assert!(!source.is_current().unwrap());
 }
 
 #[test]
@@ -768,7 +917,12 @@ pub(super) fn restore_migration_timing_with_actual_ack(
             .source_generation(0, &sample, 8_000),
         Some(source_request)
     );
-    assert_eq!(engine.current_timing_acknowledgements.current_epoch(0), 0);
+    assert_eq!(
+        engine
+            .current_timing_acknowledgements
+            .current_for_slot(&engine.input_runtime_ownership, 0),
+        0
+    );
     constant_timing::set_intent(engine, producer, 0, TimingIntent::Automatic).unwrap();
     assert_eq!(callback.drain(consumer), 1);
     let before_request = engine.pad_request_ids.lock().unwrap()[0];
@@ -781,7 +935,12 @@ pub(super) fn restore_migration_timing_with_actual_ack(
     assert!(engine.prepared_source_epochs[0].load(Ordering::Acquire) > before_epoch);
     let ticket = constant_timing::restore_saved(engine, producer, &saved).unwrap();
     assert_eq!(ticket.publication_status().unwrap(), "pending");
-    assert_eq!(engine.current_timing_acknowledgements.current_epoch(0), 0);
+    assert_eq!(
+        engine
+            .current_timing_acknowledgements
+            .current_for_slot(&engine.input_runtime_ownership, 0),
+        0
+    );
     assert!(
         constant_timing::export_current(engine, 0, original.to_string_lossy().into())
             .unwrap()
@@ -789,7 +948,9 @@ pub(super) fn restore_migration_timing_with_actual_ack(
     );
     assert_eq!(callback.drain(consumer), 1);
     assert_eq!(ticket.publication_status().unwrap(), "accepted");
-    let acknowledged = engine.current_timing_acknowledgements.current_epoch(0);
+    let acknowledged = engine
+        .current_timing_acknowledgements
+        .current_for_slot(&engine.input_runtime_ownership, 0);
     assert_ne!(acknowledged, 0);
     let encoded: serde_json::Value = serde_json::from_str(envelope).unwrap();
     let period_bits =
@@ -1303,7 +1464,7 @@ fn readable_migration_new_process(mid_layout: bool) {
             engine.cold_leases.lock().unwrap()[id] = Some(old_lease.clone());
             engine
                 .input_runtime_ownership
-                .publish_source(id, &old_sample, 8_000, 7);
+                .publish_test_source(id, &old_sample, 8_000, 7);
         }
         let preparation = control::prepared_for_test(&engine, material, &root).unwrap();
         let (producer, mut consumer) = rtrb::RingBuffer::new(8);
@@ -1601,13 +1762,23 @@ fn material_migration_new_process_child_reopens_journal_with_fresh_source_and_ti
     assert!(engine.cold_leases.lock().unwrap()[0].is_none());
     assert_eq!(engine.loaded_source_generations.lock().unwrap()[0], (0, 0));
     assert_eq!(engine.prepared_source_epochs[0].load(Ordering::Acquire), 1);
-    assert_eq!(engine.current_timing_acknowledgements.current_epoch(0), 0);
+    assert_eq!(
+        engine
+            .current_timing_acknowledgements
+            .current_for_slot(&engine.input_runtime_ownership, 0),
+        0
+    );
     assert!(engine.sample_cache.lock().unwrap()[215].is_none());
     assert_eq!(
         engine.loaded_source_generations.lock().unwrap()[215],
         (0, 0)
     );
-    assert_eq!(engine.current_timing_acknowledgements.current_epoch(215), 0);
+    assert_eq!(
+        engine
+            .current_timing_acknowledgements
+            .current_for_slot(&engine.input_runtime_ownership, 215),
+        0
+    );
     let mut callback = migration_callback_8000(&engine);
     let (producer, mut consumer) = rtrb::RingBuffer::new(8);
     let producer = Arc::new(Mutex::new(producer));
@@ -1656,7 +1827,12 @@ fn material_migration_new_process_child_reopens_journal_with_fresh_source_and_ti
     wait_until(|| consumer.slots() >= 2);
     assert_eq!(admitted.adoption.load(Ordering::Acquire), 0);
     assert_eq!(last_admitted.adoption.load(Ordering::Acquire), 0);
-    assert_eq!(engine.current_timing_acknowledgements.current_epoch(0), 0);
+    assert_eq!(
+        engine
+            .current_timing_acknowledgements
+            .current_for_slot(&engine.input_runtime_ownership, 0),
+        0
+    );
     let pending = engine.sample_cache.lock().unwrap()[0].clone().unwrap();
     let last_pending = engine.sample_cache.lock().unwrap()[215].clone().unwrap();
     assert_eq!(
@@ -1922,7 +2098,7 @@ fn material_migration_seed_subscriber_reads_actual_finite_range_before_own_callb
     engine.sample_cache.lock().unwrap()[0] = Some(previous.clone());
     engine
         .input_runtime_ownership
-        .publish_source(0, &previous, 48_000, 7);
+        .publish_test_source(0, &previous, 48_000, 7);
     let mut callback = Callback::new(&engine, &previous);
 
     // Use the productive metadata preparation entry point, which holds one frame

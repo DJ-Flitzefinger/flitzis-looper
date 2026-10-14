@@ -140,6 +140,22 @@ class CommittedStemResidency:
         """Return whether the pad has a tracked current disk selection receipt."""
         return sample_id in self._selections or sample_id in self._live_selections
 
+    def _pair_control_rows(
+        self, sample_id: int
+    ) -> tuple[_CommittedSelection | _DiskCandidate | _LiveSelection, ...]:
+        """Capture exact surviving rows without cancelling or registering Native owners."""
+        rows: list[_CommittedSelection | _DiskCandidate | _LiveSelection] = []
+        selected = self._selections.get(sample_id)
+        if selected is not None:
+            rows.append(selected)
+        live = self._live_selections.get(sample_id)
+        if live is not None:
+            rows.extend((live, live.disk))
+            for selection in (live.disk.selection, live.control, live.attempt):
+                if selection is not None and all(selection is not row for row in rows):
+                    rows.append(selection)
+        return tuple(rows)
+
     def adopt_copied_selection(
         self,
         sample_id: int,
@@ -330,11 +346,18 @@ class CommittedStemResidency:
             and selection.receipt.effective_failure_reason() != "native-preparation-failed"
         )
 
-    def poll(self) -> tuple[WithdrawnStemIntent, ...]:
+    def poll(
+        self, *, deferred_sample_ids: frozenset[int] = frozenset()
+    ) -> tuple[WithdrawnStemIntent, ...]:
         """Observe bounded own receipts; polling never advances an audio timeline."""
         withdrawn: list[WithdrawnStemIntent] = []
-        self._poll_live_selections(withdrawn)
-        for sample_id, selection in tuple(self._selections.items()):
+        self._poll_live_selections(withdrawn, deferred_sample_ids=deferred_sample_ids)
+        ready = tuple(
+            (sample_id, selection)
+            for sample_id, selection in self._selections.items()
+            if sample_id not in deferred_sample_ids
+        )
+        for sample_id, selection in ready:
             try:
                 if not self._current(
                     sample_id, selection.entry, selection.content_id, selection.source_path
@@ -552,8 +575,15 @@ class CommittedStemResidency:
             selection.ticket.cancel()
             live.disk.selection = None
 
-    def _poll_live_selections(self, withdrawn: list[WithdrawnStemIntent]) -> None:
+    def _poll_live_selections(
+        self,
+        withdrawn: list[WithdrawnStemIntent],
+        *,
+        deferred_sample_ids: frozenset[int] = frozenset(),
+    ) -> None:
         for sample_id, live in tuple(self._live_selections.items()):
+            if sample_id in deferred_sample_ids:
+                continue
             try:
                 if not self._source_current(
                     sample_id, live.disk.entry, live.disk.content_id, live.disk.source_path

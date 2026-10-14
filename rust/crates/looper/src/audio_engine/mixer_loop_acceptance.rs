@@ -77,7 +77,7 @@ impl RtMixer {
             sample.source_sample_count() as u64,
             sample.channels as u64,
             generation,
-            self.input_runtime_ownership.authority[id].load(std::sync::atomic::Ordering::Acquire),
+            self.input_runtime_ownership.authority_revision(id),
             accepted.publication_epoch,
             accepted.period_seconds.to_bits(),
             accepted.origin_seconds.to_bits(),

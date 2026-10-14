@@ -205,7 +205,13 @@ impl Harness {
         }
         let success = self.with_engine(|engine| {
             let mut success = false;
-            while let Ok(event) = engine.loader_rx.lock().unwrap().try_recv() {
+            while let Ok(event) = engine
+                .loader_rx
+                .lock()
+                .unwrap()
+                .try_recv()
+                .map(LoaderEvent::into_test_payload)
+            {
                 match event {
                     LoaderEvent::Success { request_id, .. }
                         if request_id == admitted.request_id() =>
@@ -268,7 +274,12 @@ impl Harness {
         assert!(self.current(id).is_none());
         assert!(self.export(id, path).is_none());
         self.with_engine(|engine| {
-            assert_eq!(engine.current_timing_acknowledgements.current_epoch(id), 0);
+            assert_eq!(
+                engine
+                    .current_timing_acknowledgements
+                    .current_for_slot(&engine.input_runtime_ownership, id),
+                0
+            );
             let binding = engine
                 .current_input_runtime_pad_binding(id)
                 .unwrap()
@@ -285,7 +296,9 @@ impl Harness {
         let metadata = self.current(id).unwrap();
         self.with_engine(|engine| {
             assert_eq!(
-                engine.current_timing_acknowledgements.current_epoch(id),
+                engine
+                    .current_timing_acknowledgements
+                    .current_for_slot(&engine.input_runtime_ownership, id),
                 metadata["publication_epoch"].as_u64().unwrap()
             );
             assert!(
@@ -539,7 +552,9 @@ fn copy_target(harness: &mut Harness, probe: &Py<PyAny>, target: usize, source_m
             base_epoch
         );
         assert_eq!(
-            engine.current_timing_acknowledgements.current_epoch(target),
+            engine
+                .current_timing_acknowledgements
+                .current_for_slot(&engine.input_runtime_ownership, target),
             0
         );
     });
@@ -564,7 +579,9 @@ fn copy_target(harness: &mut Harness, probe: &Py<PyAny>, target: usize, source_m
     );
     harness.with_engine(|engine| {
         assert_eq!(
-            engine.current_timing_acknowledgements.current_epoch(target),
+            engine
+                .current_timing_acknowledgements
+                .current_for_slot(&engine.input_runtime_ownership, target),
             expected_projection.publication_epoch,
         )
     });
@@ -708,7 +725,9 @@ fn actual_qm_automatic_copy_own_ack_persistence_and_fresh_engine_restore() {
                 .unwrap();
         let mut fresh = Harness::new(rate);
         assert_eq!(
-            fresh.with_engine(|engine| engine.current_timing_acknowledgements.current_epoch(215)),
+            fresh.with_engine(|engine| engine
+                .current_timing_acknowledgements
+                .current_for_slot(&engine.input_runtime_ownership, 215)),
             0
         );
         fresh.load(215, &material, &root);

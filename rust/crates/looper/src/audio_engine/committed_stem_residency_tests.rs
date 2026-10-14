@@ -127,7 +127,8 @@ fn long_harness() -> Harness {
         )
         .unwrap()
     });
-    wait_until(|| h.consumer.slots() >= 2);
+    // The last source row precedes marker release; wait for its full transaction.
+    wait_until(|| h.consumer.slots() >= 2 && h.producer.try_lock().is_ok());
     assert_eq!(h.callback.drain(&mut h.consumer), 2);
     source_successes(
         &h.engine,
@@ -289,7 +290,10 @@ impl Productive {
             h.producer.clone(),
         )
         .unwrap();
-        wait_until(|| h.consumer.peek().is_ok() || window.error().unwrap().is_some());
+        wait_until(|| {
+            (h.consumer.peek().is_ok() || window.error().unwrap().is_some())
+                && h.producer.try_lock().is_ok()
+        });
         assert_eq!(
             window.publication_status(),
             "pending",
@@ -318,7 +322,10 @@ impl Productive {
                 h.producer.clone(),
             )
             .unwrap();
-            wait_until(|| h.consumer.peek().is_ok() || mode.error().unwrap().is_some());
+            wait_until(|| {
+                (h.consumer.peek().is_ok() || mode.error().unwrap().is_some())
+                    && h.producer.try_lock().is_ok()
+            });
             assert_eq!(h.callback.drain(&mut h.consumer), 1);
             assert_eq!(mode.publication_status(), "accepted", "{:?}", mode.error());
             reconcile(&h.engine).unwrap();
@@ -365,8 +372,11 @@ impl Productive {
         let selected = register(&mut h, &pair);
 
         let mut reference = Box::new(RtMixer::new(2, RATE as f32));
-        let ownership = Arc::new(InputRuntimeOwnership::tracked());
-        ownership.publish_source(0, &full, RATE, 1);
+        // This immutable full-file PCM oracle has no AudioEngine control source.
+        // Its unrestricted permit belongs to the standalone renderer; explicit
+        // KeyLock requests below still exercise the same native mode/ACK path.
+        let ownership = Arc::new(InputRuntimeOwnership::default());
+        ownership.publish_test_source(0, &full, RATE, 1);
         reference.set_input_runtime_ownership(ownership.clone());
         reference.load_sample(0, full.clone());
         assert!(reference.publish_prepared_stems(0, full_stems));
@@ -381,12 +391,13 @@ impl Productive {
                 key_lock,
                 request,
                 InputPadBinding {
+                    placement: ownership.binding_placement(0),
                     resident: full.resident_binding(),
                     source_address: full.source_address(),
                     sample_count: full.source_sample_count(),
                     channels: full.channels,
                     sample_rate_hz: RATE,
-                    authority_revision: ownership.authority[0].load(Ordering::Acquire),
+                    authority_revision: ownership.authority_revision(0),
                     runtime_revision: 0,
                     accepted: None,
                 },
@@ -611,7 +622,10 @@ impl Productive {
     fn capture_then_wait(&mut self, ticket: &ResidentStemTicket) {
         assert_eq!(ticket.effective_mode_status(), "waiting");
         assert_eq!(self.h.callback.drain(&mut self.h.consumer), 1);
-        wait_until(|| self.h.consumer.peek().is_ok() || ticket.error().is_some());
+        wait_until(|| {
+            (self.h.consumer.peek().is_ok() || ticket.error().is_some())
+                && self.h.producer.try_lock().is_ok()
+        });
         assert_eq!(ticket.residency_status(), "pending", "{:?}", ticket.error());
         assert_eq!(ticket.effective_mode_status(), "waiting");
     }
@@ -2066,7 +2080,14 @@ fn first_selection_registration_cannot_borrow_active_or_paused_old_voice_authori
             if h.consumer.peek().is_ok() {
                 return true;
             }
-            while let Ok(event) = h.engine.loader_rx.lock().unwrap().try_recv() {
+            while let Ok(event) = h
+                .engine
+                .loader_rx
+                .lock()
+                .unwrap()
+                .try_recv()
+                .map(LoaderEvent::into_test_payload)
+            {
                 if let LoaderEvent::Error {
                     request_id, error, ..
                 } = event
@@ -3595,8 +3616,9 @@ assert audio.worker_call_count() == 1 and audio.prepared_only_on_pool_threads()
     let ratio = 0.75;
     let make_reference = |all: bool| {
         let mut mixer = Box::new(RtMixer::new(2, RATE as f32));
-        let ownership = Arc::new(InputRuntimeOwnership::tracked());
-        ownership.publish_source(0, &full, RATE, 1);
+        // Independent immutable renderer, with its own explicit KeyLock requests.
+        let ownership = Arc::new(InputRuntimeOwnership::default());
+        ownership.publish_test_source(0, &full, RATE, 1);
         mixer.set_input_runtime_ownership(ownership.clone());
         mixer.load_sample(0, full.clone());
         assert!(mixer.publish_prepared_stems(0, full_stems.clone()));
@@ -3608,12 +3630,13 @@ assert audio.worker_call_count() == 1 and audio.prepared_only_on_pool_threads()
             true,
             key_lock,
             InputPadBinding {
+                placement: ownership.binding_placement(0),
                 resident: full.resident_binding(),
                 source_address: full.source_address(),
                 sample_count: full.source_sample_count(),
                 channels: full.channels,
                 sample_rate_hz: RATE,
-                authority_revision: ownership.authority[0].load(Ordering::Acquire),
+                authority_revision: ownership.authority_revision(0),
                 runtime_revision: 0,
                 accepted: None,
             },

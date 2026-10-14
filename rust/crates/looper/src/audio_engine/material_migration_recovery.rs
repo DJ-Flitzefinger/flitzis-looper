@@ -1291,6 +1291,7 @@ impl MaterialCreationRestoreWork {
             .pad_request_ids
             .lock()
             .map_err(|_| invalid("request lock poisoned"))?;
+        let source_epoch = engine.prepared_source_epoch(id).map_err(invalid)?;
         let sample = engine
             .sample_cache
             .lock()
@@ -1339,7 +1340,7 @@ impl MaterialCreationRestoreWork {
             sample,
             lease,
             request_id: requests[id],
-            prepared_epoch: engine.prepared_source_epochs[id].load(Ordering::Acquire),
+            prepared_epoch: source_epoch.load(Ordering::Acquire),
             generation,
             rate,
         })
@@ -1516,6 +1517,7 @@ impl PreparedMaterialCreationRestore {
             .pad_request_ids
             .lock()
             .map_err(|_| invalid("request lock poisoned"))?;
+        let source_epoch = engine.prepared_source_epoch(work.id).map_err(invalid)?;
         let sample = engine
             .sample_cache
             .lock()
@@ -1527,7 +1529,7 @@ impl PreparedMaterialCreationRestore {
             .lock()
             .map_err(|_| invalid("source generation lock poisoned"))?[work.id];
         if requests[work.id] != work.request_id
-            || engine.prepared_source_epochs[work.id].load(Ordering::Acquire) != work.prepared_epoch
+            || source_epoch.load(Ordering::Acquire) != work.prepared_epoch
             || actual != (work.generation, work.rate)
             || !sample.same_source(&work.sample)
             || engine.cold_loading[work.id].load(Ordering::Acquire) != 0

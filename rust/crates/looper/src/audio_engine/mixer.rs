@@ -7,8 +7,12 @@
 //! and operates on [`SampleBuffer`](crate::messages::SampleBuffer) data loaded via
 //! [`decode_audio_file_to_sample_buffer`](crate::audio_engine::sample_loader::decode_audio_file_to_sample_buffer).
 
+#[path = "mixer/hold_action.rs"]
+mod hold_action;
 #[path = "mixer/pad_copy.rs"]
 mod pad_copy;
+#[path = "mixer/pad_pair.rs"]
+mod pad_pair;
 
 use crate::audio_engine::buffer_retirement::AudioBufferRetirement;
 #[cfg(test)]
@@ -52,6 +56,7 @@ use crate::messages::{
 use cpal::Sample;
 use std::sync::Arc;
 use std::sync::atomic::AtomicU64;
+use std::sync::atomic::Ordering;
 
 #[path = "mixer_loop_acceptance.rs"]
 mod loop_acceptance_snapshot;
@@ -231,6 +236,9 @@ pub struct RtMixer {
     current_timing_acknowledgements: Arc<CurrentTimingAcknowledgements>,
     /// Native preparation requests and cancellation share the control owner's monotonic epoch.
     prepared_source_epochs: Vec<Arc<AtomicU64>>,
+    deferred_control: Option<crate::messages::ControlMessage>,
+    // Stable content-cell custody; placement changes never exchange this registry.
+    hold_actions: [Option<Box<super::hold_action::HoldActionRtWork>>; NUM_SAMPLES],
 
     /// Per-pad Gain/Trim target in dB.
     pad_gain_db: [f32; NUM_SAMPLES],
@@ -282,6 +290,101 @@ pub struct RtMixer {
 }
 
 impl RtMixer {
+    pub(crate) fn sample_rate_hz_for_publication(&self) -> u32 {
+        self.sample_rate_hz as u32
+    }
+    pub(crate) fn placement_pending(&self) -> bool {
+        self.input_runtime_ownership.placement_pending()
+    }
+    pub(crate) fn deferred_control(&self) -> Option<&crate::messages::ControlMessage> {
+        self.deferred_control.as_ref()
+    }
+    pub(crate) fn take_deferred_control(&mut self) -> Option<crate::messages::ControlMessage> {
+        self.deferred_control.take()
+    }
+    pub(crate) fn defer_control(&mut self, message: crate::messages::ControlMessage) {
+        debug_assert!(self.deferred_control.is_none());
+        self.deferred_control = Some(message);
+    }
+    pub(crate) fn source_publication_target(
+        &self,
+        publication: &super::input_runtime_binding::SourcePublication,
+        sample: &SampleBuffer,
+    ) -> Option<usize> {
+        if !Arc::ptr_eq(&publication.ownership, &self.input_runtime_ownership)
+            || !self.input_runtime_ownership.source_publication_current(
+                publication,
+                sample,
+                self.sample_rate_hz as u32,
+            )
+        {
+            return None;
+        }
+        self.content_effect_slot(publication.key()?)
+    }
+
+    /// Cold source admission may intentionally omit timing-epoch fencing for the first
+    /// empty Legacy load. It still owns this exact Native source and slot incarnation.
+    pub(crate) fn cold_publication_target(
+        &self,
+        publication: &super::input_runtime_binding::SourcePublication,
+        sample: &SampleBuffer,
+        guard_authority: bool,
+    ) -> Option<usize> {
+        if !self.owns_source_publication(publication)
+            || !self
+                .input_runtime_ownership
+                .source_publication_identity_current(
+                    publication,
+                    sample,
+                    self.sample_rate_hz as u32,
+                )
+            || (guard_authority
+                && !self.input_runtime_ownership.source_publication_current(
+                    publication,
+                    sample,
+                    self.sample_rate_hz as u32,
+                ))
+        {
+            return None;
+        }
+        self.content_effect_slot(publication.key()?)
+    }
+
+    pub(crate) fn owns_source_publication(
+        &self,
+        publication: &super::input_runtime_binding::SourcePublication,
+    ) -> bool {
+        Arc::ptr_eq(&publication.ownership, &self.input_runtime_ownership)
+    }
+
+    pub(crate) fn source_publication_pending(
+        &self,
+        publication: &super::input_runtime_binding::SourcePublication,
+    ) -> bool {
+        self.owns_source_publication(publication)
+            && matches!(
+                self.input_runtime_ownership
+                    .observe_source_publication(publication),
+                super::content_placement::PlacementObservation::Pending
+            )
+    }
+
+    pub(crate) fn source_retirement_target(
+        &self,
+        publication: &super::input_runtime_binding::SourcePublication,
+    ) -> Option<usize> {
+        (Arc::ptr_eq(&publication.ownership, &self.input_runtime_ownership)
+            && self
+                .input_runtime_ownership
+                .source_retirement_fields_current(publication))
+        .then_some(publication.placement.slot())
+    }
+
+    pub(crate) fn source_tracking(&self) -> bool {
+        self.input_runtime_ownership.is_source_tracked()
+    }
+
     /// Creates a new RtMixer with the specified number of channels.
     ///
     /// # Parameters
@@ -327,6 +430,25 @@ impl RtMixer {
     }
 
     #[cfg(test)]
+    pub(super) fn swap_occupied_images_for_key_lock_test(&mut self, source: usize, target: usize) {
+        self.swap_occupied_pad_images_rt(source, target);
+    }
+    #[cfg(test)]
+    pub(super) fn parameter_targets_for_test(&self, slot: usize) -> (f32, [f32; 3]) {
+        (
+            self.pad_gain_db[slot],
+            self.pad_dsp_chains[slot].loop_acceptance_parameters().1,
+        )
+    }
+    #[cfg(test)]
+    pub(super) fn transport_state_for_test(&self, slot: usize) -> Option<(bool, usize, u64)> {
+        self.voices
+            .iter()
+            .find(|voice| voice.is_playing_sample(slot))
+            .map(|voice| (voice.paused, voice.frame_pos, voice.generation))
+    }
+
+    #[cfg(test)]
     pub(super) fn stem_transition_for_measurement(&self, id: usize) -> StemTransition {
         self.stem_transitions[id]
     }
@@ -365,6 +487,8 @@ impl RtMixer {
             input_runtime_ownership: Arc::default(),
             current_timing_acknowledgements: Arc::default(),
             prepared_source_epochs: (0..NUM_SAMPLES).map(|_| Arc::default()).collect(),
+            deferred_control: None,
+            hold_actions: std::array::from_fn(|_| None),
             pad_gain_db: std::array::from_fn(|_| PAD_GAIN_DB_DEFAULT),
             pad_gain_smoothers: std::array::from_fn(|_| SmoothedGain::default()),
             pad_dsp_chains: (0..NUM_SAMPLES)
@@ -408,21 +532,15 @@ impl RtMixer {
         self.input_runtime_ownership = ownership;
     }
 
+    pub(crate) fn input_ownership_for_effect(
+        &self,
+    ) -> Arc<super::input_runtime_binding::InputRuntimeOwnership> {
+        self.input_runtime_ownership.clone()
+    }
+
     pub(crate) fn set_prepared_source_epochs(&mut self, epochs: Vec<Arc<AtomicU64>>) {
         assert_eq!(epochs.len(), NUM_SAMPLES);
         self.prepared_source_epochs = epochs;
-    }
-
-    /// Fixed pointer/shape/full projection checks plus immediately published revocation.
-    pub(crate) fn input_binding_current(
-        &self,
-        id: usize,
-        binding: super::input_runtime_binding::InputPadBinding,
-    ) -> bool {
-        !self.input_runtime_ownership.resident_control_pending(id)
-            && self.input_runtime_ownership.current(id, binding)
-            && self.source_binding_current(id, binding)
-            && self.input_runtime_ownership.current(id, binding)
     }
 
     pub(crate) fn set_global_parameters_drained(&mut self, drained: bool) {
@@ -455,7 +573,7 @@ impl RtMixer {
             .get(id)
             .and_then(Option::as_ref)
             .is_some_and(|sample| {
-                self.input_runtime_ownership.source_generation(
+                self.input_runtime_ownership.callback_source_generation(
                     id,
                     sample,
                     self.sample_rate_hz as u32,
@@ -469,7 +587,8 @@ impl RtMixer {
         id: usize,
         binding: super::input_runtime_binding::InputPadBinding,
     ) -> bool {
-        self.input_runtime_ownership.authority_current(id, binding)
+        self.input_runtime_ownership
+            .admission_source_current(id, binding)
             && self
                 .input_runtime_ownership
                 .binding_source_current(id, binding)
@@ -481,14 +600,89 @@ impl RtMixer {
                     && sample.resident_binding() == binding.resident
             })
             && self.pad_accepted_timing[id] == binding.accepted
-            && self.current_timing_acknowledgements.current_epoch(id)
-                == binding
-                    .accepted
-                    .map_or(0, |accepted| accepted.publication_epoch)
-            && self.input_runtime_ownership.authority_current(id, binding)
+            && self.current_timing_acknowledgements.current_for_binding(
+                &self.input_runtime_ownership,
+                id,
+                binding,
+            ) == binding
+                .accepted
+                .map_or(0, |accepted| accepted.publication_epoch)
+            && self
+                .input_runtime_ownership
+                .admission_source_current(id, binding)
             && self
                 .input_runtime_ownership
                 .binding_source_current(id, binding)
+    }
+
+    /// Accepted effects retain their original content key even after its physical placement moves.
+    /// A caller holding the mutation marker must not attempt another slot snapshot or claim.
+    pub(crate) fn admitted_source_binding_current(
+        &self,
+        id: usize,
+        binding: super::input_runtime_binding::InputPadBinding,
+    ) -> bool {
+        let ownership = &self.input_runtime_ownership;
+        let placement_current = || {
+            binding.placement.map_or(
+                !ownership.is_source_tracked() && id < NUM_SAMPLES,
+                |placement| {
+                    placement
+                        .content_key()
+                        .is_some_and(|key| ownership.callback_key_slot(key) == Some(id))
+                },
+            )
+        };
+        placement_current()
+            && ownership.authority_current(id, binding)
+            && ownership.binding_source_current(id, binding)
+            && binding.sample_rate_hz as f32 == self.sample_rate_hz
+            && self
+                .sample_bank
+                .get(id)
+                .and_then(Option::as_ref)
+                .is_some_and(|sample| {
+                    sample.source_address() == binding.source_address
+                        && sample.source_sample_count() == binding.sample_count
+                        && sample.channels == binding.channels
+                        && sample.resident_binding() == binding.resident
+                })
+            && self.pad_accepted_timing[id] == binding.accepted
+            && self
+                .current_timing_acknowledgements
+                .current_for_binding(ownership, id, binding)
+                == binding
+                    .accepted
+                    .map_or(0, |accepted| accepted.publication_epoch)
+            && placement_current()
+            && ownership.authority_current(id, binding)
+            && ownership.binding_source_current(id, binding)
+    }
+
+    pub(crate) fn admitted_input_binding_current(
+        &self,
+        id: usize,
+        binding: super::input_runtime_binding::InputPadBinding,
+    ) -> bool {
+        let ownership = &self.input_runtime_ownership;
+        ownership.binding_cell(id, binding).is_some_and(|cell| {
+            ownership
+                .resident_control_for_cell(cell)
+                .load(Ordering::Acquire)
+                == 0
+        }) && ownership.current(id, binding)
+            && self.admitted_source_binding_current(id, binding)
+            && ownership.current(id, binding)
+    }
+
+    pub(crate) fn admitted_launch_current(
+        &self,
+        id: usize,
+        binding: super::input_runtime_binding::InputPadBinding,
+        revision: u64,
+    ) -> bool {
+        self.input_runtime_ownership
+            .binding_launch_current(id, binding, revision)
     }
 
     /// Derived bank geometry cannot rewrite a still-active or paused previous-source pin.
@@ -622,13 +816,13 @@ impl RtMixer {
             .is_some_and(|(start, end)| self.loop_context_available(id, start, end))
     }
 
-    /// A guarded explicit launch may replace an older voice with the already acknowledged bank
-    /// region. This cuts its DSP/history; it is not a refresh of the older physical domain.
-    pub(crate) fn trigger_loop_context_available(
+    /// A guarded explicit launch can cut an old retained source using its acknowledged bank.
+    pub(crate) fn admitted_trigger_loop_context_available(
         &self,
         id: usize,
         start_s: f64,
         end_s: Option<f64>,
+        binding: super::input_runtime_binding::InputPadBinding,
     ) -> bool {
         let Some((start, end)) = self.loop_intent_frames(id, start_s, end_s) else {
             return false;
@@ -649,7 +843,7 @@ impl RtMixer {
             })
             && effective_loop_region(start, end, bank.frame_count())
                 == self.effective_loop_region(id, bank.frame_count())
-            && self.can_play_sample(id, 1.0)
+            && self.admitted_source_binding_current(id, binding)
     }
 
     fn loop_intent_frames(
@@ -999,28 +1193,32 @@ impl RtMixer {
         &self,
         entries: &[super::global_playback_batch::GlobalPlaybackEntry],
     ) -> bool {
-        entries
+        entries.iter().all(|entry| {
+            self.timing_effect_slot(entry.id, entry.binding.placement)
+                .is_some_and(|id| self.admitted_source_binding_current(id, entry.binding))
+        }) && self
+            .voices
             .iter()
-            .all(|entry| self.source_binding_current(entry.id, entry.binding))
-            && self
-                .voices
-                .iter()
-                .filter(|voice| voice.active)
-                .all(|voice| {
-                    entries
-                        .iter()
-                        .find(|entry| entry.id == voice.sample_id)
-                        .is_some_and(|entry| {
-                            voice.sample.as_ref().is_some_and(|sample| {
-                                sample.source_address() == entry.binding.source_address
-                                    && sample.source_sample_count() == entry.binding.sample_count
-                                    && sample.channels == entry.binding.channels
-                            }) && self.timing_for_voice(voice).accepted == entry.binding.accepted
-                        })
-                })
-            && entries
-                .iter()
-                .all(|entry| self.source_binding_current(entry.id, entry.binding))
+            .filter(|voice| voice.active)
+            .all(|voice| {
+                entries
+                    .iter()
+                    .find(|entry| {
+                        self.timing_effect_slot(entry.id, entry.binding.placement)
+                            == Some(voice.sample_id)
+                    })
+                    .is_some_and(|entry| {
+                        voice.sample.as_ref().is_some_and(|sample| {
+                            sample.source_address() == entry.binding.source_address
+                                && sample.source_sample_count() == entry.binding.sample_count
+                                && sample.channels == entry.binding.channels
+                        }) && self.timing_for_voice(voice).accepted == entry.binding.accepted
+                    })
+            })
+            && entries.iter().all(|entry| {
+                self.timing_effect_slot(entry.id, entry.binding.placement)
+                    .is_some_and(|id| self.admitted_source_binding_current(id, entry.binding))
+            })
     }
 
     /// Loads a sample into the sample bank at the specified slot.
@@ -1038,23 +1236,6 @@ impl RtMixer {
     pub(crate) fn load_sample(&mut self, id: usize, sample: SampleBuffer) {
         let mut retirement = ImmediateAudioBufferRetirement;
         self.load_sample_rt(id, sample, &mut retirement);
-    }
-
-    pub(crate) fn claim_cold(&self, id: usize, generation: u64) -> bool {
-        self.input_runtime_ownership.claim_cold(id, generation)
-    }
-    pub(crate) fn reject_claimed_cold(&self, id: usize, generation: u64) {
-        self.input_runtime_ownership
-            .reject_claimed_cold(id, generation);
-    }
-
-    pub(crate) fn accept_cold(&self, id: usize, generation: u64) {
-        self.input_runtime_ownership.accept_cold(id, generation);
-    }
-    pub(crate) fn cancel_cold(&self, id: usize, generation: u64) {
-        if id < NUM_SAMPLES {
-            self.input_runtime_ownership.cancel_cold(id, generation);
-        }
     }
 
     /// Initial finite ON admission proves the incoming physical loop, before
@@ -1121,7 +1302,7 @@ impl RtMixer {
         incoming_mode: Option<bool>,
     ) -> bool {
         self.cold_sample_geometry_for_mode(id, sample, incoming_mode)
-            && self.input_runtime_ownership.source_generation(
+            && self.input_runtime_ownership.callback_source_generation(
                 id,
                 sample,
                 self.sample_rate_hz as u32,
@@ -1237,13 +1418,13 @@ impl RtMixer {
             self.set_pad_gain(id, PAD_GAIN_DB_DEFAULT);
             self.set_pad_eq(id, 0.0, 0.0, 0.0);
         }
-        self.current_timing_acknowledgements.clear(id);
+        self.clear_timing_ack_for_slot(id);
         self.stem_enabled_mask[id] = STEM_COMPONENT_MASK;
         self.stem_transitions[id].clear();
         if let Some(sample) = &self.sample_bank[id] {
             self.pad_key_lock_ack_source[id] = self
                 .input_runtime_ownership
-                .source_generation(id, sample, self.sample_rate_hz as u32)
+                .callback_source_generation(id, sample, self.sample_rate_hz as u32)
                 .map(|generation| (generation, sample.source_address()));
         }
         self.pad_key_lock_request_id[id] = 0;
@@ -1336,7 +1517,11 @@ impl RtMixer {
                             capture.publication.mark_rejected();
                         }
                         self.input_runtime_ownership
-                            .finish_resident_control(id, capture.publication.expected);
+                            .finish_resident_control_for_binding(
+                                id,
+                                capture.binding,
+                                capture.publication.expected,
+                            );
                     }
                     retirement.retire_sample(pin.sample);
                     if let Some(stems) = pin.stems {
@@ -1362,7 +1547,11 @@ impl RtMixer {
                     capture.publication.mark_rejected();
                 }
                 self.input_runtime_ownership
-                    .finish_resident_control(id, capture.publication.expected);
+                    .finish_resident_control_for_binding(
+                        id,
+                        capture.binding,
+                        capture.publication.expected,
+                    );
             }
         }
         retirement.retire_resident_capture(capture);
@@ -1465,7 +1654,19 @@ impl RtMixer {
         retirement: &mut impl AudioBufferRetirement,
         output_frame: Option<u64>,
     ) -> bool {
-        let id = transaction.id;
+        let target = transaction
+            .binding
+            .placement
+            .and_then(|placement| placement.content_key())
+            .and_then(|key| self.content_effect_slot(key))
+            .or_else(|| {
+                (!self.input_runtime_ownership.is_source_tracked()).then_some(transaction.id)
+            });
+        let Some(id) = target else {
+            transaction.publication.mark_rejected();
+            retirement.retire_resident_transaction(transaction);
+            return false;
+        };
         if id < NUM_SAMPLES
             && self.outgoing_stems[id].is_some()
             && self.stem_transitions[id].is_active()
@@ -1484,7 +1685,7 @@ impl RtMixer {
             if pin.stopped {
                 let current = id < NUM_SAMPLES
                     && publication.current()
-                    && self.source_binding_current(id, binding)
+                    && self.admitted_source_binding_current(id, binding)
                     && !self.sample_is_active(id)
                     && intent.loop_region.is_none()
                     && intent.key_lock.is_none()
@@ -1495,7 +1696,7 @@ impl RtMixer {
                 let accepted = current
                     && publication.claim_resident()
                     && publication.current()
-                    && self.source_binding_current(id, binding)
+                    && self.admitted_source_binding_current(id, binding)
                     && !self.sample_is_active(id);
                 if accepted {
                     publication.mark_accepted_preserved_window();
@@ -1503,7 +1704,7 @@ impl RtMixer {
                     publication.mark_rejected();
                 }
                 self.input_runtime_ownership
-                    .finish_resident_control(id, publication.expected);
+                    .finish_resident_control_for_binding(id, binding, publication.expected);
                 retirement.retire_resident_transaction(transaction);
                 return accepted;
             }
@@ -1514,7 +1715,7 @@ impl RtMixer {
                     .seek_position_s
                     .is_some_and(|position| position.is_finite() && position >= 0.0)
                 && publication.current()
-                && self.source_binding_current(id, binding)
+                && self.admitted_source_binding_current(id, binding)
                 && self.pad_key_lock_enabled[id] == pin.key_lock
                 && sample.valid_residency(self.sample_rate_hz as u32, self.channels)
                 && pin.sample.same_source(sample)
@@ -1612,7 +1813,7 @@ impl RtMixer {
                 let accepted = current
                     && publication.claim_resident()
                     && publication.current()
-                    && self.source_binding_current(id, binding)
+                    && self.admitted_source_binding_current(id, binding)
                     && self.reserve_seek_cut(id);
                 if accepted {
                     let voice = &mut self.voices[pin.voice_index];
@@ -1639,7 +1840,7 @@ impl RtMixer {
                 }
                 if id < NUM_SAMPLES {
                     self.input_runtime_ownership
-                        .finish_resident_control(id, publication.expected);
+                        .finish_resident_control_for_binding(id, binding, publication.expected);
                 }
                 retirement.retire_resident_transaction(transaction);
                 return accepted;
@@ -1655,7 +1856,7 @@ impl RtMixer {
                 .is_some_and(|position| position.is_finite() && position >= 0.0)
             && id < NUM_SAMPLES
             && publication.current()
-            && self.source_binding_current(id, binding)
+            && self.admitted_source_binding_current(id, binding)
             && sample.valid_residency(self.sample_rate_hz as u32, self.channels)
             && self.sample_bank[id].as_ref().is_some_and(|bank| {
                 bank.same_source(sample) && bank.window_revision() == expected_window_revision
@@ -1680,7 +1881,7 @@ impl RtMixer {
         if previous_pin_seek {
             let adopted = publication.claim_resident()
                 && publication.current()
-                && self.source_binding_current(id, binding)
+                && self.admitted_source_binding_current(id, binding)
                 && self.seek_sample_with_output_frame(
                     id,
                     intent.seek_position_s.expect("validated seek"),
@@ -1693,7 +1894,7 @@ impl RtMixer {
                 publication.mark_rejected();
             }
             self.input_runtime_ownership
-                .finish_resident_control(id, publication.expected);
+                .finish_resident_control_for_binding(id, binding, publication.expected);
             retirement.retire_resident_transaction(transaction);
             return adopted;
         }
@@ -1717,10 +1918,10 @@ impl RtMixer {
             && publication.current()
             && intent.key_lock_request_id.is_none_or(|request| {
                 self.input_runtime_ownership
-                    .key_lock_request_current(id, request)
+                    .callback_key_lock_request_current(id, request)
             })
             && sample.valid_residency(self.sample_rate_hz as u32, self.channels)
-            && self.source_binding_current(id, binding)
+            && self.admitted_source_binding_current(id, binding)
             && (!key_lock
                 || (sample.resident_start() == 0 && sample.resident_end() == sample.frame_count())
                 || loop_region.is_some_and(|region| {
@@ -1887,21 +2088,17 @@ impl RtMixer {
                 });
         let native_admitted =
             valid && (!key_lock || self.pad_key_lock_enabled[id] || self.reserve_key_lock_mode(id));
-        if !native_admitted
-            || !publication.claim_resident()
-            || !publication.current()
-            || !self.source_binding_current(id, binding)
-        {
+        if !native_admitted {
             let own_mode_current = id < NUM_SAMPLES
                 && publication.current()
-                && self.source_binding_current(id, binding);
+                && self.admitted_source_binding_current(id, binding);
             publication.mark_rejected();
             if id < NUM_SAMPLES {
                 if let Some(request) = intent.key_lock_request_id
                     && own_mode_current
                     && self
                         .input_runtime_ownership
-                        .key_lock_request_current(id, request)
+                        .callback_key_lock_request_current(id, request)
                 {
                     self.pad_key_lock_request_id[id] = request;
                     self.pad_key_lock_ack_source[id] = self
@@ -1912,7 +2109,7 @@ impl RtMixer {
                     self.publish_key_lock_status(id);
                 }
                 self.input_runtime_ownership
-                    .finish_resident_control(id, publication.expected);
+                    .finish_resident_control_for_binding(id, binding, publication.expected);
             }
             retirement.retire_resident_transaction(transaction);
             return false;
@@ -1927,72 +2124,130 @@ impl RtMixer {
         if !cut_admitted {
             publication.mark_rejected();
             self.input_runtime_ownership
-                .finish_resident_control(id, publication.expected);
+                .finish_resident_control_for_binding(id, binding, publication.expected);
             retirement.retire_resident_transaction(transaction);
             return false;
         }
-        for voice in &mut self.voices {
-            if voice.active
-                && voice.sample_id == id
-                && voice
-                    .sample
-                    .as_ref()
-                    .is_some_and(|old| old.same_source(sample))
-                && let Some(old) = voice.sample.replace(sample.clone())
-            {
-                retirement.retire_sample(old);
+        let ownership = self.input_runtime_ownership.clone();
+        let snapshot = match ownership.slot_snapshot(id) {
+            Some(snapshot) => snapshot,
+            None if ownership.placement_pending() => {
+                self.defer_control(crate::messages::ControlMessage::RelocateResident(
+                    transaction,
+                ));
+                return false;
             }
-        }
-        self.input_runtime_ownership.publish_window(id, sample);
-        if let Some(old) = self.sample_bank[id].replace(sample.clone()) {
-            retirement.retire_sample(old);
-        }
-        if let Some(old) = self.prepared_stems[id].take() {
-            retirement.retire_prepared_stems(old);
-        }
-        self.prepared_stems[id] = stems.clone();
-        if let Some((start, end)) = intent.loop_region {
-            let previous_region = self.effective_loop_region(id, sample.frame_count());
-            self.pad_loop_start_frame[id] = start;
-            self.pad_loop_end_frame[id] = end;
-            for voice in &mut self.voices {
-                if voice.active
-                    && voice.sample_id == id
-                    && voice
-                        .sample
-                        .as_ref()
-                        .is_some_and(|old| old.same_source(sample))
-                {
-                    let unchanged = loop_region.is_some_and(|region| {
-                        Self::unchanged_normal_loop(voice, previous_region, region)
-                    });
-                    voice.source_loop_region = None;
-                    if !unchanged {
-                        voice.clear_explicit_seek();
+            None => {
+                publication.mark_rejected();
+                retirement.retire_resident_transaction(transaction);
+                return false;
+            }
+        };
+        let write = match ownership.prepare_slot_write_fixed(snapshot, snapshot.lifetime()) {
+            Ok(write) => write,
+            Err(super::content_placement::PlacementError::Pending) => {
+                self.defer_control(crate::messages::ControlMessage::RelocateResident(
+                    transaction,
+                ));
+                return false;
+            }
+            Err(_) => {
+                publication.mark_rejected();
+                retirement.retire_resident_transaction(transaction);
+                return false;
+            }
+        };
+        let committed = ownership.commit_slot_write_fixed(
+            &write,
+            || {
+                publication.claim_resident()
+                    && publication.current()
+                    && ownership.authority_current(id, binding)
+                    && ownership.binding_source_current(id, binding)
+            },
+            |cell| {
+                for voice in &mut self.voices {
+                    if voice.active
+                        && voice.sample_id == id
+                        && voice
+                            .sample
+                            .as_ref()
+                            .is_some_and(|old| old.same_source(sample))
+                        && let Some(old) = voice.sample.replace(sample.clone())
+                    {
+                        retirement.retire_sample(old);
                     }
                 }
+                ownership.publish_window_for_cell(cell, sample);
+                if let Some(old) = self.sample_bank[id].replace(sample.clone()) {
+                    retirement.retire_sample(old);
+                }
+                if let Some(old) = self.prepared_stems[id].take() {
+                    retirement.retire_prepared_stems(old);
+                }
+                self.prepared_stems[id] = stems.clone();
+                if let Some((start, end)) = intent.loop_region {
+                    let previous_region = self.effective_loop_region(id, sample.frame_count());
+                    self.pad_loop_start_frame[id] = start;
+                    self.pad_loop_end_frame[id] = end;
+                    for voice in &mut self.voices {
+                        if voice.active
+                            && voice.sample_id == id
+                            && voice
+                                .sample
+                                .as_ref()
+                                .is_some_and(|old| old.same_source(sample))
+                        {
+                            let unchanged = loop_region.is_some_and(|region| {
+                                Self::unchanged_normal_loop(voice, previous_region, region)
+                            });
+                            voice.source_loop_region = None;
+                            if !unchanged {
+                                voice.clear_explicit_seek();
+                            }
+                        }
+                    }
+                }
+                if let Some(enabled) = intent.key_lock {
+                    self.apply_pad_key_lock_mode(id, enabled);
+                }
+                if let Some(request) = intent.key_lock_request_id {
+                    self.pad_key_lock_request_id[id] = request;
+                    self.pad_key_lock_rejected[id] = false;
+                    self.pad_key_lock_ack_source[id] = self
+                        .input_runtime_ownership
+                        .callback_source_generation(id, sample, self.sample_rate_hz as u32)
+                        .map(|generation| (generation, sample.source_address()));
+                    self.publish_key_lock_status(id);
+                }
+                if let Some(position) = intent.seek_position_s {
+                    let did_seek = self.seek_sample_with_output_frame(id, position, output_frame);
+                    publication.record_resident_seek(
+                        did_seek.then(|| self.pad_playhead_seconds(id)).flatten(),
+                    );
+                }
+            },
+        );
+        match committed {
+            Ok(_) => {}
+            Err(
+                super::content_placement::PlacementError::Pending
+                | super::content_placement::PlacementError::Stale,
+            ) => {
+                self.defer_control(crate::messages::ControlMessage::RelocateResident(
+                    transaction,
+                ));
+                return false;
             }
-        }
-        if let Some(enabled) = intent.key_lock {
-            self.apply_pad_key_lock_mode(id, enabled);
-        }
-        if let Some(request) = intent.key_lock_request_id {
-            self.pad_key_lock_request_id[id] = request;
-            self.pad_key_lock_rejected[id] = false;
-            self.pad_key_lock_ack_source[id] = self
-                .input_runtime_ownership
-                .source_generation(id, sample, self.sample_rate_hz as u32)
-                .map(|generation| (generation, sample.source_address()));
-            self.publish_key_lock_status(id);
-        }
-        if let Some(position) = intent.seek_position_s {
-            let did_seek = self.seek_sample_with_output_frame(id, position, output_frame);
-            publication
-                .record_resident_seek(did_seek.then(|| self.pad_playhead_seconds(id)).flatten());
+            Err(_) => {
+                publication.mark_rejected();
+                retirement.retire_resident_transaction(transaction);
+                return false;
+            }
         }
         publication.mark_accepted();
         self.input_runtime_ownership
-            .finish_resident_control(id, publication.expected);
+            .finish_resident_control_for_binding(id, binding, publication.expected);
         retirement.retire_resident_transaction(transaction);
         true
     }
@@ -2009,6 +2264,16 @@ impl RtMixer {
         stems: PreparedStemSet,
         retirement: &mut impl AudioBufferRetirement,
     ) -> bool {
+        let Some(id) = stems
+            .publication
+            .callback_slot(&self.input_runtime_ownership, id)
+        else {
+            stems.publication.mark_rejected_reason(
+                super::prepared_source::PreparedStemRejection::SourceRequestChanged,
+            );
+            retirement.retire_prepared_stems(stems);
+            return false;
+        };
         if let Some(reason) = self.prepared_stem_rejection(id, &stems) {
             stems.publication.mark_rejected_reason(reason);
             retirement.retire_prepared_stems(stems);
@@ -2034,8 +2299,23 @@ impl RtMixer {
         timing: PreparedConstantTiming,
         retirement: &mut impl AudioBufferRetirement,
     ) -> bool {
+        let target = match timing.content_key {
+            Some(key) => self.content_effect_slot(key),
+            None if !self.input_runtime_ownership.is_source_tracked() => Some(id),
+            None => None,
+        };
+        let Some(id) = target else {
+            timing.publication.mark_rejected();
+            retirement.retire_constant_timing(timing);
+            return false;
+        };
         let projection = timing.projection;
         let valid = id < NUM_SAMPLES
+            && timing
+                .content_key
+                .map_or(!self.input_runtime_ownership.is_source_tracked(), |key| {
+                    self.input_runtime_ownership.content_key_current(key)
+                })
             && timing.publication.current()
             && projection.sample_rate_hz as f32 == self.sample_rate_hz
             && SourceGrid::from_period(
@@ -2058,8 +2338,16 @@ impl RtMixer {
             if let Some(stems) = &mut self.outgoing_stems[id] {
                 stems.accepted_timing = Some(projection);
             }
-            self.current_timing_acknowledgements
-                .acknowledge(id, projection.publication_epoch);
+            if let Some(key) = timing.content_key {
+                self.current_timing_acknowledgements.acknowledge_for_key(
+                    &self.input_runtime_ownership,
+                    key,
+                    projection.publication_epoch,
+                );
+            } else {
+                self.current_timing_acknowledgements
+                    .acknowledge(id, projection.publication_epoch);
+            }
             timing.publication.mark_accepted();
         } else {
             timing.publication.mark_rejected();
@@ -2068,7 +2356,62 @@ impl RtMixer {
         valid
     }
 
+    fn clear_timing_ack_for_slot(&self, id: usize) {
+        if let Some(key) = self.input_runtime_ownership.callback_content_key(id) {
+            self.current_timing_acknowledgements
+                .clear_for_key(&self.input_runtime_ownership, key);
+        } else if !self.input_runtime_ownership.is_source_tracked() {
+            self.current_timing_acknowledgements.clear(id);
+        }
+    }
+
+    pub(crate) fn content_effect_slot(
+        &self,
+        key: super::content_placement::ContentKey,
+    ) -> Option<usize> {
+        self.input_runtime_ownership.callback_key_slot(key)
+    }
+
+    /// Only the callback changes the permutation. A concurrent control source write may hold
+    /// the global marker, so accepted effects use their own exact cell/lifetime/slot fields
+    /// rather than discard an unchanged empty-slot edit because an unrelated write is Pending.
+    pub(crate) fn timing_effect_slot(
+        &self,
+        id: usize,
+        placement: Option<super::content_placement::SlotSnapshot>,
+    ) -> Option<usize> {
+        match placement {
+            Some(snapshot) => match snapshot.content_key() {
+                Some(key) => self.content_effect_slot(key),
+                None => self
+                    .input_runtime_ownership
+                    .slot_snapshot_fields_current(snapshot)
+                    .then_some(snapshot.slot()),
+            },
+            None => (!self.input_runtime_ownership.is_source_tracked() && id < NUM_SAMPLES)
+                .then_some(id),
+        }
+    }
+
+    #[cfg(test)]
     pub(crate) fn clear_constant_timing(&mut self, id: usize, through_epoch: u64) {
+        let placement = self
+            .input_runtime_ownership
+            .is_source_tracked()
+            .then(|| self.input_runtime_ownership.slot_snapshot(id))
+            .flatten();
+        self.clear_constant_timing_for_placement(id, through_epoch, placement);
+    }
+
+    pub(crate) fn clear_constant_timing_for_placement(
+        &mut self,
+        id: usize,
+        through_epoch: u64,
+        placement: Option<super::content_placement::SlotSnapshot>,
+    ) {
+        let Some(id) = self.timing_effect_slot(id, placement) else {
+            return;
+        };
         if let Some(slot) = self.pad_accepted_timing.get_mut(id)
             && slot.is_some_and(|projection| projection.publication_epoch <= through_epoch)
         {
@@ -2079,7 +2422,12 @@ impl RtMixer {
             if let Some(stems) = &mut self.outgoing_stems[id] {
                 stems.accepted_timing = None;
             }
-            self.current_timing_acknowledgements.clear(id);
+            if let Some(key) = placement.and_then(|snapshot| snapshot.content_key()) {
+                self.current_timing_acknowledgements
+                    .clear_for_key(&self.input_runtime_ownership, key);
+            } else if !self.input_runtime_ownership.is_source_tracked() {
+                self.current_timing_acknowledgements.clear(id);
+            }
             self.invalidate_prepared_for_pad(id);
         }
     }
@@ -2407,11 +2755,6 @@ impl RtMixer {
                 .source_current(id, sample, self.sample_rate_hz as u32)
     }
 
-    /// Compare the bounded stop revision without changing source or DSP ownership.
-    pub(crate) fn launch_current(&self, id: usize, revision: u64) -> bool {
-        self.input_runtime_ownership.launch_current(id, revision)
-    }
-
     /// Reserve replaced PCM and any frozen stem pin before any launch/loop side effect.
     pub(crate) fn can_adopt_sample(
         &self,
@@ -2538,6 +2881,108 @@ impl RtMixer {
         self.prepare_sample_start(id, velocity, None, Some(output_frame), retirement)
     }
 
+    /// Prepare only PCM/config handles. Birth authority is installed from the original binding
+    /// inside the caller's single same-life claim, never recaptured from the current slot.
+    pub(crate) fn prepare_admitted_play_sample_rt(
+        &self,
+        id: usize,
+        velocity: f32,
+        output_frame: u64,
+        binding: super::input_runtime_binding::InputPadBinding,
+        retirement: &mut impl AudioBufferRetirement,
+    ) -> Option<VoiceStartConfig> {
+        if id >= NUM_SAMPLES
+            || !velocity.is_finite()
+            || !(VOLUME_MIN..=VOLUME_MAX).contains(&velocity)
+            || !self.admitted_source_binding_current(id, binding)
+            || !self.can_adopt_sample(id, retirement)
+        {
+            return None;
+        }
+        let cell = self.input_runtime_ownership.binding_cell(id, binding)?;
+        if self
+            .input_runtime_ownership
+            .resident_control_for_cell(cell)
+            .load(Ordering::Acquire)
+            != 0
+        {
+            return None;
+        }
+        let sample = self.sample_bank[id].as_ref()?;
+        let region = self.effective_loop_region(id, sample.frame_count())?;
+        if !resident_read_context_available(
+            sample,
+            region,
+            ExplicitSeekMode::Normal,
+            self.pad_key_lock_enabled[id],
+        ) || (self.pad_key_lock_enabled[id]
+            && !(sample.resident_start() == 0 && sample.resident_end() == sample.frame_count())
+            && !self.normal_key_lock_bank_available(
+                id,
+                sample,
+                self.prepared_stems[id].as_ref(),
+                region,
+            ))
+            || !self
+                .input_runtime_ownership
+                .source_timing_available_for_binding(
+                    id,
+                    binding,
+                    &self.current_timing_acknowledgements,
+                )
+            || !self.admitted_source_binding_current(id, binding)
+        {
+            return None;
+        }
+        Some(VoiceStartConfig {
+            sample_id: id,
+            sample: sample.clone(),
+            initial_frame_pos: region.start,
+            volume: velocity,
+            initial_tempo_ratio: self.tempo_ratio_for_sample_id(id),
+            start_output_frame: Some(output_frame),
+            source_timing: self.timing_for_sample_id(id),
+            source_admission: None,
+        })
+    }
+
+    /// Only the outer callback claim may create this proof. All cell/source fields come from
+    /// its original binding; the caller has already validated exact launch/timing authority.
+    pub(crate) fn admit_prepared_source_birth(
+        &self,
+        config: &mut VoiceStartConfig,
+        binding: super::input_runtime_binding::InputPadBinding,
+        strict_runtime: bool,
+    ) -> bool {
+        let Some(cell) = self
+            .input_runtime_ownership
+            .binding_cell(config.sample_id, binding)
+        else {
+            return false;
+        };
+        config.source_admission = NativeHistoryContext {
+            id: config.sample_id,
+            ownership: &self.input_runtime_ownership,
+            acknowledgements: &self.current_timing_acknowledgements,
+            preparation_epoch: &self.prepared_source_epochs[cell.index()],
+        }
+        .capture_admitted_source(
+            &config.sample,
+            self.sample_rate_hz as u32,
+            binding,
+            strict_runtime,
+        );
+        config.source_admission.as_ref().is_some_and(|admission| {
+            admission.current_for_birth(
+                &self.input_runtime_ownership,
+                &self.current_timing_acknowledgements,
+                &config.sample,
+                self.sample_rate_hz as u32,
+                strict_runtime,
+            )
+        })
+    }
+
     fn prepare_sample_start(
         &self,
         id: usize,
@@ -2570,7 +3015,11 @@ impl RtMixer {
             id,
             ownership: &self.input_runtime_ownership,
             acknowledgements: &self.current_timing_acknowledgements,
-            preparation_epoch: &self.prepared_source_epochs[id],
+            preparation_epoch: &self.prepared_source_epochs[self
+                .input_runtime_ownership
+                .slot_snapshot(id)?
+                .cell()
+                .index()],
         }
         .capture_source_admission(
             &sample,
@@ -2860,6 +3309,26 @@ impl RtMixer {
         self.publish_key_lock_status(id);
     }
 
+    pub(crate) fn set_pad_key_lock_saved_intent(
+        &mut self,
+        placement: super::content_placement::SlotSnapshot,
+        enabled: bool,
+    ) {
+        let id = placement.slot();
+        if placement.lifetime() != 0
+            || !self
+                .input_runtime_ownership
+                .slot_snapshot_fields_current(placement)
+            || !self
+                .input_runtime_ownership
+                .source_cell_empty(placement.cell())
+            || self.sample_bank[id].is_some()
+        {
+            return;
+        }
+        self.set_pad_key_lock(id, enabled);
+    }
+
     fn apply_pad_key_lock_mode(&mut self, id: usize, enabled: bool) {
         if self.pad_key_lock_enabled[id] != enabled {
             self.pad_key_lock_enabled[id] = enabled;
@@ -2887,11 +3356,26 @@ impl RtMixer {
         binding: super::input_runtime_binding::InputPadBinding,
         source_generation: u64,
     ) {
+        // An admitted loaded command follows its retained content incarnation. Numeric
+        // slot reuse must never turn an old request into authority over replacement content.
+        let id = if let Some(placement) = binding.placement {
+            let Some(key) = placement.content_key() else {
+                return;
+            };
+            let Some(current_id) = self.input_runtime_ownership.callback_key_slot(key) else {
+                return;
+            };
+            current_id
+        } else if self.input_runtime_ownership.is_source_tracked() {
+            return;
+        } else {
+            id
+        };
         if id >= NUM_SAMPLES
             || !self
                 .input_runtime_ownership
-                .key_lock_request_current(id, request_id)
-            || !self.source_binding_current(id, binding)
+                .callback_key_lock_request_current(id, request_id)
+            || !self.key_lock_request_binding_current(id, binding)
             || self
                 .input_runtime_ownership
                 .binding_source_generation(id, binding)
@@ -2913,6 +3397,44 @@ impl RtMixer {
         self.publish_key_lock_status(id);
     }
 
+    fn key_lock_request_binding_current(
+        &self,
+        id: usize,
+        binding: super::input_runtime_binding::InputPadBinding,
+    ) -> bool {
+        let ownership = &self.input_runtime_ownership;
+        let placement_current = || {
+            binding
+                .placement
+                .map_or(!ownership.is_source_tracked(), |placement| {
+                    placement
+                        .content_key()
+                        .is_some_and(|key| ownership.callback_key_slot(key) == Some(id))
+                })
+        };
+        placement_current()
+            && ownership.copy_reservation(id) == 0
+            && ownership.authority_current(id, binding)
+            && ownership.binding_source_current(id, binding)
+            && binding.sample_rate_hz as f32 == self.sample_rate_hz
+            && self.sample_bank[id].as_ref().is_some_and(|sample| {
+                sample.source_address() == binding.source_address
+                    && sample.source_sample_count() == binding.sample_count
+                    && sample.channels == binding.channels
+                    && sample.resident_binding() == binding.resident
+            })
+            && self.pad_accepted_timing[id] == binding.accepted
+            && self
+                .current_timing_acknowledgements
+                .current_for_binding(ownership, id, binding)
+                == binding
+                    .accepted
+                    .map_or(0, |accepted| accepted.publication_epoch)
+            && placement_current()
+            && ownership.authority_current(id, binding)
+            && ownership.binding_source_current(id, binding)
+    }
+
     fn publish_key_lock_status(&mut self, id: usize) {
         if self.pad_key_lock_ack_source[id].is_none() {
             return;
@@ -2920,10 +3442,11 @@ impl RtMixer {
         let Some(sample) = self.sample_bank[id].as_ref() else {
             return;
         };
-        let Some(source_generation) =
-            self.input_runtime_ownership
-                .source_generation(id, sample, self.sample_rate_hz as u32)
-        else {
+        let Some(source_generation) = self.input_runtime_ownership.callback_source_generation(
+            id,
+            sample,
+            self.sample_rate_hz as u32,
+        ) else {
             return;
         };
         if self.pad_key_lock_ack_source[id] != Some((source_generation, sample.source_address())) {
@@ -2989,7 +3512,7 @@ impl RtMixer {
         };
         if self.pad_key_lock_status[id] != Some(status) {
             self.input_runtime_ownership
-                .publish_key_lock_status(id, status);
+                .publish_callback_key_lock_status(id, status);
             self.pad_key_lock_status[id] = Some(status);
         }
     }
@@ -3436,6 +3959,23 @@ impl RtMixer {
     }
 
     #[cfg(test)]
+    pub(crate) fn accepted_voice_timing_for_measurement(
+        &self,
+        id: usize,
+        sample: &SampleBuffer,
+    ) -> Option<AcceptedTimingProjection> {
+        let voice = self.voices.iter().find(|voice| {
+            voice.active
+                && voice.sample_id == id
+                && voice
+                    .sample
+                    .as_ref()
+                    .is_some_and(|pinned| pinned.same_source(sample))
+        })?;
+        self.timing_for_voice(voice).accepted
+    }
+
+    #[cfg(test)]
     pub(crate) fn active_pad_bar_phase_beats(&self, id: usize) -> Option<f64> {
         if id >= NUM_SAMPLES || self.channels == 0 {
             return None;
@@ -3659,7 +4199,7 @@ impl RtMixer {
         self.stem_transitions[id].clear();
         self.pad_phase_anchor_frame[id] = 0.0;
         self.pad_accepted_timing[id] = None;
-        self.current_timing_acknowledgements.clear(id);
+        self.clear_timing_ack_for_slot(id);
         true
     }
 
@@ -3955,21 +4495,26 @@ impl RtMixer {
                         transition: source_transition,
                     };
                     let next_position = voice.source_playback.position_at(chunk_frames);
-                    let context = NativeHistoryContext {
+                    let current_epoch_cell = ownership
+                        .slot_snapshot(voice.sample_id)
+                        .map(|snapshot| snapshot.cell());
+                    let context = current_epoch_cell.map(|cell| NativeHistoryContext {
                         id: voice.sample_id,
                         ownership,
                         acknowledgements,
-                        preparation_epoch: &prepared_source_epochs[voice.sample_id],
-                    };
+                        preparation_epoch: &prepared_source_epochs[cell.index()],
+                    });
                     let permit = if bank_sources[voice.sample_id]
                         .as_ref()
                         .is_some_and(|bank| bank.same_source(&sample))
                     {
-                        context.capture(
-                            &sample,
-                            sample_rate_hz as u32,
-                            voice.source_timing.accepted,
-                        )
+                        context.and_then(|context| {
+                            context.capture(
+                                &sample,
+                                sample_rate_hz as u32,
+                                voice.source_timing.accepted,
+                            )
+                        })
                     } else {
                         voice.source_admission.as_ref().and_then(|admission| {
                             NativeVoiceHistoryContext {
@@ -4071,6 +4616,7 @@ impl RtMixer {
             pad_playhead_frame[voice.sample_id] = Some(voice.frame_pos);
         }
         self.retire_unused_pair_components(retirement);
+        self.settle_invalid_hold_actions_rt(output_start_frame.unwrap_or(0), retirement);
         for id in pad_activity.iter() {
             self.finish_pending_key_lock(id);
             self.publish_key_lock_status(id);
@@ -4401,6 +4947,7 @@ mod tests {
             assert!(mixer.publish_constant_timing_rt(
                 0,
                 PreparedConstantTiming {
+                    content_key: None,
                     reference: source.clone(),
                     publication: super::super::prepared_source::PreparedSourcePermit::for_epoch(
                         Arc::new(std::sync::atomic::AtomicU64::new(next.publication_epoch)),
@@ -4431,6 +4978,7 @@ mod tests {
         assert!(!mixer.publish_constant_timing_rt(
             0,
             PreparedConstantTiming {
+                content_key: None,
                 reference: create_test_sample(1, 20_000, 0.25),
                 publication: super::super::prepared_source::PreparedSourcePermit::unrestricted(),
                 projection: invalid,

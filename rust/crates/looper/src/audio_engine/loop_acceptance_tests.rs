@@ -155,7 +155,7 @@ fn effective_snapshot_rejects_authority_edit_and_source_replacement_without_rela
     engine.loaded_source_digests.lock().unwrap()[0] = Some("b".repeat(64));
     engine
         .input_runtime_ownership
-        .publish_source(0, &replacement, RATE, 8);
+        .publish_test_source(0, &replacement, RATE, 8);
     mixer.load_sample(0, replacement);
     let request = observe(&engine, &mixer);
     assert_status(&engine, request, false);
@@ -171,7 +171,7 @@ fn effective_snapshot_rechecks_fence_generation_even_at_identical_pointer_shape_
     // This is observer guard coverage, not C1 immutable decoder/copy-first ABA acceptance.
     engine
         .input_runtime_ownership
-        .publish_source(0, &source, RATE, 8);
+        .publish_test_source(0, &source, RATE, 8);
     assert_status(&engine, request, false);
 }
 

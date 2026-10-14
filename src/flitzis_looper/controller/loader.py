@@ -3,7 +3,7 @@ import math
 from dataclasses import dataclass, field, replace
 from itertools import islice
 from pathlib import Path
-from typing import TYPE_CHECKING, Literal, NotRequired, TypedDict, TypeVar
+from typing import TYPE_CHECKING, Literal, NotRequired, TypedDict, TypeVar, cast
 from uuid import uuid4
 
 from pydantic import ValidationError
@@ -36,7 +36,7 @@ from flitzis_looper_audio import ProjectAssetLease
 if TYPE_CHECKING:
     from collections.abc import Callable
 
-    from flitzis_looper_audio import AudioEngine
+    from flitzis_looper_audio import AudioEngine, LoaderEventDelivery
 
 
 _PadValue = TypeVar("_PadValue")
@@ -174,6 +174,8 @@ class _MaterialCreationOwnership(BaseController):
         for sample_id, (instance_id, reference) in list(self._material_creation_pending.items())[
             :8
         ]:
+            if sample_id in getattr(self, "_pair_deferred_sample_ids", ()):
+                continue
             content = self._project.pad_content[sample_id]
             if (
                 content is None
@@ -393,6 +395,8 @@ class _IncomingIntentControl:
 
     def _refresh_incoming_global_intent(self) -> None:
         for sample_id, incoming in tuple(self._incoming_loads.items()):
+            if sample_id in getattr(self, "_pair_deferred_sample_ids", ()):
+                continue
             intent = incoming.intent
             if intent.override is not None:
                 continue
@@ -459,6 +463,7 @@ class LoaderController(_IncomingIntentControl, _MaterialCreationOwnership):
         self._on_sample_unloaded: Callable[[int], None] | None = None
         self._on_accepted_timing_refresh: Callable[[int], None] | None = None
         self._load_request_ids: dict[int, int] = {}
+        self._pair_held_loader_events: list[dict[str, object]] = []
         self._migration_event_handler: Callable[[dict[str, object]], bool] | None = None
         self._load_retirements: dict[tuple[int, int | None], AssetRetirementReservation] = {}
         self._new_load_sample_ids: set[int] = set()
@@ -670,11 +675,12 @@ class LoaderController(_IncomingIntentControl, _MaterialCreationOwnership):
 
     def poll_loader_events(self) -> None:
         """Drain pending loader events from the Rust audio engine."""
+        deferred = self._pair_deferred_sample_ids
         self._refresh_incoming_global_intent()
-        self._accepted_restore.poll()
+        self._accepted_restore.poll(deferred_sample_ids=deferred)
         self._poll_material_creation()
         self._assets.retry_retirements()
-        handlers = {
+        handlers: dict[str, Callable[[int, dict[str, object]], None]] = {
             "started": self._handle_loader_started,
             "progress": self._handle_loader_progress,
             "success": self._handle_loader_success,
@@ -685,25 +691,78 @@ class LoaderController(_IncomingIntentControl, _MaterialCreationOwnership):
             "task_error": self._handle_task_error,
         }
 
-        while True:
-            event = self._audio.poll_loader_events()
-            if event is None:
-                self._poll_material_creation()
-                self._retry_deferred_restores()
+        held, self._pair_held_loader_events = self._pair_held_loader_events, []
+        for event in held:
+            self._deliver_loader_event(event, handlers, deferred)
+        # Progress cannot fill a participant fence and block unrelated completions.
+        # One bounded drain coalesces only equivalent original progress owners.
+        for _ in range(256):
+            incoming = self._audio.poll_loader_events()
+            if incoming is None:
+                break
+            self._deliver_loader_event(incoming, handlers, deferred)
+        self._poll_material_creation()
+        self._retry_deferred_restores()
+
+    def _deliver_loader_event(
+        self,
+        event: dict[str, object],
+        handlers: dict[str, Callable[[int, dict[str, object]], None]],
+        deferred: frozenset[int],
+    ) -> None:
+        if event.get("_unowned_pair_event") is True and event.get("id") not in deferred:
+            # Legacy numeric diagnostics cannot authorize a moved or replaced occupant.
+            return
+        if (owner := event.get("_native_event_owner")) is not None:
+            try:
+                resolved = self._audio._resolve_loader_event(cast("LoaderEventDelivery", owner))
+            except RuntimeError as error:
+                if "loader event content placement pending" not in str(error):
+                    raise
+                self._retain_loader_event(event)
                 return
+            if resolved is None:
+                return
+            event["id"], timing_stale = resolved
+            if timing_stale:
+                event["timing_stale"] = True
+        if event.get("id") in deferred:
+            if owner is None:
+                event["_unowned_pair_event"] = True
+            self._retain_loader_event(event)
+            return
+        self._dispatch_loader_event(event, handlers)
 
-            if self._migration_event_handler is not None and self._migration_event_handler(event):
-                continue
+    @staticmethod
+    def _same_loader_progress(left: dict[str, object], right: dict[str, object]) -> bool:
+        fields = ("type", "request_id", "task")
+        if any(left.get(field) != right.get(field) for field in fields):
+            return False
+        owner, other = left.get("_native_event_owner"), right.get("_native_event_owner")
+        if owner is None or other is None:
+            return owner is other and left.get("id") == right.get("id")
+        return cast("LoaderEventDelivery", owner).same_owner(cast("LoaderEventDelivery", other))
 
-            event_type = event.get("type")
-            sample_id = event.get("id")
-            if not isinstance(event_type, str) or not isinstance(sample_id, int):
-                continue
+    def _retain_loader_event(self, event: dict[str, object]) -> None:
+        if event.get("type") in {"progress", "task_progress"}:
+            for index, previous in enumerate(self._pair_held_loader_events):
+                if self._same_loader_progress(previous, event):
+                    self._pair_held_loader_events[index] = event
+                    return
+        self._pair_held_loader_events.append(event)
 
-            handler = handlers.get(event_type)
-            if handler is None:
-                continue
-
+    def _dispatch_loader_event(
+        self,
+        event: dict[str, object],
+        handlers: dict[str, Callable[[int, dict[str, object]], None]],
+    ) -> None:
+        if self._migration_event_handler is not None and self._migration_event_handler(event):
+            return
+        event_type, sample_id = event.get("type"), event.get("id")
+        if not isinstance(event_type, str) or not isinstance(sample_id, int):
+            return
+        handler = handlers.get(event_type)
+        if handler is not None:
             handler(sample_id, event)
 
     def _set_migration_event_handler(self, handler: Callable[[dict[str, object]], bool]) -> None:
@@ -1245,8 +1304,6 @@ class LoaderController(_IncomingIntentControl, _MaterialCreationOwnership):
         if self._session.waveform_editor_pad_id == sample_id:
             self._session.waveform_editor_open = False
             self._session.waveform_editor_pad_id = None
-        if self._session.waveform_pause_hold_pad_id == sample_id:
-            self._session.waveform_pause_hold_pad_id = None
         if self._session.tap_bpm_pad_id == sample_id:
             self._session.tap_bpm_pad_id = None
             self._session.tap_bpm_timestamps.clear()
@@ -1593,6 +1650,8 @@ class LoaderController(_IncomingIntentControl, _MaterialCreationOwnership):
     def _retry_deferred_restores(self) -> None:
         pending = list(islice(self._deferred_restores.items(), self._RESTORE_ADMISSIONS_PER_POLL))
         for sample_id, rel in pending:
+            if sample_id in getattr(self, "_pair_deferred_sample_ids", ()):
+                continue
             current_path = self._project.sample_paths[sample_id]
             content = self._project.pad_content[sample_id]
             current_content = content.instance_id if content else None

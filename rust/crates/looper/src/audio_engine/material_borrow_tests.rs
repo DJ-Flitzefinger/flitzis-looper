@@ -41,7 +41,13 @@ fn public_native_background_borrow_material_restore_and_supersession() {
         wait_until(|| {
             Python::attach(|py| {
                 let borrowed = engine.borrow(py);
-                while let Ok(event) = borrowed.loader_rx.lock().unwrap().try_recv() {
+                while let Ok(event) = borrowed
+                    .loader_rx
+                    .lock()
+                    .unwrap()
+                    .try_recv()
+                    .map(LoaderEvent::into_test_payload)
+                {
                     match event {
                         LoaderEvent::Success { request_id, .. }
                             if request_id == source.request_id() =>

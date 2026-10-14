@@ -907,7 +907,7 @@ class SessionState(BaseModel):
     """Pad id currently being edited in the waveform editor."""
 
     waveform_pause_hold_pad_id: int | None = None
-    """Pad paused by the waveform editor's transient right-button Pause hold."""
+    """Display projection from an original Native hold owner; grants no release authority."""
 
     settings_open: bool = False
     """Whether the Settings overlay is open."""
@@ -1083,7 +1083,6 @@ class SessionState(BaseModel):
         "tap_bpm_pad_id",
         "bpm_lock_anchor_pad_id",
         "waveform_editor_pad_id",
-        "waveform_pause_hold_pad_id",
         mode="after",
     )
     @classmethod

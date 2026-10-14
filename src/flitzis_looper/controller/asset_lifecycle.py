@@ -2,6 +2,7 @@ import os
 import re
 import threading
 from contextlib import contextmanager
+from dataclasses import dataclass
 from itertools import islice
 from pathlib import Path
 from typing import TYPE_CHECKING
@@ -14,6 +15,159 @@ if TYPE_CHECKING:
 
     from flitzis_looper.models import ProjectState, StemCacheEntry
     from flitzis_looper_audio import AudioEngine, ProjectAssetLease
+
+type AssignmentImage = tuple[
+    dict[tuple[str, int], Path], dict[tuple[str, int], tuple[Path, ProjectAssetLease]]
+]
+
+
+@dataclass(slots=True)
+class _AssignmentRetirement:
+    kind: str
+    path: Path
+    lease: ProjectAssetLease
+    legacy_index: int = 0
+
+
+def _store_assignment_table(
+    assets: ProjectAssetLifecycle,
+    assignments: dict[tuple[str, int], tuple[Path, ProjectAssetLease]],
+    *,
+    publication: AssignmentPublicationPlan,
+) -> None:
+    """Exchange one fully allocated assignment table before retiring any original owner."""
+    assets._assignments = assignments
+    publication._applied = True
+
+
+class AssignmentPublicationPlan:
+    """Own one complete reference publication and its original retirement obligations.
+
+    Preparation precedes durable commit. Application belongs to the original
+    control thread under the caller's retained retirement reservation. Once the
+    table has transferred, retries never rewrite it or retire a later occupant.
+    """
+
+    def __init__(
+        self, assets: ProjectAssetLifecycle, image: AssignmentImage, *, preserve_previous: bool
+    ) -> None:
+        self._assets = assets
+        self._audio = assets._audio
+        self._control_thread = threading.get_ident()
+        self._image = image
+        self._desired = image[0].copy()
+        self._acquired = image[1].copy()
+        self._before = assets._assignments.copy()
+        self._after = self._prepare_after()
+        self._publication_table = self._after.copy()
+        self._changed_keys = frozenset(
+            key
+            for key in self._before.keys() | self._after.keys()
+            if self._before.get(key) is not self._after.get(key)
+        )
+        self._retired = tuple(
+            _AssignmentRetirement(key[0], path, lease)
+            for key, (path, lease) in self._before.items()
+            if key in self._changed_keys
+        )
+        self._preserve_previous = preserve_previous
+        self._store_attempted = False
+        self._applied = False
+        self._retirement_index = 0
+
+    def _prepare_after(self) -> dict[tuple[str, int], tuple[Path, ProjectAssetLease]]:
+        after = {}
+        required = set()
+        for key, path in self._desired.items():
+            previous = self._before.get(key)
+            if previous is not None and previous[0] == path:
+                after[key] = previous
+                continue
+            prepared = self._acquired.get(key)
+            if prepared is None or prepared[0] != path:
+                message = "Assignment publication lacks its exact prepared new owner"
+                raise RuntimeError(message)
+            required.add(key)
+            after[key] = prepared
+        if self._acquired.keys() != required:
+            message = "Assignment publication contains owners outside its prepared image"
+            raise RuntimeError(message)
+        return after
+
+    @staticmethod
+    def _same_rows(
+        actual: dict[tuple[str, int], tuple[Path, ProjectAssetLease]],
+        expected: dict[tuple[str, int], tuple[Path, ProjectAssetLease]],
+    ) -> bool:
+        return actual.keys() == expected.keys() and all(
+            actual[key] is row for key, row in expected.items()
+        )
+
+    @property
+    def applied(self) -> bool:
+        """Whether the complete prepared table transferred, including an interrupted return."""
+        if not self._applied and self._store_attempted:
+            current = self._assets._assignments
+            if all(current.get(key) is self._after.get(key) for key in self._changed_keys):
+                self._applied = True
+        return self._applied
+
+    @property
+    def settled(self) -> bool:
+        """Whether all old owners were released or transferred to the existing cleanup lane."""
+        return self.applied and self._retirement_index == len(self._retired)
+
+    @property
+    def owns_unpublished_image(self) -> bool:
+        """Whether cancelling may still release the image's exact acquired leases."""
+        return not self.applied
+
+    def _publish(self) -> None:
+        if self.applied:
+            return
+        if (
+            self._image[0] != self._desired
+            or not self._same_rows(self._image[1], self._acquired)
+            or not self._same_rows(self._assets._assignments, self._before)
+            or any(self._lease_released(lease) for _, lease in self._after.values())
+        ):
+            message = "Assignment ownership changed before the prepared publication"
+            raise RuntimeError(message)
+        self._store_attempted = True
+        _store_assignment_table(self._assets, self._publication_table, publication=self)
+        self._applied = True
+
+    @staticmethod
+    def _lease_released(lease: ProjectAssetLease) -> bool:
+        released = getattr(lease, "released", None)
+        return callable(released) and released() is True
+
+    def _retirement_transferred(self, lease: ProjectAssetLease) -> bool:
+        assets = self._assets
+        with assets._retirement_lock:
+            return any(
+                lease is owner for owners in assets._pending.values() for owner in owners
+            ) or any(lease is owner for _, owner in assets._pending_groups)
+
+    def _settle_retirement(self, retired: _AssignmentRetirement) -> None:
+        lease = retired.lease
+        if self._lease_released(lease) or self._retirement_transferred(lease):
+            return
+        current_paths = (path for path, _ in self._assets._assignments.values())
+        if self._preserve_previous or retired.path in current_paths:
+            lease.release()
+        else:
+            self._assets._retire_assignment(retired.kind, retired.path, lease, progress=retired)
+
+    def apply(self) -> None:
+        """Transfer once, then retry the exact retained old-owner retirement cursor."""
+        if threading.get_ident() != self._control_thread or self._assets._audio is not self._audio:
+            message = "Assignment publication lost its original control or Native owner"
+            raise RuntimeError(message)
+        self._publish()
+        while self._retirement_index < len(self._retired):
+            self._settle_retirement(self._retired[self._retirement_index])
+            self._retirement_index += 1
 
 
 class AssetRetirementReservation:
@@ -132,6 +286,12 @@ class ProjectAssetLifecycle:
         """Reserve all new image owners before the atomic config commit."""
         current = self._current_assignments(project)
         return current, self._acquire_assignments(current)
+
+    def prepare_assignment_publication(
+        self, image: AssignmentImage, *, preserve_previous: bool = False
+    ) -> AssignmentPublicationPlan:
+        """Retain exact complete before/after owners before the candidate's Config commit."""
+        return AssignmentPublicationPlan(self, image, preserve_previous=preserve_previous)
 
     def publish_assignment_image(
         self,
@@ -457,7 +617,14 @@ class ProjectAssetLifecycle:
     def _checked_path(self, path: Path) -> Path:
         return resolve_asset(path, project_root=self._root).path
 
-    def _retire_assignment(self, kind: str, path: Path, lease: ProjectAssetLease) -> None:
+    def _retire_assignment(
+        self,
+        kind: str,
+        path: Path,
+        lease: ProjectAssetLease,
+        *,
+        progress: _AssignmentRetirement | None = None,
+    ) -> None:
         if kind == "original":
             self.retire(path, lease=lease)
         elif path.name.startswith(".ready-"):
@@ -465,8 +632,11 @@ class ProjectAssetLifecycle:
         else:
             # Legacy canonical containers can contain private/unknown files or new
             # generations. Retire only the declared files, never the pad container.
-            for name in self._LEGACY_STEM_FILES:
+            index = progress.legacy_index if progress is not None else 0
+            for name in self._LEGACY_STEM_FILES[index:]:
                 self.retire(path / name)
+                if progress is not None:
+                    progress.legacy_index += 1
             # The container owner must stay alive if any of its exact-file requests
             # has not been admitted; release it only after every path is admitted.
             with self._retirement_lock:

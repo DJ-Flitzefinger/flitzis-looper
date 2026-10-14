@@ -3,7 +3,8 @@
 use super::cold_jobs::PCM_LIMIT_BYTES;
 use super::cold_residency::{self, ResidentLoadGuard, ResidentLoadHint};
 use super::cold_store::{ColdTransaction, CommittedColdLease};
-use super::input_runtime_binding::InputRuntimeOwnership;
+use super::content_placement::{PlacementObservation, SlotSnapshot};
+use super::input_runtime_binding::{InputRuntimeOwnership, SourcePublication};
 use super::progress::{LoadProgressStage, ProgressReporter};
 use super::sample_loader::{SampleLoadProgress, SampleLoadSubtask};
 use super::{
@@ -33,6 +34,50 @@ type PreparedColdSample = (
     Option<Arc<AtomicBool>>,
 );
 
+#[cfg(test)]
+struct AdoptionWaitGate {
+    entered: AtomicBool,
+    released: AtomicBool,
+}
+
+#[cfg(test)]
+thread_local! {
+    static ADOPTION_WAIT_GATE: std::cell::RefCell<Option<Arc<AdoptionWaitGate>>> =
+        const { std::cell::RefCell::new(None) };
+}
+
+#[cfg(test)]
+struct AdoptionWaitGateGuard(Arc<AdoptionWaitGate>);
+
+#[cfg(test)]
+impl Drop for AdoptionWaitGateGuard {
+    fn drop(&mut self) {
+        self.0.released.store(true, Ordering::Release);
+        ADOPTION_WAIT_GATE.with(|slot| {
+            let installed = slot
+                .borrow()
+                .as_ref()
+                .is_some_and(|gate| Arc::ptr_eq(gate, &self.0));
+            if installed {
+                slot.borrow_mut().take();
+            }
+        });
+    }
+}
+
+#[cfg(test)]
+fn gate_next_adoption_wait() -> AdoptionWaitGateGuard {
+    let gate = Arc::new(AdoptionWaitGate {
+        entered: AtomicBool::new(false),
+        released: AtomicBool::new(false),
+    });
+    ADOPTION_WAIT_GATE.with(|slot| {
+        assert!(slot.borrow().is_none(), "adoption gate already installed");
+        *slot.borrow_mut() = Some(gate.clone());
+    });
+    AdoptionWaitGateGuard(gate)
+}
+
 struct LoadingGuard {
     id: usize,
     request_id: u64,
@@ -47,14 +92,69 @@ struct PublicationLease {
     adopted: bool,
     assets: Arc<super::project_assets::ProjectAssets>,
     _pcm: Arc<[f32]>,
+    cleanup: ColdPublicationCleanup,
 }
 
 impl Drop for PublicationLease {
     fn drop(&mut self) {
-        if !self.adopted {
+        if !self.adopted && !self.cleanup.preserve_artifacts() {
             self.assets.orphan_cold(&self.lease);
             self.lease.rollback_unadopted_original();
             self.lease.rollback_unadopted_cache();
+        }
+    }
+}
+
+/// The worker's panic boundary retains cancellation authority even after its work unwinds.
+#[derive(Clone)]
+struct ColdPublicationCleanup {
+    adoption: Arc<AtomicU8>,
+    publication: Arc<Mutex<Option<SourcePublication>>>,
+    cancellation_settled: Arc<AtomicBool>,
+    requests: Arc<Mutex<Vec<u64>>>,
+    ownership: Arc<InputRuntimeOwnership>,
+    lease: Arc<Mutex<Option<CommittedColdLease>>>,
+    assets: Arc<super::project_assets::ProjectAssets>,
+}
+
+impl ColdPublicationCleanup {
+    fn cancel_unclaimed(&self) -> bool {
+        cancel_unclaimed_material(
+            &self.requests,
+            &self.publication,
+            &self.adoption,
+            &self.cancellation_settled,
+            &self.ownership,
+        )
+    }
+
+    fn preserve_artifacts(&self) -> bool {
+        let phase = self.adoption.load(Ordering::Acquire);
+        if phase == 3 && self.cancellation_settled.load(Ordering::Acquire) {
+            return false;
+        }
+        if matches!(phase, 1 | 2) || self.ownership.placement_pending() {
+            return true;
+        }
+        match self.publication.lock() {
+            Ok(publication) => {
+                publication.is_some() && !self.cancellation_settled.load(Ordering::Acquire)
+            }
+            Err(_) => true,
+        }
+    }
+
+    fn rollback_rejected_artifacts(&self) {
+        if !self.cancellation_settled.load(Ordering::Acquire)
+            || self.adoption.load(Ordering::Acquire) != 3
+        {
+            return;
+        }
+        let lease = self.lease.lock().ok().and_then(|lease| lease.clone());
+        if let Some(lease) = lease {
+            self.assets.orphan_cold(&lease);
+            lease.rollback_unadopted_original();
+            lease.rollback_unadopted_cache();
         }
     }
 }
@@ -79,10 +179,10 @@ struct PreviousSourceState {
     generation: (u64, u32),
     digest: Option<String>,
     intent: TimingIntent,
-    content_lifetime: u64,
 }
 
 struct ColdLoad {
+    placement: SlotSnapshot,
     id: usize,
     request_id: u64,
     base_request: u64,
@@ -90,6 +190,12 @@ struct ColdLoad {
     proposal: super::resident_proposal::ResidentProposal,
     resident: super::resident_proposal::ResidentReadContext,
     adoption: Arc<AtomicU8>,
+    publication: Arc<Mutex<Option<SourcePublication>>>,
+    cancellation_settled: Arc<AtomicBool>,
+    cleanup_lease: Arc<Mutex<Option<CommittedColdLease>>>,
+    metadata_superseded: AtomicBool,
+    #[cfg(test)]
+    adoption_wait_gate: Option<Arc<AdoptionWaitGate>>,
     prepared_material: Option<Arc<super::material_migration::PreparedMigrationMaterial>>,
     path: PathBuf,
     restore: bool,
@@ -246,8 +352,41 @@ fn admit_for_format_selected_intent(
 pub(super) struct AdmittedMaterial {
     pub request_id: u64,
     pub adoption: Arc<AtomicU8>,
+    pub publication: Arc<Mutex<Option<SourcePublication>>>,
+    pub cancellation_settled: Arc<AtomicBool>,
     pub old_source: Option<SampleBuffer>,
     pub old_lease: Option<CommittedColdLease>,
+}
+
+/// Request serialization separates a private preparation cancellation from cancellation of
+/// the exact Native incarnation. Pending placement retains the handle for a later retry.
+pub(super) fn cancel_unclaimed_material(
+    requests: &Mutex<Vec<u64>>,
+    publication: &Mutex<Option<SourcePublication>>,
+    adoption: &AtomicU8,
+    cancellation_settled: &AtomicBool,
+    ownership: &InputRuntimeOwnership,
+) -> bool {
+    let Ok(_requests) = requests.lock() else {
+        return false;
+    };
+    let Ok(publication) = publication.lock() else {
+        return false;
+    };
+    let settled = if let Some(publication) = publication.as_ref() {
+        ownership
+            .cancel_cold_with_adoption_fixed(publication, adoption)
+            .unwrap_or(false)
+    } else {
+        adoption
+            .compare_exchange(0, 3, Ordering::AcqRel, Ordering::Acquire)
+            .is_ok()
+            || adoption.load(Ordering::Acquire) == 3
+    };
+    if settled {
+        cancellation_settled.store(true, Ordering::Release);
+    }
+    settled
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -427,16 +566,29 @@ fn admit_selected_material_incoming(
         return Err(PyValueError::new_err("sample is already loading"));
     }
     let base_request = requests[id];
-    let base_epoch = engine.prepared_source_epochs[id].load(Ordering::Acquire);
+    let placement = engine
+        .input_runtime_ownership
+        .slot_snapshot(id)
+        .ok_or_else(|| PyRuntimeError::new_err("content placement is pending"))?;
+    let epoch = engine
+        .prepared_source_epoch(id)
+        .map_err(PyRuntimeError::new_err)?
+        .clone();
+    if !Arc::ptr_eq(
+        &epoch,
+        &engine.prepared_source_epochs[placement.cell().index()],
+    ) {
+        return Err(PyRuntimeError::new_err("content epoch capture changed"));
+    }
+    let base_epoch = epoch.load(Ordering::Acquire);
     let expected_epoch = {
-        let advance =
-            PadRequestAdvance::prepare(&mut requests[id], &engine.prepared_source_epochs[id])
-                .map_err(PyRuntimeError::new_err)?;
+        let advance = PadRequestAdvance::prepare(&mut requests[id], &epoch)
+            .map_err(PyRuntimeError::new_err)?;
         advance.next_epoch
     };
     let (proposal, request_id) = engine
         .resident_proposals
-        .begin_source(id, base_request, base_epoch)
+        .begin_source_for_cell(id, placement.cell(), base_request, base_epoch)
         .map_err(PyRuntimeError::new_err)?;
     if request_id > u64::MAX / 4 {
         return Err(PyRuntimeError::new_err(
@@ -484,6 +636,8 @@ fn admit_selected_material_incoming(
     let admitted = AdmittedMaterial {
         request_id,
         adoption: Arc::new(AtomicU8::new(0)),
+        publication: Arc::new(Mutex::new(None)),
+        cancellation_settled: Arc::new(AtomicBool::new(false)),
         old_source: initial_source.clone(),
         old_lease: engine
             .cold_leases
@@ -503,6 +657,7 @@ fn admit_selected_material_incoming(
         .lock()
         .map_err(|_| PyRuntimeError::new_err("incoming intent lock poisoned"))?;
     let work = ColdLoad {
+        placement,
         id,
         request_id,
         base_request,
@@ -514,6 +669,12 @@ fn admit_selected_material_incoming(
         )
         .with_history(engine.cold_pcm_history.clone(), id),
         adoption: admitted.adoption.clone(),
+        publication: admitted.publication.clone(),
+        cancellation_settled: admitted.cancellation_settled.clone(),
+        cleanup_lease: Arc::new(Mutex::new(None)),
+        metadata_superseded: AtomicBool::new(false),
+        #[cfg(test)]
+        adoption_wait_gate: ADOPTION_WAIT_GATE.with(|gate| gate.borrow_mut().take()),
         prepared_material,
         path: source_path,
         restore,
@@ -528,7 +689,7 @@ fn admit_selected_material_incoming(
         incoming: incoming.clone(),
         guard_epoch: run_analysis || restore_automatic || initial_source.is_some(),
         initial_source,
-        epoch: engine.prepared_source_epochs[id].clone(),
+        epoch,
         expected_epoch,
         intents: engine.timing_intents.clone(),
         requests: engine.pad_request_ids.clone(),
@@ -545,7 +706,7 @@ fn admit_selected_material_incoming(
         cancelled: engine.cold_cancelled.clone(),
         events: engine.loader_tx.clone(),
     };
-    let panic_adoption = work.adoption.clone();
+    let panic_cleanup = work.publication_cleanup();
     let guard = LoadingGuard {
         id,
         request_id,
@@ -557,7 +718,7 @@ fn admit_selected_material_incoming(
         .submit(reservation, move || {
             let _guard = guard;
             let events = work.events.clone();
-            run_worker_catching_panic(panic_adoption, &events, id, request_id, || {
+            run_worker_catching_panic_captured(panic_cleanup, &events, id, request_id, || {
                 work.run(producer)
             });
         })
@@ -575,6 +736,7 @@ fn admit_selected_material_incoming(
     Ok(admitted)
 }
 
+#[cfg(test)]
 pub(super) fn run_worker_catching_panic(
     adoption: Arc<AtomicU8>,
     events: &std::sync::mpsc::Sender<LoaderEvent>,
@@ -589,6 +751,47 @@ pub(super) fn run_worker_catching_panic(
             request_id,
             error: "cold worker failed".into(),
         });
+    }
+}
+
+fn run_worker_catching_panic_captured(
+    cleanup: ColdPublicationCleanup,
+    events: &Sender<LoaderEvent>,
+    id: usize,
+    request_id: u64,
+    run: impl FnOnce(),
+) {
+    if let Err(panic) = std::panic::catch_unwind(std::panic::AssertUnwindSafe(run)) {
+        let detail = panic
+            .downcast_ref::<String>()
+            .map(String::as_str)
+            .or_else(|| panic.downcast_ref::<&str>().copied())
+            .unwrap_or("unknown panic");
+        let settled = cleanup.cancel_unclaimed();
+        if settled {
+            cleanup.rollback_rejected_artifacts();
+        }
+        let status = if settled {
+            "native rejection settled"
+        } else {
+            "native permission unresolved or adopted; artifacts retained"
+        };
+        let diagnostic = format!("cold worker failed: {detail}; {status}");
+        let event = if settled {
+            LoaderEvent::Error {
+                id,
+                request_id,
+                error: diagnostic,
+            }
+        } else {
+            LoaderEvent::Progress {
+                id,
+                request_id,
+                percent: 0.0,
+                stage: diagnostic,
+            }
+        };
+        let _ = events.send(event);
     }
 }
 
@@ -608,8 +811,21 @@ pub(super) fn unload_for_producer(
     engine
         .input_runtime_ownership
         .ensure_no_copy_reservation(id)?;
-    let advance = PadRequestAdvance::prepare(&mut requests[id], &engine.prepared_source_epochs[id])
+    let captured = engine
+        .input_runtime_ownership
+        .slot_snapshot(id)
+        .ok_or_else(|| PyRuntimeError::new_err("content placement is pending"))?;
+    let write = engine
+        .input_runtime_ownership
+        .prepare_slot_write(captured, 0)
         .map_err(PyRuntimeError::new_err)?;
+    let advance = PadRequestAdvance::prepare(
+        &mut requests[id],
+        engine
+            .prepared_source_epoch(id)
+            .map_err(PyRuntimeError::new_err)?,
+    )
+    .map_err(PyRuntimeError::new_err)?;
     let mut cache = engine
         .sample_cache
         .lock()
@@ -639,15 +855,23 @@ pub(super) fn unload_for_producer(
         ));
     }
     let authority = engine.input_runtime_ownership.next_authority(id)?;
-    engine.input_runtime_ownership.revoke(id, authority);
-    advance.commit();
-    engine.input_runtime_ownership.revoke_source(id);
-    engine
+    let logical_advance = engine
         .input_runtime_ownership
-        .publish_content_lifetime(id, 0);
-    engine.input_runtime_ownership.clear_launch_admitted(id);
+        .prepare_source_request_advance(id)
+        .map_err(PyRuntimeError::new_err)?;
+    let publication = engine
+        .input_runtime_ownership
+        .retire_source_write(&write, authority, || {
+            logical_advance.commit();
+            advance.commit();
+            true
+        })
+        .map_err(PyRuntimeError::new_err)?;
     producer
-        .push(ControlMessage::UnloadSample { id })
+        .push(ControlMessage::UnloadSample {
+            id,
+            publication: Some(publication),
+        })
         .expect("reserved single-producer capacity");
     cache[id] = None;
     digests[id] = None;
@@ -655,7 +879,7 @@ pub(super) fn unload_for_producer(
     engine.cold_lease_generations[id].store(0, Ordering::Release);
     engine.cold_loading[id].store(0, Ordering::Release);
     loading.remove(&id);
-    tasks.retain(|(task_id, _)| *task_id != id);
+    tasks.retain(|(task_id, _)| *task_id != captured.cell().index());
     drop(producer);
     drop(tasks);
     drop(loading);
@@ -678,6 +902,17 @@ fn same_source(left: Option<&SampleBuffer>, right: Option<&SampleBuffer>) -> boo
 }
 
 impl ColdLoad {
+    fn publication_cleanup(&self) -> ColdPublicationCleanup {
+        ColdPublicationCleanup {
+            adoption: self.adoption.clone(),
+            publication: self.publication.clone(),
+            cancellation_settled: self.cancellation_settled.clone(),
+            requests: self.requests.clone(),
+            ownership: self.ownership.clone(),
+            lease: self.cleanup_lease.clone(),
+            assets: self.assets.clone(),
+        }
+    }
     fn reuses_assignment(&self, sample: &SampleBuffer) -> Result<bool, String> {
         let mut history = self
             .pcm_history
@@ -704,17 +939,20 @@ impl ColdLoad {
 
     fn flags_cancelled(&self) -> bool {
         self.cancelled.load(Ordering::Acquire)
+            || self.adoption.load(Ordering::Acquire) == 3
+            || (!self.proposal.armed() && !self.ownership.slot_snapshot_current(self.placement))
             || !self.proposal.current()
             || self
                 .resident_guard
                 .as_ref()
                 .is_some_and(|guard| guard.cancelled.load(Ordering::Acquire))
-            || self.epoch.load(Ordering::Acquire)
-                != if self.proposal.armed() {
-                    self.expected_epoch
-                } else {
-                    self.base_epoch
-                }
+            || ((!self.proposal.armed() || self.guard_epoch)
+                && self.epoch.load(Ordering::Acquire)
+                    != if self.proposal.armed() {
+                        self.expected_epoch
+                    } else {
+                        self.base_epoch
+                    })
     }
 
     fn prepare(&self) -> Result<PreparedColdSample, String> {
@@ -1074,30 +1312,79 @@ impl ColdLoad {
         });
         let result = self.publish(&producer);
         if let Err(error) = result {
-            let _ = self
-                .adoption
-                .compare_exchange(0, 3, Ordering::AcqRel, Ordering::Acquire);
-            let _ = self.events.send(LoaderEvent::Error {
-                id: self.id,
-                request_id: self.request_id,
-                error,
-            });
+            let cleanup = self.publication_cleanup();
+            let rejected = cleanup.cancel_unclaimed();
+            if rejected {
+                cleanup.rollback_rejected_artifacts();
+            }
+            let metadata_superseded = self.adoption.load(Ordering::Acquire) == 2
+                && self.metadata_superseded.load(Ordering::Acquire);
+            let event = if rejected || metadata_superseded {
+                LoaderEvent::Error {
+                    id: self.id,
+                    request_id: self.request_id,
+                    error,
+                }
+            } else {
+                LoaderEvent::Progress {
+                    id: self.id,
+                    request_id: self.request_id,
+                    percent: 0.0,
+                    stage: format!(
+                        "{error}; native permission unresolved or adopted; artifacts retained"
+                    ),
+                }
+            };
+            let _ = self.events.send(event);
         }
     }
 
+    fn superseded_metadata_error(&self) -> String {
+        self.metadata_superseded.store(true, Ordering::Release);
+        "adopted cold source superseded".into()
+    }
+
     fn await_adoption(&self) -> Result<(), (String, bool)> {
+        #[cfg(test)]
+        if let Some(gate) = &self.adoption_wait_gate {
+            gate.entered.store(true, Ordering::Release);
+            let gate_deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+            while !gate.released.load(Ordering::Acquire) {
+                assert!(
+                    std::time::Instant::now() < gate_deadline,
+                    "adoption test gate timed out"
+                );
+                std::thread::sleep(std::time::Duration::from_millis(1));
+            }
+        }
         let deadline = std::time::Instant::now() + std::time::Duration::from_secs(30);
         loop {
             match self.adoption.load(Ordering::Acquire) {
                 2 => return Ok(()),
-                3 => return Err(("cold native adoption rejected".into(), false)),
-                0 if (self.is_cancelled() || std::time::Instant::now() >= deadline)
-                    && self
-                        .adoption
-                        .compare_exchange(0, 3, Ordering::AcqRel, Ordering::Acquire)
-                        .is_ok() =>
+                phase @ (0 | 3)
+                    if phase == 3
+                        || self.is_cancelled()
+                        || std::time::Instant::now() >= deadline =>
                 {
-                    self.ownership.cancel_cold(self.id, self.request_id);
+                    if cancel_unclaimed_material(
+                        &self.requests,
+                        &self.publication,
+                        &self.adoption,
+                        &self.cancellation_settled,
+                        &self.ownership,
+                    ) {
+                        return Err(("cold native adoption rejected".into(), false));
+                    }
+                    if self.cancelled.load(Ordering::Acquire)
+                        || std::time::Instant::now() >= deadline
+                        || self.requests.is_poisoned()
+                        || self.publication.is_poisoned()
+                    {
+                        return Err((
+                            "cold native cancellation unresolved; artifacts retained".into(),
+                            true,
+                        ));
+                    }
                 }
                 1 if self.cancelled.load(Ordering::Acquire)
                     || std::time::Instant::now() >= deadline =>
@@ -1120,7 +1407,7 @@ impl ColdLoad {
         prepared: &SampleBuffer,
         previous: PreviousSourceState,
         enqueue_epoch: u64,
-        published_lifetime: u64,
+        publication: &SourcePublication,
     ) -> Result<(), String> {
         let _requests = self.requests.lock().map_err(|_| "request lock poisoned")?;
         let mut intents = self
@@ -1139,30 +1426,32 @@ impl ColdLoad {
             .digests
             .lock()
             .map_err(|_| "source digest lock poisoned")?;
-        if generations[self.id] == (self.request_id, self.output_rate)
-            && same_source(cache[self.id].as_ref(), Some(prepared))
-            && self
-                .ownership
-                .content_lifetime_current(self.id, published_lifetime)
+        let key = publication.key().ok_or("source publication key missing")?;
+        let target = match self.ownership.observe_content_key(key) {
+            PlacementObservation::Current(snapshot) => snapshot.slot(),
+            PlacementObservation::Pending => return Err("content placement is pending".into()),
+            _ => return Ok(()),
+        };
+        if generations[target] == (self.request_id, self.output_rate)
+            && same_source(cache[target].as_ref(), Some(prepared))
         {
-            cache[self.id] = self.initial_source.clone();
-            generations[self.id] = previous.generation;
-            digests[self.id] = previous.digest;
-            self.ownership
-                .publish_content_lifetime(self.id, previous.content_lifetime);
-            if self.epoch.load(Ordering::Acquire) == enqueue_epoch {
-                intents[self.id] = previous.intent;
-                self.ownership.set_timing_intent(self.id, previous.intent);
-            }
-            if let Some(previous_sample) = self.initial_source.as_ref() {
-                self.ownership.publish_source(
-                    self.id,
-                    previous_sample,
-                    previous.generation.1,
-                    previous.generation.0,
-                );
-            } else {
-                self.ownership.revoke_source(self.id);
+            let restore_intent = self.epoch.load(Ordering::Acquire) == enqueue_epoch;
+            if self.ownership.rollback_source_write(
+                publication,
+                prepared,
+                self.output_rate,
+                self.placement,
+                self.initial_source
+                    .as_ref()
+                    .map(|sample| (sample, previous.generation.1, previous.generation.0)),
+                restore_intent.then_some(previous.intent),
+            )? {
+                cache[target] = self.initial_source.clone();
+                generations[target] = previous.generation;
+                digests[target] = previous.digest;
+                if restore_intent {
+                    intents[target] = previous.intent;
+                }
             }
         }
         Ok(())
@@ -1185,6 +1474,10 @@ impl ColdLoad {
         lease
             .bind_sample(&sample)
             .map_err(|error| error.to_string())?;
+        *self
+            .cleanup_lease
+            .lock()
+            .map_err(|_| "cold cleanup lease lock poisoned")? = Some(lease.clone());
         // Register before enqueue. Ordinary pre-ACK rejection still leaves a
         // queued PCM owner; file cleanup must follow that actual reader lifetime.
         let mut publication = PublicationLease {
@@ -1192,6 +1485,7 @@ impl ColdLoad {
             adopted: false,
             assets: self.assets.clone(),
             _pcm: sample.samples.clone(),
+            cleanup: self.publication_cleanup(),
         };
         // Reserve before enqueue, with rollback guarded even if capacity fails.
         // The pin acknowledges only when the matching Python delivery is adopted.
@@ -1209,6 +1503,10 @@ impl ColdLoad {
             )
             .map_err(|error| error.to_string())?;
         let mut requests = self.requests.lock().map_err(|_| "request lock poisoned")?;
+        let mut captured_publication = self
+            .publication
+            .lock()
+            .map_err(|_| "cold publication lock poisoned")?;
         if self.flags_cancelled()
             || incoming_cancelled
                 .as_ref()
@@ -1243,7 +1541,6 @@ impl ColdLoad {
             generation: generations[self.id],
             digest: digests[self.id].clone(),
             intent: intents[self.id],
-            content_lifetime: self.ownership.content_lifetime(self.id),
         };
         // Successful arming advances this exact epoch. Every post-enqueue
         // metadata/rollback comparison must use the admitted epoch, rather
@@ -1265,15 +1562,18 @@ impl ColdLoad {
             .transpose()?
             .map(|region| (region.start, region.end));
         let advance = PadRequestAdvance::prepare(&mut requests[self.id], &self.epoch)?;
+        let logical_advance = self.ownership.prepare_source_request_advance(self.id)?;
         if advance.next_request > self.request_id || advance.next_epoch != self.expected_epoch {
             return Err("cold proposal current authority changed before arming".into());
         }
-        publish_loaded_sample_with_arm(
+        let arm_rejected = "cold source proposal arm rejected".to_owned();
+        let source_publication = publish_loaded_sample_with_arm(
             producer,
             &self.cache,
             self.id,
             sample.clone(),
             LoadedSourcePublication {
+                placement: self.placement,
                 ownership: &self.ownership,
                 generation: self.request_id,
                 rate: self.output_rate,
@@ -1299,86 +1599,132 @@ impl ColdLoad {
                 },
             },
             || {
-                self.proposal.arm()?;
-                advance.commit_reserved(self.request_id)?;
+                if self.adoption.load(Ordering::Acquire) != 0 || !self.proposal.try_arm() {
+                    return Err(arm_rejected);
+                }
+                logical_advance.commit();
+                advance.commit_reserved_prechecked(self.request_id);
                 Ok(())
             },
         )?;
-        let published_lifetime = self.ownership.content_lifetime(self.id);
+        *captured_publication = Some(source_publication.clone());
         drop(digests);
         drop(generations);
         drop(intents);
+        drop(captured_publication);
         drop(requests);
         if let Err((error, may_be_adopted)) = self.await_adoption() {
             if may_be_adopted {
-                lease.rollback_unadopted_original();
-                let _requests = self.requests.lock().map_err(|_| "request lock poisoned")?;
-                let cache = self
-                    .cache
-                    .lock()
-                    .map_err(|_| "sample cache lock poisoned")?;
-                let generations = self
-                    .generations
-                    .lock()
-                    .map_err(|_| "source generation lock poisoned")?;
-                if generations[self.id] == (self.request_id, self.output_rate)
-                    && same_source(cache[self.id].as_ref(), Some(&sample))
-                {
-                    self.ownership.revoke_source(self.id);
-                    self.leases.lock().map_err(|_| "cold lease lock poisoned")?[self.id] =
-                        Some(lease);
-                    self.lease_generations[self.id].store(0, Ordering::Release);
-                }
+                publication.adopted = true;
                 return Err(error);
             }
             lease.rollback_unadopted_original();
             lease.rollback_unadopted_cache();
-            self.rollback_pending(&sample, previous, enqueue_epoch, published_lifetime)?;
+            self.rollback_pending(&sample, previous, enqueue_epoch, &source_publication)?;
             return Err(error);
         }
-        // ACK retains native readers even if a newer request wins before metadata delivery.
-        let requests = self.requests.lock().map_err(|_| "request lock poisoned")?;
-        let cache = self
-            .cache
-            .lock()
-            .map_err(|_| "sample cache lock poisoned")?;
-        let generations = self
-            .generations
-            .lock()
-            .map_err(|_| "source generation lock poisoned")?;
-        if requests[self.id] != self.request_id
-            || generations[self.id] != (self.request_id, self.output_rate)
-            || !same_source(cache[self.id].as_ref(), Some(&sample))
-            || !self
-                .ownership
-                .content_lifetime_current(self.id, published_lifetime)
-        {
-            lease.rollback_unadopted_original();
-            lease.rollback_unadopted_cache();
-            return Err("adopted cold source superseded".into());
-        }
-        // Only callback ACK transfers sealed original/artifact ownership and project metadata.
-        self.leases.lock().map_err(|_| "cold lease lock poisoned")?[self.id] = Some(lease);
-        self.lease_generations[self.id].store(self.request_id, Ordering::Release);
-        self.events
-            .send(LoaderEvent::Success {
-                timing_epoch: Some(enqueue_epoch),
-                id: self.id,
-                request_id: self.request_id,
-                duration_s,
-                detected_loop_start_s,
-                cached_path,
-                original_lease: Some(original_lease),
-                analysis,
-                analysis_error,
-                incoming_defaults,
-            })
-            .map_err(|_| "native adoption metadata receiver closed")?;
         publication.adopted = true;
-        Ok(())
+        // ACK retains native readers even if a newer request wins before metadata delivery.
+        let metadata_deadline = std::time::Instant::now() + std::time::Duration::from_secs(30);
+        loop {
+            let requests = self.requests.lock().map_err(|_| "request lock poisoned")?;
+            let target = match self
+                .ownership
+                .observe_source_publication(&source_publication)
+            {
+                PlacementObservation::Current(snapshot) => snapshot.slot(),
+                PlacementObservation::Pending => {
+                    drop(requests);
+                    if self.cancelled.load(Ordering::Acquire)
+                        || std::time::Instant::now() >= metadata_deadline
+                    {
+                        return Err(
+                            "acknowledged cold source metadata remains pending; artifacts retained"
+                                .into(),
+                        );
+                    }
+                    std::thread::sleep(std::time::Duration::from_millis(1));
+                    continue;
+                }
+                _ => return Err(self.superseded_metadata_error()),
+            };
+            let cache = self
+                .cache
+                .lock()
+                .map_err(|_| "sample cache lock poisoned")?;
+            let generations = self
+                .generations
+                .lock()
+                .map_err(|_| "source generation lock poisoned")?;
+            let stale_source = (self.guard_epoch
+                && self.epoch.load(Ordering::Acquire) != enqueue_epoch)
+                || generations[target] != (self.request_id, self.output_rate)
+                || !same_source(cache[target].as_ref(), Some(&sample))
+                || !self.ownership.source_publication_identity_current(
+                    &source_publication,
+                    &sample,
+                    self.output_rate,
+                );
+            // A writer may acquire its marker after the first observation. A second
+            // observation distinguishes that transient fence from a real stale source.
+            match self
+                .ownership
+                .observe_source_publication(&source_publication)
+            {
+                PlacementObservation::Pending => {
+                    drop(generations);
+                    drop(cache);
+                    drop(requests);
+                    if self.cancelled.load(Ordering::Acquire)
+                        || std::time::Instant::now() >= metadata_deadline
+                    {
+                        return Err(
+                            "acknowledged cold source metadata remains pending; artifacts retained"
+                                .into(),
+                        );
+                    }
+                    std::thread::sleep(std::time::Duration::from_millis(1));
+                    continue;
+                }
+                PlacementObservation::Current(snapshot) if snapshot.slot() == target => {}
+                _ => return Err(self.superseded_metadata_error()),
+            }
+            if stale_source {
+                return Err(self.superseded_metadata_error());
+            }
+            // Only callback ACK transfers sealed original/artifact ownership and project metadata.
+            self.leases.lock().map_err(|_| "cold lease lock poisoned")?[target] = Some(lease);
+            self.lease_generations[target].store(self.request_id, Ordering::Release);
+            self.events
+                .send(
+                    super::NativeAnalysisOwner::from_publication(
+                        &source_publication,
+                        &sample,
+                        self.output_rate,
+                    )
+                    .event(LoaderEvent::Success {
+                        timing_epoch: Some(enqueue_epoch),
+                        id: target,
+                        request_id: self.request_id,
+                        duration_s,
+                        detected_loop_start_s,
+                        cached_path,
+                        original_lease: Some(original_lease),
+                        analysis,
+                        analysis_error,
+                        incoming_defaults,
+                    }),
+                )
+                .map_err(|_| "native adoption metadata receiver closed")?;
+            return Ok(());
+        }
     }
 }
 
 #[cfg(test)]
 #[path = "cold_load_tests.rs"]
 mod tests;
+
+#[cfg(test)]
+#[path = "cold_cancellation_publication_tests.rs"]
+mod cancellation_publication_tests;

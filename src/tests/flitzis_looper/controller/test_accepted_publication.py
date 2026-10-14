@@ -34,8 +34,12 @@ ASSESSMENT = ExplicitTimingAssessment(
 
 
 class _PublicationTicket:
-    def __init__(self, status: str = "pending") -> None:
+    def __init__(self, status: str = "pending", *, control_slot: int | None = 0) -> None:
         self.status = status
+        self.control_slot = control_slot
+
+    def current_control_slot(self) -> int | None:
+        return self.control_slot
 
     def publication_status(self) -> str:
         return self.status

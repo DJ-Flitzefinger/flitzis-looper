@@ -73,7 +73,7 @@ impl SeekOracle {
         .with_complete_source(48_000);
         let mut complete = Box::new(RtMixer::new(2, 48_000.0));
         let ownership = Arc::new(InputRuntimeOwnership::tracked());
-        ownership.publish_source(0, &full, 48_000, 1);
+        ownership.publish_test_source(0, &full, 48_000, 1);
         complete.set_input_runtime_ownership(ownership);
         complete.load_sample(0, full);
         complete.set_pad_loop_region(0, START as f64 / 48_000.0, Some(END as f64 / 48_000.0));

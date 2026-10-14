@@ -136,9 +136,6 @@ class PadPlaybackController:
         validate_sample_id(sample_id)
         if sample_id not in self._session.active_sample_ids:
             return
-        if sample_id in self._session.paused_sample_ids:
-            return  # Already paused
-
         self._audio.pause_sample(sample_id)
         self._session.paused_sample_ids.add(sample_id)
 
@@ -171,16 +168,20 @@ class PadPlaybackController:
         target_s = max(0.0, float(position_s))
         self._transport.residency.seek(sample_id, target_s, expected_source_generation=generation)
 
-    def handle_sample_started_message(self, msg: AudioMessage.SampleStarted) -> None:
-        pad_id = msg.sample_id()
+    def handle_sample_started_message(
+        self, msg: AudioMessage, *, sample_id: int | None = None
+    ) -> None:
+        pad_id = msg.sample_id() if sample_id is None else sample_id
         if pad_id is None:
             return
 
         self._session.active_sample_ids.add(pad_id)
         self._session.paused_sample_ids.discard(pad_id)
 
-    def handle_sample_stopped_message(self, msg: AudioMessage.SampleStopped) -> None:
-        pad_id = msg.sample_id()
+    def handle_sample_stopped_message(
+        self, msg: AudioMessage, *, sample_id: int | None = None
+    ) -> None:
+        pad_id = msg.sample_id() if sample_id is None else sample_id
         if pad_id is None:
             return
 

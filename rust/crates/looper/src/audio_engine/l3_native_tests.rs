@@ -157,7 +157,9 @@ pub(super) fn bpm_harness() -> Harness {
         )
         .unwrap()
     });
-    wait_until(|| h.consumer.slots() >= 2);
+    // Both queue rows can be visible before the last source marker closes.
+    // The producer lock is released only after the worker finishes publication.
+    wait_until(|| h.consumer.slots() >= 2 && h.producer.try_lock().is_ok());
     assert_eq!(h.callback.drain(&mut h.consumer), 2);
     source_successes(
         &h.engine,
@@ -238,7 +240,9 @@ pub(super) fn accepted_bpm_timing(
     assert!((60.0 / projection.period_seconds - 119.999).abs() < 1e-9);
     assert_eq!(projection.sample_rate_hz, RATE);
     assert_eq!(
-        h.engine.current_timing_acknowledgements.current_epoch(0),
+        h.engine
+            .current_timing_acknowledgements
+            .current_for_slot(&h.engine.input_runtime_ownership, 0),
         projection.publication_epoch
     );
     Python::attach(|py| {
@@ -346,24 +350,30 @@ fn bpm_productive(
     let selected = register(&mut h, &pair);
 
     let mut reference = Box::new(RtMixer::new(2, RATE as f32));
-    let ownership = Arc::new(InputRuntimeOwnership::tracked());
-    ownership.publish_source(0, &full, RATE, 1);
+    // Standalone full-PCM oracle; copied timing ACKs grant no productive source authority.
+    let ownership = Arc::new(InputRuntimeOwnership::default());
+    ownership.publish_test_source(0, &full, RATE, 1);
     reference.set_input_runtime_ownership(ownership.clone());
     reference.load_sample(0, full.clone());
     assert!(reference.publish_prepared_stems(0, full_stems));
     let publication = PreparedSourcePermit::unrestricted();
     publication.mark_pending().unwrap();
-    assert!(reference.publish_constant_timing_rt(
-        0,
-        constant_timing::PreparedConstantTiming {
-            reference: full,
-            publication,
-            // Only the complete PCM oracle receives this copied actual ACK.
-            // Engine/source authority above came from productive publication.
-            projection,
-        },
-        &mut crate::audio_engine::buffer_retirement::ImmediateAudioBufferRetirement,
-    ));
+    assert!(
+        reference.publish_constant_timing_rt(
+            0,
+            constant_timing::PreparedConstantTiming {
+                content_key: ownership
+                    .binding_placement(0)
+                    .and_then(|snapshot| snapshot.content_key()),
+                reference: full,
+                publication,
+                // Only the complete PCM oracle receives this copied actual ACK.
+                // Engine/source authority above came from productive publication.
+                projection,
+            },
+            &mut crate::audio_engine::buffer_retirement::ImmediateAudioBufferRetirement,
+        )
+    );
     reference.set_loop_region_frames(0, LOOP_START, Some(LOOP_END));
     {
         let mut producer = h.producer.lock().unwrap();

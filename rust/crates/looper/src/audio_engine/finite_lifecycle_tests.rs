@@ -706,7 +706,7 @@ fn finite_live_modes_selected_stems_bpm_smoothing_and_retained_ramps_keep_raw_eq
                     }
                     .with_complete_source(LIFECYCLE_RATE);
                     for mixer in [&mut oracle.actual, &mut oracle.complete] {
-                        mixer.input_runtime_ownership.publish_source(
+                        mixer.input_runtime_ownership.publish_test_source(
                             0,
                             &replacement,
                             LIFECYCLE_RATE,
@@ -791,15 +791,21 @@ fn publish_period(
 ) {
     let publication = PreparedSourcePermit::unrestricted();
     publication.mark_pending().unwrap();
-    assert!(mixer.publish_constant_timing_rt(
-        0,
-        PreparedConstantTiming {
-            reference: sample.clone(),
-            publication,
-            projection
-        },
-        &mut ImmediateAudioBufferRetirement
-    ));
+    assert!(
+        mixer.publish_constant_timing_rt(
+            0,
+            PreparedConstantTiming {
+                content_key: mixer
+                    .input_runtime_ownership
+                    .binding_placement(0)
+                    .and_then(|snapshot| snapshot.content_key()),
+                reference: sample.clone(),
+                publication,
+                projection
+            },
+            &mut ImmediateAudioBufferRetirement
+        )
+    );
     mixer.set_pad_loop_region(
         0,
         MUSICAL_START as f64 / f64::from(LIFECYCLE_RATE),
@@ -902,7 +908,7 @@ fn finite_old_active_and_paused_voice_rejects_pre_bank_candidate_and_adopts_fres
             }
             mixer
                 .input_runtime_ownership
-                .publish_source(0, &replacement, LIFECYCLE_RATE, 4);
+                .publish_test_source(0, &replacement, LIFECYCLE_RATE, 4);
             assert!(mixer.load_sample_rt(
                 0,
                 replacement.clone(),
@@ -1038,7 +1044,7 @@ fn finite_old_voice_freezes_both_actual_transition_sides_across_active_and_pause
                     if paused {
                         mixer.pause_sample_at_output_frame(0, oracle.output_frame);
                     }
-                    mixer.input_runtime_ownership.publish_source(
+                    mixer.input_runtime_ownership.publish_test_source(
                         0,
                         &replacement,
                         LIFECYCLE_RATE,

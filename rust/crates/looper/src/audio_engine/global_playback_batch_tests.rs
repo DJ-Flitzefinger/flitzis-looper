@@ -22,6 +22,70 @@ struct Fixture {
     messages: Vec<AudioMessage>,
 }
 
+#[derive(Clone, Copy)]
+struct OriginalFeedback {
+    id: usize,
+    owner: usize,
+    key: crate::audio_engine::content_placement::ContentKey,
+    transport_revision: u64,
+}
+
+impl OriginalFeedback {
+    fn capture(engine: &AudioEngine, id: usize) -> Self {
+        let ownership = &engine.input_runtime_ownership;
+        let key = ownership.slot_snapshot(id).unwrap().content_key().unwrap();
+        Self {
+            id,
+            owner: ownership.owner_identity().diagnostic(),
+            key,
+            transport_revision: ownership
+                .transport_intent_for_cell(key.cell())
+                .load(Ordering::Acquire),
+        }
+    }
+
+    fn assert_message(
+        &self,
+        engine: &AudioEngine,
+        message: &AudioMessage,
+        kind: u8,
+        projected: Option<usize>,
+    ) {
+        let AudioMessage::ContentFeedback {
+            id,
+            owner,
+            cell,
+            lifetime,
+            transport_revision,
+            kind: observed_kind,
+            value,
+        } = message
+        else {
+            panic!("actual callback must retain original owning feedback");
+        };
+        assert_eq!(
+            (
+                *id,
+                *owner,
+                *cell,
+                *lifetime,
+                *transport_revision,
+                *observed_kind
+            ),
+            (
+                self.id,
+                self.owner,
+                self.key.cell().index(),
+                self.key.lifetime(),
+                self.transport_revision,
+                kind
+            )
+        );
+        assert_eq!(*value, 0.0);
+        assert_eq!(engine._resolve_pad_feedback(message).unwrap(), projected);
+    }
+}
+
 impl Fixture {
     fn new() -> Self {
         let engine = test_engine();
@@ -38,6 +102,7 @@ impl Fixture {
             mode: TriggerQuantization::Immediate,
             messages: Vec::new(),
         };
+        fixture.adopt_loaded_source(0);
         fixture.accept("first");
         fixture.load(1);
         fixture
@@ -50,8 +115,48 @@ impl Fixture {
         self.engine.loaded_source_digests.lock().unwrap()[id] = Some("a".repeat(64));
         self.engine
             .input_runtime_ownership
-            .publish_source(id, &sample, RATE, 1);
-        self.mixer.load_sample(id, sample);
+            .publish_test_source(id, &sample, RATE, 1);
+        self.adopt_loaded_source(id);
+    }
+
+    fn adopt_loaded_source(&mut self, id: usize) {
+        let sample = self.engine.sample_cache.lock().unwrap()[id]
+            .clone()
+            .unwrap();
+        let (generation, rate) = self.engine.loaded_source_generations.lock().unwrap()[id];
+        let ownership = &self.engine.input_runtime_ownership;
+        let before = ownership.slot_snapshot(id).unwrap();
+        let key = before.content_key().unwrap();
+        let write = ownership
+            .prepare_slot_write_fixed(before, before.lifetime())
+            .unwrap();
+        let publication = ownership
+            .publish_source_write(
+                &write,
+                &sample,
+                rate,
+                generation,
+                ownership.authority_revision(id),
+                None,
+                false,
+                || true,
+            )
+            .unwrap();
+        self.apply(
+            ControlMessage::LoadSample {
+                id,
+                sample,
+                publication: Some(publication),
+            },
+            &mut ImmediateAudioBufferRetirement,
+        );
+        assert_eq!(
+            self.engine
+                .input_runtime_ownership
+                .callback_feedback_key(id),
+            Some(key),
+            "only actual guarded callback source adoption issues this receipt"
+        );
     }
 
     fn accept(&mut self, provenance: &str) {
@@ -146,7 +251,7 @@ fn global_batch_claimed_start_tail_is_followed_by_ordered_stop_before_ui_feedbac
     }
     impl crate::audio_engine::audio_stream::AudioMessageSink for StopAtFirstStart<'_> {
         fn push_audio_message(&mut self, message: AudioMessage) {
-            if matches!(message, AudioMessage::SampleStarted { .. }) && self.stop.is_none() {
+            if message.feedback_kind() == Some("started") && self.stop.is_none() {
                 self.engine.cancel_all_launches().unwrap();
                 let bindings: Vec<_> = [0, 1]
                     .into_iter()
@@ -178,6 +283,10 @@ fn global_batch_claimed_start_tail_is_followed_by_ordered_stop_before_ui_feedbac
     }
     let mut fixture = Fixture::new();
     let start = fixture.enqueue(&[0, 1], true);
+    let original = [
+        OriginalFeedback::capture(&fixture.engine, 0),
+        OriginalFeedback::capture(&fixture.engine, 1),
+    ];
     let message = fixture.consumer.pop().unwrap();
     let mut feedback = StopAtFirstStart {
         engine: &fixture.engine,
@@ -209,10 +318,13 @@ fn global_batch_claimed_start_tail_is_followed_by_ordered_stop_before_ui_feedbac
         feedback
             .messages
             .iter()
-            .filter(|message| matches!(message, AudioMessage::SampleStarted { .. }))
+            .filter(|message| message.feedback_kind() == Some("started"))
             .count(),
         2
     );
+    for (expected, message) in original.iter().zip(&feedback.messages) {
+        expected.assert_message(&fixture.engine, message, 1, None);
+    }
     let stop = feedback.stop.take().unwrap();
     assert_eq!(stop.publication_status(), "pending");
     drop(feedback); // Only now could a controller consume the withheld started events.
@@ -706,6 +818,123 @@ fn global_batch_queue_teardown_rejects_without_effects() {
 }
 
 #[test]
+fn global_batch_without_payload_retirement_capacity_retains_exact_event_then_executes_once() {
+    let mut fixture = Fixture::new();
+    let ticket = fixture.enqueue(&[0, 1], true);
+    let message = fixture.consumer.pop().unwrap();
+    let weak = match &message {
+        ControlMessage::GlobalPlaybackBatch(batch) => Arc::downgrade(batch),
+        _ => unreachable!(),
+    };
+    let mut retirement = RetainedBatchRetirement {
+        slots: 0,
+        batches: Vec::new(),
+        samples: Vec::new(),
+        revoke: None,
+        calls: 0,
+    };
+    fixture.apply(message, &mut retirement);
+    assert_eq!(ticket.publication_status(), "pending");
+    assert!(fixture.mixer.voices.iter().all(|voice| !voice.active));
+    assert!(retirement.batches.is_empty());
+    let event = fixture.scheduler.pop_due_at_callback_start(1).unwrap();
+    match &event.command {
+        ScheduledCommand::GlobalPlaybackBatch(batch) => {
+            assert!(Arc::ptr_eq(batch, &weak.upgrade().unwrap()))
+        }
+        _ => panic!("original batch must remain owned by the deferred event"),
+    }
+    assert_eq!(event.target_frame, 0);
+    retirement.slots = 3 * MAX_VOICES + 1;
+    assert!(matches!(
+        execute_scheduled_command(
+            &mut fixture.mixer,
+            &mut fixture.transport,
+            event.execution_frame,
+            event.command,
+            &mut fixture.messages,
+            &mut retirement
+        ),
+        crate::audio_engine::audio_stream::ScheduledExecution::Complete
+    ));
+    assert_eq!(ticket.publication_status(), "accepted");
+    assert_eq!(
+        fixture
+            .mixer
+            .voices
+            .iter()
+            .filter(|voice| voice.active)
+            .count(),
+        2
+    );
+    assert_eq!(retirement.batches.len(), 1);
+    assert!(fixture.scheduler.pop_due_at_callback_start(2).is_none());
+    retirement.batches.clear();
+    assert!(weak.upgrade().is_none());
+}
+
+#[test]
+fn stale_global_batch_without_payload_retirement_capacity_retains_owner_until_rejection_can_retire()
+{
+    let mut fixture = Fixture::new();
+    fixture.mode = TriggerQuantization::Grid { step_64ths: 4 };
+    fixture.transport.set_master_period(PERIOD);
+    fixture.transport.advance_by_rendered_frames(1);
+    let ticket = fixture.enqueue(&[0, 1], true);
+    fixture.drain();
+    fixture.engine.input_runtime_ownership.revoke(1, 2);
+    let event = fixture.scheduler.pop_due_through(0, u64::MAX).unwrap();
+    let weak = match &event.command {
+        ScheduledCommand::GlobalPlaybackBatch(batch) => Arc::downgrade(batch),
+        _ => unreachable!(),
+    };
+    let mut retirement = RetainedBatchRetirement {
+        slots: 0,
+        batches: Vec::new(),
+        samples: Vec::new(),
+        revoke: None,
+        calls: 0,
+    };
+    let crate::audio_engine::audio_stream::ScheduledExecution::Pending(command) =
+        execute_scheduled_command(
+            &mut fixture.mixer,
+            &mut fixture.transport,
+            event.execution_frame,
+            event.command,
+            &mut fixture.messages,
+            &mut retirement,
+        )
+    else {
+        panic!("stale owner still needs safe retirement capacity");
+    };
+    assert_eq!(ticket.publication_status(), "pending");
+    assert!(retirement.batches.is_empty());
+    let batch = weak.upgrade().unwrap();
+    match &command {
+        ScheduledCommand::GlobalPlaybackBatch(original) => assert!(Arc::ptr_eq(original, &batch)),
+        _ => unreachable!(),
+    }
+    drop(batch);
+    retirement.slots = 1;
+    assert!(matches!(
+        execute_scheduled_command(
+            &mut fixture.mixer,
+            &mut fixture.transport,
+            event.execution_frame,
+            command,
+            &mut fixture.messages,
+            &mut retirement
+        ),
+        crate::audio_engine::audio_stream::ScheduledExecution::Complete
+    ));
+    assert_eq!(ticket.publication_status(), "rejected");
+    assert_eq!(retirement.batches.len(), 1);
+    assert!(fixture.mixer.voices.iter().all(|voice| !voice.active));
+    retirement.batches.clear();
+    assert!(weak.upgrade().is_none());
+}
+
+#[test]
 fn global_batch_quantized_unavailable_target_rejects_and_scheduler_teardown_settles_ticket() {
     let mut fixture = Fixture::new();
     fixture.mode = TriggerQuantization::Grid { step_64ths: 0 };
@@ -925,6 +1154,10 @@ fn global_batch_bounded_feedback_capacity_admits_complete_start_or_preserves_rea
         }
         let before = [fixture.loop_start(0), fixture.loop_start(1)];
         let ticket = fixture.enqueue(&[0, 1], true);
+        let original = [
+            OriginalFeedback::capture(&fixture.engine, 0),
+            OriginalFeedback::capture(&fixture.engine, 1),
+        ];
         let message = fixture.consumer.pop().unwrap();
         let (mut feedback, mut receiver) = rtrb::RingBuffer::<AudioMessage>::new(3);
         for _ in 0..3 - available {
@@ -967,14 +1200,8 @@ fn global_batch_bounded_feedback_capacity_admits_complete_start_or_preserves_rea
             assert!(actual.iter().any(|value| *value != 0.0));
             assert_eq!(actual, reference.render(4_097));
         } else {
-            assert!(matches!(
-                receiver.pop().unwrap(),
-                AudioMessage::SampleStarted { id: 0 }
-            ));
-            assert!(matches!(
-                receiver.pop().unwrap(),
-                AudioMessage::SampleStarted { id: 1 }
-            ));
+            original[0].assert_message(&fixture.engine, &receiver.pop().unwrap(), 1, Some(0));
+            original[1].assert_message(&fixture.engine, &receiver.pop().unwrap(), 1, Some(1));
             assert!(receiver.pop().is_err());
             assert!(
                 fixture
@@ -1003,6 +1230,10 @@ fn global_batch_bounded_feedback_capacity_admits_complete_stop_or_preserves_real
             state.render(61);
         }
         let ticket = fixture.enqueue(&[0, 1], false);
+        let original = [
+            OriginalFeedback::capture(&fixture.engine, 0),
+            OriginalFeedback::capture(&fixture.engine, 1),
+        ];
         let message = fixture.consumer.pop().unwrap();
         let (mut feedback, mut receiver) = rtrb::RingBuffer::<AudioMessage>::new(3);
         for _ in 0..3 - available {
@@ -1053,14 +1284,8 @@ fn global_batch_bounded_feedback_capacity_admits_complete_stop_or_preserves_real
             assert!(actual.iter().any(|value| *value != 0.0));
             assert_eq!(actual, reference.render(4_097));
         } else {
-            assert!(matches!(
-                receiver.pop().unwrap(),
-                AudioMessage::SampleStopped { id: 0 }
-            ));
-            assert!(matches!(
-                receiver.pop().unwrap(),
-                AudioMessage::SampleStopped { id: 1 }
-            ));
+            original[0].assert_message(&fixture.engine, &receiver.pop().unwrap(), 2, Some(0));
+            original[1].assert_message(&fixture.engine, &receiver.pop().unwrap(), 2, Some(1));
             assert!(receiver.pop().is_err());
             assert!(fixture.mixer.voices.iter().all(|voice| !voice.active));
         }
@@ -1071,6 +1296,7 @@ fn global_batch_bounded_feedback_capacity_admits_complete_stop_or_preserves_real
 fn global_batch_old_started_then_reliable_unload_feedback_cannot_reactivate_unloaded_pad() {
     let mut fixture = Fixture::new();
     let ticket = fixture.enqueue(&[0], true);
+    let original = OriginalFeedback::capture(&fixture.engine, 0);
     let message = fixture.consumer.pop().unwrap();
     let (mut feedback, mut receiver) = rtrb::RingBuffer::<AudioMessage>::new(1);
     process_control_message(
@@ -1093,16 +1319,10 @@ fn global_batch_old_started_then_reliable_unload_feedback_cannot_reactivate_unlo
     );
     // Python clears its local active projection on unload before it receives old STARTED.
     let mut projected_active = std::collections::HashSet::<usize>::new();
-    fixture.engine.input_runtime_ownership.revoke_source(0);
-    fixture.engine.input_runtime_ownership.revoke(0, 2);
-    fixture
-        .producer
-        .lock()
-        .unwrap()
-        .push(ControlMessage::UnloadSample { id: 0 })
+    crate::audio_engine::cold_load::unload_for_producer(&fixture.engine, 0, &fixture.producer)
         .unwrap();
     let mut retirement = RetainedBatchRetirement {
-        slots: 3 * MAX_VOICES + 3,
+        slots: 3 * MAX_VOICES + 4,
         batches: Vec::new(),
         samples: Vec::new(),
         revoke: None,
@@ -1124,16 +1344,15 @@ fn global_batch_old_started_then_reliable_unload_feedback_cannot_reactivate_unlo
     assert!(retirement.samples.is_empty());
     assert!(matches!(
         fixture.consumer.peek().unwrap(),
-        ControlMessage::UnloadSample { id: 0 }
+        ControlMessage::UnloadSample { id: 0, .. }
     ));
-    match receiver.pop().unwrap() {
-        AudioMessage::SampleStarted { id } => {
-            projected_active.insert(id);
-        }
-        _ => unreachable!(),
+    let started = receiver.pop().unwrap();
+    original.assert_message(&fixture.engine, &started, 1, None);
+    if let Some(id) = fixture.engine._resolve_pad_feedback(&started).unwrap() {
+        projected_active.insert(id);
     }
-    assert!(projected_active.contains(&0));
-    retirement.slots = 3 * MAX_VOICES + 2;
+    assert!(projected_active.is_empty());
+    retirement.slots = 3 * MAX_VOICES + 3;
     assert_eq!(
         drain_control_messages(
             &mut fixture.consumer,
@@ -1151,7 +1370,7 @@ fn global_batch_old_started_then_reliable_unload_feedback_cannot_reactivate_unlo
     assert!(receiver.pop().is_err());
     assert!(matches!(
         fixture.consumer.peek().unwrap(),
-        ControlMessage::UnloadSample { id: 0 }
+        ControlMessage::UnloadSample { id: 0, .. }
     ));
     assert!(
         fixture
@@ -1160,7 +1379,7 @@ fn global_batch_old_started_then_reliable_unload_feedback_cannot_reactivate_unlo
             .iter()
             .any(|voice| voice.active && voice.sample_id == 0)
     );
-    assert!(projected_active.contains(&0));
+    assert!(projected_active.is_empty());
     retirement.slots += 1;
     assert_eq!(
         drain_control_messages(
@@ -1175,11 +1394,10 @@ fn global_batch_old_started_then_reliable_unload_feedback_cannot_reactivate_unlo
         ),
         1
     );
-    match receiver.pop().unwrap() {
-        AudioMessage::SampleStopped { id } => {
-            projected_active.remove(&id);
-        }
-        _ => unreachable!(),
+    let stopped = receiver.pop().unwrap();
+    original.assert_message(&fixture.engine, &stopped, 2, None);
+    if let Some(id) = fixture.engine._resolve_pad_feedback(&stopped).unwrap() {
+        projected_active.remove(&id);
     }
     assert!(projected_active.is_empty());
     assert!(receiver.pop().is_err());
@@ -1202,18 +1420,13 @@ fn global_batch_unload_full_feedback_defers_actual_pin_and_paused_history_until_
         .unwrap();
     let position = voice.frame_pos;
     let pin = Arc::downgrade(&voice.sample.as_ref().unwrap().samples);
-    fixture.engine.input_runtime_ownership.revoke_source(1);
-    fixture.engine.input_runtime_ownership.revoke(1, 2);
-    fixture
-        .producer
-        .lock()
-        .unwrap()
-        .push(ControlMessage::UnloadSample { id: 1 })
+    let original = OriginalFeedback::capture(&fixture.engine, 1);
+    crate::audio_engine::cold_load::unload_for_producer(&fixture.engine, 1, &fixture.producer)
         .unwrap();
     let (mut feedback, mut receiver) = rtrb::RingBuffer::<AudioMessage>::new(1);
     feedback.push(AudioMessage::Pong()).unwrap();
     let mut retirement = RetainedBatchRetirement {
-        slots: 3 * MAX_VOICES + 3,
+        slots: 3 * MAX_VOICES + 4,
         batches: Vec::new(),
         samples: Vec::new(),
         revoke: None,
@@ -1243,7 +1456,7 @@ fn global_batch_unload_full_feedback_defers_actual_pin_and_paused_history_until_
     assert!(voice.paused);
     assert!(pin.upgrade().is_some());
     assert!(matches!(receiver.pop().unwrap(), AudioMessage::Pong()));
-    retirement.slots = 3 * MAX_VOICES + 2;
+    retirement.slots = 3 * MAX_VOICES + 3;
     assert_eq!(
         drain_control_messages(
             &mut fixture.consumer,
@@ -1261,7 +1474,7 @@ fn global_batch_unload_full_feedback_defers_actual_pin_and_paused_history_until_
     assert!(receiver.pop().is_err());
     assert!(matches!(
         fixture.consumer.peek().unwrap(),
-        ControlMessage::UnloadSample { id: 1 }
+        ControlMessage::UnloadSample { id: 1, .. }
     ));
     let voice = fixture
         .mixer
@@ -1286,11 +1499,56 @@ fn global_batch_unload_full_feedback_defers_actual_pin_and_paused_history_until_
         ),
         1
     );
-    assert!(matches!(
-        receiver.pop().unwrap(),
-        AudioMessage::SampleStopped { id: 1 }
-    ));
+    original.assert_message(&fixture.engine, &receiver.pop().unwrap(), 2, None);
     assert!(receiver.pop().is_err());
     assert_eq!(retirement.samples.len(), 2);
     assert!(!fixture.mixer.voices.iter().any(|voice| voice.active));
+}
+
+#[test]
+fn global_batch_accepts_same_source_binding_after_unrelated_publication_revision() {
+    let mut fixture = Fixture::new();
+    let binding = input_runtime_binding::capture(&fixture.engine, 0)
+        .unwrap()
+        .unwrap();
+    let ownership = &fixture.engine.input_runtime_ownership;
+    let other = ownership.slot_snapshot(215).unwrap();
+    let write = ownership
+        .prepare_slot_write_fixed(other, other.lifetime())
+        .unwrap();
+    ownership
+        .commit_slot_write_fixed(&write, || true, |_| {})
+        .unwrap();
+    let fresh = input_runtime_binding::capture(&fixture.engine, 0)
+        .unwrap()
+        .unwrap();
+    assert!(binding.is_current());
+    assert_ne!(binding.binding, fresh.binding);
+    assert!(binding.binding.same_projection(&fresh.binding));
+    let ticket = global_playback_batch::enqueue(
+        &fixture.engine,
+        &fixture.producer,
+        vec![(&binding, 0.125, Some(3.0))],
+        true,
+        Some(42),
+    )
+    .unwrap();
+    fixture.drain();
+    assert_eq!(ticket.publication_status(), "accepted");
+    let voice = fixture
+        .mixer
+        .voices
+        .iter()
+        .find(|voice| voice.active && voice.sample_id == 0)
+        .unwrap();
+    assert_eq!(voice.frame_pos, 1_000);
+    assert_eq!(
+        voice
+            .source_timing
+            .accepted
+            .unwrap()
+            .period_seconds
+            .to_bits(),
+        PERIOD.to_bits()
+    );
 }

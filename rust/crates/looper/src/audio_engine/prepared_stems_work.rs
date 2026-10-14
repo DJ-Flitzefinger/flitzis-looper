@@ -3,7 +3,7 @@
 use super::{
     AudioEngine, PreparedSourceTicket, ProjectAssetLease, cold_jobs,
     native_owned_work::CompleteSampleWork,
-    prepared_source::{enqueue_current_prepared_stems_with_owner, validate_prepared_ticket},
+    prepared_source::{try_enqueue_prepared_stems, validate_prepared_ticket},
     project_assets, stem_cache,
     stem_pair_preparation::{PreparedStemPair, StemPairPreparationWork},
 };
@@ -13,6 +13,10 @@ use pyo3::prelude::*;
 use rtrb::Producer;
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
+
+#[cfg(test)]
+#[path = "prepared_stems_content_tests.rs"]
+mod content_tests;
 
 enum Preparation {
     Pair(Box<StemPairPreparationWork>),
@@ -56,6 +60,85 @@ pub(super) struct PreparedStemsPublication {
     publication: PreparedPublication,
 }
 
+/// One bounded control-owned result retains the original payload through a placement gap.
+pub(super) struct PendingPreparedStems {
+    prepared: PreparedStemsPublication,
+    ticket: PreparedSourceTicket,
+    producer: Arc<Mutex<Producer<ControlMessage>>>,
+}
+
+pub(super) fn has_pending(engine: &AudioEngine, ticket: &PreparedSourceTicket) -> PyResult<bool> {
+    let cell = ticket
+        .publication
+        .content_key()
+        .ok_or_else(|| PyValueError::new_err("prepared Native key unavailable"))?
+        .cell();
+    let pending = engine
+        .pending_prepared_stems
+        .lock()
+        .map_err(|_| PyRuntimeError::new_err("prepared result lock poisoned"))?;
+    if let Some(pending) = &pending[cell.index()] {
+        if !pending
+            .ticket
+            .publication
+            .same_publication(&ticket.publication)
+        {
+            return Err(PyRuntimeError::new_err(
+                "another prepared result still owns this content cell",
+            ));
+        }
+        return Ok(true);
+    }
+    Ok(false)
+}
+
+pub(super) fn reconcile(engine: &AudioEngine) -> PyResult<()> {
+    for cell in 0..super::constants::NUM_SAMPLES {
+        let pending = engine
+            .pending_prepared_stems
+            .lock()
+            .map_err(|_| PyRuntimeError::new_err("prepared result lock poisoned"))?[cell]
+            .take();
+        let Some(pending) = pending else {
+            continue;
+        };
+        let PendingPreparedStems {
+            prepared,
+            ticket,
+            producer,
+        } = *pending;
+        if engine
+            .cold_cancelled
+            .load(std::sync::atomic::Ordering::Acquire)
+            || !ticket.publication.current()
+        {
+            ticket.publication.mark_rejected();
+            continue;
+        }
+        if prepared.finish(engine, &ticket, &producer).is_err() {
+            ticket.publication.mark_rejected();
+        }
+    }
+    Ok(())
+}
+
+pub(super) fn cancel_all(engine: &AudioEngine) -> PyResult<()> {
+    let retired = {
+        let mut pending = engine
+            .pending_prepared_stems
+            .lock()
+            .map_err(|_| PyRuntimeError::new_err("prepared result lock poisoned"))?;
+        pending
+            .iter_mut()
+            .filter_map(Option::take)
+            .collect::<Vec<_>>()
+    };
+    for pending in retired {
+        pending.ticket.publication.mark_rejected();
+    }
+    Ok(())
+}
+
 impl PreparedStemsWork {
     pub(super) fn capture(
         engine: &AudioEngine,
@@ -71,11 +154,36 @@ impl PreparedStemsWork {
             return Err(PyValueError::new_err("source_version must not be empty"));
         }
         stem_cache::project_stem_cache_dir(&cache_dir).map_err(PyValueError::new_err)?;
+        if id != ticket.id {
+            return Err(PyValueError::new_err(
+                "prepared work requires its original ticket selector",
+            ));
+        }
+        let id = match ticket
+            .publication
+            .control_placement(engine)
+            .map_err(PyValueError::new_err)?
+        {
+            super::content_placement::PlacementObservation::Current(current) => current.slot(),
+            super::content_placement::PlacementObservation::Pending => {
+                return Err(PyRuntimeError::new_err(
+                    "prepared source control placement is pending",
+                ));
+            }
+            _ => {
+                return Err(PyValueError::new_err(
+                    "prepared source content key is stale",
+                ));
+            }
+        };
         let sample = {
             let requests = engine
                 .pad_request_ids
                 .lock()
                 .map_err(|_| PyRuntimeError::new_err("request lock poisoned"))?;
+            let source_epoch = engine
+                .prepared_source_epoch(id)
+                .map_err(PyRuntimeError::new_err)?;
             let sample = engine
                 .sample_cache
                 .lock()
@@ -88,7 +196,7 @@ impl PreparedStemsWork {
                 id,
                 &source_version,
                 requests[id],
-                &engine.prepared_source_epochs[id],
+                source_epoch,
                 &sample,
             )
             .map_err(PyValueError::new_err)?;
@@ -270,25 +378,68 @@ impl PreparedStemsPublication {
         ticket: &PreparedSourceTicket,
         producer: &Arc<Mutex<Producer<ControlMessage>>>,
     ) -> PyResult<()> {
-        match self.publication {
+        let (mut stems, registration, source_version) = match &self.publication {
             PreparedPublication::Pair(pair) => {
-                engine.publish_stem_pair_with_producer(&pair, ticket, producer)
-            }
-            PreparedPublication::Legacy(prepared) => {
-                let LegacyPublication {
+                if !ticket.sample.same_window(&pair.reference) {
+                    return Err(PyValueError::new_err("prepared pair window is stale"));
+                }
+                let stems = pair
+                    .stems
+                    .clone()
+                    .ok_or_else(|| PyValueError::new_err("pair has no live component request"))?;
+                let pair_owner = super::resident_relocation::StemPairOwner {
+                    root: pair.root.clone(),
+                    descriptor_reference: pair.descriptor_reference.clone(),
+                    source_lease: pair.source_lease.clone(),
+                    reader: pair.pair_reader.clone(),
+                };
+                (
                     stems,
-                    path,
-                    _lease,
-                } = *prepared;
-                enqueue_current_prepared_stems_with_owner(
-                    engine,
-                    producer,
-                    ticket,
-                    &self.source_version,
-                    stems,
-                    (self.cache_dir.into(), path),
+                    (
+                        pair.wav_path.clone(),
+                        pair.wav_path.clone(),
+                        Some(pair_owner),
+                    ),
+                    &pair.source_version,
                 )
             }
+            PreparedPublication::Legacy(prepared) => (
+                prepared.stems.clone(),
+                (self.cache_dir.clone().into(), prepared.path.clone(), None),
+                &self.source_version,
+            ),
+        };
+        stems.publication = ticket.publication.clone();
+        stems.accepted_timing = ticket.publication.accepted_projection();
+        if try_enqueue_prepared_stems(
+            engine,
+            producer,
+            ticket,
+            source_version,
+            stems,
+            Some(registration),
+        )? {
+            return Ok(());
         }
+        let cell = ticket
+            .publication
+            .content_key()
+            .ok_or_else(|| PyValueError::new_err("prepared Native key unavailable"))?
+            .cell();
+        let mut pending = engine
+            .pending_prepared_stems
+            .lock()
+            .map_err(|_| PyRuntimeError::new_err("prepared result lock poisoned"))?;
+        if pending[cell.index()].is_some() {
+            return Err(PyRuntimeError::new_err(
+                "prepared result cell is already owned",
+            ));
+        }
+        pending[cell.index()] = Some(Box::new(PendingPreparedStems {
+            prepared: self,
+            ticket: ticket.clone(),
+            producer: producer.clone(),
+        }));
+        Ok(())
     }
 }

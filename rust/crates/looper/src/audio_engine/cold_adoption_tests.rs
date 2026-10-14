@@ -68,6 +68,11 @@ impl Fixture {
             .push(ControlMessage::PublishConstantTiming {
                 id: 0,
                 timing: PreparedConstantTiming {
+                    content_key: self
+                        .engine
+                        .input_runtime_ownership
+                        .binding_placement(0)
+                        .and_then(|snapshot| snapshot.content_key()),
                     reference: self.previous.clone(),
                     publication: permit.clone(),
                     projection: AcceptedTimingProjection {
@@ -83,12 +88,21 @@ impl Fixture {
         assert_eq!(self.callback.drain(&mut self.consumer), 1);
         assert_eq!(permit.status(), "accepted");
         assert_eq!(
-            self.engine.current_timing_acknowledgements.current_epoch(0),
+            self.engine
+                .current_timing_acknowledgements
+                .current_for_slot(&self.engine.input_runtime_ownership, 0),
             3
         );
     }
     fn assert_no_terminal(&self) {
-        while let Ok(event) = self.engine.loader_rx.lock().unwrap().try_recv() {
+        while let Ok(event) = self
+            .engine
+            .loader_rx
+            .lock()
+            .unwrap()
+            .try_recv()
+            .map(LoaderEvent::into_test_payload)
+        {
             assert!(
                 !matches!(
                     event,
@@ -252,9 +266,35 @@ fn absolute_canonical_restore_keeps_material_path_and_pcm_generation_at_slot_216
 fn retirement_backpressure_keeps_cold_pending_and_pinned_adoption_needs_no_feedback() {
     let mut fixture = Fixture::new();
     fixture.accept_old_timing();
+    let old_key = fixture
+        .engine
+        .input_runtime_ownership
+        .binding_placement(0)
+        .unwrap()
+        .content_key()
+        .unwrap();
+    let old_voice = fixture
+        .callback
+        .mixer
+        .voices
+        .iter()
+        .find(|voice| voice.is_playing_sample(0))
+        .unwrap();
+    let old_voice_lifetime = old_voice.history_lifetime.clone();
+    let old_voice_generation = old_voice.generation;
+    assert_ne!(old_voice_generation, 0);
+    assert_eq!(
+        fixture
+            .callback
+            .mixer
+            .accepted_voice_timing_for_measurement(0, &fixture.previous)
+            .unwrap()
+            .publication_epoch,
+        3
+    );
     let request = fixture.admit(0, false);
     fixture.pending(0, request);
-    fixture.callback.retirement.slots = 2 * MAX_VOICES + 4;
+    fixture.callback.retirement.slots = 2 * MAX_VOICES + 5;
     assert_eq!(fixture.callback.drain(&mut fixture.consumer), 0);
     fixture.callback.assert_old_voice(&fixture.previous);
     fixture.assert_no_terminal();
@@ -262,10 +302,30 @@ fn retirement_backpressure_keeps_cold_pending_and_pinned_adoption_needs_no_feedb
         fixture
             .engine
             .current_timing_acknowledgements
-            .current_epoch(0),
+            .current_for_slot(&fixture.engine.input_runtime_ownership, 0),
+        0
+    );
+    // The newly published content must not inherit ACK3 from the actual old Native pin.
+    assert!(
+        !fixture
+            .engine
+            .input_runtime_ownership
+            .content_key_current(old_key)
+    );
+    assert_eq!(
+        old_voice_lifetime.load(Ordering::Acquire),
+        old_voice_generation
+    );
+    assert_eq!(
+        fixture
+            .callback
+            .mixer
+            .accepted_voice_timing_for_measurement(0, &fixture.previous)
+            .unwrap()
+            .publication_epoch,
         3
     );
-    fixture.callback.retirement.slots = 2 * MAX_VOICES + 5;
+    fixture.callback.retirement.slots = 2 * MAX_VOICES + 6;
     fixture.callback.feedback.slots = 0;
     assert_eq!(fixture.callback.drain(&mut fixture.consumer), 1);
     assert!(matches!(
@@ -275,10 +335,23 @@ fn retirement_backpressure_keeps_cold_pending_and_pinned_adoption_needs_no_feedb
     assert!(fixture.callback.feedback.events.is_empty());
     fixture.callback.assert_old_voice(&fixture.previous);
     assert_eq!(
+        old_voice_lifetime.load(Ordering::Acquire),
+        old_voice_generation
+    );
+    assert_eq!(
+        fixture
+            .callback
+            .mixer
+            .accepted_voice_timing_for_measurement(0, &fixture.previous)
+            .unwrap()
+            .publication_epoch,
+        3
+    );
+    assert_eq!(
         fixture
             .engine
             .current_timing_acknowledgements
-            .current_epoch(0),
+            .current_for_slot(&fixture.engine.input_runtime_ownership, 0),
         0
     );
 }
@@ -291,11 +364,11 @@ fn explicit_assignment_replacement_stops_old_voice_only_after_real_callback_ack(
     fixture.pending(0, request);
     fixture.callback.assert_old_voice(&fixture.previous);
     fixture.assert_no_terminal();
-    fixture.callback.retirement.slots = 3 * MAX_VOICES + 4;
+    fixture.callback.retirement.slots = 3 * MAX_VOICES + 5;
     assert_eq!(fixture.callback.drain(&mut fixture.consumer), 0);
     fixture.callback.assert_old_voice(&fixture.previous);
     fixture.assert_no_terminal();
-    fixture.callback.retirement.slots = 3 * MAX_VOICES + 5;
+    fixture.callback.retirement.slots = 3 * MAX_VOICES + 6;
     fixture.callback.feedback.slots = 0;
     assert_eq!(fixture.callback.drain(&mut fixture.consumer), 0);
     fixture.callback.assert_old_voice(&fixture.previous);
@@ -453,7 +526,7 @@ fn callback_rejection_rolls_back_pending_cache_without_clearing_old_current_proj
         fixture
             .engine
             .current_timing_acknowledgements
-            .current_epoch(0),
+            .current_for_slot(&fixture.engine.input_runtime_ownership, 0),
         3
     );
     fixture.callback.assert_old_voice(&fixture.previous);
@@ -461,7 +534,7 @@ fn callback_rejection_rolls_back_pending_cache_without_clearing_old_current_proj
         fixture
             .engine
             .current_timing_acknowledgements
-            .current_epoch(0),
+            .current_for_slot(&fixture.engine.input_runtime_ownership, 0),
         3
     );
 }
@@ -604,7 +677,14 @@ fn empty_legacy_load_survives_initial_epoch_edit_and_ack_does_not_create_accepta
     assert_eq!(fixture.callback.drain(&mut fixture.consumer), 2);
     let mut success = false;
     wait_until(|| {
-        if let Ok(event) = fixture.engine.loader_rx.lock().unwrap().try_recv() {
+        if let Ok(event) = fixture
+            .engine
+            .loader_rx
+            .lock()
+            .unwrap()
+            .try_recv()
+            .map(LoaderEvent::into_test_payload)
+        {
             match event {
                 LoaderEvent::Success {
                     id: 1, request_id, ..
@@ -625,7 +705,7 @@ fn empty_legacy_load_survives_initial_epoch_edit_and_ack_does_not_create_accepta
         fixture
             .engine
             .current_timing_acknowledgements
-            .current_epoch(1),
+            .current_for_slot(&fixture.engine.input_runtime_ownership, 1),
         0
     );
     assert!(fixture.engine.cold_leases.lock().unwrap()[1].is_some());
@@ -658,7 +738,14 @@ fn shutdown_cancels_pending_and_queued_jobs_and_drains_owned_disk_artifacts() {
     assert!(fixture.engine.sample_cache.lock().unwrap()[1].is_none());
     assert!(fixture.engine.sample_cache.lock().unwrap()[2].is_none());
     let mut failures = Vec::new();
-    while let Ok(event) = fixture.engine.loader_rx.lock().unwrap().try_recv() {
+    while let Ok(event) = fixture
+        .engine
+        .loader_rx
+        .lock()
+        .unwrap()
+        .try_recv()
+        .map(LoaderEvent::into_test_payload)
+    {
         match event {
             LoaderEvent::Error { id, request_id, .. } => failures.push((id, request_id)),
             LoaderEvent::Success { .. } => panic!("shutdown published success"),
@@ -856,7 +943,7 @@ fn productive_same_pad_warm_reassignment_has_fresh_authority_and_preserves_pinne
         fixture
             .engine
             .current_timing_acknowledgements
-            .current_epoch(0),
+            .current_for_slot(&fixture.engine.input_runtime_ownership, 0),
         0
     );
     let leases = fixture.engine.cold_leases.lock().unwrap();

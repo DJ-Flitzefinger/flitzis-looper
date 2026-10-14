@@ -15,6 +15,7 @@ import re
 import tempfile
 import threading
 from contextlib import suppress
+from dataclasses import dataclass
 from pathlib import Path
 from time import monotonic
 from typing import TYPE_CHECKING
@@ -46,6 +47,23 @@ PROJECT_CONFIG_PATH = PROJECT_ASSETS_DIR / "flitzis_looper.config.json"
 
 class PersistenceFenceError(OSError):
     """An active transaction or newer revision prevents this config write."""
+
+
+@dataclass(frozen=True)
+class ConfigCommitReceipt:
+    """Actual normalized written bytes and their same-revision durable outcome.
+
+    This is historical Config evidence, never Native publication authority.
+    ``projected`` gives each consumer its own detached validated written image.
+    """
+
+    revision: int
+    sha256: str
+    written_text: str
+
+    def projected(self) -> ProjectState:
+        """Return the actual written project, including freshly verified timing."""
+        return ProjectState.model_validate_json(self.written_text, strict=True)
 
 
 def _validate_transaction_id(transaction_id: str) -> None:
@@ -172,6 +190,18 @@ class ProjectPersistence:
         acknowledgement. This method publishes no model references or native authority.
         The caller keeps both owner sets until the returned durable outcome is settled.
         """
+        receipt = self.commit_migration_receipt(transaction_id, expected_revision, snapshot)
+        return receipt.revision, receipt.sha256
+
+    def commit_migration_receipt(
+        self, transaction_id: str, expected_revision: int, snapshot: ProjectState
+    ) -> ConfigCommitReceipt:
+        """Commit at the SAME intent revision and expose only actual written evidence.
+
+        The returned text comes from timing verification and save normalization,
+        after the atomic replacement. Candidate serialization cannot certify this
+        outcome. Reentrant newer intent remains dirty under the existing fence.
+        """
         _validate_transaction_id(transaction_id)
         if type(expected_revision) is not int or expected_revision < 0:
             message = "material migration revision must be a nonnegative strict integer"
@@ -185,7 +215,9 @@ class ProjectPersistence:
                 raise PersistenceFenceError(message)
             validated = ProjectState.model_validate(snapshot.model_dump())
             text = self._write_snapshot(validated, expected_revision, monotonic())
-            return expected_revision, hashlib.sha256(text.encode("utf-8")).hexdigest()
+            return ConfigCommitReceipt(
+                expected_revision, hashlib.sha256(text.encode("utf-8")).hexdigest(), text
+            )
 
     def commit_stem_selection(
         self,

@@ -233,7 +233,15 @@ fn actual_separator_worker_publishes_renders_and_restores_without_model() {
     let deadline = Instant::now() + Duration::from_secs(10);
     let cached_path = loop {
         callback.drain(&mut consumer);
-        let event = Python::attach(|py| engine.borrow(py).loader_rx.lock().unwrap().try_recv());
+        let event = Python::attach(|py| {
+            engine
+                .borrow(py)
+                .loader_rx
+                .lock()
+                .unwrap()
+                .try_recv()
+                .map(LoaderEvent::into_test_payload)
+        });
         match event {
             Ok(LoaderEvent::Success {
                 request_id,

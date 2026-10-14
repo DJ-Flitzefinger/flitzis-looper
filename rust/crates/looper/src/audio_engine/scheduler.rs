@@ -41,8 +41,12 @@ pub(crate) enum ScheduledCommand {
         received_at_ns: Option<u64>,
         expected_source_generation: Option<u64>,
     },
+    #[cfg(test)]
     StopSample {
         id: usize,
+    },
+    StopSampleForPlacement {
+        placement: super::content_placement::SlotSnapshot,
     },
     StopAll,
 }
@@ -73,6 +77,10 @@ pub(crate) struct FixedCapacityScheduler<const CAPACITY: usize> {
     events: Box<[Option<ScheduledEvent>]>,
     len: usize,
     next_sequence: u64,
+    // Allocate this single bounded slot at startup too, keeping the scheduler handle
+    // small on the Windows stack. RT only moves the already popped event into it.
+    deferred_due: Box<Option<DueEvent>>,
+    deferred_at_callback: u64,
 }
 
 impl<const CAPACITY: usize> FixedCapacityScheduler<CAPACITY> {
@@ -81,6 +89,8 @@ impl<const CAPACITY: usize> FixedCapacityScheduler<CAPACITY> {
             events: vec![None; CAPACITY].into_boxed_slice(),
             len: 0,
             next_sequence: 0,
+            deferred_due: Box::new(None),
+            deferred_at_callback: 0,
         }
     }
 
@@ -91,16 +101,26 @@ impl<const CAPACITY: usize> FixedCapacityScheduler<CAPACITY> {
 
     #[cfg(test)]
     pub(crate) fn len(&self) -> usize {
-        self.len
+        self.len + usize::from(self.deferred_due.is_some())
     }
 
     #[cfg(test)]
     pub(crate) fn is_empty(&self) -> bool {
-        self.len == 0
+        self.len == 0 && self.deferred_due.is_none()
     }
 
     pub(crate) fn is_full(&self) -> bool {
-        self.len == CAPACITY
+        self.len == CAPACITY || self.deferred_due.is_some()
+    }
+
+    pub(crate) fn deferred_due(&self) -> Option<&DueEvent> {
+        self.deferred_due.as_ref().as_ref()
+    }
+
+    pub(crate) fn defer_due(&mut self, event: DueEvent, callback_frame: u64) {
+        debug_assert!(self.deferred_due.is_none());
+        *self.deferred_due = Some(event);
+        self.deferred_at_callback = callback_frame;
     }
 
     pub(crate) fn schedule(
@@ -133,6 +153,9 @@ impl<const CAPACITY: usize> FixedCapacityScheduler<CAPACITY> {
     }
 
     pub(crate) fn peek_next_target_frame(&self) -> Option<u64> {
+        if let Some(event) = self.deferred_due.as_ref() {
+            return Some(event.target_frame);
+        }
         self.events
             .first()
             .and_then(|event| event.as_ref().map(|event| event.target_frame))
@@ -150,6 +173,17 @@ impl<const CAPACITY: usize> FixedCapacityScheduler<CAPACITY> {
         callback_start_frame: u64,
         latest_frame: u64,
     ) -> Option<DueEvent> {
+        if let Some(event) = self.deferred_due.as_ref() {
+            if callback_start_frame <= self.deferred_at_callback
+                || event.target_frame > latest_frame
+            {
+                return None;
+            }
+            let mut event = self.deferred_due.take()?;
+            event.execution_frame = event.target_frame.max(callback_start_frame);
+            event.was_late = event.target_frame < callback_start_frame;
+            return Some(event);
+        }
         let event = self.events.first()?.as_ref()?;
         if event.target_frame > latest_frame {
             return None;

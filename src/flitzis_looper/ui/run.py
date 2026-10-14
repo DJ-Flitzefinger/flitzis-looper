@@ -36,18 +36,19 @@ def run_ui(
         if on_frame is not None:
             on_frame()
         if close_requested:
-            _show_close_pending(controller.arrangement.error)
+            _show_close_pending(controller.pending_pad_error)
 
     def after_swap() -> None:
         nonlocal close_requested
         live_params = hello_imgui.get_runner_params()
+        _poll_runtime_tick(context, closing=close_requested or bool(live_params.app_shall_exit))
         if not close_requested and not live_params.app_shall_exit:
             return
         close_requested = True
         # Pinned HelloImGui 902dd7d runs AfterSwap after event/menu handling and
         # checks appShallExit between complete frames. Keep clearing a sticky OS
         # close until actual Copy settlement permits BeforeExit teardown.
-        live_params.app_shall_exit = controller.prepare_shutdown()
+        live_params.app_shall_exit = controller.prepare_shutdown(holds_polled=True)
 
     runner_params.callbacks.show_gui = show_gui
     runner_params.callbacks.after_swap = after_swap
@@ -64,15 +65,29 @@ def run_ui(
     immapp.run(runner_params, add_ons_params)
 
 
+def _poll_runtime_tick(context: UiContext, *, closing: bool = False) -> None:
+    """Deliver global release/cancel before the existing always-reachable runtime tick."""
+    io = imgui.get_io()
+    if io.app_focus_lost:
+        context.ui.waveform.pause_selected_pad_hold_on_release("focus_cancel")
+    elif not imgui.is_mouse_down(imgui.MouseButton_.right):
+        context.ui.waveform.pause_selected_pad_hold_on_release("button_up")
+    if context.state.session.settings_open or not context.state.session.waveform_editor_open:
+        context.ui.waveform.pause_selected_pad_hold_on_release("editor_hidden")
+    if closing:
+        context.ui.waveform.pause_selected_pad_hold_on_release("close")
+    context.audio.poll.poll()
+
+
 def _show_close_pending(error: str | None) -> None:
     """Keep the pending close and any failed Copy settlement visible."""
-    label = "Finishing pad copy##close-pending"
+    label = "Finishing pad operation##close-pending"
     imgui.open_popup(label)
     visible, _ = imgui.begin_popup_modal(label, flags=imgui.WindowFlags_.always_auto_resize)
     if not visible:
         return
     try:
-        imgui.text_wrapped("Waiting for the pad copy to finish before closing.")
+        imgui.text_wrapped("Finishing pending pad changes and pause release before closing.")
         if error is not None:
             imgui.text_wrapped(f"Copy could not finish: {error}")
     finally:

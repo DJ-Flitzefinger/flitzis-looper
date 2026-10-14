@@ -59,6 +59,7 @@ fn productive_history_native_loaded_source_publication_fences_new_launch_during_
         0,
         old_source.clone(),
         LoadedSourcePublication {
+            placement: ownership.slot_snapshot(0).unwrap(),
             cold: false,
             cold_epoch: None,
             cold_adoption: None,
@@ -84,7 +85,12 @@ fn productive_history_native_loaded_source_publication_fences_new_launch_during_
         1
     );
     let epoch = Arc::new(AtomicU64::new(2));
-    let (accepted, _) = publication(&old_source, &epoch, 2);
+    let (mut accepted, _) = publication(&old_source, &epoch, 2);
+    if let ControlMessage::PublishConstantTiming { timing, .. } = &mut accepted {
+        timing.content_key = ownership
+            .binding_placement(0)
+            .and_then(|snapshot| snapshot.content_key());
+    }
     producer.lock().unwrap().push(accepted).unwrap();
     state.drain(&mut consumer, &mut ImmediateAudioBufferRetirement);
     ownership.set_timing_intent(0, TimingIntent::Automatic);
@@ -99,6 +105,7 @@ fn productive_history_native_loaded_source_publication_fences_new_launch_during_
         1,
         other_source,
         LoadedSourcePublication {
+            placement: ownership.slot_snapshot(1).unwrap(),
             cold: false,
             cold_epoch: None,
             cold_adoption: None,
@@ -178,6 +185,7 @@ fn productive_history_native_loaded_source_publication_fences_new_launch_during_
         0,
         new_source.clone(),
         LoadedSourcePublication {
+            placement: ownership.slot_snapshot(0).unwrap(),
             cold: false,
             cold_epoch: None,
             cold_adoption: None,
@@ -199,12 +207,14 @@ fn productive_history_native_loaded_source_publication_fences_new_launch_during_
     assert_eq!(digest, Some("b".repeat(64)));
     assert!(!state.mixer.play_sample(0, 1.0)); // new control pin cannot authorize old callback PCM
     let mut blocked = LimitedRetirement {
-        slots: 2 * MAX_VOICES + 2,
+        // The source-publication owner needs one slot beyond the sample command's
+        // existing retirement envelope. Test exactly one below that complete bound.
+        slots: 2 * MAX_VOICES + 3,
         retired: Vec::new(),
         stems: Vec::new(),
     };
     assert_eq!(state.drain(&mut consumer, &mut blocked), 0);
-    blocked.slots = 2 * MAX_VOICES + 3;
+    blocked.slots = 2 * MAX_VOICES + 4;
     assert_eq!(state.drain(&mut consumer, &mut blocked), 1);
     assert!(!state.mixer.play_sample(0, 1.0)); // Automatic requires fresh new-source acceptance
     state.mixer.render(&mut [0.0; 37], &mut [0.0; NUM_SAMPLES]);
@@ -302,6 +312,7 @@ fn productive_history_callback_pending_rejected_and_same_drain_source_replace_ke
     producer.push(latest).unwrap();
     producer
         .push(ControlMessage::LoadSample {
+            publication: None,
             id: 0,
             sample: productive_source(0.2),
         })
@@ -414,6 +425,7 @@ fn productive_history_exclusive_preflight_failure_preserves_loop_and_other_audio
         end_s: Some(0.7),
         exclusive: true,
         binding: InputPadBinding {
+            placement: None,
             resident: None,
             source_address: replacement.samples.as_ptr() as usize,
             sample_count: replacement.samples.len(),
@@ -566,6 +578,7 @@ fn publication(
         ControlMessage::PublishConstantTiming {
             id: 0,
             timing: PreparedConstantTiming {
+                content_key: None,
                 reference: source.clone(),
                 publication: permit.clone(),
                 projection: AcceptedTimingProjection {
@@ -636,6 +649,7 @@ fn constant_timing_actual_callback_drains_protect_newer_grid_from_old_parameter_
     let (mut parameters, mut parameter_messages) = RingBuffer::new(2);
     parameters
         .push(ControlParameterMessage::SetLegacyPadBpm {
+            placement: None,
             id: 0,
             bpm: Some(60.0),
             through_epoch: 1,
@@ -675,6 +689,7 @@ fn constant_timing_actual_callback_drains_protect_newer_grid_from_old_parameter_
     assert_eq!(state.mixer.active_pad_beat_position(0), phase);
     parameters
         .push(ControlParameterMessage::SetLegacyPadBpm {
+            placement: None,
             id: 0,
             bpm: Some(90.0),
             through_epoch: 3,
@@ -708,6 +723,7 @@ fn constant_timing_legacy_origin_is_one_effect_at_actual_command_budget_boundary
     }
     producer
         .push(ControlMessage::SetLegacyPadTimingMetadata {
+            placement: None,
             id: 0,
             metadata: PadTimingMetadata {
                 phase_anchor_s: 0.25,
@@ -890,6 +906,7 @@ fn constant_timing_parameter_coalescing_retains_latest_clear_epoch() {
     let (mut producer, mut consumer) = RingBuffer::new(2);
     producer
         .push(ControlParameterMessage::SetLegacyPadBpm {
+            placement: None,
             id: 0,
             bpm: Some(60.0),
             through_epoch: 1,
@@ -898,6 +915,7 @@ fn constant_timing_parameter_coalescing_retains_latest_clear_epoch() {
         .unwrap();
     producer
         .push(ControlParameterMessage::SetLegacyPadBpm {
+            placement: None,
             id: 0,
             bpm: Some(90.0),
             through_epoch: 3,

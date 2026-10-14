@@ -1,0 +1,443 @@
+//! Ordered loader delivery across short source-placement publications.
+//!
+//! The private dequeue seam is monomorphized with an empty closure in production. Tests use
+//! the same channel/pop/filter path to hold a real source writer between dequeue and lookup.
+
+use super::content_placement::PlacementObservation;
+use super::{AudioEngine, resident_relocation, task_to_str};
+use crate::messages::{BackgroundTaskKind, LoaderEvent};
+use pyo3::exceptions::PyRuntimeError;
+use pyo3::prelude::*;
+use pyo3::types::PyDict;
+use std::sync::atomic::Ordering;
+use std::sync::mpsc::TryRecvError;
+
+/// Retained Native event custody survives a Python participant-observer fence.
+#[pyclass(frozen)]
+pub struct LoaderEventDelivery {
+    owner: super::complete_context::NativeAnalysisOwner,
+    timing_epoch: Option<u64>,
+}
+
+#[pymethods]
+impl LoaderEventDelivery {
+    /// Compare immutable original admissions solely for bounded progress coalescing.
+    pub fn same_owner(&self, other: &Self) -> bool {
+        self.owner.same_admission(&other.owner)
+    }
+}
+
+pub(super) fn resolve_delivery(
+    engine: &AudioEngine,
+    delivery: &LoaderEventDelivery,
+) -> PyResult<Option<(usize, bool)>> {
+    let _requests = engine
+        .pad_request_ids
+        .lock()
+        .map_err(|_| PyRuntimeError::new_err("request lock poisoned"))?;
+    if !delivery.owner.belongs_to(&engine.input_runtime_ownership) {
+        return Ok(None);
+    }
+    match delivery.owner.observe_control() {
+        PlacementObservation::Current(snapshot) => {
+            let id = snapshot.slot();
+            let epoch = engine
+                .prepared_source_epoch(id)
+                .map_err(PyRuntimeError::new_err)?;
+            Ok(Some((
+                id,
+                delivery
+                    .timing_epoch
+                    .is_some_and(|expected| epoch.load(Ordering::Acquire) != expected),
+            )))
+        }
+        PlacementObservation::Pending => Err(PyRuntimeError::new_err(
+            "loader event content placement pending",
+        )),
+        PlacementObservation::Stale | PlacementObservation::Retired => Ok(None),
+    }
+}
+
+fn identity(event: &LoaderEvent) -> (usize, u64) {
+    match event {
+        LoaderEvent::NativeOwned { event, .. } => identity(event),
+        LoaderEvent::Started { id, request_id }
+        | LoaderEvent::Progress { id, request_id, .. }
+        | LoaderEvent::Success { id, request_id, .. }
+        | LoaderEvent::Error { id, request_id, .. }
+        | LoaderEvent::TaskStarted { id, request_id, .. }
+        | LoaderEvent::TaskProgress { id, request_id, .. }
+        | LoaderEvent::TaskSuccess { id, request_id, .. }
+        | LoaderEvent::TaskError { id, request_id, .. }
+        | LoaderEvent::OfflineAnalysisCompleted { id, request_id, .. } => (*id, *request_id),
+    }
+}
+
+fn payload(event: &mut LoaderEvent) -> &mut LoaderEvent {
+    match event {
+        LoaderEvent::NativeOwned { event, .. } => payload(event),
+        event => event,
+    }
+}
+
+fn project_slot(event: &mut LoaderEvent, slot: usize) {
+    match payload(event) {
+        LoaderEvent::Started { id, .. }
+        | LoaderEvent::Progress { id, .. }
+        | LoaderEvent::Success { id, .. }
+        | LoaderEvent::Error { id, .. }
+        | LoaderEvent::TaskStarted { id, .. }
+        | LoaderEvent::TaskProgress { id, .. }
+        | LoaderEvent::TaskSuccess { id, .. }
+        | LoaderEvent::TaskError { id, .. }
+        | LoaderEvent::OfflineAnalysisCompleted { id, .. } => *id = slot,
+        LoaderEvent::NativeOwned { .. } => unreachable!("payload is unwrapped"),
+    }
+}
+
+pub(super) fn poll(
+    engine: &AudioEngine,
+    py: Python<'_>,
+    mut after_dequeue: impl FnMut(),
+) -> PyResult<Option<Py<PyAny>>> {
+    resident_relocation::reconcile(engine)?;
+    let loader_rx = engine
+        .loader_rx
+        .lock()
+        .map_err(|_| PyRuntimeError::new_err("Failed to acquire loader receiver lock"))?;
+
+    let requests = engine
+        .pad_request_ids
+        .lock()
+        .map_err(|_| PyRuntimeError::new_err("request lock poisoned"))?;
+    let mut pending_event = engine
+        .pending_loader_event
+        .lock()
+        .map_err(|_| PyRuntimeError::new_err("pending loader event lock poisoned"))?;
+    let (event, timing_stale, native_owner) = loop {
+        if engine.input_runtime_ownership.placement_pending() {
+            return Ok(None);
+        }
+        let mut event = match pending_event.take().map(Ok).unwrap_or_else(|| {
+            let received = loader_rx.try_recv();
+            if received.is_ok() {
+                after_dequeue();
+            }
+            received
+        }) {
+            Ok(event) => event,
+            Err(TryRecvError::Empty | TryRecvError::Disconnected) => return Ok(None),
+        };
+        let native_owner = match &event {
+            LoaderEvent::NativeOwned { owner, .. } => Some(owner.clone()),
+            _ => None,
+        };
+        let (captured_id, request_id) = identity(&event);
+        let id = if let Some(owner) = native_owner.as_ref() {
+            if !owner.belongs_to(&engine.input_runtime_ownership) {
+                continue;
+            }
+            match owner.observe_control() {
+                PlacementObservation::Current(snapshot) => snapshot.slot(),
+                PlacementObservation::Pending => {
+                    *pending_event = Some(event);
+                    return Ok(None);
+                }
+                PlacementObservation::Stale | PlacementObservation::Retired => continue,
+            }
+        } else {
+            captured_id
+        };
+        let current_epoch = match engine.prepared_source_epoch(id) {
+            Ok(epoch) => epoch,
+            Err(_) if engine.input_runtime_ownership.placement_pending() => {
+                *pending_event = Some(event);
+                return Ok(None);
+            }
+            Err(error) => return Err(PyRuntimeError::new_err(error)),
+        };
+        // The immutable backend request identifies evidence. Native work uses its
+        // original cell epoch; Pair deliberately keeps numeric request counters fixed.
+        let current_stale = native_owner.is_none() && requests.get(id) != Some(&request_id);
+        if let Some(owner) = native_owner.as_ref() {
+            match owner.observe_control() {
+                PlacementObservation::Current(snapshot) if snapshot.slot() == id => {}
+                PlacementObservation::Pending => {
+                    *pending_event = Some(event);
+                    return Ok(None);
+                }
+                _ => continue,
+            }
+        }
+        let event_payload = payload(&mut event);
+        let stale = if native_owner.is_some() {
+            false
+        } else if matches!(&*event_payload, LoaderEvent::Error { .. }) {
+            !engine
+                .resident_proposals
+                .source_error_matches(id, request_id)
+                .unwrap_or(!current_stale)
+        } else if matches!(
+            &*event_payload,
+            LoaderEvent::Started { .. } | LoaderEvent::Progress { .. }
+        ) {
+            !engine
+                .resident_proposals
+                .source_event_matches(
+                    id,
+                    request_id,
+                    requests.get(id).copied().unwrap_or(0),
+                    current_epoch.load(Ordering::Acquire),
+                )
+                .unwrap_or(!current_stale)
+        } else {
+            current_stale
+        };
+        let timing_stale = stale
+            || matches!(&*event_payload, LoaderEvent::Success { timing_epoch: Some(epoch), .. } if current_epoch.load(Ordering::Acquire) != *epoch);
+        if stale {
+            match &mut *event_payload {
+                LoaderEvent::Success {
+                    analysis,
+                    analysis_error,
+                    ..
+                } => {
+                    let cache = engine
+                        .sample_cache
+                        .lock()
+                        .map_err(|_| PyRuntimeError::new_err("sample cache lock poisoned"))?;
+                    let generations = engine
+                        .loaded_source_generations
+                        .lock()
+                        .map_err(|_| PyRuntimeError::new_err("source generation lock poisoned"))?;
+                    if cache.get(id).is_none_or(Option::is_none)
+                        || generations
+                            .get(id)
+                            .is_none_or(|current| current.0 != request_id)
+                    {
+                        continue;
+                    }
+                    *analysis = None;
+                    *analysis_error = None;
+                }
+                LoaderEvent::TaskSuccess {
+                    task: BackgroundTaskKind::Analysis,
+                    analysis,
+                    ..
+                } => *analysis = None,
+                LoaderEvent::TaskError {
+                    task: BackgroundTaskKind::Analysis,
+                    ..
+                } => {}
+                _ => continue,
+            }
+        }
+        if timing_stale
+            && !stale
+            && let LoaderEvent::Success {
+                analysis,
+                analysis_error,
+                ..
+            } = &mut *event_payload
+        {
+            *analysis = None;
+            *analysis_error = None;
+        }
+        if native_owner.is_some() {
+            project_slot(&mut event, id);
+        }
+        let event = match event {
+            LoaderEvent::NativeOwned { event, .. } => *event,
+            event => event,
+        };
+        break (event, timing_stale, native_owner);
+    };
+
+    let dict = PyDict::new(py);
+    if let Some(owner) = native_owner {
+        let timing_epoch = match &event {
+            LoaderEvent::Success { timing_epoch, .. } => *timing_epoch,
+            _ => None,
+        };
+        dict.set_item(
+            "_native_event_owner",
+            Py::new(
+                py,
+                LoaderEventDelivery {
+                    owner,
+                    timing_epoch,
+                },
+            )?,
+        )?;
+    }
+    if timing_stale {
+        dict.set_item("timing_stale", true)?;
+    }
+    match event {
+        LoaderEvent::NativeOwned { .. } => {
+            unreachable!("Native delivery owner is retained separately")
+        }
+        LoaderEvent::OfflineAnalysisCompleted {
+            id,
+            request_id,
+            result_json,
+        } => {
+            dict.set_item("type", "offline_analysis_completed")?;
+            dict.set_item("id", id)?;
+            dict.set_item("request_id", request_id)?;
+            dict.set_item("result_json", result_json)?;
+        }
+        LoaderEvent::Started { id, request_id } => {
+            dict.set_item("type", "started")?;
+            dict.set_item("id", id)?;
+            dict.set_item("request_id", request_id)?;
+        }
+        LoaderEvent::Progress {
+            id,
+            request_id,
+            percent,
+            stage,
+        } => {
+            dict.set_item("type", "progress")?;
+            dict.set_item("id", id)?;
+            dict.set_item("request_id", request_id)?;
+            dict.set_item("percent", percent)?;
+            dict.set_item("stage", stage)?;
+        }
+        LoaderEvent::Success {
+            id,
+            request_id,
+            duration_s,
+            detected_loop_start_s,
+            cached_path,
+            analysis,
+            analysis_error,
+            timing_epoch: _,
+            original_lease,
+            incoming_defaults,
+        } => {
+            dict.set_item("type", "success")?;
+            dict.set_item("id", id)?;
+            dict.set_item("request_id", request_id)?;
+            dict.set_item("duration_s", duration_s)?;
+            dict.set_item("detected_loop_start_s", detected_loop_start_s)?;
+            dict.set_item("cached_path", cached_path)?;
+            if let Some(defaults) = incoming_defaults {
+                let rate = defaults.sample_rate_hz;
+                if rate == 0 {
+                    return Err(PyRuntimeError::new_err("incoming source rate unavailable"));
+                }
+                let receipt = PyDict::new(py);
+                receipt.set_item("revision", defaults.revision)?;
+                receipt.set_item("key_lock", defaults.key_lock)?;
+                receipt.set_item("start_s", defaults.start_frame as f64 / f64::from(rate))?;
+                receipt.set_item(
+                    "end_s",
+                    defaults.end_frame.map(|end| end as f64 / f64::from(rate)),
+                )?;
+                receipt.set_item("period_seconds", defaults.period_seconds)?;
+                receipt.set_item("grid_origin_s", defaults.origin_frame / f64::from(rate))?;
+                receipt.set_item("loop_auto", defaults.loop_auto)?;
+                receipt.set_item("loop_bars", defaults.loop_bars)?;
+                dict.set_item("incoming_defaults", receipt)?;
+            }
+            if let Some(error) = analysis_error {
+                dict.set_item("analysis_error", error)?;
+            }
+            if let Some(lease) = original_lease {
+                dict.set_item("original_lease", Py::new(py, lease)?)?;
+            }
+
+            if let Some(analysis) = analysis {
+                let analysis_dict = PyDict::new(py);
+                analysis_dict.set_item("bpm", analysis.bpm)?;
+                analysis_dict.set_item("key", analysis.key)?;
+
+                let beat_grid_dict = PyDict::new(py);
+                beat_grid_dict.set_item("beats", &analysis.beat_grid.beats)?;
+                beat_grid_dict.set_item("downbeats", &analysis.beat_grid.downbeats)?;
+                beat_grid_dict.set_item("bars", &analysis.beat_grid.bars)?;
+                analysis_dict.set_item("beat_grid", beat_grid_dict)?;
+
+                dict.set_item("analysis", analysis_dict)?;
+            }
+        }
+        LoaderEvent::Error {
+            id,
+            request_id,
+            error,
+        } => {
+            dict.set_item("type", "error")?;
+            dict.set_item("id", id)?;
+            dict.set_item("request_id", request_id)?;
+            dict.set_item("msg", error)?;
+        }
+        LoaderEvent::TaskStarted {
+            id,
+            request_id,
+            task,
+        } => {
+            dict.set_item("type", "task_started")?;
+            dict.set_item("id", id)?;
+            dict.set_item("request_id", request_id)?;
+            dict.set_item("task", task_to_str(task))?;
+        }
+        LoaderEvent::TaskProgress {
+            id,
+            request_id,
+            task,
+            percent,
+            stage,
+        } => {
+            dict.set_item("type", "task_progress")?;
+            dict.set_item("id", id)?;
+            dict.set_item("request_id", request_id)?;
+            dict.set_item("task", task_to_str(task))?;
+            dict.set_item("percent", percent)?;
+            dict.set_item("stage", stage)?;
+        }
+        LoaderEvent::TaskSuccess {
+            id,
+            request_id,
+            task,
+            analysis,
+        } => {
+            dict.set_item("type", "task_success")?;
+            dict.set_item("id", id)?;
+            dict.set_item("request_id", request_id)?;
+            dict.set_item("task", task_to_str(task))?;
+
+            if let Some(analysis) = analysis {
+                let analysis_dict = PyDict::new(py);
+                analysis_dict.set_item("bpm", analysis.bpm)?;
+                analysis_dict.set_item("key", analysis.key)?;
+
+                let beat_grid_dict = PyDict::new(py);
+                beat_grid_dict.set_item("beats", &analysis.beat_grid.beats)?;
+                beat_grid_dict.set_item("downbeats", &analysis.beat_grid.downbeats)?;
+                beat_grid_dict.set_item("bars", &analysis.beat_grid.bars)?;
+                analysis_dict.set_item("beat_grid", beat_grid_dict)?;
+
+                dict.set_item("analysis", analysis_dict)?;
+            }
+        }
+        LoaderEvent::TaskError {
+            id,
+            request_id,
+            task,
+            error,
+        } => {
+            dict.set_item("type", "task_error")?;
+            dict.set_item("id", id)?;
+            dict.set_item("request_id", request_id)?;
+            dict.set_item("task", task_to_str(task))?;
+            dict.set_item("msg", error)?;
+        }
+    }
+
+    Ok(Some(dict.into_any().unbind()))
+}
+
+#[cfg(test)]
+#[path = "loader_events_tests.rs"]
+mod tests;

@@ -200,7 +200,14 @@ fn wait_source_enqueue(
     if request.phase().unwrap() == "rejected" {
         let mut failure = None;
         wait_phase("Source rejection error delivery", id, || {
-            while let Ok(event) = h.engine.loader_rx.lock().unwrap().try_recv() {
+            while let Ok(event) = h
+                .engine
+                .loader_rx
+                .lock()
+                .unwrap()
+                .try_recv()
+                .map(LoaderEvent::into_test_payload)
+            {
                 if let LoaderEvent::Error {
                     id: actual,
                     request_id,
@@ -394,7 +401,14 @@ fn capture_only_seek_budget_failure_preserves_current_authority_and_audio() {
 fn wait_source_ack(h: &mut Harness, id: usize, request: u64) {
     let mut accepted = false;
     wait_phase("Source own ACK", id, || {
-        while let Ok(event) = h.engine.loader_rx.lock().unwrap().try_recv() {
+        while let Ok(event) = h
+            .engine
+            .loader_rx
+            .lock()
+            .unwrap()
+            .try_recv()
+            .map(LoaderEvent::into_test_payload)
+        {
             match event {
                 LoaderEvent::Success {
                     id: actual,
@@ -650,7 +664,10 @@ fn all_216_stopped_pads_ack_real_preload_and_repeat_window_registry_retirement()
                 .unwrap();
             assert_eq!(h.callback.drain(&mut h.consumer), 1);
             wait_phase("216 policy enqueue", id, || {
-                h.consumer.peek().is_ok() || receipt.error().is_some()
+                // The queue is visible before the worker closes its publication
+                // marker. Its producer lock covers that complete transaction.
+                (h.consumer.peek().is_ok() || receipt.error().is_some())
+                    && h.producer.try_lock().is_ok()
             });
             assert_eq!(
                 h.callback.drain(&mut h.consumer),

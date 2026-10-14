@@ -1194,8 +1194,9 @@ fn complete_reference_at_loop(
 ) -> Box<RtMixer> {
     let accepted = timing.map(|(projection, _)| projection);
     let mut mixer = Box::new(RtMixer::new(2, RATE as f32));
-    let ownership = Arc::new(InputRuntimeOwnership::tracked());
-    ownership.publish_source(0, full, RATE, 1);
+    // Immutable standalone oracle; actual Engine source/timing authority stays above.
+    let ownership = Arc::new(InputRuntimeOwnership::default());
+    ownership.publish_test_source(0, full, RATE, 1);
     mixer.set_input_runtime_ownership(ownership.clone());
     mixer.load_sample(0, full.clone());
     assert!(mixer.publish_prepared_stems(0, stems.clone()));
@@ -1204,15 +1205,20 @@ fn complete_reference_at_loop(
         publication.mark_pending().unwrap();
         // Only this independent complete-PCM reference copies the already actual
         // ACK. Product source authority came from the queued publication above.
-        assert!(mixer.publish_constant_timing_rt(
-            0,
-            crate::audio_engine::constant_timing::PreparedConstantTiming {
-                reference: full.clone(),
-                publication,
-                projection,
-            },
-            &mut crate::audio_engine::buffer_retirement::ImmediateAudioBufferRetirement,
-        ));
+        assert!(
+            mixer.publish_constant_timing_rt(
+                0,
+                crate::audio_engine::constant_timing::PreparedConstantTiming {
+                    content_key: ownership
+                        .binding_placement(0)
+                        .and_then(|snapshot| snapshot.content_key()),
+                    reference: full.clone(),
+                    publication,
+                    projection,
+                },
+                &mut crate::audio_engine::buffer_retirement::ImmediateAudioBufferRetirement,
+            )
+        );
         mixer.set_bpm_lock(true);
         mixer.set_master_period(master_period);
     }
@@ -1224,12 +1230,13 @@ fn complete_reference_at_loop(
         key_lock_enabled,
         key_lock,
         InputPadBinding {
+            placement: ownership.binding_placement(0),
             resident: full.resident_binding(),
             source_address: full.source_address(),
             sample_count: full.source_sample_count(),
             channels: full.channels,
             sample_rate_hz: RATE,
-            authority_revision: ownership.authority[0].load(Ordering::Acquire),
+            authority_revision: ownership.authority_revision(0),
             runtime_revision: 0,
             accepted,
         },
@@ -4675,7 +4682,7 @@ assert unload_notifications == [0]
     );
     assert!(matches!(
         consumer.peek(),
-        Ok(ControlMessage::UnloadSample { id: 0 })
+        Ok(ControlMessage::UnloadSample { id: 0, .. })
     ));
     assert_current(playback);
     if let Some((_, old)) = cleanup {
@@ -5620,7 +5627,8 @@ assert source_candidate.residency_status() == 'rejected' and not source_candidat
         trace,
         CandidateTrace::SourceKeyLockOn | CandidateTrace::SourceStemsOn
     )
-    .then(|| std::array::from_fn(|_| Arc::new(InputRuntimeOwnership::tracked())));
+    // Independent B PCM oracles use unrestricted component permits.
+    .then(|| std::array::from_fn(|_| Arc::new(InputRuntimeOwnership::default())));
     let independent_stems = matches!(
         trace,
         CandidateTrace::SourceStemsOff | CandidateTrace::SourceStemsOn
@@ -5654,7 +5662,7 @@ assert source_candidate.residency_status() == 'rejected' and not source_candidat
     let reference = |index: usize| {
         let mut mixer = Box::new(RtMixer::new(2, RATE as f32));
         if let Some(owners) = &reference_owners {
-            owners[index].publish_source(0, &independent, RATE, 1);
+            owners[index].publish_test_source(0, &independent, RATE, 1);
             mixer.set_input_runtime_ownership(owners[index].clone());
         }
         mixer.load_sample(0, independent.clone());
@@ -5925,12 +5933,13 @@ assert project.stem_cache[0] is None and controller.stem_residency_status(0) is 
             true,
             request,
             InputPadBinding {
+                placement: owner.binding_placement(0),
                 resident: source.resident_binding(),
                 source_address: source.source_address(),
                 sample_count: source.source_sample_count(),
                 channels: source.channels,
                 sample_rate_hz: RATE,
-                authority_revision: owner.authority[0].load(Ordering::Acquire),
+                authority_revision: owner.authority_revision(0),
                 runtime_revision: 0,
                 accepted: None,
             },
@@ -6559,6 +6568,7 @@ assert not failed_window.claimed()
     );
     wait_until(|| {
         controller_ticket_status(locals, "ready_window", "publication_status") == "pending"
+            && consumer.slots() == 2
     });
     assert!(
         matches!(consumer.peek(), Ok(ControlMessage::CommittedStemWork(work))
@@ -8531,7 +8541,9 @@ if selected_v1:
         accepted
     );
     assert_eq!(
-        engine.current_timing_acknowledgements.current_epoch(0),
+        engine
+            .current_timing_acknowledgements
+            .current_for_slot(&engine.input_runtime_ownership, 0),
         accepted.map_or(0, |projection| projection.publication_epoch)
     );
     let current = voice(&playback.callback.mixer);
@@ -9761,7 +9773,9 @@ assert fresh.effective_mode_status() == 'waiting'
                 .unwrap();
             assert_eq!(current.binding.accepted, accepted);
             assert_eq!(
-                engine.current_timing_acknowledgements.current_epoch(0),
+                engine
+                    .current_timing_acknowledgements
+                    .current_for_slot(&engine.input_runtime_ownership, 0),
                 accepted.map_or(0, |projection| projection.publication_epoch)
             );
             assert!(Arc::ptr_eq(
@@ -10481,7 +10495,9 @@ assert previous_control.ticket.is_current()
             accepted
         );
         assert_eq!(
-            engine.current_timing_acknowledgements.current_epoch(0),
+            engine
+                .current_timing_acknowledgements
+                .current_for_slot(&engine.input_runtime_ownership, 0),
             accepted.map_or(0, |projection| projection.publication_epoch)
         );
         for set in [
@@ -11020,7 +11036,9 @@ assert audio.worker_call_count() == 1 and audio.prepared_only_on_pool_threads()
             .unwrap();
         assert_eq!(current.binding.accepted, accepted);
         assert_eq!(
-            engine.current_timing_acknowledgements.current_epoch(0),
+            engine
+                .current_timing_acknowledgements
+                .current_for_slot(&engine.input_runtime_ownership, 0),
             accepted.unwrap().publication_epoch
         );
         controller_python(

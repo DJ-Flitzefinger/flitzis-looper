@@ -2,6 +2,7 @@
 
 use super::AudioEngine;
 use super::complete_context::CompleteSourceReader;
+use super::content_placement::{ContentKey, PlacementObservation};
 use std::ops::Range;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
@@ -20,6 +21,7 @@ fn output_peak_bytes(width: usize) -> Result<usize, String> {
 
 #[derive(Clone, PartialEq, Eq)]
 struct Request {
+    content: ContentKey,
     generation: u64,
     rate: u32,
     source: [u8; 32],
@@ -37,7 +39,7 @@ struct Slot {
     pending: bool,
 }
 
-/// One bounded projected view per pad; never caches complete playback PCM.
+/// One bounded projected view per stable content cell; never caches complete playback PCM.
 pub(super) struct WaveformRequests {
     slots: Vec<Arc<Mutex<Slot>>>,
 }
@@ -53,15 +55,42 @@ impl Default for WaveformRequests {
 }
 
 impl WaveformRequests {
-    pub(super) fn cancel(&self, id: usize) -> Result<(), String> {
+    /// Resolve a current fixed-slot observation only after its complete control mirror exists.
+    fn content_at_slot(engine: &AudioEngine, id: usize) -> Result<Option<ContentKey>, String> {
+        let ownership = &engine.input_runtime_ownership;
+        let placement = ownership
+            .slot_snapshot(id)
+            .ok_or("waveform content placement is pending")?;
+        let Some(key) = placement.content_key() else {
+            return Ok(None);
+        };
+        match ownership.observe_control_key(key) {
+            PlacementObservation::Current(current) if current.slot() == id => Ok(Some(key)),
+            PlacementObservation::Pending => Err("waveform content placement is pending".into()),
+            PlacementObservation::Current(_)
+            | PlacementObservation::Stale
+            | PlacementObservation::Retired => Err("waveform content placement changed".into()),
+        }
+    }
+
+    pub(super) fn cancel(&self, engine: &AudioEngine, id: usize) -> Result<(), String> {
+        let Some(content) = Self::content_at_slot(engine, id)? else {
+            return Ok(());
+        };
         let mut slot = self
             .slots
-            .get(id)
+            .get(content.cell().index())
             .ok_or("waveform id out of range")?
             .lock()
             .map_err(|_| "waveform state lock poisoned")?;
-        slot.cancelled.store(true, Ordering::Release);
-        *slot = Slot::default();
+        if slot
+            .request
+            .as_ref()
+            .is_some_and(|request| request.content == content)
+        {
+            slot.cancelled.store(true, Ordering::Release);
+            *slot = Slot::default();
+        }
         Ok(())
     }
     pub(super) fn cancel_all(&self) {
@@ -73,13 +102,34 @@ impl WaveformRequests {
         }
     }
 
-    pub(super) fn status(&self, id: usize) -> Result<(String, Option<String>), String> {
+    pub(super) fn status(
+        &self,
+        engine: &AudioEngine,
+        id: usize,
+    ) -> Result<(String, Option<String>), String> {
+        let content = match Self::content_at_slot(engine, id) {
+            Ok(content) => content,
+            Err(error) if error == "waveform content placement is pending" => {
+                return Ok(("pending".into(), None));
+            }
+            Err(error) => return Err(error),
+        };
+        let Some(content) = content else {
+            return Ok(("idle".into(), None));
+        };
         let slot = self
             .slots
-            .get(id)
+            .get(content.cell().index())
             .ok_or("waveform id out of range")?
             .lock()
             .map_err(|_| "waveform state lock poisoned")?;
+        if slot
+            .request
+            .as_ref()
+            .is_none_or(|request| request.content != content)
+        {
+            return Ok(("idle".into(), None));
+        }
         let status = if slot.error.is_some() {
             "error"
         } else if slot.pending {
@@ -114,11 +164,22 @@ impl WaveformRequests {
         if rate == 0 {
             return Err("waveform source rate unavailable".into());
         }
+        let content =
+            Self::content_at_slot(engine, id)?.ok_or("waveform source content key unavailable")?;
+        if generation == 0
+            || engine
+                .input_runtime_ownership
+                .source_generation(id, sample, rate)
+                != Some(generation)
+        {
+            return Err("waveform source assignment is stale".into());
+        }
         let source = sample
             .residency
             .as_ref()
             .map_or([0; 32], |view| view.source.transform_sha256);
         let request = Request {
+            content,
             generation,
             rate,
             source,
@@ -128,7 +189,7 @@ impl WaveformRequests {
         };
         let state = self
             .slots
-            .get(id)
+            .get(content.cell().index())
             .ok_or("waveform id out of range")?
             .clone();
         let mut slot = state.lock().map_err(|_| "waveform state lock poisoned")?;
@@ -154,6 +215,10 @@ impl WaveformRequests {
                 return Err(error);
             }
         };
+        let source_guard = reader
+            .guard
+            .clone()
+            .ok_or("waveform source guard unavailable")?;
         slot.cancelled.store(true, Ordering::Release);
         let cancelled = Arc::new(AtomicBool::new(false));
         *slot = Slot {
@@ -164,7 +229,6 @@ impl WaveformRequests {
             pending: true,
         };
         drop(slot);
-        let generations = engine.loaded_source_generations.clone();
         let shutdown = engine.cold_cancelled.clone();
         let cancelled_read = cancelled.clone();
         let job_request = request.clone();
@@ -173,9 +237,7 @@ impl WaveformRequests {
             let stale = || {
                 cancelled_read.load(Ordering::Acquire)
                     || shutdown.load(Ordering::Acquire)
-                    || generations
-                        .lock()
-                        .map_or(true, |values| values[id].0 != job_request.generation)
+                    || !source_guard.current()
             };
             let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
                 render_complete_region(
@@ -389,6 +451,10 @@ pub(crate) fn render_region(
         y_max: Some(y_max),
     })
 }
+
+#[cfg(test)]
+#[path = "waveform_content_tests.rs"]
+mod content_tests;
 
 #[cfg(test)]
 mod tests {

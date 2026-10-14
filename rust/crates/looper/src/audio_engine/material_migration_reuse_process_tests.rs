@@ -252,7 +252,13 @@ fn success_and_stages(engine: &AudioEngine, id: usize, request: u64) -> (String,
     let mut stages = Vec::new();
     let mut completed = None;
     wait_until(|| {
-        while let Ok(event) = engine.loader_rx.lock().unwrap().try_recv() {
+        while let Ok(event) = engine
+            .loader_rx
+            .lock()
+            .unwrap()
+            .try_recv()
+            .map(LoaderEvent::into_test_payload)
+        {
             match event {
                 LoaderEvent::Progress {
                     id: found_id,

@@ -84,7 +84,9 @@ impl AcceptedTimingRefreshTicket {
         self.publication_status() == "accepted"
             && self.ownership.authority_current(self.id, self.binding)
             && self.ownership.binding_source_current(self.id, self.binding)
-            && self.acknowledgements.current_epoch(self.id)
+            && self
+                .acknowledgements
+                .current_for_binding(&self.ownership, self.id, self.binding)
                 == self
                     .binding
                     .accepted
@@ -126,7 +128,7 @@ pub(super) fn enqueue(
     if !Arc::ptr_eq(&binding.ownership, &engine.input_runtime_ownership)
         || binding.binding.accepted.is_none()
         || !binding.current()
-        || binding.binding != current.binding
+        || !binding.binding.same_projection(&current.binding)
         || !current.current()
         || !current.available()
     {

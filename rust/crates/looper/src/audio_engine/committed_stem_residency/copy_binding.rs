@@ -240,6 +240,27 @@ pub(in crate::audio_engine) fn capture_copy_source_selection_fences(
     })
 }
 
+/// All selection domains remain the original owners across a placement publication.
+/// Preparation proposals are captured separately from the engine's proposal registry.
+pub(in crate::audio_engine) fn capture_pair_selection_fences(
+    cache: &ResidentStemCache,
+) -> Vec<(Arc<AtomicU64>, u64)> {
+    [
+        cache.intent_epoch.clone(),
+        cache.committed.registration_epoch.clone(),
+        cache.committed.selection_epoch.clone(),
+        cache.committed.candidate_epoch.clone(),
+        cache.committed.policy_operation_epoch.clone(),
+        cache.committed.policy_epoch.clone(),
+    ]
+    .into_iter()
+    .map(|epoch| {
+        let expected = epoch.load(Ordering::Acquire);
+        (epoch, expected)
+    })
+    .collect()
+}
+
 fn validate_target(target: &SampleBuffer, future: &CopySelectionTarget) -> Result<(), String> {
     let fences = &future.selection_fences;
     if future.id >= NUM_SAMPLES
@@ -573,8 +594,7 @@ pub(in crate::audio_engine) fn reconcile_copy_selection(
         || !Arc::ptr_eq(&cache.committed.registration_epoch, &fences.registration)
         || fences.registration.load(Ordering::Acquire) != fences.expected
         || !owner.current()
-        || owner.ownership.authority[owner.id].load(Ordering::Acquire)
-            != owner.binding.authority_revision
+        || !owner.ownership.authority_current(owner.id, owner.binding)
         || !owner
             .ownership
             .binding_window_current(owner.id, owner.binding)
@@ -725,6 +745,7 @@ mod tests {
             id: 36,
             source_generation: 5,
             binding: InputPadBinding {
+                placement: None,
                 resident: sample.resident_binding(),
                 source_address: sample.source_address(),
                 sample_count: sample.source_sample_count(),

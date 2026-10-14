@@ -4,6 +4,7 @@
 //! ring buffer between the Python thread and the real-time audio thread.
 
 use crate::audio_engine::constant_timing::{AcceptedTimingProjection, PreparedConstantTiming};
+use crate::audio_engine::content_placement::SlotSnapshot;
 use crate::audio_engine::input_runtime_binding::InputPadBinding;
 use crate::audio_engine::prepared_source::PreparedSourcePermit;
 use pyo3::prelude::*;
@@ -316,6 +317,17 @@ pub enum AudioMessage {
 
     /// Per-pad playback position in seconds (best-effort, low-rate).
     PadPlayhead { id: usize, position_s: f64 },
+
+    /// Fixed original content tags emitted at the effect, never reconstructed at dequeue.
+    ContentFeedback {
+        id: usize,
+        owner: usize,
+        cell: usize,
+        lifetime: u64,
+        transport_revision: u64,
+        kind: u8,
+        value: f64,
+    },
 }
 
 #[pymethods]
@@ -326,6 +338,7 @@ impl AudioMessage {
             AudioMessage::SampleStopped { id } => Some(*id),
             AudioMessage::PadPeak { id, peak: _ } => Some(*id),
             AudioMessage::PadPlayhead { id, position_s: _ } => Some(*id),
+            AudioMessage::ContentFeedback { id, .. } => Some(*id),
             AudioMessage::MasterPeak { peak: _ } => None,
             _ => None,
         }
@@ -334,6 +347,7 @@ impl AudioMessage {
     pub fn pad_peak(&self) -> Option<f32> {
         match self {
             AudioMessage::PadPeak { id: _, peak } => Some(*peak),
+            AudioMessage::ContentFeedback { kind: 3, value, .. } => Some(*value as f32),
             _ => None,
         }
     }
@@ -348,6 +362,17 @@ impl AudioMessage {
     pub fn pad_playhead(&self) -> Option<f64> {
         match self {
             AudioMessage::PadPlayhead { id: _, position_s } => Some(*position_s),
+            AudioMessage::ContentFeedback { kind: 4, value, .. } => Some(*value),
+            _ => None,
+        }
+    }
+
+    pub fn feedback_kind(&self) -> Option<&'static str> {
+        match self {
+            Self::ContentFeedback { kind: 1, .. } => Some("started"),
+            Self::ContentFeedback { kind: 2, .. } => Some("stopped"),
+            Self::ContentFeedback { kind: 3, .. } => Some("peak"),
+            Self::ContentFeedback { kind: 4, .. } => Some("playhead"),
             _ => None,
         }
     }
@@ -422,6 +447,7 @@ pub(crate) enum ControlParameterMessage {
 
     /// Apply a legacy BPM edit and retire older precise timing in one callback effect.
     SetLegacyPadBpm {
+        placement: Option<SlotSnapshot>,
         id: usize,
         bpm: Option<f64>,
         through_epoch: u64,
@@ -434,6 +460,7 @@ pub(crate) enum ControlParameterMessage {
 
     /// Apply only to the preparation epoch actually observed at control admission.
     SetPadGainGuarded {
+        placement: crate::audio_engine::content_placement::SlotSnapshot,
         id: usize,
         gain_db: f32,
         expected_epoch: u64,
@@ -450,6 +477,7 @@ pub(crate) enum ControlParameterMessage {
 
     /// An older queued EQ must never overwrite a newly copied complete image.
     SetPadEqGuarded {
+        placement: crate::audio_engine::content_placement::SlotSnapshot,
         id: usize,
         low_db: f32,
         mid_db: f32,
@@ -503,8 +531,15 @@ pub enum ControlMessage {
     SetKeyLock(bool),
 
     /// Enable or disable Key Lock for one pad.
+    #[cfg(test)]
     SetPadKeyLock {
         id: usize,
+        enabled: bool,
+    },
+
+    /// Saved intent for one captured empty slot incarnation; no loaded-source acknowledgement.
+    SetPadKeyLockSavedIntent {
+        placement: SlotSnapshot,
         enabled: bool,
     },
 
@@ -526,6 +561,7 @@ pub enum ControlMessage {
 
     /// Apply a legacy origin edit and retire older precise timing atomically.
     SetLegacyPadTimingMetadata {
+        placement: Option<SlotSnapshot>,
         id: usize,
         metadata: PadTimingMetadata,
         through_epoch: u64,
@@ -534,6 +570,7 @@ pub enum ControlMessage {
 
     /// Clear precise timing through this native publication epoch without erasing newer state.
     ClearPadConstantTiming {
+        placement: Option<SlotSnapshot>,
         id: usize,
         through_epoch: u64,
         expected_source_generation: Option<u64>,
@@ -580,6 +617,7 @@ pub enum ControlMessage {
     /// * `id` - Unique identifier for the sample slot (0..NUM_SAMPLES)
     /// * `sample` - Pre-decoded immutable sample buffer (shared handle)
     LoadSample {
+        publication: Option<crate::audio_engine::input_runtime_binding::SourcePublication>,
         id: usize,
         sample: SampleBuffer,
     },
@@ -611,6 +649,7 @@ pub enum ControlMessage {
 
     /// Productive cold assignment; callback checks its fixed complete source fence.
     LoadColdSample {
+        publication: crate::audio_engine::input_runtime_binding::SourcePublication,
         id: usize,
         sample: SampleBuffer,
         source_generation: u64,
@@ -626,6 +665,8 @@ pub enum ControlMessage {
 
     /// Atomic complete content installation into one reserved empty target.
     PadCopy(Box<crate::audio_engine::pad_copy::PadCopyRtWork>),
+    PadPair(Box<crate::audio_engine::pad_pair::PadPairRtWork>),
+    HoldAction(Box<crate::audio_engine::hold_action::HoldActionRtWork>),
     RelocateResident(Box<ResidentTransaction>),
     CaptureResidentSeek(Arc<crate::audio_engine::resident_seek::ResidentSeekCapture>),
     CommittedStemWork(Box<crate::audio_engine::committed_stem_residency::CommittedStemRtWork>),
@@ -683,8 +724,14 @@ pub enum ControlMessage {
     ///
     /// # Parameters
     /// * `id` - Identifier of the sample to stop
+    #[cfg(test)]
     StopSample {
         id: usize,
+    },
+
+    /// An admitted stop follows its captured content; an empty stop retains its fixed slot epoch.
+    StopSampleForPlacement {
+        placement: crate::audio_engine::content_placement::SlotSnapshot,
     },
 
     /// Stop all currently active voices.
@@ -694,6 +741,7 @@ pub enum ControlMessage {
     ///
     /// If the sample is playing, its voice becomes silent but retains its
     /// current playback position. If the sample is not playing, this has no effect.
+    #[cfg(test)]
     PauseSample {
         id: usize,
     },
@@ -702,6 +750,7 @@ pub enum ControlMessage {
     ///
     /// If the sample was paused, playback continues from that point.
     /// If the sample was not paused, this has no effect.
+    #[cfg(test)]
     ResumeSample {
         id: usize,
     },
@@ -709,10 +758,18 @@ pub enum ControlMessage {
     /// Seek an active or paused sample voice to a source position in seconds.
     ///
     /// If the sample has no active or paused voice, this has no effect.
+    #[cfg(test)]
     SeekSample {
         id: usize,
         position_s: f64,
         expected_source_generation: Option<u64>,
+    },
+
+    /// Accepted transport intent retains its original content, across a later placement.
+    TransportForPlacement {
+        placement: crate::audio_engine::content_placement::SlotSnapshot,
+        transport_revision: u64,
+        effect: TransportContentEffect,
     },
 
     /// Unload a sample slot.
@@ -722,7 +779,18 @@ pub enum ControlMessage {
     /// # Parameters
     /// * `id` - Identifier of the sample slot to unload
     UnloadSample {
+        publication: Option<crate::audio_engine::input_runtime_binding::SourcePublication>,
         id: usize,
+    },
+}
+
+#[derive(Debug, Clone, Copy)]
+pub(crate) enum TransportContentEffect {
+    Pause,
+    Resume,
+    Seek {
+        position_s: f64,
+        expected_source_generation: Option<u64>,
     },
 }
 
@@ -736,13 +804,17 @@ impl ControlMessage {
             | ControlMessage::TriggerInputPad { .. }
             | ControlMessage::GlobalPlaybackBatch(_)
             | ControlMessage::StopSample { .. }
+            | ControlMessage::StopSampleForPlacement { .. }
             | ControlMessage::StopAll()
             | ControlMessage::PauseSample { .. }
+            | ControlMessage::HoldAction(_)
+            | ControlMessage::TransportForPlacement { .. }
             | ControlMessage::ResumeSample { .. }
             | ControlMessage::SeekSample { .. } => ControlMessageClass::PlaybackEvent,
             ControlMessage::LoadSample { .. }
             | ControlMessage::LoadColdSample { .. }
             | ControlMessage::PadCopy(_)
+            | ControlMessage::PadPair(_)
             | ControlMessage::RelocateResident(_)
             | ControlMessage::CaptureResidentSeek(_)
             | ControlMessage::CommittedStemWork(_)
@@ -752,6 +824,7 @@ impl ControlMessage {
             ControlMessage::SetBpmLock(_)
             | ControlMessage::SetKeyLock(_)
             | ControlMessage::SetPadKeyLock { .. }
+            | ControlMessage::SetPadKeyLockSavedIntent { .. }
             | ControlMessage::SetPadKeyLockRequest { .. }
             | ControlMessage::SetPadTimingMetadata { .. }
             | ControlMessage::SetLegacyPadTimingMetadata { .. }
@@ -805,6 +878,11 @@ pub fn task_to_str(task: BackgroundTaskKind) -> &'static str {
 /// Events emitted from background work (loading and per-pad tasks).
 #[derive(Debug, Clone)]
 pub enum LoaderEvent {
+    /// Original Native request custody; diagnostic ids never grant routing authority.
+    NativeOwned {
+        owner: crate::audio_engine::NativeAnalysisOwner,
+        event: Box<LoaderEvent>,
+    },
     /// Validated diagnostic components; never implicitly adopted into a saved grid.
     OfflineAnalysisCompleted {
         id: usize,
@@ -886,8 +964,30 @@ pub enum LoaderEvent {
 }
 
 #[cfg(test)]
+impl LoaderEvent {
+    /// Raw worker fixtures inspect diagnostics only; control routing retains the envelope.
+    pub(crate) fn into_test_payload(self) -> Self {
+        match self {
+            Self::NativeOwned { event, .. } => event.into_test_payload(),
+            event => event,
+        }
+    }
+}
+
+#[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn captured_stop_is_classified_as_one_ordered_playback_event() {
+        let ownership =
+            crate::audio_engine::input_runtime_binding::InputRuntimeOwnership::default();
+        let placement = ownership.slot_snapshot(3).unwrap();
+        assert_eq!(
+            ControlMessage::StopSampleForPlacement { placement }.class(),
+            ControlMessageClass::PlaybackEvent
+        );
+    }
 
     #[test]
     fn seek_and_playhead_messages_preserve_long_frame_addresses() {
@@ -1143,6 +1243,7 @@ mod tests {
         );
         assert_eq!(
             ControlMessage::LoadSample {
+                publication: None,
                 id: 1,
                 sample: SampleBuffer {
                     residency: None,

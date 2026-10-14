@@ -953,22 +953,28 @@ def test_midi_snapshot_withholds_pending_own_source_and_preserves_other_ready_pa
     assert loaded[215] is True
     assert bindings[215].metadata()["pad_id"] == 215
 
-    controller.input_mapping._retry_guarded_midi_trigger("pad.trigger:0", 123_456_789)
+    captured = Mock(spec=["diagnostic_slot", "original_owner_status"])
+    captured.diagnostic_slot = 0
+    captured.original_owner_status.return_value = "current"
+    controller.input_mapping._retry_guarded_midi_trigger("pad.trigger:0", 123_456_789, captured)
     assert "receipt is pending" in controller.session.input_mapping_error
     audio_engine_mock.trigger_input_runtime_pad.assert_not_called()
     audio_engine_mock.prepare_resident_control.assert_not_called()
-    with pytest.raises(ValueError, match="receipt is pending"):
-        controller.input_mapping._trigger_current_midi(0, 123_456_789)
-    with pytest.raises(ValueError, match="receipt is pending"):
-        controller.transport.residency.prepare_trigger(0, 3.0, 4.0, Mock())
+    audio_engine_mock.trigger_captured_input_pad.assert_not_called()
+    audio_engine_mock.prepare_captured_input_trigger.assert_not_called()
+    audio_engine_mock.trigger_prepared_input_pad.assert_not_called()
+    controller.transport.residency.prepare_captured_trigger(captured)
+    controller.transport.residency.poll()
+    audio_engine_mock.prepare_captured_input_trigger.assert_not_called()
+    audio_engine_mock.trigger_prepared_input_pad.assert_not_called()
 
     audio_engine_mock.poll_loader_events.side_effect = [_success(), None]
     controller.loader.poll_loader_events()
-    audio_engine_mock.trigger_input_runtime_pad.return_value = True
-    controller.input_mapping._retry_guarded_midi_trigger("pad.trigger:0", 123_456_789)
-    audio_engine_mock.trigger_input_runtime_pad.assert_called_once_with(
-        0, received_at_ns=123_456_789
-    )
+    audio_engine_mock.trigger_captured_input_pad.return_value = True
+    controller.input_mapping._sync_rust_runtime_state()
+    controller.input_mapping._retry_guarded_midi_trigger("pad.trigger:0", 123_456_789, captured)
+    audio_engine_mock.trigger_captured_input_pad.assert_called_once_with(captured)
+    audio_engine_mock.trigger_input_runtime_pad.assert_not_called()
     _, loaded, starts, ends, bindings = audio_engine_mock.set_input_runtime_state.call_args.args
     assert loaded[0] is True
     assert bindings[0] is own

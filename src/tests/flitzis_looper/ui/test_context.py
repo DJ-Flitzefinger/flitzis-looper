@@ -998,20 +998,32 @@ class TestWaveformEditorTransportControls:
         controller.project.sample_paths[0] = "/path/to/sample.wav"
         controller.project.sample_paths[1] = "/path/to/other.wav"
         controller.session.active_sample_ids.update({0, 1})
-
-        ctx.ui.waveform.pause_selected_pad_hold_on_press()
-
-        audio_engine_mock.pause_sample.assert_called_once_with(0)
+        ticket = Mock()
+        ticket.publication_status.return_value = "pause_pending"
+        ticket.release_requested.return_value = False
+        ticket.release_admitted.return_value = False
+        ticket.current_control_slot.return_value = 0
+        audio_engine_mock.pause_waveform_hold = Mock(return_value=ticket)
+        audio_engine_mock.release_waveform_hold = Mock(return_value=True)
+        ctx.ui.waveform.pause_selected_pad_hold_on_press(received_at_ns=0)
+        audio_engine_mock.pause_waveform_hold.assert_called_once_with(0, 1, received_at_ns=0)
+        ticket.publication_status.return_value = "paused_owned"
+        controller.transport.waveform.poll_holds()
         assert controller.session.waveform_pause_hold_pad_id == 0
-        assert 0 in controller.session.paused_sample_ids
-        assert 1 not in controller.session.paused_sample_ids
-
-        ctx.ui.waveform.pause_selected_pad_hold_on_release()
-
-        audio_engine_mock.resume_sample.assert_called_once_with(0)
-        assert controller.session.waveform_pause_hold_pad_id is None
         assert 0 not in controller.session.paused_sample_ids
         assert 1 not in controller.session.paused_sample_ids
+        ctx.ui.waveform.pause_selected_pad_hold_on_release()
+        controller.transport.waveform.poll_holds()
+        audio_engine_mock.release_waveform_hold.assert_called_once_with(ticket)
+        assert controller.transport.waveform.has_pending_holds
+        ticket.publication_status.return_value = "resumed"
+        controller.transport.waveform.poll_holds()
+        assert controller.session.waveform_pause_hold_pad_id is None
+        assert not controller.transport.waveform.has_pending_holds
+        assert 0 not in controller.session.paused_sample_ids
+        assert 1 not in controller.session.paused_sample_ids
+        audio_engine_mock.pause_sample.assert_not_called()
+        audio_engine_mock.resume_sample.assert_not_called()
 
     def test_pause_selected_pad_hold_does_not_resume_previously_paused_pad(
         self, controller: AppController, audio_engine_mock: Mock
@@ -1021,10 +1033,15 @@ class TestWaveformEditorTransportControls:
         controller.project.sample_paths[0] = "/path/to/sample.wav"
         controller.session.active_sample_ids.add(0)
         controller.session.paused_sample_ids.add(0)
-
-        ctx.ui.waveform.pause_selected_pad_hold_on_press()
+        ticket = Mock()
+        ticket.publication_status.return_value = "no_effect"
+        audio_engine_mock.pause_waveform_hold = Mock(return_value=ticket)
+        audio_engine_mock.release_waveform_hold = Mock()
+        ctx.ui.waveform.pause_selected_pad_hold_on_press(received_at_ns=0)
         ctx.ui.waveform.pause_selected_pad_hold_on_release()
-
+        controller.transport.waveform.poll_holds()
+        audio_engine_mock.pause_waveform_hold.assert_called_once_with(0, 1, received_at_ns=0)
+        audio_engine_mock.release_waveform_hold.assert_not_called()
         audio_engine_mock.pause_sample.assert_not_called()
         audio_engine_mock.resume_sample.assert_not_called()
         assert controller.session.waveform_pause_hold_pad_id is None

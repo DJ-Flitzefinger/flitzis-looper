@@ -202,9 +202,6 @@ def _apply_bar_step(
 
 
 def _render_playback_controls(ctx: UiContext, height: float) -> None:
-    if not imgui.is_mouse_down(imgui.MouseButton_.right):
-        ctx.ui.waveform.pause_selected_pad_hold_on_release()
-
     play_left, play_right = _render_icon_button_mouse_down(
         f"{icons_fontawesome_6.ICON_FA_PLAY}##wf_play", height
     )

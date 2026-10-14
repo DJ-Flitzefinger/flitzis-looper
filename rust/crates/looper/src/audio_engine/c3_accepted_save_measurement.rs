@@ -93,7 +93,12 @@ fn c3_actual_600s_accepted_save() {
         let deadline = Instant::now() + Duration::from_secs(600);
         loop {
             drain(&mut callback, &mut consumer);
-            let event = engine.loader_rx.lock().unwrap().try_recv();
+            let event = engine
+                .loader_rx
+                .lock()
+                .unwrap()
+                .try_recv()
+                .map(LoaderEvent::into_test_payload);
             if let Ok(LoaderEvent::Success {
                 id: 0, request_id, ..
             }) = event
@@ -192,12 +197,14 @@ fn c3_actual_600s_accepted_save() {
         assert_eq!(ticket_metadata["source_id"], current_metadata["source_id"]);
         assert_eq!(
             current_metadata["publication_epoch"],
-            engine.current_timing_acknowledgements.current_epoch(0)
+            engine
+                .current_timing_acknowledgements
+                .current_for_slot(&engine.input_runtime_ownership, 0)
         );
         json!({"status":ticket.publication_status().unwrap(),"loaded_source_request":load["detail"]["request"],
             "actual_ticket_metadata":ticket_metadata,"actual_current_metadata":current_metadata,
             "prepared_source_epoch":engine.prepared_source_epochs[0].load(Ordering::Acquire),
-            "native_ack_publication_epoch":engine.current_timing_acknowledgements.current_epoch(0),
+            "native_ack_publication_epoch":engine.current_timing_acknowledgements.current_for_slot(&engine.input_runtime_ownership, 0),
             "explicit_probe_pcm_budget_bytes":1024*1024*1024})
     });
     let globals = Python::attach(|py| {

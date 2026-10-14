@@ -621,6 +621,9 @@ class WaveformEditorActions:
         self._last_source_identity: _WaveformSourceIdentity | None = None
         self._last_waveform_value: WaveFormRenderData | None = None
         self._last_view_revision = controller.transport.waveform.view_revision
+        if not hasattr(controller, "_pair_waveform_views"):
+            controller._pair_waveform_views = []
+        controller._pair_waveform_views.append(self)
 
         # Per-pad view state for the waveform editor plot (seconds).
         self._pad_view_ranges: dict[int, tuple[float, float]] = {}
@@ -679,30 +682,20 @@ class WaveformEditorActions:
         else:
             self._controller.transport.playback.pause_pad(pad_id)
 
-    def pause_selected_pad_hold_on_press(self) -> None:
-        """Pause the selected pad until the matching right mouse hold is released."""
+    def pause_selected_pad_hold_on_press(self, *, received_at_ns: int | None = None) -> None:
+        """Admit one Native caused-pause owner for this physical right-button press."""
         pad_id = self._selected_pad_id()
-        session = self._controller.session
-        session.waveform_pause_hold_pad_id = None
         if pad_id is None:
             return
+        self._controller.transport.waveform.press_pause_hold(pad_id, received_at_ns=received_at_ns)
 
-        if pad_id not in session.active_sample_ids or pad_id in session.paused_sample_ids:
-            return
+    def pause_selected_pad_hold_on_release(self, reason: str = "button_up") -> None:
+        """Request release of original tickets without resolving a selected numeric pad."""
+        self._controller.transport.waveform.request_hold_release(reason)
 
-        self._controller.transport.playback.pause_pad(pad_id)
-        if pad_id in session.paused_sample_ids:
-            session.waveform_pause_hold_pad_id = pad_id
-
-    def pause_selected_pad_hold_on_release(self) -> None:
-        """Resume the pad paused by a waveform Pause right-button hold."""
-        session = self._controller.session
-        pad_id = session.waveform_pause_hold_pad_id
-        if pad_id is None:
-            return
-
-        session.waveform_pause_hold_pad_id = None
-        self._controller.transport.playback.resume_pad(pad_id)
+    def _pause_hold_status(self) -> tuple[str | None, str | None]:
+        """Expose owned pause/release progress; display values grant no permission."""
+        return self._controller.transport.waveform.hold_status()
 
     def stop_selected_pad_on_press(self) -> None:
         """Stop only the selected pad (waveform editor Play right mouse down)."""

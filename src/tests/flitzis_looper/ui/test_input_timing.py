@@ -35,8 +35,8 @@ def test_keyboard_ui_captures_rust_time_before_dispatch(
     assert audio_engine_mock.method_calls[0] == call.capture_input_timestamp_ns()
     audio_engine_mock.capture_input_timestamp_ns.assert_called_once()
     assert audio_engine_mock.method_calls[-2:] == [
-        call.set_pad_loop_region(0, 0.0, None),
-        call.play_sample_exclusive(0, 1.0, received_at_ns=53),
+        call.set_pad_loop_region(0, 0.0, None, expected_source_generation=1),
+        call.play_sample_exclusive(0, 1.0, received_at_ns=53, expected_source_generation=1),
     ]
 
 
@@ -54,8 +54,8 @@ def test_mouse_pad_captures_time_before_loop_publication(
     assert audio_engine_mock.method_calls[0] == call.capture_input_timestamp_ns()
     audio_engine_mock.capture_input_timestamp_ns.assert_called_once()
     assert audio_engine_mock.method_calls[-2:] == [
-        call.set_pad_loop_region(0, 0.0, None),
-        call.play_sample_exclusive(0, 1.0, received_at_ns=0),
+        call.set_pad_loop_region(0, 0.0, None, expected_source_generation=1),
+        call.play_sample_exclusive(0, 1.0, received_at_ns=0, expected_source_generation=1),
     ]
 
 
@@ -98,7 +98,8 @@ def test_mouse_pad_release_outside_does_not_suppress_the_next_down_edge(
     assert not controller.session.pressed_pads[0]
     assert audio_engine_mock.capture_input_timestamp_ns.call_count == 20
     assert audio_engine_mock.play_sample_exclusive.call_args_list == [
-        call(0, 1.0, received_at_ns=timestamp) for timestamp in range(1, 21)
+        call(0, 1.0, received_at_ns=timestamp, expected_source_generation=1)
+        for timestamp in range(1, 21)
     ]
 
 
@@ -188,6 +189,8 @@ def test_waveform_loop_edit_retains_input_time_before_edit_and_restart(
     waveform_editor._handle_clicks(UiContext(controller), 0, 8.0)
 
     assert audio_engine_mock.method_calls[0] == call.capture_input_timestamp_ns()
-    audio_engine_mock.play_sample.assert_called_once_with(0, 1.0, received_at_ns=29)
+    audio_engine_mock.play_sample.assert_called_once_with(
+        0, 1.0, received_at_ns=29, expected_source_generation=1
+    )
     assert controller.project.pad_loop_start_s[0] == 2.5
     audio_engine_mock.play_sample_exclusive.assert_not_called()

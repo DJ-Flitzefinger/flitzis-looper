@@ -564,7 +564,13 @@ fn x11_long_productive_child() {
         Python::attach(|py| {
             let value = engine.borrow(py);
             worker_overlap = worker_overlap.max(value.cold_jobs.counts_for_test().0);
-            while let Ok(message) = value.loader_rx.lock().unwrap().try_recv() {
+            while let Ok(message) = value
+                .loader_rx
+                .lock()
+                .unwrap()
+                .try_recv()
+                .map(LoaderEvent::into_test_payload)
+            {
                 match message {
                     LoaderEvent::Success {
                         id: 1, request_id, ..
@@ -750,7 +756,13 @@ fn x11_long_productive_child() {
             callback.drain(&mut consumer);
             Python::attach(|py| {
                 let value = engine.borrow(py);
-                while let Ok(message) = value.loader_rx.lock().unwrap().try_recv() {
+                while let Ok(message) = value
+                    .loader_rx
+                    .lock()
+                    .unwrap()
+                    .try_recv()
+                    .map(LoaderEvent::into_test_payload)
+                {
                     match message {
                         LoaderEvent::Error {
                             id: 3,

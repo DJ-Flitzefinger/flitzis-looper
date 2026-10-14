@@ -3,7 +3,7 @@ use super::*;
 use crate::audio_engine::cold_jobs::{QUEUED_JOBS, WORKERS};
 use crate::audio_engine::input_runtime_binding::enqueue_stop_with_producer;
 use crate::audio_engine::prepared_source::{
-    PreparedSourcePermit, PreparedSourceTicket, enqueue_current_prepared_stems_with_owner,
+    PreparedSourceTicket, enqueue_current_prepared_stems_with_owner,
 };
 use crate::audio_engine::resident_relocation::launch_with_producer;
 use crate::messages::{PreparedStemSet, StemMixMode};
@@ -97,7 +97,12 @@ fn prepared_stems(
                 amplitude * (index + 1) as f32;
                 reference.samples.len()
             ]),
-            residency: reference.residency.clone(),
+            // Each component owns different PCM; retain the immutable complete source
+            // identity and geometry in a distinct resident owner view.
+            residency: reference
+                .residency
+                .as_ref()
+                .map(|view| Arc::new((**view).clone())),
         }),
     };
     (ticket, set)
@@ -132,6 +137,11 @@ fn accepted_stems(loaded: &mut Loaded) -> PreparedStemSet {
 }
 
 fn launch_and_render(loaded: &mut Loaded, ticket: &ResidentWindowTicket, stem_value: Option<f32>) {
+    // A completed prior STOP is observed by the normal control tick before the next gesture.
+    if let Ok(previous) = loaded.callback.feedback_rx.pop() {
+        assert!(matches!(previous, AudioMessage::SampleStopped { id: 0 }));
+    }
+    assert!(loaded.callback.feedback_rx.is_empty());
     let timestamp = loaded.engine.input_clock.capture_ns();
     assert!(
         launch_with_producer(&loaded.engine, ticket, false, timestamp, &loaded.producer).unwrap()
@@ -165,7 +175,11 @@ fn launch_and_render(loaded: &mut Loaded, ticket: &ResidentWindowTicket, stem_va
             assert_eq!(value.to_bits(), expected.to_bits(), "frame={frame}");
         }
     }
-    while loaded.callback.feedback_rx.pop().is_ok() {}
+    assert!(matches!(
+        loaded.callback.feedback_rx.pop(),
+        Ok(AudioMessage::SampleStarted { id: 0 })
+    ));
+    assert!(loaded.callback.feedback_rx.is_empty());
 }
 
 #[test]
@@ -311,20 +325,29 @@ fn ready_transaction_rejects_stale_timing_source_and_stem_set_before_ack() {
     Python::initialize();
     for change in 0..3 {
         let mut loaded = Loaded::new();
-        let stems = accepted_stems(&mut loaded);
+        let _stems = accepted_stems(&mut loaded);
         let _blocked = ColdLaneGate::occupy(&loaded.engine);
         let ticket = loaded.prepare(same_request());
         match change {
             0 => {
-                loaded.engine.input_runtime_ownership.authority[0].fetch_add(1, Ordering::AcqRel);
+                loaded
+                    .engine
+                    .input_runtime_ownership
+                    .authority_for_cell(
+                        loaded
+                            .engine
+                            .input_runtime_ownership
+                            .slot_snapshot(0)
+                            .unwrap()
+                            .cell(),
+                    )
+                    .fetch_add(1, Ordering::AcqRel);
             }
             1 => {
                 loaded.engine.input_runtime_ownership.revoke_source(0);
             }
             _ => {
-                let mut replacement = stems;
-                replacement.complete_set_identity = Arc::new([18; 32]);
-                replacement.publication = PreparedSourcePermit::unrestricted();
+                let (_replacement_ticket, replacement) = prepared_stems(&loaded, 18, 0.04);
                 replacement.publication.mark_pending().unwrap();
                 let publication = replacement.publication.clone();
                 let (mut producer, mut consumer) = rtrb::RingBuffer::new(1);
@@ -441,6 +464,108 @@ fn ready_queue_pressure_and_scheduled_stop_preserve_ack_and_quantization() {
 }
 
 #[test]
+fn ready_full_feedback_retains_start_until_real_poll_and_next_callback_with_one_birth() {
+    Python::initialize();
+    let mut loaded = Loaded::new();
+    let _blocked = ColdLaneGate::occupy(&loaded.engine);
+    let ready = loaded.prepare(same_request());
+    loaded.adopt(&ready);
+    let key = loaded
+        .engine
+        .input_runtime_ownership
+        .slot_snapshot(0)
+        .unwrap()
+        .content_key()
+        .unwrap();
+    // A completed real STOP fills the unchanged one-slot feedback ring.
+    assert!(enqueue_stop_with_producer(
+        &loaded.engine.input_runtime_ownership,
+        &mut loaded.producer.lock().unwrap(),
+        Some(0)
+    ));
+    assert_eq!(loaded.callback.drain(&mut loaded.consumer), 1);
+    assert!(matches!(
+        loaded.callback.feedback_rx.peek(),
+        Ok(AudioMessage::SampleStopped { id: 0 })
+    ));
+    let timestamp = loaded.engine.input_clock.capture_ns();
+    assert!(
+        launch_with_producer(&loaded.engine, &ready, false, timestamp, &loaded.producer).unwrap()
+    );
+    assert_eq!(loaded.callback.drain(&mut loaded.consumer), 1);
+    assert!(ready.is_current());
+    assert_eq!(ready.publication_status(), "accepted");
+    assert!(
+        !loaded
+            .callback
+            .mixer
+            .voices
+            .iter()
+            .any(|voice| voice.is_playing_sample(0))
+    );
+    let pending = loaded.callback.scheduler.deferred_due().unwrap();
+    assert_eq!(pending.target_frame, 0);
+    assert!(
+        matches!(&pending.command, crate::audio_engine::scheduler::ScheduledCommand::TriggerInputPad {
+        received_at_ns, binding, ..
+    } if *received_at_ns == timestamp && binding.placement.unwrap().content_key() == Some(key))
+    );
+    assert!(matches!(
+        loaded.callback.feedback_rx.pop(),
+        Ok(AudioMessage::SampleStopped { id: 0 })
+    ));
+    assert!(loaded.callback.feedback_rx.is_empty());
+    // Free capacity does not cause a same-callback spin or a second admission.
+    assert_eq!(loaded.callback.drain(&mut loaded.consumer), 0);
+    assert!(loaded.callback.scheduler.deferred_due().is_some());
+    assert!(
+        !loaded
+            .callback
+            .mixer
+            .voices
+            .iter()
+            .any(|voice| voice.is_playing_sample(0))
+    );
+    loaded.callback.transport.advance_by_rendered_frames(1);
+    assert_eq!(
+        crate::audio_engine::audio_stream::drain_control_messages(
+            &mut loaded.consumer,
+            &mut loaded.callback.scheduler,
+            1,
+            &mut loaded.callback.quantization,
+            &mut loaded.callback.transport,
+            &mut loaded.callback.mixer,
+            &mut loaded.callback.feedback,
+            &mut loaded.callback.retirement
+        ),
+        0
+    );
+    assert!(loaded.callback.scheduler.is_empty());
+    let voices: Vec<_> = loaded
+        .callback
+        .mixer
+        .voices
+        .iter()
+        .filter(|voice| voice.is_playing_sample(0))
+        .collect();
+    assert_eq!(voices.len(), 1);
+    assert_eq!(
+        voices[0]
+            .source_admission
+            .as_ref()
+            .unwrap()
+            .content_key_for_test(),
+        Some(key)
+    );
+    assert!(matches!(
+        loaded.callback.feedback_rx.pop(),
+        Ok(AudioMessage::SampleStarted { id: 0 })
+    ));
+    assert!(loaded.callback.feedback_rx.is_empty());
+    assert!(ready.is_current());
+}
+
+#[test]
 fn ready_admission_rejects_closed_cold_lane_before_intent_or_command_changes() {
     Python::initialize();
     for with_stems in [false, true] {
@@ -480,6 +605,18 @@ fn ready_admission_rejects_closed_cold_lane_before_intent_or_command_changes() {
 fn ready_transaction_cannot_ack_a_control_cache_source_before_actual_cold_bank_adoption() {
     Python::initialize();
     let mut loaded = Loaded::new();
+    // Keep this scenario's explicit feedback pressure using a fresh actual STOP, rather
+    // than depending on an initial Cold setup event that the control tick already polled.
+    assert!(enqueue_stop_with_producer(
+        &loaded.engine.input_runtime_ownership,
+        &mut loaded.producer.lock().unwrap(),
+        Some(0)
+    ));
+    assert_eq!(loaded.callback.drain(&mut loaded.consumer), 1);
+    assert!(matches!(
+        loaded.callback.feedback_rx.peek(),
+        Ok(AudioMessage::SampleStopped { id: 0 })
+    ));
     let (request, mut source_commands) = selected_load(
         &loaded.engine,
         &loaded.directory.path().join("control.wav"),
@@ -530,9 +667,14 @@ fn ready_transaction_cannot_ack_a_control_cache_source_before_actual_cold_bank_a
         )
         .unwrap()
     );
-    // The initial replacement load filled this fixture's one-slot feedback
-    // queue. A second replacement correctly waits for room to report STOP;
-    // consume that actual prior message before asserting its native ACK.
+    // Replacement cannot claim its actual bank or publish success while its STOP cannot
+    // be reported. Poll the real earlier STOP, then allow the queued Native adoption.
+    assert_eq!(loaded.callback.drain(&mut source_commands), 0);
+    assert_eq!(
+        loaded.engine.cold_loading[0].load(Ordering::Acquire),
+        request
+    );
+    assert!(!source_commands.is_empty());
     assert!(matches!(
         loaded.callback.feedback_rx.pop(),
         Ok(AudioMessage::SampleStopped { id: 0 })

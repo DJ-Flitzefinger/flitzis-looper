@@ -420,6 +420,12 @@ def test_publication_history_without_current_ack_never_advances() -> None:
     observer.controller.accepted_timing.refresh_current.assert_not_called()
 
 
+def _timing_ticket() -> Mock:
+    ticket = Mock()
+    ticket.current_control_slot.return_value = 0
+    return ticket
+
+
 def blank_observer(
     controller: AppController, plan: ProductiveRunPlan, ref: QuarterReference, directory: Path
 ) -> ProductiveObserver:
@@ -468,7 +474,7 @@ def budgeted_observer(
     audio_engine_mock.current_constant_timing.return_value = None
     audio_engine_mock.poll_loader_events.return_value = None
     audio_engine_mock.pad_timing_intent.return_value = "automatic"
-    audio_engine_mock.prepare_captured_constant_timing.return_value = Mock()
+    audio_engine_mock.prepare_captured_constant_timing.return_value = _timing_ticket()
     controller.project.sample_paths[0] = str(source)
     controller.project.pad_timing_intent[0] = "automatic"
     controller.project.speed = 0.73
@@ -632,7 +638,7 @@ def test_adapter_uses_productive_controller_prepare_publish_current_and_derived_
     audio_engine_mock.set_pad_timing_intent.side_effect = lambda _pad, intent: setattr(
         audio_engine_mock.pad_timing_intent, "return_value", intent
     )
-    ticket = Mock()
+    ticket = _timing_ticket()
     ticket.metadata.return_value = dict(
         current, request_id=current["accepted_request_id"], beat_seconds=[0.503, 1.004, 2.005]
     )

@@ -14,8 +14,11 @@ const ENCODING: &str = "accepted-constant-timing-qm-raw-v1";
 #[pyclass(frozen)]
 #[derive(Clone)]
 pub struct SavedConstantTimingTicket {
+    placement: Option<SlotSnapshot>,
+    ownership: Arc<InputRuntimeOwnership>,
     id: usize,
     request_id: u64,
+    request_incarnation: Option<u64>,
     source_generation: u64,
     sample_rate_hz: u32,
     source_digest: String,
@@ -454,13 +457,18 @@ fn verify(
 fn validate_capture(
     engine: &AudioEngine,
     ticket: &SavedConstantTimingTicket,
-) -> Result<(), String> {
+) -> Result<usize, String> {
     let requests = engine
         .pad_request_ids
         .lock()
         .map_err(|_| "request lock poisoned")?;
-    if !Arc::ptr_eq(&ticket.epoch, &engine.prepared_source_epochs[ticket.id])
-        || requests[ticket.id] != ticket.request_id
+    let (id, original_slot) =
+        resolve_timing_owner(engine, ticket.placement, &ticket.ownership, ticket.id)?;
+    if !Arc::ptr_eq(&ticket.ownership, &engine.input_runtime_ownership)
+        || !Arc::ptr_eq(&ticket.epoch, engine.prepared_source_epoch(id)?)
+        || (original_slot && requests[id] != ticket.request_id)
+        || timing_request_incarnation(&ticket.ownership, ticket.placement)
+            != ticket.request_incarnation
         || ticket.epoch.load(Ordering::Acquire) != ticket.captured_epoch
     {
         return Err("stale or foreign saved timing capture".into());
@@ -468,7 +476,7 @@ fn validate_capture(
     if engine
         .timing_intents
         .lock()
-        .map_err(|_| "timing intent lock poisoned")?[ticket.id]
+        .map_err(|_| "timing intent lock poisoned")?[id]
         != TimingIntent::Automatic
     {
         return Err("current timing intent is not automatic".into());
@@ -477,23 +485,23 @@ fn validate_capture(
         .sample_cache
         .lock()
         .map_err(|_| "sample cache lock poisoned")?;
-    let source = cache[ticket.id].as_ref().ok_or("source unavailable")?;
+    let source = cache[id].as_ref().ok_or("source unavailable")?;
     if !source.same_source(&ticket.sample)
         || engine
             .loaded_source_generations
             .lock()
-            .map_err(|_| "source generation lock poisoned")?[ticket.id]
+            .map_err(|_| "source generation lock poisoned")?[id]
             != (ticket.source_generation, ticket.sample_rate_hz)
         || engine
             .loaded_source_digests
             .lock()
-            .map_err(|_| "source digest lock poisoned")?[ticket.id]
+            .map_err(|_| "source digest lock poisoned")?[id]
             .as_ref()
             != Some(&ticket.source_digest)
     {
         return Err("current source ownership differs from saved timing capture".into());
     }
-    Ok(())
+    Ok(id)
 }
 
 pub(in crate::audio_engine) fn capture_saved(
@@ -563,21 +571,40 @@ pub(in crate::audio_engine) fn capture_saved(
         .map_err(|_| "source digest lock poisoned")?[id]
         .clone()
         .ok_or("source digest unavailable")?;
-    if source_generation == 0 || requests[id] == 0 {
+    if source_generation == 0 || sample_rate_hz == 0 {
         return Err("loaded source identity unavailable".into());
     }
-    let request_id =
-        PadRequestAdvance::prepare(&mut requests[id], &engine.prepared_source_epochs[id])?.commit();
+    crate::audio_engine::complete_context::CompleteSourceGuard::capture(
+        engine,
+        id,
+        &sample,
+        source_generation,
+        sample_rate_hz,
+    )?;
+    let placement = engine.input_runtime_ownership.binding_placement(id);
+    if engine.input_runtime_ownership.is_source_tracked() && placement.is_none() {
+        return Err("loaded native content lifetime unavailable".into());
+    }
+    let epoch = engine.prepared_source_epoch(id)?.clone();
+    let advance = PadRequestAdvance::prepare(&mut requests[id], &epoch)?;
+    let logical_advance = engine
+        .input_runtime_ownership
+        .prepare_source_request_advance(id)?;
+    logical_advance.commit();
+    let request_id = advance.commit();
     Ok(SavedConstantTimingTicket {
+        placement,
+        ownership: engine.input_runtime_ownership.clone(),
         id,
         request_id,
+        request_incarnation: timing_request_incarnation(&engine.input_runtime_ownership, placement),
         source_generation,
         sample_rate_hz,
         source_digest,
         source_path,
         sample,
-        epoch: engine.prepared_source_epochs[id].clone(),
-        captured_epoch: engine.prepared_source_epochs[id].load(Ordering::Acquire),
+        captured_epoch: epoch.load(Ordering::Acquire),
+        epoch,
         record: Arc::new(record),
         pcm_budget: PcmBudget::default(),
     })
@@ -616,10 +643,10 @@ impl SavedTimingRestoreWork {
         saved: &SavedConstantTimingTicket,
     ) -> Result<Self, String> {
         let lease = PreparationLease::capture(engine)?;
-        validate_capture(engine, saved)?;
+        let id = validate_capture(engine, saved)?;
         let source = crate::audio_engine::native_owned_work::CompleteSampleWork::capture(
             engine,
-            saved.id,
+            id,
             &saved.sample,
         )?;
         Ok(Self {
@@ -661,8 +688,11 @@ impl PreparedSavedTimingRestore {
             .issue_ticket()
             .map_err(|e| PyValueError::new_err(e.to_string()))?;
         let ticket = ConstantTimingTicket {
+            placement: saved.placement,
+            ownership: saved.ownership,
             id: saved.id,
             request_id: saved.request_id,
+            request_incarnation: saved.request_incarnation,
             source_generation: saved.source_generation,
             sample_rate_hz: saved.sample_rate_hz,
             source_digest: saved.source_digest,
@@ -765,7 +795,7 @@ impl SavedTimingExportWork {
                 .current_constant_timing
                 .lock()
                 .map_err(|_| "current timing lock poisoned")?;
-            retire_old_current_records(engine, id, &mut all[id]);
+            retire_old_current_records(engine, &mut all[id]);
             let Some(current) = current_record_for_source(
                 engine,
                 id,
@@ -785,17 +815,24 @@ impl SavedTimingExportWork {
             {
                 return Ok(None);
             }
+            let epoch = engine.prepared_source_epoch(id)?.clone();
             (
                 SavedConstantTimingTicket {
+                    placement: engine.input_runtime_ownership.binding_placement(id),
+                    ownership: engine.input_runtime_ownership.clone(),
                     id,
                     request_id: requests[id],
+                    request_incarnation: timing_request_incarnation(
+                        &engine.input_runtime_ownership,
+                        engine.input_runtime_ownership.binding_placement(id),
+                    ),
                     source_generation: generations[id].0,
                     sample_rate_hz: generations[id].1,
                     source_digest: current.binding.source_sha256.clone(),
                     source_path,
                     sample: sample.clone(),
-                    epoch: engine.prepared_source_epochs[id].clone(),
-                    captured_epoch: engine.prepared_source_epochs[id].load(Ordering::Acquire),
+                    captured_epoch: epoch.load(Ordering::Acquire),
+                    epoch,
                     record: Arc::new(Value::Null),
                     pcm_budget: current.pcm_budget,
                 },
@@ -852,10 +889,10 @@ impl VerifiedTimingExport {
         self,
         engine: &AudioEngine,
     ) -> Result<Option<String>, String> {
-        validate_capture(engine, &self.saved)?;
+        let id = validate_capture(engine, &self.saved)?;
         if engine
             .current_timing_acknowledgements
-            .current_epoch(self.saved.id)
+            .current_for_slot(&engine.input_runtime_ownership, id)
             != self.publication_epoch
         {
             return Ok(None);

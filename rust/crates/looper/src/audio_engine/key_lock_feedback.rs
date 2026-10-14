@@ -7,12 +7,23 @@ use crate::messages::ControlMessage;
 use pyo3::exceptions::{PyRuntimeError, PyValueError};
 use pyo3::prelude::*;
 use pyo3::types::PyDict;
+use std::sync::atomic::Ordering;
 
 pub(super) fn enqueue_with_source(
     engine: &AudioEngine,
     id: usize,
     enabled: bool,
     expected_source_generation: Option<u64>,
+) -> PyResult<u64> {
+    enqueue_with_source_before_commit(engine, id, enabled, expected_source_generation, || {})
+}
+
+fn enqueue_with_source_before_commit(
+    engine: &AudioEngine,
+    id: usize,
+    enabled: bool,
+    expected_source_generation: Option<u64>,
+    before_commit: impl FnOnce(),
 ) -> PyResult<u64> {
     let _requests = engine
         .pad_request_ids
@@ -21,14 +32,60 @@ pub(super) fn enqueue_with_source(
     engine
         .input_runtime_ownership
         .ensure_no_copy_reservation(id)?;
+    let ownership = &engine.input_runtime_ownership;
+    // None from the loaded binding resolver can also mean Pending. Capture the
+    // actual empty or loaded slot first; only its exact empty incarnation is saved intent.
+    let placement = ownership
+        .slot_snapshot(id)
+        .ok_or_else(|| PyValueError::new_err("content placement is pending or changed"))?;
     let binding = input_runtime_binding::capture_under_request_lock(engine, id)?;
     input_runtime_binding::validate_expected_source_generation(
         binding.as_ref(),
         expected_source_generation,
     )?;
-    if expected_source_generation.is_some() {
-        engine.admit_resident_key_lock(id, enabled)?;
+    if binding.as_ref().is_some_and(|binding| {
+        !binding
+            .binding
+            .placement
+            .is_some_and(|captured| captured.same_projection(placement))
+    }) || (binding.is_none()
+        && (placement.content_key().is_some() || !ownership.source_cell_empty(placement.cell())))
+    {
+        return Err(PyValueError::new_err("current complete source changed"));
     }
+    engine.admit_resident_key_lock(id, enabled)?;
+    let prepared = ownership
+        .prepare_slot_write_fixed(placement, placement.lifetime())
+        .map_err(|error| PyValueError::new_err(error.to_string()))?;
+    let previous_request = ownership
+        .key_lock_request_for_cell(placement.cell())
+        .load(Ordering::Acquire);
+    let request_id = if binding.is_some() {
+        previous_request
+            .checked_add(1)
+            .ok_or_else(|| PyRuntimeError::new_err("Key Lock request epoch exhausted"))?
+    } else {
+        0
+    };
+    let restore_guards = engine
+        .resident_restore_guards
+        .lock()
+        .map_err(|_| PyRuntimeError::new_err("resident intent lock poisoned"))?;
+    let cold_request = engine.cold_loading[id].load(Ordering::Acquire);
+    let restore_guard = restore_guards[id]
+        .as_ref()
+        .filter(|guard| guard.request == cold_request);
+    let message = if let Some(binding) = &binding {
+        ControlMessage::SetPadKeyLockRequest {
+            id,
+            enabled,
+            request_id,
+            binding: binding.binding,
+            source_generation: binding.source_generation,
+        }
+    } else {
+        ControlMessage::SetPadKeyLockSavedIntent { placement, enabled }
+    };
     let mut producer = engine
         .control_producer()?
         .lock()
@@ -38,34 +95,44 @@ pub(super) fn enqueue_with_source(
             "Failed to send SetPadKeyLock - buffer may be full",
         ));
     }
-    if binding.as_ref().is_some_and(|binding| !binding.current()) {
-        return Err(PyValueError::new_err("current complete source changed"));
-    }
-    engine.note_resident_key_lock_intent(id, enabled)?;
-    let Some(binding) = binding else {
-        // Saved-load intent may precede a current source. It has no source-bound
-        // acknowledgement; zero must never settle a loaded controller operation.
-        super::push_control_message(
-            &mut producer,
-            ControlMessage::SetPadKeyLock { id, enabled },
-            "SetPadKeyLock",
-        )?;
-        return Ok(0);
-    };
-    let request_id = engine.input_runtime_ownership.next_key_lock_request(id)?;
-    super::push_control_message(
-        &mut producer,
-        ControlMessage::SetPadKeyLockRequest {
-            id,
-            enabled,
-            request_id,
-            binding: binding.binding,
-            source_generation: binding.source_generation,
-        },
-        "SetPadKeyLock",
-    )?;
+    before_commit();
+    ownership
+        .commit_slot_write_fixed(
+            &prepared,
+            || {
+                ownership.slot_snapshot_fields_current(placement)
+                    && ownership.copy_reservation(id) == 0
+                    && ownership
+                        .key_lock_request_for_cell(placement.cell())
+                        .load(Ordering::Acquire)
+                        == previous_request
+                    && engine.cold_loading[id].load(Ordering::Acquire) == cold_request
+                    && binding.as_ref().map_or_else(
+                        || ownership.source_cell_empty(placement.cell()),
+                        |binding| binding.control_publication_current(),
+                    )
+            },
+            |cell| {
+                if let Some(guard) = restore_guard {
+                    guard.key_lock_intent(enabled);
+                }
+                if request_id != 0 {
+                    ownership
+                        .key_lock_request_for_cell(cell)
+                        .store(request_id, Ordering::Release);
+                }
+                // Capacity is held by the sole producer; its consumer only frees slots.
+                let sent = producer.push(message);
+                debug_assert!(sent.is_ok());
+            },
+        )
+        .map_err(|error| PyValueError::new_err(error.to_string()))?;
     Ok(request_id)
 }
+
+#[cfg(test)]
+#[path = "key_lock_control_tests.rs"]
+mod key_lock_control_tests;
 
 pub(super) fn status(
     engine: &AudioEngine,

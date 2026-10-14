@@ -45,22 +45,22 @@ fn copy_stem_reference_matches(stems: &PreparedStemSet, sample: &SampleBuffer) -
 }
 
 impl RtMixer {
-    /// Match the fixed lifetime captured by a non-realtime source admission.
-    pub(crate) fn content_lifetime_current(&self, id: usize, expected: u64) -> bool {
+    /// Parameter edits retain the actual admitted copy epoch across the two queues.
+    pub(crate) fn pad_parameter_epoch_current(&self, id: usize, expected: u64) -> bool {
         id < NUM_SAMPLES
             && self
                 .input_runtime_ownership
-                .content_lifetime_current(id, expected)
-    }
-
-    /// Parameter edits retain the actual admitted copy epoch across the two queues.
-    pub(crate) fn pad_parameter_epoch_current(&self, id: usize, expected: u64) -> bool {
-        id < NUM_SAMPLES && self.input_runtime_ownership.copy_parameter_epoch(id) == expected
+                .callback_copy_parameter_epoch(id)
+                == Some(expected)
     }
 
     /// Legacy timing's own admission epoch is newer than every preceding accepted copy.
     pub(crate) fn legacy_parameter_after_copy(&self, id: usize, through_epoch: u64) -> bool {
-        id < NUM_SAMPLES && through_epoch >= self.input_runtime_ownership.copy_parameter_epoch(id)
+        id < NUM_SAMPLES
+            && self
+                .input_runtime_ownership
+                .callback_copy_parameter_epoch(id)
+                .is_some_and(|epoch| through_epoch >= epoch)
     }
 
     /// Validate, claim and install one complete stopped target without touching its source.
@@ -73,83 +73,124 @@ impl RtMixer {
         mut work: Box<PadCopyRtWork>,
         retirement: &mut impl AudioBufferRetirement,
     ) -> bool {
-        if !self.copy_pad_preflight(&work)
-            || retirement.available_retirement_slots() == 0
-            || !work.guard.claim()
-        {
+        if self.placement_pending() {
+            self.defer_control(crate::messages::ControlMessage::PadCopy(work));
+            return false;
+        }
+        if !self.copy_pad_preflight(&work) || retirement.available_retirement_slots() == 0 {
+            if self.placement_pending() {
+                self.defer_control(crate::messages::ControlMessage::PadCopy(work));
+                return false;
+            }
             work.guard.reject();
             retirement.retire_pad_copy(work);
             return false;
         }
 
-        // There is no fallible operation or guard recheck after this claim. Control-side
-        // reservation fences keep the target unavailable until this complete image has ACKed.
+        let ownership = self.input_runtime_ownership.clone();
+        let guard = work.guard.clone();
+        let write = match ownership
+            .prepare_slot_write_fixed(guard.target_placement, work.content_lifetime)
+        {
+            Ok(write) => write,
+            Err(super::super::content_placement::PlacementError::Pending) => {
+                self.defer_control(crate::messages::ControlMessage::PadCopy(work));
+                return false;
+            }
+            Err(_) => {
+                guard.reject();
+                retirement.retire_pad_copy(work);
+                return false;
+            }
+        };
         let target = work.target;
         let intent = work.intent;
-        self.input_runtime_ownership
-            .revoke(target, work.authority_revision);
-        self.input_runtime_ownership.publish_source(
-            target,
-            &work.sample,
-            self.sample_rate_hz as u32,
-            work.source_generation,
-        );
-        self.prepared_source_epochs[target].store(work.prepared_epoch, Ordering::Release);
-        self.input_runtime_ownership
-            .publish_copy_parameter_epoch(target, work.prepared_epoch);
-        self.input_runtime_ownership
-            .publish_copy_lifetime(target, work.content_lifetime);
-        self.input_runtime_ownership
-            .set_timing_intent(target, intent.timing_intent);
+        let committed = ownership.commit_slot_write_fixed(
+            &write,
+            || guard.claim_stable(),
+            |cell| {
+                ownership.apply_source_for_cell(
+                    cell,
+                    &work.sample,
+                    self.sample_rate_hz as u32,
+                    work.source_generation,
+                    work.authority_revision,
+                    intent.timing_intent,
+                );
+                work.guard
+                    .target_epoch
+                    .store(work.prepared_epoch, Ordering::Release);
+                ownership.publish_copy_parameter_epoch_for_cell(cell, work.prepared_epoch);
+                self.sample_bank[target] = Some(work.sample.clone());
+                work.retired_stems =
+                    std::mem::replace(&mut self.prepared_stems[target], work.stems.clone());
+                work.retired_outgoing = self.outgoing_stems[target].take();
+                work.retired_receipt = self.committed_stem_receipts[target].take();
+                self.committed_stem_selection[target] = work.selection;
+                if let Some(fences) = &work.selection_fences {
+                    fences.selection.store(fences.expected, Ordering::Release);
+                    fences
+                        .registration
+                        .store(fences.expected, Ordering::Release);
+                    fences.publication.mark_accepted();
+                }
+                self.release_pair_components[target] = false;
+                self.pad_loop_start_frame[target] = intent.loop_start_frame;
+                self.pad_loop_end_frame[target] = intent.loop_end_frame;
+                self.pad_period_seconds[target] = intent.period_seconds;
+                self.pad_phase_anchor_frame[target] = intent.origin_frame;
+                self.pad_accepted_timing[target] = work.projection;
+                self.stem_mix_mode[target] = intent.stem_mix_mode;
+                self.stem_mix_source_version_hash[target] = intent.source_version_hash;
+                self.stem_enabled_mask[target] = intent.enabled_mask;
+                self.stem_transitions[target].clear();
+                self.pad_playhead_frame[target] = None;
+                self.pad_key_lock_enabled[target] = intent.key_lock;
+                self.pad_key_lock_request_id[target] = 0;
+                self.pad_key_lock_rejected[target] = false;
+                self.pad_key_lock_pending_on[target] = false;
+                self.pad_key_lock_ack_source[target] =
+                    Some((work.source_generation, work.sample.source_address()));
+                self.pad_key_lock_status[target] = None;
 
-        self.sample_bank[target] = Some(work.sample.clone());
-        work.retired_stems =
-            std::mem::replace(&mut self.prepared_stems[target], work.stems.clone());
-        work.retired_outgoing = self.outgoing_stems[target].take();
-        work.retired_receipt = self.committed_stem_receipts[target].take();
-        self.committed_stem_selection[target] = work.selection;
-        if let Some(fences) = &work.selection_fences {
-            fences.selection.store(fences.expected, Ordering::Release);
-            fences
-                .registration
-                .store(fences.expected, Ordering::Release);
-            fences.publication.mark_accepted();
+                // Both smoothing and filter history belong to this stopped target. Reserved future
+                // parameters return to their neutral value rather than retaining the previous content.
+                self.set_pad_dsp_parameter(target, DspParameterSlot::Slot3, 0.5);
+                self.set_pad_gain(target, intent.gain_db);
+                self.set_pad_eq(
+                    target,
+                    intent.eq_low_db,
+                    intent.eq_mid_db,
+                    intent.eq_high_db,
+                );
+                self.pad_dsp_chains[target].reset();
+            },
+        );
+        match committed {
+            Ok(_) => {}
+            Err(
+                super::super::content_placement::PlacementError::Pending
+                | super::super::content_placement::PlacementError::Stale,
+            ) => {
+                self.defer_control(crate::messages::ControlMessage::PadCopy(work));
+                return false;
+            }
+            Err(_) => {
+                guard.reject();
+                retirement.retire_pad_copy(work);
+                return false;
+            }
         }
-        self.release_pair_components[target] = false;
-        self.pad_loop_start_frame[target] = intent.loop_start_frame;
-        self.pad_loop_end_frame[target] = intent.loop_end_frame;
-        self.pad_period_seconds[target] = intent.period_seconds;
-        self.pad_phase_anchor_frame[target] = intent.origin_frame;
-        self.pad_accepted_timing[target] = work.projection;
-        self.stem_mix_mode[target] = intent.stem_mix_mode;
-        self.stem_mix_source_version_hash[target] = intent.source_version_hash;
-        self.stem_enabled_mask[target] = intent.enabled_mask;
-        self.stem_transitions[target].clear();
-        self.pad_playhead_frame[target] = None;
-        self.pad_key_lock_enabled[target] = intent.key_lock;
-        self.pad_key_lock_request_id[target] = 0;
-        self.pad_key_lock_rejected[target] = false;
-        self.pad_key_lock_pending_on[target] = false;
-        self.pad_key_lock_ack_source[target] =
-            Some((work.source_generation, work.sample.source_address()));
-        self.pad_key_lock_status[target] = None;
-
-        // Both smoothing and filter history belong to this stopped target. Reserved future
-        // parameters return to their neutral value rather than retaining the previous content.
-        self.set_pad_dsp_parameter(target, DspParameterSlot::Slot3, 0.5);
-        self.set_pad_gain(target, intent.gain_db);
-        self.set_pad_eq(
-            target,
-            intent.eq_low_db,
-            intent.eq_mid_db,
-            intent.eq_high_db,
-        );
-        self.pad_dsp_chains[target].reset();
+        ownership.acknowledge_callback_source(work.content_key);
         if let Some(projection) = work.projection {
-            self.current_timing_acknowledgements
-                .acknowledge(target, projection.publication_epoch);
+            self.current_timing_acknowledgements.acknowledge_for_key(
+                &self.input_runtime_ownership,
+                work.content_key,
+                projection.publication_epoch,
+            );
         } else {
-            self.current_timing_acknowledgements.clear(target);
+            self.current_timing_acknowledgements
+                .clear_for_key(&self.input_runtime_ownership, work.content_key);
         }
         if let Some(stems) = &self.prepared_stems[target] {
             stems.publication.mark_accepted();
@@ -165,12 +206,23 @@ impl RtMixer {
         let guard = &work.guard;
         let target = work.target;
         let source = guard.source;
+        let Some(source_placement) = self.input_runtime_ownership.slot_snapshot(source) else {
+            return false;
+        };
+        let Some(target_placement) = self.input_runtime_ownership.slot_snapshot(target) else {
+            return false;
+        };
         if target >= NUM_SAMPLES
             || source >= NUM_SAMPLES
             || source == target
             || guard.target != target
             || work.source_generation == 0
             || work.content_lifetime == 0
+            || guard
+                .target_placement
+                .for_lifetime(work.content_lifetime)
+                .and_then(|snapshot| snapshot.content_key())
+                != Some(work.content_key)
             || work.prepared_epoch <= guard.captured_target_epoch
             || work.authority_revision <= guard.target_authority
             || work.retired_stems.is_some()
@@ -181,8 +233,14 @@ impl RtMixer {
                 &guard.acknowledgements,
                 &self.current_timing_acknowledgements,
             )
-            || !Arc::ptr_eq(&guard.source_epoch, &self.prepared_source_epochs[source])
-            || !Arc::ptr_eq(&guard.target_epoch, &self.prepared_source_epochs[target])
+            || !Arc::ptr_eq(
+                &guard.source_epoch,
+                &self.prepared_source_epochs[source_placement.cell().index()],
+            )
+            || !Arc::ptr_eq(
+                &guard.target_epoch,
+                &self.prepared_source_epochs[target_placement.cell().index()],
+            )
             || !Arc::ptr_eq(&work.publication.epoch, &guard.target_epoch)
             || work.publication.expected != work.prepared_epoch
             || self.sample_bank[target].is_some()

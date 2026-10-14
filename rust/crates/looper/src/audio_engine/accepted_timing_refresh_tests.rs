@@ -39,7 +39,7 @@ impl Fixture {
                 .with_complete_source(RATE);
             engine
                 .input_runtime_ownership
-                .publish_source(0, &sample, RATE, 7);
+                .publish_test_source(0, &sample, RATE, 7);
             engine.sample_cache.lock().unwrap()[0] = Some(sample);
         }
         let mut mixer = acknowledged_mixer(&engine);
@@ -297,7 +297,7 @@ fn finite_accepted_refresh_executor_rejects_old_active_and_paused_native_source_
         fixture
             .engine
             .input_runtime_ownership
-            .publish_source(0, &replacement, RATE, 7);
+            .publish_test_source(0, &replacement, RATE, 7);
         fixture.mixer.load_sample(0, replacement);
         fixture.publish("finite-old-source-rejection");
         fixture.process_next();
@@ -364,7 +364,7 @@ fn accepted_refresh_coupled_master_replaces_foreign_pending_bootstrap_before_sou
     fixture
         .engine
         .input_runtime_ownership
-        .publish_source(1, &other, RATE, 1);
+        .publish_test_source(1, &other, RATE, 1);
     fixture.mixer.load_sample(1, other);
     fixture.mixer.set_pad_bpm(1, Some(80.0));
     fixture.transport.request_bootstrap(1);
@@ -812,7 +812,7 @@ fn accepted_refresh_rejects_old_active_and_paused_source_pins_after_current_bank
         fixture
             .engine
             .input_runtime_ownership
-            .publish_source(0, &replacement, RATE, 7);
+            .publish_test_source(0, &replacement, RATE, 7);
         fixture.mixer.load_sample(0, replacement);
         fixture.publish("new-current-source");
         fixture.process_next();
@@ -894,7 +894,18 @@ fn accepted_refresh_invalid_values_or_epoch_overflow_preserve_admitted_ownership
         );
         assert_eq!(fixture.binding().binding.authority_revision, original);
     }
-    fixture.engine.input_runtime_ownership.authority[0].store(u64::MAX, Ordering::Release);
+    fixture
+        .engine
+        .input_runtime_ownership
+        .authority_for_cell(
+            fixture
+                .engine
+                .input_runtime_ownership
+                .slot_snapshot(0)
+                .unwrap()
+                .cell(),
+        )
+        .store(u64::MAX, Ordering::Release);
     let maximum = fixture.binding();
     assert!(
         accepted_timing_refresh::enqueue(
@@ -1191,4 +1202,36 @@ fn accepted_captured_worker_prepares_actual_native_qm_without_recapturing_or_pub
     assert!(!raw.beat_frames().is_empty());
     assert_eq!(ticket.publication_status().unwrap(), "captured");
     assert!(fixture.consumer.is_empty());
+}
+
+#[test]
+fn accepted_refresh_accepts_same_source_binding_after_unrelated_publication_revision() {
+    let mut fixture = Fixture::new();
+    let binding = fixture.binding();
+    let ownership = &fixture.engine.input_runtime_ownership;
+    let other = ownership.slot_snapshot(215).unwrap();
+    let write = ownership
+        .prepare_slot_write_fixed(other, other.lifetime())
+        .unwrap();
+    ownership
+        .commit_slot_write_fixed(&write, || true, |_| {})
+        .unwrap();
+    assert!(binding.is_current());
+    let fresh = fixture.binding();
+    assert_ne!(binding.binding, fresh.binding);
+    assert!(binding.binding.same_projection(&fresh.binding));
+    let ticket = accepted_timing_refresh::enqueue(
+        &fixture.engine,
+        &fixture.producer,
+        &binding,
+        0.125,
+        Some(1.75),
+        None,
+    )
+    .unwrap();
+    fixture.process_next();
+    fixture.render(2);
+    assert_eq!(ticket.publication_status(), "accepted");
+    assert!(ticket.is_current());
+    assert_eq!(fixture.mixer.loop_region_frames(0), (1_000, Some(14_000)));
 }
