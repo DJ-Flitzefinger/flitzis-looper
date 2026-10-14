@@ -249,7 +249,9 @@ class StemGenerationJob:
                 replace(target, sample_id=source_id) if target is not None else None,
             )
 
-    def transfer_subscribers_to(self, target: StemGenerationJob) -> tuple[StemSubscriber, ...]:
+    def transfer_subscribers_to(
+        self, target: StemGenerationJob, *, require_active: bool = False
+    ) -> tuple[StemSubscriber, ...]:
         """Move exact interests after resolution without releasing their independent custody."""
         if target is self:
             return ()
@@ -261,6 +263,15 @@ class StemGenerationJob:
             if self._running or self._cancelled or self._disposed:
                 message = "Stem candidate has unsettled reads or no current interests"
                 raise RuntimeError(message)
+            if require_active and (
+                target._cancelled
+                or target._disposed
+                or target._phase not in {"resolved", "running"}
+            ):
+                # A worker may have returned between the control observation
+                # and these locks. Its already captured terminal delivery cannot
+                # acquire a new subscriber; keep the candidate intact for retry.
+                return ()
             if target._cancelled or target._disposed:
                 message = "Stem target job is no longer available"
                 raise RuntimeError(message)

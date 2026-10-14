@@ -1,5 +1,16 @@
 ## ADDED Requirements
 
+### Requirement: Pair-delayed duplicate generation retains a live completion route
+The existing shared generation owner SHALL retain each exact source/model/content subscriber while Pair settlement temporarily prevents canonical admission. It SHALL resolve that retained interest through a compatible completed set, an actually live transferable canonical job or the existing fair waiting/inference queue, without recapturing changed intent or creating a second job registry.
+
+#### Scenario: Canonical completion or removal while a duplicate waits for Pair
+- **GIVEN** a duplicate generation job retains original unresolved subscribers and a canonical job with the same complete fingerprint
+- **WHEN** Pair settlement delays their admission and the canonical completes, fails, cancels, disappears or retains a terminal delivery
+- **THEN** the duplicate SHALL NOT transfer interest into a terminal delivery whose participant image was already captured
+- **AND** while the actual prior worker or fenced settlement owns work, it SHALL retain the original candidate without starting overlapping inference
+- **AND** once those actual owners settle, it SHALL reuse compatible completed data or admit the same retained candidate through the existing queue exactly once
+- **AND** removing an overwritten target SHALL retire only its original subscriber after own Copy acceptance and SHALL preserve other subscribers, actual reader leases and terminal settlement owners
+
 ### Requirement: E11-06 Shared Stem Jobs Deduplicate Material And Model Intent
 The system SHALL use one physical offline job for concurrent verified equal
 material/model/configuration/shape/transform requests while retaining each

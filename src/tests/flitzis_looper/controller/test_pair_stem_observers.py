@@ -30,8 +30,14 @@ if TYPE_CHECKING:
     from flitzis_looper.controller.asset_lifecycle import ProjectAssetLifecycle
     from flitzis_looper.controller.pair_stem_mirror import PreparedPairStemMirror
     from flitzis_looper.controller.stem_generation import StemGenerationResult, StemProgressCallback
+    from flitzis_looper.controller.stem_intent import StemGenerationIntent
     from flitzis_looper.controller.stem_job import StemSubscriber
-    from flitzis_looper_audio import AudioEngine, OfflineStemSourceLease, PreparedSourceTicket
+    from flitzis_looper_audio import (
+        AudioEngine,
+        OfflineStemSourceLease,
+        PreparedSourceTicket,
+        PreparedStemPair,
+    )
 
 
 @dataclass
@@ -622,3 +628,304 @@ def test_distinct_canonical_job_keeps_partial_admission_visible_without_duplicat
     assert rig.queued == []
     job.cancel()
     canonical.cancel()
+
+
+def _add_independent_pad(rig: _ObserverRig) -> None:
+    rig.controller._project.sample_paths[86] = "samples/shared.wav"
+    rig.controller._project.pad_content[86] = PadContentIdentity(instance_id="d" * 32)
+    rig.accepts.add(86)
+
+
+def _queue_reused_pair(rig: _ObserverRig, monkeypatch: pytest.MonkeyPatch) -> None:
+    publish = rig.controller._queue_stem_publication
+
+    def accepted_publication(
+        sample_id: int,
+        entry: StemCacheEntry,
+        ticket: PreparedSourceTicket,
+        *,
+        prepared_pair: PreparedStemPair | None = None,
+        generation_intent: StemGenerationIntent | None = None,
+        own_source_version: str | None = None,
+        artifact_source_version: str | None = None,
+    ) -> bool:
+        accepted = publish(
+            sample_id,
+            entry,
+            ticket,
+            prepared_pair=prepared_pair,
+            generation_intent=generation_intent,
+            own_source_version=own_source_version,
+            artifact_source_version=artifact_source_version,
+        )
+        if accepted:
+            # This test's Native-publication substitute has accepted a real
+            # promoted artifact. Project the ready disk flag its ACK would set.
+            rig.controller._project.stem_cache[sample_id] = entry.model_copy(
+                update={"available": True}
+            )
+        return accepted
+
+    def prepare(
+        sample_id: int,
+        entry: StemCacheEntry,
+        ticket: PreparedSourceTicket,
+        **_options: object,
+    ) -> bool:
+        rig.queued.append((sample_id, entry, ticket))
+        rig.controller._project.stem_cache[sample_id] = entry
+        return True
+
+    monkeypatch.setattr(rig.controller, "_queue_stem_publication", accepted_publication)
+    monkeypatch.setattr(rig.controller, "_prepare_pair", prepare)
+
+
+def test_distinct_canonical_success_reuses_original_candidate_after_pair(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    rig = _rig(tmp_path, monkeypatch)
+    _add_independent_pad(rig)
+    canonical = _job(rig, 86)
+    _resolve_identity(rig, canonical, monkeypatch)
+    job = _job(rig)
+    _subscribe(rig, job, 36)
+    original = job.subscribers()[0]
+    request = job.request
+    mirror, acknowledgement = _prepare(rig.controller)
+    rig.controller._pair_deferred_sample_ids = frozenset((0, 215))
+    tasks: list[Callable[[], None]] = []
+    rig.controller._stem_task_runner = tasks.append
+    guard = _resolve_identity(rig, job, monkeypatch)
+    _queue_reused_pair(rig, monkeypatch)
+    rig.controller._poll_generation_events()
+    identity = rig.controller._pair_held_generation_events[job, "identity"]
+    assert identity.admission_route == "canonical_pending"
+    assert len(tasks) == 1
+    tasks.pop()()
+    rig.controller._poll_generation_events()
+    rig.controller._poll_generation_events()
+    assert cast("str | None", identity.admission_route) == "reuse"
+    assert [sample_id for sample_id, _entry, _ticket in rig.queued] == [86, 36]
+    assert job.request is request
+    assert job.processing_files is guard
+    assert job.subscribers()[0] is original
+    assert not cast("_Lease", original.source_lease).released
+    assert not job.cancel_event.is_set()
+    _move(rig, mirror, acknowledgement)
+    rig.controller._pair_deferred_sample_ids = frozenset()
+    rig.controller._poll_generation_events()
+    rig.controller._poll_generation_events()
+    assert [sample_id for sample_id, _entry, _ticket in rig.queued] == [86, 36, 215]
+    assert len(rig.backend.requests) == 1
+    assert tasks == []
+    assert rig.queued[0][1].cache_dir == rig.queued[-1][1].cache_dir
+    assert cast("_Lease", original.source_lease).released
+    assert not rig.controller._jobs
+    assert not rig.controller._pair_held_generation_events
+
+
+def test_canonical_worker_return_between_observation_and_transfer_keeps_candidate(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    rig = _rig(tmp_path, monkeypatch)
+    _add_independent_pad(rig)
+    canonical = _job(rig, 86)
+    _resolve_identity(rig, canonical, monkeypatch)
+    job = _job(rig)
+    original = job.subscribers()[0]
+    _resolve_identity(rig, job, monkeypatch)
+    tasks: list[Callable[[], None]] = []
+    rig.controller._stem_task_runner = tasks.append
+    transfer = job.transfer_subscribers_to
+
+    def settle_before_transfer(
+        target: StemGenerationJob, *, require_active: bool = False
+    ) -> tuple[StemSubscriber, ...]:
+        assert target is canonical
+        assert require_active
+        assert target.begin() is not None
+        assert target.finish_read()
+        return transfer(target, require_active=require_active)
+
+    monkeypatch.setattr(job, "transfer_subscribers_to", settle_before_transfer)
+    rig.controller._poll_generation_events()
+    identity = rig.controller._pair_held_generation_events[job, "identity"]
+    assert identity.admission_route == "canonical_pending"
+    assert canonical.phase == "settled"
+    own = job.subscribers()[0]
+    assert own.source is original.source
+    assert own.source_lease is original.source_lease
+    assert own.retirement is original.retirement
+    assert not job.cancel_event.is_set()
+    assert not cast("_Lease", original.source_lease).released
+    assert 0 not in {subscriber.sample_id for subscriber in canonical.subscribers()}
+    assert len(tasks) == 1
+    canonical.cancel()
+    job.cancel()
+
+
+def _settle_unavailable_canonical(
+    rig: _ObserverRig,
+    canonical: StemGenerationJob,
+    terminal: str,
+    tasks: list[Callable[[], None]],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    canonical_task = tasks.pop()
+    if terminal == "removed":
+        rig.controller._cancel_jobs(86)
+        rig.controller._poll_generation_events()
+        assert tasks == []
+        assert canonical.request.cache_dir in rig.controller._inference_jobs
+        canonical_task()
+    elif terminal == "error":
+        rig.backend.error = RuntimeError("Canonical inference failed")
+        canonical_task()
+        rig.backend.error = None
+    else:
+        generate = rig.backend.generate
+
+        def cancelled_generate(
+            resolved: StemGenerationRequest, progress: StemProgressCallback
+        ) -> StemGenerationResult:
+            assert canonical.running
+            source = canonical.source
+            rig.controller._cancel_jobs(86)
+            assert canonical.source is source
+            assert canonical.running
+            return generate(resolved, progress)
+
+        with monkeypatch.context() as patch:
+            patch.setattr(rig.backend, "generate", cancelled_generate)
+            canonical_task()
+
+
+@pytest.mark.parametrize("terminal", ["error", "cancelled", "removed"])
+def test_unavailable_canonical_rejoins_same_resolved_candidate_after_worker_settlement(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    terminal: str,
+) -> None:
+    rig = _rig(tmp_path, monkeypatch)
+    _add_independent_pad(rig)
+    canonical = _job(rig, 86)
+    _resolve_identity(rig, canonical, monkeypatch)
+    job = _job(rig)
+    _subscribe(rig, job, 36)
+    original = job.subscribers()[0]
+    request = job.request
+    mirror, acknowledgement = _prepare(rig.controller)
+    rig.controller._pair_deferred_sample_ids = frozenset((0, 215))
+    tasks: list[Callable[[], None]] = []
+    rig.controller._stem_task_runner = tasks.append
+    guard = _resolve_identity(rig, job, monkeypatch)
+    rig.controller._poll_generation_events()
+    identity = rig.controller._pair_held_generation_events[job, "identity"]
+    _settle_unavailable_canonical(rig, canonical, terminal, tasks, monkeypatch)
+    rig.controller._poll_generation_events()
+    assert canonical.request.cache_dir not in rig.controller._inference_jobs
+    rig.controller._poll_generation_events()
+    assert identity.admission_route == "inference"
+    assert identity.canonical is None
+    assert len(tasks) == 1
+    assert job.request is request
+    assert job.processing_files is guard
+    assert job.subscribers()[0] is original
+    assert not job.cancel_event.is_set()
+    assert not cast("_Lease", original.source_lease).released
+    _move(rig, mirror, acknowledgement)
+    rig.controller._pair_deferred_sample_ids = frozenset()
+    rig.controller._poll_generation_events()
+    moved = next(subscriber for subscriber in job.subscribers() if subscriber.sample_id == 215)
+    assert moved.source is original.source
+    assert moved.source_lease is original.source_lease
+    assert moved.retirement is original.retirement
+    assert moved.intent is rig.controller._generation_intents[215]
+    assert moved.intent is not None
+    assert original.intent is not None
+    assert moved.intent.admission_sequence == original.intent.admission_sequence
+    assert moved.intent.material_key == original.intent.material_key
+    assert moved.intent.signature == original.intent.signature
+    assert rig.controller._intents.is_current(moved.intent)
+    tasks.pop()()
+    rig.controller._poll_generation_events()
+    rig.controller._poll_generation_events()
+    assert [sample_id for sample_id, _entry, _ticket in rig.queued] == [36, 215]
+    assert rig.backend.requests[-1] is job.resolved_request
+    assert tasks == []
+    assert not rig.controller._jobs
+    assert not rig.controller._pair_held_generation_events
+
+
+def _assert_held_canonical_interest(
+    rig: _ObserverRig,
+    canonical: StemGenerationJob,
+    identity: stems._StemJobEventDelivery,
+    own: StemSubscriber,
+    terminal: str,
+) -> None:
+    assert 86 not in {subscriber.sample_id for subscriber in canonical.subscribers()}
+    assert len(rig.backend.requests) == 1
+    assert terminal in {"error", "success"}
+    if terminal == "error":
+        assert identity.admission_route == "canonical_pending"
+        assert not cast("_Lease", own.source_lease).released
+        assert 86 not in rig.controller._session.stem_generation_errors
+    else:
+        assert identity.admission_route == "reuse"
+        assert [sample_id for sample_id, _entry, _ticket in rig.queued] == [36, 86]
+
+
+@pytest.mark.parametrize("terminal", ["success", "error"])
+def test_settlement_fenced_canonical_never_absorbs_uncaptured_terminal_interest(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    terminal: str,
+) -> None:
+    rig = _rig(tmp_path, monkeypatch)
+    _add_independent_pad(rig)
+    canonical = _job(rig)
+    _subscribe(rig, canonical, 36)
+    original = canonical.subscribers()[0]
+    mirror, acknowledgement = _prepare(rig.controller)
+    job = _job(rig, 86)
+    own = job.subscribers()[0]
+    rig.controller._pair_deferred_sample_ids = frozenset((0, 215))
+    tasks: list[Callable[[], None]] = []
+    rig.controller._stem_task_runner = tasks.append
+    _resolve_identity(rig, canonical, monkeypatch)
+    _resolve_identity(rig, job, monkeypatch)
+    _queue_reused_pair(rig, monkeypatch)
+    rig.controller._poll_generation_events()
+    identity = rig.controller._pair_held_generation_events[job, "identity"]
+    assert identity.remaining == ()
+    assert identity.admission_route == "canonical_pending"
+    assert job.subscribers()[0].source is own.source
+    assert len(tasks) == 1
+    if terminal == "error":
+        rig.backend.error = RuntimeError("Canonical terminal is held")
+    tasks.pop()()
+    rig.backend.error = None
+    rig.controller._poll_generation_events()
+    held = rig.controller._pair_held_generation_events[canonical, "terminal"]
+    assert held.remaining == (original,)
+    rig.controller._poll_generation_events()
+    assert tasks == []
+    _assert_held_canonical_interest(rig, canonical, identity, own, terminal)
+    _move(rig, mirror, acknowledgement)
+    rig.controller._pair_deferred_sample_ids = frozenset()
+    rig.controller._poll_generation_events()
+    rig.controller._poll_generation_events()
+    if terminal == "error":
+        assert cast("str | None", identity.admission_route) == "inference"
+        assert len(tasks) == 1
+        tasks.pop()()
+        rig.controller._poll_generation_events()
+        assert [sample_id for sample_id, _entry, _ticket in rig.queued] == [86]
+    else:
+        assert [sample_id for sample_id, _entry, _ticket in rig.queued] == [36, 86, 215]
+    assert tasks == []
+    assert not rig.controller._jobs
+    assert not rig.controller._pair_held_generation_events

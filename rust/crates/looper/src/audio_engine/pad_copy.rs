@@ -1,4 +1,4 @@
-//! Empty-target content copies: sealed preparation and a distinct callback receipt.
+//! Content copies: sealed original participants and a distinct callback receipt.
 //! Disk/evidence/assignment owners never enter the realtime payload.
 
 use super::committed_stem_residency::{SelectedStemIdentity, StemModeReceipt};
@@ -46,6 +46,10 @@ pub(super) struct CopyRtGuard {
     pub(super) target_authority: u64,
     pub(super) target_runtime: u64,
     pub(super) target_placement: SlotSnapshot,
+    pub(super) target_binding: Option<InputPadBinding>,
+    pub(super) target_source_generation: u64,
+    pub(super) target_selection_fences:
+        [Option<(Arc<AtomicU64>, u64)>; super::pad_pair::MAX_PAIR_SELECTION_FENCES],
     pub(super) reservation: u64,
     pub(super) phase: Arc<AtomicU8>,
     pub(super) ownership: Arc<InputRuntimeOwnership>,
@@ -65,6 +69,35 @@ impl std::fmt::Debug for CopyRtGuard {
 }
 
 impl CopyRtGuard {
+    fn target_fields_current(&self) -> bool {
+        self.target_selection_fences.iter().all(|fence| {
+            fence
+                .as_ref()
+                .is_none_or(|(epoch, expected)| epoch.load(Ordering::Acquire) == *expected)
+        }) && match self.target_binding {
+            Some(binding) => {
+                self.ownership.current(self.target, binding)
+                    && self
+                        .ownership
+                        .binding_source_generation(self.target, binding)
+                        == Some(self.target_source_generation)
+                    && self.acknowledgements.current_for_binding(
+                        &self.ownership,
+                        self.target,
+                        binding,
+                    ) == binding
+                        .accepted
+                        .map_or(0, |projection| projection.publication_epoch)
+            }
+            None => {
+                self.target_placement.lifetime() == 0
+                    && self
+                        .ownership
+                        .source_cell_empty(self.target_placement.cell())
+            }
+        }
+    }
+
     pub(super) fn stable_current(&self) -> bool {
         let cell = self.target_placement.cell();
         self.ownership
@@ -74,7 +107,7 @@ impl CopyRtGuard {
                 .placement
                 .is_some_and(|snapshot| self.ownership.slot_snapshot_fields_current(snapshot))
             && self.ownership.copy_reservation(self.target) == self.reservation
-            && self.ownership.source_cell_empty(cell)
+            && self.target_fields_current()
             && self
                 .ownership
                 .authority_for_cell(cell)
@@ -124,7 +157,7 @@ impl CopyRtGuard {
     pub(super) fn current(&self) -> bool {
         self.ownership.copy_reservation(self.target) == self.reservation
             && self.ownership.slot_snapshot_current(self.target_placement)
-            && self.ownership.copy_target_empty(self.target)
+            && self.target_fields_current()
             && self.ownership.authority_revision(self.target) == self.target_authority
             && self.ownership.runtime_revision(self.target) == self.target_runtime
             && self.target_epoch.load(Ordering::Acquire) == self.captured_target_epoch
@@ -205,10 +238,23 @@ pub(crate) struct PadCopyRtWork {
     pub(super) authority_revision: u64,
     pub(super) guard: CopyRtGuard,
     pub(super) intent: CopyRtIntent,
-    // Residual owners of a formerly-used empty slot retire with this whole payload.
+    // Displaced bank and stem readers retire with this whole payload.
+    pub(super) retired_sample: Option<SampleBuffer>,
     pub(super) retired_receipt: Option<StemModeReceipt>,
     pub(super) retired_stems: Option<PreparedStemSet>,
     pub(super) retired_outgoing: Option<PreparedStemSet>,
+}
+
+impl PadCopyRtWork {
+    pub(crate) fn retirement_slots_needed(&self) -> usize {
+        if self.guard.target_binding.is_some() {
+            // Each old voice owns input plus up to two frozen stem readers;
+            // the old Hold and this aggregate each need their own retirement entry.
+            3 * super::constants::MAX_VOICES + 2
+        } else {
+            1
+        }
+    }
 }
 
 mod control;

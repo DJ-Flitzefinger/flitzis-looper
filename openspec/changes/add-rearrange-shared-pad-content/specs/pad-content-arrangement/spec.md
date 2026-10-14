@@ -72,6 +72,19 @@ The waveform Controller SHALL own bounded opaque Native Hold tickets and the phy
 ### Requirement: Pair mutation preserves living playback and selection
 The system SHALL apply Move to empty or Swap to occupied target as one guarded native/content/project transaction preserving both surviving lifetimes, voices, cursor, DSP/history/FIFO/filter/ramps and selected content without restart.
 
+#### Scenario: Occupied Copy requires the exact original target and one stopped successor
+- **GIVEN** independent loaded contents A and B and their exact current Native bindings
+- **WHEN** an occupied-target Copy prepares A's complete musical snapshot for B's slot
+- **THEN** capture SHALL require B's original opaque engine-owned binding, lifetime, physical placement, source, timing, preparation, authority, runtime and selection guards; a boolean overwrite flag or equal material SHALL NOT substitute for B
+- **AND** one existing Copy mutation claim SHALL retire only B's living cohort and caused Hold effects, advance the target binding epoch and install a fresh stopped C with independent mutable state and shared immutable A backing
+- **AND** A's voices, history, DSP, cursor, holds and selection SHALL remain unchanged
+- **AND** queued actions and feedback for B SHALL remain bound to B and SHALL NOT control C after replacement
+- **AND** all voice, source, outgoing-stem and receipt owners removed by the claim SHALL leave through prepared bounded retirement capacity outside realtime
+- **AND** transient Pending or insufficient retirement capacity SHALL retain the identical complete payload for bounded retry; stale B, failed capture or preclaim cancellation SHALL leave both contents unchanged
+- **AND** until C's own complete Native acknowledgement and control mirror are reconciled, target observers and conflicting admissions SHALL remain fenced, old/new custody SHALL remain owned and no durable success or rollback SHALL be reported
+- **AND** only after that own acknowledgement SHALL the original target's controller owners and job subscriber be retired; shared jobs with other subscribers SHALL remain alive and C SHALL receive its own copied registration rather than B's receipt
+- **AND** the existing complete config and asset transaction SHALL preserve unrelated newer intent and retained before/after owners through failed postclaim settlement, with restart uncertainty remaining explicitly fenced until verified recovery and fresh Native acceptance
+
 #### Scenario: Current content permissions survive placement without relabeling
 - **GIVEN** a living content owns current Native source, timing, window, preparation, selection and playback permissions
 - **WHEN** a complete guarded Move or Swap changes only its placement

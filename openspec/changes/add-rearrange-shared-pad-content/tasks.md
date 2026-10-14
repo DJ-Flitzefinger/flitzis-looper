@@ -18,6 +18,9 @@ Use canonical program/coverage, not a new parallel order. R0 is docs/spec-only.
   native caused PauseEffect/cohort/control revision follows or fences captured lifetime.
   Execute all R2 HC cases, release-before-ACK, both layout/release orderings, saturation,
   superseding intent, repeated mutations/ABA/stale telemetry/ACK; separate closure beforeR3/R4.
+  Internal occupied Copy uses exact target binding and one fresh stopped successor;
+  retain dedicated journal/restart recovery and full R2 selection/Hold acceptance
+  before public gestures. Bounded Native/controller proofs do not close this parent.
 - [ ] R3: modeOFF/warning/help/left-right gestures/target feedback; branch before
   trigger/stop, cancel/self/invalid/empty no-op, existing control tick outside release
   even after editor close/focus/selection; global mute/latest volume regression.

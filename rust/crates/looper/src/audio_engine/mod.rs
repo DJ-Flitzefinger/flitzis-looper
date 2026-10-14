@@ -2432,14 +2432,16 @@ impl AudioEngine {
         prepared.finish(&*slf.try_borrow()?, source_ticket, &producer)
     }
 
-    /// Capture musical intent and reserve an empty target without publishing its epochs.
+    /// Capture musical intent and the exact original target without publishing its epochs.
+    #[pyo3(signature = (binding, target_id, intent_json, *, target_binding=None))]
     pub fn capture_pad_copy(
         &self,
         binding: &InputRuntimePadBinding,
         target_id: usize,
         intent_json: &str,
+        target_binding: Option<&InputRuntimePadBinding>,
     ) -> PyResult<CapturedPadCopy> {
-        pad_copy::capture(self, binding, target_id, intent_json)
+        pad_copy::capture(self, binding, target_id, intent_json, target_binding)
     }
 
     /// Prepare on the existing two-worker lane without retaining an AudioEngine Python borrow.

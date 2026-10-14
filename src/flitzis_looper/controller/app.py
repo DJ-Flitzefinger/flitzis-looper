@@ -24,6 +24,7 @@ if TYPE_CHECKING:
 
     from flitzis_looper.controller.base import BaseController
     from flitzis_looper.controller.stem_generation import StemGenerationBackend
+    from flitzis_looper.copy_snapshot import CopySnapshot
     from flitzis_looper.ui.context import WaveformEditorActions
     from flitzis_looper_audio import PadCopyTicket
 
@@ -122,6 +123,7 @@ class AppController:
             self._assets,
             stem_task_runner=self.stems._stem_task_runner,
             on_copy_committed=self._on_copy_committed,
+            on_target_removed=self._on_copy_target_removed,
             can_admit=lambda: not self.pairs.active,
         )
         self.transport.bind_pad_edit_guard(self.ensure_not_copy_target)
@@ -243,7 +245,9 @@ class AppController:
 
     def on_frame_render(self) -> None:
         self.pairs.poll()
+        self._sync_arrangement_observers()
         self.arrangement.poll()
+        self._sync_arrangement_observers()
         for controller in self._controllers:
             controller.on_frame_render()
 
@@ -251,16 +255,21 @@ class AppController:
         """Poll runtime event sources and update controller-owned state projections."""
         self.transport.waveform.poll_holds()
         self.pairs.poll()
+        self._sync_arrangement_observers()
         self.arrangement.poll()
-        deferred = self.pairs.observer_fenced_sample_ids
-        for component in (self.transport, self.loader, self.accepted_timing, self.stems):
-            component._pair_deferred_sample_ids = deferred
+        self._sync_arrangement_observers()
         self.loader.poll_loader_events()
         self.material_migration.poll()
         self._poll_audio_messages()
         self.accepted_timing.poll()
         self.transport.residency.poll()
         self.arrangement.poll()
+        self._sync_arrangement_observers()
+
+    def _sync_arrangement_observers(self) -> None:
+        deferred = self.pairs.observer_fenced_sample_ids | self.arrangement.fenced_sample_ids
+        for component in (self.transport, self.loader, self.accepted_timing, self.stems):
+            component._pair_deferred_sample_ids = deferred
 
     def ensure_not_copy_target(self, sample_id: int) -> None:
         """Reject participant gestures while a complete arrangement owns the slot."""
@@ -273,6 +282,20 @@ class AppController:
     def _ensure_global_key_lock_edit_allowed(self) -> None:
         self.arrangement.ensure_global_key_lock_edit_allowed()
         self.pairs.ensure_global_key_lock_edit_allowed()
+
+    def _on_copy_target_removed(self, sample_id: int, predecessor: CopySnapshot) -> None:
+        """Retire original target control owners only after its complete own Native ACK."""
+        validate_sample_id(sample_id)
+        original = predecessor.projected().source_identity.instance_id
+        identity = self._project.pad_content[sample_id]
+        if identity is None or identity.instance_id != original:
+            message = "Acknowledged Copy lost its original target control projection"
+            raise RuntimeError(message)
+        self._sync_arrangement_observers()
+        self.transport.residency.cancel(sample_id)
+        self.accepted_timing.cancel(sample_id)
+        self.loader._clear_analysis_task_state(sample_id)
+        self.stems.retire_overwritten_native_state(sample_id, original_content_id=original)
 
     def _on_copy_committed(self, sample_id: int, ticket: PadCopyTicket) -> None:
         """Project the durable stopped target before its Native reservation is released."""
@@ -366,7 +389,7 @@ class AppController:
             return True
         if sample_id is None:
             return True
-        if sample_id in self.pairs.observer_fenced_sample_ids:
+        if sample_id in self.pairs.observer_fenced_sample_ids | self.arrangement.fenced_sample_ids:
             self._retain_content_feedback(msg)
             return True
         handlers = {

@@ -163,6 +163,7 @@ class _DiskSelectionSettlement:
     lease: ProjectAssetLease
     previous_lease: ProjectAssetLease | None
     retirement: AssetRetirementReservation
+    content_retired: bool = False
 
 
 @dataclass(slots=True)
@@ -322,6 +323,47 @@ class StemController(BaseController):  # noqa: PLR0904
     def _ensure_pad_edit_allowed(self, sample_id: int) -> None:
         if self._pad_edit_guard is not None:
             self._pad_edit_guard(sample_id)
+
+    def retire_overwritten_native_state(self, sample_id: int, *, original_content_id: str) -> None:
+        """Retire predecessor control owners after its occupied Copy's own Native ACK.
+
+        The coordinator keeps this target observer-fenced and its predecessor
+        project image intact until retirement completes. Retained Native tickets
+        and worker readers settle by their existing rules; no new slot command
+        or durable musical assignment is issued here.
+        """
+        validate_sample_id(sample_id)
+        if (
+            sample_id not in getattr(self, "_pair_deferred_sample_ids", ())
+            or self._content_id(sample_id) != original_content_id
+        ):
+            message = "Overwritten stem retirement requires the fenced original content"
+            raise RuntimeError(message)
+        self._committed_residency.cancel(sample_id)
+        self._cancel_jobs(sample_id)
+        self._pair_preparations.cancel(sample_id)
+        settlement = self._disk_selection_settlements.get(sample_id)
+        if settlement is not None:
+            # A committed disk selection cannot be discarded as a precommit
+            # worker. Keep its exact durable/lease owners until the coordinator's
+            # superseding config has been written and normal settlement can run.
+            settlement.content_retired = True
+            settlement.request.cancelled.set()
+        pending = self._pending_stem_publications.get(sample_id)
+        retry = self._publication_retries.pending.get(sample_id)
+        owners = (pending, retry.pending if retry is not None else None)
+        for index, owner in enumerate(owners):
+            if owner is not None and all(owner is not prior for prior in owners[:index]):
+                self._release_pending_stems(owner)
+        self._pending_stem_publications.pop(sample_id, None)
+        self._demands.pop(sample_id, None)
+        self._resident_pairs.discard(sample_id)
+        self._pair_release_ordered.discard(sample_id)
+        self._fenced_pair_ids.discard(sample_id)
+        self._pending_full_mix_releases.discard(sample_id)
+        self._residency_errors.pop(sample_id, None)
+        self._clear_stem_generation_state(sample_id)
+        self._clear_stem_generation_messages(sample_id)
 
     def project_copied_native_state(
         self,
@@ -1803,11 +1845,11 @@ class StemController(BaseController):  # noqa: PLR0904
         if resolved is None:
             message = "Stem identity worker returned no resolved request"
             raise RuntimeError(message)
+        if delivery.admission_route is None:
+            self._select_generation_admission(delivery, resolved)
         if delivery.admission_route == "canonical_pending":
             self._advance_canonical_admission(delivery, resolved)
             return
-        if delivery.admission_route is None:
-            self._select_generation_admission(delivery, resolved)
         if delivery.admission_route == "reuse":
             promotion = delivery.promotion
             assert promotion is not None
@@ -1834,30 +1876,35 @@ class StemController(BaseController):  # noqa: PLR0904
         if event.cache_dir in self._reuse_only_jobs:
             delivery.admission_route = "unavailable"
             return
-        shared = next(
-            (
-                existing
-                for path, existing in self._jobs.items()
-                if path != event.cache_dir
-                and job.generation_fingerprint is not None
-                and existing.generation_fingerprint == job.generation_fingerprint
-                and any(self._intent_current(sub.intent) for sub in existing.subscribers())
-                and path in self._inference_jobs | self._waiting_jobs
-            ),
-            None,
-        )
+        shared = self._shared_generation_job(job)
         if shared is not None:
-            if delivery.remaining:
-                delivery.canonical = shared
-                delivery.admission_route = "canonical_pending"
-                self._report_canonical_admission_pending(delivery)
-                return
-            job.transfer_subscribers_to(shared)
-            self._discard_generation_artifacts(event.sample_id, event.cache_dir)
+            delivery.canonical = shared
+            delivery.admission_route = "canonical_pending"
             return
         delivery.admission_route = "inference"
         self._waiting_jobs.add(event.cache_dir)
         self._start_waiting_generations()
+
+    def _shared_generation_job(self, job: StemGenerationJob) -> StemGenerationJob | None:
+        """Find actual equal-fingerprint work, including retained terminal custody."""
+        return next(
+            (
+                existing
+                for path, existing in self._jobs.items()
+                if existing is not job
+                and job.generation_fingerprint is not None
+                and existing.generation_fingerprint == job.generation_fingerprint
+                and path in self._inference_jobs | self._waiting_jobs
+                and self._canonical_generation_interests_current(existing)
+            ),
+            None,
+        )
+
+    def _canonical_generation_interests_current(self, job: StemGenerationJob) -> bool:
+        """Old readers serialize new work but cannot lend obsolete intent authority."""
+        return not job.cancel_event.is_set() and any(
+            self._intent_current(sub.intent) for sub in job.subscribers()
+        )
 
     def _retain_reuse_admission(
         self, delivery: _StemJobEventDelivery, compatible: StemCacheEntry
@@ -1893,13 +1940,31 @@ class StemController(BaseController):  # noqa: PLR0904
             self._reuse_resolved_generation(job, compatible, resolved, current)
             return
         canonical = delivery.canonical
-        if (
-            not delivery.remaining
-            and canonical is not None
+        retained = (
+            canonical is not None
             and self._jobs.get(canonical.request.cache_dir) is canonical
             and canonical.request.cache_dir in self._inference_jobs | self._waiting_jobs
+            and self._canonical_generation_interests_current(canonical)
+        )
+        if not retained:
+            # The candidate still owns its original resolved source/model and
+            # subscribers. Rejoin existing admission instead of waiting forever
+            # for a disappeared physical owner or manufacturing a new request.
+            delivery.canonical = None
+            delivery.admission_route = None
+            self._select_generation_admission(delivery, resolved)
+            canonical = delivery.canonical
+            if canonical is None:
+                return
+        assert canonical is not None
+        deferred = getattr(self, "_pair_deferred_sample_ids", ())
+        if (
+            not delivery.remaining
+            and canonical.phase in {"resolved", "running"}
+            and (canonical, "terminal") not in self._pair_held_generation_events
+            and not any(sub.sample_id in deferred for sub in canonical.subscribers())
+            and job.transfer_subscribers_to(canonical, require_active=True)
         ):
-            job.transfer_subscribers_to(canonical)
             self._discard_generation_artifacts(job.request.sample_id, job.request.cache_dir)
             delivery.admission_route = "inference"
             return
@@ -2578,7 +2643,8 @@ class StemController(BaseController):  # noqa: PLR0904
             with settlement.retirement.activate():
                 prepared.select()
                 current = (
-                    self._project.stem_cache[sample_id] is settlement.entry
+                    not settlement.content_retired
+                    and self._project.stem_cache[sample_id] is settlement.entry
                     and self._content_id(sample_id) == request.content_id
                     and self._project.sample_paths[sample_id] == request.source_path
                 )

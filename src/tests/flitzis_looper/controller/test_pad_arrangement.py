@@ -23,6 +23,7 @@ if TYPE_CHECKING:
 
     from flitzis_looper.controller.asset_lifecycle import (
         AssetRetirementReservation,
+        AssignmentPublicationPlan,
         ProjectAssetLifecycle,
     )
     from flitzis_looper.controller.pad_arrangement import AssignmentImage
@@ -68,16 +69,23 @@ class _ScriptedNative:
         self.publish_count = 0
         self.cancel_count = 0
         self.finish_count = 0
+        self.target_binding: InputRuntimePadBinding | None = None
 
     def current_input_runtime_pad_binding(self, sample_id: int) -> InputRuntimePadBinding | None:
         return self.bindings.get(sample_id)
 
     def capture_pad_copy(
-        self, source_binding: InputRuntimePadBinding, target_id: int, intent_json: str
+        self,
+        source_binding: InputRuntimePadBinding,
+        target_id: int,
+        intent_json: str,
+        *,
+        target_binding: InputRuntimePadBinding | None = None,
     ) -> CapturedPadCopy:
         assert source_binding is self.bindings[0]
         assert target_id == 215
         self.capture_count += 1
+        self.target_binding = target_binding
         self.envelope = json.loads(intent_json)
         return cast("CapturedPadCopy", self.captured)
 
@@ -152,6 +160,8 @@ class _Assets:
         self.published: list[AssignmentImage] = []
         self.prepare_error: RuntimeError | None = None
         self.publish_failures = 0
+        self.publication_plans: list[_Publication] = []
+        self.planned_retirement_failures = 0
 
     def reserve(self) -> AssetRetirementReservation:
         return cast("AssetRetirementReservation", self.retirement)
@@ -179,10 +189,40 @@ class _Assets:
             raise RuntimeError(message)
         self.published.append(image)
 
+    def prepare_assignment_publication(self, image: AssignmentImage) -> AssignmentPublicationPlan:
+        plan = _Publication(self, image)
+        plan.retirement_failures = self.planned_retirement_failures
+        self.planned_retirement_failures = 0
+        self.publication_plans.append(plan)
+        return cast("AssignmentPublicationPlan", plan)
+
     @staticmethod
     def release_assignment_image(image: AssignmentImage) -> None:
         for _, lease in image[1].values():
             lease.release()
+
+
+class _Publication:
+    def __init__(self, assets: _Assets, image: AssignmentImage) -> None:
+        self.assets = assets
+        self.image = image
+        self.applied = False
+        self.settled = False
+        self.retirement_failures = 0
+
+    @property
+    def owns_unpublished_image(self) -> bool:
+        return not self.applied
+
+    def apply(self) -> None:
+        if not self.applied:
+            self.assets.publish_assignment_image(self.image)
+            self.applied = True
+        if self.retirement_failures:
+            self.retirement_failures -= 1
+            message = "original retirement settlement pending"
+            raise RuntimeError(message)
+        self.settled = True
 
 
 class _Jobs:
@@ -211,6 +251,7 @@ def _harness(
     tmp_path: Path,
     *,
     callback: Callable[[int, PadCopyTicket], None] | None = None,
+    removed: Callable[[int, object], None] | None = None,
 ) -> _Harness:
     project = ProjectState(key_lock=True, selected_pad=0, volume=0.7)
     project.sample_paths[0] = "samples/source.wav"
@@ -252,6 +293,7 @@ def _harness(
         cast("ProjectAssetLifecycle", assets),
         stem_task_runner=jobs,
         on_copy_committed=callback,
+        on_target_removed=removed,
     )
     return _Harness(project, persistence, session, native, assets, jobs, controller)
 
@@ -966,3 +1008,180 @@ def test_another_writer_fence_blocks_copy_without_releasing_its_owner(tmp_path: 
     assert harness.native.capture_count == 0
     _assert_writer_fenced(harness)
     harness.persistence.release_migration(owner)
+
+
+def _occupy_target(harness: _Harness) -> PadContentIdentity:
+    identity = PadContentIdentity(instance_id="c" * 32, material_id="d" * 32)
+    harness.project.sample_paths[215] = "samples/target.wav"
+    harness.project.pad_content[215] = identity
+    harness.project.manual_bpm[215] = 88.75
+    harness.project.pad_timing_intent[215] = "manual"
+    harness.project.pad_gain_db[215] = 3.0
+    harness.native.bindings[215] = cast("InputRuntimePadBinding", object())
+    harness.session.active_sample_ids.add(215)
+    harness.session.paused_sample_ids.add(215)
+    return identity
+
+
+def test_occupied_copy_retains_original_binding_and_waits_for_own_ack_before_retirement(
+    tmp_path: Path,
+) -> None:
+    events: list[str] = []
+
+    def removed(sample_id: int, predecessor: object) -> None:
+        assert sample_id == 215
+        assert harness.native.complete_ack
+        assert harness.project.pad_content[215] == original
+        assert not harness.persistence.config_path.exists()
+        pending = harness.controller._copy
+        assert pending is not None
+        assert predecessor is pending.predecessor
+        events.append("removed")
+
+    def committed(sample_id: int, ticket: PadCopyTicket) -> None:
+        assert harness.project.pad_content[sample_id] != original
+        assert harness.persistence.config_path.exists()
+        assert events == ["removed"]
+        events.append("committed")
+
+    harness = _harness(tmp_path, callback=committed, removed=removed)
+    original = _occupy_target(harness)
+    source_before = harness.project.pad_content[0]
+    assert harness.controller.copy_overwrite(0, 215)
+    assert harness.native.target_binding is harness.native.bindings[215]
+    assert harness.controller.fenced_sample_ids == frozenset({215})
+    harness.jobs.run()
+    harness.controller.poll()
+    assert harness.project.pad_content[215] == original
+    assert 215 in harness.session.active_sample_ids
+    assert not events
+    _assert_writer_fenced(harness)
+    harness.native.complete_ack = True
+    harness.controller.poll()
+    _assert_complete_copy(harness)
+    assert events == ["removed", "committed"]
+    assert harness.project.pad_content[0] == source_before
+
+
+@pytest.mark.parametrize("operation", ["cancel", "changed_identity", "removed", "changed_intent"])
+def test_occupied_copy_preclaim_failure_preserves_both_contents_and_never_retires_target(
+    tmp_path: Path,
+    operation: str,
+) -> None:
+    retired: list[int] = []
+    harness = _harness(tmp_path, removed=lambda sample_id, _old: retired.append(sample_id))
+    _occupy_target(harness)
+    assert harness.controller.copy_overwrite(0, 215)
+    harness.jobs.run()
+    if operation == "changed_identity":
+        harness.project.pad_content[215] = PadContentIdentity(
+            instance_id="e" * 32, material_id="d" * 32
+        )
+    elif operation == "removed":
+        harness.project.pad_content[215] = None
+        harness.project.sample_paths[215] = None
+    elif operation == "changed_intent":
+        harness.project.manual_bpm[215] = 91.25
+    before = harness.project.model_dump_json()
+    if operation == "cancel":
+        assert not harness.controller.cancel()
+        harness.controller.poll()
+    else:
+        harness.controller.poll()
+    assert not harness.controller.active
+    assert harness.project.model_dump_json() == before
+    assert not retired
+    assert harness.native.publish_count == 0
+    assert not harness.persistence.config_path.exists()
+
+
+def test_occupied_copy_postclaim_cleanup_failure_retains_own_retry_and_original_custody(
+    tmp_path: Path,
+) -> None:
+    attempts: list[int] = []
+
+    def removed(sample_id: int, _predecessor: object) -> None:
+        attempts.append(sample_id)
+        if len(attempts) == 1:
+            message = "original owner settlement pending"
+            raise RuntimeError(message)
+
+    harness = _harness(tmp_path, removed=removed)
+    original = _occupy_target(harness)
+    assert harness.controller.copy_overwrite(0, 215)
+    harness.jobs.run()
+    harness.controller.poll()
+    harness.native.complete_ack = True
+    harness.controller.poll()
+    assert harness.controller.active
+    assert harness.project.pad_content[215] == original
+    assert harness.native.cancel_count == 0
+    assert not harness.assets.retirement.closed
+    _assert_writer_fenced(harness)
+    harness.controller.poll()
+    _assert_complete_copy(harness)
+    assert attempts == [215, 215]
+    assert harness.native.publish_count == 1
+
+
+@pytest.mark.parametrize("newer_intent", [False, True])
+def test_occupied_copy_retries_actual_transferred_asset_plan_without_republishing_old_owners(
+    tmp_path: Path,
+    *,
+    newer_intent: bool,
+) -> None:
+    harness = _harness(tmp_path)
+    _occupy_target(harness)
+    harness.assets.planned_retirement_failures = 1
+    assert harness.controller.copy_overwrite(0, 215)
+    harness.jobs.run()
+    harness.controller.poll()
+    harness.native.complete_ack = True
+    harness.controller.poll()
+    assert harness.controller.active
+    first = harness.assets.publication_plans[0]
+    assert first.applied
+    assert not first.settled
+    assert harness.assets.published == [first.image]
+    target_identity = harness.project.pad_content[215]
+    first_leases = [lease for _, lease in first.image[1].values()]
+    assert all(not lease.released for lease in first_leases)
+    _assert_writer_fenced(harness)
+    if newer_intent:
+        harness.project.volume = 0.25
+        harness.persistence.mark_dirty()
+    harness.controller.poll()
+    _assert_complete_copy(harness)
+    assert first.settled
+    assert harness.project.pad_content[215] == target_identity
+    assert sum(image is first.image for image in harness.assets.published) == 1
+    assert len(harness.assets.publication_plans) == (2 if newer_intent else 1)
+    assert all(not lease.released for lease in first_leases)
+    if newer_intent:
+        assert json.loads(harness.persistence.config_path.read_text())["volume"] == 0.25
+
+
+@pytest.mark.parametrize("blocked", ["empty", "missing_binding", "loading", "self"])
+def test_occupied_copy_requires_loaded_original_target_without_reserving_unsupported_target(
+    tmp_path: Path,
+    blocked: str,
+) -> None:
+    harness = _harness(tmp_path)
+    _occupy_target(harness)
+    target = 215
+    if blocked == "empty":
+        harness.project.pad_content[215] = None
+        harness.project.sample_paths[215] = None
+    elif blocked == "missing_binding":
+        harness.native.bindings.pop(215)
+    elif blocked == "loading":
+        harness.session.loading_sample_ids.add(215)
+    else:
+        target = 0
+    project_before = harness.project.model_dump_json()
+    session_before = harness.session.model_dump_json()
+    assert not harness.controller.copy_overwrite(0, target)
+    assert harness.native.capture_count == 0
+    assert not harness.controller.active
+    assert harness.project.model_dump_json() == project_before
+    assert harness.session.model_dump_json() == session_before

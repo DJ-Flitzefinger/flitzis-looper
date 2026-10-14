@@ -1408,7 +1408,7 @@ fn control_message_retirement_slots_needed(message: &ControlMessage) -> usize {
         ControlMessage::RelocateResident(_) => 3 * MAX_VOICES + 3,
         ControlMessage::CaptureResidentSeek(_) => 3,
         ControlMessage::CommittedStemWork(_) => 3,
-        ControlMessage::PadCopy(_) => 1,
+        ControlMessage::PadCopy(work) => work.retirement_slots_needed(),
         ControlMessage::PadPair(_) => 1,
         ControlMessage::HoldAction(_) => 2,
         ControlMessage::TransportForPlacement { .. } => 1,
@@ -2489,7 +2489,7 @@ pub(super) fn process_control_message<
             mixer.capture_resident_seek_rt(capture, retirement, callback_start_frame);
         }
         ControlMessage::PadCopy(work) => {
-            mixer.copy_pad_rt(work, retirement);
+            mixer.copy_pad_at_output_frame_rt(work, callback_start_frame, retirement);
         }
         ControlMessage::PadPair(work) => {
             mixer.pair_pad_rt(work, retirement);
@@ -2823,7 +2823,7 @@ mod launch_callback_tests;
 /// Construct the callback's unique mixer owner on the control thread. Keeping the owner
 /// boxed prevents CPAL's generic callback setup from moving copies of its fixed pad/voice
 /// storage through the startup stack; rendering only borrows this preallocated owner.
-fn create_stream_mixer(
+pub(super) fn create_stream_mixer(
     channels: usize,
     sample_rate_hz: u32,
     current_timing_acknowledgements: Arc<CurrentTimingAcknowledgements>,

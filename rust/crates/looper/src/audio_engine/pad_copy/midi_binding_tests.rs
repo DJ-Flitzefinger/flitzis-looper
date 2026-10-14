@@ -324,7 +324,7 @@ fn copy_accepts_same_source_binding_after_unrelated_publication_revision() {
                 assert_ne!(binding.binding, fresh.binding);
                 assert!(binding.binding.same_projection(&fresh.binding));
                 engine
-                    .capture_pad_copy(&binding, 36, &fixture.envelope())
+                    .capture_pad_copy(&binding, 36, &fixture.envelope(), None)
                     .unwrap()
             });
             let ticket = fixture.prepare(&captured);

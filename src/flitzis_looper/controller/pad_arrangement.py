@@ -1,4 +1,4 @@
-"""Control-thread orchestration of a complete Native Copy into an empty pad."""
+"""Control-thread orchestration of a complete stopped Native Copy."""
 
 import json
 import threading
@@ -17,6 +17,7 @@ if TYPE_CHECKING:
 
     from flitzis_looper.controller.asset_lifecycle import (
         AssetRetirementReservation,
+        AssignmentPublicationPlan,
         ProjectAssetLifecycle,
     )
     from flitzis_looper.controller.persistence import ProjectPersistence
@@ -67,7 +68,12 @@ class NativeAdapterProtocol(Protocol):
     ) -> InputRuntimePadBinding | None: ...
 
     def capture_pad_copy(
-        self, source_binding: InputRuntimePadBinding, target_id: int, intent_json: str
+        self,
+        source_binding: InputRuntimePadBinding,
+        target_id: int,
+        intent_json: str,
+        *,
+        target_binding: InputRuntimePadBinding | None = None,
     ) -> CapturedPadCopy: ...
 
     def prepare_pad_copy(self, captured: CapturedPadCopy) -> PadCopyTicket: ...
@@ -97,6 +103,8 @@ class _Copy:
     identity: PadContentIdentity
     retirement: AssetRetirementReservation
     resolved_key_lock: bool
+    predecessor: CopySnapshot | None = None
+    predecessor_retired: bool = False
     captured: CapturedPadCopy | None = None
     ticket: PadCopyTicket | None = None
     images: list[AssignmentImage] = field(default_factory=list)
@@ -104,6 +112,8 @@ class _Copy:
     committed_image: AssignmentImage | None = None
     committed_revision: int | None = None
     candidate: ProjectState | None = None
+    candidate_revision: int | None = None
+    assignment_publication: AssignmentPublicationPlan | None = None
     worker_done: bool = True
     cancel_requested: bool = False
     published: bool = False
@@ -149,6 +159,15 @@ def _empty_target(project: ProjectState, session: SessionState, sample_id: int) 
     )
 
 
+def _occupied_target(project: ProjectState, session: SessionState, sample_id: int) -> bool:
+    return (
+        project.sample_paths[sample_id] is not None
+        and project.pad_content[sample_id] is not None
+        and sample_id not in session.loading_sample_ids
+        and sample_id not in session.pending_sample_paths
+    )
+
+
 def _resolved_key_lock(project: ProjectState, copy: _Copy) -> bool:
     override = copy.snapshot.projected().key_lock
     return project.key_lock if override is None else override
@@ -171,14 +190,23 @@ def _candidate(project: ProjectState, copy: _Copy) -> ProjectState:
 def _check_target(project: ProjectState, copy: _Copy) -> None:
     target = project.pad_content[copy.target_id]
     path = project.sample_paths[copy.target_id]
-    empty = target is None and path is None and not copy.model_committed
+    empty = (
+        copy.predecessor is None and target is None and path is None and not copy.model_committed
+    )
     own = (
         target is not None
         and target.instance_id == copy.identity.instance_id
         and path == copy.snapshot.projected().source_path
     )
-    if not empty and not own:
-        message = "Copy target changed while its empty assignment was reserved"
+    original = (
+        copy.predecessor is not None
+        and target is not None
+        and path is not None
+        and not copy.model_committed
+        and capture_copy_snapshot(project, copy.target_id) == copy.predecessor
+    )
+    if not empty and not own and not original:
+        message = "Copy target changed while its original assignment was reserved"
         raise RuntimeError(message)
     if _resolved_key_lock(project, copy) != copy.resolved_key_lock:
         message = "Copy inherited Key Lock changed before complete publication"
@@ -206,7 +234,7 @@ def _discard_obsolete_images(assets: ProjectAssetLifecycle, copy: _Copy) -> None
 
 
 class PadArrangementController:
-    """Own one empty-target Copy until Native, durable config and custody agree."""
+    """Own one stopped Copy until Native, durable config and custody agree."""
 
     def __init__(
         self,
@@ -217,6 +245,7 @@ class PadArrangementController:
         *,
         stem_task_runner: StemTaskRunner,
         on_copy_committed: Callable[[int, PadCopyTicket], None] | None = None,
+        on_target_removed: Callable[[int, CopySnapshot], None] | None = None,
         can_admit: Callable[[], bool] | None = None,
     ) -> None:
         self._persistence = persistence
@@ -226,6 +255,7 @@ class PadArrangementController:
         self._assets = assets
         self._runner = stem_task_runner
         self._on_copy_committed = on_copy_committed
+        self._on_target_removed = on_target_removed
         self._can_admit = can_admit or (lambda: True)
         self._results: SimpleQueue[_PreparedCopy] = SimpleQueue()
         self._copy: _Copy | None = None
@@ -292,13 +322,52 @@ class PadArrangementController:
             self._session.sample_load_errors[target_id] = f"Copy failed: {error}"
             return False
 
+    def copy_overwrite(self, source_id: int, target_id: int) -> bool:
+        """Prepare a stopped copy replacing only the exact original occupied target.
+
+        This internal admission shares the empty-target transaction. Public gestures
+        remain gated by the complete arrangement integration and recovery proof.
+        """
+        self._require_control_thread()
+        if self._closing or not self._can_admit():
+            return False
+        if (
+            self.active
+            or not all(_valid_pad(value) for value in (source_id, target_id))
+            or source_id == target_id
+            or self._project.sample_paths[source_id] is None
+            or not _occupied_target(self._project, self._session, target_id)
+        ):
+            return False
+        try:
+            self._ensure_config_writable()
+            source = self._audio.current_input_runtime_pad_binding(source_id)
+            target = self._audio.current_input_runtime_pad_binding(target_id)
+            if source is None or target is None:
+                return False
+            return self._begin(source_id, target_id, source, target_binding=target)
+        except (OSError, RuntimeError, TypeError, ValueError) as error:
+            self.error = str(error)
+            self._session.sample_load_errors[target_id] = f"Copy failed: {error}"
+            return False
+
     def _ensure_config_writable(self) -> None:
         if self._persistence.load_error is not None:
             message = f"Copy config is fenced: {self._persistence.load_error}"
             raise RuntimeError(message)
 
-    def _begin(self, source_id: int, target_id: int, binding: InputRuntimePadBinding) -> bool:
+    def _begin(
+        self,
+        source_id: int,
+        target_id: int,
+        binding: InputRuntimePadBinding,
+        *,
+        target_binding: InputRuntimePadBinding | None = None,
+    ) -> bool:
         snapshot = capture_copy_snapshot(self._project, source_id)
+        predecessor = (
+            capture_copy_snapshot(self._project, target_id) if target_binding is not None else None
+        )
         source = snapshot.projected().source_identity
         identity = PadContentIdentity(
             instance_id=uuid4().hex,
@@ -314,7 +383,14 @@ class PadArrangementController:
             self._persistence.release_migration(owner)
             raise
         copy = _Copy(
-            owner, source_id, target_id, snapshot, identity, retirement, resolved_key_lock=False
+            owner,
+            source_id,
+            target_id,
+            snapshot,
+            identity,
+            retirement,
+            resolved_key_lock=False,
+            predecessor=predecessor,
         )
         copy.resolved_key_lock = _resolved_key_lock(self._project, copy)
         self._copy = copy
@@ -334,7 +410,13 @@ class PadArrangementController:
                 separators=(",", ":"),
                 allow_nan=False,
             )
-            copy.captured = self._audio.capture_pad_copy(binding, target_id, envelope)
+            copy.captured = (
+                self._audio.capture_pad_copy(
+                    binding, target_id, envelope, target_binding=target_binding
+                )
+                if target_binding is not None
+                else self._audio.capture_pad_copy(binding, target_id, envelope)
+            )
             captured = copy.captured
             audio = self._audio
             results = self._results
@@ -451,8 +533,16 @@ class PadArrangementController:
                 self._status = "adopting" if phase in {"adopting", "accepted"} else "pending"
                 return
             copy.acknowledged = True
+        self._retire_predecessor(copy)
         self._status = "commit_pending"
         self._commit(copy)
+
+    def _retire_predecessor(self, copy: _Copy) -> None:
+        if copy.predecessor is None or copy.predecessor_retired:
+            return
+        if self._on_target_removed is not None:
+            self._on_target_removed(copy.target_id, copy.predecessor)
+        copy.predecessor_retired = True
 
     def _publish(self, copy: _Copy) -> None:
         if copy.ticket is None:
@@ -469,6 +559,9 @@ class PadArrangementController:
 
     def _commit(self, copy: _Copy) -> None:
         _check_target(self._project, copy)
+        if copy.predecessor is not None:
+            self._commit_occupied(copy)
+            return
         if (
             copy.config_committed
             and self._persistence.revision != copy.committed_revision
@@ -502,6 +595,69 @@ class PadArrangementController:
             with copy.retirement.activate():
                 self._assets.publish_assignment_image(copy.committed_image)
             copy.images[:] = [held for held in copy.images if held is not copy.committed_image]
+            copy.assets_published = True
+        _release_images(self._assets, copy)
+        self._finish(copy)
+
+    def _prepare_occupied_assignment(self, copy: _Copy, revision: int) -> None:
+        if copy.candidate is not None and copy.candidate_revision == revision:
+            return
+        candidate = _candidate(self._project, copy)
+        image = self._assets.prepare_assignment_image(candidate)
+        try:
+            publication = self._assets.prepare_assignment_publication(image)
+        except OSError, RuntimeError, TypeError, ValueError:
+            self._assets.release_assignment_image(image)
+            raise
+        previous, previous_plan = copy.committed_image, copy.assignment_publication
+        copy.images.append(image)
+        copy.committed_image = image
+        copy.assignment_publication = publication
+        copy.candidate = candidate
+        copy.candidate_revision = revision
+        if (
+            previous is not None
+            and previous_plan is not None
+            and previous_plan.owns_unpublished_image
+        ):
+            self._assets.release_assignment_image(previous)
+            copy.images[:] = [held for held in copy.images if held is not previous]
+
+    def _apply_occupied_assignment(self, copy: _Copy) -> None:
+        assert copy.assignment_publication is not None
+        try:
+            with copy.retirement.activate():
+                copy.assignment_publication.apply()
+        finally:
+            if not copy.assignment_publication.owns_unpublished_image:
+                copy.images[:] = [held for held in copy.images if held is not copy.committed_image]
+
+    def _commit_occupied(self, copy: _Copy) -> None:
+        if (
+            copy.assignment_publication is not None
+            and copy.assignment_publication.applied
+            and not copy.assignment_publication.settled
+        ):
+            self._apply_occupied_assignment(copy)
+        revision = self._persistence.revision
+        if not copy.config_committed or copy.committed_revision != revision:
+            self._prepare_occupied_assignment(copy, revision)
+            assert copy.candidate is not None
+            self._persistence.commit_migration(copy.owner, revision, copy.candidate)
+            if self._persistence.revision != revision:
+                message = (
+                    "Newer project intent arrived during the atomic occupied Copy config write"
+                )
+                raise RuntimeError(message)
+            copy.committed_revision = revision
+            copy.config_committed = True
+            copy.assets_published = False
+        assert copy.candidate is not None
+        if not copy.model_committed:
+            _publish_project(self._project, copy.candidate, copy.target_id)
+            copy.model_committed = True
+        if not copy.assets_published:
+            self._apply_occupied_assignment(copy)
             copy.assets_published = True
         _release_images(self._assets, copy)
         self._finish(copy)

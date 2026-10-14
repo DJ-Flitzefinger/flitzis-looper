@@ -4,7 +4,8 @@ mod copy_binding;
 pub(super) use copy_binding::{
     CapturedCopySelection, CopySelectionTarget, PreparedCopySelection, capture_copy_selection,
     capture_copy_selection_fences, capture_copy_source_selection_fences,
-    capture_pair_selection_fences, prepare_copy_selection, reconcile_copy_selection,
+    capture_pair_selection_fences, prepare_copy_replacement, prepare_copy_selection,
+    reconcile_copy_selection,
 };
 
 use super::AudioEngine;

@@ -5,6 +5,9 @@
 #[path = "midi_binding_tests.rs"]
 mod midi_binding_tests;
 
+#[path = "overwrite_public_tests.rs"]
+mod overwrite_public_tests;
+
 use super::{CapturedPadCopy, PadCopyTicket};
 use crate::audio_engine::AudioEngine;
 use crate::audio_engine::audio_stream::{
@@ -481,7 +484,7 @@ impl Fixture {
                 .unwrap();
             assert!(binding.is_current());
             engine
-                .capture_pad_copy(&binding, target, &self.envelope())
+                .capture_pad_copy(&binding, target, &self.envelope(), None)
                 .unwrap()
         })
     }
@@ -824,7 +827,7 @@ fn actual_public_copy_cancellation_staleness_queue_and_uncertain_claim_keep_fenc
             let foreign = AudioEngine::new().unwrap();
             assert!(
                 foreign
-                    .capture_pad_copy(&source_binding, 36, &fixture.envelope())
+                    .capture_pad_copy(&source_binding, 36, &fixture.envelope(), None)
                     .is_err()
             );
             let captured = fixture.capture(36);

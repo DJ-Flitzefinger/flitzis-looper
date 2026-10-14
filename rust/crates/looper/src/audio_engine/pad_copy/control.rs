@@ -12,6 +12,7 @@ use crate::audio_engine::constants::NUM_SAMPLES;
 use crate::audio_engine::input_runtime_binding::{self, InputPadBinding, InputRuntimePadBinding};
 use crate::audio_engine::prepared_source::{PreparedSourcePermit, next_epoch};
 use crate::audio_engine::resident_proposal::ResidentReadContext;
+use crate::audio_engine::resident_relocation::ResidentStemCache;
 use crate::messages::{ControlMessage, SampleBuffer, StemMixMode};
 use pyo3::exceptions::{PyRuntimeError, PyValueError};
 use pyo3::prelude::*;
@@ -24,6 +25,8 @@ use std::sync::{
 struct CopyCapture {
     source: SampleBuffer,
     lease: CommittedColdLease,
+    previous_sample: Option<SampleBuffer>,
+    previous_lease: Option<CommittedColdLease>,
     digest: String,
     rate: u32,
     intent: CopyIntent,
@@ -46,6 +49,7 @@ struct PreparedCopyOwners {
     selection: Option<PreparedCopySelection>,
     selection_ticket: Option<CommittedStemSetTicket>,
     rt: Option<Box<PadCopyRtWork>>,
+    _retired_resident: Option<ResidentStemCache>,
 }
 
 pub(in crate::audio_engine) struct PadCopyState {
@@ -125,6 +129,7 @@ impl PadCopyTicket {
                 .is_some_and(|owner| owner.set.publication.status() == "accepted")
         });
         json!({"target_id": self.state.guard.target, "source_generation": self.state.capture.request,
+            "original_target_lifetime": self.state.guard.target_placement.lifetime(),
             "content_lifetime": self.state.capture.lifetime, "status": self.state.status(),
             "control_mirrored": self.state.mirrored.load(Ordering::Acquire), "components_available": components_available}).to_string()
     }
@@ -135,6 +140,7 @@ pub(in crate::audio_engine) fn capture(
     binding: &InputRuntimePadBinding,
     target: usize,
     intent_json: &str,
+    target_binding: Option<&InputRuntimePadBinding>,
 ) -> PyResult<CapturedPadCopy> {
     if target >= NUM_SAMPLES || binding.id >= NUM_SAMPLES || target == binding.id {
         return Err(PyValueError::new_err(
@@ -167,12 +173,31 @@ pub(in crate::audio_engine) fn capture(
             "copy timing intent differs from its current source",
         ));
     }
+    let original_target = match target_binding {
+        Some(expected) => {
+            let current = input_runtime_binding::capture_under_request_lock(engine, target)?
+                .filter(InputRuntimePadBinding::current)
+                .ok_or_else(|| PyValueError::new_err("copy overwrite target is unavailable"))?;
+            if expected.id != target
+                || !Arc::ptr_eq(&expected.ownership, &engine.input_runtime_ownership)
+                || !expected.current()
+                || !expected.binding.same_projection(&current.binding)
+                || expected.source_generation != current.source_generation
+            {
+                return Err(PyValueError::new_err(
+                    "stale or foreign copy overwrite target binding",
+                ));
+            }
+            Some(current)
+        }
+        None => None,
+    };
     let cache = engine
         .sample_cache
         .lock()
         .map_err(|_| PyRuntimeError::new_err("sample cache lock poisoned"))?;
-    if cache[target].is_some()
-        || !engine.input_runtime_ownership.copy_target_empty(target)
+    if (original_target.is_none()
+        && (cache[target].is_some() || !engine.input_runtime_ownership.copy_target_empty(target)))
         || engine
             .loading_sample_ids
             .lock()
@@ -181,18 +206,27 @@ pub(in crate::audio_engine) fn capture(
         || engine.cold_loading[target].load(Ordering::Acquire) != 0
     {
         return Err(PyValueError::new_err(
-            "copy requires an unloaded target without pending work",
+            "copy requires its original target without pending source work",
         ));
     }
     let source = cache[binding.id]
         .clone()
         .ok_or_else(|| PyValueError::new_err("copy source disappeared"))?;
-    let lease = engine
+    let leases = engine
         .cold_leases
         .lock()
-        .map_err(|_| PyRuntimeError::new_err("cold lease lock poisoned"))?[binding.id]
+        .map_err(|_| PyRuntimeError::new_err("cold lease lock poisoned"))?;
+    let lease = leases[binding.id]
         .clone()
         .ok_or_else(|| PyValueError::new_err("copy requires verified complete source custody"))?;
+    let previous_sample = cache[target].clone();
+    let previous_lease = leases[target].clone();
+    if original_target.is_some() && (previous_sample.is_none() || previous_lease.is_none()) {
+        return Err(PyValueError::new_err(
+            "copy overwrite target custody is unavailable",
+        ));
+    }
+    drop(leases);
     if engine.cold_lease_generations[binding.id].load(Ordering::Acquire)
         != binding.source_generation
         || intent.snapshot["source_identity"]["material_id"] != json!(lease.material_id)
@@ -243,14 +277,29 @@ pub(in crate::audio_engine) fn capture(
         .resident_stem_cache
         .lock()
         .map_err(|_| PyRuntimeError::new_err("resident ownership lock poisoned"))?;
-    let selection_fences = if selection.is_some() {
-        Some(
-            committed_stem_residency::capture_copy_selection_fences(&owners[target])
-                .map_err(PyValueError::new_err)?,
-        )
-    } else {
-        None
-    };
+    let selection_fences = Some(
+        committed_stem_residency::capture_copy_selection_fences(&owners[target])
+            .map_err(PyValueError::new_err)?,
+    );
+    let mut target_selection_fences =
+        committed_stem_residency::capture_pair_selection_fences(&owners[target]);
+    let target_placement = engine
+        .input_runtime_ownership
+        .slot_snapshot(target)
+        .ok_or_else(|| PyRuntimeError::new_err("copy target placement is pending"))?;
+    target_selection_fences.extend(
+        engine
+            .resident_proposals
+            .capture_pair_fences_for_cell(target_placement.cell())
+            .ok_or_else(|| PyRuntimeError::new_err("copy target proposals are changing"))?,
+    );
+    if target_selection_fences.len() > crate::audio_engine::pad_pair::MAX_PAIR_SELECTION_FENCES {
+        return Err(PyRuntimeError::new_err(
+            "copy target selection guard capacity unavailable",
+        ));
+    }
+    let target_selection_fences =
+        std::array::from_fn(|index| target_selection_fences.get(index).cloned());
     let source_selection_fences =
         committed_stem_residency::capture_copy_source_selection_fences(&owners[binding.id]);
     drop(owners);
@@ -261,6 +310,11 @@ pub(in crate::audio_engine) fn capture(
     // that control-only zero as the admitted runtime. Later runtime edits still fence Copy.
     let mut source_binding = current.binding;
     source_binding.runtime_revision = engine.input_runtime_ownership.runtime_revision(binding.id);
+    let target_binding = original_target.as_ref().map(|current| {
+        let mut binding = current.binding;
+        binding.runtime_revision = engine.input_runtime_ownership.runtime_revision(target);
+        binding
+    });
     let guard = CopyRtGuard {
         source: binding.id,
         target,
@@ -273,10 +327,12 @@ pub(in crate::audio_engine) fn capture(
         target_epoch,
         target_authority: engine.input_runtime_ownership.authority_revision(target),
         target_runtime: engine.input_runtime_ownership.runtime_revision(target),
-        target_placement: engine
-            .input_runtime_ownership
-            .slot_snapshot(target)
-            .ok_or_else(|| PyRuntimeError::new_err("copy target placement is pending"))?,
+        target_placement,
+        target_binding,
+        target_source_generation: original_target
+            .as_ref()
+            .map_or(0, |binding| binding.source_generation),
+        target_selection_fences,
         reservation: lifetime,
         phase: Arc::new(AtomicU8::new(0)),
         ownership: engine.input_runtime_ownership.clone(),
@@ -287,6 +343,8 @@ pub(in crate::audio_engine) fn capture(
         capture: CopyCapture {
             source,
             lease,
+            previous_sample,
+            previous_lease,
             digest,
             rate,
             intent,
@@ -321,7 +379,15 @@ pub(in crate::audio_engine) fn capture(
     }
     engine
         .input_runtime_ownership
-        .reserve_copy(target, lifetime)?;
+        .reserve_copy_target(target_placement, lifetime)?;
+    if !state.guard.current() {
+        engine
+            .input_runtime_ownership
+            .release_copy(target, lifetime)?;
+        return Err(PyValueError::new_err(
+            "copy participants changed before reservation",
+        ));
+    }
     states[target] = Some(state.clone());
     Ok(CapturedPadCopy { state })
 }
@@ -508,7 +574,8 @@ fn prepare_owned(state: &Arc<PadCopyState>) -> Result<PreparedCopyOwners, String
         selection: selection.as_ref().map(|selected| selected.selected),
         selection_fences: selection
             .as_ref()
-            .map(|selected| selected.selection_fences.clone()),
+            .map(|selected| selected.selection_fences.clone())
+            .or_else(|| capture.selection_fences.clone()),
         projection,
         source_generation: capture.request,
         content_lifetime: capture.lifetime,
@@ -517,6 +584,7 @@ fn prepare_owned(state: &Arc<PadCopyState>) -> Result<PreparedCopyOwners, String
         guard: state.guard.clone(),
         intent,
         retired_receipt: None,
+        retired_sample: None,
         retired_stems: None,
         retired_outgoing: None,
     });
@@ -527,6 +595,7 @@ fn prepare_owned(state: &Arc<PadCopyState>) -> Result<PreparedCopyOwners, String
         selection,
         selection_ticket: None,
         rt: Some(rt),
+        _retired_resident: None,
     })
 }
 
@@ -631,8 +700,23 @@ pub(in crate::audio_engine) fn reconcile(
         .resident_stem_cache
         .lock()
         .map_err(|_| PyRuntimeError::new_err("resident ownership lock poisoned"))?;
+    let original_sample_current = match (&capture.previous_sample, &cache[target]) {
+        (Some(captured), Some(current)) => {
+            captured.same_source(current) && captured.same_window(current)
+        }
+        (None, None) => true,
+        _ => false,
+    };
+    let original_lease_current = match (&capture.previous_lease, &leases[target]) {
+        (Some(captured), Some(current)) => {
+            captured.assignment_id() == current.assignment_id() && !current.assignment_retired()
+        }
+        (None, None) => true,
+        _ => false,
+    };
     if requests[target] != capture.base_request
-        || cache[target].is_some()
+        || !original_sample_current
+        || !original_lease_current
         || state.guard.ownership.copy_reservation(target) != capture.lifetime
         || state.guard.target_epoch.load(Ordering::Acquire) != capture.future_epoch
         || state.guard.ownership.authority_revision(target) != capture.future_authority
@@ -653,16 +737,23 @@ pub(in crate::audio_engine) fn reconcile(
             "acknowledged copy target ownership changed; settlement remains fenced",
         ));
     }
-    if let Some(selection) = &owners.selection {
-        owners.selection_ticket = Some(
+    // Finish every fallible new selection check against a detached successor.
+    // Old target readers remain owned until all locks/checks and own ACK agree.
+    let mut replacement = committed_stem_residency::prepare_copy_replacement(&resident[target]);
+    let selection_ticket = if let Some(selection) = &owners.selection {
+        Some(
             committed_stem_residency::reconcile_copy_selection(
-                &mut resident[target],
+                &mut replacement,
                 selection.clone(),
                 &state.guard.phase,
             )
             .map_err(PyRuntimeError::new_err)?,
-        );
-    }
+        )
+    } else {
+        None
+    };
+    owners.selection_ticket = selection_ticket;
+    owners._retired_resident = Some(std::mem::replace(&mut resident[target], replacement));
     requests[target] = capture.request;
     cache[target] = Some(owners.sample.clone());
     generations[target] = (capture.request, capture.rate);

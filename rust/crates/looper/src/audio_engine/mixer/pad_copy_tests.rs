@@ -13,13 +13,19 @@ use rtrb::{Producer, RingBuffer};
 use std::sync::Mutex;
 use std::sync::atomic::{AtomicBool, AtomicU8};
 
-const SOURCE: usize = 0;
-const TARGET: usize = 36;
-const RATE: u32 = 48_000;
+pub(super) const SOURCE: usize = 0;
+pub(super) const TARGET: usize = 36;
+pub(super) const RATE: u32 = 48_000;
 
-struct HoldingRetirement {
-    slots: usize,
-    held: Option<Box<PadCopyRtWork>>,
+pub(super) struct HoldingRetirement {
+    pub(super) slots: usize,
+    pub(super) held: Option<Box<PadCopyRtWork>>,
+    pub(super) samples: Vec<SampleBuffer>,
+    pub(super) stems: Vec<PreparedStemSet>,
+    // Preserve the actual prepared boxes transferred by the production retirement
+    // interface; unboxing here would destroy their allocation inside the callback.
+    #[allow(clippy::vec_box)]
+    pub(super) holds: Vec<Box<crate::audio_engine::hold_action::HoldActionRtWork>>,
 }
 
 macro_rules! unexpected_retirement {
@@ -40,8 +46,18 @@ impl AudioBufferRetirement for HoldingRetirement {
         self.slots
     }
 
-    unexpected_retirement!(retire_sample, SampleBuffer);
-    unexpected_retirement!(retire_prepared_stems, PreparedStemSet);
+    fn retire_sample(&mut self, sample: SampleBuffer) {
+        self.samples.push(sample);
+    }
+    fn retire_prepared_stems(&mut self, stems: PreparedStemSet) {
+        self.stems.push(stems);
+    }
+    fn retire_hold_action(
+        &mut self,
+        hold: Box<crate::audio_engine::hold_action::HoldActionRtWork>,
+    ) {
+        self.holds.push(hold);
+    }
     unexpected_retirement!(retire_constant_timing, PreparedConstantTiming);
     unexpected_retirement!(retire_cold_adoption, Arc<AtomicU8>);
     unexpected_retirement!(retire_resident_cancellation, Arc<AtomicBool>);
@@ -67,10 +83,19 @@ impl AudioBufferRetirement for HoldingRetirement {
     );
 }
 
-fn fixture() -> (RtMixer, Box<PadCopyRtWork>, HoldingRetirement) {
-    let mut mixer = RtMixer::new(1, RATE as f32);
+pub(super) fn fixture() -> (Box<RtMixer>, Box<PadCopyRtWork>, HoldingRetirement) {
     let ownership = Arc::new(InputRuntimeOwnership::tracked());
-    mixer.set_input_runtime_ownership(ownership.clone());
+    // Use the exact production boxed startup path. Returning an inline RtMixer
+    // through this fixture and occupied_fixture multiplies its fixed arrays in
+    // unoptimized caller frames; the production callback owns only one box.
+    let mut mixer = crate::audio_engine::audio_stream::create_stream_mixer(
+        1,
+        RATE,
+        Arc::default(),
+        ownership.clone(),
+        (0..NUM_SAMPLES).map(|_| Arc::default()).collect(),
+    )
+    .unwrap();
     let source = SampleBuffer {
         channels: 1,
         samples: Arc::from(vec![0.25; 256]),
@@ -112,6 +137,9 @@ fn fixture() -> (RtMixer, Box<PadCopyRtWork>, HoldingRetirement) {
         target_authority: ownership.authority_revision(TARGET),
         target_runtime: ownership.runtime_revision(TARGET),
         target_placement: ownership.slot_snapshot(TARGET).unwrap(),
+        target_binding: None,
+        target_source_generation: 0,
+        target_selection_fences: std::array::from_fn(|_| None),
         reservation: 17,
         phase: Arc::new(AtomicU8::new(0)),
         ownership,
@@ -153,6 +181,7 @@ fn fixture() -> (RtMixer, Box<PadCopyRtWork>, HoldingRetirement) {
             eq_high_db: 0.0,
         },
         retired_receipt: None,
+        retired_sample: None,
         retired_stems: None,
         retired_outgoing: None,
     });
@@ -162,6 +191,9 @@ fn fixture() -> (RtMixer, Box<PadCopyRtWork>, HoldingRetirement) {
         HoldingRetirement {
             slots: 1,
             held: None,
+            samples: Vec::new(),
+            stems: Vec::new(),
+            holds: Vec::new(),
         },
     )
 }
@@ -376,13 +408,13 @@ fn automatic_copy_acknowledges_only_the_fresh_target_publication() {
 }
 
 #[test]
-fn missing_retirement_capacity_rejects_before_any_target_epoch_or_image_change() {
+fn missing_retirement_capacity_retains_exact_copy_before_any_image_change() {
     let (mut mixer, work, mut retirement) = fixture();
     retirement.slots = 0;
     let phase = work.guard.phase.clone();
     assert!(!mixer.copy_pad_rt(work, &mut retirement));
-    assert_eq!(phase.load(Ordering::Acquire), 3);
-    assert!(retirement.held.is_some());
+    assert_eq!(phase.load(Ordering::Acquire), 0);
+    assert!(retirement.held.is_none());
     assert!(mixer.sample_bank[TARGET].is_none());
     assert_eq!(mixer.input_runtime_ownership.authority_revision(TARGET), 1);
     assert_eq!(
@@ -391,6 +423,13 @@ fn missing_retirement_capacity_rejects_before_any_target_epoch_or_image_change()
     );
     assert_eq!(mixer.pad_loop_start_frame[TARGET], 0);
     assert_eq!(mixer.pad_gain_db[TARGET], PAD_GAIN_DB_DEFAULT);
+    let Some(ControlMessage::PadCopy(work)) = mixer.take_deferred_control() else {
+        panic!("capacity must retain the exact Copy payload");
+    };
+    assert!(Arc::ptr_eq(&phase, &work.guard.phase));
+    retirement.slots = 1;
+    assert!(mixer.copy_pad_rt(work, &mut retirement));
+    assert_eq!(phase.load(Ordering::Acquire), 2);
 }
 
 #[test]

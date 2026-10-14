@@ -1173,10 +1173,22 @@ impl InputRuntimeOwnership {
         Ok(())
     }
 
+    #[cfg(test)]
     pub(super) fn reserve_copy(&self, id: usize, owner: u64) -> PyResult<()> {
-        self.ensure_no_copy_reservation(id)?;
         if owner == 0 || !self.copy_target_empty(id) {
             return Err(PyValueError::new_err("copy requires an empty target"));
+        }
+        let captured = self
+            .slot_snapshot(id)
+            .ok_or_else(|| PyRuntimeError::new_err("copy target placement is pending"))?;
+        self.reserve_copy_target(captured, owner)
+    }
+
+    pub(super) fn reserve_copy_target(&self, captured: SlotSnapshot, owner: u64) -> PyResult<()> {
+        let id = captured.slot();
+        self.ensure_no_copy_reservation(id)?;
+        if owner == 0 || !self.slot_snapshot_current(captured) {
+            return Err(PyValueError::new_err("copy target placement changed"));
         }
         self.copy_reservations[id]
             .compare_exchange(0, owner, Ordering::AcqRel, Ordering::Acquire)

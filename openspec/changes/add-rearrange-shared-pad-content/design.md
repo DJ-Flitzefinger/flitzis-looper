@@ -112,6 +112,14 @@ cell cannot turn an old current permission into authority over its new lifetime.
 CopySnapshot captures source, valid analysis, selected available StemSet, loop/
 excerpt/grid/timing/manualTAP, source correction/numericbase/extra/KeyLock/other
 playback/GainEQ/current musical mask/custommask/preset/mutes/retrigger checkbox.
+Internal occupied Copy supplies the exact original target's opaque Native binding,
+not an overwrite flag. The existing Copy claim replaces that lifetime with a fresh
+stopped successor and retires only its old Hold/cohort/readers. Target observers
+stay fenced through own-ACK/control/config/asset settlement; controller retirement
+is delayed until own Native acceptance and shared jobs lose only that subscriber.
+The occupied asset publication retains its exact prepared table and retirement
+cursor across interrupted return and unrelated newer intent. Public gesture and
+occupied journal/restart proofs remain separate open R2 obligations.
 Mutable settings become independent; immutable disk/input backing stays shared.
 New copy is stopped with fresh current guards/native ACK, no cursor/voice/DSP
 history/meters/progress/pressed/HoldAction/tempjobhandle/runtime-token clone.

@@ -578,6 +578,17 @@ pub(in crate::audio_engine) fn prepare_copy_selection(
 /// Install only independently acknowledged target owners. Reservation remains held
 /// through the caller's configuration commit; raw authority/window checks therefore
 /// intentionally avoid authority_current(), which denies pending Copy targets.
+/// Prepare an independent empty successor while retaining the callback-published
+/// Copy selection domains. Old windows/jobs/tickets stay in the retired cache.
+pub(in crate::audio_engine) fn prepare_copy_replacement(
+    previous: &ResidentStemCache,
+) -> ResidentStemCache {
+    let mut replacement = ResidentStemCache::default();
+    replacement.committed.selection_epoch = previous.committed.selection_epoch.clone();
+    replacement.committed.registration_epoch = previous.committed.registration_epoch.clone();
+    replacement
+}
+
 pub(in crate::audio_engine) fn reconcile_copy_selection(
     cache: &mut ResidentStemCache,
     prepared: PreparedCopySelection,

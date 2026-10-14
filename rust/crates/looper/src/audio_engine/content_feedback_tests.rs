@@ -540,6 +540,9 @@ fn actual_tracked_copy_adoption_grants_its_distinct_target_feedback_without_a_co
         target_authority: ownership.authority_revision(TARGET),
         target_runtime: ownership.runtime_revision(TARGET),
         target_placement: target_before,
+        target_binding: None,
+        target_source_generation: 0,
+        target_selection_fences: std::array::from_fn(|_| None),
         reservation: lifetime,
         phase: phase.clone(),
         ownership: ownership.clone(),
@@ -575,6 +578,7 @@ fn actual_tracked_copy_adoption_grants_its_distinct_target_feedback_without_a_co
             eq_high_db: 0.0,
         },
         retired_receipt: None,
+        retired_sample: None,
         retired_stems: None,
         retired_outgoing: None,
     });

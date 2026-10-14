@@ -8,6 +8,45 @@ have separate contracts in
 [add-rearrange-shared-pad-content](../openspec/changes/add-rearrange-shared-pad-content/specs/pad-content-arrangement/spec.md).
 This core does not close those later gates.
 
+## Internal occupied-target foundation — 2026-10-14
+
+The existing Native Copy transaction can now prepare an occupied target when
+`capture_pad_copy` receives that target's exact opaque `target_binding`. Omitting
+it still requires an empty target. Captured lifetime, source, timing, physical
+placement, preparation, runtime, authority and bounded selection/proposal guards
+must remain current. Equal PCM or an overwrite flag cannot authorize replacement.
+
+One existing callback claim retires the original target's Hold effect and voices,
+then installs a fresh stopped content. The source keeps its living voice, history,
+DSP, cursor and holds. Displaced bank/stem/receipt handles and voice readers leave
+through the existing off-realtime retirement lane. Fixed guards and conservative
+retirement capacity bound callback work. Pending or pressure retains the exact
+payload; a stale target or preclaim cancellation rejects without replacing either
+participant. The own Native acknowledgement controls replacement of the target's
+control cache, including removal of an old selected set when the source is FullMix
+without selected stems.
+
+The internal `PadArrangementController.copy_overwrite` captures the original
+musical target seal and fences target observers until settlement. Only after the
+own complete Native acknowledgement does it retire original controller tickets
+and that target's job subscriber. Other subscribers and actual readers survive.
+The occupied config path retains one prepared `AssignmentPublicationPlan` through
+interrupted table transfer and old-owner retirement; retries settle its original
+cursor before incorporating newer unrelated intent. Generic cancellation after an
+actual disk-selection replacement does not revoke the committed selection.
+
+A Pair-delayed duplicate generation retains its original source/model/subscriber
+owners. It may reuse a ready completed set, transfer to an actually active canonical
+owner under both job locks, or rejoin the existing queue after that owner settles.
+An already captured terminal delivery cannot absorb another subscriber. Cancelled
+or obsolete running readers retain their real custody while newer intent waits in
+the existing material-serialized queue.
+
+This is an internal software foundation. Public Re-Arrange gestures, occupied-Copy
+journal/restart recovery, complete selection/Hold matrices and whole R2 acceptance
+remain open, as do musical, resource, device and Human gates. It does not expose
+the pending Key/transposition performance milestone.
+
 ## Durable intent and the snapshot
 
 `ProjectState.pad_stem_intent` is the single musical stem-selection authority for

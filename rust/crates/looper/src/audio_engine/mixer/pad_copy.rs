@@ -1,4 +1,4 @@
-//! One prepared empty-target copy, with a distinct stopped image and callback ACK.
+//! One prepared copy, with atomic target retirement and a distinct stopped image/ACK.
 
 use super::*;
 use crate::audio_engine::pad_copy::PadCopyRtWork;
@@ -66,24 +66,39 @@ impl RtMixer {
     /// Validate, claim and install one complete stopped target without touching its source.
     ///
     /// The callback only moves or clones already-owned handles and writes fixed scalar state.
-    /// The single retirement slot carries the entire payload and any empty-slot residual owners.
+    /// One aggregate retires displaced bank/stem owners; prechecked separate entries carry
+    /// each old voice reader and the removed content's exact retained Hold.
     /// Target control admissions stay fenced by the reservation until control reconciles this ACK.
+    #[cfg(test)]
     pub(crate) fn copy_pad_rt(
         &mut self,
+        work: Box<PadCopyRtWork>,
+        retirement: &mut impl AudioBufferRetirement,
+    ) -> bool {
+        self.copy_pad_at_output_frame_rt(work, 0, retirement)
+    }
+
+    pub(crate) fn copy_pad_at_output_frame_rt(
+        &mut self,
         mut work: Box<PadCopyRtWork>,
+        output_frame: u64,
         retirement: &mut impl AudioBufferRetirement,
     ) -> bool {
         if self.placement_pending() {
             self.defer_control(crate::messages::ControlMessage::PadCopy(work));
             return false;
         }
-        if !self.copy_pad_preflight(&work) || retirement.available_retirement_slots() == 0 {
-            if self.placement_pending() {
+        if !self.copy_pad_preflight(&work) {
+            if self.placement_pending() || retirement.available_retirement_slots() == 0 {
                 self.defer_control(crate::messages::ControlMessage::PadCopy(work));
                 return false;
             }
             work.guard.reject();
             retirement.retire_pad_copy(work);
+            return false;
+        }
+        if retirement.available_retirement_slots() < work.retirement_slots_needed() {
+            self.defer_control(crate::messages::ControlMessage::PadCopy(work));
             return false;
         }
 
@@ -109,6 +124,15 @@ impl RtMixer {
             &write,
             || guard.claim_stable(),
             |cell| {
+                if let Some(old_key) = guard.target_placement.content_key() {
+                    self.retire_content_actions_rt(
+                        old_key,
+                        crate::audio_engine::hold_action::HoldActionState::Retired,
+                        output_frame,
+                        retirement,
+                    );
+                    self.stop_sample_rt(target, retirement);
+                }
                 ownership.apply_source_for_cell(
                     cell,
                     &work.sample,
@@ -121,7 +145,7 @@ impl RtMixer {
                     .target_epoch
                     .store(work.prepared_epoch, Ordering::Release);
                 ownership.publish_copy_parameter_epoch_for_cell(cell, work.prepared_epoch);
-                self.sample_bank[target] = Some(work.sample.clone());
+                work.retired_sample = self.sample_bank[target].replace(work.sample.clone());
                 work.retired_stems =
                     std::mem::replace(&mut self.prepared_stems[target], work.stems.clone());
                 work.retired_outgoing = self.outgoing_stems[target].take();
@@ -168,10 +192,7 @@ impl RtMixer {
         );
         match committed {
             Ok(_) => {}
-            Err(
-                super::super::content_placement::PlacementError::Pending
-                | super::super::content_placement::PlacementError::Stale,
-            ) => {
+            Err(super::super::content_placement::PlacementError::Pending) => {
                 self.defer_control(crate::messages::ControlMessage::PadCopy(work));
                 return false;
             }
@@ -226,6 +247,7 @@ impl RtMixer {
             || work.prepared_epoch <= guard.captured_target_epoch
             || work.authority_revision <= guard.target_authority
             || work.retired_stems.is_some()
+            || work.retired_sample.is_some()
             || work.retired_outgoing.is_some()
             || work.retired_receipt.is_some()
             || !Arc::ptr_eq(&guard.ownership, &self.input_runtime_ownership)
@@ -243,15 +265,27 @@ impl RtMixer {
             )
             || !Arc::ptr_eq(&work.publication.epoch, &guard.target_epoch)
             || work.publication.expected != work.prepared_epoch
-            || self.sample_bank[target].is_some()
-            || self
-                .voices
-                .iter()
-                .any(|voice| voice.sample_id == target && (voice.active || voice.paused))
             || !guard.current()
             || !self.source_binding_current(source, guard.source_binding)
         {
             return false;
+        }
+        match guard.target_binding {
+            Some(binding)
+                if self.admitted_source_binding_current(target, binding)
+                    && self.sample_bank[target].as_ref().is_some_and(|sample| {
+                        self.input_runtime_ownership.callback_source_generation(
+                            target,
+                            sample,
+                            self.sample_rate_hz as u32,
+                        ) == Some(guard.target_source_generation)
+                    }) => {}
+            None if self.sample_bank[target].is_none()
+                && !self
+                    .voices
+                    .iter()
+                    .any(|voice| voice.sample_id == target && (voice.active || voice.paused)) => {}
+            _ => return false,
         }
         let Some(source_sample) = self.sample_bank[source].as_ref() else {
             return false;
@@ -322,8 +356,8 @@ impl RtMixer {
         let source = work.guard.source;
         match (work.selection, &work.selection_fences) {
             (None, None) => {}
-            (Some(selection), Some(fences))
-                if selection.epoch == fences.expected
+            (selection, Some(fences))
+                if selection.is_none_or(|selection| selection.epoch == fences.expected)
                     && fences.expected != 0
                     && Arc::ptr_eq(&fences.publication.epoch, &fences.registration)
                     && fences.publication.expected == fences.expected
@@ -401,3 +435,7 @@ impl RtMixer {
 #[cfg(test)]
 #[path = "pad_copy_tests.rs"]
 mod tests;
+
+#[cfg(test)]
+#[path = "pad_copy_overwrite_tests.rs"]
+mod overwrite_tests;

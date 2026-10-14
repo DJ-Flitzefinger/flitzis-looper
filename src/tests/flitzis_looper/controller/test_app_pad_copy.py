@@ -8,6 +8,7 @@ import pytest
 
 from flitzis_looper.controller.current_timing import UNRESOLVED_TIMING, CurrentPadTiming
 from flitzis_looper.controller.pad_arrangement import PadArrangementController
+from flitzis_looper.copy_snapshot import capture_copy_snapshot
 from flitzis_looper.models import PadContentIdentity, StemCacheEntry
 from flitzis_looper.stem_intent import PadStemIntent
 from flitzis_looper.stem_pair_selection import StemPairSelection
@@ -88,6 +89,7 @@ def test_app_binds_copy_to_existing_assets_runner_and_callback(controller: AppCo
     assert arrangement._assets is controller._assets
     assert arrangement._runner is controller.stems._stem_task_runner
     assert arrangement._on_copy_committed == controller._on_copy_committed
+    assert arrangement._on_target_removed == controller._on_copy_target_removed
     assert controller.transport._pad_edit_guard == controller.ensure_not_copy_target
     assert controller.stems._pad_edit_guard == controller.ensure_not_copy_target
     assert (
@@ -663,6 +665,60 @@ def test_shutdown_retains_every_owner_until_copy_settles_then_tears_down_once(
     controller.shut_down()
 
     assert observed.mock_calls == []
+
+
+def test_overwrite_retires_original_control_owners_before_projecting_successor(
+    controller: AppController,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _bind_copied_pair(controller)
+    original = capture_copy_snapshot(controller.project, TARGET)
+    observers = (
+        controller.transport,
+        controller.loader,
+        controller.accepted_timing,
+        controller.stems,
+    )
+    monkeypatch.setattr(
+        PadArrangementController, "fenced_sample_ids", property(lambda _self: frozenset({TARGET}))
+    )
+    events = Mock()
+    events.attach_mock(Mock(), "resident")
+    events.attach_mock(Mock(), "timing")
+    events.attach_mock(Mock(), "analysis")
+    events.attach_mock(Mock(), "stems")
+    monkeypatch.setattr(controller.transport.residency, "cancel", events.resident)
+    monkeypatch.setattr(controller.accepted_timing, "cancel", events.timing)
+    monkeypatch.setattr(controller.loader, "_clear_analysis_task_state", events.analysis)
+    monkeypatch.setattr(controller.stems, "retire_overwritten_native_state", events.stems)
+    before = controller.project.model_dump_json()
+    controller._on_copy_target_removed(TARGET, original)
+    assert events.mock_calls == [
+        call.resident(TARGET),
+        call.timing(TARGET),
+        call.analysis(TARGET),
+        call.stems(TARGET, original_content_id="f" * 32),
+    ]
+    assert controller.project.model_dump_json() == before
+    assert all(
+        component._pair_deferred_sample_ids == frozenset({TARGET}) for component in observers
+    )
+
+
+def test_overwrite_cannot_retire_equal_material_successor_from_old_controller_snapshot(
+    controller: AppController,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _bind_copied_pair(controller)
+    original = capture_copy_snapshot(controller.project, TARGET)
+    controller.project.pad_content[TARGET] = PadContentIdentity(
+        instance_id="a" * 32, material_id="b" * 32
+    )
+    cancel = Mock()
+    monkeypatch.setattr(controller.transport.residency, "cancel", cancel)
+    with pytest.raises(RuntimeError, match="original target control projection"):
+        controller._on_copy_target_removed(TARGET, original)
+    cancel.assert_not_called()
 
 
 @pytest.mark.parametrize("reentry_phase", ["prepare", "migration"])
