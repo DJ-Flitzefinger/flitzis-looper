@@ -26,8 +26,14 @@ Use canonical program/coverage, not a new parallel order. R0 is docs/spec-only.
   Selected display content now follows one retained Config/controller projection,
   including repeated navigation and partial-store ABA; unrelated removal preserves
   physical Holds. Actual complete FullMix Hold/Pair composition covers early release,
-  both serial orders and bounded pressure. Repeated mutation with slot reuse, actual
-  superseding transport/refresh and selected ALL/wet composition remain required.
+  both serial orders and bounded pressure. Further callback composition covers four
+  mutations with one Hold, PCM-equal fresh slot birth and delayed own ACK/mirror/finish;
+  public accepted STOP/retrigger/manual pause/resume; actual QM/timing and resident
+  refresh publications before and after Move/Swap; and selected ALL/component-mask
+  ACKs with productive wet Native/FIFO/history and independent rendered chronology.
+  The wet Swap proof checks the independently paused target's own selection and
+  distinct mask as well. These are bounded software profiles, not all HC, musical,
+  resource, device or full R2 acceptance.
   Finished timing evidence and dispatched publication retain their original owners
   through Native Pending; own timing/derived acknowledgements still control projection.
   These bounded continuation proofs do not supply complete selection/Hold acceptance.

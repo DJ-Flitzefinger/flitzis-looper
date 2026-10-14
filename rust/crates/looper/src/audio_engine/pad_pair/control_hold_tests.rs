@@ -1,6 +1,7 @@
 //! Actual Hold/Pair control composition with the production boxed callback mixer.
-//! This bounded complete FullMix fixture does not certify selected ALL, wet adoption,
-//! musical/resource acceptance, controller gestures or the whole R2 parent.
+//! The base fixture proves bounded FullMix ownership; child fixtures separately use
+//! actual timing/resident and selected ALL/wet publications. These software profiles
+//! do not certify musical/resource acceptance, controller gestures or the R2 parent.
 
 use super::{PadPairRtWork, PadPairTicket, control};
 use crate::audio_engine::audio_stream::{
@@ -42,6 +43,21 @@ impl AudioBufferRetirement for RetirementGate {
     }
     fn retire_hold_action(&mut self, work: Box<HoldActionRtWork>) {
         self.inner.retire_hold_action(work);
+    }
+    fn retire_source_publication(
+        &mut self,
+        publication: crate::audio_engine::input_runtime_binding::SourcePublication,
+    ) {
+        self.inner.retire_source_publication(publication);
+    }
+    fn retire_pad_copy(&mut self, work: Box<crate::audio_engine::pad_copy::PadCopyRtWork>) {
+        self.inner.retire_pad_copy(work);
+    }
+    fn retire_committed_stem_work(
+        &mut self,
+        work: Box<crate::audio_engine::committed_stem_residency::CommittedStemRtWork>,
+    ) {
+        self.inner.retire_committed_stem_work(work);
     }
     fn retire_resident_capture(
         &mut self,
@@ -176,6 +192,7 @@ impl CallbackFixture {
             &mut self.feedback,
             &mut self.retirement,
         );
+        self.transport.advance_by_rendered_frames(frames);
         output
     }
 
@@ -506,3 +523,10 @@ fn actual_pair_then_release_callback_retirement_pressure_preserves_own_effect_un
         assert_eq!(fixture.drain(), 0);
     }
 }
+
+#[path = "control_hold_tests/refresh.rs"]
+mod refresh;
+#[path = "control_hold_tests/repeated_transport.rs"]
+mod repeated_transport;
+#[path = "control_hold_tests/stems.rs"]
+mod stems;

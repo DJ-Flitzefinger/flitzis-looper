@@ -177,8 +177,17 @@ projection, avoiding retry swapback and numeric selection ABA during partial sto
 It grants no audio authority. A new Pair captures the current complete selected row;
 selected empty targets remain numeric targets. Unrelated unload/replacement cannot
 request release of surviving physical waveform holds. Real Hold/Pair callback tests
-compose early release, both serial orders, independent paused B and queue pressure;
-repeated mutation, actual superseding transport/refresh and ALL/wet proofs remain open.
+compose early release, both serial orders, independent paused B and queue pressure.
+Further tests retain one Hold through four acknowledged mutations and PCM-equal
+fresh slot birth, delay each own ACK/controller mirror/finish, and admit later STOP,
+retrigger, manual pause and resume through their public control queues. Same-source
+QM/timing and resident refresh use actual worker publications and their callback ACKs
+before and after Move/Swap. Selected ALL tests obtain own registration/component-mask
+ACKs and productive KEY LOCK Native/FIFO/history, then compare moved wet output with
+an independent unchanged chronology. The paused swap target owns a separately
+registered selection and distinct component mask, checked after mirror and rendering.
+These bounded software profiles leave complete HC/R2, musical, resource and Human
+acceptance open; direct revision writes or copied availability flags cannot replace them.
 Fixed MIDI pad trigger/stop/selection mappings stay at slots for future input.
 Already admitted selected pitch events follow live lifetime or fence removed one.
 Visual pressed state is no authority. Global middle-hold output mute remains global

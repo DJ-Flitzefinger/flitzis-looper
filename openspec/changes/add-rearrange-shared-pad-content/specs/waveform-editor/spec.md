@@ -53,6 +53,7 @@ SHALL change atomically; a resolved numeric slot alone SHALL NOT authorize relea
 - **WHEN** A participates in several successful moves/swaps before release
 - **THEN** H follows that same instance through every complete native projection
 - **AND** the single release cannot affect an earlier slot's later occupant
+- **AND** software proof SHALL retain the same actual Hold ticket through several complete Pair capture, preparation, callback acknowledgement, mirror and finish transactions, including a genuine fresh source birth in a vacated slot and delayed control acknowledgement
 
 ### Requirement: Removed lifetimes fence old releases and actions
 The system SHALL terminally fence HoldRelease and all other accepted content-bound actions for every removed lifetime in the same guarded native transaction that deletes, reassigns or overwrites that content.
@@ -219,6 +220,7 @@ musical ContentInstance and source bytes remain equal.
 - **WHEN** a later accepted STOP, retrigger, explicit resume or intentional pause supersedes that effect
 - **AND** H's old release arrives
 - **THEN** that old claim settles without changing the later transport intent or new cohort
+- **AND** the software proof SHALL admit those later gestures through their actual control queue and apply their callback effects rather than certify supersession by directly replacing a revision scalar
 
 #### Scenario: HC-21 Continuity-preserving native refresh preserves owned pause
 - **GIVEN** H owns A's paused native cohort
@@ -226,6 +228,14 @@ musical ContentInstance and source bytes remain equal.
 - **THEN** native continuity guards prove H remains owned
 - **AND** H's release resumes only that cohort without position/DSP/history reset
 - **AND** a refresh that replaces the cohort instead invalidates H
+- **AND** software proof SHALL use the actual prepared timing or resident publication and its own callback acknowledgement while the original Hold is owned, then complete Move or Swap and release against the preserved cohort
+
+#### Scenario: Selected ALL and productive wet history follow the held content
+- **GIVEN** A owns its selected immutable StemPair registration, accepted component and effective-mask results, and productive KEY LOCK processor, FIFO and source/filter history
+- **WHEN** its actual waveform Hold pauses A, an acknowledged Move or Swap relocates it, and its matching release executes
+- **THEN** A SHALL retain the same selection, caused-pause cohort, processor and pending FIFO/history through the complete Pair acknowledgement and controller mirror
+- **AND** an independently paused B SHALL keep its own selection and Native state without inheriting A's Hold or release
+- **AND** the software proof SHALL verify actual selected component acknowledgements and rendered wet processing, not infer them from a copied availability flag, dry render, or historical selection token
 
 ### Requirement: MIDI input does not invent or redirect holds
 The system SHALL preserve the existing NoteOff/NoteOn-velocity0 nonattack/nonreset semantics and fixed-slot binding layout while future accepted pitch actions bind their captured selected ContentInstance and lifetime through direct, fallback and pending execution.

@@ -3578,13 +3578,8 @@ impl AudioEngine {
             )));
         }
 
-        let handle = self
-            .stream_handle
-            .as_ref()
-            .ok_or_else(|| PyRuntimeError::new_err("Audio engine not initialized"))?;
-
-        let mut producer_guard = handle
-            .producer
+        let mut producer_guard = self
+            .control_producer()?
             .lock()
             .map_err(|_| PyRuntimeError::new_err("Failed to acquire producer lock"))?;
 
