@@ -17,6 +17,7 @@ from flitzis_looper.controller.current_timing import CurrentPadTiming
 from flitzis_looper.models import (
     STEM_INSTRUMENTAL_PRESET_MASK,
     BeatGrid,
+    PadContentIdentity,
     ProjectState,
     SampleAnalysis,
     StemCacheEntry,
@@ -704,6 +705,19 @@ class TestUiActions:
         ui_actions.select_pad(10)
 
         assert controller.project.selected_pad == 10
+
+    def test_select_pad_recaptures_content_for_every_same_slot_gesture(
+        self, controller: AppController
+    ) -> None:
+        controller.project.pad_content[0] = PadContentIdentity(instance_id="a" * 32)
+        ui_actions = UiActions(controller)
+        ui_actions.select_pad(0)
+        assert controller.session.pad_selection_content_id == "a" * 32
+        assert controller.session.pad_selection_revision == 1
+        controller.project.pad_content[0] = PadContentIdentity(instance_id="b" * 32)
+        ui_actions.select_pad(0)
+        assert controller.session.pad_selection_content_id == "b" * 32
+        assert controller.session.pad_selection_revision == 2
 
     def test_select_bank(self, controller: AppController) -> None:
         """Test select_bank sets selected_bank."""

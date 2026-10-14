@@ -510,3 +510,7 @@ pub(crate) use control::{cancel, capture, prepare, publish, reconcile};
 
 #[cfg(test)]
 mod tests;
+
+#[cfg(test)]
+#[path = "pad_pair/control_hold_tests.rs"]
+mod control_hold_tests;

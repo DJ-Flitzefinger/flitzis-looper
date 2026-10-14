@@ -81,6 +81,13 @@ SHALL NOT reinterpret an old release using the removed slot's new occupant.
 - **AND** a delayed old release or pause ACK arrives
 - **THEN** its old action/lifetime is fenced and cannot change C or restore H
 
+#### Scenario: Unrelated removal preserves the still-held content
+- **GIVEN** H owns A's caused pause while unrelated B is unloaded or replaced
+- **WHEN** B's successful removal is mirrored to its controllers, or B's admission fails before removal
+- **THEN** the operation SHALL NOT request or admit release of A's still-held H
+- **AND** A SHALL retain the same physical press, Native action and release obligation until its own matching release or explicit input cancellation
+- **AND** removal SHALL retire only B's own lifetime; later matching release of H SHALL still target A
+
 #### Scenario: HC-08 Copy overwrite retires only the old target claim
 - **GIVEN** source A remains live and H actually paused target B
 - **WHEN** Copy-overwrite atomically replaces B with fresh stopped C
@@ -191,6 +198,7 @@ conflicting input rather than invent a completed layout or rollback.
 - **WHEN** release and layout commit execute in either deterministic order
 - **THEN** release affects the same surviving owned cohort or safely settles removed lifetime
 - **AND** no replacement receives the old effect and all complete projections match native ACK
+- **AND** the software proof SHALL compose actual Hold admission and release with actual Pair capture, preparation, publication, callback adoption, own acknowledgement, controller mirror and finish in both orders, including release before pause acknowledgement and an independently paused other participant
 
 #### Scenario: HC-19 Unload failure and delayed/stale ACK
 - **GIVEN** H owns A and native unload capacity is full

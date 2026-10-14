@@ -11,16 +11,20 @@ from pathlib import Path
 from types import SimpleNamespace
 from typing import TYPE_CHECKING, cast
 
+import pytest
+
 from flitzis_looper.controller import pair_control_mirror
 from flitzis_looper.controller.accepted_publication import AcceptedTimingController
 from flitzis_looper.controller.asset_lifecycle import ProjectAssetLifecycle
 from flitzis_looper.controller.loader import LoaderController
 from flitzis_looper.controller.metering import MeteringController
+from flitzis_looper.controller.pad_selection import record_pad_selection
 from flitzis_looper.controller.pair_arrangement import PairArrangementController
 from flitzis_looper.controller.pair_arrangement_journal import (
     PairJournalOwner,
     validated_pair_history,
 )
+from flitzis_looper.controller.pair_arrangement_recovery import inspect_pair_recovery
 from flitzis_looper.controller.persistence import ProjectPersistence
 from flitzis_looper.controller.stems import StemController
 from flitzis_looper.controller.transport import TransportController
@@ -31,8 +35,6 @@ from tests.flitzis_looper.controller.test_pair_control_mirror import _pending
 
 if TYPE_CHECKING:
     from collections.abc import Callable
-
-    import pytest
 
     from flitzis_looper.controller.app import AppController
     from flitzis_looper.controller.asset_lifecycle import AssignmentImage
@@ -352,6 +354,135 @@ def test_interrupted_real_mirror_keeps_same_ack_and_merges_newer_unrelated_confi
     saved = pair.receipt.projected()
     assert saved.pad_gain_db[36] == -22.0
     assert saved.volume == 0.5
+
+
+@pytest.mark.parametrize(("selected", "expected"), [(0, 215), (215, 0), (36, 36)])
+def test_selected_content_has_identical_live_config_and_journal_placement(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, selected: int, expected: int
+) -> None:
+    harness = _harness(tmp_path, monkeypatch)
+    record_pad_selection(harness.app.project, harness.app.session, selected)
+    harness.app.persistence.mark_dirty()
+    assert harness.controller.begin(0, 215, operation="swap")
+    pair = harness.original_pair()
+    harness.complete()
+    assert harness.app.project.selected_pad == expected
+    assert pair.receipt.projected().selected_pad == expected
+    assert (
+        ProjectState.model_validate_json(
+            harness.app.persistence.config_path.read_text(encoding="utf-8")
+        ).selected_pad
+        == expected
+    )
+    _assert_complete_receipt(harness, pair, 1)
+
+
+def test_navigation_during_actual_config_write_recaptures_content_and_regenerates_receipt(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    harness = _harness(tmp_path, monkeypatch)
+    app = harness.app
+    record_pad_selection(app.project, app.session, 0)
+    app.persistence.mark_dirty()
+    write = app.persistence._atomic_write_text
+    navigated = False
+
+    def write_then_navigate(text: str, *, before_replace: Callable[[], None] | None = None) -> None:
+        nonlocal navigated
+        write(text, before_replace=before_replace)
+        if not navigated:
+            navigated = True
+            for selected in (0, 36, 0):
+                record_pad_selection(app.project, app.session, selected)
+                app.persistence.mark_dirty()
+
+    monkeypatch.setattr(app.persistence, "_atomic_write_text", write_then_navigate)
+    assert harness.controller.begin(0, 215, operation="swap")
+    pair = harness.original_pair()
+    harness.complete()
+    assert navigated
+    assert app.session.pad_selection_content_id == "1" * 32
+    assert app.project.selected_pad == pair.receipt.projected().selected_pad == 215
+    assert len(harness.native.captures) == len(harness.native.publish_calls) == 1
+    _assert_complete_receipt(harness, pair, 4)
+
+
+@pytest.mark.parametrize(("selected", "expected"), [(0, 215), (215, 0)])
+def test_lost_config_replace_return_recognizes_actual_selected_pair_mirror_image(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, selected: int, expected: int
+) -> None:
+    harness = _harness(tmp_path, monkeypatch)
+    app = harness.app
+    record_pad_selection(app.project, app.session, selected)
+    app.persistence.mark_dirty()
+    write = app.persistence._atomic_write_text
+    failed = False
+
+    def write_then_fail(text: str, *, before_replace: Callable[[], None] | None = None) -> None:
+        nonlocal failed
+        write(text, before_replace=before_replace)
+        if not failed:
+            failed = True
+            message = "lost selected Config receipt after actual replacement"
+            raise OSError(message)
+
+    monkeypatch.setattr(app.persistence, "_atomic_write_text", write_then_fail)
+    assert harness.controller.begin(0, 215, operation="swap")
+    harness.controller.poll()
+    pair = harness.original_pair()
+    assert pair.receipt is None
+    assert not pair.mirror.applied
+    assert app.project.selected_pad == selected
+    decision = inspect_pair_recovery(pair.journal.journal, app.persistence.config_path.read_bytes())
+    assert decision.disposition == "recognized_after"
+    assert decision.receipt.projected().selected_pad == expected
+    assert app.persistence._migration_owner == pair.owner
+    harness.complete()
+    assert app.project.selected_pad == pair.receipt.projected().selected_pad == expected
+    assert len(harness.native.captures) == len(harness.native.publish_calls) == 1
+    _assert_complete_receipt(harness, pair, 1)
+
+
+@pytest.mark.parametrize(
+    ("interruption", "expected"),
+    [("sample_paths", 215), ("pad_content", 0), ("selected_pad", 0)],
+)
+def test_selection_aba_during_interrupted_pair_rewrites_the_same_own_config_receipt(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, interruption: str, expected: int
+) -> None:
+    harness = _harness(tmp_path, monkeypatch)
+    app = harness.app
+    record_pad_selection(app.project, app.session, 0)
+    app.persistence.mark_dirty()
+    store = pair_control_mirror._store
+    interrupted = False
+
+    def interrupt_after_store(owner: object, name: str, image: object) -> None:
+        nonlocal interrupted
+        store(owner, name, image)
+        if owner is app.project and name == interruption and not interrupted:
+            interrupted = True
+            message = "interrupted selection settlement"
+            raise RuntimeError(message)
+
+    monkeypatch.setattr(pair_control_mirror, "_store", interrupt_after_store)
+    assert harness.controller.begin(0, 215, operation="swap")
+    harness.controller.poll()
+    pair = harness.original_pair()
+    mirror, ack = pair.mirror, pair.acknowledgement
+    assert interrupted
+    assert not mirror.applied
+    for selected in (0, 36, 0):
+        record_pad_selection(app.project, app.session, selected)
+        app.persistence.mark_dirty()
+    harness.complete()
+    chosen = "1" * 32 if interruption == "sample_paths" else "2" * 32
+    assert app.session.pad_selection_content_id == chosen
+    assert app.project.selected_pad == pair.receipt.projected().selected_pad == expected
+    assert pair.mirror is mirror
+    assert pair.acknowledgement is ack
+    assert len(harness.native.captures) == len(harness.native.publish_calls) == 1
+    _assert_complete_receipt(harness, pair, 4)
 
 
 def test_newer_intent_replaces_only_unpublished_image_and_keeps_original_native_ack(

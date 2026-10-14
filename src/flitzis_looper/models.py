@@ -897,6 +897,14 @@ class SessionState(BaseModel):
     """Last non-error stem generation diagnostic per pad."""
 
     # UI State
+    pad_selection_revision: int = Field(default=0, strict=True, ge=0, lt=1 << 64)
+    """Session-only monotone navigation revision; every admitted gesture advances it."""
+
+    pad_selection_content_id: str | None = Field(
+        default=None, strict=True, pattern=r"^[0-9a-f]{32}$"
+    )
+    """Content chosen by UI navigation; display intent only, never Native authority."""
+
     file_dialog_pad_id: int | None = None
     """Current file dialog target pad ID or None if no file dialog is open."""
 

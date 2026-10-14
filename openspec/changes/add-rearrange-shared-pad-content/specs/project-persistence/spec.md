@@ -45,6 +45,13 @@ The system SHALL serialize layout/reference/config/journal/autosave revisions an
 - **AND** persisted musical metadata SHALL NOT clone live voices, DSP, holds, workers or current Native authority; availability and current selection projections SHALL require the actual matching Native owners
 - **AND** duplicate content identities or invalid contained participant data SHALL reject before any project mutation
 
+#### Scenario: Selection and durable Pair receipt share one projection
+- **WHEN** selected content participates in Move or Swap and the actual Config receipt is written before controller settlement
+- **THEN** the actual written selected pad and controller mirror SHALL follow the same surviving content with one retained projection
+- **AND** an interrupted mirror or repeated candidate calculation SHALL NOT apply selection twice
+- **AND** later accepted navigation SHALL retain its original chosen content and force the existing revision-aware Config retry when it changes the project during commit
+- **AND** restart SHALL restore only the saved selected pad and fresh process-local selection intent, never a historical selection or Native authority token
+
 ### Requirement: Pair settlement owns complete durable history and actual receipts
 The system SHALL retain the original Config writer, assignment and retirement owners until one strict bounded Pair journal, complete controller mirror and Native finish settle together. Pair journal records MUST bind kind, supported schema, transaction directory, actual Config location, unchanged original musical seals and bounded project before/after images. Persisted Native acknowledgements, keys, lifetimes, tickets or Hold permits MUST NOT restore live authority.
 

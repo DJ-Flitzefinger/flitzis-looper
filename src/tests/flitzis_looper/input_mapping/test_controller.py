@@ -25,7 +25,7 @@ from flitzis_looper.input_mapping.storage import (
     load_keyboard_mapping_file,
     load_midi_mapping_file,
 )
-from flitzis_looper.models import STEM_MASK_VOCALS
+from flitzis_looper.models import STEM_MASK_VOCALS, PadContentIdentity
 from flitzis_looper.ui.context import UiContext
 
 if TYPE_CHECKING:
@@ -565,6 +565,31 @@ def test_keyboard_mapping_executes_selected_tap_bpm(
     assert handled is True
     assert controller.session.tap_bpm_pad_id == 5
     assert len(controller.session.tap_bpm_timestamps) == 1
+
+
+@pytest.mark.parametrize("source", ["keyboard", "midi"])
+def test_mapped_selection_recaptures_actual_content_after_same_slot_reuse(
+    controller: AppController, source: str
+) -> None:
+    controller.input_mapping.set_enabled(enabled=True)
+    binding = KeyboardBinding(key_name="S")
+    controller.input_mapping.save_mapping("keyboard", binding.key, LooperAction.select_pad(0))
+    for revision, identity in enumerate(("a" * 32, "b" * 32), start=1):
+        controller.project.pad_content[0] = PadContentIdentity(instance_id=identity)
+        if source == "keyboard":
+            assert controller.input_mapping.capture_keyboard_input(
+                binding, text_input_focused=False
+            )
+        else:
+            controller.input_mapping._handle_rust_input_event({
+                "source": "midi",
+                "binding_key": "midi:note:1:60",
+                "action_key": "ui.select_pad:0",
+                "direct": False,
+            })
+        assert controller.project.selected_pad == 0
+        assert controller.session.pad_selection_content_id == identity
+        assert controller.session.pad_selection_revision == revision
 
 
 def test_midi_mapping_executes_selected_tap_bpm(controller: AppController) -> None:

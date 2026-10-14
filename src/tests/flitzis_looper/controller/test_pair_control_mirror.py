@@ -12,6 +12,7 @@ import pytest
 from flitzis_looper.controller import accepted_publication, loader, pair_control_mirror
 from flitzis_looper.controller.current_timing import CurrentPadTiming
 from flitzis_looper.controller.metering import MeteringController
+from flitzis_looper.controller.pad_selection import record_pad_selection
 from flitzis_looper.controller.pair_control_mirror import prepare_pair_control_mirror
 from flitzis_looper.controller.transport import TransportController, global_playback, residency
 from flitzis_looper.models import PadContentIdentity, ProjectState, SessionState, StemCacheEntry
@@ -274,7 +275,7 @@ def test_latest_unrelated_rows_navigation_and_global_replacement_survive() -> No
     app._session.sample_load_progress[36] = 0.9
     app._session.loading_sample_ids.add(36)
     app._project.pad_gain_db[36] = -8.0
-    app._project.selected_pad = 36
+    record_pad_selection(app._project, app._session, 36)
     app._session.waveform_editor_pad_id = 36
     app._session.tap_bpm_pad_id = 36
     app._session.tap_bpm_timestamps = [10.0, 10.5]
@@ -511,3 +512,83 @@ def test_later_hold_terminal_and_unrelated_anchor_are_preserved() -> None:
     assert bundle.app._session.waveform_pause_hold_pad_id is None
     assert bundle.app._session.bpm_lock_anchor_pad_id == 36
     assert latest_request.control_signature is signature
+
+
+@pytest.mark.parametrize(
+    ("occupied", "selected", "expected"),
+    [
+        (False, 0, 215),
+        (False, 215, 215),
+        (False, 36, 36),
+        (True, 0, 215),
+        (True, 215, 0),
+        (True, 36, 36),
+    ],
+)
+def test_config_candidate_and_live_mirror_select_the_same_surviving_content(
+    *, occupied: bool, selected: int, expected: int
+) -> None:
+    bundle = _bundle(occupied=occupied)
+    record_pad_selection(bundle.app._project, bundle.app._session, selected)
+    plan = bundle.prepare()
+    candidate = plan.projected_project()
+    assert candidate.selected_pad == expected
+    assert bundle.app._project.selected_pad == selected
+    plan.apply(bundle.acknowledgement)
+    assert bundle.app._project.selected_pad == expected
+    assert plan.projected_project().selected_pad == expected
+    plan.apply(bundle.acknowledgement)
+    assert bundle.app._project.selected_pad == expected
+
+
+@pytest.mark.parametrize(
+    ("interruption", "expected"),
+    [("sample_paths", 215), ("pad_content", 0), ("selected_pad", 0)],
+)
+def test_navigation_aba_binds_content_chosen_before_or_after_partial_pair_projection(
+    monkeypatch: pytest.MonkeyPatch, interruption: str, expected: int
+) -> None:
+    bundle = _bundle(occupied=True)
+    app = bundle.app
+    record_pad_selection(app._project, app._session, 0)
+    plan = bundle.prepare()
+    store = pair_control_mirror._store
+    interrupted = False
+
+    def interrupt_after_store(owner: object, name: str, image: object) -> None:
+        nonlocal interrupted
+        store(owner, name, image)
+        if owner is app._project and name == interruption and not interrupted:
+            interrupted = True
+            message = "selection projection interrupted"
+            raise RuntimeError(message)
+
+    monkeypatch.setattr(pair_control_mirror, "_store", interrupt_after_store)
+    with pytest.raises(RuntimeError, match="selection projection interrupted"):
+        plan.apply(bundle.acknowledgement)
+    record_pad_selection(app._project, app._session, 0)
+    record_pad_selection(app._project, app._session, 36)
+    record_pad_selection(app._project, app._session, 0)
+    chosen = "a" * 32 if interruption == "sample_paths" else "b" * 32
+    assert app._session.pad_selection_content_id == chosen
+    assert app._session.pad_selection_revision == 4
+    assert plan.projected_project().selected_pad == expected
+    plan.apply(bundle.acknowledgement)
+    assert app._project.selected_pad == expected
+    assert plan.projected_project().selected_pad == expected
+
+
+def test_fresh_next_pair_follows_prior_selected_content_without_reusing_its_old_placement() -> None:
+    bundle = _bundle(occupied=True)
+    app = bundle.app
+    record_pad_selection(app._project, app._session, 0)
+    first = bundle.prepare()
+    first.apply(bundle.acknowledgement)
+    assert app._project.selected_pad == 215
+    bundle.snapshot = capture_pair_snapshot(app._project, 0, 215, operation="swap")
+    bundle.acknowledgement = object()
+    second = bundle.prepare()
+    assert second.projected_project().selected_pad == 0
+    second.apply(bundle.acknowledgement)
+    assert app._project.selected_pad == 0
+    assert app._session.pad_selection_content_id == "a" * 32

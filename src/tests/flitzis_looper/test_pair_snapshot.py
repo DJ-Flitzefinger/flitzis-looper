@@ -109,6 +109,30 @@ def test_swap_exchanges_complete_images_with_unchanged_birth_and_copy_lineage() 
     assert project.model_dump_json() == before
 
 
+@pytest.mark.parametrize(
+    ("operation", "selected", "expected"),
+    [
+        ("move", 0, 215),
+        ("move", 215, 215),
+        ("move", 36, 36),
+        ("swap", 0, 215),
+        ("swap", 215, 0),
+        ("swap", 36, 36),
+    ],
+)
+def test_pair_projection_follows_selected_survivor_and_preserves_empty_slot_selection(
+    operation: PairOperation, selected: int, expected: int
+) -> None:
+    project = _full_project() if operation == "move" else _two_contents()
+    project.selected_pad = selected
+    before = project.model_dump_json()
+    snapshot = capture_pair_snapshot(project, 0, 215, operation=operation)
+    candidate = project_with_pair_snapshot(project, snapshot)
+    assert candidate.selected_pad == expected
+    assert candidate.selected_bank == project.selected_bank
+    assert project.model_dump_json() == before
+
+
 @pytest.mark.parametrize("operation", ["move", "swap"])
 def test_projection_preserves_latest_unrelated_slots_globals_and_selection(
     operation: PairOperation,

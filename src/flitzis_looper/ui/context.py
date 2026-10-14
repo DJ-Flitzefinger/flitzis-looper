@@ -1001,8 +1001,7 @@ class UiActions:
         )
 
     def select_pad(self, pad_id: int) -> None:
-        self._controller.project.selected_pad = pad_id
-        self._controller.persistence.mark_dirty()
+        self._controller.select_pad(pad_id)
 
     def select_bank(self, bank_id: int) -> None:
         self._controller.input_mapping.perform_learnable_action(

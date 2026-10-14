@@ -125,6 +125,21 @@ def capture_pair_snapshot(
     )
 
 
+def project_selected_pair_content(
+    selected_pad: int, selected_content_id: str | None, pair: PairSnapshotData
+) -> int:
+    """Follow a chosen surviving content; empty and unrelated selections stay at their slots."""
+    if selected_content_id is None:
+        return selected_pad
+    source = pair.source.source_identity
+    target = pair.target.source_identity
+    if source is not None and selected_content_id == source.instance_id:
+        return pair.target_id
+    if target is not None and selected_content_id == target.instance_id:
+        return pair.source_id
+    return selected_pad
+
+
 def project_with_pair_snapshot(project: ProjectState, snapshot: PairSnapshot) -> ProjectState:
     """Project one strictly revalidated pair into the latest independent project image.
 
@@ -148,6 +163,10 @@ def project_with_pair_snapshot(project: ProjectState, snapshot: PairSnapshot) ->
     )
     images = ((captured.source_id, source), (captured.target_id, captured.source))
     data = project.model_dump(mode="python", exclude_computed_fields=True, warnings="error")
+    selected = project.pad_content[project.selected_pad]
+    data["selected_pad"] = project_selected_pair_content(
+        project.selected_pad, selected.instance_id if selected is not None else None, captured
+    )
     for sample_id, image in images:
         projection = image.model_dump(mode="python", warnings="error")
         for name, project_field in CONTENT_FIELDS:

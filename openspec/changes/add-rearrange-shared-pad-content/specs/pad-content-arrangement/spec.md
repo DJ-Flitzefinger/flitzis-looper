@@ -333,6 +333,15 @@ The system SHALL apply Move to empty or Swap to occupied target as one guarded n
 - **AND** live playback and paused cohorts follow their content, selection/editor follows selected content
 - **AND** fixed slot MIDI/controller layout stays unchanged
 
+#### Scenario: Selected content follows one owning Pair projection
+- **GIVEN** one acknowledged Move or Swap retains its complete original participants and controller mirror
+- **WHEN** its current selected content and project image are projected or retried after an interrupted store
+- **THEN** the saved Config candidate and applied controller selection SHALL use the same owning selection projection, following surviving A or B exactly once without swapping an already projected selection again
+- **AND** selection of an empty Move target SHALL retain that target, while unrelated navigation SHALL retain its chosen pad
+- **AND** every accepted GUI or mapped selection, including a repeated same-slot choice, SHALL retain a fresh bounded process-local intent revision and the content chosen at admission
+- **AND** newer navigation SHALL follow that chosen surviving content or preserve its unrelated or empty target through partial mirror settlement, even when its numeric pad equals an earlier before or after value
+- **AND** the process-local selection record SHALL NOT be persisted or grant audio, timing, Hold or future pitch authority
+
 #### Scenario: Complete controller settlement retains current independent owners
 - **GIVEN** a request owns both original Native participants and its own opaque Pair acknowledgement
 - **WHEN** the corresponding controller mirror settles Move or Swap

@@ -9,6 +9,7 @@ from flitzis_looper.controller.loader import LoaderController
 from flitzis_looper.controller.material_migration import MaterialMigrationController
 from flitzis_looper.controller.metering import MeteringController
 from flitzis_looper.controller.pad_arrangement import PadArrangementController
+from flitzis_looper.controller.pad_selection import record_pad_selection
 from flitzis_looper.controller.pair_arrangement import PairArrangementController
 from flitzis_looper.controller.performance_confirmation import PerformanceConfirmationController
 from flitzis_looper.controller.persistence import ProjectPersistence
@@ -200,6 +201,11 @@ class AppController:
     def _restored_assignment_held(self, sample_id: int) -> bool:
         return sample_id in self.arrangement.fenced_sample_ids | self.pairs.fenced_sample_ids
 
+    def select_pad(self, sample_id: int) -> None:
+        """Record the chosen UI content before storing its latest navigation intent."""
+        record_pad_selection(self._project, self._session, sample_id)
+        self._persistence.mark_dirty()
+
     def prepare_shutdown(self, *, holds_polled: bool = False) -> bool:
         """Settle complete Copy ownership while its workers and callback remain alive."""
         if self._shutdown_complete:
@@ -338,7 +344,6 @@ class AppController:
         )
 
     def _on_sample_unloaded(self, sample_id: int) -> None:
-        self.transport.waveform.request_hold_release("unload")
         if self._session.waveform_editor_pad_id == sample_id:
             self.transport.waveform.close_editor()
         self.transport.residency.cancel(sample_id)

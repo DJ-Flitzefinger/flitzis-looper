@@ -12,6 +12,7 @@ from typing import TYPE_CHECKING, cast
 
 from pydantic import BaseModel
 
+from flitzis_looper.controller.pad_selection import PreparedPadSelection
 from flitzis_looper.copy_snapshot import CONTENT_FIELDS, canonical_snapshot_json
 from flitzis_looper.models import ProjectState, SessionState
 from flitzis_looper.pair_snapshot import PairSnapshot, capture_pair_snapshot
@@ -352,6 +353,7 @@ class PreparedPairControlMirror:
         self._refresh_signatures: dict[int, _Attribute] = {}
         self._render_invalidations: dict[int, tuple[_Attribute, ...]] = {}
         self._waveform_views = waveform_views
+        self._selection = PreparedPadSelection(controller._project, controller._session, snapshot)
         self._prepare_models()
         self._prepare_controls()
         self._prepare_global()
@@ -395,6 +397,7 @@ class PreparedPairControlMirror:
         candidate = project.model_copy(deep=True)
         for name, image in images:
             _store(candidate, name, image)
+        _store(candidate, "selected_pad", self._selection.projected_pad())
         data = candidate.model_dump(mode="json", exclude_computed_fields=True, warnings="error")
         return ProjectState.model_validate_json(canonical_snapshot_json(data), strict=True)
 
@@ -535,7 +538,11 @@ class PreparedPairControlMirror:
                 *self._prepare_render_invalidation(),
             )
         )
-        exchanges = (*containers, *attributes)
+        exchanges = (
+            *containers,
+            *attributes,
+            (self._controller._project, "selected_pad", self._selection.projected_pad()),
+        )
         # No allocation, callback, validation, Native action or cancellation
         # occurs between these fully prepared exchanges. Retain this exact ACK
         # before the first store so every interrupted attempt keeps one owner.

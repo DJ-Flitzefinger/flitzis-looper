@@ -1116,6 +1116,16 @@ Restore observers stay reachable until these requirements pass. Historical journ
 tokens and a stable empty selection epoch confer no current acceptance. The broader
 R2 selection/Hold matrix, public gestures and musical/resource/Human gates remain open.
 
+GUI and mapped pad navigation share one selection admission path. Each accepted
+choice, including a repeated slot choice, retains a bounded Session revision and
+the content displayed at admission. This record is display intent only. The Pair
+mirror uses one retained projection for both the Config candidate and live selected
+pad, including newer navigation through interrupted stores. A new Pair captures the
+current complete selected row, so an earlier removed or refilled selection cannot
+redirect it. Empty-target navigation stays at its chosen slot. Ordinary unrelated
+unload or replacement does not request global release of surviving waveform holds;
+matching physical release, editor cancellation and shutdown keep their existing path.
+
 Audio-to-control telemetry is best-effort and controller-owned. Dropped
 telemetry must not silently change durable project intent.
 

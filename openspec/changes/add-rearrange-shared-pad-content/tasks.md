@@ -23,6 +23,11 @@ Use canonical program/coverage, not a new parallel order. R0 is docs/spec-only.
   before/after pins, fresh target-only selection acceptance and strict Portable routing.
   Full R2 selection/Hold acceptance remains required before public gestures.
   Bounded Native/controller/recovery proofs do not close this parent.
+  Selected display content now follows one retained Config/controller projection,
+  including repeated navigation and partial-store ABA; unrelated removal preserves
+  physical Holds. Actual complete FullMix Hold/Pair composition covers early release,
+  both serial orders and bounded pressure. Repeated mutation with slot reuse, actual
+  superseding transport/refresh and selected ALL/wet composition remain required.
   Finished timing evidence and dispatched publication retain their original owners
   through Native Pending; own timing/derived acknowledgements still control projection.
   These bounded continuation proofs do not supply complete selection/Hold acceptance.

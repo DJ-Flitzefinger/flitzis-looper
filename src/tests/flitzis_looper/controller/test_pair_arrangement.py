@@ -11,12 +11,13 @@ from typing import TYPE_CHECKING, cast
 import pytest
 
 from flitzis_looper.controller import pair_arrangement, pair_arrangement_journal
+from flitzis_looper.controller.pad_selection import PreparedPadSelection
 from flitzis_looper.controller.pair_arrangement import PairArrangementController
 from flitzis_looper.controller.pair_arrangement_journal import PairArrangementAfterImage
 from flitzis_looper.controller.pair_arrangement_recovery import inspect_pair_recovery
 from flitzis_looper.controller.persistence import ProjectPersistence
 from flitzis_looper.copy_snapshot import CONTENT_FIELDS
-from flitzis_looper.models import PadContentIdentity, ProjectState
+from flitzis_looper.models import PadContentIdentity, ProjectState, SessionState
 from flitzis_looper_audio import MaterialMigrationJournalStore
 
 if TYPE_CHECKING:
@@ -175,6 +176,7 @@ class _Mirror:
     def __init__(self, app: SimpleNamespace, snapshot: PairSnapshot) -> None:
         self.app = app
         self.after = PairArrangementAfterImage.from_before(snapshot)
+        self.selection = PreparedPadSelection(app.project, app.session, snapshot)
         self.apply_calls: list[object] = []
         self.apply_failures = 0
         self.partial = False
@@ -186,6 +188,7 @@ class _Mirror:
             projection = slot.model_dump(mode="python")
             for name, field in CONTENT_FIELDS:
                 current[field][sample_id] = projection[name]
+        current["selected_pad"] = self.selection.projected_pad()
         return ProjectState.model_validate(current)
 
     def apply(self, ack: object) -> None:
@@ -234,6 +237,7 @@ def _rig(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> _Rig:
     persistence.flush()
     app = SimpleNamespace(
         project=project,
+        session=SessionState(),
         persistence=persistence,
         _audio=_Audio(),
         _assets=_Assets(),
@@ -488,6 +492,8 @@ def test_config_replace_exception_keeps_native_owner_then_actual_after_recovery_
         original.journal.journal, rig.app.persistence.config_path.read_bytes()
     )
     assert decision.disposition == "recognized_after"
+    assert decision.receipt.projected().selected_pad == 215
+    assert rig.app.project.selected_pad == 0
     assert rig.app.persistence._migration_owner == original.owner
     assert rig.app._audio.cancel_calls == []
     assert rig.app._assets.retirement.closed == 0

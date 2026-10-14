@@ -747,8 +747,7 @@ class InputMappingController(BaseController):
     def _execute_select_pad(self, key: str) -> bool:
         if (pad_id := _parse_prefixed_sample_id(key, "ui.select_pad:")) is None:
             return False
-        self._app.project.selected_pad = pad_id
-        self._app.persistence.mark_dirty()
+        self._app.select_pad(pad_id)
         return True
 
     def _execute_select_bank(self, key: str) -> bool:
