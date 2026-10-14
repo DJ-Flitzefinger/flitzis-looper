@@ -1,6 +1,27 @@
 {
   "schema": "official-pre-rust-r0-obligation-map-v1",
   "status": "REQUIRED_PROGRAM_SCOPED_SOFTWARE_STATUS_FINAL_GATES_OPEN",
+  "human_execution_priority_20261014": {
+    "status": "PLANNING_ONLY_NOT_IMPLEMENTED_OR_ACCEPTED",
+    "first_testable_product_milestone": "Complete audible Key + Transposition, root-relative playable keyboard and stable MIDI SET/SET_RETRIGGER through the same input/control path.",
+    "foundation": "Finish Controller/Durable/Hold delivery, then actual remaining R2 content/selection/lifetime prerequisites including Copy-overwrite and required proven rate/map/finite/DSP contracts.",
+    "engineering_scope": [
+      "B5",
+      "B6-K-AUDIO",
+      "B7-K-ATOMIC",
+      "B8-E",
+      "K1a",
+      "K1b"
+    ],
+    "before_large_deliveries": [
+      "R4",
+      "R5",
+      "X11-BULK",
+      "RECORD"
+    ],
+    "acceptance_limit": "Existing canonical IDs, dependency edges, all189 rows and complete parent/resource/music/Human gates remain. Earlier bounded engineering may reuse proven current rate/map semantics; it cannot close unproved B2/B3/P4b/P6/B5/B6/B7/B8/V0/H-LIVE/SLICE7/H-FINAL/C-FINAL or certify live/device/hearing release.",
+    "authoritative_tasks": "openspec/changes/add-key-transposition-performance/tasks.md"
+  },
   "lineage": {
     "acceptedC1PlanSHA256": "d9d23d48182b95b48a47c4e3bfaf37d9a4bb06b705797b6bcb5af3394ad63dd1",
     "literalHumanSHA256": "f6cc51bb474f53c05f1491901c0b301d4721bba6849cf30eec0e7ed6bc00dd22",

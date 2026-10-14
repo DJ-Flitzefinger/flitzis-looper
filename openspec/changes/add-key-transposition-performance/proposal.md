@@ -17,6 +17,14 @@ Use shared state for two stay-open menus and persistent independent musical inte
 
 ## Delivery and lineage
 
+Latest Human priority2026-10-14 requests the complete audible Key + Transposition,
+playable root-relative keyboard and stable SET/SET_RETRIGGER MIDI workflow as the
+first testable product milestone after the actual content/selection/rate/DSP
+foundations. Large bank/bulk/RECORD delivery moves behind this coherent milestone.
+The [tasks](tasks.md) distinguish this earlier engineering order from unchanged
+full parent, resource, musical and Human acceptance gates. This planning adjustment
+does not assert an implemented keyboard or audible pitch.
+
 K-META now implements only the pure durable key policy and source/request-bound
 metadata lifecycle. Its saved numeric shifts are neutral intent; they issue no
 audible pitch or retrigger command and add no new GUI or MIDI action.

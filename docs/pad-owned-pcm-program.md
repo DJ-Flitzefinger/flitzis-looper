@@ -1,5 +1,16 @@
 # Shared-material PCM and extended pre-Rust delivery program
 
+Latest Human execution priority2026-10-14: finish the current Controller/Durable/
+Hold delivery, then its actually needed remaining R2 ownership/selection foundation
+and the rate/map/finite/DSP prerequisites for a complete testable Key + Transposition,
+playable keyboard and MIDI SET/SET_RETRIGGER milestone. Group1–3 delivery precedes
+large bank, bulk and RECORD work. Use the same proven runtime and scheduler paths.
+See [pitch tasks](../openspec/changes/add-key-transposition-performance/tasks.md).
+The canonical table/edges continue to describe full acceptance dependencies;
+earlier bounded engineering closes no unproved parent, resource, musical or Human
+gate. All48 IDs/78 edges/189 rows and both extensions remain. Pitch/keyboard are
+still open; this note changes execution priority only.
+
 Status: P1a, P1b, K-META, bounded P2a, P2b and P3 independently accepted, 2026-10-10; no whole-program or human
 completion. J0 and P1a are published. Typed native material/slot
 resolution, canonical import/restore storage, durable material/content IDs and
