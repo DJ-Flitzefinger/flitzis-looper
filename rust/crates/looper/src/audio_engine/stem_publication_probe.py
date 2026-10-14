@@ -25,7 +25,7 @@ from flitzis_looper.controller.stem_generation import StemGenerationResult
 from flitzis_looper.controller.stems import StemController
 from flitzis_looper.controller.transport import TransportController
 from flitzis_looper.input_mapping import InputMappingController
-from flitzis_looper.models import PadContentIdentity, ProjectState, SessionState
+from flitzis_looper.models import PadContentIdentity, PadStemIntent, ProjectState, SessionState
 from flitzis_looper.project_materials import original_asset, resolve_asset
 from flitzis_looper.stem_pair_selection import StemPairSelection
 from flitzis_looper.ui.context import UiContext
@@ -460,7 +460,7 @@ class Probe:
         self.project.pad_timing_intent[0] = "legacy"
         self.project.pad_stem_mix_mode[0] = "all_stems"
         self.session = SessionState()
-        self.session.pad_stem_enabled_mask[0] = 1
+        self.project.pad_stem_intent[0] = PadStemIntent(enabled_mask=1, display_mode="custom")
         self.backend = OfflineFixtureBackend()
         self.controller = StemController(
             self.project,
@@ -590,7 +590,9 @@ class Probe:
     def restore(self) -> None:
         self.restored_project = ProjectState.model_validate_json(self.project.model_dump_json())
         self.restored_session = SessionState()
-        self.restored_session.pad_stem_enabled_mask[0] = 1
+        self.restored_project.pad_stem_intent[0] = PadStemIntent(
+            enabled_mask=1, display_mode="custom"
+        )
         self.restored = StemController(self.restored_project, self.restored_session, self.audio)
         self.restored.restore_stem_cache_from_project_state()
         assert not self.restored.stems_available(0)

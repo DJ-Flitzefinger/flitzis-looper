@@ -892,6 +892,7 @@ fn control_message_retirement_slots_needed(message: &ControlMessage) -> usize {
         ControlMessage::RelocateResident(_) => 3 * MAX_VOICES + 3,
         ControlMessage::CaptureResidentSeek(_) => 3,
         ControlMessage::CommittedStemWork(_) => 3,
+        ControlMessage::PadCopy(_) => 1,
         ControlMessage::LoadColdSample {
             replace_assignment: true,
             ..
@@ -1005,6 +1006,7 @@ struct PendingPadBpm {
 struct PendingPadGain {
     id: usize,
     gain_db: f32,
+    expected_epoch: Option<u64>,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -1013,6 +1015,7 @@ struct PendingPadEq {
     low_db: f32,
     mid_db: f32,
     high_db: f32,
+    expected_epoch: Option<u64>,
 }
 
 struct PendingControlParameters {
@@ -1043,6 +1046,7 @@ impl Default for PendingControlParameters {
             pad_gain: [PendingPadGain {
                 id: 0,
                 gain_db: 0.0,
+                expected_epoch: None,
             }; MAX_PARAMETER_MESSAGES_PER_CALLBACK],
             pad_gain_count: 0,
             pad_eq: [PendingPadEq {
@@ -1050,6 +1054,7 @@ impl Default for PendingControlParameters {
                 low_db: 0.0,
                 mid_db: 0.0,
                 high_db: 0.0,
+                expected_epoch: None,
             }; MAX_PARAMETER_MESSAGES_PER_CALLBACK],
             pad_eq_count: 0,
         }
@@ -1086,20 +1091,44 @@ impl PendingControlParameters {
             } => {
                 // Reject before coalescing: an old gesture must not replace a
                 // valid pending edit for the newly adopted source in this pad.
-                if mixer.expected_source_generation_current(id, expected_source_generation) {
+                if mixer.expected_source_generation_current(id, expected_source_generation)
+                    && mixer.legacy_parameter_after_copy(id, through_epoch)
+                {
                     self.record_pad_bpm(id, bpm, Some(through_epoch), expected_source_generation);
                 }
             }
+            #[cfg(test)]
             ControlParameterMessage::SetPadGain { id, gain_db } => {
-                self.record_pad_gain(id, gain_db);
+                self.record_pad_gain(id, gain_db, None);
             }
+            ControlParameterMessage::SetPadGainGuarded {
+                id,
+                gain_db,
+                expected_epoch,
+            } => {
+                if mixer.pad_parameter_epoch_current(id, expected_epoch) {
+                    self.record_pad_gain(id, gain_db, Some(expected_epoch));
+                }
+            }
+            #[cfg(test)]
             ControlParameterMessage::SetPadEq {
                 id,
                 low_db,
                 mid_db,
                 high_db,
             } => {
-                self.record_pad_eq(id, low_db, mid_db, high_db);
+                self.record_pad_eq(id, low_db, mid_db, high_db, None);
+            }
+            ControlParameterMessage::SetPadEqGuarded {
+                id,
+                low_db,
+                mid_db,
+                high_db,
+                expected_epoch,
+            } => {
+                if mixer.pad_parameter_epoch_current(id, expected_epoch) {
+                    self.record_pad_eq(id, low_db, mid_db, high_db, Some(expected_epoch));
+                }
             }
         }
     }
@@ -1134,7 +1163,7 @@ impl PendingControlParameters {
         }
     }
 
-    fn record_pad_gain(&mut self, id: usize, gain_db: f32) {
+    fn record_pad_gain(&mut self, id: usize, gain_db: f32, expected_epoch: Option<u64>) {
         if id >= NUM_SAMPLES {
             return;
         }
@@ -1143,15 +1172,27 @@ impl PendingControlParameters {
             .find(|pending| pending.id == id)
         {
             pending.gain_db = gain_db;
+            pending.expected_epoch = expected_epoch;
             return;
         }
         if self.pad_gain_count < self.pad_gain.len() {
-            self.pad_gain[self.pad_gain_count] = PendingPadGain { id, gain_db };
+            self.pad_gain[self.pad_gain_count] = PendingPadGain {
+                id,
+                gain_db,
+                expected_epoch,
+            };
             self.pad_gain_count += 1;
         }
     }
 
-    fn record_pad_eq(&mut self, id: usize, low_db: f32, mid_db: f32, high_db: f32) {
+    fn record_pad_eq(
+        &mut self,
+        id: usize,
+        low_db: f32,
+        mid_db: f32,
+        high_db: f32,
+        expected_epoch: Option<u64>,
+    ) {
         if id >= NUM_SAMPLES {
             return;
         }
@@ -1162,6 +1203,7 @@ impl PendingControlParameters {
             pending.low_db = low_db;
             pending.mid_db = mid_db;
             pending.high_db = high_db;
+            pending.expected_epoch = expected_epoch;
             return;
         }
         if self.pad_eq_count < self.pad_eq.len() {
@@ -1170,6 +1212,7 @@ impl PendingControlParameters {
                 low_db,
                 mid_db,
                 high_db,
+                expected_epoch,
             };
             self.pad_eq_count += 1;
         }
@@ -1198,6 +1241,9 @@ impl PendingControlParameters {
         for pending in self.pad_bpm[..self.pad_bpm_count].iter().copied() {
             if !mixer
                 .expected_source_generation_current(pending.id, pending.expected_source_generation)
+                || pending
+                    .through_epoch
+                    .is_some_and(|epoch| !mixer.legacy_parameter_after_copy(pending.id, epoch))
             {
                 continue;
             }
@@ -1208,10 +1254,22 @@ impl PendingControlParameters {
             applied += 1;
         }
         for pending in self.pad_gain[..self.pad_gain_count].iter().copied() {
+            if pending
+                .expected_epoch
+                .is_some_and(|epoch| !mixer.pad_parameter_epoch_current(pending.id, epoch))
+            {
+                continue;
+            }
             mixer.set_pad_gain(pending.id, pending.gain_db);
             applied += 1;
         }
         for pending in self.pad_eq[..self.pad_eq_count].iter().copied() {
+            if pending
+                .expected_epoch
+                .is_some_and(|epoch| !mixer.pad_parameter_epoch_current(pending.id, epoch))
+            {
+                continue;
+            }
             mixer.set_pad_eq(pending.id, pending.low_db, pending.mid_db, pending.high_db);
             applied += 1;
         }
@@ -1326,6 +1384,7 @@ pub(super) fn process_control_message<
             id,
             sample,
             source_generation,
+            content_lifetime,
             adoption,
             epoch,
             captured_epoch,
@@ -1343,6 +1402,7 @@ pub(super) fn process_control_message<
                     })
             };
             if epoch_current()
+                && mixer.content_lifetime_current(id, content_lifetime)
                 && mixer.cold_source_current_with_defaults(
                     id,
                     &sample,
@@ -1363,6 +1423,7 @@ pub(super) fn process_control_message<
                 // A concurrent control change after claim must still reject before effects.
                 if !mixer.claim_cold(id, source_generation)
                     || !epoch_current()
+                    || !mixer.content_lifetime_current(id, content_lifetime)
                     || !mixer.cold_source_current_with_defaults(
                         id,
                         &sample,
@@ -1424,6 +1485,9 @@ pub(super) fn process_control_message<
         }
         ControlMessage::CaptureResidentSeek(capture) => {
             mixer.capture_resident_seek_rt(capture, retirement, callback_start_frame);
+        }
+        ControlMessage::PadCopy(work) => {
+            mixer.copy_pad_rt(work, retirement);
         }
         ControlMessage::CommittedStemWork(work) => {
             mixer.apply_committed_stem_work(work, retirement);

@@ -92,6 +92,19 @@ def check_resident_api(engine_type: type) -> None:
     ), "Native residency API missing independent preload interest"
 
 
+def check_pad_copy_api(engine_type: type) -> None:
+    """Reject stale Copy interfaces before activating the matching Python controls."""
+    for method in (
+        "capture_pad_copy",
+        "prepare_pad_copy",
+        "publish_pad_copy",
+        "reconcile_pad_copy",
+        "finish_pad_copy",
+        "cancel_pad_copy",
+    ):
+        assert callable(getattr(engine_type, method, None)), f"Native Copy API missing: {method}"
+
+
 def check_runtime(root: Path, checkout: Path, runtime: Path) -> None:
     # Runtime imports must follow private-path/DLL setup, before any GUI/device opens.
     native_module = importlib.import_module("flitzis_looper_audio")
@@ -99,6 +112,7 @@ def check_runtime(root: Path, checkout: Path, runtime: Path) -> None:
     assert native.is_relative_to(physical_path(checkout / "src/flitzis_looper_audio")), native
     assert native_module.native_build_profile() == "release"
     check_resident_api(native_module.AudioEngine)
+    check_pad_copy_api(native_module.AudioEngine)
     assert physical_path(Path(sys.executable)).is_relative_to(physical_path(runtime / "python"))
     customization = importlib.import_module("sitecustomize")
     assert physical_path(Path(customization.__file__)).is_relative_to(

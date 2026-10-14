@@ -89,9 +89,54 @@ impl Fixture {
         sample: &SampleBuffer,
     ) -> CommittedColdLease {
         transaction.commit(&|| false).unwrap();
-        transaction.bind_pcm(&sample.samples);
+        transaction.bind_sample(sample).unwrap();
         transaction.into_lease()
     }
+}
+
+#[test]
+fn prepared_equal_finite_selections_share_pcm_with_fresh_views_and_complete_verification() {
+    let fixture = Fixture::new(vec![0.125; 1024], 8_000, 2);
+    let mut first = fixture.prepare();
+    let selected = first
+        .read_prepared_selection(fixture.hint(17, 41), PCM_LIMIT_BYTES, &|| false)
+        .unwrap();
+    let lease = fixture.commit(first, &selected);
+    let mut warm = fixture.capture();
+    let _gate = warm
+        .preparation_gate(fixture.rate, fixture.channels, &|| false)
+        .unwrap();
+    assert!(
+        warm.try_reuse_prepared(fixture.rate, fixture.channels, PCM_LIMIT_BYTES, &|| false)
+            .unwrap()
+    );
+    reset_window_read_observation_for_test();
+    let restored = warm
+        .read_prepared_selection(fixture.hint(17, 41), PCM_LIMIT_BYTES, &|| false)
+        .unwrap();
+    assert!(Arc::ptr_eq(&selected.samples, &restored.samples));
+    let original_view = selected.residency.as_ref().unwrap();
+    let restored_view = restored.residency.as_ref().unwrap();
+    assert!(Arc::ptr_eq(&original_view.source, &restored_view.source));
+    assert!(!Arc::ptr_eq(original_view, restored_view));
+    assert_eq!(
+        window_read_observation_for_test(),
+        WindowReadObservation::default()
+    );
+    assert_eq!(
+        warm.integrity.decoder_verify_bytes,
+        fixture.audio.len() as u64 * 4
+    );
+    assert_eq!(
+        warm.integrity.playback_verify_bytes,
+        fixture.audio.len() as u64 * 4
+    );
+    assert!(lease.live_cached_pcm_samples().is_none());
+    let different = warm
+        .read_prepared_selection(fixture.hint(18, 41), PCM_LIMIT_BYTES, &|| false)
+        .unwrap();
+    assert!(!Arc::ptr_eq(&selected.samples, &different.samples));
+    assert_eq!(window_read_observation_for_test().read_bytes, 23 * 2 * 4);
 }
 
 #[test]

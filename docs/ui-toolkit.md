@@ -59,7 +59,11 @@ The UI shell starts in `src/flitzis_looper/ui/run.py`:
 2. Create `UiContext(controller)`.
 3. Configure Hello ImGui/ImmApp runner parameters.
 4. Register `render_ui(context)` as the per-frame callback.
-5. Register `controller.shut_down` for exit.
+5. Gate close requests in `after_swap` through nonblocking
+   `controller.prepare_shutdown`, retaining the frame loop and a visible pending
+   message until Copy's actual worker/Native/config ownership has settled.
+6. Register `controller.shut_down` for permitted exit; teardown never bypasses
+   pending Copy ownership. See [pad content copies](pad-content-copy.md).
 
 `render_ui()` in `src/flitzis_looper/ui/render/render.py` is the canonical frame
 entrypoint:

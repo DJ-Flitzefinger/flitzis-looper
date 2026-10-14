@@ -56,6 +56,19 @@ class StemResidencyStatus:
     demand_error: str | None = None
 
 
+@dataclass(frozen=True, slots=True)
+class WithdrawnStemIntent:
+    """One accepted operation's retired implicit intent, without Native ownership."""
+
+    sample_id: int
+    content_id: str | None
+    source_path: str | None
+    source_version: str
+    stem_set_identity: str | None
+    mode: StemMixMode
+    enabled_mask: int
+
+
 @dataclass(slots=True)
 class _CommittedSelection:
     entry: StemCacheEntry
@@ -126,6 +139,39 @@ class CommittedStemResidency:
     def contains(self, sample_id: int) -> bool:
         """Return whether the pad has a tracked current disk selection receipt."""
         return sample_id in self._selections or sample_id in self._live_selections
+
+    def adopt_copied_selection(
+        self,
+        sample_id: int,
+        entry: StemCacheEntry,
+        content_id: str | None,
+        source_path: str | None,
+        ticket: CommittedStemSetTicket,
+    ) -> None:
+        """Track the copied target's own accepted registration without resubmitting it."""
+        binding_current = (
+            entry.pair is not None
+            and content_id is not None
+            and source_path is not None
+            and self._current(sample_id, entry, content_id, source_path)
+        )
+        if (
+            not binding_current
+            or ticket.publication_status() != "accepted"
+            or ticket.is_current() is not True
+        ):
+            message = "Copied stem selection has no current accepted target registration"
+            raise RuntimeError(message)
+        previous = self._selections.get(sample_id)
+        if sample_id in self._live_selections or (
+            previous is not None and not self._matches(previous, entry, content_id, source_path)
+        ):
+            message = "Copied stem selection conflicts with an existing target control owner"
+            raise RuntimeError(message)
+        if previous is not None:
+            previous.entry = entry
+            return
+        self._selections[sample_id] = _CommittedSelection(entry, content_id, source_path, ticket)
 
     def requires_current_preparation(
         self, sample_id: int, source_ticket: PreparedSourceTicket
@@ -284,9 +330,10 @@ class CommittedStemResidency:
             and selection.receipt.effective_failure_reason() != "native-preparation-failed"
         )
 
-    def poll(self) -> None:
+    def poll(self) -> tuple[WithdrawnStemIntent, ...]:
         """Observe bounded own receipts; polling never advances an audio timeline."""
-        self._poll_live_selections()
+        withdrawn: list[WithdrawnStemIntent] = []
+        self._poll_live_selections(withdrawn)
         for sample_id, selection in tuple(self._selections.items()):
             try:
                 if not self._current(
@@ -303,7 +350,11 @@ class CommittedStemResidency:
                 if not selection.ticket.is_current():
                     self.cancel(sample_id)
                     continue
+                intent = selection.receipt_intent
+                implicit_intent = intent is not None and selection.desired == intent
                 if self._withdraw_accepted_receipt(selection):
+                    if implicit_intent and intent is not None:
+                        withdrawn.append(self._withdrawn_intent(sample_id, selection, intent))
                     continue
                 self._submit(selection)
                 receipt = selection.receipt
@@ -318,6 +369,7 @@ class CommittedStemResidency:
             except (RuntimeError, TypeError, ValueError) as error:
                 selection.desired = None
                 self._report_error(sample_id, f"Stem residency status failed: {error}")
+        return tuple(withdrawn)
 
     def status(self, sample_id: int) -> StemResidencyStatus | None:
         """Return actual registration/residency/effective status without inferring ACK."""
@@ -500,7 +552,7 @@ class CommittedStemResidency:
             selection.ticket.cancel()
             live.disk.selection = None
 
-    def _poll_live_selections(self) -> None:
+    def _poll_live_selections(self, withdrawn: list[WithdrawnStemIntent]) -> None:
         for sample_id, live in tuple(self._live_selections.items()):
             try:
                 if not self._source_current(
@@ -513,18 +565,24 @@ class CommittedStemResidency:
                 ):
                     live.desired = None
                     self._withdraw_disk(live)
-                self._observe_live(sample_id, live)
+                self._observe_live(sample_id, live, withdrawn=withdrawn)
                 self._submit_live(sample_id, live)
             except (RuntimeError, TypeError, ValueError) as error:
                 live.blocked = True
                 self._report_error(sample_id, f"Stem residency status failed: {error}")
 
-    def _observe_live(self, sample_id: int, live: _LiveSelection) -> None:
+    def _observe_live(
+        self,
+        sample_id: int,
+        live: _LiveSelection,
+        *,
+        withdrawn: list[WithdrawnStemIntent] | None = None,
+    ) -> None:
         selection = live.attempt or live.control
         if selection is None or selection.receipt is None:
             return
         receipt = selection.receipt
-        if self._withdraw_accepted_live_receipt(live, selection):
+        if self._withdraw_accepted_live_receipt(sample_id, live, selection, withdrawn=withdrawn):
             return
         if self._failed(receipt):
             live.blocked = True
@@ -551,7 +609,11 @@ class CommittedStemResidency:
 
     @staticmethod
     def _withdraw_accepted_live_receipt(
-        live: _LiveSelection, selection: _CommittedSelection
+        sample_id: int,
+        live: _LiveSelection,
+        selection: _CommittedSelection,
+        *,
+        withdrawn: list[WithdrawnStemIntent] | None = None,
     ) -> bool:
         intent = selection.receipt_intent
         target = live.disk.selection if intent and intent[0] == "all_stems" else live.control
@@ -567,7 +629,24 @@ class CommittedStemResidency:
         live.effective_identity = None
         if implicit_intent:
             live.desired = None
+            if withdrawn is not None and intent is not None:
+                withdrawn.append(
+                    CommittedStemResidency._withdrawn_intent(sample_id, selection, intent)
+                )
         return True
+
+    @staticmethod
+    def _withdrawn_intent(
+        sample_id: int, selection: _CommittedSelection, intent: tuple[StemMixMode, int]
+    ) -> WithdrawnStemIntent:
+        return WithdrawnStemIntent(
+            sample_id,
+            selection.content_id,
+            selection.source_path,
+            selection.entry.source_version,
+            CommittedStemResidency._identity(selection),
+            *intent,
+        )
 
     @staticmethod
     def _effective_observed(

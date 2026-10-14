@@ -16,6 +16,7 @@ from flitzis_looper.models import (
     SessionState,
     StemCacheEntry,
 )
+from flitzis_looper.stem_intent import PadStemIntent
 from tests.conftest import write_mono_pcm16_wav
 
 
@@ -663,7 +664,7 @@ def test_legacy_loaded_key_lock_preserves_audible_intent_after_save(
     assert restored.resolve_pad_key_lock(3) is legacy_mode
 
 
-def test_transient_stem_generation_state_is_not_persisted(
+def test_transient_stem_generation_state_is_not_persisted_and_stem_intent_is_durable(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     monkeypatch.chdir(tmp_path)
@@ -674,9 +675,12 @@ def test_transient_stem_generation_state_is_not_persisted(
     session.stem_generation_progress[0] = 0.5
     session.stem_generation_stage[0] = "Writing stem cache"
     session.stem_generation_errors[0] = "old error"
-    session.pad_stem_enabled_mask[0] = STEM_INSTRUMENTAL_PRESET_MASK
-    session.pad_stem_last_custom_mask[0] = STEM_MASK_VOCALS
-    session.pad_stem_mask_display_mode[0] = "instrumental"
+    intent = PadStemIntent(
+        enabled_mask=STEM_INSTRUMENTAL_PRESET_MASK,
+        last_custom_mask=STEM_MASK_VOCALS,
+        display_mode="instrumental",
+    )
+    project.pad_stem_intent[0] = intent
 
     persistence = ProjectPersistence(project)
     persistence.mark_dirty()
@@ -690,6 +694,9 @@ def test_transient_stem_generation_state_is_not_persisted(
     assert "pad_stem_enabled_mask" not in data
     assert "pad_stem_last_custom_mask" not in data
     assert "pad_stem_mask_display_mode" not in data
+    assert data["pad_stem_intent"][0] == intent.model_dump(mode="json")
+    restored = ProjectPersistence.from_config_path().project
+    assert restored.pad_stem_intent[0] == intent
 
 
 def test_config_path_creation_os_error(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:

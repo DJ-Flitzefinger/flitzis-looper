@@ -458,7 +458,7 @@ def bs_rig(
             "subscriber215": {
                 "gain_db": controller.project.pad_gain_db[215],
                 "key_lock": controller.project.pad_key_lock[215],
-                "mask": controller.session.pad_stem_enabled_mask[215],
+                "mask": controller.project.pad_stem_intent[215].enabled_mask,
             },
         }
         receipt_path = tmp_path.parent / (tmp_path.name + "-bs-software-receipt.json")
@@ -544,7 +544,7 @@ def test_bs_actual_decode_worker_publication_and_own_subscriber_completed_reuse(
     assert _assert_complete_generation(rig, current) == before
     assert rig.controller.project.pad_gain_db[215] == -11
     assert rig.controller.project.pad_key_lock[215]
-    assert rig.controller.session.pad_stem_enabled_mask[215] == 0b0101
+    assert rig.controller.project.pad_stem_intent[215].enabled_mask == 0b0101
     rig.controller.loader.unload_sample(0)
     assert rig.controller.project.stem_cache[215] is current
     assert _assert_complete_generation(rig, current) == before

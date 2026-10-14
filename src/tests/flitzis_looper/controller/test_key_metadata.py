@@ -265,7 +265,7 @@ def test_true_equal_path_replacement_resets_only_after_matching_source_success(
 ) -> None:
     before = _seed(controller, audio_engine_mock)
     old_content = controller.project.pad_content[0]
-    audio_engine_mock.load_sample_async.return_value = 21
+    audio_engine_mock.load_incoming_sample_async.return_value = 21
     controller.loader.load_sample_async(0, "samples/shared.wav")
     assert controller.project.pad_key_intent[0] == before
     _poll(
@@ -289,6 +289,16 @@ def test_true_equal_path_replacement_resets_only_after_matching_source_success(
             "request_id": 21,
             "cached_path": "samples/shared.wav",
             "timing_stale": timing_stale,
+            "incoming_defaults": {
+                "revision": 0,
+                "key_lock": controller.project.key_lock,
+                "start_s": 0.0,
+                "end_s": None,
+                "period_seconds": None,
+                "grid_origin_s": 0.0,
+                "loop_auto": True,
+                "loop_bars": 8.0,
+            },
         },
     )
     assert controller.project.pad_key_intent[0] == PadKeyIntent()

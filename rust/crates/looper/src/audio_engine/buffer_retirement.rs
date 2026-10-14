@@ -27,9 +27,16 @@ pub(crate) enum RetiredAudioBuffer {
     ResidentCancellation(Arc<AtomicBool>),
     ResidentSeekCapture(Arc<super::resident_seek::ResidentSeekCapture>),
     CommittedStemWork(Box<super::committed_stem_residency::CommittedStemRtWork>),
+    PadCopy(Box<super::pad_copy::PadCopyRtWork>),
 }
 
 pub(crate) trait AudioBufferRetirement {
+    #[cfg(test)]
+    fn retire_pad_copy(&mut self, work: Box<super::pad_copy::PadCopyRtWork>) {
+        drop(work);
+    }
+    #[cfg(not(test))]
+    fn retire_pad_copy(&mut self, work: Box<super::pad_copy::PadCopyRtWork>);
     #[cfg(test)]
     fn retire_committed_stem_work(
         &mut self,
@@ -163,6 +170,9 @@ impl RtAudioBufferRetirement {
 }
 
 impl AudioBufferRetirement for RtAudioBufferRetirement {
+    fn retire_pad_copy(&mut self, work: Box<super::pad_copy::PadCopyRtWork>) {
+        self.retire_buffer(RetiredAudioBuffer::PadCopy(work));
+    }
     fn retire_committed_stem_work(
         &mut self,
         work: Box<super::committed_stem_residency::CommittedStemRtWork>,

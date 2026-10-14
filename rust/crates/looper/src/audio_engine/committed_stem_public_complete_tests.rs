@@ -651,7 +651,7 @@ pub(super) fn history_with_followup(
             &locals,
             r#"
 import json
-from flitzis_looper.models import ProjectState, SessionState, StemCacheEntry, PadContentIdentity
+from flitzis_looper.models import ProjectState, SessionState, StemCacheEntry, PadContentIdentity, PadStemIntent
 from flitzis_looper.controller.stem_cache import expected_stem_files
 from flitzis_looper.controller.stems import StemController
 from flitzis_looper.controller.stem_workers import StemWorkerPool
@@ -671,7 +671,7 @@ disk_selection = StemPairSelection.model_validate(fixture['pair'])
 project.stem_cache[0] = StemCacheEntry(source_version=fixture['source_version'],
     cache_dir=disk_selection.wav_generation, stems=expected_stem_files(disk_selection.wav_generation),
     pair=disk_selection, available=True)
-session.pad_stem_enabled_mask[0] = 0b1010
+project.pad_stem_intent[0] = PadStemIntent(enabled_mask=0b1010, display_mode='custom')
 controller = StemController(project, session, audio)
 assert isinstance(controller._stem_worker_pool, StemWorkerPool)
 assert controller._stem_worker_pool._executor._max_workers == 2

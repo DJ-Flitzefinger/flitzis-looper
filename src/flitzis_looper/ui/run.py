@@ -1,6 +1,6 @@
 from typing import TYPE_CHECKING
 
-from imgui_bundle import hello_imgui, immapp
+from imgui_bundle import hello_imgui, imgui, immapp
 
 from flitzis_looper.controller import AppController
 from flitzis_looper.ui.constants import BG_RGBA, TITLE, VIEWPORT_PX
@@ -29,13 +29,28 @@ def run_ui(
     runner_params.app_window_params.restore_previous_geometry = True
     runner_params.imgui_window_params.background_color = BG_RGBA
     runner_params.imgui_window_params.enable_viewports = True
+    close_requested = False
 
     def show_gui() -> None:
         render_ui(context)
         if on_frame is not None:
             on_frame()
+        if close_requested:
+            _show_close_pending(controller.arrangement.error)
+
+    def after_swap() -> None:
+        nonlocal close_requested
+        live_params = hello_imgui.get_runner_params()
+        if not close_requested and not live_params.app_shall_exit:
+            return
+        close_requested = True
+        # Pinned HelloImGui 902dd7d runs AfterSwap after event/menu handling and
+        # checks appShallExit between complete frames. Keep clearing a sticky OS
+        # close until actual Copy settlement permits BeforeExit teardown.
+        live_params.app_shall_exit = controller.prepare_shutdown()
 
     runner_params.callbacks.show_gui = show_gui
+    runner_params.callbacks.after_swap = after_swap
 
     def before_exit() -> None:
         if on_exit is not None:
@@ -47,6 +62,21 @@ def run_ui(
     add_ons_params = immapp.AddOnsParams(with_implot=True)
 
     immapp.run(runner_params, add_ons_params)
+
+
+def _show_close_pending(error: str | None) -> None:
+    """Keep the pending close and any failed Copy settlement visible."""
+    label = "Finishing pad copy##close-pending"
+    imgui.open_popup(label)
+    visible, _ = imgui.begin_popup_modal(label, flags=imgui.WindowFlags_.always_auto_resize)
+    if not visible:
+        return
+    try:
+        imgui.text_wrapped("Waiting for the pad copy to finish before closing.")
+        if error is not None:
+            imgui.text_wrapped(f"Copy could not finish: {error}")
+    finally:
+        imgui.end_popup()
 
 
 def load_fonts(ctx: UiContext) -> None:

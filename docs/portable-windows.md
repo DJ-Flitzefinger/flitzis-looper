@@ -112,7 +112,8 @@ paths or FFmpeg must review the BAT, `scripts/portable`, focused tests and this
 document together. Keep the Native relocation contract authoritative; installer
 code must not copy sample trees or rewrite JSON references independently.
 
-The runtime activation preflight also checks Native resident-admission protocol
+The runtime activation preflight also checks the complete Native pad Copy
+capture/prepare/publish/reconcile/finish/cancel interface and resident-admission protocol
 version 1, the budget setter/status API and the independent preload-interest
 parameter. This checks the built Release class without constructing an engine or
 opening an audio device; an older incompatible extension cannot activate the

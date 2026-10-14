@@ -325,9 +325,9 @@ class _ActiveGenerationBaseline:
         )
         self.controls = (
             tuple(project.pad_stem_mix_mode),
-            tuple(session.pad_stem_enabled_mask),
-            tuple(session.pad_stem_last_custom_mask),
-            tuple(session.pad_stem_mask_display_mode),
+            tuple(intent.enabled_mask for intent in project.pad_stem_intent),
+            tuple(intent.last_custom_mask for intent in project.pad_stem_intent),
+            tuple(intent.display_mode for intent in project.pad_stem_intent),
         )
         self.other_path = project.sample_paths[215]
         self.other_content = project.pad_content[215]
@@ -348,9 +348,9 @@ class _ActiveGenerationBaseline:
         ) == self.activity
         assert (
             tuple(project.pad_stem_mix_mode),
-            tuple(session.pad_stem_enabled_mask),
-            tuple(session.pad_stem_last_custom_mask),
-            tuple(session.pad_stem_mask_display_mode),
+            tuple(intent.enabled_mask for intent in project.pad_stem_intent),
+            tuple(intent.last_custom_mask for intent in project.pad_stem_intent),
+            tuple(intent.display_mode for intent in project.pad_stem_intent),
         ) == self.controls
         self.assert_unrelated_unchanged(queued)
 
@@ -360,9 +360,9 @@ class _ActiveGenerationBaseline:
         assert project.pad_content[215] is self.other_content
         assert queued.selected(215) is self.other_entry
         assert project.pad_stem_mix_mode[215] == self.controls[0][215]
-        assert session.pad_stem_enabled_mask[215] == self.controls[1][215]
-        assert session.pad_stem_last_custom_mask[215] == self.controls[2][215]
-        assert session.pad_stem_mask_display_mode[215] == self.controls[3][215]
+        assert project.pad_stem_intent[215].enabled_mask == self.controls[1][215]
+        assert project.pad_stem_intent[215].last_custom_mask == self.controls[2][215]
+        assert project.pad_stem_intent[215].display_mode == self.controls[3][215]
         assert 215 in session.active_sample_ids
         for key, owner in self.other_owners.items():
             assert queued.controller._assets._assignments[key] is owner
@@ -432,6 +432,7 @@ def _assert_active_generated_disk_selection(
     assert reopened.project.stem_cache[0] == selected
     assert reopened.project.stem_cache[215] == queued.selected(215)
     assert reopened.project.pad_stem_mix_mode == queued.controller.project.pad_stem_mix_mode
+    assert reopened.project.pad_stem_intent == queued.controller.project.pad_stem_intent
     assert not queued.tasks
     assert not queued.controller.stems._jobs
     assert not queued.controller.stems._pending_stem_publications

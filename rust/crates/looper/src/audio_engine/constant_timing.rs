@@ -32,8 +32,10 @@ pub(super) const MAX_PCM_BYTES: usize = 512 * 1024 * 1024;
 const MAX_HYPOTHESIS_JSON_BYTES: usize = 32 * 1024 * 1024;
 const SOURCE_PROVENANCE: &str = "native-loader-sha256-before-decode-and-project-copy-check-v1; loaded Arc association; immutable copy-first decode ABA is not proved";
 
+mod copy_binding;
 mod pcm_budget;
 mod persistence;
+pub(super) use copy_binding::rebind_copy_timing;
 use pcm_budget::PcmBudget;
 pub use persistence::SavedConstantTimingTicket;
 #[cfg(test)]
@@ -1301,6 +1303,24 @@ pub(super) fn publish_legacy_origin_with_source(
             expected_source_generation,
         })
         .map_err(|_| PyRuntimeError::new_err("reserved ordered capacity lost"))
+}
+
+/// Observe immutable evidence sharing without granting or altering current authority.
+#[cfg(test)]
+pub(super) fn copy_records_share_accepted_for_test(
+    engine: &AudioEngine,
+    source: usize,
+    target: usize,
+) -> bool {
+    let records = engine
+        .current_constant_timing
+        .lock()
+        .expect("timing test lock");
+    records
+        .get(source)
+        .and_then(|items| items.last())
+        .zip(records.get(target).and_then(|items| items.last()))
+        .is_some_and(|(source, target)| Arc::ptr_eq(&source.accepted, &target.accepted))
 }
 
 #[cfg(test)]

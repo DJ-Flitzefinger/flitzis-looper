@@ -1,3 +1,4 @@
+import json
 import math
 
 # Pydantic resolves the computed serializer annotation at runtime.
@@ -18,6 +19,7 @@ from pydantic import (
     model_validator,
 )
 
+from flitzis_looper import stem_intent
 from flitzis_looper.accepted_timing import PersistedAcceptedTiming
 from flitzis_looper.audio_gain import legacy_gain_value_to_db
 from flitzis_looper.constants import (
@@ -48,6 +50,7 @@ from flitzis_looper.material_migration_model import (
     MaterialMigrationAlias,
     MigrationID,
 )
+from flitzis_looper.stem_intent import PadStemIntent
 from flitzis_looper.stem_pair_selection import StemFingerprintSchema, StemPairSelection
 
 if TYPE_CHECKING:
@@ -70,7 +73,8 @@ type TriggerQuantizationStep = Literal[
     "1_16",
 ]
 type StemMixMode = Literal["full_mix", "all_stems"]
-type StemMaskDisplayMode = Literal["custom", "instrumental", "all"]
+type StemMaskDisplayMode = stem_intent.StemMaskDisplayMode
+
 type StemKind = Literal["vocals", "melody", "bass", "drums", "instrumental"]
 type StemGridIndicatorState = Literal["available", "generating", "blocked", "error"]
 type StemSeparator = Literal["demucs:htdemucs", "bs-roformer:musdb18hq"]
@@ -113,13 +117,16 @@ STEM_SEPARATOR_LABELS: dict[StemSeparator, str] = {
     "demucs:htdemucs": "Demucs htdemucs",
     "bs-roformer:musdb18hq": "BS-RoFormer MUSDB18HQ",
 }
-STEM_MASK_VOCALS = 1 << 0
-STEM_MASK_MELODY = 1 << 1
-STEM_MASK_BASS = 1 << 2
-STEM_MASK_DRUMS = 1 << 3
-STEM_MASK_INSTRUMENTAL = 1 << 4
-STEM_COMPONENT_MASK = STEM_MASK_VOCALS | STEM_MASK_MELODY | STEM_MASK_BASS | STEM_MASK_DRUMS
-STEM_INSTRUMENTAL_PRESET_MASK = STEM_MASK_DRUMS | STEM_MASK_MELODY | STEM_MASK_BASS
+
+
+# Public compatibility names resolve the one immutable selection definition.
+STEM_COMPONENT_MASK = stem_intent.STEM_COMPONENT_MASK
+STEM_INSTRUMENTAL_PRESET_MASK = stem_intent.STEM_INSTRUMENTAL_PRESET_MASK
+STEM_MASK_BASS = stem_intent.STEM_MASK_BASS
+STEM_MASK_DRUMS = stem_intent.STEM_MASK_DRUMS
+STEM_MASK_INSTRUMENTAL = stem_intent.STEM_MASK_INSTRUMENTAL
+STEM_MASK_MELODY = stem_intent.STEM_MASK_MELODY
+STEM_MASK_VOCALS = stem_intent.STEM_MASK_VOCALS
 
 
 def _default_sample_paths() -> list[str | None]:
@@ -361,10 +368,37 @@ def _migrate_legacy_timing_intent(data: dict[str, object]) -> None:
 class PadContentIdentity(BaseModel):
     """Durable content instance and material identity; live authority is never saved."""
 
-    model_config = ConfigDict(frozen=True, extra="forbid")
-    instance_id: str = Field(pattern=r"^[0-9a-f]{32}$")
-    material_id: str | None = Field(default=None, pattern=r"^[0-9a-f]{32}$")
+    model_config = ConfigDict(frozen=True, extra="forbid", revalidate_instances="always")
+    instance_id: str = Field(strict=True, pattern=r"^[0-9a-f]{32}$")
+    material_id: str | None = Field(default=None, strict=True, pattern=r"^[0-9a-f]{32}$")
     material_creation: MaterialCreationReceipt | None = None
+    copied_from: str | None = Field(default=None, strict=True, pattern=r"^[0-9a-f]{32}$")
+    """Historical origin instance; it grants no lookup or native ownership authority."""
+
+    @field_validator("material_creation", mode="before")
+    @classmethod
+    def _validate_material_birth(cls, value: object) -> object:
+        # Project migration validators operate on Python dictionaries. Restore the
+        # strict JSON array encoding of fixed FileIDs without coercing their integers.
+        data = (
+            value.model_dump(mode="json") if isinstance(value, MaterialCreationReceipt) else value
+        )
+        if isinstance(data, dict):
+            return MaterialCreationReceipt.model_validate_json(
+                json.dumps(data, allow_nan=False), strict=True
+            )
+        return data
+
+    @model_validator(mode="after")
+    def _validate_copy_lineage(self) -> PadContentIdentity:
+        if self.copied_from == self.instance_id:
+            msg = "copy lineage must name a distinct content instance"
+            raise ValueError(msg)
+        return self
+
+
+def _default_pad_stem_intent() -> list[PadStemIntent]:
+    return [PadStemIntent() for _ in range(NUM_SAMPLES)]
 
 
 def _default_pad_content() -> list[PadContentIdentity | None]:
@@ -468,6 +502,11 @@ class ProjectState(BaseModel):
 
     pad_stem_mix_mode: list[StemMixMode] = Field(default_factory=_default_pad_stem_mix_mode)
     """Per-pad durable stem mix preference."""
+
+    pad_stem_intent: list[PadStemIntent] = Field(
+        default_factory=_default_pad_stem_intent, min_length=NUM_SAMPLES, max_length=NUM_SAMPLES
+    )
+    """One durable component mask/custom/preset intent; effective Native state is separate."""
 
     key_lock_intent_version: int = Field(default=2, strict=True, ge=2, le=2)
     """Nullable override format; legacy loaded booleans retain explicit intent."""
@@ -761,18 +800,6 @@ def _default_pad_playhead_s() -> list[float | None]:
     return [None] * NUM_SAMPLES
 
 
-def _default_pad_stem_enabled_mask() -> list[int]:
-    return [STEM_COMPONENT_MASK] * NUM_SAMPLES
-
-
-def _default_pad_stem_last_custom_mask() -> list[int]:
-    return [STEM_COMPONENT_MASK] * NUM_SAMPLES
-
-
-def _default_pad_stem_mask_display_mode() -> list[StemMaskDisplayMode]:
-    return ["all"] * NUM_SAMPLES
-
-
 class SessionState(BaseModel):
     """Runtime/UI state. Recreated on app launch."""
 
@@ -868,17 +895,6 @@ class SessionState(BaseModel):
 
     stem_generation_diagnostics: dict[int, str] = Field(default_factory=dict)
     """Last non-error stem generation diagnostic per pad."""
-
-    pad_stem_enabled_mask: list[int] = Field(default_factory=_default_pad_stem_enabled_mask)
-    """Session-only per-pad component-stem mask used when all-stems mode is active."""
-
-    pad_stem_last_custom_mask: list[int] = Field(default_factory=_default_pad_stem_last_custom_mask)
-    """Session-only remembered component mask restored when a stem preset is toggled off."""
-
-    pad_stem_mask_display_mode: list[StemMaskDisplayMode] = Field(
-        default_factory=_default_pad_stem_mask_display_mode
-    )
-    """Session-only display mode for bottom-bar stem mask buttons."""
 
     # UI State
     file_dialog_pad_id: int | None = None
@@ -1039,28 +1055,6 @@ class SessionState(BaseModel):
     def _validate_sample_ids(cls, value: Iterable[int]) -> Iterable[int]:
         for sid in value:
             validate_sample_id(sid)
-        return value
-
-    @field_validator("pad_stem_enabled_mask", "pad_stem_last_custom_mask", mode="after")
-    @classmethod
-    def _validate_pad_stem_enabled_mask(cls, value: list[int]) -> list[int]:
-        if len(value) != NUM_SAMPLES:
-            msg = f"stem mask arrays must have length {NUM_SAMPLES}, got {len(value)}"
-            raise ValueError(msg)
-        for mask in value:
-            if mask < 0 or mask & ~STEM_COMPONENT_MASK:
-                msg = f"stem mask values must be component masks, got {mask}"
-                raise ValueError(msg)
-        return value
-
-    @field_validator("pad_stem_mask_display_mode", mode="after")
-    @classmethod
-    def _validate_pad_stem_mask_display_mode(
-        cls, value: list[StemMaskDisplayMode]
-    ) -> list[StemMaskDisplayMode]:
-        if len(value) != NUM_SAMPLES:
-            msg = f"pad_stem_mask_display_mode must have length {NUM_SAMPLES}, got {len(value)}"
-            raise ValueError(msg)
         return value
 
     @field_validator(

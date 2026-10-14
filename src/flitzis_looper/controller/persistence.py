@@ -22,6 +22,7 @@ from typing import TYPE_CHECKING
 from pydantic import ValidationError
 
 from flitzis_looper.controller.key_metadata_persistence import recover_project_key_intent
+from flitzis_looper.controller.stem_intent_persistence import recover_project_stem_intent
 from flitzis_looper.controller.stem_pair_persistence import (
     is_pair_metadata_error,
     recover_stem_pair_metadata,
@@ -388,6 +389,15 @@ class ProjectPersistence:
                         for item in error.errors()
                         if is_pair_metadata_error(item["loc"]) and isinstance(item["loc"][1], int)
                     }
+                if any(
+                    item["loc"] and item["loc"][0] == "pad_stem_intent" for item in error.errors()
+                ):
+                    selection_error = "Unsupported stem selection metadata retained on disk"
+                    persistence.load_error = (
+                        f"{persistence.load_error}; {selection_error}"
+                        if persistence.load_error is not None
+                        else selection_error
+                    )
                 return persistence
 
         return ProjectPersistence(state)
@@ -396,7 +406,8 @@ class ProjectPersistence:
     def _recover_metadata_fields(raw: str, error: ValidationError) -> ProjectState:
         """Neutralize only malformed new metadata, preserving all valid performer intent."""
         if any(
-            item["loc"][0] not in {"pad_key_intent", "material_migrations", "config_revision"}
+            item["loc"][0]
+            not in {"pad_key_intent", "pad_stem_intent", "material_migrations", "config_revision"}
             and not is_pair_metadata_error(item["loc"])
             for item in error.errors()
             if item["loc"]
@@ -408,6 +419,7 @@ class ProjectPersistence:
                 return ProjectState()
             if "pad_key_intent" in recovered:
                 recovered = recover_project_key_intent(recovered)
+            recovered = recover_project_stem_intent(recovered)
             recover_stem_pair_metadata(recovered, error)
             revision = recovered.get("config_revision", 0)
             if type(revision) is not int or revision < 0:

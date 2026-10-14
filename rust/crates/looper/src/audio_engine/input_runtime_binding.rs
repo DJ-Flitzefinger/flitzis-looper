@@ -66,6 +66,9 @@ pub(crate) struct InputRuntimeOwnership {
     launch_revisions: [AtomicU64; NUM_SAMPLES],
     admitted_launches: [AtomicBool; NUM_SAMPLES],
     migration_holds: [AtomicU64; NUM_SAMPLES],
+    copy_reservations: [AtomicU64; NUM_SAMPLES],
+    content_lifetimes: [AtomicU64; NUM_SAMPLES],
+    copy_parameter_epochs: [AtomicU64; NUM_SAMPLES],
     key_lock: [KeyLockStatusSlot; NUM_SAMPLES],
 }
 
@@ -82,12 +85,75 @@ impl Default for InputRuntimeOwnership {
             launch_revisions: std::array::from_fn(|_| AtomicU64::new(0)),
             admitted_launches: std::array::from_fn(|_| AtomicBool::new(false)),
             migration_holds: std::array::from_fn(|_| AtomicU64::new(0)),
+            copy_reservations: std::array::from_fn(|_| AtomicU64::new(0)),
+            content_lifetimes: std::array::from_fn(|_| AtomicU64::new(0)),
+            copy_parameter_epochs: std::array::from_fn(|_| AtomicU64::new(0)),
             key_lock: std::array::from_fn(|_| KeyLockStatusSlot::default()),
         }
     }
 }
 
 impl InputRuntimeOwnership {
+    pub(super) fn copy_reservation(&self, id: usize) -> u64 {
+        self.copy_reservations[id].load(Ordering::Acquire)
+    }
+
+    pub(super) fn ensure_no_copy_reservation(&self, id: usize) -> PyResult<()> {
+        if id >= NUM_SAMPLES {
+            return Err(PyValueError::new_err("id out of range"));
+        }
+        if self.copy_reservation(id) != 0 {
+            return Err(PyRuntimeError::new_err("pad content copy is pending"));
+        }
+        Ok(())
+    }
+
+    pub(super) fn reserve_copy(&self, id: usize, owner: u64) -> PyResult<()> {
+        self.ensure_no_copy_reservation(id)?;
+        if owner == 0 || !self.copy_target_empty(id) {
+            return Err(PyValueError::new_err("copy requires an empty target"));
+        }
+        self.copy_reservations[id]
+            .compare_exchange(0, owner, Ordering::AcqRel, Ordering::Acquire)
+            .map_err(|_| PyRuntimeError::new_err("pad content copy is pending"))?;
+        Ok(())
+    }
+
+    pub(super) fn release_copy(&self, id: usize, owner: u64) -> PyResult<()> {
+        self.copy_reservations[id]
+            .compare_exchange(owner, 0, Ordering::AcqRel, Ordering::Acquire)
+            .map_err(|_| PyRuntimeError::new_err("pad content copy owner changed"))?;
+        Ok(())
+    }
+
+    pub(super) fn copy_target_empty(&self, id: usize) -> bool {
+        id < NUM_SAMPLES && self.sources[id].generation.load(Ordering::SeqCst) == 0
+    }
+
+    pub(super) fn copy_parameter_epoch(&self, id: usize) -> u64 {
+        self.copy_parameter_epochs[id].load(Ordering::Acquire)
+    }
+
+    pub(super) fn publish_copy_parameter_epoch(&self, id: usize, epoch: u64) {
+        self.copy_parameter_epochs[id].store(epoch, Ordering::Release);
+    }
+
+    pub(super) fn publish_copy_lifetime(&self, id: usize, lifetime: u64) {
+        self.publish_content_lifetime(id, lifetime);
+    }
+
+    pub(crate) fn content_lifetime(&self, id: usize) -> u64 {
+        self.content_lifetimes[id].load(Ordering::Acquire)
+    }
+
+    pub(crate) fn content_lifetime_current(&self, id: usize, expected: u64) -> bool {
+        id < NUM_SAMPLES && self.content_lifetime(id) == expected
+    }
+
+    pub(super) fn publish_content_lifetime(&self, id: usize, lifetime: u64) {
+        self.content_lifetimes[id].store(lifetime, Ordering::Release);
+    }
+
     pub(crate) fn next_key_lock_request(&self, id: usize) -> PyResult<u64> {
         let request = self.reserve_key_lock_request(id)?;
         self.publish_key_lock_request(id, request);
@@ -159,6 +225,7 @@ impl InputRuntimeOwnership {
         id < NUM_SAMPLES
             && revision != u64::MAX
             && self.migration_holds[id].load(Ordering::Acquire) == 0
+            && self.copy_reservation(id) == 0
             && self.launch_revision(id) == revision
     }
 
@@ -418,6 +485,7 @@ impl InputRuntimeOwnership {
     }
 
     pub(super) fn next_authority(&self, id: usize) -> PyResult<u64> {
+        self.ensure_no_copy_reservation(id)?;
         next_epoch(&self.authority[id]).map_err(PyRuntimeError::new_err)
     }
 
@@ -432,7 +500,9 @@ impl InputRuntimeOwnership {
     }
 
     pub(crate) fn authority_current(&self, id: usize, binding: InputPadBinding) -> bool {
-        id < NUM_SAMPLES && self.authority[id].load(Ordering::Acquire) == binding.authority_revision
+        id < NUM_SAMPLES
+            && self.copy_reservation(id) == 0
+            && self.authority[id].load(Ordering::Acquire) == binding.authority_revision
     }
 
     pub(crate) fn binding_source_current(&self, id: usize, binding: InputPadBinding) -> bool {
@@ -557,6 +627,7 @@ pub(crate) struct InputPadBinding {
 pub struct InputRuntimePadBinding {
     pub(super) id: usize,
     pub(super) source_generation: u64,
+    content_lifetime: u64,
     source_digest: String,
     sample_rate_hz: u32,
     intent: TimingIntent,
@@ -567,11 +638,18 @@ pub struct InputRuntimePadBinding {
 }
 
 impl InputRuntimePadBinding {
+    pub(super) fn copy_timing_context(
+        &self,
+    ) -> (TimingIntent, Option<CurrentConstantTimingRecord>) {
+        (self.intent, self.accepted.clone())
+    }
+
     #[cfg(test)]
     pub(super) fn for_test(id: usize, ownership: Arc<InputRuntimeOwnership>) -> Self {
         Self {
             id,
             source_generation: 1,
+            content_lifetime: ownership.content_lifetime(id),
             source_digest: "a".repeat(64),
             sample_rate_hz: 48_000,
             intent: TimingIntent::Legacy,
@@ -591,7 +669,9 @@ impl InputRuntimePadBinding {
         }
     }
     pub(super) fn current(&self) -> bool {
-        self.ownership.authority_current(self.id, self.binding)
+        self.ownership
+            .content_lifetime_current(self.id, self.content_lifetime)
+            && self.ownership.authority_current(self.id, self.binding)
             && self.ownership.binding_source_current(self.id, self.binding)
             && self.acknowledgements.current_epoch(self.id)
                 == self
@@ -599,6 +679,9 @@ impl InputRuntimePadBinding {
                     .accepted
                     .map_or(0, |accepted| accepted.publication_epoch)
             && self.ownership.authority_current(self.id, self.binding)
+            && self
+                .ownership
+                .content_lifetime_current(self.id, self.content_lifetime)
     }
 
     pub(super) fn available(&self) -> bool {
@@ -622,6 +705,7 @@ impl InputRuntimePadBinding {
             format!("loaded-{}-{}", self.id, self.source_generation),
         )?;
         metadata.set_item("source_generation", self.source_generation)?;
+        metadata.set_item("content_lifetime", self.content_lifetime)?;
         metadata.set_item("source_sha256", &self.source_digest)?;
         metadata.set_item("sample_rate_hz", self.sample_rate_hz)?;
         metadata.set_item(
@@ -713,6 +797,9 @@ pub(super) fn validate_expected_source_generation_under_request_lock(
     id: usize,
     expected_source_generation: Option<u64>,
 ) -> PyResult<()> {
+    engine
+        .input_runtime_ownership
+        .ensure_no_copy_reservation(id)?;
     if expected_source_generation.is_none() {
         return Ok(());
     }
@@ -726,6 +813,9 @@ pub(super) fn capture_under_request_lock(
     engine: &AudioEngine,
     id: usize,
 ) -> PyResult<Option<InputRuntimePadBinding>> {
+    engine
+        .input_runtime_ownership
+        .ensure_no_copy_reservation(id)?;
     super::resident_relocation::reconcile_under_request_lock(engine)?;
     let intents = engine
         .timing_intents
@@ -779,6 +869,7 @@ pub(super) fn capture_under_request_lock(
     Ok(Some(InputRuntimePadBinding {
         id,
         source_generation: generation,
+        content_lifetime: engine.input_runtime_ownership.content_lifetime(id),
         source_digest: digest.clone(),
         sample_rate_hz: rate,
         intent: intents[id],

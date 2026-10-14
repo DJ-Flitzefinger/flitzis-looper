@@ -50,6 +50,7 @@ mod complete_context;
 pub use committed_stem_residency::{CommittedStemSetTicket, ResidentStemTicket};
 pub(crate) mod constant_timing;
 mod constants;
+mod content_lifetime;
 pub use constant_timing::CapturedConstantTiming;
 pub use constant_timing::ConstantTimingTicket;
 pub use constant_timing::SavedConstantTimingTicket;
@@ -74,7 +75,9 @@ mod native_history_permit;
 mod native_owned_work;
 mod native_source_coverage;
 mod offline_stem_source;
+pub(crate) mod pad_copy;
 pub use offline_stem_source::OfflineStemSourceLease;
+pub use pad_copy::{CapturedPadCopy, PadCopyTicket};
 mod prepared_native_history;
 pub(crate) mod prepared_source;
 mod prepared_stems_work;
@@ -452,12 +455,21 @@ fn publish_loaded_sample_with_arm(
         .ownership
         .next_authority(id)
         .map_err(|error| error.to_string())?;
+    let content_lifetime = content_lifetime::for_assignment(
+        publication.ownership.content_lifetime(id),
+        publication.replace_assignment
+            || slot.is_none()
+            || publication.digest_slot.as_ref() != Some(&publication.digest),
+    )?;
     // Preparatory proposals cannot invalidate the old usable source before all
     // resource/queue/scalar admission succeeds. The caller owns its request gate.
     arm()?;
     // Capacity is reserved under the only producer lock. Publish the source fence
     // before releasing the command so a fast callback never sees an old fence.
     publication.ownership.revoke(id, authority);
+    publication
+        .ownership
+        .publish_content_lifetime(id, content_lifetime);
     if let Some((slot, intent)) = publication.intent {
         *slot = intent;
         publication.ownership.set_timing_intent(id, intent);
@@ -479,6 +491,7 @@ fn publish_loaded_sample_with_arm(
             id,
             sample,
             source_generation: publication.generation,
+            content_lifetime,
             adoption: publication
                 .cold_adoption
                 .expect("bounded cold adoption token"),
@@ -672,6 +685,7 @@ pub struct AudioEngine {
     resident_stem_cache: Arc<Mutex<Vec<resident_relocation::ResidentStemCache>>>,
     resident_restore_guards: Mutex<Vec<Option<Arc<cold_residency::ResidentLoadGuard>>>>,
     incoming_loads: Mutex<Vec<Option<Arc<incoming_load::IncomingLoad>>>>,
+    pad_copies: Mutex<Vec<Option<Arc<pad_copy::PadCopyState>>>>,
     cold_lease_generations: Arc<Vec<AtomicU64>>,
     cold_pcm_history: Arc<project_assets::PcmHistory>,
     project_assets: Arc<project_assets::ProjectAssets>,
@@ -1069,6 +1083,7 @@ impl AudioEngine {
             )),
             resident_restore_guards: Mutex::new((0..NUM_SAMPLES).map(|_| None).collect()),
             incoming_loads: Mutex::new((0..NUM_SAMPLES).map(|_| None).collect()),
+            pad_copies: Mutex::new((0..NUM_SAMPLES).map(|_| None).collect()),
             cold_lease_generations: Arc::new((0..NUM_SAMPLES).map(|_| AtomicU64::new(0)).collect()),
             cold_pcm_history,
             project_assets,
@@ -2315,6 +2330,46 @@ impl AudioEngine {
         prepared.finish(&*slf.try_borrow()?, source_ticket, &producer)
     }
 
+    /// Capture musical intent and reserve an empty target without publishing its epochs.
+    pub fn capture_pad_copy(
+        &self,
+        binding: &InputRuntimePadBinding,
+        target_id: usize,
+        intent_json: &str,
+    ) -> PyResult<CapturedPadCopy> {
+        pad_copy::capture(self, binding, target_id, intent_json)
+    }
+
+    /// Prepare on the existing two-worker lane without retaining an AudioEngine Python borrow.
+    pub fn prepare_pad_copy(
+        slf: Py<Self>,
+        py: Python<'_>,
+        captured: &CapturedPadCopy,
+    ) -> PyResult<PadCopyTicket> {
+        let state = {
+            let engine = slf.try_borrow(py)?;
+            pad_copy::prepare(&engine, captured)?
+        };
+        py.detach(move || pad_copy::prepare_detached(state))
+            .map_err(PyRuntimeError::new_err)
+    }
+
+    pub fn publish_pad_copy(&self, ticket: &PadCopyTicket) -> PyResult<()> {
+        pad_copy::publish(self, ticket)
+    }
+
+    pub fn reconcile_pad_copy(&self, ticket: &PadCopyTicket) -> PyResult<bool> {
+        pad_copy::reconcile(self, ticket)
+    }
+
+    pub fn finish_pad_copy(&self, ticket: &PadCopyTicket) -> PyResult<()> {
+        pad_copy::finish(self, ticket)
+    }
+
+    pub fn cancel_pad_copy(&self, captured: &CapturedPadCopy) -> PyResult<bool> {
+        pad_copy::cancel(self, captured)
+    }
+
     /// Select whether a pad renders from the loaded full mix or all prepared stems.
     #[pyo3(signature = (id, mode, source_version = None))]
     pub fn set_stem_mix_mode(
@@ -2343,6 +2398,12 @@ impl AudioEngine {
             }
         };
 
+        let _requests = self
+            .pad_request_ids
+            .lock()
+            .map_err(|_| PyRuntimeError::new_err("request lock poisoned"))?;
+        self.input_runtime_ownership
+            .ensure_no_copy_reservation(id)?;
         let handle = self
             .stream_handle
             .as_ref()
@@ -2398,6 +2459,12 @@ impl AudioEngine {
         }
 
         let source_version_hash = source_version_hash(&source_version);
+        let _requests = self
+            .pad_request_ids
+            .lock()
+            .map_err(|_| PyRuntimeError::new_err("request lock poisoned"))?;
+        self.input_runtime_ownership
+            .ensure_no_copy_reservation(id)?;
         let handle = self
             .stream_handle
             .as_ref()
@@ -2975,6 +3042,14 @@ impl AudioEngine {
 
     pub fn set_key_lock(&mut self, enabled: bool) -> PyResult<()> {
         resident_relocation::reconcile(self)?;
+        let _requests = self
+            .pad_request_ids
+            .lock()
+            .map_err(|_| PyRuntimeError::new_err("request lock poisoned"))?;
+        for id in 0..NUM_SAMPLES {
+            self.input_runtime_ownership
+                .ensure_no_copy_reservation(id)?;
+        }
         for id in 0..NUM_SAMPLES {
             self.admit_resident_key_lock(id, enabled)?;
         }
@@ -3180,6 +3255,8 @@ impl AudioEngine {
             .pad_request_ids
             .lock()
             .map_err(|_| PyRuntimeError::new_err("request lock poisoned"))?;
+        self.input_runtime_ownership
+            .ensure_no_copy_reservation(id)?;
         let handle = self
             .stream_handle
             .as_ref()
@@ -3207,6 +3284,8 @@ impl AudioEngine {
             .pad_request_ids
             .lock()
             .map_err(|_| PyRuntimeError::new_err("request lock poisoned"))?;
+        self.input_runtime_ownership
+            .ensure_no_copy_reservation(id)?;
         let handle = self
             .stream_handle
             .as_ref()
@@ -3232,19 +3311,25 @@ impl AudioEngine {
             return Err(PyValueError::new_err("gain out of range"));
         }
 
-        let handle = self
-            .stream_handle
-            .as_ref()
-            .ok_or_else(|| PyRuntimeError::new_err("Audio engine not initialized"))?;
-
-        let mut producer_guard = handle
-            .parameter_producer
+        let _requests = self
+            .pad_request_ids
+            .lock()
+            .map_err(|_| PyRuntimeError::new_err("request lock poisoned"))?;
+        self.input_runtime_ownership
+            .ensure_no_copy_reservation(id)?;
+        let expected_epoch = self.input_runtime_ownership.copy_parameter_epoch(id);
+        let mut producer_guard = self
+            .parameter_producer()?
             .lock()
             .map_err(|_| PyRuntimeError::new_err("Failed to acquire producer lock"))?;
 
         push_parameter_message(
             &mut producer_guard,
-            ControlParameterMessage::SetPadGain { id, gain_db },
+            ControlParameterMessage::SetPadGainGuarded {
+                id,
+                gain_db,
+                expected_epoch,
+            },
             "SetPadGain",
         )
     }
@@ -3268,23 +3353,26 @@ impl AudioEngine {
             return Err(PyValueError::new_err("eq gain out of range"));
         }
 
-        let handle = self
-            .stream_handle
-            .as_ref()
-            .ok_or_else(|| PyRuntimeError::new_err("Audio engine not initialized"))?;
-
-        let mut producer_guard = handle
-            .parameter_producer
+        let _requests = self
+            .pad_request_ids
+            .lock()
+            .map_err(|_| PyRuntimeError::new_err("request lock poisoned"))?;
+        self.input_runtime_ownership
+            .ensure_no_copy_reservation(id)?;
+        let expected_epoch = self.input_runtime_ownership.copy_parameter_epoch(id);
+        let mut producer_guard = self
+            .parameter_producer()?
             .lock()
             .map_err(|_| PyRuntimeError::new_err("Failed to acquire producer lock"))?;
 
         push_parameter_message(
             &mut producer_guard,
-            ControlParameterMessage::SetPadEq {
+            ControlParameterMessage::SetPadEqGuarded {
                 id,
                 low_db,
                 mid_db,
                 high_db,
+                expected_epoch,
             },
             "SetPadEq",
         )
@@ -3426,6 +3514,12 @@ impl AudioEngine {
             )));
         }
 
+        let _requests = self
+            .pad_request_ids
+            .lock()
+            .map_err(|_| PyRuntimeError::new_err("request lock poisoned"))?;
+        self.input_runtime_ownership
+            .ensure_no_copy_reservation(id)?;
         let mut producer_guard = self
             .control_producer()?
             .lock()
@@ -3448,6 +3542,12 @@ impl AudioEngine {
             )));
         }
 
+        let _requests = self
+            .pad_request_ids
+            .lock()
+            .map_err(|_| PyRuntimeError::new_err("request lock poisoned"))?;
+        self.input_runtime_ownership
+            .ensure_no_copy_reservation(id)?;
         let mut producer_guard = self
             .control_producer()?
             .lock()

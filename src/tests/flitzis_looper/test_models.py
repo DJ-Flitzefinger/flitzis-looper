@@ -38,6 +38,7 @@ from flitzis_looper.models import (
     StemFileSet,
     StemSeparator,
 )
+from flitzis_looper.stem_intent import PadStemIntent
 from flitzis_looper.stem_pair_selection import STEM_FINGERPRINT_SCHEMA
 
 
@@ -286,6 +287,14 @@ def test_project_state_defaults(project_state: ProjectState) -> None:
     assert all(entry is None for entry in project_state.stem_cache)
     assert len(project_state.pad_stem_mix_mode) == NUM_SAMPLES
     assert all(mode == "full_mix" for mode in project_state.pad_stem_mix_mode)
+    assert len(project_state.pad_stem_intent) == NUM_SAMPLES
+    assert all(
+        intent.enabled_mask == STEM_COMPONENT_MASK for intent in project_state.pad_stem_intent
+    )
+    assert all(
+        intent.last_custom_mask == STEM_COMPONENT_MASK for intent in project_state.pad_stem_intent
+    )
+    assert all(intent.display_mode == "all" for intent in project_state.pad_stem_intent)
     assert len(project_state.pad_key_lock) == NUM_SAMPLES
     assert all(value is None for value in project_state.pad_key_lock)
     assert project_state.key_lock_intent_version == 2
@@ -749,12 +758,6 @@ def test_session_state_defaults(session_state: SessionState) -> None:
     assert session_state.stem_generation_progress == {}
     assert session_state.stem_generation_stage == {}
     assert session_state.stem_generation_errors == {}
-    assert len(session_state.pad_stem_enabled_mask) == NUM_SAMPLES
-    assert all(mask == STEM_COMPONENT_MASK for mask in session_state.pad_stem_enabled_mask)
-    assert len(session_state.pad_stem_last_custom_mask) == NUM_SAMPLES
-    assert all(mask == STEM_COMPONENT_MASK for mask in session_state.pad_stem_last_custom_mask)
-    assert len(session_state.pad_stem_mask_display_mode) == NUM_SAMPLES
-    assert all(mode == "all" for mode in session_state.pad_stem_mask_display_mode)
     assert session_state.input_learn_active is False
     assert session_state.input_learn_pending_source is None
     assert session_state.input_learn_pending_binding_key is None
@@ -786,38 +789,52 @@ def test_master_output_metering_state_validation(session_state: SessionState) ->
         SessionState(master_output_clip_hold_until=float("nan"))
 
 
-def test_stem_enabled_mask_validation(session_state: SessionState) -> None:
-    session_state.pad_stem_enabled_mask[0] = STEM_INSTRUMENTAL_PRESET_MASK
-    assert session_state.pad_stem_enabled_mask[0] == (
+def test_stem_enabled_mask_validation(project_state: ProjectState) -> None:
+    project_state.pad_stem_intent[0] = PadStemIntent(
+        enabled_mask=STEM_INSTRUMENTAL_PRESET_MASK, display_mode="instrumental"
+    )
+    assert project_state.pad_stem_intent[0].enabled_mask == (
         STEM_MASK_DRUMS | STEM_MASK_MELODY | STEM_MASK_BASS
     )
 
-    with pytest.raises(ValidationError, match="pad_stem_enabled_mask"):
-        SessionState(pad_stem_enabled_mask=[])
+    with pytest.raises(ValidationError, match="pad_stem_intent"):
+        ProjectState(pad_stem_intent=[])
 
-    with pytest.raises(ValidationError, match="component masks"):
-        SessionState(pad_stem_enabled_mask=[1 << 4] * NUM_SAMPLES)
-
-    session_state.pad_stem_last_custom_mask[0] = STEM_INSTRUMENTAL_PRESET_MASK
-    assert session_state.pad_stem_last_custom_mask[0] == STEM_INSTRUMENTAL_PRESET_MASK
-
-    with pytest.raises(ValidationError, match="pad_stem_last_custom_mask"):
-        SessionState(pad_stem_last_custom_mask=[])
-
-    with pytest.raises(ValidationError, match="component masks"):
-        SessionState(pad_stem_last_custom_mask=[1 << 4] * NUM_SAMPLES)
+    with pytest.raises(ValidationError, match="enabled_mask"):
+        ProjectState.model_validate({
+            "pad_stem_intent": [
+                {"enabled_mask": 1 << 4, "display_mode": "custom"} for _ in range(NUM_SAMPLES)
+            ]
+        })
 
 
-def test_stem_mask_display_mode_validation(session_state: SessionState) -> None:
-    session_state.pad_stem_mask_display_mode[0] = "instrumental"
-    assert session_state.pad_stem_mask_display_mode[0] == "instrumental"
+def test_stem_last_custom_mask_validation(project_state: ProjectState) -> None:
+    project_state.pad_stem_intent[0] = PadStemIntent(last_custom_mask=STEM_INSTRUMENTAL_PRESET_MASK)
+    assert project_state.pad_stem_intent[0].last_custom_mask == STEM_INSTRUMENTAL_PRESET_MASK
+
+    with pytest.raises(ValidationError, match="pad_stem_intent"):
+        ProjectState(pad_stem_intent=[PadStemIntent() for _ in range(NUM_SAMPLES - 1)])
+
+    with pytest.raises(ValidationError, match="last_custom_mask"):
+        ProjectState.model_validate({
+            "pad_stem_intent": [{"last_custom_mask": 1 << 4} for _ in range(NUM_SAMPLES)]
+        })
+
+
+def test_stem_mask_display_mode_validation(project_state: ProjectState) -> None:
+    project_state.pad_stem_intent[0] = PadStemIntent(
+        enabled_mask=STEM_INSTRUMENTAL_PRESET_MASK, display_mode="instrumental"
+    )
+    assert project_state.pad_stem_intent[0].display_mode == "instrumental"
     assert tuple(STEM_MASK_DISPLAY_MODES) == ("custom", "instrumental", "all")
 
-    with pytest.raises(ValidationError, match="pad_stem_mask_display_mode"):
-        SessionState(pad_stem_mask_display_mode=[])
+    with pytest.raises(ValidationError, match="pad_stem_intent"):
+        ProjectState(pad_stem_intent=[PadStemIntent() for _ in range(NUM_SAMPLES + 1)])
 
-    with pytest.raises(ValidationError):
-        SessionState.model_validate({"pad_stem_mask_display_mode": ["preset"] * NUM_SAMPLES})
+    with pytest.raises(ValidationError, match="display_mode"):
+        ProjectState.model_validate({
+            "pad_stem_intent": [{"display_mode": "preset"} for _ in range(NUM_SAMPLES)]
+        })
 
 
 @pytest.mark.parametrize("budget", [True, False, 512.0, "512", None, 127, 16385])

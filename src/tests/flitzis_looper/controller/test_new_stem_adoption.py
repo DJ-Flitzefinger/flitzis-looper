@@ -6,7 +6,10 @@ from typing import TYPE_CHECKING, cast
 
 import pytest
 
-from flitzis_looper.controller.committed_stem_residency import CommittedStemResidency
+from flitzis_looper.controller.committed_stem_residency import (
+    CommittedStemResidency,
+    WithdrawnStemIntent,
+)
 from flitzis_looper.controller.stem_cache import expected_stem_files
 from flitzis_looper.models import StemCacheEntry
 from flitzis_looper.stem_pair_selection import StemPairSelection
@@ -656,7 +659,7 @@ def test_accepted_v2_launch_loss_needs_explicit_same_all_receipt(
     obsolete = _OwnReceipt(residency="accepted", effective=effective, owned_claim=True)
     fresh = _OwnReceipt()
     adoption.audio.receipts.extend((obsolete, fresh))
-    adoption.bind("c", active=False)
+    entry = adoption.bind("c", active=False)
     installed = adoption.audio.candidates[-1]
     assert adoption.helper.request(0, "all_stems", 15)
     adoption.helper.poll()
@@ -672,8 +675,13 @@ def test_accepted_v2_launch_loss_needs_explicit_same_all_receipt(
     assert obsolete.residency_status() == "accepted"
     assert obsolete.effective_mode_status() == "rejected"
     assert obsolete.effective_failure_reason() is None
+    assert adoption.helper.poll() == (
+        WithdrawnStemIntent(
+            0, "content-1", "samples/source.wav", entry.source_version, "c" * 64, "all_stems", 15
+        ),
+    )
     for _ in range(3):
-        adoption.helper.poll()
+        assert adoption.helper.poll() == ()
 
     status = adoption.helper.status(0)
     assert status is not None

@@ -615,14 +615,14 @@ fn live_candidate_first_and_replacement_keep_actual_native_fifo_and_two_exact_re
                 // exercises a fresh own preparation rather than reusing its ACK.
                 let full = p.request("full_mix", 0b1010);
                 assert!(
-                    !receipt.is_current(),
-                    "later ordinary intent retires only V2's old receipt"
-                );
-                assert!(
                     p.selected.is_current(),
                     "accepted V2 selection remains reusable"
                 );
                 p.capture_then_wait(&full);
+                assert!(
+                    !receipt.is_current(),
+                    "later ordinary intent retires only V2's old receipt"
+                );
                 assert_eq!(p.h.callback.drain(&mut p.h.consumer), 1);
                 p.select_reference("full_mix", 0b1010);
                 settle(&mut p, &full);
@@ -770,8 +770,8 @@ fn empty_candidate_mask_keeps_exact_reader_authority_before_a_changed_mask() {
     );
     assert!(p.h.callback.mixer.stems_for_measurement()[0].is_some());
     let changed = p.request("all_stems", 0b1010);
-    assert!(!empty.is_current());
     p.capture_then_wait(&changed);
+    assert!(!empty.is_current());
     assert_eq!(p.h.callback.drain(&mut p.h.consumer), 1);
     p.select_reference("all_stems", reordered_mask(0b1010));
     settle(&mut p, &changed);

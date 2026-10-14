@@ -3599,7 +3599,8 @@ assert ('stems', 0) in controller._assets._assignments
 assert project.sample_paths[0] == frozen_saved_path and project.pad_content[0] == frozen_saved_content
 assert project.stem_cache[0].pair == disk_v2
 assert ('stems', 0) in controller._assets._assignments
-assert not session.stem_generation_errors and not session.sample_load_errors
+assert not session.stem_generation_errors and not session.sample_load_errors, (
+    session.stem_generation_errors, session.sample_load_errors, controller.stem_residency_status(0))
 "#,
     );
     if lifecycle == CandidateLifecycle::FrozenResumeReaders {
@@ -4047,7 +4048,8 @@ assert candidate.effective_failure_reason() is None
 assert project.sample_paths[0] == frozen_saved_path and project.pad_content[0] == frozen_saved_content
 assert project.stem_cache[0].pair == disk_v2 and project.pad_stem_mix_mode[0] == 'all_stems'
 assert ('stems', 0) in controller._assets._assignments and ('original', 215) in controller._assets._assignments
-assert not session.stem_generation_errors and not session.sample_load_errors
+assert not session.stem_generation_errors and not session.sample_load_errors, (
+    session.stem_generation_errors, session.sample_load_errors, controller.stem_residency_status(0))
 "#,
     );
 }
@@ -4888,6 +4890,7 @@ fn public_source_replacement(
     let other_native = other.stretch.native_state_address();
     let other_source = other.sample.clone().unwrap();
     let other_demand = playback.callback.mixer.stem_demand_for_measurement(215);
+    let source_epoch_before = engine.prepared_source_epochs[0].load(Ordering::Acquire);
     let input = std::env::current_dir()
         .unwrap()
         .join("public-replacement.wav");
@@ -4935,6 +4938,9 @@ source_registration = source_selection.ticket
 source_path_before = project.sample_paths[0]
 source_content_before = project.pad_content[0]
 source_worker_calls = audio.worker_call_count()
+assert source_candidate.is_current() and not source_candidate.claimed()
+assert source_registration.is_current() and source_registration.publication_status() == 'accepted'
+assert source_v2.same_preparation_context(source_v2)
 loader.load_sample_async(0, source_input)
 assert not session.sample_load_errors, session.sample_load_errors
 source_request = loader._load_request_ids[0]
@@ -4946,9 +4952,8 @@ assert not source_audio.success_receipts
 assert 0 in session.loading_sample_ids and session.pending_sample_paths[0] == source_input
 assert project.sample_paths[0] == source_path_before and project.pad_content[0] == source_content_before
 assert project.stem_cache[0].pair == disk_v2
-assert not source_candidate.is_current() and not source_candidate.claimed()
-assert source_registration.is_current() and source_registration.publication_status() == 'accepted'
-assert not source_v2.same_preparation_context(source_v2)
+assert not source_candidate.claimed()
+assert source_registration.publication_status() == 'accepted'
 assert live.control is previous_control and live.attempt is source_selection
 "#,
     );
@@ -4987,10 +4992,29 @@ assert live.control is previous_control and live.attempt is source_selection
             .stem_transition_for_measurement(0)
             .matches_exact(transition)
     );
+    // Proposal admission preserves the usable predecessor. The worker arms the
+    // new source only after complete preparation and reserved queue capacity.
+    // Keep the old Adopt queued so neither source has received a callback ACK.
     wait_until(|| consumer.slots() == 2);
     assert!(
         matches!(consumer.peek(), Ok(ControlMessage::CommittedStemWork(work))
         if work.as_ref() as *const CommittedStemRtWork as usize == queued)
+    );
+    assert_ne!(
+        engine.prepared_source_epochs[0].load(Ordering::Acquire),
+        source_epoch_before,
+        "queued new-source work has genuinely armed its source authority"
+    );
+    controller_python(
+        locals,
+        r#"
+assert not source_candidate.is_current() and not source_candidate.claimed()
+assert not source_registration.is_current() and source_registration.publication_status() == 'accepted'
+assert not source_v2.same_preparation_context(source_v2)
+assert live.control is previous_control and live.attempt is source_selection
+assert project.sample_paths[0] == source_path_before and project.pad_content[0] == source_content_before
+assert project.stem_cache[0].pair == disk_v2 and not source_audio.success_receipts
+"#,
     );
     assert_eq!(playback.drain(consumer), 0);
     for frames in [1, 31, 137, 257] {
@@ -6122,7 +6146,7 @@ if b_stem_key_lock:
     assert status.requested and status.effective is True and not status.pending
 b_worker_calls = audio.worker_call_count()
 assert controller.set_stem_enabled_mask(0, 0b1010)
-assert session.pad_stem_enabled_mask[0] == 0b1010
+assert project.pad_stem_intent[0].enabled_mask == 0b1010
 controller.bind_disk_selection_commit(persistence.commit_stem_selection, persistence.flush)
 "#,
     );
@@ -6526,10 +6550,11 @@ window_selection = live.disk.selection
 window_registration = window_selection.ticket
 window_ownership_error = 'Committed stem residency or mode ownership changed'
 window_worker_calls = audio.worker_call_count()
+assert failed_window.is_current() and not failed_window.claimed()
 transport.loop.set_end(0, 1581 / fixture['rate'])
 ready_window = transport.residency._pending[0].ticket
 assert ready_window is not None
-assert not failed_window.is_current() and not failed_window.claimed()
+assert not failed_window.claimed()
 "#,
     );
     wait_until(|| {
@@ -6540,6 +6565,10 @@ assert not failed_window.is_current() and not failed_window.claimed()
         if work.as_ref() as *const CommittedStemRtWork as usize == queued)
     );
     assert_eq!(consumer.slots(), 2);
+    controller_python(
+        locals,
+        "assert not failed_window.is_current() and not failed_window.claimed()",
+    );
     assert_eq!(playback.drain(consumer), 0);
     let admitted = voice(&playback.callback.mixer);
     assert!(admitted.source_playback.matches_exact(&old_clock));
@@ -7323,7 +7352,7 @@ for _ in range(16):
     assert live.disk.selection is latest_selection and latest_selection.ticket is fresh_registration
     assert latest_selection.receipt is candidate and candidate.is_current() and not candidate.claimed()
     assert candidate.residency_status() in {'captured', 'pending'} and candidate.effective_mode_status() == 'waiting'
-    assert live.desired == ('all_stems', 0b0101) and session.pad_stem_enabled_mask[0] == 0b0101
+    assert live.desired == ('all_stems', 0b0101) and project.pad_stem_intent[0].enabled_mask == 0b0101
     assert not superseded.is_current() and not superseded.claimed()
     assert superseded.residency_status() == 'rejected' and superseded.effective_mode_status() == 'rejected'
     assert superseded.effective_failure_reason() is None
@@ -7427,7 +7456,7 @@ assert initial_nonempty.effective_mode_status() == 'transitioning'
 assert controller.set_stem_enabled_mask(0, latest_mask)
 for _ in range(16):
     controller.on_frame_render()
-    assert session.pad_stem_enabled_mask[0] == latest_mask
+    assert project.pad_stem_intent[0].enabled_mask == latest_mask
     assert live.desired == ('all_stems', latest_mask)
     assert live.control is nonempty_selection and live.attempt is nonempty_selection
     assert live.disk.selection is nonempty_selection
@@ -7528,11 +7557,11 @@ assert nonempty_selection.ticket is nonempty_registration and nonempty_registrat
 assert nonempty_registration.publication_status() == 'accepted'
 assert nonempty_selection.receipt_intent == ('all_stems', 0b0101)
 assert live.desired == ('all_stems', 0b0101)
-assert session.pad_stem_enabled_mask[0] == 0b0101
+assert project.pad_stem_intent[0].enabled_mask == 0b0101
 assert candidate.is_current() and not candidate.claimed()
 assert candidate.residency_status() in {'captured', 'pending'}
 assert candidate.effective_mode_status() == 'waiting'
-assert not initial_nonempty.is_current()
+assert initial_nonempty.is_current()
 assert initial_nonempty.effective_failure_reason() is None
 status = controller.stem_residency_status(0)
 assert status.disk_stem_set_identity == disk_v2.stem_set_identity
@@ -7557,7 +7586,25 @@ assert not session.stem_generation_errors, session.stem_generation_errors
             .stem_transition_for_measurement(0)
             .is_active()
     );
-    own_adoption(playback, consumer, locals, "candidate", key_lock);
+    assert_eq!(playback.drain(consumer), 1, "latest mask's own Capture");
+    wait_until(|| {
+        consumer.peek().is_ok()
+            || controller_ticket_status(locals, "candidate", "residency_status") == "rejected"
+    });
+    assert!(
+        matches!(consumer.peek(), Ok(ControlMessage::CommittedStemWork(work))
+        if matches!(work.as_ref(), crate::audio_engine::committed_stem_residency::CommittedStemRtWork::Adopt(transaction)
+            if transaction.id == 0 && transaction.mask == 0b0101))
+    );
+    controller_python(
+        locals,
+        r#"
+assert candidate.residency_status() == 'pending' and candidate.is_current() and not candidate.claimed()
+assert not initial_nonempty.is_current()
+assert initial_nonempty.effective_failure_reason() is None
+"#,
+    );
+    own_adoption_after_capture(playback, consumer, locals, "candidate", key_lock);
     let current = playback.callback.mixer.stems_for_measurement()[0]
         .as_ref()
         .unwrap();
@@ -7652,7 +7699,7 @@ assert live.attempt is v2_control and v2_control.receipt is candidate
 assert v2_control.receipt_intent == ('all_stems', 0)
 for mask in (0b0101, 0, 0b1010):
     assert controller.set_stem_enabled_mask(0, mask)
-    assert session.pad_stem_enabled_mask[0] == mask
+    assert project.pad_stem_intent[0].enabled_mask == mask
     assert live.desired == ('all_stems', mask)
     assert live.control is v2_control and live.attempt is v2_control
     assert v2_control.receipt is candidate and v2_control.receipt_intent == ('all_stems', 0)
@@ -7804,7 +7851,7 @@ assert status.disk_stem_set_identity == disk_v3.stem_set_identity
 assert status.control_stem_set_identity == disk_v3.stem_set_identity
 assert status.effective_stem_set_identity == disk_v3.stem_set_identity
 assert project.stem_cache[0].pair == disk_v3
-assert session.pad_stem_enabled_mask[0] == 0b1010
+assert project.pad_stem_intent[0].enabled_mask == 0b1010
 assert not session.stem_generation_errors, session.stem_generation_errors
 owner_v3.release()
 "#,
@@ -8116,9 +8163,27 @@ transport.playback.trigger_pad_keep_others(0)
 ready_start = transport.residency._pending[0].ticket
 assert ready_start is not None
 assert ready_start.publication_status() in ({'preparing', 'pending'} if complete_partial else {'pending'})
-assert not stopped.is_current() and stopped.effective_mode_status() == 'rejected'
+"#,
+    );
+    // A changed physical window remains a proposal during heavy preparation.
+    // Its actual queued transaction proves the worker armed the new intent;
+    // only that boundary can revoke the accepted stopped observation.
+    wait_until(|| consumer.peek().is_ok());
+    assert!(matches!(
+        consumer.peek(),
+        Ok(ControlMessage::RelocateResident(_))
+    ));
+    controller_python(
+        locals,
+        r#"
+assert ready_start.is_current() and ready_start.publication_status() == 'pending'
+assert 0 not in session.active_sample_ids
+assert not stopped.is_current() and stopped.effective_mode_status() == 'rejected', (
+    ready_start.publication_status(), stopped.is_current(), stopped.effective_mode_status(),
+    session.stem_generation_errors, session.sample_load_errors)
 controller.on_frame_render()
-assert live.control is live.disk.selection and live.attempt is None
+assert live.control is live.disk.selection and live.attempt is None, (
+    controller.stem_residency_status(0), session.stem_generation_errors, session.sample_load_errors)
 assert not live.control.candidate and live.control.ticket.is_current()
 assert live.control.receipt is None and live.control.receipt_intent is None
 assert live.control.desired is None and live.desired is None
@@ -8129,15 +8194,6 @@ assert project.pad_stem_mix_mode[0] == 'all_stems'
 assert not session.stem_generation_errors, session.stem_generation_errors
 "#,
     );
-    wait_until(|| consumer.peek().is_ok());
-    controller_python(
-        locals,
-        "assert ready_start.is_current() and ready_start.publication_status() == 'pending'\nassert 0 not in session.active_sample_ids",
-    );
-    assert!(matches!(
-        consumer.peek(),
-        Ok(ControlMessage::RelocateResident(_))
-    ));
     assert_eq!(callback.drain(consumer), 1, "ordinary Play window ACK");
     controller_python(
         locals,
@@ -8283,6 +8339,7 @@ fn public_explicit_seek(
         let before = voice(&playback.callback.mixer);
         let generation = before.generation;
         let history_epoch = before.stretch.source_epoch_owner().load(Ordering::Acquire);
+        let source_playback_before = before.source_playback;
         let source = playback.callback.mixer.bank_for_measurement()[0]
             .clone()
             .unwrap();
@@ -8335,13 +8392,29 @@ assert tail_seek.key_lock_request_id is None
                 || (status == "pending"
                     && matches!(consumer.peek(), Ok(ControlMessage::RelocateResident(_))))
         });
-        let direct =
-            controller_ticket_status(locals, "tail_seek", "publication_status") == "accepted";
         assert_eq!(
-            direct,
-            complete_resident || mode == ExplicitSeekMode::Normal
+            controller_ticket_status(locals, "tail_seek", "publication_status"),
+            "pending",
+            "capture-only proposal cannot acknowledge the Seek"
         );
-        if direct {
+        assert!(matches!(
+            consumer.peek(),
+            Ok(ControlMessage::RelocateResident(_))
+        ));
+        let captured = voice(&playback.callback.mixer);
+        assert_eq!(captured.generation, generation);
+        assert!(
+            captured
+                .source_playback
+                .matches_exact(&source_playback_before)
+        );
+        assert_eq!(playback.drain(consumer), 1, "public own Seek Relocate");
+        assert_eq!(
+            controller_ticket_status(locals, "tail_seek", "publication_status"),
+            "accepted"
+        );
+        reconcile(engine).unwrap();
+        if complete_resident || mode == ExplicitSeekMode::Normal {
             let current = playback.callback.mixer.bank_for_measurement()[0]
                 .as_ref()
                 .unwrap();
@@ -8354,20 +8427,27 @@ assert tail_seek.key_lock_request_id is None
             Python::attach(|py| {
                 let ticket = locals.bind(py).get_item("tail_seek").unwrap().unwrap();
                 let ticket = ticket.extract::<PyRef<crate::audio_engine::resident_relocation::ResidentWindowTicket>>().unwrap();
-                assert!(
-                    ticket.read_observation_for_test().is_none(),
-                    "covered own Seek performs no worker PCM read"
-                );
+                if let Some(read) = ticket.read_observation_for_test() {
+                    assert_eq!(read.source.read_bytes, 0, "covered Seek source I/O");
+                    assert_eq!(read.source.allocated_bytes, 0, "covered Seek source PCM");
+                    assert_eq!(read.stems.read_bytes, [0; 5], "covered Seek stem I/O");
+                    assert_eq!(read.stems.allocated_bytes, 0, "covered Seek stem PCM");
+                    assert_eq!(read.stems.fresh_opens, 0, "covered Seek stem opens");
+                    assert_eq!(
+                        read.stems.integrity_bytes, 0,
+                        "covered Seek stem integrity I/O"
+                    );
+                }
             });
-            assert!(consumer.is_empty(), "covered Seek needs no Relocate");
-        } else {
-            assert_eq!(playback.drain(consumer), 1, "public own Seek Relocate");
+            assert!(
+                consumer.is_empty(),
+                "covered Seek has exactly one own Relocate"
+            );
         }
         assert_eq!(
             controller_ticket_status(locals, "tail_seek", "publication_status"),
             "accepted"
         );
-        reconcile(engine).unwrap();
         let current = voice(&playback.callback.mixer);
         assert_ne!(
             current.generation, generation,
@@ -9345,7 +9425,7 @@ fn round_trip_with_lifecycle(
             r#"
 import json
 from pathlib import Path
-from flitzis_looper.models import ProjectState, SessionState, StemCacheEntry, PadContentIdentity
+from flitzis_looper.models import ProjectState, SessionState, StemCacheEntry, PadContentIdentity, PadStemIntent
 from flitzis_looper.controller.stem_cache import expected_stem_files
 from flitzis_looper.controller.stems import StemController
 from flitzis_looper.controller.stem_workers import StemWorkerPool
@@ -9372,7 +9452,7 @@ disk_v1 = StemPairSelection.model_validate(fixture['pair'])
 project.stem_cache[0] = StemCacheEntry(source_version=fixture['source_version'],
     cache_dir=disk_v1.wav_generation, stems=expected_stem_files(disk_v1.wav_generation), pair=disk_v1, available=True)
 session = SessionState()
-session.pad_stem_enabled_mask[0] = 0b1010
+project.pad_stem_intent[0] = PadStemIntent(enabled_mask=0b1010, display_mode='custom')
 persistence = ProjectPersistence(project)
 controller = StemController(project, session, audio, persistence.mark_dirty)
 assert isinstance(controller._stem_worker_pool, StemWorkerPool)
@@ -9385,24 +9465,44 @@ assert controller.publish_restored_stem_cache_if_available(0)
         locals.unbind()
     });
     wait_until(|| {
-        Python::attach(|py| {
+        let own_registration_pending = Python::attach(|py| {
             worker_python(
                 py,
                 locals.bind(py),
-                "controller.on_frame_render()\nassert not session.stem_generation_errors, session.stem_generation_errors",
+                r#"
+controller.on_frame_render()
+assert not session.stem_generation_errors, session.stem_generation_errors
+initial_registration_pending = (
+    0 in controller._committed_residency._selections
+    and controller._committed_residency._selections[0].ticket.is_current()
+    and controller._committed_residency._selections[0].ticket.publication_status() == 'pending'
+)
+"#,
             );
             locals
                 .bind(py)
-                .get_item("controller")
+                .get_item("initial_registration_pending")
                 .unwrap()
                 .unwrap()
-                .call_method1("stem_residency_status", (0,))
+                .extract::<bool>()
                 .unwrap()
-                .getattr("registration")
-                .map(|status| status.extract::<String>().unwrap() == "pending")
-                .unwrap_or(false)
-        })
+        });
+        own_registration_pending && h.consumer.peek().is_ok()
     });
+    assert!(
+        matches!(
+            h.consumer.peek().unwrap(),
+            ControlMessage::CommittedStemWork(work)
+                if matches!(
+                    work.as_ref(),
+                    crate::audio_engine::committed_stem_residency::CommittedStemRtWork::Register {
+                        id: 0,
+                        ..
+                    }
+                )
+        ),
+        "initial restore must queue its own stopped source registration"
+    );
     assert_eq!(h.callback.drain(&mut h.consumer), 1);
     controller_python(
         &locals,
@@ -10869,7 +10969,7 @@ if preclaim_masks:
     assert latest_selection.ticket is fresh_registration and fresh_registration.is_current()
     assert latest_selection.receipt is candidate and candidate.is_current() and candidate.claimed()
     assert latest_selection.receipt_intent == ('all_stems', 0b0101)
-    assert live.desired == ('all_stems', 0b0101) and session.pad_stem_enabled_mask[0] == 0b0101
+    assert live.desired == ('all_stems', 0b0101) and project.pad_stem_intent[0].enabled_mask == 0b0101
     assert superseded_selection.receipt is superseded
     assert not superseded.is_current() and not superseded.claimed()
     assert superseded.residency_status() == 'rejected' and superseded.effective_mode_status() == 'rejected'

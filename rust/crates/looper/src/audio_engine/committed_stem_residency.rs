@@ -1,5 +1,12 @@
 //! Sealed same-set residency and independent new-set candidate transactions.
 //! Component I/O and every final PCM/file-owner drop use existing workers.
+mod copy_binding;
+pub(super) use copy_binding::{
+    CapturedCopySelection, CopySelectionTarget, PreparedCopySelection, capture_copy_selection,
+    capture_copy_selection_fences, capture_copy_source_selection_fences, prepare_copy_selection,
+    reconcile_copy_selection,
+};
+
 use super::AudioEngine;
 use super::constant_timing::AcceptedTimingProjection;
 use super::constant_timing::CurrentTimingAcknowledgements;
@@ -113,6 +120,7 @@ impl CandidateAuthority {
 }
 
 #[pyclass(frozen)]
+#[derive(Clone)]
 pub struct CommittedStemSetTicket {
     owner: Arc<SelectionOwner>,
     publication: PreparedSourcePermit,
@@ -705,6 +713,8 @@ impl AudioEngine {
             .pad_request_ids
             .lock()
             .map_err(|_| PyRuntimeError::new_err("request lock poisoned"))?;
+        self.input_runtime_ownership
+            .ensure_no_copy_reservation(ticket.id)?;
         let cache = self
             .sample_cache
             .lock()
@@ -818,6 +828,8 @@ impl AudioEngine {
             .pad_request_ids
             .lock()
             .map_err(|_| PyRuntimeError::new_err("request lock poisoned"))?;
+        self.input_runtime_ownership
+            .ensure_no_copy_reservation(ticket.id)?;
         let cache = self
             .sample_cache
             .lock()
@@ -982,6 +994,8 @@ impl AudioEngine {
             .pad_request_ids
             .lock()
             .map_err(|_| PyRuntimeError::new_err("request lock poisoned"))?;
+        self.input_runtime_ownership
+            .ensure_no_copy_reservation(id)?;
         let mut producer_guard = producer
             .lock()
             .map_err(|_| PyRuntimeError::new_err("producer lock poisoned"))?;

@@ -588,6 +588,9 @@ pub(super) fn admit_stem_publication(
     source_version: &str,
     registration: Option<(PathBuf, PathBuf, Option<StemPairOwner>)>,
 ) -> PyResult<()> {
+    engine
+        .input_runtime_ownership
+        .ensure_no_copy_reservation(id)?;
     let mut owners = engine
         .resident_stem_cache
         .lock()
@@ -634,6 +637,9 @@ pub(super) fn set_stem_pair_full_mix_with_producer(
         .pad_request_ids
         .lock()
         .map_err(|_| PyRuntimeError::new_err("request lock poisoned"))?;
+    engine
+        .input_runtime_ownership
+        .ensure_no_copy_reservation(id)?;
     let mut producer = producer
         .lock()
         .map_err(|_| PyRuntimeError::new_err("control queue lock poisoned"))?;
@@ -1446,6 +1452,9 @@ pub(super) fn prepare_window_with_producer(
         .pad_request_ids
         .lock()
         .map_err(|_| PyRuntimeError::new_err("request lock poisoned"))?;
+    engine
+        .input_runtime_ownership
+        .ensure_no_copy_reservation(id)?;
     let binding = input_runtime_binding::capture_under_request_lock(engine, id)?;
     input_runtime_binding::validate_expected_source_generation(
         binding.as_ref(),

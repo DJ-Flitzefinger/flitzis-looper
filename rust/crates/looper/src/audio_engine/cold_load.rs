@@ -75,6 +75,13 @@ impl Drop for LoadingGuard {
     }
 }
 
+struct PreviousSourceState {
+    generation: (u64, u32),
+    digest: Option<String>,
+    intent: TimingIntent,
+    content_lifetime: u64,
+}
+
 struct ColdLoad {
     id: usize,
     request_id: u64,
@@ -397,14 +404,17 @@ fn admit_selected_material_incoming(
     } else {
         requested_path
     };
-    let reservation = engine
-        .cold_jobs
-        .reserve()
-        .map_err(PyRuntimeError::new_err)?;
     let mut requests = engine
         .pad_request_ids
         .lock()
         .map_err(|_| PyRuntimeError::new_err("request lock poisoned"))?;
+    engine
+        .input_runtime_ownership
+        .ensure_no_copy_reservation(id)?;
+    let reservation = engine
+        .cold_jobs
+        .reserve()
+        .map_err(PyRuntimeError::new_err)?;
     let mut loading = engine
         .loading_sample_ids
         .lock()
@@ -595,6 +605,9 @@ pub(super) fn unload_for_producer(
         .pad_request_ids
         .lock()
         .map_err(|_| PyRuntimeError::new_err("request lock poisoned"))?;
+    engine
+        .input_runtime_ownership
+        .ensure_no_copy_reservation(id)?;
     let advance = PadRequestAdvance::prepare(&mut requests[id], &engine.prepared_source_epochs[id])
         .map_err(PyRuntimeError::new_err)?;
     let mut cache = engine
@@ -629,6 +642,9 @@ pub(super) fn unload_for_producer(
     engine.input_runtime_ownership.revoke(id, authority);
     advance.commit();
     engine.input_runtime_ownership.revoke_source(id);
+    engine
+        .input_runtime_ownership
+        .publish_content_lifetime(id, 0);
     engine.input_runtime_ownership.clear_launch_admitted(id);
     producer
         .push(ControlMessage::UnloadSample { id })
@@ -749,7 +765,9 @@ impl ColdLoad {
                 .subscribe_verified()
                 .map_err(|error| error.to_string())?;
             self.resident.commit_selected_history(&sample)?;
-            lease.bind_pcm(&sample.samples);
+            lease
+                .bind_sample(&sample)
+                .map_err(|error| error.to_string())?;
             return Ok((lease, sample, None, None, None, None, None));
         }
 
@@ -893,7 +911,9 @@ impl ColdLoad {
         // prepare_pcm_resident already read the exact selected extent/context;
         // rewriting its Arc view would invalidate the scoped owner witness.
         self.resident.commit_selected_history(&sample)?;
-        transaction.bind_pcm(&sample.samples);
+        transaction
+            .bind_sample(&sample)
+            .map_err(|error| error.to_string())?;
         Ok((
             transaction.into_lease(),
             sample,
@@ -1033,7 +1053,9 @@ impl ColdLoad {
         transaction
             .commit(&cancelled)
             .map_err(|error| error.to_string())?;
-        transaction.bind_pcm(&sample.samples);
+        transaction
+            .bind_sample(&sample)
+            .map_err(|error| error.to_string())?;
         Ok((
             transaction.into_lease(),
             sample,
@@ -1096,10 +1118,9 @@ impl ColdLoad {
     fn rollback_pending(
         &self,
         prepared: &SampleBuffer,
-        previous_generation: (u64, u32),
-        previous_digest: Option<String>,
-        previous_intent: TimingIntent,
+        previous: PreviousSourceState,
         enqueue_epoch: u64,
+        published_lifetime: u64,
     ) -> Result<(), String> {
         let _requests = self.requests.lock().map_err(|_| "request lock poisoned")?;
         let mut intents = self
@@ -1120,20 +1141,25 @@ impl ColdLoad {
             .map_err(|_| "source digest lock poisoned")?;
         if generations[self.id] == (self.request_id, self.output_rate)
             && same_source(cache[self.id].as_ref(), Some(prepared))
+            && self
+                .ownership
+                .content_lifetime_current(self.id, published_lifetime)
         {
             cache[self.id] = self.initial_source.clone();
-            generations[self.id] = previous_generation;
-            digests[self.id] = previous_digest;
+            generations[self.id] = previous.generation;
+            digests[self.id] = previous.digest;
+            self.ownership
+                .publish_content_lifetime(self.id, previous.content_lifetime);
             if self.epoch.load(Ordering::Acquire) == enqueue_epoch {
-                intents[self.id] = previous_intent;
-                self.ownership.set_timing_intent(self.id, previous_intent);
+                intents[self.id] = previous.intent;
+                self.ownership.set_timing_intent(self.id, previous.intent);
             }
-            if let Some(previous) = self.initial_source.as_ref() {
+            if let Some(previous_sample) = self.initial_source.as_ref() {
                 self.ownership.publish_source(
                     self.id,
-                    previous,
-                    previous_generation.1,
-                    previous_generation.0,
+                    previous_sample,
+                    previous.generation.1,
+                    previous.generation.0,
                 );
             } else {
                 self.ownership.revoke_source(self.id);
@@ -1156,7 +1182,9 @@ impl ColdLoad {
             .as_str()
             .ok_or("prepared original digest missing")?
             .to_owned();
-        lease.bind_pcm(&sample.samples);
+        lease
+            .bind_sample(&sample)
+            .map_err(|error| error.to_string())?;
         // Register before enqueue. Ordinary pre-ACK rejection still leaves a
         // queued PCM owner; file cleanup must follow that actual reader lifetime.
         let mut publication = PublicationLease {
@@ -1211,9 +1239,12 @@ impl ColdLoad {
             .digests
             .lock()
             .map_err(|_| "source digest lock poisoned")?;
-        let previous_generation = generations[self.id];
-        let previous_digest = digests[self.id].clone();
-        let previous_intent = intents[self.id];
+        let previous = PreviousSourceState {
+            generation: generations[self.id],
+            digest: digests[self.id].clone(),
+            intent: intents[self.id],
+            content_lifetime: self.ownership.content_lifetime(self.id),
+        };
         // Successful arming advances this exact epoch. Every post-enqueue
         // metadata/rollback comparison must use the admitted epoch, rather
         // than the predecessor snapshot retained for preparation validation.
@@ -1273,6 +1304,7 @@ impl ColdLoad {
                 Ok(())
             },
         )?;
+        let published_lifetime = self.ownership.content_lifetime(self.id);
         drop(digests);
         drop(generations);
         drop(intents);
@@ -1301,13 +1333,7 @@ impl ColdLoad {
             }
             lease.rollback_unadopted_original();
             lease.rollback_unadopted_cache();
-            self.rollback_pending(
-                &sample,
-                previous_generation,
-                previous_digest,
-                previous_intent,
-                enqueue_epoch,
-            )?;
+            self.rollback_pending(&sample, previous, enqueue_epoch, published_lifetime)?;
             return Err(error);
         }
         // ACK retains native readers even if a newer request wins before metadata delivery.
@@ -1323,6 +1349,9 @@ impl ColdLoad {
         if requests[self.id] != self.request_id
             || generations[self.id] != (self.request_id, self.output_rate)
             || !same_source(cache[self.id].as_ref(), Some(&sample))
+            || !self
+                .ownership
+                .content_lifetime_current(self.id, published_lifetime)
         {
             lease.rollback_unadopted_original();
             lease.rollback_unadopted_cache();

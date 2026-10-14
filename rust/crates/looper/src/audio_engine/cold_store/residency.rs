@@ -210,6 +210,7 @@ impl CommittedColdLease {
                 .retain_registration(token)
                 .map_err(io::Error::other)?;
         }
+        self.cache.remember_verified_window(&sample)?;
         Ok(sample)
     }
 

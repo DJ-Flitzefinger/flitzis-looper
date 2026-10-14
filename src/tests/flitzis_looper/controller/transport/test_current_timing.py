@@ -31,11 +31,13 @@ def accepted_pad(controller: AppController, audio_engine_mock: Mock) -> dict[str
     audio_engine_mock.current_constant_timing.return_value = metadata
     audio_engine_mock.pad_timing_intent.return_value = "automatic"
 
-    def legacy_edit(*_args: object) -> None:
+    def legacy_edit(*_args: object, expected_source_generation: int | None = None) -> None:
         audio_engine_mock.current_constant_timing.return_value = None
         audio_engine_mock.pad_timing_intent.return_value = "legacy"
 
-    def declare_intent(_sample_id: int, intent: str) -> None:
+    def declare_intent(
+        _sample_id: int, intent: str, *, expected_source_generation: int | None = None
+    ) -> None:
         audio_engine_mock.pad_timing_intent.return_value = intent
 
     audio_engine_mock.set_pad_bpm.side_effect = legacy_edit
@@ -257,11 +259,16 @@ def test_manual_and_clear_retire_accepted_and_preserve_explicit_authority(
     controller: AppController, audio_engine_mock: Mock, accepted_pad: dict[str, object]
 ) -> None:
     controller.transport.bpm.set_manual_bpm(0, 123.4567890123)
+    audio_engine_mock.set_pad_bpm.assert_called_once_with(
+        0, 123.4567890123, expected_source_generation=accepted_pad["source_generation"]
+    )
     timing = controller.transport.bpm.current_timing(0)
     assert timing is not None
     assert timing.accepted_revision is None
     assert timing.period_seconds == 60.0 / 123.4567890123
-    audio_engine_mock.set_pad_timing_intent.assert_called_with(0, "manual")
+    audio_engine_mock.set_pad_timing_intent.assert_called_with(
+        0, "manual", expected_source_generation=accepted_pad["source_generation"]
+    )
     assert audio_engine_mock.pad_timing_intent(0) == "manual"
     controller.transport.bpm.clear_manual_bpm(0)
     assert controller.transport.bpm.effective_bpm(0) == 135.0
@@ -280,6 +287,12 @@ def test_tap_authority_follows_all_legacy_numeric_publications(
     monkeypatch.setattr("flitzis_looper.controller.transport.bpm.monotonic", lambda: next(taps))
     assert controller.transport.bpm.tap_bpm(0) is None
     assert controller.transport.bpm.tap_bpm(0) == 120.0
+    audio_engine_mock.set_pad_bpm.assert_called_once_with(
+        0, 120.0, expected_source_generation=accepted_pad["source_generation"]
+    )
+    audio_engine_mock.set_pad_timing_intent.assert_called_with(
+        0, "tap", expected_source_generation=accepted_pad["source_generation"]
+    )
     assert audio_engine_mock.pad_timing_intent(0) == "tap"
     timing = controller.transport.bpm.current_timing(0)
     assert timing is not None

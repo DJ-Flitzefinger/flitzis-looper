@@ -247,7 +247,10 @@ pub(super) fn prepare_material_complete_for_test(
         .lease
         .read_complete_cancellable(&material.sample, PCM_LIMIT_BYTES, cancelled)
         .map_err(|error| error.to_string())?;
-    material.lease.bind_pcm(&material.sample.samples);
+    material
+        .lease
+        .bind_sample(&material.sample)
+        .map_err(|error| error.to_string())?;
     Ok(material)
 }
 
@@ -340,7 +343,9 @@ fn prepare_material_selected(
             .cache_path_for_migration()
             .map_err(|error| error.to_string())?,
     )?;
-    transaction.bind_pcm(&sample.samples);
+    transaction
+        .bind_sample(&sample)
+        .map_err(|error| error.to_string())?;
     let lease = transaction.into_lease();
     Ok(PreparedMigrationMaterial {
         sample,

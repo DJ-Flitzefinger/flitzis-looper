@@ -63,8 +63,6 @@ from flitzis_looper.controller.stem_separators import (
 from flitzis_looper.controller.stem_workers import StemWorkerPool
 from flitzis_looper.encoder_provenance import encoder_contract
 from flitzis_looper.models import (
-    STEM_COMPONENT_MASK,
-    STEM_MASK_DISPLAY_MODES,
     STEM_MIX_MODES,
     StemCacheEntry,
     StemGridIndicatorState,
@@ -73,12 +71,14 @@ from flitzis_looper.models import (
     validate_sample_id,
 )
 from flitzis_looper.project_materials import original_asset
+from flitzis_looper.stem_intent import transition_stem_intent
 from flitzis_looper.stem_pair_selection import STEM_FINGERPRINT_SCHEMA
 
 if TYPE_CHECKING:
     from flitzis_looper.models import ProjectState, SessionState
     from flitzis_looper_audio import (
         AudioEngine,
+        CommittedStemSetTicket,
         OfflineStemSourceLease,
         PreparedSourceTicket,
         PreparedStemPair,
@@ -190,6 +190,7 @@ class StemController(BaseController):  # noqa: PLR0904
         asset_lifecycle: ProjectAssetLifecycle | None = None,
     ) -> None:
         super().__init__(project, session, audio, on_project_changed)
+        self._pad_edit_guard: Callable[[int], None] | None = None
         self._assets = asset_lifecycle or ProjectAssetLifecycle(project, audio)
         self._jobs: dict[Path, StemGenerationJob] = {}
         self._intents = StemIntentRegistry()
@@ -244,7 +245,7 @@ class StemController(BaseController):  # noqa: PLR0904
         self._on_frame_render_callbacks.append(self._poll_pair_preparations)
         self._on_frame_render_callbacks.append(self._poll_disk_selection_settlements)
         self._on_frame_render_callbacks.append(self._poll_publication_retries)
-        self._on_frame_render_callbacks.append(self._committed_residency.poll)
+        self._on_frame_render_callbacks.append(self._poll_committed_residency)
         self._on_frame_render_callbacks.append(self._poll_residency_demands)
 
     def shut_down(self) -> None:
@@ -285,6 +286,44 @@ class StemController(BaseController):  # noqa: PLR0904
         if self._stem_worker_pool is not None:
             self._stem_worker_pool.shutdown()
 
+    def bind_pad_edit_guard(self, guard: Callable[[int], None]) -> None:
+        """Check assignment ownership before changing musical stem intent."""
+        self._pad_edit_guard = guard
+
+    def _ensure_pad_edit_allowed(self, sample_id: int) -> None:
+        if self._pad_edit_guard is not None:
+            self._pad_edit_guard(sample_id)
+
+    def project_copied_native_state(
+        self,
+        sample_id: int,
+        *,
+        components_available: bool,
+        selection: CommittedStemSetTicket | None,
+    ) -> None:
+        """Project only component availability from the complete target's own Native ACK."""
+        validate_sample_id(sample_id)
+        entry = self._project.stem_cache[sample_id]
+        if entry is None:
+            if components_available or selection is not None:
+                message = "Copied Native components have no committed target stem metadata"
+                raise RuntimeError(message)
+            return
+        if (entry.pair is None) != (selection is None):
+            message = "Copied stem metadata and own target registration do not match"
+            raise RuntimeError(message)
+        projected = entry.model_copy(update={"available": components_available})
+        if selection is not None:
+            self._committed_residency.adopt_copied_selection(
+                sample_id,
+                projected,
+                self._content_id(sample_id),
+                self._project.sample_paths[sample_id],
+                selection,
+            )
+        if entry.available != components_available:
+            self._project.stem_cache[sample_id] = projected
+
     def bind_disk_selection_commit(
         self,
         commit: Callable[[int, StemCacheEntry | None, StemCacheEntry, Callable[[], bool]], None],
@@ -317,6 +356,32 @@ class StemController(BaseController):  # noqa: PLR0904
             demand = _StemDemand(*binding)
             self._demands[sample_id] = demand
         return demand
+
+    def _poll_committed_residency(self) -> None:
+        """Retire observed past direct interest before the same frame can retry it."""
+        for withdrawn in self._committed_residency.poll():
+            sample_id = withdrawn.sample_id
+            demand = self._demands.get(sample_id)
+            if demand is None or not demand.explicit:
+                continue
+            if (
+                self._demand_current(sample_id, demand)
+                and (
+                    demand.content_id,
+                    demand.source_path,
+                    demand.source_version,
+                    demand.selection_identity,
+                )
+                == (
+                    withdrawn.content_id,
+                    withdrawn.source_path,
+                    withdrawn.source_version,
+                    withdrawn.stem_set_identity,
+                )
+                and withdrawn.mode == self._project.pad_stem_mix_mode[sample_id] == "all_stems"
+                and withdrawn.enabled_mask == self._project.pad_stem_intent[sample_id].enabled_mask
+            ):
+                demand.explicit = False
 
     def refresh_residency_policy(self) -> None:
         """Coalesce bounded policy interest without cancelling direct requests or voice owners."""
@@ -452,7 +517,7 @@ class StemController(BaseController):  # noqa: PLR0904
                 return False
         if status.requested_mode != "all_stems" or status.residency == "rejected":
             if not self._committed_residency.request(
-                sample_id, "all_stems", self._session.pad_stem_enabled_mask[sample_id]
+                sample_id, "all_stems", self._project.pad_stem_intent[sample_id].enabled_mask
             ):
                 self._defer_or_fail_demand(sample_id, demand)
                 return False
@@ -608,6 +673,7 @@ class StemController(BaseController):  # noqa: PLR0904
     def generate_stems_async(self, sample_id: int) -> bool:
         """Schedule source-leased offline generation independently of pad playback."""
         validate_sample_id(sample_id)
+        self._ensure_pad_edit_allowed(sample_id)
         self._assets.sync_assignments()
         self._expire_generation_interests()
         self._clear_stem_generation_messages(sample_id)
@@ -933,7 +999,6 @@ class StemController(BaseController):  # noqa: PLR0904
             changed = True
         if changed:
             self._mark_project_changed()
-        self._reset_stem_mask_state(sample_id)
         self._assets.sync_assignments()
 
     def stem_mix_mode(self, sample_id: int) -> StemMixMode:
@@ -972,7 +1037,14 @@ class StemController(BaseController):  # noqa: PLR0904
         """Return whether current stem cache metadata is available for UI controls."""
         validate_sample_id(sample_id)
         entry = self._project.stem_cache[sample_id]
-        return entry is not None and entry.available
+        if entry is None:
+            return False
+        if entry.available:
+            return True
+        try:
+            return self._committed_residency.component_residency_current(sample_id)
+        except RuntimeError, TypeError, ValueError:
+            return False
 
     def has_stem_cache(self, sample_id: int) -> bool:
         """Return whether a pad has any tracked stem cache metadata."""
@@ -980,14 +1052,19 @@ class StemController(BaseController):  # noqa: PLR0904
         return self._project.stem_cache[sample_id] is not None
 
     def stem_enabled_mask(self, sample_id: int) -> int:
-        """Return the session-only enabled component-stem mask for a pad."""
+        """Return the durable requested component-stem mask for a pad."""
         validate_sample_id(sample_id)
-        return int(self._session.pad_stem_enabled_mask[sample_id])
+        return self._project.pad_stem_intent[sample_id].enabled_mask
+
+    def remembered_custom_mask(self, sample_id: int) -> int:
+        """Return the durable custom mask retained across preset choices."""
+        validate_sample_id(sample_id)
+        return self._project.pad_stem_intent[sample_id].last_custom_mask
 
     def stem_mask_display_mode(self, sample_id: int) -> StemMaskDisplayMode:
-        """Return the session-only bottom-bar stem mask display mode."""
+        """Return the durable requested bottom-bar stem mask display mode."""
         validate_sample_id(sample_id)
-        return self._session.pad_stem_mask_display_mode[sample_id]
+        return self._project.pad_stem_intent[sample_id].display_mode
 
     def stem_mask_controls_enabled(self, sample_id: int) -> bool:
         """Return whether selected-pad per-stem mask controls should be interactive."""
@@ -1014,22 +1091,33 @@ class StemController(BaseController):  # noqa: PLR0904
     def set_stem_mix_mode(self, sample_id: int, mode: StemMixMode) -> bool:
         """Set the durable full-mix/all-stems mode for a pad."""
         validate_sample_id(sample_id)
+        self._ensure_pad_edit_allowed(sample_id)
         if mode not in STEM_MIX_MODES:
             msg = "stem mix mode must be full_mix or all_stems"
             raise ValueError(msg)
 
         if mode == "full_mix":
             return self._set_full_mix(sample_id)
+        return self._set_all_stems(sample_id)
+
+    def _set_all_stems(self, sample_id: int) -> bool:
         if sample_id in self._publication_retries.pending:
-            self._project.pad_stem_mix_mode[sample_id] = mode
+            self._project.pad_stem_mix_mode[sample_id] = "all_stems"
             self._mark_project_changed()
             return True
+
+        entry = self._project.stem_cache[sample_id]
+        if (
+            entry is not None
+            and entry.pair is not None
+            and self._committed_residency.contains(sample_id)
+        ):
+            return self._request_pair_mode(sample_id, entry, entry.source_version)
 
         source_version = self._current_prepared_source_version(sample_id)
         if source_version is None:
             return False
 
-        entry = self._project.stem_cache[sample_id]
         if (
             entry is not None
             and entry.pair is not None
@@ -1040,8 +1128,8 @@ class StemController(BaseController):  # noqa: PLR0904
         if not self._publish_all_stems_state(sample_id, source_version):
             return False
 
-        if mode != self._project.pad_stem_mix_mode[sample_id]:
-            self._project.pad_stem_mix_mode[sample_id] = mode
+        if self._project.pad_stem_mix_mode[sample_id] != "all_stems":
+            self._project.pad_stem_mix_mode[sample_id] = "all_stems"
             self._mark_project_changed()
 
         return True
@@ -1053,7 +1141,7 @@ class StemController(BaseController):  # noqa: PLR0904
         had_committed_selection = self._committed_residency.contains(sample_id)
         if had_committed_selection:
             if self._committed_residency.request(
-                sample_id, "full_mix", self._session.pad_stem_enabled_mask[sample_id]
+                sample_id, "full_mix", self._project.pad_stem_intent[sample_id].enabled_mask
             ):
                 self._pending_full_mix_releases.add(sample_id)
                 self._project.pad_stem_mix_mode[sample_id] = "full_mix"
@@ -1134,7 +1222,7 @@ class StemController(BaseController):  # noqa: PLR0904
         if not self._committed_residency.contains(sample_id):
             return None, None
         if self._committed_residency.request(
-            sample_id, "all_stems", self._session.pad_stem_enabled_mask[sample_id]
+            sample_id, "all_stems", self._project.pad_stem_intent[sample_id].enabled_mask
         ):
             return True, None
         pressure = self._residency_errors.get(sample_id)
@@ -1168,6 +1256,7 @@ class StemController(BaseController):  # noqa: PLR0904
     def delete_stems(self, sample_id: int) -> bool:
         """Retire cached stems after their final reader and return to full mix."""
         validate_sample_id(sample_id)
+        self._ensure_pad_edit_allowed(sample_id)
         try:
             with self._assets.admission():
                 return self._delete_stems(sample_id)
@@ -1210,8 +1299,6 @@ class StemController(BaseController):  # noqa: PLR0904
             self._project.pad_stem_mix_mode[sample_id] = "full_mix"
             changed = True
 
-        self._reset_stem_mask_state(sample_id)
-
         if changed:
             self._mark_project_changed()
 
@@ -1224,31 +1311,27 @@ class StemController(BaseController):  # noqa: PLR0904
         enabled_stem_mask: int,
         display_mode: StemMaskDisplayMode = "custom",
     ) -> bool:
-        """Set the session-only enabled component-stem mask for a pad."""
+        """Persist one musical mask/preset intent before guarded native publication."""
         validate_sample_id(sample_id)
-        if enabled_stem_mask < 0 or enabled_stem_mask & ~STEM_COMPONENT_MASK:
-            msg = "stem enabled mask must contain only component stems"
-            raise ValueError(msg)
-        if display_mode not in STEM_MASK_DISPLAY_MODES:
-            msg = "stem mask display mode must be custom, instrumental, or all"
-            raise ValueError(msg)
-
-        current_display_mode = self._session.pad_stem_mask_display_mode[sample_id]
-        if display_mode == "custom":
-            self._session.pad_stem_last_custom_mask[sample_id] = enabled_stem_mask
-        elif current_display_mode == "custom":
-            self._session.pad_stem_last_custom_mask[sample_id] = (
-                self._session.pad_stem_enabled_mask[sample_id]
-            )
-
-        if (
-            enabled_stem_mask == self._session.pad_stem_enabled_mask[sample_id]
-            and display_mode == current_display_mode
-        ):
+        self._ensure_pad_edit_allowed(sample_id)
+        current = self._project.pad_stem_intent[sample_id]
+        intent = transition_stem_intent(current, enabled_stem_mask, display_mode)
+        if intent == current:
             return True
-
-        self._session.pad_stem_enabled_mask[sample_id] = enabled_stem_mask
-        self._session.pad_stem_mask_display_mode[sample_id] = display_mode
+        self._project.pad_stem_intent[sample_id] = intent
+        self._mark_project_changed()
+        entry = self._project.stem_cache[sample_id]
+        if (
+            self._project.pad_stem_mix_mode[sample_id] == "all_stems"
+            and entry is not None
+            and entry.pair is not None
+            and self.stems_available(sample_id)
+            and self._committed_residency.contains(sample_id)
+        ):
+            source_version = self._current_prepared_source_version(sample_id)
+            if source_version is None:
+                return False
+            return self._request_pair_mode(sample_id, entry, source_version)
         return self.publish_stem_enabled_mask_if_available(sample_id)
 
     def publish_stem_mix_mode_if_available(self, sample_id: int) -> bool:
@@ -1258,7 +1341,7 @@ class StemController(BaseController):  # noqa: PLR0904
             return True
 
         entry = self._project.stem_cache[sample_id]
-        if entry is None or not entry.available:
+        if entry is None or not self.stems_available(sample_id):
             return True
 
         source_version = self._current_prepared_source_version(sample_id)
@@ -1268,13 +1351,13 @@ class StemController(BaseController):  # noqa: PLR0904
         return self._publish_stem_mix_mode(sample_id, source_version)
 
     def publish_stem_enabled_mask_if_available(self, sample_id: int) -> bool:
-        """Publish the session stem mask to Rust when current prepared stems are available."""
+        """Publish durable mask intent when current prepared stems are available."""
         validate_sample_id(sample_id)
         if self._project.pad_stem_mix_mode[sample_id] != "all_stems":
             return True
 
         entry = self._project.stem_cache[sample_id]
-        if entry is None or not entry.available:
+        if entry is None or not self.stems_available(sample_id):
             return True
 
         source_version = self._current_prepared_source_version(sample_id)
@@ -1290,7 +1373,11 @@ class StemController(BaseController):  # noqa: PLR0904
 
     def _current_prepared_source_version(self, sample_id: int) -> str | None:
         entry = self._project.stem_cache[sample_id]
-        if entry is None or not entry.available or self._project.sample_paths[sample_id] is None:
+        if (
+            entry is None
+            or not self.stems_available(sample_id)
+            or self._project.sample_paths[sample_id] is None
+        ):
             return None
         try:
             self._capture_source_ticket(sample_id, entry.source_version)
@@ -1306,7 +1393,7 @@ class StemController(BaseController):  # noqa: PLR0904
     def _publish_stem_mix_mode(self, sample_id: int, source_version: str) -> bool:
         if self._committed_residency.contains(sample_id):
             return self._committed_residency.request(
-                sample_id, "all_stems", self._session.pad_stem_enabled_mask[sample_id]
+                sample_id, "all_stems", self._project.pad_stem_intent[sample_id].enabled_mask
             )
         if self._requires_committed_residency(sample_id):
             return False
@@ -1320,14 +1407,14 @@ class StemController(BaseController):  # noqa: PLR0904
     def _publish_stem_enabled_mask(self, sample_id: int, source_version: str) -> bool:
         if self._committed_residency.contains(sample_id):
             return self._committed_residency.request(
-                sample_id, "all_stems", self._session.pad_stem_enabled_mask[sample_id]
+                sample_id, "all_stems", self._project.pad_stem_intent[sample_id].enabled_mask
             )
         if self._requires_committed_residency(sample_id):
             return False
         try:
             self._audio.set_stem_enabled_mask(
                 sample_id,
-                self._session.pad_stem_enabled_mask[sample_id],
+                self._project.pad_stem_intent[sample_id].enabled_mask,
                 source_version,
             )
         except (RuntimeError, ValueError) as err:
@@ -2656,11 +2743,6 @@ class StemController(BaseController):  # noqa: PLR0904
         self._session.stem_generation_progress.pop(sample_id, None)
         self._session.stem_generation_stage.pop(sample_id, None)
 
-    def _reset_stem_mask_state(self, sample_id: int) -> None:
-        self._session.pad_stem_enabled_mask[sample_id] = STEM_COMPONENT_MASK
-        self._session.pad_stem_last_custom_mask[sample_id] = STEM_COMPONENT_MASK
-        self._session.pad_stem_mask_display_mode[sample_id] = "all"
-
     def _target_shape_for_pad(self, sample_id: int) -> AudioShape | None:
         fn = getattr(self._audio, "loaded_sample_shape", None)
         if fn is None:
@@ -2983,7 +3065,7 @@ class StemController(BaseController):  # noqa: PLR0904
 
         if self._committed_residency.contains(sample_id):
             return self._committed_residency.request(
-                sample_id, "all_stems", self._session.pad_stem_enabled_mask[sample_id]
+                sample_id, "all_stems", self._project.pad_stem_intent[sample_id].enabled_mask
             )
         if self._requires_committed_residency(sample_id):
             return False
@@ -2992,7 +3074,7 @@ class StemController(BaseController):  # noqa: PLR0904
             self._audio.set_stem_mix_mode(sample_id, "all_stems", source_version)
             self._audio.set_stem_enabled_mask(
                 sample_id,
-                self._session.pad_stem_enabled_mask[sample_id],
+                self._project.pad_stem_intent[sample_id].enabled_mask,
                 source_version,
             )
         except (RuntimeError, ValueError) as err:

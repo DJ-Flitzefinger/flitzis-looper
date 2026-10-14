@@ -529,6 +529,7 @@ impl Retirement {
                 RetiredAudioBuffer::CommittedStemWork(value) => {
                     actual.retire_committed_stem_work(value)
                 }
+                RetiredAudioBuffer::PadCopy(value) => actual.retire_pad_copy(value),
             }
         } else {
             self.retired.push(value);

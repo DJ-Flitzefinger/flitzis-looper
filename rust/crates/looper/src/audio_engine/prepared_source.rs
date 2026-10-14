@@ -471,6 +471,9 @@ fn enqueue_prepared_stems(
         .pad_request_ids
         .lock()
         .map_err(|_| PyRuntimeError::new_err("request lock poisoned"))?;
+    engine
+        .input_runtime_ownership
+        .ensure_no_copy_reservation(id)?;
     let cache = engine
         .sample_cache
         .lock()

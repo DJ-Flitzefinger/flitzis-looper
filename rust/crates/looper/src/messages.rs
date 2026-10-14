@@ -429,14 +429,32 @@ pub(crate) enum ControlParameterMessage {
     },
 
     /// Set per-pad Gain/Trim in dB.
+    #[cfg(test)]
     SetPadGain { id: usize, gain_db: f32 },
 
+    /// Apply only to the preparation epoch actually observed at control admission.
+    SetPadGainGuarded {
+        id: usize,
+        gain_db: f32,
+        expected_epoch: u64,
+    },
+
     /// Set per-pad 3-band EQ gains in dB.
+    #[cfg(test)]
     SetPadEq {
         id: usize,
         low_db: f32,
         mid_db: f32,
         high_db: f32,
+    },
+
+    /// An older queued EQ must never overwrite a newly copied complete image.
+    SetPadEqGuarded {
+        id: usize,
+        low_db: f32,
+        mid_db: f32,
+        high_db: f32,
+        expected_epoch: u64,
     },
 }
 
@@ -455,7 +473,8 @@ impl ControlParameterMessage {
             | ControlParameterMessage::SetLegacyPadBpm { id, .. } => {
                 ControlParameterKey::PadBpm(*id)
             }
-            ControlParameterMessage::SetPadGain { id, gain_db: _ } => {
+            ControlParameterMessage::SetPadGain { id, gain_db: _ }
+            | ControlParameterMessage::SetPadGainGuarded { id, .. } => {
                 ControlParameterKey::PadGain(*id)
             }
             ControlParameterMessage::SetPadEq {
@@ -463,7 +482,10 @@ impl ControlParameterMessage {
                 low_db: _,
                 mid_db: _,
                 high_db: _,
-            } => ControlParameterKey::PadEq(*id),
+            }
+            | ControlParameterMessage::SetPadEqGuarded { id, .. } => {
+                ControlParameterKey::PadEq(*id)
+            }
         }
     }
 }
@@ -592,6 +614,7 @@ pub enum ControlMessage {
         id: usize,
         sample: SampleBuffer,
         source_generation: u64,
+        content_lifetime: u64,
         adoption: Arc<std::sync::atomic::AtomicU8>,
         epoch: Option<Arc<std::sync::atomic::AtomicU64>>,
         captured_epoch: u64,
@@ -601,6 +624,8 @@ pub enum ControlMessage {
         incoming_defaults: Option<IncomingLoadDefaults>,
     },
 
+    /// Atomic complete content installation into one reserved empty target.
+    PadCopy(Box<crate::audio_engine::pad_copy::PadCopyRtWork>),
     RelocateResident(Box<ResidentTransaction>),
     CaptureResidentSeek(Arc<crate::audio_engine::resident_seek::ResidentSeekCapture>),
     CommittedStemWork(Box<crate::audio_engine::committed_stem_residency::CommittedStemRtWork>),
@@ -717,6 +742,7 @@ impl ControlMessage {
             | ControlMessage::SeekSample { .. } => ControlMessageClass::PlaybackEvent,
             ControlMessage::LoadSample { .. }
             | ControlMessage::LoadColdSample { .. }
+            | ControlMessage::PadCopy(_)
             | ControlMessage::RelocateResident(_)
             | ControlMessage::CaptureResidentSeek(_)
             | ControlMessage::CommittedStemWork(_)

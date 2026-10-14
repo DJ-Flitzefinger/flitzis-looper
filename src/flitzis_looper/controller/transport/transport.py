@@ -32,6 +32,8 @@ class TransportController(BaseController):
         super().__init__(project, session, audio, on_project_changed)
         self._on_global_key_lock_changed: Callable[[], None] | None = None
         self._incoming_load_request: Callable[[int], int | None] | None = None
+        self._pad_edit_guard: Callable[[int], None] | None = None
+        self._global_key_lock_edit_guard: Callable[[], None] | None = None
         self._on_current_pad_edit: (
             Callable[[int, int | None, Literal["key_lock", "loop", "timing"]], None] | None
         ) = None
@@ -50,6 +52,19 @@ class TransportController(BaseController):
     def bind_incoming_global_key_lock(self, callback: Callable[[], None]) -> None:
         """Publish the new global default to pending incoming assignments immediately."""
         self._on_global_key_lock_changed = callback
+
+    def bind_pad_edit_guard(self, guard: Callable[[int], None]) -> None:
+        """Check transaction ownership before a current-pad gesture changes intent."""
+        self._pad_edit_guard = guard
+
+    def bind_global_key_lock_edit_guard(self, guard: Callable[[], None]) -> None:
+        """Check inherited pending assignments before changing the global default."""
+        self._global_key_lock_edit_guard = guard
+
+    def ensure_global_key_lock_edit_allowed(self) -> None:
+        """Reject a conflicting global gesture before capturing or mutating pad state."""
+        if self._global_key_lock_edit_guard is not None:
+            self._global_key_lock_edit_guard()
 
     def bind_current_pad_edit(
         self,
@@ -78,8 +93,14 @@ class TransportController(BaseController):
             pass
         return None
 
+    def ensure_pad_edit_allowed(self, sample_id: int) -> None:
+        """Check a reserved arrangement target before changing its musical metadata."""
+        if self._pad_edit_guard is not None:
+            self._pad_edit_guard(sample_id)
+
     def ensure_current_source_assignment_ready(self, sample_id: int) -> None:
         """Reject reads derived from the predecessor until the own receipt is projected."""
+        self.ensure_pad_edit_allowed(sample_id)
         if (
             self._incoming_load_request is not None
             and self._incoming_load_request(sample_id) is not None

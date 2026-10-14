@@ -1123,8 +1123,8 @@ def test_keyboard_mapping_executes_stem_mask_action_without_available_cache(
     )
 
     assert handled is True
-    assert controller.session.pad_stem_enabled_mask[0] == STEM_MASK_VOCALS
-    assert controller.session.pad_stem_mask_display_mode[0] == "custom"
+    assert controller.project.pad_stem_intent[0].enabled_mask == STEM_MASK_VOCALS
+    assert controller.project.pad_stem_intent[0].display_mode == "custom"
     audio_engine_mock.set_stem_enabled_mask.assert_not_called()
 
 

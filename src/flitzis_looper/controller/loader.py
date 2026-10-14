@@ -30,6 +30,7 @@ from flitzis_looper.models import (
     validate_sample_id,
 )
 from flitzis_looper.project_materials import original_asset
+from flitzis_looper.stem_intent import PadStemIntent
 from flitzis_looper_audio import ProjectAssetLease
 
 if TYPE_CHECKING:
@@ -794,6 +795,9 @@ class LoaderController(_IncomingIntentControl, _MaterialCreationOwnership):
             ),
             _reset_pad_value(self._project.stem_cache, sample_id, defaults.stem_cache[sample_id]),
             _reset_pad_value(
+                self._project.pad_stem_intent, sample_id, defaults.pad_stem_intent[sample_id]
+            ),
+            _reset_pad_value(
                 self._project.pad_stem_mix_mode,
                 sample_id,
                 defaults.pad_stem_mix_mode[sample_id],
@@ -998,6 +1002,9 @@ class LoaderController(_IncomingIntentControl, _MaterialCreationOwnership):
         *,
         timing_stale: bool,
     ) -> tuple[bool, bool]:
+        # Only a matching completed NEW assignment owns this content reset.
+        # Retired timing does not carry the predecessor's musical stem choices.
+        self._project.pad_stem_intent[sample_id] = PadStemIntent()
         if incoming is not None and adopted is not None:
             return self._project_incoming_defaults(
                 sample_id, event, incoming, adopted, timing_stale=timing_stale

@@ -18,6 +18,9 @@ pub(super) fn enqueue_with_source(
         .pad_request_ids
         .lock()
         .map_err(|_| PyRuntimeError::new_err("request lock poisoned"))?;
+    engine
+        .input_runtime_ownership
+        .ensure_no_copy_reservation(id)?;
     let binding = input_runtime_binding::capture_under_request_lock(engine, id)?;
     input_runtime_binding::validate_expected_source_generation(
         binding.as_ref(),

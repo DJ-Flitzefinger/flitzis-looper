@@ -721,6 +721,33 @@ fn rejected_created_material_retires_only_after_last_native_and_actual_marker_re
 }
 
 #[test]
+fn warm_commit_defers_own_unused_staging_until_recovery_reader_retires() {
+    let fixture = Fixture::new(44_100, 1);
+    let (original, first) = fixture.cold(48_000, 2);
+    let mut transaction =
+        ColdTransaction::capture(&fixture.samples, &fixture.source, true, &|| false).unwrap();
+    let _gate = transaction.preparation_gate(48_000, 2, &|| false).unwrap();
+    let sample = transaction
+        .try_reuse(48_000, 2, PCM_LIMIT_BYTES, &|| false)
+        .unwrap()
+        .unwrap();
+    let stage = transaction.staging.as_ref().unwrap().clone();
+    let marker_reader = sealed_reader(&stage.join("owner.json")).unwrap();
+    let directory_reader = directory_guard(&stage).unwrap();
+    let cache = transaction.commit(&|| false).unwrap();
+    assert_eq!(cache, first.cache_path);
+    transaction.bind_sample(&sample).unwrap();
+    let restored = transaction.into_lease();
+    assert!(stage.join("owner.json").exists());
+    assert!(Arc::ptr_eq(&original.samples, &sample.samples));
+    assert!(restored.cache_path.join("playback.f32le").exists());
+    drop((marker_reader, directory_reader));
+    wait_absent(&stage);
+    assert!(restored.cache_path.join("playback.f32le").exists());
+    assert!(fixture.source.exists());
+}
+
+#[test]
 fn exclusive_rollback_retries_until_actual_staging_reader_retires_without_snapshot_copy() {
     let fixture = Fixture::new(44_100, 1);
     let transaction =

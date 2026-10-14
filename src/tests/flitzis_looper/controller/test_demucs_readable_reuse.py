@@ -39,6 +39,7 @@ from flitzis_looper.encoder_provenance import (
 )
 from flitzis_looper.models import STEM_KINDS, PadContentIdentity
 from flitzis_looper.pcm16_wav import PcmWavReader
+from flitzis_looper.stem_intent import PadStemIntent
 from flitzis_looper.stem_pair_selection import STEM_FINGERPRINT_SCHEMA, StemGenerationProvenance
 from flitzis_looper_audio import MigrationArtifactLease
 from tests.conftest import write_mono_pcm16_wav
@@ -629,7 +630,9 @@ def _source_assignments(controller: AppController, tmp: Path) -> Path:
     controller.project.pad_gain_db[0] = -4
     controller.project.pad_gain_db[215] = -11
     controller.project.pad_key_lock[215] = True
-    controller.session.pad_stem_enabled_mask[215] = 0b0101
+    controller.project.pad_stem_intent[215] = PadStemIntent(
+        enabled_mask=0b0101, last_custom_mask=0b0101, display_mode="custom"
+    )
     controller._assets.sync_assignments()
     return source
 
@@ -706,7 +709,7 @@ def _pad_evidence[Backend: _BackendRecords, Runner: _RunnerRecords](
         "gain_db": project.pad_gain_db[sample_id],
         "key_lock": project.pad_key_lock[sample_id],
         "key_intent": project.pad_key_intent[sample_id].model_dump(mode="json"),
-        "enabled_mask": rig.controller.session.pad_stem_enabled_mask[sample_id],
+        "enabled_mask": project.pad_stem_intent[sample_id].enabled_mask,
         "pending_publication": publication,
         "error": rig.controller.stems.stem_generation_error(sample_id),
     }
@@ -949,7 +952,7 @@ def test_demucs_actual_wrapper_encoder_publication_and_independent_completed_reu
     assert _assert_complete_generation(rig, current) == before
     assert rig.controller.project.pad_gain_db[215] == -11
     assert rig.controller.project.pad_key_lock[215]
-    assert rig.controller.session.pad_stem_enabled_mask[215] == 0b0101
+    assert rig.controller.project.pad_stem_intent[215].enabled_mask == 0b0101
     rig.controller.loader.unload_sample(0)
     assert rig.controller.project.stem_cache[215] is current
     assert _assert_complete_generation(rig, current) == before

@@ -4,8 +4,15 @@ Use canonical program/coverage, not a new parallel order. R0 is docs/spec-only.
 
 - [ ] P1a/P1b after R0-CLOSURE and J0 as applicable: real instance/lifetime/
   source/current native authority/lease/action groundwork, no advertised Hold remap.
-- [ ] R1: complete independent durable CopySnapshot including current Session-derived
+- [x] R1: complete independent durable CopySnapshot including current Session-derived
   mask/custom/preset/mutes/manualTAP; no transient token/DSP clone; origin-delete restore.
+  Implementation retains one persistent stem-selection intent and a complete typed
+  snapshot, independent source/stem custody, prepared empty-target Native claim and
+  genuine complete-target acknowledgement. Preclaim/config/queue/cancel/stale and
+  claimed-uncertainty cases and actual producer-exit/new-process origin-delete restore
+  are proven with own complete Copy ACKs, shared finite PCM/stems and last-reader
+  reclamation. Saved QM evidence remains historical until fresh own acceptance.
+  This closes only R1; live pair mutations, UI, full resource and Human gates remain open.
 - [ ] R2: native pair Move/Swap/overwrite linearization with two live contents and
   continuity of voices/FIFO/filter/DSP/history/selected content; fresh stopped copies;
   native caused PauseEffect/cohort/control revision follows or fences captured lifetime.

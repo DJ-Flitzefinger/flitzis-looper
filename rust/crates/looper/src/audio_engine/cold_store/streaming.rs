@@ -202,7 +202,7 @@ impl ColdTransaction {
     ) -> io::Result<SampleBuffer> {
         use crate::audio_engine::cold_residency;
         use crate::messages::{ResidentContext, ResidentSourceView};
-        let source = cold_residency::identity(self.manifest()?).map_err(io::Error::other)?;
+        let mut source = cold_residency::identity(self.manifest()?).map_err(io::Error::other)?;
         let (start, end, context) = if let Some(hint) = hint {
             hint.selection(source.sample_rate_hz, source.frame_count)
                 .map_err(io::Error::other)?
@@ -212,7 +212,23 @@ impl ColdTransaction {
         check_cancelled(cancelled)?;
         let mut reader = self.prepared_playback_reader()?;
         let cache = self.reused_cache.as_ref().or(self.shared_cache.as_ref());
-        let shared = if let Some(cache) = cache {
+        // Complete disk integrity and retained FileIDs precede this locator lookup.
+        // The preparation gate remains held through scoped admission and commit.
+        let window = cache
+            .map(|cache| cache.verified_window(&source, start, end))
+            .transpose()?
+            .flatten();
+        if let Some(window) = window.as_ref() {
+            source = window
+                .residency
+                .as_ref()
+                .expect("verified range view")
+                .source
+                .clone();
+        }
+        let shared = if let Some(window) = window.as_ref() {
+            Some(window.samples.clone())
+        } else if let Some(cache) = cache {
             let mut pcm = cache
                 .pcm
                 .lock()
@@ -306,6 +322,9 @@ impl ColdTransaction {
                 .lock()
                 .map_err(|_| invalid("warm PCM ownership poisoned"))? =
                 Some(Arc::downgrade(&sample.samples));
+        }
+        if let Some(cache) = cache {
+            cache.remember_verified_window(&sample)?;
         }
         Ok(sample)
     }

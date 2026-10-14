@@ -202,7 +202,7 @@ class StemSelectors:
         return self._controller.stems.stem_enabled_mask(pad_id)
 
     def stem_last_custom_mask(self, pad_id: int) -> int:
-        return int(self._session.pad_stem_last_custom_mask[pad_id])
+        return self._controller.stems.remembered_custom_mask(pad_id)
 
     def stem_mask_display_mode(self, pad_id: int) -> StemMaskDisplayMode:
         return self._controller.stems.stem_mask_display_mode(pad_id)

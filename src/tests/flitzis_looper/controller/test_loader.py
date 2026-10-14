@@ -22,6 +22,7 @@ from flitzis_looper.models import (
     SessionState,
     StemCacheEntry,
 )
+from flitzis_looper.stem_intent import PadStemIntent
 from flitzis_looper_audio import AudioEngine
 from tests.conftest import write_mono_pcm16_wav
 from tests.flitzis_looper.conftest import current_timing_metadata, write_test_stem_marker
@@ -2317,9 +2318,11 @@ def test_unload_sample_clears_restored_stem_runtime_eligibility(
         stems=expected_stem_files(cache_dir),
         available=True,
     )
-    controller.session.pad_stem_enabled_mask[0] = STEM_MASK_VOCALS
-    controller.session.pad_stem_last_custom_mask[0] = STEM_MASK_VOCALS
-    controller.session.pad_stem_mask_display_mode[0] = "custom"
+    controller.project.pad_stem_intent[0] = PadStemIntent(
+        enabled_mask=STEM_MASK_VOCALS,
+        last_custom_mask=STEM_MASK_VOCALS,
+        display_mode="custom",
+    )
 
     controller.loader.unload_sample(0)
     restored_publish_result = controller.stems.publish_restored_stem_cache_if_available(0)
@@ -2333,9 +2336,9 @@ def test_unload_sample_clears_restored_stem_runtime_eligibility(
     assert controller.project.pad_stem_mix_mode[0] == "full_mix"
     assert controller.stems.stems_available(0) is False
     assert controller.stems.stem_mask_controls_enabled(0) is False
-    assert controller.session.pad_stem_enabled_mask[0] == STEM_COMPONENT_MASK
-    assert controller.session.pad_stem_last_custom_mask[0] == STEM_COMPONENT_MASK
-    assert controller.session.pad_stem_mask_display_mode[0] == "all"
+    assert controller.project.pad_stem_intent[0].enabled_mask == STEM_COMPONENT_MASK
+    assert controller.project.pad_stem_intent[0].last_custom_mask == STEM_COMPONENT_MASK
+    assert controller.project.pad_stem_intent[0].display_mode == "all"
     audio_engine_mock.publish_prepared_stems.assert_not_called()
     audio_engine_mock.set_stem_mix_mode.assert_called_once_with(0, "full_mix")
     audio_engine_mock.unload_sample.assert_called_once_with(0)

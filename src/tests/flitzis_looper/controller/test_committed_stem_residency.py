@@ -6,7 +6,10 @@ from unittest.mock import Mock, call
 
 import pytest
 
-from flitzis_looper.controller.committed_stem_residency import CommittedStemResidency
+from flitzis_looper.controller.committed_stem_residency import (
+    CommittedStemResidency,
+    WithdrawnStemIntent,
+)
 from flitzis_looper.controller.stem_cache import expected_stem_files
 from flitzis_looper.models import StemCacheEntry
 from flitzis_looper.stem_pair_selection import StemPairSelection
@@ -519,7 +522,7 @@ def test_obsolete_accepted_receipt_becomes_unconfirmed_without_automatic_retry(
         residency="accepted", effective=effective, message="mode request superseded"
     )
     fresh = _ResidencyReceipt()
-    residency.bind(registration)
+    entry = residency.bind(registration)
     residency.audio.request_committed_stem_residency.side_effect = [obsolete, fresh]
     assert residency.helper.request(0, "all_stems", 15)
     obsolete.current = False
@@ -527,8 +530,13 @@ def test_obsolete_accepted_receipt_becomes_unconfirmed_without_automatic_retry(
     assert obsolete.effective_mode_status() == "rejected"
     assert obsolete.effective_failure_reason() is None
 
+    assert residency.helper.poll() == (
+        WithdrawnStemIntent(
+            0, "f" * 32, "samples/source.wav", entry.source_version, "b" * 64, "all_stems", 15
+        ),
+    )
     for _ in range(3):
-        residency.helper.poll()
+        assert residency.helper.poll() == ()
 
     status = residency.helper.status(0)
     assert status is not None

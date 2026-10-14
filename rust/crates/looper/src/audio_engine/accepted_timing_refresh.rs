@@ -5,7 +5,6 @@ use super::constant_timing::CurrentTimingAcknowledgements;
 use super::input_runtime_binding::{
     self, InputPadBinding, InputRuntimeOwnership, InputRuntimePadBinding,
 };
-use super::prepared_source::next_epoch;
 use crate::messages::ControlMessage;
 use pyo3::exceptions::{PyRuntimeError, PyValueError};
 use pyo3::prelude::*;
@@ -143,8 +142,7 @@ pub(super) fn enqueue(
             "Failed to send accepted timing refresh - buffer may be full",
         ));
     }
-    let next = next_epoch(&engine.input_runtime_ownership.authority[binding.id])
-        .map_err(PyRuntimeError::new_err)?;
+    let next = engine.input_runtime_ownership.next_authority(binding.id)?;
     if !binding.current() {
         return Err(PyRuntimeError::new_err(
             "accepted timing refresh binding changed during admission",

@@ -484,7 +484,7 @@ impl ColdTransaction {
             ));
         }
         // Both paths establish the same complete source identity before custody.
-        let source = cold_residency::identity(&manifest).map_err(io::Error::other)?;
+        let mut source = cold_residency::identity(&manifest).map_err(io::Error::other)?;
         let (start, end, context) = if let ReuseRequest::Selected(Some(hint), _) = request {
             hint.selection(rate, frames).map_err(io::Error::other)?
         } else {
@@ -497,7 +497,26 @@ impl ColdTransaction {
         };
         // Pin a real shared hit, then release the cache mutex before entering
         // the asset/account gate (the collector takes these in the reverse order).
-        let shared_pcm = if !finite && let Some(shared) = existing.as_ref() {
+        let shared_window = if matches!(request, ReuseRequest::Selected(..)) {
+            existing
+                .as_ref()
+                .map(|shared| shared.verified_window(&source, start, end))
+                .transpose()?
+                .flatten()
+        } else {
+            None
+        };
+        if let Some(window) = shared_window.as_ref() {
+            source = window
+                .residency
+                .as_ref()
+                .expect("verified window view")
+                .source
+                .clone();
+        }
+        let shared_pcm = if let Some(window) = shared_window.as_ref() {
+            Some(window.samples.clone())
+        } else if !finite && let Some(shared) = existing.as_ref() {
             let mut pcm = shared
                 .pcm
                 .lock()
@@ -604,6 +623,7 @@ impl ColdTransaction {
                 readers,
                 directories: vec![directory],
                 pcm: Mutex::new(samples.as_ref().filter(|_| !finite).map(Arc::downgrade)),
+                windows: Mutex::new(Default::default()),
                 retired: AtomicBool::new(retiring),
                 durable_assignments: Mutex::new(HashSet::new()),
                 identity: directory_identity,
@@ -619,6 +639,13 @@ impl ColdTransaction {
                 .insert(path.to_owned(), Arc::downgrade(&shared));
             shared
         };
+        if let Some(samples) = samples.as_ref() {
+            shared.remember_verified_window(&SampleBuffer {
+                channels,
+                samples: samples.clone(),
+                residency: Some(view.clone()),
+            })?;
+        }
         store()
             .state
             .lock()

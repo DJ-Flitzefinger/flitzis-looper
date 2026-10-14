@@ -27,6 +27,7 @@ from flitzis_looper.models import (
     StemCacheEntry,
 )
 from flitzis_looper.project_materials import original_asset, resolve_asset
+from flitzis_looper.stem_intent import PadStemIntent
 from tests.conftest import write_mono_pcm16_wav
 from tests.flitzis_looper.conftest import write_test_stem_marker
 from tests.flitzis_looper.controller.test_material_migration import (
@@ -124,8 +125,12 @@ def test_both_old_layouts_group_by_real_full_content_and_hold_each_original(
     audio_engine_mock.prepare_material_migration.return_value = rig.preparation
     controller.project.pad_key_lock[0] = False
     controller.project.pad_key_lock[215] = True
-    controller.session.pad_stem_enabled_mask[0] = 1
-    controller.session.pad_stem_enabled_mask[215] = 8
+    controller.project.pad_stem_intent[0] = PadStemIntent(
+        enabled_mask=1, last_custom_mask=1, display_mode="custom"
+    )
+    controller.project.pad_stem_intent[215] = PadStemIntent(
+        enabled_mask=8, last_custom_mask=8, display_mode="custom"
+    )
     expected = controller.project.model_copy(deep=True)
     rig.begin()
     assignments = rig.records()[-1].assignments
@@ -152,8 +157,9 @@ def test_both_old_layouts_group_by_real_full_content_and_hold_each_original(
     assert saved.pad_loop_end_s == expected.pad_loop_end_s
     assert saved.pad_gain_db == expected.pad_gain_db
     assert saved.pad_eq_low_db == expected.pad_eq_low_db
-    assert controller.session.pad_stem_enabled_mask[0] == 1
-    assert controller.session.pad_stem_enabled_mask[215] == 8
+    assert saved.pad_stem_intent == expected.pad_stem_intent
+    assert controller.project.pad_stem_intent[0].enabled_mask == 1
+    assert controller.project.pad_stem_intent[215].enabled_mask == 8
     assert second.read_bytes() == Path(_OLD).read_bytes()
     assert original_asset(target).layout == "readable"
 

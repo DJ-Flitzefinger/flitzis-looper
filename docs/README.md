@@ -34,6 +34,7 @@ For focused areas:
 | `architecture.md` | Current Rust/Python runtime architecture and ownership boundaries. |
 | `pcm-cache-residency.md` | Productive sealed originals/full PCM cache, validated reuse and reader lifecycle; separate C2 residency and C3 measurement contracts. |
 | `readable-material-validation.md` | Readable full-content roots, compatible no-copy/no-inference reuse, M-ID/legacy migration and bounded software evidence with retained final gates. |
+| `pad-content-copy.md` | Complete empty-target musical Copy, durable stem intent, own Native acceptance, independent shared custody and close settlement. |
 | `pad-owned-pcm-program.md` | Pending R0 shared-material/pitch/rearrangement/full pre-Rust serial program and genuine acceptance boundaries. |
 | `pre-rust-program-coverage.json` | Required seven-group detail rows, original56/nine obligations and HC26; retained38-ID/48-edge dependencies plus20 E11 rows/ten deliveries (48 IDs/78 edges/189 rows). Scoped software status stays separate from required final gates. |
 | `development.md` | Setup, validation, OpenSpec workflow, package layout, and generated-file notes. |

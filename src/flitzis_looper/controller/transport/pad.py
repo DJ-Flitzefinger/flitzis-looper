@@ -138,6 +138,7 @@ class PadController:
         )
 
     def _set_key_intent(self, sample_id: int, intent: PadKeyIntent) -> None:
+        self._transport.ensure_pad_edit_allowed(sample_id)
         if self._project.pad_key_intent[sample_id] == intent:
             return
         self._project.pad_key_intent[sample_id] = intent

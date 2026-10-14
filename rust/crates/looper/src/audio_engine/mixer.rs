@@ -7,6 +7,9 @@
 //! and operates on [`SampleBuffer`](crate::messages::SampleBuffer) data loaded via
 //! [`decode_audio_file_to_sample_buffer`](crate::audio_engine::sample_loader::decode_audio_file_to_sample_buffer).
 
+#[path = "mixer/pad_copy.rs"]
+mod pad_copy;
+
 use crate::audio_engine::buffer_retirement::AudioBufferRetirement;
 #[cfg(test)]
 use crate::audio_engine::buffer_retirement::ImmediateAudioBufferRetirement;

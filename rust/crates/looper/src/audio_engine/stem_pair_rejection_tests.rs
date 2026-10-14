@@ -717,6 +717,7 @@ fn assert_pair_physical_proof(proof: &PairPhysicalProof, exclusive: bool) {
 /// admission, callback-settled legacy timing and ordinary pool/own stem ACK.
 /// The 11-frame fixture has no AutomaticTiming/QM envelope to restore.
 fn reopen_first_created_selection(root: &Path, fixture: &Value, config: &Path) {
+    use crate::audio_engine::committed_stem_residency::CommittedStemRtWork;
     let engine = Arc::new(AudioEngine::new().unwrap());
     assert!(engine.sample_cache.lock().unwrap()[1].is_none());
     let previous = old(&engine);
@@ -815,47 +816,60 @@ assert not controller.stems_available(1)
         locals.unbind()
     });
     wait_until(|| {
-        Python::attach(|py| {
-            worker_python(py, locals.bind(py), "controller.on_frame_render()");
+        let owns_pending = Python::attach(|py| {
+            worker_python(
+                py,
+                locals.bind(py),
+                r#"
+controller.on_frame_render()
+assert not session.stem_generation_errors, session.stem_generation_errors
+registration_pending = (
+    1 in controller._committed_residency._selections
+    and controller._committed_residency._selections[1].ticket.is_current()
+    and controller._committed_residency._selections[1].ticket.publication_status() == 'pending'
+)
+"#,
+            );
             locals
                 .bind(py)
-                .get_item("controller")
+                .get_item("registration_pending")
                 .unwrap()
                 .unwrap()
-                .getattr("_pending_stem_publications")
+                .extract::<bool>()
                 .unwrap()
-                .contains(1)
-                .unwrap()
-        })
+        });
+        owns_pending
+            && matches!(consumer.peek(), Ok(ControlMessage::CommittedStemWork(work))
+                if matches!(work.as_ref(), CommittedStemRtWork::Register { id: 1, .. }))
     });
     Python::attach(|py| {
         worker_python(
             py,
             locals.bind(py),
             r#"
-ticket = controller._pending_stem_publications[1].source_ticket
+ticket = controller._committed_residency._selections[1].ticket
 assert ticket.publication_status() == 'pending'
-assert not controller.stems_available(1)
+assert ticket.is_current() and ticket.error() is None
+assert not controller._pending_stem_publications
 assert audio.worker_call_count() == 1 and audio.prepared_only_on_pool_threads()
 assert project.stem_cache[1].pair == selection
 "#,
         )
     });
-    assert_eq!(callback.drain(&mut consumer), 1);
+    assert!(callback.mixer.stems_for_measurement()[1].is_none());
+    assert_eq!(
+        callback.drain(&mut consumer),
+        1,
+        "fresh engine own Register ACK"
+    );
     Python::attach(|py| {
         worker_python(
             py,
             locals.bind(py),
             r#"
-assert ticket.publication_status() == 'accepted'
+assert ticket.publication_status() == 'accepted' and ticket.is_current()
 controller.on_frame_render()
-assert controller.stems_available(1) and project.stem_cache[1].available
-assert project.stem_cache[1].pair == selection
-assert project.pad_content[1].instance_id == '2' * 32
-persistence.flush()
-reopened = ProjectPersistence.from_config_path(Path(config_path))
-assert reopened.load_error is None and reopened.project.stem_cache[1].pair == selection
-assert reopened.project.stem_cache[1].available
+assert controller.set_stem_mix_mode(1, 'all_stems')
 "#,
         )
     });
@@ -876,14 +890,33 @@ assert reopened.project.stem_cache[1].available
             1,
             "all_stems",
         );
-        Python::attach(|py| {
-            worker_python(
-                py,
-                locals.bind(py),
-                "controller.shut_down()\nassets.release_saved_assignments()",
-            );
-        });
     }
+    assert!(callback.mixer.stems_for_measurement()[1].is_some());
+    Python::attach(|py| {
+        worker_python(
+            py,
+            locals.bind(py),
+            r#"
+assert ticket.publication_status() == 'accepted'
+controller.on_frame_render()
+assert controller.stems_available(1) and project.stem_cache[1].available
+assert audio.worker_call_count() == 1 and audio.prepared_only_on_pool_threads()
+assert project.stem_cache[1].pair == selection
+assert project.pad_content[1].instance_id == '2' * 32
+persistence.flush()
+reopened = ProjectPersistence.from_config_path(Path(config_path))
+assert reopened.load_error is None and reopened.project.stem_cache[1].pair == selection
+assert reopened.project.stem_cache[1].available
+"#,
+        )
+    });
+    Python::attach(|py| {
+        worker_python(
+            py,
+            locals.bind(py),
+            "controller.shut_down()\nassets.release_saved_assignments()",
+        );
+    });
     assert!(consumer.is_empty());
     assert!(source.is_current().unwrap());
     assert_complete_selection(root, &fixture["second"]["selection"]);
@@ -943,6 +976,7 @@ fn run_python_retry_child(first_created_case: Option<&str>) -> Value {
         "unchanged_selection",
         "pad1_voice_preserved",
         "current_json_reopened",
+        "public_restore_own_acks",
     ] {
         assert_eq!(receipt[field], true);
     }
@@ -952,7 +986,9 @@ fn run_python_retry_child(first_created_case: Option<&str>) -> Value {
 #[test]
 fn ordinary_python_controller_reprepares_native_timing_rejection_and_waits_for_own_ack() {
     let receipt = run_python_retry_child(None);
-    assert_eq!(receipt["worker_calls"], 2);
+    assert_eq!(receipt["worker_calls"], 3);
+    assert_eq!(receipt["public_restore_worker_calls"], 1);
+    assert_eq!(receipt["legacy_worker_calls"], 2);
     assert_eq!(receipt["held_pending_polls"], 25);
 }
 
@@ -962,7 +998,12 @@ fn first_created_rejected_pair_survives_close_and_successful_retry_after_all_rea
         let receipt = run_python_retry_child(Some(case));
         assert_eq!(receipt["first_created_pair"], true);
         assert_eq!(receipt["closed_before_retry"], case == "close");
-        assert_eq!(receipt["worker_calls"], if case == "close" { 1 } else { 2 });
+        assert_eq!(receipt["worker_calls"], if case == "close" { 2 } else { 3 });
+        assert_eq!(receipt["public_restore_worker_calls"], 1);
+        assert_eq!(
+            receipt["legacy_worker_calls"],
+            if case == "close" { 1 } else { 2 }
+        );
         assert_eq!(
             receipt["held_pending_polls"],
             if case == "close" { 0 } else { 25 }
@@ -1113,7 +1154,7 @@ fn ordinary_python_retry_child_keeps_fresh_pending_until_own_ack() {
             &locals,
             r#"
 import json
-from flitzis_looper.models import ProjectState, SessionState, StemCacheEntry, PadContentIdentity
+from flitzis_looper.models import ProjectState, SessionState, StemCacheEntry, PadContentIdentity, PadStemIntent
 from flitzis_looper.controller.stem_cache import expected_stem_files
 from flitzis_looper.controller.stems import StemController
 from flitzis_looper.controller.stem_workers import StemWorkerPool
@@ -1131,11 +1172,15 @@ for pad, name in enumerate(('first', 'second')):
     project.stem_cache[pad] = StemCacheEntry(source_version=data['source_version'],
         cache_dir=cache_dir, stems=expected_stem_files(cache_dir), available=True, pair=pair)
     project.pad_stem_mix_mode[pad] = 'all_stems'
+project.sample_paths[215] = project.sample_paths[0]
+project.pad_content[215] = PadContentIdentity(instance_id='e' * 32, material_id=fixture['first']['material_id'])
+project.stem_cache[215] = project.stem_cache[0].model_copy(deep=True)
+project.pad_stem_mix_mode[215] = 'all_stems'
 persistence = ProjectPersistence(project)
 assets = ProjectAssetLifecycle(project, audio)
 assets.sync_assignments()
 session = SessionState(active_sample_ids={0})
-session.pad_stem_enabled_mask[0] = 2
+project.pad_stem_intent[0] = PadStemIntent(enabled_mask=2, display_mode='custom')
 controller = StemController(project, session, audio, persistence.mark_dirty, asset_lifecycle=assets)
 assert isinstance(controller._stem_worker_pool, StemWorkerPool)
 assert controller._stem_worker_pool._executor._max_workers == 2
@@ -1147,12 +1192,22 @@ selection = project.stem_cache[1].pair
 assert (selection is None) == fixture['first_created']
 assert controller.source_version_for_pad(1) == fixture['second']['source_version']
 assert controller._entry_files_available(project.stem_cache[1]), project.stem_cache[1]
-assert controller.publish_restored_stem_cache_if_available(1)
-assert 1 in controller._pair_preparations.pending
 assert not controller.stems_available(1)
 "#,
         );
         locals.unbind()
+    });
+    // PAD215 uses the first material's already existing pair. Its genuine public
+    // restore cannot create or retain any second-material derivative reader.
+    public_restore_215_ack(&engine, &mut callback, &mut consumer, &locals);
+    // Additional private legacy kernel retains the typed timing rejection and
+    // retry protocol independently from public restore's committed route.
+    Python::attach(|py| {
+        worker_python(
+            py,
+            locals.bind(py),
+            "assert controller._publish_restored_stem_cache(1)\nassert 1 in controller._pair_preparations.pending",
+        )
     });
     wait_until(|| {
         Python::attach(|py| {
@@ -1189,7 +1244,7 @@ original_retirement = original_pending.retirement
 assert first_attempt.publication_status() == 'pending'
 assert first_attempt.rejection_reason() is None
 assert original_retirement.remaining > 0
-assert audio.worker_call_count() == 1 and audio.prepared_only_on_pool_threads()
+assert audio.worker_call_count() - legacy_worker_baseline == 1 and audio.prepared_only_on_pool_threads()
 selection = project.stem_cache[1].pair
 assert isinstance(selection, StemPairSelection)
 assert json.loads(original_pending.prepared_pair.selection_json()) == selection.model_dump()
@@ -1323,7 +1378,7 @@ assert original_pending.previous_lease is None
 assert original_retirement.remaining == 0
 assert fresh_pending.retirement.remaining > 0
 assert controller._publication_retries.pending[1].attempts == 1
-assert audio.worker_call_count() == 2 and audio.prepared_only_on_pool_threads()
+assert audio.worker_call_count() - legacy_worker_baseline == 2 and audio.prepared_only_on_pool_threads()
 for _ in range(25):
     controller.on_frame_render()
     assert controller._pending_stem_publications[1] is fresh_pending
@@ -1331,7 +1386,7 @@ for _ in range(25):
     assert controller._publication_retries.pending[1].attempts == 1
     assert fresh_ticket.publication_status() == 'pending'
     assert fresh_pending.retirement.remaining > 0
-    assert audio.worker_call_count() == 2
+    assert audio.worker_call_count() - legacy_worker_baseline == 2
     assert not controller.stems_available(1)
 assert project.stem_cache[1].pair == selection
 assert project.stem_cache[0].model_dump() == first_entry_before
@@ -1358,7 +1413,7 @@ assert 1 not in session.stem_generation_errors
 assert fresh_pending.retirement.remaining == 0
 for _ in range(25):
     controller.on_frame_render()
-    assert audio.worker_call_count() == 2
+    assert audio.worker_call_count() - legacy_worker_baseline == 2
 assert project.stem_cache[1].pair == selection
 assert project.stem_cache[0].model_dump() == first_entry_before
 assert project.pad_content[0] == first_content_before
@@ -1398,7 +1453,7 @@ assert reopened.project.pad_content[1] == second_content_before
                 py,
                 locals.bind(py),
                 r#"
-assert audio.worker_call_count() == 1
+assert audio.worker_call_count() - legacy_worker_baseline == 1
 assert original_retirement.remaining > 0
 assert project.stem_cache[1].pair == selection
 assert not project.stem_cache[1].available and not controller.stems_available(1)
@@ -1470,6 +1525,30 @@ assert reopened.project.pad_content[1] == second_content_before
     } else {
         root.parent().unwrap().join(config_path)
     };
+    let (worker_calls, public_restore_worker_calls, legacy_worker_calls) = Python::attach(|py| {
+        let locals = locals.bind(py);
+        let total = locals
+            .get_item("audio")
+            .unwrap()
+            .unwrap()
+            .call_method0("worker_call_count")
+            .unwrap()
+            .extract::<usize>()
+            .unwrap();
+        let public = locals
+            .get_item("public_restore_worker_calls")
+            .unwrap()
+            .unwrap()
+            .extract::<usize>()
+            .unwrap();
+        let baseline = locals
+            .get_item("legacy_worker_baseline")
+            .unwrap()
+            .unwrap()
+            .extract::<usize>()
+            .unwrap();
+        (total, public, total - baseline)
+    });
     if first_created {
         // Remove all Python pending/retry/job handles and the facade's engine
         // Arc, including bound-controller callback cycles. No saved test owner
@@ -1534,7 +1613,10 @@ assert not controller._pair_preparations.pending
         child_directory.join("retry-child-verified.json"),
         serde_json::to_vec(&json!({
             "process_id": std::process::id(),
-            "worker_calls": if close_before_retry {1} else {2},
+            "worker_calls": worker_calls,
+            "public_restore_worker_calls": public_restore_worker_calls,
+            "legacy_worker_calls": legacy_worker_calls,
+            "public_restore_own_acks": true,
             "held_pending_polls": if close_before_retry {0} else {25},
             "only_pool_threads": true, "native_timing_rejection": true,
             "new_ticket_own_ack": true, "unchanged_selection": true,

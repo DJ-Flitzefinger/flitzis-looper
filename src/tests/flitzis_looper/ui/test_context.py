@@ -21,6 +21,7 @@ from flitzis_looper.models import (
     SampleAnalysis,
     StemCacheEntry,
 )
+from flitzis_looper.stem_intent import PadStemIntent
 from flitzis_looper.ui.context import (
     AudioActions,
     InputMappingActions,
@@ -264,9 +265,11 @@ class TestUiStateComputedProperties:
         controller.session.stem_generation_progress[0] = 0.5
         controller.session.stem_generation_errors[0] = "failed"
         controller.session.stem_generating_sample_ids.add(0)
-        controller.session.pad_stem_enabled_mask[0] = STEM_INSTRUMENTAL_PRESET_MASK
-        controller.session.pad_stem_last_custom_mask[0] = STEM_INSTRUMENTAL_PRESET_MASK
-        controller.session.pad_stem_mask_display_mode[0] = "instrumental"
+        controller.project.pad_stem_intent[0] = PadStemIntent(
+            enabled_mask=STEM_INSTRUMENTAL_PRESET_MASK,
+            last_custom_mask=STEM_INSTRUMENTAL_PRESET_MASK,
+            display_mode="instrumental",
+        )
         controller.project.sample_paths[0] = "samples/foo.wav"
         controller.session.active_sample_ids.add(0)
 
@@ -317,7 +320,9 @@ class TestAudioActions:  # noqa: PLR0904
 
         audio_actions.pads.trigger_pad(0)
 
-        audio_engine_mock.play_sample_exclusive.assert_called_once_with(0, 1.0)
+        audio_engine_mock.play_sample_exclusive.assert_called_once_with(
+            0, 1.0, expected_source_generation=1
+        )
         # Simulate the audio message that would update state
         msg = Mock()
         msg.sample_id.return_value = 0
@@ -346,17 +351,17 @@ class TestAudioActions:  # noqa: PLR0904
     def test_load_sample_async(self, controller: AppController, audio_engine_mock: Mock) -> None:
         """Test load_sample_async delegates to controller."""
         audio_actions = AudioActions(controller)
+        key_lock = False
+        audio_engine_mock.load_incoming_sample_async.return_value = 41
 
         audio_actions.pads.load_sample_async(0, "/path/to/sample.wav")
 
-        audio_engine_mock.load_sample_async.assert_called_once_with(
-            0,
-            "/path/to/sample.wav",
-            run_analysis=True,
-            replace_assignment=True,
-            source_intent="import",
+        audio_engine_mock.load_incoming_sample_async.assert_called_once_with(
+            0, "/path/to/sample.wav", key_lock
         )
+        assert controller.loader.incoming_load_request_id(0) == 41
         assert controller.session.pending_sample_paths[0] == "/path/to/sample.wav"
+        assert 0 in controller.session.loading_sample_ids
         assert controller.project.sample_paths[0] is None
 
     def test_analyze_sample_async(self, controller: AppController, audio_engine_mock: Mock) -> None:
@@ -399,7 +404,9 @@ class TestAudioActions:  # noqa: PLR0904
 
         audio_actions.pads.toggle_pad_key_lock(3)
 
-        audio_engine_mock.set_pad_key_lock.assert_called_once_with(3, enabled)
+        audio_engine_mock.set_pad_key_lock.assert_called_once_with(
+            3, enabled, expected_source_generation=1
+        )
         assert controller.project.pad_key_lock[3] is True
 
     def test_set_pad_full_track_loop_region(
@@ -417,7 +424,9 @@ class TestAudioActions:  # noqa: PLR0904
         assert controller.project.pad_loop_start_s[0] == pytest.approx(0.0)
         assert controller.project.pad_loop_end_s[0] == pytest.approx(42.0)
         assert controller.project.pad_loop_auto[0] is False
-        audio_engine_mock.set_pad_loop_region.assert_called_once_with(0, 0.0, 42.0)
+        audio_engine_mock.set_pad_loop_region.assert_called_once_with(
+            0, 0.0, 42.0, expected_source_generation=1
+        )
 
     def test_tap_bpm_delegates(
         self, controller: AppController, monkeypatch: pytest.MonkeyPatch
@@ -861,8 +870,10 @@ class TestWaveformEditorTransportControls:
         ctx.ui.waveform.play_restart_selected_pad_on_press()
 
         audio_engine_mock.stop_all.assert_not_called()
-        audio_engine_mock.play_sample.assert_called_once_with(0, 1.0)
-        audio_engine_mock.set_pad_loop_region.assert_called_once_with(0, 2.0, 5.0)
+        audio_engine_mock.play_sample.assert_called_once_with(0, 1.0, expected_source_generation=1)
+        audio_engine_mock.set_pad_loop_region.assert_called_once_with(
+            0, 2.0, 5.0, expected_source_generation=1
+        )
         assert controller.session.pad_playhead_s[0] == pytest.approx(2.0)
         assert 0 not in controller.session.paused_sample_ids
 
@@ -895,10 +906,10 @@ class TestWaveformEditorTransportControls:
         assert controller.project.pad_loop_start_s[0] == pytest.approx(4.25)
         audio_engine_mock.stop_all.assert_not_called()
         assert audio_engine_mock.set_pad_loop_region.call_args_list == [
-            call(0, 4.25, 9.0),
-            call(0, 4.25, 9.0),
+            call(0, 4.25, 9.0, expected_source_generation=1),
+            call(0, 4.25, 9.0, expected_source_generation=1),
         ]
-        audio_engine_mock.play_sample.assert_called_once_with(0, 1.0)
+        audio_engine_mock.play_sample.assert_called_once_with(0, 1.0, expected_source_generation=1)
         assert controller.session.pad_playhead_s[0] == pytest.approx(4.25)
         assert controller.session.pad_playhead_s[1] == pytest.approx(1.5)
 
@@ -1080,7 +1091,7 @@ class TestWaveformEditorTransportControls:
 
         ctx.ui.waveform.seek_selected_pad_to_position(12.5)
 
-        audio_engine_mock.seek_sample.assert_called_once_with(0, 10.0)
+        audio_engine_mock.seek_sample.assert_called_once_with(0, 10.0, expected_source_generation=1)
         assert controller.session.pad_playhead_s[0] == pytest.approx(10.0)
 
     def test_waveform_render_cache_includes_source_identity(
@@ -1215,7 +1226,7 @@ class TestWaveformEditorTransportControls:
         ctx.ui.waveform.set_loop_start_and_play_selected_pad(-0.5)
         assert controller.project.pad_loop_start_s[0] == 0.0
         ctx.ui.waveform.seek_selected_pad_to_position(-0.5)
-        audio_engine_mock.seek_sample.assert_called_once_with(0, 0.0)
+        audio_engine_mock.seek_sample.assert_called_once_with(0, 0.0, expected_source_generation=1)
 
     def test_source_replacement_resets_view_but_loop_edits_and_reopen_preserve_it(
         self, controller: AppController

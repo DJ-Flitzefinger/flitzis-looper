@@ -6,6 +6,7 @@ from typing import TYPE_CHECKING
 import pytest
 
 from flitzis_looper.models import SampleAnalysis
+from flitzis_looper.stem_intent import PadStemIntent
 from tests.conftest import write_mono_pcm16_wav
 from tests.flitzis_looper.conftest import FakeInputRuntimePadBinding, current_timing_metadata
 from tests.flitzis_looper.controller.transport.test_key_lock_transactions import _mode_source
@@ -14,6 +15,24 @@ if TYPE_CHECKING:
     from unittest.mock import Mock
 
     from flitzis_looper.controller import AppController
+    from flitzis_looper.models import ProjectState
+
+
+def _seed_musical_state_before_replacement(
+    project: ProjectState, analysis: SampleAnalysis
+) -> PadStemIntent:
+    intent = PadStemIntent(enabled_mask=0, last_custom_mask=5, display_mode="custom")
+    project.sample_analysis[0] = analysis
+    project.pad_stem_intent[0] = intent
+    project.pad_stem_intent[36] = intent
+    return intent
+
+
+def _assert_stem_intent_after_replacement(
+    project: ProjectState, previous: PadStemIntent, *, restored: bool
+) -> None:
+    assert project.pad_stem_intent[0] == (previous if restored else PadStemIntent())
+    assert project.pad_stem_intent[36] is previous
 
 
 def _legacy_analysis() -> dict[str, object]:
@@ -140,7 +159,7 @@ def test_maintenance_source_completion_preserves_timing_and_gates_analysis_until
     project.key_lock = global_default
     project.pad_key_lock[0] = not global_default
     old_analysis = SampleAnalysis.model_validate(_legacy_analysis())
-    project.sample_analysis[0] = old_analysis
+    old_stem_intent = _seed_musical_state_before_replacement(project, old_analysis)
     project.manual_bpm[0] = 123.456
     project.pad_grid_anchor_s[0] = -0.125
     project.pad_loop_auto[0] = False
@@ -181,6 +200,7 @@ def test_maintenance_source_completion_preserves_timing_and_gates_analysis_until
     controller.loader.poll_loader_events()
 
     assert (project.sample_paths[0], project.sample_durations[0]) == (cached_path, 32.0)
+    _assert_stem_intent_after_replacement(project, old_stem_intent, restored=restored)
     assert (
         session.loading_sample_ids,
         session.pending_sample_paths,

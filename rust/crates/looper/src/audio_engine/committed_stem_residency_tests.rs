@@ -1271,8 +1271,10 @@ fn empty_mask_mid_ramp_mask_change_and_full_mix_supersession_preserve_real_rate_
     );
     let late_mask = p.request("all_stems", 0b0011);
     p.capture_then_wait(&late_mask);
-    // The future FullMix request supersedes the already prepared mask worker;
-    // its separate Capture and Adopt still need their own callback work.
+    // Match the control owner's public cancellation of its already prepared,
+    // unclaimed mask. A new proposal alone cannot arm before this FIFO Adopt.
+    assert!(late_mask.withdraw());
+    // FullMix's separate Capture and Adopt still need their own callback work.
     let release = p.request("full_mix", 0b0011);
     assert_eq!(p.h.callback.drain(&mut p.h.consumer), 2);
     assert_eq!(late_mask.residency_status(), "rejected");
@@ -3507,7 +3509,7 @@ fn controller_active_round_trip(stopped_start: bool) {
             &locals,
             r#"
 import json
-from flitzis_looper.models import ProjectState, SessionState, StemCacheEntry, PadContentIdentity
+from flitzis_looper.models import ProjectState, SessionState, StemCacheEntry, PadContentIdentity, PadStemIntent
 from flitzis_looper.controller.stem_cache import expected_stem_files
 from flitzis_looper.controller.stems import StemController
 from flitzis_looper.controller.stem_workers import StemWorkerPool
@@ -3524,7 +3526,7 @@ project.stem_cache[0] = StemCacheEntry(source_version=fixture['source_version'],
     cache_dir=disk_selection.wav_generation, stems=expected_stem_files(disk_selection.wav_generation),
     pair=disk_selection, available=True)
 session = SessionState()
-session.pad_stem_enabled_mask[0] = 0b1010
+project.pad_stem_intent[0] = PadStemIntent(enabled_mask=0b1010, display_mode='custom')
 controller = StemController(project, session, audio)
 assert isinstance(controller._stem_worker_pool, StemWorkerPool)
 assert controller._stem_worker_pool._executor._max_workers == 2
@@ -3536,27 +3538,40 @@ assert controller.publish_restored_stem_cache_if_available(0)
         locals.unbind()
     });
     wait_until(|| {
-        Python::attach(|py| {
+        let own_registration_pending = Python::attach(|py| {
             worker_python(
                 py,
                 locals.bind(py),
-                "controller.on_frame_render()\nassert not session.stem_generation_errors, session.stem_generation_errors",
+                r#"
+controller.on_frame_render()
+assert not session.stem_generation_errors, session.stem_generation_errors
+own_registration_pending = (
+    0 in controller._committed_residency._selections
+    and controller._committed_residency._selections[0].ticket.is_current()
+    and controller._committed_residency._selections[0].ticket.publication_status() == 'pending'
+)
+"#,
             );
-            let status = locals
+            locals
                 .bind(py)
-                .get_item("controller")
+                .get_item("own_registration_pending")
                 .unwrap()
                 .unwrap()
-                .call_method1("stem_residency_status", (0,))
-                .unwrap();
-            !status.is_none()
-                && status
-                    .getattr("registration")
-                    .unwrap()
-                    .extract::<String>()
-                    .unwrap()
-                    == "pending"
-        })
+                .extract::<bool>()
+                .unwrap()
+        });
+        own_registration_pending
+            && matches!(
+                h.consumer.peek(),
+                Ok(ControlMessage::CommittedStemWork(work))
+                    if matches!(
+                        work.as_ref(),
+                        crate::audio_engine::committed_stem_residency::CommittedStemRtWork::Register {
+                            id: 0,
+                            ..
+                        }
+                    )
+            )
     });
     controller_python(
         &locals,

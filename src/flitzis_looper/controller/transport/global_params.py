@@ -45,6 +45,7 @@ class GlobalParametersController:
 
     def set_key_lock(self, *, enabled: bool) -> None:
         """Change the default and publish only pads that inherit it."""
+        self._transport.ensure_global_key_lock_edit_allowed()
         generations = self._capture_inherited_generations()
         changed = enabled != self._project.key_lock
         self._project.key_lock = enabled
@@ -115,6 +116,8 @@ class GlobalParametersController:
         """Enable or disable BPM Lock mode."""
         if enabled == self._project.bpm_lock:
             return
+        if enabled:
+            self._transport.ensure_pad_edit_allowed(self._project.selected_pad)
 
         self._project.bpm_lock = enabled
         self._transport._mark_project_changed()
@@ -226,6 +229,7 @@ class GlobalParametersController:
         ensure_finite(speed)
         anchor_id = self._session.bpm_lock_anchor_pad_id
         if self._project.bpm_lock and anchor_id is not None:
+            self._transport.ensure_pad_edit_allowed(anchor_id)
             if isinstance(anchor_timing, UnresolvedTiming):
                 anchor_timing = self._bpm.current_timing(anchor_id)
             if anchor_timing is None and self._audio.pad_timing_intent(anchor_id) == "automatic":

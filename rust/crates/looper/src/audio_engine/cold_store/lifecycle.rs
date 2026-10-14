@@ -1218,6 +1218,9 @@ impl CommittedColdLease {
         {
             *pcm = None;
         }
+        if let Ok(mut windows) = self.cache.windows.lock() {
+            windows.prune();
+        }
     }
     pub(in crate::audio_engine) fn assignment_id(&self) -> u64 {
         self.assignment.id
@@ -1359,6 +1362,10 @@ impl CommittedColdLease {
             *pcm = Some(Arc::downgrade(samples));
         }
     }
+    pub(in crate::audio_engine) fn bind_sample(&self, sample: &SampleBuffer) -> io::Result<()> {
+        self.bind_pcm(&sample.samples);
+        self.cache.remember_verified_window(sample)
+    }
     pub(in crate::audio_engine) fn retire_cache(&self) {
         self.retire_assignment(true);
     }
@@ -1391,6 +1398,15 @@ impl CommittedColdLease {
 }
 
 impl ColdTransaction {
+    /// Retain only weak locators for the actual independently admitted view.
+    pub(in crate::audio_engine) fn bind_sample(&mut self, sample: &SampleBuffer) -> io::Result<()> {
+        self.bind_pcm(&sample.samples);
+        self.shared_cache
+            .as_ref()
+            .expect("bound committed cache")
+            .remember_verified_window(sample)
+    }
+
     /// Install sealed committed ownership and the PCM weak reference before
     /// releasing the digest gate. Followers can then share PCM even while the
     /// producer is waiting for its independent native ACK.
@@ -1400,31 +1416,36 @@ impl ColdTransaction {
             manifest.descriptor["playback"]["pcm"]["full_bytes"].as_u64()
                 == samples.len().checked_mul(4).map(|n| n as u64)
         });
-        let cache = self.reused_cache.clone().unwrap_or_else(|| {
-            let mut directories = std::mem::take(&mut self.directories);
-            directories.push(self.committed_directory.take().expect("committed guard"));
-            let path = self
-                .committed_cache
-                .as_ref()
-                .expect("committed cache")
-                .clone();
-            let cache = Arc::new(CacheReaders {
-                path: path.clone(),
-                root: self.cache_root.clone(),
-                readers: std::mem::take(&mut self.artifact_readers),
-                directories,
-                pcm: Mutex::new(None),
-                retired: AtomicBool::new(false),
-                durable_assignments: Mutex::new(HashSet::new()),
-                identity: self.committed_identity.take().expect("committed identity"),
-                file_identities: std::mem::take(&mut self.artifact_identities),
-                cleanup: self.staging_slot.take(),
+        let cache = self
+            .reused_cache
+            .clone()
+            .or_else(|| self.shared_cache.clone())
+            .unwrap_or_else(|| {
+                let mut directories = std::mem::take(&mut self.directories);
+                directories.push(self.committed_directory.take().expect("committed guard"));
+                let path = self
+                    .committed_cache
+                    .as_ref()
+                    .expect("committed cache")
+                    .clone();
+                let cache = Arc::new(CacheReaders {
+                    path: path.clone(),
+                    root: self.cache_root.clone(),
+                    readers: std::mem::take(&mut self.artifact_readers),
+                    directories,
+                    pcm: Mutex::new(None),
+                    windows: Mutex::new(Default::default()),
+                    retired: AtomicBool::new(false),
+                    durable_assignments: Mutex::new(HashSet::new()),
+                    identity: self.committed_identity.take().expect("committed identity"),
+                    file_identities: std::mem::take(&mut self.artifact_identities),
+                    cleanup: self.staging_slot.take(),
+                });
+                if let Ok(mut state) = store().state.lock() {
+                    state.caches.insert(path, Arc::downgrade(&cache));
+                }
+                cache
             });
-            if let Ok(mut state) = store().state.lock() {
-                state.caches.insert(path, Arc::downgrade(&cache));
-            }
-            cache
-        });
         if complete && let Ok(mut pcm) = cache.pcm.lock() {
             *pcm = Some(Arc::downgrade(samples));
         }

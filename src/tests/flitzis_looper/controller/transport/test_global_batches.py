@@ -422,8 +422,12 @@ def test_productive_unload_or_replace_prunes_pad_from_late_global_stop_restore(
     if operation == "unload":
         controller.loader.unload_sample(2)
     else:
-        audio_engine_mock.load_sample_async.return_value = 7
+        audio_engine_mock.load_incoming_sample_async.return_value = 7
         controller.loader.load_sample_async(2, "replacement/source.wav")
+        audio_engine_mock.load_incoming_sample_async.assert_called_once_with(
+            2, "replacement/source.wav", controller.project.resolve_pad_key_lock(2)
+        )
+        audio_engine_mock.load_sample_async.assert_not_called()
         assert 2 in controller.session.active_sample_ids
         audio_engine_mock.unload_sample.assert_not_called()
         # The actual cold callback replaces source ownership before success metadata.
@@ -435,10 +439,22 @@ def test_productive_unload_or_replace_prunes_pad_from_late_global_stop_restore(
                 "request_id": 7,
                 "cached_path": "samples/replacement.wav",
                 "duration_s": 1.0,
+                "incoming_defaults": {
+                    "revision": 0,
+                    "key_lock": controller.project.resolve_pad_key_lock(2),
+                    "start_s": 0.0,
+                    "end_s": None,
+                    "period_seconds": None,
+                    "grid_origin_s": 0.0,
+                    "loop_auto": True,
+                    "loop_bars": 8.0,
+                },
             },
             None,
         ]
         controller.loader.poll_loader_events()
+        assert controller.project.sample_paths[2] == "samples/replacement.wav"
+        assert 2 not in controller.session.sample_load_errors
     ticket.status = final_status
     controller.transport.on_frame_render()
 
@@ -463,8 +479,12 @@ def test_failed_cold_replacement_keeps_pad_in_late_global_stop_restore(
     ticket = FakeGlobalPlaybackBatchTicket("pending")
     audio_engine_mock.stop_global_playback_batch.return_value = ticket
     controller.transport.playback.stop_global_start_stop()
-    audio_engine_mock.load_sample_async.return_value = 7
+    audio_engine_mock.load_incoming_sample_async.return_value = 7
     controller.loader.load_sample_async(2, "replacement/source.wav")
+    audio_engine_mock.load_incoming_sample_async.assert_called_once_with(
+        2, "replacement/source.wav", controller.project.resolve_pad_key_lock(2)
+    )
+    audio_engine_mock.load_sample_async.assert_not_called()
     audio_engine_mock.poll_loader_events.side_effect = [
         {"type": "error", "id": 2, "request_id": 7, "msg": "cold preparation failed"},
         None,
@@ -475,6 +495,8 @@ def test_failed_cold_replacement_keeps_pad_in_late_global_stop_restore(
     controller.transport.on_frame_render()
 
     assert controller.project.sample_paths[2] == "saved/stale-2.wav"
+    assert controller.session.sample_load_errors[2] == "cold preparation failed"
+    assert 2 not in controller.session.loading_sample_ids
     assert controller.session.global_stop_restore_sample_ids == {0, 2}
     audio_engine_mock.unload_sample.assert_not_called()
 

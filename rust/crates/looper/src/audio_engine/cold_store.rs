@@ -26,6 +26,7 @@ pub(super) use material::{
 };
 mod migration;
 mod residency;
+mod shared_windows;
 #[cfg(test)]
 pub(super) use warm::{
     WindowReadObservation, reset_window_read_observation_for_test, window_read_observation_for_test,
@@ -109,6 +110,7 @@ struct CacheReaders {
     readers: Vec<File>,
     directories: Vec<File>,
     pcm: Mutex<Option<Weak<[f32]>>>,
+    windows: Mutex<shared_windows::SharedResidentWindows>,
     retired: AtomicBool,
     durable_assignments: Mutex<HashSet<u64>>,
     identity: FileIdentity,
@@ -1019,9 +1021,30 @@ impl ColdTransaction {
             self.source_reader.take();
             self.source_directories.clear();
             self.staging_directory.take();
-            if let Some(staging) = self.staging.as_ref() {
-                fs::remove_file(staging.join("owner.json"))?;
-                fs::remove_dir(staging)?;
+            if let Some(path) = self.staging.as_ref() {
+                match staging::remove_generation(
+                    &self.cache_root,
+                    path,
+                    Some(&self.staging_identity),
+                ) {
+                    Ok(()) => {}
+                    Err(error)
+                        if error.kind() == io::ErrorKind::PermissionDenied
+                            || matches!(error.raw_os_error(), Some(32 | 33)) =>
+                    {
+                        // Another capture's recovery scan may still hold this unused
+                        // marker. Transfer only our exact generation and reserved slot.
+                        lifecycle::queue_generation(
+                            path.clone(),
+                            self.cache_root.clone(),
+                            self.staging_identity.clone(),
+                            self.staging_slot
+                                .take()
+                                .expect("staging cleanup capacity reserved"),
+                        );
+                    }
+                    Err(error) => return Err(error),
+                }
             }
             self.staging = None;
             self.verified = true;
@@ -1196,6 +1219,7 @@ impl ColdTransaction {
                     readers: std::mem::take(&mut self.artifact_readers),
                     directories,
                     pcm: Mutex::new(None),
+                    windows: Mutex::new(Default::default()),
                     retired: AtomicBool::new(false),
                     durable_assignments: Mutex::new(HashSet::new()),
                     identity: self

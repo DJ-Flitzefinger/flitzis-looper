@@ -1,3 +1,4 @@
+import json
 from contextlib import suppress
 from typing import TYPE_CHECKING
 
@@ -6,13 +7,14 @@ from flitzis_looper.controller.asset_lifecycle import ProjectAssetLifecycle
 from flitzis_looper.controller.loader import LoaderController
 from flitzis_looper.controller.material_migration import MaterialMigrationController
 from flitzis_looper.controller.metering import MeteringController
+from flitzis_looper.controller.pad_arrangement import PadArrangementController
 from flitzis_looper.controller.performance_confirmation import PerformanceConfirmationController
 from flitzis_looper.controller.persistence import ProjectPersistence
 from flitzis_looper.controller.settings import SettingsController
 from flitzis_looper.controller.stems import StemController, StemTaskRunner
 from flitzis_looper.controller.transport import TransportController
 from flitzis_looper.input_mapping import InputMappingController
-from flitzis_looper.models import ProjectState, SessionState
+from flitzis_looper.models import ProjectState, SessionState, validate_sample_id
 from flitzis_looper_audio import AudioEngine, AudioMessage
 
 if TYPE_CHECKING:
@@ -20,6 +22,36 @@ if TYPE_CHECKING:
 
     from flitzis_looper.controller.base import BaseController
     from flitzis_looper.controller.stem_generation import StemGenerationBackend
+    from flitzis_looper_audio import PadCopyTicket
+
+
+def _copied_components_available(sample_id: int, ticket: PadCopyTicket) -> bool:
+    try:
+        metadata = json.loads(ticket.metadata_json())
+    except (AttributeError, TypeError, ValueError) as error:
+        message = "Complete Copy target acknowledgement metadata is unavailable"
+        raise RuntimeError(message) from error
+    if not isinstance(metadata, dict):
+        message = "Complete Copy target acknowledgement metadata is invalid"
+        raise TypeError(message)
+    target = metadata.get("target_id")
+    generation = metadata.get("source_generation")
+    lifetime = metadata.get("content_lifetime")
+    components = metadata.get("components_available")
+    target_matches = type(target) is int and target == sample_id
+    counters_are_current = all(
+        type(counter) is int and counter > 0 for counter in (generation, lifetime)
+    )
+    if (
+        not target_matches
+        or not counters_are_current
+        or metadata.get("status") != "accepted"
+        or metadata.get("control_mirrored") is not True
+        or not isinstance(components, bool)
+    ):
+        message = "Complete Copy target has no matching acknowledged Native image"
+        raise RuntimeError(message)
+    return components
 
 
 class AppController:
@@ -39,6 +71,10 @@ class AppController:
             self._persistence.config_path = project_config_path
         self._project = self._persistence.project
         self._session = SessionState()
+        self._close_requested = False
+        self._shutdown_preparing = False
+        self._shutdown_running = False
+        self._shutdown_complete = False
 
         self._audio = AudioEngine()
         self._audio.set_resident_pcm_budget_mib(self._project.resident_pcm_budget_mib)
@@ -73,6 +109,19 @@ class AppController:
         self.stems.fence_pair_metadata(self._persistence.invalid_stem_pair_ids)
         self.stems.bind_disk_selection_commit(
             self._persistence.commit_stem_selection, self._persistence.flush
+        )
+        self.arrangement = PadArrangementController(
+            self._persistence,
+            self._session,
+            self._audio,
+            self._assets,
+            stem_task_runner=self.stems._stem_task_runner,
+            on_copy_committed=self._on_copy_committed,
+        )
+        self.transport.bind_pad_edit_guard(self.ensure_not_copy_target)
+        self.stems.bind_pad_edit_guard(self.ensure_not_copy_target)
+        self.transport.bind_global_key_lock_edit_guard(
+            self.arrangement.ensure_global_key_lock_edit_allowed
         )
         self.settings.bind_residency_policy(self.stems.refresh_residency_policy)
         self.loader = LoaderController(
@@ -134,24 +183,54 @@ class AppController:
         self.transport.apply_project_state_to_audio()
         self.input_mapping.apply_project_state_to_input_runtime()
 
-    def shut_down(self) -> None:
-        self._audio.set_input_mapping_enabled(False)
-        self.material_migration.shut_down()
-        self.transport.residency.shut_down()
-        self.accepted_timing.shut_down()
-        self.loader.shut_down()
-        self.stems.shut_down()
-        with suppress(OSError):
-            self._persistence.flush()
+    def prepare_shutdown(self) -> bool:
+        """Settle complete Copy ownership while its workers and callback remain alive."""
+        if self._shutdown_complete:
+            return True
+        if self._shutdown_preparing:
+            message = "Application shutdown preparation is already running"
+            raise RuntimeError(message)
+        self._shutdown_preparing = True
+        try:
+            if not self._close_requested:
+                self._audio.set_input_mapping_enabled(False)
+                self._close_requested = True
+            return self.arrangement.prepare_shutdown()
+        finally:
+            self._shutdown_preparing = False
 
-        self._audio.stop_all()
-        self._assets.release_saved_assignments()
-        self._audio.shut_down()
+    def shut_down(self) -> None:
+        """Release dependent owners only after actual Copy settlement permits exit."""
+        if self._shutdown_complete:
+            return
+        if self._shutdown_running:
+            message = "Application shutdown is already running"
+            raise RuntimeError(message)
+        self._shutdown_running = True
+        try:
+            if not self.prepare_shutdown():
+                message = "Application close is waiting for complete Copy settlement"
+                raise RuntimeError(message)
+            self.material_migration.shut_down()
+            self.transport.residency.shut_down()
+            self.accepted_timing.shut_down()
+            self.loader.shut_down()
+            self.stems.shut_down()
+            with suppress(OSError):
+                self._persistence.flush()
+
+            self._audio.stop_all()
+            self._assets.release_saved_assignments()
+            self._audio.shut_down()
+            self._shutdown_complete = True
+        finally:
+            self._shutdown_running = False
 
     def _report_timing_save_error(self, sample_id: int, message: str) -> None:
         self._session.sample_analysis_errors[sample_id] = message
 
     def on_frame_render(self) -> None:
+        self.arrangement.poll()
         for controller in self._controllers:
             controller.on_frame_render()
 
@@ -162,6 +241,37 @@ class AppController:
         self._poll_audio_messages()
         self.accepted_timing.poll()
         self.transport.residency.poll()
+        self.arrangement.poll()
+
+    def ensure_not_copy_target(self, sample_id: int) -> None:
+        """Reject a target gesture while its complete Copy transaction remains fenced."""
+        validate_sample_id(sample_id)
+        if sample_id in self.arrangement.fenced_sample_ids:
+            message = "Complete Copy target receipt is pending; current-pad gesture rejected"
+            raise ValueError(message)
+
+    def _on_copy_committed(self, sample_id: int, ticket: PadCopyTicket) -> None:
+        """Project the durable stopped target before its Native reservation is released."""
+        validate_sample_id(sample_id)
+        components = _copied_components_available(sample_id, ticket)
+        try:
+            selection = ticket.committed_stem_ticket()
+        except AttributeError as error:
+            message = "Complete Copy target registration metadata is unavailable"
+            raise RuntimeError(message) from error
+        self.stems.project_copied_native_state(
+            sample_id, components_available=components, selection=selection
+        )
+        self._session.active_sample_ids.discard(sample_id)
+        self._session.paused_sample_ids.discard(sample_id)
+        self._session.pressed_pads[sample_id] = False
+        self._session.pad_peak[sample_id] = 0.0
+        self._session.pad_peak_updated_at[sample_id] = 0.0
+        self._session.pad_clip_hold_until[sample_id] = 0.0
+        self._session.pad_playhead_s[sample_id] = None
+        self._session.pad_playhead_updated_at[sample_id] = 0.0
+        self.metering._active_peak_sample_ids.discard(sample_id)
+        self.transport.playback.discard_global_restore_for_unloaded_pad(sample_id)
 
     def _refresh_restored_accepted_timing(self, sample_id: int) -> None:
         self.accepted_timing.refresh_current(

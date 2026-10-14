@@ -1826,6 +1826,117 @@ fn committed_controller_ack(
     crate::audio_engine::resident_relocation::reconcile(engine).unwrap();
 }
 
+// Public restore verifies disk artifacts before explicit component interest. Keep
+// this actual Register/Capture/Adopt route separate from the legacy publication
+// rejection kernel exercised below; a saved ALL preference is not a request.
+fn public_restore_215_ack(
+    engine: &AudioEngine,
+    callback: &mut Callback,
+    consumer: &mut rtrb::Consumer<ControlMessage>,
+    locals: &Py<PyDict>,
+) {
+    use crate::audio_engine::committed_stem_residency::CommittedStemRtWork;
+    let controller = Python::attach(|py| {
+        worker_python(
+            py,
+            locals.bind(py),
+            r#"
+public_restore_worker_before = audio.worker_call_count()
+assert controller.publish_restored_stem_cache_if_available(215)
+assert not controller.stems_available(215)
+assert not controller._pending_stem_publications
+"#,
+        );
+        locals
+            .bind(py)
+            .get_item("controller")
+            .unwrap()
+            .unwrap()
+            .unbind()
+    });
+    wait_until(|| {
+        let owns_pending = Python::attach(|py| {
+            worker_python(
+                py,
+                locals.bind(py),
+                "controller.on_frame_render()\nassert not controller._session.stem_generation_errors, controller._session.stem_generation_errors",
+            );
+            let selections = controller
+                .bind(py)
+                .getattr("_committed_residency")
+                .unwrap()
+                .getattr("_selections")
+                .unwrap();
+            if !selections.contains(215).unwrap() {
+                return false;
+            }
+            let ticket = selections.get_item(215).unwrap().getattr("ticket").unwrap();
+            ticket
+                .call_method0("is_current")
+                .unwrap()
+                .extract::<bool>()
+                .unwrap()
+                && ticket
+                    .call_method0("publication_status")
+                    .unwrap()
+                    .extract::<String>()
+                    .unwrap()
+                    == "pending"
+        });
+        owns_pending
+            && matches!(consumer.peek(), Ok(ControlMessage::CommittedStemWork(work))
+                if matches!(work.as_ref(), CommittedStemRtWork::Register { id: 215, .. }))
+    });
+    assert!(callback.mixer.stems_for_measurement()[215].is_none());
+    assert_eq!(
+        callback.drain(consumer),
+        1,
+        "own public restore registration ACK"
+    );
+    Python::attach(|py| {
+        worker_python(
+            py,
+            locals.bind(py),
+            r#"
+controller.on_frame_render()
+assert controller._committed_residency._selections[215].ticket.publication_status() == 'accepted'
+assert not controller._pending_stem_publications
+assert controller.set_stem_mix_mode(215, 'all_stems')
+public_restore_worker_calls = audio.worker_call_count() - public_restore_worker_before
+assert public_restore_worker_calls == 1 and audio.prepared_only_on_pool_threads()
+"#,
+        )
+    });
+    committed_controller_ack(engine, callback, consumer, &controller, 215, "all_stems");
+    assert!(callback.mixer.stems_for_measurement()[215].is_some());
+    Python::attach(|py| {
+        worker_python(
+            py,
+            locals.bind(py),
+            "assert controller.set_stem_mix_mode(215, 'full_mix')",
+        )
+    });
+    committed_controller_ack(engine, callback, consumer, &controller, 215, "full_mix");
+    assert!(callback.mixer.stems_for_measurement()[215].is_none());
+    callback.retirement.retired.clear();
+    assert!(consumer.is_empty());
+    Python::attach(|py| {
+        worker_python(
+            py,
+            locals.bind(py),
+            r#"
+assert audio.worker_call_count() - public_restore_worker_before == 1
+persistence.flush()
+public_reopen = ProjectPersistence.from_config_path(persistence.config_path)
+assert public_reopen.load_error is None
+assert public_reopen.project.stem_cache[215].pair == project.stem_cache[215].pair
+assert public_reopen.project.pad_stem_mix_mode[215] == 'full_mix'
+legacy_worker_baseline = audio.worker_call_count()
+"#,
+        )
+    });
+}
+
 #[test]
 fn ordinary_python_worker_runs_native_pair_preparation_and_persists_current_selection() {
     pyo3::Python::initialize();
@@ -1890,13 +2001,16 @@ fn ordinary_python_worker_runs_native_pair_preparation_and_persists_current_sele
     )
     .unwrap();
     assert_eq!(receipt["process_id"], child.id());
-    assert_eq!(receipt["worker_calls"], 1);
+    assert_eq!(receipt["worker_calls"], 2);
+    assert_eq!(receipt["public_restore_worker_calls"], 1);
+    assert_eq!(receipt["legacy_worker_calls"], 1);
     for field in [
         "only_pool_threads",
         "pending_before_callback",
         "accepted_after_callback",
         "full_mix_components_released",
         "current_json_reopened",
+        "public_restore_own_acks",
     ] {
         assert_eq!(receipt[field], true);
     }
@@ -1934,11 +2048,21 @@ fn ordinary_python_worker_child_requires_own_callback_ack_and_reprepares_after_f
         (2, RATE, root.clone()),
     )
     .unwrap();
-    wait_until(|| consumer.peek().is_ok());
+    let last_source = control::adopt_for_format(
+        &engine,
+        215,
+        &preparation,
+        producer.clone(),
+        (2, RATE, root.clone()),
+    )
+    .unwrap();
+    wait_until(|| consumer.slots() >= 2);
     assert_eq!(source.phase().unwrap(), "pending");
-    assert_eq!(callback.drain(&mut consumer), 1);
-    source_successes(&engine, &[source.request_id()]);
+    assert_eq!(last_source.phase().unwrap(), "pending");
+    assert_eq!(callback.drain(&mut consumer), 2);
+    source_successes(&engine, &[source.request_id(), last_source.request_id()]);
     assert!(source.is_current().unwrap());
+    assert!(last_source.is_current().unwrap());
     callback.mixer.stop_sample_rt(0, &mut callback.retirement);
     callback.retirement.retired.clear();
     preparation.release_preparation().unwrap();
@@ -1993,6 +2117,10 @@ project.pad_content[0] = PadContentIdentity(instance_id='d' * 32, material_id=fi
 project.stem_cache[0] = StemCacheEntry(source_version=fixture['source_version'], cache_dir=fixture['wav_generation'],
     stems=expected_stem_files(fixture['wav_generation']), available=True)
 project.pad_stem_mix_mode[0] = 'all_stems'
+project.sample_paths[215] = project.sample_paths[0]
+project.pad_content[215] = PadContentIdentity(instance_id='e' * 32, material_id=fixture['material_id'])
+project.stem_cache[215] = project.stem_cache[0].model_copy(deep=True)
+project.pad_stem_mix_mode[215] = 'all_stems'
 persistence = ProjectPersistence(project)
 assets = ProjectAssetLifecycle(project, audio)
 controller = StemController(project, SessionState(), audio, persistence.mark_dirty, asset_lifecycle=assets)
@@ -2001,10 +2129,19 @@ assert STEM_WORKERS == 2 and STEM_QUEUED_JOBS == 32
 assert controller._stem_worker_pool._executor._max_workers == 2
 controller.restore_stem_cache_from_project_state()
 assert not controller.stems_available(0)
-assert controller.publish_restored_stem_cache_if_available(0)
 "#,
         );
         locals.unbind()
+    });
+    public_restore_215_ack(&engine, &mut callback, &mut consumer, &locals);
+    // Additional private legacy kernel: public restore above already proved its
+    // own Register/Capture/Adopt path and does not enqueue PublishPreparedStems.
+    Python::attach(|py| {
+        worker_python(
+            py,
+            locals.bind(py),
+            "assert controller._publish_restored_stem_cache(0)\nassert 0 in controller._pair_preparations.pending",
+        )
     });
     wait_until(|| {
         Python::attach(|py| {
@@ -2041,7 +2178,7 @@ assert project.stem_cache[0].pair is not None
 selection = project.stem_cache[0].pair
 assert isinstance(selection, StemPairSelection)
 assert selection.wav_generation == fixture['wav_generation']
-assert audio.worker_call_count() == 1 and audio.prepared_only_on_pool_threads()
+assert audio.worker_call_count() - legacy_worker_baseline == 1 and audio.prepared_only_on_pool_threads()
 persistence.flush()
 pending_reopen = ProjectPersistence.from_config_path(persistence.config_path)
 assert pending_reopen.load_error is None
@@ -2151,7 +2288,7 @@ assert second_ticket.effective_mode_status() == 'waiting'
 assert controller.stems_available(0)  # verified disk availability precedes residency
 assert not controller._pending_stem_publications
 assert project.stem_cache[0].pair == selection
-assert audio.worker_call_count() == 1 and audio.prepared_only_on_pool_threads()
+assert audio.worker_call_count() - legacy_worker_baseline == 1 and audio.prepared_only_on_pool_threads()
 "#,
         )
     });
@@ -2183,6 +2320,8 @@ assert final_reopen.project.stem_cache[0].pair == selection
 assert final_reopen.project.pad_content[0] == project.pad_content[0]
 Path('worker-child-verified.json').write_text(json.dumps(dict(process_id=__import__('os').getpid(),
     worker_calls=audio.worker_call_count(), only_pool_threads=audio.prepared_only_on_pool_threads(),
+    public_restore_worker_calls=public_restore_worker_calls,
+    legacy_worker_calls=audio.worker_call_count() - legacy_worker_baseline, public_restore_own_acks=True,
     pending_before_callback=True, accepted_after_callback=True, full_mix_components_released=True,
     current_json_reopened=True, selection=selection.model_dump())), encoding='utf-8')
 controller.shut_down()
