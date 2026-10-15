@@ -8,6 +8,9 @@ use std::collections::{BTreeMap, VecDeque};
 #[path = "paused_source_feed_tests.rs"]
 mod paused_source_feed_tests;
 
+#[path = "selection_source_feed_tests.rs"]
+pub(in crate::audio_engine) mod selection_source_feed_tests;
+
 const START: usize = 64_000;
 const END: usize = 160_000;
 const EXTENT: usize = 240_000;

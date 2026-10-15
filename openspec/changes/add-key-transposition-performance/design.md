@@ -105,8 +105,30 @@ A small SOURCE/voice guard travels with the fresh Native permit through strict
 adoption; recycling the large snapshot cannot refresh or revoke that guard.
 The extra guard does not participate in productive-history or endpoint-data
 observations. All-voice claim and the resident transaction's same own final ACK
-remain authoritative. Explicit refusal still applies to active selection
-transitions and unheld historical contexts.
+remain authoritative. The held-selection extension supports one real committed
+StemSet across historical current/outgoing roles, with a settled original E.
+Actual F reader roles are frozen with the projection. Worker replay resolves
+each sliced plan's required roles against that pin and copied publication
+generation before the same coverage and checked-read paths. Only roles the
+sliced plan no longer reads may disappear; an empty mask still requires its set.
+The physical pin survives even when FullMix E has no endpoint stem reader, so
+endpoint comparisons use required readers separately from retained history
+ownership. No new lane/queue or mutable reader lookup is introduced. Active
+transitions at E, other/unheld sets and mismatched generations still refuse.
+The admitted set's copied publication owner/expected value is provenance, not
+live operation permission. Actual committed residency uses the same publication
+for a mutable selection receipt; ordinary Play can advance its intent counter
+while reusing the admitted PCM. Historical data matching therefore compares the
+original stamp and real PCM/backings, without imposing old receipt freshness.
+Initial publication remains fully guarded, and fresh/effective Native permits
+plus source/voice guards remain the authority for preparation/adoption/continuity.
+When a new independent selection operation reuses those exact admitted readers,
+its preparation clones their original data-publication stamp. Only newly created
+physical sets take a new data stamp; the new selection receipt still owns its own
+strict operation checks and final acknowledgement separately.
+Shared-cache reconstruction alone is a physical reader source, not a prior
+Mixer admission. Its unbound publication placeholder is replaced by the new
+operation's actual admitted stamp; only a real admitted pin preserves provenance.
 
 For a paused participant, global E remains F+4096 while the frozen future contains
 zero additional active source frames. Preparation replays genuine past only to
@@ -122,8 +144,12 @@ paused ON remains armed until that voice actually renders after Resume.
 Eight public Intro/Tail cases at +24/-23, ON/OFF, compare every 4,097 adopted PCM
 samples against an independent scalar/direct-C-ABI A-reset oracle, including
 off-grid source-rate changes. Ownership/recycle and independent permit regressions
-are separate evidence. Additional mode span storage is 32 * 630,784 = 20,185,088
-bytes before work owners/queues; whole-process resources and performer deadlines
+are separate evidence. With copied selection/backing context, additional mode
+span storage is 32 * 1,089,536 = 34,865,152 bytes before work owners/queues. The
+Release host profile measured 1,401.1 microseconds median for 32 full snapshots
+plus fixed future assignment; 32 journals + 64 admitted SET + 32 mode span payloads
+derive 139,460,608 bytes, without bounding earlier control captures. Whole-process
+resources and performer deadlines
 remain open. This bounded engineering does not certify continuous-O equivalence,
 acoustic quality, the full B5/B6/P6 matrix or Human acceptance.
 

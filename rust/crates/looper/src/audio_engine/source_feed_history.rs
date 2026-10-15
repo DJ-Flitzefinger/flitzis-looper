@@ -7,7 +7,7 @@
 use super::productive_source_history::ProductiveSourceBinding;
 use super::source_playback::SourcePlayback;
 use super::source_reader::{SourceReadPlan, StemReadSets};
-use crate::messages::{PreparedStemSet, STEM_BUFFER_COUNT};
+use crate::messages::{PreparedStemSet, ResidentBinding, STEM_BUFFER_COUNT};
 use std::ops::Range;
 use std::sync::{
     Arc,
@@ -18,6 +18,20 @@ pub(crate) const SOURCE_FEED_HISTORY_MAX_SPANS: usize = 1024;
 pub(crate) const SOURCE_FEED_HISTORY_MAX_FRAMES: usize = 262_144;
 const STEM_OWNER_MARKER_COUNT: usize = STEM_BUFFER_COUNT + 2;
 
+#[derive(Clone, Copy, Debug, PartialEq)]
+struct StemFeedIdentity {
+    complete_pcm: [u8; 32],
+    publication_owner: usize,
+    publication_generation: u64,
+    source_version_hash: u64,
+    sample_rate_hz: u32,
+    channels: usize,
+    frame_count: usize,
+    available_mask: u8,
+    reference_resident: Option<ResidentBinding>,
+    component_residents: [Option<ResidentBinding>; STEM_BUFFER_COUNT],
+}
+
 /// Physical identities used by one actual feed, without retaining any PCM ownership.
 /// Historical accepted/resident tags remain data and cannot authorize a new request.
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -27,8 +41,8 @@ pub(crate) struct SourceFeedContext {
     pub(crate) current_stem_owners: [usize; STEM_OWNER_MARKER_COUNT],
     pub(crate) outgoing_stem_owners: [usize; STEM_OWNER_MARKER_COUNT],
     // Copied immutable PCM identity and original publication epoch/value prevent address ABA.
-    current_stem_generation: Option<([u8; 32], usize, u64)>,
-    outgoing_stem_generation: Option<([u8; 32], usize, u64)>,
+    current_stem_generation: Option<StemFeedIdentity>,
+    outgoing_stem_generation: Option<StemFeedIdentity>,
 }
 
 impl SourceFeedContext {
@@ -51,15 +65,102 @@ impl SourceFeedContext {
             && self.current_stem_generation == other.current_stem_generation
             && self.outgoing_stem_generation == other.outgoing_stem_generation
     }
+
+    /// Keep the original physical slot mapping, dropping only slots this actual plan
+    /// no longer reads. Requirements come from the plan even if no descriptor resolves.
+    pub(crate) fn for_plan(mut self, plan: SourceReadPlan) -> Self {
+        let mut current = false;
+        let mut outgoing = false;
+        for selection in std::iter::once(plan.selection)
+            .chain(plan.transition.required_from_selection())
+            .filter(|selection| selection.required_stem_hash().is_some())
+        {
+            if self.current_stem_generation.is_some_and(|identity| {
+                selection.matches_stem_descriptor(
+                    self.current_stem_owners[0],
+                    identity.source_version_hash,
+                )
+            }) {
+                current = true;
+            } else if self.outgoing_stem_generation.is_some_and(|identity| {
+                selection.matches_stem_descriptor(
+                    self.outgoing_stem_owners[0],
+                    identity.source_version_hash,
+                )
+            }) {
+                outgoing = true;
+            }
+        }
+        if !current {
+            self.current_stem_owners = [0; STEM_OWNER_MARKER_COUNT];
+            self.current_stem_generation = None;
+        }
+        if !outgoing {
+            self.outgoing_stem_owners = [0; STEM_OWNER_MARKER_COUNT];
+            self.outgoing_stem_generation = None;
+        }
+        self
+    }
+
+    /// Resolve both required historical roles against one actually retained pin.
+    /// Markers never construct ownership, and a missing lookup cannot remove a role.
+    pub(crate) fn resolve_readers<'a>(
+        self,
+        plan: SourceReadPlan,
+        held: Option<&'a PreparedStemSet>,
+    ) -> Option<StemReadSets<'a>> {
+        let context = self.for_plan(plan);
+        let resolve = |owners, identity: Option<StemFeedIdentity>| match identity {
+            Some(identity) => held
+                .filter(|held| {
+                    stem_owner_markers(Some(held)) == owners
+                        && stem_generation(Some(held)) == Some(identity)
+                })
+                .map(Some),
+            None => Some(None),
+        };
+        let current = resolve(context.current_stem_owners, context.current_stem_generation)?;
+        let outgoing = resolve(
+            context.outgoing_stem_owners,
+            context.outgoing_stem_generation,
+        )?;
+        let readers = StemReadSets::new(current, outgoing);
+        for selection in
+            std::iter::once(plan.selection).chain(plan.transition.required_from_selection())
+        {
+            if selection.required_stem_hash().is_some()
+                && readers.for_selection(selection).is_none()
+            {
+                return None;
+            }
+        }
+        Some(readers)
+    }
 }
 
-fn stem_generation(stems: Option<&PreparedStemSet>) -> Option<([u8; 32], usize, u64)> {
-    stems.map(|stems| {
-        (
-            *stems.complete_set_identity,
-            Arc::as_ptr(&stems.publication.epoch) as usize,
-            stems.publication.expected,
-        )
+fn stem_generation(stems: Option<&PreparedStemSet>) -> Option<StemFeedIdentity> {
+    stems.map(|stems| StemFeedIdentity {
+        complete_pcm: *stems.complete_set_identity,
+        publication_owner: Arc::as_ptr(&stems.publication.epoch) as usize,
+        publication_generation: stems.publication.expected,
+        source_version_hash: stems.source_version_hash,
+        sample_rate_hz: stems.sample_rate_hz,
+        channels: stems.channels,
+        frame_count: stems.frame_count,
+        available_mask: stems.available_mask,
+        reference_resident: stems
+            .reference_residency
+            .as_ref()
+            .map(|view| ResidentBinding {
+                address: stems.reference_samples.as_ptr() as usize,
+                start: view.start_frame,
+                end: view
+                    .start_frame
+                    .saturating_add(stems.reference_samples.len() / stems.channels.max(1)),
+                revision: view.window_revision,
+                context: view.context,
+            }),
+        component_residents: std::array::from_fn(|index| stems.stems[index].resident_binding()),
     })
 }
 
@@ -97,6 +198,7 @@ impl SourceFeedSpan {
         result.active_start += offset as u64;
         result.frames = frames;
         advance_source(&mut result.playback, &mut result.plan, offset);
+        result.context = result.context.for_plan(result.plan);
         Some(result)
     }
 
@@ -438,6 +540,132 @@ mod tests {
     use crate::audio_engine::source_reader::{
         ExplicitSeekMode, FrameRange, SourceLoopDomain, StemRenderSelection, StemTransition,
     };
+
+    fn held_stems() -> PreparedStemSet {
+        let sample = crate::messages::SampleBuffer {
+            channels: 2,
+            residency: None,
+            samples: vec![0.125; 4006].into(),
+        }
+        .with_complete_source(48_000);
+        PreparedStemSet {
+            complete_set_identity: Arc::new([23; 32]),
+            accepted_timing: None,
+            reference_samples: sample.samples.clone(),
+            reference_residency: sample.residency.clone(),
+            publication: crate::audio_engine::prepared_source::PreparedSourcePermit::unrestricted(),
+            source_version_hash: 97,
+            sample_rate_hz: 48_000,
+            channels: 2,
+            frame_count: 2003,
+            available_mask: 15,
+            stems: std::array::from_fn(|_| sample.clone()),
+        }
+    }
+
+    #[test]
+    fn held_selection_slices_preserve_required_roles_before_at_and_after_ramp_end() {
+        let stems = held_stems();
+        let playback = playback(19, ExplicitSeekMode::Normal, 0.5);
+        let mut plan = plan(
+            playback,
+            StemTransition::start(StemRenderSelection::for_stems(&stems, 0), 64),
+        );
+        plan.selection = StemRenderSelection::full_mix();
+        let context =
+            SourceFeedContext::new(context().binding, StemReadSets::new(None, Some(&stems)));
+        let span = SourceFeedSpan {
+            active_start: 300,
+            frames: 8192,
+            playback,
+            plan,
+            context,
+        };
+        for offset in [0, 127] {
+            let part = span.slice(offset, 1).unwrap();
+            assert!(part.plan.transition.is_active());
+            let readers = part
+                .context
+                .resolve_readers(part.plan, Some(&stems))
+                .unwrap();
+            assert!(readers.current.is_none());
+            assert!(std::ptr::eq(readers.outgoing.unwrap(), &stems));
+            assert!(part.context.resolve_readers(part.plan, None).is_none());
+        }
+        // A projected constant-rate span can be much longer than its source ramp.
+        // Slicing a replay origin beyond the ramp must not require the obsolete pin.
+        for offset in [128, 129, 4096] {
+            let part = span.slice(offset, 512).unwrap();
+            assert!(!part.plan.transition.is_active());
+            let readers = part.context.resolve_readers(part.plan, None).unwrap();
+            assert!(readers.current.is_none() && readers.outgoing.is_none());
+            assert!(
+                part.context
+                    .same_source(SourceFeedContext::new(context.binding, readers))
+            );
+        }
+        let crossing = span.slice(100, 512).unwrap();
+        assert!(
+            crossing
+                .context
+                .resolve_readers(crossing.plan, None)
+                .is_none()
+        );
+        assert!(
+            crossing
+                .slice(28, 484)
+                .unwrap()
+                .context
+                .resolve_readers(crossing.slice(28, 484).unwrap().plan, None,)
+                .is_some()
+        );
+    }
+
+    #[test]
+    fn held_selection_missing_empty_and_other_or_republished_owners_refuse() {
+        let mut stems = held_stems();
+        let playback = playback(19, ExplicitSeekMode::Normal, 0.73);
+        let mut plan = plan(playback, StemTransition::default());
+        plan.selection = StemRenderSelection::for_stems(&stems, 0);
+        let context =
+            SourceFeedContext::new(context().binding, StemReadSets::new(Some(&stems), None));
+        assert!(context.resolve_readers(plan, Some(&stems)).is_some());
+        assert!(context.resolve_readers(plan, None).is_none());
+        assert!(
+            SourceFeedContext::new(context.binding, StemReadSets::default())
+                .resolve_readers(plan, Some(&stems))
+                .is_none()
+        );
+        let mut other = stems.clone();
+        other.stems[0].samples = other.stems[0].samples.to_vec().into();
+        assert!(context.resolve_readers(plan, Some(&other)).is_none());
+        other = stems.clone();
+        other.complete_set_identity = Arc::new(*stems.complete_set_identity);
+        assert!(context.resolve_readers(plan, Some(&other)).is_none());
+        other = stems.clone();
+        other.publication =
+            crate::audio_engine::prepared_source::PreparedSourcePermit::unrestricted();
+        assert!(context.resolve_readers(plan, Some(&other)).is_none());
+        // The same real allocation with another copied identity cannot pass address checks.
+        drop(other);
+        let owner = Arc::as_ptr(&stems.complete_set_identity);
+        *Arc::get_mut(&mut stems.complete_set_identity).unwrap() = [24; 32];
+        assert_eq!(owner, Arc::as_ptr(&stems.complete_set_identity));
+        assert!(context.resolve_readers(plan, Some(&stems)).is_none());
+        *Arc::get_mut(&mut stems.complete_set_identity).unwrap() = [23; 32];
+        stems.publication.expected = 2;
+        stems.publication.epoch.store(2, Ordering::Release);
+        assert!(stems.publication.current());
+        assert!(context.resolve_readers(plan, Some(&stems)).is_none());
+        let fresh = SourceFeedContext::new(context.binding, StemReadSets::new(Some(&stems), None));
+        assert!(fresh.resolve_readers(plan, Some(&stems)).is_some());
+        // The original publication stamp is data provenance. Its mutable operation
+        // bookkeeping supplies no data lifetime. Authority is separately checked by
+        // the owning Native permit; this is only a scalar operation-state perturbation.
+        stems.publication.epoch.store(3, Ordering::Release);
+        stems.publication.mark_rejected();
+        assert!(fresh.resolve_readers(plan, Some(&stems)).is_some());
+    }
 
     fn context() -> SourceFeedContext {
         SourceFeedContext::new(
@@ -861,19 +1089,34 @@ mod tests {
     fn reused_stem_addresses_do_not_replace_original_pcm_or_publication_generation() {
         let mut original = context();
         original.current_stem_owners = [17; STEM_OWNER_MARKER_COUNT];
-        original.current_stem_generation = Some(([3; 32], 41, 7));
+        let identity = StemFeedIdentity {
+            complete_pcm: [3; 32],
+            publication_owner: 41,
+            publication_generation: 7,
+            ..stem_generation(Some(&held_stems())).unwrap()
+        };
+        original.current_stem_generation = Some(identity);
         let mut reused = original;
-        reused.current_stem_generation = Some(([4; 32], 41, 7));
+        reused.current_stem_generation = Some(StemFeedIdentity {
+            complete_pcm: [4; 32],
+            ..identity
+        });
         assert!(
             !original.same_source(reused),
             "identical addresses can contain different PCM"
         );
-        reused.current_stem_generation = Some(([3; 32], 41, 8));
+        reused.current_stem_generation = Some(StemFeedIdentity {
+            publication_generation: 8,
+            ..identity
+        });
         assert!(
             !original.same_source(reused),
             "new publication is not the old generation"
         );
-        reused.current_stem_generation = Some(([3; 32], 42, 7));
+        reused.current_stem_generation = Some(StemFeedIdentity {
+            publication_owner: 42,
+            ..identity
+        });
         assert!(
             !original.same_source(reused),
             "equal counters from another owner do not match"

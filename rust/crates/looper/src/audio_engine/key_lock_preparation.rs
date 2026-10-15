@@ -9,7 +9,7 @@ use super::prepared_native_history::{
     PREPARED_HISTORY_FRAMES, PitchSourceSnapshot,
 };
 use super::productive_source_history::ProductiveSourceBinding;
-use super::source_feed_history::{SourceFeedHistory, SourceFeedSnapshot};
+use super::source_feed_history::{SourceFeedContext, SourceFeedHistory, SourceFeedSnapshot};
 use super::source_playback::SourcePlayback;
 use super::source_reader::SourceReadPlan;
 use super::stretch_processor::ProductiveSourceFeed;
@@ -33,13 +33,14 @@ pub(crate) struct ProspectiveSourceHistory<'a> {
     pub(crate) voice_generation: u64,
     pub(crate) execution_frame: u64,
     pub(crate) paused: bool,
+    pub(crate) source_feed_context: SourceFeedContext,
 }
 
 /// One reusable owner per source lane, allocated before rendering. Only the worker clears a
 /// filled snapshot; the callback merely moves this owner through bounded queues.
 struct SourceHistoryWork {
     snapshot: SourceFeedSnapshot,
-    future: Option<(SourcePlayback, SourceReadPlan, u64)>,
+    future: Option<(SourcePlayback, SourceReadPlan, u64, SourceFeedContext)>,
 }
 
 impl SourceHistoryWork {
@@ -324,7 +325,6 @@ impl KeyLockPreparationLane {
         let active_delta = if context.paused { 0 } else { delta };
         if !permit.current(feed.sample, feed.sample_rate_hz)
             || !permit.matches_projection(feed.accepted)
-            || feed.plan.transition.is_active()
         {
             return false;
         }
@@ -334,7 +334,12 @@ impl KeyLockPreparationLane {
             .take()
             .expect("preflighted reusable source-history owner");
         let request = if context.history.capture_into(&mut history.snapshot) {
-            history.future = Some((*feed.playback, feed.plan, active_delta));
+            history.future = Some((
+                *feed.playback,
+                feed.plan,
+                active_delta,
+                context.source_feed_context,
+            ));
             history
                 .snapshot
                 .guard(context.voice_lifetime, context.voice_generation)
@@ -347,6 +352,7 @@ impl KeyLockPreparationLane {
                         paused: context.paused,
                         playback: *feed.playback,
                         plan: feed.plan,
+                        source_feed_context: context.source_feed_context,
                     };
                     if !endpoint.project_output_frames(delta) {
                         return None;
@@ -1015,6 +1021,7 @@ mod tests {
     fn history_context<'a>(
         history: &'a SourceFeedHistory,
         lifetime: &'a Arc<AtomicU64>,
+        feed: &ProductiveSourceFeed<'_>,
         delta: u64,
     ) -> ProspectiveSourceHistory<'a> {
         ProspectiveSourceHistory {
@@ -1023,6 +1030,14 @@ mod tests {
             voice_generation: 1,
             execution_frame: 100 + delta,
             paused: false,
+            source_feed_context: SourceFeedContext::new(
+                ProductiveSourceBinding::new(feed.sample, feed.sample_rate_hz, feed.accepted),
+                feed.plan
+                    .required_read_sets(super::super::source_reader::StemReadSets::new(
+                        feed.stems,
+                        feed.outgoing_stems,
+                    )),
+            ),
         }
     }
 
@@ -1115,6 +1130,17 @@ mod tests {
                     transition,
                 },
                 4096,
+                SourceFeedContext::new(
+                    ProductiveSourceBinding {
+                        resident: None,
+                        source_address: 17 + voice_index,
+                        sample_count: 4006,
+                        channels: 2,
+                        sample_rate_hz: 48_000,
+                        accepted: None,
+                    },
+                    StemReadSets::default(),
+                ),
             ));
             let address = work.as_ref() as *const SourceHistoryWork as usize;
             assert!(!addresses.contains(&address));
@@ -1255,7 +1281,7 @@ mod tests {
         let lifetime = Arc::new(AtomicU64::new(2));
         assert!(!callback.request_source_with_history(
             &feed,
-            history_context(&history, &lifetime, 8192),
+            history_context(&history, &lifetime, &feed, 8192),
             0,
             1,
         ));
@@ -1300,7 +1326,7 @@ mod tests {
         let feed = prospective_feed(&request);
         let history = SourceFeedHistory::new();
         let lifetime = Arc::new(AtomicU64::new(1));
-        let mut context = history_context(&history, &lifetime, 8192);
+        let mut context = history_context(&history, &lifetime, &feed, 8192);
         context.paused = true;
         assert!(callback.request_source_with_history(&feed, context, 0, 1));
         let SourcePreparationRequest::WithHistory {
@@ -1314,7 +1340,7 @@ mod tests {
         assert_eq!(queued.target_output_frame, 8292);
         assert!(queued.playback.matches_exact(feed.playback));
         assert!(queued.plan.matches_exact(feed.plan));
-        let (future_playback, future_plan, active_delta) = captured.future.as_ref().unwrap();
+        let (future_playback, future_plan, active_delta, _) = captured.future.as_ref().unwrap();
         assert_eq!(*active_delta, 0);
         assert!(future_playback.matches_exact(feed.playback));
         assert!(future_plan.matches_exact(feed.plan));
@@ -1349,7 +1375,7 @@ mod tests {
         );
         assert!(!callback.request_source_with_history(
             &feed,
-            history_context(&history, &lifetime, 8192),
+            history_context(&history, &lifetime, &feed, 8192),
             0,
             1,
         ));
@@ -1357,13 +1383,13 @@ mod tests {
         drop(worker.requests.pop().unwrap());
         assert!(callback.request_source_with_history(
             &feed,
-            history_context(&history, &lifetime, 8192),
+            history_context(&history, &lifetime, &feed, 8192),
             0,
             1,
         ));
         assert!(!callback.request_source_with_history(
             &feed,
-            history_context(&history, &lifetime, 12_288),
+            history_context(&history, &lifetime, &feed, 12_288),
             0,
             2,
         ));
@@ -1408,7 +1434,7 @@ mod tests {
         let lifetime = Arc::new(AtomicU64::new(1));
         assert!(callback.request_source_with_history(
             &feed,
-            history_context(&history, &lifetime, 17),
+            history_context(&history, &lifetime, &feed, 17),
             0,
             1,
         ));
@@ -1421,7 +1447,7 @@ mod tests {
         let valid = SourceFeedHistory::new();
         assert!(callback.request_source_with_history(
             &feed,
-            history_context(&valid, &lifetime, 8192),
+            history_context(&valid, &lifetime, &feed, 8192),
             0,
             2,
         ));
@@ -1441,7 +1467,7 @@ mod tests {
         let lifetime = Arc::new(AtomicU64::new(2));
         assert!(!callback.request_source_with_history(
             &feed,
-            history_context(&history, &lifetime, 8192),
+            history_context(&history, &lifetime, &feed, 8192),
             0,
             1,
         ));
@@ -1476,7 +1502,7 @@ mod tests {
             let lifetime = Arc::new(AtomicU64::new(1));
             assert!(callback.request_source_with_history(
                 &feed,
-                history_context(&history, &lifetime, 8192),
+                history_context(&history, &lifetime, &feed, 8192),
                 0,
                 1,
             ));

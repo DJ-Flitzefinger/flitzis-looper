@@ -946,6 +946,18 @@ fn native_old_complete_stem_seek_reads_original_knots_with_new_bank_selection() 
     let full = complete();
     let mut actual = plain(&full);
     let mut queue = NativeQueue::new();
+    let mut prepared = stems(&full);
+    prepared.publication = PreparedSourcePermit::for_native_binding_for_test(
+        0,
+        InputPadBinding {
+            runtime_revision: actual.input_runtime_ownership.runtime_revision(0),
+            ..binding(&actual)
+        },
+        actual.input_runtime_ownership.clone(),
+        actual.current_timing_acknowledgements.clone(),
+        actual.prepared_source_epochs[0].clone(),
+    )
+    .unwrap();
     queue
         .producer
         .push(ControlMessage::StopSample { id: 0 })
@@ -954,7 +966,7 @@ fn native_old_complete_stem_seek_reads_original_knots_with_new_bank_selection() 
         .producer
         .push(ControlMessage::PublishPreparedStems {
             id: 0,
-            stems: stems(&full),
+            stems: prepared,
         })
         .unwrap();
     queue

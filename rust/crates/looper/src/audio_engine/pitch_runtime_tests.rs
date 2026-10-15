@@ -1,7 +1,7 @@
 //! Device-free public capture/publication through the real boxed mixer and scheduler.
 
 #[path = "pitch_runtime_tests/source_feed_tests.rs"]
-mod source_feed_tests;
+pub(in crate::audio_engine) mod source_feed_tests;
 
 use super::*;
 use crate::audio_engine::audio_stream::{

@@ -195,6 +195,9 @@ pub(crate) fn normal_loop_feed_available_with_readers(
 #[derive(Clone)]
 struct StemCoverage {
     complete_set_identity: Arc<[u8; 32]>,
+    complete_pcm: [u8; 32],
+    publication_owner: Arc<std::sync::atomic::AtomicU64>,
+    publication_generation: u64,
     reference_address: usize,
     bindings: [Option<ResidentBinding>; STEM_BUFFER_COUNT],
     addresses: [usize; STEM_BUFFER_COUNT],
@@ -204,6 +207,9 @@ impl StemCoverage {
     fn capture(stems: &PreparedStemSet) -> Self {
         Self {
             complete_set_identity: stems.complete_set_identity.clone(),
+            complete_pcm: *stems.complete_set_identity,
+            publication_owner: stems.publication.epoch.clone(),
+            publication_generation: stems.publication.expected,
             reference_address: stems.reference_samples.as_ptr() as usize,
             bindings: std::array::from_fn(|index| stems.stems[index].resident_binding()),
             addresses: std::array::from_fn(|index| stems.stems[index].samples.as_ptr() as usize),
@@ -212,6 +218,11 @@ impl StemCoverage {
 
     fn matches(&self, stems: &PreparedStemSet, exact_window: bool) -> bool {
         Arc::ptr_eq(&self.complete_set_identity, &stems.complete_set_identity)
+            && self.complete_pcm == *stems.complete_set_identity
+            && Arc::ptr_eq(&self.publication_owner, &stems.publication.epoch)
+            && self.publication_generation == stems.publication.expected
+            // Original publication owner/value identifies admitted data. Mutable receipt
+            // counters/status are not its lifetime; the Native permit proves authority.
             && (!exact_window
                 || (self.reference_address == stems.reference_samples.as_ptr() as usize
                     && stems.stems.iter().enumerate().all(|(index, component)| {
@@ -247,6 +258,9 @@ impl NormalLoopCoverage {
         if !normal_loop_feed_available(sample, stems, sample_rate_hz, accepted, plan, playback) {
             return None;
         }
+        let stems = plan
+            .required_read_sets(StemReadSets::new(stems, None))
+            .current;
         Some(Self {
             source: sample.residency.as_ref()?.source.clone(),
             binding: ProductiveSourceBinding::new(sample, sample_rate_hz, accepted),
@@ -269,6 +283,9 @@ impl NormalLoopCoverage {
         playback: &SourcePlayback,
         exact_window: bool,
     ) -> bool {
+        let stems = plan
+            .required_read_sets(StemReadSets::new(stems, None))
+            .current;
         let binding = ProductiveSourceBinding::new(sample, sample_rate_hz, accepted);
         sample
             .residency
@@ -296,7 +313,7 @@ impl NormalLoopCoverage {
 mod tests {
     use super::*;
     use crate::audio_engine::constant_timing::CurrentTimingAcknowledgements;
-    use crate::audio_engine::input_runtime_binding::InputRuntimeOwnership;
+    use crate::audio_engine::input_runtime_binding::{InputPadBinding, InputRuntimeOwnership};
     use crate::audio_engine::native_history_permit::NativeHistoryContext;
     use crate::audio_engine::prepared_native_history::{NativeAdapterState, NativeHistoryRequest};
     use crate::audio_engine::prepared_source::PreparedSourcePermit;
@@ -387,7 +404,7 @@ mod tests {
                 transition: StemTransition::default(),
             };
             let ownership = Arc::new(InputRuntimeOwnership::tracked());
-            ownership.publish_source(0, &sample, RATE, 7);
+            ownership.publish_test_source(0, &sample, RATE, 7);
             Self {
                 full,
                 sample,
@@ -415,6 +432,7 @@ mod tests {
         fn complete_stems(&self) -> PreparedStemSet {
             let mut stems = self.stems.clone();
             stems.reference_samples = self.full.samples.clone();
+            stems.reference_residency = self.full.residency.clone();
             stems.stems = std::array::from_fn(|index| SampleBuffer {
                 channels: 2,
                 residency: self.full.residency.clone(),
@@ -456,6 +474,13 @@ mod tests {
         }
 
         fn request(&self) -> NativeHistoryRequest {
+            self.request_with_accepted(None)
+        }
+
+        fn request_with_accepted(
+            &self,
+            accepted: Option<AcceptedTimingProjection>,
+        ) -> NativeHistoryRequest {
             NativeHistoryRequest {
                 pitch_intent: super::super::pitch_intent::PitchIntent::default(),
                 key_lock: true,
@@ -467,10 +492,20 @@ mod tests {
                     acknowledgements: &self.acknowledgements,
                     preparation_epoch: &self.epoch,
                 }
-                .capture(&self.sample, RATE, None)
+                .capture(&self.sample, RATE, accepted)
                 .unwrap(),
-                coverage: Some(self.coverage()),
-                binding: ProductiveSourceBinding::new(&self.sample, RATE, None),
+                coverage: Some(
+                    NormalLoopCoverage::capture(
+                        &self.sample,
+                        Some(&self.stems),
+                        RATE,
+                        accepted,
+                        self.plan,
+                        &self.playback,
+                    )
+                    .unwrap(),
+                ),
+                binding: ProductiveSourceBinding::new(&self.sample, RATE, accepted),
                 playback: self.playback,
                 plan: self.plan,
                 target_output_frame: 4096,
@@ -1038,5 +1073,217 @@ mod tests {
         assert!(request.matches_effective_contract(&next, 0));
         fixture.epoch.fetch_add(1, Ordering::AcqRel);
         assert!(!request.matches_effective_contract(&next, 0));
+    }
+
+    fn tracked_stem_window_fixture() -> (Fixture, AcceptedTimingProjection, Arc<AtomicU64>) {
+        let mut fixture = Fixture::new(1000.25);
+        fixture
+            .ownership
+            .publish_test_source(0, &fixture.sample, RATE, 7);
+        let placement = fixture.ownership.slot_snapshot(0).unwrap();
+        let accepted = AcceptedTimingProjection {
+            revision: [67; 32],
+            period_seconds: 1000.25 / f64::from(RATE),
+            origin_seconds: REGION.start as f64 / f64::from(RATE),
+            sample_rate_hz: RATE,
+            publication_epoch: 11,
+        };
+        assert!(fixture.acknowledgements.acknowledge_for_key(
+            &fixture.ownership,
+            placement.content_key().unwrap(),
+            accepted.publication_epoch,
+        ));
+        let source_epoch = Arc::new(AtomicU64::new(5));
+        fixture.stems.accepted_timing = Some(accepted);
+        fixture.stems.publication = PreparedSourcePermit::for_native_binding_for_test(
+            0,
+            InputPadBinding {
+                placement: Some(placement),
+                resident: fixture.sample.resident_binding(),
+                source_address: fixture.sample.source_address(),
+                sample_count: fixture.sample.source_sample_count(),
+                channels: fixture.sample.channels,
+                sample_rate_hz: RATE,
+                authority_revision: fixture.ownership.authority_revision(0),
+                runtime_revision: fixture.ownership.runtime_revision(0),
+                accepted: Some(accepted),
+            },
+            fixture.ownership.clone(),
+            fixture.acknowledgements.clone(),
+            Arc::new(AtomicU64::new(3)),
+        )
+        .unwrap()
+        .with_source_epoch(source_epoch.clone(), 5);
+        fixture.stems.publication.mark_accepted();
+        assert!(fixture.stems.publication.current());
+        (fixture, accepted, source_epoch)
+    }
+
+    #[test]
+    fn tracked_stem_window_ack_keeps_data_stamp_but_requires_own_native_window_and_revocation() {
+        use crate::audio_engine::prepared_native_history::PitchSourceSnapshot;
+        use crate::audio_engine::source_feed_history::SourceFeedContext;
+
+        for revoke in [
+            "none",
+            "operation_epoch",
+            "source_publication_epoch",
+            "receipt_status",
+            "publication_owner",
+            "publication_expected",
+            "source",
+            "timing",
+            "authority",
+            "native_epoch",
+        ] {
+            let (fixture, accepted, source_epoch) = tracked_stem_window_fixture();
+            let original = fixture.request_with_accepted(Some(accepted));
+            let original_feed = ProductiveSourceFeed {
+                accepted: Some(accepted),
+                output_frame: Some(4096),
+                ..fixture.feed()
+            };
+            assert!(original.matches_adoption(&original_feed, 0, 1));
+            let mut refreshed = fixture.sample.clone();
+            let mut view = (**refreshed.residency.as_ref().unwrap()).clone();
+            view.window_revision += 1;
+            refreshed.residency = Some(Arc::new(view));
+            let refreshed_stems = fixture.stems.clone().window_for(&refreshed).unwrap();
+            fixture.ownership.publish_window(0, &refreshed);
+            assert!(!fixture.stems.publication.current());
+            assert!(Arc::ptr_eq(
+                &fixture.stems.publication.epoch,
+                &refreshed_stems.publication.epoch
+            ));
+            let next = ProductiveSourceFeed {
+                sample: &refreshed,
+                stems: Some(&refreshed_stems),
+                ..original_feed
+            };
+            assert!(!original.matches_contract(&next, 0));
+            assert!(!original.matches_adoption(&next, 0, 1));
+            assert!(original.matches_effective_contract(&next, 0));
+            let context = NativeHistoryContext {
+                id: 0,
+                ownership: &fixture.ownership,
+                acknowledgements: &fixture.acknowledgements,
+                preparation_epoch: &fixture.epoch,
+            };
+            assert!(
+                context
+                    .capture(&fixture.sample, RATE, Some(accepted))
+                    .is_none()
+            );
+            let fresh_permit = context.capture(&refreshed, RATE, Some(accepted)).unwrap();
+            let snapshot = PitchSourceSnapshot {
+                sample: refreshed.clone(),
+                stems: Some(refreshed_stems.clone()),
+                accepted: Some(accepted),
+                sample_rate_hz: RATE,
+                paused: false,
+                playback: fixture.playback,
+                plan: fixture.plan,
+                source_feed_context: SourceFeedContext::new(
+                    ProductiveSourceBinding::new(&refreshed, RATE, Some(accepted)),
+                    fixture
+                        .plan
+                        .required_read_sets(StemReadSets::new(Some(&refreshed_stems), None)),
+                ),
+            };
+            assert!(snapshot.readers().is_some());
+            let fresh = snapshot
+                .into_request(fresh_permit, original.pitch_intent, true, 4096, 2, 0)
+                .unwrap();
+            assert!(
+                fresh.matches_adoption(&next, 0, 2),
+                "fresh own-window Native authority must admit retained stem data"
+            );
+            let operation_only = match revoke {
+                "none" => continue,
+                "operation_epoch" => {
+                    fixture
+                        .stems
+                        .publication
+                        .epoch
+                        .fetch_add(1, Ordering::AcqRel);
+                    true
+                }
+                "source_publication_epoch" => {
+                    source_epoch.fetch_add(1, Ordering::AcqRel);
+                    true
+                }
+                // A scalar operation-outcome perturbation supplies no PCM lifetime
+                // authority. This unit does not claim an accepted public receipt
+                // normally transitions to rejected while its readers stay installed.
+                "receipt_status" => {
+                    fixture.stems.publication.mark_rejected();
+                    true
+                }
+                "publication_owner" | "publication_expected" => {
+                    let mut replaced = refreshed_stems.clone();
+                    if revoke == "publication_owner" {
+                        replaced.publication.epoch =
+                            Arc::new(AtomicU64::new(replaced.publication.expected));
+                    } else {
+                        replaced.publication.expected += 1;
+                    }
+                    let replaced_feed = ProductiveSourceFeed {
+                        stems: Some(&replaced),
+                        ..next
+                    };
+                    assert!(
+                        !original.matches_effective_contract(&replaced_feed, 0),
+                        "{revoke}"
+                    );
+                    assert!(
+                        !fresh.matches_effective_contract(&replaced_feed, 0),
+                        "{revoke}"
+                    );
+                    assert!(!fresh.matches_adoption(&replaced_feed, 0, 2), "{revoke}");
+                    continue;
+                }
+                "source" => {
+                    fixture.ownership.revoke_source(0);
+                    false
+                }
+                "timing" => {
+                    assert!(
+                        fixture.acknowledgements.revoke_for_key(
+                            &fixture.ownership,
+                            fixture
+                                .ownership
+                                .slot_snapshot(0)
+                                .unwrap()
+                                .content_key()
+                                .unwrap(),
+                            accepted.publication_epoch,
+                        )
+                    );
+                    false
+                }
+                "authority" => {
+                    fixture
+                        .ownership
+                        .revoke(0, fixture.ownership.authority_revision(0) + 1);
+                    false
+                }
+                "native_epoch" => {
+                    fixture.epoch.fetch_add(1, Ordering::AcqRel);
+                    false
+                }
+                _ => unreachable!(),
+            };
+            if operation_only {
+                assert!(original.permit.current_effective_source(&refreshed, RATE));
+                assert!(fresh.permit.current(&refreshed, RATE));
+                assert!(original.matches_effective_contract(&next, 0), "{revoke}");
+                assert!(fresh.matches_effective_contract(&next, 0), "{revoke}");
+                assert!(fresh.matches_adoption(&next, 0, 2), "{revoke}");
+                continue;
+            }
+            assert!(!original.matches_effective_contract(&next, 0), "{revoke}");
+            assert!(!fresh.matches_effective_contract(&next, 0), "{revoke}");
+            assert!(!fresh.matches_adoption(&next, 0, 2), "{revoke}");
+        }
     }
 }

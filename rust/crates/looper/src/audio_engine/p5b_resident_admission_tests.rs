@@ -1,5 +1,6 @@
 //! Actual native proposal and policy transactions on the existing productive harness.
 use super::*;
+use crate::audio_engine::committed_stem_residency::CommittedStemRtWork;
 
 fn policy(p: &mut Productive, interest: &str) -> ResidentStemTicket {
     p.h.engine
@@ -426,6 +427,129 @@ fn wait_source_ack(h: &mut Harness, id: usize, request: u64) {
         }
         accepted && h.engine.cold_loading[id].load(Ordering::Acquire) == 0
     });
+}
+
+#[test]
+fn two_stopped_subscribers_admit_shared_components_with_own_publication_ack() {
+    let mut h = long_harness();
+    let preparation = current_material_preparation(&h);
+    for id in 0..2 {
+        let request = control::adopt_for_format(
+            &h.engine,
+            id,
+            &preparation,
+            h.producer.clone(),
+            (2, RATE, h.root.clone()),
+        )
+        .unwrap();
+        wait_source_enqueue(&mut h, &request);
+        assert_eq!(h.callback.drain(&mut h.consumer), 1);
+        wait_source_ack(&mut h, id, request.request_id());
+        assert!(request.is_current().unwrap());
+    }
+    preparation.release_preparation().unwrap();
+    drop(preparation);
+
+    let pair = h.prepare(0, &h.ticket(0), false, None);
+    let _saved = h.save(&pair);
+    let mut selections = Vec::new();
+    for id in 0..2 {
+        let selected = h
+            .engine
+            .register_committed_stem_pair_with_producer(&pair, &h.ticket(id), &h.producer)
+            .unwrap();
+        assert_eq!(selected.publication_status(), "pending");
+        assert_eq!(h.callback.drain(&mut h.consumer), 1);
+        assert_eq!(selected.publication_status(), "accepted");
+        assert!(selected.is_current());
+        selections.push(selected);
+    }
+
+    let mut first: Option<PreparedStemSet> = None;
+    for (id, selected) in selections.iter().enumerate() {
+        assert!(h.callback.mixer.stems_for_measurement()[id].is_none());
+        let receipt = h
+            .engine
+            .request_committed_stem_residency_with_interest_and_producer(
+                selected,
+                "full_mix",
+                15,
+                "preload",
+                &h.producer,
+            )
+            .unwrap();
+        assert_eq!(h.callback.drain(&mut h.consumer), 1);
+        wait_phase("two-subscriber policy enqueue", id, || {
+            (h.consumer.peek().is_ok() || receipt.error().is_some())
+                && h.producer.try_lock().is_ok()
+        });
+        let publication = {
+            let ControlMessage::CommittedStemWork(work) = h.consumer.peek().unwrap() else {
+                panic!("preload must enqueue its own committed-stem adoption");
+            };
+            let CommittedStemRtWork::Adopt(transaction) = work.as_ref() else {
+                panic!("preload must reach its own adoption after capture");
+            };
+            assert!(transaction.pin.stems.is_none());
+            let prepared = transaction.stems.as_ref().unwrap();
+            let publication = &transaction.status.publication;
+            assert!(Arc::ptr_eq(&prepared.publication.epoch, &publication.epoch));
+            assert_eq!(prepared.publication.expected, publication.expected);
+            assert_eq!(prepared.publication.status(), "pending");
+            if let Some(first) = &first {
+                assert!(Arc::ptr_eq(
+                    &first.complete_set_identity,
+                    &prepared.complete_set_identity
+                ));
+                for (first, shared) in first.stems.iter().zip(&prepared.stems) {
+                    assert!(Arc::ptr_eq(&first.samples, &shared.samples));
+                }
+                assert!(!Arc::ptr_eq(
+                    &first.publication.epoch,
+                    &prepared.publication.epoch
+                ));
+            }
+            publication.clone()
+        };
+        assert!(h.callback.mixer.stems_for_measurement()[id].is_none());
+        assert_eq!(h.callback.drain(&mut h.consumer), 1);
+        assert_eq!(
+            receipt.residency_status(),
+            "accepted",
+            "{:?}",
+            receipt.error()
+        );
+        assert!(receipt.is_current());
+        assert_eq!(receipt.effective_mode_status(), "not_requested");
+        let admitted = h.callback.mixer.stems_for_measurement()[id]
+            .as_ref()
+            .unwrap();
+        assert!(Arc::ptr_eq(&admitted.publication.epoch, &publication.epoch));
+        assert_eq!(admitted.publication.expected, publication.expected);
+        assert_eq!(admitted.publication.status(), "accepted");
+        assert!(admitted.publication.current());
+        assert_eq!(
+            h.callback.mixer.stem_demand_for_measurement(id).0,
+            StemMixMode::FullMix
+        );
+        if first.is_none() {
+            first = Some(admitted.clone());
+        }
+        reconcile(&h.engine).unwrap();
+    }
+    let first = first.unwrap();
+    let admitted = h.callback.mixer.stems_for_measurement()[1]
+        .as_ref()
+        .unwrap();
+    assert!(Arc::ptr_eq(
+        &first.complete_set_identity,
+        &admitted.complete_set_identity
+    ));
+    for (first, shared) in first.stems.iter().zip(&admitted.stems) {
+        assert!(Arc::ptr_eq(&first.samples, &shared.samples));
+    }
+    assert!(first.publication.current());
+    assert!(admitted.publication.current());
 }
 
 fn actual_bank_pcm(h: &Harness) -> (usize, usize) {

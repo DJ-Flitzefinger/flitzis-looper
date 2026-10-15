@@ -611,4 +611,5 @@ mod source_feed_history_tests {
     }
 
     include!("key_lock_paused_history_tests.rs");
+    include!("key_lock_selection_history_tests.rs");
 }

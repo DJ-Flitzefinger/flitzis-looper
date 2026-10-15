@@ -82,6 +82,26 @@ independent resumed PCM evidence. Constant pre-origin start semantics remain
 covered separately; none of these finite A-reset checks certifies continuous-O,
 acoustic, performer-deadline or full parent acceptance.
 
+Held same-set selection replay now retains the actual historical pin even at a
+FullMix endpoint. Four SET and eight prospective mode cases cover real mask/empty
+mask and both FullMix ramps, including active F ramps settled by original E;
+each compares 4,097 PCM samples with an independent scalar/direct-Native A-reset
+oracle, exact phase/FIFO and retained Native owner (observed max error zero).
+Public selection/source ABA refuses original work and permits fresh same-worker
+retry; paused active-E ramps, missing/other/stale owners remain refusals. Sliced
+reader roles are checked before, at and after ramp completion. A tracked storage
+WindowACK preserves admitted stem data and productive Native/FIFO/PCM while a
+fresh request proves its own current Native authority; old strict requests and
+changed held publication identities and actual Native source/timing revocations
+still refuse. Full active-E/multiple
+set, acoustic, continuous-O, P6/RSS and Human gates remain open.
+The real Controller stopped-ALL/ordinary-Play/explicit-ALL regression retains the
+original admitted data stamp and Native owner across independent receipts.
+A bounded two-subscriber preload proof inspects actual queued adoption without
+prior Mixer pins, verifies genuine shared complete/component owners, and requires
+each subscriber's own pending then accepted/current publication. The full existing
+216-pad suite and P6/resource/Human acceptance are not replaced by this check.
+
 - [x] K-META: neutral persisted source correction/epochs/base/extra/retrigger model;
   all12x12 same-mode roots, +6 tie/idempotence/unknown/mode/reset/late-analysis races.
   Actual2978 Python PASS/35 device skips plus strengthened reset regression;

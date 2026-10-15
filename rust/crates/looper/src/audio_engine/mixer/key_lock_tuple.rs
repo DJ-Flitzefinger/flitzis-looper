@@ -59,12 +59,15 @@ fn feed<'a>(
     output_frame: u64,
     permit: Option<&'a crate::audio_engine::native_history_permit::NativeHistoryPermit>,
 ) -> ProductiveSourceFeed<'a> {
+    let readers = snapshot.readers().unwrap_or_default();
     ProductiveSourceFeed {
         pitch_intent: pitch,
         key_lock: enabled,
         sample: &snapshot.sample,
-        stems: snapshot.stems.as_ref(),
-        outgoing_stems: None,
+        // Keep a FullMix history pin reachable by the source worker even though
+        // the plan correctly excludes it from endpoint reader comparisons.
+        stems: readers.current.or(snapshot.stems.as_ref()),
+        outgoing_stems: readers.outgoing,
         sample_rate_hz: snapshot.sample_rate_hz,
         accepted: snapshot.accepted,
         playback: &snapshot.playback,
@@ -192,11 +195,8 @@ impl RtMixer {
             let Some(snapshot) = self.capture_pitch_voice_snapshot(index) else {
                 return false;
             };
-            // Pause freezes active source time; the same global E still owns adoption.
-            // Active selection transitions need a separately admitted endpoint.
-            if snapshot.plan.transition.is_active() {
-                return false;
-            }
+            // The lane projects to the original E and refuses if its ramp is still
+            // active there. Pause contributes zero active frames to that projection.
             // Reserve reusable callback storage before changing this voice's DSP request.
             // A filled snapshot returns through the worker; no replacement is allocated here.
             if !self.voices[index].stretch.source_history_work_available() {
@@ -266,6 +266,7 @@ impl RtMixer {
                     voice_generation: voice.generation,
                     execution_frame: execution,
                     paused: snapshot.paused,
+                    source_feed_context: snapshot.source_feed_context,
                 },
             ) else {
                 return false;

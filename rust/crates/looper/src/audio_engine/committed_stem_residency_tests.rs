@@ -3478,6 +3478,11 @@ assert live_receipt.effective_mode_status() == 'waiting'
         &set.complete_set_identity,
         &actual.complete_set_identity
     ));
+    assert!(Arc::ptr_eq(
+        &set.publication.epoch,
+        &actual.publication.epoch
+    ));
+    assert_eq!(set.publication.expected, actual.publication.expected);
     for (before, after) in set.stems.iter().zip(&actual.stems) {
         assert!(Arc::ptr_eq(&before.samples, &after.samples));
     }
@@ -3497,8 +3502,8 @@ assert live_receipt.effective_mode_status() == 'waiting'
         locals,
         r#"
 controller.on_frame_render()
-assert live_receipt.is_current() and live_receipt.effective_mode_status() == 'effective'
-assert live_receipt.effective_failure_reason() is None and live_receipt.error() is None
+assert live_receipt.is_current() and live_receipt.effective_mode_status() == 'effective', (live_receipt.is_current(), live_receipt.effective_mode_status(), live_receipt.effective_failure_reason(), live_receipt.error())
+assert live_receipt.effective_failure_reason() is None and live_receipt.error() is None, (live_receipt.effective_failure_reason(), live_receipt.error())
 assert controller.stem_residency_status(0).effective == 'effective'
 assert not stopped.is_current()
 assert not session.stem_generation_errors, session.stem_generation_errors

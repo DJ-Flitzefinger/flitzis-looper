@@ -451,24 +451,47 @@ impl RtMixer {
         let selection =
             frozen.map_or_else(|| self.stem_render_selection(id), |view| view.selection);
         let transition = frozen.map_or(self.stem_transitions[id], |view| view.transition);
+        let outgoing = frozen.map_or(self.outgoing_stems[id].as_ref(), |view| {
+            view.outgoing.as_ref()
+        });
+        let outgoing = prepared_stem_set_for_render(
+            outgoing,
+            sample,
+            self.channels,
+            self.sample_rate_hz,
+            sample.frame_count(),
+            timing.accepted,
+        );
         let position = playback.position();
+        let plan = SourceReadPlan {
+            channels: self.channels,
+            sample_frames: sample.frame_count(),
+            frame_pos: position.frame,
+            loop_region: region,
+            loop_period: playback.loop_period(),
+            seek_mode: position.seek_mode,
+            selection,
+            transition,
+        };
+        let source_feed_context = super::source_feed_history::SourceFeedContext::new(
+            super::productive_source_history::ProductiveSourceBinding::new(
+                sample,
+                self.sample_rate_hz as u32,
+                timing.accepted,
+            ),
+            plan.required_read_sets(StemReadSets::new(stems, outgoing)),
+        );
         Some(PitchSourceSnapshot {
             sample: sample.clone(),
-            stems: stems.cloned(),
+            // A FullMix endpoint can still require this real owner for earlier reads.
+            // A second distinct set remains unheld and therefore refuses in the worker.
+            stems: stems.or(outgoing).cloned(),
             accepted: timing.accepted,
             sample_rate_hz: self.sample_rate_hz as u32,
             paused: voice.paused,
             playback,
-            plan: SourceReadPlan {
-                channels: self.channels,
-                sample_frames: sample.frame_count(),
-                frame_pos: position.frame,
-                loop_region: region,
-                loop_period: playback.loop_period(),
-                seek_mode: position.seek_mode,
-                selection,
-                transition,
-            },
+            plan,
+            source_feed_context,
         })
     }
 
@@ -496,6 +519,16 @@ impl RtMixer {
             timing.accepted,
         );
         let position = playback.position();
+        let plan = SourceReadPlan {
+            channels: self.channels,
+            sample_frames: sample.frame_count(),
+            frame_pos: position.frame,
+            loop_region: region,
+            loop_period: playback.loop_period(),
+            seek_mode: position.seek_mode,
+            selection: self.stem_render_selection(id),
+            transition: self.stem_transitions[id],
+        };
         Some(PitchSourceSnapshot {
             sample: sample.clone(),
             stems: stems.cloned(),
@@ -503,16 +536,15 @@ impl RtMixer {
             sample_rate_hz: self.sample_rate_hz as u32,
             paused: false,
             playback,
-            plan: SourceReadPlan {
-                channels: self.channels,
-                sample_frames: sample.frame_count(),
-                frame_pos: position.frame,
-                loop_region: region,
-                loop_period: playback.loop_period(),
-                seek_mode: position.seek_mode,
-                selection: self.stem_render_selection(id),
-                transition: self.stem_transitions[id],
-            },
+            plan,
+            source_feed_context: super::source_feed_history::SourceFeedContext::new(
+                super::productive_source_history::ProductiveSourceBinding::new(
+                    sample,
+                    self.sample_rate_hz as u32,
+                    timing.accepted,
+                ),
+                plan.required_read_sets(StemReadSets::new(stems, self.outgoing_stems[id].as_ref())),
+            ),
         })
     }
 

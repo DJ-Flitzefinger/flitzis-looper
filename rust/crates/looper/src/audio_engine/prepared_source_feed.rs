@@ -10,7 +10,9 @@ use super::source_feed_history::{
     SOURCE_FEED_HISTORY_MAX_FRAMES, SourceFeedContext, SourceFeedSnapshot, SourceFeedSpan,
 };
 use super::source_playback::SourcePlayback;
-use super::source_reader::{SourceReadPlan, StemReadSets};
+use super::source_reader::SourceReadPlan;
+#[cfg(test)]
+use super::source_reader::StemReadSets;
 use super::stretch_processor::DEFAULT_BLOCK_SAMPLES;
 
 fn unavailable() -> RubberBandError {
@@ -42,9 +44,12 @@ fn constant_chronology_matches(
         {
             return false;
         }
-        let readers = span
-            .plan
-            .required_read_sets(StemReadSets::new(request.stems.as_ref(), None));
+        let Some(readers) = span
+            .context
+            .resolve_readers(span.plan, request.stems.as_ref())
+        else {
+            return false;
+        };
         if !span
             .context
             .same_source(SourceFeedContext::new(request.binding, readers))
@@ -71,7 +76,7 @@ impl NativeAdapterState {
         &mut self,
         request: NativeHistoryRequest,
         history: &SourceFeedSnapshot,
-        future: (SourcePlayback, SourceReadPlan, u64),
+        future: (SourcePlayback, SourceReadPlan, u64, SourceFeedContext),
     ) -> Result<(), RubberBandError> {
         if !history.is_current()
             || !request
@@ -91,7 +96,7 @@ impl NativeAdapterState {
         native.prepare_exact_pitch(endpoint_pitch)?;
         let mut bound = native.source_history_frames(endpoint_pitch)? as u64;
         let mut spans: Vec<SourceFeedSpan> = history.spans().copied().collect();
-        let (mut playback, mut plan, mut remaining) = future;
+        let (mut playback, mut plan, mut remaining, future_context) = future;
         let end = history
             .active_frames()
             .checked_add(remaining)
@@ -109,13 +114,12 @@ impl NativeAdapterState {
             let position = playback.position();
             plan.frame_pos = position.frame;
             plan.seek_mode = position.seek_mode;
-            let readers = plan.required_read_sets(StemReadSets::new(request.stems.as_ref(), None));
             spans.push(SourceFeedSpan {
                 active_start: active,
                 frames,
                 playback,
                 plan,
-                context: SourceFeedContext::new(request.binding, readers),
+                context: future_context.for_plan(plan),
             });
             playback.advance(frames);
             plan.transition.advance_fractional(frames as f64 * ratio);
@@ -214,8 +218,9 @@ impl NativeAdapterState {
                 )
                 .ok_or_else(unavailable)?;
             let readers = part
-                .plan
-                .required_read_sets(StemReadSets::new(request.stems.as_ref(), None));
+                .context
+                .resolve_readers(part.plan, request.stems.as_ref())
+                .ok_or_else(unavailable)?;
             let actual = SourceFeedContext::new(request.binding, readers);
             if !part.context.same_source(actual)
                 || !normal_loop_feed_available_with_readers(
@@ -262,9 +267,27 @@ impl NativeAdapterState {
             while offset < span.frames {
                 let frames = (span.frames - offset).min(DEFAULT_BLOCK_SAMPLES);
                 let part = span.slice(offset, frames).ok_or_else(unavailable)?;
-                part.plan.fill_fractional_buffers_checked(
+                let readers = part
+                    .context
+                    .resolve_readers(part.plan, request.stems.as_ref())
+                    .ok_or_else(unavailable)?;
+                if !part
+                    .context
+                    .same_source(SourceFeedContext::new(request.binding, readers))
+                    || !normal_loop_feed_available_with_readers(
+                        &request.sample,
+                        readers,
+                        request.binding.sample_rate_hz,
+                        part.context.binding.accepted,
+                        part.plan,
+                        &part.playback,
+                    )
+                {
+                    return Err(unavailable());
+                }
+                part.plan.fill_fractional_buffers_checked_with_readers(
                     &request.sample,
-                    request.stems.as_ref(),
+                    readers,
                     &part.playback,
                     &mut feed,
                     frames,
@@ -450,6 +473,7 @@ mod tests {
                 paused: false,
                 playback: self.playback,
                 plan: self.plan,
+                source_feed_context: self.feed_context(),
             };
             assert!(endpoint.project_output_frames(FUTURE));
             let permit = NativeHistoryContext {
@@ -477,6 +501,17 @@ mod tests {
             assert!(self.history.capture_into(&mut snapshot));
             snapshot
         }
+
+        fn feed_context(&self) -> SourceFeedContext {
+            SourceFeedContext::new(
+                super::super::productive_source_history::ProductiveSourceBinding::new(
+                    &self.sample,
+                    RATE,
+                    None,
+                ),
+                StemReadSets::default(),
+            )
+        }
     }
 
     #[test]
@@ -489,7 +524,12 @@ mod tests {
                 candidate.prepare_source_with_feed_history(
                     missing.request(1),
                     &missing.snapshot(),
-                    (missing.playback, missing.plan, FUTURE),
+                    (
+                        missing.playback,
+                        missing.plan,
+                        FUTURE,
+                        missing.feed_context()
+                    ),
                 ),
                 Err(RubberBandError::UnavailableSourceHistory)
             ));
@@ -498,7 +538,7 @@ mod tests {
                 .prepare_source_with_feed_history(
                     valid.request(2),
                     &valid.snapshot(),
-                    (valid.playback, valid.plan, FUTURE),
+                    (valid.playback, valid.plan, FUTURE, valid.feed_context()),
                 )
                 .unwrap();
             assert!(candidate.used && candidate.active && !candidate.dirty);
@@ -518,7 +558,12 @@ mod tests {
                 candidate.prepare_source_with_feed_history(
                     request,
                     &missing.snapshot(),
-                    (missing.playback, missing.plan, FUTURE),
+                    (
+                        missing.playback,
+                        missing.plan,
+                        FUTURE,
+                        missing.feed_context()
+                    ),
                 ),
                 Err(RubberBandError::UnavailableSourceHistory)
             ));
@@ -528,7 +573,7 @@ mod tests {
             .prepare_source_with_feed_history(
                 valid.request(4),
                 &valid.snapshot(),
-                (valid.playback, valid.plan, FUTURE),
+                (valid.playback, valid.plan, FUTURE, valid.feed_context()),
             )
             .unwrap();
         assert_eq!(candidate.source.as_ref().unwrap().request_id, 4);

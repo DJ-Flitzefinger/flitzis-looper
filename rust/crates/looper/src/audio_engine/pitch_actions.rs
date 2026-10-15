@@ -11,7 +11,7 @@ use super::native_history_permit::{NativeHistoryContext, NativeHistoryPermit};
 use super::pitch_intent::PitchIntent;
 use super::prepared_native_history::{NativeAdapterState, NativeHistoryRequest};
 use super::rubberband_backend::{RubberBandError, RubberBandLiveShifter};
-use super::source_feed_history::SourceFeedSnapshot;
+use super::source_feed_history::{SourceFeedContext, SourceFeedSnapshot};
 use super::source_playback::SourcePlayback;
 use super::source_reader::SourceReadPlan;
 use crate::messages::SampleBuffer;
@@ -773,7 +773,7 @@ pub(crate) struct PitchActionWork {
     preparation_mode: PitchActionPreparationMode,
     preparation_required: bool,
     pub(crate) source_feed: SourceFeedSnapshot,
-    pub(crate) source_feed_future: Option<(SourcePlayback, SourceReadPlan, u64)>,
+    pub(crate) source_feed_future: Option<(SourcePlayback, SourceReadPlan, u64, SourceFeedContext)>,
     pub(crate) source_feed_voice: Option<(Arc<AtomicU64>, u64)>,
 }
 

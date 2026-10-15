@@ -61,6 +61,17 @@ fn fixture(sample: &SampleBuffer, stems: Option<PreparedStemSet>, wet: bool) -> 
     );
     if let Some(mut stems) = stems {
         stems.accepted_timing = Some(accepted());
+        stems.publication = PreparedSourcePermit::for_native_binding_for_test(
+            0,
+            InputPadBinding {
+                runtime_revision: mixer.input_runtime_ownership.runtime_revision(0),
+                ..binding(&mixer)
+            },
+            mixer.input_runtime_ownership.clone(),
+            mixer.current_timing_acknowledgements.clone(),
+            mixer.prepared_source_epochs[0].clone(),
+        )
+        .unwrap();
         assert!(mixer.publish_prepared_stems(0, stems));
         mixer.set_stem_mix_mode(0, StemMixMode::AllStems, 91);
         mixer.set_stem_enabled_mask(0, 0b1010, 91);
@@ -433,6 +444,9 @@ fn native_keylock_finite_context_relocation_keeps_actual_handle_fifo_history_fil
         let history = voice(&actual).stretch.productive_history().unwrap();
         let fifos = voice(&actual).stretch.pending_fifo_frames();
         let playback = voice(&actual).source_playback;
+        let stem_publication = actual.prepared_stems[0]
+            .as_ref()
+            .map(|set| set.publication.clone());
         let before = binding(&actual);
         let next = full
             .window(START - 19, END + 29, 2, ResidentContext::KeyLockFiniteLoop)
@@ -441,6 +455,7 @@ fn native_keylock_finite_context_relocation_keeps_actual_handle_fifo_history_fil
         assert!(!Arc::ptr_eq(&next.samples, &full.samples));
         let next_stems = full_stems.map(|mut set| {
             set.accepted_timing = Some(accepted());
+            set.publication = stem_publication.as_ref().unwrap().clone();
             set.window_for(&next).unwrap()
         });
         let publication = PreparedSourcePermit::new(
@@ -462,6 +477,24 @@ fn native_keylock_finite_context_relocation_keeps_actual_handle_fifo_history_fil
             })),
         );
         assert_eq!(publication.status(), "accepted");
+        if let Some(stem_publication) = &stem_publication {
+            assert!(
+                !stem_publication.current(),
+                "original publication keeps its old WindowACK"
+            );
+            assert!(Arc::ptr_eq(
+                &stem_publication.epoch,
+                &actual.prepared_stems[0].as_ref().unwrap().publication.epoch,
+            ));
+            assert_eq!(
+                stem_publication.expected,
+                actual.prepared_stems[0]
+                    .as_ref()
+                    .unwrap()
+                    .publication
+                    .expected
+            );
+        }
         assert_eq!(voice(&actual).stretch.native_state_address(), address);
         assert_eq!(voice(&actual).stretch.pending_fifo_frames(), fifos);
         assert_eq!(
@@ -520,6 +553,7 @@ fn native_keylock_finite_context_relocation_keeps_actual_handle_fifo_history_fil
             elapsed += frames as u64;
             assert_eq!(voice(&actual).stretch.native_state_address(), address);
             assert_eq!(voice(&actual).stretch.adopted_request_id(), Some(1));
+            assert!(!voice(&actual).stretch.source_preparation_pending());
             assert_eq!(
                 voice(&actual).stretch.pending_fifo_frames(),
                 voice(&reference).stretch.pending_fifo_frames()

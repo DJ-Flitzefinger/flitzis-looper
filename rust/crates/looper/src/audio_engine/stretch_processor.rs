@@ -1001,6 +1001,18 @@ mod tests {
                         voice_generation: 2,
                         execution_frame: 8292,
                         paused: false,
+                        source_feed_context:
+                            super::super::source_feed_history::SourceFeedContext::new(
+                                ProductiveSourceBinding::new(
+                                    feed.sample,
+                                    feed.sample_rate_hz,
+                                    feed.accepted
+                                ),
+                                feed.plan.required_read_sets(StemReadSets::new(
+                                    feed.stems,
+                                    feed.outgoing_stems
+                                )),
+                            ),
                     },
                 )
                 .is_none()
@@ -1024,6 +1036,15 @@ mod tests {
                     voice_generation: 1,
                     execution_frame: 8292,
                     paused: false,
+                    source_feed_context: super::super::source_feed_history::SourceFeedContext::new(
+                        ProductiveSourceBinding::new(
+                            feed.sample,
+                            feed.sample_rate_hz,
+                            feed.accepted
+                        ),
+                        feed.plan
+                            .required_read_sets(StemReadSets::new(feed.stems, feed.outgoing_stems)),
+                    ),
                 },
             ),
             Some((epoch, 1))
@@ -1085,6 +1106,15 @@ mod tests {
                     voice_generation: 1,
                     execution_frame: 8292,
                     paused: true,
+                    source_feed_context: super::super::source_feed_history::SourceFeedContext::new(
+                        ProductiveSourceBinding::new(
+                            feed.sample,
+                            feed.sample_rate_hz,
+                            feed.accepted
+                        ),
+                        feed.plan
+                            .required_read_sets(StemReadSets::new(feed.stems, feed.outgoing_stems)),
+                    ),
                 },
             ),
             Some((first_epoch, 1))
@@ -1131,6 +1161,15 @@ mod tests {
                     voice_generation: 1,
                     execution_frame: 12_388,
                     paused: true,
+                    source_feed_context: super::super::source_feed_history::SourceFeedContext::new(
+                        ProductiveSourceBinding::new(
+                            feed.sample,
+                            feed.sample_rate_hz,
+                            feed.accepted
+                        ),
+                        feed.plan
+                            .required_read_sets(StemReadSets::new(feed.stems, feed.outgoing_stems)),
+                    ),
                 },
             ),
             Some((retry_epoch, 2))

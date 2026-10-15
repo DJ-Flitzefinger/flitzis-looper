@@ -12,8 +12,9 @@ use super::productive_source_history::ProductiveSourceBinding;
 #[cfg(test)]
 use super::rubberband_backend::pitch_scale_for_tempo_ratio;
 use super::rubberband_backend::{RubberBandError, RubberBandLiveShifter};
+use super::source_feed_history::SourceFeedContext;
 use super::source_playback::SourcePlayback;
-use super::source_reader::SourceReadPlan;
+use super::source_reader::{SourceReadPlan, StemReadSets};
 use super::stretch_processor::{DEFAULT_BLOCK_SAMPLES, FixedFifo, ProductiveSourceFeed};
 use crate::messages::{PreparedStemSet, SampleBuffer};
 use std::sync::Arc;
@@ -61,9 +62,16 @@ pub(crate) struct PitchSourceSnapshot {
     pub(crate) paused: bool,
     pub(crate) playback: SourcePlayback,
     pub(crate) plan: SourceReadPlan,
+    pub(crate) source_feed_context: SourceFeedContext,
 }
 
 impl PitchSourceSnapshot {
+    /// Resolve the actual captured reader slots against the retained physical pin.
+    pub(crate) fn readers(&self) -> Option<StemReadSets<'_>> {
+        self.source_feed_context
+            .resolve_readers(self.plan, self.stems.as_ref())
+    }
+
     /// Project a frozen SET checkpoint from capture F to its declared execution E.
     /// This changes only the snapshot. It has a fixed bound because accepted source-rate
     /// smoothing has finitely many .05 steps; the terminal constant interval advances at once.
@@ -97,6 +105,7 @@ impl PitchSourceSnapshot {
         plan.seek_mode = position.seek_mode;
         self.playback = playback;
         self.plan = plan;
+        self.source_feed_context = self.source_feed_context.for_plan(plan);
         true
     }
 
@@ -118,12 +127,17 @@ impl PitchSourceSnapshot {
         {
             return None;
         }
+        self.readers()?;
+        let endpoint_stems = self
+            .plan
+            .required_read_sets(StemReadSets::new(self.stems.as_ref(), None))
+            .current;
         let coverage = if complete_view_available(&self.sample) {
             None
         } else {
             Some(NormalLoopCoverage::capture(
                 &self.sample,
-                self.stems.as_ref(),
+                endpoint_stems,
                 self.sample_rate_hz,
                 self.accepted,
                 self.plan,
@@ -219,14 +233,36 @@ impl NativeHistoryRequest {
             && self.permit.matches_projection(feed.accepted)
             && self.playback.matches_exact(feed.playback)
             && self.plan.matches_exact(feed.plan)
-            && same_stem_owners(self.stems.as_ref(), feed.stems)
+            && same_stem_owners(
+                self.endpoint_stems(),
+                feed.plan
+                    .required_read_sets(StemReadSets::new(feed.stems, feed.outgoing_stems))
+                    .for_selection(feed.plan.selection),
+            )
     }
 
     fn coverage_matches(&self, feed: &ProductiveSourceFeed<'_>, exact_window: bool) -> bool {
+        let readers = feed
+            .plan
+            .required_read_sets(StemReadSets::new(feed.stems, feed.outgoing_stems));
+        let required_available = |plan: SourceReadPlan, readers: StemReadSets<'_>| {
+            std::iter::once(plan.selection)
+                .chain(plan.transition.required_from_selection())
+                .all(|selection| {
+                    selection.required_stem_hash().is_none()
+                        || readers.for_selection(selection).is_some()
+                })
+        };
+        if !required_available(self.plan, StemReadSets::new(self.stems.as_ref(), None))
+            || !required_available(feed.plan, readers)
+        {
+            return false;
+        }
+        let endpoint_stems = readers.for_selection(feed.plan.selection);
         if let Some(coverage) = &self.coverage {
             coverage.matches(
                 feed.sample,
-                feed.stems,
+                endpoint_stems,
                 feed.sample_rate_hz,
                 feed.accepted,
                 feed.plan,
@@ -243,7 +279,7 @@ impl NativeHistoryRequest {
                     || (!exact_window
                         && normal_loop_feed_available(
                             feed.sample,
-                            feed.stems,
+                            endpoint_stems,
                             feed.sample_rate_hz,
                             feed.accepted,
                             feed.plan,
@@ -270,10 +306,18 @@ impl NativeHistoryRequest {
             && self.permit.matches_projection(feed.accepted)
             && self.plan.matches_source_contract(feed.plan)
             && self.playback.matches_rate_target(feed.playback)
-            && match (self.stems.as_ref(), feed.stems) {
+            && match (
+                self.endpoint_stems(),
+                feed.plan
+                    .required_read_sets(StemReadSets::new(feed.stems, feed.outgoing_stems))
+                    .for_selection(feed.plan.selection),
+            ) {
                 (None, None) => true,
                 (Some(old), Some(next)) => {
                     Arc::ptr_eq(&old.complete_set_identity, &next.complete_set_identity)
+                        && *old.complete_set_identity == *next.complete_set_identity
+                        && Arc::ptr_eq(&old.publication.epoch, &next.publication.epoch)
+                        && old.publication.expected == next.publication.expected
                         && old.accepted_timing == next.accepted_timing
                 }
                 _ => false,
@@ -290,7 +334,12 @@ impl NativeHistoryRequest {
             && self.permit.matches_projection(feed.accepted)
             && self.plan.matches_source_contract(feed.plan)
             && self.playback.matches_rate_target(feed.playback)
-            && same_stem_owners(self.stems.as_ref(), feed.stems)
+            && same_stem_owners(
+                self.endpoint_stems(),
+                feed.plan
+                    .required_read_sets(StemReadSets::new(feed.stems, feed.outgoing_stems))
+                    .for_selection(feed.plan.selection),
+            )
     }
 
     pub(crate) fn matches_adoption(
@@ -305,13 +354,21 @@ impl NativeHistoryRequest {
             && self.playback.matches_exact(feed.playback)
             && self.plan.matches_exact(feed.plan)
     }
+
+    pub(crate) fn endpoint_stems(&self) -> Option<&PreparedStemSet> {
+        StemReadSets::new(self.stems.as_ref(), None).for_selection(self.plan.selection)
+    }
 }
 
 fn same_stem_owners(left: Option<&PreparedStemSet>, right: Option<&PreparedStemSet>) -> bool {
     match (left, right) {
         (None, None) => true,
         (Some(left), Some(right)) => {
-            left.source_version_hash == right.source_version_hash
+            Arc::ptr_eq(&left.complete_set_identity, &right.complete_set_identity)
+                && *left.complete_set_identity == *right.complete_set_identity
+                && Arc::ptr_eq(&left.publication.epoch, &right.publication.epoch)
+                && left.publication.expected == right.publication.expected
+                && left.source_version_hash == right.source_version_hash
                 && left.sample_rate_hz == right.sample_rate_hz
                 && left.channels == right.channels
                 && left.frame_count == right.frame_count
@@ -480,7 +537,7 @@ impl NativeAdapterState {
             && !request.coverage.as_ref().is_some_and(|coverage| {
                 coverage.matches(
                     &request.sample,
-                    request.stems.as_ref(),
+                    request.endpoint_stems(),
                     request.binding.sample_rate_hz,
                     request.binding.accepted,
                     request.plan,

@@ -1000,6 +1000,48 @@ generations; current held readers must cover the actual historical contexts.
 Historical markers supply data provenance, with fresh strong endpoint authority
 still required at adoption. Constant endpoint reuse first checks the real required
 read/selection chronology, including gaps and completed selection changes.
+SET and prospective mode replay can resolve selection history through one actually
+held committed stem set, including FullMix/stem ramps, changed masks and an empty
+mask. A ramp active at capture F must settle by the original E. Each sliced plan
+determines its required reader roles before identity/coverage resolution; missing
+roles cannot disappear through a failed lookup. FullMix E retains the physical
+stem pin needed by earlier reads. Active ramps at E, other/unheld sets and stale
+publication generations still refuse only that request and retain effective audio.
+
+Already admitted immutable stem data keeps its copied original publication
+owner/expected identity across a storage-only resident window change.
+Initial stem admission still requires its full original source/timing/window
+permit. A fresh Native action independently requires its own current window and
+timing ACK; an adopted Native owner uses its existing effective authority. Storage
+relocation therefore preserves productive Native/FIFO/filter continuity without
+letting an old strict action adopt against a newer window.
+The same publication may also be a mutable selection-operation receipt. Ordinary
+Play can withdraw that observation, and analysis/timing requests can supersede
+request epochs, while the admitted physical PCM remains valid. Those operation
+checks apply to initial admission; they cannot revoke retained data independently
+of the owning fresh/effective Native source, timing and voice authority.
+An independent selection receipt reusing actual admitted readers preserves their
+original data stamp. Shared-cache reconstruction alone has no prior admission;
+its placeholder publication takes the new operation's genuine admitted stamp.
+Four public SET cases and eight prospective mode cases compare all 4,097 adopted
+samples with independent scalar/direct-C-ABI A-reset references at +24/-23,
+with exact phase/FIFO and stable Native ownership. Their observed maximum PCM
+error is zero; deliberately replacing the past with FullMix disagrees by at least
+0.228. Public selection/source ABA refuses the original capture and a fresh
+request succeeds on the same worker. A paused mid-ramp endpoint still refuses.
+Slice tests cover before/at/after ramp completion, empty masks and missing,
+different or republished owners. Tracked publication/WindowACK tests preserve
+productive relocation PCM and accept a fresh own-window request while refusing
+the old strict request, changed held publication identities and actual Native
+source/timing revocations. These
+checks establish the bounded replay and ownership contract, without closing
+continuous-from-birth, acoustic or performer-deadline acceptance.
+The real Controller stopped-ALL/ordinary-Play/explicit-ALL path preserves its
+admitted data stamp and productive owner through separate receipts. A two-pad
+preload probe also inspects actual queued adoption: both pins start absent,
+the second reuses the first's complete/component Arc owners, and each receives
+its own pending then accepted/current data-publication stamp. This proves shared
+reader admission separately from the existing full 216-pad and P6 obligations.
 Source/rate/domain/selection edits and Pause/Resume fence each captured F-to-E
 projection without discarding its genuine past. This source-trajectory epoch is
 separate from Stretch's DSP preparation epoch: a later prospective Key Lock
@@ -1054,14 +1096,18 @@ off-grid rate edits. Each compares all 4,097 adopted samples, source phase and
 FIFO against an independent direct-C-ABI A-reset reference. Restored-source-control
 refusal and a fresh request use the same lane. Lane ownership and permit tests
 cover snapshot reuse, stale work and bounded return saturation. The additional
-32 mode snapshot payloads total 20,185,088 bytes before owner and queue overhead;
+32 mode snapshot payloads now total 34,865,152 bytes before owner and queue overhead;
 these structural counts do not establish total process memory or a deadline.
 An explicit Release profile filled all 1,024 spans in each of 32 mode snapshots:
-128 measured capture batches after eight warmups took 497.3 microseconds minimum,
-543.3 median, 627.9 p99 and 645.6 maximum on this host. Timing includes the fixed
+128 measured capture batches after eight warmups took 1,324.3 microseconds minimum,
+1,401.1 median, 1,610.8 p99 and 1,617.3 maximum on this host. Timing includes the fixed
 future assignment, excludes clearing, guards, projection, queues and Native replay,
-and establishes no callback deadline. Existing journal/SET plus mode span payloads
-derive to 80,740,352 bytes; allocator, Arc, queue, Native and PCM storage are separate.
+and establishes no callback deadline. Each scalar/optional span is 1,064 bytes;
+one 1,024-span allocation is 1,089,536 bytes. The profile actually allocates 32
+journals and 32 mode snapshots (69,730,304 span bytes). Adding the 64 admitted SET
+slots derives 139,460,608 span bytes; this does not bound earlier control captures.
+Allocator, Arc, queue, Native and PCM storage are separate. These measurements
+replace the smaller pre-selection-history layout and its earlier host timings.
 
 Eight paused Intro/Tail variants at +24/-23 compare each of 12,290 resumed samples,
 phase and FIFO against the independent A-reset reference with no paused future

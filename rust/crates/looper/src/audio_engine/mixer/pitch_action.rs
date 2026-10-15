@@ -204,7 +204,7 @@ impl RtMixer {
         }
         let guard = self.pitch_action_guard(work)?;
         let render = work.action.render();
-        let mut snapshot = match work.action.variant() {
+        let snapshot = match work.action.variant() {
             PitchActionVariant::Set => {
                 let Some(index) = self.pitch_action_voice(guard.id, guard.binding)? else {
                     return Ok(None);
@@ -229,8 +229,12 @@ impl RtMixer {
                         .checked_sub(callback_frame)
                         .ok_or(PitchActionReject::PreparedMismatch)?;
                     let active_delta = if snapshot.paused { 0 } else { delta };
-                    work.source_feed_future =
-                        Some((snapshot.playback, snapshot.plan, active_delta));
+                    work.source_feed_future = Some((
+                        snapshot.playback,
+                        snapshot.plan,
+                        active_delta,
+                        snapshot.source_feed_context,
+                    ));
                     work.source_feed_voice =
                         Some((voice.history_lifetime.clone(), voice.generation));
                 }
@@ -266,14 +270,6 @@ impl RtMixer {
             .map_err(|_| PitchActionReject::UnsupportedPitch)?;
         if pitch == 1.0 && work.action.variant() == PitchActionVariant::SetRetrigger {
             return Ok(None);
-        }
-        if snapshot
-            .plan
-            .required_read_sets(StemReadSets::new(snapshot.stems.as_ref(), None))
-            .current
-            .is_none()
-        {
-            snapshot.stems = None;
         }
         // Permits use the admitted action's own epoch and current resolved storage window.
         let permit = work

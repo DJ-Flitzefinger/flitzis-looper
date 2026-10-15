@@ -1727,7 +1727,13 @@ impl ResidencyWork {
                 if *set.complete_set_identity != *self.selection.identity {
                     return Err("effective stem set differs from registered selection".into());
                 }
-                set.clone()
+                let mut set = set.clone();
+                if pin.stems.is_none() {
+                    // Shared cache reconstruction has not been admitted for this
+                    // subscriber, so its placeholder takes this operation's stamp.
+                    set.publication = self.status.publication.clone();
+                }
+                set
             } else {
                 let components = self
                     .selection
@@ -1750,13 +1756,13 @@ impl ResidencyWork {
                     stems: components,
                 }
             };
-            // Existing readers keep their actual complete-set/history owner even when
+            // Admitted readers keep their actual complete-set/history owner even when
             // an independent disk-selection receipt seals equal content at new refs.
-            // First None->Some construction above alone takes the selected owner.
+            // New components and shared reconstructions take this operation's stamp;
+            // its receipt must not restamp an admitted set or its productive Native.
             set.accepted_timing = pin.accepted;
             set.reference_samples = pin.sample.samples.clone();
             set.reference_residency = pin.sample.residency.clone();
-            set.publication = self.status.publication.clone();
             resident
                 .commit_stems(&set)
                 .map_err(|error| error.to_string())?;

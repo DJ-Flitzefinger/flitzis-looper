@@ -123,6 +123,8 @@ source-read chronology before F and frozen F-to-original-E projection under the
 same declared O/A replay contract as a moving SET. Each replay span SHALL use the
 actual applied numeric pitch with the requested mode and its actual source rate.
 A settled endpoint SHALL NOT erase earlier rate, Intro/Tail or selection history.
+The same held-selection chronology contract below SHALL apply to prospective
+mode and nonstarting SET preparation.
 
 Each source lane SHALL acquire already allocated reusable snapshot storage before
 capture; exhausted storage SHALL cause local refusal without callback allocation
@@ -262,6 +264,55 @@ earlier SET's independent source trajectory or original execution frame.
 Historical stem descriptors SHALL retain copied complete-PCM identity values and
 their original publication epoch owner/value in addition to allocation markers;
 reused addresses SHALL NOT substitute another PCM or publication generation.
+
+For a settled original E, replay SHALL support a preceding selection ramp whose
+required stem readers belong to one actually held committed StemSet, including
+a ramp still active at capture F that deterministically completes by E. The
+request SHALL retain that physical history owner even when E uses FullMix and
+requires no endpoint stem reader. One pin MAY fulfill both reader roles only
+when each required role independently matches that pin's complete PCM identity,
+source, physical backings and original publication generation.
+
+The worker SHALL resolve the current and outgoing roles required by each sliced
+read plan against real retained owners before validating coverage or reading.
+An empty selected stem mask SHALL retain its owner requirement. Only roles no
+longer required by that actual sliced plan MAY be omitted; an unsuccessful
+lookup SHALL NOT erase a required role. Frozen F-to-E projection SHALL preserve
+the actual reader roles at F and their deterministic retirement at ramp completion.
+Endpoint/adoption comparisons SHALL use E's required readers independently of
+the retained history pin, while retaining all physical identity, timing, window
+and publication checks for readers that remain required. Historical pins SHALL
+retire through the existing worker-owned bounded retirement path.
+
+An already productive Native owner SHALL survive a storage-only WindowACK with
+the same actual source, accepted timing and committed publication generation
+when its current physical coverage remains valid. Its stem publication's old
+capture-window acknowledgement SHALL NOT replace the existing productive source
+and timing authority check. Fresh preparation and adoption SHALL retain their
+strict current-window gates; a changed actual held publication identity or a
+source/timing/voice revocation through the owning Native authority SHALL remain
+invalidation reasons.
+A fresh Native request on the refreshed physical view MAY reuse the already
+admitted stem publication stamp; its own fresh Native permit SHALL prove the
+current source, timing, window and acknowledgement. Initial stem publication
+and admission SHALL retain their existing strict publication-window checks.
+For already admitted Mixer-owned data, copied publication owner/expected value
+SHALL identify its original data provenance. Mutable operation/receipt status and
+intent counters SHALL NOT replace that data identity or the owning Native
+authority. Withdrawing or superseding an old selection receipt SHALL NOT revoke
+unchanged admitted PCM retained by a valid ordinary start or productive voice.
+An independent selection operation reusing an already admitted physical set
+SHALL preserve that set's original data-publication stamp. Its new receipt SHALL
+retain its own separate operation/admission authority rather than restamping the
+unchanged data and invalidating productive Native history.
+Reader reconstruction from a shared cache without an admitted Mixer StemSet
+SHALL take the new operation's admitted data-publication stamp; an unbound cache
+placeholder SHALL NOT be promoted to admitted provenance by retaining it.
+
+This bounded contract SHALL NOT admit a still-active selection transition at E,
+unheld historical readers or a second distinct StemSet without its own physical
+owner proof. Those cases SHALL remain request-local refusal with the old
+productive tuple retained and a later valid request on the same worker usable.
 Existing constant endpoint priming MAY retain deliberate pre-origin start
 semantics only after its whole required actual interval proves the same
 rate/read/selection contract without a gap. A settled source clock alone SHALL
@@ -329,3 +380,31 @@ acoustic, performer-deadline and full B5/B6 acceptance gates SHALL remain requir
 - **WHEN** the current source clock supports backwards constant reconstruction
 - **THEN** the system SHALL still prove the actual selection/context chronology before reusing constant endpoint preparation
 - **AND** it SHALL replay the genuine held past or refuse that request locally rather than repeat the current selection across the missing history
+
+#### Scenario: A held same-set ramp precedes the settled original endpoint
+- **GIVEN** a source whose required history contains a real FullMix-to-stems, stems-to-FullMix or stem-mask ramp backed by one still-held committed StemSet
+- **WHEN** a nonstarting SET or prospective mode request captures that history, with any active ramp at F completing by the original E
+- **THEN** replay SHALL preserve the actual selection weights and current/outgoing reader roles through the required past and frozen future
+- **AND** every adopted PCM sample, source phase and FIFO count SHALL match an independent direct-Native A-reset reference without changing original E or replacing the adopted owner
+- **AND** a FullMix E SHALL retain its required historical pin without creating an unused endpoint-reader mismatch
+
+#### Scenario: Slicing across ramp completion preserves only actual reader dependencies
+- **GIVEN** a retained or projected span starts during a selection ramp and extends beyond its completion
+- **WHEN** replay slices before, exactly at or after that completion
+- **THEN** every still-required role SHALL match its genuine held pin and original publication generation, including an empty selected mask
+- **AND** a role no longer read after completion SHALL NOT create a fictitious dependency on an obsolete outgoing owner
+- **AND** a missing, different or stale required owner SHALL refuse that original request without borrowing a marker or another participant's pin
+
+#### Scenario: A storage-only WindowACK retains productive stem Native ownership
+- **GIVEN** an adopted wet stem Native owner with a real source-bound stem publication
+- **WHEN** actual resident adoption changes only its storage window and preserves the source, accepted timing, publication generation and required coverage
+- **THEN** productive matching SHALL retain its exact Native/FIFO owner without automatic replacement or readiness failure
+- **AND** a new preparation or adoption SHALL still require its own fresh current-window authority, while a changed held publication identity or an owning Native source/timing revocation SHALL still refuse
+
+#### Scenario: Ordinary Play withdraws a stopped selection receipt while retaining admitted stems
+- **GIVEN** an actual stopped committed ALL selection has admitted its physical StemSet through its original receipt
+- **WHEN** an ordinary Play obtains its own resident ACK and withdraws that earlier selection observation while retaining the same admitted PCM
+- **THEN** its own fresh Native request SHALL prepare and adopt those exact stem readers at its original T/E without reviving or borrowing the earlier receipt
+- **AND** unchanged copied publication provenance SHALL remain data evidence even when the earlier operation counter advances, while changed physical/publication identities and stale owning Native authority SHALL still refuse
+- **AND** a subsequent explicit ALL confirmation reusing the same admitted set SHALL keep its original data-publication stamp and existing Native history while reaching its own effective receipt
+- **AND** shared-cache reconstruction without such an admitted set SHALL instead obtain the new operation's genuine admitted publication stamp

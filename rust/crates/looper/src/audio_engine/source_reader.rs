@@ -356,6 +356,17 @@ impl StemRenderSelection {
             })
     }
 
+    /// Match a copied historical descriptor only. The caller must still resolve and
+    /// validate its real physical owner before this selection can read any PCM.
+    pub(crate) fn matches_stem_descriptor(self, owner: usize, source_version_hash: u64) -> bool {
+        self.mode == StemMixMode::AllStems
+            && self.source_version_hash != 0
+            && self.source_version_hash == source_version_hash
+            && self
+                .complete_set_owner
+                .is_none_or(|expected| expected == owner)
+    }
+
     #[cfg(test)]
     pub(crate) fn from_state(
         mode: StemMixMode,
