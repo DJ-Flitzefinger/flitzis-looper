@@ -251,9 +251,9 @@ impl RtMixer {
                                 sequence,
                             );
                         }
-                        mixer.voice_pitch_intent[index] = render.pitch;
-                        mixer.voice_key_lock[index] = render.key_lock;
-                        mixer.publish_key_lock_status(id);
+                        // Each claimed birth owns fresh first-live-wet feedback under its
+                        // already proved actual tuple; retain its clean prepared Native/FIFO.
+                        mixer.rearm_key_lock_after_voice_start(id, index);
                         feedback[position] = captured_feedback(&ownership, id, true);
                         work.origin().mark_effective(output_frame);
                     }

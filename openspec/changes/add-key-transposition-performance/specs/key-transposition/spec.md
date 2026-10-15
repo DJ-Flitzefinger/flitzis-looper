@@ -116,7 +116,7 @@ request visibly, preserve the old effective mode, and leave worker retirement
 and later requests usable. Existing strong Native history permits SHALL remain
 required at actual adoption. A constant endpoint SHALL NOT stand in for missing
 variable source history. The bounded history contract below does not certify
-paused endpoint, acoustic, device or full B5 acceptance.
+acoustic, device or full B5 acceptance.
 
 Prospective mode preparation SHALL reuse the owning voice's genuine bounded
 source-read chronology before F and frozen F-to-original-E projection under the
@@ -133,6 +133,17 @@ voice-generation fences with the candidate through adoption even after the large
 snapshot has been recycled. That guard SHALL only narrow a fresh strong Native
 permit, never replace source/window/timing authority. Its later invalidation
 SHALL NOT by itself revoke already productive Native history.
+
+For a participant paused at F, prospective mode preparation SHALL retain the
+same original global E while projecting zero additional active source frames
+between F and E. The requested tuple SHALL replay only the genuine retained
+active chronology to that frozen endpoint. The callback SHALL retain its own
+prepared candidate until the all-participant claim at E without consuming its
+Native input/output FIFOs, source smoothing clock or filter history during pause.
+Pause or Resume before E SHALL fence the original pending request; Resume after
+successful adoption SHALL retain the adopted Native/FIFO owner and continue from
+the frozen source position. Armed readiness while paused SHALL remain distinct
+from that voice's first actual successful Native output after Resume.
 
 #### Scenario: Complete source changes Lock in either direction with nonzero pitch
 - **GIVEN** a playing complete source with positive or negative numeric transposition and actual r=1 or a nonunit rate
@@ -174,6 +185,30 @@ SHALL NOT by itself revoke already productive Native history.
 - **WHEN** another prospective mode request arrives or unavailable history returns
 - **THEN** no callback SHALL allocate replacement snapshot storage, overwrite an owning request or destroy a filled snapshot
 - **AND** bounded worker retirement SHALL return that same reusable owner and leave a later request functional
+
+#### Scenario: A paused participant changes nonzero-pitch mode without invented reads
+- **GIVEN** a publicly started voice with positive or negative applied pitch is paused with its own source position, active clock and filter history retained
+- **WHEN** its addressed ON or OFF request is prepared while global output advances from F to the original E
+- **THEN** the actual frozen endpoint SHALL be claimed at E through the same own mode/window transaction, with no START, STOP, retrigger or source-frame advance
+- **AND** its prepared Native/FIFO candidate SHALL survive intervening paused callbacks while other running voices continue independently
+- **AND** every sample after Resume, source phase and FIFO count SHALL match an independent direct-Native reference with the same declared A reset and zero paused active-frame projection
+- **AND** successful paused ON SHALL report armed readiness while first live wet success or failure remains owned by that voice after Resume
+
+#### Scenario: Paused request cancellation and mixed global targets keep independent owners
+- **GIVEN** a global request addresses inherited running and paused pads while explicit ON and OFF peers retain their overrides
+- **WHEN** one original paused request is superseded, stopped or resumed before its original E, or bounded retirement is temporarily unavailable
+- **THEN** that target SHALL preserve its previous effective tuple and original request owner until its own safe completion or visible refusal
+- **AND** another inherited target SHALL remain independently eligible for its own E and acknowledgement
+- **AND** a later paused request on the same worker SHALL remain usable without borrowing another target's receipt or refreshing the refused E
+
+#### Scenario: A prepared ordinary birth owns its first live wet acknowledgement
+- **GIVEN** a tracked zero-pitch KEY LOCK ON voice previously emitted confirmed wet output and was stopped
+- **WHEN** a new addressed or global ordinary start adopts its own prepared Native/FIFO at its original E
+- **THEN** the new voice SHALL rearm the existing first-live-wet guard independently of the predecessor's completed readiness
+- **AND** preparation alone SHALL NOT report successful live wet output for that new voice
+- **AND** failure before its first actual output SHALL retain the declared dry source trajectory and report its own effective OFF/error without rewriting inherited or explicit intent
+- **AND** successful first live output SHALL retain the exact adopted Native/FIFO owner, original source phase and acknowledgement
+- **AND** this birth guard SHALL NOT adopt a later requested mode or borrow that later mode's completion
 
 #### Scenario: Saturated retirement retains the original finite mode owner
 - **GIVEN** an adopting resident mode transaction and zero available retirement queue or backlog slots

@@ -609,4 +609,6 @@ mod source_feed_history_tests {
         assert_eq!(status.request_id, fresh);
         assert!(status.ready && status.effective);
     }
+
+    include!("key_lock_paused_history_tests.rs");
 }

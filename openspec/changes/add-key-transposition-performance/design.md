@@ -105,8 +105,19 @@ A small SOURCE/voice guard travels with the fresh Native permit through strict
 adoption; recycling the large snapshot cannot refresh or revoke that guard.
 The extra guard does not participate in productive-history or endpoint-data
 observations. All-voice claim and the resident transaction's same own final ACK
-remain authoritative. Explicit refusal still applies to paused endpoints, active
-selection transitions and unheld historical contexts.
+remain authoritative. Explicit refusal still applies to active selection
+transitions and unheld historical contexts.
+
+For a paused participant, global E remains F+4096 while the frozen future contains
+zero additional active source frames. Preparation replays genuine past only to
+the retained endpoint. Paused polling services bounded recyclers without removing
+the held candidate, and the same all-participant claim checks the captured paused
+state at E. Resume before E cancels through existing lane and SOURCE fences;
+Resume after E keeps the adopted Native/FIFO and retained source/filter history.
+The strong source permit uses the existing current cell's prepared-source epoch,
+or a freshly admitted retained voice's birth lifetime, independently of the lane's
+request epoch. No authority checks are removed. Adoption clears wet-success flags;
+paused ON remains armed until that voice actually renders after Resume.
 
 Eight public Intro/Tail cases at +24/-23, ON/OFF, compare every 4,097 adopted PCM
 samples against an independent scalar/direct-C-ABI A-reset oracle, including

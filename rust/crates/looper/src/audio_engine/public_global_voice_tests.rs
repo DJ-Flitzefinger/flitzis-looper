@@ -5,6 +5,9 @@
 #[path = "public_shared_restore_global_tests.rs"]
 mod public_shared_restore_global_tests;
 
+#[path = "keylock_paused_controller_tests.rs"]
+mod keylock_paused_controller_tests;
+
 use super::*;
 use crate::audio_engine::dsp::{DspNodeSlot, DspParameterId, DspParameterSlot, PerPadDspChain};
 use crate::audio_engine::mixer::prepared_native_mixer_tests::finite_lifecycle_tests::{
@@ -399,18 +402,116 @@ impl GlobalVoices {
             (72, 71, true, [-9.0, -1.0, 3.0]),
             (215, 193, false, [-3.0, -5.0, 1.0]),
         ] {
+            let original_frame = result.harness.frame;
             result.harness.target("start", id);
+            let original = Python::attach(|py| {
+                result
+                    .harness
+                    .probe
+                    .call_method1(py, "original_start", (id,))
+                    .unwrap()
+                    .extract::<PyRef<crate::audio_engine::pad_start::CapturedPadStart>>(py)
+                    .unwrap()
+                    .clone()
+            });
+            let timestamp = original.received_timestamp();
             wait_until(Duration::from_secs(10), || {
                 result.harness.drain();
-                result
+                assert_eq!(result.harness.frame, original_frame);
+                assert_ne!(
+                    original.state(),
+                    "rejected",
+                    "pad {id} original START: {:?}, T={:?}, E={:?}",
+                    original.reason(),
+                    original.original_frame(),
+                    original.execution_frame()
+                );
+                if original.state() == "applied" {
+                    return true;
+                }
+                let runtime = result
                     .harness
                     .callback
                     .mixer
-                    .voices
-                    .iter()
-                    .any(|voice| voice.is_playing_sample(id))
+                    .pitch_runtime
+                    .as_mut()
+                    .unwrap();
+                runtime.poll();
+                runtime.has_ready_action(original.sequence())
             });
+            assert_eq!(original.original_frame(), Some(original_frame));
+            let execution = original.execution_frame().unwrap();
+            assert_eq!(execution, original_frame + if enabled { 8192 } else { 0 });
+            if execution > original_frame {
+                assert!(
+                    !result
+                        .harness
+                        .callback
+                        .mixer
+                        .voices
+                        .iter()
+                        .any(|voice| voice.is_playing_sample(id)),
+                    "pad {id} became active before its original E"
+                );
+                assert_eq!(
+                    result.harness.callback.scheduler.peek_next_target_frame(),
+                    Some(execution)
+                );
+                // Existing owners consume the real preparation lead through their
+                // complete PCM/EQ/clock oracles. The new owner has no samples yet.
+                result.render((execution - original_frame) as usize);
+            }
+            let callback = result.harness.callback.as_mut();
+            render_scheduled_audio(
+                &mut callback.mixer,
+                &mut callback.scheduler,
+                &mut [],
+                &mut [0.0; NUM_SAMPLES],
+                execution,
+                2,
+                &mut callback.transport,
+                &mut callback.feedback,
+                &mut callback.retirement,
+            );
+            result.harness.call0("poll");
+            assert_eq!(original.original_frame(), Some(original_frame));
+            assert_eq!(original.effective_frame(), Some(execution));
+            assert_eq!(original.received_timestamp(), timestamp);
+            let actual = voice(&result.harness, id);
+            assert_eq!(actual.source_playback.position().frame, START);
+            assert_eq!(actual.source_playback.position().fraction, 0.0);
             let mut expected = ExpectedVoice::new(&result.harness, id, enabled);
+            if enabled {
+                // Normal loop START has a periodic physical past at its original
+                // endpoint. Build that past from original PCM and declared .73 rate;
+                // 100 output periods end at exactly 73 source-loop periods.
+                let mut history_clock = AlgebraicClock::physical(START, END, RATIO);
+                history_clock.advance((END - START) * 100 - HISTORY);
+                expected.raw = RawChronology::new(RATIO, true);
+                expected
+                    .raw
+                    .render(&expected.source, &mut history_clock, HISTORY);
+                let (frame, fraction, explicit) = history_clock.physical_position(0);
+                assert_eq!(frame, START);
+                assert!(fraction.abs() < 1e-8 && !explicit);
+                expected.warm = 0;
+                expected.raw_fed = HISTORY;
+                expected.candidate_needed = false;
+                expected.adoptions = 1;
+                let actual = voice(&result.harness, id);
+                assert_eq!(
+                    actual.stretch.adopted_request_id(),
+                    Some(original.sequence())
+                );
+                assert_eq!(
+                    actual
+                        .stretch
+                        .productive_history()
+                        .unwrap()
+                        .fed_output_frames,
+                    HISTORY as u64
+                );
+            }
             // Actual typed parameter queue is fixture setup; public Mode/Transport routes
             // remain connected to the real AudioEngine throughout both histories.
             Python::attach(|py| {

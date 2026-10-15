@@ -53,6 +53,18 @@ class _ControllerFixture:
     def start(self, sample_id):
         self.transport.playback.trigger_pad_keep_others(sample_id)
 
+    def stop(self, sample_id):
+        self.transport.playback.stop_pad(sample_id)
+
+    def original_start(self, sample_id):
+        starts = [
+            pending.start
+            for pending in self.transport.residency._captured_starts.values()
+            if pending.start.diagnostic_slot == sample_id
+        ]
+        assert len(starts) == 1, (sample_id, starts)
+        return starts[0]
+
     def pause(self, sample_id):
         self.transport.playback.pause_pad(sample_id)
 
@@ -61,7 +73,17 @@ class _ControllerFixture:
 
     def poll(self):
         while (message := self.audio.receive_msg()) is not None:
-            if isinstance(message, self._messages.SampleStarted):
+            kind = message.feedback_kind()
+            if kind in {"started", "stopped"}:
+                sample_id = self.audio._resolve_pad_feedback(message)
+                if sample_id is not None:
+                    handler = (
+                        self.transport.playback.handle_sample_started_message
+                        if kind == "started"
+                        else self.transport.playback.handle_sample_stopped_message
+                    )
+                    handler(message, sample_id=sample_id)
+            elif isinstance(message, self._messages.SampleStarted):
                 self.transport.playback.handle_sample_started_message(message)
             elif isinstance(message, self._messages.SampleStopped):
                 self.transport.playback.handle_sample_stopped_message(message)

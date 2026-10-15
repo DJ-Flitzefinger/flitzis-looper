@@ -393,11 +393,11 @@ impl RtMixer {
                             sequence,
                         );
                     }
-                    // This attack inherits the actual tuple. It never changes the bank image
-                    // or rearms a later requested tuple over the candidate it just adopted.
-                    mixer.voice_pitch_intent[index] = render.pitch;
-                    mixer.voice_key_lock[index] = render.key_lock;
-                    mixer.publish_key_lock_status(id);
+                    // The complete claim proved the frozen actual tuple. Rearm only this
+                    // birth's existing first-live-wet guard, without adopting later intent.
+                    // A clean prepared owner remains in place: reserve_wet_mode cannot
+                    // exchange or reset it merely to rearm feedback for the new voice.
+                    mixer.rearm_key_lock_after_voice_start(id, index);
                     feedback[feedback_count] =
                         Some((captured_feedback(&ownership, id, true), id, true));
                     feedback_count += 1;

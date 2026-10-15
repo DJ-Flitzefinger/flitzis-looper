@@ -32,6 +32,7 @@ pub(crate) struct ProspectiveSourceHistory<'a> {
     pub(crate) voice_lifetime: &'a Arc<AtomicU64>,
     pub(crate) voice_generation: u64,
     pub(crate) execution_frame: u64,
+    pub(crate) paused: bool,
 }
 
 /// One reusable owner per source lane, allocated before rendering. Only the worker clears a
@@ -172,15 +173,7 @@ impl KeyLockPreparationLane {
     /// Also polled for inactive/paused voices by the callback owner. A worker result published
     /// immediately after cancellation is then retired without requiring another source render.
     pub(crate) fn retire_prepared(&mut self) {
-        self.flush_pending_request();
-        self.reclaim_source_history();
-        if let Some(pending) = self.pending_source_return.take()
-            && let Err(PushError::Full(pending)) = self.source_recycle.push(pending)
-        {
-            self.pending_source_return = Some(pending);
-            return;
-        }
-        if self.source_recycle.slots() == 0 {
+        if !self.poll_source_recycling() {
             return;
         }
         if let Ok(state) = self.source_ready.pop() {
@@ -192,6 +185,19 @@ impl KeyLockPreparationLane {
                 self.pending_source_return = Some(state);
             }
         }
+    }
+
+    /// Service bounded returned work without consuming a held prospective candidate.
+    pub(crate) fn poll_source_recycling(&mut self) -> bool {
+        self.flush_pending_request();
+        self.reclaim_source_history();
+        if let Some(pending) = self.pending_source_return.take()
+            && let Err(PushError::Full(pending)) = self.source_recycle.push(pending)
+        {
+            self.pending_source_return = Some(pending);
+            return false;
+        }
+        self.source_recycle.slots() != 0
     }
 
     fn flush_pending_request(&mut self) {
@@ -315,6 +321,7 @@ impl KeyLockPreparationLane {
         let Some(delta) = context.execution_frame.checked_sub(capture_frame) else {
             return false;
         };
+        let active_delta = if context.paused { 0 } else { delta };
         if !permit.current(feed.sample, feed.sample_rate_hz)
             || !permit.matches_projection(feed.accepted)
             || feed.plan.transition.is_active()
@@ -327,7 +334,7 @@ impl KeyLockPreparationLane {
             .take()
             .expect("preflighted reusable source-history owner");
         let request = if context.history.capture_into(&mut history.snapshot) {
-            history.future = Some((*feed.playback, feed.plan, delta));
+            history.future = Some((*feed.playback, feed.plan, active_delta));
             history
                 .snapshot
                 .guard(context.voice_lifetime, context.voice_generation)
@@ -337,7 +344,7 @@ impl KeyLockPreparationLane {
                         stems: feed.stems.cloned(),
                         accepted: feed.accepted,
                         sample_rate_hz: feed.sample_rate_hz,
-                        paused: false,
+                        paused: context.paused,
                         playback: *feed.playback,
                         plan: feed.plan,
                     };
@@ -1015,6 +1022,7 @@ mod tests {
             voice_lifetime: lifetime,
             voice_generation: 1,
             execution_frame: 100 + delta,
+            paused: false,
         }
     }
 
@@ -1279,6 +1287,44 @@ mod tests {
             0
         );
         assert!(!callback.source_work_finished(1));
+    }
+
+    #[test]
+    fn paused_history_capture_keeps_original_global_e_without_projecting_active_frames() {
+        let (mut callback, mut worker) = source_history_lanes(1);
+        let mut request = fixture(1, 48_000, 1.37, ExplicitSeekMode::Normal, None);
+        request.playback.set_target(0.73);
+        request
+            .playback
+            .chunk(super::super::stretch_processor::DEFAULT_BLOCK_SAMPLES);
+        let feed = prospective_feed(&request);
+        let history = SourceFeedHistory::new();
+        let lifetime = Arc::new(AtomicU64::new(1));
+        let mut context = history_context(&history, &lifetime, 8192);
+        context.paused = true;
+        assert!(callback.request_source_with_history(&feed, context, 0, 1));
+        let SourcePreparationRequest::WithHistory {
+            request: Some(queued),
+            history: captured,
+            ..
+        } = worker.requests.peek().unwrap()
+        else {
+            panic!("the original paused request owns its captured work");
+        };
+        assert_eq!(queued.target_output_frame, 8292);
+        assert!(queued.playback.matches_exact(feed.playback));
+        assert!(queued.plan.matches_exact(feed.plan));
+        let (future_playback, future_plan, active_delta) = captured.future.as_ref().unwrap();
+        assert_eq!(*active_delta, 0);
+        assert!(future_playback.matches_exact(feed.playback));
+        assert!(future_plan.matches_exact(feed.plan));
+
+        // An empty paused past cannot borrow the global waiting interval as source history.
+        assert!(worker.prepare_source().unwrap());
+        assert!(callback.source_work_finished(1));
+        assert!(callback.prepared_state().is_none());
+        assert!(callback.source_history_work_available());
+        assert!(!callback.worker_failed());
     }
 
     #[test]

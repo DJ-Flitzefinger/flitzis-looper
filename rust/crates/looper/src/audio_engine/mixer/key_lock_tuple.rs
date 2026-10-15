@@ -27,6 +27,7 @@ mod tests {
 #[derive(Clone, Copy)]
 struct TupleVoice {
     generation: u64,
+    paused: bool,
     epoch: u64,
     request_id: u64,
     pitch: PitchIntent,
@@ -191,9 +192,9 @@ impl RtMixer {
             let Some(snapshot) = self.capture_pitch_voice_snapshot(index) else {
                 return false;
             };
-            // This lane replays genuine past and the frozen F..E projection. Paused or
-            // active selection transitions still need a separately admitted endpoint.
-            if snapshot.paused || snapshot.plan.transition.is_active() {
+            // Pause freezes active source time; the same global E still owns adoption.
+            // Active selection transitions need a separately admitted endpoint.
+            if snapshot.plan.transition.is_active() {
                 return false;
             }
             // Reserve reusable callback storage before changing this voice's DSP request.
@@ -205,6 +206,7 @@ impl RtMixer {
             self.voices[index].stretch.hold_prospective_tuple();
             pending.voices[index] = Some(TupleVoice {
                 generation: self.voices[index].generation,
+                paused: snapshot.paused,
                 epoch: self.voices[index].stretch.preparation_epoch(),
                 request_id: 0,
                 pitch,
@@ -215,11 +217,16 @@ impl RtMixer {
                 .as_ref()
                 .is_some_and(|bank| bank.same_source(&snapshot.sample))
             {
+                let Some(slot) = self.input_runtime_ownership.slot_snapshot(id) else {
+                    return false;
+                };
                 NativeHistoryContext {
                     id,
                     ownership: &self.input_runtime_ownership,
                     acknowledgements: &self.current_timing_acknowledgements,
-                    preparation_epoch: voice.stretch.source_epoch_owner(),
+                    // Match productive rendering's actual source cell authority. The lane
+                    // epoch and genuine SOURCE guard separately fence pending mode work.
+                    preparation_epoch: &self.prepared_source_epochs[slot.cell().index()],
                 }
                 .capture(
                     &snapshot.sample,
@@ -232,7 +239,9 @@ impl RtMixer {
                         admission,
                         lifetime: &voice.history_lifetime,
                         generation: voice.generation,
-                        preparation_epoch: voice.stretch.source_epoch_owner(),
+                        // A retained source's admitted birth remains authoritative across
+                        // Pause/Resume; pending cancellation still uses its own lane epoch.
+                        preparation_epoch: &voice.history_lifetime,
                         accepted: snapshot.accepted,
                     }
                     .capture(&snapshot.sample, snapshot.sample_rate_hz)
@@ -256,12 +265,14 @@ impl RtMixer {
                     voice_lifetime: &voice.history_lifetime,
                     voice_generation: voice.generation,
                     execution_frame: execution,
+                    paused: snapshot.paused,
                 },
             ) else {
                 return false;
             };
             pending.voices[index] = Some(TupleVoice {
                 generation: self.voices[index].generation,
+                paused: snapshot.paused,
                 epoch,
                 request_id,
                 pitch,
@@ -291,7 +302,7 @@ impl RtMixer {
                 continue;
             };
             if !participates
-                || voice.paused
+                || voice.paused != expected.paused
                 || voice.generation != expected.generation
                 || self.effective_voice_tuple(index) != (expected.pitch, expected.previous_mode)
             {

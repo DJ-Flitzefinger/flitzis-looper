@@ -29,6 +29,7 @@ struct Harness {
     mono: Vec<f32>,
     frame: u64,
     active_frames: u64,
+    last_start: Option<crate::audio_engine::pad_start::CapturedPadStart>,
 }
 
 impl Harness {
@@ -44,6 +45,7 @@ impl Harness {
         let source = directory.path().join("control.wav");
         let mono = wav(&source, RATE);
         let mut engine = AudioEngine::new().unwrap();
+        engine.test_output_format = Some((RATE, 2));
         let mut callback = Box::new(Callback::new(&engine, RATE));
         let (producer, mut consumer) = rtrb::RingBuffer::new(64);
         let producer = Arc::new(Mutex::new(producer));
@@ -129,6 +131,7 @@ impl Harness {
             mono,
             frame: 0,
             active_frames: 0,
+            last_start: None,
         };
         harness.call0("initialize");
         harness.settle(ids, initial, false);
@@ -393,22 +396,91 @@ impl Harness {
     fn start(&mut self) -> u64 {
         Python::attach(|py| self.engine.borrow_mut(py).set_speed(RATIO).unwrap());
         self.drain();
+        let capture_frame = self.frame;
+        let active_frames = self.active_frames;
+        let source = self.feedback_identity();
+        let prepared_on = self.callback.mixer.key_lock_for_measurement(0);
         self.target("start", 0);
+        let original = Python::attach(|py| {
+            self.probe
+                .call_method1(py, "original_start", (0,))
+                .unwrap()
+                .extract::<PyRef<crate::audio_engine::pad_start::CapturedPadStart>>(py)
+                .unwrap()
+                .clone()
+        });
+        let timestamp = original.received_timestamp();
         wait_until(Duration::from_secs(10), || {
             self.drain();
-            self.callback
-                .mixer
-                .voices
-                .iter()
-                .any(|voice| voice.is_playing_sample(0))
+            assert_eq!(self.frame, capture_frame);
+            assert_ne!(
+                original.state(),
+                "rejected",
+                "original START: {:?}, T={:?}, E={:?}",
+                original.reason(),
+                original.original_frame(),
+                original.execution_frame()
+            );
+            if original.state() == "applied" {
+                return true;
+            }
+            let runtime = self.callback.mixer.pitch_runtime.as_mut().unwrap();
+            runtime.poll();
+            runtime.has_ready_action(original.sequence())
         });
-        self.callback
+        assert_eq!(original.original_frame(), Some(capture_frame));
+        let execution = original.execution_frame().unwrap();
+        if execution > capture_frame {
+            assert_eq!(execution, capture_frame + 8192);
+            assert_eq!(
+                self.callback.scheduler.peek_next_target_frame(),
+                Some(execution)
+            );
+        }
+        // Prepared ordinary START now owns Native history before E. This fixture
+        // consumes its genuine silent lead, never the former live-ON dry warming
+        // samples. First-wet tests can act at E before any active source frame.
+        while self.frame < execution {
+            assert!(!self.callback.mixer.voices.iter().any(|voice| voice.active));
+            let frames = (execution - self.frame).min(257) as usize;
+            assert!(self.render(frames, false).iter().all(|value| *value == 0.0));
+            assert_eq!(original.effective_frame(), None);
+        }
+        self.render(0, false);
+        assert_eq!(original.effective_frame(), Some(execution));
+        assert_eq!(original.original_frame(), Some(capture_frame));
+        assert_eq!(original.execution_frame(), Some(execution));
+        assert_eq!(original.received_timestamp(), timestamp);
+        assert_eq!(self.active_frames, active_frames);
+        assert_eq!(self.feedback_identity()[..2], source[..2]);
+        let voice = self
+            .callback
             .mixer
             .voices
             .iter()
             .find(|voice| voice.is_playing_sample(0))
-            .unwrap()
-            .generation
+            .unwrap();
+        assert_eq!(voice.source_playback.position().frame, START);
+        assert_eq!(voice.source_playback.position().fraction, 0.0);
+        if prepared_on {
+            assert_eq!(
+                voice.stretch.adopted_request_id(),
+                Some(original.sequence())
+            );
+            assert_eq!(
+                voice
+                    .stretch
+                    .productive_history()
+                    .unwrap()
+                    .fed_output_frames,
+                4096
+            );
+            assert!(!voice.stretch.wet_output_ready());
+            assert!(!voice.stretch.wet_current_source_output_ready());
+        }
+        let generation = voice.generation;
+        self.last_start = Some(original);
+        generation
     }
 }
 
@@ -480,8 +552,7 @@ fn actual_python_controller_off_during_native_only_waiting_cannot_later_become_w
         let mut harness = Harness::new(true, &[0]);
         let generation = harness.start();
         let started_identity = harness.feedback_identity();
-        let first = harness.render(128, true);
-        harness.assert_dry(&first, 0);
+        harness.assert_phase(generation);
         Python::attach(|py| {
             harness
                 .probe
@@ -493,6 +564,8 @@ fn actual_python_controller_off_during_native_only_waiting_cannot_later_become_w
         } else {
             harness.local(0, false);
         }
+        let off_ticket = harness.ticket(0);
+        let off_request = harness.mode_request(&off_ticket);
         // Dry output is not confirmation that the native ON preparation retired.
         Python::attach(|py| {
             harness
@@ -500,7 +573,18 @@ fn actual_python_controller_off_during_native_only_waiting_cannot_later_become_w
                 .call_method1(py, "assert_pending", (0, false))
                 .unwrap();
         });
-        harness.settle(&[0], false, true);
+        // OFF owns an actual callback ACK at the same E before any wet sample.
+        // Rendering to discover OFF readiness would already consume the prepared ON.
+        let frame = harness.frame;
+        wait_until(Duration::from_secs(10), || {
+            harness.drain();
+            assert_eq!(harness.frame, frame);
+            assert_eq!(harness.active_frames, 0);
+            Python::attach(|py| off_ticket.borrow(py).publication_status() == "accepted")
+                && harness.settled(0, false)
+        });
+        assert_eq!(harness.feedback_identity()[3], off_request);
+        harness.assert_phase(generation);
         harness.assert_origin(0, if global_action { None } else { Some(false) });
         for frames in [31, 1024, 1, 777, 4096] {
             let before = harness.active_frames;
@@ -533,14 +617,23 @@ fn actual_python_controller_stopped_armed_on_start_preserves_inherited_intent_on
             .clone();
         let generation = harness.start();
         let started_identity = harness.feedback_identity();
-        assert_eq!(&started_identity[..3], &armed_identity[..3]);
-        assert!(
-            started_identity[3] > armed_identity[3],
-            "public start did not receive its own real source-bound Window ACK"
+        // An unchanged current Window/MODE ACK is reused. The fresh captured START
+        // sequence and its exact Native request, timestamp and E own this birth.
+        assert_eq!(started_identity, armed_identity);
+        let original = harness.last_start.as_ref().unwrap();
+        assert_eq!(original.effective_frame(), Some(harness.frame));
+        assert_eq!(
+            harness
+                .callback
+                .mixer
+                .voices
+                .iter()
+                .find(|voice| voice.is_playing_sample(0))
+                .unwrap()
+                .stretch
+                .adopted_request_id(),
+            Some(original.sequence())
         );
-        harness.assert_phase(generation);
-        let first = harness.render(128, true);
-        harness.assert_dry(&first, 0);
         harness.assert_phase(generation);
         Python::attach(|py| {
             harness
@@ -549,8 +642,9 @@ fn actual_python_controller_stopped_armed_on_start_preserves_inherited_intent_on
                 .unwrap();
         });
         if let Some(exhaust) = failure {
-            // The actual stopped arming succeeded. The newly started voice has
-            // not rendered any wet frames and must retain its first-wet guard.
+            // The actual stopped arming and prepared START both succeeded. Its
+            // adopted Native/FIFO has emitted no samples; this own first-wet guard
+            // must still reject failure before replacing the dry source baseline.
             let voice = harness
                 .callback
                 .mixer
@@ -589,11 +683,44 @@ fn actual_python_controller_stopped_armed_on_start_preserves_inherited_intent_on
             });
             assert!(!harness.callback.mixer.key_lock_for_measurement(0));
         } else {
-            wait_until(Duration::from_secs(10), || {
-                harness.render(128, true);
-                harness.assert_phase(generation);
-                harness.native_ready(true)
-            });
+            let voice = harness
+                .callback
+                .mixer
+                .voices
+                .iter()
+                .find(|voice| voice.is_playing_sample(0))
+                .unwrap();
+            let native = voice.stretch.native_state_address();
+            let native_request = voice.stretch.adopted_request_id();
+            let fed = voice
+                .stretch
+                .productive_history()
+                .unwrap()
+                .fed_output_frames;
+            harness.render(1, true);
+            harness.assert_phase(generation);
+            let voice = harness
+                .callback
+                .mixer
+                .voices
+                .iter()
+                .find(|voice| voice.is_playing_sample(0))
+                .unwrap();
+            assert_eq!(voice.stretch.native_state_address(), native);
+            assert_eq!(voice.stretch.adopted_request_id(), native_request);
+            assert_eq!(
+                voice
+                    .stretch
+                    .productive_history()
+                    .unwrap()
+                    .fed_output_frames,
+                fed + 1
+            );
+            assert!(voice.stretch.wet_current_source_output_ready());
+            assert!(
+                harness.native_ready(true),
+                "prepared ON did not emit own wet output on its first sample"
+            );
             let before = harness.active_frames;
             let wet = harness.render(4096, true);
             let difference: f32 = wet
@@ -617,6 +744,170 @@ fn actual_python_controller_stopped_armed_on_start_preserves_inherited_intent_on
             harness.feedback_identity(),
             started_identity,
             "first-wet settlement changed source/window/request ownership"
+        );
+        assert!(Arc::ptr_eq(
+            &source_backing,
+            &harness.callback.mixer.bank_for_measurement()[0]
+                .as_ref()
+                .unwrap()
+                .samples
+        ));
+        harness.assert_origin(0, None);
+    }
+}
+
+#[test]
+fn actual_python_controller_confirmed_wet_stop_fresh_start_keeps_own_first_wet_guard() {
+    for failure in [Some(false), Some(true), None] {
+        let mut harness = Harness::new(true, &[0]);
+        let first_generation = harness.start();
+        let first_start = harness.last_start.as_ref().unwrap().clone();
+        harness.render(1536, true);
+        harness.assert_phase(first_generation);
+        assert!(harness.native_ready(true));
+        let mode_owner = harness.feedback_identity();
+        Python::attach(|py| {
+            harness
+                .probe
+                .call_method1(py, "assert_native_wet", (0, mode_owner[3]))
+                .unwrap();
+        });
+        let source_backing = harness.callback.mixer.bank_for_measurement()[0]
+            .as_ref()
+            .unwrap()
+            .samples
+            .clone();
+
+        // This is a public STOP of an already confirmed wet owner. The subsequent
+        // birth must rearm its guard even though the stopped MODE remains ON.
+        let stop_frame = harness.frame;
+        harness.target("stop", 0);
+        wait_until(Duration::from_secs(10), || {
+            harness.drain();
+            assert_eq!(harness.frame, stop_frame);
+            !harness
+                .callback
+                .mixer
+                .voices
+                .iter()
+                .any(|voice| voice.active)
+        });
+        harness.target("assert_stopped_armed", 0);
+        assert_eq!(harness.feedback_identity(), mode_owner);
+        // The independent source oracle starts a new active-time coordinate only
+        // after that real STOP; no output/native clock or PCM state is adjusted.
+        harness.active_frames = 0;
+        let generation = harness.start();
+        let original = harness.last_start.as_ref().unwrap().clone();
+        assert_ne!(generation, first_generation);
+        assert_ne!(original.sequence(), first_start.sequence());
+        assert!(original.received_timestamp() > first_start.received_timestamp());
+        assert_eq!(original.original_frame(), Some(stop_frame));
+        assert_eq!(original.effective_frame(), Some(harness.frame));
+        assert_eq!(original.execution_frame(), Some(harness.frame));
+        assert_eq!(harness.feedback_identity(), mode_owner);
+        assert_eq!(harness.active_frames, 0);
+        harness.assert_phase(generation);
+        Python::attach(|py| {
+            harness
+                .probe
+                .call_method1(py, "assert_live_waiting", (0, mode_owner[3]))
+                .unwrap();
+        });
+        let voice = harness
+            .callback
+            .mixer
+            .voices
+            .iter()
+            .find(|voice| voice.is_playing_sample(0))
+            .unwrap();
+        assert_eq!(
+            voice.stretch.adopted_request_id(),
+            Some(original.sequence())
+        );
+        assert_eq!(
+            voice
+                .stretch
+                .productive_history()
+                .unwrap()
+                .fed_output_frames,
+            4096
+        );
+        assert!(!voice.stretch.wet_render_ready());
+        assert!(!voice.stretch.wet_output_ready());
+        let native = voice.stretch.native_state_address();
+        let fifo = voice.stretch.pending_fifo_frames();
+
+        if let Some(exhaust) = failure {
+            let voice = harness
+                .callback
+                .mixer
+                .voices
+                .iter_mut()
+                .find(|voice| voice.is_playing_sample(0))
+                .unwrap();
+            if exhaust {
+                voice.stretch.exhaust_warmed_reserve();
+            } else {
+                voice.stretch.fail_preparation_worker();
+            }
+            for frames in [1, 31, 777, 1024] {
+                let before = harness.active_frames;
+                let output = harness.render(frames, true);
+                harness.assert_dry(&output, before);
+                harness.assert_phase(generation);
+            }
+            harness.assert_failure(mode_owner[3], false);
+            assert!(!harness.callback.mixer.key_lock_for_measurement(0));
+        } else {
+            harness.render(1, true);
+            harness.assert_phase(generation);
+            let voice = harness
+                .callback
+                .mixer
+                .voices
+                .iter()
+                .find(|voice| voice.is_playing_sample(0))
+                .unwrap();
+            assert_eq!(voice.stretch.native_state_address(), native);
+            assert_eq!(
+                voice.stretch.adopted_request_id(),
+                Some(original.sequence())
+            );
+            assert_eq!(
+                voice.stretch.pending_fifo_frames(),
+                ((fifo.0 + 1) % 512, 511 - (fifo.0 + 1) % 512)
+            );
+            assert_eq!(
+                voice
+                    .stretch
+                    .productive_history()
+                    .unwrap()
+                    .fed_output_frames,
+                4097
+            );
+            assert!(voice.stretch.wet_current_source_output_ready());
+            assert!(harness.native_ready(true));
+            let before = harness.active_frames;
+            let wet = harness.render(4096, true);
+            let difference: f32 = wet
+                .iter()
+                .zip(harness.dry_oracle(before, 4096))
+                .map(|(actual, dry)| (actual - dry).abs())
+                .sum();
+            assert!(difference > 10.0 && wet.iter().map(|value| value.abs()).sum::<f32>() > 1.0);
+            harness.assert_phase(generation);
+            Python::attach(|py| {
+                harness
+                    .probe
+                    .call_method1(py, "assert_native_wet", (0, mode_owner[3]))
+                    .unwrap();
+            });
+        }
+        assert_eq!(
+            harness.feedback_identity(),
+            mode_owner,
+            "fresh birth borrowed or replaced MODE/source ownership"
         );
         assert!(Arc::ptr_eq(
             &source_backing,

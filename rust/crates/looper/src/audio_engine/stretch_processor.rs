@@ -380,6 +380,11 @@ impl StretchProcessor {
         self.preparation.source_work_finished(self.request_id)
     }
 
+    #[cfg(test)]
+    pub(crate) fn source_preparation_pending(&self) -> bool {
+        self.request_pending
+    }
+
     pub(crate) fn adopt_prospective_tuple_claimed(
         &mut self,
         feed: &ProductiveSourceFeed<'_>,
@@ -407,7 +412,11 @@ impl StretchProcessor {
     }
 
     pub(crate) fn retire_prepared(&mut self) {
-        self.preparation.retire_prepared();
+        if self.prospective_request.is_some() {
+            self.preparation.poll_source_recycling();
+        } else {
+            self.preparation.retire_prepared();
+        }
     }
 
     pub(crate) fn chunk_until_prepared_adoption(
@@ -991,6 +1000,7 @@ mod tests {
                         voice_lifetime: &lifetime,
                         voice_generation: 2,
                         execution_frame: 8292,
+                        paused: false,
                     },
                 )
                 .is_none()
@@ -1013,12 +1023,129 @@ mod tests {
                     voice_lifetime: &lifetime,
                     voice_generation: 1,
                     execution_frame: 8292,
+                    paused: false,
                 },
             ),
             Some((epoch, 1))
         );
         assert!(processor.request_pending);
         assert_eq!(processor.prospective_request, Some(1));
+    }
+
+    #[test]
+    fn paused_prospective_candidate_survives_idle_poll_and_cancel_allows_fresh_work() {
+        use super::super::prepared_native_history::tests::fixture;
+        use super::super::source_feed_history::{SourceFeedContext, SourceFeedHistory};
+        use super::super::source_reader::ExplicitSeekMode;
+        use std::sync::{Arc, atomic::AtomicU64};
+        use std::time::{Duration, Instant};
+
+        let mut processor = StretchProcessor::new(1);
+        let mut source = fixture(1, 48_000, 1.0, ExplicitSeekMode::Normal, None);
+        let mut history = SourceFeedHistory::new();
+        const ACTIVE_FRAMES: usize = 32_769;
+        history.record_success(
+            source.playback,
+            source.plan,
+            SourceFeedContext::new(
+                source.binding,
+                source
+                    .plan
+                    .required_read_sets(StemReadSets::new(source.stems.as_ref(), None)),
+            ),
+            ACTIVE_FRAMES,
+        );
+        source.playback.advance(ACTIVE_FRAMES);
+        source.playback.chunk(DEFAULT_BLOCK_SAMPLES);
+        let position = source.playback.position();
+        source.plan.frame_pos = position.frame;
+        source.plan.seek_mode = position.seek_mode;
+        let feed = ProductiveSourceFeed {
+            pitch_intent: PitchIntent::new(3, 0).unwrap(),
+            key_lock: false,
+            sample: &source.sample,
+            stems: None,
+            outgoing_stems: None,
+            sample_rate_hz: 48_000,
+            accepted: None,
+            plan: source.plan,
+            playback: &source.playback,
+            permit: Some(&source.permit),
+            output_frame: Some(100),
+        };
+        let lifetime = Arc::new(AtomicU64::new(1));
+        processor.hold_prospective_tuple();
+        let first_epoch = processor.preparation_epoch;
+        assert_eq!(
+            processor.request_prospective_tuple_with_history(
+                &feed,
+                ProspectiveSourceHistory {
+                    history: &history,
+                    voice_lifetime: &lifetime,
+                    voice_generation: 1,
+                    execution_frame: 8292,
+                    paused: true,
+                },
+            ),
+            Some((first_epoch, 1))
+        );
+        let deadline = Instant::now() + Duration::from_secs(2);
+        while !processor.prospective_work_ready() && Instant::now() < deadline {
+            processor.retire_prepared();
+            std::thread::sleep(Duration::from_millis(1));
+        }
+        let candidate = processor.preparation.prepared_state().unwrap();
+        let address = candidate.rubberband.as_ref().unwrap().state_address();
+        let fifo = (
+            candidate.input_fifo[0].len(),
+            candidate.output_fifo[0].len(),
+        );
+        assert_eq!(candidate.source.as_ref().unwrap().target_output_frame, 8292);
+        assert!(
+            candidate
+                .source
+                .as_ref()
+                .unwrap()
+                .playback
+                .matches_exact(feed.playback)
+        );
+        for _ in 0..8 {
+            processor.retire_prepared();
+            let held = processor.preparation.prepared_state().unwrap();
+            assert_eq!(held.rubberband.as_ref().unwrap().state_address(), address);
+            assert_eq!((held.input_fifo[0].len(), held.output_fifo[0].len()), fifo);
+        }
+        assert!(processor.source_history_work_available());
+
+        processor.invalidate_prepared();
+        assert!(processor.prospective_request.is_none());
+        assert!(processor.preparation.prepared_state().is_none());
+        processor.hold_prospective_tuple();
+        let retry_epoch = processor.preparation_epoch;
+        assert_eq!(
+            processor.request_prospective_tuple_with_history(
+                &feed,
+                ProspectiveSourceHistory {
+                    history: &history,
+                    voice_lifetime: &lifetime,
+                    voice_generation: 1,
+                    execution_frame: 12_388,
+                    paused: true,
+                },
+            ),
+            Some((retry_epoch, 2))
+        );
+        let deadline = Instant::now() + Duration::from_secs(2);
+        while !processor.prospective_work_ready() && Instant::now() < deadline {
+            processor.retire_prepared();
+            std::thread::sleep(Duration::from_millis(1));
+        }
+        let retry = processor.preparation.prepared_state().unwrap();
+        let retried_source = retry.source.as_ref().unwrap();
+        assert_eq!(retried_source.request_id, 2);
+        assert_eq!(retried_source.target_output_frame, 12_388);
+        assert!(retried_source.playback.matches_exact(feed.playback));
+        processor.invalidate_prepared();
     }
 
     #[test]

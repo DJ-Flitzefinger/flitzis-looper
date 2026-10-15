@@ -1,5 +1,8 @@
 //! Real public GLOBAL capture -> target callback -> existing atomic group execution.
 
+#[path = "captured_global_start_first_wet_tests.rs"]
+mod first_wet_tests;
+
 use super::*;
 use crate::audio_engine::audio_stream::drain_control_messages;
 use crate::audio_engine::input_mapping::launch_admission_tests::RATE;

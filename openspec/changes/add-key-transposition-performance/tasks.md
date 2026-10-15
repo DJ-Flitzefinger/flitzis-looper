@@ -34,8 +34,8 @@ implemented behavior separately from those remaining acceptance obligations.
   old effective PCM until exact E, all-voice claim, original resident ticket kept
   adopting through SAME own mode ACK, positive/negative pitch and both mode directions,
   source/timing/window/pitch/Stop/supersession refusal and independent raw Native/FIFO
-  PCM comparison. Hardware-free evidence does not close B5, paused endpoints,
-  broader variable history, acoustic, performer-deadline or Human acceptance gates.
+  PCM comparison. Hardware-free evidence does not close B5, broader paused endpoint
+  or variable history coverage, acoustic, performer-deadline or Human acceptance gates.
 
 Numeric intent, shared Native selection/captures, fixed action custody on the
 existing scheduler, atomic effect claim and both keyboards/Learn/Controller paths
@@ -62,8 +62,15 @@ recycled snapshot per source lane and a small SOURCE/voice guard retained by its
 fresh permit through E. Eight public +/- pitch, ON/OFF, Intro/Tail cases compare
 every adopted sample, phase and FIFO with an independent A-reset oracle; lane
 ownership, restored-control refusal/retry and permit guards have focused evidence.
-Broader history, paused/selection coverage, full acoustic predicates, resource/216
-proofs and performer deadlines remain open.
+Paused preparation retains original global E with zero active future frames and
+its held candidate through paused callbacks. Eight paused Intro/Tail cases compare
+12,290 resumed PCM samples each, exact phase/FIFO and the same Native owner with
+no automatic replacement; warm filter state is retained. Public Controller/GLOBAL
+nonzero targets have separate resident tickets and staggered own E/ACK, while
+explicit peers retain independent PCM/EQ evidence. Resume/Pause alias, supersession
+and Stop refuse original work; fresh paused requests remain usable.
+Broader history and pause/selection coverage, full acoustic predicates,
+resource/216 proofs and performer deadlines remain open.
 
 - [x] K-META: neutral persisted source correction/epochs/base/extra/retrigger model;
   all12x12 same-mode roots, +6 tie/idempotence/unknown/mode/reset/late-analysis races.

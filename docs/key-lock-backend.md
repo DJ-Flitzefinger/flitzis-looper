@@ -1023,6 +1023,16 @@ existing semantics. Mode supersession continues to use Stretch's separate
 preparation epoch. All participating voices and the original finite resident
 ticket still commit together at E.
 
+Paused prospective participants keep that global E but project zero active source
+frames between capture and adoption. Their candidate survives paused render polls;
+the callback services returned storage without consuming its Native/FIFO. The
+claim checks the original paused state, so a Resume before E refuses that request.
+After adoption, Resume retains its source position, active smoothing clock, filter
+history and prepared Native/FIFO. Source authority uses the existing actual current
+cell epoch or freshly captured retained voice birth, while the separate lane epoch
+and SOURCE guard continue to fence pending work. Paused ON is armed; adoption clears
+that voice's actual wet-output flags until its own resumed output.
+
 Public Intro/Tail tests cover both mode directions at +24 and -23 semitones after
 off-grid rate edits. Each compares all 4,097 adopted samples, source phase and
 FIFO against an independent direct-C-ABI A-reset reference. Restored-source-control
@@ -1036,6 +1046,24 @@ An explicit Release profile filled all 1,024 spans in each of 32 mode snapshots:
 future assignment, excludes clearing, guards, projection, queues and Native replay,
 and establishes no callback deadline. Existing journal/SET plus mode span payloads
 derive to 80,740,352 bytes; allocator, Arc, queue, Native and PCM storage are separate.
+
+Eight paused Intro/Tail variants at +24/-23 compare each of 12,290 resumed samples,
+phase and FIFO against the independent A-reset reference with no paused future
+reads. They retain the claimed Native address and queue no automatic replacement,
+including after the later 4,096-frame boundary. Real filter-history probes distinguish
+warm and reset state and stay unchanged through pause, adoption and Resume. Public
+Controller +7/-3 GLOBAL tests retain separate resident tickets and E values one
+frame apart for running and paused targets, with independent explicit-peer PCM/EQ
+checks and armed versus first actual wet feedback. Refusal/retry retains original
+receipts across Resume/Pause, supersession and Stop.
+
+Prepared ordinary local and GLOBAL births rearm the existing zero-pitch ON
+first-live-wet guard after adopting their clean candidate. A previous voice's
+successful wet output cannot certify a fresh start after STOP. The first live
+failure retains dry source chronology and reports OFF/error; success consumes the
+already adopted Native/FIFO without another reset or exchange. A still-current
+source/window/MODE acknowledgement may be reused, while the new captured START's
+own sequence, timestamp, original E and adopted Native request remain distinct.
 
 Variable replay declares a fresh reset A on the voice's active-frame origin O's
 512-frame lattice. H queries configure each actual pitch before measuring its
@@ -1053,8 +1081,8 @@ an off-grid 48 kHz/k=+24 probe retained identical FIFO counts but observed maxim
 PCM differences of 0.30 to 0.48 even with genuine aligned suffixes of 4,205 to
 49,261 frames.
 That negative equivalence result supplies no acoustic verdict; the original
-quality gates remain required. Broader variable history, paused endpoints and
-active selection transitions, performer deadlines, the full B5 quality/latency/
+quality gates remain required. Broader variable history and pause/selection
+coverage, active selection transitions, performer deadlines, the full B5 quality/latency/
 unity-transition matrix, B6 and Human app/device/listening/visual acceptance remain
 open. R2 layout/hold and B7 captured pitch+retrigger retain their prepared ownership
 guards. Neither this surface nor persisted K-META completes whole-arrangement,
