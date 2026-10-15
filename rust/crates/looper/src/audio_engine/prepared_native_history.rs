@@ -14,7 +14,7 @@ use super::rubberband_backend::pitch_scale_for_tempo_ratio;
 use super::rubberband_backend::{RubberBandError, RubberBandLiveShifter};
 use super::source_feed_history::SourceFeedContext;
 use super::source_playback::SourcePlayback;
-use super::source_reader::{SourceReadPlan, StemReadSets};
+use super::source_reader::{SourceReadPlan, StemReadSets, StemTransition};
 use super::stretch_processor::{DEFAULT_BLOCK_SAMPLES, FixedFifo, ProductiveSourceFeed};
 use crate::messages::{PreparedStemSet, SampleBuffer};
 use std::sync::Arc;
@@ -92,7 +92,7 @@ impl PitchSourceSnapshot {
                 return false;
             }
             playback.advance(frames);
-            plan.transition.advance_fractional(frames as f64 * ratio);
+            plan.transition.advance_output_frames(frames, ratio);
             remaining -= frames as u64;
         }
         if remaining != 0 {
@@ -118,26 +118,44 @@ impl PitchSourceSnapshot {
         request_id: u64,
         epoch: u64,
     ) -> Option<NativeHistoryRequest> {
+        if self.plan.transition.is_active() {
+            return None;
+        }
+        self.into_history_request(
+            permit,
+            pitch_intent,
+            key_lock,
+            target_output_frame,
+            request_id,
+            epoch,
+        )
+    }
+
+    /// Only genuine source-feed replay may own a still-active endpoint transition.
+    pub(crate) fn into_history_request(
+        self,
+        permit: NativeHistoryPermit,
+        pitch_intent: PitchIntent,
+        key_lock: bool,
+        target_output_frame: u64,
+        request_id: u64,
+        epoch: u64,
+    ) -> Option<NativeHistoryRequest> {
         if !permit.current(&self.sample, self.sample_rate_hz)
             || !permit.matches_projection(self.accepted)
-            || self.plan.transition.is_active()
             || pitch_intent
                 .native_pitch_scale(self.playback.tempo_ratio(), key_lock)
                 .is_err()
         {
             return None;
         }
-        self.readers()?;
-        let endpoint_stems = self
-            .plan
-            .required_read_sets(StemReadSets::new(self.stems.as_ref(), None))
-            .current;
+        let readers = self.readers()?;
         let coverage = if complete_view_available(&self.sample) {
             None
         } else {
-            Some(NormalLoopCoverage::capture(
+            Some(NormalLoopCoverage::capture_with_readers(
                 &self.sample,
-                endpoint_stems,
+                readers,
                 self.sample_rate_hz,
                 self.accepted,
                 self.plan,
@@ -184,10 +202,13 @@ impl NativeHistoryRequest {
         snapshot: &PitchSourceSnapshot,
         render: super::pitch_actions::FrozenPitchRender,
     ) -> bool {
+        let Some(readers) = snapshot.readers() else {
+            return false;
+        };
         let feed = ProductiveSourceFeed {
             sample: &snapshot.sample,
-            stems: snapshot.stems.as_ref(),
-            outgoing_stems: None,
+            stems: readers.current,
+            outgoing_stems: readers.outgoing,
             sample_rate_hz: snapshot.sample_rate_hz,
             accepted: snapshot.accepted,
             plan: snapshot.plan,
@@ -233,15 +254,48 @@ impl NativeHistoryRequest {
             && self.permit.matches_projection(feed.accepted)
             && self.playback.matches_exact(feed.playback)
             && self.plan.matches_exact(feed.plan)
-            && same_stem_owners(
-                self.endpoint_stems(),
-                feed.plan
-                    .required_read_sets(StemReadSets::new(feed.stems, feed.outgoing_stems))
-                    .for_selection(feed.plan.selection),
-            )
+            && self.required_stems_match(feed, true)
+    }
+
+    fn required_stems_match(&self, feed: &ProductiveSourceFeed<'_>, exact_window: bool) -> bool {
+        let original = StemReadSets::new(self.stems.as_ref(), None);
+        let actual = StemReadSets::new(feed.stems, feed.outgoing_stems);
+        std::iter::once(feed.plan.selection)
+            .chain(feed.plan.transition.required_from_selection())
+            .all(|selection| {
+                let old = original.for_selection(selection);
+                let next = actual.for_selection(selection);
+                if selection.required_stem_hash().is_some() && (old.is_none() || next.is_none()) {
+                    return false;
+                }
+                if exact_window {
+                    same_stem_owners(old, next)
+                } else {
+                    match (old, next) {
+                        (None, None) => true,
+                        (Some(old), Some(next)) => {
+                            Arc::ptr_eq(&old.complete_set_identity, &next.complete_set_identity)
+                                && *old.complete_set_identity == *next.complete_set_identity
+                                && Arc::ptr_eq(&old.publication.epoch, &next.publication.epoch)
+                                && old.publication.expected == next.publication.expected
+                                && old.accepted_timing == next.accepted_timing
+                        }
+                        _ => false,
+                    }
+                }
+            })
     }
 
     fn coverage_matches(&self, feed: &ProductiveSourceFeed<'_>, exact_window: bool) -> bool {
+        self.coverage_matches_transition(feed, exact_window, None)
+    }
+
+    fn coverage_matches_transition(
+        &self,
+        feed: &ProductiveSourceFeed<'_>,
+        exact_window: bool,
+        expected_transition: Option<StemTransition>,
+    ) -> bool {
         let readers = feed
             .plan
             .required_read_sets(StemReadSets::new(feed.stems, feed.outgoing_stems));
@@ -258,17 +312,28 @@ impl NativeHistoryRequest {
         {
             return false;
         }
-        let endpoint_stems = readers.for_selection(feed.plan.selection);
         if let Some(coverage) = &self.coverage {
-            coverage.matches(
-                feed.sample,
-                endpoint_stems,
-                feed.sample_rate_hz,
-                feed.accepted,
-                feed.plan,
-                feed.playback,
-                exact_window,
-            )
+            if exact_window {
+                coverage.matches_with_readers(
+                    feed.sample,
+                    readers,
+                    feed.sample_rate_hz,
+                    feed.accepted,
+                    feed.plan,
+                    feed.playback,
+                    true,
+                )
+            } else {
+                coverage.matches_effective_with_readers(
+                    feed.sample,
+                    readers,
+                    feed.sample_rate_hz,
+                    feed.accepted,
+                    feed.plan,
+                    feed.playback,
+                    expected_transition,
+                )
+            }
         } else {
             // A missing finite proof never becomes a successful native source request.
             // An already adopted complete request retains its original source/history pins
@@ -277,9 +342,9 @@ impl NativeHistoryRequest {
             complete_view_available(&self.sample)
                 && (complete_view_available(feed.sample)
                     || (!exact_window
-                        && normal_loop_feed_available(
+                        && super::native_source_coverage::normal_loop_feed_available_with_readers(
                             feed.sample,
-                            endpoint_stems,
+                            readers,
                             feed.sample_rate_hz,
                             feed.accepted,
                             feed.plan,
@@ -292,12 +357,27 @@ impl NativeHistoryRequest {
         feed: &ProductiveSourceFeed<'_>,
         _epoch: u64,
     ) -> bool {
+        self.matches_effective_contract_with_transition(feed, _epoch, None)
+    }
+
+    fn matches_effective_contract_with_transition(
+        &self,
+        feed: &ProductiveSourceFeed<'_>,
+        _epoch: u64,
+        expected_transition: Option<StemTransition>,
+    ) -> bool {
+        if self.plan.transition.is_active()
+            && expected_transition
+                .is_none_or(|expected| !expected.matches_exact(feed.plan.transition))
+        {
+            return false;
+        }
         let binding = ProductiveSourceBinding::new(feed.sample, feed.sample_rate_hz, feed.accepted);
         // Once adopted, this frozen action's own permit owns its lifetime. A later lane request
         // epoch is not authority to stale the already accepted attack or its productive history.
         self.pitch_intent == feed.pitch_intent
             && self.key_lock == feed.key_lock
-            && self.coverage_matches(feed, false)
+            && self.coverage_matches_transition(feed, false, expected_transition)
             && self.binding.same_source(binding)
             && self.binding.accepted == binding.accepted
             && self
@@ -306,22 +386,7 @@ impl NativeHistoryRequest {
             && self.permit.matches_projection(feed.accepted)
             && self.plan.matches_source_contract(feed.plan)
             && self.playback.matches_rate_target(feed.playback)
-            && match (
-                self.endpoint_stems(),
-                feed.plan
-                    .required_read_sets(StemReadSets::new(feed.stems, feed.outgoing_stems))
-                    .for_selection(feed.plan.selection),
-            ) {
-                (None, None) => true,
-                (Some(old), Some(next)) => {
-                    Arc::ptr_eq(&old.complete_set_identity, &next.complete_set_identity)
-                        && *old.complete_set_identity == *next.complete_set_identity
-                        && Arc::ptr_eq(&old.publication.epoch, &next.publication.epoch)
-                        && old.publication.expected == next.publication.expected
-                        && old.accepted_timing == next.accepted_timing
-                }
-                _ => false,
-            }
+            && self.required_stems_match(feed, false)
     }
     pub(crate) fn matches_contract(&self, feed: &ProductiveSourceFeed<'_>, epoch: u64) -> bool {
         self.epoch == epoch
@@ -334,12 +399,7 @@ impl NativeHistoryRequest {
             && self.permit.matches_projection(feed.accepted)
             && self.plan.matches_source_contract(feed.plan)
             && self.playback.matches_rate_target(feed.playback)
-            && same_stem_owners(
-                self.endpoint_stems(),
-                feed.plan
-                    .required_read_sets(StemReadSets::new(feed.stems, feed.outgoing_stems))
-                    .for_selection(feed.plan.selection),
-            )
+            && self.required_stems_match(feed, true)
     }
 
     pub(crate) fn matches_adoption(
@@ -395,6 +455,8 @@ pub(crate) struct NativeAdapterState {
     pub(crate) dirty: bool,
     pub(crate) used: bool,
     pub(crate) source: Option<NativeHistoryRequest>,
+    /// Only genuine active-E preparation seeds this. Some(inactive) fences later restarts.
+    pub(crate) source_transition: Option<StemTransition>,
     pub(crate) primed_output_frames: usize,
 }
 
@@ -419,6 +481,7 @@ impl NativeAdapterState {
             dirty: false,
             used: false,
             source: None,
+            source_transition: None,
             primed_output_frames: 0,
         }
     }
@@ -433,6 +496,21 @@ impl NativeAdapterState {
         self.active = false;
         self.pitch_scale = 1.0;
         self.primed_output_frames = 0;
+        self.source_transition = None;
+    }
+
+    pub(crate) fn matches_effective_source(
+        &self,
+        feed: &ProductiveSourceFeed<'_>,
+        epoch: u64,
+    ) -> bool {
+        self.source.as_ref().is_some_and(|source| {
+            if let Some(expected) = self.source_transition {
+                source.matches_effective_contract_with_transition(feed, epoch, Some(expected))
+            } else {
+                source.matches_effective_contract(feed, epoch)
+            }
+        })
     }
 
     /// Native reset, initial pitch setup, source catch-up and old pin destruction are worker-only.
@@ -672,10 +750,7 @@ impl NativeAdapterState {
             self.render(&feed, &mut output, frames, pitch)
                 .map_err(NativeSourcePreparationError::Backend)?;
             request.playback.advance(frames);
-            request
-                .plan
-                .transition
-                .advance_fractional(frames as f64 * ratio);
+            request.plan.transition.advance_output_frames(frames, ratio);
             let position = request.playback.position();
             request.plan.frame_pos = position.frame;
             request.plan.seek_mode = position.seek_mode;

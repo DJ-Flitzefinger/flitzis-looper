@@ -450,6 +450,15 @@ impl StretchProcessor {
         if frames == 0 {
             return false;
         }
+        if self
+            .native
+            .source_transition
+            .is_some_and(|expected| !expected.matches_exact(feed.plan.transition))
+        {
+            // A missed or changed ramp cannot become valid again when it later clears.
+            // The original active request now has no continuation proof until replacement.
+            self.native.source_transition = None;
+        }
         let Ok(pitch_scale) = feed
             .pitch_intent
             .native_pitch_scale(feed.playback.tempo_ratio(), feed.key_lock)
@@ -520,9 +529,9 @@ impl StretchProcessor {
             }
             if wet
                 && !self.request_pending
-                && !self.native.source.as_ref().is_some_and(|source| {
-                    source.matches_effective_contract(&feed, self.preparation_epoch)
-                })
+                && !self
+                    .native
+                    .matches_effective_source(&feed, self.preparation_epoch)
                 && let Some(request_id) = self.request_id.checked_add(1)
                 && self.preparation_epoch != u64::MAX
                 && self
@@ -562,9 +571,14 @@ impl StretchProcessor {
             feed.pitch_intent,
         );
         self.wet_source_rendered = self.wet_render_ready()
-            && self.native.source.as_ref().is_some_and(|source| {
-                source.matches_effective_contract(&feed, self.preparation_epoch)
-            });
+            && self
+                .native
+                .matches_effective_source(&feed, self.preparation_epoch);
+        if self.wet_source_rendered
+            && let Some(expected) = &mut self.native.source_transition
+        {
+            expected.advance_output_frames(frames, feed.playback.tempo_ratio());
+        }
         if self.native.active {
             self.productive_history = Some(ProductiveSourceHistory {
                 binding,

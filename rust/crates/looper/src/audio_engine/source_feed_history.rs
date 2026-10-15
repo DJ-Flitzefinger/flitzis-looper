@@ -214,12 +214,12 @@ impl SourceFeedSpan {
 }
 
 fn advance_source(playback: &mut SourcePlayback, plan: &mut SourceReadPlan, frames: usize) {
-    let source_frames = frames as f64 * playback.tempo_ratio();
+    let ratio = playback.tempo_ratio();
     playback.advance(frames);
     let position = playback.position();
     plan.frame_pos = position.frame;
     plan.seek_mode = position.seek_mode;
-    plan.transition.advance_fractional(source_frames);
+    plan.transition.advance_output_frames(frames, ratio);
 }
 
 /// Allocate once with the voice, outside the callback. Every later journal operation is bounded
@@ -775,7 +775,7 @@ mod tests {
                 observed.push(feed);
                 history.record_success(playback, plan, context(), frames);
                 playback.advance(frames);
-                transition.advance_fractional(frames as f64 * ratio);
+                transition.advance_output_frames(frames, ratio);
                 active += frames;
                 partition += 1;
             }
@@ -843,6 +843,168 @@ mod tests {
         changed.current_stem_owners[0] = 31;
         history.record_success(rebased, plan, changed, 5);
         assert_eq!(capture(&history).spans().len(), 4);
+    }
+
+    #[test]
+    fn fractional_ramp_history_slices_and_coalescing_preserve_partitioned_state_and_pcm() {
+        fn pcm(
+            span: SourceFeedSpan,
+            sample: &crate::messages::SampleBuffer,
+            stems: &PreparedStemSet,
+        ) -> Vec<Vec<f32>> {
+            let readers = span
+                .context
+                .resolve_readers(span.plan, Some(stems))
+                .unwrap();
+            let mut output = vec![vec![f32::NAN; span.frames]; sample.channels];
+            span.plan
+                .fill_fractional_buffers_checked_with_readers(
+                    sample,
+                    readers,
+                    &span.playback,
+                    &mut output,
+                    span.frames,
+                )
+                .unwrap();
+            assert!(output.iter().flatten().all(|value| value.is_finite()));
+            output
+        }
+
+        fn assert_same(
+            actual: SourceFeedSpan,
+            expected: SourceFeedSpan,
+            sample: &crate::messages::SampleBuffer,
+            stems: &PreparedStemSet,
+        ) {
+            assert_eq!(actual.active_start, expected.active_start);
+            assert_eq!(actual.frames, expected.frames);
+            assert_eq!(actual.context, expected.context);
+            assert!(actual.playback.matches_exact(&expected.playback));
+            assert!(actual.plan.matches_exact(expected.plan));
+            assert_eq!(pcm(actual, sample, stems), pcm(expected, sample, stems));
+        }
+
+        let stems = held_stems();
+        let sample = crate::messages::SampleBuffer {
+            samples: stems.reference_samples.clone(),
+            channels: stems.channels,
+            residency: stems.reference_residency.clone(),
+        };
+        let mut playback = playback(19, ExplicitSeekMode::Normal, 0.9200000000000003);
+        let mut plan = plan(
+            playback,
+            StemTransition::start(StemRenderSelection::full_mix(), 128),
+        );
+        // FullMix to an empty stem mask makes every ramp gain observable in PCM.
+        plan.selection = StemRenderSelection::for_stems(&stems, 0);
+        let context = SourceFeedContext::new(
+            ProductiveSourceBinding::new(&sample, 48_000, None),
+            plan.required_read_sets(StemReadSets::new(Some(&stems), None)),
+        );
+        let mut history = SourceFeedHistory::new();
+        history.record_success(playback, plan, context, 43);
+        advance_source(&mut playback, &mut plan, 43);
+        let span = SourceFeedSpan {
+            active_start: 43,
+            frames: 97,
+            playback,
+            plan,
+            context,
+        };
+        assert_same(span.slice(0, 97).unwrap(), span, &sample, &stems);
+        assert!(span.slice(0, 0).is_none());
+        assert!(span.slice(97, 1).is_none());
+
+        let direct_endpoint = span.slice(17, 1).unwrap();
+        let nested_endpoint = span.slice(3, 94).unwrap().slice(14, 1).unwrap();
+        assert_same(direct_endpoint, nested_endpoint, &sample, &stems);
+        let whole_pcm = pcm(span.slice(0, 17).unwrap(), &sample, &stems);
+        let mut split_pcm = pcm(span.slice(0, 3).unwrap(), &sample, &stems);
+        let remainder_pcm = pcm(span.slice(3, 14).unwrap(), &sample, &stems);
+        for (channel, remainder) in split_pcm.iter_mut().zip(remainder_pcm) {
+            channel.extend(remainder);
+        }
+        assert_eq!(whole_pcm, split_pcm);
+        assert!(whole_pcm.iter().flatten().any(|value| *value != 0.0));
+
+        let mut observed = Vec::new();
+        for frames in [3, 14] {
+            observed.push(SourceFeedSpan {
+                active_start: history.active_frames,
+                frames,
+                playback,
+                plan,
+                context,
+            });
+            history.record_success(playback, plan, context, frames);
+            advance_source(&mut playback, &mut plan, frames);
+        }
+        assert!(playback.matches_exact(&direct_endpoint.playback));
+        assert!(plan.matches_exact(direct_endpoint.plan));
+        let coalesced = capture(&history);
+        assert_eq!(coalesced.spans().len(), 1);
+        assert_eq!(coalesced.spans().next().unwrap().frames, 60);
+        assert_same(
+            coalesced.spans().next().unwrap().slice(43, 17).unwrap(),
+            span.slice(0, 17).unwrap(),
+            &sample,
+            &stems,
+        );
+
+        // These are actual off-grid control epochs. They must remain distinct in
+        // the journal while arbitrary subdivisions within one epoch may coalesce.
+        let mut active = 60;
+        let controls = [(67, 1.17), (81, 0.67), (229, 0.81)];
+        let partitions = [17, 3, 14, 29, 1, 53];
+        let mut partition = 0;
+        while active < 629 {
+            if let Some((_, target)) = controls.iter().find(|(at, _)| *at == active) {
+                playback.set_target(*target);
+            }
+            let boundary = controls
+                .iter()
+                .map(|(at, _)| *at)
+                .find(|at| *at > active)
+                .unwrap_or(629);
+            let requested = (boundary - active).min(partitions[partition % partitions.len()]);
+            let (frames, _) = playback.chunk(requested);
+            let position = playback.position();
+            plan.frame_pos = position.frame;
+            plan.seek_mode = position.seek_mode;
+            let actual = SourceFeedSpan {
+                active_start: active as u64,
+                frames,
+                playback,
+                plan,
+                context,
+            };
+            assert_same(actual.slice(0, frames).unwrap(), actual, &sample, &stems);
+            assert!(actual.slice(0, 0).is_none());
+            observed.push(actual);
+            history.record_success(playback, plan, context, frames);
+            advance_source(&mut playback, &mut plan, frames);
+            active += frames;
+            partition += 1;
+        }
+        let snapshot = capture(&history);
+        assert_eq!(snapshot.retained_range(), Some(0..629));
+        assert!(snapshot.spans().len() >= 4);
+        for actual in observed {
+            let retained = snapshot
+                .spans()
+                .find(|retained| {
+                    retained.active_start <= actual.active_start
+                        && retained.active_end() >= actual.active_end()
+                })
+                .unwrap();
+            let copied = retained
+                .slice(
+                    (actual.active_start - retained.active_start) as usize,
+                    actual.frames,
+                )
+                .unwrap();
+            assert_same(copied, actual, &sample, &stems);
+        }
     }
 
     #[test]
@@ -1190,7 +1352,7 @@ mod tests {
                 });
                 history.record_success(playback, read_plan, context, frames);
                 playback.advance(frames);
-                transition.advance_fractional(frames as f64 * ratio);
+                transition.advance_output_frames(frames, ratio);
             }
             assert_eq!(history.len, SOURCE_FEED_HISTORY_MAX_SPANS);
 

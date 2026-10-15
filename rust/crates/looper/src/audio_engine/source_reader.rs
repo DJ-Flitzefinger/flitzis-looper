@@ -420,7 +420,9 @@ impl<'a> StemReadSets<'a> {
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub(crate) struct StemTransition {
     from: StemRenderSelection,
-    elapsed_frames: f64,
+    elapsed_anchor: f64,
+    output_frames: u64,
+    output_ratio: f64,
     total_frames: usize,
 }
 
@@ -428,7 +430,9 @@ impl StemTransition {
     fn inactive() -> Self {
         Self {
             from: StemRenderSelection::full_mix(),
-            elapsed_frames: 0.0,
+            elapsed_anchor: 0.0,
+            output_frames: 0,
+            output_ratio: 0.0,
             total_frames: 0,
         }
     }
@@ -440,13 +444,15 @@ impl StemTransition {
 
         Self {
             from,
-            elapsed_frames: 0.0,
+            elapsed_anchor: 0.0,
+            output_frames: 0,
+            output_ratio: 0.0,
             total_frames,
         }
     }
 
     pub(crate) fn is_active(self) -> bool {
-        self.total_frames > 0 && self.elapsed_frames < self.total_frames as f64
+        self.total_frames > 0 && self.elapsed_frames() < self.total_frames as f64
     }
 
     pub(crate) fn required_from_selection(self) -> Option<StemRenderSelection> {
@@ -460,18 +466,51 @@ impl StemTransition {
     /// Preserve complete source-selection ramp state at a prepared adoption boundary.
     pub(crate) fn matches_exact(self, other: Self) -> bool {
         self.from == other.from
-            && self.elapsed_frames.to_bits() == other.elapsed_frames.to_bits()
+            && self.elapsed_anchor.to_bits() == other.elapsed_anchor.to_bits()
+            && self.output_frames == other.output_frames
+            && self.output_ratio.to_bits() == other.output_ratio.to_bits()
             && self.total_frames == other.total_frames
     }
 
-    fn gains_at(self, frame_offset: f64) -> (f32, f32) {
+    fn elapsed_frames(self) -> f64 {
+        self.elapsed_anchor + self.output_frames as f64 * self.output_ratio
+    }
+
+    /// Evaluate the same constant-rate epoch at an output offset, before rounding its phase.
+    /// A copied reader may have a new applied rate before its first advance in that rate.
+    fn elapsed_at_output_offset(self, frames: usize, ratio: f64) -> f64 {
+        debug_assert!((super::constants::SPEED_MIN..=super::constants::SPEED_MAX).contains(&ratio));
+        if self.output_ratio.to_bits() == ratio.to_bits() {
+            let count = match self.output_frames.checked_add(frames as u64) {
+                Some(count) => count as f64,
+                // Normal rendering retains only a short active epoch. Keep an oversized
+                // read-only offset correct without a wide conversion on the ordinary path.
+                None => (u128::from(self.output_frames) + frames as u128) as f64,
+            };
+            self.elapsed_anchor + count * ratio
+        } else {
+            self.elapsed_frames() + frames as f64 * ratio
+        }
+    }
+
+    fn gains_at_elapsed(self, elapsed: f64) -> (f32, f32) {
         if !self.is_active() {
             return (0.0, 1.0);
         }
-
-        let elapsed = (self.elapsed_frames + frame_offset).min(self.total_frames as f64);
-        let to_gain = elapsed as f32 / self.total_frames as f32;
+        let to_gain = elapsed.min(self.total_frames as f64) as f32 / self.total_frames as f32;
         (1.0 - to_gain, to_gain)
+    }
+
+    fn gains_at_output_offset(self, frames: usize, ratio: f64) -> (f32, f32) {
+        if !self.is_active() {
+            return (0.0, 1.0);
+        }
+        self.gains_at_elapsed(self.elapsed_at_output_offset(frames, ratio))
+    }
+
+    #[cfg(test)]
+    fn gains_at(self, frame_offset: f64) -> (f32, f32) {
+        self.gains_at_elapsed(self.elapsed_frames() + frame_offset)
     }
 
     #[cfg(test)]
@@ -479,13 +518,39 @@ impl StemTransition {
         self.advance_fractional(frames as f64);
     }
 
-    pub(crate) fn advance_fractional(&mut self, frames: f64) {
-        if !self.is_active() {
+    /// Advance one applied-rate epoch by its integer output count, independently of partitions.
+    /// Actual source rates are .5..2, so a production 128-source-frame ramp retains at most 256
+    /// output frames in an epoch (the larger resource fixtures are bounded in the same way).
+    pub(crate) fn advance_output_frames(&mut self, frames: usize, ratio: f64) {
+        if frames == 0 || !self.is_active() {
             return;
         }
+        debug_assert!((super::constants::SPEED_MIN..=super::constants::SPEED_MAX).contains(&ratio));
+        if self.output_ratio.to_bits() != ratio.to_bits() {
+            self.elapsed_anchor = self.elapsed_frames();
+            self.output_frames = 0;
+            self.output_ratio = ratio;
+        }
+        // A large completing call must clear before converting the retained active count.
+        let count = u128::from(self.output_frames) + frames as u128;
+        if self.elapsed_anchor + count as f64 * ratio >= self.total_frames as f64 {
+            self.clear();
+        } else {
+            self.output_frames = u64::try_from(count)
+                .expect("bounded active source ramp retains an integer output count");
+        }
+    }
 
-        self.elapsed_frames += frames;
-        if self.elapsed_frames >= self.total_frames as f64 {
+    /// Explicit source-distance probes do not define a rate epoch for later output reads.
+    #[cfg(test)]
+    pub(crate) fn advance_fractional(&mut self, frames: f64) {
+        if frames == 0.0 || !self.is_active() {
+            return;
+        }
+        self.elapsed_anchor = self.elapsed_frames() + frames;
+        self.output_frames = 0;
+        self.output_ratio = 0.0;
+        if self.elapsed_anchor >= self.total_frames as f64 {
             self.clear();
         }
     }
@@ -739,13 +804,13 @@ impl SourceReadPlan {
                 seek_mode: position.seek_mode,
                 ..self
             };
-            let source_progress = frame as f64 * tempo_ratio;
+            let transition_gains = self.transition.gains_at_output_offset(frame, tempo_ratio);
             for (channel, buffer) in buffers.iter_mut().enumerate().take(self.channels) {
-                buffer[frame] = plan.sample_fractional_with_readers(
+                buffer[frame] = plan.sample_fractional_with_gains(
                     sample,
                     readers,
                     position.fraction,
-                    source_progress,
+                    transition_gains,
                     channel,
                 );
             }
@@ -898,12 +963,30 @@ impl SourceReadPlan {
         )
     }
 
+    #[cfg(test)]
     fn sample_at_frame_with_progress(
         self,
         sample: &SampleBuffer,
         readers: StemReadSets<'_>,
         frame: usize,
         transition_progress: f64,
+        channel: usize,
+    ) -> f32 {
+        self.sample_at_frame_with_gains(
+            sample,
+            readers,
+            frame,
+            self.transition.gains_at(transition_progress),
+            channel,
+        )
+    }
+
+    fn sample_at_frame_with_gains(
+        self,
+        sample: &SampleBuffer,
+        readers: StemReadSets<'_>,
+        frame: usize,
+        transition_gains: (f32, f32),
         channel: usize,
     ) -> f32 {
         if self.transition.is_active() {
@@ -923,7 +1006,7 @@ impl SourceReadPlan {
                 self.channels,
                 channel,
             );
-            let (from_gain, to_gain) = self.transition.gains_at(transition_progress);
+            let (from_gain, to_gain) = transition_gains;
             from_sample * from_gain + to_sample * to_gain
         } else {
             render_source_selection_sample_with_readers(
@@ -957,12 +1040,30 @@ impl SourceReadPlan {
         )
     }
 
+    #[cfg(test)]
     pub(crate) fn sample_fractional_with_readers(
         self,
         sample: &SampleBuffer,
         readers: StemReadSets<'_>,
         fraction: f64,
         transition_progress: f64,
+        channel: usize,
+    ) -> f32 {
+        self.sample_fractional_with_gains(
+            sample,
+            readers,
+            fraction,
+            self.transition.gains_at(transition_progress),
+            channel,
+        )
+    }
+
+    fn sample_fractional_with_gains(
+        self,
+        sample: &SampleBuffer,
+        readers: StemReadSets<'_>,
+        fraction: f64,
+        transition_gains: (f32, f32),
         channel: usize,
     ) -> f32 {
         let taps = self.fractional_taps(fraction);
@@ -973,13 +1074,8 @@ impl SourceReadPlan {
             false,
             self.tap_available_with_readers(sample, readers, taps.left, channel),
         );
-        let left = self.sample_at_frame_with_progress(
-            sample,
-            readers,
-            taps.left,
-            transition_progress,
-            channel,
-        );
+        let left =
+            self.sample_at_frame_with_gains(sample, readers, taps.left, transition_gains, channel);
         let Some(right_frame) = taps.right else {
             return left;
         };
@@ -990,11 +1086,11 @@ impl SourceReadPlan {
             true,
             self.tap_available_with_readers(sample, readers, right_frame, channel),
         );
-        let right = self.sample_at_frame_with_progress(
+        let right = self.sample_at_frame_with_gains(
             sample,
             readers,
             right_frame,
-            transition_progress,
+            transition_gains,
             channel,
         );
         left + (right - left) * taps.right_gain
@@ -1110,6 +1206,99 @@ mod tests {
             selection: StemRenderSelection::full_mix(),
             transition: StemTransition::default(),
         }
+    }
+
+    #[test]
+    fn source_transition_output_epochs_keep_exact_state_across_partitions_and_rate_changes() {
+        for ratio in [0.5, 0.61, 0.73, 1.371234567890123, 2.0] {
+            let mut initial = StemTransition::start(StemRenderSelection::full_mix(), 128);
+            initial.advance_fractional(0.25);
+            let mut whole = initial;
+            whole.advance_output_frames(17, ratio);
+            for parts in [&[3, 14][..], &[1, 4, 2, 7, 3][..]] {
+                let mut divided = initial;
+                for frames in parts {
+                    divided.advance_output_frames(*frames, ratio);
+                }
+                assert!(
+                    whole.matches_exact(divided),
+                    "ratio={ratio} parts={parts:?}"
+                );
+                assert_eq!(
+                    whole.elapsed_frames().to_bits(),
+                    divided.elapsed_frames().to_bits()
+                );
+                assert_eq!(
+                    initial.gains_at_output_offset(29, ratio),
+                    divided.gains_at_output_offset(12, ratio)
+                );
+            }
+        }
+
+        let mut whole = StemTransition::start(StemRenderSelection::full_mix(), 128);
+        let mut divided = whole;
+        for (frames, ratio) in [(17, 0.73), (11, 1.371234567890123), (13, 0.61), (19, 0.61)] {
+            whole.advance_output_frames(frames, ratio);
+            divided.advance_output_frames(3, ratio);
+            divided.advance_output_frames(frames - 3, ratio);
+            assert!(whole.matches_exact(divided));
+        }
+        let mut equal_elapsed = StemTransition::start(StemRenderSelection::full_mix(), 128);
+        equal_elapsed.advance_fractional(whole.elapsed_frames());
+        assert_eq!(
+            whole.elapsed_frames().to_bits(),
+            equal_elapsed.elapsed_frames().to_bits()
+        );
+        assert!(
+            !whole.matches_exact(equal_elapsed),
+            "future rounding retains the epoch identity"
+        );
+    }
+
+    #[test]
+    fn source_transition_zero_calls_preserve_epochs_and_completion_clears_exactly() {
+        let mut transition = StemTransition::start(StemRenderSelection::full_mix(), 128);
+        let initial = transition;
+        transition.advance_output_frames(0, 0.73);
+        assert!(transition.matches_exact(initial));
+        transition.advance_output_frames(17, 0.73);
+        let captured = transition;
+        transition.advance_output_frames(0, 1.371234567890123);
+        transition.advance_fractional(0.0);
+        assert!(transition.matches_exact(captured));
+
+        let mut whole = initial;
+        whole.advance_output_frames(256, 0.5);
+        transition = initial;
+        transition.advance_output_frames(255, 0.5);
+        assert!(transition.is_active());
+        transition.advance_output_frames(1, 0.5);
+        assert!(transition.matches_exact(whole));
+        assert!(transition.matches_exact(StemTransition::default()));
+        transition.advance_output_frames(17, 2.0);
+        assert!(transition.matches_exact(whole));
+
+        let mut oversized = captured;
+        oversized.advance_output_frames(usize::MAX, 0.5);
+        assert!(oversized.matches_exact(StemTransition::default()));
+    }
+
+    #[test]
+    fn source_transition_gain_rounding_uses_one_canonical_output_coordinate() {
+        // At output frame five, the old 3*r + 2*r grouping crosses an f32 rounding tie.
+        let ratio = f64::from_bits(0x3fe1_9999_a666_6667);
+        assert_ne!((5.0 * ratio) as f32, (3.0 * ratio + 2.0 * ratio) as f32);
+        let whole = StemTransition::start(StemRenderSelection::full_mix(), 128);
+        let mut divided = whole;
+        divided.advance_output_frames(3, ratio);
+        assert_eq!(
+            whole.gains_at_output_offset(5, ratio),
+            divided.gains_at_output_offset(2, ratio)
+        );
+        assert_eq!(
+            divided.gains_at_output_offset(2, ratio).1.to_bits(),
+            ((5.0 * ratio) as f32 / 128.0).to_bits()
+        );
     }
 
     #[test]

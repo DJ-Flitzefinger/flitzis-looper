@@ -511,6 +511,180 @@ fn held_selection_set_replays_real_past_and_active_f_ramp_at_original_settled_e(
     }
 }
 
+#[test]
+fn paused_active_e_set_keeps_original_t_and_replays_both_roles_through_resume() {
+    active_e_set_case(true);
+}
+
+#[test]
+fn quantized_active_e_set_keeps_old_pcm_until_t_then_consumes_the_remaining_ramp() {
+    active_e_set_case(false);
+}
+
+fn active_e_set_case(paused: bool) {
+    for (history, lock, pitch) in [
+        (History::FullToStems, true, PitchIntent::new(6, 18).unwrap()),
+        (
+            History::StemsToFull,
+            true,
+            PitchIntent::new(-5, -18).unwrap(),
+        ),
+        (History::Mask, false, PitchIntent::new(6, 18).unwrap()),
+        (History::Empty, false, PitchIntent::new(-5, -18).unwrap()),
+    ] {
+        let (mut fixture, source, stems, output_origin) =
+            selection_setup(lock, PitchIntent::default());
+        run_history(&mut fixture, output_origin, history);
+        let mut baseline = (!paused && !lock).then(|| {
+            let (mut baseline, _, _, baseline_origin) =
+                selection_setup(lock, PitchIntent::default());
+            assert_eq!(baseline_origin, output_origin);
+            run_history(&mut baseline, baseline_origin, history);
+            baseline
+        });
+        if paused {
+            fixture.control.engine.pause_sample(0).unwrap();
+            fixture.drain();
+            assert!(fixture.voice(0).paused);
+        }
+        let phase = fixture.voice(0).source_playback;
+        let index = fixture
+            .mixer
+            .voices
+            .iter()
+            .position(|voice| voice.active && voice.sample_id == 0)
+            .unwrap();
+        let generation = fixture.voice(0).generation;
+        let starts = fixture.starts(0);
+        let old_native = fixture.voice(0).stretch.native_state_address();
+        fixture.rows(PitchPadProjection {
+            intent: PitchIntent::new(pitch.base_shift(), 0).unwrap(),
+            key_lock: lock,
+            quantize_step_64ths: Some(16),
+            ..PitchPadProjection::default()
+        });
+        fixture.refresh_clock();
+        let mut clock = fixture.clock.read().unwrap();
+        clock.downbeat_frame = if paused {
+            output_origin
+        } else {
+            output_origin + F as u64 - 24_000 + 17
+        };
+        clock.master_beat = (output_origin + F as u64 - clock.downbeat_frame) as f64 / 24_000.0;
+        fixture.clock.publish(clock);
+        let action = fixture
+            .control
+            .engine
+            .capture_pad_pitch_action(0, &format!("pitch.extra:{}:set", pitch.extra_shift()), None)
+            .unwrap();
+        let original_t = action.original_due_frame();
+        let timestamp = action.received_timestamp();
+        let content = action.content_key();
+        assert_eq!(
+            original_t,
+            output_origin + if paused { E as u64 } else { F as u64 + 17 }
+        );
+        fixture.publish(&action);
+        fixture.wait_worker(&[&action]);
+        let endpoint = F + if paused { 0 } else { 17 };
+        let timeline = normal_chronology(endpoint + 4_097);
+        let origin = reset_origin(&timeline, endpoint, pitch, lock);
+        let first_pitch = native_pitch(timeline[origin + BLOCK - 1], pitch, lock);
+        let mut raw = RawRubberBand::new(first_pitch);
+        let events = history.events();
+        for active in origin..endpoint {
+            raw.sample(
+                selected_pcm(&timeline, active, &source, &stems, &events),
+                native_pitch(timeline[active], pitch, lock),
+            );
+        }
+        if let Some(baseline) = &mut baseline {
+            identical_old_to(&mut fixture, baseline, output_origin + F as u64 + 3);
+            identical_old_to(&mut fixture, baseline, original_t);
+        } else {
+            if !paused {
+                fixture.render_to(output_origin + F as u64 + 3);
+            }
+            let before = fixture.render_to(original_t);
+            if paused {
+                assert!(before.iter().all(|sample| *sample == 0.0));
+            }
+        }
+        assert_eq!(fixture.voice(0).stretch.native_state_address(), old_native);
+        assert_eq!(
+            fixture.mixer.pad_pitch_intent(0),
+            Some(PitchIntent::default())
+        );
+        fixture.render(0);
+        assert!(
+            action.effective(),
+            "{} {:?}",
+            action.state(),
+            action.reason()
+        );
+        let adopted = fixture.voice(0).stretch.native_state_address();
+        assert_ne!(adopted, old_native);
+        if paused {
+            assert!(fixture.voice(0).source_playback.matches_exact(&phase));
+        }
+        assert_phase(&fixture, timeline[endpoint]);
+        assert!(
+            fixture
+                .mixer
+                .capture_pitch_voice_snapshot(index)
+                .unwrap()
+                .plan
+                .transition
+                .is_active()
+        );
+        assert_eq!(fixture.voice(0).stretch.pending_fifo_frames(), raw.fifo());
+        if paused {
+            fixture.control.engine.resume_sample(0).unwrap();
+            fixture.drain();
+        }
+        assert!(!fixture.voice(0).paused);
+        let mut active = endpoint;
+        for frames in PARTITIONS {
+            let actual = fixture.render(frames);
+            for (offset, sample) in actual.iter().enumerate() {
+                let at = active + offset;
+                let expected = raw.sample(
+                    selected_pcm(&timeline, at, &source, &stems, &events),
+                    native_pitch(timeline[at], pitch, lock),
+                );
+                assert!(
+                    (*sample - expected).abs() < 2.0e-6,
+                    "{history:?} Lock={lock} active={at} actual={sample} expected={expected}"
+                );
+            }
+            active += frames;
+            assert_phase(&fixture, timeline[active]);
+            assert_eq!(fixture.voice(0).stretch.pending_fifo_frames(), raw.fifo());
+            assert_eq!(fixture.voice(0).stretch.native_state_address(), adopted);
+            assert_eq!(
+                fixture.voice(0).stretch.adopted_request_id(),
+                Some(action.sequence())
+            );
+            assert_eq!(fixture.voice(0).generation, generation);
+            assert_eq!(fixture.starts(0), starts);
+            assert_eq!(action.original_due_frame(), original_t);
+            assert_eq!(action.execution_target(), original_t);
+            assert_eq!(action.received_timestamp(), timestamp);
+            assert_eq!(action.content_key(), content);
+            assert!(!fixture.voice(0).stretch.wet_mode_failed());
+        }
+        assert!(
+            !fixture
+                .mixer
+                .capture_pitch_voice_snapshot(index)
+                .unwrap()
+                .plan
+                .transition
+                .is_active()
+        );
+    }
+}
+
 fn identical_old_to(fixture: &mut Fixture, baseline: &mut Fixture, target: u64) {
     assert_eq!(
         fixture.transport.output_frame(),

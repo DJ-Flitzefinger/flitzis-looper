@@ -26,6 +26,9 @@ fn constant_chronology_matches(
     end: u64,
     bound: u64,
 ) -> bool {
+    if request.plan.transition.is_active() {
+        return false;
+    }
     // Intentional constant starts retain their established pre-origin priming semantics.
     // Every actual read since that origin must still prove the same selection and data;
     // the source clock alone says nothing about masks, outgoing readers or refused reads.
@@ -122,7 +125,7 @@ impl NativeAdapterState {
                 context: future_context.for_plan(plan),
             });
             playback.advance(frames);
-            plan.transition.advance_fractional(frames as f64 * ratio);
+            plan.transition.advance_output_frames(frames, ratio);
             active = active.checked_add(frames as u64).ok_or_else(unavailable)?;
             remaining -= frames as u64;
         }
@@ -314,6 +317,13 @@ impl NativeAdapterState {
             coverage.prepared_taps = super::source_reader::tap_observation_for_test();
         }
         self.primed_output_frames = (end - origin) as usize;
+        // Seed only after genuine replay reaches exact E; callback consumption owns
+        // subsequent scalar progress, including the retained completed state.
+        self.source_transition = request
+            .plan
+            .transition
+            .is_active()
+            .then_some(request.plan.transition);
         self.source = Some(request);
         Ok(())
     }

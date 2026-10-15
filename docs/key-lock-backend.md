@@ -49,8 +49,8 @@ masks do not stand in for absent owners. The existing ramp advances by 128 sourc
 frames, including fractional progress and its existing interruption policy.
 
 The wet native handle, input/output FIFOs and chronological filter continue
-through the entire ramp. New source-specific preparation remains deferred while
-the ramp is active, then actual settled-selection catch-up and guarded adoption
+through the entire ramp. Automatic source-specific preparation remains deferred
+while the ramp is active, then actual settled-selection catch-up and guarded adoption
 use the existing worker and exact Source/Window/Stem/History permits. Storage-only
 ACKs do not restart chronology or release still-used pins. The retiring
 `SetStemPairFullMix` path releases components only after the outgoing ramp; history
@@ -454,8 +454,8 @@ these owners; catch-up feed/output scratch allocation remains on the worker.
 The worker applies exact starting inverse-rate pitch before reset and processes
 4096 active frames through the same fixed adapter and source reader, including
 copied canonical rate smoothing. It retains the resulting handle and full FIFO
-continuation with request pins. Active stem-selection transitions defer requests
-until complete, while effective wet playback continues through both proved finite
+continuation with request pins. Active stem-selection transitions defer automatic
+requests until complete, while effective wet playback continues through both proved finite
 selections; the settled request must still complete real preparation and adoption.
 This bounded horizon is not
 a native-delay estimate, pre-target crop or accepted musical onset policy.
@@ -1002,11 +1002,33 @@ still required at adoption. Constant endpoint reuse first checks the real requir
 read/selection chronology, including gaps and completed selection changes.
 SET and prospective mode replay can resolve selection history through one actually
 held committed stem set, including FullMix/stem ramps, changed masks and an empty
-mask. A ramp active at capture F must settle by the original E. Each sliced plan
+mask. Genuine-history requests may retain a ramp still active at original E.
+Each sliced plan
 determines its required reader roles before identity/coverage resolution; missing
 roles cannot disappear through a failed lookup. FullMix E retains the physical
-stem pin needed by earlier reads. Active ramps at E, other/unheld sets and stale
-publication generations still refuse only that request and retain effective audio.
+stem pin needed by earlier reads or by the outgoing endpoint role. Both logical
+reader roles receive independent physical coverage and exact adoption checks,
+including when they alias one set or select an empty mask. Other/unheld sets and
+stale publication generations still refuse only that request and retain effective audio.
+
+An active-E prepared Native owner carries a scalar expected-transition state,
+initialized only after genuine replay reaches E. Each actual successful source
+chunk checks its exact pre-read phase and advances it by the same actual source
+progress as the mixer. Pause contributes no frames. Natural completion retains
+the same Native/FIFO/filter owner and a completed tracker; mismatched progress,
+premature clearing and a restarted ramp invalidate that continuation proof rather
+than becoming valid again after another clear. No-history/automatic preparation
+still refuses active ramps, and active-E replay cannot use backward constant
+reconstruction. This extends finite-history engineering, not continuous-O or
+acoustic/deadline acceptance.
+
+Selection ramps use the same canonical rate-epoch progression on the live reader,
+snapshot slices, endpoint projection and preparation worker. An epoch retains its
+source-progress anchor, applied ratio and integer output-frame count. Both ramp
+gains and boundary state evaluate that anchor plus the complete epoch count times
+ratio, so a 17-frame projection and callbacks of 3 then 14 frames are identical.
+Only a real applied-rate change reanchors; zero-frame calls leave the epoch intact.
+Strict adoption compares that complete state without a numerical tolerance.
 
 Already admitted immutable stem data keeps its copied original publication
 owner/expected identity across a storage-only resident window change.
@@ -1096,18 +1118,22 @@ off-grid rate edits. Each compares all 4,097 adopted samples, source phase and
 FIFO against an independent direct-C-ABI A-reset reference. Restored-source-control
 refusal and a fresh request use the same lane. Lane ownership and permit tests
 cover snapshot reuse, stale work and bounded return saturation. The additional
-32 mode snapshot payloads now total 34,865,152 bytes before owner and queue overhead;
+32 mode snapshot payloads now total 35,389,440 bytes before owner and queue overhead;
 these structural counts do not establish total process memory or a deadline.
 An explicit Release profile filled all 1,024 spans in each of 32 mode snapshots:
-128 measured capture batches after eight warmups took 1,324.3 microseconds minimum,
-1,401.1 median, 1,610.8 p99 and 1,617.3 maximum on this host. Timing includes the fixed
+128 measured capture batches after eight warmups took 1,313.3 microseconds minimum,
+1,415.5 median, 1,564.5 p99 and 1,572.7 maximum on this host. Timing includes the fixed
 future assignment, excludes clearing, guards, projection, queues and Native replay,
-and establishes no callback deadline. Each scalar/optional span is 1,064 bytes;
-one 1,024-span allocation is 1,089,536 bytes. The profile actually allocates 32
-journals and 32 mode snapshots (69,730,304 span bytes). Adding the 64 admitted SET
-slots derives 139,460,608 span bytes; this does not bound earlier control captures.
+and establishes no callback deadline. Each scalar/optional span is 1,080 bytes;
+one 1,024-span allocation is 1,105,920 bytes. The profile actually allocates 32
+journals and 32 mode snapshots (70,778,880 span bytes). Adding the 64 admitted SET
+work owners derives 141,557,760 span bytes. The canonical transition epoch adds
+16 bytes per span and 2,097,152 bytes across those 128 span allocations compared
+with the earlier selection-history layout. Request inline storage is 2,384 bytes
+and its preparation enum is 2,400 bytes; those are separate from span payloads.
 Allocator, Arc, queue, Native and PCM storage are separate. These measurements
-replace the smaller pre-selection-history layout and its earlier host timings.
+replace the earlier layout and host timing profile; they are no whole-process
+resource or callback-deadline proof.
 
 Eight paused Intro/Tail variants at +24/-23 compare each of 12,290 resumed samples,
 phase and FIFO against the independent A-reset reference with no paused future

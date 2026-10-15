@@ -141,15 +141,45 @@ or a freshly admitted retained voice's birth lifetime, independently of the lane
 request epoch. No authority checks are removed. Adoption clears wet-success flags;
 paused ON remains armed until that voice actually renders after Resume.
 
+Same-held-set active-E endpoints use the genuine-history request entry point;
+ordinary/history-free requests keep their existing active-transition refusal.
+The single retained StemSet can resolve both logical roles, but every required
+role must independently match its actual immutable identity and strict backing at
+adoption. Finite coverage captures incoming/outgoing logical owners separately,
+so FullMix and empty masks cannot hide an outgoing dependency. A second distinct
+or unheld set remains a local refusal.
+
+Only after genuine replay reaches an active E does the prepared Native box receive
+an optional scalar expected-transition tracker. The original request/plan stays
+frozen. Productive source processing checks exact tracker phase before the read,
+advances it only after successful wet source processing by the actual output
+frame count and applied ratio, and keeps Some(inactive) after natural completion.
+A mismatch latches loss
+of the old active request's continuation proof. This distinguishes a completed
+outgoing role from premature clear or a later identical restart without a new
+queue, scheduler, allocation or callback Native call. The same Native/FIFO and
+filter state remains through the remaining ramp and after its proved completion.
+Transition progression retains a source-progress anchor, exact applied rate and
+integer output-frame count per actual rate epoch. Per-sample gains use the same
+anchored expression as boundary advancement. Live callbacks, copied span slices
+and worker projection therefore agree bit for bit across different partitions;
+only an actual rate change reanchors, and zero-frame calls leave state intact.
+Exact matching includes that complete canonical state without a tolerance.
+The independent A-reset PCM proofs do not establish continuous-O, acoustic,
+performer-deadline, full resources or Human acceptance.
+
 Eight public Intro/Tail cases at +24/-23, ON/OFF, compare every 4,097 adopted PCM
 samples against an independent scalar/direct-C-ABI A-reset oracle, including
 off-grid source-rate changes. Ownership/recycle and independent permit regressions
 are separate evidence. With copied selection/backing context, additional mode
-span storage is 32 * 1,089,536 = 34,865,152 bytes before work owners/queues. The
-Release host profile measured 1,401.1 microseconds median for 32 full snapshots
+span storage is 32 * 1,105,920 = 35,389,440 bytes before work owners/queues. The
+current Release host profile measured 1,415.5 microseconds median for 32 full snapshots
 plus fixed future assignment; 32 journals + 64 admitted SET + 32 mode span payloads
-derive 139,460,608 bytes. This historical profile excluded earlier control captures;
-the separate pitch-work custody limit below now bounds their work storage. Whole-process
+derive 141,557,760 bytes. The canonical transition epoch adds 16 bytes per span,
+or 2,097,152 bytes across these 128 span allocations. The profile actually allocated
+32 journal and 32 mode span blocks; SET storage is derived from its separate
+64-owner custody bound. Request inline storage is 2,384 bytes and its preparation
+enum is 2,400 bytes, counted separately from spans. Whole-process
 resources and performer deadlines
 remain open. This bounded engineering does not certify continuous-O equivalence,
 acoustic quality, the full B5/B6/P6 matrix or Human acceptance.

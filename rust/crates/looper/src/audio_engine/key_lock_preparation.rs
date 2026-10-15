@@ -346,7 +346,7 @@ impl KeyLockPreparationLane {
                 .and_then(|guard| {
                     let mut endpoint = PitchSourceSnapshot {
                         sample: feed.sample.clone(),
-                        stems: feed.stems.cloned(),
+                        stems: feed.stems.or(feed.outgoing_stems).cloned(),
                         accepted: feed.accepted,
                         sample_rate_hz: feed.sample_rate_hz,
                         paused: context.paused,
@@ -357,7 +357,7 @@ impl KeyLockPreparationLane {
                     if !endpoint.project_output_frames(delta) {
                         return None;
                     }
-                    endpoint.into_request(
+                    endpoint.into_history_request(
                         permit.clone().with_source_feed_guard(guard),
                         feed.pitch_intent,
                         feed.key_lock,
@@ -1113,7 +1113,7 @@ mod tests {
                     frames,
                 );
                 playback.advance(frames);
-                transition.advance_fractional(frames as f64 * ratio);
+                transition.advance_output_frames(frames, ratio);
             }
             playback.chunk(1024);
             let position = playback.position();

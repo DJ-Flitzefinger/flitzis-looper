@@ -213,7 +213,7 @@ fn render_partitions(
             output.extend([buffers[0][frame], buffers[1][frame]]);
         }
         playback.advance(frames);
-        reader.transition.advance_fractional(frames as f64 * ratio);
+        reader.transition.advance_output_frames(frames, ratio);
         remaining -= frames;
         partition += 1;
     }
@@ -302,7 +302,7 @@ fn render_changing_rate(
             .unwrap();
         output.extend_from_slice(&buffers[0]);
         playback.advance(frames);
-        reader.transition.advance_fractional(frames as f64 * ratio);
+        reader.transition.advance_output_frames(frames, ratio);
         consumed += frames;
         partition += 1;
     }

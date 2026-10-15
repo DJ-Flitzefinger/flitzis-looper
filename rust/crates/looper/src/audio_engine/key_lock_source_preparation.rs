@@ -276,7 +276,7 @@ impl<'a> PreparedSourceStream<'a> {
         );
         self.plan
             .transition
-            .advance_fractional(frames as f64 * self.feed.tempo_ratio());
+            .advance_output_frames(frames, self.feed.tempo_ratio());
         self.feed.advance(frames);
     }
 

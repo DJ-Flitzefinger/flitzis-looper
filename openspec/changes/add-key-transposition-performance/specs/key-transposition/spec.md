@@ -309,10 +309,36 @@ Reader reconstruction from a shared cache without an admitted Mixer StemSet
 SHALL take the new operation's admitted data-publication stamp; an unbound cache
 placeholder SHALL NOT be promoted to admitted provenance by retaining it.
 
-This bounded contract SHALL NOT admit a still-active selection transition at E,
-unheld historical readers or a second distinct StemSet without its own physical
-owner proof. Those cases SHALL remain request-local refusal with the old
-productive tuple retained and a later valid request on the same worker usable.
+This bounded contract MAY admit a selection transition still active at the
+unchanged E only through genuine source-feed replay, when one actually held
+StemSet proves every required incoming and outgoing logical reader. FullMix and
+empty-mask roles SHALL NOT erase a required stem owner. Exact adoption SHALL
+retain the original phase, ramp gains/from/duration, source/timing/window authority
+and strict physical backing checks for every required role. History-free or
+backward constant reconstruction SHALL NOT authorize an active-E endpoint.
+
+An adopted active-E Native owner SHALL carry a bounded scalar expected-transition
+state. Before each productive source chunk the actual ramp SHALL match that
+state exactly; only the same successful source consumption may advance it by
+the actual source-frame progress. Deterministic completion MAY remove an outgoing
+reader dependency without replacing/resetting Native, FIFO or filter state.
+The completed tracker SHALL remain owned, so premature clearing, wrong progress,
+changed from/duration and a later identical restarted ramp SHALL NOT borrow its
+old proof. Pause SHALL contribute no source progress; Resume SHALL continue the
+same prepared owner and remaining actual ramp.
+
+Source-selection transition state and every rendered ramp gain SHALL be invariant
+under callback, snapshot-slice and worker chunk partitions of the same actual
+output-frame/rate chronology. Each constant applied-rate epoch SHALL retain one
+canonical source-progress anchor and integer output-frame count; only an actual
+rate change may reanchor that epoch. Zero-frame calls SHALL contribute no progress
+or epoch change. Exact endpoint comparison SHALL retain this canonical state
+without adding a numerical tolerance to prepared adoption.
+
+Unheld historical readers or a second distinct StemSet without its own physical
+owner proof SHALL remain request-local refusal with the old productive tuple
+retained and a later valid request on the same worker usable. This extension SHALL
+NOT certify continuous-O equality, acoustic quality or a performer deadline.
 Existing constant endpoint priming MAY retain deliberate pre-origin start
 semantics only after its whole required actual interval proves the same
 rate/read/selection contract without a gap. A settled source clock alone SHALL
@@ -336,6 +362,31 @@ contract. A bounded suffix or matching FIFO counts SHALL NOT certify equality to
 Native processing continuously from O or acoustic transition quality. Separate
 continuous-reference diagnostics SHALL retain their actual results; the original
 acoustic, performer-deadline and full B5/B6 acceptance gates SHALL remain required.
+
+#### Scenario: A paused active selection endpoint adopts its own prepared tuple
+- **GIVEN** a voice paused during a real same-held-set selection ramp with genuine retained source reads
+- **WHEN** SET or a prospective Key Lock request prepares at its original E
+- **THEN** both actual reader roles and the exact paused ramp SHALL be proved at adoption
+- **AND** Resume SHALL retain that Native/FIFO/filter owner while consuming the remaining ramp and after its natural completion
+- **AND** original T/E, source phase and transport SHALL remain unchanged
+
+#### Scenario: Transition progress cannot reuse an earlier endpoint proof
+- **WHEN** an active-E prepared owner observes premature clear, changed progress/from/duration or an identical restarted ramp after completion
+- **THEN** that mismatched feed SHALL NOT count as successful productive use of the old proof
+- **AND** exact adoption and current source/permit checks SHALL remain strict
+
+#### Scenario: Callback partitions preserve the original active endpoint
+- **GIVEN** a genuine active selection ramp at a fractional applied source rate
+- **WHEN** the same F-to-E output interval is projected in one chunk and consumed in different callback partitions, including 17 versus 3 plus 14 frames
+- **THEN** exact transition state and every rendered source sample SHALL agree at the original E and through the remaining ramp
+- **AND** off-grid actual rate changes SHALL establish the same new epochs on live, sliced-history and worker paths
+- **AND** zero-frame calls SHALL NOT alter that agreement or widen adoption authority
+
+#### Scenario: Outgoing-only and empty-mask endpoints retain their owners
+- **WHEN** active-E FullMix or an empty selected mask still requires a stem reader on either side
+- **THEN** complete and finite paths SHALL prove every required physical role before adoption
+- **AND** missing, foreign-generation, truncated or unheld data SHALL refuse locally without replacing the old effective tuple
+- **AND** a later valid original request on the same worker SHALL remain usable
 
 #### Scenario: Off-grid rate edits precede an expanded moving SET
 - **GIVEN** a voice with actual rate edits away from Native block boundaries and an Intro or Tail passage into Normal inside its retained pre-F history

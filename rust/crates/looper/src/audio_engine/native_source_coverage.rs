@@ -9,7 +9,7 @@ use super::constant_timing::AcceptedTimingProjection;
 use super::productive_source_history::ProductiveSourceBinding;
 use super::source_playback::SourcePlayback;
 use super::source_reader::{
-    ExplicitSeekMode, FrameRange, SourceLoopDomain, SourceReadPlan, StemReadSets,
+    ExplicitSeekMode, FrameRange, SourceLoopDomain, SourceReadPlan, StemReadSets, StemTransition,
     prepared_stem_set_matches_sample,
 };
 use crate::messages::{
@@ -241,7 +241,8 @@ pub(crate) struct NormalLoopCoverage {
     resident: ResidentBinding,
     plan: SourceReadPlan,
     playback: SourcePlayback,
-    stems: Option<StemCoverage>,
+    incoming_stems: Option<StemCoverage>,
+    outgoing_stems: Option<StemCoverage>,
     #[cfg(test)]
     pub(crate) prepared_taps: super::source_reader::TapReadObservation,
 }
@@ -255,19 +256,50 @@ impl NormalLoopCoverage {
         plan: SourceReadPlan,
         playback: &SourcePlayback,
     ) -> Option<Self> {
-        if !normal_loop_feed_available(sample, stems, sample_rate_hz, accepted, plan, playback) {
+        Self::capture_with_readers(
+            sample,
+            StemReadSets::new(stems, None),
+            sample_rate_hz,
+            accepted,
+            plan,
+            playback,
+        )
+    }
+
+    /// Capture both logical selection roles independently of their physical reader slots.
+    /// One real held set may satisfy both roles, including a selected empty mask.
+    pub(crate) fn capture_with_readers(
+        sample: &SampleBuffer,
+        readers: StemReadSets<'_>,
+        sample_rate_hz: u32,
+        accepted: Option<AcceptedTimingProjection>,
+        plan: SourceReadPlan,
+        playback: &SourcePlayback,
+    ) -> Option<Self> {
+        if !normal_loop_feed_available_with_readers(
+            sample,
+            readers,
+            sample_rate_hz,
+            accepted,
+            plan,
+            playback,
+        ) {
             return None;
         }
-        let stems = plan
-            .required_read_sets(StemReadSets::new(stems, None))
-            .current;
         Some(Self {
             source: sample.residency.as_ref()?.source.clone(),
             binding: ProductiveSourceBinding::new(sample, sample_rate_hz, accepted),
             resident: sample.resident_binding()?,
             plan,
             playback: *playback,
-            stems: stems.map(StemCoverage::capture),
+            incoming_stems: readers
+                .for_selection(plan.selection)
+                .map(StemCoverage::capture),
+            outgoing_stems: plan
+                .transition
+                .required_from_selection()
+                .and_then(|selection| readers.for_selection(selection))
+                .map(StemCoverage::capture),
             #[cfg(test)]
             prepared_taps: super::source_reader::TapReadObservation::default(),
         })
@@ -283,9 +315,92 @@ impl NormalLoopCoverage {
         playback: &SourcePlayback,
         exact_window: bool,
     ) -> bool {
-        let stems = plan
-            .required_read_sets(StemReadSets::new(stems, None))
-            .current;
+        self.matches_with_readers(
+            sample,
+            StemReadSets::new(stems, None),
+            sample_rate_hz,
+            accepted,
+            plan,
+            playback,
+            exact_window,
+        )
+    }
+
+    /// Pending preparation retains its original transition contract. Exact adoption also
+    /// compares the advanced plan/clock outside this finite physical-coverage proof.
+    pub(crate) fn matches_with_readers(
+        &self,
+        sample: &SampleBuffer,
+        readers: StemReadSets<'_>,
+        sample_rate_hz: u32,
+        accepted: Option<AcceptedTimingProjection>,
+        plan: SourceReadPlan,
+        playback: &SourcePlayback,
+        exact_window: bool,
+    ) -> bool {
+        self.plan
+            .transition
+            .matches_source_contract(plan.transition)
+            && self.matches_reader_data(
+                sample,
+                readers,
+                sample_rate_hz,
+                accepted,
+                plan,
+                playback,
+                exact_window,
+            )
+    }
+
+    /// An originally active adopted ramp needs the caller's independently advanced scalar
+    /// transition proof, including after completion. Missing proof never relaxes its contract.
+    pub(crate) fn matches_effective_with_readers(
+        &self,
+        sample: &SampleBuffer,
+        readers: StemReadSets<'_>,
+        sample_rate_hz: u32,
+        accepted: Option<AcceptedTimingProjection>,
+        plan: SourceReadPlan,
+        playback: &SourcePlayback,
+        expected_transition: Option<StemTransition>,
+    ) -> bool {
+        let transition_matches = if self.plan.transition.is_active() {
+            expected_transition.is_some_and(|expected| expected.matches_exact(plan.transition))
+        } else {
+            self.plan
+                .transition
+                .matches_source_contract(plan.transition)
+        };
+        transition_matches
+            && self.matches_reader_data(
+                sample,
+                readers,
+                sample_rate_hz,
+                accepted,
+                plan,
+                playback,
+                false,
+            )
+    }
+
+    /// Caller proves transition continuity before a completed outgoing role may disappear.
+    /// Every role still read by this plan retains its own captured physical identity.
+    fn matches_reader_data(
+        &self,
+        sample: &SampleBuffer,
+        readers: StemReadSets<'_>,
+        sample_rate_hz: u32,
+        accepted: Option<AcceptedTimingProjection>,
+        plan: SourceReadPlan,
+        playback: &SourcePlayback,
+        exact_window: bool,
+    ) -> bool {
+        let matches_role =
+            |owner: Option<&StemCoverage>, stems: Option<&PreparedStemSet>| match (owner, stems) {
+                (None, None) => true,
+                (Some(owner), Some(stems)) => owner.matches(stems, exact_window),
+                _ => false,
+            };
         let binding = ProductiveSourceBinding::new(sample, sample_rate_hz, accepted);
         sample
             .residency
@@ -295,17 +410,28 @@ impl NormalLoopCoverage {
             && self.binding.accepted == accepted
             && (!exact_window || sample.resident_binding() == Some(self.resident))
             && self.plan.matches_source_contract(plan)
-            && self
-                .plan
-                .transition
-                .matches_source_contract(plan.transition)
             && self.playback.matches_rate_target(playback)
-            && normal_loop_feed_available(sample, stems, sample_rate_hz, accepted, plan, playback)
-            && match (&self.stems, stems) {
-                (None, None) => true,
-                (Some(owner), Some(stems)) => owner.matches(stems, exact_window),
-                _ => false,
-            }
+            && normal_loop_feed_available_with_readers(
+                sample,
+                readers,
+                sample_rate_hz,
+                accepted,
+                plan,
+                playback,
+            )
+            && matches_role(
+                self.incoming_stems.as_ref(),
+                readers.for_selection(plan.selection),
+            )
+            && plan
+                .transition
+                .required_from_selection()
+                .is_none_or(|selection| {
+                    matches_role(
+                        self.outgoing_stems.as_ref(),
+                        readers.for_selection(selection),
+                    )
+                })
     }
 }
 
@@ -654,7 +780,7 @@ mod tests {
                             assert!(observed.max_frame.unwrap() < fixture.sample.resident_end());
                             right_reads += observed.right_reads;
                             playback.advance(frames);
-                            plan.transition.advance_fractional(frames as f64 * ratio);
+                            plan.transition.advance_output_frames(frames, ratio);
                             let position = playback.position();
                             plan.frame_pos = position.frame;
                             plan.seek_mode = position.seek_mode;
@@ -1043,6 +1169,231 @@ mod tests {
                     assert!(capture(Some(&missing)).is_none());
                 }
             }
+        }
+    }
+
+    #[test]
+    fn finite_coverage_retains_logical_roles_from_real_outgoing_and_shared_reader_slots() {
+        fn capture(
+            fixture: &Fixture,
+            readers: StemReadSets<'_>,
+            plan: SourceReadPlan,
+        ) -> Option<NormalLoopCoverage> {
+            NormalLoopCoverage::capture_with_readers(
+                &fixture.sample,
+                readers,
+                RATE,
+                None,
+                plan,
+                &fixture.playback,
+            )
+        }
+
+        let fixture = Fixture::new(1000.25);
+        let empty = StemRenderSelection::for_stems(&fixture.stems, 0);
+        let selected = StemRenderSelection::for_stems(&fixture.stems, 10);
+        for (from, to, readers) in [
+            (
+                empty,
+                StemRenderSelection::full_mix(),
+                StemReadSets::new(None, Some(&fixture.stems)),
+            ),
+            (
+                StemRenderSelection::full_mix(),
+                empty,
+                StemReadSets::new(Some(&fixture.stems), None),
+            ),
+            (
+                empty,
+                selected,
+                StemReadSets::new(Some(&fixture.stems), Some(&fixture.stems)),
+            ),
+        ] {
+            let plan = SourceReadPlan {
+                selection: to,
+                transition: StemTransition::start(from, 128),
+                ..fixture.plan
+            };
+            let coverage = capture(&fixture, readers, plan).unwrap();
+            assert!(coverage.matches_with_readers(
+                &fixture.sample,
+                readers,
+                RATE,
+                None,
+                plan,
+                &fixture.playback,
+                true,
+            ));
+            assert!(capture(&fixture, StemReadSets::default(), plan).is_none());
+            let mut foreign = fixture.stems.clone();
+            foreign.complete_set_identity = Arc::new(*fixture.stems.complete_set_identity);
+            let mut republished = fixture.stems.clone();
+            republished.publication.expected += 1;
+            for replacement in [&foreign, &republished] {
+                let changed = StemReadSets::new(
+                    readers.current.map(|_| replacement),
+                    readers.outgoing.map(|_| replacement),
+                );
+                for exact_window in [false, true] {
+                    assert!(!coverage.matches_with_readers(
+                        &fixture.sample,
+                        changed,
+                        RATE,
+                        None,
+                        plan,
+                        &fixture.playback,
+                        exact_window,
+                    ));
+                }
+            }
+            let foreign_readers = StemReadSets::new(
+                readers.current.map(|_| &foreign),
+                readers.outgoing.map(|_| &foreign),
+            );
+            assert!(capture(&fixture, foreign_readers, plan).is_none());
+            for component in 0..STEM_BUFFER_COUNT {
+                let mut truncated = fixture.stems.clone();
+                truncated.stems[component].samples = Arc::from([0.0; 2]);
+                let changed = StemReadSets::new(
+                    readers.current.map(|_| &truncated),
+                    readers.outgoing.map(|_| &truncated),
+                );
+                assert!(capture(&fixture, changed, plan).is_none());
+                assert!(!coverage.matches_with_readers(
+                    &fixture.sample,
+                    changed,
+                    RATE,
+                    None,
+                    plan,
+                    &fixture.playback,
+                    false,
+                ));
+            }
+        }
+    }
+
+    #[test]
+    fn effective_active_coverage_requires_exact_progress_and_only_releases_completed_outgoing_role()
+    {
+        let fixture = Fixture::new(1000.25);
+        let empty = StemRenderSelection::for_stems(&fixture.stems, 0);
+        for (from, to) in [
+            (empty, StemRenderSelection::full_mix()),
+            (StemRenderSelection::full_mix(), empty),
+        ] {
+            let mut plan = SourceReadPlan {
+                selection: to,
+                transition: StemTransition::start(from, 128),
+                ..fixture.plan
+            };
+            plan.transition.advance_fractional(27.25);
+            let readers = StemReadSets::new(Some(&fixture.stems), Some(&fixture.stems));
+            let coverage = NormalLoopCoverage::capture_with_readers(
+                &fixture.sample,
+                readers,
+                RATE,
+                None,
+                plan,
+                &fixture.playback,
+            )
+            .unwrap();
+            let matches = |plan: SourceReadPlan, playback: &SourcePlayback, readers, expected| {
+                coverage.matches_effective_with_readers(
+                    &fixture.sample,
+                    readers,
+                    RATE,
+                    None,
+                    plan,
+                    playback,
+                    expected,
+                )
+            };
+            assert!(!matches(plan, &fixture.playback, readers, None));
+            assert!(matches(
+                plan,
+                &fixture.playback,
+                readers,
+                Some(plan.transition)
+            ));
+            let initial_transition = plan.transition;
+            let mut wrong_phase = initial_transition;
+            wrong_phase.advance_fractional(0.25);
+            assert!(!matches(
+                plan,
+                &fixture.playback,
+                readers,
+                Some(wrong_phase)
+            ));
+            let premature_clear = SourceReadPlan {
+                transition: StemTransition::default(),
+                ..plan
+            };
+            assert!(!matches(
+                premature_clear,
+                &fixture.playback,
+                StemReadSets::default(),
+                Some(initial_transition),
+            ));
+            assert!(!matches(
+                plan,
+                &fixture.playback,
+                StemReadSets::default(),
+                Some(initial_transition),
+            ));
+
+            let mut playback = fixture.playback;
+            for frames in [1, 73, 511] {
+                let (frames, ratio) = playback.chunk(frames);
+                playback.advance(frames);
+                plan.transition.advance_output_frames(frames, ratio);
+                let position = playback.position();
+                plan.frame_pos = position.frame;
+                plan.seek_mode = position.seek_mode;
+                assert!(!matches(plan, &playback, readers, None));
+                assert!(matches(plan, &playback, readers, Some(plan.transition)));
+                assert_eq!(
+                    coverage.matches_with_readers(
+                        &fixture.sample,
+                        readers,
+                        RATE,
+                        None,
+                        plan,
+                        &playback,
+                        true,
+                    ),
+                    plan.transition.is_active(),
+                );
+            }
+            assert!(!plan.transition.is_active());
+            assert!(!matches(plan, &playback, readers, Some(initial_transition)));
+            let settled_readers =
+                StemReadSets::new(to.required_stem_hash().map(|_| &fixture.stems), None);
+            assert!(matches(
+                plan,
+                &playback,
+                settled_readers,
+                Some(plan.transition),
+            ));
+            assert_eq!(
+                matches(
+                    plan,
+                    &playback,
+                    StemReadSets::default(),
+                    Some(plan.transition),
+                ),
+                to.required_stem_hash().is_none(),
+                "an empty incoming mask still requires its original held set",
+            );
+            let different_selection = SourceReadPlan {
+                selection: StemRenderSelection::for_stems(&fixture.stems, 2),
+                ..plan
+            };
+            assert!(!matches(
+                different_selection,
+                &playback,
+                readers,
+                Some(plan.transition),
+            ));
         }
     }
 

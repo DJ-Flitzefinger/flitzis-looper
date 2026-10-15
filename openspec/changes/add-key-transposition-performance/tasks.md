@@ -88,13 +88,14 @@ mask and both FullMix ramps, including active F ramps settled by original E;
 each compares 4,097 PCM samples with an independent scalar/direct-Native A-reset
 oracle, exact phase/FIFO and retained Native owner (observed max error zero).
 Public selection/source ABA refuses original work and permits fresh same-worker
-retry; paused active-E ramps, missing/other/stale owners remain refusals. Sliced
+retry. At that checkpoint paused active-E ramps remained refused; missing/other/stale
+owners remain refusals in the active-E extension as well. Sliced
 reader roles are checked before, at and after ramp completion. A tracked storage
 WindowACK preserves admitted stem data and productive Native/FIFO/PCM while a
 fresh request proves its own current Native authority; old strict requests and
 changed held publication identities and actual Native source/timing revocations
-still refuse. Full active-E/multiple
-set, acoustic, continuous-O, P6/RSS and Human gates remain open.
+still refuse. The bounded active-E extension is tracked separately below;
+multiple-set, acoustic, continuous-O, P6/RSS and Human gates remain open.
 The real Controller stopped-ALL/ordinary-Play/explicit-ALL regression retains the
 original admitted data stamp and Native owner across independent receipts.
 A bounded two-subscriber preload proof inspects actual queued adoption without
@@ -128,6 +129,18 @@ each subscriber's own pending then accepted/current publication. The full existi
   endpoint on the existing lower-priority worker lane; prove a consumable ready hit
   E=T for stopped/playing content with fresh original authority, stale-source/geometry/tuple misses and distinct
   burst records. This bounded vertical closes no full deadline/acoustic/resource gate.
+- [x] Active-E selection: prove both logical reader roles from one genuinely held
+  StemSet through genuine-history SET/MODE preparation, exact adoption, paused
+  resume and scalar-tracked natural ramp completion without Native/FIFO replacement;
+  retain strict finite coverage, ABA/unheld refusal and same-worker recovery.
+  Public paused MODE/SET and moving quantized SET compare independent A-reset
+  PCM, phase/FIFO and retained Native through completion; strict finite role and
+  stale/ABA regressions pass. Review exposed a real 17 versus 3+14 callback
+  partition failure; canonical state and per-sample gains now share actual rate
+  epochs, with exact state/PCM/slicing/coalescing and Release regressions.
+  Current impacted Debug pitch101/1 ignored and ordinary42, private Release/API
+  and84 Python tests pass; the same independent reviewer cleared the repair.
+  This bounded extension closes no continuous-O, acoustic, deadline, P6 or Human gate.
 - [ ] K1a: stable semantic SET/SET_RETRIGGER Learn/persistence, immutable checkbox
   variant/two simultaneous mappings/zero/NoteOff/two-device selection-to-pitch ordering.
 - [ ] K1b: common state/correction/result/resets, simultaneous stay-open menus,

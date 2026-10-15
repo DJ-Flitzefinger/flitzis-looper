@@ -5119,7 +5119,7 @@ impl RtMixer {
                     } else {
                         voice.stretch.record_wet_output();
                     }
-                    source_transition.advance_fractional(chunk_frames as f64 * tempo_ratio);
+                    source_transition.advance_output_frames(chunk_frames, tempo_ratio);
                     let pad_dsp_chain = &mut pad_dsp_chains[voice.sample_id];
                     pad_dsp_chain.bind_source(
                         ProductiveSourceBinding::new(

@@ -275,8 +275,8 @@ impl RtMixer {
         let permit = work
             .capture_history_permit(&snapshot.sample, snapshot.sample_rate_hz)
             .ok_or(PitchActionReject::SourceChanged)?;
-        snapshot
-            .into_request(
+        if work.source_feed_future.is_some() {
+            snapshot.into_history_request(
                 permit,
                 render.pitch,
                 render.key_lock,
@@ -284,8 +284,18 @@ impl RtMixer {
                 work.action.sequence(),
                 work.action.epoch(),
             )
-            .map(Some)
-            .ok_or(PitchActionReject::PreparationFailed)
+        } else {
+            snapshot.into_request(
+                permit,
+                render.pitch,
+                render.key_lock,
+                execution_frame,
+                work.action.sequence(),
+                work.action.epoch(),
+            )
+        }
+        .map(Some)
+        .ok_or(PitchActionReject::PreparationFailed)
     }
 
     fn pitch_action_candidate_matches(
@@ -296,14 +306,13 @@ impl RtMixer {
         output_frame: u64,
     ) -> bool {
         let render = work.action.render();
-        let stems = snapshot
-            .plan
-            .required_read_sets(StemReadSets::new(snapshot.stems.as_ref(), None))
-            .current;
+        let Some(readers) = snapshot.readers() else {
+            return false;
+        };
         let feed = ProductiveSourceFeed {
             sample: &snapshot.sample,
-            stems,
-            outgoing_stems: None,
+            stems: readers.current,
+            outgoing_stems: readers.outgoing,
             sample_rate_hz: snapshot.sample_rate_hz,
             accepted: snapshot.accepted,
             plan: snapshot.plan,
@@ -332,14 +341,14 @@ impl RtMixer {
         output_frame: u64,
     ) {
         let render = work.action.render();
-        let stems = snapshot
-            .plan
-            .required_read_sets(StemReadSets::new(snapshot.stems.as_ref(), None))
-            .current;
+        // The pre-claim exact candidate match has already proved these same fixed pins.
+        let readers = snapshot
+            .readers()
+            .expect("claimed pitch retains both reader roles");
         let feed = ProductiveSourceFeed {
             sample: &snapshot.sample,
-            stems,
-            outgoing_stems: None,
+            stems: readers.current,
+            outgoing_stems: readers.outgoing,
             sample_rate_hz: snapshot.sample_rate_hz,
             accepted: snapshot.accepted,
             plan: snapshot.plan,

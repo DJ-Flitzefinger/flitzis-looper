@@ -437,36 +437,119 @@ mod selection_mode_history_tests {
     }
 
     #[test]
-    fn paused_mid_selection_ramp_refuses_mode_at_active_e_without_consuming_old_owner() {
-        let pitch = PitchIntent::new(-5, -18).unwrap();
-        let (mut fixture, _source, stems, origin) = selection_setup(false, pitch);
-        controls(&mut fixture, &stems, origin, false);
-        pause_public(&mut fixture);
-        let phase = fixture.voice(0).source_playback;
-        let native = fixture.voice(0).stretch.native_state_address();
-        let fifo = fixture.voice(0).stretch.pending_fifo_frames();
-        let generation = fixture.voice(0).generation;
-        let starts = fixture.starts(0);
-        let filter = filter_history_probe(&fixture.mixer.pad_dsp_chains[0]);
-        let request = submit_scalar(&mut fixture, true);
-        let pcm = fixture.render_to(origin + E as u64 + 1);
-        assert!(pcm.iter().all(|sample| *sample == 0.0));
-        assert!(fixture.mixer.pending_key_lock_tuples[0].is_none());
-        let status = fixture.mixer.pad_key_lock_status[0].unwrap();
-        assert_eq!(status.request_id, request);
-        assert_eq!(status.state, "error");
-        assert!(!status.ready && !status.effective);
-        assert!(!fixture.mixer.pad_key_lock_enabled[0]);
-        assert!(fixture.mixer.stem_transitions[0].is_active());
-        assert!(fixture.voice(0).source_playback.matches_exact(&phase));
-        assert_eq!(fixture.voice(0).stretch.native_state_address(), native);
-        assert_eq!(fixture.voice(0).stretch.pending_fifo_frames(), fifo);
-        assert_eq!(fixture.voice(0).generation, generation);
-        assert_eq!(fixture.starts(0), starts);
-        assert_eq!(
-            filter_history_probe(&fixture.mixer.pad_dsp_chains[0]),
-            filter
-        );
-        assert!(!fixture.voice(0).stretch.wet_mode_failed());
+    fn paused_active_e_mode_adopts_both_roles_and_keeps_native_through_resumed_completion() {
+        for pitch in [
+            PitchIntent::new(-5, -18).unwrap(),
+            PitchIntent::new(6, 18).unwrap(),
+        ] {
+            for old in [false, true] {
+                for full_mix_e in [false, true] {
+                    let (mut fixture, source, stems, origin) = selection_setup(old, pitch);
+                    controls(&mut fixture, &stems, origin, full_mix_e);
+                    let timeline = normal_timeline(F + 4_097);
+                    let selections = selection_timeline(&timeline, full_mix_e);
+                    let total = pitch.total_semitones();
+                    let (reset, _) = bounded_origin(&timeline, F, total, !old);
+                    let first_pitch = timeline[reset + BLOCK - 1].pitch(total, !old);
+                    let mut reference = DirectNative::new(first_pitch);
+                    for active in reset..F {
+                        reference.sample(
+                            scalar_pcm(&source, &stems, timeline[active], selections[active]),
+                            timeline[active].pitch(total, !old),
+                        );
+                    }
+                    pause_public(&mut fixture);
+                    let original_transition = fixture.mixer.stem_transitions[0];
+                    let phase = fixture.voice(0).source_playback;
+                    let old_native = fixture.voice(0).stretch.native_state_address();
+                    let old_fifo = fixture.voice(0).stretch.pending_fifo_frames();
+                    let generation = fixture.voice(0).generation;
+                    let starts = fixture.starts(0);
+                    let filter = filter_history_probe(&fixture.mixer.pad_dsp_chains[0]);
+                    let request = submit_scalar(&mut fixture, !old);
+                    wait_own_candidate(&mut fixture, request, "paused active-E mode preparation");
+                    let execution = fixture.mixer.pending_key_lock_tuples[0]
+                        .as_ref()
+                        .unwrap()
+                        .execution
+                        .unwrap();
+                    assert_eq!(execution, origin + E as u64);
+                    assert!(
+                        fixture
+                            .render_to(execution)
+                            .iter()
+                            .all(|sample| *sample == 0.0)
+                    );
+                    assert_eq!(fixture.voice(0).stretch.native_state_address(), old_native);
+                    assert_eq!(fixture.voice(0).stretch.pending_fifo_frames(), old_fifo);
+                    assert!(fixture.render(1).iter().all(|sample| *sample == 0.0));
+                    assert!(fixture.mixer.pending_key_lock_tuples[0].is_none());
+                    let adopted = fixture.voice(0).stretch.native_state_address();
+                    assert_ne!(adopted, old_native);
+                    assert!(fixture.voice(0).source_playback.matches_exact(&phase));
+                    assert!(fixture.mixer.stem_transitions[0].is_active());
+                    assert_eq!(
+                        fixture.voice(0).stretch.pending_fifo_frames(),
+                        reference.fifo()
+                    );
+                    assert_eq!(
+                        filter_history_probe(&fixture.mixer.pad_dsp_chains[0]),
+                        filter
+                    );
+                    let status = fixture.mixer.pad_key_lock_status[0].unwrap();
+                    assert_eq!(status.request_id, request);
+                    assert!(status.ready);
+                    assert_eq!(status.effective, !old);
+                    resume_public(&mut fixture);
+                    let mut active = F;
+                    for frames in PARTITIONS {
+                        let pcm = fixture.render(frames);
+                        for (offset, actual) in pcm.iter().enumerate() {
+                            let at = active + offset;
+                            let expected = reference.sample(
+                                scalar_pcm(&source, &stems, timeline[at], selections[at]),
+                                timeline[at].pitch(total, !old),
+                            );
+                            assert!(
+                                (*actual - expected).abs() < 2.0e-6,
+                                "k={total} old={old} fullmix={full_mix_e} active={at} actual={actual} expected={expected}"
+                            );
+                        }
+                        active += frames;
+                        assert_phase(&fixture, timeline[active]);
+                        assert_eq!(
+                            fixture.voice(0).stretch.pending_fifo_frames(),
+                            reference.fifo()
+                        );
+                        assert_eq!(
+                            fixture.voice(0).stretch.native_state_address(),
+                            adopted,
+                            "natural completion must retain its own Native"
+                        );
+                        assert_eq!(fixture.voice(0).generation, generation);
+                        assert_eq!(fixture.starts(0), starts);
+                        assert!(!fixture.voice(0).stretch.wet_mode_failed());
+                    }
+                    assert!(!fixture.mixer.stem_transitions[0].is_active());
+                    let status = fixture.mixer.pad_key_lock_status[0].unwrap();
+                    assert_eq!(status.request_id, request);
+                    assert!(status.ready);
+                    assert_eq!(status.effective, !old);
+                    // Internal fault injection deliberately preserves source/permit authority:
+                    // the scalar consumption proof itself must fence an identical restart.
+                    fixture.mixer.stem_transitions[0] = original_transition;
+                    fixture.render(1);
+                    assert_eq!(fixture.voice(0).stretch.native_state_address(), adopted);
+                    assert!(!fixture.voice(0).stretch.wet_current_source_output_ready());
+                    fixture.mixer.stem_transitions[0].clear();
+                    fixture.render(1);
+                    assert_eq!(fixture.voice(0).stretch.native_state_address(), adopted);
+                    assert!(
+                        !fixture.voice(0).stretch.wet_current_source_output_ready(),
+                        "clearing the restarted ramp cannot resurrect the consumed proof"
+                    );
+                }
+            }
+        }
     }
 }
