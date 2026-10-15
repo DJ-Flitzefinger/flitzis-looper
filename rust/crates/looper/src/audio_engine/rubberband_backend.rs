@@ -412,7 +412,7 @@ fn validate_channel_count(expected: usize, actual: usize) -> Result<(), RubberBa
 }
 
 #[repr(C)]
-struct RubberBandLiveStateOpaque {
+pub(super) struct RubberBandLiveStateOpaque {
     _private: [u8; 0],
 }
 

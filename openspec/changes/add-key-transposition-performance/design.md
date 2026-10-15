@@ -63,6 +63,35 @@ no MIDI PauseHold is added. Final gates and exact row coverage are in the progra
 
 ## Current implementation boundary — 2026-10-15, acceptance still open
 
+Moving SET owns a preallocated 1024-span/262144-active-frame source-read journal
+per voice and a separate immutable snapshot per accepted action. Record actual
+post-chunk/pre-advance reads, including DRY, and fence read gaps and lifecycle
+changes. Callback storage contains scalar clocks, plans and comparison markers;
+the worker owns all Native resets, allocations and replay. Copied complete-stem
+PCM identities and original publication epoch owner/value prevent old-address
+aliasing. Historical plans describe data only; replay needs current held readers'
+whole physical coverage and fresh strong endpoint authority.
+
+Preserve the existing constant endpoint path only after its required actual
+interval proves the same rate/read/selection contract, with deliberate constant
+start priming before O retained. Otherwise replay genuine spans plus frozen F-to-E
+from canonical A on the voice's O/512 lattice. Query H after configuring each
+encountered pitch, expand the suffix without clipping retention, initialize with
+the first completed real block's pitch profile, then replay without resets.
+Restore the exact E clock/plan and adapter phase. Gaps, insufficient or evicted
+history, missing old contexts and stale voice/source-trajectory fences refuse locally.
+The journal epoch fences real source/rate/domain/selection/Pause/Resume edits
+without discarding genuine past. Stretch retains its separate DSP preparation
+epoch, so source-neutral prospective Key Lock work does not cancel an earlier
+SET. A source edit restored before E still invalidates the frozen future; a later
+mode tuple retains its original captured-pitch check after the earlier SET applies.
+
+Independent Intro/Tail A-reset PCM and refusal/retry on the same public worker are
+bounded engineering evidence. They do not certify an arbitrarily continuous
+Native state: the separate aligned-suffix experiment records actual large PCM
+differences despite equal FIFO counts. Full continuous/acoustic, prospective mode,
+deadline, resource/216 and Human gates remain open.
+
 The first automatic source-specific endpoint reserve is limited to one currently
 selected Normal start, independently of whether that content is stopped or playing.
 It captures a fresh physical loop-start trajectory, never a live SET/voice history.

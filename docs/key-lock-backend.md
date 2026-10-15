@@ -989,8 +989,43 @@ preparation and unavailable contexts remain explicit refusals with previous
 effective audio retained, rather than silently clamping pitch or changing tempo.
 No cascade or complete transformed pitch PCM is introduced.
 
-This nonzero-pitch production path remains an engineering delivery. Variable-rate
-SET past/history reconstruction, performer deadlines, the full B5 quality/latency/
+Moving SET now retains a bounded journal of actual successful source reads,
+including dry reads: 1024 scalar spans and at most 262,144 active frames per voice.
+Start/seek/restart/Stop fence it, Pause advances no frames, and failed reads form
+explicit gaps. Each accepted SET copies the available suffix into its own
+preallocated snapshot; the existing worker never reads mutable callback storage.
+It replays genuine rate/read-plan epochs and the frozen F-to-E projection. Old
+stem descriptors include copied complete PCM identities and original publication
+generations; current held readers must cover the actual historical contexts.
+Historical markers supply data provenance, with fresh strong endpoint authority
+still required at adoption. Constant endpoint reuse first checks the real required
+read/selection chronology, including gaps and completed selection changes.
+Source/rate/domain/selection edits and Pause/Resume fence each captured F-to-E
+projection without discarding its genuine past. This source-trajectory epoch is
+separate from Stretch's DSP preparation epoch: a later prospective Key Lock
+preparation cannot cancel an earlier SET on an unchanged source. A later tuple
+using the old numeric pitch still fails its own captured-pitch check after that
+SET applies at its original E. Restoring a changed rate before E cannot hide the
+intervening source edit.
+
+Variable replay declares a fresh reset A on the voice's active-frame origin O's
+512-frame lattice. H queries configure each actual pitch before measuring its
+reset-dependent bound. Alignment can add up to 511 frames and must fit the full
+retention budget. The cold profile uses the pitch of the first completed real
+Native block; later spans do not reset Native. Independent Intro/Tail tests at
+k=+24 compare every adopted sample, phase and FIFO against this declared A-reset
+contract, and reject a backwards-constant reference. Public insufficient-history
+refusal preserves the original action and old PCM, with a later valid action
+using the same worker.
+
+This bounded nonzero-pitch production path remains an engineering delivery.
+A-reset provenance does not prove equality to Native continuous from voice birth:
+an off-grid 48 kHz/k=+24 probe retained identical FIFO counts but observed maximum
+PCM differences of 0.30 to 0.48 even with genuine aligned suffixes of 4,205 to
+49,261 frames.
+That negative equivalence result supplies no acoustic verdict; the original
+quality gates remain required. Broader variable history and
+prospective mode coverage, performer deadlines, the full B5 quality/latency/
 unity-transition matrix, B6 and Human app/device/listening/visual acceptance remain
 open. R2 layout/hold and B7 captured pitch+retrigger retain their prepared ownership
 guards. Neither this surface nor persisted K-META completes whole-arrangement,

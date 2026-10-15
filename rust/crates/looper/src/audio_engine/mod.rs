@@ -117,6 +117,7 @@ pub use pad_pair::{CapturedPadPair, PadPairAcknowledgement, PadPairTicket};
 pub use pitch_actions::CapturedPitchAction;
 mod prepared_native_history;
 pub(crate) mod prepared_source;
+mod prepared_source_feed;
 mod prepared_stems_work;
 mod productive_source_history;
 mod progress;
@@ -152,6 +153,7 @@ pub(crate) use scalar_grid::ScalarSourceGrid;
 #[cfg(test)]
 mod l3_source_reader_tests;
 mod scheduler;
+mod source_feed_history;
 mod source_grid;
 mod source_playback;
 mod source_reader;

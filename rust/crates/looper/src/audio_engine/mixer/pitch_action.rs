@@ -192,7 +192,7 @@ impl RtMixer {
 
     pub(crate) fn capture_pitch_action_request(
         &self,
-        work: &PitchActionWork,
+        work: &mut PitchActionWork,
         callback_frame: u64,
         execution_frame: u64,
     ) -> Result<Option<NativeHistoryRequest>, PitchActionReject> {
@@ -216,6 +216,23 @@ impl RtMixer {
                 // Capture must make the same decision; execution rechecks it before claim.
                 if self.pitch_action_scalar_ready(work, &snapshot, index)? {
                     return Ok(None);
+                }
+                if work.preparation_mode() == PitchActionPreparationMode::Endpoint
+                    && !snapshot.paused
+                {
+                    let voice = &self.voices[index];
+                    if !voice
+                        .source_feed_history
+                        .capture_into(&mut work.source_feed)
+                    {
+                        return Err(PitchActionReject::PreparationFailed);
+                    }
+                    let delta = execution_frame
+                        .checked_sub(callback_frame)
+                        .ok_or(PitchActionReject::PreparedMismatch)?;
+                    work.source_feed_future = Some((snapshot.playback, snapshot.plan, delta));
+                    work.source_feed_voice =
+                        Some((voice.history_lifetime.clone(), voice.generation));
                 }
                 let project_to = match work.preparation_mode() {
                     PitchActionPreparationMode::Endpoint => execution_frame,
@@ -578,8 +595,15 @@ impl RtMixer {
                     mixer.pad_pitch_intent[id] = render.pitch;
                     mixer.pad_key_lock_enabled[id] = render.key_lock;
                     mixer.pad_key_lock_pending_on[id] = false;
-                    mixer.pad_key_lock_request_id[id] = 0;
-                    mixer.pad_key_lock_rejected[id] = false;
+                    // A later prospective mode still owns its independent receipt. Its
+                    // captured-pitch guard will reject a now-stale tuple on the next poll;
+                    // this earlier SET must not erase that request's eventual status.
+                    if mixer.pending_key_lock_tuples[id].is_none()
+                        && mixer.queued_key_lock_tuples[id].is_none()
+                    {
+                        mixer.pad_key_lock_request_id[id] = 0;
+                        mixer.pad_key_lock_rejected[id] = false;
+                    }
                     if let Some(index) = index {
                         mixer.voice_pitch_intent[index] = render.pitch;
                         mixer.voice_key_lock[index] = render.key_lock;

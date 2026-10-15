@@ -52,8 +52,13 @@ open below. One independent review and its repair follow-ups are complete. The
 impacted Native suites, focused Python checks against the private Release, API
 preflight, types, formatting and affected strict specification checks pass; this
 does not certify device/hearing/live release or Human acceptance. Native lint
-passes with remaining warnings. Actual variable SourceFeed history, full acoustic
-predicates, resource/216 proofs and performer deadlines remain open.
+passes with remaining warnings. A bounded genuine moving-SET SourceFeed journal
+and worker replay now have independent Intro/Tail A-reset PCM evidence and
+refusal/retry on the same public worker. This does not certify continuous-from-birth
+equivalence:
+the separate aligned-suffix probe retains its real negative PCM result. Broader
+history/prospective mode coverage, full acoustic predicates, resource/216 proofs
+and performer deadlines remain open.
 
 - [x] K-META: neutral persisted source correction/epochs/base/extra/retrigger model;
   all12x12 same-mode roots, +6 tie/idempotence/unknown/mode/reset/late-analysis races.

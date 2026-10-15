@@ -2,6 +2,7 @@ use crate::audio_engine::buffer_retirement::AudioBufferRetirement;
 use crate::audio_engine::constant_timing::AcceptedTimingProjection;
 use crate::audio_engine::key_lock_preparation::KeyLockPreparationLane;
 use crate::audio_engine::native_history_permit::NativeSourceAdmission;
+use crate::audio_engine::source_feed_history::SourceFeedHistory;
 use crate::audio_engine::source_grid::SourceGrid;
 use crate::audio_engine::source_playback::SourcePlayback;
 pub(crate) use crate::audio_engine::source_reader::ExplicitSeekMode;
@@ -94,6 +95,7 @@ pub struct VoiceSlot {
     pub(crate) frozen_stems: Option<FrozenStemView>,
     pub(crate) generation: u64,
     pub(crate) history_lifetime: Arc<AtomicU64>,
+    pub(crate) source_feed_history: SourceFeedHistory,
     pub(crate) source_admission: Option<NativeSourceAdmission>,
     pub stretch: StretchProcessor,
     pub paused: bool,
@@ -117,6 +119,7 @@ impl VoiceSlot {
             frozen_stems: None,
             generation: 0,
             history_lifetime: Arc::default(),
+            source_feed_history: SourceFeedHistory::new(),
             source_admission: None,
             stretch: StretchProcessor::with_preparation_lane(channels, preparation),
             paused: false,
@@ -130,6 +133,7 @@ impl VoiceSlot {
         retirement: &mut impl AudioBufferRetirement,
     ) {
         // The source-address history is valid only while this voice retains its PCM pin.
+        self.source_feed_history.reset();
         self.stretch.reset();
         if let Some(old_sample) = self.sample.take() {
             retirement.retire_sample(old_sample);
@@ -172,6 +176,7 @@ impl VoiceSlot {
 
     #[cfg(test)]
     pub(crate) fn stop(&mut self) {
+        self.source_feed_history.reset();
         self.stretch.reset();
         self.sample = None;
         self.frozen_stems = None;
@@ -179,6 +184,7 @@ impl VoiceSlot {
     }
 
     pub(crate) fn stop_rt(&mut self, retirement: &mut impl AudioBufferRetirement) {
+        self.source_feed_history.reset();
         self.stretch.reset();
         if let Some(sample) = self.sample.take() {
             retirement.retire_sample(sample);
@@ -221,6 +227,7 @@ impl VoiceSlot {
         _start_output_frame: Option<u64>,
         retirement: &mut impl AudioBufferRetirement,
     ) {
+        self.source_feed_history.reset();
         self.retire_frozen_stems(retirement);
         self.source_loop_region = None;
         self.generation = self.generation.saturating_add(1);
@@ -244,6 +251,7 @@ impl VoiceSlot {
         mode: ExplicitSeekMode,
         _output_frame: Option<u64>,
     ) {
+        self.source_feed_history.reset();
         self.generation = self.generation.saturating_add(1);
         self.history_lifetime
             .store(self.generation, Ordering::Release);
@@ -255,9 +263,15 @@ impl VoiceSlot {
     }
 
     pub(crate) fn clear_explicit_seek(&mut self) {
-        self.stretch.invalidate_prepared();
+        self.invalidate_source_preparation();
         self.explicit_seek_mode = ExplicitSeekMode::Normal;
         self.source_playback.clear_explicit_seek();
+    }
+
+    /// Source controls fence captured future reads separately from DSP-only mode preparation.
+    pub(crate) fn invalidate_source_preparation(&mut self) {
+        self.source_feed_history.invalidate_captures();
+        self.stretch.invalidate_prepared();
     }
 
     pub fn is_playing_sample(&self, sample_id: usize) -> bool {
@@ -266,13 +280,13 @@ impl VoiceSlot {
 
     /// Pause playback: set the paused flag. Does not change frame_pos.
     pub fn pause(&mut self) {
-        self.stretch.invalidate_prepared();
+        self.invalidate_source_preparation();
         self.paused = true;
     }
 
     /// Resume playback: clear the paused flag.
     pub fn resume(&mut self) {
-        self.stretch.invalidate_prepared();
+        self.invalidate_source_preparation();
         self.paused = false;
     }
 }

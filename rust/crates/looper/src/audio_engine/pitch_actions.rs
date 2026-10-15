@@ -11,6 +11,9 @@ use super::native_history_permit::{NativeHistoryContext, NativeHistoryPermit};
 use super::pitch_intent::PitchIntent;
 use super::prepared_native_history::{NativeAdapterState, NativeHistoryRequest};
 use super::rubberband_backend::{RubberBandError, RubberBandLiveShifter};
+use super::source_feed_history::SourceFeedSnapshot;
+use super::source_playback::SourcePlayback;
+use super::source_reader::SourceReadPlan;
 use crate::messages::SampleBuffer;
 use pyo3::prelude::*;
 use std::sync::{
@@ -769,6 +772,9 @@ pub(crate) struct PitchActionWork {
     own_window: Option<InputPadBinding>,
     preparation_mode: PitchActionPreparationMode,
     preparation_required: bool,
+    pub(crate) source_feed: SourceFeedSnapshot,
+    pub(crate) source_feed_future: Option<(SourcePlayback, SourceReadPlan, u64)>,
+    pub(crate) source_feed_voice: Option<(Arc<AtomicU64>, u64)>,
 }
 
 impl PitchActionWork {
@@ -787,6 +793,9 @@ impl PitchActionWork {
             own_window: None,
             preparation_mode: PitchActionPreparationMode::Endpoint,
             preparation_required: true,
+            source_feed: SourceFeedSnapshot::new(),
+            source_feed_future: None,
+            source_feed_voice: None,
         }))
     }
 
@@ -922,11 +931,25 @@ impl PitchActionWork {
         !self.captured && self.request.is_none() && self.candidate.source.is_none()
     }
 
+    fn source_feed_current(&self) -> bool {
+        self.source_feed_future.is_none()
+            || (self.source_feed.is_current()
+                && self
+                    .source_feed_voice
+                    .as_ref()
+                    .is_some_and(|(owner, epoch)| {
+                        *epoch != u64::MAX && owner.load(Ordering::Acquire) == *epoch
+                    }))
+    }
+
     /// Worker-only native reset/warm/read/allocate; each action retains its own tuple and epoch.
     pub(crate) fn prepare(&mut self) -> Result<(), PitchActionReject> {
         self.action.control_guard(self.own_window)?;
         if !self.preparation_required {
             return Ok(());
+        }
+        if !self.source_feed_current() {
+            return Err(PitchActionReject::PreparationFailed);
         }
         let request = self
             .request
@@ -943,11 +966,22 @@ impl PitchActionWork {
         }
         match self.preparation_mode {
             PitchActionPreparationMode::Endpoint => {
-                self.candidate.prepare_source_at_endpoint(request)
+                if let Some(future) = self.source_feed_future {
+                    self.candidate.prepare_source_with_feed_history(
+                        request,
+                        &self.source_feed,
+                        future,
+                    )
+                } else {
+                    self.candidate.prepare_source_at_endpoint(request)
+                }
             }
             PitchActionPreparationMode::ForwardHistory => self.candidate.prepare_source(request),
         }
         .map_err(|_| PitchActionReject::PreparationFailed)?;
+        if !self.source_feed_current() {
+            return Err(PitchActionReject::PreparationFailed);
+        }
         self.action.control_guard(self.own_window)?;
         let status = self.action.owner.status.load(Ordering::Acquire);
         if !matches!(status, PREPARING | SCHEDULED)
@@ -975,6 +1009,9 @@ impl PitchActionWork {
         }
         if !self.preparation_required {
             return Ok(guard);
+        }
+        if !self.source_feed_current() {
+            return Err(PitchActionReject::PreparationFailed);
         }
         let render = self.action.render();
         let source = self

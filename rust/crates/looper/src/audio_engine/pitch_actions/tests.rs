@@ -288,6 +288,9 @@ fn worker_returns_failed_original_owner_and_callback_lane_retires_intact() {
         own_window: None,
         preparation_mode: PitchActionPreparationMode::Endpoint,
         preparation_required: true,
+        source_feed: SourceFeedSnapshot::new(),
+        source_feed_future: None,
+        source_feed_voice: None,
     });
     let (mut lane, worker) = PitchActionPreparation::new(1).unwrap();
     let mut retained = Some(work);
@@ -326,6 +329,9 @@ fn deferred_execution_coordinate_is_once_only_and_original_input_target_is_uncha
         own_window: None,
         preparation_mode: PitchActionPreparationMode::Endpoint,
         preparation_required: true,
+        source_feed: SourceFeedSnapshot::new(),
+        source_feed_future: None,
+        source_feed_voice: None,
     };
     assert_eq!(
         work.freeze_execution_frame(699),
@@ -431,6 +437,9 @@ fn action_capture_requires_own_epoch_arc_even_when_all_scalar_pitch_source_and_d
         own_window: None,
         preparation_mode: PitchActionPreparationMode::Endpoint,
         preparation_required: true,
+        source_feed: SourceFeedSnapshot::new(),
+        source_feed_future: None,
+        source_feed_voice: None,
     };
     let rejected = match work.rt_capture(request) {
         Err(request) => request,
@@ -454,6 +463,9 @@ fn no_preparation_completion_keeps_set_pending_until_actual_application() {
         own_window: None,
         preparation_mode: PitchActionPreparationMode::Endpoint,
         preparation_required: true,
+        source_feed: SourceFeedSnapshot::new(),
+        source_feed_future: None,
+        source_feed_voice: None,
     };
     work.freeze_execution_frame(705).unwrap();
     assert!(work.preparation_required());
@@ -486,6 +498,9 @@ fn fixed_claim_guard_remains_valid_inside_existing_placement_marker() {
         own_window: None,
         preparation_mode: PitchActionPreparationMode::Endpoint,
         preparation_required: true,
+        source_feed: SourceFeedSnapshot::new(),
+        source_feed_future: None,
+        source_feed_voice: None,
     };
     let guard = work.current_guard().unwrap();
     let placement = guard.binding.placement.unwrap();
@@ -510,6 +525,9 @@ fn history_mode_is_explicit_and_cannot_be_changed_after_preparation_free_complet
         own_window: None,
         preparation_mode: PitchActionPreparationMode::Endpoint,
         preparation_required: true,
+        source_feed: SourceFeedSnapshot::new(),
+        source_feed_future: None,
+        source_feed_voice: None,
     };
     work.set_preparation_mode(PitchActionPreparationMode::ForwardHistory)
         .unwrap();

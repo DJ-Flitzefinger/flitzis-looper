@@ -188,7 +188,7 @@ impl PitchRuntime {
         let execution = execution_frame(work.action.original_due_frame(), callback, required);
         let capture = work
             .freeze_execution_frame(execution)
-            .and_then(|()| mixer.capture_pitch_action_request(&work, callback, execution));
+            .and_then(|()| mixer.capture_pitch_action_request(&mut work, callback, execution));
         let result = match capture {
             Ok(Some(request)) => work.rt_capture(request).map_err(|request| {
                 let retained = work.retain_rejected_capture(request);

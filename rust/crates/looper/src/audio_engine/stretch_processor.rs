@@ -412,12 +412,14 @@ impl StretchProcessor {
 
     /// Read the owning voice's real canonical source before feeding live native/adapter state.
     /// Projection refreshes retain chronological history only across exact source continuity.
+    /// Return whether the canonical source read succeeded, including dry bypass. A refused
+    /// read must remain a gap even when the mixer's logical source clock advances.
     pub(crate) fn process_source(
         &mut self,
         mut feed: ProductiveSourceFeed<'_>,
         output_frames: usize,
         _preserve_pitch: bool,
-    ) {
+    ) -> bool {
         let readers = feed
             .plan
             .required_read_sets(StemReadSets::new(feed.stems, feed.outgoing_stems));
@@ -428,7 +430,7 @@ impl StretchProcessor {
         self.wet_source_output_emitted = false;
         let frames = output_frames.min(DEFAULT_BLOCK_SAMPLES);
         if frames == 0 {
-            return;
+            return false;
         }
         let Ok(pitch_scale) = feed
             .pitch_intent
@@ -436,7 +438,7 @@ impl StretchProcessor {
         else {
             self.silence_output(frames);
             self.wet_render_failed = true;
-            return;
+            return false;
         };
         let wet = (pitch_scale - 1.0).abs() > PITCH_SCALE_EPSILON
             || self.retain_aligned_unity_history(feed.pitch_intent, feed.key_lock);
@@ -465,7 +467,7 @@ impl StretchProcessor {
                 // Never consume missing-tap zeros or touch productive native/FIFO/history state.
                 self.silence_output(frames);
                 self.wet_render_failed = wet;
-                return;
+                return false;
             }
         }
         if self.prospective_request.is_none() {
@@ -556,6 +558,7 @@ impl StretchProcessor {
             // Dry bypass and failed reserve admission own no productive wet history.
             self.productive_history = None;
         }
+        true
     }
 
     /// Returns fixed feed storage whose first `output_frames` samples the source reader fills.

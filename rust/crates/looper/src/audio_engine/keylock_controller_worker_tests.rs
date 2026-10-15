@@ -1024,6 +1024,9 @@ fn actual_python_global_all_banks_local_override_supersession_and_one_target_fai
 #[test]
 fn actual_python_pending_unload_reload_inherits_default_and_rejects_previous_source_feedback() {
     let mut harness = Harness::new(false, &[0]);
+    Python::attach(|py| {
+        harness.engine.borrow_mut(py).test_output_format = Some((RATE, 2));
+    });
     let generation = Python::attach(|py| {
         harness
             .engine
@@ -1095,7 +1098,80 @@ fn actual_python_pending_unload_reload_inherits_default_and_rejects_previous_sou
     harness.call0("initialize");
     harness.settle(&[0], true, false);
     harness.assert_origin(0, None);
-    let generation = harness.start();
+    Python::attach(|py| harness.engine.borrow_mut(py).set_speed(RATIO).unwrap());
+    harness.drain();
+    harness.target("start", 0);
+    let ControlMessage::CapturePadStartTarget(start) = harness.consumer.peek().unwrap() else {
+        panic!("reload start must retain its original target before PreparedStart");
+    };
+    let start = start.clone();
+    let capture_frame = harness.frame;
+    // The real controller's Window ACK and Native preparation retain this input's
+    // original target. Host readiness polling never advances the output clock.
+    wait_until(Duration::from_secs(10), || {
+        harness.drain();
+        assert_eq!(harness.frame, capture_frame);
+        assert!(
+            harness
+                .callback
+                .mixer
+                .voices
+                .iter()
+                .all(|voice| !voice.active)
+        );
+        assert_ne!(start.state(), "rejected", "{:?}", start.reason());
+        let runtime = harness.callback.mixer.pitch_runtime.as_mut().unwrap();
+        runtime.poll();
+        runtime.has_ready_action(start.sequence())
+    });
+    assert_eq!(start.original_frame(), Some(capture_frame));
+    let execution = start.execution_frame().unwrap();
+    assert!(execution > capture_frame);
+    assert_eq!(
+        harness.callback.scheduler.peek_next_target_frame(),
+        Some(execution)
+    );
+    assert!(start.accepted());
+    assert_eq!(start.effective_frame(), None);
+    // An ON start at the non-unity ratio owns a later E. Run actual silent
+    // callback partitions up to E, then execute E without consuming a sample.
+    while harness.frame < execution {
+        let frames = (execution - harness.frame).min(257) as usize;
+        assert!(
+            harness
+                .render(frames, false)
+                .iter()
+                .all(|value| *value == 0.0)
+        );
+        harness
+            .callback
+            .transport
+            .advance_by_rendered_frames(frames);
+        assert!(
+            harness
+                .callback
+                .mixer
+                .voices
+                .iter()
+                .all(|voice| !voice.active)
+        );
+        assert_eq!(start.effective_frame(), None);
+    }
+    harness.render(0, false);
+    assert_eq!(start.state(), "applied", "{:?}", start.reason());
+    assert_eq!(start.original_frame(), Some(capture_frame));
+    assert_eq!(start.execution_frame(), Some(execution));
+    assert_eq!(start.effective_frame(), Some(execution));
+    assert!(harness.callback.scheduler.is_empty());
+    let generation = harness
+        .callback
+        .mixer
+        .voices
+        .iter()
+        .find(|voice| voice.is_playing_sample(0))
+        .unwrap()
+        .generation;
+    harness.assert_phase(generation);
     wait_until(Duration::from_secs(10), || {
         harness.render(257, true);
         harness.assert_phase(generation);

@@ -987,6 +987,9 @@ impl RtMixer {
 
     pub(crate) fn set_loop_region_frames(&mut self, id: usize, start: usize, end: Option<usize>) {
         if id < NUM_SAMPLES && self.loop_context_available(id, start, end) {
+            if self.pad_loop_start_frame[id] != start || self.pad_loop_end_frame[id] != end {
+                self.invalidate_source_for_pad(id);
+            }
             self.pad_loop_start_frame[id] = start;
             self.pad_loop_end_frame[id] = end;
         }
@@ -1691,7 +1694,7 @@ impl RtMixer {
                     voice.source_loop_region = previous_region;
                     // Pending Current-Bank history never becomes retained-voice work.
                     // Fresh capture below uses the admitted voice's distinct authority.
-                    voice.stretch.invalidate_prepared();
+                    voice.invalidate_source_preparation();
                     voice.retire_frozen_stems(retirement);
                     voice.frozen_stems = Some(FrozenStemView {
                         set: self.prepared_stems[id].clone(),
@@ -2714,7 +2717,7 @@ impl RtMixer {
         self.prepared_stems[id] = Some(stems);
         self.release_pair_components[id] = false;
         self.stem_transitions[id].clear();
-        self.invalidate_prepared_for_pad(id);
+        self.invalidate_source_for_pad(id);
         true
     }
 
@@ -2754,7 +2757,7 @@ impl RtMixer {
                     && sample.same_source(&timing.reference)
             });
         if valid {
-            self.invalidate_prepared_for_pad(id);
+            self.invalidate_source_for_pad(id);
             self.pad_accepted_timing[id] = Some(projection);
             // PCM remains immutable and source-bound. Every retained stem reads
             // the newly adopted full revision through the same SourcePlayback.
@@ -2854,7 +2857,7 @@ impl RtMixer {
             } else if !self.input_runtime_ownership.is_source_tracked() {
                 self.current_timing_acknowledgements.clear(id);
             }
-            self.invalidate_prepared_for_pad(id);
+            self.invalidate_source_for_pad(id);
         }
     }
 
@@ -3028,7 +3031,7 @@ impl RtMixer {
             return;
         }
 
-        self.invalidate_prepared_for_pad(id);
+        self.invalidate_source_for_pad(id);
 
         if self.sample_is_active(id) {
             self.stem_transitions[id] =
@@ -3591,12 +3594,12 @@ impl RtMixer {
             return;
         }
 
-        self.invalidate_prepared_for_all();
+        self.invalidate_source_for_all();
         self.speed = speed;
     }
 
     pub fn set_bpm_lock(&mut self, enabled: bool) {
-        self.invalidate_prepared_for_all();
+        self.invalidate_source_for_all();
         self.bpm_lock_enabled = enabled;
         if !enabled {
             self.master_period_seconds = None;
@@ -4015,7 +4018,7 @@ impl RtMixer {
 
     pub(crate) fn set_master_period(&mut self, period: f64) {
         if period.is_finite() && period > 0.0 {
-            self.invalidate_prepared_for_all();
+            self.invalidate_source_for_all();
             self.master_period_seconds = Some(period);
         }
     }
@@ -4035,7 +4038,7 @@ impl RtMixer {
         });
 
         self.pad_period_seconds[id] = bpm;
-        self.invalidate_prepared_for_pad(id);
+        self.invalidate_source_for_pad(id);
     }
 
     pub fn set_pad_timing_metadata(&mut self, id: usize, metadata: PadTimingMetadata) {
@@ -4046,21 +4049,30 @@ impl RtMixer {
         let frame = metadata.phase_anchor_s * self.sample_rate_hz as f64;
         if frame.is_finite() {
             self.pad_phase_anchor_frame[id] = frame.round();
-            self.invalidate_prepared_for_pad(id);
+            self.invalidate_source_for_pad(id);
         }
     }
 
+    fn invalidate_source_for_pad(&mut self, id: usize) {
+        for voice in &mut self.voices {
+            if voice.is_playing_sample(id) {
+                voice.invalidate_source_preparation();
+            }
+        }
+    }
+
+    fn invalidate_source_for_all(&mut self) {
+        for voice in &mut self.voices {
+            voice.invalidate_source_preparation();
+        }
+    }
+
+    /// Mode-only DSP work must not invalidate an independent captured source trajectory.
     fn invalidate_prepared_for_pad(&mut self, id: usize) {
         for voice in &mut self.voices {
             if voice.is_playing_sample(id) {
                 voice.stretch.invalidate_prepared();
             }
-        }
-    }
-
-    fn invalidate_prepared_for_all(&mut self) {
-        for voice in &mut self.voices {
-            voice.stretch.invalidate_prepared();
         }
     }
 
@@ -5019,16 +5031,28 @@ impl RtMixer {
                             .capture(&sample, sample_rate_hz as u32)
                         })
                     };
-                    voice.stretch.process_source(
+                    let outgoing_stem_set = frozen
+                        .map_or(outgoing_stem_slots[voice.sample_id].as_ref(), |view| {
+                            view.outgoing.as_ref()
+                        });
+                    let history_context = super::source_feed_history::SourceFeedContext::new(
+                        ProductiveSourceBinding::new(
+                            &sample,
+                            sample_rate_hz as u32,
+                            voice.source_timing.accepted,
+                        ),
+                        source_plan.required_read_sets(StemReadSets::new(
+                            prepared_stem_set,
+                            outgoing_stem_set,
+                        )),
+                    );
+                    let source_read = voice.stretch.process_source(
                         ProductiveSourceFeed {
                             pitch_intent,
                             key_lock,
                             sample: &sample,
                             stems: prepared_stem_set,
-                            outgoing_stems: frozen
-                                .map_or(outgoing_stem_slots[voice.sample_id].as_ref(), |view| {
-                                    view.outgoing.as_ref()
-                                }),
+                            outgoing_stems: outgoing_stem_set,
                             sample_rate_hz: sample_rate_hz as u32,
                             accepted: voice.source_timing.accepted,
                             plan: source_plan,
@@ -5039,6 +5063,16 @@ impl RtMixer {
                         chunk_frames,
                         key_lock,
                     );
+                    if source_read {
+                        voice.source_feed_history.record_success(
+                            voice.source_playback,
+                            source_plan,
+                            history_context,
+                            chunk_frames,
+                        );
+                    } else {
+                        voice.source_feed_history.record_gap(chunk_frames);
+                    }
                     if pad_key_lock_pending_on[voice.sample_id]
                         && (pending_dry
                             || voice.stretch.wet_mode_failed()
