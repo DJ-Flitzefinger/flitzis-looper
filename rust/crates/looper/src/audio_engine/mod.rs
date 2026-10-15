@@ -779,6 +779,7 @@ pub struct AudioEngine {
     loop_acceptance: Arc<loop_acceptance::SharedLoopAcceptance>,
     current_constant_timing: Mutex<Vec<Vec<constant_timing::CurrentConstantTimingRecord>>>,
     input_runtime_ownership: Arc<input_runtime_binding::InputRuntimeOwnership>,
+    pitch_work_capacity: pitch_publication::PitchWorkCapacity,
     global_timing_revision: Arc<AtomicU64>,
     constant_timing_busy: Arc<AtomicBool>,
     offline_jobs: analysis_jobs::OfflineJobs,
@@ -1234,6 +1235,7 @@ impl AudioEngine {
             input_runtime_ownership: Arc::new(
                 input_runtime_binding::InputRuntimeOwnership::tracked(),
             ),
+            pitch_work_capacity: pitch_publication::PitchWorkCapacity::default(),
             global_timing_revision: Arc::new(AtomicU64::new(1)),
             constant_timing_busy: Arc::new(AtomicBool::new(false)),
             offline_jobs: analysis_jobs::OfflineJobs::default(),
@@ -3055,7 +3057,35 @@ impl AudioEngine {
             .or_else(|| self.test_control_channels.as_ref().map(|_| (48_000, 1)));
         let (sample_rate, channels) =
             format.ok_or_else(|| PyRuntimeError::new_err("Audio engine not initialized"))?;
-        let work = match PitchActionWork::new(action.clone(), sample_rate, channels) {
+        let mut producer = self
+            .control_producer()?
+            .lock()
+            .map_err(|_| PyRuntimeError::new_err("Failed to acquire producer lock"))?;
+        // The producer lock serializes staging with duplicate publication checks.
+        if action.is_published() {
+            return if action.state() == "rejected" {
+                Err(PyValueError::new_err(
+                    action.reason().unwrap_or("pitch action rejected"),
+                ))
+            } else {
+                Ok(true)
+            };
+        }
+        if producer.slots() == 0 {
+            if let Some(runtime) = &self.input_runtime {
+                let _ = runtime.cancel_pitch_capture(action, PitchActionReject::Capacity);
+            }
+            return Err(PyRuntimeError::new_err("pitch action queue is full"));
+        }
+        let Some(custody) = self.pitch_work_capacity.claim() else {
+            if let Some(runtime) = &self.input_runtime {
+                let _ = runtime.cancel_pitch_capture(action, PitchActionReject::Capacity);
+            }
+            return Err(PyRuntimeError::new_err(
+                "pitch action work capacity is full",
+            ));
+        };
+        let work = match PitchActionWork::new(action.clone(), sample_rate, channels, custody) {
             Ok(work) => work,
             Err(error) => {
                 if let Some(runtime) = &self.input_runtime {
@@ -3065,16 +3095,6 @@ impl AudioEngine {
                 return Err(PyRuntimeError::new_err(error.to_string()));
             }
         };
-        let mut producer = self
-            .control_producer()?
-            .lock()
-            .map_err(|_| PyRuntimeError::new_err("Failed to acquire producer lock"))?;
-        if producer.slots() == 0 {
-            if let Some(runtime) = &self.input_runtime {
-                let _ = runtime.cancel_pitch_capture(action, PitchActionReject::Capacity);
-            }
-            return Err(PyRuntimeError::new_err("pitch action queue is full"));
-        }
         action
             .mark_published()
             .map_err(|reason| PyValueError::new_err(reason.as_str()))?;

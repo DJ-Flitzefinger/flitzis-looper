@@ -281,7 +281,8 @@ fn worker_returns_failed_original_owner_and_callback_lane_retires_intact() {
     let original = action(ownership, "pitch.extra:2:set_retrigger");
     let work = Box::new(PitchActionWork {
         action: original.clone(),
-        candidate: Box::new(NativeAdapterState::new(None, 1)),
+        candidate: None,
+        render_format: (48_000, 1),
         request: None,
         captured: false,
         execution_frozen: false,
@@ -291,6 +292,9 @@ fn worker_returns_failed_original_owner_and_callback_lane_retires_intact() {
         source_feed: SourceFeedSnapshot::new(),
         source_feed_future: None,
         source_feed_voice: None,
+        _custody: super::super::pitch_publication::PitchWorkCapacity::default()
+            .claim()
+            .unwrap(),
     });
     let (mut lane, worker) = PitchActionPreparation::new(1).unwrap();
     let mut retained = Some(work);
@@ -322,7 +326,8 @@ fn deferred_execution_coordinate_is_once_only_and_original_input_target_is_uncha
     let original = action(ownership, "pitch.extra:2:set_retrigger");
     let mut work = PitchActionWork {
         action: original.clone(),
-        candidate: Box::new(NativeAdapterState::new(None, 1)),
+        candidate: None,
+        render_format: (48_000, 1),
         request: None,
         captured: false,
         execution_frozen: false,
@@ -332,6 +337,9 @@ fn deferred_execution_coordinate_is_once_only_and_original_input_target_is_uncha
         source_feed: SourceFeedSnapshot::new(),
         source_feed_future: None,
         source_feed_voice: None,
+        _custody: super::super::pitch_publication::PitchWorkCapacity::default()
+            .claim()
+            .unwrap(),
     };
     assert_eq!(
         work.freeze_execution_frame(699),
@@ -430,7 +438,8 @@ fn action_capture_requires_own_epoch_arc_even_when_all_scalar_pitch_source_and_d
     };
     let mut work = PitchActionWork {
         action: second,
-        candidate: Box::new(NativeAdapterState::new(None, 1)),
+        candidate: None,
+        render_format: (48_000, 1),
         request: None,
         captured: false,
         execution_frozen: false,
@@ -440,6 +449,9 @@ fn action_capture_requires_own_epoch_arc_even_when_all_scalar_pitch_source_and_d
         source_feed: SourceFeedSnapshot::new(),
         source_feed_future: None,
         source_feed_voice: None,
+        _custody: super::super::pitch_publication::PitchWorkCapacity::default()
+            .claim()
+            .unwrap(),
     };
     let rejected = match work.rt_capture(request) {
         Err(request) => request,
@@ -456,7 +468,8 @@ fn no_preparation_completion_keeps_set_pending_until_actual_application() {
     let original = action(ownership, "pitch.extra:2:set");
     let mut work = PitchActionWork {
         action: original.clone(),
-        candidate: Box::new(NativeAdapterState::new(None, 1)),
+        candidate: None,
+        render_format: (48_000, 1),
         request: None,
         captured: false,
         execution_frozen: false,
@@ -466,6 +479,9 @@ fn no_preparation_completion_keeps_set_pending_until_actual_application() {
         source_feed: SourceFeedSnapshot::new(),
         source_feed_future: None,
         source_feed_voice: None,
+        _custody: super::super::pitch_publication::PitchWorkCapacity::default()
+            .claim()
+            .unwrap(),
     };
     work.freeze_execution_frame(705).unwrap();
     assert!(work.preparation_required());
@@ -478,7 +494,7 @@ fn no_preparation_completion_keeps_set_pending_until_actual_application() {
         work.rt_ready(706),
         Err(PitchActionReject::PreparedMismatch)
     ));
-    assert!(work.candidate.source.is_none());
+    assert!(work.candidate.is_none());
     assert_eq!(
         work.set_preparation_mode(PitchActionPreparationMode::ForwardHistory),
         Err(PitchActionReject::PreparedMismatch)
@@ -491,7 +507,8 @@ fn fixed_claim_guard_remains_valid_inside_existing_placement_marker() {
     let original = action(ownership.clone(), "pitch.extra:2:set");
     let work = PitchActionWork {
         action: original,
-        candidate: Box::new(NativeAdapterState::new(None, 1)),
+        candidate: None,
+        render_format: (48_000, 1),
         request: None,
         captured: false,
         execution_frozen: false,
@@ -501,6 +518,9 @@ fn fixed_claim_guard_remains_valid_inside_existing_placement_marker() {
         source_feed: SourceFeedSnapshot::new(),
         source_feed_future: None,
         source_feed_voice: None,
+        _custody: super::super::pitch_publication::PitchWorkCapacity::default()
+            .claim()
+            .unwrap(),
     };
     let guard = work.current_guard().unwrap();
     let placement = guard.binding.placement.unwrap();
@@ -518,7 +538,8 @@ fn history_mode_is_explicit_and_cannot_be_changed_after_preparation_free_complet
     let original = action(ownership, "pitch.extra:0:set_retrigger");
     let mut work = PitchActionWork {
         action: original,
-        candidate: Box::new(NativeAdapterState::new(None, 1)),
+        candidate: None,
+        render_format: (48_000, 1),
         request: None,
         captured: false,
         execution_frozen: false,
@@ -528,6 +549,9 @@ fn history_mode_is_explicit_and_cannot_be_changed_after_preparation_free_complet
         source_feed: SourceFeedSnapshot::new(),
         source_feed_future: None,
         source_feed_voice: None,
+        _custody: super::super::pitch_publication::PitchWorkCapacity::default()
+            .claim()
+            .unwrap(),
     };
     work.set_preparation_mode(PitchActionPreparationMode::ForwardHistory)
         .unwrap();

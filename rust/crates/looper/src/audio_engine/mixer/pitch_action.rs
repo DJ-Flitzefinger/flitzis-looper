@@ -313,8 +313,11 @@ impl RtMixer {
             pitch_intent: render.pitch,
             key_lock: render.key_lock,
         };
+        let Some(candidate) = work.candidate.as_ref() else {
+            return false;
+        };
         self.voices[index].stretch.prepared_pitch_matches(
-            &work.candidate,
+            candidate,
             &feed,
             work.action.epoch(),
             work.action.sequence(),
@@ -347,7 +350,9 @@ impl RtMixer {
             key_lock: render.key_lock,
         };
         self.voices[index].stretch.adopt_prepared_pitch_claimed(
-            &mut work.candidate,
+            work.candidate
+                .as_mut()
+                .expect("ready pitch retains its own candidate"),
             &feed,
             work.action.sequence(),
         );

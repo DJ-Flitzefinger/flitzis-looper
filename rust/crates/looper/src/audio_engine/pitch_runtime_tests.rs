@@ -3,6 +3,9 @@
 #[path = "pitch_runtime_tests/source_feed_tests.rs"]
 pub(in crate::audio_engine) mod source_feed_tests;
 
+#[path = "pitch_runtime_tests/custody_tests.rs"]
+mod custody_tests;
+
 use super::*;
 use crate::audio_engine::audio_stream::{
     create_stream_mixer, drain_control_messages, render_scheduled_audio,
@@ -559,7 +562,13 @@ fn original_capture_cannot_target_a_refilled_source_or_a_foreign_engine() {
 fn publication_clone_never_creates_a_second_heavy_owner_or_attack() {
     let fixture = Fixture::new(false);
     let action = fixture.capture(0, "pitch.extra:0:set_retrigger");
-    let work = pitch_actions::PitchActionWork::new(action, RATE, 1).unwrap();
+    let work = pitch_actions::PitchActionWork::new(
+        action,
+        RATE,
+        1,
+        fixture.control.engine.pitch_work_capacity.claim().unwrap(),
+    )
+    .unwrap();
     let publication = Arc::new(pitch_publication::PitchActionPublication::new(work));
     let clone = publication.clone();
     assert!(publication.take().is_some());
@@ -769,6 +778,7 @@ fn assert_live_scalar_set_continuity(extra: i32, lock: bool) {
     }
     let starts = fixture.starts(0);
     let frame = fixture.transport.output_frame();
+    let native_creations = fixture.control.engine.pitch_work_capacity.allocations().1;
     let action = fixture.capture(0, &format!("pitch.extra:{extra}:set"));
     let timestamp = action.received_timestamp();
     assert_eq!(action.original_due_frame(), frame);
@@ -792,6 +802,10 @@ fn assert_live_scalar_set_continuity(extra: i32, lock: bool) {
     // The real scheduler drains E=F before rendering, without progressing audio or
     // waiting for an unnecessary worker. A deferred/preparing SET fails here.
     fixture.render(0);
+    assert_eq!(
+        fixture.control.engine.pitch_work_capacity.allocations().1,
+        native_creations
+    );
     assert!(
         action.effective(),
         "state={} reason={:?}",

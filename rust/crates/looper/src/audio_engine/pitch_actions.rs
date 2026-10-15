@@ -765,7 +765,8 @@ pub(crate) enum PitchActionPreparationMode {
 
 pub(crate) struct PitchActionWork {
     pub(crate) action: CapturedPitchAction,
-    pub(crate) candidate: Box<NativeAdapterState>,
+    pub(crate) candidate: Option<Box<NativeAdapterState>>,
+    render_format: (u32, usize),
     request: Option<NativeHistoryRequest>,
     captured: bool,
     execution_frozen: bool,
@@ -775,6 +776,8 @@ pub(crate) struct PitchActionWork {
     pub(crate) source_feed: SourceFeedSnapshot,
     pub(crate) source_feed_future: Option<(SourcePlayback, SourceReadPlan, u64, SourceFeedContext)>,
     pub(crate) source_feed_voice: Option<(Arc<AtomicU64>, u64)>,
+    // Must remain LAST: storage and displaced Native/source owners die before reuse.
+    _custody: super::pitch_publication::PitchWorkClaim,
 }
 
 impl PitchActionWork {
@@ -782,11 +785,21 @@ impl PitchActionWork {
         action: CapturedPitchAction,
         sample_rate_hz: u32,
         channels: usize,
+        custody: super::pitch_publication::PitchWorkClaim,
     ) -> Result<Box<Self>, RubberBandError> {
-        let native = RubberBandLiveShifter::new(sample_rate_hz, channels)?;
-        Ok(Box::new(Self {
+        if sample_rate_hz == 0 {
+            return Err(RubberBandError::InvalidSampleRate);
+        }
+        if u32::try_from(channels)
+            .ok()
+            .is_none_or(|channels| channels == 0)
+        {
+            return Err(RubberBandError::InvalidChannelCount);
+        }
+        let work = Box::new(Self {
             action,
-            candidate: Box::new(NativeAdapterState::new(Some(native), channels)),
+            candidate: None,
+            render_format: (sample_rate_hz, channels),
             request: None,
             captured: false,
             execution_frozen: false,
@@ -796,7 +809,11 @@ impl PitchActionWork {
             source_feed: SourceFeedSnapshot::new(),
             source_feed_future: None,
             source_feed_voice: None,
-        }))
+            _custody: custody,
+        });
+        #[cfg(test)]
+        work._custody.record_work_allocation();
+        Ok(work)
     }
 
     pub(crate) fn current_guard(&self) -> Result<PitchActionGuard, PitchActionReject> {
@@ -889,7 +906,7 @@ impl PitchActionWork {
         let render = self.action.render();
         if self.captured
             || self.request.is_some()
-            || self.candidate.source.is_some()
+            || self.candidate.is_some()
             || request.pitch_intent != render.pitch
             || request.key_lock != render.key_lock
             || request.request_id != self.action.sequence()
@@ -928,7 +945,7 @@ impl PitchActionWork {
         Ok(())
     }
     pub(crate) fn capture_available(&self) -> bool {
-        !self.captured && self.request.is_none() && self.candidate.source.is_none()
+        !self.captured && self.request.is_none() && self.candidate.is_none()
     }
 
     fn source_feed_current(&self) -> bool {
@@ -964,19 +981,23 @@ impl PitchActionWork {
         {
             return Err(PitchActionReject::SourceChanged);
         }
+        // Worker-only construction follows the original request's fresh authority checks.
+        let (rate, channels) = self.render_format;
+        let native = RubberBandLiveShifter::new(rate, channels)
+            .map_err(|_| PitchActionReject::PreparationFailed)?;
+        #[cfg(test)]
+        self._custody.record_native_creation();
+        self.candidate = Some(Box::new(NativeAdapterState::new(Some(native), channels)));
+        let candidate = self.candidate.as_mut().unwrap();
         match self.preparation_mode {
             PitchActionPreparationMode::Endpoint => {
                 if let Some(future) = self.source_feed_future {
-                    self.candidate.prepare_source_with_feed_history(
-                        request,
-                        &self.source_feed,
-                        future,
-                    )
+                    candidate.prepare_source_with_feed_history(request, &self.source_feed, future)
                 } else {
-                    self.candidate.prepare_source_at_endpoint(request)
+                    candidate.prepare_source_at_endpoint(request)
                 }
             }
-            PitchActionPreparationMode::ForwardHistory => self.candidate.prepare_source(request),
+            PitchActionPreparationMode::ForwardHistory => candidate.prepare_source(request),
         }
         .map_err(|_| PitchActionReject::PreparationFailed)?;
         if !self.source_feed_current() {
@@ -1014,15 +1035,18 @@ impl PitchActionWork {
             return Err(PitchActionReject::PreparationFailed);
         }
         let render = self.action.render();
-        let source = self
+        let candidate = self
             .candidate
+            .as_ref()
+            .ok_or(PitchActionReject::WindowPending)?;
+        let source = candidate
             .source
             .as_ref()
             .ok_or(PitchActionReject::WindowPending)?;
         if output_frame != self.action.execution_target()
-            || !self.candidate.active
-            || !self.candidate.used
-            || self.candidate.dirty
+            || !candidate.active
+            || !candidate.used
+            || candidate.dirty
             || source.pitch_intent != render.pitch
             || source.key_lock != render.key_lock
             || source.request_id != self.action.sequence()

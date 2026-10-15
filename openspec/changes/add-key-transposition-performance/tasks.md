@@ -115,6 +115,15 @@ each subscriber's own pending then accepted/current publication. The full existi
 - [ ] B6-K-AUDIO/B7-K-ATOMIC: prepared one-pass pitch, captured native selected
   projection/content lifetime/permits, direct/fallback/pending, distinct repeated
   attacks, same existing dueframe event, allfour Quantize/SYNC and routing combinations.
+- [x] Pitch work custody: reserve an engine-local 64-owner claim before work/history
+  allocation, construct Native only on the existing worker after fresh validation,
+  and prove saturation/refusal/cancellation/retirement recovery, scalar/no-op zero
+  construction and unchanged distinct GUI/MIDI T/E/PCM. This closes no parent gate.
+  Debug pitch99 passed/1 ignored (includes the4 new custody tests), shared ordinary
+  path42 passed; private locked stripped Release/API and84 affected Python tests
+  passed without an engine/device. One independent final review had no findings.
+  Concurrent duplicate publication/stream teardown have adjacent coverage rather
+  than a new complete race proof; totalRSS/P6/216/acoustic/Human remain open.
 - [ ] Selected Normal endpoint: automatically prepare one exact actual
   endpoint on the existing lower-priority worker lane; prove a consumable ready hit
   E=T for stopped/playing content with fresh original authority, stale-source/geometry/tuple misses and distinct

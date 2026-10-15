@@ -1222,6 +1222,22 @@ its lowest-pitch expectation failed at 18,944 versus 29,184 actual frames. The
 probe now queries the selected state and keeps strict history equality. Neither
 these resource measurements nor an idle prepared endpoint resolves the existing
 1,598-frame pre-target retention conflict. Unique 216-pad sources, the P6 matrix,
-performer deadlines and acoustic/Human acceptance remain open. The 64 admitted
-action slots also do not, by themselves, bound Native owners allocated earlier
-by control captures.
+performer deadlines and acoustic/Human acceptance remain open.
+
+Pitch publication now reserves a separate engine-local limit of 64 work owners
+after checking the command queue and before allocating work/history backing.
+Each claim remains with that original work through queued, preparing, ready,
+scheduled, cancelled and retiring states until actual off-callback destruction.
+Retaining a receipt does not retain retired work capacity. Callback capture keeps
+its preallocated history storage; Native/adapter/FIFO construction occurs only
+on the existing worker after fresh original source/permit checks. Stopped SET,
+actual scalar/no-op and pre-preparation rejection construct no Native. Format
+errors still reject synchronously; Native construction failure is a local
+asynchronous preparation refusal.
+
+Adoption swaps the prepared adapter into an existing voice and returns its
+displaced adapter through the same work for retirement. The 64 work-held
+snapshots/adapters and existing MAX_VOICES productive adapters are separate bounds;
+ordinary starts, mode work, endpoint reserve and other owners are additional.
+The historical resource table above is not a measurement of this new custody
+path and neither bound certifies total RSS, P6, 216 unique sources or a deadline.

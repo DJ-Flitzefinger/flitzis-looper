@@ -1,5 +1,43 @@
 ## ADDED Requirements
 
+### Requirement: Pitch work owns bounded custody before allocation
+Each audio engine SHALL reserve one of 64 non-cloneable pitch-work claims before
+allocating its work envelope or callback history snapshot. The existing control
+producer SHALL have space before that reservation. Exhaustion SHALL reject only
+the original action with capacity and SHALL NOT allocate Native or work storage.
+The claim SHALL follow the same original work through control publication,
+scheduler admission, worker preparation, ready storage, application, cancellation
+and retirement. Rejection, cancellation or an effective receipt alone SHALL NOT
+release capacity: release SHALL occur only after that work's storage and displaced
+Native/source owners are destroyed off the callback. Publication clones SHALL NOT
+duplicate a claim or an attack. This bound SHALL NOT be presented as a whole-process
+RAM, ordinary-start, 216-content or performer-deadline guarantee.
+
+Native construction and adapter/FIFO allocation SHALL occur only on the existing
+preparation worker after the original request's current source and permit checks.
+Stopped SET, actual scalar/no-op work and pre-preparation refusals SHALL construct
+no Native. Callback history storage SHALL already exist when callback capture
+begins. The existing scheduler, DSP path, original content/lifetime/timestamp and
+T/E policy SHALL remain authoritative, and equal-target attacks SHALL stay distinct.
+
+#### Scenario: Publication pressure precedes callback admission
+- **GIVEN** 64 original pitch-work owners remain queued, preparing, ready or awaiting retirement
+- **WHEN** another GUI or MIDI pitch action is published
+- **THEN** it SHALL receive capacity refusal without allocating work or Native
+- **AND** cancellation alone SHALL NOT free another owner's storage claim
+- **AND** actual off-callback retirement SHALL permit a later original action to proceed
+
+#### Scenario: Scalar and rejected actions avoid Native construction
+- **WHEN** stopped SET, actual scalar work or an action refused before preparation is processed
+- **THEN** its numeric intent and original receipt SHALL use the existing guarded path without constructing Native
+- **AND** wet work SHALL construct its own candidate only after worker validation
+
+#### Scenario: Distinct original attacks survive custody reuse
+- **WHEN** repeated equal or different GUI/MIDI retriggers saturate and reuse custody over several cycles
+- **THEN** every admitted action SHALL retain its own sequence, timestamp, content, original T and frozen E
+- **AND** actual PCM and attack feedback SHALL prove each successful effect without coalescing
+- **AND** all terminal work SHALL release its claims exactly once after off-callback destruction
+
 ### Requirement: Pitch Learn stores stable immutable action variants
 The system SHALL provide separate stable SET and SET_RETRIGGER semantic actions for every supported absolute Key and extra integer including0 and SHALL persist the variant selected during Learn.
 

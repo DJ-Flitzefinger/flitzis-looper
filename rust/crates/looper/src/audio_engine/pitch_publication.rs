@@ -2,7 +2,70 @@
 
 use super::pitch_actions::PitchActionWork;
 use std::cell::UnsafeCell;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{
+    Arc,
+    atomic::{AtomicBool, AtomicUsize, Ordering},
+};
+
+/// Engine-local storage bound, independent of callback admission and receipt lifetime.
+#[derive(Default)]
+pub(crate) struct PitchWorkCapacity(Arc<PitchWorkUsage>);
+
+#[derive(Default)]
+struct PitchWorkUsage {
+    used: AtomicUsize,
+    #[cfg(test)]
+    allocated: AtomicUsize,
+    #[cfg(test)]
+    native_created: AtomicUsize,
+}
+
+impl PitchWorkCapacity {
+    /// Control-only reservation, before allocating the original work or history storage.
+    pub(crate) fn claim(&self) -> Option<PitchWorkClaim> {
+        self.0
+            .used
+            .fetch_update(Ordering::AcqRel, Ordering::Acquire, |used| {
+                (used < super::pitch_runtime::MAX_PITCH_ACTIONS).then_some(used + 1)
+            })
+            .ok()
+            .map(|_| PitchWorkClaim(self.0.clone()))
+    }
+
+    #[cfg(test)]
+    pub(crate) fn used(&self) -> usize {
+        self.0.used.load(Ordering::Acquire)
+    }
+
+    #[cfg(test)]
+    pub(crate) fn allocations(&self) -> (usize, usize) {
+        (
+            self.0.allocated.load(Ordering::Acquire),
+            self.0.native_created.load(Ordering::Acquire),
+        )
+    }
+}
+
+/// Never cloned; the final work field releases this only after all owned storage.
+pub(crate) struct PitchWorkClaim(Arc<PitchWorkUsage>);
+
+#[cfg(test)]
+impl PitchWorkClaim {
+    pub(crate) fn record_work_allocation(&self) {
+        self.0.allocated.fetch_add(1, Ordering::AcqRel);
+    }
+
+    pub(crate) fn record_native_creation(&self) {
+        self.0.native_created.fetch_add(1, Ordering::AcqRel);
+    }
+}
+
+impl Drop for PitchWorkClaim {
+    fn drop(&mut self) {
+        let previous = self.0.used.fetch_sub(1, Ordering::AcqRel);
+        debug_assert!(previous != 0);
+    }
+}
 
 pub(crate) struct PitchActionPublication {
     claimed: AtomicBool,

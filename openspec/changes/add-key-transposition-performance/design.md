@@ -148,7 +148,8 @@ are separate evidence. With copied selection/backing context, additional mode
 span storage is 32 * 1,089,536 = 34,865,152 bytes before work owners/queues. The
 Release host profile measured 1,401.1 microseconds median for 32 full snapshots
 plus fixed future assignment; 32 journals + 64 admitted SET + 32 mode span payloads
-derive 139,460,608 bytes, without bounding earlier control captures. Whole-process
+derive 139,460,608 bytes. This historical profile excluded earlier control captures;
+the separate pitch-work custody limit below now bounds their work storage. Whole-process
 resources and performer deadlines
 remain open. This bounded engineering does not certify continuous-O equivalence,
 acoustic quality, the full B5/B6/P6 matrix or Human acceptance.
@@ -184,10 +185,36 @@ runs only behind accepted requests at job boundaries; an already running Native
 preparation is non-preemptive and is not a deadline guarantee for a cache miss.
 Ordinary capture allocates only the lightweight original work envelope and validates
 its render format; a miss constructs Native on the existing worker after admission.
-Pitch captures still allocate Native before admission: the64 action slots are not
-a global bound on control-retained Native owners. Source/window ACKs do not imply
+Pitch publication now checks the existing command producer and reserves one of
+64 engine-local non-cloneable work claims before allocating its original envelope
+and fixed callback history snapshot. A duplicate publication is rechecked under
+the same producer mutex. The claim follows queued, inflight, ready, scheduled and
+retiring work; receipt cancellation/effect and runtime-slot release cannot return
+it. It is the last work field, so storage and displaced owners are destroyed before
+capacity becomes reusable, including stream/engine teardown. Retained lightweight
+receipts do not retain that capacity.
+
+Pitch candidates start absent. The existing worker constructs Native/adapter/FIFO
+only after original request, source and permit validation; stopped SET, actual
+scalar/no-op and pre-preparation refusal construct none. Format errors still fail
+on control, while Native construction failures become local asynchronous
+PreparationFailed receipts. Callback capture still owns preallocated source-feed
+storage and never constructs Native. Adoption swaps the prepared box into the
+existing voice and the displaced voice box back into work for retirement.
+Thus 64 work owners bound work-held snapshots/adapters, while the existing
+MAX_VOICES productive adapters are counted separately. Ordinary, mode, endpoint
+and other resource owners remain separate; neither limit is a process-RAM or
+216-content/deadline certificate. Source/window ACKs do not imply
 endpoint readiness. A ready hit can use original T as E; misses retain the existing
 declared E/rejection. Acoustic causality and B5/B6/P6/Human obligations remain open.
+
+Custody validation exercises three real 64-owner cancelled-publication cycles,
+overflow without further work/Native allocation, failed-worker and ready-cancel
+retirement, retained receipts and fresh GUI/MIDI recovery with original T/E and
+tone PCM. Per-engine test counters avoid unrelated process-global Native counts.
+The current Debug pitch suite passes99 with1 explicitly ignored test; shared
+ordinary paths pass42, and private Release/API plus84 affected Python tests pass.
+These counts overlap the4 new custody tests and are not whole-program acceptance.
 
 The numeric tuple uses one source-feed/DSP path, per-action Native owners and the
 existing scheduler. Requested control rows, effective Native state and original
