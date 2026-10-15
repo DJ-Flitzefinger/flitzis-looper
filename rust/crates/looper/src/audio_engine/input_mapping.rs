@@ -2,12 +2,13 @@ use crate::audio_engine::constants::NUM_SAMPLES;
 use crate::audio_engine::input_runtime_binding::{
     InputPadBinding, InputRuntimeOwnership, InputRuntimePadBinding, LaunchWriteKind,
 };
+use crate::audio_engine::pitch_actions::{CapturedPitchAction, PitchActionReject, PitchActionSpec};
 use crate::audio_engine::timing::InputClock;
 use crate::messages::ControlMessage;
 use midir::{Ignore, MidiInput, MidiInputConnection};
 use rtrb::Producer;
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::mpsc::{Receiver, RecvTimeoutError, SyncSender, sync_channel};
+use std::sync::mpsc::{Receiver, RecvTimeoutError, SyncSender, TrySendError, sync_channel};
 use std::sync::{Arc, Mutex};
 use std::thread::{self, JoinHandle};
 use std::time::Duration;
@@ -53,6 +54,9 @@ impl MidiBinding {
 enum InputAction {
     TriggerPad { id: usize },
     StopPad { id: usize },
+    SelectPad { id: usize },
+    Pitch { spec: PitchActionSpec },
+    InvalidPitch,
     Python { action_key: String },
 }
 
@@ -64,16 +68,58 @@ struct InputMapping {
     owner: Arc<AtomicBool>,
 }
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Clone)]
 struct RuntimePadState {
     loaded: bool,
     loop_start_s: f64,
     loop_end_s: Option<f64>,
     binding: Option<InputPadBinding>,
+    pitch: PitchPadProjection,
+    latest_request_sequence: u64,
+    pitch_anchor: Option<pitch::RequestedPitchAnchor>,
+    acknowledgements:
+        Option<Arc<crate::audio_engine::constant_timing::CurrentTimingAcknowledgements>>,
+}
+
+impl std::fmt::Debug for RuntimePadState {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("RuntimePadState")
+            .field("loaded", &self.loaded)
+            .field("loop_start_s", &self.loop_start_s)
+            .field("loop_end_s", &self.loop_end_s)
+            .field("binding", &self.binding)
+            .field("pitch", &self.pitch)
+            .field("latest_request_sequence", &self.latest_request_sequence)
+            .finish_non_exhaustive()
+    }
+}
+
+impl PartialEq for RuntimePadState {
+    fn eq(&self, other: &Self) -> bool {
+        self.loaded == other.loaded
+            && self.loop_start_s == other.loop_start_s
+            && self.loop_end_s == other.loop_end_s
+            && self.binding == other.binding
+            && self.pitch == other.pitch
+            && self.latest_request_sequence == other.latest_request_sequence
+            && self.pitch_anchor == other.pitch_anchor
+            && match (&self.acknowledgements, &other.acknowledgements) {
+                (Some(left), Some(right)) => Arc::ptr_eq(left, right),
+                (None, None) => true,
+                _ => false,
+            }
+    }
 }
 
 impl RuntimePadState {
     fn same_projection(&self, other: &Self) -> bool {
+        self.same_runtime_projection(other)
+            && self.pitch == other.pitch
+            && self.latest_request_sequence == other.latest_request_sequence
+            && self.pitch_anchor == other.pitch_anchor
+    }
+
+    fn same_runtime_projection(&self, other: &Self) -> bool {
         let binding_matches = match (&self.binding, &other.binding) {
             (Some(left), Some(right)) => left.same_projection(right),
             (None, None) => true,
@@ -93,26 +139,43 @@ impl Default for RuntimePadState {
             loop_start_s: 0.0,
             loop_end_s: None,
             binding: None,
+            pitch: PitchPadProjection::default(),
+            latest_request_sequence: 0,
+            pitch_anchor: None,
+            acknowledgements: None,
         }
     }
 }
 
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 struct RuntimeState {
     multi_loop: bool,
     pads: Vec<RuntimePadState>,
+    selected: Option<RuntimeSelectedContent>,
+    selection_revision: u64,
+    pitch_clock: Option<Arc<crate::audio_engine::timing::SharedOutputClock>>,
+    render_format: Option<(u32, usize)>,
+    pitch_shadow: pitch::RequestedPitchJournal,
 }
 
 mod pair_mirror;
 pub(super) use pair_mirror::CapturedPairRuntime;
 mod captured_trigger;
 pub use captured_trigger::CapturedInputPadTrigger;
+mod pitch;
+pub(crate) use pitch::PitchPadProjection;
+use pitch::RuntimeSelectedContent;
 
 impl Default for RuntimeState {
     fn default() -> Self {
         Self {
             multi_loop: false,
             pads: vec![RuntimePadState::default(); NUM_SAMPLES],
+            selected: None,
+            selection_revision: 0,
+            pitch_clock: None,
+            render_format: if cfg!(test) { Some((48_000, 1)) } else { None },
+            pitch_shadow: pitch::RequestedPitchJournal::default(),
         }
     }
 }
@@ -133,6 +196,9 @@ pub(crate) struct InputRuntimeEvent {
     pub dispatched: bool,
     pub direct: bool,
     pub captured_trigger: Option<CapturedInputPadTrigger>,
+    pub captured_pitch: Option<CapturedPitchAction>,
+    pub pitch_rejection: Option<PitchActionReject>,
+    pub selection_revision: Option<u64>,
 }
 
 pub(crate) struct InputRuntime {
@@ -172,6 +238,7 @@ impl InputRuntime {
 
         let dispatcher = {
             let dispatcher = InputDispatcher {
+                clock,
                 input_rx,
                 event_tx,
                 mappings: mappings.clone(),
@@ -273,14 +340,65 @@ impl InputRuntime {
         bindings: Vec<Option<&InputRuntimePadBinding>>,
         before_commit: impl FnOnce(),
     ) -> Result<(), String> {
+        self.set_runtime_state_with_pitch_before_commit(
+            multi_loop,
+            loaded,
+            loop_starts,
+            loop_ends,
+            bindings,
+            None,
+            before_commit,
+        )
+    }
+
+    pub(crate) fn set_runtime_state_with_pitch(
+        &self,
+        multi_loop: bool,
+        loaded: Vec<bool>,
+        loop_starts: Vec<f64>,
+        loop_ends: Vec<Option<f64>>,
+        bindings: Vec<Option<&InputRuntimePadBinding>>,
+        pitch: Vec<PitchPadProjection>,
+    ) -> Result<(), String> {
+        self.set_runtime_state_with_pitch_before_commit(
+            multi_loop,
+            loaded,
+            loop_starts,
+            loop_ends,
+            bindings,
+            Some(pitch),
+            || {},
+        )
+    }
+
+    // The complete source/loop/pitch projection must publish in one existing claim.
+    #[allow(clippy::too_many_arguments)]
+    fn set_runtime_state_with_pitch_before_commit(
+        &self,
+        multi_loop: bool,
+        loaded: Vec<bool>,
+        loop_starts: Vec<f64>,
+        loop_ends: Vec<Option<f64>>,
+        bindings: Vec<Option<&InputRuntimePadBinding>>,
+        pitch: Option<Vec<PitchPadProjection>>,
+        before_commit: impl FnOnce(),
+    ) -> Result<(), String> {
         if loaded.len() != NUM_SAMPLES
             || loop_starts.len() != NUM_SAMPLES
             || loop_ends.len() != NUM_SAMPLES
             || bindings.len() != NUM_SAMPLES
+            || pitch
+                .as_ref()
+                .is_some_and(|pitch| pitch.len() != NUM_SAMPLES)
         {
             return Err(format!(
                 "input runtime state arrays must have length {NUM_SAMPLES}"
             ));
+        }
+        if let Some(pitch) = &pitch {
+            for projection in pitch {
+                projection.validate().map_err(|reason| reason.to_string())?;
+            }
         }
 
         let mut pads = Vec::with_capacity(NUM_SAMPLES);
@@ -312,6 +430,12 @@ impl InputRuntime {
                 loop_start_s: start_s,
                 loop_end_s: end_s,
                 binding,
+                pitch: PitchPadProjection::default(),
+                latest_request_sequence: 0,
+                pitch_anchor: None,
+                acknowledgements: bindings[idx]
+                    .filter(|_| loaded[idx])
+                    .map(|binding| binding.acknowledgements.clone()),
             });
         }
 
@@ -319,6 +443,28 @@ impl InputRuntime {
             .runtime_state
             .lock()
             .map_err(|_| "input runtime lock poisoned")?;
+        let mut pitch_shadow = guard.pitch_shadow.clone();
+        for (idx, pad) in pads.iter_mut().enumerate() {
+            if pad
+                .binding
+                .and_then(|binding| binding.placement?.content_key())
+                == guard.pads[idx]
+                    .binding
+                    .and_then(|binding| binding.placement?.content_key())
+                && pad.binding.is_some()
+            {
+                pad.pitch = guard.pads[idx].pitch;
+                pad.latest_request_sequence = guard.pads[idx].latest_request_sequence;
+                pad.pitch_anchor = guard.pads[idx].pitch_anchor;
+                pitch_shadow.refresh_row(pad, idx, &self.ownership);
+            }
+            if let Some(projection) = pitch.as_ref().map(|pitch| pitch[idx])
+                && pitch::apply_pitch_projection(pad, projection)
+            {
+                pitch_shadow.anchor_row(pad);
+            }
+        }
+        pitch_shadow.reconcile(&mut pads, &self.ownership);
         let mut revisions = Vec::with_capacity(NUM_SAMPLES);
         for (idx, pad) in pads.iter_mut().enumerate() {
             if let Some(binding) = &mut pad.binding {
@@ -326,7 +472,8 @@ impl InputRuntime {
                     .binding
                     .map_or(0, |old| old.runtime_revision);
             }
-            let changed = guard.multi_loop != multi_loop || !guard.pads[idx].same_projection(pad);
+            let changed =
+                guard.multi_loop != multi_loop || !guard.pads[idx].same_runtime_projection(pad);
             let placement = self
                 .ownership
                 .slot_snapshot(idx)
@@ -350,7 +497,15 @@ impl InputRuntime {
                 return Err("MIDI binding changed during runtime publication".into());
             }
         }
-        let mut replacement = Some(RuntimeState { multi_loop, pads });
+        let mut replacement = Some(RuntimeState {
+            multi_loop,
+            pads,
+            selected: guard.selected,
+            selection_revision: guard.selection_revision,
+            pitch_clock: guard.pitch_clock.clone(),
+            render_format: guard.render_format,
+            pitch_shadow,
+        });
         let mut previous = None;
         before_commit();
         self.ownership
@@ -385,15 +540,106 @@ impl InputRuntime {
     }
 
     pub(super) fn trigger_pad(&self, id: usize, received_at_ns: u64) -> bool {
-        dispatch_trigger_pad(
-            id,
+        use super::ordinary_start::OrdinaryStartPublication;
+        use super::pad_start::CapturedPadStart;
+
+        let Ok(state) = self.runtime_state.lock() else {
+            return false;
+        };
+        let Some(pad) = state.pads.get(id).filter(|pad| pad.loaded) else {
+            return false;
+        };
+        let Some(binding) = pad.binding else {
+            return false;
+        };
+        if self.ownership.resident_control_pending(id)
+            || !self.ownership.admission_current(id, binding)
+        {
+            return false;
+        }
+        if let Some(resident) = binding.resident {
+            let frames = binding.sample_count / binding.channels.max(1);
+            let rate = f64::from(binding.sample_rate_hz);
+            let start = (pad.loop_start_s * rate).round() as usize;
+            let end = pad.loop_end_s.map(|end| (end * rate).round() as usize);
+            if super::source_reader::effective_loop_region(start, end, frames)
+                .is_none_or(|region| region.start < resident.start || region.end > resident.end)
+            {
+                return false;
+            }
+        }
+        let (Some(acknowledgements), Some(format), Some(placement)) = (
+            pad.acknowledgements.as_ref(),
+            state.render_format,
+            binding.placement,
+        ) else {
+            return false;
+        };
+        let Ok(mut producer) = self.audio_producer.try_lock() else {
+            return false;
+        };
+        if producer.slots() < 2 {
+            return false;
+        }
+        // Public starts retain their exact source intent independently of MIDI input state.
+        let Ok(start) = CapturedPadStart::capture_parts(
+            binding,
+            self.ownership.clone(),
+            acknowledgements.clone(),
+            pad.loop_start_s,
+            pad.loop_end_s,
+            1.0,
+            !state.multi_loop,
             received_at_ns,
-            &self.runtime_state,
-            &self.ownership,
-            &self.audio_producer,
+            format,
             None,
-        )
-        .dispatched
+        ) else {
+            return false;
+        };
+        let Ok(prepared) = self
+            .ownership
+            .prepare_launch_write(placement, LaunchWriteKind::Admit)
+        else {
+            return false;
+        };
+        let Ok(Some(work)) = start.take_work_with_binding(binding, None) else {
+            return false;
+        };
+        let target = ControlMessage::CapturePadStartTarget(start.clone());
+        let publication = Arc::new(OrdinaryStartPublication::new(work));
+        let trigger = ControlMessage::PreparedStart(publication.clone());
+        let dispatched = self
+            .ownership
+            .commit_launch_write(
+                prepared,
+                || {
+                    self.ownership.admission_fields_current(id, binding)
+                        && start.mark_published_claimed()
+                },
+                || {
+                    producer
+                        .push(target)
+                        .expect("reserved public start target capacity");
+                    producer
+                        .push(trigger)
+                        .expect("reserved public prepared start capacity");
+                },
+            )
+            .is_ok();
+        if !dispatched {
+            match publication.take() {
+                Some(work) => {
+                    if let Err(work) = start.restore_unpublished_work(work) {
+                        start.reject(PitchActionReject::PreparedMismatch);
+                        drop(work);
+                    }
+                }
+                None => {
+                    start.reject(PitchActionReject::PreparedMismatch);
+                }
+            }
+        }
+        dispatched
     }
 
     /// Test-only split at the real dispatcher mapping-capture/admission boundary.
@@ -506,6 +752,7 @@ impl Drop for InputRuntime {
 }
 
 struct InputDispatcher {
+    clock: InputClock,
     input_rx: Receiver<NormalizedMidiEvent>,
     event_tx: SyncSender<InputRuntimeEvent>,
     mappings: Arc<Mutex<Vec<InputMapping>>>,
@@ -538,9 +785,27 @@ impl InputDispatcher {
             let mut dispatched = false;
             let mut direct = false;
             let mut captured_trigger = None;
+            let mut captured_pitch = None;
+            let mut pitch_rejection = None;
+            let mut selection_revision = None;
             let action_key = mapping.as_ref().map(|m| m.action_key.clone());
 
             if let Some(mapping) = mapping {
+                if let InputAction::Pitch { spec } = mapping.action {
+                    match pitch::capture_selected(
+                        spec,
+                        event.received_at_ns,
+                        self.clock.capture_ns(),
+                        &self.runtime_state,
+                        &self.ownership,
+                        Some((&mapping.owner, &self.enabled, &self.learn_capture_active)),
+                    ) {
+                        Ok(action) => captured_pitch = Some(action),
+                        Err(reason) => pitch_rejection = Some(reason),
+                    }
+                } else if matches!(mapping.action, InputAction::InvalidPitch) {
+                    pitch_rejection = Some(PitchActionReject::InvalidAction);
+                }
                 if matches!(mapping.action, InputAction::TriggerPad { .. }) {
                     captured_trigger = CapturedInputPadTrigger::capture(
                         &mapping,
@@ -549,9 +814,27 @@ impl InputDispatcher {
                         &self.ownership,
                         &self.enabled,
                         &self.learn_capture_active,
+                        &self.audio_producer,
                     );
                 }
-                let result = if let Some(trigger) = captured_trigger.as_ref() {
+                let result = if let InputAction::SelectPad { id } = mapping.action {
+                    let selected = pitch::select_pad(id, &self.runtime_state, &self.ownership);
+                    selection_revision = selected.as_ref().ok().copied();
+                    DispatchResult {
+                        dispatched: selected.is_ok(),
+                        direct: false,
+                    }
+                } else if matches!(
+                    mapping.action,
+                    InputAction::Pitch { .. } | InputAction::InvalidPitch
+                ) {
+                    // The original immutable envelope is handed to the controller for
+                    // off-control native allocation/preparation. Capture is not dispatch.
+                    DispatchResult {
+                        dispatched: false,
+                        direct: true,
+                    }
+                } else if let Some(trigger) = captured_trigger.as_ref() {
                     DispatchResult {
                         dispatched: trigger.dispatch(&self.audio_producer).unwrap_or(false),
                         direct: true,
@@ -575,15 +858,23 @@ impl InputDispatcher {
                 direct = result.direct;
             }
 
-            let _ = self.event_tx.try_send(InputRuntimeEvent {
-                binding_key,
-                value: event.value,
-                received_at_ns: event.received_at_ns,
-                action_key,
-                dispatched,
-                direct,
-                captured_trigger,
-            });
+            if let Err(TrySendError::Full(event) | TrySendError::Disconnected(event)) =
+                self.event_tx.try_send(InputRuntimeEvent {
+                    binding_key,
+                    value: event.value,
+                    received_at_ns: event.received_at_ns,
+                    action_key,
+                    dispatched,
+                    direct,
+                    captured_trigger,
+                    captured_pitch,
+                    pitch_rejection,
+                    selection_revision,
+                })
+                && let Some(action) = event.captured_pitch
+            {
+                pitch::reject_undelivered_capture(&action, &self.runtime_state, &self.ownership);
+            }
         }
     }
 }
@@ -637,6 +928,14 @@ fn dispatch_action(
                 direct: true,
             }
         }
+        InputAction::SelectPad { id } => DispatchResult {
+            dispatched: pitch::select_pad(*id, runtime_state, ownership).is_ok(),
+            direct: false,
+        },
+        InputAction::Pitch { .. } | InputAction::InvalidPitch => DispatchResult {
+            dispatched: false,
+            direct: true,
+        },
         InputAction::Python { action_key } => {
             let _ = action_key.len();
             DispatchResult {
@@ -772,6 +1071,17 @@ fn dispatch_trigger_pad_before_commit(
 }
 
 fn parse_input_action(action_key: &str) -> InputAction {
+    if action_key.starts_with("pitch.") {
+        return PitchActionSpec::parse(action_key).map_or(InputAction::InvalidPitch, |spec| {
+            InputAction::Pitch { spec }
+        });
+    }
+    if let Some(id) = action_key
+        .strip_prefix("ui.select_pad:")
+        .and_then(|value| value.parse::<usize>().ok())
+    {
+        return InputAction::SelectPad { id };
+    }
     if let Some(id) = action_key
         .strip_prefix("pad.trigger:")
         .and_then(|value| value.parse::<usize>().ok())
@@ -1126,6 +1436,10 @@ mod tests {
                 loop_start_s: 1.25,
                 loop_end_s: Some(4.0),
                 binding: Some(InputRuntimePadBinding::for_test(3, ownership.clone()).binding),
+                pitch: PitchPadProjection::default(),
+                latest_request_sequence: 0,
+                acknowledgements: None,
+                pitch_anchor: None,
             };
         }
 
@@ -1197,6 +1511,10 @@ mod tests {
             loop_start_s: 80.0 / 48_000.0,
             loop_end_s: Some(111.0 / 48_000.0),
             binding: Some(binding),
+            pitch: PitchPadProjection::default(),
+            latest_request_sequence: 0,
+            acknowledgements: None,
+            pitch_anchor: None,
         };
         let result = dispatch_trigger_pad(1, 42, &state, &ownership, &producer, None);
         assert_eq!(
@@ -1291,12 +1609,20 @@ mod tests {
         let runtime = InputRuntime::new(Arc::new(Mutex::new(producer)), InputClock::new());
         publish_test_runtime(&runtime, true);
         assert!(runtime.trigger_pad(0, 42));
-        let ControlMessage::TriggerInputPad {
-            binding: original, ..
-        } = consumer.pop().unwrap()
-        else {
+        let ControlMessage::CapturePadStartTarget(target) = consumer.pop().unwrap() else {
+            panic!("original public trigger timing capture")
+        };
+        assert_eq!(target.received_timestamp(), 42);
+        target.capture_target(0).unwrap();
+        let ControlMessage::PreparedStart(publication) = consumer.pop().unwrap() else {
             panic!("guarded trigger")
         };
+        let work = publication
+            .take()
+            .expect("one public prepared-capable start");
+        assert!(work.origin().same_owner(&target));
+        let original = work.origin().control_guard().unwrap().binding;
+        assert!(consumer.is_empty());
         let bindings: Vec<_> = (0..NUM_SAMPLES)
             .map(|id| InputRuntimePadBinding::for_test(id, runtime.ownership.clone()))
             .collect();

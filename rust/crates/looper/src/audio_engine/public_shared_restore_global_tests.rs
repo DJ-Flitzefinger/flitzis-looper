@@ -165,12 +165,16 @@ from keylock_controller_probe import Probe
 from flitzis_looper.controller.loader import LoaderController
 from flitzis_looper.project_materials import original_asset
 from pathlib import Path
+from collections import deque
 
 class SharedRestoreProbe(Probe):
     def setup(self, saved_path, project_cwd):
         assert Path.cwd() == Path(project_cwd)
         assert original_asset(saved_path).path.relative_to(Path.cwd()).as_posix() == saved_path
         self.saved_path = saved_path
+        self.original_starts = {}
+        self.original_start_timestamps = {}
+        self.pending_content_feedback = deque()
         for sample_id, override in ((0, None), (36, True), (215, False)):
             self.assign(sample_id, saved_path, False)
             self.project.pad_key_lock[sample_id] = override
@@ -194,10 +198,62 @@ class SharedRestoreProbe(Probe):
         self.restore_requests = dict(self.loader._load_request_ids)
 
     def poll(self):
-        super().poll()
+        incoming = list(self.pending_content_feedback)
+        self.pending_content_feedback.clear()
+        while (message := self.audio.receive_msg()) is not None:
+            incoming.append(message)
+        for message in incoming:
+            kind = message.feedback_kind()
+            if kind is not None:
+                try:
+                    sample_id = self.audio._resolve_pad_feedback(message)
+                except RuntimeError as error:
+                    if 'content feedback placement pending' not in str(error):
+                        raise
+                    assert len(self.pending_content_feedback) < 1024
+                    self.pending_content_feedback.append(message)
+                    continue
+                if sample_id is None:
+                    continue
+                if kind == 'started':
+                    self.transport.playback.handle_sample_started_message(message, sample_id=sample_id)
+                elif kind == 'stopped':
+                    self.transport.playback.handle_sample_stopped_message(message, sample_id=sample_id)
+            elif isinstance(message, self._messages.SampleStarted):
+                self.transport.playback.handle_sample_started_message(message)
+            elif isinstance(message, self._messages.SampleStopped):
+                self.transport.playback.handle_sample_stopped_message(message)
+        self.transport.on_frame_render()
         if hasattr(self, 'loader'):
             self.loader.poll_loader_events()
             self.transport.on_frame_render()
+
+    def start(self, sample_id):
+        timestamp = self.audio.capture_input_timestamp_ns()
+        self.transport.playback.trigger_pad_keep_others(sample_id, received_at_ns=timestamp)
+        originals = [pending for pending in self.transport.residency._captured_starts.values()
+                     if pending.start.diagnostic_slot == sample_id]
+        assert len(originals) == 1
+        self.original_starts[sample_id] = originals[0]
+        self.original_start_timestamps[sample_id] = timestamp
+        assert originals[0].start.effective_frame() is None
+
+    def original_start(self, sample_id):
+        return self.original_starts[sample_id].start
+
+    def original_start_window(self, sample_id):
+        return self.original_starts[sample_id].ticket
+
+    def original_start_timestamp(self, sample_id):
+        return self.original_start_timestamps[sample_id]
+
+    def finish_start(self, sample_id):
+        original = self.original_starts.pop(sample_id)
+        assert original.start.state() == 'applied'
+        assert original.published and original.ticket is not None
+        assert original.ticket.publication_status() == 'accepted' and original.ticket.is_current()
+        assert sample_id in self.session.active_sample_ids
+        self.original_start_timestamps.pop(sample_id)
 
     def restored(self):
         if self.session.loading_sample_ids:
@@ -273,6 +329,7 @@ fn new_restore() -> (GlobalVoices, RestoreCwd, Vec<f32>, String) {
         let mut engine = harness.engine.borrow_mut(py);
         engine.test_control_channels.as_mut().unwrap().0 = producer.clone();
         engine.test_parameter_producer = Some(parameters.clone());
+        engine.test_output_format = Some((RATE, 2));
     });
     harness.producer = producer.clone();
     harness.consumer = consumer;
@@ -489,18 +546,128 @@ fn assert_shared_active(voices: &GlobalVoices, pcm: &Weak<[f32]>) {
 }
 
 fn start(voices: &mut GlobalVoices, id: usize, enabled: bool, eq: [f32; 3], gap: usize) {
+    let original_frame = voices.harness.frame;
     voices.harness.target("start", id);
+    let original = Python::attach(|py| {
+        voices
+            .harness
+            .probe
+            .call_method1(py, "original_start", (id,))
+            .unwrap()
+            .extract::<PyRef<crate::audio_engine::pad_start::CapturedPadStart>>(py)
+            .unwrap()
+            .clone()
+    });
+    let original_timestamp = Python::attach(|py| {
+        voices
+            .harness
+            .probe
+            .call_method1(py, "original_start_timestamp", (id,))
+            .unwrap()
+            .extract::<u64>(py)
+            .unwrap()
+    });
+    assert_eq!(original.received_timestamp(), original_timestamp);
     wait_until(Duration::from_secs(10), || {
         voices.harness.drain();
-        voices
+        assert_ne!(
+            original.state(),
+            "rejected",
+            "pad {id} original START: {:?}, T={:?}, E={:?}",
+            original.reason(),
+            original.original_frame(),
+            original.execution_frame()
+        );
+        if original.state() == "applied" {
+            return true;
+        }
+        let runtime = voices
             .harness
             .callback
             .mixer
-            .voices
-            .iter()
-            .any(|voice| voice.is_playing_sample(id))
+            .pitch_runtime
+            .as_mut()
+            .unwrap();
+        runtime.poll();
+        runtime.has_ready_action(original.sequence())
     });
+    assert_eq!(original.original_frame(), Some(original_frame));
+    let execution = original.execution_frame().unwrap();
+    assert_eq!(execution, original_frame + if enabled { 8192 } else { 0 });
+    Python::attach(|py| {
+        let ticket = voices
+            .harness
+            .probe
+            .call_method1(py, "original_start_window", (id,))
+            .unwrap();
+        let ticket = ticket.extract::<PyRef<ResidentWindowTicket>>(py).unwrap();
+        assert!(
+            ticket
+                .capture_pad_start_launch_guard(&original)
+                .unwrap()
+                .is_some(),
+            "pad {id} must publish from its original member's own WindowACK"
+        );
+    });
+    // The original endpoint stays fixed while the worker prepares. Existing
+    // audible owners consume this real lead through their independent PCM/EQ
+    // oracles; the new voice has not been created or moved to compensate.
+    let lead = (execution - voices.harness.frame) as usize;
+    if lead != 0 {
+        voices.render(lead);
+    }
+    let callback = voices.harness.callback.as_mut();
+    render_scheduled_audio(
+        &mut callback.mixer,
+        &mut callback.scheduler,
+        &mut [],
+        &mut [0.0; NUM_SAMPLES],
+        execution,
+        2,
+        &mut callback.transport,
+        &mut callback.feedback,
+        &mut callback.retirement,
+    );
+    voices.harness.call0("poll");
+    assert_eq!(original.effective_frame(), Some(execution));
+    assert_eq!(original.received_timestamp(), original_timestamp);
+    let actual = voice(&voices.harness, id);
+    assert_eq!(actual.source_playback.position().frame, 0);
+    assert_eq!(actual.source_playback.position().fraction, 0.0);
+    voices.harness.target("finish_start", id);
     let mut expected = ExpectedVoice::new_at_range(&voices.harness, id, enabled, 0, FRAMES);
+    if enabled {
+        // A Normal loop start owns periodic past at its physical endpoint. Feed
+        // the independent raw Native from the equivalent prior phase of this
+        // fixture's declared .73 rate (100 loops form an exact output cycle).
+        // No live clock, prepared request or Native output supplies these samples.
+        let mut history_clock = AlgebraicClock::physical(0, FRAMES, RATIO);
+        history_clock.advance(FRAMES * 100 - HISTORY);
+        expected.raw = RawChronology::new(RATIO, true);
+        expected
+            .raw
+            .render(&expected.source, &mut history_clock, HISTORY);
+        let (frame, fraction, explicit) = history_clock.physical_position(0);
+        assert_eq!(frame, 0);
+        assert!(fraction.abs() < 1e-8 && !explicit);
+        expected.warm = 0;
+        expected.raw_fed = HISTORY;
+        expected.candidate_needed = false;
+        expected.adoptions = 1;
+        let actual = voice(&voices.harness, id);
+        assert_eq!(
+            actual.stretch.adopted_request_id(),
+            Some(original.sequence())
+        );
+        assert_eq!(
+            actual
+                .stretch
+                .productive_history()
+                .unwrap()
+                .fed_output_frames,
+            HISTORY as u64
+        );
+    }
     Python::attach(|py| {
         voices
             .harness

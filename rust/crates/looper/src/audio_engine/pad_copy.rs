@@ -21,6 +21,7 @@ pub(super) struct CopyRtIntent {
     pub(super) loop_start_frame: usize,
     pub(super) loop_end_frame: Option<usize>,
     pub(super) key_lock: bool,
+    pub(super) pitch_intent: super::pitch_intent::PitchIntent,
     pub(super) timing_intent: TimingIntent,
     pub(super) stem_mix_mode: StemMixMode,
     pub(super) source_version_hash: u64,

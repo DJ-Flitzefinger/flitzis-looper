@@ -200,12 +200,27 @@ impl ColdTransaction {
         cancelled: &impl Fn() -> bool,
         resident: Option<&crate::audio_engine::resident_proposal::ResidentReadContext>,
     ) -> io::Result<SampleBuffer> {
+        self.read_prepared_selection_resident_for_native(hint, maximum, cancelled, resident, false)
+    }
+
+    pub(in crate::audio_engine) fn read_prepared_selection_resident_for_native(
+        &mut self,
+        hint: Option<crate::audio_engine::cold_residency::ResidentLoadHint>,
+        maximum: usize,
+        cancelled: &impl Fn() -> bool,
+        resident: Option<&crate::audio_engine::resident_proposal::ResidentReadContext>,
+        native_pitch_required: bool,
+    ) -> io::Result<SampleBuffer> {
         use crate::audio_engine::cold_residency;
         use crate::messages::{ResidentContext, ResidentSourceView};
         let mut source = cold_residency::identity(self.manifest()?).map_err(io::Error::other)?;
         let (start, end, context) = if let Some(hint) = hint {
-            hint.selection(source.sample_rate_hz, source.frame_count)
-                .map_err(io::Error::other)?
+            hint.selection_for_native(
+                source.sample_rate_hz,
+                source.frame_count,
+                native_pitch_required,
+            )
+            .map_err(io::Error::other)?
         } else {
             (0, source.frame_count, ResidentContext::FullTrack)
         };

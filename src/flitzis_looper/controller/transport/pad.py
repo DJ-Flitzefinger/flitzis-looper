@@ -3,6 +3,11 @@ from typing import TYPE_CHECKING
 from flitzis_looper.audio_gain import clamp_gain_db
 from flitzis_looper.constants import PAD_EQ_DB_MAX, PAD_EQ_DB_MIN
 from flitzis_looper.controller.validation import ensure_finite
+from flitzis_looper.input_mapping.actions import (
+    pitch_base_action,
+    pitch_extra_action,
+    pitch_reset_base_action,
+)
 from flitzis_looper.models import validate_sample_id
 
 if TYPE_CHECKING:
@@ -136,6 +141,49 @@ class PadController:
         self._set_key_intent(
             sample_id, self._project.pad_key_intent[sample_id].changed(retrigger=enabled)
         )
+
+    def choose_base_key(
+        self,
+        sample_id: int,
+        target: MusicalKey,
+        *,
+        retrigger: bool,
+        received_at_ns: int | None = None,
+    ) -> None:
+        """Admit one explicit content's absolute key through the common Native pitch route."""
+        action = pitch_base_action(target, retrigger=retrigger)
+        self._transport.pitch.choose_pad_action(
+            sample_id, action.key, received_at_ns=received_at_ns
+        )
+
+    def choose_extra_shift(
+        self,
+        sample_id: int,
+        semitones: int,
+        *,
+        retrigger: bool,
+        received_at_ns: int | None = None,
+    ) -> None:
+        """Set a strict signed target without accumulating or changing the GUI preference."""
+        action = pitch_extra_action(semitones, retrigger=retrigger)
+        self._transport.pitch.choose_pad_action(
+            sample_id, action.key, received_at_ns=received_at_ns
+        )
+
+    def reset_base_pitch(
+        self, sample_id: int, *, retrigger: bool, received_at_ns: int | None = None
+    ) -> None:
+        """Reset only numeric base through an action that also works with unknown source key."""
+        action = pitch_reset_base_action(retrigger=retrigger)
+        self._transport.pitch.choose_pad_action(
+            sample_id, action.key, received_at_ns=received_at_ns
+        )
+
+    def reset_extra_pitch(
+        self, sample_id: int, *, retrigger: bool, received_at_ns: int | None = None
+    ) -> None:
+        """Set extra zero through the same fixed-target route, preserving base and correction."""
+        self.choose_extra_shift(sample_id, 0, retrigger=retrigger, received_at_ns=received_at_ns)
 
     def _set_key_intent(self, sample_id: int, intent: PadKeyIntent) -> None:
         self._transport.ensure_pad_edit_allowed(sample_id)

@@ -100,6 +100,26 @@ fn current_binding(fixture: &Fixture, id: usize) -> (u64, InputPadBinding) {
     })
 }
 
+fn assert_binding_projection(actual: InputPadBinding, expected: InputPadBinding) {
+    // Unrelated complete claims advance the global layout observation revision.
+    // Every source/window/timing/runtime and slot-incarnation field still matches.
+    assert!(
+        actual.same_projection(&expected),
+        "{actual:?} != {expected:?}"
+    );
+}
+
+fn assert_current_binding(
+    fixture: &Fixture,
+    id: usize,
+    expected_generation: u64,
+    expected: InputPadBinding,
+) {
+    let (generation, actual) = current_binding(fixture, id);
+    assert_eq!(generation, expected_generation);
+    assert_binding_projection(actual, expected);
+}
+
 fn assert_no_bpm_receipt(event: &Py<PyAny>) {
     Python::attach(|py| {
         let analysis = event.bind(py).get_item("analysis").unwrap();
@@ -229,9 +249,21 @@ struct CapturedLaunch {
     binding: InputPadBinding,
     guard: ResidentLaunchGuard,
     launch_revision: u64,
+    original: CapturedPadStart,
 }
 
-fn capture_queued_launch(fixture: &Fixture, exclusive: bool) -> CapturedLaunch {
+fn capture_queued_launch(
+    fixture: &Fixture,
+    ticket: &Py<ResidentWindowTicket>,
+    exclusive: bool,
+) -> CapturedLaunch {
+    let original = fixture.callback.queued_start();
+    assert_eq!(original.exclusive(), exclusive);
+    assert_eq!(
+        original.loop_region(),
+        (0.0, Some(COMPLETE_FRAMES as f64 / f64::from(RATE)))
+    );
+    let message = Python::attach(|py| ticket.borrow(py).launch_message(exclusive, 0).unwrap().0);
     let ControlMessage::TriggerInputPad {
         id,
         start_s,
@@ -241,35 +273,37 @@ fn capture_queued_launch(fixture: &Fixture, exclusive: bool) -> CapturedLaunch {
         resident_control: Some(guard),
         launch_revision,
         ..
-    } = fixture.callback.consumer.peek().unwrap()
+    } = message
     else {
-        panic!("actual public ticket must enqueue its captured TriggerInputPad");
+        panic!("the real ticket must retain its original scalar launch guards");
     };
-    assert_eq!((*id, *actual_exclusive), (0, exclusive));
-    assert_eq!(*start_s, 0.0);
-    assert_eq!(*end_s, Some(COMPLETE_FRAMES as f64 / f64::from(RATE)));
+    assert_eq!((id, actual_exclusive), (0, exclusive));
+    assert_eq!(start_s, 0.0);
+    assert_eq!(end_s, Some(COMPLETE_FRAMES as f64 / f64::from(RATE)));
     let (source_generation, current) = current_binding(fixture, 0);
-    assert_eq!(*binding, current);
+    assert_binding_projection(binding, current);
+    assert_binding_projection(original.callback_guard().unwrap().binding, current);
     assert!(guard.current());
     Python::attach(|py| {
         let engine = fixture.engine.borrow(py);
         assert_eq!(
             engine
                 .input_runtime_ownership
-                .binding_source_generation(0, *binding),
+                .binding_source_generation(0, binding),
             Some(source_generation)
         );
         assert!(
             engine
                 .input_runtime_ownership
-                .launch_current(0, *launch_revision)
+                .launch_current(0, launch_revision)
         );
     });
     CapturedLaunch {
         source_generation,
-        binding: *binding,
-        guard: guard.clone(),
-        launch_revision: *launch_revision,
+        binding,
+        guard,
+        launch_revision,
+        original,
     }
 }
 
@@ -320,9 +354,12 @@ impl PeerHistory {
             (sample.resident_start(), sample.resident_end()),
             (0, self.independent.frame_count())
         );
-        assert_eq!(
-            current_binding(fixture, 215),
-            (self.source_generation, self.binding)
+        let (generation, binding) = current_binding(fixture, 215);
+        assert_eq!(generation, self.source_generation);
+        assert!(
+            binding.same_projection(&self.binding),
+            "peer's complete source/slot projection changed: {binding:?} != {:?}",
+            self.binding
         );
         assert_eq!(fixture.callback.mixer.loop_region_frames(215), self.region);
         assert_eq!(
@@ -379,10 +416,7 @@ impl CurrentPad {
         assert!(Arc::ptr_eq(&bank.samples, &self.bank.samples));
         assert!(bank.same_window(&self.bank));
         assert_eq!(bank.samples.as_ref(), self.bank.samples.as_ref());
-        assert_eq!(
-            current_binding(fixture, 0),
-            (self.source_generation, self.binding)
-        );
+        assert_current_binding(fixture, 0, self.source_generation, self.binding);
         assert_eq!(fixture.callback.mixer.loop_region_frames(0), self.region);
         assert_eq!(
             fixture.callback.mixer.key_lock_for_measurement(0),
@@ -596,11 +630,14 @@ fn current_authority_due_history(key_lock: bool, exclusive: bool) {
     assert!(fixture.callback.transport.set_master_bpm(120.0));
     fixture.callback.quantization = TriggerQuantization::Grid { step_64ths: 4 };
     assert!(launch_ticket(&fixture, &ticket, exclusive));
-    let captured = capture_queued_launch(&fixture, exclusive);
+    let captured = capture_queued_launch(&fixture, &ticket, exclusive);
     assert_eq!(captured.source_generation, request);
-    assert_eq!(fixture.callback.drain(), 1);
+    assert_eq!(fixture.callback.drain(), 2);
+    fixture.callback.wait_start_ready(&captured.original);
     assert_eq!(fixture.callback.scheduler.len(), 1);
     let due = fixture.callback.scheduler.peek_next_target_frame().unwrap();
+    assert_eq!(captured.original.execution_frame(), Some(due));
+    assert_eq!(captured.original.original_frame(), Some(6000));
     assert!(due > fixture.callback.frame);
     for frames in [31, 137, 512, 777].into_iter().cycle() {
         let remaining = due - fixture.callback.frame;
@@ -658,7 +695,7 @@ fn current_authority_due_history(key_lock: bool, exclusive: bool) {
     );
     assert!(captured.guard.current());
     assert!(Python::attach(|py| ticket.borrow(py).is_current()));
-    assert_eq!(current_binding(&fixture, 0), (request, captured.binding));
+    assert_current_binding(&fixture, 0, request, captured.binding);
     let bank = fixture.callback.mixer.bank_for_measurement()[0]
         .as_ref()
         .unwrap();
@@ -671,15 +708,20 @@ fn current_authority_due_history(key_lock: bool, exclusive: bool) {
     );
     assert_eq!(fixture.callback.mixer.key_lock_for_measurement(0), key_lock);
 
-    // Independent PCM is allowed to create only its own reference voice after
-    // the productive public voice already exists. Both modes choose dry PCM
-    // during these eight frames; ON has not yet completed its first Native block.
+    // Independent complete PCM creates its own reference after the public birth.
+    // ON owns the same independently prepared periodic endpoint at its first sample.
     let mut reference = Box::new(RtMixer::new(2, RATE as f32));
+    let ownership = Arc::new(input_runtime_binding::InputRuntimeOwnership::tracked());
+    ownership.publish_test_source(0, &fixture.complete, RATE, 1);
+    reference.set_input_runtime_ownership(ownership);
     reference.load_sample(0, fixture.complete.clone());
     reference.set_loop_region_frames(0, 0, Some(COMPLETE_FRAMES));
     reference.set_speed(RATIO);
-    reference.set_pad_key_lock(0, false);
+    reference.set_pad_key_lock(0, key_lock);
     assert!(reference.play_sample_at_output_frame(0, 1.0, due));
+    if key_lock {
+        prepare_reference_start(&mut reference, due);
+    }
     let mut expected = vec![0.0; 8 * 2];
     reference.render(&mut expected, &mut [0.0; NUM_SAMPLES]);
     assert!(expected.iter().any(|sample| sample.abs() > 0.01));
@@ -701,16 +743,34 @@ fn current_authority_due_history(key_lock: bool, exclusive: bool) {
             .matches_exact(&voice(&reference, 0).source_playback)
     );
     if key_lock {
-        let mut raw = RawNative::new(false);
+        let mut raw = RawNative::prepared_start(&fixture.complete, 0, COMPLETE_FRAMES);
         assert!(raw.native.block_size() > 8);
         let feed = std::array::from_fn(|channel| {
-            expected
-                .chunks_exact(2)
-                .map(|frame| frame[channel])
+            (0..8)
+                .map(|offset| {
+                    let phase = offset as f64 * RATIO;
+                    let left = phase.floor() as usize;
+                    let a = fixture.complete.samples[left * 2 + channel];
+                    a + (fixture.complete.samples[(left + 1) * 2 + channel] - a)
+                        * phase.fract() as f32
+                })
                 .collect::<Vec<_>>()
         });
-        assert_eq!(raw.render(&feed, true), expected);
-        assert!(!raw.used);
+        assert_eq!(raw.render(&feed), expected);
+        assert!(raw.used);
+        assert_eq!(
+            current.stretch.adopted_request_id(),
+            Some(captured.original.sequence())
+        );
+        assert_ne!(current.stretch.native_state_address(), 0);
+        assert_eq!(
+            current
+                .stretch
+                .productive_history()
+                .unwrap()
+                .fed_output_frames,
+            prepared_native_history::PREPARED_HISTORY_FRAMES as u64 + 8
+        );
         assert_eq!(
             current.stretch.pending_fifo_frames(),
             (raw.input[0].len(), raw.output[0].len())
@@ -744,10 +804,7 @@ fn current_authority_due_history(key_lock: bool, exclusive: bool) {
         let phase = (due as f64 * RATIO).rem_euclid(peer.independent.frame_count() as f64);
         assert_eq!(prefix_phase.frame, phase.floor() as usize);
         assert_eq!(prefix_phase.fraction.to_bits(), phase.fract().to_bits());
-        assert_eq!(
-            current_binding(&fixture, 215),
-            (peer.source_generation, peer.binding)
-        );
+        assert_current_binding(&fixture, 215, peer.source_generation, peer.binding);
         assert!(
             fixture.callback.mixer.bank_for_measurement()[215]
                 .as_ref()
@@ -764,9 +821,9 @@ fn current_authority_due_history(key_lock: bool, exclusive: bool) {
     assert_public_mode(
         &fixture,
         &ticket,
-        if key_lock { "waiting" } else { "dry" },
-        false,
-        !key_lock,
+        if key_lock { "wet" } else { "dry" },
+        key_lock,
+        true,
     );
     assert!(fixture.callback.consumer.is_empty());
     assert!(fixture.callback.parameters.is_empty());
@@ -817,15 +874,18 @@ fn scheduled_history(key_lock: bool, exclusive: bool, supersession: Supersession
     assert!(fixture.callback.transport.set_master_bpm(120.0));
     fixture.callback.quantization = TriggerQuantization::Grid { step_64ths: 4 };
     assert!(launch_ticket(&fixture, &ticket, exclusive));
-    let captured = capture_queued_launch(&fixture, exclusive);
+    let captured = capture_queued_launch(&fixture, &ticket, exclusive);
     assert_eq!(captured.source_generation, request);
-    assert_eq!(captured.binding, own.binding);
-    assert_eq!(fixture.callback.drain(), 1);
+    assert_binding_projection(captured.binding, own.binding);
+    assert_eq!(fixture.callback.drain(), 2);
+    fixture.callback.wait_start_ready(&captured.original);
     assert!(fixture.callback.consumer.is_empty());
     assert_eq!(fixture.callback.scheduler.len(), 1);
     assert!(fixture.transport_events().is_empty());
     own.assert_unchanged(&fixture);
     let due = fixture.callback.scheduler.peek_next_target_frame().unwrap();
+    assert_eq!(captured.original.original_frame(), Some(6000));
+    assert_eq!(captured.original.execution_frame(), Some(due));
     assert!(due > fixture.callback.frame + 3);
 
     let newer_ticket = match supersession {
@@ -842,10 +902,16 @@ fn scheduled_history(key_lock: bool, exclusive: bool, supersession: Supersession
                 _ => (FINITE_START, FINITE_END),
             };
             let newer = prepare_ticket(&fixture, request, start, end, None);
-            // Admission already invalidates the old captured resident permit;
-            // the bank remains the acknowledged original until the real ACK.
-            assert!(!captured.guard.current());
-            assert!(!Python::attach(|py| ticket.borrow(py).is_current()));
+            if matches!(supersession, Supersession::CompleteIntent) {
+                // A same-window control publication supersedes its old intent.
+                assert!(!captured.guard.current());
+                assert!(!Python::attach(|py| ticket.borrow(py).is_current()));
+            } else {
+                // An unarmed replacement proposal cannot revoke the usable
+                // acknowledged window before its genuine callback adoption.
+                assert!(captured.guard.current());
+                assert!(Python::attach(|py| ticket.borrow(py).is_current()));
+            }
             assert!(
                 fixture.callback.mixer.bank_for_measurement()[0]
                     .as_ref()
@@ -853,6 +919,8 @@ fn scheduled_history(key_lock: bool, exclusive: bool, supersession: Supersession
                     .same_window(&own.bank)
             );
             acknowledge_ticket(&mut fixture, &newer);
+            assert!(!captured.guard.current());
+            assert!(!Python::attach(|py| ticket.borrow(py).is_current()));
             assert_eq!(current_binding(&fixture, 0).0, captured.source_generation);
             assert_eq!(
                 fixture.callback.mixer.loop_region_frames(0),
@@ -865,7 +933,7 @@ fn scheduled_history(key_lock: bool, exclusive: bool, supersession: Supersession
             if matches!(supersession, Supersession::CompleteIntent) {
                 assert!(Arc::ptr_eq(&bank.samples, &own.bank.samples));
                 assert_eq!(bank.window_revision(), own.bank.window_revision());
-                assert_eq!(current_binding(&fixture, 0).1, captured.binding);
+                assert_binding_projection(current_binding(&fixture, 0).1, captured.binding);
                 assert_complete_source(bank, &fixture.complete, key_lock);
             } else {
                 assert_eq!(bank.window_revision(), own.bank.window_revision() + 1);
@@ -956,7 +1024,7 @@ fn scheduled_history(key_lock: bool, exclusive: bool, supersession: Supersession
     );
     assert_eq!(fixture.callback.scheduler.len(), 1);
     assert_eq!(captured.source_generation, request);
-    assert_eq!(captured.binding, own.binding);
+    assert_binding_projection(captured.binding, own.binding);
     assert_eq!(
         Python::attach(|py| ticket.borrow(py).publication_status()),
         "accepted"
@@ -984,6 +1052,8 @@ fn scheduled_history(key_lock: bool, exclusive: bool, supersession: Supersession
         fixture.callback.scheduler.is_empty(),
         "actual in-buffer due consumed the stale start"
     );
+    assert_eq!(captured.original.state(), "rejected");
+    assert_eq!(captured.original.effective_frame(), None);
     current.assert_unchanged(&fixture);
     for frames in [1, 31, 137, 512, 777] {
         render_scheduled(&mut fixture, frames, &peer);

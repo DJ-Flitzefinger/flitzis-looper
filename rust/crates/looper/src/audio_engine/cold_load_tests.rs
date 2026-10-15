@@ -541,6 +541,21 @@ impl Retirement {
                 RetiredAudioBuffer::PadCopy(value) => actual.retire_pad_copy(value),
                 RetiredAudioBuffer::PadPair(value) => actual.retire_pad_pair(value),
                 RetiredAudioBuffer::HoldAction(value) => actual.retire_hold_action(value),
+                RetiredAudioBuffer::PitchAction(value) => actual.retire_pitch_action(value),
+                RetiredAudioBuffer::OrdinaryStart(value) => actual.retire_ordinary_start(value),
+                RetiredAudioBuffer::OrdinaryStartGroup(value) => {
+                    actual.retire_ordinary_start_group(value)
+                }
+                RetiredAudioBuffer::OrdinaryStartPublication(value) => {
+                    actual.retire_ordinary_start_publication(value)
+                }
+                RetiredAudioBuffer::PadStartTarget(value) => actual.retire_pad_start_target(value),
+                RetiredAudioBuffer::GlobalStartTarget(value) => {
+                    actual.retire_global_start_target(value)
+                }
+                RetiredAudioBuffer::PitchPublication(value) => {
+                    actual.retire_pitch_publication(value)
+                }
             }
         } else {
             self.retired.push(value);

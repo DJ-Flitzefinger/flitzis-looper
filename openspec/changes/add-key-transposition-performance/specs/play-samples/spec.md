@@ -1,5 +1,108 @@
 ## ADDED Requirements
 
+### Requirement: Ordinary attacks inherit the actual audible tuple on their first block
+The system SHALL retain each ordinary GUI, MIDI, resident and global start as an original content-bound attack before residency preparation. The existing audio callback SHALL capture the ordinary transport target T once before an attack's own window publication. Later readiness SHALL retain T and SHALL expose a separate execution frame E without quantizing again. The callback SHALL freeze the actual applied pitch and Key Lock tuple for preparation; an ordinary attack MUST NOT write a requested tuple into the bank or falsely acknowledge another pending pitch action.
+
+#### Scenario: A saved nonneutral pad starts after its own window acknowledgement
+- **GIVEN** a loaded pad has a saved applied nonneutral pitch tuple and needs its own resident window
+- **WHEN** its original ordinary attack receives its own WindowACK and the exact Native source preparation becomes ready
+- **THEN** the one transport scheduler executes that original attack at its recorded E with the exact prepared source and FIFO from its first audible block
+- **AND** the original T, content lifetime, source authority, input timestamp, volume and exclusive intent remain owned by that attack
+- **AND** a stale, cancelled, mismatched or late preparation produces no attack and an observable rejection
+
+#### Scenario: A global start has one prepared atomic effect
+- **GIVEN** a global start captures several original pad attacks
+- **WHEN** all original participants and their exact prepared sources are validated under the existing complete mutation claim
+- **THEN** all participants start at the same recorded E through one scheduler event
+- **AND** a failed participant causes no partial audio start
+- **AND** preparation and retirement perform no Native processing, allocation, lock acquisition or final heavy owner destruction on the callback
+
+### Requirement: A deferred global gesture retains its original native owners
+The system SHALL capture all GLOBAL START participants, source lifetimes, timing authorities, requested loop regions and one input timestamp in a native group before waiting for residency. The existing callback SHALL capture that group's original transport target T once. Publication after readiness MUST NOT recapture participants, replace their source authority, recompute their loops or quantize T again. Each residency dependency SHALL retain the actual native ticket present at gesture capture and SHALL resolve only that ticket's genuine accepted publication and adopted binding. A matching later ticket or matching numeric metadata MUST NOT grant readiness.
+
+#### Scenario: An existing resident edit finishes after the global gesture
+- **GIVEN** a GLOBAL START participant has an already admitted resident edit with a genuine native ticket
+- **WHEN** GLOBAL START captures that edit's requested loop and original native source before its WindowACK
+- **THEN** the exact dependency SHALL retain that original participant through its own WindowACK and placement changes
+- **AND** the complete group SHALL use its original T and one common E through the existing scheduler
+- **AND** Stop, source replacement, a failed dependency or a failed participant SHALL reject the entire group without partial starts
+
+#### Scenario: A pending edit has no durable native request owner
+- **GIVEN** a participant's pending resident edit has no native ticket, including an unaccepted queue-pressure retry
+- **WHEN** GLOBAL START requests that participant
+- **THEN** the complete gesture SHALL report bounded readiness unavailability before accepting a captured group
+- **AND** polling SHALL NOT attach that gesture to a later ticket by comparing fields
+- **AND** this rejection SHALL NOT be presented as preservation of an accepted gesture through queue pressure
+
+#### Scenario: A published global start is rejected before its effect
+- **GIVEN** the complete original group has been published and its batch ticket is still pending
+- **WHEN** Native rejects the group before its atomic effect, including after a placement change
+- **THEN** the controller SHALL expose the original rejection on the group's current diagnostic pads after the owning placement mirror is ready
+- **AND** the rejected ticket SHALL NOT fabricate active playback or discard the preceding remembered restore intent
+
+### Requirement: Ordinary attacks share exact physical readiness independently
+The system SHALL allow equal original ordinary attacks to register distinct Native memberships in one exact source/timing/loop/context readiness request. Each attack SHALL retain its own owner, Work, sequence, input time, target T, ticket association and cancellation. Cancelling one member MUST NOT cancel another member or an independently requested controller edit. A controller edit dependency SHALL be retained as its exact existing Native ticket before polling; its original mode request SHALL receive its own real WindowACK and MUST NOT be superseded by preparing the dependent ordinary attack. A matching later request MUST NOT substitute for that dependency.
+
+#### Scenario: Equal attacks share real physical readiness
+- **GIVEN** two ordinary attacks capture the same living source, timing and loop before readiness
+- **WHEN** they register with one genuine Native window request and receive its actual callback ACK
+- **THEN** both SHALL retain distinct Work and scheduled effects in original input order
+- **AND** cancelling either member SHALL leave the other member's request and attack valid
+- **AND** a different region, source, timing or cancelled request SHALL fail the shared membership check
+
+#### Scenario: An ordinary start depends on an existing loop and mode edit
+- **GIVEN** a controller loop/mode edit already owns a Native request and its own request ID
+- **WHEN** an ordinary start retains that exact ticket before waiting
+- **THEN** its distinct member ticket SHALL resolve the same real WindowACK and actual mode request ID
+- **AND** the independently requested edit SHALL remain accepted when the start is cancelled
+
+#### Scenario: A fresh member follows benign input projections
+- **GIVEN** an original attack is scheduled against its genuine accepted physical readiness
+- **WHEN** input routing projections change and a fresh attack captures the unchanged source, timing, window and loop
+- **THEN** the fresh attack SHALL reuse that same physical readiness without superseding the scheduled attack
+- **AND** each member SHALL still validate its own original input/runtime guards; an older unpublished capture SHALL NOT acquire fresh permission from another member
+
+### Requirement: A timing edit preserves its coupled resident acknowledgement
+The system SHALL finish a timing edit's legacy BPM/origin publications and final Manual or Tap intent declaration before admitting its coupled resident loop/Key Lock refresh. Intermediate grid-offset reclamping SHALL NOT publish a resident refresh that the same edit subsequently revokes. The coupled refresh SHALL retain its own original source, window, timing authority and request ID through the actual callback acknowledgement; a later request ID alone MUST NOT acknowledge its effect.
+
+#### Scenario: Manual or Tap timing refreshes a saved Key Lock pad
+- **GIVEN** a loaded finite pad has acknowledged saved Key Lock ON and an existing callback mode receipt
+- **WHEN** a Manual or Tap BPM edit, or a refresh of that declared timing, also reclamps its grid offset and refreshes its loop
+- **THEN** the final Native timing declaration SHALL precede the one coupled resident request
+- **AND** that edit SHALL NOT invalidate its own request before its callback acknowledgement
+- **AND** a subsequent prepared ordinary attack SHALL expose actual wet readiness under the acknowledged request without replacing its ownership guards with the latest counter
+
+### Requirement: Selected ordinary starts may consume exact endpoint readiness
+The system SHALL automatically prepare at most one currently selected Normal-start endpoint from the actual settled Native source, window, timing, loop, stem selection, output format and applied pitch/Key Lock tuple, for both stopped and already playing content. The Normal endpoint SHALL remain independent of a live voice's evolving chronology. Selection SHALL publish only preparation interest; SourceACK and WindowACK SHALL remain distinct from actual Native endpoint readiness. Background preparation SHALL use the existing worker at lower priority without occupying any of the 64 accepted action slots or action request cells.
+
+#### Scenario: A ready selected endpoint serves a fresh ordinary attack
+- **GIVEN** the selected content has one genuinely prepared exact Normal endpoint
+- **WHEN** a fresh ordinary attack is admitted at its immutable original target T
+- **THEN** it SHALL consume that unique Native/FIFO state with E=T when admitted in time, using its own sequence, epoch, original owner and freshly captured source/timing permit
+- **AND** the old cache request SHALL retire off realtime without relabelling its permit, resetting Native state, changing the physical endpoint or bypassing the existing complete effect claim
+
+#### Scenario: An already playing pad waits for its fresh Normal attack
+- **GIVEN** selected content is playing and an independent exact Normal endpoint is ready
+- **WHEN** a fresh ordinary repeat waits for its original target T
+- **THEN** its existing live Native/FIFO owner and source cursor SHALL remain unchanged by preparation before T
+- **AND** the repeat at T SHALL adopt a distinct prepared Native/FIFO with its own original action permit
+
+#### Scenario: A genuine own WindowACK preserves the physical endpoint
+- **GIVEN** an original attack captures before its own genuine resident preparation and an exact physical endpoint is already ready
+- **WHEN** that original ticket receives its actual WindowACK while only its input RuntimeProjection advances
+- **THEN** the same original owner and ticket MAY consume the unchanged physical endpoint after their fresh original guards and action permit succeed
+- **AND** a changed physical window or timing ACK SHALL still miss or reject; a later matching ticket or numeric observation SHALL NOT supply the original association
+
+#### Scenario: The endpoint is stale, absent or already consumed
+- **WHEN** the actual source/incarnation, window/ACK, timing, loop, selected stems, rate or applied tuple differs, or another attack already consumed the endpoint
+- **THEN** that attack SHALL retain its own original T and the existing explicit preparation E or rejection
+- **AND** selection changes and stale background work SHALL NOT revoke accepted actions, coalesce repeated attacks, consume their bounded queue capacity or claim readiness for other pads or unseen tuples
+
+#### Scenario: Preparation availability does not certify acoustic causality
+- **WHEN** an exact endpoint is available at T
+- **THEN** its complete initial Native/FIFO PCM SHALL be preserved
+- **AND** cache availability alone SHALL NOT assert the separately required first-sound, acoustic latency, click, phase, causal or Human acceptance predicates
+
 ### Requirement: Set and retrigger preserve distinct playback semantics
 The system SHALL keep SET position-preserving without starting stopped content and SHALL execute SET_RETRIGGER as a fresh normal start-point trigger, including for stopped content and repeated already-active values.
 
@@ -35,3 +138,29 @@ The system SHALL keep each admitted repeated pitch attack as a distinct bounded 
 - **WHEN** several attacks are accepted before ACK, including equal values
 - **THEN** every accepted event remains ordered and a later pitch request does not globally stale its tuple
 - **AND** removed lifetime/source authority still fences unsafe execution; existing unrelated stem-start coalescing remains intact
+
+#### Scenario: A later control projection cannot relabel an original action
+- **GIVEN** two separately admitted actions for the same living content with frozen numeric tuples and original targets
+- **WHEN** a later requested pitch or GUI/MIDI projection changes the mutable control row
+- **THEN** each action SHALL retain its own preparation epoch, source generation, actual window and timing ACK owner
+- **AND** the mutable row revision SHALL NOT alone revoke the earlier action or present its prepared state as the later tuple
+
+#### Scenario: Cancellation races with the complete native effect claim
+- **WHEN** cancellation and an original action compete for its complete native effect
+- **THEN** cancellation before the final claim SHALL leave pitch and transport unchanged
+- **AND** a completed claim SHALL preserve its complete effect and own ACK without a partial pitch, start or stop
+
+#### Scenario: Stop cancels a prepared attack without cancelling a nonstarting SET
+- **GIVEN** an original SET_RETRIGGER and an independent SET waiting for their captured target
+- **WHEN** an explicit native Stop or launch cancellation changes the living content's existing cancellation revision
+- **THEN** the original attack SHALL reject without changing pitch or restarting playback
+- **AND** the nonstarting SET SHALL retain its transport-preserving semantics; later accepted attacks and Move/Swap alone SHALL NOT revoke earlier attacks
+
+### Requirement: Expanded pitch catch-up preserves its original history and worker isolation
+The system SHALL prepare the actual required Native history at the declared output coordinate without fabricating a constant past from a wrapped endpoint or a newly settled rate. An unavailable source trajectory or finite context SHALL reject only its own preparation and SHALL NOT disable another voice's preparation worker.
+
+#### Scenario: A settled extreme pitch requires more history than the ordinary catch-up interval
+- **GIVEN** a constant-rate source with valid original source, lifetime, window and timing authority
+- **WHEN** its requested pitch requires an expanded Native history
+- **THEN** preparation SHALL retain its original output target and reconstruct only the proved source trajectory, including any traversed Intro or Tail
+- **AND** insufficient history after rate or domain changes SHALL remain an explicit local failure without a ready candidate or a shared-worker failure

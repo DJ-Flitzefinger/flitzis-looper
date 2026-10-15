@@ -457,6 +457,8 @@ mod tests {
 
         fn request(&self) -> NativeHistoryRequest {
             NativeHistoryRequest {
+                pitch_intent: super::super::pitch_intent::PitchIntent::default(),
+                key_lock: true,
                 sample: self.sample.clone(),
                 stems: Some(self.stems.clone()),
                 permit: NativeHistoryContext {
@@ -479,6 +481,8 @@ mod tests {
 
         fn feed(&self) -> ProductiveSourceFeed<'_> {
             ProductiveSourceFeed {
+                pitch_intent: super::super::pitch_intent::PitchIntent::default(),
+                key_lock: true,
                 sample: &self.sample,
                 outgoing_stems: None,
                 stems: Some(&self.stems),

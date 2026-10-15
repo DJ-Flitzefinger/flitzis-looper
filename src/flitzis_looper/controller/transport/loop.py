@@ -244,6 +244,7 @@ class PadLoopController:
         *,
         timing: CurrentPadTiming | UnresolvedTiming | None = UNRESOLVED_TIMING,
         expected_source_generation: int | None = None,
+        publish: bool = True,
     ) -> bool:
         """Re-clamp the stored grid offset when effective BPM changes."""
         validate_sample_id(sample_id)
@@ -256,12 +257,13 @@ class PadLoopController:
 
         self._project.pad_grid_offset_samples[sample_id] = clamped
         self._transport._mark_project_changed()
-        self.apply_grid_anchor_to_audio(
-            sample_id, timing=timing, expected_source_generation=expected_source_generation
-        )
-        self._apply_effective_pad_loop_region_to_audio(
-            sample_id, timing=timing, expected_source_generation=expected_source_generation
-        )
+        if publish:
+            self.apply_grid_anchor_to_audio(
+                sample_id, timing=timing, expected_source_generation=expected_source_generation
+            )
+            self._apply_effective_pad_loop_region_to_audio(
+                sample_id, timing=timing, expected_source_generation=expected_source_generation
+            )
         return True
 
     def set_grid_offset_samples(self, sample_id: int, grid_offset_samples: int) -> None:

@@ -25,6 +25,7 @@ if TYPE_CHECKING:
     from flitzis_looper_audio import (
         AcceptedTimingRefreshTicket,
         AudioEngine,
+        CapturedGlobalStart,
         ConstantTimingTicket,
         GlobalPlaybackBatchTicket,
         ResidentWindowTicket,
@@ -325,7 +326,7 @@ def test_global_ticket_and_deferred_accepted_tail_keep_exact_owners() -> None:
         original.ticket, frozenset({0, 36}), 7, start=True, start_ids=frozenset({215})
     )
     deferred = global_playback._DeferredStart(
-        ((0, original.signature, original.accepted),), 87654321, 7, 500.0, 3
+        cast("CapturedGlobalStart", Mock(spec=[])), frozenset({0}), 7, 500.0, 3
     )
     global_control._pending = pending
     global_control._deferred = deferred
@@ -340,17 +341,10 @@ def test_global_ticket_and_deferred_accepted_tail_keep_exact_owners() -> None:
     assert projected.restore_ids == frozenset({215, 36})
     assert projected.start_ids == frozenset({0})
     projected_deferred = global_control._deferred
-    assert projected_deferred.received_at_ns == deferred.received_at_ns
+    assert projected_deferred.capture is deferred.capture
     assert projected_deferred.deadline == deferred.deadline
     assert projected_deferred.attempts == deferred.attempts
-    sample_id, projected_signature, projected_accepted = projected_deferred.sources[0]
-    assert sample_id == 215
-    assert projected_signature[0] == 215
-    assert all(
-        left is right
-        for left, right in zip(projected_signature[1:], original.signature[1:], strict=True)
-    )
-    assert projected_accepted is original.accepted
+    assert projected_deferred.sample_ids == frozenset({215})
     assert app.accepted_timing._refreshes[36] is refresh
     assert refresh.ticket is original.refresh_ticket
     assert request.control_signature[-1] == 215

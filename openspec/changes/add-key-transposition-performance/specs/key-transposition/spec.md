@@ -97,3 +97,58 @@ SHALL NOT create complete source PCM or two serial pitch shifters.
 - **WHEN** r=1 with k nonzero or h/r=1 with r nonunit
 - **THEN** prepared processing/transition preserves intended pitch and matched output history/latency
 - **AND** rate-only/dry bypass cannot silently omit transposition or reset voices
+
+### Requirement: A live Key Lock change owns a prospective numeric tuple
+For a live nonzero applied transposition, the system SHALL retain the previously
+effective Key Lock mode and its productive Native/FIFO history until the original
+mode request can atomically adopt source-specific prepared owners for every
+participating voice at one exact output frame E. Preparation SHALL use each
+voice's actual applied numeric pitch intent with the requested Key Lock mode,
+and SHALL retain the original request, content/source generation, actual window,
+accepted timing/ACK, voice generation and preparation epoch fences. An old
+effective-mode candidate SHALL NOT certify the prospective tuple.
+
+The system SHALL use its existing bounded source-preparation/recycle lanes and
+render boundaries. Callback work SHALL NOT construct Native state, allocate
+owners, wait, perform I/O, or partially change a pad when any participant fails
+preflight. Preparation failure or unavailable history SHALL reject only that
+request visibly, preserve the old effective mode, and leave worker retirement
+and later requests usable. Existing strong Native history permits SHALL remain
+required at actual adoption. A constant endpoint SHALL NOT stand in for missing
+variable source history. This requirement does not claim unimplemented variable
+history, paused endpoint, acoustic, device or full B5 acceptance.
+
+#### Scenario: Complete source changes Lock in either direction with nonzero pitch
+- **GIVEN** a playing complete source with positive or negative numeric transposition and actual r=1 or a nonunit rate
+- **WHEN** its current own mode request changes Key Lock in either direction
+- **THEN** real source preparation targets the prospective tuple while uninterrupted old-mode PCM remains effective before E
+- **AND** all participating prepared Native/FIFO owners and the same own mode request adopt together at E without a source restart, numeric pitch change or tempo change
+- **AND** the first resulting PCM uses the prospective tuple and its matched prepared history
+
+#### Scenario: Finite window storage precedes the same own mode acknowledgement
+- **GIVEN** a finite source whose nonzero live transposition needs a new Key Lock tuple
+- **WHEN** the original mode-only resident transaction claims actual storage
+- **THEN** its original ticket SHALL remain adopting and its resident marker SHALL remain owned while the old mode is audible
+- **AND** preparation SHALL capture a fresh strong permit from the actual installed window rather than fabricate authority for a future window
+- **AND** ordinary or GLOBAL starts depending on that ticket SHALL remain pending until that same request's complete prospective adoption at E
+- **AND** only complete adoption may accept the original ticket and publish its own mode acknowledgement
+
+#### Scenario: Stale or unavailable prospective work preserves old effective audio
+- **WHEN** Stop, source replacement, window/timing/ACK change, an earlier pitch effect, a newer mode request or a changed participant invalidates prospective work
+- **THEN** no participant SHALL consume that candidate or change the shared effective mode
+- **AND** the original resident marker and owner SHALL settle exactly once through bounded off-thread retirement
+- **AND** an unavailable real source-history trajectory SHALL remain a request-local visible refusal without terminating the preparation worker or certifying unsupported history
+
+#### Scenario: Saturated retirement retains the original finite mode owner
+- **GIVEN** an adopting resident mode transaction and zero available retirement queue or backlog slots
+- **WHEN** its exact E, cancellation or a newer mode request is observed
+- **THEN** the system SHALL retain the original transaction, PCM/stem pins and pending state without consuming, overwriting, forgetting or destroying that owner on the callback
+- **AND** only available retirement capacity may settle that owner exactly once
+- **AND** if E has already passed, later capacity SHALL permit refusal and retirement, never late mode adoption
+
+#### Scenario: Refused mode reconciles its own already adopted physical window
+- **GIVEN** a mode-only transaction whose real storage claim installed a different finite window or context before E
+- **WHEN** prospective mode adoption is refused by Stop, timing, unavailable work or missed E
+- **THEN** its original mode ticket SHALL remain rejected and dependent starts SHALL remain unable to launch
+- **AND** control reconciliation SHALL preserve the actual claimed storage using only that original transaction's separate callback storage observation and current native content/source-generation/unique-window fences
+- **AND** a fresh capture and later own mode request SHALL use that real window and remain functional without fabricating an accepted predecessor or replacement receipt

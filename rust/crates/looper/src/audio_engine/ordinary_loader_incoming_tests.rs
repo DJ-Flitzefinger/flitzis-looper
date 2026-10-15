@@ -4,11 +4,16 @@
 use super::*;
 use crate::audio_engine::audio_stream::{
     drain_control_messages, drain_parameter_messages, execute_scheduled_command,
+    render_scheduled_audio,
 };
 use crate::audio_engine::buffer_retirement::{AudioBufferRetirement, RetiredAudioBuffer};
 use crate::audio_engine::dsp::{DspNodeSlot, DspParameterId, DspParameterSlot, PerPadDspChain};
 use crate::audio_engine::mixer::RtMixer;
-use crate::audio_engine::rubberband_backend::{RubberBandLiveShifter, pitch_scale_for_tempo_ratio};
+use crate::audio_engine::native_history_permit::NativeHistoryContext;
+use crate::audio_engine::pad_start::CapturedPadStart;
+use crate::audio_engine::pitch_intent::PitchIntent;
+use crate::audio_engine::prepared_native_history::NativeAdapterState;
+use crate::audio_engine::rubberband_backend::RubberBandLiveShifter;
 use crate::audio_engine::scheduler::FixedCapacityScheduler;
 use crate::audio_engine::source_reader::{
     reset_tap_observation_for_test, tap_observation_for_test,
@@ -236,6 +241,79 @@ struct Callback {
 }
 
 impl Callback {
+    fn queued_start(&self) -> CapturedPadStart {
+        let ControlMessage::CapturePadStartTarget(original) = self.consumer.peek().unwrap() else {
+            panic!("ordinary public Play must retain its original target before PreparedStart");
+        };
+        original.clone()
+    }
+
+    fn wait_start_ready(&mut self, original: &CapturedPadStart) {
+        let frame = self.frame;
+        wait_until(|| {
+            assert_ne!(
+                original.state(),
+                "rejected",
+                "reason={:?}",
+                original.reason()
+            );
+            if original.state() == "applied" {
+                return true;
+            }
+            let runtime = self.mixer.pitch_runtime.as_mut().unwrap();
+            runtime.poll();
+            runtime.has_ready_action(original.sequence())
+        });
+        assert_eq!(
+            self.frame, frame,
+            "worker waits cannot advance virtual output"
+        );
+        assert!(original.accepted());
+    }
+
+    fn render_scheduled(&mut self, frames: usize) -> Vec<f32> {
+        assert_eq!(self.transport.output_frame(), self.frame);
+        let mut output = vec![0.0; frames * 2];
+        render_scheduled_audio(
+            &mut self.mixer,
+            &mut self.scheduler,
+            &mut output,
+            &mut [0.0; NUM_SAMPLES],
+            self.frame,
+            2,
+            &mut self.transport,
+            &mut self.feedback,
+            &mut self.retirement,
+        );
+        self.transport.advance_by_rendered_frames(frames);
+        self.frame = self.transport.output_frame();
+        self.other_consumed += frames as u64;
+        output
+    }
+
+    fn complete_start(&mut self, original: &CapturedPadStart) {
+        self.wait_start_ready(original);
+        let execution = original.execution_frame().unwrap();
+        for count in [31, 137, 512, 777].into_iter().cycle() {
+            if self.frame == execution {
+                break;
+            }
+            assert!(self.frame < execution);
+            let output = self.render_scheduled(count.min((execution - self.frame) as usize));
+            assert!(output.iter().all(|sample| *sample == 0.0));
+            assert_eq!(original.effective_frame(), None);
+        }
+        // Claim the real due event without omitting its first output sample.
+        assert!(self.render_scheduled(0).is_empty());
+        assert_eq!(
+            original.state(),
+            "applied",
+            "reason={:?}",
+            original.reason()
+        );
+        assert_eq!(original.effective_frame(), Some(execution));
+    }
+
     fn drain(&mut self) -> usize {
         drain_parameter_messages(&mut self.parameters, &mut self.mixer, &mut self.transport);
         drain_control_messages(
@@ -264,6 +342,7 @@ impl Callback {
                 .render_rt(&mut output, &mut [0.0; NUM_SAMPLES], &mut self.retirement);
         }
         self.frame += frames as u64;
+        self.transport.advance_by_rendered_frames(frames);
         if !paused {
             self.other_consumed += frames as u64;
         }
@@ -338,6 +417,7 @@ impl Fixture {
         let parameters = Arc::new(Mutex::new(parameters));
         let (feedback, feedback_consumer) = rtrb::RingBuffer::new(128);
         let mut engine = AudioEngine::new().unwrap();
+        engine.test_output_format = Some((RATE, 2));
         engine.test_control_channels = Some((producer, Arc::new(Mutex::new(feedback_consumer))));
         engine.test_parameter_producer = Some(parameters.clone());
         let mut mixer = Box::new(RtMixer::new(2, RATE as f32));
@@ -381,8 +461,7 @@ impl Fixture {
                 .unwrap()
         });
         fixture.call("set_speed", (RATIO,));
-        fixture.call("play_sample", (215, 0.0_f32));
-        fixture.callback.drain();
+        fixture.play_legacy(215, 0.0);
         assert_eq!(
             fixture.transport_events(),
             vec![("started".to_owned(), 215)]
@@ -402,8 +481,7 @@ impl Fixture {
                     gain_db: -12.0,
                 })
                 .unwrap();
-            fixture.call("play_sample", (0, 1.0_f32));
-            fixture.callback.drain();
+            fixture.play_legacy(0, 1.0);
             assert_eq!(fixture.transport_events(), vec![("started".to_owned(), 0)]);
             fixture.old = Python::attach(|py| {
                 fixture.engine.borrow(py).sample_cache.lock().unwrap()[0].clone()
@@ -419,6 +497,22 @@ impl Fixture {
         Python::attach(|py| {
             self.engine.bind(py).call_method1(name, args).unwrap();
         });
+    }
+
+    fn play_legacy(&mut self, id: usize, volume: f32) -> CapturedPadStart {
+        let capture = self.callback.frame;
+        self.call("play_sample", (id, volume));
+        let original = self.callback.queued_start();
+        assert_eq!(original.original_frame(), None);
+        assert_eq!(
+            self.callback.drain(),
+            2,
+            "original target plus prepared publication"
+        );
+        assert_eq!(original.original_frame(), Some(capture));
+        assert!(original.execution_frame().unwrap() >= capture);
+        self.callback.complete_start(&original);
+        original
     }
 
     fn legacy_load(&self, id: usize, path: &Path) -> u64 {
@@ -744,10 +838,37 @@ impl Fixture {
     fn transport_events(&self) -> Vec<(String, usize)> {
         let mut events = Vec::new();
         Python::attach(|py| {
-            while let Some(message) = self.engine.borrow_mut(py).receive_msg().unwrap() {
+            loop {
+                let message = self.engine.borrow_mut(py).receive_msg().unwrap();
+                let Some(message) = message else { break };
                 match message {
                     AudioMessage::SampleStarted { id } => events.push(("started".to_owned(), id)),
                     AudioMessage::SampleStopped { id } => events.push(("stopped".to_owned(), id)),
+                    AudioMessage::ContentFeedback {
+                        id, kind: 1 | 2, ..
+                    } => {
+                        let engine = self.engine.borrow(py);
+                        assert_eq!(engine._resolve_pad_feedback(&message).unwrap(), Some(id));
+                        let AudioMessage::ContentFeedback { kind, .. } = message else {
+                            unreachable!()
+                        };
+                        if kind == 1 {
+                            let bank = self.callback.mixer.bank_for_measurement()[id]
+                                .as_ref()
+                                .unwrap();
+                            let current = voice(&self.callback.mixer, id);
+                            assert!(current.sample.as_ref().unwrap().same_source(bank));
+                            assert_eq!(
+                                current.sample.as_ref().unwrap().resident_binding(),
+                                bank.resident_binding()
+                            );
+                            assert_eq!(
+                                current.source_admission.as_ref().unwrap().content_key(),
+                                engine.input_runtime_ownership.callback_feedback_key(id)
+                            );
+                        }
+                        events.push((if kind == 1 { "started" } else { "stopped" }.to_owned(), id));
+                    }
                     _ => panic!("unexpected actual callback feedback: {message:?}"),
                 }
             }
@@ -909,18 +1030,34 @@ struct RawNative {
     used: bool,
 }
 impl RawNative {
-    fn new(prepared: bool) -> Self {
+    fn prepared_start(source: &SampleBuffer, start: usize, end: usize) -> Self {
+        let mut raw = Self::new();
+        let history = raw.native.source_history_frames(1.0 / RATIO).unwrap();
+        assert_eq!(history, prepared_native_history::PREPARED_HISTORY_FRAMES);
+        let length = end - start;
+        let coordinate = (-(history as f64) * RATIO).rem_euclid(length as f64);
+        let feed = std::array::from_fn(|channel| {
+            (0..history)
+                .map(|offset| {
+                    let phase = (coordinate + offset as f64 * RATIO).rem_euclid(length as f64);
+                    let left = start + phase.floor() as usize;
+                    let right = if left + 1 == end { start } else { left + 1 };
+                    let a = source.samples[left * 2 + channel];
+                    a + (source.samples[right * 2 + channel] - a) * phase.fract() as f32
+                })
+                .collect()
+        });
+        let _ = raw.render(&feed);
+        assert!(
+            raw.used,
+            "the first output owns real periodic Native history"
+        );
+        raw
+    }
+
+    fn new() -> Self {
         let mut native = RubberBandLiveShifter::new(RATE, 2).unwrap();
-        if prepared {
-            native
-                .prepare_exact_pitch(pitch_scale_for_tempo_ratio(RATIO))
-                .unwrap();
-        } else {
-            native.prepare_for_reuse().unwrap();
-            native
-                .set_pitch_scale(pitch_scale_for_tempo_ratio(RATIO))
-                .unwrap();
-        }
+        native.prepare_exact_pitch(1.0 / RATIO).unwrap();
         let block = native.block_size();
         Self {
             native,
@@ -929,17 +1066,12 @@ impl RawNative {
             used: false,
         }
     }
-    fn render(&mut self, feed: &[Vec<f32>; 2], initial: bool) -> Vec<f32> {
+    fn render(&mut self, feed: &[Vec<f32>; 2]) -> Vec<f32> {
         let mut result = Vec::new();
         let mut offset = 0;
         while offset < feed[0].len() {
-            let dry = initial && !self.used;
             let block = self.native.block_size();
-            let count = if dry {
-                (block - self.input[0].len()).min(feed[0].len() - offset)
-            } else {
-                feed[0].len() - offset
-            };
+            let count = feed[0].len() - offset;
             for (channel, source) in self.input.iter_mut().zip(feed) {
                 channel.extend(&source[offset..offset + count]);
             }
@@ -957,10 +1089,10 @@ impl RawNative {
                 }
             }
             assert!(self.output.iter().all(|channel| channel.len() >= count));
-            for frame in 0..count {
-                for (channel, source) in feed.iter().enumerate() {
+            for _ in 0..count {
+                for channel in 0..2 {
                     let wet = self.output[channel].pop_front().unwrap();
-                    result.push(if dry { source[offset + frame] } else { wet });
+                    result.push(wet);
                 }
             }
             offset += count;
@@ -990,15 +1122,54 @@ fn filter() -> PerPadDspChain {
     filter
 }
 
+fn prepare_reference_start(reference: &mut RtMixer, execution: u64) {
+    let ownership = reference.input_ownership_for_effect();
+    let acknowledgements = Arc::new(constant_timing::CurrentTimingAcknowledgements::default());
+    reference.set_current_timing_acknowledgements(acknowledgements.clone());
+    let index = reference
+        .voices
+        .iter()
+        .position(|voice| voice.is_playing_sample(0))
+        .unwrap();
+    let snapshot = reference.capture_pitch_voice_snapshot(index).unwrap();
+    let epoch = Arc::new(std::sync::atomic::AtomicU64::new(1));
+    let permit = NativeHistoryContext {
+        id: 0,
+        ownership: &ownership,
+        acknowledgements: &acknowledgements,
+        preparation_epoch: &epoch,
+    }
+    .capture(&snapshot.sample, RATE, None)
+    .unwrap();
+    let pitch = PitchIntent::default();
+    let request = snapshot
+        .into_request(permit, pitch, true, execution, 1, 1)
+        .unwrap();
+    let mut candidate = Box::new(NativeAdapterState::new(
+        Some(RubberBandLiveShifter::new(RATE, 2).unwrap()),
+        2,
+    ));
+    candidate.prepare_source_at_endpoint(request).unwrap();
+    assert!(reference.adopt_prepared_pitch_voice(
+        index,
+        &mut candidate,
+        execution,
+        pitch,
+        true,
+        1,
+        1,
+    ));
+}
+
 struct Playback {
     reference: Box<RtMixer>,
     raw: Option<RawNative>,
-    candidate: Option<(u64, RawNative)>,
     filter: PerPadDspChain,
     start: usize,
     end: usize,
     consumed: u64,
     seams: HashSet<u64>,
+    original: CapturedPadStart,
 }
 
 impl Playback {
@@ -1021,8 +1192,7 @@ impl Playback {
             })
             .unwrap();
         fixture.callback.drain();
-        fixture.call("play_sample", (0, 1.0_f32));
-        assert_eq!(fixture.callback.drain(), 1);
+        let original = fixture.play_legacy(0, 1.0);
         assert_eq!(fixture.transport_events(), vec![("started".to_owned(), 0)]);
         let start = defaults.start_frame;
         let end = defaults.end_frame.unwrap_or(fixture.complete.frame_count());
@@ -1037,6 +1207,33 @@ impl Playback {
         reference.set_pad_key_lock(0, defaults.key_lock);
         reference.set_pad_eq(0, -12.0, -3.0, 4.0);
         assert!(reference.play_sample_at_output_frame(0, 1.0, fixture.callback.frame));
+        if defaults.key_lock {
+            prepare_reference_start(&mut reference, fixture.callback.frame);
+            let current = voice(&fixture.callback.mixer, 0);
+            assert_eq!(
+                current.stretch.adopted_request_id(),
+                Some(original.sequence())
+            );
+            assert_ne!(current.stretch.native_state_address(), 0);
+            let history = current.stretch.productive_history().unwrap();
+            assert_eq!(
+                history.fed_output_frames,
+                prepared_native_history::PREPARED_HISTORY_FRAMES as u64
+            );
+            assert_eq!(history.next_position.frame, start);
+            assert_eq!(history.next_position.fraction, 0.0);
+            if start != 0 || end != fixture.complete.frame_count() {
+                let taps = current
+                    .stretch
+                    .native_tap_observation()
+                    .expect("the actual finite source must retain its prepared coverage proof");
+                assert_eq!(taps.missing_reads, 0);
+                assert!(taps.min_frame.is_some_and(|frame| frame >= start));
+                assert!(taps.max_frame.is_some_and(|frame| frame < end));
+            } else {
+                assert!(current.stretch.native_tap_observation().is_none());
+            }
+        }
         assert_eq!(
             voice(&fixture.callback.mixer, 0)
                 .source_playback
@@ -1046,13 +1243,15 @@ impl Playback {
         );
         Self {
             reference,
-            raw: defaults.key_lock.then(|| RawNative::new(false)),
-            candidate: None,
+            raw: defaults
+                .key_lock
+                .then(|| RawNative::prepared_start(&fixture.complete, start, end)),
             filter: filter(),
             start,
             end,
             consumed: 0,
             seams: HashSet::new(),
+            original,
         }
     }
 
@@ -1081,14 +1280,6 @@ impl Playback {
     }
 
     fn render(&mut self, fixture: &mut Fixture, frames: usize, timestamp: bool) {
-        if let Some((target, _)) = &self.candidate {
-            assert!(fixture.callback.frame <= *target);
-            if fixture.callback.frame == *target {
-                self.raw = Some(self.candidate.take().unwrap().1);
-            } else {
-                assert!(fixture.callback.frame + frames as u64 <= *target);
-            }
-        }
         let feed = self.feed(fixture, self.consumed, frames);
         let raw = self.raw.as_mut().map_or_else(
             || {
@@ -1098,7 +1289,7 @@ impl Playback {
             },
             // Incoming ON is effective at its own source ACK, before voice birth.
             // This history has no pending mode change with a dry bootstrap.
-            |native| native.render(&feed, false),
+            |native| native.render(&feed),
         );
         let mut expected = vec![0.0; frames * 2];
         if timestamp {
@@ -1147,6 +1338,10 @@ impl Playback {
         );
         if let Some(raw) = &self.raw {
             assert_eq!(
+                current.stretch.adopted_request_id(),
+                Some(self.original.sequence())
+            );
+            assert_eq!(
                 current.stretch.pending_fifo_frames(),
                 (raw.input[0].len(), raw.output[0].len())
             );
@@ -1192,87 +1387,26 @@ impl Playback {
     }
 
     fn adopt_native(&mut self, fixture: &mut Fixture) {
-        self.render(fixture, 13, true);
-        wait_until(|| {
-            voice_mut(&mut fixture.callback.mixer, 0)
-                .stretch
-                .source_preparation_ready()
-                && voice_mut(&mut self.reference, 0)
-                    .stretch
-                    .source_preparation_ready()
-        });
-        let target = voice_mut(&mut fixture.callback.mixer, 0)
-            .stretch
-            .prepared_target_output_frame()
-            .unwrap();
-        assert_eq!(
-            voice_mut(&mut self.reference, 0)
-                .stretch
-                .prepared_target_output_frame(),
-            Some(target)
-        );
-        let prepared = voice_mut(&mut fixture.callback.mixer, 0)
-            .stretch
-            .prepared_native_address();
         let old = voice(&fixture.callback.mixer, 0)
             .stretch
             .native_state_address();
-        assert_ne!(prepared, 0);
-        assert_ne!(prepared, old);
+        assert_ne!(old, 0);
         let generation = voice(&fixture.callback.mixer, 0).generation;
-        let taps = voice_mut(&mut fixture.callback.mixer, 0)
-            .stretch
-            .prepared_tap_observation()
-            .unwrap();
-        assert_eq!(taps.missing_reads, 0);
-        assert!(taps.min_frame.is_some_and(|frame| frame >= self.start));
-        assert!(taps.max_frame.is_some_and(|frame| frame < self.end));
-        let warm_start = target - prepared_native_history::PREPARED_HISTORY_FRAMES as u64;
-        assert!(
-            warm_start >= fixture.callback.frame - 13,
-            "warm capture belongs to post-Resume audio"
-        );
-        let warm_consumed = self.consumed - (fixture.callback.frame - warm_start);
-        let feed = self.feed(
-            fixture,
-            warm_consumed,
-            prepared_native_history::PREPARED_HISTORY_FRAMES,
-        );
-        let mut raw = RawNative::new(true);
-        let _ = raw.render(&feed, false);
-        self.candidate = Some((target, raw));
-        for count in [1, 31, 137, 512, 257].into_iter().cycle() {
-            if fixture.callback.frame == target {
-                break;
-            }
-            self.render(
-                fixture,
-                count.min((target - fixture.callback.frame) as usize),
-                true,
-            );
-        }
-        self.render(fixture, 137, true);
-        assert_eq!(
-            voice(&fixture.callback.mixer, 0)
-                .stretch
-                .native_state_address(),
-            prepared
-        );
-        assert_eq!(
-            voice(&fixture.callback.mixer, 0)
-                .stretch
-                .native_tap_observation(),
-            Some(taps)
-        );
-        assert!(
-            voice(&fixture.callback.mixer, 0)
-                .stretch
-                .adopted_request_id()
-                .is_some()
-        );
-        assert_eq!(voice(&fixture.callback.mixer, 0).generation, generation);
         for count in [1, 31, 137, 512, 777, 96, 257] {
-            self.render(fixture, count, false);
+            self.render(fixture, count, true);
+            let current = voice(&fixture.callback.mixer, 0);
+            assert_eq!(current.stretch.native_state_address(), old);
+            assert_eq!(
+                current.stretch.adopted_request_id(),
+                Some(self.original.sequence())
+            );
+            assert_eq!(current.generation, generation);
+            assert!(
+                !voice_mut(&mut fixture.callback.mixer, 0)
+                    .stretch
+                    .source_preparation_ready(),
+                "the first ordinary candidate remains productive without a second warm-up"
+            );
         }
     }
 }
@@ -2002,7 +2136,6 @@ fn predecessor_scheduled_start_history(exclusive: bool) {
     let mut fixture = Fixture::new(pulse_track(), false, true);
     let predecessor = current_generation(&fixture);
     fixture.callback.render(1, false, false);
-    fixture.callback.transport.advance_by_rendered_frames(1);
     assert!(fixture.callback.transport.set_master_bpm(120.0));
     fixture.callback.quantization = TriggerQuantization::Grid { step_64ths: 4 };
     bound_call(
@@ -2016,10 +2149,14 @@ fn predecessor_scheduled_start_history(exclusive: bool) {
         predecessor,
     )
     .unwrap();
-    fixture.callback.drain();
+    let original = fixture.callback.queued_start();
+    assert_eq!(fixture.callback.drain(), 2);
+    fixture.callback.wait_start_ready(&original);
     assert_eq!(fixture.callback.scheduler.len(), 1);
     assert!(fixture.transport_events().is_empty());
     let due_frame = fixture.callback.scheduler.peek_next_target_frame().unwrap();
+    assert_eq!(original.original_frame(), Some(due_frame));
+    assert_eq!(original.execution_frame(), Some(due_frame));
     assert!(due_frame > fixture.callback.frame);
     let request = fixture.start(false);
     let captured = fixture.pending(request);
@@ -2042,6 +2179,8 @@ fn predecessor_scheduled_start_history(exclusive: bool) {
         &mut fixture.callback.feedback,
         &mut fixture.callback.retirement,
     );
+    assert_eq!(original.state(), "rejected");
+    assert_eq!(original.effective_frame(), None);
     assert!(fixture.transport_events().is_empty());
     assert_eq!(
         voice(&fixture.callback.mixer, 215)

@@ -7,6 +7,7 @@ import pytest
 from flitzis_looper.input_mapping import KeyboardBinding, LooperAction
 from flitzis_looper_audio import AudioMessage
 from tests.flitzis_looper.conftest import (
+    FakeCapturedGlobalStart,
     FakeGlobalPlaybackBatchTicket,
     FakeInputRuntimePadBinding,
     current_timing_metadata,
@@ -56,11 +57,24 @@ def _event(action: str, timestamp: object, *, dispatched: bool = True) -> dict[s
 
 
 def _assert_no_fallback(audio: Mock) -> None:
+    audio.start_global_playback_batch.assert_not_called()
     audio.set_pad_loop_region.assert_not_called()
     audio.play_sample.assert_not_called()
     audio.play_sample_exclusive.assert_not_called()
     audio.trigger_input_runtime_pad.assert_not_called()
     audio.stop_all.assert_not_called()
+
+
+def _set_start_ticket(audio: Mock, ticket: FakeGlobalPlaybackBatchTicket) -> None:
+    audio.publish_captured_global_start.side_effect = lambda capture: capture.publish(ticket)
+
+
+def _last_original_start(audio: Mock) -> FakeCapturedGlobalStart:
+    original = audio.publish_captured_global_start.call_args.args[0]
+    assert isinstance(original, FakeCapturedGlobalStart)
+    assert original.entries == tuple(audio.capture_global_start.call_args.args[0])
+    assert audio.publish_captured_global_start.call_args.args == (original,)
+    return original
 
 
 def _dispatch_global_action(
@@ -89,9 +103,11 @@ def test_actual_app_global_input_drains_accepted_playback_feedback_before_next_t
     controller.session.global_stop_restore_sample_ids = {0, 2}
     start_ticket = FakeGlobalPlaybackBatchTicket("pending")
     stop_ticket = FakeGlobalPlaybackBatchTicket("pending")
-    audio_engine_mock.start_global_playback_batch.return_value = start_ticket
+    _set_start_ticket(audio_engine_mock, start_ticket)
     audio_engine_mock.stop_global_playback_batch.return_value = stop_ticket
     _dispatch_global_action(controller, "global.start_stop", route=route, timestamp=17)
+    first_start = _last_original_start(audio_engine_mock)
+    assert first_start.received_at_ns == 17
     assert controller.session.active_sample_ids == set()
     assert controller.session.global_stop_restore_sample_ids == {0, 2}
 
@@ -124,17 +140,20 @@ def test_actual_app_global_input_drains_accepted_playback_feedback_before_next_t
     assert controller.session.active_sample_ids == set()
     assert controller.session.paused_sample_ids == set()
     if remember_stop:
-        assert audio_engine_mock.start_global_playback_batch.call_count == 2
-        assert audio_engine_mock.start_global_playback_batch.call_args.args[0] == [
-            (bindings[0], 1.0, 2.0),
-            (bindings[2], 3.0, 4.0),
+        assert audio_engine_mock.capture_global_start.call_count == 2
+        assert audio_engine_mock.capture_global_start.call_args.args[0] == [
+            (bindings[0], 1.0, 2.0, None),
+            (bindings[2], 3.0, 4.0, None),
         ]
-        assert audio_engine_mock.start_global_playback_batch.call_args.kwargs == {
-            "received_at_ns": 23
-        }
+        assert audio_engine_mock.capture_global_start.call_args.kwargs == {"received_at_ns": 23}
+        assert audio_engine_mock.publish_captured_global_start.call_count == 2
+        second_start = _last_original_start(audio_engine_mock)
+        assert second_start is not first_start
+        assert second_start.received_at_ns == 23
         assert controller.session.global_stop_restore_sample_ids == {0, 2}
     else:
-        audio_engine_mock.start_global_playback_batch.assert_called_once()
+        audio_engine_mock.capture_global_start.assert_called_once()
+        audio_engine_mock.publish_captured_global_start.assert_called_once_with(first_start)
         assert controller.session.global_stop_restore_sample_ids == set()
     _assert_no_fallback(audio_engine_mock)
 
@@ -158,15 +177,21 @@ def test_productive_midi_global_action_captures_all_native_sources_with_original
     )
 
     if action == "global.start_stop":
-        audio_engine_mock.start_global_playback_batch.assert_called_once_with(
-            [(bindings[0], 1.0, 2.0), (bindings[2], 3.0, 4.0)], received_at_ns=timestamp
+        audio_engine_mock.capture_global_start.assert_called_once_with(
+            [(bindings[0], 1.0, 2.0, None), (bindings[2], 3.0, 4.0, None)],
+            received_at_ns=timestamp,
         )
+        original = _last_original_start(audio_engine_mock)
+        assert original.received_at_ns == timestamp
+        audio_engine_mock.publish_captured_global_start.assert_called_once_with(original)
         audio_engine_mock.stop_global_playback_batch.assert_not_called()
     else:
         audio_engine_mock.stop_global_playback_batch.assert_called_once_with(
             [bindings[0], bindings[2]], received_at_ns=timestamp
         )
         audio_engine_mock.start_global_playback_batch.assert_not_called()
+        audio_engine_mock.capture_global_start.assert_not_called()
+        audio_engine_mock.publish_captured_global_start.assert_not_called()
     assert controller.session.model_dump() == before
     _assert_no_fallback(audio_engine_mock)
 
@@ -189,7 +214,7 @@ def test_productive_midi_global_failure_preserves_restore_and_all_voice_state(
             intent="automatic",
         )
     else:
-        audio_engine_mock.start_global_playback_batch.side_effect = RuntimeError(
+        audio_engine_mock.publish_captured_global_start.side_effect = RuntimeError(
             "full command ring"
         )
         audio_engine_mock.stop_global_playback_batch.side_effect = RuntimeError("full command ring")
@@ -202,8 +227,16 @@ def test_productive_midi_global_failure_preserves_restore_and_all_voice_state(
     if failure == "queue_full":
         assert after.pop("input_mapping_error") == "full command ring"
         before.pop("input_mapping_error")
+        if action == "global.start_stop":
+            original = _last_original_start(audio_engine_mock)
+            audio_engine_mock.capture_global_start.assert_called_once()
+            audio_engine_mock.publish_captured_global_start.assert_called_once_with(original)
+            assert original.received_at_ns == 41
+            assert original.cancelled is True
     else:
         audio_engine_mock.start_global_playback_batch.assert_not_called()
+        audio_engine_mock.capture_global_start.assert_not_called()
+        audio_engine_mock.publish_captured_global_start.assert_not_called()
         audio_engine_mock.stop_global_playback_batch.assert_not_called()
     assert after == before
     assert controller.project.model_dump() == project_before
@@ -223,6 +256,8 @@ def test_invalid_midi_global_time_reports_error_without_unguarded_retry(
     audio_engine_mock.current_constant_timing.assert_not_called()
     audio_engine_mock.current_input_runtime_pad_binding.assert_not_called()
     audio_engine_mock.start_global_playback_batch.assert_not_called()
+    audio_engine_mock.capture_global_start.assert_not_called()
+    audio_engine_mock.publish_captured_global_start.assert_not_called()
     audio_engine_mock.stop_global_playback_batch.assert_not_called()
     _assert_no_fallback(audio_engine_mock)
 
@@ -235,11 +270,16 @@ def test_midi_pending_then_rejected_global_batch_retains_previous_restore(
     controller.session.global_stop_engaged = True
     controller.session.global_stop_restore_sample_ids = {0, 2}
     ticket = FakeGlobalPlaybackBatchTicket("pending")
-    audio_engine_mock.start_global_playback_batch.return_value = ticket
+    _set_start_ticket(audio_engine_mock, ticket)
     audio_engine_mock.stop_global_playback_batch.return_value = ticket
     before = controller.session.model_dump()
 
     controller.input_mapping._handle_rust_input_event(_event(action, 0))
+    if action == "global.start_stop":
+        original = _last_original_start(audio_engine_mock)
+        audio_engine_mock.capture_global_start.assert_called_once()
+        audio_engine_mock.publish_captured_global_start.assert_called_once_with(original)
+        assert original.received_at_ns == 0
     controller.transport.on_frame_render()
     assert controller.session.model_dump() == before
     ticket.status = "rejected"

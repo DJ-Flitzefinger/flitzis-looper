@@ -48,11 +48,12 @@ class BpmController:
         )
         self._project.manual_bpm[sample_id] = float(bpm)
         self._transport.record_current_pad_edit(sample_id, generation, "timing")
-        self.on_pad_bpm_changed(sample_id, publish_bpm=False, expected_source_generation=generation)
-        self._audio.set_pad_timing_intent(
-            sample_id, "manual", **self._transport.source_generation_options(generation)
+        self.on_pad_bpm_changed(
+            sample_id,
+            publish_bpm=False,
+            timing_intent="manual",
+            expected_source_generation=generation,
         )
-        self._project.pad_timing_intent[sample_id] = "manual"
         self._transport._mark_project_changed()
 
     def clear_manual_bpm(self, sample_id: int) -> None:
@@ -107,11 +108,12 @@ class BpmController:
         )
         self._project.manual_bpm[sample_id] = bpm
         self._transport.record_current_pad_edit(sample_id, generation, "timing")
-        self.on_pad_bpm_changed(sample_id, publish_bpm=False, expected_source_generation=generation)
-        self._audio.set_pad_timing_intent(
-            sample_id, "tap", **self._transport.source_generation_options(generation)
+        self.on_pad_bpm_changed(
+            sample_id,
+            publish_bpm=False,
+            timing_intent="tap",
+            expected_source_generation=generation,
         )
-        self._project.pad_timing_intent[sample_id] = "tap"
         self._transport._mark_project_changed()
         return bpm
 
@@ -230,6 +232,7 @@ class BpmController:
         sample_id: int,
         *,
         publish_bpm: bool = True,
+        timing_intent: TimingIntent | None = None,
         expected_source_generation: int | None = None,
     ) -> None:
         """Refresh derived controls without replaying legacy values over accepted timing."""
@@ -259,30 +262,38 @@ class BpmController:
                 **self._transport.source_generation_options(expected_source_generation),
             )
 
-        # Grid offset clamp depends on effective BPM, so re-clamp on changes.
+        # Scalar timing changes revoke older preparation. Publish the one coupled
+        # resident request only after the edit's final Native authority is declared.
         self._transport.loop.reclamp_grid_offset_samples(
-            sample_id, timing=timing, expected_source_generation=expected_source_generation
+            sample_id,
+            timing=timing,
+            expected_source_generation=expected_source_generation,
+            publish=False,
         )
         self._transport.loop.apply_grid_anchor_to_audio(
             sample_id, timing=timing, expected_source_generation=expected_source_generation
         )
+        if (
+            timing_intent is None
+            and publish_bpm
+            and (
+                self._project.manual_bpm[sample_id] is not None
+                or self._project.pad_timing_intent[sample_id] in {"manual", "tap"}
+            )
+        ):
+            timing_intent = (
+                "tap" if self._project.pad_timing_intent[sample_id] == "tap" else "manual"
+            )
+        if timing_intent is not None:
+            self._audio.set_pad_timing_intent(
+                sample_id,
+                timing_intent,
+                **self._transport.source_generation_options(expected_source_generation),
+            )
+            self._project.pad_timing_intent[sample_id] = timing_intent
         self._transport.loop._apply_effective_pad_loop_region_to_audio(
             sample_id, timing=timing, expected_source_generation=expected_source_generation
         )
-
-        if publish_bpm and (
-            self._project.manual_bpm[sample_id] is not None
-            or self._project.pad_timing_intent[sample_id] in {"manual", "tap"}
-        ):
-            intent: TimingIntent = (
-                "tap" if self._project.pad_timing_intent[sample_id] == "tap" else "manual"
-            )
-            self._audio.set_pad_timing_intent(
-                sample_id,
-                intent,
-                **self._transport.source_generation_options(expected_source_generation),
-            )
-            self._project.pad_timing_intent[sample_id] = intent
 
         if self._session.bpm_lock_anchor_pad_id != sample_id:
             return

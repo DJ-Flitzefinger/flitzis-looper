@@ -1,17 +1,21 @@
 //! Source/current-authority-bound global transactions; all allocation is control-side.
 
 use super::AudioEngine;
+use super::captured_global_start::CapturedGlobalStart;
 use super::constants::{MAX_VOICES, NUM_SAMPLES};
 use super::input_runtime_binding::{
     self, InputPadBinding, InputRuntimePadBinding, LaunchWriteKind,
 };
+use super::ordinary_start::OrdinaryStartWork;
+use super::pad_start::CapturedPadStart;
 use crate::messages::ControlMessage;
 use pyo3::exceptions::{PyRuntimeError, PyValueError};
 use pyo3::prelude::*;
 use rtrb::Producer;
+use std::cell::UnsafeCell;
 use std::sync::{
     Arc, Mutex,
-    atomic::{AtomicU8, Ordering},
+    atomic::{AtomicBool, AtomicU8, Ordering},
 };
 
 const PENDING: u8 = 0;
@@ -27,12 +31,30 @@ pub(crate) struct GlobalPlaybackEntry {
     pub(crate) launch_revision: u64,
 }
 
-#[derive(Debug)]
 pub(crate) struct GlobalPlaybackBatch {
     pub(crate) entries: Box<[GlobalPlaybackEntry]>,
     pub(crate) start: bool,
     pub(crate) received_at_ns: Option<u64>,
+    pub(crate) captured_start: Option<CapturedGlobalStart>,
     status: Arc<AtomicU8>,
+    prepared_claimed: AtomicBool,
+    prepared_starts: UnsafeCell<Option<Box<[Option<Box<OrdinaryStartWork>>]>>>,
+}
+
+// Control finishes initialization before queue publication. Exactly one callback
+// consumer wins this payload's atomic claim; losing Arc clones never access it.
+unsafe impl Send for GlobalPlaybackBatch {}
+unsafe impl Sync for GlobalPlaybackBatch {}
+
+impl std::fmt::Debug for GlobalPlaybackBatch {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("GlobalPlaybackBatch")
+            .field("entries", &self.entries)
+            .field("start", &self.start)
+            .field("received_at_ns", &self.received_at_ns)
+            .finish_non_exhaustive()
+    }
 }
 
 impl PartialEq for GlobalPlaybackBatch {
@@ -42,6 +64,20 @@ impl PartialEq for GlobalPlaybackBatch {
 }
 
 impl GlobalPlaybackBatch {
+    /// Transfer the complete control-allocated group exactly once. Runtime must
+    /// reserve every participant before capture and retain one atomic batch effect.
+    pub(crate) fn take_prepared_starts(&self) -> Option<Box<[Option<Box<OrdinaryStartWork>>]>> {
+        if self
+            .prepared_claimed
+            .compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)
+            .is_err()
+        {
+            return None;
+        }
+        // Only the successful claim accesses this cell for its remaining lifetime.
+        unsafe { (&mut *self.prepared_starts.get()).take() }
+    }
+
     pub(crate) fn finish(&self, accepted: bool) {
         self.status.store(
             if accepted { ACCEPTED } else { REJECTED },
@@ -108,6 +144,11 @@ fn enqueue_before_commit(
     let mut seen = [false; NUM_SAMPLES];
     let mut effects = Vec::with_capacity(entries.len());
     let mut captures = Vec::with_capacity(entries.len());
+    let mut prepared_starts = Vec::with_capacity(if start { entries.len() } else { 0 });
+    let mut start_owners = Vec::with_capacity(if start { entries.len() } else { 0 });
+    let render_format = start
+        .then(|| engine.ordinary_start_render_format())
+        .transpose()?;
     for (binding, start_s, end_s) in &entries {
         let id = binding.id;
         if id >= NUM_SAMPLES
@@ -141,6 +182,25 @@ fn enqueue_before_commit(
             end_s: *end_s,
             launch_revision: 0,
         });
+        if let Some(format) = render_format {
+            let owner = CapturedPadStart::capture_from_binding(
+                &current,
+                *start_s,
+                *end_s,
+                1.0,
+                false,
+                received_at_ns.unwrap_or(0),
+                format,
+                None,
+            )
+            .map_err(|reason| PyRuntimeError::new_err(reason.as_str()))?;
+            let work = owner
+                .take_work_with_binding(current.binding, None)
+                .map_err(|reason| PyRuntimeError::new_err(reason.as_str()))?
+                .ok_or_else(|| PyRuntimeError::new_err("global start owner already published"))?;
+            start_owners.push(owner);
+            prepared_starts.push(Some(work));
+        }
         captures.push(current);
     }
     let mut producer = producer
@@ -190,7 +250,10 @@ fn enqueue_before_commit(
         entries: effects.into_boxed_slice(),
         start,
         received_at_ns,
+        captured_start: None,
         status: status.clone(),
+        prepared_claimed: AtomicBool::new(false),
+        prepared_starts: UnsafeCell::new(start.then(|| prepared_starts.into_boxed_slice())),
     });
     let message = ControlMessage::GlobalPlaybackBatch(batch);
     before_commit();
@@ -204,6 +267,9 @@ fn enqueue_before_commit(
                     && captures
                         .iter()
                         .all(InputRuntimePadBinding::control_publication_current)
+                    && start_owners
+                        .iter()
+                        .all(CapturedPadStart::mark_published_claimed)
             },
             |_| {
                 for prepared in &writes {
@@ -215,6 +281,129 @@ fn enqueue_before_commit(
         )
         .map_err(|error| PyRuntimeError::new_err(error.to_string()))?;
     Ok(GlobalPlaybackBatchTicket { status })
+}
+
+/// Publish an already captured complete gesture. No current source/loop/timing
+/// capture occurs here; only its retained original owners can grant authority.
+pub(super) fn enqueue_captured(
+    engine: &AudioEngine,
+    captured: &CapturedGlobalStart,
+) -> PyResult<Option<GlobalPlaybackBatchTicket>> {
+    let _requests = engine
+        .pad_request_ids
+        .lock()
+        .map_err(|_| PyRuntimeError::new_err("request lock poisoned"))?;
+    let mut producer = engine
+        .control_producer()?
+        .lock()
+        .map_err(|_| PyRuntimeError::new_err("Failed to acquire producer lock"))?;
+    // Capacity is checked before any exact Work is transferred from its owner.
+    if producer.is_full() {
+        return Err(PyRuntimeError::new_err("global start queue is full"));
+    }
+    let Some(resolved) = captured.resolve()? else {
+        return Ok(None);
+    };
+    let ownership = &engine.input_runtime_ownership;
+    let mut effects = Vec::with_capacity(resolved.len());
+    let mut writes = Vec::with_capacity(resolved.len());
+    for member in &resolved {
+        let placement = member
+            .guard
+            .binding
+            .placement
+            .ok_or_else(|| PyRuntimeError::new_err("global placement is pending"))?;
+        let prepared = ownership
+            .prepare_launch_write(placement, LaunchWriteKind::Admit)
+            .map_err(PyRuntimeError::new_err)?;
+        let (start_s, end_s) = member.start.loop_region();
+        effects.push(GlobalPlaybackEntry {
+            id: member.guard.id,
+            binding: member.guard.binding,
+            start_s,
+            end_s,
+            launch_revision: prepared.previous_revision,
+        });
+        writes.push(prepared);
+    }
+    let anchor = writes
+        .first()
+        .ok_or_else(|| PyValueError::new_err("empty global start"))?
+        .placement;
+    let write = match ownership.prepare_slot_write_fixed(anchor, anchor.lifetime()) {
+        Ok(write) => write,
+        Err(super::content_placement::PlacementError::Pending) => return Ok(None),
+        Err(error) => return Err(PyRuntimeError::new_err(error.to_string())),
+    };
+    let mut prepared_starts = Vec::with_capacity(resolved.len());
+    for member in &resolved {
+        match member
+            .start
+            .take_work_with_binding(member.guard.binding, member.resident_guard.clone())
+        {
+            Ok(Some(work)) => prepared_starts.push(Some(work)),
+            result => {
+                for (staged, work) in resolved.iter().zip(prepared_starts.into_iter().flatten()) {
+                    let _ = staged.start.restore_unpublished_work(work);
+                }
+                let reason = result
+                    .err()
+                    .map_or("global start work already consumed", |reason| {
+                        reason.as_str()
+                    });
+                return Err(PyValueError::new_err(reason));
+            }
+        }
+    }
+    let status = Arc::new(AtomicU8::new(PENDING));
+    let batch = Arc::new(GlobalPlaybackBatch {
+        entries: effects.into_boxed_slice(),
+        start: true,
+        received_at_ns: Some(captured.received_timestamp()),
+        captured_start: Some(captured.clone()),
+        status: status.clone(),
+        prepared_claimed: AtomicBool::new(false),
+        prepared_starts: UnsafeCell::new(Some(prepared_starts.into_boxed_slice())),
+    });
+    let reclaim = batch.clone();
+    let result = ownership.commit_slot_write_fixed(
+        &write,
+        || {
+            writes
+                .iter()
+                .all(|prepared| ownership.launch_write_current(*prepared))
+                && resolved
+                    .iter()
+                    .all(|member| member.start.claim_current(member.guard))
+                && captured.mark_published_claimed()
+        },
+        |_| {
+            for prepared in &writes {
+                ownership.apply_launch_write(*prepared);
+            }
+            let sent = producer.push(ControlMessage::GlobalPlaybackBatch(batch));
+            debug_assert!(sent.is_ok());
+        },
+    );
+    if let Err(error) = result {
+        if let Some(work) = reclaim.take_prepared_starts() {
+            for (member, work) in resolved.iter().zip(work.into_vec()) {
+                if let Some(work) = work {
+                    let _ = member.start.restore_unpublished_work(work);
+                }
+            }
+        }
+        reclaim.finish(false);
+        if matches!(
+            error,
+            super::content_placement::PlacementError::Pending
+                | super::content_placement::PlacementError::ClaimRejected
+        ) {
+            return Ok(None);
+        }
+        return Err(PyRuntimeError::new_err(error.to_string()));
+    }
+    Ok(Some(GlobalPlaybackBatchTicket { status }))
 }
 
 #[cfg(test)]

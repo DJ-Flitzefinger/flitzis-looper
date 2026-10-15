@@ -40,8 +40,7 @@ fn actual_overwrite_preserves_source_and_fences_both_removed_hold_release_orders
                         .unwrap()["content_lifetime"]
                         .as_u64()
                         .unwrap();
-                    fixture.with_engine(|engine| engine.play_sample(36, 1.0, None).unwrap());
-                    fixture.callback.drain();
+                    fixture.start(36);
                     fixture.callback.render(19);
                     let target_hold = hold(&fixture, 36, 9001);
                     fixture.callback.drain();
@@ -142,8 +141,7 @@ fn actual_overwrite_cancel_and_stale_equal_pcm_binding_preserve_current_target()
         || {
             let mut fixture = Fixture::new(false, false, "manual");
             settle_empty(&mut fixture, 215);
-            fixture.with_engine(|engine| engine.play_sample(215, 1.0, None).unwrap());
-            fixture.callback.drain();
+            fixture.start(215);
             let old_target = fixture.with_engine(|engine| {
                 engine
                     .current_input_runtime_pad_binding(215)
@@ -218,8 +216,7 @@ fn actual_copy_of_held_source_over_playing_target_keeps_original_pause_effect() 
         || {
             let mut fixture = Fixture::new(false, false, "tap");
             settle_empty(&mut fixture, 36);
-            fixture.with_engine(|engine| engine.play_sample(36, 1.0, None).unwrap());
-            fixture.callback.drain();
+            fixture.start(36);
             let source_hold = hold(&fixture, 0, 4001);
             fixture.callback.drain();
             let original_effect = source_hold.action.effect().unwrap();

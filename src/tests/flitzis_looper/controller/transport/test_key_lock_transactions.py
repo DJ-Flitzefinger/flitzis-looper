@@ -7,7 +7,11 @@ import pytest
 
 from flitzis_looper.ui.context import UiContext
 from tests.flitzis_looper.conftest import FakeInputRuntimePadBinding
-from tests.flitzis_looper.controller.transport.test_residency import Ticket, resident
+from tests.flitzis_looper.controller.transport.test_residency import (
+    Ticket,
+    resident,
+    schedule_captured_start,
+)
 
 if TYPE_CHECKING:
     from flitzis_looper.controller import AppController
@@ -63,30 +67,39 @@ def test_window_ack_waits_for_own_actual_processing_feedback(
     audio_engine_mock.play_resident_control.assert_not_called()
 
 
-def test_initial_on_intent_with_unknown_baseline_waits_for_own_native_ready_before_launch(
+def test_initial_on_intent_keeps_effective_unknown_until_actual_native_ready(
     controller: AppController, audio_engine_mock: Mock
 ) -> None:
     ticket, feedback = _mode_source(controller, audio_engine_mock)
+    ticket.key_lock_request_id = None
     controller.project.pad_key_lock[0] = True
-    # No actual previous mode feedback exists yet; saved ON alone cannot grant
-    # effective ON or bypass this launch's own mode request acknowledgement.
+    # Ordinary start inherits the actual Native bank tuple and does not invent a
+    # new Key Lock edit request from saved desired ON. Feedback alone proves ON.
     audio_engine_mock.pad_key_lock_status.return_value = None
+    audio_engine_mock.publish_pad_start.side_effect = schedule_captured_start
     controller.transport.playback.trigger_pad(0, received_at_ns=123)
+    original = audio_engine_mock.prepare_captured_pad_start.call_args.args[0]
+    assert controller.transport.residency.key_lock_status(0).effective is None
     ticket.status = "accepted"
     audio_engine_mock.pad_key_lock_status.return_value = feedback
     feedback.update(effective=True, ready=False, request_id=2, window_revision=2)
     residency = controller.transport.residency
     residency.poll()
     assert residency.key_lock_status(0).effective is None
-    assert residency.key_lock_status(0).pending
+    assert residency.status(0) == ("pending", None)
+    audio_engine_mock.publish_pad_start.assert_called_once_with(original, ticket)
+    audio_engine_mock.prepare_resident_control.assert_called_once_with(
+        0, start_s=3.0, end_s=4.0, position_s=None, key_lock=None, expected_source_generation=1
+    )
+    audio_engine_mock.set_pad_key_lock.assert_not_called()
     audio_engine_mock.play_resident_control.assert_not_called()
     feedback["ready"] = True
+    original.status = "applied"
     residency.poll()
     assert residency.key_lock_status(0).effective is True
     assert not residency.key_lock_status(0).pending
-    audio_engine_mock.play_resident_control.assert_called_once_with(
-        ticket, exclusive=True, received_at_ns=123
-    )
+    audio_engine_mock.publish_pad_start.assert_called_once_with(original, ticket)
+    audio_engine_mock.play_resident_control.assert_not_called()
 
 
 @pytest.mark.parametrize("terminal", ["wet", "error"])

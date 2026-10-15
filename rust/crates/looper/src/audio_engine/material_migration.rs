@@ -101,6 +101,33 @@ pub(super) fn prepare_pcm_resident(
     progress: &mut impl FnMut(SampleLoadProgress),
     resident: Option<&super::resident_proposal::ResidentReadContext>,
 ) -> Result<SampleBuffer, String> {
+    prepare_pcm_resident_for_native(
+        transaction,
+        source,
+        output_rate,
+        output_channels,
+        maximum,
+        resident_hint,
+        cancelled,
+        progress,
+        resident,
+        false,
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
+pub(super) fn prepare_pcm_resident_for_native(
+    transaction: &mut ColdTransaction,
+    source: &Path,
+    output_rate: u32,
+    output_channels: usize,
+    maximum: usize,
+    resident_hint: Option<ResidentLoadHint>,
+    cancelled: &impl Fn() -> bool,
+    progress: &mut impl FnMut(SampleLoadProgress),
+    resident: Option<&super::resident_proposal::ResidentReadContext>,
+    native_pitch_required: bool,
+) -> Result<SampleBuffer, String> {
     prepare_disk_pcm(
         transaction,
         source,
@@ -111,7 +138,13 @@ pub(super) fn prepare_pcm_resident(
         progress,
     )?;
     transaction
-        .read_prepared_selection_resident(resident_hint, maximum, cancelled, resident)
+        .read_prepared_selection_resident_for_native(
+            resident_hint,
+            maximum,
+            cancelled,
+            resident,
+            native_pitch_required,
+        )
         .map_err(|error| error.to_string())
 }
 

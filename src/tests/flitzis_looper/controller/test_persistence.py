@@ -175,6 +175,9 @@ def test_restore_loads_valid_audio_files_without_reanalysis(
         run_analysis=False,
         replace_assignment=True,
         source_intent="restore",
+        initial_base_shift=0,
+        initial_extra_shift=0,
+        initial_key_lock=False,
     )
     on_project_changed.assert_not_called()
 

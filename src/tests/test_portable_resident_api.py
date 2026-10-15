@@ -1,6 +1,7 @@
 """Reject stale Native interfaces before a portable runtime can activate."""
 
 import runpy
+from inspect import Parameter, signature
 from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import Mock
@@ -111,6 +112,9 @@ _PAIR_HOLD_METHODS = (
     "_finish_pad_pair",
     "_cancel_pad_pair",
     "capture_recovered_pad_pair",
+    "capture_recovered_pad_copy",
+    "validate_recovered_pad_copy",
+    "release_recovered_pad_copy",
     "validate_recovered_pad_pair",
     "release_recovered_pad_pair",
     "pause_waveform_hold",
@@ -144,6 +148,456 @@ _CompatibleTimingEngine = type(
 _CompatibleTimingTicket = type(
     "CompatibleTimingTicket", (), {"placement_pending": _forbidden_native_work}
 )
+
+_PITCH_METHODS = (
+    "select_input_pad",
+    "input_selected_projection",
+    "capture_pad_pitch_action",
+    "capture_selected_pitch_action",
+    "publish_pitch_action",
+    "cancel_pitch_action",
+    "set_input_runtime_state",
+    "poll_input_events",
+    "load_sample_async",
+)
+_PITCH_CAPTURE_ATTRIBUTES = (
+    "accepted_sequence",
+    "received_at_ns",
+    "due_frame",
+    "execution_frame",
+    "content_lifetime",
+    "base_shift",
+    "extra_shift",
+    "key_lock",
+    "retrigger",
+    "quantize_step_64ths",
+    "sync_enabled",
+    "accepted",
+    "effective",
+    "effective_output_frame",
+    "state",
+    "reason",
+    "current_control_slot",
+)
+
+
+def _capture_pad_pitch(
+    self: object, sample_id: int, action_key: str, *, received_at_ns: int | None = None
+) -> None:
+    _forbidden_native_work(self, sample_id, action_key, received_at_ns=received_at_ns)
+
+
+def _capture_selected_pitch(
+    self: object, action_key: str, *, received_at_ns: int | None = None
+) -> None:
+    _forbidden_native_work(self, action_key, received_at_ns=received_at_ns)
+
+
+def _pitch_runtime_state(self: object, *arguments: object, pitch_rows: object = None) -> None:
+    _forbidden_native_work(self, *arguments, pitch_rows=pitch_rows)
+
+
+def _pitch_restore_source(
+    self: object,
+    *arguments: object,
+    initial_base_shift: object = None,
+    initial_extra_shift: object = None,
+    initial_key_lock: object = None,
+) -> None:
+    _forbidden_native_work(
+        self,
+        *arguments,
+        initial_base_shift=initial_base_shift,
+        initial_extra_shift=initial_extra_shift,
+        initial_key_lock=initial_key_lock,
+    )
+
+
+_PITCH_IMPLEMENTATIONS: dict[str, object] = dict.fromkeys(
+    _PITCH_METHODS, _forbidden_native_work
+) | {
+    "capture_pad_pitch_action": _capture_pad_pitch,
+    "capture_selected_pitch_action": _capture_selected_pitch,
+    "set_input_runtime_state": _pitch_runtime_state,
+    "load_sample_async": _pitch_restore_source,
+}
+_CompatiblePitchEngine = type(
+    "CompatiblePitchEngine", (_CompatibleTimingEngine,), _PITCH_IMPLEMENTATIONS
+)
+_CompatiblePitchCapture = type(
+    "CompatiblePitchCapture",
+    (),
+    dict.fromkeys(_PITCH_CAPTURE_ATTRIBUTES, property(_forbidden_native_work))
+    | {"__init__": _forbidden_native_work},
+)
+
+
+def test_complete_pitch_api_is_reflected_without_engine_or_capture_execution() -> None:
+    check = runpy.run_path(str(REPO / "scripts/portable/bootstrap.py"))["check_pitch_action_api"]
+    check(
+        SimpleNamespace(
+            AudioEngine=_CompatiblePitchEngine, CapturedPitchAction=_CompatiblePitchCapture
+        )
+    )
+
+
+@pytest.mark.parametrize("method", _PITCH_METHODS)
+@pytest.mark.parametrize("missing", [False, True], ids=["not-callable", "absent"])
+def test_incomplete_pitch_engine_api_cannot_activate(method: str, *, missing: bool) -> None:
+    methods = _PITCH_IMPLEMENTATIONS.copy()
+    if missing:
+        del methods[method]
+    else:
+        methods[method] = None
+    engine_type = type("IncompletePitchEngine", (_CompatibleTimingEngine,), methods)
+    check = runpy.run_path(str(REPO / "scripts/portable/bootstrap.py"))["check_pitch_action_api"]
+    with pytest.raises(AssertionError, match=method):
+        check(SimpleNamespace(AudioEngine=engine_type, CapturedPitchAction=_CompatiblePitchCapture))
+
+
+@pytest.mark.parametrize("attribute", _PITCH_CAPTURE_ATTRIBUTES)
+def test_incomplete_pitch_receipt_cannot_activate(attribute: str) -> None:
+    attributes = dict.fromkeys(_PITCH_CAPTURE_ATTRIBUTES, property(_forbidden_native_work))
+    del attributes[attribute]
+    capture_type = type("IncompletePitchCapture", (), attributes)
+    check = runpy.run_path(str(REPO / "scripts/portable/bootstrap.py"))["check_pitch_action_api"]
+    with pytest.raises(AssertionError, match=attribute):
+        check(SimpleNamespace(AudioEngine=_CompatiblePitchEngine, CapturedPitchAction=capture_type))
+
+
+@pytest.mark.parametrize(
+    ("method", "keyword"),
+    [
+        ("set_input_runtime_state", "pitch_rows"),
+        ("capture_pad_pitch_action", "received_at_ns"),
+        ("capture_selected_pitch_action", "received_at_ns"),
+        ("load_sample_async", "initial_base_shift"),
+        ("load_sample_async", "initial_extra_shift"),
+        ("load_sample_async", "initial_key_lock"),
+    ],
+)
+def test_old_pitch_projection_or_fresh_timestamp_only_capture_cannot_activate(
+    method: str, keyword: str
+) -> None:
+    implementation = _PITCH_IMPLEMENTATIONS[method]
+    assert callable(implementation)
+    complete = signature(implementation)
+    old_method = type(
+        "OldMethod",
+        (),
+        {
+            "__call__": _forbidden_native_work,
+            "__signature__": complete.replace(
+                parameters=[item for name, item in complete.parameters.items() if name != keyword]
+            ),
+        },
+    )()
+    engine_type = type("OldPitchSignature", (_CompatiblePitchEngine,), {method: old_method})
+    check = runpy.run_path(str(REPO / "scripts/portable/bootstrap.py"))["check_pitch_action_api"]
+    with pytest.raises(AssertionError, match=keyword):
+        check(SimpleNamespace(AudioEngine=engine_type, CapturedPitchAction=_CompatiblePitchCapture))
+
+
+def test_missing_pitch_capture_type_cannot_activate() -> None:
+    check = runpy.run_path(str(REPO / "scripts/portable/bootstrap.py"))["check_pitch_action_api"]
+    with pytest.raises(AssertionError, match="CapturedPitchAction"):
+        check(SimpleNamespace(AudioEngine=_CompatiblePitchEngine))
+
+
+_ORDINARY_START_METHODS = (
+    "capture_pad_start",
+    "prepare_captured_pad_start",
+    "publish_pad_start",
+)
+_ORDINARY_CAPTURE_METHODS = (
+    "is_current",
+    "same_owner",
+    "original_owner_status",
+    "state",
+    "reason",
+    "accepted",
+    "effective_frame",
+    "original_frame",
+    "execution_frame",
+    "cancel",
+)
+
+
+def _capture_pad_start(
+    self: object,
+    id: int,  # noqa: A002 - Native API names the original pad slot.
+    start_s: float,
+    end_s: float | None = None,
+    volume: float = 1.0,
+    *,
+    exclusive: bool = False,
+    received_at_ns: int | None = None,
+    expected_source_generation: int | None = None,
+) -> None:
+    _forbidden_native_work(
+        self,
+        id,
+        start_s,
+        end_s,
+        volume,
+        exclusive=exclusive,
+        received_at_ns=received_at_ns,
+        expected_source_generation=expected_source_generation,
+    )
+
+
+def _prepare_captured_pad_start(self: object, captured: object, window: object = None) -> None:
+    _forbidden_native_work(self, captured, window)
+
+
+def _publish_pad_start(self: object, captured: object, window: object = None) -> None:
+    _forbidden_native_work(self, captured, window)
+
+
+def _capture_global_start(
+    self: object, entries: object, *, received_at_ns: int | None = None
+) -> None:
+    _forbidden_native_work(self, entries, received_at_ns=received_at_ns)
+
+
+def _publish_captured_global_start(self: object, captured: object) -> None:
+    _forbidden_native_work(self, captured)
+
+
+_ORDINARY_START_IMPLEMENTATIONS = {
+    "capture_pad_start": _capture_pad_start,
+    "prepare_captured_pad_start": _prepare_captured_pad_start,
+    "publish_pad_start": _publish_pad_start,
+    "capture_global_start": _capture_global_start,
+    "publish_captured_global_start": _publish_captured_global_start,
+}
+_CompatibleOrdinaryEngine = type(
+    "CompatibleOrdinaryEngine", (_CompatiblePitchEngine,), _ORDINARY_START_IMPLEMENTATIONS
+)
+_ORDINARY_CAPTURE_IMPLEMENTATIONS = dict.fromkeys(
+    _ORDINARY_CAPTURE_METHODS, _forbidden_native_work
+) | {
+    "diagnostic_slot": property(_forbidden_native_work),
+    "__init__": _forbidden_native_work,
+}
+_CompatibleOrdinaryCapture = type(
+    "CompatibleOrdinaryCapture", (), _ORDINARY_CAPTURE_IMPLEMENTATIONS
+)
+_CompatibleOrdinaryTrigger = type(
+    "CompatibleOrdinaryTrigger",
+    (),
+    {
+        "captured_start": property(_forbidden_native_work),
+        "__init__": _forbidden_native_work,
+    },
+)
+
+_GLOBAL_CAPTURE_METHODS = ("diagnostic_slots", "original_frame", "state", "reason", "cancel")
+_CompatibleGlobalCapture = type(
+    "CompatibleGlobalCapture",
+    (),
+    dict.fromkeys(_GLOBAL_CAPTURE_METHODS, _forbidden_native_work)
+    | {"__init__": _forbidden_native_work},
+)
+
+
+def test_complete_global_capture_api_is_reflected_without_native_work() -> None:
+    check = runpy.run_path(str(REPO / "scripts/portable/bootstrap.py"))[
+        "check_captured_global_start_api"
+    ]
+    check(
+        SimpleNamespace(
+            AudioEngine=_CompatibleOrdinaryEngine, CapturedGlobalStart=_CompatibleGlobalCapture
+        )
+    )
+
+
+@pytest.mark.parametrize("method", _GLOBAL_CAPTURE_METHODS)
+def test_missing_original_global_capture_method_cannot_activate(method: str) -> None:
+    capture = type(
+        "IncompleteGlobalCapture",
+        (),
+        {name: _forbidden_native_work for name in _GLOBAL_CAPTURE_METHODS if name != method},
+    )
+    check = runpy.run_path(str(REPO / "scripts/portable/bootstrap.py"))[
+        "check_captured_global_start_api"
+    ]
+    with pytest.raises(AssertionError, match=method):
+        check(SimpleNamespace(AudioEngine=_CompatibleOrdinaryEngine, CapturedGlobalStart=capture))
+
+
+@pytest.mark.parametrize("method", ["capture_global_start", "publish_captured_global_start"])
+def test_missing_original_global_engine_method_cannot_activate(method: str) -> None:
+    engine = type("IncompleteGlobalEngine", (_CompatibleOrdinaryEngine,), {method: None})
+    check = runpy.run_path(str(REPO / "scripts/portable/bootstrap.py"))[
+        "check_captured_global_start_api"
+    ]
+    with pytest.raises(AssertionError, match=method):
+        check(SimpleNamespace(AudioEngine=engine, CapturedGlobalStart=_CompatibleGlobalCapture))
+
+
+def test_missing_original_global_capture_type_cannot_activate() -> None:
+    check = runpy.run_path(str(REPO / "scripts/portable/bootstrap.py"))[
+        "check_captured_global_start_api"
+    ]
+    with pytest.raises(AssertionError, match="CapturedGlobalStart"):
+        check(SimpleNamespace(AudioEngine=_CompatibleOrdinaryEngine))
+
+
+@pytest.mark.parametrize("incompatibility", ["absent", "required", "wrong-default"])
+def test_global_capture_timestamp_contract_cannot_activate_when_incompatible(
+    incompatibility: str,
+) -> None:
+    complete = signature(_capture_global_start)
+    parameters = list(complete.parameters.values())
+    if incompatibility == "absent":
+        parameters = [parameter for parameter in parameters if parameter.name != "received_at_ns"]
+    else:
+        parameters[-1] = parameters[-1].replace(
+            default=Parameter.empty if incompatibility == "required" else 0
+        )
+    method = type(
+        "OldGlobalCaptureMethod",
+        (),
+        {
+            "__call__": _forbidden_native_work,
+            "__signature__": complete.replace(parameters=parameters),
+        },
+    )()
+    engine = type(
+        "OldGlobalCaptureEngine", (_CompatibleOrdinaryEngine,), {"capture_global_start": method}
+    )
+    check = runpy.run_path(str(REPO / "scripts/portable/bootstrap.py"))[
+        "check_captured_global_start_api"
+    ]
+    with pytest.raises(AssertionError, match="received_at_ns"):
+        check(SimpleNamespace(AudioEngine=engine, CapturedGlobalStart=_CompatibleGlobalCapture))
+
+
+def test_complete_ordinary_start_api_is_reflected_without_native_work() -> None:
+    check = runpy.run_path(str(REPO / "scripts/portable/bootstrap.py"))["check_ordinary_start_api"]
+    check(
+        SimpleNamespace(
+            AudioEngine=_CompatibleOrdinaryEngine,
+            CapturedPadStart=_CompatibleOrdinaryCapture,
+            CapturedInputPadTrigger=_CompatibleOrdinaryTrigger,
+        )
+    )
+
+
+@pytest.mark.parametrize("method", _ORDINARY_START_METHODS)
+@pytest.mark.parametrize("missing", [False, True], ids=["not-callable", "absent"])
+def test_incomplete_ordinary_start_engine_cannot_activate(method: str, *, missing: bool) -> None:
+    methods: dict[str, object] = _ORDINARY_START_IMPLEMENTATIONS.copy()
+    if missing:
+        del methods[method]
+    else:
+        methods[method] = None
+    engine_type = type("IncompleteOrdinaryEngine", (_CompatiblePitchEngine,), methods)
+    check = runpy.run_path(str(REPO / "scripts/portable/bootstrap.py"))["check_ordinary_start_api"]
+    with pytest.raises(AssertionError, match=method):
+        check(SimpleNamespace(AudioEngine=engine_type, CapturedPadStart=_CompatibleOrdinaryCapture))
+
+
+@pytest.mark.parametrize("attribute", ["diagnostic_slot", *_ORDINARY_CAPTURE_METHODS])
+@pytest.mark.parametrize("missing", [False, True], ids=["not-callable", "absent"])
+def test_incomplete_ordinary_start_receipt_cannot_activate(
+    attribute: str, *, missing: bool
+) -> None:
+    attributes = _ORDINARY_CAPTURE_IMPLEMENTATIONS.copy()
+    if missing:
+        del attributes[attribute]
+    else:
+        attributes[attribute] = None
+    capture_type = type("IncompleteOrdinaryCapture", (), attributes)
+    check = runpy.run_path(str(REPO / "scripts/portable/bootstrap.py"))["check_ordinary_start_api"]
+    with pytest.raises(AssertionError, match=attribute):
+        check(SimpleNamespace(AudioEngine=_CompatibleOrdinaryEngine, CapturedPadStart=capture_type))
+
+
+@pytest.mark.parametrize(
+    ("method", "keyword"),
+    [
+        ("capture_pad_start", "exclusive"),
+        ("capture_pad_start", "received_at_ns"),
+        ("capture_pad_start", "expected_source_generation"),
+        ("publish_pad_start", "window"),
+        ("prepare_captured_pad_start", "window"),
+    ],
+)
+@pytest.mark.parametrize(
+    "incompatibility", ["absent", "positional-only", "required", "wrong-default"]
+)
+def test_incompatible_ordinary_start_keywords_cannot_activate(
+    method: str, keyword: str, incompatibility: str
+) -> None:
+    complete = signature(_ORDINARY_START_IMPLEMENTATIONS[method])
+    parameters = list(complete.parameters.values())
+    position = next(
+        index for index, parameter in enumerate(parameters) if parameter.name == keyword
+    )
+    if incompatibility == "absent":
+        del parameters[position]
+    elif incompatibility == "positional-only":
+        positional = [
+            parameter.replace(kind=Parameter.POSITIONAL_ONLY)
+            for parameter in parameters
+            if parameter.name != keyword
+            and parameter.kind in {Parameter.POSITIONAL_ONLY, Parameter.POSITIONAL_OR_KEYWORD}
+        ]
+        target = parameters[position].replace(kind=Parameter.POSITIONAL_ONLY)
+        remaining = [
+            parameter
+            for parameter in parameters
+            if parameter.name != keyword and parameter.kind == Parameter.KEYWORD_ONLY
+        ]
+        parameters = [*positional, target, *remaining]
+    elif incompatibility == "wrong-default":
+        parameters[position] = parameters[position].replace(
+            default=not parameters[position].default
+        )
+    else:
+        parameters[position] = parameters[position].replace(default=Parameter.empty)
+    old_method = type(
+        "OldOrdinaryMethod",
+        (),
+        {
+            "__call__": _forbidden_native_work,
+            "__signature__": complete.replace(parameters=parameters),
+        },
+    )()
+    engine_type = type("OldOrdinarySignature", (_CompatibleOrdinaryEngine,), {method: old_method})
+    check = runpy.run_path(str(REPO / "scripts/portable/bootstrap.py"))["check_ordinary_start_api"]
+    with pytest.raises(AssertionError, match=keyword):
+        check(SimpleNamespace(AudioEngine=engine_type, CapturedPadStart=_CompatibleOrdinaryCapture))
+
+
+def test_missing_ordinary_start_capture_type_cannot_activate() -> None:
+    check = runpy.run_path(str(REPO / "scripts/portable/bootstrap.py"))["check_ordinary_start_api"]
+    with pytest.raises(AssertionError, match="CapturedPadStart"):
+        check(SimpleNamespace(AudioEngine=_CompatibleOrdinaryEngine))
+
+
+@pytest.mark.parametrize(
+    "trigger_type",
+    [
+        None,
+        type("MissingOriginalStartGetter", (), {}),
+        type("DisabledOriginalStartGetter", (), {"captured_start": None}),
+        type("NonGetterOriginalStart", (), {"captured_start": object()}),
+    ],
+    ids=["missing-type", "missing-getter", "disabled-getter", "not-a-getter"],
+)
+def test_missing_original_midi_start_observation_cannot_activate(trigger_type: object) -> None:
+    check = runpy.run_path(str(REPO / "scripts/portable/bootstrap.py"))["check_ordinary_start_api"]
+    with pytest.raises(AssertionError, match="CapturedInputPadTrigger"):
+        check(
+            SimpleNamespace(
+                AudioEngine=_CompatibleOrdinaryEngine,
+                CapturedPadStart=_CompatibleOrdinaryCapture,
+                CapturedInputPadTrigger=trigger_type,
+            )
+        )
 
 
 def test_timing_completion_interface_is_reflected_without_native_work() -> None:
@@ -232,6 +686,28 @@ def test_old_native_is_rejected_before_any_app_or_device_activation(
     imported.assert_called_once_with("flitzis_looper_audio")
 
 
+def test_runtime_rejects_native_without_ordinary_start_before_app_imports(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    bootstrap = runpy.run_path(str(REPO / "scripts/portable/bootstrap.py"))
+    checkout = tmp_path / "flitzis-looper"
+    native = SimpleNamespace(
+        flitzis_looper_audio=SimpleNamespace(
+            __file__=str(checkout / "src/flitzis_looper_audio/native.pyd")
+        ),
+        native_build_profile=lambda: "release",
+        AudioEngine=_CompatibleOrdinaryEngine,
+        CapturedPitchAction=_CompatiblePitchCapture,
+        ConstantTimingTicket=_CompatibleTimingTicket,
+        AcceptedTimingRefreshTicket=_CompatibleTimingTicket,
+    )
+    imported = Mock(return_value=native)
+    monkeypatch.setattr(bootstrap["importlib"], "import_module", imported)
+    with pytest.raises(AssertionError, match="CapturedPadStart"):
+        bootstrap["check_runtime"](tmp_path, checkout, tmp_path / "Runtime")
+    imported.assert_called_once_with("flitzis_looper_audio")
+
+
 def test_runtime_preflight_accepts_complete_reflected_native_before_activation(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
 ) -> None:
@@ -247,8 +723,12 @@ def test_runtime_preflight_accepts_complete_reflected_native_before_activation(
             __file__=str(checkout / "src/flitzis_looper_audio/native.pyd")
         ),
         native_build_profile=lambda: "release",
-        AudioEngine=_CompatibleTimingEngine,
+        AudioEngine=_CompatibleOrdinaryEngine,
+        CapturedPitchAction=_CompatiblePitchCapture,
+        CapturedPadStart=_CompatibleOrdinaryCapture,
+        CapturedInputPadTrigger=_CompatibleOrdinaryTrigger,
         ConstantTimingTicket=_CompatibleTimingTicket,
+        CapturedGlobalStart=_CompatibleGlobalCapture,
         AcceptedTimingRefreshTicket=_CompatibleTimingTicket,
     )
     modules: dict[str, object] = {

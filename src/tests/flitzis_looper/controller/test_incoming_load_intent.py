@@ -4,7 +4,11 @@ from unittest.mock import Mock, call, patch
 import pytest
 
 from flitzis_looper.models import BeatGrid, ProjectState, SampleAnalysis
-from tests.flitzis_looper.conftest import FakeInputRuntimePadBinding
+from tests.flitzis_looper.conftest import (
+    FakeCapturedGlobalStart,
+    FakeCapturedPadStart,
+    FakeInputRuntimePadBinding,
+)
 
 if TYPE_CHECKING:
     from flitzis_looper.controller import AppController
@@ -38,6 +42,16 @@ def _success(*, revision: int = 0, key_lock: bool = False) -> dict[str, object]:
 def _admit(controller: AppController, audio: Mock) -> None:
     audio.load_incoming_sample_async.return_value = 7
     controller.loader.load_sample_async(0, "incoming.wav")
+
+
+def _generation_binding(generation: int, *, sample_id: int = 0, current: bool = True) -> Mock:
+    metadata = FakeInputRuntimePadBinding(sample_id).metadata()
+    metadata.update(source_generation=generation, source_id=f"loaded-{sample_id}-{generation}")
+    return Mock(
+        spec=["is_current", "metadata"],
+        is_current=Mock(return_value=current),
+        metadata=Mock(return_value=metadata),
+    )
 
 
 @pytest.mark.parametrize("global_mode", [False, True])
@@ -199,9 +213,7 @@ def test_generic_predecessor_pad_gesture_never_becomes_incoming_override(
     controller.project.sample_paths[0] = "samples/old.wav"
     controller.project.pad_key_lock[0] = False
     audio_engine_mock.current_input_runtime_pad_binding.side_effect = None
-    audio_engine_mock.current_input_runtime_pad_binding.return_value = Mock(
-        is_current=Mock(return_value=True), metadata=Mock(return_value={"source_generation": 1})
-    )
+    audio_engine_mock.current_input_runtime_pad_binding.return_value = _generation_binding(1)
     _admit(controller, audio_engine_mock)
     with pytest.raises(ValueError, match="receipt is pending"):
         controller.transport.pad.set_pad_key_lock(0, enabled=old_gesture)
@@ -225,9 +237,7 @@ def test_generic_gesture_waits_for_own_receipt_then_uses_own_native_generation(
     controller.project.pad_key_lock[0] = False
     _admit(controller, audio_engine_mock)
     audio_engine_mock.current_input_runtime_pad_binding.side_effect = None
-    audio_engine_mock.current_input_runtime_pad_binding.return_value = Mock(
-        is_current=Mock(return_value=True), metadata=Mock(return_value={"source_generation": 7})
-    )
+    audio_engine_mock.current_input_runtime_pad_binding.return_value = _generation_binding(7)
     with pytest.raises(ValueError, match="receipt is pending"):
         controller.transport.pad.set_pad_key_lock(0, enabled=False)
     assert controller.loader._incoming_loads[0].current_source_revisions == {}
@@ -348,9 +358,8 @@ def test_generic_loop_waits_for_receipt_for_predecessor_and_own_native_generatio
     controller.project.sample_paths[0] = "samples/old.wav"
     _admit(controller, audio_engine_mock)
     audio_engine_mock.current_input_runtime_pad_binding.side_effect = None
-    audio_engine_mock.current_input_runtime_pad_binding.return_value = Mock(
-        is_current=Mock(return_value=True),
-        metadata=Mock(return_value={"source_generation": generation}),
+    audio_engine_mock.current_input_runtime_pad_binding.return_value = _generation_binding(
+        generation
     )
     with pytest.raises(ValueError, match="receipt is pending"):
         controller.transport.loop.set_auto(0, enabled=False)
@@ -374,9 +383,8 @@ def test_generic_timing_waits_for_receipt_for_predecessor_and_own_native_generat
     controller.project.sample_paths[0] = "samples/old.wav"
     _admit(controller, audio_engine_mock)
     audio_engine_mock.current_input_runtime_pad_binding.side_effect = None
-    audio_engine_mock.current_input_runtime_pad_binding.return_value = Mock(
-        is_current=Mock(return_value=True),
-        metadata=Mock(return_value={"source_generation": generation}),
+    audio_engine_mock.current_input_runtime_pad_binding.return_value = _generation_binding(
+        generation
     )
     with pytest.raises(ValueError, match="receipt is pending"):
         controller.transport.bpm.set_manual_bpm(0, 90.0)
@@ -415,9 +423,7 @@ def test_later_addressed_timing_supersedes_earlier_addressed_timing(
     controller.project.sample_paths[0] = "samples/old.wav"
     _admit(controller, audio_engine_mock)
     audio_engine_mock.current_input_runtime_pad_binding.side_effect = None
-    audio_engine_mock.current_input_runtime_pad_binding.return_value = Mock(
-        is_current=Mock(return_value=True), metadata=Mock(return_value={"source_generation": 7})
-    )
+    audio_engine_mock.current_input_runtime_pad_binding.return_value = _generation_binding(7)
     controller.loader.set_incoming_timing_intent(
         0, 7, period_seconds=60.0 / 90.0, grid_origin_s=None
     )
@@ -441,9 +447,7 @@ def test_addressed_override_keeps_incoming_origin_before_global_gesture(
     controller.project.sample_paths[0] = "samples/old.wav"
     _admit(controller, audio_engine_mock)
     audio_engine_mock.current_input_runtime_pad_binding.side_effect = None
-    audio_engine_mock.current_input_runtime_pad_binding.return_value = Mock(
-        is_current=Mock(return_value=True), metadata=Mock(return_value={"source_generation": 7})
-    )
+    audio_engine_mock.current_input_runtime_pad_binding.return_value = _generation_binding(7)
     controller.loader.set_incoming_key_lock_override(0, 7, override=False)
     controller.transport.global_params.set_key_lock(enabled=True)
     audio_engine_mock.poll_loader_events.side_effect = [_success(), None]
@@ -480,16 +484,12 @@ def test_old_loop_gesture_captures_generation_before_native_adoption_during_publ
 ) -> None:
     controller.project.sample_paths[0] = "samples/old.wav"
     audio_engine_mock.current_input_runtime_pad_binding.side_effect = None
-    audio_engine_mock.current_input_runtime_pad_binding.return_value = Mock(
-        is_current=Mock(return_value=True), metadata=Mock(return_value={"source_generation": 1})
-    )
+    audio_engine_mock.current_input_runtime_pad_binding.return_value = _generation_binding(1)
 
     def adopt_during_publication(
         _sample_id: int, _start: float, _end: float | None, *, expected_source_generation: int
     ) -> None:
-        audio_engine_mock.current_input_runtime_pad_binding.return_value = Mock(
-            is_current=Mock(return_value=True), metadata=Mock(return_value={"source_generation": 7})
-        )
+        audio_engine_mock.current_input_runtime_pad_binding.return_value = _generation_binding(7)
         assert expected_source_generation == 1
         message = "current source generation no longer matches captured gesture"
         raise ValueError(message)
@@ -507,9 +507,7 @@ def test_later_addressed_override_supersedes_earlier_addressed_override(
     controller.project.sample_paths[0] = "samples/old.wav"
     _admit(controller, audio_engine_mock)
     audio_engine_mock.current_input_runtime_pad_binding.side_effect = None
-    audio_engine_mock.current_input_runtime_pad_binding.return_value = Mock(
-        is_current=Mock(return_value=True), metadata=Mock(return_value={"source_generation": 7})
-    )
+    audio_engine_mock.current_input_runtime_pad_binding.return_value = _generation_binding(7)
     controller.loader.set_incoming_key_lock_override(0, 7, override=False)
     audio_engine_mock.update_incoming_load_intent.return_value = False
     controller.loader.set_incoming_key_lock_override(0, 7, override=True)
@@ -581,10 +579,7 @@ def test_ordinary_pending_gesture_rejects_before_any_predecessor_read_or_mutatio
     project.pad_loop_end_s[0] = 4.0
     _admit(controller, audio_engine_mock)
     audio_engine_mock.current_input_runtime_pad_binding.side_effect = None
-    binding = Mock(
-        is_current=Mock(return_value=binding_state == "own"),
-        metadata=Mock(return_value={"source_generation": 7}),
-    )
+    binding = _generation_binding(7, current=binding_state == "own")
     audio_engine_mock.current_input_runtime_pad_binding.return_value = (
         None if binding_state == "missing" else binding
     )
@@ -630,9 +625,8 @@ def test_bpm_gesture_keeps_capture_through_derived_calls_and_rejects_adoption_ra
 ) -> None:
     controller.project.sample_paths[0] = "samples/old.wav"
     generation = 3
-    audio_engine_mock.current_input_runtime_pad_binding.side_effect = lambda _sample_id: Mock(
-        is_current=Mock(return_value=True),
-        metadata=Mock(return_value={"source_generation": generation}),
+    audio_engine_mock.current_input_runtime_pad_binding.side_effect = lambda sample_id: (
+        _generation_binding(generation, sample_id=sample_id)
     )
 
     def adopt_after_bpm(_sample_id: int, _bpm: float, *, expected_source_generation: int) -> None:
@@ -667,11 +661,7 @@ def test_global_incoming_update_skips_unavailable_predecessor_and_continues_othe
     controller.project.sample_paths[1] = "samples/other.wav"
     _admit(controller, audio_engine_mock)
     audio_engine_mock.current_input_runtime_pad_binding.side_effect = lambda sample_id: (
-        None
-        if sample_id == 0
-        else Mock(
-            is_current=Mock(return_value=True), metadata=Mock(return_value={"source_generation": 1})
-        )
+        None if sample_id == 0 else _generation_binding(1, sample_id=sample_id)
     )
     enabled = True
 
@@ -696,9 +686,8 @@ def test_residency_retry_retains_captured_generation_and_cannot_retarget_new_sou
         "window_revision": 1,
         "cache_backed": not scalar,
     }
-    audio_engine_mock.current_input_runtime_pad_binding.side_effect = lambda _sample_id: Mock(
-        is_current=Mock(return_value=True),
-        metadata=Mock(return_value={"source_generation": generation}),
+    audio_engine_mock.current_input_runtime_pad_binding.side_effect = lambda sample_id: (
+        _generation_binding(generation, sample_id=sample_id)
     )
     method = (
         audio_engine_mock.set_pad_key_lock if scalar else audio_engine_mock.prepare_resident_control
@@ -734,9 +723,7 @@ def test_generic_bpm_carries_one_source_capture_to_every_native_derived_publicat
 ) -> None:
     controller.project.sample_paths[0] = "samples/current.wav"
     audio_engine_mock.current_input_runtime_pad_binding.side_effect = None
-    audio_engine_mock.current_input_runtime_pad_binding.return_value = Mock(
-        is_current=Mock(return_value=True), metadata=Mock(return_value={"source_generation": 5})
-    )
+    audio_engine_mock.current_input_runtime_pad_binding.return_value = _generation_binding(5)
 
     controller.transport.bpm.set_manual_bpm(0, 90.0)
 
@@ -781,10 +768,7 @@ def test_playback_pending_source_rejects_before_start_restore_or_seek_projection
     audio_engine_mock.current_input_runtime_pad_binding.return_value = (
         None
         if binding_state == "missing"
-        else Mock(
-            is_current=Mock(return_value=binding_state == "own"),
-            metadata=Mock(return_value={"source_generation": 7}),
-        )
+        else _generation_binding(7, current=binding_state == "own")
     )
     playback = controller.transport.playback
     gestures = {
@@ -809,23 +793,16 @@ def test_playback_pending_source_rejects_before_start_restore_or_seek_projection
         getattr(audio_engine_mock, name).assert_not_called()
 
 
-@pytest.mark.parametrize("operation", ["start", "exclusive", "seek"])
-def test_playback_scalar_adoption_race_keeps_captured_source_at_each_native_admission(
-    controller: AppController, audio_engine_mock: Mock, operation: str
+def test_seek_adoption_race_keeps_captured_source_at_native_admission(
+    controller: AppController, audio_engine_mock: Mock
 ) -> None:
     controller.project.sample_paths[0] = "samples/old.wav"
     controller.session.active_sample_ids.add(0)
     controller.session.pad_playhead_s[0] = 3.0
     generation = 3
-    audio_engine_mock.current_input_runtime_pad_binding.side_effect = lambda _sample_id: Mock(
-        is_current=Mock(return_value=True),
-        metadata=Mock(return_value={"source_generation": generation}),
+    audio_engine_mock.current_input_runtime_pad_binding.side_effect = lambda sample_id: (
+        _generation_binding(generation, sample_id=sample_id)
     )
-
-    def adopt_after_loop(*_args: object, expected_source_generation: int) -> None:
-        nonlocal generation
-        assert expected_source_generation == generation == 3
-        generation = 7
 
     def reject_after_adoption(*_args: object, expected_source_generation: int) -> None:
         nonlocal generation
@@ -834,28 +811,65 @@ def test_playback_scalar_adoption_race_keeps_captured_source_at_each_native_admi
         message = "current source generation no longer matches captured gesture"
         raise ValueError(message)
 
-    audio_engine_mock.set_pad_loop_region.side_effect = adopt_after_loop
-    method = {
-        "start": audio_engine_mock.play_sample,
-        "exclusive": audio_engine_mock.play_sample_exclusive,
-        "seek": audio_engine_mock.seek_sample,
-    }[operation]
+    method = audio_engine_mock.seek_sample
     method.side_effect = reject_after_adoption
     playback = controller.transport.playback
-    gestures = {
-        "start": lambda: playback.trigger_pad_keep_others(0),
-        "exclusive": lambda: playback.trigger_pad(0),
-        "seek": lambda: playback.seek_pad(0, 20.0),
-    }
     with pytest.raises(ValueError, match="generation no longer matches"):
-        gestures[operation]()
+        playback.seek_pad(0, 20.0)
     assert method.call_args.kwargs == {"expected_source_generation": 3}
-    if operation != "seek":
-        assert audio_engine_mock.set_pad_loop_region.call_args.kwargs == {
-            "expected_source_generation": 3
-        }
+    audio_engine_mock.set_pad_loop_region.assert_not_called()
     assert controller.session.pad_playhead_s[0] == 3.0
     assert controller.project.sample_paths[0] == "samples/old.wav"
+
+
+@pytest.mark.parametrize("exclusive", [False, True])
+def test_captured_start_adoption_race_rejects_original_without_recapturing_new_source(
+    controller: AppController, audio_engine_mock: Mock, *, exclusive: bool
+) -> None:
+    controller.project.sample_paths[0] = "samples/old.wav"
+    controller.session.active_sample_ids.add(0)
+    controller.session.pad_playhead_s[0] = 3.0
+    generation = 3
+    original = FakeCapturedPadStart(
+        0, 0.0, None, 1.0, exclusive=exclusive, received_at_ns=99, expected_source_generation=3
+    )
+    audio_engine_mock.current_input_runtime_pad_binding.side_effect = lambda sample_id: (
+        _generation_binding(generation, sample_id=sample_id)
+    )
+
+    def capture(*_args: object, **options: object) -> FakeCapturedPadStart:
+        nonlocal generation
+        assert options["expected_source_generation"] == generation == 3
+        generation = 7
+        return original
+
+    def reject_publication(start: FakeCapturedPadStart) -> bool:
+        assert start is original
+        assert start.expected_source_generation == 3
+        assert generation == 7
+        message = "current source generation no longer matches captured gesture"
+        raise ValueError(message)
+
+    audio_engine_mock.capture_pad_start.side_effect = capture
+    audio_engine_mock.publish_pad_start.side_effect = reject_publication
+    playback = controller.transport.playback
+    if exclusive:
+        playback.trigger_pad(0, received_at_ns=99)
+    else:
+        playback.trigger_pad_keep_others(0, received_at_ns=99)
+
+    audio_engine_mock.capture_pad_start.assert_called_once_with(
+        0, 0.0, None, 1.0, exclusive=exclusive, received_at_ns=99, expected_source_generation=3
+    )
+    audio_engine_mock.publish_pad_start.assert_called_once_with(original)
+    assert original.cancelled
+    assert controller.transport.residency._captured_starts == {}
+    assert "generation no longer matches" in controller.transport.residency._launch_errors[0]
+    assert controller.session.pad_playhead_s[0] == 3.0
+    assert controller.session.active_sample_ids == {0}
+    assert controller.project.sample_paths[0] == "samples/old.wav"
+    for name in ("set_pad_loop_region", "play_sample", "play_sample_exclusive"):
+        getattr(audio_engine_mock, name).assert_not_called()
 
 
 def test_toggle_captures_source_before_derived_read_and_cannot_retarget_adoption(
@@ -863,9 +877,8 @@ def test_toggle_captures_source_before_derived_read_and_cannot_retarget_adoption
 ) -> None:
     controller.project.sample_paths[0] = "samples/old.wav"
     generation = 3
-    audio_engine_mock.current_input_runtime_pad_binding.side_effect = lambda _sample_id: Mock(
-        is_current=Mock(return_value=True),
-        metadata=Mock(return_value={"source_generation": generation}),
+    audio_engine_mock.current_input_runtime_pad_binding.side_effect = lambda sample_id: (
+        _generation_binding(generation, sample_id=sample_id)
     )
     resolve = ProjectState.resolve_pad_key_lock
 
@@ -973,7 +986,22 @@ def test_midi_snapshot_withholds_pending_own_source_and_preserves_other_ready_pa
     audio_engine_mock.trigger_captured_input_pad.return_value = True
     controller.input_mapping._sync_rust_runtime_state()
     controller.input_mapping._retry_guarded_midi_trigger("pad.trigger:0", 123_456_789, captured)
-    audio_engine_mock.trigger_captured_input_pad.assert_called_once_with(captured)
+    # The original readiness owner retains this gesture through its own WindowACK;
+    # a duplicate delivery must not bypass it via a fresh direct launch.
+    audio_engine_mock.trigger_captured_input_pad.assert_not_called()
+    window = Mock(
+        spec=["publication_status", "error", "cancel_launch", "cancel"],
+        publication_status=Mock(return_value="preparing"),
+    )
+    audio_engine_mock.prepare_captured_input_trigger.return_value = window
+    audio_engine_mock.trigger_prepared_input_pad.return_value = True
+    controller.transport.residency.poll()
+    audio_engine_mock.prepare_captured_input_trigger.assert_called_once_with(captured)
+    audio_engine_mock.trigger_prepared_input_pad.assert_not_called()
+    window.publication_status.return_value = "accepted"
+    controller.transport.residency.poll()
+    audio_engine_mock.trigger_prepared_input_pad.assert_called_once_with(captured, window)
+    assert not controller.transport.residency.owns_captured_trigger(captured)
     audio_engine_mock.trigger_input_runtime_pad.assert_not_called()
     _, loaded, starts, ends, bindings = audio_engine_mock.set_input_runtime_state.call_args.args
     assert loaded[0] is True
@@ -993,17 +1021,33 @@ def test_global_start_rejects_whole_batch_before_pending_own_project_loop_read(
     controller.session.active_sample_ids = {0, 215}
     playback = controller.transport.playback
     global_playback = playback._global_playback
+    original: FakeCapturedGlobalStart | None = None
     if deferred:
-        with patch.object(
-            controller.transport.residency, "status", return_value=("preparing", None)
-        ):
-            playback.start_or_restart_global_start_stop(received_at_ns=99)
+        window = Mock(
+            spec=["publication_status", "is_current", "error", "cancel", "cancel_launch"],
+            publication_status=Mock(return_value="preparing"),
+            is_current=Mock(return_value=True),
+        )
+        audio_engine_mock.loaded_residency.return_value = {
+            "cache_backed": True,
+            "source_identity": 1,
+            "window_revision": 1,
+        }
+        audio_engine_mock.prepare_resident_control.return_value = window
+        controller.transport.residency.publish_loop(0, 3.0, 4.0)
+        playback.start_or_restart_global_start_stop(received_at_ns=99)
         assert global_playback._deferred is not None
+        original = global_playback._deferred.capture
+        assert isinstance(original, FakeCapturedGlobalStart)
+        assert original.entries[0][3] is window
     _admit(controller, audio_engine_mock)
     audio_engine_mock.current_input_runtime_pad_binding.side_effect = lambda sample_id: (
         _own_binding() if sample_id == 0 else FakeInputRuntimePadBinding(sample_id)
     )
-    with patch.object(controller.transport.loop, "effective_region") as region:
+    if original is not None:
+        original.status = "rejected"
+        original.failure = "original source generation changed"
+    with patch.object(controller.transport.loop, "requested_region") as region:
         if deferred:
             global_playback.poll()
         else:
@@ -1011,18 +1055,24 @@ def test_global_start_rejects_whole_batch_before_pending_own_project_loop_read(
         region.assert_not_called()
     audio_engine_mock.start_global_playback_batch.assert_not_called()
     assert global_playback._deferred is None
-    assert "receipt is pending" in controller.transport.residency._launch_errors[0]
+    error = controller.transport.residency._launch_errors[0]
+    assert ("source generation changed" if deferred else "receipt is pending") in error
     assert controller.session.active_sample_ids == {0, 215}
     audio_engine_mock.poll_loader_events.side_effect = [_success(), None]
     controller.loader.poll_loader_events()
     controller.session.global_stop_engaged = True
     controller.session.global_stop_restore_sample_ids = {0, 215}
     playback.start_or_restart_global_start_stop(received_at_ns=99)
-    audio_engine_mock.start_global_playback_batch.assert_called_once()
-    entries = audio_engine_mock.start_global_playback_batch.call_args.args[0]
+    expected_captures = 2 if deferred else 1
+    assert audio_engine_mock.capture_global_start.call_count == expected_captures
+    entries = audio_engine_mock.capture_global_start.call_args.args[0]
     assert [entry[0].metadata()["pad_id"] for entry in entries] == [0, 215]
-    assert entries[0][1:] == (123.25, 139.25)
-    assert audio_engine_mock.start_global_playback_batch.call_args.kwargs == {"received_at_ns": 99}
+    assert entries[0][1:] == (123.25, 139.25, None)
+    assert audio_engine_mock.capture_global_start.call_args.kwargs == {"received_at_ns": 99}
+    if original is not None:
+        assert audio_engine_mock.publish_captured_global_start.call_args_list[0] == call(original)
+    assert audio_engine_mock.publish_captured_global_start.call_args != call(original)
+    audio_engine_mock.start_global_playback_batch.assert_not_called()
 
 
 @pytest.mark.parametrize("operation", ["gain", "eq"])

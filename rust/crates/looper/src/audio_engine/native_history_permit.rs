@@ -44,6 +44,10 @@ enum NativeHistoryAuthority {
         ownership: Arc<InputRuntimeOwnership>,
         acknowledgements: Arc<CurrentTimingAcknowledgements>,
     },
+    ActionCurrent {
+        ownership: Arc<InputRuntimeOwnership>,
+        acknowledgements: Arc<CurrentTimingAcknowledgements>,
+    },
     RetainedVoice {
         lifetime: Arc<AtomicU64>,
         generation: u64,
@@ -254,21 +258,118 @@ impl NativeVoiceHistoryContext<'_> {
 }
 
 impl NativeHistoryPermit {
+    /// Compare real source authority without transferring either permission/epoch.
+    /// The caller must retain and validate a fresh original action permit separately.
+    pub(crate) fn same_endpoint_authority(&self, other: &Self) -> bool {
+        let owners = |authority: &NativeHistoryAuthority| match authority {
+            NativeHistoryAuthority::Current {
+                ownership,
+                acknowledgements,
+            }
+            | NativeHistoryAuthority::ActionCurrent {
+                ownership,
+                acknowledgements,
+            } => Some((Arc::as_ptr(ownership), Arc::as_ptr(acknowledgements))),
+            NativeHistoryAuthority::RetainedVoice { .. } => None,
+        };
+        owners(&self.authority).is_some()
+            && owners(&self.authority) == owners(&other.authority)
+            && self.id == other.id
+            && self.source_generation == other.source_generation
+            && self
+                .binding
+                .placement
+                .and_then(|placement| placement.content_key())
+                == other
+                    .binding
+                    .placement
+                    .and_then(|placement| placement.content_key())
+            && self.binding.authority_revision == other.binding.authority_revision
+            && self.binding.resident == other.binding.resident
+            && self.binding.accepted == other.binding.accepted
+            && self.binding.source_address == other.binding.source_address
+            && self.binding.sample_count == other.binding.sample_count
+            && self.binding.channels == other.binding.channels
+            && self.binding.sample_rate_hz == other.binding.sample_rate_hz
+    }
+
+    /// A separately admitted action retains its own epoch and actual Native owners.
+    /// Equal PCM or scalar counters cannot relabel another content's permission.
+    pub(crate) fn matches_action_owner(
+        &self,
+        ownership: &Arc<InputRuntimeOwnership>,
+        acknowledgements: &Arc<CurrentTimingAcknowledgements>,
+        key: super::content_placement::ContentKey,
+        preparation_epoch: &Arc<AtomicU64>,
+    ) -> bool {
+        let own_authority = matches!(
+            &self.authority,
+            NativeHistoryAuthority::Current {
+                ownership: actual_ownership,
+                acknowledgements: actual_acknowledgements,
+            } | NativeHistoryAuthority::ActionCurrent {
+                ownership: actual_ownership,
+                acknowledgements: actual_acknowledgements,
+            } if Arc::ptr_eq(actual_ownership, ownership)
+                && Arc::ptr_eq(actual_acknowledgements, acknowledgements)
+        );
+        own_authority
+            && self
+                .binding
+                .placement
+                .and_then(|placement| placement.content_key())
+                == Some(key)
+            && Arc::ptr_eq(&self.preparation_epoch, preparation_epoch)
+            && self.expected_epoch != 0
+            && self.expected_epoch == preparation_epoch.load(Ordering::Acquire)
+    }
+    /// Only a completely matched action owner can opt out of the mutable MIDI row's
+    /// revision. Source, lifetime, window, ACK and its own epoch remain authoritative.
+    pub(crate) fn for_action(
+        mut self,
+        ownership: &Arc<InputRuntimeOwnership>,
+        acknowledgements: &Arc<CurrentTimingAcknowledgements>,
+        key: super::content_placement::ContentKey,
+        epoch: &Arc<AtomicU64>,
+    ) -> Option<Self> {
+        if !self.matches_action_owner(ownership, acknowledgements, key, epoch) {
+            return None;
+        }
+        self.authority = NativeHistoryAuthority::ActionCurrent {
+            ownership: ownership.clone(),
+            acknowledgements: acknowledgements.clone(),
+        };
+        Some(self)
+    }
     /// Already adopted history owns chronological native/FIFO/filter state. A
     /// storage-only window ACK may fence pending preparation without invalidating
     /// that same source's established trajectory or timing owner.
     pub(crate) fn current_effective_source(&self, sample: &SampleBuffer, rate: u32) -> bool {
-        let current = || self.current_inner(sample, rate, false);
+        let current = || self.current_inner(sample, rate, false, false);
         current() && current()
     }
     /// Preparation/request and current source/authority are rechecked at ACTUAL native adoption.
     /// The double check is bounded and has no spin, owner allocation or address dereference.
     pub(crate) fn current(&self, sample: &SampleBuffer, rate: u32) -> bool {
-        let current = || self.current_inner(sample, rate, true);
+        let current = || self.current_inner(sample, rate, true, true);
         current() && current()
     }
 
-    fn current_inner(&self, sample: &SampleBuffer, rate: u32, exact_window: bool) -> bool {
+    /// Physical endpoint data observation only, never action/adoption permission.
+    /// A same-window resident control may advance RuntimeProjection without changing
+    /// any prepared sample. Consumers still require their own fresh original guard/permit.
+    pub(crate) fn endpoint_source_current(&self, sample: &SampleBuffer, rate: u32) -> bool {
+        let current = || self.current_inner(sample, rate, true, false);
+        current() && current()
+    }
+
+    fn current_inner(
+        &self,
+        sample: &SampleBuffer,
+        rate: u32,
+        exact_window: bool,
+        strict_runtime: bool,
+    ) -> bool {
         if self.preparation_epoch.load(Ordering::Acquire) != self.expected_epoch
             || sample.source_address() != self.binding.source_address
             || sample.source_sample_count() != self.binding.sample_count
@@ -281,9 +382,23 @@ impl NativeHistoryPermit {
             NativeHistoryAuthority::Current {
                 ownership,
                 acknowledgements,
+            }
+            | NativeHistoryAuthority::ActionCurrent {
+                ownership,
+                acknowledgements,
             } => {
                 (if exact_window {
-                    ownership.current(self.id, self.binding)
+                    if !strict_runtime
+                        || matches!(
+                            &self.authority,
+                            NativeHistoryAuthority::ActionCurrent { .. }
+                        )
+                    {
+                        ownership.authority_current(self.id, self.binding)
+                            && ownership.binding_window_current(self.id, self.binding)
+                    } else {
+                        ownership.current(self.id, self.binding)
+                    }
                 } else {
                     ownership.authority_current(self.id, self.binding)
                 }) && ownership.binding_source_generation(self.id, self.binding)
@@ -326,6 +441,48 @@ mod tests {
     use super::*;
     use crate::messages::{CompleteSourceIdentity, ResidentContext, ResidentSourceView};
     use flitzis_looper_analysis::tempo_acceptance::TimingIntent;
+
+    #[test]
+    fn own_action_history_ignores_only_mutable_runtime_rows_and_keeps_strong_source_fences() {
+        let sample = SampleBuffer {
+            samples: Arc::from([0.25; 32]),
+            channels: 1,
+            residency: None,
+        };
+        let ownership = Arc::new(InputRuntimeOwnership::tracked());
+        ownership.publish_test_source(0, &sample, 48_000, 3);
+        let acknowledgements = Arc::default();
+        let epoch = Arc::new(AtomicU64::new(1));
+        let context = NativeHistoryContext {
+            id: 0,
+            ownership: &ownership,
+            acknowledgements: &acknowledgements,
+            preparation_epoch: &epoch,
+        };
+        let background = context.capture(&sample, 48_000, None).unwrap();
+        let key = background.binding.placement.unwrap().content_key().unwrap();
+        let action = background
+            .clone()
+            .for_action(&ownership, &acknowledgements, key, &epoch)
+            .unwrap();
+        ownership
+            .runtime_for_cell(key.cell())
+            .fetch_add(1, Ordering::AcqRel);
+        assert!(!background.current(&sample, 48_000));
+        assert!(action.current(&sample, 48_000));
+        let foreign_epoch = Arc::new(AtomicU64::new(1));
+        assert!(
+            action
+                .clone()
+                .for_action(&ownership, &acknowledgements, key, &foreign_epoch)
+                .is_none()
+        );
+        ownership
+            .authority_for_cell(key.cell())
+            .fetch_add(1, Ordering::AcqRel);
+        assert!(!action.current(&sample, 48_000));
+        assert!(!action.current_effective_source(&sample, 48_000));
+    }
 
     #[test]
     fn admitted_history_follows_its_content_cell_while_old_slot_admission_stays_stale_after_aba() {

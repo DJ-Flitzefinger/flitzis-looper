@@ -99,8 +99,17 @@ impl ResidentLoadHint {
         rate: u32,
         frames: usize,
     ) -> Result<(usize, usize, ResidentContext), String> {
+        self.selection_for_native(rate, frames, false)
+    }
+
+    pub(super) fn selection_for_native(
+        self,
+        rate: u32,
+        frames: usize,
+        native_pitch_required: bool,
+    ) -> Result<(usize, usize, ResidentContext), String> {
         let region = self.region(rate, frames)?;
-        let context = if self.key_lock {
+        let context = if self.key_lock || native_pitch_required {
             key_lock_context_for_range(region.start, region.end, frames)
         } else {
             ResidentContext::FiniteLoop

@@ -103,6 +103,11 @@ failed acoustic and causal criteria SHALL remain unchanged and separately visibl
 The system SHALL keep nonzero transposition diagnostics outside production playback and the audio
 callback, with all experimental construction, reset, preparation and destruction off callback.
 
+This requirement scopes the preparation-only diagnostic change. Production
+activation is separately governed by `add-key-transposition-performance`; its
+performer, native readiness and live acceptance obligations cannot be inferred
+from passing these diagnostics.
+
 Offline results SHALL NOT certify live native allocation safety, deadlines, hardware latency or
 long-session acceptance. No KEY UI, public input action, persistence rollout, silent model download
 or new live pitch adoption SHALL be introduced by this preparation change.

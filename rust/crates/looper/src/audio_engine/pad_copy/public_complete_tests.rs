@@ -11,18 +11,20 @@ mod overwrite_public_tests;
 use super::{CapturedPadCopy, PadCopyTicket};
 use crate::audio_engine::AudioEngine;
 use crate::audio_engine::audio_stream::{
-    drain_control_messages, drain_parameter_messages, render_scheduled_audio,
+    AudioMessageSink, drain_control_messages, drain_parameter_messages, render_scheduled_audio,
 };
 use crate::audio_engine::buffer_retirement::{
     AudioBufferRetirementWorker, RtAudioBufferRetirement, create_audio_buffer_retirement,
 };
 use crate::audio_engine::constants::NUM_SAMPLES;
+use crate::audio_engine::input_runtime_binding::InputRuntimeOwnership;
 use crate::audio_engine::material_migration::{
     PreparedMigrationMaterial, prepare_material_complete_for_test,
 };
 use crate::audio_engine::material_migration_control::{adopt_for_format, prepared_for_test};
 use crate::audio_engine::material_paths;
 use crate::audio_engine::mixer::RtMixer;
+use crate::audio_engine::pad_start::CapturedPadStart;
 use crate::audio_engine::resident_relocation;
 use crate::audio_engine::scheduler::FixedCapacityScheduler;
 use crate::audio_engine::stem_cache::{STEM_FILE_NAMES, source_version_hash};
@@ -125,11 +127,103 @@ fn wav(layers: &[usize]) -> Vec<u8> {
     bytes
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct StartFeedback {
+    owner: usize,
+    cell: usize,
+    lifetime: u64,
+    transport_revision: u64,
+}
+
+struct Feedback {
+    producer: Producer<AudioMessage>,
+    ownership: Arc<InputRuntimeOwnership>,
+    starts: [usize; NUM_SAMPLES],
+    expected_starts: [Option<StartFeedback>; NUM_SAMPLES],
+    last_starts: [Option<StartFeedback>; NUM_SAMPLES],
+}
+
+impl Feedback {
+    fn expect_start(&mut self, start: &CapturedPadStart) {
+        assert!(Arc::ptr_eq(start.ownership(), &self.ownership));
+        assert!(self.ownership.is_source_tracked());
+        let id = start.diagnostic_slot().unwrap();
+        let key = start.content_key();
+        assert!(key.belongs_to(self.ownership.owner_identity()));
+        let expected = StartFeedback {
+            owner: self.ownership.owner_identity().diagnostic(),
+            cell: key.cell().index(),
+            lifetime: key.lifetime(),
+            // This exact original content's next ordinary effect owns one transport
+            // write. MIDI's prior admission has already happened before this arm.
+            transport_revision: self
+                .ownership
+                .transport_intent_for_cell(key.cell())
+                .load(Ordering::Acquire)
+                .checked_add(1)
+                .unwrap(),
+        };
+        assert!(self.expected_starts[id].replace(expected).is_none());
+    }
+}
+
+impl AudioMessageSink for Feedback {
+    fn push_audio_message(&mut self, message: AudioMessage) {
+        match &message {
+            AudioMessage::SampleStarted { .. } => {
+                panic!("tracked ordinary effect emitted raw START: {message:?}")
+            }
+            AudioMessage::ContentFeedback {
+                id,
+                owner,
+                cell,
+                lifetime,
+                transport_revision,
+                kind: 1,
+                value,
+            } => {
+                let observed = StartFeedback {
+                    owner: *owner,
+                    cell: *cell,
+                    lifetime: *lifetime,
+                    transport_revision: *transport_revision,
+                };
+                assert_eq!(self.expected_starts[*id].take(), Some(observed));
+                assert_eq!(value.to_bits(), 0.0_f64.to_bits());
+                // Observe before Ring1 publication/controller polling. This verifies
+                // the packet against the actual adopted callback owner; no raw packet
+                // is tagged or repaired from a later slot lookup.
+                let key = self.ownership.callback_feedback_key(*id).unwrap();
+                assert_eq!(
+                    observed,
+                    StartFeedback {
+                        owner: self.ownership.owner_identity().diagnostic(),
+                        cell: key.cell().index(),
+                        lifetime: key.lifetime(),
+                        transport_revision: self
+                            .ownership
+                            .transport_intent_for_cell(key.cell())
+                            .load(Ordering::Acquire),
+                    }
+                );
+                self.last_starts[*id] = Some(observed);
+                self.starts[*id] += 1;
+            }
+            _ => {}
+        }
+        let _ = self.producer.push(message);
+    }
+
+    fn available_audio_message_slots(&mut self) -> usize {
+        self.producer.slots()
+    }
+}
+
 struct Callback {
     mixer: Box<RtMixer>,
     controls: Consumer<ControlMessage>,
     parameters: Consumer<ControlParameterMessage>,
-    feedback: Producer<AudioMessage>,
+    feedback: Feedback,
     scheduler: FixedCapacityScheduler<32>,
     transport: TransportTimeline,
     quantization: TriggerQuantization,
@@ -140,6 +234,7 @@ struct Callback {
 
 impl Callback {
     fn drain(&mut self) -> usize {
+        assert_eq!(self.frame, self.transport.output_frame());
         drain_parameter_messages(&mut self.parameters, &mut self.mixer, &mut self.transport);
         drain_control_messages(
             &mut self.controls,
@@ -154,6 +249,7 @@ impl Callback {
     }
 
     fn render(&mut self, frames: usize) -> Vec<f32> {
+        assert_eq!(self.frame, self.transport.output_frame());
         let mut output = vec![0.0; frames * 2];
         render_scheduled_audio(
             &mut self.mixer,
@@ -166,8 +262,115 @@ impl Callback {
             &mut self.feedback,
             &mut self.retirement,
         );
-        self.frame += frames as u64;
+        self.transport.advance_by_rendered_frames(frames);
+        self.frame = self.transport.output_frame();
         output
+    }
+
+    fn complete_start(&mut self, start: &CapturedPadStart, starts_before: usize) {
+        let id = start.diagnostic_slot().unwrap();
+        assert!(start.accepted(), "reason={:?}", start.reason());
+        let execution = start.execution_frame().unwrap();
+        if start.effective_frame().is_none() {
+            // Host readiness never advances the callback or the source. The original
+            // owner keeps its own worker request and its already frozen scheduler E.
+            let frame = self.frame;
+            let deadline = Instant::now() + Duration::from_secs(10);
+            loop {
+                let runtime = self.mixer.pitch_runtime.as_mut().unwrap();
+                runtime.poll();
+                if runtime.has_ready_action(start.sequence()) {
+                    break;
+                }
+                assert_ne!(start.state(), "rejected", "reason={:?}", start.reason());
+                assert!(
+                    Instant::now() < deadline,
+                    "ordinary Copy fixture start was not ready"
+                );
+                std::thread::sleep(Duration::from_millis(1));
+            }
+            assert_eq!(self.frame, frame);
+            assert_eq!(self.transport.output_frame(), frame);
+            while self.frame < execution {
+                self.render((execution - self.frame).min(512) as usize);
+            }
+        }
+        // Include the first output frame at E, including the prepared Native FIFO.
+        self.render(37);
+        assert_eq!(start.state(), "applied", "reason={:?}", start.reason());
+        assert_eq!(start.effective_frame(), Some(execution));
+        assert_eq!(self.feedback.starts[id], starts_before + 1);
+        assert!(self.feedback.expected_starts[id].is_none());
+        let observed = self.feedback.last_starts[id].unwrap();
+        let key = start.content_key();
+        assert_eq!(
+            (observed.owner, observed.cell, observed.lifetime),
+            (
+                start.ownership().owner_identity().diagnostic(),
+                key.cell().index(),
+                key.lifetime(),
+            )
+        );
+        let mut voices = self
+            .mixer
+            .voices
+            .iter()
+            .filter(|voice| voice.is_playing_sample(id));
+        let voice = voices.next().unwrap();
+        assert!(voices.next().is_none());
+        let pitch = self.mixer.pad_pitch_intent(id).unwrap();
+        let native = pitch
+            .native_pitch_scale(
+                voice.source_playback.tempo_ratio(),
+                self.mixer.key_lock_for_measurement(id),
+            )
+            .unwrap()
+            != 1.0;
+        assert_eq!(
+            voice.stretch.adopted_request_id(),
+            native.then_some(start.sequence())
+        );
+        if native {
+            assert_ne!(voice.stretch.native_state_address(), 0);
+            assert!(
+                voice
+                    .stretch
+                    .productive_history()
+                    .unwrap()
+                    .fed_output_frames
+                    >= 4096
+            );
+            let taps = voice.stretch.native_tap_observation().unwrap();
+            assert!(taps.left_reads > 0);
+            assert_eq!(taps.missing_reads, 0);
+        }
+    }
+
+    fn start(&mut self, engine: &AudioEngine, id: usize) {
+        let starts_before = self.feedback.starts[id];
+        let frame = self.frame;
+        let (from, to) = self.mixer.loop_region_frames(id);
+        let start = engine
+            .capture_pad_start(
+                id,
+                from as f64 / f64::from(RATE),
+                to.map(|end| end as f64 / f64::from(RATE)),
+                1.0,
+                false,
+                None,
+                None,
+            )
+            .unwrap();
+        self.feedback.expect_start(&start);
+        assert_eq!(start.target_frame(), None);
+        self.drain();
+        assert_eq!(start.target_frame(), Some(frame));
+        assert!(engine.publish_pad_start(&start, None).unwrap());
+        self.drain();
+        self.complete_start(&start, starts_before);
+        assert!(engine.publish_pad_start(&start, None).unwrap());
+        assert_eq!(self.drain(), 0, "the same original start is one-shot");
+        assert_eq!(self.feedback.starts[id], starts_before + 1);
     }
 }
 
@@ -179,6 +382,7 @@ fn empty_engine() -> (AudioEngine, Callback, Arc<Mutex<Producer<ControlMessage>>
     let (feedback, messages) = RingBuffer::new(512);
     engine.test_control_channels = Some((producer.clone(), Arc::new(Mutex::new(messages))));
     engine.test_parameter_producer = Some(Arc::new(Mutex::new(parameter_producer)));
+    engine.test_output_format = Some((RATE, 2));
     let mut mixer = Box::new(RtMixer::new(2, RATE as f32));
     mixer.set_input_runtime_ownership(engine.input_runtime_ownership.clone());
     mixer.set_prepared_source_epochs(engine.prepared_source_epochs.clone());
@@ -188,7 +392,13 @@ fn empty_engine() -> (AudioEngine, Callback, Arc<Mutex<Producer<ControlMessage>>
         mixer,
         controls,
         parameters,
-        feedback,
+        feedback: Feedback {
+            producer: feedback,
+            ownership: engine.input_runtime_ownership.clone(),
+            starts: [0; NUM_SAMPLES],
+            expected_starts: [None; NUM_SAMPLES],
+            last_starts: [None; NUM_SAMPLES],
+        },
         scheduler: FixedCapacityScheduler::new(),
         transport: TransportTimeline::new(RATE),
         quantization: TriggerQuantization::Immediate,
@@ -376,9 +586,7 @@ impl Fixture {
                 assert_eq!(selection.publication_status(), "accepted");
                 // Stopped residency acknowledges readers, not audible effect.
                 // Establish the real public source voice before requesting ALL.
-                engine.play_sample(0, 1.0, None).unwrap();
-                callback.drain();
-                callback.render(37);
+                callback.start(&engine, 0);
                 assert!(
                     callback
                         .mixer
@@ -440,9 +648,7 @@ impl Fixture {
             .iter()
             .any(|voice| voice.is_playing_sample(0))
         {
-            fixture.with_engine(|engine| engine.play_sample(0, 1.0, None).unwrap());
-            fixture.callback.drain();
-            fixture.callback.render(37);
+            fixture.start(0);
         }
         assert!(
             fixture
@@ -457,6 +663,10 @@ impl Fixture {
 
     fn with_engine<T>(&self, operation: impl FnOnce(&mut AudioEngine) -> T) -> T {
         Python::attach(|py| operation(&mut self.engine.borrow_mut(py)))
+    }
+
+    fn start(&mut self, id: usize) {
+        Python::attach(|py| self.callback.start(&self.engine.borrow(py), id));
     }
 
     fn envelope(&self) -> String {
@@ -694,9 +904,7 @@ fn actual_public_copy_to_36_and_215_keeps_source_voice_and_independent_shared_cu
                 fixture.callback.render(29);
                 assert_eq!(fixture.source_voice().generation, generation);
                 assert_ne!(fixture.source_voice().source_playback.position(), position);
-                fixture.with_engine(|engine| engine.play_sample(36, 1.0, None).unwrap());
-                fixture.callback.drain();
-                fixture.callback.render(37);
+                fixture.start(36);
                 let own_mask = fixture.with_engine(|engine| {
                     engine
                         .request_committed_stem_residency(
@@ -1152,9 +1360,7 @@ fn restore_saved_in_new_process(root: &Path) {
         before,
         "restore changed a verified FileID/hash or duplicated a generated source/pair artifact"
     );
-    Python::attach(|py| engine.borrow_mut(py).play_sample(36, 1.0, None).unwrap());
-    callback.drain();
-    callback.render(37);
+    Python::attach(|py| callback.start(&engine.borrow(py), 36));
     Python::attach(|py| probe.call_method0(py, "request_audible_mask").unwrap());
     wait_for(
         || {

@@ -4,6 +4,7 @@ use crate::audio_engine::constant_timing::AcceptedTimingProjection;
 use crate::audio_engine::constants::{
     PAD_EQ_DB_MAX, PAD_EQ_DB_MIN, PAD_GAIN_DB_MAX, PAD_GAIN_DB_MIN,
 };
+use crate::audio_engine::pitch_intent::PitchIntent;
 use crate::audio_engine::source_grid::SourceGrid;
 use crate::messages::{STEM_COMPONENT_MASK, SampleBuffer, StemMixMode};
 use flitzis_looper_analysis::tempo_acceptance::TimingIntent;
@@ -65,6 +66,21 @@ fn identity(value: &Value) -> bool {
 }
 
 impl CopyIntent {
+    fn pitch_intent(&self) -> Result<PitchIntent, String> {
+        let key = &self.snapshot["key_intent"];
+        // Existing snapshots represent the neutral inherited intent with null.
+        if key.is_null() {
+            return Ok(PitchIntent::default());
+        }
+        let shift = |name: &str| {
+            key[name]
+                .as_i64()
+                .and_then(|value| i32::try_from(value).ok())
+                .ok_or_else(|| format!("copy key {name} must be a supported integer"))
+        };
+        PitchIntent::new(shift("base_shift")?, shift("extra_shift")?)
+            .map_err(|error| error.to_string())
+    }
     pub(super) fn parse(json: &str) -> Result<Self, String> {
         if json.len() > 32 * 1024 * 1024 {
             return Err("copy snapshot exceeds its admission limit".into());
@@ -116,6 +132,7 @@ impl CopyIntent {
             timing_intent,
         };
         result.mask()?;
+        result.pitch_intent()?;
         Ok(result)
     }
 
@@ -241,6 +258,7 @@ impl CopyIntent {
             loop_start_frame: frame(start_s)?,
             loop_end_frame: end_s.map(frame).transpose()?,
             key_lock: self.key_lock,
+            pitch_intent: self.pitch_intent()?,
             timing_intent: self.timing_intent,
             stem_mix_mode,
             source_version_hash: 0,

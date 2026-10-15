@@ -9,6 +9,7 @@ import pytest
 from flitzis_looper.models import BeatGrid, SampleAnalysis
 from flitzis_looper_audio import AudioMessage
 from tests.flitzis_looper.conftest import (
+    FakeCapturedGlobalStart,
     FakeGlobalPlaybackBatchTicket,
     FakeInputRuntimePadBinding,
     current_timing_metadata,
@@ -65,12 +66,68 @@ def _accepted_sources(
 
 
 def _assert_no_unguarded_batch_effect(audio: Mock) -> None:
+    audio.start_global_playback_batch.assert_not_called()
     audio.set_pad_loop_region.assert_not_called()
     audio.play_sample.assert_not_called()
     audio.play_sample_exclusive.assert_not_called()
     audio.stop_all.assert_not_called()
     audio.set_pad_bpm.assert_not_called()
     audio.set_pad_timing_metadata.assert_not_called()
+
+
+def _set_start_ticket(audio: Mock, ticket: FakeGlobalPlaybackBatchTicket) -> None:
+    audio.publish_captured_global_start.side_effect = lambda capture: capture.publish(ticket)
+
+
+def _published_capture(audio: Mock) -> FakeCapturedGlobalStart:
+    capture = audio.publish_captured_global_start.call_args.args[0]
+    assert isinstance(capture, FakeCapturedGlobalStart)
+    audio.publish_captured_global_start.assert_called_once_with(capture)
+    assert capture.entries == tuple(audio.capture_global_start.call_args.args[0])
+    return capture
+
+
+class _ResidentWindow:
+    """Explicit controller dependency; actual Native ACK ownership is tested in Rust."""
+
+    def __init__(self) -> None:
+        self.status = "preparing"
+        self.current = True
+        self.failure: str | None = None
+        self.cancelled = False
+        self.previous_window_revision = 1
+        self.window_revision = 2
+        self.key_lock_request_id: int | None = None
+
+    def publication_status(self) -> str:
+        return self.status
+
+    def is_current(self) -> bool:
+        return self.current
+
+    def error(self) -> str | None:
+        return self.failure
+
+    def cancel(self) -> bool:
+        self.cancelled = True
+        return True
+
+
+def _pending_loop_edit(controller: AppController, audio: Mock) -> _ResidentWindow:
+    _accepted_sources(controller, audio, (0,))
+    controller.session.active_sample_ids = {0}
+    controller.project.pad_loop_auto[0] = False
+    controller.project.pad_loop_start_s[0] = 0.125
+    controller.project.pad_loop_end_s[0] = 0.25
+    audio.loaded_residency.return_value = {"source_identity": 123, "window_revision": 1}
+    controller.transport.residency.remember(0)
+    window = _ResidentWindow()
+    audio.prepare_resident_control = Mock(return_value=window)
+    controller.project.pad_loop_start_s[0] = 0.5
+    controller.project.pad_loop_end_s[0] = 0.75
+    controller.transport.residency.publish_loop(0, 0.5, 0.75)
+    assert controller.transport.residency.acknowledged_region(0) == (0.125, 0.25)
+    return window
 
 
 @pytest.mark.parametrize("received_at_ns", [None, 0, 123_456_789])
@@ -85,11 +142,14 @@ def test_global_restart_carries_one_exact_current_snapshot_per_actual_source(
 
     controller.transport.playback.start_or_restart_global_start_stop(received_at_ns=received_at_ns)
 
-    entries = audio_engine_mock.start_global_playback_batch.call_args.args[0]
-    assert [binding for binding, _, _ in entries] == [bindings[0], bindings[2]]
+    entries = audio_engine_mock.capture_global_start.call_args.args[0]
+    assert [binding for binding, _, _, _ in entries] == [bindings[0], bindings[2]]
     end_s = round(4.0 * PRECISE_PERIOD * 48_000) / 48_000
-    assert [(start, end) for _, start, end in entries] == [(0.0, end_s), (0.0, end_s)]
-    assert audio_engine_mock.start_global_playback_batch.call_args.kwargs == {
+    assert [(start, end) for _, start, end, _ in entries] == [(0.0, end_s), (0.0, end_s)]
+    assert [dependency for _, _, _, dependency in entries] == [None, None]
+    capture = _published_capture(audio_engine_mock)
+    assert capture.received_at_ns == received_at_ns
+    assert audio_engine_mock.capture_global_start.call_args.kwargs == {
         "received_at_ns": received_at_ns
     }
     assert audio_engine_mock.current_constant_timing.call_args_list == [call(0), call(2)]
@@ -125,7 +185,8 @@ def test_one_unavailable_automatic_member_rejects_entire_productive_batch(
 
     assert controller.session.model_dump() == before
     assert controller.project.model_dump() == project_before
-    audio_engine_mock.start_global_playback_batch.assert_not_called()
+    audio_engine_mock.capture_global_start.assert_not_called()
+    audio_engine_mock.publish_captured_global_start.assert_not_called()
     audio_engine_mock.stop_global_playback_batch.assert_not_called()
     _assert_no_unguarded_batch_effect(audio_engine_mock)
 
@@ -168,7 +229,8 @@ def test_current_binding_mismatch_cannot_admit_or_partially_clear_restore(
     controller.transport.playback.start_or_restart_global_start_stop()
 
     assert controller.session.model_dump() == before
-    audio_engine_mock.start_global_playback_batch.assert_not_called()
+    audio_engine_mock.capture_global_start.assert_not_called()
+    audio_engine_mock.publish_captured_global_start.assert_not_called()
     _assert_no_unguarded_batch_effect(audio_engine_mock)
 
 
@@ -185,7 +247,8 @@ def test_current_binding_signed_zero_is_not_interchangeable(
 
     controller.transport.playback.start_or_restart_global_start_stop()
 
-    audio_engine_mock.start_global_playback_batch.assert_not_called()
+    audio_engine_mock.capture_global_start.assert_not_called()
+    audio_engine_mock.publish_captured_global_start.assert_not_called()
 
 
 @pytest.mark.parametrize("operation", ["restart", "right_stop", "stop_all"])
@@ -217,7 +280,8 @@ def test_native_capture_failure_never_falls_back_to_saved_paths_or_partial_batch
 
     assert controller.session.model_dump() == before
     assert controller.project.model_dump() == project_before
-    audio_engine_mock.start_global_playback_batch.assert_not_called()
+    audio_engine_mock.capture_global_start.assert_not_called()
+    audio_engine_mock.publish_captured_global_start.assert_not_called()
     audio_engine_mock.stop_global_playback_batch.assert_not_called()
     _assert_no_unguarded_batch_effect(audio_engine_mock)
 
@@ -241,10 +305,11 @@ def test_explicit_nonaccepted_authority_uses_native_binding_without_promoting_an
 
     controller.transport.playback.start_or_restart_global_start_stop()
 
-    entries = audio_engine_mock.start_global_playback_batch.call_args.args[0]
+    entries = audio_engine_mock.capture_global_start.call_args.args[0]
     assert entries[0][0] is binding
     assert binding.metadata()["accepted_timing"] is None
-    assert entries[0][1:] == (0.0, round((4 * 60 / 135) * 44_100) / 44_100)
+    assert entries[0][1:] == (0.0, round((4 * 60 / 135) * 44_100) / 44_100, None)
+    _published_capture(audio_engine_mock)
     _assert_no_unguarded_batch_effect(audio_engine_mock)
 
 
@@ -259,7 +324,7 @@ def test_failed_native_batch_admission_preserves_all_saved_and_session_intent(
     controller.session.global_stop_restore_sample_ids = {0, 2}
     before = controller.session.model_dump()
     project_before = controller.project.model_dump()
-    audio_engine_mock.start_global_playback_batch.side_effect = RuntimeError("full command ring")
+    audio_engine_mock.publish_captured_global_start.side_effect = RuntimeError("full command ring")
     audio_engine_mock.stop_global_playback_batch.side_effect = RuntimeError("full command ring")
     audio_engine_mock.reset_mock()
     methods: dict[str, Callable[[], None]] = {
@@ -287,7 +352,7 @@ def test_pending_batch_and_native_feedback_preserve_telemetry_owned_voice_sets(
     controller.session.global_stop_engaged = True
     controller.session.global_stop_restore_sample_ids = {2}
     ticket = FakeGlobalPlaybackBatchTicket("pending")
-    audio_engine_mock.start_global_playback_batch.return_value = ticket
+    _set_start_ticket(audio_engine_mock, ticket)
     audio_engine_mock.stop_global_playback_batch.return_value = ticket
     methods: dict[str, Callable[[], None]] = {
         "restart": controller.transport.playback.start_or_restart_global_start_stop,
@@ -303,6 +368,8 @@ def test_pending_batch_and_native_feedback_preserve_telemetry_owned_voice_sets(
         audio_engine_mock.stop_global_playback_batch.assert_called_once_with(
             [bindings[0], bindings[2]], received_at_ns=None
         )
+    else:
+        _published_capture(audio_engine_mock)
     controller.session.active_sample_ids.add(5)
     ticket.status = final_status
     controller.transport.on_frame_render()
@@ -328,7 +395,7 @@ def test_stop_supersedes_start_but_pending_stop_blocks_further_global_operations
     controller.session.active_sample_ids = {0, 2}
     start = FakeGlobalPlaybackBatchTicket(start_status)
     stop = FakeGlobalPlaybackBatchTicket("pending")
-    audio_engine_mock.start_global_playback_batch.return_value = start
+    _set_start_ticket(audio_engine_mock, start)
     audio_engine_mock.stop_global_playback_batch.return_value = stop
     before = controller.session.model_dump()
     controller.transport.playback.start_or_restart_global_start_stop()
@@ -337,7 +404,8 @@ def test_stop_supersedes_start_but_pending_stop_blocks_further_global_operations
     controller.transport.playback.stop_all_pads()
     controller.transport.playback.start_or_restart_global_start_stop()
 
-    audio_engine_mock.start_global_playback_batch.assert_called_once()
+    audio_engine_mock.capture_global_start.assert_called_once()
+    _published_capture(audio_engine_mock)
     audio_engine_mock.stop_global_playback_batch.assert_called_once_with(
         [bindings[0], bindings[2]], received_at_ns=None
     )
@@ -347,7 +415,8 @@ def test_stop_supersedes_start_but_pending_stop_blocks_further_global_operations
     stop.status = "accepted"
     controller.transport.playback.start_or_restart_global_start_stop()
 
-    assert audio_engine_mock.start_global_playback_batch.call_count == 2
+    assert audio_engine_mock.capture_global_start.call_count == 2
+    assert audio_engine_mock.publish_captured_global_start.call_count == 2
     audio_engine_mock.stop_global_playback_batch.assert_called_once()
     assert controller.session.active_sample_ids == {0, 2}
     assert controller.session.paused_sample_ids == set()
@@ -381,7 +450,7 @@ def test_restart_ack_preserves_paused_voice_until_actual_started_telemetry(
     controller.session.active_sample_ids = {2}
     controller.session.paused_sample_ids = {2}
     ticket = FakeGlobalPlaybackBatchTicket("pending")
-    audio_engine_mock.start_global_playback_batch.return_value = ticket
+    _set_start_ticket(audio_engine_mock, ticket)
     controller.transport.playback.start_or_restart_global_start_stop()
     unrelated_started = Mock()
     unrelated_started.sample_id.return_value = 5
@@ -508,7 +577,7 @@ def test_actual_app_drain_keeps_unloaded_pad_inactive_after_delayed_started_feed
     controller.session.global_stop_engaged = True
     controller.session.global_stop_restore_sample_ids = {0}
     ticket = FakeGlobalPlaybackBatchTicket("pending")
-    audio_engine_mock.start_global_playback_batch.return_value = ticket
+    _set_start_ticket(audio_engine_mock, ticket)
     controller.transport.playback.start_or_restart_global_start_stop()
     assert controller.session.active_sample_ids == set()
     ticket.status = "accepted"
@@ -534,7 +603,7 @@ def test_actual_app_drain_keeps_unloaded_pad_inactive_after_delayed_started_feed
     assert controller.session.paused_sample_ids == set()
     assert controller.session.global_stop_engaged is False
     assert controller.session.global_stop_restore_sample_ids == set()
-    audio_engine_mock.start_global_playback_batch.assert_called_once()
+    audio_engine_mock.capture_global_start.assert_called_once()
     audio_engine_mock.unload_sample.assert_called_once_with(0)
 
 
@@ -555,3 +624,215 @@ def test_invalid_global_timestamp_rejects_before_capturing_or_publishing(
             controller.transport.playback.stop_all_pads(received_at_ns=cast("int", timestamp))
 
     assert audio_engine_mock.method_calls == []
+
+
+def test_deferred_global_start_retains_original_source_loop_time_and_same_capture(
+    controller: AppController, audio_engine_mock: Mock
+) -> None:
+    _, bindings = _accepted_sources(controller, audio_engine_mock, (0,))
+    controller.session.active_sample_ids = {0}
+    controller.project.pad_loop_auto[0] = False
+    controller.project.pad_loop_start_s[0] = 0.25
+    controller.project.pad_loop_end_s[0] = 0.75
+    ready = False
+
+    def publish(capture: FakeCapturedGlobalStart) -> FakeGlobalPlaybackBatchTicket | None:
+        return capture.publish() if ready else None
+
+    audio_engine_mock.publish_captured_global_start.side_effect = publish
+    controller.transport.playback.start_or_restart_global_start_stop(received_at_ns=123)
+    capture = _published_capture(audio_engine_mock)
+    assert capture.entries == ((bindings[0], 0.25, 0.75, None),)
+    assert capture.received_at_ns == 123
+    capture.frame = 24_000
+    original_project = controller.project.model_dump()
+    controller.project.pad_loop_start_s[0] = 0.5
+    controller.project.pad_loop_end_s[0] = 1.0
+    source_reads = audio_engine_mock.current_input_runtime_pad_binding.call_count
+    timing_reads = audio_engine_mock.current_constant_timing.call_count
+    for _ in range(3):
+        controller.transport.playback._global_playback.poll()
+    ready = True
+    controller.transport.playback._global_playback.poll()
+
+    audio_engine_mock.capture_global_start.assert_called_once()
+    assert audio_engine_mock.publish_captured_global_start.call_args_list == [call(capture)] * 5
+    assert audio_engine_mock.current_input_runtime_pad_binding.call_count == source_reads
+    assert audio_engine_mock.current_constant_timing.call_count == timing_reads
+    assert capture.entries == ((bindings[0], 0.25, 0.75, None),)
+    assert capture.received_at_ns == 123
+    assert capture.original_frame() == 24_000
+    assert controller.project.model_dump() != original_project
+    assert controller.project.pad_loop_start_s[0] == 0.5
+    assert controller.project.pad_loop_end_s[0] == 1.0
+    _assert_no_unguarded_batch_effect(audio_engine_mock)
+
+
+def test_global_capture_retains_pending_window_and_requested_instead_of_effective_loop(
+    controller: AppController, audio_engine_mock: Mock
+) -> None:
+    window = _pending_loop_edit(controller, audio_engine_mock)
+
+    controller.transport.playback.start_or_restart_global_start_stop(received_at_ns=456)
+    capture = _published_capture(audio_engine_mock)
+    original_binding, start, end, dependency = capture.entries[0]
+    assert (start, end) == (0.5, 0.75)
+    assert dependency is window
+    assert capture.received_at_ns == 456
+    source_reads = audio_engine_mock.current_input_runtime_pad_binding.call_count
+    timing_reads = audio_engine_mock.current_constant_timing.call_count
+    controller.transport.playback._global_playback.poll()
+    assert capture.state() == "captured"
+    window.status = "accepted"
+    controller.transport.playback._global_playback.poll()
+
+    assert capture.entries == ((original_binding, 0.5, 0.75, window),)
+    audio_engine_mock.capture_global_start.assert_called_once()
+    assert audio_engine_mock.publish_captured_global_start.call_args_list == [call(capture)] * 3
+    assert audio_engine_mock.current_input_runtime_pad_binding.call_count == source_reads
+    assert audio_engine_mock.current_constant_timing.call_count == timing_reads
+    assert window.cancelled is False
+    audio_engine_mock.play_resident_control.assert_not_called()
+    _assert_no_unguarded_batch_effect(audio_engine_mock)
+
+
+def test_global_start_rejects_python_pending_edit_without_native_ticket(
+    controller: AppController, audio_engine_mock: Mock
+) -> None:
+    _pending_loop_edit(controller, audio_engine_mock)
+    audio_engine_mock.prepare_resident_control.side_effect = RuntimeError(
+        "resident command queue is full"
+    )
+    controller.project.pad_loop_start_s[0] = 0.625
+    controller.transport.residency.publish_loop(0, 0.625, 0.75)
+    before = controller.session.model_dump()
+    audio_engine_mock.reset_mock()
+
+    controller.transport.playback.start_or_restart_global_start_stop()
+
+    audio_engine_mock.capture_global_start.assert_not_called()
+    audio_engine_mock.publish_captured_global_start.assert_not_called()
+    assert controller.session.model_dump() == before
+    _assert_no_unguarded_batch_effect(audio_engine_mock)
+
+
+def test_forgetting_deferred_global_intent_cancels_attacks_and_preserves_own_edit(
+    controller: AppController, audio_engine_mock: Mock
+) -> None:
+    window = _pending_loop_edit(controller, audio_engine_mock)
+    controller.transport.playback.start_or_restart_global_start_stop()
+    capture = _published_capture(audio_engine_mock)
+
+    controller.transport.playback._forget_global_start_stop_restore()
+    window.status = "accepted"
+    controller.transport.playback._global_playback.poll()
+
+    assert capture.cancelled is True
+    assert window.cancelled is False
+    assert capture.entries[0][3] is window
+    audio_engine_mock.capture_global_start.assert_called_once()
+    audio_engine_mock.publish_captured_global_start.assert_called_once_with(capture)
+    _assert_no_unguarded_batch_effect(audio_engine_mock)
+
+
+def test_global_queue_pressure_retries_same_capture_with_bounded_budget(
+    controller: AppController, audio_engine_mock: Mock
+) -> None:
+    _accepted_sources(controller, audio_engine_mock, (0,))
+    controller.session.active_sample_ids = {0}
+    audio_engine_mock.publish_captured_global_start.side_effect = RuntimeError(
+        "ordinary start queue is full"
+    )
+    controller.transport.playback.start_or_restart_global_start_stop(received_at_ns=789)
+    capture = _published_capture(audio_engine_mock)
+    for _ in range(10):
+        controller.transport.playback._global_playback.poll()
+
+    audio_engine_mock.capture_global_start.assert_called_once()
+    assert audio_engine_mock.publish_captured_global_start.call_args_list == [call(capture)] * 8
+    assert capture.cancelled is True
+    assert capture.received_at_ns == 789
+    assert controller.transport.residency.status(0)[1] == "ordinary start queue is full"
+    _assert_no_unguarded_batch_effect(audio_engine_mock)
+
+
+def test_stop_cancels_deferred_original_group_and_stops_its_unobserved_targets(
+    controller: AppController, audio_engine_mock: Mock
+) -> None:
+    _, bindings = _accepted_sources(controller, audio_engine_mock, (0,))
+    controller.session.global_stop_engaged = True
+    controller.session.global_stop_restore_sample_ids = {0}
+    audio_engine_mock.publish_captured_global_start.side_effect = lambda _capture: None
+    controller.transport.playback.start_or_restart_global_start_stop()
+    capture = _published_capture(audio_engine_mock)
+    assert controller.session.active_sample_ids == set()
+
+    controller.transport.playback.stop_all_pads()
+    controller.transport.playback._global_playback.poll()
+
+    assert capture.cancelled is True
+    audio_engine_mock.capture_global_start.assert_called_once()
+    audio_engine_mock.publish_captured_global_start.assert_called_once_with(capture)
+    audio_engine_mock.stop_global_playback_batch.assert_called_once_with(
+        [bindings[0]], received_at_ns=None
+    )
+    assert controller.session.active_sample_ids == set()
+    assert controller.session.global_stop_restore_sample_ids == set()
+    _assert_no_unguarded_batch_effect(audio_engine_mock)
+
+
+def test_deferred_global_failure_reports_current_native_diagnostic_slot_without_recapture(
+    controller: AppController, audio_engine_mock: Mock
+) -> None:
+    window = _pending_loop_edit(controller, audio_engine_mock)
+    controller.transport.playback.start_or_restart_global_start_stop()
+    capture = _published_capture(audio_engine_mock)
+    capture.slots = [5]
+    controller.transport._pair_deferred_sample_ids = frozenset({5})
+    controller.transport.playback._global_playback.poll()
+    audio_engine_mock.publish_captured_global_start.assert_called_once_with(capture)
+    controller.transport._pair_deferred_sample_ids = frozenset()
+    window.status = "failed"
+    window.failure = "original resident timing changed"
+
+    controller.transport.playback._global_playback.poll()
+
+    audio_engine_mock.capture_global_start.assert_called_once()
+    assert audio_engine_mock.publish_captured_global_start.call_args_list == [call(capture)] * 2
+    assert capture.state() == "rejected"
+    assert controller.transport.residency.status(5)[1] == "original resident timing changed"
+    assert window.cancelled is False
+
+
+@pytest.mark.parametrize("reason", [None, "source_changed"])
+def test_published_global_rejection_reports_actual_native_owner_after_pair_deferral(
+    controller: AppController, audio_engine_mock: Mock, reason: str | None
+) -> None:
+    _accepted_sources(controller, audio_engine_mock, (0,))
+    controller.session.global_stop_engaged = True
+    controller.session.global_stop_restore_sample_ids = {0}
+    ticket = FakeGlobalPlaybackBatchTicket("pending")
+    _set_start_ticket(audio_engine_mock, ticket)
+    controller.transport.playback.start_or_restart_global_start_stop()
+    capture = _published_capture(audio_engine_mock)
+    capture.slots = [5]
+    capture.status = "rejected"
+    capture.failure = reason
+    ticket.status = "rejected"
+    controller.transport._pair_deferred_sample_ids = frozenset({5})
+
+    controller.transport.playback._global_playback.poll()
+
+    assert controller.transport.playback._global_playback._pending is not None
+    assert controller.transport.residency.status(5)[1] is None
+    controller.transport._pair_deferred_sample_ids = frozenset()
+    controller.transport.playback._global_playback.poll()
+
+    assert controller.transport.playback._global_playback._pending is None
+    assert controller.transport.residency.status(5)[1] == (
+        reason or "global playback start rejected"
+    )
+    assert controller.session.global_stop_engaged is True
+    assert controller.session.global_stop_restore_sample_ids == {0}
+    audio_engine_mock.capture_global_start.assert_called_once()
+    audio_engine_mock.publish_captured_global_start.assert_called_once_with(capture)

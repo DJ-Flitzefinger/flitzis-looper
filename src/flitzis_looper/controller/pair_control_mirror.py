@@ -267,16 +267,16 @@ def _deferred_global_image(
 ) -> _DeferredStart | None:
     if current is None:
         return None
-    sources = tuple(
-        (
-            projected,
-            (placement.project(signature[0]), *signature[1:]),
-            accepted,
-        )
-        for sample_id, signature, accepted in current.sources
-        if (projected := placement.project_slot(sample_id)) is not None
+    # The native capture follows its original ContentKeys through placement.
+    # Mirror only fallback UI slots; never reconstruct its source/timing owners.
+    return replace(
+        current,
+        sample_ids=frozenset(
+            projected
+            for sample_id in current.sample_ids
+            if (projected := placement.project_slot(sample_id)) is not None
+        ),
     )
-    return replace(current, sources=sources)
 
 
 def _references(

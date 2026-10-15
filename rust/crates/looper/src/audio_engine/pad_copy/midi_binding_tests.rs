@@ -8,6 +8,7 @@ use crate::messages::ControlMessage;
 use pyo3::prelude::*;
 use std::sync::Arc;
 use std::sync::atomic::Ordering;
+use std::time::{Duration, Instant};
 
 fn publish_mapped_runtime(fixture: &Fixture, start: usize) -> u64 {
     Python::attach(|py| {
@@ -18,6 +19,12 @@ fn publish_mapped_runtime(fixture: &Fixture, start: usize) -> u64 {
                 engine.input_clock,
                 engine.input_runtime_ownership.clone(),
             ));
+            engine
+                .input_runtime
+                .as_ref()
+                .unwrap()
+                .set_render_format(RATE, 2)
+                .unwrap();
             engine
                 .set_input_mapping_snapshot(vec![("midi:note:1:60".into(), "pad.trigger:0".into())])
                 .unwrap();
@@ -38,7 +45,7 @@ fn publish_mapped_runtime(fixture: &Fixture, start: usize) -> u64 {
         let mut bindings: Vec<_> = (0..NUM_SAMPLES).map(|_| None).collect();
         bindings[0] = Some(Py::new(py, binding).unwrap());
         engine
-            .set_input_runtime_state(py, true, loaded, starts, ends, Some(bindings))
+            .set_input_runtime_state(py, true, loaded, starts, ends, Some(bindings), None)
             .unwrap();
         let revision = engine.input_runtime_ownership.runtime_revision(0);
         assert_ne!(revision, 0);
@@ -47,24 +54,48 @@ fn publish_mapped_runtime(fixture: &Fixture, start: usize) -> u64 {
 }
 
 fn admit_actual_mapped_source(fixture: &mut Fixture, revision: u64) {
+    let starts_before = fixture.callback.feedback.starts[0];
     fixture.with_engine(|engine| {
-        let dispatch = engine
-            .input_runtime
-            .as_ref()
-            .unwrap()
-            .capture_mapping_dispatch_for_test("midi:note:1:60", 42)
-            .expect("configured MIDI mapping must reach its actual admission path");
-        assert!(dispatch());
+        assert!(
+            engine
+                .input_runtime
+                .as_ref()
+                .unwrap()
+                .inject_midi_message(&[0x90, 60, 100])
+        );
     });
+    let deadline = Instant::now() + Duration::from_secs(10);
+    let event = loop {
+        if let Some(event) =
+            fixture.with_engine(|engine| engine.input_runtime.as_ref().unwrap().poll_event())
+        {
+            break event;
+        }
+        assert!(
+            Instant::now() < deadline,
+            "actual mapped MIDI event was not dispatched"
+        );
+        std::thread::sleep(Duration::from_millis(1));
+    };
+    assert!(event.direct && event.dispatched);
+    let trigger = event
+        .captured_trigger
+        .expect("actual MIDI dispatcher retains its original owner");
+    let start = trigger.captured_start();
+    assert_eq!(start.received_timestamp(), event.received_at_ns);
+    assert_eq!(
+        start.control_guard().unwrap().binding.runtime_revision,
+        revision
+    );
     match fixture.callback.controls.peek().unwrap() {
-        ControlMessage::TriggerInputPad { id, binding, .. } => {
-            assert_eq!(*id, 0);
-            assert_eq!(binding.runtime_revision, revision);
+        ControlMessage::CapturePadStartTarget(original) => {
+            assert!(original.same_owner(&start));
         }
         other => panic!("expected actual mapped MIDI source admission, got {other:?}"),
     }
-    assert_eq!(fixture.callback.drain(), 1);
-    fixture.callback.render(17);
+    fixture.callback.feedback.expect_start(&start);
+    assert_eq!(fixture.callback.drain(), 2);
+    fixture.callback.complete_start(&start, starts_before);
     assert!(fixture.source_voice().active);
     assert!(!fixture.source_voice().paused);
 }

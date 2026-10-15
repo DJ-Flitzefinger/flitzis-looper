@@ -132,6 +132,9 @@ class _RestoredLoadOptions(TypedDict):
     run_analysis: bool
     replace_assignment: bool
     source_intent: Literal["restore"]
+    initial_base_shift: int
+    initial_extra_shift: int
+    initial_key_lock: bool
     restore_automatic: NotRequired[bool]
     resident_loop_start_s: NotRequired[float]
     resident_loop_end_s: NotRequired[float]
@@ -1580,10 +1583,14 @@ class LoaderController(_IncomingIntentControl, _MaterialCreationOwnership):
             asset = original_asset(rel)
             self._validate_restored_material_identity(sample_id, asset.material_id)
             reservation = self._assets.reserve()
+            key_intent = self._project.pad_key_intent[sample_id]
             options: _RestoredLoadOptions = {
                 "run_analysis": run_analysis,
                 "replace_assignment": True,
                 "source_intent": "restore",
+                "initial_base_shift": key_intent.base_shift,
+                "initial_extra_shift": key_intent.extra_shift,
+                "initial_key_lock": self._project.resolve_pad_key_lock(sample_id),
             }
             if self._wants_accepted_restore(sample_id):
                 options["restore_automatic"] = True
@@ -1597,7 +1604,7 @@ class LoaderController(_IncomingIntentControl, _MaterialCreationOwnership):
                     options["resident_loop_end_s"] = resident.end_seconds
                     options["resident_key_lock"] = resident.key_lock
             request_id = self._audio.load_sample_async(sample_id, rel.as_posix(), **options)
-        except (RuntimeError, ValueError) as error:
+        except (RuntimeError, ValueError, TypeError) as error:
             if reservation is not None:
                 reservation.close()
             if isinstance(error, RuntimeError) and str(error) == self._COLD_QUEUE_FULL:

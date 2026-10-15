@@ -1,15 +1,26 @@
+from dataclasses import dataclass
 from typing import TYPE_CHECKING, Literal
 
 from pydantic import BaseModel, Field
 
 from flitzis_looper.audio_gain import clamp_gain_db, format_gain_db
 from flitzis_looper.constants import PAD_GAIN_DB_MAX, PAD_GAIN_DB_MIN, SPEED_MAX, SPEED_MIN
+from flitzis_looper.key_intent import MusicalKey
 
 if TYPE_CHECKING:
     from flitzis_looper.models import StemMaskDisplayMode, StemMixMode, TriggerQuantizationMode
 
 type LooperActionSource = Literal["direct", "python"]
 type PadEqBand = Literal["low", "mid", "high"]
+
+
+@dataclass(frozen=True)
+class PitchAction:
+    """Parsed stable pitch target and the variant fixed when the input was learned."""
+
+    kind: Literal["base", "extra", "reset_base"]
+    target: MusicalKey | int | None
+    retrigger: bool
 
 
 class LooperAction(BaseModel):
@@ -105,7 +116,103 @@ class LooperAction(BaseModel):
 
     @classmethod
     def from_key(cls, key: str) -> LooperAction:
-        return cls(key=key)
+        return cls(key=key, source="direct" if parse_pitch_action(key) is not None else "python")
+
+
+def pitch_base_action(target: MusicalKey, *, retrigger: bool) -> LooperAction:
+    """Return an absolute same-mode target, independent of menu and selected content."""
+    variant = _pitch_variant(retrigger=retrigger)
+    return LooperAction(
+        key=f"pitch.base:{target.root}:{target.mode}:{variant}",
+        label=f"Key {target.label}{' + retrigger' if retrigger else ''}",
+        source="direct",
+    )
+
+
+def pitch_extra_action(semitones: int, *, retrigger: bool) -> LooperAction:
+    """Return one strict signed SET or SET_RETRIGGER transposition target."""
+    if isinstance(semitones, bool) or not isinstance(semitones, int):
+        msg = "semitones must be an integer"
+        raise TypeError(msg)
+    if not -18 <= semitones <= 18:
+        msg = "extra semitones must be between -18 and +18"
+        raise ValueError(msg)
+    variant = _pitch_variant(retrigger=retrigger)
+    return LooperAction(
+        key=f"pitch.extra:{semitones}:{variant}",
+        label=f"Transpose {semitones:+d}{' + retrigger' if retrigger else ''}",
+        source="direct",
+    )
+
+
+def pitch_reset_base_action(*, retrigger: bool) -> LooperAction:
+    """Return the source-neutral numeric base reset, including unknown source keys."""
+    variant = _pitch_variant(retrigger=retrigger)
+    return LooperAction(
+        key=f"pitch.base.reset:{variant}",
+        label=f"Reset base pitch{' + retrigger' if retrigger else ''}",
+        source="direct",
+    )
+
+
+def _pitch_variant(*, retrigger: bool) -> Literal["set", "set_retrigger"]:
+    if not isinstance(retrigger, bool):
+        msg = "retrigger must be a boolean"
+        raise TypeError(msg)
+    return "set_retrigger" if retrigger else "set"
+
+
+def parse_pitch_action(key: str) -> PitchAction | None:
+    """Decode a canonical semantic action without consulting checkbox or selection state."""
+    parts = key.split(":")
+    if parts[-1] not in {"set", "set_retrigger"}:
+        return None
+    retrigger = parts[-1] == "set_retrigger"
+    if len(parts) == 2 and parts[0] == "pitch.base.reset":
+        return PitchAction("reset_base", None, retrigger)
+    if len(parts) == 4 and parts[0] == "pitch.base" and parts[2] in {"major", "minor"}:
+        root = _pitch_integer(parts[1], minimum=0, maximum=11)
+        if root is not None:
+            mode: Literal["major", "minor"] = "major" if parts[2] == "major" else "minor"
+            return PitchAction("base", MusicalKey(root=root, mode=mode), retrigger)
+    if len(parts) == 3 and parts[0] == "pitch.extra":
+        semitones = _pitch_integer(parts[1], minimum=-18, maximum=18)
+        if semitones is not None:
+            return PitchAction("extra", semitones, retrigger)
+    return None
+
+
+def _pitch_integer(raw: str, *, minimum: int, maximum: int) -> int | None:
+    try:
+        value = int(raw)
+    except ValueError:
+        return None
+    return value if str(value) == raw and minimum <= value <= maximum else None
+
+
+def describe_pitch_rejection(reason: str) -> str:
+    """Translate native admission feedback into a short performer-facing explanation."""
+    descriptions = {
+        "invalid_action": "The saved pitch choice is invalid.",
+        "no_selected_content": "Select a loaded pad first.",
+        "stale_content": "The selected audio has been removed or replaced.",
+        "source_changed": "The audio changed before this pitch choice could be applied.",
+        "timing_changed": "Loop timing changed before this pitch choice could be applied.",
+        "timing_unavailable": "Audio timing is not ready yet.",
+        "unknown_source_key": "Source key is unknown; choose a source correction first.",
+        "mode_mismatch": "Key must keep the source's major/minor mode.",
+        "unsupported_pitch": "This pitch and playback speed combination is not supported.",
+        "input_disabled": "Input mapping is disabled.",
+        "placement_pending": "Audio is moving; try again after the move.",
+        "window_pending": "Audio is not ready for this pitch choice yet.",
+        "capacity": "Too many pitch choices are waiting; try again.",
+        "preparation_failed": "Pitch preparation failed; try again.",
+        "prepared_mismatch": "Audio changed during pitch preparation; try again.",
+        "already_published": "This pitch choice has already been applied.",
+        "sequence_exhausted": "Restart the app before making another pitch choice.",
+        "launch_cancelled": "The pending pitch attack was cancelled by Stop.",
+    }
+    return descriptions.get(reason, reason)
 
 
 def tap_bpm_action(pad_id: int) -> LooperAction:

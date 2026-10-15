@@ -356,6 +356,75 @@ history, with native reset/warming still owned by the worker.
 
 ### Productive Source-Specific Preparation
 
+GUI and MIDI pitch choices retain one original `CapturedPitchAction`: content
+lifetime, source/timing authority, numeric tuple, input time and dueframe T.
+SET and SET_RETRIGGER share the existing scheduler and fixed action custody.
+Preparation selects a separate execution frame E without calculating another
+grid target. An already usable live SET keeps its Native/FIFO history and applies
+as a scalar effect; it does not send an unnecessary request to the worker.
+
+Disabled mapping and Learn discard unpublished MIDI pitch receipts by cancelling
+each exact Native owner. A separate 64-record control journal rewires cancelled
+predecessors, so later cancellation cannot restore an already discarded choice.
+It retains scalar source fences and lightweight status observations, with no
+Native, PCM or action-work owner chain. Accepted requested-model projections
+anchor later composition; stale source/timing records cannot overwrite them.
+Journal reconciliation runs under the existing control mutex outside rendering.
+
+Live nonzero KEY LOCK changes prepare each voice's prospective numeric tuple
+through the existing source lanes while its previous effective mode continues.
+All participants must pass their exact source, window/ACK, generation, epoch and
+endpoint checks before one content claim exchanges Native/FIFO owners at E.
+For a finite source, actual storage can be claimed first; the original mode
+ticket remains adopting until its own complete effect. That storage observation
+and mode success have separate custody, so mode refusal neither releases a
+dependent start nor loses the actual installed window. Retirement pressure
+retains the original owner. Unavailable trajectories remain visible request
+refusals with old effective audio retained; paused endpoints, variable-history
+and full B5 acceptance remain open.
+
+GLOBAL START captures an opaque native group before waiting for an existing
+resident edit. Its original participants, timing ACK owners, requested loop
+regions and input time remain fixed. One existing callback target message freezes
+T for the complete group; publication after readiness uses that same T and one
+common execution frame E through the existing atomic ordinary group and scheduler.
+Polling never recaptures the source or reconstructs loop/pitch intent.
+
+Each pending resident dependency retains its actual native ticket/publication and
+uses only that request's genuine adopted binding and launch permit. Move/Swap
+resolve the original content key. A later numerically matching request cannot
+replace the dependency. Group cancellation cancels its attacks and preserves the
+independently requested edit. A pending edit without a native ticket is explicitly
+unavailable before GLOBAL capture; this rejection does not claim preservation of
+an accepted gesture across queue pressure.
+
+Equal ordinary starts register separate Native memberships against one actual
+physical readiness request. Each retains its own Work, sequence, T and callback
+effect. Per-member cancellation cannot revoke a sibling. An independently
+requested loop/mode edit is joined through the exact ticket retained by that
+gesture; the original request ID and WindowACK remain authoritative, and cancelling
+the attack preserves the edit. Membership lookup precedes proposal supersession;
+the weak cache and bounded control-side registry retain no adapter candidate.
+
+One selected Normal-loop start has a separate source-specific Native reserve.
+The callback captures its actual bank source, loop, timing/window ACK, rate and
+applied pitch/Lock tuple after control and parameter drains. One lower-priority
+mailbox on the existing preparation worker owns one mutable Native/FIFO bundle;
+background work consumes none of the 64 accepted-action cells. An ordinary
+capture allocates its scalar owner on the control side and constructs Native on
+the worker only when it misses this reserve.
+
+A hit consumes the bundle once and replaces its cache request with the original
+attack's fresh request, permit, epoch and sequence. An on-time hit keeps E=T;
+late admission keeps original T and uses the current callback frame for E.
+Each further attack retains a distinct receipt even when the reserve is empty.
+Selection changes can retire the cache without revoking an already accepted
+attack. Source, incarnation, real window, loop, rate or tuple changes prevent
+reuse. A same-physical-window ACK can reuse preparation only behind that
+attack's own exact ACK and current authority. The integrated Ordinary42 check
+includes all ten reserve cases and complete initial PCM; this is a bounded
+selected-endpoint result, with full deadline, trajectory and acoustic gates open.
+
 `prepared_native_history::NativeAdapterState` centralizes the actual native
 handle and fixed input/output FIFOs used by both productive `StretchProcessor`
 and its preparation worker. The worker's bounded request/result/recycle lanes
@@ -879,11 +948,12 @@ Reference URLs:
 
 - https://breakfastquay.com/rubberband/integration.html
 
-## Durable key intent and pending audible transposition
+## Durable key intent and engineering pitch controls
 
-K-META implements `key_intent.py` and the saved fixed216 `pad_key_intent` table:
+K-META implements `key_intent.py` and the saved fixed-216 `pad_key_intent` table:
 immutable source versions, independent correction/analysis epochs, numeric
-base_shift(-5..+6 with fixed+6 tie), all37 extra_shift(-18..+18) and retrigger flag.
+`base_shift` (-5..+6 with fixed +6 tie), all 37 `extra_shift` values (-18..+18)
+and the retrigger flag.
 Legacy `manual_key` delegates to this same table. Its three resets are independent;
 unknown source text remains display metadata without guessed root or mode.
 Failed deliberate analysis admission preserves correction; a genuinely admitted
@@ -891,19 +961,40 @@ request can remove its prior correction, while later corrections survive its
 guarded result. Accepted replacement resets source-bound intent; restore retains
 it. New explicit correction `None` prevents legacy resurrection on reopen and
 malformed new fields recover locally without discarding valid performer settings.
-These pure/controller/persistence changes activate no audible pitch controls.
 
-Correction relabels without retune/position change;
-base and extra combine once into total k=-23..+24, h=2^(k/12). Equal-rate current
-varispeed route requires lockON p=h/r, lockOFF p=h preserving speed coupling r*h.
-Actual r(n) extrema expand the B5 joint proof; r=.5..2 implies desired p~.132433..8.
-Current .5..2 compensation clamp/dry bypass/positive-finite API do not prove support.
-Require full desired quality/RT/readiness/latency/finite context/unity-transition
-evidence; concrete measured restrictions must be shared UI/MIDI/storage/audio
-rejections, never silent clamp/tempo change. No cascade or complete pitch PCM.
-R2 layout/hold and B7 captured pitch+retrigger use prepared guarded ownership;
-K1 remains engineering/guarded until real B6/B8 H-LIVE device acceptance. B5 remains
-test-only nonzero k; K-META grants no native pitch, device or hearing acceptance.
+The implemented left-sidebar Key + Transposition surface now routes GUI choices
+and learned MIDI/keyboard SET or SET_RETRIGGER actions through the same Native
+`CapturedPitchAction` and Python `PitchController`. Absolute Key retains the
+recognized source's major/minor mode; unknown source labels require correction
+before an absolute choice. All 37 numeric extra shifts and the independent base/
+extra resets remain available. Correction relabels without retuning or changing
+position. The Retrigger checkbox affects GUI choices and newly learned variants;
+existing bindings retain their stored variant.
+
+SET preserves the source cursor and stopped state. Every admitted SET_RETRIGGER,
+including repeated identical choices, retains its own content/lifetime, input
+timestamp and original dueframe T. Source-specific preparation selects execution
+frame E through the existing scheduler; tuple application and attack occur
+together. Requested saved intent and pending/rejected/effective observations are
+separate; a numeric choice alone does not confirm its audible effect.
+
+Base and extra combine once into 48 total semitone values k=-23..+24, with
+h=2^(k/12). The production pitch-intent path applies one pitch pass over the
+existing varispeed feed: lockON p=h/r; lockOFF p=h, preserving speed coupling r*h.
+It validates the exact finite positive value without the legacy .5..2 compensation
+clamp. For r=.5..2, the joint requested domain is p~.132433..8; native preparation
+uses that selected pitch and its source-specific history requirement. Numeric
+validity does not replace window/feed/history/epoch or endpoint admission. Failed
+preparation and unavailable contexts remain explicit refusals with previous
+effective audio retained, rather than silently clamping pitch or changing tempo.
+No cascade or complete transformed pitch PCM is introduced.
+
+This nonzero-pitch production path remains an engineering delivery. Variable-rate
+SET past/history reconstruction, performer deadlines, the full B5 quality/latency/
+unity-transition matrix, B6 and Human app/device/listening/visual acceptance remain
+open. R2 layout/hold and B7 captured pitch+retrigger retain their prepared ownership
+guards. Neither this surface nor persisted K-META completes whole-arrangement,
+full-216 or final product acceptance.
 
 ## Direct live KEYLOCK correction2026-10-11
 
@@ -948,3 +1039,35 @@ to the new specified behavior; an intermediate UI fixture range was corrected.
 Existing torchaudio and analysis compiler warnings remain. The skips and these
 software checks grant no App/device/hearing acceptance and close no full P4b/P5a,
 nonzero-pitch or whole-program gate.
+
+## Prepared endpoint resource probe — 2026-10-15
+
+The opt-in `pitch_reserve_resource_tests` probe retains distinct actual Native
+handles, adapters and source-specific input/output FIFOs in fresh Windows child
+processes. It uses one generated 48 kHz stereo source of 65,536 bytes, allocated
+before the baseline. Each of four profiles measures 1, 8, 32 and 64 retained
+bundles; all 16 children verify exact selected pitch, history length, source
+ownership and available source taps. This measures preparation costs without an
+App, device, installed extension or complete transformed PCM cache.
+
+| Profile | Native p | History frames | Private commit delta, 64 bundles | Native construction | History preparation |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| Unity calibration | 1 | 4,096 | 149.13 MiB | 34.15 ms | 227.53 ms |
+| Saved lock, r=.73 | 1.369863 | 4,096 | 149.13 MiB | 33.69 ms | 290.04 ms |
+| Total -23, r=2 | .132433 | 29,184 | 149.13 MiB | 33.99 ms | 1,402.89 ms |
+| Total +24, r=.5 | 8 | 23,552 | 149.05 MiB | 34.24 ms | 1,209.76 ms |
+
+Times cover all 64 bundles sequentially in this Debug probe. They are observations,
+not callback budgets or Release performance guarantees. The retained working-set
+delta is 141.76–143.01 MiB. Releasing all 64 bundles reduces private commit by
+146.59–146.66 MiB; 2.46–2.49 MiB remains above the process baseline. This single
+release observation does not establish repeated-cycle leak freedom.
+
+The first run queried history length before selecting the actual Native pitch;
+its lowest-pitch expectation failed at 18,944 versus 29,184 actual frames. The
+probe now queries the selected state and keeps strict history equality. Neither
+these resource measurements nor an idle prepared endpoint resolves the existing
+1,598-frame pre-target retention conflict. Unique 216-pad sources, the P6 matrix,
+performer deadlines and acoustic/Human acceptance remain open. The 64 admitted
+action slots also do not, by themselves, bound Native owners allocated earlier
+by control captures.

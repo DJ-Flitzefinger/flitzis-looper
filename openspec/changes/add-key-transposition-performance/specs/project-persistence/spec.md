@@ -29,3 +29,15 @@ The system SHALL reset correction/base/extra/retrigger to neutral defaults only 
 - **THEN** source-bound pitch is neutral and old actions/holds are retired
 - **AND** correction, base, extra and retrigger reset even if a newer timing edit makes the load's timing projection stale
 - **AND** failure before admission preserves old lifetime/settings and Copy/Move/restore do not reset them
+
+#### Scenario: Restored pitch is present before the first native start
+- **GIVEN** saved numeric base/extra intent and resolved actual Key Lock for a restored source
+- **WHEN** the existing native source-bank publication is acknowledged
+- **THEN** the system SHALL already own that full tuple for a subsequent GUI or MIDI start without requiring a later Loader SET
+- **AND** a stopped source SHALL remain stopped and retained predecessor voices SHALL keep their independently admitted tuple
+
+#### Scenario: Same-content material migration meets a newer requested pitch
+- **GIVEN** a living source with an effective native tuple and a different pending requested tuple
+- **WHEN** its same-content material is migrated through the existing source publication
+- **THEN** the system SHALL preserve its actual effective tuple and the pending action's original owner separately
+- **AND** native finite-read coverage SHALL account for nonzero pitch even with Key Lock OFF without falsifying the actual Lock flag

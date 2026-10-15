@@ -28,12 +28,15 @@ impl LaunchFixture {
         pyo3::Python::initialize();
         let engine = AudioEngine::new().unwrap();
         let (producer, consumer) = RingBuffer::new(capacity);
-        let fixture = Self {
+        let mut fixture = Self {
             engine,
             producer: Arc::new(Mutex::new(producer)),
             consumer,
             state: Arc::new(Mutex::new(RuntimeState::default())),
         };
+        let (_, feedback) = RingBuffer::<AudioMessage>::new(64);
+        fixture.engine.test_control_channels =
+            Some((fixture.producer.clone(), Arc::new(Mutex::new(feedback))));
         fixture.publish(0, 0.25, 7);
         fixture.publish(OTHER, -0.5, 8);
         let mut state = fixture.state.lock().unwrap();
@@ -47,6 +50,10 @@ impl LaunchFixture {
                 loop_start_s: 16.0 / f64::from(RATE),
                 loop_end_s: Some(96.0 / f64::from(RATE)),
                 binding: Some(binding.binding),
+                pitch: PitchPadProjection::default(),
+                latest_request_sequence: 0,
+                pitch_anchor: None,
+                acknowledgements: Some(binding.acknowledgements.clone()),
             };
         }
         drop(state);

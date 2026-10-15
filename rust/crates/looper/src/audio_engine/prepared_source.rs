@@ -14,7 +14,7 @@ use sha2::{Digest, Sha256};
 use std::fs::File;
 use std::io::Read;
 use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicU8, AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU8, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 
 /// Opaque engine-owned admission snapshot. Never constructed from Python numbers.
@@ -135,6 +135,7 @@ pub(crate) struct PreparedSourcePermit {
     status: Arc<AtomicU8>,
     rejection: Arc<AtomicU8>,
     resident_seek_bits: Arc<AtomicU64>,
+    resident_storage_adopted: Arc<AtomicBool>,
     source_epoch: Option<(Arc<AtomicU64>, u64)>,
     timing: Option<PreparedTimingPermit>,
 }
@@ -257,6 +258,7 @@ impl PreparedSourcePermit {
             status: Arc::new(AtomicU8::new(0)),
             rejection: Arc::new(AtomicU8::new(0)),
             resident_seek_bits: Arc::new(AtomicU64::new(f64::NAN.to_bits())),
+            resident_storage_adopted: Arc::new(AtomicBool::new(false)),
             source_epoch: None,
             timing: None,
         }
@@ -271,6 +273,16 @@ impl PreparedSourcePermit {
 
     pub(crate) fn mark_accepted(&self) {
         self.status.store(2, Ordering::Release);
+    }
+
+    /// Observation of this original transaction's actual successful storage claim.
+    /// It grants no mode or launch acceptance and survives a later mode-only refusal.
+    pub(crate) fn mark_resident_storage_adopted(&self) {
+        self.resident_storage_adopted.store(true, Ordering::Release);
+    }
+
+    pub(crate) fn resident_storage_adopted(&self) -> bool {
+        self.resident_storage_adopted.load(Ordering::Acquire)
     }
 
     /// A guarded seek of a previous-source pin changes no current bank storage.

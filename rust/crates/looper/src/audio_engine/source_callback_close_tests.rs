@@ -155,6 +155,7 @@ impl Fixture {
                 loop_region: None,
                 resident_cancelled: Some(cancellation),
                 incoming_defaults: None,
+                initial_pitch: crate::audio_engine::SourcePitchInitialization::FreshNeutral,
             })
             .unwrap();
         let popped = self.state().consumer_in.pop().unwrap();

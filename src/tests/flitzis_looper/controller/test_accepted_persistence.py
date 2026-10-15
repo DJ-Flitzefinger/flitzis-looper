@@ -241,6 +241,9 @@ def test_startup_captures_automatic_without_mutating_authority_before_cold_succe
         restore_automatic=True,
         replace_assignment=True,
         source_intent="restore",
+        initial_base_shift=0,
+        initial_extra_shift=0,
+        initial_key_lock=False,
     )
     audio.set_pad_timing_intent.assert_not_called()
     audio.poll_loader_events.side_effect = [
@@ -304,6 +307,9 @@ def test_actual_startup_audio_projection_waits_for_fresh_automatic_adoption(
         resident_loop_end_s=10.0,
         resident_key_lock=False,
         source_intent="restore",
+        initial_base_shift=0,
+        initial_extra_shift=0,
+        initial_key_lock=False,
     )
     audio.set_pad_bpm.assert_not_called()
     audio.set_pad_timing_metadata.assert_not_called()

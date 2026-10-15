@@ -56,9 +56,11 @@ pub(crate) mod content_placement;
 pub use constant_timing::CapturedConstantTiming;
 pub use constant_timing::ConstantTimingTicket;
 pub use constant_timing::SavedConstantTimingTicket;
+pub(crate) mod captured_global_start;
 mod dsp;
 mod errors;
 pub(crate) mod global_playback_batch;
+pub use captured_global_start::CapturedGlobalStart;
 pub(crate) mod hold_action;
 pub use global_playback_batch::GlobalPlaybackBatchTicket;
 mod incoming_load;
@@ -80,8 +82,30 @@ mod native_history_permit;
 mod native_owned_work;
 mod native_source_coverage;
 mod offline_stem_source;
+mod ordinary_endpoint_reserve;
+pub(crate) mod ordinary_start;
 pub(crate) mod pad_copy;
 pub(crate) mod pad_pair;
+pub(crate) mod pad_start;
+mod pad_start_api;
+pub(crate) mod pitch_actions;
+mod pitch_api;
+pub(crate) mod pitch_intent;
+pub(crate) mod pitch_publication;
+pub(crate) mod pitch_runtime;
+pub use pad_start::CapturedPadStart;
+#[cfg(test)]
+mod ordinary_endpoint_reserve_tests;
+#[cfg(test)]
+mod ordinary_global_start_tests;
+#[cfg(test)]
+mod ordinary_midi_start_tests;
+#[cfg(test)]
+mod ordinary_start_tests;
+#[cfg(all(test, windows))]
+mod pitch_reserve_resource_tests;
+#[cfg(test)]
+mod pitch_runtime_tests;
 pub use hold_action::HoldActionTicket;
 pub use input_mapping::CapturedInputPadTrigger;
 pub use loader_events::LoaderEventDelivery;
@@ -90,6 +114,7 @@ pub use pad_copy::recovery::RecoveredCopyAcceptance;
 pub use pad_copy::{CapturedPadCopy, PadCopyTicket};
 pub use pad_pair::recovery::RecoveredPairAcceptance;
 pub use pad_pair::{CapturedPadPair, PadPairAcknowledgement, PadPairTicket};
+pub use pitch_actions::CapturedPitchAction;
 mod prepared_native_history;
 pub(crate) mod prepared_source;
 mod prepared_stems_work;
@@ -444,6 +469,8 @@ fn resident_seek_available(sample: &SampleBuffer, position_s: f64, rate: u32) ->
     frame >= sample.resident_start() && frame < sample.resident_end()
 }
 
+pub(crate) use cold_load::SourcePitchInitialization;
+
 struct LoadedSourcePublication<'a> {
     ownership: &'a Arc<input_runtime_binding::InputRuntimeOwnership>,
     placement: content_placement::SlotSnapshot,
@@ -459,6 +486,7 @@ struct LoadedSourcePublication<'a> {
     loop_region: Option<(usize, usize)>,
     resident_cancelled: Option<Arc<AtomicBool>>,
     incoming_defaults: Option<crate::messages::IncomingLoadDefaults>,
+    initial_pitch: cold_load::SourcePitchInitialization,
     intent: Option<(
         &'a mut analysis::tempo_acceptance::TimingIntent,
         analysis::tempo_acceptance::TimingIntent,
@@ -566,6 +594,7 @@ fn publish_loaded_sample_with_arm(
             loop_region: publication.loop_region,
             resident_cancelled: publication.resident_cancelled,
             incoming_defaults: publication.incoming_defaults,
+            initial_pitch: publication.initial_pitch,
         }
     } else {
         ControlMessage::LoadSample {
@@ -726,6 +755,8 @@ pub struct AudioEngine {
         Arc<Mutex<Producer<ControlMessage>>>,
         Arc<Mutex<rtrb::Consumer<AudioMessage>>>,
     )>,
+    #[cfg(test)]
+    test_output_format: Option<(u32, usize)>,
     #[cfg(test)]
     test_parameter_producer: Option<Arc<Mutex<Producer<ControlParameterMessage>>>>,
     is_playing: bool,
@@ -1036,6 +1067,43 @@ impl AudioEngine {
     }
 }
 
+impl AudioEngine {
+    /// Preserve the existing Rust test/control call shape; Python uses the strict
+    /// restore initializer wrapper registered under the same public method name.
+    #[allow(clippy::too_many_arguments)]
+    pub fn load_sample_async(
+        &self,
+        id: usize,
+        path: String,
+        run_analysis: Option<bool>,
+        restore_automatic: bool,
+        replace_assignment: bool,
+        resident_loop_start_s: Option<f64>,
+        resident_loop_end_s: Option<f64>,
+        resident_key_lock: bool,
+        source_intent: &str,
+    ) -> PyResult<u64> {
+        if id >= NUM_SAMPLES {
+            return Err(PyValueError::new_err("id out of range"));
+        }
+        cold_load::admit(
+            self,
+            id,
+            path,
+            run_analysis.unwrap_or(true),
+            restore_automatic,
+            replace_assignment,
+            cold_residency::ResidentLoadHint::parse(
+                resident_loop_start_s,
+                resident_loop_end_s,
+                resident_key_lock,
+            )
+            .map_err(PyValueError::new_err)?,
+            source_intent,
+        )
+    }
+}
+
 #[pymethods]
 impl AudioEngine {
     /// Device-free capability proof for scoped admission and residency interests.
@@ -1136,6 +1204,8 @@ impl AudioEngine {
             #[cfg(test)]
             test_control_channels: None,
             #[cfg(test)]
+            test_output_format: None,
+            #[cfg(test)]
             test_parameter_producer: None,
             is_playing: false,
             loader_tx,
@@ -1227,6 +1297,14 @@ impl AudioEngine {
                     self.input_clock,
                     self.input_runtime_ownership.clone(),
                 ));
+                if let Some(runtime) = &self.input_runtime {
+                    runtime
+                        .attach_pitch_clock(handle.output_clock.clone())
+                        .map_err(PyRuntimeError::new_err)?;
+                    runtime
+                        .set_render_format(handle.output_sample_rate, handle.output_channels)
+                        .map_err(PyRuntimeError::new_err)?;
+                }
                 self.stream_handle = Some(handle);
                 self.is_playing = true;
                 Ok(())
@@ -1526,7 +1604,7 @@ impl AudioEngine {
         Ok(())
     }
 
-    #[pyo3(signature = (multi_loop, loaded, loop_starts, loop_ends, bindings=None))]
+    #[pyo3(signature = (multi_loop, loaded, loop_starts, loop_ends, bindings=None, pitch_rows=None))]
     pub fn set_input_runtime_state(
         &self,
         py: Python<'_>,
@@ -1535,6 +1613,7 @@ impl AudioEngine {
         loop_starts: Vec<f64>,
         loop_ends: Vec<Option<f64>>,
         bindings: Option<Vec<Option<Py<InputRuntimePadBinding>>>>,
+        pitch_rows: Option<Vec<Py<PyDict>>>,
     ) -> PyResult<()> {
         let runtime = self
             .input_runtime
@@ -1549,15 +1628,124 @@ impl AudioEngine {
             .iter()
             .map(|binding| binding.as_ref().map(|binding| binding.borrow(py)))
             .collect();
+        let bindings = borrowed.iter().map(|binding| binding.as_deref()).collect();
+        if let Some(rows) = pitch_rows {
+            runtime
+                .set_runtime_state_with_pitch(
+                    multi_loop,
+                    loaded,
+                    loop_starts,
+                    loop_ends,
+                    bindings,
+                    pitch_api::parse_rows(py, rows)?,
+                )
+                .map_err(PyValueError::new_err)
+        } else {
+            runtime
+                .set_runtime_state(multi_loop, loaded, loop_starts, loop_ends, bindings)
+                .map_err(PyValueError::new_err)
+        }
+    }
+
+    /// GUI selection enters the same Native ordering as mapped device selection.
+    pub fn select_input_pad(&self, sample_id: usize) -> PyResult<u64> {
+        let runtime = self
+            .input_runtime
+            .as_ref()
+            .ok_or_else(|| PyRuntimeError::new_err("Audio engine not initialized"))?;
+        match input_runtime_binding::capture(self, sample_id)? {
+            Some(binding) => runtime.set_selected_binding(&binding),
+            None => runtime.set_selected_pad(sample_id),
+        }
+        .map_err(|error| PyValueError::new_err(error.to_string()))
+    }
+
+    pub fn input_selected_projection(&self) -> PyResult<(u64, Option<usize>)> {
+        self.input_runtime
+            .as_ref()
+            .ok_or_else(|| PyRuntimeError::new_err("Audio engine not initialized"))?
+            .selected_projection()
+            .map_err(|error| PyValueError::new_err(error.to_string()))
+    }
+
+    #[pyo3(signature = (sample_id, action_key, received_at_ns=None))]
+    pub fn capture_pad_pitch_action(
+        &self,
+        sample_id: usize,
+        action_key: &str,
+        received_at_ns: Option<&Bound<'_, PyAny>>,
+    ) -> PyResult<CapturedPitchAction> {
+        let runtime = self
+            .input_runtime
+            .as_ref()
+            .ok_or_else(|| PyRuntimeError::new_err("Audio engine not initialized"))?;
+        let binding = input_runtime_binding::capture(self, sample_id)?
+            .ok_or_else(|| PyRuntimeError::new_err("pitch source is unavailable"))?;
+        let now = self.input_clock.capture_ns();
+        let timestamp =
+            validated_input_timestamp(parse_input_timestamp(received_at_ns)?, now).unwrap_or(now);
         runtime
-            .set_runtime_state(
-                multi_loop,
-                loaded,
-                loop_starts,
-                loop_ends,
-                borrowed.iter().map(|binding| binding.as_deref()).collect(),
-            )
-            .map_err(PyValueError::new_err)
+            .capture_gui_pitch(&binding, action_key, timestamp)
+            .map_err(|error| PyValueError::new_err(error.to_string()))
+    }
+
+    #[pyo3(signature = (id, start_s, end_s=None, volume=1.0, *, exclusive=false, received_at_ns=None, expected_source_generation=None))]
+    #[allow(clippy::too_many_arguments)]
+    pub fn capture_pad_start(
+        &self,
+        id: usize,
+        start_s: f64,
+        end_s: Option<f64>,
+        volume: f32,
+        exclusive: bool,
+        received_at_ns: Option<&Bound<'_, PyAny>>,
+        expected_source_generation: Option<u64>,
+    ) -> PyResult<CapturedPadStart> {
+        self._capture_pad_start(
+            id,
+            start_s,
+            end_s,
+            volume,
+            exclusive,
+            received_at_ns,
+            expected_source_generation,
+        )
+    }
+
+    #[pyo3(name = "prepare_captured_pad_start", signature = (captured, window=None))]
+    pub fn python_prepare_captured_pad_start(
+        &self,
+        captured: &CapturedPadStart,
+        window: Option<&resident_relocation::ResidentWindowTicket>,
+    ) -> PyResult<resident_relocation::ResidentWindowTicket> {
+        self._prepare_captured_pad_start(captured, window)
+    }
+
+    #[pyo3(signature = (captured, window=None))]
+    pub fn publish_pad_start(
+        &self,
+        captured: &CapturedPadStart,
+        window: Option<&resident_relocation::ResidentWindowTicket>,
+    ) -> PyResult<bool> {
+        self._publish_pad_start(captured, window)
+    }
+
+    #[pyo3(signature = (action_key, received_at_ns=None))]
+    pub fn capture_selected_pitch_action(
+        &self,
+        action_key: &str,
+        received_at_ns: Option<&Bound<'_, PyAny>>,
+    ) -> PyResult<CapturedPitchAction> {
+        let runtime = self
+            .input_runtime
+            .as_ref()
+            .ok_or_else(|| PyRuntimeError::new_err("Audio engine not initialized"))?;
+        let now = self.input_clock.capture_ns();
+        let timestamp =
+            validated_input_timestamp(parse_input_timestamp(received_at_ns)?, now).unwrap_or(now);
+        runtime
+            .capture_selected_pitch(action_key, timestamp)
+            .map_err(|error| PyValueError::new_err(error.to_string()))
     }
 
     /// Capture actual loaded source and current acknowledged timing for MIDI admission.
@@ -1617,8 +1805,8 @@ impl AudioEngine {
 
     /// Admit copy-first complete cold preparation in the fixed worker lane.
     #[allow(clippy::too_many_arguments)] // Fixed public source/load options preserve the existing API.
-    #[pyo3(signature = (id, path, run_analysis=None, restore_automatic=false, replace_assignment=false, resident_loop_start_s=None, resident_loop_end_s=None, resident_key_lock=false, source_intent="auto"))]
-    pub fn load_sample_async(
+    #[pyo3(name = "load_sample_async", signature = (id, path, run_analysis=None, restore_automatic=false, replace_assignment=false, resident_loop_start_s=None, resident_loop_end_s=None, resident_key_lock=false, source_intent="auto", initial_base_shift=None, initial_extra_shift=None, initial_key_lock=None))]
+    pub fn load_sample_async_with_pitch(
         &self,
         id: usize,
         path: String,
@@ -1629,11 +1817,20 @@ impl AudioEngine {
         resident_loop_end_s: Option<f64>,
         resident_key_lock: bool,
         source_intent: &str,
+        initial_base_shift: Option<&Bound<'_, PyAny>>,
+        initial_extra_shift: Option<&Bound<'_, PyAny>>,
+        initial_key_lock: Option<&Bound<'_, PyAny>>,
     ) -> PyResult<u64> {
         if id >= NUM_SAMPLES {
             return Err(PyValueError::new_err("id out of range"));
         }
-        cold_load::admit(
+        let initial_pitch = cold_load::parse_initial_pitch(
+            source_intent,
+            initial_base_shift,
+            initial_extra_shift,
+            initial_key_lock,
+        )?;
+        cold_load::admit_with_initial_pitch(
             self,
             id,
             path,
@@ -1647,6 +1844,7 @@ impl AudioEngine {
             )
             .map_err(PyValueError::new_err)?,
             source_intent,
+            initial_pitch,
         )
     }
 
@@ -2803,6 +3001,15 @@ impl AudioEngine {
         if let Some(trigger) = event.captured_trigger {
             dict.set_item("captured_trigger", trigger)?;
         }
+        if let Some(pitch) = event.captured_pitch {
+            dict.set_item("captured_pitch", pitch)?;
+        }
+        if let Some(reason) = event.pitch_rejection {
+            dict.set_item("pitch_rejection", reason.as_str())?;
+        }
+        if let Some(revision) = event.selection_revision {
+            dict.set_item("selection_revision", revision)?;
+        }
         if let Some(action_key) = event.action_key {
             dict.set_item("action_key", action_key)?;
         }
@@ -2815,6 +3022,80 @@ impl AudioEngine {
             .as_ref()
             .ok_or_else(|| PyRuntimeError::new_err("Audio engine not initialized"))?
             .trigger_captured_pad(trigger)
+    }
+
+    /// Publish the original immutable GUI/MIDI owner once. No Python payload enters RT.
+    pub fn publish_pitch_action(&self, action: &CapturedPitchAction) -> PyResult<bool> {
+        use pitch_actions::{PitchActionReject, PitchActionWork};
+        if !action.belongs_to(&self.input_runtime_ownership) {
+            return Err(PyValueError::new_err(
+                "pitch action belongs to another audio engine",
+            ));
+        }
+        if action.is_published() {
+            if action.state() == "rejected" {
+                return Err(PyValueError::new_err(
+                    action.reason().unwrap_or("pitch action rejected"),
+                ));
+            }
+            return Ok(true);
+        }
+        action
+            .control_guard(None)
+            .map_err(|reason| PyValueError::new_err(reason.as_str()))?;
+        let format = self
+            .stream_handle
+            .as_ref()
+            .map(|handle| (handle.output_sample_rate, handle.output_channels));
+        #[cfg(test)]
+        let format = format
+            .or(self.test_output_format)
+            .or_else(|| self.test_control_channels.as_ref().map(|_| (48_000, 1)));
+        let (sample_rate, channels) =
+            format.ok_or_else(|| PyRuntimeError::new_err("Audio engine not initialized"))?;
+        let work = match PitchActionWork::new(action.clone(), sample_rate, channels) {
+            Ok(work) => work,
+            Err(error) => {
+                if let Some(runtime) = &self.input_runtime {
+                    let _ =
+                        runtime.cancel_pitch_capture(action, PitchActionReject::PreparationFailed);
+                }
+                return Err(PyRuntimeError::new_err(error.to_string()));
+            }
+        };
+        let mut producer = self
+            .control_producer()?
+            .lock()
+            .map_err(|_| PyRuntimeError::new_err("Failed to acquire producer lock"))?;
+        if producer.slots() == 0 {
+            if let Some(runtime) = &self.input_runtime {
+                let _ = runtime.cancel_pitch_capture(action, PitchActionReject::Capacity);
+            }
+            return Err(PyRuntimeError::new_err("pitch action queue is full"));
+        }
+        action
+            .mark_published()
+            .map_err(|reason| PyValueError::new_err(reason.as_str()))?;
+        let publication = Arc::new(pitch_publication::PitchActionPublication::new(work));
+        if producer
+            .push(ControlMessage::PitchAction(publication))
+            .is_err()
+        {
+            if let Some(runtime) = &self.input_runtime {
+                let _ = runtime.cancel_pitch_capture(action, PitchActionReject::Capacity);
+            }
+            return Err(PyRuntimeError::new_err("pitch action queue is full"));
+        }
+        Ok(true)
+    }
+
+    /// Cancel only this action. Later requested choices and completed attacks remain owned.
+    pub fn cancel_pitch_action(&self, action: &CapturedPitchAction) -> PyResult<bool> {
+        self.input_runtime
+            .as_ref()
+            .ok_or_else(|| PyRuntimeError::new_err("Audio engine not initialized"))?
+            .cancel_pitch_capture(action, pitch_actions::PitchActionReject::StaleContent)
+            .map_err(|reason| PyValueError::new_err(reason.as_str()))
     }
 
     pub fn prepare_captured_input_trigger(
@@ -2847,41 +3128,18 @@ impl AudioEngine {
         received_at_ns: Option<&Bound<'_, PyAny>>,
         expected_source_generation: Option<u64>,
     ) -> PyResult<()> {
-        let received_at_ns = validated_input_timestamp(
-            parse_input_timestamp(received_at_ns)?,
-            self.input_clock.capture_ns(),
-        );
-        if id >= NUM_SAMPLES {
-            return Err(PyValueError::new_err("id out of range"));
-        }
-
-        if !volume.is_finite() || !(VOLUME_MIN..=VOLUME_MAX).contains(&volume) {
-            return Err(PyValueError::new_err("volume out of range"));
-        }
-        let _requests = self
-            .pad_request_ids
-            .lock()
-            .map_err(|_| PyRuntimeError::new_err("request lock poisoned"))?;
-        input_runtime_binding::validate_expected_source_generation_under_request_lock(
-            self,
+        let captured = self._capture_pad_start(
             id,
+            0.0,
+            None,
+            volume,
+            false,
+            received_at_ns,
             expected_source_generation,
         )?;
-        let mut producer_guard = self
-            .control_producer()?
-            .lock()
-            .map_err(|_| PyRuntimeError::new_err("Failed to acquire producer lock"))?;
-
-        producer_guard
-            .push(ControlMessage::PlaySample {
-                id,
-                volume,
-                received_at_ns,
-                expected_source_generation,
-            })
-            .map_err(|_| PyRuntimeError::new_err("Failed to send PlaySample - buffer may be full"))
+        self.publish_pad_start_work(&captured, None, true)
+            .map(|_| ())
     }
-
     /// Stop all active voices and play a sample as one audio-thread command.
     #[pyo3(name = "play_sample_exclusive", signature = (id, volume, *, received_at_ns=None, expected_source_generation=None))]
     pub fn play_sample_exclusive_with_source(
@@ -2891,44 +3149,18 @@ impl AudioEngine {
         received_at_ns: Option<&Bound<'_, PyAny>>,
         expected_source_generation: Option<u64>,
     ) -> PyResult<()> {
-        let received_at_ns = validated_input_timestamp(
-            parse_input_timestamp(received_at_ns)?,
-            self.input_clock.capture_ns(),
-        );
-        if id >= NUM_SAMPLES {
-            return Err(PyValueError::new_err("id out of range"));
-        }
-
-        if !volume.is_finite() || !(VOLUME_MIN..=VOLUME_MAX).contains(&volume) {
-            return Err(PyValueError::new_err("volume out of range"));
-        }
-
-        let _requests = self
-            .pad_request_ids
-            .lock()
-            .map_err(|_| PyRuntimeError::new_err("request lock poisoned"))?;
-        input_runtime_binding::validate_expected_source_generation_under_request_lock(
-            self,
+        let captured = self._capture_pad_start(
             id,
+            0.0,
+            None,
+            volume,
+            true,
+            received_at_ns,
             expected_source_generation,
         )?;
-        let mut producer_guard = self
-            .control_producer()?
-            .lock()
-            .map_err(|_| PyRuntimeError::new_err("Failed to acquire producer lock"))?;
-
-        producer_guard
-            .push(ControlMessage::PlaySampleExclusive {
-                id,
-                volume,
-                received_at_ns,
-                expected_source_generation,
-            })
-            .map_err(|_| {
-                PyRuntimeError::new_err("Failed to send PlaySampleExclusive - buffer may be full")
-            })
+        self.publish_pad_start_work(&captured, None, true)
+            .map(|_| ())
     }
-
     /// Stop playback of all active voices.
     pub fn stop_all(&mut self) -> PyResult<()> {
         let handle = self
@@ -2977,6 +3209,48 @@ impl AudioEngine {
 
     /// Admit one controller-owned global launch against actual native current bindings.
     #[pyo3(signature = (entries, *, received_at_ns=None))]
+    pub fn capture_global_start(
+        &self,
+        py: Python<'_>,
+        entries: Vec<(
+            Py<InputRuntimePadBinding>,
+            f64,
+            Option<f64>,
+            Option<Py<resident_relocation::ResidentWindowTicket>>,
+        )>,
+        received_at_ns: Option<&Bound<'_, PyAny>>,
+    ) -> PyResult<CapturedGlobalStart> {
+        let now = self.input_clock.capture_ns();
+        let timestamp =
+            validated_input_timestamp(parse_input_timestamp(received_at_ns)?, now).unwrap_or(now);
+        let bindings: Vec<_> = entries
+            .iter()
+            .map(|(binding, _, _, _)| binding.borrow(py))
+            .collect();
+        let windows: Vec<_> = entries
+            .iter()
+            .map(|(_, _, _, window)| window.as_ref().map(|window| window.borrow(py)))
+            .collect();
+        let entries = bindings
+            .iter()
+            .zip(entries.iter())
+            .zip(windows.iter())
+            .map(|((binding, (_, start, end, _)), window)| {
+                (&**binding, *start, *end, window.as_deref())
+            })
+            .collect();
+        captured_global_start::capture(self, entries, timestamp)
+    }
+
+    /// Publish only the original retained group; None means genuine readiness is pending.
+    pub fn publish_captured_global_start(
+        &self,
+        captured: &CapturedGlobalStart,
+    ) -> PyResult<Option<GlobalPlaybackBatchTicket>> {
+        captured_global_start::publish(self, captured)
+    }
+
+    #[pyo3(signature = (entries, *, received_at_ns=None))]
     pub fn start_global_playback_batch(
         &self,
         py: Python<'_>,
@@ -2987,10 +3261,7 @@ impl AudioEngine {
             parse_input_timestamp(received_at_ns)?,
             self.input_clock.capture_ns(),
         );
-        let handle = self
-            .stream_handle
-            .as_ref()
-            .ok_or_else(|| PyRuntimeError::new_err("Audio engine not initialized"))?;
+        let producer = self.control_producer()?;
         let bindings: Vec<_> = entries
             .iter()
             .map(|(binding, _, _)| binding.borrow(py))
@@ -3000,7 +3271,7 @@ impl AudioEngine {
             .zip(entries.iter())
             .map(|(binding, (_, start, end))| (&**binding, *start, *end))
             .collect();
-        global_playback_batch::enqueue(self, &handle.producer, entries, true, received_at_ns)
+        global_playback_batch::enqueue(self, producer, entries, true, received_at_ns)
     }
 
     /// Stop only after every actual voice is covered by matching current native authority.
@@ -3015,16 +3286,13 @@ impl AudioEngine {
             parse_input_timestamp(received_at_ns)?,
             self.input_clock.capture_ns(),
         );
-        let handle = self
-            .stream_handle
-            .as_ref()
-            .ok_or_else(|| PyRuntimeError::new_err("Audio engine not initialized"))?;
+        let producer = self.control_producer()?;
         let bindings: Vec<_> = bindings.iter().map(|binding| binding.borrow(py)).collect();
         let entries = bindings
             .iter()
             .map(|binding| (&**binding, 0.0, None))
             .collect();
-        global_playback_batch::enqueue(self, &handle.producer, entries, false, received_at_ns)
+        global_playback_batch::enqueue(self, producer, entries, false, received_at_ns)
     }
 
     /// Set the global volume multiplier.
@@ -4490,6 +4758,7 @@ mod tests {
                 loop_region: None,
                 resident_cancelled: None,
                 incoming_defaults: None,
+                initial_pitch: cold_load::SourcePitchInitialization::FreshNeutral,
                 intent: None,
             },
         );

@@ -9,6 +9,7 @@
 use super::*;
 use crate::audio_engine::constant_timing;
 use crate::audio_engine::constants::NUM_SAMPLES;
+use crate::audio_engine::content_placement::ContentKey;
 use crate::audio_engine::input_mapping::InputRuntime;
 use crate::audio_engine::input_runtime_binding::{self, InputRuntimePadBinding};
 use crate::audio_engine::resident_relocation::{
@@ -29,6 +30,50 @@ struct PlayingFirstPad {
     first_binding: InputRuntimePadBinding,
     _first_saved: crate::audio_engine::project_assets::ProjectAssetLease,
     _second_original: crate::audio_engine::project_assets::ProjectAssetLease,
+}
+
+fn assert_original_feedback(harness: &Harness, id: usize, key: ContentKey, kind: u8) {
+    let event = harness
+        .callback
+        .feedback
+        .events
+        .iter()
+        .find(|event| {
+            matches!(event, AudioMessage::ContentFeedback { id: observed, kind: observed_kind, .. }
+            if *observed == id && *observed_kind == kind)
+        })
+        .expect("actual original-content feedback");
+    let AudioMessage::ContentFeedback {
+        owner,
+        cell,
+        lifetime,
+        transport_revision,
+        value,
+        ..
+    } = event
+    else {
+        unreachable!("selected original-content feedback");
+    };
+    let ownership = &harness.engine.input_runtime_ownership;
+    let binding = input_runtime_binding::capture(&harness.engine, id)
+        .unwrap()
+        .unwrap();
+    assert!(binding.current());
+    assert_eq!(binding.binding.placement.unwrap().content_key(), Some(key));
+    assert_eq!(*owner, ownership.owner_identity().diagnostic());
+    assert_eq!(*cell, key.cell().index());
+    assert_eq!(*lifetime, key.lifetime());
+    assert_eq!(
+        *transport_revision,
+        ownership
+            .transport_intent_for_cell(key.cell())
+            .load(Ordering::Acquire)
+    );
+    assert_eq!(*value, 0.0);
+    assert_eq!(
+        harness.engine._resolve_pad_feedback(event).unwrap(),
+        Some(id)
+    );
 }
 
 impl PlayingFirstPad {
@@ -155,6 +200,7 @@ impl PlayingFirstPad {
             InputClock::new(),
             harness.engine.input_runtime_ownership.clone(),
         );
+        runtime.set_render_format(RATE, 2).unwrap();
         let mut loaded = vec![false; NUM_SAMPLES];
         let mut native_bindings = vec![None; NUM_SAMPLES];
         let mut starts = vec![0.0; NUM_SAMPLES];
@@ -170,15 +216,22 @@ impl PlayingFirstPad {
             .set_runtime_state(true, loaded, starts, ends, native_bindings)
             .unwrap();
         assert!(runtime.trigger_pad(0, 123));
-        assert!(matches!(
-            harness.consumer.peek().unwrap(),
-            ControlMessage::TriggerInputPad {
-                id: 0,
-                exclusive: false,
-                ..
-            }
-        ));
-        assert_eq!(harness.callback.drain(&mut harness.consumer), 1);
+        let ControlMessage::CapturePadStartTarget(origin) = harness.consumer.peek().unwrap() else {
+            panic!("original PAD1 target must precede its prepared start");
+        };
+        assert_eq!(origin.control_guard().unwrap().id, 0);
+        assert!(!origin.exclusive());
+        assert_eq!(origin.received_timestamp(), 123);
+        assert_eq!(
+            origin.content_key(),
+            bindings[0]
+                .binding
+                .placement
+                .unwrap()
+                .content_key()
+                .unwrap()
+        );
+        assert_eq!(harness.callback.drain(&mut harness.consumer), 2);
         let first_voice = harness
             .callback
             .mixer
@@ -379,14 +432,13 @@ fn genuine_pad2_start_before_publish_rejects_own_pair_without_ui_start_feedback(
     let selected = selection(&pair);
     let _saved = rig.harness.save(&pair);
     assert!(rig.runtime.trigger_pad(1, 456));
-    assert!(matches!(
-        rig.harness.consumer.peek().unwrap(),
-        ControlMessage::TriggerInputPad {
-            id: 1,
-            exclusive: false,
-            ..
-        }
-    ));
+    let ControlMessage::CapturePadStartTarget(origin) = rig.harness.consumer.peek().unwrap() else {
+        panic!("original PAD2 target must precede its prepared start");
+    };
+    assert_eq!(origin.control_guard().unwrap().id, 1);
+    assert!(!origin.exclusive());
+    assert_eq!(origin.received_timestamp(), 456);
+    let original_key = origin.content_key();
     assert!(rig.harness.callback.feedback.events.is_empty());
     assert!(
         rig.harness
@@ -401,15 +453,8 @@ fn genuine_pad2_start_before_publish_rejects_own_pair_without_ui_start_feedback(
         .publish_stem_pair_with_producer(&pair, &ticket, &rig.harness.producer)
         .unwrap();
     assert_eq!(ticket.publication_status(), "pending");
-    assert_eq!(rig.harness.callback.drain(&mut rig.harness.consumer), 2);
-    assert!(
-        rig.harness
-            .callback
-            .feedback
-            .events
-            .iter()
-            .any(|event| { matches!(event, AudioMessage::SampleStarted { id: 1 }) })
-    );
+    assert_eq!(rig.harness.callback.drain(&mut rig.harness.consumer), 3);
+    assert_original_feedback(&rig.harness, 1, original_key, 1);
     assert!(
         rig.harness
             .callback
@@ -429,14 +474,7 @@ fn genuine_pad2_start_before_publish_rejects_own_pair_without_ui_start_feedback(
         Some(1),
     ));
     assert_eq!(rig.harness.callback.drain(&mut rig.harness.consumer), 1);
-    assert!(
-        rig.harness
-            .callback
-            .feedback
-            .events
-            .iter()
-            .any(|event| { matches!(event, AudioMessage::SampleStopped { id: 1 }) })
-    );
+    assert_original_feedback(&rig.harness, 1, original_key, 2);
     rig.reprepare_after_settlement(&ticket, &selected);
 }
 
@@ -809,6 +847,8 @@ assets.sync_assignments()
 session = SessionState()
 controller = StemController(project, session, audio, persistence.mark_dirty, asset_lifecycle=assets)
 controller.restore_stem_cache_from_project_state()
+restored_entry = project.stem_cache[1]
+assert restored_entry is not None and restored_entry.available is False
 assert controller.publish_restored_stem_cache_if_available(1)
 assert not controller.stems_available(1)
 "#,
@@ -899,14 +939,27 @@ assert controller.set_stem_mix_mode(1, 'all_stems')
             r#"
 assert ticket.publication_status() == 'accepted'
 controller.on_frame_render()
-assert controller.stems_available(1) and project.stem_cache[1].available
+# Restored disk intent remains unchanged; only the fresh engine's own current
+# registration and component ACK establish availability, never persisted flags.
+assert project.stem_cache[1] is restored_entry
+assert restored_entry.available is False
+native_selection = controller._committed_residency._selections[1]
+assert native_selection.entry is restored_entry and native_selection.ticket is ticket
+assert ticket.is_current() and ticket.error() is None
+assert controller._committed_residency.registered_selection_current(1, restored_entry)
+native_receipt = native_selection.receipt
+assert native_receipt is not None and native_receipt.is_current()
+assert native_receipt.residency_status() == 'accepted' and native_receipt.error() is None
+assert native_receipt.effective_mode_status() == 'waiting'
+assert controller._committed_residency.component_residency_current(1)
+assert controller.stems_available(1)
 assert audio.worker_call_count() == 1 and audio.prepared_only_on_pool_threads()
 assert project.stem_cache[1].pair == selection
 assert project.pad_content[1].instance_id == '2' * 32
 persistence.flush()
 reopened = ProjectPersistence.from_config_path(Path(config_path))
 assert reopened.load_error is None and reopened.project.stem_cache[1].pair == selection
-assert reopened.project.stem_cache[1].available
+assert reopened.project.stem_cache[1].available is False
 "#,
         )
     });
@@ -1200,13 +1253,25 @@ assert not controller.stems_available(1)
     // PAD215 uses the first material's already existing pair. Its genuine public
     // restore cannot create or retain any second-material derivative reader.
     public_restore_215_ack(&engine, &mut callback, &mut consumer, &locals);
-    // Additional private legacy kernel retains the typed timing rejection and
-    // retry protocol independently from public restore's committed route.
+    // This private new-publication kernel retains the typed timing rejection and
+    // retry protocol independently from public restore's committed route. The
+    // restored candidate itself must follow Register, not PublishPreparedStems.
+    // Capture a distinct publication intent with the same immutable disk pair;
+    // the genuine pool job still owns source/timing checks and publication.
     Python::attach(|py| {
         worker_python(
             py,
             locals.bind(py),
-            "assert controller._publish_restored_stem_cache(1)\nassert 1 in controller._pair_preparations.pending",
+            r#"
+publication_entry = project.stem_cache[1].model_copy(deep=True)
+assert publication_entry is not project.stem_cache[1]
+assert publication_entry.pair == project.stem_cache[1].pair
+publication_source = controller._capture_source_ticket(1, publication_entry.source_version)
+assert controller._queue_stem_publication(1, publication_entry, publication_source)
+publication_request = controller._pair_preparations.pending[1]
+assert publication_request.previous_entry is project.stem_cache[1]
+assert not publication_request.verify_saved_selection
+"#,
         )
     });
     wait_until(|| {

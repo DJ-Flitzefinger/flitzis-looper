@@ -186,6 +186,9 @@ pub(crate) struct InputRuntimeOwnership {
     content_lifetimes: [AtomicU64; NUM_SAMPLES],
     copy_parameter_epochs: [AtomicU64; NUM_SAMPLES],
     key_lock: [KeyLockStatusSlot; NUM_SAMPLES],
+    endpoint_selection_revision: AtomicU64,
+    endpoint_selection_cell: AtomicUsize,
+    endpoint_selection_lifetime: AtomicU64,
     placement: ContentPlacement,
 }
 
@@ -212,12 +215,43 @@ impl Default for InputRuntimeOwnership {
             content_lifetimes: std::array::from_fn(|_| AtomicU64::new(0)),
             copy_parameter_epochs: std::array::from_fn(|_| AtomicU64::new(0)),
             key_lock: std::array::from_fn(|_| KeyLockStatusSlot::default()),
+            endpoint_selection_revision: AtomicU64::new(0),
+            endpoint_selection_cell: AtomicUsize::new(NUM_SAMPLES),
+            endpoint_selection_lifetime: AtomicU64::new(0),
             placement: ContentPlacement::new(),
         }
     }
 }
 
 impl InputRuntimeOwnership {
+    /// Existing serialized selection writers publish preparation interest only.
+    /// Zero marks an in-progress projection; the callback never waits for it.
+    pub(crate) fn publish_endpoint_selection(&self, revision: u64, key: Option<ContentKey>) {
+        self.endpoint_selection_revision.store(0, Ordering::SeqCst);
+        self.endpoint_selection_cell.store(
+            key.map_or(NUM_SAMPLES, |key| key.cell().index()),
+            Ordering::SeqCst,
+        );
+        self.endpoint_selection_lifetime
+            .store(key.map_or(0, ContentKey::lifetime), Ordering::SeqCst);
+        self.endpoint_selection_revision
+            .store(revision, Ordering::SeqCst);
+    }
+
+    /// Owner identity is implicit in this live table. Scalar equality grants no permission.
+    pub(crate) fn endpoint_selection(&self) -> Option<(u64, Option<ContentKey>)> {
+        let revision = self.endpoint_selection_revision.load(Ordering::SeqCst);
+        if revision == 0 {
+            return None;
+        }
+        let cell = self.endpoint_selection_cell.load(Ordering::SeqCst);
+        let lifetime = self.endpoint_selection_lifetime.load(Ordering::SeqCst);
+        let key = ContentCell::from_index(cell)
+            .and_then(|cell| ContentKey::new(self.owner_identity(), cell, lifetime));
+        (self.endpoint_selection_revision.load(Ordering::SeqCst) == revision)
+            .then_some((revision, key))
+    }
+
     pub(crate) fn callback_content_key(&self, id: usize) -> Option<ContentKey> {
         let cell = self.callback_cell(id)?;
         ContentKey::new(
@@ -899,8 +933,19 @@ impl InputRuntimeOwnership {
         placement: SlotSnapshot,
         kind: LaunchWriteKind,
     ) -> Result<PreparedLaunchWrite, String> {
+        self.prepare_launch_write_fixed(placement, kind)
+            .map_err(|error| error.to_string())
+    }
+
+    /// Callback counterpart: errors carry only fixed enum values and never allocate.
+    pub(crate) fn prepare_launch_write_fixed(
+        &self,
+        placement: SlotSnapshot,
+        kind: LaunchWriteKind,
+    ) -> Result<PreparedLaunchWrite, super::content_placement::PlacementError> {
+        use super::content_placement::PlacementError;
         if !self.slot_snapshot_current(placement) {
-            return Err("launch placement changed or is pending".into());
+            return Err(PlacementError::Pending);
         }
         let cell = placement.cell().index();
         let previous_revision = self.launch_revisions[cell].load(Ordering::Acquire);
@@ -910,7 +955,7 @@ impl InputRuntimeOwnership {
         let original_transport = self.transport_intents[cell].load(Ordering::Acquire);
         let next_transport = original_transport
             .checked_add(1)
-            .ok_or("transport intent exhausted")?;
+            .ok_or(PlacementError::ObservationGenerationExhausted)?;
         if kind == LaunchWriteKind::Admit
             && (previous_revision == u64::MAX
                 || original_hold != 0
@@ -918,7 +963,7 @@ impl InputRuntimeOwnership {
                 || self.copy_reservation(placement.slot()) != 0
                 || self.pair_reservation(placement.slot()) != 0)
         {
-            return Err("launch permission is unavailable or exhausted".into());
+            return Err(PlacementError::CapacityUnavailable);
         }
         Ok(PreparedLaunchWrite {
             placement,

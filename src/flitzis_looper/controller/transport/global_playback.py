@@ -11,7 +11,12 @@ if TYPE_CHECKING:
     from collections.abc import Callable
 
     from flitzis_looper.controller.transport import TransportController
-    from flitzis_looper_audio import GlobalPlaybackBatchTicket, InputRuntimePadBinding
+    from flitzis_looper_audio import (
+        CapturedGlobalStart,
+        GlobalPlaybackBatchTicket,
+        InputRuntimePadBinding,
+        ResidentWindowTicket,
+    )
 
 
 @dataclass(frozen=True)
@@ -21,12 +26,13 @@ class _PendingGlobalBatch:
     restore_revision: int
     start: bool = False
     start_ids: frozenset[int] = frozenset()
+    capture: CapturedGlobalStart | None = None
 
 
 @dataclass(frozen=True)
 class _DeferredStart:
-    sources: tuple[tuple[int, tuple[object, ...], object], ...]
-    received_at_ns: int | None
+    capture: CapturedGlobalStart
+    sample_ids: frozenset[int]
     restore_revision: int
     deadline: float
     attempts: int = 0
@@ -56,7 +62,7 @@ class GlobalPlaybackController:
     def forget_restore(self) -> None:
         """Supersede remembered global intent after another playback gesture."""
         self._restore_revision += 1
-        self._deferred = None
+        self._cancel_deferred()
         self._session.global_stop_engaged = False
         self._session.global_stop_restore_sample_ids = set()
 
@@ -69,16 +75,25 @@ class GlobalPlaybackController:
                 self._pending, restore_ids=self._pending.restore_ids - {sample_id}
             )
 
+    def _pair_publication_pending(self) -> bool:
+        deferred_ids = getattr(self._transport, "_pair_deferred_sample_ids", ())
+        if self._pending is not None:
+            starts = self._pending.start_ids
+            if self._pending.capture is not None:
+                starts = frozenset(self._pending.capture.diagnostic_slots()) or starts
+            if (self._pending.restore_ids | starts).intersection(deferred_ids):
+                return True
+        if self._deferred is not None:
+            slots = (
+                frozenset(self._deferred.capture.diagnostic_slots()) or self._deferred.sample_ids
+            )
+            if slots.intersection(deferred_ids):
+                return True
+        return False
+
     def poll(self) -> None:
         """Observe completion without projecting pending/rejected work as effective."""
-        deferred_ids = getattr(self._transport, "_pair_deferred_sample_ids", ())
-        if self._pending is not None and (
-            self._pending.restore_ids | self._pending.start_ids
-        ).intersection(deferred_ids):
-            return
-        if self._deferred is not None and any(
-            sample_id in deferred_ids for sample_id, _, _ in self._deferred.sources
-        ):
+        if self._pair_publication_pending():
             return
         if self._pending is None:
             self._poll_deferred()
@@ -89,6 +104,17 @@ class GlobalPlaybackController:
         if status == "pending":
             return
         self._pending = None
+        if pending.start and status != "accepted":
+            ids = (
+                frozenset(pending.capture.diagnostic_slots())
+                if pending.capture is not None
+                else pending.start_ids
+            ) or pending.start_ids
+            error = (
+                pending.capture.reason() if pending.capture is not None else None
+            ) or "global playback start rejected"
+            for sample_id in ids:
+                self._transport.residency.report_launch_error(sample_id, error)
         if status != "accepted" or pending.restore_revision != self._restore_revision:
             return
         self._session.global_stop_restore_sample_ids = set(pending.restore_ids)
@@ -97,34 +123,15 @@ class GlobalPlaybackController:
     def _poll_deferred(self) -> None:
         deferred = self._deferred
         if deferred is None or deferred.restore_revision != self._restore_revision:
-            self._deferred = None
+            self._cancel_deferred()
             return
         if time.monotonic() >= deferred.deadline:
             self._retire_deferred(deferred, "global playback readiness deadline expired")
             return
-        if any(not self._incoming_target_ready(sample_id) for sample_id, _, _ in deferred.sources):
-            self._deferred = None
+        if deferred.capture.state() == "rejected":
+            self._retire_deferred(deferred, deferred.capture.reason() or "global start rejected")
             return
-        entries: list[tuple[InputRuntimePadBinding, float, float | None]] = []
-        for sample_id, signature, accepted in deferred.sources:
-            status, error = self._transport.residency.status(sample_id)
-            if error and status is None:
-                self._deferred = None
-                return
-            timing = self._transport.bpm.current_timing(sample_id)
-            snapshot = capture_current_pad_binding(self._audio, sample_id, timing=timing)
-            if (
-                snapshot is None
-                or snapshot.source_signature[:9] != signature
-                or snapshot.accepted_timing != accepted
-            ):
-                self._deferred = None
-                return
-            if status is not None:
-                return
-            start_s, end_s = self._transport.loop.effective_region(sample_id, timing=timing)
-            entries.append((snapshot.binding, start_s, end_s))
-        self._admit_start(entries, deferred, from_poll=True)
+        self._admit_start(deferred, from_poll=True)
 
     def _incoming_target_ready(self, sample_id: int) -> bool:
         try:
@@ -136,45 +143,60 @@ class GlobalPlaybackController:
 
     def _retire_deferred(self, deferred: _DeferredStart, error: str) -> None:
         self._deferred = None
-        for sample_id, _, _ in deferred.sources:
+        deferred.capture.cancel()
+        for sample_id in set(deferred.capture.diagnostic_slots()) or deferred.sample_ids:
             self._transport.residency.report_launch_error(sample_id, error)
+
+    def _cancel_deferred(self) -> frozenset[int]:
+        deferred = self._deferred
+        self._deferred = None
+        if deferred is None:
+            return frozenset()
+        ids = frozenset(deferred.capture.diagnostic_slots())
+        deferred.capture.cancel()
+        return ids
 
     def _admit_start(
         self,
-        entries: list[tuple[InputRuntimePadBinding, float, float | None]],
         deferred: _DeferredStart,
         *,
         from_poll: bool = False,
     ) -> None:
         try:
-            ticket = self._audio.start_global_playback_batch(
-                entries, received_at_ns=deferred.received_at_ns
-            )
+            ticket = self._audio.publish_captured_global_start(deferred.capture)
         except (RuntimeError, ValueError) as error:
             attempts = deferred.attempts + 1
-            pressure = isinstance(error, RuntimeError) and "buffer may be full" in str(error)
+            pressure = isinstance(error, RuntimeError) and (
+                "queue is full" in str(error) or "buffer may be full" in str(error)
+            )
             if not from_poll and not pressure:
+                self._retire_deferred(deferred, str(error))
                 raise
             if pressure and attempts < 8 and time.monotonic() < deferred.deadline:
                 self._deferred = replace(deferred, attempts=attempts)
             else:
                 self._retire_deferred(deferred, str(error))
         else:
+            if ticket is None:
+                self._deferred = deferred
+                return
             self._deferred = None
-            for sample_id, _, _ in deferred.sources:
+            ids = frozenset(deferred.capture.diagnostic_slots())
+            for sample_id in ids:
                 self._transport.residency.report_launch_error(sample_id, None)
             self._pending = _PendingGlobalBatch(
                 ticket,
                 frozenset(),
                 deferred.restore_revision,
                 start=True,
-                start_ids=frozenset(sample_id for sample_id, _, _ in deferred.sources),
+                start_ids=ids,
+                capture=deferred.capture,
             )
 
     def start(self, *, received_at_ns: int | None = None) -> None:
         """Start/restart the entire remembered or playing set with one input time."""
         received_at_ns = validate_input_timestamp_ns(received_at_ns)
-        self._deferred = None
+        self._cancel_deferred()
         self.poll()
         if self._pending is not None:
             return
@@ -189,42 +211,41 @@ class GlobalPlaybackController:
             return
         if any(not self._incoming_target_ready(sample_id) for sample_id in sorted(target_ids)):
             return
-        entries: list[tuple[InputRuntimePadBinding, float, float | None]] = []
-        deferred_sources: list[tuple[int, tuple[object, ...], object]] = []
-        waiting = False
+        entries: list[
+            tuple[InputRuntimePadBinding, float, float | None, ResidentWindowTicket | None]
+        ] = []
         for sample_id in sorted(target_ids):
-            timing = self._transport.bpm.current_timing(sample_id)
-            snapshot = capture_current_pad_binding(self._audio, sample_id, timing=timing)
-            if snapshot is None:
+            try:
+                entry = self._transport.capture_global_start_entry(sample_id)
+            except ValueError as error:
+                for target in target_ids:
+                    self._transport.residency.report_launch_error(target, str(error))
                 return
-            deferred_sources.append((
-                sample_id,
-                snapshot.source_signature[:9],
-                snapshot.accepted_timing,
-            ))
-            waiting |= self._transport.residency.status(sample_id)[0] is not None
-            start_s, end_s = self._transport.loop.effective_region(sample_id, timing=timing)
-            entries.append((snapshot.binding, start_s, end_s))
+            if entry is None:
+                return
+            entries.append(entry)
+        capture = self._audio.capture_global_start(entries, received_at_ns=received_at_ns)
         deferred = _DeferredStart(
-            tuple(deferred_sources),
-            received_at_ns,
+            capture,
+            frozenset(target_ids),
             self._restore_revision,
             time.monotonic() + 30.0,
         )
-        if waiting:
-            self._deferred = deferred
-            return
-        self._admit_start(entries, deferred)
+        self._admit_start(deferred)
 
     def stop(self, *, remember: bool, received_at_ns: int | None = None) -> None:
         """Stop the complete active/paused set after all current permits agree."""
         received_at_ns = validate_input_timestamp_ns(received_at_ns)
-        self._deferred = None
+        deferred_ids = self._cancel_deferred()
         prior_start_ids = (
-            self._pending.start_ids
-            if self._pending is not None and self._pending.start
-            else frozenset()
-        ) | self._transport.residency.cancel_all_launches()
+            (
+                self._pending.start_ids
+                if self._pending is not None and self._pending.start
+                else frozenset()
+            )
+            | self._transport.residency.cancel_all_launches()
+            | deferred_ids
+        )
         self.poll()
         if self._pending is not None:
             if not self._pending.start:

@@ -316,9 +316,10 @@ per-path acoustic fidelity remain separate acceptance gates.
 ## Ordered implementation slices
 
 Each row is a bounded implementation/validation handoff, not a single broad rewrite. Do not mark
-a row complete from documentation or mocked inference alone. Run full project checks for each
-implemented Rust/audio/persistence/shared-contract slice, and strict validation of its affected
-changes. Keep generated/private evidence outside the repository.
+a row complete from documentation or mocked inference alone. During implementation use focused
+checks; at a coherent product boundary run the impacted integrated checks and strict validation
+of affected changes. Required full integration and final acceptance gates remain intact.
+Keep generated/private evidence outside the repository.
 
 | Slice | Concrete output and dependencies | Acceptance and rollback |
 | --- | --- | --- |
@@ -327,7 +328,7 @@ changes. Keep generated/private evidence outside the repository.
 | B2: accepted new default | Freeze local annotation/quality/resource criteria before tuning; measure raw Beat This on all available benchmark classes, repair qm comparator only as needed; switch NEW automatic/manual analysis after gates. | Published quality/error/uncertainty report, no unflagged count errors in accepted regions, corrected-grid effort and critical downbeats assessed; old projects untouched. Rollback selects legacy backend explicitly and preserves provenance. |
 | B3: shared map | Versioned raw/accepted records, precise anchors, monotone B/S with bounded lookup, explicit gaps/beat units, legacy scalar mode and persistence. Can be built against exact fixtures in parallel with B1. | Identity/restore/round-trip/long-loop/rate tests; no silent variable playback activation. Scalar mode remains intact. |
 | B4: editor and correction | Same B/S for dynamic grid, snap/auto-loop and display; source-sample manual anchors, count/downbeat repair, optional separately evaluated refinement, revision/uncertainty display. Depends on B3. | Editor and engine diagnostic coordinates match; old markers/master remain stable. Displayed map is explicitly not yet live. |
-| B5: independent time/pitch proof | Implement diagnostic/core contract for r and k, test-only nonzero k; compare Rubber Band routes and state transitions on exact and accepted maps. Depends on map semantics, not completion of B4 UI. | Matrix below and original acoustic gates; document supported joint envelope, measured readiness and chosen render architecture. No production KEY UI or live SYNC yet. |
+| B5: independent time/pitch proof | The core r/k and captured nonzero-pitch path now supports the early Key engineering surface; compare the one-pass Rubber Band route and state transitions on exact and accepted maps. Depends on map semantics, not completion of B4 UI. | Matrix below and original acoustic gates; document supported joint envelope, measured readiness and chosen render architecture. Early Key controls do not close B5 or activate continuous live SYNC. |
 | B6: live mapped ownership | Prepared map/trajectory/state publication, bounded source/DSP progression, pitch-ready revisions, per-path output alignment, rollback and deferred/rejected updates. Depends on B5, then device evidence. | No stale state, callback violations, accumulating phase or concealed per-pad delay; full-mix/stems and mode transitions pass. Keep activation guarded until evidence passes. |
 | B7: unified entry and SYNC | One captured-input launch policy plus independent continuous SYNC; all four Quantize/SYNC combinations, preserved phi, tempo changes, stop/pause/seek/retrigger/cancel. Depends on B6 and explicit remaining launch UX choices. | Source and audible phase tests across MIDI/native/fallback/keyboard/mouse, headroom/lateness/loops; no 500-ms reset. Old launch path remains available until accepted. |
 | B8-E: guarded engineering | Existing optimization/stress/Human-ready packet, future-k diagnostics, docs/UI/portability. | Hardware-free evidence does not close B6/B8 device release; genuine H-LIVE remains required. |

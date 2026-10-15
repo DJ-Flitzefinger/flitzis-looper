@@ -25,7 +25,11 @@ from flitzis_looper.models import (
 from flitzis_looper.stem_intent import PadStemIntent
 from flitzis_looper_audio import AudioEngine
 from tests.conftest import write_mono_pcm16_wav
-from tests.flitzis_looper.conftest import current_timing_metadata, write_test_stem_marker
+from tests.flitzis_looper.conftest import (
+    FakeInputRuntimePadBinding,
+    current_timing_metadata,
+    write_test_stem_marker,
+)
 
 if TYPE_CHECKING:
     from pathlib import Path
@@ -436,6 +440,9 @@ def test_restored_admission_failure_retains_assignment_and_timing_authority(
         restore_automatic=True,
         replace_assignment=True,
         source_intent="restore",
+        initial_base_shift=0,
+        initial_extra_shift=0,
+        initial_key_lock=False,
     )
     audio_engine_mock.set_pad_timing_intent.assert_not_called()
     audio_engine_mock.set_pad_bpm.assert_not_called()
@@ -974,8 +981,12 @@ def test_new_source_invalidates_predecessor_analysis_and_gates_generic_timing_un
     controller.loader.load_sample_async(0, "replacement.wav")
     audio_engine_mock.waveform_source_identity.return_value = (17, "b" * 64, 48_000 * 32, 48_000)
     audio_engine_mock.current_input_runtime_pad_binding.side_effect = None
+    metadata = FakeInputRuntimePadBinding(0).metadata() | {
+        "source_generation": 17,
+        "source_id": "loaded-0-17",
+    }
     audio_engine_mock.current_input_runtime_pad_binding.return_value = Mock(
-        is_current=Mock(return_value=True), metadata=Mock(return_value={"source_generation": 17})
+        is_current=Mock(return_value=True), metadata=Mock(return_value=metadata)
     )
     if intent == "manual":
         with pytest.raises(ValueError, match="receipt is pending"):

@@ -21,6 +21,7 @@ if TYPE_CHECKING:
     from collections.abc import Callable, Iterator
 
     from flitzis_looper.models import ProjectState, SessionState
+    from flitzis_looper_audio import ResidentWindowTicket
 
 
 class FakePreparedSourceTicket:
@@ -180,6 +181,146 @@ class FakeGlobalPlaybackBatchTicket:
         return self.status
 
 
+@dataclass(frozen=True, slots=True)
+class _CapturedPadStartIntent:
+    sample_id: int
+    start_s: float
+    end_s: float | None
+    volume: float
+    exclusive: bool
+    received_at_ns: int | None
+    expected_source_generation: int | None
+
+
+class FakeCapturedPadStart:
+    """Original controller receipt; actual Native preparation/audio is tested separately."""
+
+    def __init__(
+        self,
+        sample_id: int,
+        start_s: float,
+        end_s: float | None,
+        volume: float,
+        *,
+        exclusive: bool = False,
+        received_at_ns: int | None = None,
+        expected_source_generation: int | None = None,
+    ) -> None:
+        self._intent = _CapturedPadStartIntent(
+            sample_id,
+            start_s,
+            end_s,
+            volume,
+            exclusive,
+            received_at_ns,
+            expected_source_generation,
+        )
+        self.diagnostic_slot: int | None = sample_id
+        self.status = "captured"
+        self.failure: str | None = None
+        self.cancelled = False
+        self.published = False
+        self.window: ResidentWindowTicket | None = None
+
+    @property
+    def original_id(self) -> int:
+        return self._intent.sample_id
+
+    @property
+    def loop_region(self) -> tuple[float, float | None]:
+        return self._intent.start_s, self._intent.end_s
+
+    @property
+    def volume(self) -> float:
+        return self._intent.volume
+
+    @property
+    def exclusive(self) -> bool:
+        return self._intent.exclusive
+
+    @property
+    def received_at_ns(self) -> int | None:
+        return self._intent.received_at_ns
+
+    @property
+    def expected_source_generation(self) -> int | None:
+        return self._intent.expected_source_generation
+
+    def state(self) -> str:
+        return self.status
+
+    def reason(self) -> str | None:
+        return self.failure
+
+    def original_owner_status(self) -> str:
+        if self.status == "rejected":
+            return "superseded"
+        return "published" if self.published else "current"
+
+    def cancel(self) -> bool:
+        if self.status in {"applying", "applied", "rejected"}:
+            return False
+        self.cancelled = True
+        self.status = "rejected"
+        self.failure = "launch_cancelled"
+        return True
+
+    def publish(self, window: ResidentWindowTicket | None = None) -> bool:
+        """Complete this explicit controller double without invoking legacy Play."""
+        if self.status == "rejected":
+            return False
+        if window is not self.window:
+            return False
+        if window is not None and (
+            window.publication_status() != "accepted" or not window.is_current()
+        ):
+            return False
+        self.published = True
+        self.status = "applied"
+        return True
+
+
+def _install_captured_start_fakes(audio: Mock) -> None:
+    def prepare_captured_start(
+        start: FakeCapturedPadStart, window: ResidentWindowTicket | None = None
+    ) -> ResidentWindowTicket:
+        if window is not None:
+            start.window = window
+        if start.window is None:
+            start_s, end_s = start.loop_region
+            options = (
+                {"expected_source_generation": start.expected_source_generation}
+                if start.expected_source_generation is not None
+                else {}
+            )
+            start.window = cast(
+                "ResidentWindowTicket",
+                audio.prepare_resident_control(
+                    start.original_id,
+                    start_s=start_s,
+                    end_s=end_s,
+                    position_s=None,
+                    key_lock=None,
+                    **options,
+                ),
+            )
+        return start.window
+
+    def publish_captured_start(
+        start: FakeCapturedPadStart, window: ResidentWindowTicket | None = None
+    ) -> bool:
+        return start.publish(window)
+
+    # Missing callback feedback remains unknown. The fake receipt cannot confirm
+    # processing mode or claim actual Native PCM/preparation correctness.
+    audio.pad_key_lock_status = Mock(return_value=None)
+    # Install explicitly even when autospec uses an older Native extension.
+    # Each capture gets a fresh owner; publication never calls legacy Play.
+    audio.capture_pad_start = Mock(side_effect=FakeCapturedPadStart)
+    audio.prepare_captured_pad_start = Mock(side_effect=prepare_captured_start)
+    audio.publish_pad_start = Mock(side_effect=publish_captured_start)
+
+
 def current_timing_metadata(
     *,
     sample_id: int = 0,
@@ -242,6 +383,157 @@ class FakeInputRuntimePadBinding:
 
     def metadata(self) -> dict[str, object]:
         return dict(self._metadata)
+
+
+FakeGlobalStartEntry = tuple[FakeInputRuntimePadBinding, float, float | None, object | None]
+
+
+@dataclass(frozen=True, slots=True)
+class _CapturedGlobalStartIntent:
+    entries: tuple[FakeGlobalStartEntry, ...]
+    received_at_ns: int | None
+
+
+class FakeCapturedGlobalStart:
+    """One immutable controller group; this double supplies no Native ACK/PCM proof."""
+
+    def __init__(
+        self, entries: list[FakeGlobalStartEntry], *, received_at_ns: int | None = None
+    ) -> None:
+        self._intent = _CapturedGlobalStartIntent(tuple(entries), received_at_ns)
+        self.slots = [cast("int", binding.metadata()["pad_id"]) for binding, *_ in entries]
+        self.status = "captured"
+        self.failure: str | None = None
+        self.cancelled = False
+        self.frame: int | None = None
+        self.ticket = FakeGlobalPlaybackBatchTicket()
+
+    @property
+    def entries(self) -> tuple[FakeGlobalStartEntry, ...]:
+        return self._intent.entries
+
+    @property
+    def received_at_ns(self) -> int | None:
+        return self._intent.received_at_ns
+
+    def state(self) -> str:
+        return self.status
+
+    def reason(self) -> str | None:
+        return self.failure
+
+    def diagnostic_slots(self) -> list[int]:
+        return list(self.slots)
+
+    def original_frame(self) -> int | None:
+        return self.frame
+
+    def cancel(self) -> bool:
+        if self.status in {"applied", "rejected"}:
+            return False
+        self.cancelled = True
+        self.status = "rejected"
+        self.failure = "launch_cancelled"
+        return True
+
+    def publish(
+        self, ticket: FakeGlobalPlaybackBatchTicket | None = None
+    ) -> FakeGlobalPlaybackBatchTicket | None:
+        """Wait on the exact retained dependency; never invoke legacy GLOBAL START."""
+        if self.status == "rejected":
+            raise ValueError(self.failure or "captured global start rejected")
+        for _, _, _, dependency in self.entries:
+            if dependency is None:
+                continue
+            window = cast("ResidentWindowTicket", dependency)
+            status = window.publication_status()
+            if status in {"failed", "cancelled", "rejected"} or not window.is_current():
+                self.status = "rejected"
+                self.failure = window.error() or "original global resident dependency rejected"
+                raise ValueError(self.failure)
+            if status != "accepted":
+                return None
+        receipt = self.ticket if ticket is None else ticket
+        self.status = "applied" if receipt.publication_status() == "accepted" else "published"
+        return receipt
+
+
+def _install_captured_global_start_fakes(audio: Mock) -> None:
+    # Explicit installation also works with an older installed Native ABI.
+    audio.capture_global_start = Mock(side_effect=FakeCapturedGlobalStart)
+    audio.publish_captured_global_start = Mock(side_effect=lambda captured: captured.publish())
+
+
+class FakeInputSelection:
+    """Control-only selection projection; opaque Native lifetime proof remains separate."""
+
+    def __init__(self) -> None:
+        self._revision = 0
+        self._ready_bindings: dict[int, object] = {}
+        self._ready_sources: dict[int, tuple[object, ...]] = {}
+        self._selected_source: tuple[object, ...] | None = None
+
+    @staticmethod
+    def _source_identity(binding: object) -> tuple[object, ...] | None:
+        current = getattr(binding, "is_current", None)
+        provider = getattr(binding, "metadata", None)
+        if not callable(current) or current() is not True or not callable(provider):
+            return None
+        metadata = provider()
+        if not isinstance(metadata, dict):
+            return None
+        source_id = metadata.get("source_id")
+        generation = metadata.get("source_generation")
+        if not isinstance(source_id, str) or type(generation) is not int:
+            return None
+        return (
+            metadata.get("content_lifetime"),
+            source_id,
+            generation,
+            metadata.get("source_sha256"),
+        )
+
+    def record_runtime_state(
+        self,
+        multi_loop: object,
+        loaded: list[bool],
+        loop_starts: list[float],
+        loop_ends: list[float | None],
+        bindings: list[object] | None = None,
+        pitch_rows: list[dict[str, object]] | None = None,
+    ) -> object:
+        """Record only explicit ready bindings; preserve the caller's mock return value."""
+        rows = bindings if bindings is not None else [None] * len(loaded)
+        self._ready_bindings = {
+            sample_id: binding
+            for sample_id, (ready, binding) in enumerate(zip(loaded, rows, strict=True))
+            if ready
+        }
+        self._ready_sources = {
+            sample_id: identity
+            for sample_id, binding in self._ready_bindings.items()
+            if (identity := self._source_identity(binding)) is not None
+        }
+        if self._selected_source not in self._ready_sources.values():
+            self._selected_source = None
+        return DEFAULT
+
+    def select(self, sample_id: int) -> int:
+        """Advance one GUI selection revision, including an explicit empty-pad choice."""
+        self._revision += 1
+        identity = self._source_identity(self._ready_bindings.get(sample_id))
+        self._selected_source = identity if identity == self._ready_sources.get(sample_id) else None
+        return self._revision
+
+    def projection(self) -> tuple[int, int | None]:
+        """Follow a unique published source through placement without binding a later refill."""
+        matches = [
+            sample_id
+            for sample_id, source in self._ready_sources.items()
+            if source == self._selected_source
+            and self._source_identity(self._ready_bindings[sample_id]) == source
+        ]
+        return self._revision, matches[0] if len(matches) == 1 else None
 
 
 class FakeStemGenerationBackend:
@@ -365,9 +657,8 @@ def audio_engine_mock() -> Iterator[Mock]:
         audio_engine.return_value.cancel_pad_launches = Mock(return_value=False)
         audio_engine.return_value.cancel_all_launches = Mock(return_value=[])
         audio_engine.return_value.admitted_launch_ids = Mock(return_value=[])
-        # Missing callback feedback deliberately remains unknown. Scalar enqueue
-        # and project booleans do not prove an actual mode acknowledgement.
-        audio_engine.return_value.pad_key_lock_status = Mock(return_value=None)
+        _install_captured_start_fakes(audio_engine.return_value)
+        _install_captured_global_start_fakes(audio_engine.return_value)
 
         def runtime_binding(sample_id: int) -> FakeInputRuntimePadBinding:
             metadata = audio_engine.return_value.current_constant_timing.return_value
@@ -379,6 +670,13 @@ def audio_engine_mock() -> Iterator[Mock]:
             )
 
         audio_engine.return_value.current_input_runtime_pad_binding.side_effect = runtime_binding
+        selection = FakeInputSelection()
+        audio_engine.return_value.select_input_pad = Mock(side_effect=selection.select)
+        audio_engine.return_value.input_selected_projection = Mock(side_effect=selection.projection)
+        if audio_engine.return_value.set_input_runtime_state.side_effect is None:
+            audio_engine.return_value.set_input_runtime_state.side_effect = (
+                selection.record_runtime_state
+            )
         audio_engine.return_value.start_global_playback_batch.return_value = (
             FakeGlobalPlaybackBatchTicket()
         )

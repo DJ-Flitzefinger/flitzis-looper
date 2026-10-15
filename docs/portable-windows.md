@@ -120,6 +120,16 @@ original-ticket Hold release, captured MIDI trigger/window admission, owned pad
 feedback, original timing-ticket/refresh Pending observations and the Native
 placement-marker/read-token queries, resident-admission protocol version 1, the
 budget setter/status API and the independent preload-interest parameter. These
+checks also require the complete Native pitch interface: immutable
+`CapturedPitchAction` receipts, native selection/projection, GUI and selected MIDI
+capture with original timestamps, publish/cancel, input polling and atomic
+`pitch_rows` runtime publication, plus the atomic source-restore keywords
+`initial_base_shift`, `initial_extra_shift` and `initial_key_lock`. Ordinary starts
+also require the `CapturedPadStart` observations/cancellation methods and
+`capture_pad_start`, `prepare_captured_pad_start` and `publish_pad_start`, including
+optional original timestamp/source-generation/exclusive capture keywords and the
+default `window=None` publication parameter. Missing methods, receipt fields or
+incompatible keyword defaults reject the runtime before activation. These
 checks inspect the built Release
 class without constructing an engine or opening an audio device; an older
 incompatible extension cannot activate the current Python controls. The source
@@ -153,6 +163,12 @@ replacing the developer runtime. A fresh non-editable Release wheel and exact
 Native source commit are required. Runtime imports, private loaded DLL paths and
 offline-worker imports must pass before packaging. The source BAT remains the
 ordinary install/update path and performs the model preparation gate.
+
+Preflight also reflects the opaque `CapturedGlobalStart` and the engine's
+`capture_global_start` / `publish_captured_global_start` interface without
+constructing an engine or invoking native preparation. A runtime missing this
+contract cannot activate: deferred GLOBAL gestures must retain their original
+native participants and actual resident dependency rather than recapture after a wait.
 
 Required arguments are `--native-wheel`, `--native-source-commit`, `--ffmpeg-dir`,
 one or more `--dll-dir`, external `--license-file NAME=PATH` inputs and `--output`

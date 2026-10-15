@@ -159,6 +159,7 @@ impl RtMixer {
         work.retired_receipt = self.committed_stem_receipts[source].take();
         self.committed_stem_selection[source] = None;
         self.pad_key_lock_enabled[source] = false;
+        self.pad_pitch_intent[source] = PitchIntent::default();
         self.pad_key_lock_request_id[source] = 0;
         self.pad_key_lock_rejected[source] = false;
         self.pad_key_lock_pending_on[source] = false;
@@ -191,6 +192,7 @@ impl RtMixer {
     /// only the physical pad used to select their image changes.
     pub(super) fn swap_occupied_pad_images_rt(&mut self, source: usize, target: usize) {
         self.pad_key_lock_enabled.swap(source, target);
+        self.pad_pitch_intent.swap(source, target);
         self.pad_key_lock_request_id.swap(source, target);
         self.pad_key_lock_rejected.swap(source, target);
         self.pad_key_lock_pending_on.swap(source, target);

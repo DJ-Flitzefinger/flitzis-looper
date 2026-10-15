@@ -6,7 +6,12 @@ from unittest.mock import Mock, patch
 
 import pytest
 
-from tests.flitzis_looper.conftest import FakeInputRuntimePadBinding
+from tests.flitzis_looper.conftest import (
+    FakeCapturedGlobalStart,
+    FakeCapturedPadStart,
+    FakeGlobalPlaybackBatchTicket,
+    FakeInputRuntimePadBinding,
+)
 
 if TYPE_CHECKING:
     from flitzis_looper.controller import AppController
@@ -122,18 +127,42 @@ def resident(controller: AppController, audio: Mock) -> Ticket:
     return ticket
 
 
-def test_repeated_starts_preserve_failed_admission_budget_and_deadline(
+def legacy_start(controller: AppController, audio: Mock, received_at_ns: int) -> None:
+    """Exercise latest-per-pad Residency.start compatibility, outside GUI capture."""
+    start_s, end_s = controller.transport.loop.requested_region(0)
+    generation = controller.transport.capture_current_pad_edit_generation(0)
+    controller.transport.residency.start(
+        0,
+        start_s,
+        end_s,
+        Mock(),
+        prepared_play=lambda ticket: audio.play_resident_control(
+            ticket, exclusive=True, received_at_ns=received_at_ns
+        ),
+        expected_source_generation=generation,
+    )
+
+
+def schedule_captured_start(start: FakeCapturedPadStart, ticket: Ticket | None = None) -> bool:
+    """Retain an explicitly queued receipt without claiming a first Native effect."""
+    if not start.publish(ticket):
+        return False
+    start.status = "scheduled"
+    return True
+
+
+def test_legacy_repeated_starts_preserve_failed_admission_budget_and_deadline(
     controller: AppController, audio_engine_mock: Mock
 ) -> None:
     resident(controller, audio_engine_mock)
     audio_engine_mock.prepare_resident_control.side_effect = RuntimeError("cold source queue full")
     residency = controller.transport.residency
-    controller.transport.playback.trigger_pad(0, received_at_ns=1)
+    legacy_start(controller, audio_engine_mock, 1)
     pending = residency._pending[0]
     deadline = pending.deadline
     for attempt in range(1, 9):
         for gesture in range(10):
-            controller.transport.playback.trigger_pad(0, received_at_ns=attempt * 10 + gesture)
+            legacy_start(controller, audio_engine_mock, attempt * 10 + gesture)
             assert residency._pending[0] is pending
             assert pending.attempts == attempt
             assert pending.deadline == deadline
@@ -143,15 +172,15 @@ def test_repeated_starts_preserve_failed_admission_budget_and_deadline(
     audio_engine_mock.play_resident_control.assert_not_called()
 
 
-def test_retired_pending_ticket_requires_fresh_ack_for_latest_start(
+def test_legacy_retired_pending_ticket_requires_fresh_ack_for_latest_start(
     controller: AppController, audio_engine_mock: Mock
 ) -> None:
     old = resident(controller, audio_engine_mock)
     new = Ticket()
     audio_engine_mock.prepare_resident_control.side_effect = [old, new]
-    controller.transport.playback.trigger_pad(0, received_at_ns=1)
+    legacy_start(controller, audio_engine_mock, 1)
     old.current = False
-    controller.transport.playback.trigger_pad(0, received_at_ns=2)
+    legacy_start(controller, audio_engine_mock, 2)
     assert audio_engine_mock.prepare_resident_control.call_count == 2
     old.status = "accepted"
     controller.transport.residency.poll()
@@ -164,7 +193,7 @@ def test_retired_pending_ticket_requires_fresh_ack_for_latest_start(
 
 
 @pytest.mark.parametrize("ack_before_click", [False, True])
-def test_retired_launch_preserves_actual_ack_geometry_after_failed_replacement(
+def test_legacy_retired_launch_preserves_actual_ack_geometry_after_failed_replacement(
     controller: AppController, audio_engine_mock: Mock, *, ack_before_click: bool
 ) -> None:
     old = resident(controller, audio_engine_mock)
@@ -177,7 +206,7 @@ def test_retired_launch_preserves_actual_ack_geometry_after_failed_replacement(
         "resident stem publication is pending"
     )
     residency = controller.transport.residency
-    controller.transport.playback.trigger_pad(0, received_at_ns=2)
+    legacy_start(controller, audio_engine_mock, 2)
     old.status = "accepted"
     residency.poll()
     residency._pending[0].deadline = 0.0
@@ -209,7 +238,7 @@ def test_retired_launch_ack_cannot_project_geometry_into_another_native_owner(
     )
 
 
-def test_new_click_after_unconfirmed_adoption_requires_a_fresh_ticket_and_ack(
+def test_legacy_new_start_after_unconfirmed_adoption_requires_a_fresh_ticket_and_ack(
     controller: AppController, audio_engine_mock: Mock
 ) -> None:
     old = resident(controller, audio_engine_mock)
@@ -220,14 +249,14 @@ def test_new_click_after_unconfirmed_adoption_requires_a_fresh_ticket_and_ack(
         fresh,
     ]
     residency = controller.transport.residency
-    controller.transport.playback.trigger_pad(0, received_at_ns=1)
+    legacy_start(controller, audio_engine_mock, 1)
     original = residency._pending[0]
     old.status = "adopting"
     original.deadline = 0.0
     residency.poll()
     assert original.unconfirmed
     assert original.after_ack is None
-    controller.transport.playback.trigger_pad(0, received_at_ns=2)
+    legacy_start(controller, audio_engine_mock, 2)
     assert residency._pending[0] is not original
     old.status = "accepted"
     residency.poll()
@@ -405,26 +434,39 @@ def test_trigger_preserves_input_timestamp_and_launches_only_after_current_ack(
 ) -> None:
     ticket = resident(controller, audio_engine_mock)
     controller.transport.playback.trigger_pad(0, received_at_ns=12345)
+    original = audio_engine_mock.prepare_captured_pad_start.call_args.args[0]
+    assert isinstance(original, FakeCapturedPadStart)
+    assert original.received_at_ns == 12345
+    assert original.exclusive is True
+    assert original.loop_region == (3.0, 4.0)
     audio_engine_mock.play_sample_exclusive.assert_not_called()
-    audio_engine_mock.play_resident_control.assert_not_called()
+    audio_engine_mock.publish_pad_start.assert_not_called()
     ticket.status = "accepted"
     controller.transport.residency.poll()
-    audio_engine_mock.play_resident_control.assert_called_once_with(
-        ticket, exclusive=True, received_at_ns=12345
+    audio_engine_mock.publish_pad_start.assert_called_once_with(original, ticket)
+    audio_engine_mock.capture_pad_start.assert_called_once_with(
+        0,
+        3.0,
+        4.0,
+        1.0,
+        exclusive=True,
+        received_at_ns=12345,
+        expected_source_generation=1,
     )
+    audio_engine_mock.play_resident_control.assert_not_called()
     audio_engine_mock.play_sample_exclusive.assert_not_called()
 
 
 @pytest.mark.parametrize("status", ["preparing", "pending", "adopting"])
-def test_repeated_identical_trigger_keeps_preparation_and_latest_input_timestamp(
+def test_repeated_identical_legacy_start_keeps_preparation_and_latest_input_timestamp(
     controller: AppController, audio_engine_mock: Mock, status: str
 ) -> None:
     ticket = resident(controller, audio_engine_mock)
     ticket.status = status
-    controller.transport.playback.trigger_pad(0, received_at_ns=123)
+    legacy_start(controller, audio_engine_mock, 123)
     pending = controller.transport.residency._pending[0]
     for timestamp in range(124, 144):
-        controller.transport.playback.trigger_pad(0, received_at_ns=timestamp)
+        legacy_start(controller, audio_engine_mock, timestamp)
     assert controller.transport.residency._pending[0] is pending
     assert audio_engine_mock.prepare_resident_control.call_count == 1
     audio_engine_mock.play_resident_control.assert_not_called()
@@ -435,13 +477,13 @@ def test_repeated_identical_trigger_keeps_preparation_and_latest_input_timestamp
     )
 
 
-def test_trigger_observes_already_received_ack_without_waiting_for_another_frame(
+def test_legacy_start_observes_received_ack_without_waiting_for_another_frame(
     controller: AppController, audio_engine_mock: Mock
 ) -> None:
     ticket = resident(controller, audio_engine_mock)
-    controller.transport.playback.trigger_pad(0, received_at_ns=123)
+    legacy_start(controller, audio_engine_mock, 123)
     ticket.status = "accepted"
-    controller.transport.playback.trigger_pad(0, received_at_ns=456)
+    legacy_start(controller, audio_engine_mock, 456)
     assert audio_engine_mock.prepare_resident_control.call_count == 1
     audio_engine_mock.play_resident_control.assert_called_once_with(
         ticket, exclusive=True, received_at_ns=456
@@ -449,11 +491,11 @@ def test_trigger_observes_already_received_ack_without_waiting_for_another_frame
 
 
 @pytest.mark.parametrize("change", ["region", "key-lock", "source", "authority"])
-def test_changed_trigger_context_still_admits_new_preparation(
+def test_changed_legacy_start_context_still_admits_new_preparation(
     controller: AppController, audio_engine_mock: Mock, change: str
 ) -> None:
     old = resident(controller, audio_engine_mock)
-    controller.transport.playback.trigger_pad(0, received_at_ns=123)
+    legacy_start(controller, audio_engine_mock, 123)
     if change == "region":
         controller.project.pad_loop_end_s[0] = 5.0
     elif change == "key-lock":
@@ -466,7 +508,7 @@ def test_changed_trigger_context_still_admits_new_preparation(
         )
     new = Ticket()
     audio_engine_mock.prepare_resident_control.return_value = new
-    controller.transport.playback.trigger_pad(0, received_at_ns=456)
+    legacy_start(controller, audio_engine_mock, 456)
     assert audio_engine_mock.prepare_resident_control.call_count == 2
     old.status = "accepted"
     controller.transport.residency.poll()
@@ -506,7 +548,9 @@ def test_shutdown_invalidates_pending_launch_without_reopening_admission(
     controller.transport.playback.trigger_pad(0, received_at_ns=6789)
     audio_engine_mock.play_sample_exclusive.assert_not_called()
     audio_engine_mock.play_resident_control.assert_not_called()
+    audio_engine_mock.publish_pad_start.assert_not_called()
     assert audio_engine_mock.prepare_resident_control.call_count == 1
+    assert audio_engine_mock.prepare_captured_pad_start.call_count == 1
 
 
 def test_key_lock_context_shares_loop_transaction_and_retains_rejected_intent(
@@ -531,6 +575,7 @@ def test_stop_before_start_ack_revokes_launch_even_with_no_active_voice(
 ) -> None:
     ticket = resident(controller, audio_engine_mock)
     controller.transport.playback.trigger_pad(0, received_at_ns=123)
+    original = audio_engine_mock.prepare_captured_pad_start.call_args.args[0]
     if claimed:
         ticket.status = "adopting"
     if stop == "pad":
@@ -541,6 +586,9 @@ def test_stop_before_start_ack_revokes_launch_even_with_no_active_voice(
     controller.transport.residency.poll()
     audio_engine_mock.play_sample_exclusive.assert_not_called()
     audio_engine_mock.play_resident_control.assert_not_called()
+    audio_engine_mock.publish_pad_start.assert_not_called()
+    assert original.state() == "rejected"
+    audio_engine_mock.capture_pad_start.assert_called_once()
     assert not controller.session.active_sample_ids
 
 
@@ -584,11 +632,14 @@ def test_post_ack_launch_failure_reports_error_and_keeps_adopted_loop(
     controller: AppController, audio_engine_mock: Mock
 ) -> None:
     ticket = resident(controller, audio_engine_mock)
-    audio_engine_mock.play_resident_control.side_effect = RuntimeError("launch source retired")
+    audio_engine_mock.publish_pad_start.side_effect = RuntimeError("launch source retired")
     controller.transport.playback.trigger_pad(0, received_at_ns=123)
     ticket.status = "accepted"
     controller.transport.residency.poll()
     assert controller.transport.residency.status(0) == (None, "launch source retired")
+    original = audio_engine_mock.prepare_captured_pad_start.call_args.args[0]
+    audio_engine_mock.publish_pad_start.assert_called_once_with(original, ticket)
+    audio_engine_mock.play_resident_control.assert_not_called()
     assert controller.project.pad_loop_end_s[0] == 4.0
 
 
@@ -604,17 +655,25 @@ def test_post_ack_launch_capacity_retry_is_bounded_and_preserves_input_time(
     controller: AppController, audio_engine_mock: Mock, message: str
 ) -> None:
     ticket = resident(controller, audio_engine_mock)
-    audio_engine_mock.play_resident_control.side_effect = RuntimeError(message)
+    audio_engine_mock.publish_pad_start.side_effect = RuntimeError(message)
     controller.transport.playback.trigger_pad(0, received_at_ns=123)
     ticket.status = "accepted"
     for _ in range(20):
         controller.transport.residency.poll()
-    assert audio_engine_mock.play_resident_control.call_count == 8
+    original = audio_engine_mock.prepare_captured_pad_start.call_args.args[0]
+    # One preparation and seven publication attempts share the bounded budget.
+    assert audio_engine_mock.publish_pad_start.call_count == 7
     assert all(
-        call.kwargs["received_at_ns"] == 123
-        for call in audio_engine_mock.play_resident_control.call_args_list
+        attempt.args == (original, ticket)
+        for attempt in audio_engine_mock.publish_pad_start.call_args_list
     )
-    assert controller.transport.residency.status(0) == (None, message)
+    assert original.received_at_ns == 123
+    audio_engine_mock.capture_pad_start.assert_called_once()
+    assert controller.transport.residency.status(0) == (
+        None,
+        message,
+    )
+    audio_engine_mock.play_resident_control.assert_not_called()
 
 
 def test_midi_unprepared_context_uses_own_ack_route_and_original_guard(
@@ -652,14 +711,23 @@ def test_global_start_waits_for_pending_region_without_splitting_native_batch(
     controller.session.active_sample_ids.add(0)
     controller.transport.loop.set_end(0, 7.0)
     controller.transport.playback.start_or_restart_global_start_stop(received_at_ns=123)
-    audio_engine_mock.start_global_playback_batch.assert_not_called()
+    original = audio_engine_mock.publish_captured_global_start.call_args.args[0]
+    assert isinstance(original, FakeCapturedGlobalStart)
+    assert original.entries == tuple(audio_engine_mock.capture_global_start.call_args.args[0])
+    assert original.entries[0][1:] == (3.0, 7.0, ticket)
+    assert original.received_at_ns == 123
+    assert original.state() == "captured"
     ticket.status = "accepted"
     controller.transport.residency.poll()
     controller.transport.playback._global_playback.poll()
-    audio_engine_mock.start_global_playback_batch.assert_called_once()
-    entry = audio_engine_mock.start_global_playback_batch.call_args.args[0][0]
-    assert entry[1:] == (3.0, 7.0)
-    assert audio_engine_mock.start_global_playback_batch.call_args.kwargs["received_at_ns"] == 123
+    audio_engine_mock.capture_global_start.assert_called_once()
+    assert audio_engine_mock.publish_captured_global_start.call_count == 2
+    assert all(
+        entry.args == (original,)
+        for entry in audio_engine_mock.publish_captured_global_start.call_args_list
+    )
+    assert original.state() == "applied"
+    audio_engine_mock.start_global_playback_batch.assert_not_called()
 
 
 @pytest.mark.parametrize("ready", [False, True])
@@ -746,11 +814,11 @@ def test_unclaimed_current_ticket_deadline_cancels_and_restores_effective_region
     )
 
 
-def test_claimed_current_ticket_deadline_keeps_ownership_but_revokes_launch(
+def test_legacy_claimed_current_ticket_deadline_keeps_ownership_but_revokes_launch(
     controller: AppController, audio_engine_mock: Mock
 ) -> None:
     ticket = resident(controller, audio_engine_mock)
-    controller.transport.playback.trigger_pad(0, received_at_ns=123)
+    legacy_start(controller, audio_engine_mock, 123)
     ticket.status = "adopting"
     controller.transport.residency._pending[0].deadline = 0.0
     controller.transport.residency.poll()
@@ -825,20 +893,35 @@ def test_deferred_global_queue_pressure_is_bounded_and_retains_input_timestamp(
     controller.session.active_sample_ids.add(0)
     controller.transport.loop.set_end(0, 7.0)
     controller.transport.playback.start_or_restart_global_start_stop(received_at_ns=123)
+    original = audio_engine_mock.publish_captured_global_start.call_args.args[0]
+    assert isinstance(original, FakeCapturedGlobalStart)
     message = "Failed to send global playback batch - buffer may be full"
-    accepted = audio_engine_mock.start_global_playback_batch.return_value
-    audio_engine_mock.start_global_playback_batch.side_effect = (
-        [RuntimeError(message), accepted] if succeeds else RuntimeError(message)
-    )
+    accepted = FakeGlobalPlaybackBatchTicket()
+    attempts = 0
+
+    def publish(capture: FakeCapturedGlobalStart) -> FakeGlobalPlaybackBatchTicket | None:
+        nonlocal attempts
+        assert capture is original
+        attempts += 1
+        if succeeds and attempts == 2:
+            return capture.publish(accepted)
+        raise RuntimeError(message)
+
+    audio_engine_mock.publish_captured_global_start.side_effect = publish
     ticket.status = "accepted"
     controller.transport.residency.poll()
     for _ in range(20):
         controller.transport.playback._global_playback.poll()
-    assert audio_engine_mock.start_global_playback_batch.call_count == (2 if succeeds else 8)
+    assert attempts == (2 if succeeds else 8)
+    assert audio_engine_mock.publish_captured_global_start.call_count == attempts + 1
     assert all(
-        call.kwargs["received_at_ns"] == 123
-        for call in audio_engine_mock.start_global_playback_batch.call_args_list
+        entry.args == (original,)
+        for entry in audio_engine_mock.publish_captured_global_start.call_args_list
     )
+    audio_engine_mock.capture_global_start.assert_called_once()
+    assert original.received_at_ns == 123
+    assert original.entries[0][1:] == (3.0, 7.0, ticket)
+    audio_engine_mock.start_global_playback_batch.assert_not_called()
     assert controller.transport.playback._global_playback._deferred is None
     if not succeeds:
         assert controller.transport.residency.status(0) == (None, message)
@@ -852,11 +935,22 @@ def test_new_global_gesture_supersedes_ready_deferred_timestamp(
     controller.session.active_sample_ids.add(0)
     controller.transport.loop.set_end(0, 7.0)
     controller.transport.playback.start_or_restart_global_start_stop(received_at_ns=123)
+    first = audio_engine_mock.publish_captured_global_start.call_args.args[0]
+    assert isinstance(first, FakeCapturedGlobalStart)
     ticket.status = "accepted"
     controller.transport.residency.poll()
     controller.transport.playback.start_or_restart_global_start_stop(received_at_ns=456)
-    audio_engine_mock.start_global_playback_batch.assert_called_once()
-    assert audio_engine_mock.start_global_playback_batch.call_args.kwargs["received_at_ns"] == 456
+    second = audio_engine_mock.publish_captured_global_start.call_args.args[0]
+    assert isinstance(second, FakeCapturedGlobalStart)
+    assert second is not first
+    assert first.cancelled is True
+    assert first.received_at_ns == 123
+    assert second.received_at_ns == 456
+    assert audio_engine_mock.capture_global_start.call_count == 2
+    assert audio_engine_mock.publish_captured_global_start.call_count == 2
+    assert audio_engine_mock.capture_global_start.call_args.kwargs["received_at_ns"] == 456
+    assert second.entries[0][1:] == (3.0, 7.0, None)
+    audio_engine_mock.start_global_playback_batch.assert_not_called()
 
 
 def test_deferred_global_deadline_exposes_error_without_launching(
@@ -869,12 +963,18 @@ def test_deferred_global_deadline_exposes_error_without_launching(
     global_controller = controller.transport.playback._global_playback
     deferred = global_controller._deferred
     assert deferred is not None
+    original = deferred.capture
     global_controller._deferred = replace(deferred, deadline=0.0)
     global_controller.poll()
     ticket.status = "accepted"
     controller.transport.residency.poll()
     global_controller.poll()
     audio_engine_mock.start_global_playback_batch.assert_not_called()
+    audio_engine_mock.capture_global_start.assert_called_once()
+    audio_engine_mock.publish_captured_global_start.assert_called_once_with(original)
+    assert isinstance(original, FakeCapturedGlobalStart)
+    assert original.cancelled is True
+    assert original.received_at_ns == 123
     assert global_controller._deferred is None
     assert controller.transport.residency.status(0) == (
         None,
@@ -886,17 +986,27 @@ def test_post_ack_ui_launch_keeps_opaque_ticket_and_rejects_retired_source(
     controller: AppController, audio_engine_mock: Mock
 ) -> None:
     ticket = resident(controller, audio_engine_mock)
-    audio_engine_mock.play_resident_control.return_value = False
+
+    def retire_original(start: FakeCapturedPadStart, window: Ticket) -> bool:
+        assert start.window is window
+        start.status = "rejected"
+        start.failure = "source_changed"
+        return False
+
+    audio_engine_mock.publish_pad_start.side_effect = retire_original
     controller.transport.playback.trigger_pad(0, received_at_ns=123)
     ticket.status = "accepted"
     controller.transport.residency.poll()
-    audio_engine_mock.play_resident_control.assert_called_once_with(
-        ticket, exclusive=True, received_at_ns=123
-    )
+    controller.transport.residency.poll()
+    original = audio_engine_mock.prepare_captured_pad_start.call_args.args[0]
+    audio_engine_mock.publish_pad_start.assert_called_once_with(original, ticket)
+    assert original.received_at_ns == 123
+    audio_engine_mock.capture_pad_start.assert_called_once()
+    audio_engine_mock.play_resident_control.assert_not_called()
     audio_engine_mock.play_sample_exclusive.assert_not_called()
     assert controller.transport.residency.status(0) == (
         None,
-        "resident launch ownership retired",
+        "source_changed",
     )
 
 
@@ -907,7 +1017,10 @@ def test_stop_after_ack_revokes_queued_launch_before_active_feedback(
 ) -> None:
     ticket = resident(controller, audio_engine_mock)
     if input_kind == "ui":
+        audio_engine_mock.publish_pad_start.side_effect = schedule_captured_start
+        audio_engine_mock.cancel_all_launches.return_value = [0]
         controller.transport.playback.trigger_pad(0, received_at_ns=123)
+        original = audio_engine_mock.prepare_captured_pad_start.call_args.args[0]
     else:
         controller.input_mapping.set_enabled(enabled=True)
         original = captured_midi(audio_engine_mock, ticket, 123)
@@ -918,7 +1031,10 @@ def test_stop_after_ack_revokes_queued_launch_before_active_feedback(
         native_cancel_captured_launch(audio_engine_mock, original, ticket)
     ticket.status = "accepted"
     controller.transport.residency.poll()
-    assert controller.transport.residency.status(0) == (None, None)
+    assert controller.transport.residency.status(0) == (
+        "pending" if input_kind == "ui" else None,
+        None,
+    )
     assert not controller.session.active_sample_ids
     if input_kind == "midi":
         audio_engine_mock.trigger_captured_input_pad.assert_called_once_with(original)
@@ -939,6 +1055,8 @@ def test_stop_after_ack_revokes_queued_launch_before_active_feedback(
     assert ticket.launch_cancelled
     if input_kind == "midi":
         assert original.owner_status == "superseded"
+    else:
+        assert original.state() == "rejected"
     assert ticket.status == "accepted"
     assert ticket.is_current()
     assert not controller.transport.residency._launched
@@ -946,11 +1064,11 @@ def test_stop_after_ack_revokes_queued_launch_before_active_feedback(
 
 
 @pytest.mark.parametrize("retire", ["unload", "shutdown"])
-def test_adopted_launch_retires_with_only_its_ticket_on_unload_and_all_on_shutdown(
+def test_legacy_adopted_launch_retires_with_its_ticket_on_unload_and_all_on_shutdown(
     controller: AppController, audio_engine_mock: Mock, retire: str
 ) -> None:
     ticket = resident(controller, audio_engine_mock)
-    controller.transport.playback.trigger_pad(0, received_at_ns=123)
+    legacy_start(controller, audio_engine_mock, 123)
     ticket.status = "accepted"
     controller.transport.residency.poll()
     audio_engine_mock.loaded_residency.return_value["source_identity"] = 456
@@ -974,9 +1092,14 @@ def test_global_stop_targets_claimed_start_before_active_feedback(
 ) -> None:
     resident(controller, audio_engine_mock)
     controller.session.active_sample_ids.add(0)
-    start_ticket = audio_engine_mock.start_global_playback_batch.return_value
-    start_ticket.status = status
+    start_ticket = FakeGlobalPlaybackBatchTicket(status)
+    audio_engine_mock.publish_captured_global_start.side_effect = lambda capture: capture.publish(
+        start_ticket
+    )
     controller.transport.playback.start_or_restart_global_start_stop(received_at_ns=123)
+    original = audio_engine_mock.publish_captured_global_start.call_args.args[0]
+    assert isinstance(original, FakeCapturedGlobalStart)
+    assert original.received_at_ns == 123
     controller.session.active_sample_ids.clear()
     controller.transport.playback.stop_all_pads(received_at_ns=456)
     audio_engine_mock.cancel_all_launches.assert_called_once_with()

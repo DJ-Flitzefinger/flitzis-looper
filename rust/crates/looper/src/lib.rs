@@ -107,7 +107,13 @@ mod flitzis_looper_audio {
     use super::audio_engine::SavedConstantTimingTicket;
 
     #[pymodule_export]
+    use super::audio_engine::CapturedGlobalStart;
+    #[pymodule_export]
     use super::audio_engine::CapturedInputPadTrigger;
+    #[pymodule_export]
+    use super::audio_engine::CapturedPadStart;
+    #[pymodule_export]
+    use super::audio_engine::CapturedPitchAction;
     #[pymodule_export]
     use super::audio_engine::HoldActionTicket;
     #[pymodule_export]

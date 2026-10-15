@@ -80,6 +80,7 @@ class AppController:
         self._shutdown_preparing = False
         self._shutdown_running = False
         self._shutdown_complete = False
+        self._gui_native_selection: tuple[int, int] | None = None
         self._pair_waveform_views: list[WaveformEditorActions] = []
         self._pending_content_feedback: deque[AudioMessage] = deque()
 
@@ -150,9 +151,7 @@ class AppController:
             incoming_request=self.loader.incoming_load_request_id,
         )
         self.loader.set_stems_invalidated_callback(self.stems.invalidate_stem_cache)
-        self.loader.set_restored_sample_loaded_callback(
-            self.stems.publish_restored_stem_cache_if_available
-        )
+        self.loader.set_restored_sample_loaded_callback(self._on_restored_sample_loaded)
         self.loader.set_new_sample_loaded_callback(
             self._on_new_sample_loaded,
             key_lock_callback=self._refresh_loaded_key_lock,
@@ -185,11 +184,16 @@ class AppController:
         }
         self.transport.playback.set_global_playback_feedback_poll(self._poll_audio_messages)
 
+        self._restore_initial_runtime_state()
+
+    def _restore_initial_runtime_state(self) -> None:
+        """Restore source/control state in order, then initialize one configured GUI selection."""
         self.loader.restore_samples_from_project_state()
         self.stems.restore_stem_cache_from_project_state()
         self.material_migration.schedule_after_restore()
         self.transport.apply_project_state_to_audio()
         self.input_mapping.apply_project_state_to_input_runtime()
+        self._initialize_native_gui_selection()
 
     def _prepare_arrangement_recovery(self) -> None:
         """Acquire Copy/Pair startup ownership before ordinary Loader restoration."""
@@ -201,10 +205,99 @@ class AppController:
     def _restored_assignment_held(self, sample_id: int) -> bool:
         return sample_id in self.arrangement.fenced_sample_ids | self.pairs.fenced_sample_ids
 
-    def select_pad(self, sample_id: int) -> None:
-        """Record the chosen UI content before storing its latest navigation intent."""
+    def select_pad(
+        self,
+        sample_id: int,
+        *,
+        native_selection_already_applied: bool = False,
+        expected_native_selection_revision: int | None = None,
+    ) -> None:
+        """Order GUI selection natively or project only an unchanged original MIDI receipt."""
+        validate_sample_id(sample_id)
+        if native_selection_already_applied:
+            if not self._native_selection_receipt_current(
+                sample_id, expected_native_selection_revision
+            ):
+                return
+        else:
+            setter = getattr(self._audio, "select_input_pad", None)
+            if callable(setter):
+                try:
+                    revision = setter(sample_id)
+                    self._validate_native_selection_revision(revision)
+                except (RuntimeError, ValueError, TypeError) as error:
+                    self._session.input_mapping_error = str(error)
+                    return
+                self._gui_native_selection = (revision, sample_id)
+            else:
+                self._session.input_mapping_error = (
+                    "Pitch choices require the current audio runtime."
+                )
         record_pad_selection(self._project, self._session, sample_id)
         self._persistence.mark_dirty()
+
+    @staticmethod
+    def _validate_native_selection_revision(revision: object) -> None:
+        if type(revision) is not int or not 0 <= revision < 1 << 64:
+            message = "Native selection acknowledgement is unavailable"
+            raise TypeError(message)
+
+    def _native_selection_receipt_current(self, sample_id: int, revision: int | None) -> bool:
+        if type(revision) is not int or not 0 <= revision < 1 << 64:
+            return False
+        current = self._current_native_selection()
+        if current is None or current[0] != revision:
+            return False
+        if current[1] is None:
+            return (
+                self._project.sample_paths[sample_id] is None
+                and self._project.pad_content[sample_id] is None
+            )
+        return type(current[1]) is int and current[1] == sample_id
+
+    def _current_native_selection(self) -> tuple[int, int | None] | None:
+        provider = getattr(self._audio, "input_selected_projection", None)
+        if not callable(provider):
+            return None
+        try:
+            current: object = provider()
+        except (RuntimeError, ValueError, TypeError) as error:
+            self._session.input_mapping_error = str(error)
+            return None
+        if not isinstance(current, tuple) or len(current) != 2:
+            return None
+        revision: object = current[0]
+        slot: object = current[1]
+        if type(revision) is not int or not 0 <= revision < 1 << 64:
+            return None
+        if slot is not None and (
+            type(slot) is not int or not 0 <= slot < len(self._project.pad_content)
+        ):
+            return None
+        return revision, slot
+
+    def _initialize_native_gui_selection(self) -> None:
+        current = self._current_native_selection()
+        if current is None or current[0] != 0:
+            return
+        sample_id = self._project.selected_pad
+        self._gui_native_selection = (0, sample_id)
+        self._refresh_native_gui_selection(sample_id)
+
+    def _refresh_native_gui_selection(self, sample_id: int) -> None:
+        """Resolve one startup/empty GUI choice after its own loaded runtime snapshot is ready."""
+        previous = self._gui_native_selection
+        if previous is None or previous[1] != sample_id or self._project.selected_pad != sample_id:
+            return
+        current = self._current_native_selection()
+        if current is None or current[0] != previous[0] or current[1] == sample_id:
+            return
+        if not self.input_mapping._refresh_rust_runtime_state():
+            return
+        snapshot = self.input_mapping._last_input_runtime_state_signature
+        if snapshot is None or not snapshot[2][sample_id].ready:
+            return
+        self.select_pad(sample_id)
 
     def prepare_shutdown(self, *, holds_polled: bool = False) -> bool:
         """Settle complete Copy ownership while its workers and callback remain alive."""
@@ -242,6 +335,7 @@ class AppController:
                 message = "Application close is waiting for complete Copy settlement"
                 raise RuntimeError(message)
             self.material_migration.shut_down()
+            self.transport.pitch.shut_down()
             self.transport.residency.shut_down()
             self.accepted_timing.shut_down()
             self.loader.shut_down()
@@ -279,6 +373,7 @@ class AppController:
         self._poll_audio_messages()
         self.accepted_timing.poll()
         self.transport.residency.poll()
+        self.transport.pitch.poll()
         self.arrangement.poll()
         self._sync_arrangement_observers()
 
@@ -353,6 +448,12 @@ class AppController:
     def _on_new_sample_loaded(self, sample_id: int, detected_start: float | None) -> None:
         self.transport.loop.initialize_loaded_pad_defaults(sample_id, detected_start)
         self.stems.reuse_compatible_stems_on_load(sample_id)
+        self._refresh_native_gui_selection(sample_id)
+
+    def _on_restored_sample_loaded(self, sample_id: int) -> bool:
+        """Resolve configured selection after actual restore readiness, then refresh stems."""
+        self._refresh_native_gui_selection(sample_id)
+        return self.stems.publish_restored_stem_cache_if_available(sample_id)
 
     def _on_incoming_sample_loaded(self, sample_id: int) -> None:
         """Refresh derived master and stem work after Native has adopted incoming defaults."""
@@ -361,6 +462,7 @@ class AppController:
         if self._session.bpm_lock_anchor_pad_id == sample_id:
             self.transport.bpm.recompute_master_bpm()
         self.stems.reuse_compatible_stems_on_load(sample_id)
+        self._refresh_native_gui_selection(sample_id)
 
     def _refresh_loaded_key_lock(self, sample_id: int) -> None:
         """Retire prior-source control baselines before resolving the adopted source."""

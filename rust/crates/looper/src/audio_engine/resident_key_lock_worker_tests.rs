@@ -2,9 +2,155 @@
 use super::*;
 use crate::audio_engine::input_runtime_binding::InputRuntimeOwnership;
 use crate::audio_engine::mixer::prepared_native_mixer_tests::finite_lifecycle_tests::{
-    AlgebraicClock, RawChronology, lifecycle_filter_after_cut,
+    AlgebraicClock, lifecycle_filter_after_cut,
 };
 use crate::audio_engine::resident_relocation::launch_with_producer;
+use crate::audio_engine::rubberband_backend::{RubberBandLiveShifter, pitch_scale_for_tempo_ratio};
+use std::collections::VecDeque;
+
+// Independent Native/FIFO oracle. Keeping its feed explicit also lets the ordinary
+// attack prime real negative-time loop PCM before its first audible output sample.
+struct RawChronology {
+    native: RubberBandLiveShifter,
+    input: VecDeque<f32>,
+    output: VecDeque<f32>,
+    pitch: f64,
+    used: bool,
+}
+
+impl RawChronology {
+    fn new(ratio: f64, prepared: bool) -> Self {
+        let mut native = RubberBandLiveShifter::new(48_000, 1).unwrap();
+        let pitch = pitch_scale_for_tempo_ratio(ratio);
+        if prepared {
+            native.prepare_exact_pitch(pitch).unwrap();
+        } else {
+            native.prepare_for_reuse().unwrap();
+            native.set_pitch_scale(pitch).unwrap();
+        }
+        let output = VecDeque::from(vec![0.0; native.block_size() - 1]);
+        Self {
+            native,
+            input: VecDeque::new(),
+            output,
+            pitch,
+            used: false,
+        }
+    }
+
+    fn block_size(&self) -> usize {
+        self.native.block_size()
+    }
+
+    fn feed(&mut self, samples: &[f32]) -> Vec<f32> {
+        self.input.extend(samples.iter().copied());
+        let block = self.block_size();
+        while self.input.len() >= block {
+            let input = vec![self.input.drain(..block).collect::<Vec<_>>()];
+            let mut output = vec![vec![0.0; block]];
+            self.native.shift(&input, &mut output).unwrap();
+            self.used = true;
+            self.output.extend(output[0].iter().copied());
+        }
+        assert!(self.output.len() >= samples.len());
+        self.output.drain(..samples.len()).collect()
+    }
+
+    fn endpoint(source: &SampleBuffer, ratio: f64) -> Self {
+        let mut raw = Self::new(ratio, true);
+        let history: Vec<_> = (0..4096)
+            .map(|frame| {
+                let phase = ((frame as f64 - 4096.0) * ratio).rem_euclid(72.0);
+                let left = 24 + phase.floor() as usize;
+                let right = if left + 1 == 96 { 24 } else { left + 1 };
+                let a = source.samples[left];
+                a + (source.samples[right] - a) * phase.fract() as f32
+            })
+            .collect();
+        raw.feed(&history);
+        raw
+    }
+
+    fn render(
+        &mut self,
+        source: &SampleBuffer,
+        clock: &mut AlgebraicClock,
+        frames: usize,
+    ) -> Vec<f32> {
+        let mut result = Vec::with_capacity(frames);
+        while result.len() < frames {
+            let count = clock.begin_chunk(frames - result.len());
+            let pitch = pitch_scale_for_tempo_ratio(clock.ratio_for_test());
+            if (pitch - self.pitch).abs() > 0.001 {
+                self.native.set_pitch_scale(pitch).unwrap();
+                self.pitch = pitch;
+            }
+            result.extend(self.feed(&clock.dry(source, count)));
+        }
+        result
+    }
+}
+
+fn prepare_complete_endpoint(
+    mixer: &mut RtMixer,
+    ownership: &Arc<InputRuntimeOwnership>,
+    execution: u64,
+) {
+    let acknowledgements: Arc<crate::audio_engine::constant_timing::CurrentTimingAcknowledgements> =
+        Arc::default();
+    mixer.set_current_timing_acknowledgements(acknowledgements.clone());
+    let index = mixer
+        .voices
+        .iter()
+        .position(|voice| voice.is_playing_sample(0))
+        .unwrap();
+    let snapshot = mixer.capture_pitch_voice_snapshot(index).unwrap();
+    let epoch = mixer.voices[index].stretch.preparation_epoch();
+    let permit = crate::audio_engine::native_history_permit::NativeHistoryContext {
+        id: 0,
+        ownership,
+        acknowledgements: &acknowledgements,
+        preparation_epoch: mixer.voices[index].stretch.source_epoch_owner(),
+    }
+    .capture(&snapshot.sample, 48_000, None)
+    .unwrap();
+    let request = snapshot
+        .into_request(
+            permit,
+            crate::audio_engine::pitch_intent::PitchIntent::default(),
+            true,
+            execution,
+            1,
+            epoch,
+        )
+        .unwrap();
+    let mut candidate = Box::new(
+        crate::audio_engine::prepared_native_history::NativeAdapterState::new(
+            Some(RubberBandLiveShifter::new(48_000, 2).unwrap()),
+            2,
+        ),
+    );
+    candidate.prepare_source_at_endpoint(request).unwrap();
+    let snapshot = mixer.capture_pitch_voice_snapshot(index).unwrap();
+    let feed = crate::audio_engine::stretch_processor::ProductiveSourceFeed {
+        pitch_intent: crate::audio_engine::pitch_intent::PitchIntent::default(),
+        key_lock: true,
+        sample: &snapshot.sample,
+        stems: None,
+        outgoing_stems: None,
+        sample_rate_hz: 48_000,
+        accepted: None,
+        plan: snapshot.plan,
+        playback: &snapshot.playback,
+        permit: None,
+        output_frame: Some(execution),
+    };
+    assert!(
+        mixer.voices[index]
+            .stretch
+            .adopt_prepared_pitch(&mut candidate, &feed, epoch, 1)
+    );
+}
 
 fn voice(mixer: &RtMixer) -> &crate::audio_engine::voice_slot::VoiceSlot {
     mixer
@@ -34,6 +180,7 @@ struct ModeOracle {
     wet: bool,
     dry_warm_remaining: usize,
     candidate: Option<(u64, usize, RawChronology)>,
+    ordinary_adoption: Option<(u64, usize, bool)>,
     adopted: usize,
     difference: f32,
 }
@@ -53,7 +200,97 @@ impl ModeOracle {
         loaded.adopt(&ready);
         loaded.callback.mixer.set_speed(ratio);
         assert!(launch_with_producer(&loaded.engine, &ready, false, 1, &loaded.producer).unwrap());
-        assert_eq!(loaded.callback.drain(&mut loaded.consumer), 1);
+        let ControlMessage::CapturePadStartTarget(start) = loaded.consumer.peek().unwrap() else {
+            panic!("ordinary launch must retain its original target before PreparedStart");
+        };
+        let start = start.clone();
+        assert_eq!(loaded.callback.drain(&mut loaded.consumer), 2);
+        assert!(loaded.consumer.is_empty());
+        assert!(start.accepted(), "{:?}", start.reason());
+        assert_eq!(start.original_frame(), Some(0));
+        let execution = start.execution_frame().unwrap();
+        assert_eq!(execution > 0, initial && ratio != 1.0);
+        if execution > 0 {
+            assert!(loaded.callback.feedback_rx.is_empty());
+            assert!(
+                !loaded
+                    .callback
+                    .mixer
+                    .voices
+                    .iter()
+                    .any(|voice| voice.active)
+            );
+            wait_until(Duration::from_secs(5), || {
+                let runtime = loaded.callback.mixer.pitch_runtime.as_mut().unwrap();
+                runtime.poll();
+                runtime.has_ready_action(start.sequence())
+            });
+            while loaded.callback.transport.output_frame() < execution {
+                let frame = loaded.callback.transport.output_frame();
+                let frames = (execution - frame).min(257) as usize;
+                let mut silence = vec![0.0; frames * 2];
+                let callback = &mut loaded.callback;
+                crate::audio_engine::audio_stream::render_scheduled_audio(
+                    &mut callback.mixer,
+                    &mut callback.scheduler,
+                    &mut silence,
+                    &mut [0.0; NUM_SAMPLES],
+                    frame,
+                    2,
+                    &mut callback.transport,
+                    &mut callback.feedback,
+                    &mut callback.retirement,
+                );
+                callback.transport.advance_by_rendered_frames(frames);
+                assert!(silence.iter().all(|sample| *sample == 0.0));
+                assert!(!callback.mixer.voices.iter().any(|voice| voice.active));
+                assert!(callback.feedback_rx.is_empty());
+            }
+            let callback = &mut loaded.callback;
+            crate::audio_engine::audio_stream::render_scheduled_audio(
+                &mut callback.mixer,
+                &mut callback.scheduler,
+                &mut [],
+                &mut [0.0; NUM_SAMPLES],
+                execution,
+                2,
+                &mut callback.transport,
+                &mut callback.feedback,
+                &mut callback.retirement,
+            );
+        }
+        assert_eq!(start.state(), "applied", "{:?}", start.reason());
+        assert_eq!(start.effective_frame(), Some(execution));
+        assert!(loaded.callback.scheduler.is_empty());
+        assert_eq!(
+            loaded
+                .callback
+                .mixer
+                .voices
+                .iter()
+                .filter(|voice| voice.is_playing_sample(0))
+                .count(),
+            1
+        );
+        if initial {
+            let actual = voice(&loaded.callback.mixer);
+            assert_eq!(actual.stretch.adopted_request_id(), Some(start.sequence()));
+            assert_eq!(
+                actual
+                    .stretch
+                    .productive_history()
+                    .unwrap()
+                    .fed_output_frames,
+                4096
+            );
+            let taps = actual.stretch.native_tap_observation().unwrap();
+            assert_eq!(taps.left_reads, 4096 * 2);
+            assert_eq!(taps.missing_reads, 0);
+            assert!(taps.min_frame.is_some_and(|frame| frame >= 24));
+            assert!(taps.max_frame.is_some_and(|frame| frame < 96));
+            assert_eq!(actual.source_playback.position().frame, 24);
+            assert_eq!(actual.source_playback.position().fraction, 0.0);
+        }
         let source = SampleBuffer {
             channels: 1,
             residency: None,
@@ -77,21 +314,28 @@ impl ModeOracle {
         complete.load_sample(0, full);
         complete.set_pad_loop_region(0, 24.0 / 48_000.0, Some(96.0 / 48_000.0));
         complete.set_speed(ratio);
-        assert!(complete.play_sample_at_output_frame(0, 1.0, 0));
-        // The complete-PCM control stages the same first wet handover on its live
-        // dry voice. The productive finite side instead arms the owned mode stopped.
+        assert!(complete.play_sample_at_output_frame(0, 1.0, execution));
         complete.set_pad_key_lock(0, initial);
+        if initial {
+            prepare_complete_endpoint(&mut complete, &ownership, execution);
+        }
         for mixer in [complete.as_mut(), &mut loaded.callback.mixer] {
             mixer.set_pad_eq(0, -12.0, -3.0, 4.0);
         }
-        let raw = RawChronology::new(ratio, false);
-        let dry_warm_remaining = if initial { raw.block_size() } else { 0 };
+        let raw = if initial {
+            RawChronology::endpoint(&source, ratio)
+        } else {
+            RawChronology::new(ratio, false)
+        };
+        let ordinary_adoption = initial.then(|| {
+            (
+                execution,
+                voice(&loaded.callback.mixer).stretch.native_state_address(),
+                false,
+            )
+        });
         // Observe the genuine completed initial start before later STOP/mode gestures.
-        assert!(matches!(
-            loaded.callback.feedback_rx.pop(),
-            Ok(AudioMessage::SampleStarted { id: 0 })
-        ));
-        assert!(loaded.callback.feedback_rx.is_empty());
+        loaded.assert_feedback(1);
         Self {
             loaded,
             complete,
@@ -100,10 +344,11 @@ impl ModeOracle {
             clock: AlgebraicClock::physical(24, 96, ratio),
             raw,
             filter: lifecycle_filter_after_cut(),
-            frame: 0,
+            frame: execution,
             wet: initial,
-            dry_warm_remaining,
+            dry_warm_remaining: 0,
             candidate: None,
+            ordinary_adoption,
             adopted: 0,
             difference: 0.0,
         }
@@ -179,11 +424,7 @@ impl ModeOracle {
             .push(ControlMessage::StopSample { id: 0 })
             .unwrap();
         assert_eq!(self.loaded.callback.drain(&mut self.loaded.consumer), 1);
-        assert!(matches!(
-            self.loaded.callback.feedback_rx.pop(),
-            Ok(AudioMessage::SampleStopped { id: 0 })
-        ));
-        assert!(self.loaded.callback.feedback_rx.is_empty());
+        self.loaded.assert_feedback(2);
         self.complete.stop_sample(0);
         assert!(
             !self
@@ -254,11 +495,7 @@ impl ModeOracle {
                 .push(ControlMessage::StopSample { id: 0 })
                 .unwrap();
             assert_eq!(self.loaded.callback.drain(&mut self.loaded.consumer), 1);
-            assert!(matches!(
-                self.loaded.callback.feedback_rx.pop(),
-                Ok(AudioMessage::SampleStopped { id: 0 })
-            ));
-            assert!(self.loaded.callback.feedback_rx.is_empty());
+            self.loaded.assert_feedback(2);
             let status = self
                 .loaded
                 .engine
@@ -295,16 +532,19 @@ impl ModeOracle {
         );
         let start_source = self.loaded.sample();
         assert!(Arc::ptr_eq(&start_source.samples, &armed_source.samples));
-        assert!(
-            launch_with_producer(
-                &self.loaded.engine,
-                &ticket,
-                false,
-                1,
-                &self.loaded.producer
-            )
+        // This regression deliberately exercises the legacy cold first-wet path.
+        // A current ordinary start already owns endpoint preparation before E.
+        self.loaded
+            .producer
+            .lock()
             .unwrap()
-        );
+            .push(ControlMessage::PlaySample {
+                expected_source_generation: None,
+                id: 0,
+                volume: 1.0,
+                received_at_ns: None,
+            })
+            .unwrap();
         assert_eq!(self.loaded.callback.drain(&mut self.loaded.consumer), 1);
         assert!(
             self.complete
@@ -499,6 +739,18 @@ impl ModeOracle {
     }
 
     fn prepare(&mut self) -> (u64, usize) {
+        if let Some((target, native, requested)) = &mut self.ordinary_adoption {
+            assert!(!*requested);
+            *requested = true;
+            assert_eq!(*target, self.frame);
+            assert_eq!(
+                voice(&self.loaded.callback.mixer)
+                    .stretch
+                    .native_state_address(),
+                *native
+            );
+            return (*target, *native);
+        }
         self.clock.begin_chunk(1);
         let mut preparation_clock = self.clock.clone();
         let mut raw = RawChronology::new(self.clock.ratio_for_test(), true);
@@ -534,6 +786,21 @@ impl ModeOracle {
     }
 
     fn through_adoption(&mut self) {
+        if let Some((target, native, requested)) = self.ordinary_adoption.take() {
+            assert!(requested);
+            for frames in [1, 127, 384, 96, 257, 512, 31, 369] {
+                self.render(frames);
+            }
+            assert_eq!(self.frame, target + 1777);
+            assert_eq!(
+                voice(&self.loaded.callback.mixer)
+                    .stretch
+                    .native_state_address(),
+                native
+            );
+            self.adopted += 1;
+            return;
+        }
         let target = self.candidate.as_ref().unwrap().0;
         let mut step = 0;
         while self.frame < target + 1777 {

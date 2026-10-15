@@ -9,6 +9,9 @@ use super::input_mapping::CapturedInputPadTrigger;
 use super::input_runtime_binding::{
     self, InputPadBinding, InputRuntimeOwnership, InputRuntimePadBinding,
 };
+use super::ordinary_start::OrdinaryStartPublication;
+use super::pad_start::{CapturedPadStart, PadStartReadinessSeal};
+use super::pitch_actions::PitchActionReject;
 use super::prepared_source::{PreparedSourcePermit, ResidentLaunchPermit};
 use crate::messages::{
     ControlMessage, PreparedStemSet, ResidentContext, ResidentControlIntent, SampleBuffer,
@@ -18,7 +21,7 @@ use pyo3::prelude::*;
 use rtrb::Producer;
 use std::path::PathBuf;
 use std::sync::{
-    Arc, Mutex,
+    Arc, Mutex, OnceLock, Weak,
     atomic::{AtomicBool, AtomicU8, AtomicU64, Ordering},
 };
 use std::time::{Duration, Instant};
@@ -254,6 +257,7 @@ pub(super) struct ResidentStemCache {
     pending: Option<StemOwner>,
     relocation: Option<PendingWindow>,
     proposal: Option<PendingWindow>,
+    start_readiness: Option<Weak<WindowState>>,
     pub(super) intent_epoch: Arc<AtomicU64>,
     history: Vec<StemDescriptor>,
     pub(super) committed: super::committed_stem_residency::CommittedStemState,
@@ -360,6 +364,7 @@ struct WindowState {
     error: Mutex<Option<String>>,
     adopted_binding: Mutex<Option<InputPadBinding>>,
     launch_cancelled: Arc<AtomicBool>,
+    start_readiness: OnceLock<SharedStartReadiness>,
     proposal: Mutex<Option<super::resident_proposal::ResidentProposal>>,
     #[cfg(test)]
     terminal_observation: Mutex<Option<terminal_order_tests::TerminalObservation>>,
@@ -367,6 +372,52 @@ struct WindowState {
     range_observation: Mutex<Option<WindowReadObservation>>,
     #[cfg(test)]
     control_wait_observed: AtomicBool,
+}
+
+/// Actual physical request metadata. WindowState owns this record; it contains
+/// no WindowState/attack/Work reference and therefore introduces no Arc cycle.
+struct SharedStartReadiness {
+    seal: PadStartReadinessSeal,
+    publication: PreparedSourcePermit,
+    binding: InputPadBinding,
+    source_generation: u64,
+    acknowledgements: Arc<CurrentTimingAcknowledgements>,
+    loop_region: Option<(f64, Option<f64>)>,
+    start_frame: usize,
+    end_frame: usize,
+    full_frame_count: usize,
+    window_revision: u64,
+    previous_window_revision: u64,
+    key_lock_request_id: Option<u64>,
+    independent_owner: bool,
+    members: Mutex<Vec<Weak<AtomicBool>>>,
+}
+
+impl SharedStartReadiness {
+    fn register_member(&self) -> PyResult<Arc<AtomicBool>> {
+        let mut members = self
+            .members
+            .lock()
+            .map_err(|_| PyRuntimeError::new_err("resident member lock poisoned"))?;
+        members.retain(|member| member.strong_count() != 0);
+        if members.len() >= 256 {
+            return Err(PyRuntimeError::new_err(
+                "resident start membership capacity exhausted",
+            ));
+        }
+        let cancelled = Arc::new(AtomicBool::new(false));
+        members.push(Arc::downgrade(&cancelled));
+        Ok(cancelled)
+    }
+
+    fn has_other_live_member(&self) -> bool {
+        self.members.lock().map_or(true, |members| {
+            members
+                .iter()
+                .filter_map(Weak::upgrade)
+                .any(|member| !member.load(Ordering::Acquire))
+        })
+    }
 }
 
 #[cfg(test)]
@@ -524,6 +575,7 @@ pub(crate) struct ResidentLaunchGuard {
     // rejection/execution drops only this bounded scalar metadata.
     publication: ResidentLaunchPermit,
     cancelled: Arc<AtomicBool>,
+    member_cancelled: Option<Arc<AtomicBool>>,
 }
 
 impl PartialEq for ResidentLaunchGuard {
@@ -531,18 +583,30 @@ impl PartialEq for ResidentLaunchGuard {
         Arc::ptr_eq(&self.publication.epoch, &other.publication.epoch)
             && self.publication.expected == other.publication.expected
             && Arc::ptr_eq(&self.cancelled, &other.cancelled)
+            && match (&self.member_cancelled, &other.member_cancelled) {
+                (None, None) => true,
+                (Some(left), Some(right)) => Arc::ptr_eq(left, right),
+                _ => false,
+            }
     }
 }
 
 impl ResidentLaunchGuard {
     pub(crate) fn current(&self) -> bool {
-        !self.cancelled.load(Ordering::Acquire) && self.publication.current_accepted()
+        !self.cancelled.load(Ordering::Acquire)
+            && self
+                .member_cancelled
+                .as_ref()
+                .is_none_or(|member| !member.load(Ordering::Acquire))
+            && self.publication.current_accepted()
     }
 }
 
 #[pyclass(frozen)]
 pub struct ResidentWindowTicket {
     input_trigger: Option<CapturedInputPadTrigger>,
+    pad_start: Option<CapturedPadStart>,
+    member_cancelled: Option<Arc<AtomicBool>>,
     publication: PreparedSourcePermit,
     state: Arc<WindowState>,
     #[pyo3(get)]
@@ -565,7 +629,195 @@ pub struct ResidentWindowTicket {
     key_lock_request_id: Option<u64>,
 }
 
+/// A retained, genuine resident request dependency. Capturing it grants no new
+/// window owner and never joins/replaces the singleton resident proposal.
+#[derive(Clone)]
+pub(crate) struct ResidentStartDependency {
+    publication: PreparedSourcePermit,
+    state: Arc<WindowState>,
+    binding: InputPadBinding,
+    ownership: Arc<InputRuntimeOwnership>,
+    member_cancelled: Option<Arc<AtomicBool>>,
+}
+
+impl ResidentStartDependency {
+    pub(crate) fn resolve(
+        &self,
+        start: &CapturedPadStart,
+    ) -> PyResult<Option<(InputPadBinding, ResidentLaunchGuard)>> {
+        self.state.retry_failure(&self.ownership);
+        if !start.belongs_to(&self.ownership)
+            || self.state.terminal.load(Ordering::Acquire) != 0
+            || self.state.launch_cancelled.load(Ordering::Acquire)
+            || self
+                .member_cancelled
+                .as_ref()
+                .is_some_and(|member| member.load(Ordering::Acquire))
+            || self.publication.status() == "rejected"
+        {
+            return Err(PyValueError::new_err(
+                "original global resident dependency rejected",
+            ));
+        }
+        let proposal_current = self
+            .state
+            .proposal
+            .lock()
+            .map_err(|_| PyRuntimeError::new_err("resident proposal lock poisoned"))?
+            .as_ref()
+            .is_some_and(|proposal| {
+                !self.state.control_published.load(Ordering::Acquire) && proposal.current()
+            });
+        if !self.publication.current() && !proposal_current {
+            return Err(PyValueError::new_err(
+                "original global resident dependency superseded",
+            ));
+        }
+        if self.publication.status() != "accepted" {
+            return Ok(None);
+        }
+        let binding = if self.publication.preserved_window() {
+            self.binding
+        } else {
+            let Some(binding) = *self
+                .state
+                .adopted_binding
+                .lock()
+                .map_err(|_| PyRuntimeError::new_err("resident binding lock poisoned"))?
+            else {
+                return Ok(None);
+            };
+            binding
+        };
+        let publication = self
+            .publication
+            .resident_launch_permit()
+            .ok_or_else(|| PyValueError::new_err("global resident ACK has no launch permit"))?;
+        let guard = ResidentLaunchGuard {
+            publication,
+            cancelled: self.state.launch_cancelled.clone(),
+            member_cancelled: self.member_cancelled.clone(),
+        };
+        let resolved = match start.preflight_work_with_binding(binding, Some(&guard)) {
+            Ok(resolved) => resolved,
+            Err(
+                super::pitch_actions::PitchActionReject::PlacementPending
+                | super::pitch_actions::PitchActionReject::WindowPending,
+            ) => return Ok(None),
+            Err(reason) => return Err(PyValueError::new_err(reason.as_str())),
+        };
+        Ok(Some((resolved.binding, guard)))
+    }
+}
+
 impl ResidentWindowTicket {
+    /// Retain this exact already-admitted request at GLOBAL gesture capture.
+    pub(crate) fn capture_start_dependency(
+        &self,
+        start: &CapturedPadStart,
+    ) -> PyResult<ResidentStartDependency> {
+        if !start.belongs_to(&self.ownership)
+            || self.state.terminal.load(Ordering::Acquire) != 0
+            || self.state.launch_cancelled.load(Ordering::Acquire)
+            || !self.is_current()
+            || self
+                .loop_region
+                .is_some_and(|region| region != start.loop_region())
+        {
+            return Err(PyValueError::new_err(
+                "resident ticket does not own the original global intent",
+            ));
+        }
+        let binding =
+            if self.publication.status() == "accepted" && !self.publication.preserved_window() {
+                self.state
+                    .adopted_binding
+                    .lock()
+                    .map_err(|_| PyRuntimeError::new_err("resident binding lock poisoned"))?
+                    .ok_or_else(|| PyValueError::new_err("resident ACK binding unavailable"))?
+            } else {
+                self.binding
+            };
+        let original = start
+            .control_guard()
+            .map_err(|reason| PyValueError::new_err(reason.as_str()))?;
+        if !start.validates_preparation_binding(original.id, binding) {
+            return Err(PyValueError::new_err(
+                "resident ticket belongs to a different original source",
+            ));
+        }
+        // Key Lock/seek-only tickets have no loop intent. Their actual finite
+        // window must cover the complete immutable attack region instead.
+        if self.loop_region.is_none() {
+            let (from, to) = start.loop_region();
+            let rate = f64::from(binding.sample_rate_hz);
+            let from = (from * rate).round().max(0.0) as usize;
+            let to = to
+                .map_or(self.full_frame_count, |end| {
+                    (end * rate).round().max(0.0) as usize
+                })
+                .min(self.full_frame_count);
+            if from < self.start_frame || to > self.end_frame || from >= to {
+                return Err(PyValueError::new_err(
+                    "resident dependency does not cover original global loop",
+                ));
+            }
+        }
+        Ok(ResidentStartDependency {
+            publication: self.publication.clone(),
+            state: self.state.clone(),
+            binding: self.binding,
+            ownership: self.ownership.clone(),
+            member_cancelled: self.member_cancelled.clone(),
+        })
+    }
+
+    /// Only the original captured start can use this ticket's actual WindowACK.
+    pub(super) fn capture_pad_start_launch_guard(
+        &self,
+        start: &CapturedPadStart,
+    ) -> PyResult<Option<(InputPadBinding, ResidentLaunchGuard)>> {
+        if self
+            .pad_start
+            .as_ref()
+            .is_none_or(|original| !original.same_owner(start))
+            || self.publication.status() != "accepted"
+            || !self.is_current()
+            || self.state.launch_cancelled.load(Ordering::Acquire)
+            || self
+                .member_cancelled
+                .as_ref()
+                .is_some_and(|member| member.load(Ordering::Acquire))
+            || self.loop_region != Some(start.loop_region())
+        {
+            return Ok(None);
+        }
+        let binding = if self.publication.preserved_window() {
+            self.binding
+        } else {
+            let Some(binding) = *self
+                .state
+                .adopted_binding
+                .lock()
+                .map_err(|_| PyRuntimeError::new_err("resident binding lock poisoned"))?
+            else {
+                return Ok(None);
+            };
+            binding
+        };
+        let Some(publication) = self.publication.resident_launch_permit() else {
+            return Ok(None);
+        };
+        Ok(Some((
+            binding,
+            ResidentLaunchGuard {
+                publication,
+                cancelled: self.state.launch_cancelled.clone(),
+                member_cancelled: self.member_cancelled.clone(),
+            },
+        )))
+    }
+
     #[cfg(test)]
     pub(super) fn control_published_for_test(&self) -> bool {
         self.state.control_published.load(Ordering::Acquire)
@@ -585,12 +837,15 @@ impl ResidentWindowTicket {
     pub(super) fn read_observation_for_test(&self) -> Option<WindowReadObservation> {
         self.state.range_observation.lock().unwrap().clone()
     }
+    /// Legacy launch metadata only; callers convert it to prepared work off realtime.
+    /// This scalar TriggerInputPad value must never be published to the audio queue.
     pub(super) fn launch_message(
         &self,
         exclusive: bool,
         received_at_ns: u64,
     ) -> Option<(ControlMessage, input_runtime_binding::PreparedLaunchWrite)> {
         if self.input_trigger.is_some()
+            || self.pad_start.is_some()
             || self.publication.status() != "accepted"
             || !self.is_current()
             || self.state.launch_cancelled.load(Ordering::Acquire)
@@ -621,6 +876,7 @@ impl ResidentWindowTicket {
                 resident_control: Some(ResidentLaunchGuard {
                     publication: self.publication.resident_launch_permit()?,
                     cancelled: self.state.launch_cancelled.clone(),
+                    member_cancelled: self.member_cancelled.clone(),
                 }),
                 launch_revision: prepared.previous_revision,
             },
@@ -686,18 +942,10 @@ pub(super) fn launch_captured_with_producer(
     {
         return Ok(false);
     }
-    let window_binding = if ticket.publication.preserved_window() {
-        ticket.binding
-    } else {
-        let Some(binding) = *ticket
-            .state
-            .adopted_binding
-            .lock()
-            .map_err(|_| PyRuntimeError::new_err("resident binding lock poisoned"))?
-        else {
-            return Ok(false);
-        };
-        binding
+    let Some((window_binding, resident_guard)) =
+        ticket.capture_pad_start_launch_guard(trigger.pad_start())?
+    else {
+        return Ok(false);
     };
     let Some(guard) = trigger.launch_guard(Some(window_binding))? else {
         return Ok(false);
@@ -715,24 +963,18 @@ pub(super) fn launch_captured_with_producer(
         .ownership
         .prepare_launch_write(placement, input_runtime_binding::LaunchWriteKind::Admit)
         .map_err(PyRuntimeError::new_err)?;
-    let Some(publication) = ticket.publication.resident_launch_permit() else {
+    let Some(work) = trigger
+        .pad_start()
+        .take_work_with_binding(guard.binding, Some(resident_guard))
+        .map_err(|reason| PyRuntimeError::new_err(reason.as_str()))?
+    else {
         return Ok(false);
     };
-    let (start_s, end_s) = trigger.loop_region();
-    let message = ControlMessage::TriggerInputPad {
-        id: guard.id,
-        start_s,
-        end_s,
-        exclusive: trigger.exclusive(),
-        binding: guard.binding,
-        received_at_ns: trigger.received_at_ns(),
-        resident_control: Some(ResidentLaunchGuard {
-            publication,
-            cancelled: ticket.state.launch_cancelled.clone(),
-        }),
-        launch_revision: prepared.previous_revision,
-    };
-    Ok(ticket
+    let publication = Arc::new(OrdinaryStartPublication::new(work));
+    let message = ControlMessage::PreparedStart(publication.clone());
+    #[cfg(test)]
+    control_publication_tests::before_commit();
+    let committed = ticket
         .ownership
         .commit_launch_write(
             prepared,
@@ -759,6 +1001,7 @@ pub(super) fn launch_captured_with_producer(
                         .binding
                         .accepted
                         .map_or(0, |accepted| accepted.publication_epoch)
+                    && trigger.pad_start().mark_published_claimed()
             },
             || {
                 guard.mark_admitted();
@@ -767,7 +1010,17 @@ pub(super) fn launch_captured_with_producer(
                     .expect("reserved MIDI resident capacity");
             },
         )
-        .is_ok())
+        .is_ok();
+    if !committed
+        && let Some(work) = publication.take()
+        && let Err(work) = trigger.pad_start().restore_unpublished_work(work)
+    {
+        trigger
+            .pad_start()
+            .reject(PitchActionReject::PreparedMismatch);
+        drop(work);
+    }
+    Ok(committed)
 }
 
 fn launch_with_producer_before_commit(
@@ -784,28 +1037,70 @@ fn launch_with_producer_before_commit(
     let mut producer = producer
         .lock()
         .map_err(|_| PyRuntimeError::new_err("producer lock poisoned"))?;
-    if producer.is_full() {
-        return Err(PyRuntimeError::new_err("resident command queue is full"));
+    if producer.slots() < 2 {
+        return Err(PyRuntimeError::new_err(
+            "resident command queue requires timing and prepared start capacity",
+        ));
     }
     let Some((message, prepared)) = ticket.launch_message(exclusive, received_at_ns) else {
         return Ok(false);
     };
-    let binding = match &message {
-        ControlMessage::TriggerInputPad { binding, .. } => *binding,
-        _ => unreachable!("resident launch preparation has one message kind"),
+    let ControlMessage::TriggerInputPad {
+        binding,
+        start_s,
+        end_s,
+        resident_control: Some(resident_guard),
+        ..
+    } = message
+    else {
+        unreachable!("resident launch preparation retains its exact native guard");
     };
+    let start = CapturedPadStart::capture_parts(
+        binding,
+        ticket.ownership.clone(),
+        ticket.acknowledgements.clone(),
+        start_s,
+        end_s,
+        1.0,
+        exclusive,
+        received_at_ns,
+        engine.ordinary_start_render_format()?,
+        None,
+    )
+    .map_err(|reason| PyRuntimeError::new_err(reason.as_str()))?;
+    let Some(work) = start
+        .take_work_with_binding(binding, Some(resident_guard))
+        .map_err(|reason| PyRuntimeError::new_err(reason.as_str()))?
+    else {
+        return Ok(false);
+    };
+    let target = ControlMessage::CapturePadStartTarget(start.clone());
+    let publication = Arc::new(OrdinaryStartPublication::new(work));
+    let message = ControlMessage::PreparedStart(publication.clone());
     before_commit();
-    Ok(engine
+    let committed = engine
         .input_runtime_ownership
         .commit_launch_write(
             prepared,
-            || ticket.launch_binding_current(binding),
+            || ticket.launch_binding_current(binding) && start.mark_published_claimed(),
             || {
-                let sent = producer.push(message);
-                debug_assert!(sent.is_ok());
+                producer
+                    .push(target)
+                    .expect("reserved legacy resident target capacity");
+                producer
+                    .push(message)
+                    .expect("reserved legacy resident prepared start capacity");
             },
         )
-        .is_ok())
+        .is_ok();
+    if !committed
+        && let Some(work) = publication.take()
+        && let Err(work) = start.restore_unpublished_work(work)
+    {
+        start.reject(PitchActionReject::PreparedMismatch);
+        drop(work);
+    }
+    Ok(committed)
 }
 
 #[cfg(test)]
@@ -817,7 +1112,11 @@ impl ResidentWindowTicket {
     /// Revoke this ticket's starts while preserving its acknowledged window.
     /// The flag belongs only to this ticket, so stale cancellation cannot affect a newer owner.
     pub fn cancel_launch(&self) -> bool {
-        !self.state.launch_cancelled.swap(true, Ordering::AcqRel)
+        !self
+            .member_cancelled
+            .as_ref()
+            .unwrap_or(&self.state.launch_cancelled)
+            .swap(true, Ordering::AcqRel)
     }
 
     /// The adopted target comes from the actual voice's complete native extent.
@@ -829,6 +1128,13 @@ impl ResidentWindowTicket {
     }
 
     pub fn publication_status(&self) -> &'static str {
+        if self
+            .member_cancelled
+            .as_ref()
+            .is_some_and(|member| member.load(Ordering::Acquire))
+        {
+            return "cancelled";
+        }
         self.state.retry_failure(&self.ownership);
         if self
             .state
@@ -858,6 +1164,13 @@ impl ResidentWindowTicket {
 
     /// An ACK alone cannot promote a ticket after unload, replacement or a newer intent.
     pub fn is_current(&self) -> bool {
+        if self
+            .member_cancelled
+            .as_ref()
+            .is_some_and(|member| member.load(Ordering::Acquire))
+        {
+            return false;
+        }
         let binding =
             if self.publication.status() == "accepted" && !self.publication.preserved_window() {
                 let Ok(adopted) = self.state.adopted_binding.lock() else {
@@ -891,6 +1204,14 @@ impl ResidentWindowTicket {
 
     /// A claimed callback tail cannot be cancelled or rolled back by metadata.
     pub fn cancel(&self) -> bool {
+        if let Some(member) = &self.member_cancelled {
+            let changed = !member.swap(true, Ordering::AcqRel);
+            if self.state.start_readiness.get().is_some_and(|readiness| {
+                readiness.independent_owner || readiness.has_other_live_member()
+            }) {
+                return changed;
+            }
+        }
         if let Ok(proposal) = self.state.proposal.lock()
             && let Some(proposal) = proposal.as_ref()
             && !proposal.armed()
@@ -1222,6 +1543,109 @@ fn catch_up_pair_window_custody(
     }
 }
 
+/// Mirror only this original transaction's observed storage effect. Mode refusal is
+/// independent: the rejected ticket remains rejected and cannot authorize any launch.
+/// False means a publication/mirror marker is temporarily unavailable; retain all owners.
+fn reconcile_claimed_resident_storage(
+    engine: &AudioEngine,
+    id: usize,
+    pending: &PendingWindow,
+    cache: &mut Option<SampleBuffer>,
+    accepted: &mut Option<StemOwner>,
+) -> PyResult<bool> {
+    let ownership = &engine.input_runtime_ownership;
+    let Some(key) = pending
+        .state
+        .placement
+        .and_then(|placement| placement.content_key())
+    else {
+        return Ok(true);
+    };
+    let native = match ownership.observe_content_key(key) {
+        PlacementObservation::Current(native) => native,
+        PlacementObservation::Pending => return Ok(false),
+        _ => return Ok(true),
+    };
+    if ownership.control_slot_for_cell(key.cell()) != id {
+        return Ok(false);
+    }
+    let Some(next) = pending.sample.as_ref() else {
+        return Ok(true);
+    };
+    let Some(binding) = *pending
+        .state
+        .adopted_binding
+        .lock()
+        .map_err(|_| PyRuntimeError::new_err("resident binding lock poisoned"))?
+    else {
+        return Ok(false);
+    };
+    let owns_binding = binding
+        .placement
+        .and_then(|placement| placement.content_key())
+        == Some(key)
+        && binding.resident == next.resident_binding()
+        && binding.source_address == next.source_address()
+        && binding.sample_count == next.source_sample_count()
+        && binding.channels == next.channels;
+    let owns_cache = cache.as_ref().is_some_and(|sample| {
+        sample.same_source(next)
+            && (sample.window_revision() == pending.expected_revision
+                || (sample.same_window(next) && Arc::ptr_eq(&sample.samples, &next.samples)))
+    });
+    let source_current = || {
+        owns_binding
+            && owns_cache
+            && pending.state.source_generation != 0
+            && pending.publication.resident_storage_adopted()
+            && pending.state.control_published.load(Ordering::Acquire)
+            && ownership.slot_snapshot_fields_current(native)
+            && ownership.control_slot_for_cell(key.cell()) == id
+            && ownership.authority_current(id, binding)
+            && ownership.binding_source_generation(id, binding)
+                == Some(pending.state.source_generation)
+            && ownership.binding_window_current(id, binding)
+    };
+    if !source_current() {
+        // A replacement no longer owns this exact physical window. Never install an
+        // old receipt over it, even when source bytes or numerical revisions agree.
+        return Ok(true);
+    }
+    let write = match ownership.prepare_slot_write_fixed(native, native.lifetime()) {
+        Ok(write) => write,
+        Err(PlacementError::Pending | PlacementError::Stale) => return Ok(false),
+        Err(PlacementError::Retired) => return Ok(true),
+        Err(error) => return Err(PyRuntimeError::new_err(error.to_string())),
+    };
+    let replacement = next.clone();
+    let stems = pending.stems.clone();
+    let mut old_sample = None;
+    let mut old_stems = None;
+    let result = ownership.commit_slot_write_fixed(&write, source_current, |_| {
+        old_sample = cache.replace(replacement);
+        if let Some(owner) = accepted.as_mut()
+            && let Some(stems) = stems
+            && Arc::ptr_eq(
+                &owner.set.complete_set_identity,
+                &stems.complete_set_identity,
+            )
+        {
+            old_stems = Some(std::mem::replace(&mut owner.set, stems));
+        }
+    });
+    // All destruction is on the control thread under its existing request/cache locks.
+    drop(old_sample);
+    drop(old_stems);
+    match result {
+        Ok(_) => Ok(true),
+        Err(PlacementError::Pending | PlacementError::Stale | PlacementError::ClaimRejected) => {
+            Ok(false)
+        }
+        Err(PlacementError::Retired) => Ok(true),
+        Err(error) => Err(PyRuntimeError::new_err(error.to_string())),
+    }
+}
+
 pub(super) fn reconcile_under_request_lock(engine: &AudioEngine) -> PyResult<()> {
     let mut cache = engine
         .sample_cache
@@ -1308,6 +1732,25 @@ pub(super) fn reconcile_under_request_lock(engine: &AudioEngine) -> PyResult<()>
                 );
             }
             let status = pending.publication.status();
+            if matches!(status, "accepted" | "rejected")
+                && pending.publication.resident_storage_adopted()
+            {
+                if !reconcile_claimed_resident_storage(
+                    engine,
+                    id,
+                    pending,
+                    &mut cache[id],
+                    &mut owner.accepted,
+                )? || !pending.state.finish_control(
+                    &engine.input_runtime_ownership,
+                    id,
+                    pending.publication.expected,
+                ) {
+                    continue;
+                }
+                owner.relocation = None;
+                continue;
+            }
             if status == "accepted" {
                 if catch_up_pair_window_custody(
                     engine,
@@ -2185,13 +2628,18 @@ pub(super) fn prepare_window_with_producer(
     request: WindowRequest,
     producer: Arc<Mutex<Producer<ControlMessage>>>,
 ) -> PyResult<ResidentWindowTicket> {
-    prepare_window_with_producer_and_trigger(engine, id, request, producer, None)
+    prepare_window_with_producer_and_trigger(engine, id, request, producer, None, None)
 }
 
 pub(super) fn prepare_captured_control(
     engine: &AudioEngine,
     trigger: &CapturedInputPadTrigger,
 ) -> PyResult<ResidentWindowTicket> {
+    if let Some(ticket) = join_captured_readiness(engine, trigger.pad_start(), Some(trigger), None)?
+    {
+        trigger.note_window_prepared();
+        return Ok(ticket);
+    }
     let id = trigger.preparation_slot(engine)?;
     let ticket = prepare_window_with_producer_and_trigger(
         engine,
@@ -2202,9 +2650,160 @@ pub(super) fn prepare_captured_control(
         },
         engine.control_producer()?.clone(),
         Some(trigger),
+        Some(trigger.pad_start()),
     )?;
     trigger.note_window_prepared();
     Ok(ticket)
+}
+
+pub(super) fn prepare_captured_pad_start_with_dependency(
+    engine: &AudioEngine,
+    start: &CapturedPadStart,
+    dependency: Option<&ResidentWindowTicket>,
+) -> PyResult<ResidentWindowTicket> {
+    if let Some(ticket) = join_captured_readiness(engine, start, None, dependency)? {
+        start.note_window_prepared();
+        return Ok(ticket);
+    }
+    let id = start.preparation_slot(engine)?;
+    let ticket = prepare_window_with_producer_and_trigger(
+        engine,
+        id,
+        WindowRequest {
+            loop_region: Some(start.loop_region()),
+            ..WindowRequest::default()
+        },
+        engine.control_producer()?.clone(),
+        None,
+        Some(start),
+    )?;
+    start.note_window_prepared();
+    Ok(ticket)
+}
+
+/// Register a distinct original attack with a retained physical request BEFORE
+/// strict old-window admission or reconciliation can retire its discovery row.
+fn join_captured_readiness(
+    engine: &AudioEngine,
+    start: &CapturedPadStart,
+    input_trigger: Option<&CapturedInputPadTrigger>,
+    dependency: Option<&ResidentWindowTicket>,
+) -> PyResult<Option<ResidentWindowTicket>> {
+    if !start.belongs_to(&engine.input_runtime_ownership) {
+        return Err(PyValueError::new_err("foreign captured pad start"));
+    }
+    let _requests = engine
+        .pad_request_ids
+        .lock()
+        .map_err(|_| PyRuntimeError::new_err("request lock poisoned"))?;
+    let id = start
+        .diagnostic_slot()
+        .ok_or_else(|| PyValueError::new_err("captured start placement unavailable"))?;
+    let state = match dependency {
+        Some(ticket) => {
+            if !Arc::ptr_eq(&ticket.ownership, &engine.input_runtime_ownership)
+                || ticket
+                    .member_cancelled
+                    .as_ref()
+                    .is_some_and(|member| member.load(Ordering::Acquire))
+            {
+                return Err(PyValueError::new_err(
+                    "original resident dependency unavailable",
+                ));
+            }
+            Some(ticket.state.clone())
+        }
+        None => engine
+            .resident_stem_cache
+            .lock()
+            .map_err(|_| PyRuntimeError::new_err("resident ownership lock poisoned"))?[id]
+            .start_readiness
+            .as_ref()
+            .and_then(Weak::upgrade),
+    };
+    let Some(state) = state else {
+        if dependency.is_some() {
+            return Err(PyValueError::new_err(
+                "original resident dependency unavailable",
+            ));
+        }
+        return Ok(None);
+    };
+    let Some(readiness) = state.start_readiness.get() else {
+        if dependency.is_some() {
+            return Err(PyValueError::new_err(
+                "original resident dependency has no Native readiness owner",
+            ));
+        }
+        return Ok(None);
+    };
+    // Independent controller edits can only be joined via the exact ticket
+    // retained at gesture capture; a later matching edit is never discovered.
+    if dependency.is_none() && readiness.independent_owner {
+        return Ok(None);
+    }
+    let proposal_current = state
+        .proposal
+        .lock()
+        .map_err(|_| PyRuntimeError::new_err("resident proposal lock poisoned"))?
+        .as_ref()
+        .is_some_and(|proposal| {
+            !state.control_published.load(Ordering::Acquire) && proposal.current()
+        });
+    let current = state.terminal.load(Ordering::Acquire) == 0
+        && !state.launch_cancelled.load(Ordering::Acquire)
+        && readiness.publication.status() != "rejected"
+        && (readiness.publication.current() || proposal_current);
+    let adopted = if readiness.publication.status() == "accepted" {
+        *state
+            .adopted_binding
+            .lock()
+            .map_err(|_| PyRuntimeError::new_err("resident binding lock poisoned"))?
+    } else {
+        None
+    };
+    let (from, to) = start.loop_region();
+    let rate = f64::from(readiness.binding.sample_rate_hz);
+    let from_frame = (from * rate).round().max(0.0) as usize;
+    let to_frame = to
+        .map_or(readiness.full_frame_count, |end| {
+            (end * rate).round().max(0.0) as usize
+        })
+        .min(readiness.full_frame_count);
+    let same_context = readiness.loop_region.map_or(
+        from_frame >= readiness.start_frame
+            && to_frame <= readiness.end_frame
+            && from_frame < to_frame,
+        |region| region == start.loop_region(),
+    );
+    if !current || !same_context || !start.matches_readiness_seal(&readiness.seal, adopted) {
+        if dependency.is_some() {
+            return Err(PyValueError::new_err(
+                "original resident dependency source, timing or loop changed",
+            ));
+        }
+        return Ok(None);
+    }
+    let member_cancelled = readiness.register_member()?;
+    Ok(Some(ResidentWindowTicket {
+        input_trigger: input_trigger.cloned(),
+        pad_start: Some(start.clone()),
+        member_cancelled: Some(member_cancelled),
+        publication: readiness.publication.clone(),
+        state: state.clone(),
+        window_revision: readiness.window_revision,
+        previous_window_revision: readiness.previous_window_revision,
+        start_frame: readiness.start_frame,
+        end_frame: readiness.end_frame,
+        full_frame_count: readiness.full_frame_count,
+        id,
+        source_generation: readiness.source_generation,
+        binding: readiness.binding,
+        ownership: engine.input_runtime_ownership.clone(),
+        acknowledgements: readiness.acknowledgements.clone(),
+        loop_region: Some(start.loop_region()),
+        key_lock_request_id: readiness.key_lock_request_id,
+    }))
 }
 
 fn prepare_window_with_producer_and_trigger(
@@ -2213,6 +2812,7 @@ fn prepare_window_with_producer_and_trigger(
     request: WindowRequest,
     producer: Arc<Mutex<Producer<ControlMessage>>>,
     input_trigger: Option<&CapturedInputPadTrigger>,
+    pad_start: Option<&CapturedPadStart>,
 ) -> PyResult<ResidentWindowTicket> {
     if id >= NUM_SAMPLES
         || request.storage_range.is_some_and(|(start, end)| {
@@ -2245,9 +2845,12 @@ fn prepare_window_with_producer_and_trigger(
         .pad_request_ids
         .lock()
         .map_err(|_| PyRuntimeError::new_err("request lock poisoned"))?;
-    let id = match input_trigger {
-        Some(trigger) => trigger.preparation_slot(engine)?,
-        None => id,
+    let id = if let Some(trigger) = input_trigger {
+        trigger.preparation_slot(engine)?
+    } else if let Some(start) = pad_start {
+        start.preparation_slot(engine)?
+    } else {
+        id
     };
     engine
         .input_runtime_ownership
@@ -2265,6 +2868,7 @@ fn prepare_window_with_producer_and_trigger(
         .ok_or_else(|| PyValueError::new_err("current complete source/timing unavailable"))?;
     if input_trigger
         .is_some_and(|trigger| !trigger.validates_preparation_binding(id, binding.binding))
+        || pad_start.is_some_and(|start| !start.validates_preparation_binding(id, binding.binding))
     {
         return Err(PyValueError::new_err(
             "captured MIDI preparation source or intent changed",
@@ -2521,6 +3125,35 @@ fn prepare_window_with_producer_and_trigger(
         control.placement,
         binding.source_generation,
     ));
+    state
+        .start_readiness
+        .set(SharedStartReadiness {
+            seal: PadStartReadinessSeal::capture(&binding)
+                .map_err(|reason| PyValueError::new_err(reason.as_str()))?,
+            publication: publication.clone(),
+            binding: binding.binding,
+            source_generation: binding.source_generation,
+            acknowledgements: binding.acknowledgements.clone(),
+            loop_region: request.loop_region,
+            start_frame: start,
+            end_frame: end,
+            full_frame_count: old.frame_count(),
+            window_revision: revision,
+            previous_window_revision: old.window_revision(),
+            key_lock_request_id,
+            independent_owner: pad_start.is_none(),
+            members: Mutex::new(Vec::new()),
+        })
+        .map_err(|_| PyRuntimeError::new_err("resident readiness already installed"))?;
+    let member_cancelled = pad_start
+        .map(|_| {
+            state
+                .start_readiness
+                .get()
+                .expect("new readiness record")
+                .register_member()
+        })
+        .transpose()?;
     *state
         .proposal
         .lock()
@@ -2530,6 +3163,8 @@ fn prepare_window_with_producer_and_trigger(
     let token = Arc::new(());
     let ticket = ResidentWindowTicket {
         input_trigger: input_trigger.cloned(),
+        pad_start: pad_start.cloned(),
+        member_cancelled,
         publication: publication.clone(),
         state: state.clone(),
         window_revision: revision,
@@ -2594,6 +3229,7 @@ fn prepare_window_with_producer_and_trigger(
                 },
                 || {
                     displaced = owners[id].relocation.replace(pending);
+                    owners[id].start_readiness = Some(Arc::downgrade(&state));
                     state.control_published.store(true, Ordering::Release);
                     admission_producer
                         .push(message)
@@ -2614,6 +3250,7 @@ fn prepare_window_with_producer_and_trigger(
         return Ok(ticket);
     }
     owners[id].proposal = Some(pending);
+    owners[id].start_readiness = Some(Arc::downgrade(&state));
     let (capture, seek_receiver) = if seek_only {
         let (sender, receiver) = rtrb::RingBuffer::new(1);
         (

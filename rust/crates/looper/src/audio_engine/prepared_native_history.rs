@@ -7,10 +7,11 @@ use super::native_history_permit::NativeHistoryPermit;
 use super::native_source_coverage::{
     NormalLoopCoverage, complete_view_available, normal_loop_feed_available,
 };
+use super::pitch_intent::PitchIntent;
 use super::productive_source_history::ProductiveSourceBinding;
-use super::rubberband_backend::{
-    RubberBandError, RubberBandLiveShifter, pitch_scale_for_tempo_ratio,
-};
+#[cfg(test)]
+use super::rubberband_backend::pitch_scale_for_tempo_ratio;
+use super::rubberband_backend::{RubberBandError, RubberBandLiveShifter};
 use super::source_playback::SourcePlayback;
 use super::source_reader::SourceReadPlan;
 use super::stretch_processor::{DEFAULT_BLOCK_SAMPLES, FixedFifo, ProductiveSourceFeed};
@@ -18,9 +19,137 @@ use crate::messages::{PreparedStemSet, SampleBuffer};
 use std::sync::Arc;
 
 pub(crate) const PREPARED_HISTORY_FRAMES: usize = 4096;
-pub(crate) const PITCH_SCALE_EPSILON: f64 = 0.001;
+// A near-unity request remains a real request. Only actual native p=1 permits dry bypass.
+pub(crate) const PITCH_SCALE_EPSILON: f64 = 0.0;
+
+/// Source/history admission failures belong to one request. Adapter/backend faults still
+/// terminate the worker; in particular, its FIFO InvalidBlockSize is not a coverage rejection.
+#[derive(Debug)]
+pub(crate) enum NativeSourcePreparationError {
+    Unavailable(RubberBandError),
+    Backend(RubberBandError),
+}
+
+impl NativeSourcePreparationError {
+    fn from_history(error: RubberBandError) -> Self {
+        match error {
+            RubberBandError::UnavailableSourceHistory => Self::Unavailable(error),
+            _ => Self::Backend(error),
+        }
+    }
+
+    fn from_coverage(error: RubberBandError) -> Self {
+        match error {
+            RubberBandError::InvalidBlockSize => Self::Unavailable(error),
+            _ => Self::Backend(error),
+        }
+    }
+
+    fn into_backend(self) -> RubberBandError {
+        match self {
+            Self::Unavailable(error) | Self::Backend(error) => error,
+        }
+    }
+}
+
+/// Frozen source/render checkpoint owned by one accepted action, without mutable DSP state.
+pub(crate) struct PitchSourceSnapshot {
+    pub(crate) sample: SampleBuffer,
+    pub(crate) stems: Option<PreparedStemSet>,
+    pub(crate) accepted: Option<super::constant_timing::AcceptedTimingProjection>,
+    pub(crate) sample_rate_hz: u32,
+    pub(crate) paused: bool,
+    pub(crate) playback: SourcePlayback,
+    pub(crate) plan: SourceReadPlan,
+}
+
+impl PitchSourceSnapshot {
+    /// Project a frozen SET checkpoint from capture F to its declared execution E.
+    /// This changes only the snapshot. It has a fixed bound because accepted source-rate
+    /// smoothing has finitely many .05 steps; the terminal constant interval advances at once.
+    pub(crate) fn project_output_frames(&mut self, output_frames: u64) -> bool {
+        if self.paused || output_frames == 0 {
+            return true;
+        }
+        let mut playback = self.playback;
+        let mut plan = self.plan;
+        let mut remaining = output_frames;
+        for _ in 0..SourcePlayback::MAX_PROJECTION_SEGMENTS {
+            if remaining == 0 {
+                break;
+            }
+            let max_frames = usize::try_from(remaining).unwrap_or(usize::MAX);
+            let (frames, ratio) = playback.chunk(max_frames);
+            if frames == 0 {
+                return false;
+            }
+            playback.advance(frames);
+            plan.transition.advance_fractional(frames as f64 * ratio);
+            remaining -= frames as u64;
+        }
+        if remaining != 0 {
+            return false;
+        }
+        // Adoption compares the same intended output coordinate just before its first feed.
+        playback.chunk(DEFAULT_BLOCK_SAMPLES);
+        let position = playback.position();
+        plan.frame_pos = position.frame;
+        plan.seek_mode = position.seek_mode;
+        self.playback = playback;
+        self.plan = plan;
+        true
+    }
+
+    pub(crate) fn into_request(
+        self,
+        permit: NativeHistoryPermit,
+        pitch_intent: PitchIntent,
+        key_lock: bool,
+        target_output_frame: u64,
+        request_id: u64,
+        epoch: u64,
+    ) -> Option<NativeHistoryRequest> {
+        if !permit.current(&self.sample, self.sample_rate_hz)
+            || !permit.matches_projection(self.accepted)
+            || self.plan.transition.is_active()
+            || pitch_intent
+                .native_pitch_scale(self.playback.tempo_ratio(), key_lock)
+                .is_err()
+        {
+            return None;
+        }
+        let coverage = if complete_view_available(&self.sample) {
+            None
+        } else {
+            Some(NormalLoopCoverage::capture(
+                &self.sample,
+                self.stems.as_ref(),
+                self.sample_rate_hz,
+                self.accepted,
+                self.plan,
+                &self.playback,
+            )?)
+        };
+        Some(NativeHistoryRequest {
+            pitch_intent,
+            key_lock,
+            binding: ProductiveSourceBinding::new(&self.sample, self.sample_rate_hz, self.accepted),
+            sample: self.sample,
+            stems: self.stems,
+            permit,
+            coverage,
+            playback: self.playback,
+            plan: self.plan,
+            target_output_frame,
+            request_id,
+            epoch,
+        })
+    }
+}
 
 pub(crate) struct NativeHistoryRequest {
+    pub(crate) pitch_intent: PitchIntent,
+    pub(crate) key_lock: bool,
     pub(crate) sample: SampleBuffer,
     pub(crate) stems: Option<PreparedStemSet>,
     pub(crate) permit: NativeHistoryPermit,
@@ -34,6 +163,65 @@ pub(crate) struct NativeHistoryRequest {
 }
 
 impl NativeHistoryRequest {
+    /// Endpoint DSP data excludes the absolute output target and action envelope.
+    /// Both real source owners remain current; callers must capture a fresh action permit.
+    pub(crate) fn matches_endpoint(
+        &self,
+        snapshot: &PitchSourceSnapshot,
+        render: super::pitch_actions::FrozenPitchRender,
+    ) -> bool {
+        let feed = ProductiveSourceFeed {
+            sample: &snapshot.sample,
+            stems: snapshot.stems.as_ref(),
+            outgoing_stems: None,
+            sample_rate_hz: snapshot.sample_rate_hz,
+            accepted: snapshot.accepted,
+            plan: snapshot.plan,
+            playback: &snapshot.playback,
+            permit: None,
+            output_frame: None,
+            pitch_intent: render.pitch,
+            key_lock: render.key_lock,
+        };
+        self.endpoint_data_matches(&feed)
+    }
+
+    pub(crate) fn same_endpoint_request(&self, other: &Self) -> bool {
+        let feed = ProductiveSourceFeed {
+            sample: &other.sample,
+            stems: other.stems.as_ref(),
+            outgoing_stems: None,
+            sample_rate_hz: other.binding.sample_rate_hz,
+            accepted: other.binding.accepted,
+            plan: other.plan,
+            playback: &other.playback,
+            permit: None,
+            output_frame: None,
+            pitch_intent: other.pitch_intent,
+            key_lock: other.key_lock,
+        };
+        self.endpoint_data_matches(&feed)
+            && other
+                .permit
+                .current(&other.sample, other.binding.sample_rate_hz)
+            && self.permit.same_endpoint_authority(&other.permit)
+    }
+
+    fn endpoint_data_matches(&self, feed: &ProductiveSourceFeed<'_>) -> bool {
+        self.pitch_intent == feed.pitch_intent
+            && self.key_lock == feed.key_lock
+            && self.coverage_matches(feed, true)
+            && self.binding
+                == ProductiveSourceBinding::new(feed.sample, feed.sample_rate_hz, feed.accepted)
+            && self
+                .permit
+                .endpoint_source_current(feed.sample, feed.sample_rate_hz)
+            && self.permit.matches_projection(feed.accepted)
+            && self.playback.matches_exact(feed.playback)
+            && self.plan.matches_exact(feed.plan)
+            && same_stem_owners(self.stems.as_ref(), feed.stems)
+    }
+
     fn coverage_matches(&self, feed: &ProductiveSourceFeed<'_>, exact_window: bool) -> bool {
         if let Some(coverage) = &self.coverage {
             coverage.matches(
@@ -66,10 +254,13 @@ impl NativeHistoryRequest {
     pub(crate) fn matches_effective_contract(
         &self,
         feed: &ProductiveSourceFeed<'_>,
-        epoch: u64,
+        _epoch: u64,
     ) -> bool {
         let binding = ProductiveSourceBinding::new(feed.sample, feed.sample_rate_hz, feed.accepted);
-        self.epoch == epoch
+        // Once adopted, this frozen action's own permit owns its lifetime. A later lane request
+        // epoch is not authority to stale the already accepted attack or its productive history.
+        self.pitch_intent == feed.pitch_intent
+            && self.key_lock == feed.key_lock
             && self.coverage_matches(feed, false)
             && self.binding.same_source(binding)
             && self.binding.accepted == binding.accepted
@@ -90,6 +281,8 @@ impl NativeHistoryRequest {
     }
     pub(crate) fn matches_contract(&self, feed: &ProductiveSourceFeed<'_>, epoch: u64) -> bool {
         self.epoch == epoch
+            && self.pitch_intent == feed.pitch_intent
+            && self.key_lock == feed.key_lock
             && self.coverage_matches(feed, true)
             && self.binding
                 == ProductiveSourceBinding::new(feed.sample, feed.sample_rate_hz, feed.accepted)
@@ -145,6 +338,7 @@ pub(crate) struct NativeAdapterState {
     pub(crate) dirty: bool,
     pub(crate) used: bool,
     pub(crate) source: Option<NativeHistoryRequest>,
+    pub(crate) primed_output_frames: usize,
 }
 
 impl NativeAdapterState {
@@ -168,6 +362,7 @@ impl NativeAdapterState {
             dirty: false,
             used: false,
             source: None,
+            primed_output_frames: 0,
         }
     }
 
@@ -180,13 +375,107 @@ impl NativeAdapterState {
         self.output_fifo.iter_mut().for_each(FixedFifo::reset);
         self.active = false;
         self.pitch_scale = 1.0;
+        self.primed_output_frames = 0;
     }
 
     /// Native reset, initial pitch setup, source catch-up and old pin destruction are worker-only.
     pub(crate) fn prepare_source(
         &mut self,
-        mut request: NativeHistoryRequest,
+        request: NativeHistoryRequest,
     ) -> Result<(), RubberBandError> {
+        self.prepare_source_with_silence(request, 0, PREPARED_HISTORY_FRAMES, false)
+            .map_err(NativeSourcePreparationError::into_backend)
+    }
+
+    /// Catch up to the existing F+4096 checkpoint without changing its declared endpoint.
+    /// Legacy pitch profiles retain their exact forward-history path. Expanded profiles need
+    /// more real history and may rewind only an already constant captured source trajectory.
+    /// This method is worker-only; no source/native preparation is added to rendering.
+    pub(crate) fn prepare_live_catchup(
+        &mut self,
+        mut request: NativeHistoryRequest,
+    ) -> Result<(), NativeSourcePreparationError> {
+        let pitch = request
+            .pitch_intent
+            .native_pitch_scale(request.playback.tempo_ratio(), request.key_lock)
+            .map_err(|_| {
+                NativeSourcePreparationError::Unavailable(RubberBandError::InvalidPitchScale)
+            })?;
+        if (0.5..=2.0).contains(&pitch) {
+            return self.prepare_source_with_silence(request, 0, PREPARED_HISTORY_FRAMES, false);
+        }
+        if request.playback.tempo_ratio().to_bits() != request.playback.rate_target().to_bits() {
+            return Err(NativeSourcePreparationError::Unavailable(
+                RubberBandError::UnavailableSourceHistory,
+            ));
+        }
+        request.playback.advance(PREPARED_HISTORY_FRAMES);
+        request.playback.chunk(DEFAULT_BLOCK_SAMPLES);
+        let position = request.playback.position();
+        request.plan.frame_pos = position.frame;
+        request.plan.seek_mode = position.seek_mode;
+        self.prepare_source_at_endpoint_checked(request)
+    }
+
+    /// Prime actual past source history while keeping an intentional launch endpoint unchanged.
+    /// This is worker-only. Pending rate smoothing remains an explicit unavailable trajectory,
+    /// rather than being replaced with a fabricated constant-rate prediction.
+    pub(crate) fn prepare_source_at_endpoint(
+        &mut self,
+        request: NativeHistoryRequest,
+    ) -> Result<(), RubberBandError> {
+        self.prepare_source_at_endpoint_checked(request)
+            .map_err(NativeSourcePreparationError::into_backend)
+    }
+
+    fn prepare_source_at_endpoint_checked(
+        &mut self,
+        mut request: NativeHistoryRequest,
+    ) -> Result<(), NativeSourcePreparationError> {
+        let endpoint = request.playback;
+        let endpoint_plan = request.plan;
+        let pitch = request
+            .pitch_intent
+            .native_pitch_scale(endpoint.tempo_ratio(), request.key_lock)
+            .map_err(|_| {
+                NativeSourcePreparationError::Unavailable(RubberBandError::InvalidPitchScale)
+            })?;
+        let native = self
+            .rubberband
+            .as_mut()
+            .ok_or(NativeSourcePreparationError::Backend(
+                RubberBandError::ConstructionFailed,
+            ))?;
+        native
+            .prepare_exact_pitch(pitch)
+            .map_err(NativeSourcePreparationError::Backend)?;
+        let history_frames = native
+            .source_history_frames(pitch)
+            .map_err(NativeSourcePreparationError::from_history)?;
+        let (history, silent_prefix) = endpoint.history_before_constant(history_frames).ok_or(
+            NativeSourcePreparationError::Unavailable(RubberBandError::UnavailableSourceHistory),
+        )?;
+        request.playback = history;
+        let position = history.position();
+        request.plan.frame_pos = position.frame;
+        request.plan.seek_mode = position.seek_mode;
+        self.prepare_source_with_silence(request, silent_prefix, history_frames, true)?;
+        let source = self
+            .source
+            .as_mut()
+            .expect("prepared endpoint retains its source owner");
+        source.playback = endpoint;
+        source.plan = endpoint_plan;
+        Ok(())
+    }
+
+    fn prepare_source_with_silence(
+        &mut self,
+        mut request: NativeHistoryRequest,
+        mut silent_prefix: usize,
+        history_frames: usize,
+        native_prepared: bool,
+    ) -> Result<(), NativeSourcePreparationError> {
         if !complete_view_available(&request.sample)
             && !request.coverage.as_ref().is_some_and(|coverage| {
                 coverage.matches(
@@ -200,15 +489,40 @@ impl NativeAdapterState {
                 )
             })
         {
-            return Err(RubberBandError::InvalidBlockSize);
+            return Err(NativeSourcePreparationError::Unavailable(
+                RubberBandError::InvalidBlockSize,
+            ));
         }
         self.source = None;
         self.reset_adapter();
-        let pitch = pitch_scale_for_tempo_ratio(request.playback.tempo_ratio());
-        self.rubberband
-            .as_mut()
-            .expect("prepared adapter owns native state")
-            .prepare_exact_pitch(pitch)?;
+        let pitch = request
+            .pitch_intent
+            .native_pitch_scale(request.playback.tempo_ratio(), request.key_lock)
+            .map_err(|_| {
+                NativeSourcePreparationError::Unavailable(RubberBandError::InvalidPitchScale)
+            })?;
+        if !native_prepared {
+            self.rubberband
+                .as_mut()
+                .expect("prepared adapter owns native state")
+                .prepare_exact_pitch(pitch)
+                .map_err(NativeSourcePreparationError::Backend)?;
+        }
+        if !native_prepared
+            && self
+                .rubberband
+                .as_ref()
+                .expect("prepared adapter owns native state")
+                .source_history_frames(pitch)
+                .map_err(NativeSourcePreparationError::from_history)?
+                > history_frames
+        {
+            // ForwardHistory owns exactly its declared 4096-frame checkpoint interval.
+            // Larger-pitch readiness cannot silently move that endpoint or claim warmed output.
+            return Err(NativeSourcePreparationError::Unavailable(
+                RubberBandError::UnavailableSourceHistory,
+            ));
+        }
         self.pitch_scale = pitch;
         self.dirty = false;
         self.used = false;
@@ -219,11 +533,42 @@ impl NativeAdapterState {
         let mut output = (0..channels)
             .map(|_| vec![0.0; DEFAULT_BLOCK_SAMPLES])
             .collect::<Vec<_>>();
-        let mut remaining = PREPARED_HISTORY_FRAMES;
+        let mut remaining = history_frames;
         #[cfg(test)]
         super::source_reader::reset_tap_observation_for_test();
         while remaining > 0 {
             let (frames, ratio) = request.playback.chunk(remaining.min(DEFAULT_BLOCK_SAMPLES));
+            let pitch = request
+                .pitch_intent
+                .native_pitch_scale(ratio, request.key_lock)
+                .map_err(|_| {
+                    NativeSourcePreparationError::Unavailable(RubberBandError::InvalidPitchScale)
+                })?;
+            if !native_prepared
+                && self
+                    .rubberband
+                    .as_ref()
+                    .expect("prepared adapter owns native state")
+                    .source_history_frames(pitch)
+                    .map_err(NativeSourcePreparationError::from_history)?
+                    > history_frames
+            {
+                // The actual forward trajectory may enter an expanded pitch profile after
+                // its initial checkpoint. Its fixed interval must not claim unavailable history.
+                return Err(NativeSourcePreparationError::Unavailable(
+                    RubberBandError::UnavailableSourceHistory,
+                ));
+            }
+            if silent_prefix != 0 {
+                let frames = frames.min(silent_prefix);
+                feed.iter_mut()
+                    .for_each(|channel| channel[..frames].fill(0.0));
+                self.render(&feed, &mut output, frames, pitch)
+                    .map_err(NativeSourcePreparationError::Backend)?;
+                silent_prefix -= frames;
+                remaining -= frames;
+                continue;
+            }
             if request.coverage.is_some() {
                 if !normal_loop_feed_available(
                     &request.sample,
@@ -233,15 +578,25 @@ impl NativeAdapterState {
                     request.plan,
                     &request.playback,
                 ) {
-                    return Err(RubberBandError::InvalidBlockSize);
+                    return Err(NativeSourcePreparationError::Unavailable(
+                        RubberBandError::InvalidBlockSize,
+                    ));
                 }
-                request.plan.fill_fractional_buffers_checked(
-                    &request.sample,
-                    request.stems.as_ref(),
-                    &request.playback,
-                    &mut feed,
-                    frames,
-                )?;
+                if feed.len() < request.plan.channels {
+                    return Err(NativeSourcePreparationError::Backend(
+                        RubberBandError::InvalidBlockSize,
+                    ));
+                }
+                request
+                    .plan
+                    .fill_fractional_buffers_checked(
+                        &request.sample,
+                        request.stems.as_ref(),
+                        &request.playback,
+                        &mut feed,
+                        frames,
+                    )
+                    .map_err(NativeSourcePreparationError::from_coverage)?;
             } else if complete_view_available(&request.sample) {
                 request.plan.fill_fractional_buffers(
                     &request.sample,
@@ -251,16 +606,14 @@ impl NativeAdapterState {
                     frames,
                 );
             } else {
-                return Err(RubberBandError::InvalidBlockSize);
+                return Err(NativeSourcePreparationError::Unavailable(
+                    RubberBandError::InvalidBlockSize,
+                ));
             }
             // A trajectory reaching unity still goes through native state during preparation;
             // adoption will reject a dry endpoint rather than changing dry playback semantics.
-            self.render(
-                &feed,
-                &mut output,
-                frames,
-                pitch_scale_for_tempo_ratio(ratio),
-            )?;
+            self.render(&feed, &mut output, frames, pitch)
+                .map_err(NativeSourcePreparationError::Backend)?;
             request.playback.advance(frames);
             request
                 .plan
@@ -278,6 +631,7 @@ impl NativeAdapterState {
             coverage.prepared_taps = super::source_reader::tap_observation_for_test();
         }
         self.source = Some(request);
+        self.primed_output_frames = history_frames;
         Ok(())
     }
 
@@ -411,7 +765,7 @@ pub(super) mod tests {
         playback.advance(1);
         let position = playback.position();
         let ownership = Arc::new(InputRuntimeOwnership::tracked());
-        ownership.publish_source(0, &sample, rate, 13);
+        ownership.publish_test_source(0, &sample, rate, 13);
         let acknowledgements = Arc::new(CurrentTimingAcknowledgements::default());
         let epoch = Arc::new(AtomicU64::new(7));
         let permit = NativeHistoryContext {
@@ -437,6 +791,8 @@ pub(super) mod tests {
             transition: StemTransition::default(),
         };
         NativeHistoryRequest {
+            pitch_intent: PitchIntent::default(),
+            key_lock: true,
             binding: ProductiveSourceBinding::new(&sample, rate, None),
             sample,
             stems,
@@ -656,6 +1012,8 @@ pub(super) mod tests {
         state.prepare_source(request).unwrap();
         let source = state.source.as_ref().unwrap();
         let feed = ProductiveSourceFeed {
+            pitch_intent: super::super::pitch_intent::PitchIntent::default(),
+            key_lock: true,
             sample: &source.sample,
             outgoing_stems: None,
             stems: source.stems.as_ref(),
@@ -1068,6 +1426,8 @@ pub(super) mod tests {
         assert!(!request.plan.matches_exact(changed_plan));
         assert!(!request.plan.matches_source_contract(changed_plan));
         let feed = ProductiveSourceFeed {
+            pitch_intent: super::super::pitch_intent::PitchIntent::default(),
+            key_lock: true,
             sample: &request.sample,
             outgoing_stems: None,
             stems: None,

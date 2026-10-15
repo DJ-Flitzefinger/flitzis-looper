@@ -170,6 +170,7 @@ impl RtMixer {
                 self.stem_transitions[target].clear();
                 self.pad_playhead_frame[target] = None;
                 self.pad_key_lock_enabled[target] = intent.key_lock;
+                self.pad_pitch_intent[target] = intent.pitch_intent;
                 self.pad_key_lock_request_id[target] = 0;
                 self.pad_key_lock_rejected[target] = false;
                 self.pad_key_lock_pending_on[target] = false;
@@ -315,7 +316,8 @@ impl RtMixer {
                     || !bpm.is_finite()
                     || bpm <= 0.0
             })
-            || (intent.key_lock && !Self::initial_key_lock_geometry_available(&work.sample))
+            || ((intent.key_lock || intent.pitch_intent.total_semitones() != 0)
+                && !Self::initial_key_lock_geometry_available(&work.sample))
         {
             return false;
         }

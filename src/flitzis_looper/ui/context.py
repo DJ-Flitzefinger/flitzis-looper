@@ -1,5 +1,6 @@
+from dataclasses import dataclass, replace
 from pathlib import Path, PureWindowsPath
-from typing import TYPE_CHECKING, TypeVar, cast
+from typing import TYPE_CHECKING, Literal, TypeVar, cast
 
 from pydantic import BaseModel
 
@@ -19,6 +20,11 @@ from flitzis_looper.input_mapping import (
     selected_tap_bpm_action,
     start_stop_action,
 )
+from flitzis_looper.input_mapping.actions import (
+    pitch_base_action,
+    pitch_extra_action,
+    pitch_reset_base_action,
+)
 from flitzis_looper.input_timing import validate_input_timestamp_ns
 from flitzis_looper.ui.waveform_grid import waveform_view_start
 
@@ -31,6 +37,7 @@ if TYPE_CHECKING:
     from flitzis_looper.controller.performance_confirmation import PerformanceConfirmation
     from flitzis_looper.controller.stems import StemResidencySummary
     from flitzis_looper.controller.transport.key_lock_status import KeyLockStatus
+    from flitzis_looper.key_intent import MusicalKey, PadKeyIntent
     from flitzis_looper.models import (
         ProjectState,
         SampleAnalysis,
@@ -51,6 +58,15 @@ type _WaveformSourceIdentity = tuple[
     tuple[str, int, str, str, int, int] | None,
     tuple[int, str, int, int] | None,
 ]
+type PitchMenu = Literal["base", "extra"]
+
+
+@dataclass(frozen=True)
+class PitchMenuState:
+    """Independent transient pitch surfaces, owned by this UI context alone."""
+
+    base_open: bool = False
+    extra_open: bool = False
 
 
 class ReadOnlyStateProxy[T]:
@@ -120,6 +136,14 @@ class PadSelectors:  # noqa: PLR0904 - selector facade intentionally mirrors pad
 
     def effective_key(self, pad_id: int) -> str | None:
         return self._controller.transport.pad.effective_key(pad_id)
+
+    def key_intent(self, pad_id: int) -> PadKeyIntent:
+        """Read chosen values independently of held notes and effective audio receipts."""
+        return self._project.pad_key_intent[pad_id]
+
+    def pitch_status(self, pad_id: int) -> tuple[str | None, str | None]:
+        """Read preparation/admission feedback without granting audio authority."""
+        return self._controller.transport.pitch.status(pad_id)
 
     def key_lock(self, pad_id: int) -> bool:
         """Return requested intent; confirmed presentation uses key_lock_status."""
@@ -281,6 +305,7 @@ class UiState:
 
     def __init__(self, controller: AppController):
         self._controller = controller
+        self._pitch_menus = PitchMenuState()
         self._project_proxy = ReadOnlyStateProxy(controller.project)
         self._session_proxy = ReadOnlyStateProxy(controller.session)
 
@@ -298,6 +323,11 @@ class UiState:
     @property
     def session(self) -> SessionState:
         return cast("SessionState", self._session_proxy)
+
+    @property
+    def pitch_menus(self) -> PitchMenuState:
+        """Return immutable menu visibility that is neither saved nor audio state."""
+        return self._pitch_menus
 
 
 class PadAudioActions:  # noqa: PLR0904 - pad action facade mirrors selected-pad controls.
@@ -384,6 +414,66 @@ class PadAudioActions:  # noqa: PLR0904 - pad action facade mirrors selected-pad
 
     def clear_manual_key(self, pad_id: int) -> None:
         self._controller.transport.pad.clear_manual_key(pad_id)
+
+    def choose_base_key(
+        self,
+        pad_id: int,
+        target: MusicalKey,
+        *,
+        retrigger: bool,
+        received_at_ns: int | None = None,
+    ) -> None:
+        """Learn the fixed variant or admit an explicit content's absolute key choice."""
+        action = pitch_base_action(target, retrigger=retrigger)
+        self._controller.input_mapping.perform_learnable_action(
+            action,
+            lambda: self._controller.transport.pad.choose_base_key(
+                pad_id, target, retrigger=retrigger, received_at_ns=received_at_ns
+            ),
+        )
+
+    def choose_extra_shift(
+        self,
+        pad_id: int,
+        semitones: int,
+        *,
+        retrigger: bool,
+        received_at_ns: int | None = None,
+    ) -> None:
+        """Learn or admit one strict signed target without a second audio dispatch."""
+        action = pitch_extra_action(semitones, retrigger=retrigger)
+        self._controller.input_mapping.perform_learnable_action(
+            action,
+            lambda: self._controller.transport.pad.choose_extra_shift(
+                pad_id, semitones, retrigger=retrigger, received_at_ns=received_at_ns
+            ),
+        )
+
+    def reset_base_pitch(
+        self, pad_id: int, *, retrigger: bool, received_at_ns: int | None = None
+    ) -> None:
+        """Reset numerical base independently of correction and additional transpose."""
+        self._controller.input_mapping.perform_learnable_action(
+            pitch_reset_base_action(retrigger=retrigger),
+            lambda: self._controller.transport.pad.reset_base_pitch(
+                pad_id, retrigger=retrigger, received_at_ns=received_at_ns
+            ),
+        )
+
+    def reset_extra_pitch(
+        self, pad_id: int, *, retrigger: bool, received_at_ns: int | None = None
+    ) -> None:
+        """Learn or admit SET zero for the additional transpose only."""
+        self._controller.input_mapping.perform_learnable_action(
+            pitch_extra_action(0, retrigger=retrigger),
+            lambda: self._controller.transport.pad.reset_extra_pitch(
+                pad_id, retrigger=retrigger, received_at_ns=received_at_ns
+            ),
+        )
+
+    def set_pitch_retrigger_intent(self, pad_id: int, *, enabled: bool) -> None:
+        """Persist the GUI/new-Learn preference without changing existing input variants."""
+        self._controller.transport.pad.set_pitch_retrigger_intent(pad_id, enabled=enabled)
 
     def set_pad_gain(self, pad_id: int, gain_db: float) -> None:
         action = (
@@ -972,11 +1062,30 @@ class UiActions:
     settings: SettingsActions
     waveform: WaveformEditorActions
 
-    def __init__(self, controller: AppController):
+    def __init__(self, controller: AppController, state: UiState | None = None):
         self._controller = controller
+        self._state = state if state is not None else UiState(controller)
+        self._pitch_menu_selection: dict[PitchMenu, tuple[int, int | None]] = {}
         self.settings = SettingsActions(controller)
         self.waveform = WaveformEditorActions(controller)
         self.confirmation = PerformanceConfirmationActions(controller)
+
+    def toggle_pitch_menu(self, menu: PitchMenu) -> None:
+        """Toggle only the requested surface; choices and MIDI never close either menu."""
+        current = self._state.pitch_menus
+        if menu == "base":
+            self._state._pitch_menus = replace(current, base_open=not current.base_open)
+        else:
+            self._state._pitch_menus = replace(current, extra_open=not current.extra_open)
+        self._pitch_menu_selection.pop(menu, None)
+
+    def consume_pitch_scroll_request(self, menu: PitchMenu, pad_id: int, value: int | None) -> bool:
+        """Reveal a newly opened/changed chosen value while leaving manual scrolling free."""
+        selection = (pad_id, value)
+        if self._pitch_menu_selection.get(menu) == selection:
+            return False
+        self._pitch_menu_selection[menu] = selection
+        return True
 
     def toggle_left_sidebar(self) -> None:
         new_val = not self._controller.project.sidebar_left_expanded
@@ -1137,7 +1246,7 @@ class UiContext:
         self._controller = controller
         self.state = UiState(controller)
         self.audio = AudioActions(controller)
-        self.ui = UiActions(controller)
+        self.ui = UiActions(controller, self.state)
         self.input = InputMappingActions(controller)
         self.persistence = controller.persistence
 

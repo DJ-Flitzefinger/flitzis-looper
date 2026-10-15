@@ -85,20 +85,21 @@ class PadPlaybackController:
         generation = self._transport.capture_current_pad_edit_generation(sample_id)
         options = self._transport.source_generation_options(generation)
         start_s, end_s = self._loop.requested_region(sample_id)
-        play = self._audio.play_sample_exclusive if exclusive else self._audio.play_sample
+        captured = self._audio.capture_pad_start(
+            sample_id,
+            start_s,
+            end_s,
+            1.0,
+            exclusive=exclusive,
+            received_at_ns=received_at_ns,
+            **options,
+        )
         self._transport.residency.start(
             sample_id,
             start_s,
             end_s,
-            lambda: (
-                play(sample_id, 1.0, **options)
-                if received_at_ns is None
-                else play(sample_id, 1.0, received_at_ns=received_at_ns, **options)
-            ),
             expected_source_generation=generation,
-            prepared_play=lambda ticket: self._audio.play_resident_control(
-                ticket, exclusive=exclusive, received_at_ns=received_at_ns
-            ),
+            captured_start=captured,
         )
 
     def stop_pad(self, sample_id: int) -> None:

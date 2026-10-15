@@ -115,7 +115,14 @@ def test_durable_restore_preserves_content_identity_and_does_not_dirty_project(
     changed.assert_not_called()
     assert 215 not in controller.session.loading_sample_ids
     audio_engine_mock.load_sample_async.assert_called_once_with(
-        215, REFERENCE, run_analysis=False, replace_assignment=True, source_intent="restore"
+        215,
+        REFERENCE,
+        run_analysis=False,
+        replace_assignment=True,
+        source_intent="restore",
+        initial_base_shift=0,
+        initial_extra_shift=0,
+        initial_key_lock=False,
     )
 
 

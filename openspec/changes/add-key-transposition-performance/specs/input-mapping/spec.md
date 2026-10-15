@@ -41,3 +41,43 @@ The system SHALL treat MIDI NoteOff and NoteOn velocity0 as nonattack/nonreset f
 #### Scenario: Release after repeated attacks
 - **WHEN** repeated equal-target NoteOn attacks are followed by NoteOff or velocity0
 - **THEN** attacks remain distinct and release neither adds attack nor resets pitch0/highlight/hold
+
+### Requirement: Discarded unpublished pitch captures cannot become requested intent
+The system SHALL cancel the exact original Native owner when disabled mapping,
+Learn or an explicit Learn queue drain discards an unpublished pitch capture.
+A later capture SHALL NOT inherit numeric intent solely from a discarded
+capture, including when cancellations arrive in FIFO order or separate polls.
+Cancellation SHALL preserve newer retained captures and authoritative projected
+requested intent. Removal, replacement and timing refresh SHALL NOT restore an
+old source's unresolved shadow into a new source; Move SHALL follow content.
+
+#### Scenario: Several discarded captures have no surviving predecessor
+- **GIVEN** two or three unpublished extra-pitch captures precede their first cancellation
+- **WHEN** disabled mapping or Learn discards every capture in FIFO order, together or across separate polls
+- **THEN** each exact original owner SHALL be cancelled without publication
+- **AND** later Base SET composition SHALL use the last retained requested anchor and SHALL NOT resurrect any cancelled predecessor
+- **AND** the same result SHALL hold for other cancellation orders
+
+#### Scenario: An older discard preserves a newer chosen owner
+- **WHEN** an older unpublished pitch capture is discarded while a newer capture remains retained or its intent is authoritatively projected
+- **THEN** cancellation SHALL affect only the discarded owner and its predecessor links
+- **AND** the newer requested tuple, sequence and eventual effect SHALL remain unchanged
+
+### Requirement: Requested pitch rollback uses bounded control custody
+The system SHALL bound unresolved requested-shadow bookkeeping to 64 scalar
+records under the existing control owner. These records MAY retain lightweight
+atomic status observations but SHALL NOT retain Native adapters, action-work
+owners, PCM pins or an unbounded chain of original owners. Journal reconciliation
+SHALL remain outside the audio callback and SHALL NOT advance unrelated source,
+timing or RuntimeProjection authority.
+
+#### Scenario: Requested-shadow capacity is exhausted and recovered
+- **GIVEN** all 64 unresolved control records remain owned
+- **WHEN** another pitch capture is attempted
+- **THEN** it SHALL reject with capacity before allocating its original owner or changing requested intent
+- **AND** cancellation or authoritative settlement SHALL release bounded bookkeeping so a later original capture can succeed
+
+#### Scenario: A stale source cannot leave phantom intent after reconciliation
+- **WHEN** an unresolved capture is fenced by a logical source or timing refresh and later cancelled
+- **THEN** its record SHALL settle without overwriting the current source's authoritative requested anchor
+- **AND** the next capture SHALL compose from that current anchor rather than an unresolved old-source tuple

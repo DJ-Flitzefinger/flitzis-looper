@@ -3,11 +3,15 @@ from typing import TYPE_CHECKING
 import pytest
 
 from flitzis_looper.models import BeatGrid, SampleAnalysis
+from tests.flitzis_looper.conftest import FakeInputRuntimePadBinding
+from tests.flitzis_looper.controller.transport.test_residency import resident
 
 if TYPE_CHECKING:
     from unittest.mock import Mock
 
     from flitzis_looper.controller import AppController
+    from flitzis_looper.models import TimingIntent
+    from tests.flitzis_looper.controller.transport.test_residency import Ticket
 
 
 def test_set_and_clear_manual_bpm(controller: AppController) -> None:
@@ -50,6 +54,100 @@ def test_tap_bpm_computes_on_second_tap(
     audio_engine_mock.set_pad_bpm.assert_called_with(
         sample_id, pytest.approx(120.0, abs=0.01), expected_source_generation=1
     )
+
+
+@pytest.mark.parametrize("edit", ["manual", "tap", "refresh-manual", "refresh-tap"])
+@pytest.mark.parametrize("reclamp", [False, True])
+def test_timing_edit_preserves_its_coupled_resident_authority(
+    controller: AppController,
+    audio_engine_mock: Mock,
+    monkeypatch: pytest.MonkeyPatch,
+    edit: str,
+    *,
+    reclamp: bool,
+) -> None:
+    """Scalar revocation must finish before the resident ticket captures authority."""
+    ticket = resident(controller, audio_engine_mock)
+    controller.project.pad_key_lock[0] = True
+    controller.project.pad_grid_anchor_s[0] = 0.0
+    controller.project.pad_grid_offset_samples[0] = 192_000 if reclamp else 480
+    audio_engine_mock.output_sample_rate.return_value = 48_000
+    intent: TimingIntent = "tap" if edit.endswith("tap") else "manual"
+    native_intent = "legacy"
+    authority_revision = 0
+    events: list[str] = []
+    captured_authorities: list[tuple[int, str]] = []
+
+    def scalar_write(kind: str) -> None:
+        nonlocal authority_revision, native_intent
+        authority_revision += 1
+        native_intent = "legacy"
+        events.append(kind)
+
+    def declare_intent(
+        _sample_id: int, value: str, *, expected_source_generation: int | None = None
+    ) -> None:
+        nonlocal authority_revision, native_intent
+        authority_revision += 1
+        native_intent = value
+        events.append(value)
+
+    def prepare(*_args: object, **_kwargs: object) -> Ticket:
+        events.append("resident")
+        captured_authorities.append((authority_revision, native_intent))
+        return ticket
+
+    audio_engine_mock.set_pad_bpm.side_effect = lambda *_args, **_kwargs: scalar_write("bpm")
+    audio_engine_mock.set_pad_timing_metadata.side_effect = lambda *_args, **_kwargs: scalar_write(
+        "origin"
+    )
+    audio_engine_mock.set_pad_timing_intent.side_effect = declare_intent
+    audio_engine_mock.prepare_resident_control.side_effect = prepare
+    audio_engine_mock.current_input_runtime_pad_binding.side_effect = lambda sample_id: (
+        FakeInputRuntimePadBinding(
+            sample_id, intent=native_intent, authority_revision=authority_revision
+        )
+    )
+
+    if edit.startswith("refresh-"):
+        controller.project.manual_bpm[0] = 120.0
+        controller.project.pad_timing_intent[0] = intent
+        controller.transport.bpm.on_pad_bpm_changed(0, expected_source_generation=1)
+    elif edit == "tap":
+        times = iter([0.0, 0.5])
+        monkeypatch.setattr(
+            "flitzis_looper.controller.transport.bpm.monotonic", lambda: next(times)
+        )
+        assert controller.transport.bpm.tap_bpm(0) is None
+        assert controller.transport.bpm.tap_bpm(0) == 120.0
+    else:
+        controller.transport.bpm.set_manual_bpm(0, 120.0)
+
+    assert events == ["bpm", "origin", intent, "resident"]
+    assert captured_authorities == [(authority_revision, intent)]
+    assert controller.project.pad_timing_intent[0] == intent
+    assert controller.project.pad_grid_offset_samples[0] == (96_000 if reclamp else 480)
+    audio_engine_mock.prepare_resident_control.assert_called_once_with(
+        0, start_s=3.0, end_s=4.0, position_s=None, key_lock=True, expected_source_generation=1
+    )
+    audio_engine_mock.set_pad_key_lock.assert_not_called()
+    controller.transport.residency.poll()
+    assert controller.transport.residency.status(0) == ("preparing", None)
+    assert ticket.publication_status() == "preparing"
+
+
+def test_failed_final_timing_authority_does_not_publish_resident_request(
+    controller: AppController, audio_engine_mock: Mock
+) -> None:
+    resident(controller, audio_engine_mock)
+    controller.project.pad_key_lock[0] = True
+    audio_engine_mock.set_pad_timing_intent.side_effect = RuntimeError("timing edit was superseded")
+
+    with pytest.raises(RuntimeError, match="timing edit was superseded"):
+        controller.transport.bpm.set_manual_bpm(0, 120.0)
+
+    audio_engine_mock.prepare_resident_control.assert_not_called()
+    assert controller.transport.residency.status(0) == (None, None)
 
 
 def test_tap_bpm_fits_constant_tempo_across_all_taps(

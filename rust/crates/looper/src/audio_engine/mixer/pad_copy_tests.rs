@@ -166,6 +166,7 @@ pub(super) fn fixture() -> (Box<RtMixer>, Box<PadCopyRtWork>, HoldingRetirement)
         publication: PreparedSourcePermit::new(guard.target_epoch.clone(), 1),
         guard,
         intent: CopyRtIntent {
+            pitch_intent: crate::audio_engine::pitch_intent::PitchIntent::default(),
             period_seconds: Some(0.5),
             origin_frame: -3.25,
             loop_start_frame: 8,

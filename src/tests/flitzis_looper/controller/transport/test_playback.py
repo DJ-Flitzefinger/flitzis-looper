@@ -3,8 +3,63 @@ from unittest.mock import ANY, Mock, call
 
 import pytest
 
+from tests.flitzis_looper.conftest import FakeCapturedGlobalStart, FakeCapturedPadStart
+
 if TYPE_CHECKING:
     from flitzis_looper.controller import AppController
+
+
+def _assert_published_capture(
+    audio: Mock,
+    sample_id: int,
+    *,
+    start_s: float = 0.0,
+    end_s: float | None = None,
+    exclusive: bool,
+    received_at_ns: int | None = None,
+) -> None:
+    audio.capture_pad_start.assert_called_once_with(
+        sample_id,
+        start_s,
+        end_s,
+        1.0,
+        exclusive=exclusive,
+        received_at_ns=received_at_ns,
+        expected_source_generation=1,
+    )
+    original = audio.publish_pad_start.call_args.args[0]
+    assert isinstance(original, FakeCapturedPadStart)
+    assert original.original_id == sample_id
+    assert original.loop_region == (start_s, end_s)
+    assert original.volume == 1.0
+    assert original.exclusive is exclusive
+    assert original.received_at_ns == received_at_ns
+    assert original.expected_source_generation == 1
+    audio.publish_pad_start.assert_called_once_with(original)
+    order = [entry[0] for entry in audio.method_calls]
+    assert order.index("capture_pad_start") < order.index("publish_pad_start")
+    audio.set_pad_loop_region.assert_not_called()
+    audio.play_sample.assert_not_called()
+    audio.play_sample_exclusive.assert_not_called()
+
+
+def _assert_published_global(
+    audio: Mock,
+    regions: list[tuple[int, float, float | None]],
+    received_at_ns: int | None = None,
+) -> None:
+    audio.capture_global_start.assert_called_once_with(
+        [(ANY, start, end, None) for _, start, end in regions], received_at_ns=received_at_ns
+    )
+    capture = audio.publish_captured_global_start.call_args.args[0]
+    assert isinstance(capture, FakeCapturedGlobalStart)
+    assert capture.entries == tuple(audio.capture_global_start.call_args.args[0])
+    assert [binding.metadata()["pad_id"] for binding, _, _, _ in capture.entries] == [
+        sample_id for sample_id, _, _ in regions
+    ]
+    assert capture.received_at_ns == received_at_ns
+    audio.publish_captured_global_start.assert_called_once_with(capture)
+    audio.start_global_playback_batch.assert_not_called()
 
 
 def test_seek_pad_preserves_adjacent_long_source_frames(
@@ -25,7 +80,7 @@ def test_seek_pad_preserves_adjacent_long_source_frames(
 
 
 def test_trigger_pad_single_loop(controller: AppController, audio_engine_mock: Mock) -> None:
-    """Test triggering a pad in single loop mode uses the exclusive audio command."""
+    """Single-loop triggering preserves exclusive intent in the original capture."""
     sample_id = 0
     path = "/path/to/sample.wav"
     controller.project.sample_paths[sample_id] = path
@@ -35,10 +90,7 @@ def test_trigger_pad_single_loop(controller: AppController, audio_engine_mock: M
     controller.transport.playback.trigger_pad(sample_id)
 
     audio_engine_mock.stop_all.assert_not_called()
-    audio_engine_mock.play_sample.assert_not_called()
-    audio_engine_mock.play_sample_exclusive.assert_called_once_with(
-        sample_id, 1.0, expected_source_generation=1
-    )
+    _assert_published_capture(audio_engine_mock, sample_id, exclusive=True)
     # Simulate the audio message that would update state for the new pad
     msg = Mock()
     msg.sample_id.return_value = sample_id
@@ -52,7 +104,7 @@ def test_trigger_pad_single_loop(controller: AppController, audio_engine_mock: M
 
 
 def test_trigger_pad_multi_loop(controller: AppController, audio_engine_mock: Mock) -> None:
-    """Test triggering a pad in multi loop mode toggles playback."""
+    """Multi-loop triggering captures an independent nonexclusive attack."""
     sample_id = 0
     path = "/path/to/sample.wav"
     controller.project.sample_paths[sample_id] = path
@@ -63,8 +115,7 @@ def test_trigger_pad_multi_loop(controller: AppController, audio_engine_mock: Mo
 
     # Should not stop all pads
     audio_engine_mock.stop_all.assert_not_called()
-    # But play_sample is called
-    audio_engine_mock.play_sample.assert_called_with(sample_id, 1.0, expected_source_generation=1)
+    _assert_published_capture(audio_engine_mock, sample_id, exclusive=False)
 
 
 @pytest.mark.parametrize("received_at_ns", [0, 123_456_789])
@@ -84,11 +135,14 @@ def test_trigger_preserves_captured_input_time_through_loop_publication(
 
     controller.transport.playback.trigger_pad(0, received_at_ns=received_at_ns)
 
-    play = call.play_sample if multi_loop else call.play_sample_exclusive
-    assert audio_engine_mock.method_calls[-2:] == [
-        call.set_pad_loop_region(0, 2.0, 4.0, expected_source_generation=1),
-        play(0, 1.0, received_at_ns=received_at_ns, expected_source_generation=1),
-    ]
+    _assert_published_capture(
+        audio_engine_mock,
+        0,
+        start_s=2.0,
+        end_s=4.0,
+        exclusive=not multi_loop,
+        received_at_ns=received_at_ns,
+    )
 
 
 def test_keep_others_trigger_preserves_input_time(
@@ -99,10 +153,7 @@ def test_keep_others_trigger_preserves_input_time(
 
     controller.transport.playback.trigger_pad_keep_others(0, received_at_ns=31)
 
-    audio_engine_mock.play_sample.assert_called_once_with(
-        0, 1.0, received_at_ns=31, expected_source_generation=1
-    )
-    audio_engine_mock.play_sample_exclusive.assert_not_called()
+    _assert_published_capture(audio_engine_mock, 0, exclusive=False, received_at_ns=31)
 
 
 def test_global_restart_preserves_one_input_timestamp_for_every_pad(
@@ -115,11 +166,7 @@ def test_global_restart_preserves_one_input_timestamp_for_every_pad(
 
     controller.transport.playback.start_or_restart_global_start_stop(received_at_ns=0)
 
-    audio_engine_mock.start_global_playback_batch.assert_called_once_with(
-        [(ANY, 0.0, None), (ANY, 0.0, None)], received_at_ns=0
-    )
-    entries = audio_engine_mock.start_global_playback_batch.call_args.args[0]
-    assert [binding.metadata()["pad_id"] for binding, _, _ in entries] == [0, 2]
+    _assert_published_global(audio_engine_mock, [(0, 0.0, None), (2, 0.0, None)], 0)
     assert controller.session.active_sample_ids == set()
 
 
@@ -141,6 +188,8 @@ def test_trigger_pad_not_loaded(controller: AppController, audio_engine_mock: Mo
 
     controller.transport.playback.trigger_pad(sample_id)
 
+    audio_engine_mock.capture_pad_start.assert_not_called()
+    audio_engine_mock.publish_pad_start.assert_not_called()
     audio_engine_mock.play_sample.assert_not_called()
     audio_engine_mock.play_sample_exclusive.assert_not_called()
 
@@ -308,9 +357,7 @@ def test_global_start_stop_left_restarts_current_active_set(
     controller.transport.on_frame_render()
 
     audio_engine_mock.stop_all.assert_not_called()
-    audio_engine_mock.start_global_playback_batch.assert_called_once_with(
-        [(ANY, 1.0, 3.0), (ANY, 2.0, 4.0)], received_at_ns=None
-    )
+    _assert_published_global(audio_engine_mock, [(0, 1.0, 3.0), (1, 2.0, 4.0)])
     audio_engine_mock.set_pad_loop_region.assert_not_called()
     audio_engine_mock.play_sample.assert_not_called()
     assert controller.session.global_stop_engaged is False
@@ -328,11 +375,7 @@ def test_global_start_stop_left_restarts_current_active_set_without_paused_pads(
 
     controller.transport.playback.start_or_restart_global_start_stop()
 
-    audio_engine_mock.start_global_playback_batch.assert_called_once_with(
-        [(ANY, 0.0, None)], received_at_ns=None
-    )
-    entries = audio_engine_mock.start_global_playback_batch.call_args.args[0]
-    assert entries[0][0].metadata()["pad_id"] == 0
+    _assert_published_global(audio_engine_mock, [(0, 0.0, None)])
     assert 1 in controller.session.paused_sample_ids
 
 
@@ -352,9 +395,7 @@ def test_global_start_stop_left_restores_remembered_set_together(
     controller.transport.on_frame_render()
 
     audio_engine_mock.stop_all.assert_not_called()
-    audio_engine_mock.start_global_playback_batch.assert_called_once_with(
-        [(ANY, 1.0, 3.0), (ANY, 2.0, 4.0)], received_at_ns=None
-    )
+    _assert_published_global(audio_engine_mock, [(0, 1.0, 3.0), (1, 2.0, 4.0)])
     audio_engine_mock.set_pad_loop_region.assert_not_called()
     audio_engine_mock.play_sample.assert_not_called()
     assert controller.session.global_stop_engaged is False
@@ -394,11 +435,7 @@ def test_manual_pad_trigger_after_global_stop_forgets_remembered_set(
     audio_engine_mock.reset_mock()
     controller.transport.playback.start_or_restart_global_start_stop()
 
-    audio_engine_mock.start_global_playback_batch.assert_called_once_with(
-        [(ANY, 0.0, None)], received_at_ns=None
-    )
-    entries = audio_engine_mock.start_global_playback_batch.call_args.args[0]
-    assert entries[0][0].metadata()["pad_id"] == 3
+    _assert_published_global(audio_engine_mock, [(3, 0.0, None)])
 
 
 def test_manual_pad_stop_after_global_stop_forgets_remembered_set(
@@ -424,6 +461,8 @@ def test_manual_pad_stop_after_global_stop_forgets_remembered_set(
 
     audio_engine_mock.play_sample.assert_not_called()
     audio_engine_mock.start_global_playback_batch.assert_not_called()
+    audio_engine_mock.capture_global_start.assert_not_called()
+    audio_engine_mock.publish_captured_global_start.assert_not_called()
 
 
 def test_global_start_stop_right_never_restores_remembered_set(
@@ -438,6 +477,8 @@ def test_global_start_stop_right_never_restores_remembered_set(
     audio_engine_mock.play_sample.assert_not_called()
     audio_engine_mock.stop_global_playback_batch.assert_not_called()
     audio_engine_mock.start_global_playback_batch.assert_not_called()
+    audio_engine_mock.capture_global_start.assert_not_called()
+    audio_engine_mock.publish_captured_global_start.assert_not_called()
     assert controller.session.global_stop_engaged is True
     assert controller.session.global_stop_restore_sample_ids == {0, 1}
 
@@ -479,9 +520,7 @@ def test_trigger_pad_applies_loop_region(
 
     controller.transport.playback.trigger_pad(sample_id)
 
-    audio_engine_mock.set_pad_loop_region.assert_called_with(
-        sample_id, 5.0, 15.0, expected_source_generation=1
-    )
+    _assert_published_capture(audio_engine_mock, sample_id, start_s=5.0, end_s=15.0, exclusive=True)
 
 
 def test_trigger_pad_plays_with_gain(controller: AppController, audio_engine_mock: Mock) -> None:
@@ -492,9 +531,7 @@ def test_trigger_pad_plays_with_gain(controller: AppController, audio_engine_moc
 
     controller.transport.playback.trigger_pad(sample_id)
 
-    audio_engine_mock.play_sample_exclusive.assert_called_with(
-        sample_id, 1.0, expected_source_generation=1
-    )
+    _assert_published_capture(audio_engine_mock, sample_id, exclusive=True)
 
 
 def test_play_separate_method(controller: AppController, audio_engine_mock: Mock) -> None:
@@ -506,7 +543,7 @@ def test_play_separate_method(controller: AppController, audio_engine_mock: Mock
     controller.transport.playback.trigger_pad(sample_id)
 
     audio_engine_mock.stop_all.assert_not_called()
-    audio_engine_mock.play_sample.assert_called_with(sample_id, 1.0, expected_source_generation=1)
+    _assert_published_capture(audio_engine_mock, sample_id, exclusive=False)
 
 
 def test_play_applies_loop_region(controller: AppController, audio_engine_mock: Mock) -> None:
@@ -519,9 +556,7 @@ def test_play_applies_loop_region(controller: AppController, audio_engine_mock: 
 
     controller.transport.playback.trigger_pad(sample_id)
 
-    audio_engine_mock.set_pad_loop_region.assert_called_with(
-        sample_id, 2.0, 8.0, expected_source_generation=1
-    )
+    _assert_published_capture(audio_engine_mock, sample_id, start_s=2.0, end_s=8.0, exclusive=False)
 
 
 def test_toggle_stop_active(controller: AppController, audio_engine_mock: Mock) -> None:
@@ -534,7 +569,7 @@ def test_toggle_stop_active(controller: AppController, audio_engine_mock: Mock) 
     controller.transport.playback.trigger_pad(sample_id)
 
     audio_engine_mock.stop_sample.assert_not_called()
-    audio_engine_mock.play_sample.assert_called_with(sample_id, 1.0, expected_source_generation=1)
+    _assert_published_capture(audio_engine_mock, sample_id, exclusive=False)
 
 
 def test_toggle_start_inactive(controller: AppController, audio_engine_mock: Mock) -> None:
@@ -545,7 +580,7 @@ def test_toggle_start_inactive(controller: AppController, audio_engine_mock: Moc
 
     controller.transport.playback.trigger_pad(sample_id)
 
-    audio_engine_mock.play_sample.assert_called_with(sample_id, 1.0, expected_source_generation=1)
+    _assert_published_capture(audio_engine_mock, sample_id, exclusive=False)
 
 
 def test_trigger_invalid_sample_id(controller: AppController, audio_engine_mock: Mock) -> None:

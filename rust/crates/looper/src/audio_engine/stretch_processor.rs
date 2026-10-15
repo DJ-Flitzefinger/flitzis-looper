@@ -1,8 +1,7 @@
 use super::constant_timing::AcceptedTimingProjection;
 use super::native_history_permit::NativeHistoryPermit;
-use super::prepared_native_history::{
-    NativeAdapterState, PITCH_SCALE_EPSILON, PREPARED_HISTORY_FRAMES,
-};
+use super::pitch_intent::PitchIntent;
+use super::prepared_native_history::{NativeAdapterState, PITCH_SCALE_EPSILON};
 use super::productive_source_history::{ProductiveSourceBinding, ProductiveSourceHistory};
 use super::source_playback::SourcePlayback;
 use super::source_reader::{SourceReadPlan, StemReadSets};
@@ -13,10 +12,13 @@ use crate::audio_engine::key_lock_preparation::{
 };
 #[cfg(test)]
 use crate::audio_engine::rubberband_backend::RubberBandLiveShifter;
+#[cfg(test)]
 use crate::audio_engine::rubberband_backend::pitch_scale_for_tempo_ratio;
 use crate::messages::{PreparedStemSet, SampleBuffer};
 
 pub(crate) struct ProductiveSourceFeed<'a> {
+    pub(crate) pitch_intent: PitchIntent,
+    pub(crate) key_lock: bool,
     pub(crate) sample: &'a SampleBuffer,
     pub(crate) stems: Option<&'a PreparedStemSet>,
     pub(crate) outgoing_stems: Option<&'a PreparedStemSet>,
@@ -47,6 +49,7 @@ pub struct StretchProcessor {
     preparation_epoch: u64,
     request_id: u64,
     request_pending: bool,
+    prospective_request: Option<u64>,
     adopted_request_id: Option<u64>,
     preparation: KeyLockPreparationLane,
     productive_history: Option<ProductiveSourceHistory>,
@@ -62,6 +65,84 @@ pub struct StretchProcessor {
 unsafe impl Send for StretchProcessor {}
 
 impl StretchProcessor {
+    pub(crate) fn preparation_epoch(&self) -> u64 {
+        self.preparation_epoch
+    }
+
+    /// Scalar preflight for an event-owned candidate, before any mixer setting changes.
+    pub(crate) fn prepared_pitch_matches(
+        &self,
+        candidate: &NativeAdapterState,
+        feed: &ProductiveSourceFeed<'_>,
+        epoch: u64,
+        request_id: u64,
+    ) -> bool {
+        !self.wet_mode_failed()
+            && candidate.active
+            && candidate.used
+            && !candidate.dirty
+            && candidate
+                .source
+                .as_ref()
+                .is_some_and(|source| source.matches_adoption(feed, epoch, request_id))
+    }
+
+    /// Transfer an accepted event's exact source/pitch/FIFO state without allocation or drops.
+    /// The caller retains the displaced owner in its existing off-thread retirement work.
+    pub(crate) fn adopt_prepared_pitch(
+        &mut self,
+        candidate: &mut Box<NativeAdapterState>,
+        feed: &ProductiveSourceFeed<'_>,
+        epoch: u64,
+        request_id: u64,
+    ) -> bool {
+        if !self.prepared_pitch_matches(candidate, feed, epoch, request_id) {
+            return false;
+        }
+        self.adopt_prepared_pitch_claimed(candidate, feed, request_id);
+        true
+    }
+
+    /// Only a caller that already owns the complete same-content claim may use this.
+    /// Post-claim control revocation cannot partially undo the accepted frozen effect.
+    pub(crate) fn adopt_prepared_pitch_claimed(
+        &mut self,
+        candidate: &mut Box<NativeAdapterState>,
+        feed: &ProductiveSourceFeed<'_>,
+        request_id: u64,
+    ) {
+        std::mem::swap(&mut self.native, candidate);
+        self.request_pending = false;
+        self.adopted_request_id = Some(request_id);
+        self.productive_history = Some(ProductiveSourceHistory {
+            binding: ProductiveSourceBinding::new(feed.sample, feed.sample_rate_hz, feed.accepted),
+            next_position: feed.playback.position(),
+            domain: Some(feed.plan.domain()),
+            fed_output_frames: self.native.primed_output_frames as u64,
+        });
+        self.wet_rendered = false;
+        self.wet_render_failed = false;
+        self.wet_output_emitted = false;
+        self.wet_source_rendered = false;
+        self.wet_source_output_emitted = false;
+    }
+
+    pub(crate) fn owns_pitch_contract(&self, pitch_intent: PitchIntent, key_lock: bool) -> bool {
+        self.native.active
+            && self.native.used
+            && !self.native.dirty
+            && self.native.source.as_ref().is_some_and(|source| {
+                source.pitch_intent == pitch_intent && source.key_lock == key_lock
+            })
+    }
+
+    fn retain_aligned_unity_history(&self, pitch_intent: PitchIntent, key_lock: bool) -> bool {
+        self.native.active
+            && self.native.source.as_ref().is_some_and(|source| {
+                source.pitch_intent == pitch_intent && source.key_lock == key_lock
+            })
+    }
+
     pub(crate) fn wet_mode_failed(&self) -> bool {
         self.wet_render_failed || self.preparation.worker_failed()
     }
@@ -208,6 +289,7 @@ impl StretchProcessor {
             preparation_epoch: 0,
             request_id: 0,
             request_pending: false,
+            prospective_request: None,
             adopted_request_id: None,
             preparation,
             productive_history: None,
@@ -239,8 +321,76 @@ impl StretchProcessor {
 
     /// Fence a pending source-specific candidate without touching current audio/native history.
     pub(crate) fn invalidate_prepared(&mut self) {
+        self.prospective_request = None;
         self.preparation_epoch = self.preparation_epoch.saturating_add(1);
         self.preparation.invalidate_source(self.preparation_epoch);
+    }
+
+    pub(crate) fn hold_prospective_tuple(&mut self) {
+        self.invalidate_prepared();
+        self.request_pending = false;
+        self.prospective_request = Some(0);
+    }
+
+    pub(crate) fn request_prospective_tuple(
+        &mut self,
+        feed: &ProductiveSourceFeed<'_>,
+    ) -> Option<(u64, u64)> {
+        let request_id = self.request_id.checked_add(1)?;
+        if self.preparation_epoch == u64::MAX
+            || !self
+                .preparation
+                .request_source(feed, self.preparation_epoch, request_id)
+        {
+            return None;
+        }
+        self.request_id = request_id;
+        self.request_pending = true;
+        self.prospective_request = Some(request_id);
+        Some((self.preparation_epoch, request_id))
+    }
+
+    pub(crate) fn prospective_tuple_matches(
+        &mut self,
+        feed: &ProductiveSourceFeed<'_>,
+        epoch: u64,
+        request_id: u64,
+    ) -> bool {
+        self.preparation_epoch == epoch
+            && self.prospective_request == Some(request_id)
+            && self.preparation.source_matches(feed, epoch, request_id)
+    }
+
+    #[cfg(test)]
+    pub(crate) fn prospective_work_ready(&mut self) -> bool {
+        self.preparation.prepared_state().is_some()
+    }
+
+    #[cfg(test)]
+    pub(crate) fn prospective_work_finished(&self) -> bool {
+        self.preparation.source_work_finished(self.request_id)
+    }
+
+    pub(crate) fn adopt_prospective_tuple_claimed(
+        &mut self,
+        feed: &ProductiveSourceFeed<'_>,
+        request_id: u64,
+    ) {
+        self.preparation.exchange_source_claimed(&mut self.native);
+        self.prospective_request = None;
+        self.request_pending = false;
+        self.adopted_request_id = Some(request_id);
+        self.productive_history = Some(ProductiveSourceHistory {
+            binding: ProductiveSourceBinding::new(feed.sample, feed.sample_rate_hz, feed.accepted),
+            next_position: feed.playback.position(),
+            domain: Some(feed.plan.domain()),
+            fed_output_frames: self.native.primed_output_frames as u64,
+        });
+        self.wet_render_failed = false;
+        self.wet_rendered = false;
+        self.wet_output_emitted = false;
+        self.wet_source_rendered = false;
+        self.wet_source_output_emitted = false;
     }
 
     pub(crate) fn source_epoch_owner(&self) -> &std::sync::Arc<std::sync::atomic::AtomicU64> {
@@ -266,7 +416,7 @@ impl StretchProcessor {
         &mut self,
         mut feed: ProductiveSourceFeed<'_>,
         output_frames: usize,
-        preserve_pitch: bool,
+        _preserve_pitch: bool,
     ) {
         let readers = feed
             .plan
@@ -280,9 +430,19 @@ impl StretchProcessor {
         if frames == 0 {
             return;
         }
+        let Ok(pitch_scale) = feed
+            .pitch_intent
+            .native_pitch_scale(feed.playback.tempo_ratio(), feed.key_lock)
+        else {
+            self.silence_output(frames);
+            self.wet_render_failed = true;
+            return;
+        };
+        let wet = (pitch_scale - 1.0).abs() > PITCH_SCALE_EPSILON
+            || self.retain_aligned_unity_history(feed.pitch_intent, feed.key_lock);
         let finite = !super::native_source_coverage::complete_view_available(feed.sample);
         if finite {
-            if (preserve_pitch
+            if (wet
                 && !super::native_source_coverage::normal_loop_feed_available_with_readers(
                     feed.sample,
                     readers,
@@ -304,55 +464,54 @@ impl StretchProcessor {
             {
                 // Never consume missing-tap zeros or touch productive native/FIFO/history state.
                 self.silence_output(frames);
-                self.wet_render_failed = preserve_pitch;
+                self.wet_render_failed = wet;
                 return;
             }
         }
-        let wet = preserve_pitch
-            && (pitch_scale_for_tempo_ratio(feed.playback.tempo_ratio()) - 1.0).abs()
-                > PITCH_SCALE_EPSILON;
-        if !wet && self.request_pending {
-            self.invalidate_prepared();
-        }
-        if self.request_pending && self.preparation.source_work_finished(self.request_id) {
-            self.request_pending = false;
-        }
-        match self.preparation.exchange_source(
-            &mut self.native,
-            &feed,
-            self.preparation_epoch,
-            self.request_id,
-        ) {
-            SourceExchange::Adopted(request_id) => {
-                self.request_pending = false;
-                self.adopted_request_id = Some(request_id);
-                self.productive_history = Some(ProductiveSourceHistory {
-                    binding: ProductiveSourceBinding::new(
-                        feed.sample,
-                        feed.sample_rate_hz,
-                        feed.accepted,
-                    ),
-                    next_position: feed.playback.position(),
-                    domain: Some(feed.plan.domain()),
-                    fed_output_frames: PREPARED_HISTORY_FRAMES as u64,
-                });
+        if self.prospective_request.is_none() {
+            if !wet && self.request_pending {
+                self.invalidate_prepared();
             }
-            SourceExchange::Rejected(_request_id) => self.request_pending = false,
-            SourceExchange::Pending => {}
-        }
-        if wet
-            && !self.request_pending
-            && !self.native.source.as_ref().is_some_and(|source| {
-                source.matches_effective_contract(&feed, self.preparation_epoch)
-            })
-            && let Some(request_id) = self.request_id.checked_add(1)
-            && self.preparation_epoch != u64::MAX
-            && self
-                .preparation
-                .request_source(&feed, self.preparation_epoch, request_id)
-        {
-            self.request_id = request_id;
-            self.request_pending = true;
+            if self.request_pending && self.preparation.source_work_finished(self.request_id) {
+                self.request_pending = false;
+            }
+            match self.preparation.exchange_source(
+                &mut self.native,
+                &feed,
+                self.preparation_epoch,
+                self.request_id,
+            ) {
+                SourceExchange::Adopted(request_id) => {
+                    self.request_pending = false;
+                    self.adopted_request_id = Some(request_id);
+                    self.productive_history = Some(ProductiveSourceHistory {
+                        binding: ProductiveSourceBinding::new(
+                            feed.sample,
+                            feed.sample_rate_hz,
+                            feed.accepted,
+                        ),
+                        next_position: feed.playback.position(),
+                        domain: Some(feed.plan.domain()),
+                        fed_output_frames: self.native.primed_output_frames as u64,
+                    });
+                }
+                SourceExchange::Rejected(_request_id) => self.request_pending = false,
+                SourceExchange::Pending => {}
+            }
+            if wet
+                && !self.request_pending
+                && !self.native.source.as_ref().is_some_and(|source| {
+                    source.matches_effective_contract(&feed, self.preparation_epoch)
+                })
+                && let Some(request_id) = self.request_id.checked_add(1)
+                && self.preparation_epoch != u64::MAX
+                && self
+                    .preparation
+                    .request_source(&feed, self.preparation_epoch, request_id)
+            {
+                self.request_id = request_id;
+                self.request_pending = true;
+            }
         }
         let binding = ProductiveSourceBinding::new(feed.sample, feed.sample_rate_hz, feed.accepted);
         let position = feed.playback.position();
@@ -376,7 +535,12 @@ impl StretchProcessor {
                 frames,
             );
         }
-        self.process_resampled(frames, feed.playback.tempo_ratio(), preserve_pitch);
+        self.process_resampled_with_pitch(
+            frames,
+            feed.playback.tempo_ratio(),
+            feed.key_lock,
+            feed.pitch_intent,
+        );
         self.wet_source_rendered = self.wet_render_ready()
             && self.native.source.as_ref().is_some_and(|source| {
                 source.matches_effective_contract(&feed, self.preparation_epoch)
@@ -407,18 +571,42 @@ impl StretchProcessor {
         tempo_ratio: f64,
         preserve_pitch: bool,
     ) {
+        self.process_resampled_with_pitch(
+            output_frames,
+            tempo_ratio,
+            preserve_pitch,
+            PitchIntent::default(),
+        );
+    }
+
+    /// Render one native pitch pass. The immutable source reader owns all duration/rate changes.
+    pub(crate) fn process_resampled_with_pitch(
+        &mut self,
+        output_frames: usize,
+        tempo_ratio: f64,
+        key_lock: bool,
+        pitch_intent: PitchIntent,
+    ) {
         if self.channels == 0 {
             return;
         }
 
         let output_samples = output_frames.min(DEFAULT_BLOCK_SAMPLES);
-        let pitch_scale = pitch_scale_for_tempo_ratio(tempo_ratio);
+        let Ok(pitch_scale) = pitch_intent.native_pitch_scale(tempo_ratio, key_lock) else {
+            self.silence_output(output_samples);
+            self.wet_render_failed = true;
+            return;
+        };
 
-        if preserve_pitch
-            && (pitch_scale - 1.0).abs() > PITCH_SCALE_EPSILON
-            && self.native.rubberband.is_some()
+        if (pitch_scale - 1.0).abs() > PITCH_SCALE_EPSILON
+            || self.retain_aligned_unity_history(pitch_intent, key_lock)
         {
-            self.process_rubberband(output_samples, pitch_scale);
+            if self.native.rubberband.is_some() {
+                self.process_rubberband(output_samples, pitch_scale);
+            } else {
+                self.silence_output(output_samples);
+                self.wet_render_failed = true;
+            }
         } else {
             self.deactivate_rubberband_if_needed();
             self.copy_varispeed_output(output_samples);
@@ -603,6 +791,11 @@ impl StretchProcessor {
     }
 
     #[cfg(test)]
+    pub(crate) fn native_primed_output_frames(&self) -> usize {
+        self.native.primed_output_frames
+    }
+
+    #[cfg(test)]
     pub(crate) fn native_tap_observation(
         &self,
     ) -> Option<super::source_reader::TapReadObservation> {
@@ -637,6 +830,10 @@ pub(crate) struct FixedFifo {
     write_pos: usize,
     len: usize,
 }
+
+#[cfg(test)]
+#[path = "pitch_dsp_tests.rs"]
+mod pitch_dsp_tests;
 
 impl FixedFifo {
     pub(super) fn new(capacity: usize) -> Self {

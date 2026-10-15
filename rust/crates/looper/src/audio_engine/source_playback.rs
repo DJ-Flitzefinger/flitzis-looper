@@ -29,9 +29,16 @@ pub(crate) struct SourcePlayback {
     ratio: f64,
     target: f64,
     frames_until_step: usize,
+    // Before this epoch, only an intentional start/seek defines reconstructible source history.
+    history_reconstructible: bool,
 }
 
 impl SourcePlayback {
+    // At most one .05 source-rate step per segment, plus the terminal constant segment.
+    // The extra two segments cover binary64 accumulation at an inclusive endpoint.
+    pub(crate) const MAX_PROJECTION_SEGMENTS: usize =
+        ((SPEED_MAX - SPEED_MIN) / TEMPO_STEP) as usize + 3;
+
     pub(crate) fn new(frame: usize, seek_mode: ExplicitSeekMode, ratio: f64) -> Self {
         let ratio = checked_ratio(ratio);
         Self {
@@ -45,6 +52,7 @@ impl SourcePlayback {
             ratio,
             target: ratio,
             frames_until_step: 0,
+            history_reconstructible: true,
         }
     }
 
@@ -58,6 +66,7 @@ impl SourcePlayback {
         self.ratio = checked_ratio(ratio);
         self.target = self.ratio;
         self.frames_until_step = 0;
+        self.history_reconstructible = true;
         self
     }
 
@@ -68,6 +77,59 @@ impl SourcePlayback {
     /// Observe the pending target separately from the applied rate without advancing it.
     pub(crate) fn rate_target(&self) -> f64 {
         self.target
+    }
+
+    /// Copy a constant source trajectory's past for off-thread endpoint priming.
+    /// The live clock is untouched. A pending smoothing trajectory cannot be invented from
+    /// its endpoint and is explicitly unavailable; ordinary forward catch-up retains it.
+    /// The second result counts silence before physical source zero for Intro/Tail history.
+    pub(crate) fn history_before_constant(&self, output_frames: usize) -> Option<(Self, usize)> {
+        if self.ratio.to_bits() != self.target.to_bits() {
+            return None;
+        }
+        if self.elapsed_output_frames >= output_frames as u64 {
+            let mut history = *self;
+            history.elapsed_output_frames -= output_frames as u64;
+            return Some((history, 0));
+        }
+        if !self.history_reconstructible {
+            return None;
+        }
+        let domain = self.domain?;
+        // Rewind the original epoch, not its wrapped endpoint. An Intro/Tail may already
+        // have reached Normal at E while its actual prefix still belongs to this history.
+        let position = self.origin;
+        let missing_frames = output_frames - self.elapsed_output_frames as usize;
+        let distance = missing_frames as f64 * self.ratio;
+        let (coordinate, silent_prefix) = if position.seek_mode == ExplicitSeekMode::Normal {
+            let period = domain.musical_period.unwrap_or(domain.region.len() as f64);
+            let phase = (position.frame.saturating_sub(domain.region.start) as f64
+                + position.fraction
+                - distance)
+                .rem_euclid(period);
+            (domain.region.start as f64 + phase, 0)
+        } else {
+            let endpoint = position.frame as f64 + position.fraction;
+            let silent = ((distance - endpoint).max(0.0) / self.ratio).ceil() as usize;
+            let silent = silent.min(missing_frames);
+            (
+                endpoint - (missing_frames - silent) as f64 * self.ratio,
+                silent,
+            )
+        };
+        if !coordinate.is_finite() || coordinate < 0.0 {
+            return None;
+        }
+        let whole = coordinate.floor();
+        let mut history = *self;
+        history.origin = FractionalSourcePosition {
+            frame: whole as usize,
+            fraction: coordinate - whole,
+            seek_mode: position.seek_mode,
+        };
+        history.elapsed_output_frames = 0;
+        history.frames_until_step = 0;
+        Some((history, silent_prefix))
     }
 
     /// Compare the complete copied trajectory at a prepared native adoption boundary.
@@ -84,6 +146,7 @@ impl SourcePlayback {
             && self.ratio.to_bits() == other.ratio.to_bits()
             && self.target.to_bits() == other.target.to_bits()
             && self.frames_until_step == other.frames_until_step
+            && self.history_reconstructible == other.history_reconstructible
     }
 
     /// Check pending preparation control intent while its copied smoothing clock advances.
@@ -111,6 +174,9 @@ impl SourcePlayback {
         let same_geometry = self.domain.is_some_and(|previous| {
             previous.sample_frames == domain.sample_frames && previous.region == domain.region
         });
+        if self.domain.is_some() {
+            self.history_reconstructible = false;
+        }
         self.rebase();
         self.domain = Some(domain);
         let outside = if let Some(period) = domain.musical_period {
@@ -139,6 +205,7 @@ impl SourcePlayback {
         // the virtual seam's fractional residue.
         if was_explicit {
             self.domain = None;
+            self.history_reconstructible = false;
         }
     }
 
@@ -159,12 +226,14 @@ impl SourcePlayback {
         };
         self.domain = None;
         self.elapsed_output_frames = 0;
+        self.history_reconstructible = true;
     }
 
     /// Begin a constant-ratio chunk, bounded by the next active-output-frame smoothing step.
     pub(crate) fn chunk(&mut self, max_frames: usize) -> (usize, f64) {
         if self.frames_until_step == 0 && self.ratio != self.target {
             self.rebase();
+            self.history_reconstructible = false;
             let delta = (self.target - self.ratio).clamp(-TEMPO_STEP, TEMPO_STEP);
             self.ratio = if (self.target - self.ratio).abs() <= TEMPO_STEP {
                 self.target
@@ -288,6 +357,76 @@ fn checked_ratio(ratio: f64) -> f64 {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn pitch_history_keeps_the_original_intro_or_tail_after_its_endpoint_wraps() {
+        let region = FrameRange { start: 20, end: 40 };
+        for musical in [false, true] {
+            let domain = if musical {
+                SourceLoopDomain::musical(60, region, 20.25).unwrap()
+            } else {
+                SourceLoopDomain::physical(60, region)
+            };
+            let period = if musical { 20.25 } else { 20.0 };
+            for (mode, start, boundary) in [
+                (ExplicitSeekMode::BeforeLoop, 5, 20),
+                (ExplicitSeekMode::AfterLoop, 45, 60),
+            ] {
+                for rate in [0.5, 1.3, 2.0] {
+                    let mut endpoint = SourcePlayback::new(start, mode, rate);
+                    endpoint.configure_domain(domain);
+                    endpoint.advance(110);
+                    assert_eq!(endpoint.position().seek_mode, ExplicitSeekMode::Normal);
+                    let (history, silence) = endpoint.history_before_constant(256).unwrap();
+                    // Independent physical prefix and musical-loop arithmetic. In particular,
+                    // E being Normal must not replace actual pre-E Intro/Tail with loop PCM.
+                    for frame in 0..256 {
+                        let raw = start as f64 + (frame as f64 - 146.0) * rate;
+                        if raw < -1.0e-12 {
+                            assert!(frame < silence);
+                            continue;
+                        }
+                        assert!(frame >= silence);
+                        let observed = history.position_at(frame - silence);
+                        let (expected, expected_mode) = if raw < boundary as f64 {
+                            (raw, mode)
+                        } else {
+                            (
+                                20.0 + (raw - boundary as f64).rem_euclid(period),
+                                ExplicitSeekMode::Normal,
+                            )
+                        };
+                        let actual = observed.frame as f64 + observed.fraction;
+                        assert!(
+                            (actual - expected).abs() < 1.0e-10,
+                            "mode={mode:?} rate={rate} musical={musical} n={frame} actual={actual} expected={expected}"
+                        );
+                        assert_eq!(observed.seek_mode, expected_mode);
+                    }
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn pitch_history_never_invents_the_past_of_a_newly_settled_rate_or_domain() {
+        let region = FrameRange { start: 10, end: 90 };
+        let mut playback = SourcePlayback::new(10, ExplicitSeekMode::Normal, 1.0);
+        playback.configure(100, region);
+        playback.set_target(1.05);
+        assert_eq!(playback.chunk(1), (1, 1.05));
+        playback.advance(1);
+        assert_eq!(playback.tempo_ratio(), playback.rate_target());
+        assert!(playback.history_before_constant(4096).is_none());
+        playback.advance(4095);
+        let (history, silence) = playback.history_before_constant(4096).unwrap();
+        assert_eq!(silence, 0);
+        assert_eq!(history.position_at(4096), playback.position());
+        playback.configure_domain(SourceLoopDomain::musical(100, region, 80.25).unwrap());
+        assert!(playback.history_before_constant(4096).is_none());
+        playback.advance(4096);
+        assert!(playback.history_before_constant(4096).is_some());
+    }
 
     #[test]
     fn musical_domain_preserves_virtual_seam_phase_through_rebase_rate_seek_and_edits() {

@@ -6,6 +6,9 @@ use crate::audio_engine::content_placement::{ContentKey, PlacementObservation};
 use crate::audio_engine::input_runtime_binding::{
     InputPadBinding, InputRuntimeOwnership, LaunchWriteKind,
 };
+use crate::audio_engine::ordinary_start::OrdinaryStartPublication;
+use crate::audio_engine::pad_start::CapturedPadStart;
+use crate::audio_engine::pitch_actions::PitchActionReject;
 use crate::audio_engine::resident_relocation::{self, ResidentWindowTicket};
 use crate::messages::ControlMessage;
 use pyo3::exceptions::{PyRuntimeError, PyValueError};
@@ -15,6 +18,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 
 struct TriggerOwner {
+    pad_start: CapturedPadStart,
     key: ContentKey,
     binding: InputPadBinding,
     generation: u64,
@@ -30,7 +34,6 @@ struct TriggerOwner {
     loop_start_s: f64,
     loop_end_s: Option<f64>,
     exclusive: bool,
-    received_at_ns: u64,
     admitted: AtomicBool,
     window_prepared: AtomicBool,
 }
@@ -74,6 +77,7 @@ impl CapturedInputPadTrigger {
         ownership: &Arc<InputRuntimeOwnership>,
         enabled: &Arc<AtomicBool>,
         learn_capture_active: &Arc<AtomicBool>,
+        producer: &Arc<Mutex<Producer<ControlMessage>>>,
     ) -> Option<Self> {
         let InputAction::TriggerPad { id } = &mapping.action else {
             return None;
@@ -86,8 +90,26 @@ impl CapturedInputPadTrigger {
             return None;
         }
         let key = binding.placement?.content_key()?;
+        let pad_start = CapturedPadStart::capture_parts(
+            binding,
+            ownership.clone(),
+            pad.acknowledgements.clone()?,
+            pad.loop_start_s,
+            pad.loop_end_s,
+            1.0,
+            !state.multi_loop,
+            received_at_ns,
+            state.render_format?,
+            Some((
+                mapping.owner.clone(),
+                enabled.clone(),
+                learn_capture_active.clone(),
+            )),
+        )
+        .ok()?;
         let token = Self {
             owner: Arc::new(TriggerOwner {
+                pad_start,
                 key,
                 binding,
                 generation: ownership.binding_source_generation(id, binding)?,
@@ -107,12 +129,26 @@ impl CapturedInputPadTrigger {
                 loop_start_s: pad.loop_start_s,
                 loop_end_s: pad.loop_end_s,
                 exclusive: !state.multi_loop,
-                received_at_ns,
                 admitted: AtomicBool::new(false),
                 window_prepared: AtomicBool::new(false),
             }),
         };
-        token.scalar_current(id, binding).then_some(token)
+        if !token.scalar_current(id, binding) {
+            return None;
+        }
+        // This scalar capture precedes every possible own WindowACK on the same
+        // command lane. A later residency retry retains this exact original T.
+        let queued = producer.try_lock().is_ok_and(|mut producer| {
+            producer
+                .push(ControlMessage::CapturePadStartTarget(
+                    token.pad_start().clone(),
+                ))
+                .is_ok()
+        });
+        if !queued {
+            token.pad_start().reject(PitchActionReject::Capacity);
+        }
+        Some(token)
     }
 
     pub(in crate::audio_engine) fn belongs_to(
@@ -126,10 +162,15 @@ impl CapturedInputPadTrigger {
         Arc::ptr_eq(&self.owner, &other.owner)
     }
 
+    pub(in crate::audio_engine) fn pad_start(&self) -> &CapturedPadStart {
+        &self.owner.pad_start
+    }
+
     fn scalar_current(&self, id: usize, binding: InputPadBinding) -> bool {
         let owner = &self.owner;
         let ownership = &owner.ownership;
-        !owner.admitted.load(Ordering::Acquire)
+        owner.pad_start.state() != "rejected"
+            && !owner.admitted.load(Ordering::Acquire)
             && owner.mapping.owner.load(Ordering::Acquire)
             && owner.enabled.load(Ordering::Acquire)
             && !owner.learn_capture_active.load(Ordering::Acquire)
@@ -248,19 +289,26 @@ impl CapturedInputPadTrigger {
     pub(in crate::audio_engine) fn loop_region(&self) -> (f64, Option<f64>) {
         (self.owner.loop_start_s, self.owner.loop_end_s)
     }
-    pub(in crate::audio_engine) fn exclusive(&self) -> bool {
-        self.owner.exclusive
-    }
+    #[cfg(test)]
     pub(in crate::audio_engine) fn received_at_ns(&self) -> u64 {
-        self.owner.received_at_ns
+        self.owner.pad_start.received_timestamp()
     }
     pub(in crate::audio_engine) fn note_window_prepared(&self) {
         self.owner.window_prepared.store(true, Ordering::Release);
+        self.owner.pad_start.note_window_prepared();
     }
 
     pub(super) fn dispatch(
         &self,
         producer: &Arc<Mutex<Producer<ControlMessage>>>,
+    ) -> PyResult<bool> {
+        self.dispatch_before_commit(producer, || {})
+    }
+
+    fn dispatch_before_commit(
+        &self,
+        producer: &Arc<Mutex<Producer<ControlMessage>>>,
+        before_commit: impl FnOnce(),
     ) -> PyResult<bool> {
         let Some(guard) = self.launch_guard(None)? else {
             return Ok(false);
@@ -299,31 +347,52 @@ impl CapturedInputPadTrigger {
         let prepared = ownership
             .prepare_launch_write(placement, LaunchWriteKind::Admit)
             .map_err(PyRuntimeError::new_err)?;
-        let message = ControlMessage::TriggerInputPad {
-            id: guard.id,
-            start_s: self.owner.loop_start_s,
-            end_s: self.owner.loop_end_s,
-            exclusive: self.owner.exclusive,
-            binding: guard.binding,
-            received_at_ns: self.owner.received_at_ns,
-            resident_control: None,
-            launch_revision: prepared.previous_revision,
+        let Some(work) = self
+            .owner
+            .pad_start
+            .take_work_with_binding(guard.binding, None)
+            .map_err(|reason| PyRuntimeError::new_err(reason.as_str()))?
+        else {
+            return Ok(false);
         };
-        Ok(ownership
+        let publication = Arc::new(OrdinaryStartPublication::new(work));
+        let message = ControlMessage::PreparedStart(publication.clone());
+        before_commit();
+        let committed = ownership
             .commit_launch_write(
                 prepared,
-                || guard.current() && ownership.admission_fields_current(guard.id, guard.binding),
+                || {
+                    guard.current()
+                        && ownership.admission_fields_current(guard.id, guard.binding)
+                        && self.owner.pad_start.mark_published_claimed()
+                },
                 || {
                     guard.mark_admitted();
                     producer.push(message).expect("reserved MIDI capacity");
                 },
             )
-            .is_ok())
+            .is_ok();
+        if !committed
+            && let Some(work) = publication.take()
+            && let Err(work) = self.owner.pad_start.restore_unpublished_work(work)
+        {
+            self.owner
+                .pad_start
+                .reject(PitchActionReject::PreparedMismatch);
+            drop(work);
+        }
+        Ok(committed)
     }
 }
 
 #[pymethods]
 impl CapturedInputPadTrigger {
+    /// Observe the exact already-dispatched start; this never captures or publishes work.
+    #[getter]
+    pub fn captured_start(&self) -> CapturedPadStart {
+        self.owner.pad_start.clone()
+    }
+
     /// Current original-owner projection for Controller bookkeeping, never slot authority.
     #[getter]
     pub fn diagnostic_slot(&self) -> Option<usize> {
@@ -339,6 +408,9 @@ impl CapturedInputPadTrigger {
     /// Original scalar owner observation only. Own WindowACK and launch admission
     /// still require trigger_prepared_input_pad with the exact retained ticket.
     pub fn original_owner_status(&self) -> &'static str {
+        if self.owner.pad_start.state() == "rejected" {
+            return "superseded";
+        }
         if self.owner.admitted.load(Ordering::Acquire) {
             return "admitted";
         }
@@ -390,6 +462,7 @@ impl InputRuntime {
             &self.ownership,
             &self.enabled,
             &self.learn_capture_active,
+            &self.audio_producer,
         )
     }
     pub(in crate::audio_engine) fn trigger_captured_pad(
@@ -440,8 +513,10 @@ mod tests {
     use super::*;
     use crate::audio_engine::complete_context::source_custody_tests::own_pair_ack;
     use crate::audio_engine::input_mapping::launch_admission_tests::{LaunchFixture, RATE};
+    use crate::audio_engine::resident_relocation::control_publication_tests::PendingWriter;
     use crate::audio_engine::timing::InputClock;
     use crate::audio_engine::{input_runtime_binding, pad_pair};
+    use std::cell::RefCell;
     use std::time::Duration;
 
     fn runtime_fixture(capacity: usize) -> LaunchFixture {
@@ -473,13 +548,8 @@ mod tests {
     }
 
     fn original_failed_event(fixture: &mut LaunchFixture) -> CapturedInputPadTrigger {
-        // Actual dispatcher pressure returns the same admitted input to Python.
-        fixture
-            .producer
-            .lock()
-            .unwrap()
-            .push(ControlMessage::Ping())
-            .unwrap();
+        // Its original timing capture fills the one-slot lane, so the actual
+        // start publication returns this same original input to Python.
         let runtime = fixture.engine.input_runtime.as_ref().unwrap();
         assert!(runtime.inject_midi_message(&[0x90, 60, 100]));
         let mut event = None;
@@ -496,10 +566,12 @@ mod tests {
             .captured_trigger
             .expect("captured original mapping/source");
         assert_eq!(trigger.received_at_ns(), event.received_at_ns);
-        assert!(matches!(
-            fixture.consumer.pop().unwrap(),
-            ControlMessage::Ping()
-        ));
+        let ControlMessage::CapturePadStartTarget(target) = fixture.consumer.pop().unwrap() else {
+            panic!("original ordinary target capture precedes launch publication");
+        };
+        assert!(target.same_owner(trigger.pad_start()));
+        target.capture_target(0).unwrap();
+        assert_eq!(trigger.pad_start().target_frame(), Some(0));
         trigger
     }
 
@@ -530,26 +602,69 @@ mod tests {
             .unwrap();
         let runtime = fixture.engine.input_runtime.as_ref().unwrap();
         assert!(runtime.trigger_captured_pad(&trigger).unwrap());
-        let ControlMessage::TriggerInputPad {
-            id,
-            received_at_ns,
-            exclusive,
-            binding,
-            ..
-        } = fixture.consumer.pop().unwrap()
-        else {
+        let ControlMessage::PreparedStart(publication) = fixture.consumer.pop().unwrap() else {
             panic!("original MIDI launch");
         };
-        assert_eq!(id, 1);
-        assert_eq!(received_at_ns, trigger.received_at_ns());
-        assert!(!exclusive);
+        let work = publication
+            .take()
+            .expect("one original prepared-capable work");
+        let origin = work.origin();
+        let guard = origin
+            .control_guard()
+            .expect("same relocated original owner");
+        assert_eq!(guard.id, 1);
+        assert_eq!(origin.received_timestamp(), trigger.received_at_ns());
+        assert!(!origin.exclusive());
         assert_eq!(
-            binding.placement.unwrap().content_key(),
+            guard.binding.placement.unwrap().content_key(),
             Some(trigger.owner.key)
         );
+        assert!(origin.same_owner(trigger.pad_start()));
         assert!(!runtime.trigger_captured_pad(&trigger).unwrap());
         assert!(fixture.consumer.is_empty());
         assert_eq!(*fixture.engine.pad_request_ids.lock().unwrap(), requests);
+    }
+
+    #[test]
+    fn pending_writer_after_staged_original_midi_start_restores_exact_work_for_retry() {
+        let mut fixture = runtime_fixture(1);
+        let trigger = original_failed_event(&mut fixture);
+        let ownership = fixture.engine.input_runtime_ownership.clone();
+        let sequence = trigger.pad_start().sequence();
+        let original = trigger.launch_guard(None).unwrap().unwrap().binding;
+        let launch_revision = ownership.launch_revision(0);
+        let held = RefCell::new(None);
+        assert!(
+            !trigger
+                .dispatch_before_commit(&fixture.producer, || {
+                    *held.borrow_mut() = Some(PendingWriter::hold(ownership.clone()));
+                })
+                .unwrap()
+        );
+        assert!(fixture.consumer.is_empty());
+        assert!(!trigger.pad_start().is_published());
+        assert!(!trigger.owner.admitted.load(Ordering::Acquire));
+        assert_eq!(trigger.pad_start().sequence(), sequence);
+        assert_eq!(trigger.pad_start().target_frame(), Some(0));
+        held.into_inner().unwrap().complete();
+        assert!(ownership.admitted_launch_ids().is_empty());
+        assert_eq!(ownership.launch_revision(0), launch_revision);
+        assert!(trigger.is_current());
+        assert!(trigger.dispatch(&fixture.producer).unwrap());
+        let ControlMessage::PreparedStart(publication) = fixture.consumer.pop().unwrap() else {
+            panic!("retry queues the original prepared-capable MIDI work");
+        };
+        let work = publication.take().unwrap();
+        assert_eq!(work.sequence(), sequence);
+        assert!(work.origin().same_owner(trigger.pad_start()));
+        assert_eq!(work.origin().received_timestamp(), trigger.received_at_ns());
+        assert_eq!(work.origin().target_frame(), Some(0));
+        let retry = work.origin().control_guard().unwrap().binding;
+        assert!(retry.same_projection(&original));
+        assert_eq!(retry.resident, original.resident);
+        assert!(trigger.pad_start().is_published());
+        assert!(trigger.owner.admitted.load(Ordering::Acquire));
+        assert!(fixture.consumer.is_empty());
     }
 
     #[test]

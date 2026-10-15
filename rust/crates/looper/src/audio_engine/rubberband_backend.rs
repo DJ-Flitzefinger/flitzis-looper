@@ -62,6 +62,8 @@ pub(crate) enum RubberBandError {
     InvalidBlockSize,
     #[error("pitch scale must be finite and greater than zero")]
     InvalidPitchScale,
+    #[error("endpoint pitch preparation requires an available exact source-rate history")]
+    UnavailableSourceHistory,
     #[error("expected {expected} channels but got {actual}")]
     BufferChannelCount { expected: usize, actual: usize },
     #[error("channel {channel} has {actual} frames but Rubber Band requires at least {required}")]
@@ -89,6 +91,9 @@ pub(crate) struct RubberBandLiveShifter {
     channels: usize,
     block_size: usize,
     start_delay: usize,
+    // Exact pinned 4.0.0 R3LiveShifter window, derived from this handle's rate/options.
+    // Nominal getStartDelay includes ratio-dependent block corrections and cannot replace it.
+    source_window_frames: usize,
     input_ptrs: Vec<*const c_float>,
     output_ptrs: Vec<*mut c_float>,
 }
@@ -137,6 +142,7 @@ impl RubberBandLiveShifter {
             channels,
             block_size: 0,
             start_delay: 0,
+            source_window_frames: pinned_source_window_frames(sample_rate_hz, options),
             input_ptrs: vec![std::ptr::null(); channels],
             output_ptrs: vec![std::ptr::null_mut(); channels],
         };
@@ -213,12 +219,71 @@ impl RubberBandLiveShifter {
 
     /// Set initial pitch and clear native history before source preparation, outside rendering.
     ///
-    /// Pitch is accepted before reset remeasures the native delay. No silent shifts follow, so
-    /// the caller's first shift supplies source content with this exact initial pitch.
+    /// The legacy range resets at its exact pitch. Expanded upward pitch finishes native cold
+    /// initialization with a silent unity block before setting the exact target, avoiding the
+    /// pinned backend's oversized first-process pad. Every real source block uses the target.
     pub(crate) fn prepare_exact_pitch(&mut self, pitch_scale: f64) -> Result<(), RubberBandError> {
-        self.set_pitch_scale(pitch_scale)?;
-        self.reset_for_preparation();
+        if !pitch_scale.is_finite() || pitch_scale <= 0.0 {
+            return Err(RubberBandError::InvalidPitchScale);
+        }
+        if pitch_scale > 2.0 {
+            // R3LiveShifter 4.0.0 has a 4W input ring but its cold first shift attempts W*p
+            // padding, then requires a full block of free input space. Large requested p can
+            // therefore overflow that ring before source processing. Finish firstProcess at
+            // unity with silence, then change this ONE handle's pitch without another reset.
+            // The first real source block still uses exactly the requested pitch. This work
+            // runs only during setup/preparation, never in callback rendering.
+            self.set_pitch_scale(1.0)?;
+            self.reset_for_preparation();
+            let input = vec![vec![0.0; self.block_size]; self.channels];
+            let mut output = vec![vec![0.0; self.block_size]; self.channels];
+            self.shift(&input, &mut output)?;
+            self.set_pitch_scale(pitch_scale)?;
+        } else {
+            // Preserve the established k=0 (.5..2) exact-cold-source regression profile.
+            self.set_pitch_scale(pitch_scale)?;
+            self.reset_for_preparation();
+        }
         Ok(())
+    }
+
+    /// Worker-only endpoint history bound for the complete requested pitch/rate domain.
+    /// Window history is expressed in raw output-domain feed frames, so pitch-up input
+    /// decimation and pitch-down output expansion both need the larger reciprocal factor.
+    /// The native delay plus two complete adapter blocks reserve the output/resampler tail.
+    pub(crate) fn source_history_frames(&self, pitch_scale: f64) -> Result<usize, RubberBandError> {
+        // Pinned 4.0.0's source window is <=8192 (Short) or <=10240 (Medium).
+        // SourcePlayback rates are .5..2 and the requested semitone extremes are -23..24,
+        // so the larger pitch/reciprocal factor is <=8. Each measured resampler deficit
+        // is <=one 512-frame block. W*factor + nominal delay + two blocks is therefore
+        // below this finite ceiling, including Medium at 192kHz. Reject, never clip.
+        const MAX_HISTORY_FRAMES: usize = 262_144;
+        let min_pitch = 2.0_f64.powf(-23.0 / 12.0) / super::constants::SPEED_MAX;
+        let max_pitch = 2.0_f64.powf(24.0 / 12.0) / super::constants::SPEED_MIN;
+        if !pitch_scale.is_finite() || !(min_pitch..=max_pitch).contains(&pitch_scale) {
+            return Err(RubberBandError::UnavailableSourceHistory);
+        }
+        if (0.5..=2.0).contains(&pitch_scale) {
+            return Ok(super::prepared_native_history::PREPARED_HISTORY_FRAMES);
+        }
+        let factor = pitch_scale.max(1.0 / pitch_scale);
+        let window_frames = (self.source_window_frames as f64 * factor).ceil();
+        if !window_frames.is_finite() || window_frames > MAX_HISTORY_FRAMES as f64 {
+            return Err(RubberBandError::UnavailableSourceHistory);
+        }
+        let frames = (window_frames as usize)
+            .checked_add(self.start_delay)
+            .and_then(|frames| frames.checked_add(self.block_size.saturating_mul(2)))
+            .map(|frames| frames.max(super::prepared_native_history::PREPARED_HISTORY_FRAMES))
+            .ok_or(RubberBandError::UnavailableSourceHistory)?;
+        let frames = frames
+            .div_ceil(self.block_size)
+            .checked_mul(self.block_size)
+            .ok_or(RubberBandError::UnavailableSourceHistory)?;
+        if frames > MAX_HISTORY_FRAMES {
+            return Err(RubberBandError::UnavailableSourceHistory);
+        }
+        Ok(frames)
     }
 
     /// Restore a silent, neutral instance for an ownership handover to the audio callback.
@@ -319,6 +384,22 @@ impl Drop for RubberBandLiveShifter {
         }
         #[cfg(test)]
         super::c3_observation::native_deleted();
+    }
+}
+
+/// Mirror the pinned 4.0.0 native window calculation, not an acoustic readiness estimate.
+/// `mathmisc.cpp::roundUpDiv` rounds ceil(rate/divisor) to a power of two. `Guide.h`
+/// selects max(1024, roundUpDiv(rate,32)) in single-window mode; Medium additionally
+/// includes `R3LiveShifter.h::Limits::maxInhopWithReadahead = roundUpDiv(rate,128)`.
+fn pinned_source_window_frames(sample_rate_hz: u32, options: RubberBandLiveOptions) -> usize {
+    // Mirror the native profile's existing supported-rate selection only for its window
+    // metadata. This neither changes the source clock nor certifies an unsupported rate.
+    let native_rate = sample_rate_hz.clamp(8_000, 192_000) as usize;
+    let classification = native_rate.div_ceil(32).next_power_of_two().max(1024);
+    if options.bits() & 0x00100000 != 0 {
+        classification + native_rate.div_ceil(128).next_power_of_two()
+    } else {
+        classification
     }
 }
 

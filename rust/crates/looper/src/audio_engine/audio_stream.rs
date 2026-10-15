@@ -782,6 +782,19 @@ pub(super) fn execute_scheduled_command<S: AudioMessageSink, R: AudioBufferRetir
     retirement: &mut R,
 ) -> ScheduledExecution {
     match command {
+        ScheduledCommand::PitchAction {
+            slot,
+            action_sequence,
+        } => {
+            return super::pitch_runtime::execute(
+                mixer,
+                slot,
+                action_sequence,
+                output_frame,
+                audio_messages,
+                retirement,
+            );
+        }
         ScheduledCommand::RefreshAcceptedTiming(refresh) => {
             let accepted = execute_accepted_timing_refresh(
                 mixer,
@@ -942,7 +955,7 @@ fn execute_accepted_timing_refresh<R: AudioBufferRetirement>(
     true
 }
 
-fn global_playback_entry_slot(
+pub(super) fn global_playback_entry_slot(
     mixer: &RtMixer,
     entry: &super::global_playback_batch::GlobalPlaybackEntry,
     start: bool,
@@ -1195,6 +1208,8 @@ fn render_scheduled_audio_tracking_pads<
     pad_peaks.fill(0.0);
     pad_activity.clear();
 
+    super::pitch_runtime::service_endpoint_reserve(mixer);
+
     drain_scheduler_due_at_callback_start(
         scheduler,
         callback_start_frame,
@@ -1411,6 +1426,10 @@ fn control_message_retirement_slots_needed(message: &ControlMessage) -> usize {
         ControlMessage::PadCopy(work) => work.retirement_slots_needed(),
         ControlMessage::PadPair(_) => 1,
         ControlMessage::HoldAction(_) => 2,
+        ControlMessage::PitchAction(_) => 2,
+        ControlMessage::PreparedStart(_) => 2,
+        ControlMessage::CapturePadStartTarget(_) => 1,
+        ControlMessage::CaptureGlobalStartTarget(_) => 1,
         ControlMessage::TransportForPlacement { .. } => 1,
         ControlMessage::LoadColdSample {
             replace_assignment: true,
@@ -2138,7 +2157,14 @@ pub(super) fn process_control_message<
                 retirement.retire_global_playback_batch(batch);
                 return;
             }
-            let target = if batch.start {
+            let target = if let Some(captured) = batch.captured_start.as_ref() {
+                let Some(target) = captured.target_frame() else {
+                    batch.finish(false);
+                    retirement.retire_global_playback_batch(batch);
+                    return;
+                };
+                target
+            } else if batch.start {
                 match *trigger_quantization {
                     TriggerQuantization::Immediate => callback_start_frame,
                     TriggerQuantization::Grid { .. } => {
@@ -2155,7 +2181,18 @@ pub(super) fn process_control_message<
             } else {
                 callback_start_frame
             };
-            let _ = scheduler.schedule(target, ScheduledCommand::GlobalPlaybackBatch(batch));
+            if batch.start {
+                super::pitch_runtime::accept_group(
+                    mixer,
+                    batch,
+                    scheduler,
+                    callback_start_frame,
+                    target,
+                    retirement,
+                );
+            } else {
+                let _ = scheduler.schedule(target, ScheduledCommand::GlobalPlaybackBatch(batch));
+            }
             drain_scheduler_due_at_callback_start(
                 scheduler,
                 callback_start_frame,
@@ -2263,6 +2300,7 @@ pub(super) fn process_control_message<
             loop_region,
             resident_cancelled,
             incoming_defaults,
+            initial_pitch,
         } => {
             let ownership = publication.ownership.clone();
             let snapshot = match ownership.observe_source_publication(&publication) {
@@ -2283,6 +2321,7 @@ pub(super) fn process_control_message<
                         loop_region,
                         resident_cancelled,
                         incoming_defaults,
+                        initial_pitch,
                     });
                     return;
                 }
@@ -2294,11 +2333,12 @@ pub(super) fn process_control_message<
             let geometry = target.is_some()
                 && publication.source_generation == source_generation
                 && publication.placement.lifetime() == content_lifetime
-                && mixer.cold_source_current_with_defaults(
+                && mixer.cold_source_current_with_initial_pitch(
                     id,
                     &sample,
                     source_generation,
                     incoming_defaults,
+                    initial_pitch,
                 );
             let write = match snapshot
                 .filter(|_| geometry)
@@ -2320,6 +2360,7 @@ pub(super) fn process_control_message<
                         loop_region,
                         resident_cancelled,
                         incoming_defaults,
+                        initial_pitch,
                     });
                     return;
                 }
@@ -2380,12 +2421,13 @@ pub(super) fn process_control_message<
                             transport.clear_pending_bootstrap_for_pad(id);
                             mixer.stop_sample_rt(id, retirement);
                         }
-                        mixer.load_sample_with_defaults_rt(
+                        mixer.load_sample_with_initial_pitch_rt(
                             id,
                             pending_sample
                                 .take()
                                 .expect("single claimed source payload"),
                             incoming_defaults,
+                            initial_pitch,
                             retirement,
                         );
                         if let Some((start, end)) = loop_region {
@@ -2419,6 +2461,7 @@ pub(super) fn process_control_message<
                     loop_region,
                     resident_cancelled,
                     incoming_defaults,
+                    initial_pitch,
                 });
                 return;
             }
@@ -2455,6 +2498,7 @@ pub(super) fn process_control_message<
                         loop_region,
                         resident_cancelled,
                         incoming_defaults,
+                        initial_pitch,
                     });
                     return;
                 }
@@ -2496,6 +2540,52 @@ pub(super) fn process_control_message<
         }
         ControlMessage::HoldAction(work) => {
             apply_hold_action_message(mixer, work, callback_start_frame, retirement);
+        }
+        ControlMessage::PitchAction(publication) => {
+            if let Some(work) = publication.take() {
+                super::pitch_runtime::accept(
+                    mixer,
+                    work,
+                    scheduler,
+                    callback_start_frame,
+                    retirement,
+                );
+            }
+            retirement.retire_pitch_publication(publication);
+        }
+        ControlMessage::CapturePadStartTarget(owner) => {
+            let original = quantized_target_frame(transport, *trigger_quantization)
+                .unwrap_or(callback_start_frame);
+            if let Err(reason) = owner.capture_target(original) {
+                owner.reject(reason);
+            }
+            retirement.retire_pad_start_target(owner);
+        }
+        ControlMessage::CaptureGlobalStartTarget(owner) => {
+            let original = quantized_target_frame(transport, *trigger_quantization)
+                .unwrap_or(callback_start_frame);
+            owner.capture_target(original);
+            retirement.retire_global_start_target(owner);
+        }
+        ControlMessage::PreparedStart(publication) => {
+            if let Some(work) = publication.take() {
+                super::pitch_runtime::accept_ordinary(
+                    mixer,
+                    work,
+                    scheduler,
+                    callback_start_frame,
+                    retirement,
+                );
+            }
+            retirement.retire_ordinary_start_publication(publication);
+            drain_scheduler_due_at_callback_start(
+                scheduler,
+                callback_start_frame,
+                mixer,
+                transport,
+                audio_messages,
+                retirement,
+            );
         }
         ControlMessage::CommittedStemWork(work) => {
             mixer.apply_committed_stem_work(work, retirement);
@@ -3821,6 +3911,10 @@ mod tests {
                 loop_region: None,
                 resident_cancelled: None,
                 incoming_defaults: None,
+                initial_pitch: super::super::cold_load::SourcePitchInitialization::RestoredTuple {
+                    pitch: super::super::pitch_intent::PitchIntent::new(6, 18).unwrap(),
+                    key_lock: Some(false),
+                },
             })
             .unwrap();
         // The message has actually left the queue before another source writer starts.
@@ -3853,6 +3947,10 @@ mod tests {
         assert!(mixer.deferred_control().is_none());
         assert_eq!(adoption.load(Ordering::Acquire), 2);
         assert_eq!(ownership.cold_status(0, 7), Some(2));
+        assert_eq!(
+            mixer.pad_pitch_intent(0),
+            Some(super::super::pitch_intent::PitchIntent::new(6, 18).unwrap())
+        );
         assert!(mixer.can_play_sample(0, 1.0));
         assert_eq!(feedback.len(), 1);
         assert!(matches!(feedback[0], AudioMessage::Pong()));

@@ -17,6 +17,90 @@ use crate::audio_engine::resident_relocation::{
     ResidentWindowTicket, WindowRequest, prepare_window_with_producer, reconcile,
 };
 
+#[derive(Clone, Copy, Debug)]
+struct ExpectedPadFeedback {
+    id: usize,
+    owner: usize,
+    cell: usize,
+    lifetime: u64,
+    transport_revision: u64,
+    kind: u8,
+}
+
+impl ExpectedPadFeedback {
+    fn capture(engine: &AudioEngine, id: usize, kind: u8) -> Self {
+        let ownership = &engine.input_runtime_ownership;
+        let key = ownership
+            .callback_feedback_key(id)
+            .expect("actual adopted feedback owner");
+        Self {
+            id,
+            owner: ownership.owner_identity().diagnostic(),
+            cell: key.cell().index(),
+            lifetime: key.lifetime(),
+            transport_revision: ownership
+                .transport_intent_for_cell(key.cell())
+                .load(Ordering::Acquire),
+            kind,
+        }
+    }
+
+    fn assert_message(&self, message: &AudioMessage) {
+        let AudioMessage::ContentFeedback {
+            id,
+            owner,
+            cell,
+            lifetime,
+            transport_revision,
+            kind,
+            value,
+        } = message
+        else {
+            panic!("expected exact owned pad feedback {self:?}, got {message:?}");
+        };
+        assert_eq!(
+            (
+                *id,
+                *owner,
+                *cell,
+                *lifetime,
+                *transport_revision,
+                *kind,
+                value.to_bits()
+            ),
+            (
+                self.id,
+                self.owner,
+                self.cell,
+                self.lifetime,
+                self.transport_revision,
+                self.kind,
+                0.0_f64.to_bits()
+            ),
+        );
+    }
+
+    fn assert_current(&self, engine: &AudioEngine, message: &AudioMessage) {
+        self.assert_message(message);
+        assert_eq!(
+            engine._resolve_pad_feedback(message).unwrap(),
+            Some(self.id)
+        );
+    }
+}
+
+fn assert_owned_pad_feedback(engine: &AudioEngine, callback: &mut Callback, id: usize, kind: u8) {
+    let message = callback
+        .feedback_rx
+        .pop()
+        .expect("one actual pad effect feedback packet");
+    ExpectedPadFeedback::capture(engine, id, kind).assert_current(engine, &message);
+    assert!(
+        callback.feedback_rx.is_empty(),
+        "one effect must leave exactly one packet in Ring1"
+    );
+}
+
 struct Loaded {
     directory: tempfile::TempDir,
     engine: AudioEngine,
@@ -32,7 +116,8 @@ impl Loaded {
         let directory = tempfile::tempdir().unwrap();
         let source = directory.path().join("control.wav");
         let mono = wav(&source, 48_000);
-        let engine = AudioEngine::new().unwrap();
+        let mut engine = AudioEngine::new().unwrap();
+        engine.test_output_format = Some((48_000, 2));
         let mut callback = Callback::new(&engine, 48_000);
         let (request, mut load) = selected_load(
             &engine,
@@ -56,11 +141,7 @@ impl Loaded {
         });
         // The real control tick observes completed Cold replacement feedback before a new
         // gesture. Keep the one-slot queue so explicit pressure tests still exercise it.
-        assert!(matches!(
-            callback.feedback_rx.pop(),
-            Ok(AudioMessage::SampleStopped { id: 0 })
-        ));
-        assert!(callback.feedback_rx.is_empty());
+        assert_owned_pad_feedback(&engine, &mut callback, 0, 2);
         let (producer, consumer) = rtrb::RingBuffer::new(8);
         Self {
             directory,
@@ -70,6 +151,10 @@ impl Loaded {
             producer: Arc::new(Mutex::new(producer)),
             consumer,
         }
+    }
+
+    fn assert_feedback(&mut self, kind: u8) {
+        assert_owned_pad_feedback(&self.engine, &mut self.callback, 0, kind);
     }
 
     fn prepare(&self, request: WindowRequest) -> ResidentWindowTicket {
@@ -135,6 +220,7 @@ impl Loaded {
             crate::audio_engine::timing::InputClock::new(),
             self.engine.input_runtime_ownership.clone(),
         );
+        runtime.set_render_format(48_000, 2).unwrap();
         let mut loaded = vec![false; NUM_SAMPLES];
         loaded[0] = true;
         let mut bindings = vec![None; NUM_SAMPLES];
@@ -234,7 +320,10 @@ fn actual_worker_stop_revisions_cover_ui_midi_and_global_queued_scheduled_and_fr
                     }
                 }
                 if scheduled {
-                    assert_eq!(loaded.callback.drain(&mut loaded.consumer), 1);
+                    assert_eq!(
+                        loaded.callback.drain(&mut loaded.consumer),
+                        if route == 2 { 1 } else { 2 }
+                    );
                     assert_eq!(loaded.callback.scheduler.len(), 1);
                 }
                 // A rejected native STOP admission must not revoke earlier starts.
@@ -258,13 +347,33 @@ fn actual_worker_stop_revisions_cover_ui_midi_and_global_queued_scheduled_and_fr
                     revision
                 );
                 assert_eq!(loaded.engine.admitted_launch_ids(), vec![0]);
-                // Discard only pressure Pings off the realtime path; retain the admitted start.
-                let first = loaded.consumer.pop().unwrap();
-                while loaded.consumer.pop().is_ok() {}
-                if !scheduled {
-                    loaded.producer.lock().unwrap().push(first).unwrap();
-                } else {
-                    assert!(matches!(first, ControlMessage::Ping()));
+                // Discard only pressure Pings off RT. The captured target and its
+                // PreparedStart remain one admitted start, in their original order.
+                let mut retained = Vec::new();
+                while let Ok(command) = loaded.consumer.pop() {
+                    if !matches!(command, ControlMessage::Ping()) {
+                        retained.push(command);
+                    }
+                }
+                assert_eq!(
+                    retained.len(),
+                    if scheduled {
+                        0
+                    } else if route == 2 {
+                        1
+                    } else {
+                        2
+                    }
+                );
+                if !scheduled && route != 2 {
+                    assert!(matches!(
+                        &retained[0],
+                        ControlMessage::CapturePadStartTarget(_)
+                    ));
+                    assert!(matches!(&retained[1], ControlMessage::PreparedStart(_)));
+                }
+                for command in retained {
+                    loaded.producer.lock().unwrap().push(command).unwrap();
                 }
                 assert!(enqueue_stop_with_producer(
                     &loaded.engine.input_runtime_ownership,
@@ -274,7 +383,13 @@ fn actual_worker_stop_revisions_cover_ui_midi_and_global_queued_scheduled_and_fr
                 assert!(loaded.engine.admitted_launch_ids().is_empty());
                 assert_eq!(
                     loaded.callback.drain(&mut loaded.consumer),
-                    if scheduled { 1 } else { 2 }
+                    if scheduled {
+                        1
+                    } else if route == 2 {
+                        2
+                    } else {
+                        3
+                    }
                 );
                 while loaded.callback.feedback_rx.pop().is_ok() {}
                 if scheduled {
@@ -330,7 +445,7 @@ fn actual_worker_stop_revisions_cover_ui_midi_and_global_queued_scheduled_and_fr
                     }
                 }
                 if route != 2 {
-                    assert_eq!(loaded.callback.drain(&mut loaded.consumer), 1);
+                    assert_eq!(loaded.callback.drain(&mut loaded.consumer), 2);
                 }
                 assert!(
                     loaded
@@ -356,11 +471,19 @@ fn actual_worker_claimed_ui_and_midi_start_tail_receives_ordered_stop_before_ui_
         engine: &'a AudioEngine,
         producer: &'a Arc<Mutex<rtrb::Producer<ControlMessage>>>,
         queued: bool,
+        started: Option<ExpectedPadFeedback>,
         messages: Vec<AudioMessage>,
     }
     impl AudioMessageSink for StopAtStart<'_> {
         fn push_audio_message(&mut self, message: AudioMessage) {
-            if matches!(message, AudioMessage::SampleStarted { id: 0 }) && !self.queued {
+            if matches!(
+                message,
+                AudioMessage::ContentFeedback { id: 0, kind: 1, .. }
+            ) && !self.queued
+            {
+                let expected = ExpectedPadFeedback::capture(self.engine, 0, 1);
+                expected.assert_current(self.engine, &message);
+                self.started = Some(expected);
                 // The start passed its final native guard. The controller still
                 // sees an inactive pad, but retains its admitted source-bound id.
                 let targets = self.engine.admitted_launch_ids();
@@ -401,6 +524,7 @@ fn actual_worker_claimed_ui_and_midi_start_tail_receives_ordered_stop_before_ui_
             engine: &loaded.engine,
             producer: &loaded.producer,
             queued: false,
+            started: None,
             messages: Vec::new(),
         };
         assert_eq!(
@@ -414,16 +538,24 @@ fn actual_worker_claimed_ui_and_midi_start_tail_receives_ordered_stop_before_ui_
                 &mut feedback,
                 &mut loaded.callback.retirement,
             ),
-            2
+            3
         );
         assert!(feedback.queued);
-        assert!(matches!(
-            feedback.messages.as_slice(),
-            [
-                AudioMessage::SampleStarted { id: 0 },
-                AudioMessage::SampleStopped { id: 0 },
-            ]
-        ));
+        assert_eq!(feedback.messages.len(), 2);
+        feedback
+            .started
+            .unwrap()
+            .assert_message(&feedback.messages[0]);
+        assert_eq!(
+            loaded
+                .engine
+                ._resolve_pad_feedback(&feedback.messages[0])
+                .unwrap(),
+            None,
+            "the subsequent STOP transport intent fences the earlier START packet"
+        );
+        ExpectedPadFeedback::capture(&loaded.engine, 0, 2)
+            .assert_current(&loaded.engine, &feedback.messages[1]);
         assert!(
             !loaded
                 .callback
@@ -442,7 +574,7 @@ fn actual_worker_claimed_ui_and_midi_start_tail_receives_ordered_stop_before_ui_
                 launch_with_producer(&loaded.engine, &ready, false, 124, &loaded.producer).unwrap()
             );
         }
-        assert_eq!(loaded.callback.drain(&mut loaded.consumer), 1);
+        assert_eq!(loaded.callback.drain(&mut loaded.consumer), 2);
         assert!(
             loaded
                 .callback
@@ -525,7 +657,7 @@ fn actual_worker_native_midi_stop_dispatch_revokes_scheduled_launch_without_chan
     assert!(ready.is_current());
     loaded.callback.quantization = TriggerQuantization::Immediate;
     assert!(midi.trigger_pad(0, event.received_at_ns));
-    assert_eq!(loaded.callback.drain(&mut loaded.consumer), 1);
+    assert_eq!(loaded.callback.drain(&mut loaded.consumer), 2);
     assert!(
         loaded
             .callback
@@ -552,7 +684,7 @@ fn actual_worker_exact_ticket_launch_cancellation_preserves_ack_and_new_owner() 
     assert_eq!(loaded.engine.admitted_launch_ids(), vec![0]);
     assert_eq!(ready.publication_status(), "accepted");
     assert!(ready.is_current());
-    assert_eq!(loaded.callback.drain(&mut loaded.consumer), 1);
+    assert_eq!(loaded.callback.drain(&mut loaded.consumer), 2);
     assert!(
         !loaded
             .callback
@@ -568,7 +700,7 @@ fn actual_worker_exact_ticket_launch_cancellation_preserves_ack_and_new_owner() 
     loaded.adopt(&newer);
     assert!(launch_with_producer(&loaded.engine, &newer, false, 124, &loaded.producer).unwrap());
     assert!(!ready.cancel_launch());
-    assert_eq!(loaded.callback.drain(&mut loaded.consumer), 1);
+    assert_eq!(loaded.callback.drain(&mut loaded.consumer), 2);
     assert!(newer.is_current());
     assert!(
         loaded
@@ -768,7 +900,7 @@ fn actual_worker_retrigger_prepares_new_bank_while_old_source_keeps_playing_unti
         )
         .unwrap()
     );
-    assert_eq!(loaded.callback.drain(&mut loaded.consumer), 1);
+    assert_eq!(loaded.callback.drain(&mut loaded.consumer), 2);
     let voice = loaded
         .callback
         .mixer
@@ -810,7 +942,7 @@ fn actual_worker_guarded_ui_launch_keeps_timestamp_survives_runtime_refresh_and_
                 launch_with_producer(&loaded.engine, &ready, false, 123, &loaded.producer)
                     .unwrap_err()
                     .to_string()
-                    .contains("resident command queue is full")
+                    .contains("resident command queue requires timing and prepared start capacity")
             );
             assert!(ready.is_current());
             assert_eq!(loaded.callback.drain(&mut loaded.consumer), 8);
@@ -835,15 +967,12 @@ fn actual_worker_guarded_ui_launch_keeps_timestamp_survives_runtime_refresh_and_
         assert!(
             launch_with_producer(&loaded.engine, &ready, false, 123, &loaded.producer).unwrap()
         );
-        assert!(matches!(
-            loaded.consumer.peek(),
-            Ok(ControlMessage::TriggerInputPad {
-                received_at_ns: 123,
-                resident_control: Some(_),
-                ..
-            })
-        ));
-        assert_eq!(loaded.callback.drain(&mut loaded.consumer), 1);
+        let ControlMessage::CapturePadStartTarget(start) = loaded.consumer.peek().unwrap() else {
+            panic!("UI launch must capture its original target before PreparedStart");
+        };
+        let start = start.clone();
+        assert_eq!(start.received_timestamp(), 123);
+        assert_eq!(loaded.callback.drain(&mut loaded.consumer), 2);
         assert_eq!(loaded.callback.scheduler.len(), 1);
         match change {
             0 => {
@@ -919,12 +1048,12 @@ fn actual_worker_guarded_ui_launch_keeps_timestamp_survives_runtime_refresh_and_
             .unwrap();
         assert!(matches!(
             &event.command,
-            crate::audio_engine::scheduler::ScheduledCommand::TriggerInputPad {
-                received_at_ns: 123,
-                resident_control: Some(_),
-                ..
-            }
+            crate::audio_engine::scheduler::ScheduledCommand::PitchAction { action_sequence, .. }
+                if *action_sequence == start.sequence()
         ));
+        assert_eq!(start.original_frame(), Some(target));
+        assert_eq!(start.execution_frame(), Some(target));
+        assert_eq!(start.effective_frame(), None);
         crate::audio_engine::audio_stream::execute_scheduled_command(
             &mut loaded.callback.mixer,
             &mut loaded.callback.transport,
@@ -1781,11 +1910,19 @@ fn actual_worker_cancel_capture_covers_admission_after_empty_scan_and_claimed_ta
         producer: &'a Arc<Mutex<rtrb::Producer<ControlMessage>>>,
         all: bool,
         captured: Option<Vec<usize>>,
+        started: Option<ExpectedPadFeedback>,
         messages: Vec<AudioMessage>,
     }
     impl AudioMessageSink for StopAfterClaim<'_> {
         fn push_audio_message(&mut self, message: AudioMessage) {
-            if matches!(message, AudioMessage::SampleStarted { id: 0 }) && self.captured.is_none() {
+            if matches!(
+                message,
+                AudioMessage::ContentFeedback { id: 0, kind: 1, .. }
+            ) && self.captured.is_none()
+            {
+                let expected = ExpectedPadFeedback::capture(self.engine, 0, 1);
+                expected.assert_current(self.engine, &message);
+                self.started = Some(expected);
                 // Native has passed the final guard; Python has received no event.
                 // The former separate empty scan cannot supply this STOP target.
                 let targets = cancel_launches_with_producer(
@@ -1844,6 +1981,7 @@ fn actual_worker_cancel_capture_covers_admission_after_empty_scan_and_claimed_ta
                 producer: &loaded.producer,
                 all,
                 captured: None,
+                started: None,
                 messages: Vec::new(),
             };
             assert_eq!(
@@ -1857,16 +1995,24 @@ fn actual_worker_cancel_capture_covers_admission_after_empty_scan_and_claimed_ta
                     &mut feedback,
                     &mut loaded.callback.retirement,
                 ),
-                2
+                if native_midi { 2 } else { 3 }
             );
             assert_eq!(feedback.captured, Some(vec![0]));
-            assert!(matches!(
-                feedback.messages.as_slice(),
-                [
-                    AudioMessage::SampleStarted { id: 0 },
-                    AudioMessage::SampleStopped { id: 0 }
-                ]
-            ));
+            assert_eq!(feedback.messages.len(), 2);
+            feedback
+                .started
+                .unwrap()
+                .assert_message(&feedback.messages[0]);
+            assert_eq!(
+                loaded
+                    .engine
+                    ._resolve_pad_feedback(&feedback.messages[0])
+                    .unwrap(),
+                None,
+                "the subsequent STOP transport intent fences the earlier START packet"
+            );
+            ExpectedPadFeedback::capture(&loaded.engine, 0, 2)
+                .assert_current(&loaded.engine, &feedback.messages[1]);
             drop(feedback);
             assert!(loaded.engine.admitted_launch_ids().is_empty());
             assert!(
@@ -1880,7 +2026,7 @@ fn actual_worker_cancel_capture_covers_admission_after_empty_scan_and_claimed_ta
             assert_eq!(ready.publication_status(), "accepted");
             assert!(ready.is_current());
             assert!(midi.trigger_pad(0, 124));
-            assert_eq!(loaded.callback.drain(&mut loaded.consumer), 1);
+            assert_eq!(loaded.callback.drain(&mut loaded.consumer), 2);
             assert!(
                 loaded
                     .callback
@@ -1935,7 +2081,7 @@ fn actual_worker_cancel_capture_obeys_shared_producer_mutex() {
         loaded.engine.input_runtime_ownership.launch_revision(0),
         revision
     );
-    assert_eq!(loaded.callback.drain(&mut loaded.consumer), 1);
+    assert_eq!(loaded.callback.drain(&mut loaded.consumer), 2);
     assert!(
         !loaded
             .callback
@@ -2019,14 +2165,10 @@ fn actual_worker_full_queue_cancel_capture_retains_ordered_stop_target() {
                 "global STOP had no active voices"
             );
         } else {
-            assert!(matches!(
-                loaded.callback.feedback_rx.pop(),
-                Ok(AudioMessage::SampleStopped { id: 0 })
-            ));
-            assert!(loaded.callback.feedback_rx.is_empty());
+            loaded.assert_feedback(2);
         }
         assert!(midi.trigger_pad(0, 124));
-        assert_eq!(loaded.callback.drain(&mut loaded.consumer), 1);
+        assert_eq!(loaded.callback.drain(&mut loaded.consumer), 2);
         assert!(
             loaded
                 .callback
@@ -2064,7 +2206,7 @@ fn actual_worker_disabled_dispatcher_rejects_captured_mapping_after_shutdown_fen
     assert_eq!(ready.publication_status(), "accepted");
     // Explicit public triggers intentionally retain their existing semantics.
     assert!(midi.trigger_pad(0, 124));
-    assert_eq!(loaded.callback.drain(&mut loaded.consumer), 1);
+    assert_eq!(loaded.callback.drain(&mut loaded.consumer), 2);
     assert!(
         loaded
             .callback

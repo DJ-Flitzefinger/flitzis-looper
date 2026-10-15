@@ -521,6 +521,11 @@ impl ControlParameterMessage {
 /// Message that is emitted from the Python side.
 #[derive(Debug, Clone)]
 pub enum ControlMessage {
+    /// One complete control-allocated pitch/optional attack owner.
+    PitchAction(Arc<crate::audio_engine::pitch_publication::PitchActionPublication>),
+    PreparedStart(Arc<crate::audio_engine::ordinary_start::OrdinaryStartPublication>),
+    CapturePadStartTarget(crate::audio_engine::pad_start::CapturedPadStart),
+    CaptureGlobalStartTarget(crate::audio_engine::captured_global_start::CapturedGlobalStart),
     /// Used for testing message passing functionality.
     Ping(),
 
@@ -661,6 +666,7 @@ pub enum ControlMessage {
         loop_region: Option<(usize, usize)>,
         resident_cancelled: Option<Arc<std::sync::atomic::AtomicBool>>,
         incoming_defaults: Option<IncomingLoadDefaults>,
+        initial_pitch: crate::audio_engine::SourcePitchInitialization,
     },
 
     /// Atomic complete content installation into one reserved empty target.
@@ -800,6 +806,10 @@ impl ControlMessage {
         match self {
             ControlMessage::Ping() => ControlMessageClass::Test,
             ControlMessage::PlaySample { .. }
+            | ControlMessage::PitchAction(_)
+            | ControlMessage::PreparedStart(_)
+            | ControlMessage::CapturePadStartTarget(_)
+            | ControlMessage::CaptureGlobalStartTarget(_)
             | ControlMessage::PlaySampleExclusive { .. }
             | ControlMessage::TriggerInputPad { .. }
             | ControlMessage::GlobalPlaybackBatch(_)

@@ -5,7 +5,7 @@
 //! warming and owner destruction happen outside rendering.
 
 use super::prepared_native_history::{
-    NativeAdapterState, NativeHistoryRequest, PREPARED_HISTORY_FRAMES,
+    NativeAdapterState, NativeHistoryRequest, NativeSourcePreparationError, PREPARED_HISTORY_FRAMES,
 };
 use super::productive_source_history::ProductiveSourceBinding;
 use super::stretch_processor::ProductiveSourceFeed;
@@ -203,6 +203,8 @@ impl KeyLockPreparationLane {
             Some(coverage)
         };
         let request = NativeHistoryRequest {
+            pitch_intent: feed.pitch_intent,
+            key_lock: feed.key_lock,
             sample: feed.sample.clone(),
             stems: feed.stems.cloned(),
             permit: permit.clone(),
@@ -297,6 +299,42 @@ impl KeyLockPreparationLane {
             SourceExchange::Adopted(request_id)
         } else {
             SourceExchange::Rejected(request_id)
+        }
+    }
+
+    /// Reserve the exact ready owner and its retirement slot before a multi-voice claim.
+    pub(crate) fn source_matches(
+        &mut self,
+        feed: &ProductiveSourceFeed<'_>,
+        epoch: u64,
+        request_id: u64,
+    ) -> bool {
+        if let Some(pending) = self.pending_source_return.take()
+            && let Err(PushError::Full(pending)) = self.source_recycle.push(pending)
+        {
+            self.pending_source_return = Some(pending);
+            return false;
+        }
+        !self.worker_failed.load(Ordering::Acquire)
+            && self.source_recycle.slots() != 0
+            && self.source_ready.peek().is_ok_and(|candidate| {
+                candidate.active
+                    && candidate.used
+                    && !candidate.dirty
+                    && candidate
+                        .source
+                        .as_ref()
+                        .is_some_and(|source| source.matches_adoption(feed, epoch, request_id))
+            })
+    }
+
+    /// The callback has preflighted every participant and owns the enclosing effect claim.
+    /// Only this consumer can remove ready owners; the worker can only add retirement capacity.
+    pub(crate) fn exchange_source_claimed(&mut self, current: &mut Box<NativeAdapterState>) {
+        let mut candidate = self.source_ready.pop().expect("preflighted source owner");
+        std::mem::swap(current, &mut candidate);
+        if let Err(PushError::Full(candidate)) = self.source_recycle.push(candidate) {
+            self.pending_source_return = Some(candidate);
         }
     }
     #[cfg(test)]
@@ -400,12 +438,23 @@ impl WorkerLane {
                 .current(&request.sample, request.binding.sample_rate_hz)
             && request.permit.matches_projection(request.binding.accepted)
         {
-            if let Err(error) = state.prepare_source(request) {
-                // This consumed request will never appear in the ready lane. Publish completion
-                // before worker-owned state/pins retire so the callback cannot retain its pending
-                // request forever while failure-only retirement continues.
-                self.completed_request.store(request_id, Ordering::Release);
-                return Err(error);
+            match state.prepare_live_catchup(request) {
+                Ok(()) => {}
+                Err(NativeSourcePreparationError::Unavailable(_)) => {
+                    // A missing source/history proof rejects only this request. Retain the
+                    // unique adapter for another request; no half-prepared owner is published.
+                    self.completed_request.store(request_id, Ordering::Release);
+                    state.source = None;
+                    state.reset_adapter();
+                    self.source_reserve = Some(state);
+                    return Ok(true);
+                }
+                Err(NativeSourcePreparationError::Backend(error)) => {
+                    // Backend/adapter faults still terminate the shared worker. The callback
+                    // must observe completion even though no ready owner can be published.
+                    self.completed_request.store(request_id, Ordering::Release);
+                    return Err(error);
+                }
             }
             if state.source.as_ref().is_some_and(|source| {
                 source.epoch != self.source_epoch.load(Ordering::Acquire)
@@ -454,6 +503,10 @@ impl WorkerLane {
         Ok(true)
     }
 }
+
+#[cfg(test)]
+#[path = "pitch_catchup_tests.rs"]
+mod pitch_catchup_tests;
 
 /// Owned by stream/control state. It must be dropped only after callback rendering has stopped.
 pub(crate) struct KeyLockPreparationWorker {
@@ -775,6 +828,8 @@ mod tests {
                 .is_ok()
         );
         let feed = ProductiveSourceFeed {
+            pitch_intent: super::super::pitch_intent::PitchIntent::default(),
+            key_lock: true,
             sample: &sample,
             outgoing_stems: None,
             stems: None,
@@ -833,6 +888,8 @@ mod tests {
             request.epoch = 0;
             let weak = Arc::downgrade(&request.sample.samples);
             let feed = ProductiveSourceFeed {
+                pitch_intent: super::super::pitch_intent::PitchIntent::default(),
+                key_lock: true,
                 sample: &request.sample,
                 outgoing_stems: None,
                 stems: None,

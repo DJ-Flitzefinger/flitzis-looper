@@ -91,6 +91,7 @@ fn source_adoption(
             loop_region: None,
             resident_cancelled: None,
             incoming_defaults: None,
+            initial_pitch: crate::audio_engine::SourcePitchInitialization::FreshNeutral,
         },
         adoption,
     )
@@ -563,6 +564,7 @@ fn actual_tracked_copy_adoption_grants_its_distinct_target_feedback_without_a_co
         authority_revision: guard.target_authority + 1,
         guard,
         intent: CopyRtIntent {
+            pitch_intent: crate::audio_engine::pitch_intent::PitchIntent::default(),
             period_seconds: Some(0.5),
             origin_frame: -3.25,
             loop_start_frame: 8,

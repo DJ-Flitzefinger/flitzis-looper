@@ -93,7 +93,7 @@ struct Peer {
 }
 
 impl Peer {
-    fn new(playback: &ControllerPlayback) -> Self {
+    fn new(playback: &ControllerPlayback, initial_prepare_frames: u64) -> Self {
         let peer = complete::other(&playback.callback.mixer);
         Self {
             sample: peer.sample.clone().unwrap(),
@@ -102,7 +102,9 @@ impl Peer {
             fifo: peer.stretch.pending_fifo_frames(),
             demand: playback.callback.mixer.stem_demand_for_measurement(215),
             callback_start: playback.frame,
-            consumed_start: playback.source_frame,
+            // The public peer started at original T=0 and continued during the tested
+            // pad's real Native preparation lead. Later common pauses consume neither.
+            consumed_start: playback.source_frame + initial_prepare_frames,
         }
     }
 
@@ -229,7 +231,16 @@ fn public_off(
     assert_eq!(playback.ratio.to_bits(), 0.75_f64.to_bits());
     assert!(playback.complete_resident && playback.loop_start == 0 && playback.loop_end == 4096);
     let all = playback.selection == Some(0b1010);
-    let peer = Peer::new(playback);
+    let initial_prepare_frames = Python::attach(|py| {
+        locals
+            .bind(py)
+            .get_item("initial_prepare_frames")
+            .unwrap()
+            .unwrap()
+            .extract::<u64>()
+            .unwrap()
+    });
+    let peer = Peer::new(playback, initial_prepare_frames);
     let generation = voice(&playback.callback.mixer).generation;
     let native = voice(&playback.callback.mixer)
         .stretch

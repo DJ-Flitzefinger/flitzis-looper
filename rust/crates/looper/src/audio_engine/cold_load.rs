@@ -15,6 +15,7 @@ use crate::messages::{ControlMessage, LoaderEvent, SampleBuffer};
 use flitzis_looper_analysis::tempo_acceptance::TimingIntent;
 use pyo3::exceptions::{PyRuntimeError, PyValueError};
 use pyo3::prelude::*;
+use pyo3::types::{PyBool, PyInt};
 use rtrb::Producer;
 use std::collections::HashSet;
 use std::path::{Component, PathBuf};
@@ -33,6 +34,91 @@ type PreparedColdSample = (
     Option<crate::messages::IncomingLoadDefaults>,
     Option<Arc<AtomicBool>>,
 );
+
+/// Initial bank settings are source-owned scalars, never a performer attack.
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub(crate) enum SourcePitchInitialization {
+    #[default]
+    FreshNeutral,
+    RestoredTuple {
+        pitch: super::pitch_intent::PitchIntent,
+        key_lock: Option<bool>,
+    },
+    PreserveEffective,
+}
+
+impl SourcePitchInitialization {
+    pub(crate) fn resolve(
+        self,
+        effective: super::pitch_intent::PitchIntent,
+        key_lock: bool,
+    ) -> (super::pitch_intent::PitchIntent, bool) {
+        match self {
+            Self::FreshNeutral => (super::pitch_intent::PitchIntent::default(), key_lock),
+            Self::RestoredTuple {
+                pitch,
+                key_lock: saved,
+            } => (pitch, saved.unwrap_or(key_lock)),
+            Self::PreserveEffective => (effective, key_lock),
+        }
+    }
+    fn native_geometry_required(self) -> bool {
+        match self {
+            Self::FreshNeutral => false,
+            Self::RestoredTuple { pitch, key_lock } => {
+                key_lock.unwrap_or(false) || pitch.total_semitones() != 0
+            }
+            // Migration proves the same finite extent for either actual effective mode.
+            // It never derives audible settings from a pending Python requested shadow.
+            Self::PreserveEffective => true,
+        }
+    }
+}
+
+pub(super) fn parse_initial_pitch(
+    source_intent: &str,
+    base: Option<&Bound<'_, PyAny>>,
+    extra: Option<&Bound<'_, PyAny>>,
+    key_lock: Option<&Bound<'_, PyAny>>,
+) -> PyResult<SourcePitchInitialization> {
+    let base = base.filter(|value| !value.is_none());
+    let extra = extra.filter(|value| !value.is_none());
+    let key_lock = key_lock.filter(|value| !value.is_none());
+    if base.is_none() && extra.is_none() && key_lock.is_none() {
+        return Ok(SourcePitchInitialization::FreshNeutral);
+    }
+    if source_intent != "restore" {
+        return Err(PyValueError::new_err(
+            "initial pitch settings require explicit restore",
+        ));
+    }
+    let integer = |value: Option<&Bound<'_, PyAny>>| -> PyResult<i32> {
+        let Some(value) = value else {
+            return Ok(0);
+        };
+        if value.is_instance_of::<PyBool>() || !value.is_instance_of::<PyInt>() {
+            return Err(PyValueError::new_err(
+                "initial pitch shifts must be strict integers",
+            ));
+        }
+        value
+            .extract::<i32>()
+            .map_err(|_| PyValueError::new_err("initial pitch shift is outside its integer domain"))
+    };
+    let pitch = super::pitch_intent::PitchIntent::new(integer(base)?, integer(extra)?)
+        .map_err(|error| PyValueError::new_err(error.to_string()))?;
+    let key_lock = key_lock
+        .map(|value| {
+            if !value.is_instance_of::<PyBool>() {
+                return Err(PyValueError::new_err(
+                    "initial_key_lock must be a strict boolean",
+                ));
+            }
+            value.extract::<bool>()
+        })
+        .transpose()?;
+    Ok(SourcePitchInitialization::RestoredTuple { pitch, key_lock })
+}
 
 #[cfg(test)]
 struct AdoptionWaitGate {
@@ -199,6 +285,7 @@ struct ColdLoad {
     prepared_material: Option<Arc<super::material_migration::PreparedMigrationMaterial>>,
     path: PathBuf,
     restore: bool,
+    initial_pitch: SourcePitchInitialization,
     samples_root: PathBuf,
     output_channels: usize,
     output_rate: u32,
@@ -238,11 +325,45 @@ pub(super) fn admit(
     resident_hint: Option<ResidentLoadHint>,
     source_intent: &str,
 ) -> PyResult<u64> {
+    admit_with_initial_pitch(
+        engine,
+        id,
+        path,
+        run_analysis,
+        restore_automatic,
+        replace_assignment,
+        resident_hint,
+        source_intent,
+        SourcePitchInitialization::FreshNeutral,
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
+pub(super) fn admit_with_initial_pitch(
+    engine: &AudioEngine,
+    id: usize,
+    path: String,
+    run_analysis: bool,
+    restore_automatic: bool,
+    replace_assignment: bool,
+    resident_hint: Option<ResidentLoadHint>,
+    source_intent: &str,
+    initial_pitch: SourcePitchInitialization,
+) -> PyResult<u64> {
+    // The saved source tuple owns the actual mode. The residency hint still
+    // describes the same range, and its cancellation guard tracks that mode.
+    let resident_hint = match initial_pitch {
+        SourcePitchInitialization::RestoredTuple {
+            key_lock: Some(key_lock),
+            ..
+        } => resident_hint.map(|hint| ResidentLoadHint { key_lock, ..hint }),
+        _ => resident_hint,
+    };
     #[cfg(test)]
     if let Some((producer, _)) = &engine.test_control_channels {
         // An explicitly installed headless command/feedback pair exercises this
         // real PyO3 route without constructing an App, CPAL stream or device.
-        return admit_for_format_selected_intent(
+        return admit_for_format_selected_intent_with_pitch(
             engine,
             id,
             path,
@@ -261,13 +382,14 @@ pub(super) fn admit(
                     .join("samples"),
             ),
             source_intent,
+            initial_pitch,
         );
     }
     let handle = engine
         .stream_handle
         .as_ref()
         .ok_or_else(|| PyRuntimeError::new_err("Audio engine not initialized"))?;
-    admit_for_format_selected_intent(
+    admit_for_format_selected_intent_with_pitch(
         engine,
         id,
         path,
@@ -286,6 +408,7 @@ pub(super) fn admit(
                 .join("samples"),
         ),
         source_intent,
+        initial_pitch,
     )
 }
 
@@ -327,6 +450,7 @@ pub(super) fn admit_for_format_selected(
     admit_for_format_selected_intent(engine, id, path, selection, producer, output, "auto")
 }
 
+#[cfg(test)]
 fn admit_for_format_selected_intent(
     engine: &AudioEngine,
     id: usize,
@@ -336,7 +460,30 @@ fn admit_for_format_selected_intent(
     output: (usize, u32, PathBuf),
     source_intent: &str,
 ) -> PyResult<u64> {
-    admit_selected_material(
+    admit_for_format_selected_intent_with_pitch(
+        engine,
+        id,
+        path,
+        selection,
+        producer,
+        output,
+        source_intent,
+        SourcePitchInitialization::FreshNeutral,
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
+fn admit_for_format_selected_intent_with_pitch(
+    engine: &AudioEngine,
+    id: usize,
+    path: String,
+    selection: (bool, bool, bool, Option<ResidentLoadHint>),
+    producer: Arc<Mutex<Producer<ControlMessage>>>,
+    output: (usize, u32, PathBuf),
+    source_intent: &str,
+    initial_pitch: SourcePitchInitialization,
+) -> PyResult<u64> {
+    admit_selected_material_incoming(
         engine,
         id,
         path,
@@ -345,6 +492,8 @@ fn admit_for_format_selected_intent(
         output,
         source_intent,
         None,
+        None,
+        initial_pitch,
     )
     .map(|admitted| admitted.request_id)
 }
@@ -400,6 +549,11 @@ pub(super) fn admit_selected_material(
     source_intent: &str,
     prepared_material: Option<Arc<super::material_migration::PreparedMigrationMaterial>>,
 ) -> PyResult<AdmittedMaterial> {
+    let initial_pitch = if prepared_material.is_some() && !selection.2 {
+        SourcePitchInitialization::PreserveEffective
+    } else {
+        SourcePitchInitialization::FreshNeutral
+    };
     admit_selected_material_incoming(
         engine,
         id,
@@ -410,6 +564,7 @@ pub(super) fn admit_selected_material(
         source_intent,
         prepared_material,
         None,
+        initial_pitch,
     )
 }
 
@@ -451,6 +606,7 @@ pub(super) fn admit_incoming(
         "import",
         None,
         Some(super::incoming_load::IncomingIntent::initial(key_lock)),
+        SourcePitchInitialization::FreshNeutral,
     )
     .map(|admitted| admitted.request_id)
 }
@@ -466,6 +622,7 @@ fn admit_selected_material_incoming(
     source_intent: &str,
     prepared_material: Option<Arc<super::material_migration::PreparedMigrationMaterial>>,
     incoming_intent: Option<super::incoming_load::IncomingIntent>,
+    initial_pitch: SourcePitchInitialization,
 ) -> PyResult<AdmittedMaterial> {
     let (output_channels, output_rate, samples_root) = output;
     let (run_analysis, restore_automatic, replace_assignment, resident_hint) = selection;
@@ -678,6 +835,7 @@ fn admit_selected_material_incoming(
         prepared_material,
         path: source_path,
         restore,
+        initial_pitch,
         samples_root,
         output_channels,
         output_rate,
@@ -966,7 +1124,11 @@ impl ColdLoad {
             // same sealed complete lease before source queue admission.
             let source = &prepared.sample;
             let (start, end, context) = if let Some(hint) = self.resident_hint {
-                hint.selection(self.output_rate, source.frame_count())?
+                hint.selection_for_native(
+                    self.output_rate,
+                    source.frame_count(),
+                    self.initial_pitch.native_geometry_required(),
+                )?
             } else {
                 (
                     0,
@@ -1035,7 +1197,7 @@ impl ColdLoad {
                 update.percent <= 0.0 || update.percent >= 1.0,
             );
         };
-        let mut sample = super::material_migration::prepare_pcm_resident(
+        let mut sample = super::material_migration::prepare_pcm_resident_for_native(
             &mut transaction,
             &self.path,
             self.output_rate,
@@ -1045,6 +1207,7 @@ impl ColdLoad {
             &cancelled,
             &mut report,
             Some(&self.resident),
+            self.initial_pitch.native_geometry_required(),
         )?;
         cold_residency::attach(
             &mut sample,
@@ -1586,6 +1749,7 @@ impl ColdLoad {
                 replace_assignment: self.replace_assignment,
                 loop_region,
                 incoming_defaults,
+                initial_pitch: self.initial_pitch,
                 resident_cancelled: incoming_cancelled.or_else(|| {
                     self.resident_guard
                         .as_ref()
@@ -1728,3 +1892,132 @@ mod tests;
 #[cfg(test)]
 #[path = "cold_cancellation_publication_tests.rs"]
 mod cancellation_publication_tests;
+
+#[cfg(test)]
+mod source_pitch_initialization_tests {
+    use super::*;
+    use crate::audio_engine::pitch_intent::PitchIntent;
+
+    #[test]
+    fn restore_parser_is_strict_and_does_not_grant_import_pitch_initialization() {
+        Python::initialize();
+        Python::attach(|py| {
+            for source in ["import", "auto"] {
+                let base = py.eval(c"2", None, None).unwrap();
+                assert!(parse_initial_pitch(source, Some(&base), None, None).is_err());
+            }
+            for expression in [c"True", c"False", c"2.0", c"'2'", c"7", c"-6"] {
+                let base = py.eval(expression, None, None).unwrap();
+                assert!(parse_initial_pitch("restore", Some(&base), None, None).is_err());
+            }
+            for expression in [c"True", c"18.0", c"19", c"-19"] {
+                let extra = py.eval(expression, None, None).unwrap();
+                assert!(parse_initial_pitch("restore", None, Some(&extra), None).is_err());
+            }
+            let base = py.eval(c"-5", None, None).unwrap();
+            let extra = py.eval(c"-18", None, None).unwrap();
+            let lock = py.eval(c"False", None, None).unwrap();
+            assert_eq!(
+                parse_initial_pitch("restore", Some(&base), Some(&extra), Some(&lock)).unwrap(),
+                SourcePitchInitialization::RestoredTuple {
+                    pitch: PitchIntent::new(-5, -18).unwrap(),
+                    key_lock: Some(false)
+                }
+            );
+            for expression in [c"0", c"1", c"'false'"] {
+                let lock = py.eval(expression, None, None).unwrap();
+                assert!(parse_initial_pitch("restore", None, None, Some(&lock)).is_err());
+            }
+            assert_eq!(
+                parse_initial_pitch("import", None, None, None).unwrap(),
+                SourcePitchInitialization::FreshNeutral
+            );
+        });
+    }
+
+    #[test]
+    fn invalid_public_restore_options_leave_source_request_and_workers_untouched() {
+        Python::initialize();
+        Python::attach(|py| {
+            let engine = AudioEngine::new().unwrap();
+            engine.pad_request_ids.lock().unwrap()[0] = 17;
+            engine.loaded_source_generations.lock().unwrap()[0] = (13, 48_000);
+            let epoch = engine.prepared_source_epochs[0].load(Ordering::Acquire);
+            for (source, base, extra, lock) in [
+                ("restore", c"True", c"None", c"None"),
+                ("restore", c"0", c"19", c"None"),
+                ("restore", c"0", c"0", c"0"),
+                ("import", c"0", c"0", c"False"),
+            ] {
+                let base = py.eval(base, None, None).unwrap();
+                let extra = py.eval(extra, None, None).unwrap();
+                let lock = py.eval(lock, None, None).unwrap();
+                let error = engine
+                    .load_sample_async_with_pitch(
+                        0,
+                        "not-opened.wav".into(),
+                        Some(false),
+                        false,
+                        true,
+                        None,
+                        None,
+                        false,
+                        source,
+                        Some(&base),
+                        Some(&extra),
+                        Some(&lock),
+                    )
+                    .unwrap_err();
+                assert!(error.is_instance_of::<PyValueError>(py));
+                assert_eq!(engine.pad_request_ids.lock().unwrap()[0], 17);
+                assert_eq!(
+                    engine.loaded_source_generations.lock().unwrap()[0],
+                    (13, 48_000)
+                );
+                assert_eq!(
+                    engine.prepared_source_epochs[0].load(Ordering::Acquire),
+                    epoch
+                );
+                assert!(engine.active_tasks.lock().unwrap().is_empty());
+                assert!(engine.loading_sample_ids.lock().unwrap().is_empty());
+            }
+        });
+    }
+
+    #[test]
+    fn finite_native_requirement_never_changes_actual_saved_lock_or_geometry() {
+        let hint = ResidentLoadHint {
+            start_s: 100.0 / 48_000.0,
+            end_s: 1100.0 / 48_000.0,
+            key_lock: false,
+        };
+        let restored = SourcePitchInitialization::RestoredTuple {
+            pitch: PitchIntent::new(6, 18).unwrap(),
+            key_lock: Some(false),
+        };
+        assert_eq!(
+            hint.selection_for_native(48_000, 4096, restored.native_geometry_required())
+                .unwrap(),
+            (
+                100,
+                1100,
+                crate::messages::ResidentContext::KeyLockFiniteLoop
+            )
+        );
+        assert!(!hint.key_lock);
+        assert_eq!(
+            restored.resolve(PitchIntent::default(), true),
+            (PitchIntent::new(6, 18).unwrap(), false)
+        );
+        assert_eq!(
+            SourcePitchInitialization::PreserveEffective
+                .resolve(PitchIntent::new(-3, 5).unwrap(), false),
+            (PitchIntent::new(-3, 5).unwrap(), false)
+        );
+    }
+
+    #[test]
+    fn source_bank_initializer_restores_effective_tuple_without_retuning_retained_voice() {
+        crate::audio_engine::mixer::RtMixer::assert_source_pitch_initialization_preserves_retained_voice_for_test();
+    }
+}

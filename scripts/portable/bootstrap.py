@@ -148,6 +148,141 @@ def check_timing_completion_api(native_module: object) -> None:
         )
 
 
+def check_pitch_action_api(native_module: object) -> None:
+    """Require immutable pitch capture and atomic runtime projection without Native work."""
+    capture_type = getattr(native_module, "CapturedPitchAction", None)
+    assert isinstance(capture_type, type), "Native pitch API missing: CapturedPitchAction"
+    for attribute in (
+        "accepted_sequence",
+        "received_at_ns",
+        "due_frame",
+        "execution_frame",
+        "content_lifetime",
+        "base_shift",
+        "extra_shift",
+        "key_lock",
+        "retrigger",
+        "quantize_step_64ths",
+        "sync_enabled",
+        "accepted",
+        "effective",
+        "effective_output_frame",
+        "state",
+        "reason",
+        "current_control_slot",
+    ):
+        assert inspect.getattr_static(capture_type, attribute, None) is not None, (
+            f"Native pitch API missing: CapturedPitchAction.{attribute}"
+        )
+    engine_type = getattr(native_module, "AudioEngine", None)
+    for method in (
+        "select_input_pad",
+        "input_selected_projection",
+        "capture_pad_pitch_action",
+        "capture_selected_pitch_action",
+        "publish_pitch_action",
+        "cancel_pitch_action",
+        "set_input_runtime_state",
+        "poll_input_events",
+        "load_sample_async",
+    ):
+        assert callable(getattr(engine_type, method, None)), (
+            f"Native pitch API missing: AudioEngine.{method}"
+        )
+    for method, keyword in (
+        ("set_input_runtime_state", "pitch_rows"),
+        ("capture_pad_pitch_action", "received_at_ns"),
+        ("capture_selected_pitch_action", "received_at_ns"),
+        ("load_sample_async", "initial_base_shift"),
+        ("load_sample_async", "initial_extra_shift"),
+        ("load_sample_async", "initial_key_lock"),
+    ):
+        parameter = inspect.signature(getattr(engine_type, method)).parameters.get(keyword)
+        assert parameter is not None, (
+            f"Native pitch API missing keyword: AudioEngine.{method}.{keyword}"
+        )
+        assert parameter.kind != inspect.Parameter.POSITIONAL_ONLY, (
+            f"Native pitch API missing keyword: AudioEngine.{method}.{keyword}"
+        )
+
+
+def check_captured_global_start_api(native_module: object) -> None:
+    """Require the original GLOBAL group contract without executing native work."""
+    capture_type = getattr(native_module, "CapturedGlobalStart", None)
+    assert isinstance(capture_type, type), "Native GLOBAL capture API missing: CapturedGlobalStart"
+    for method in ("diagnostic_slots", "original_frame", "state", "reason", "cancel"):
+        assert callable(inspect.getattr_static(capture_type, method, None)), (
+            f"Native GLOBAL capture API missing: CapturedGlobalStart.{method}"
+        )
+    engine_type = getattr(native_module, "AudioEngine", None)
+    for method in ("capture_global_start", "publish_captured_global_start"):
+        assert callable(getattr(engine_type, method, None)), (
+            f"Native GLOBAL capture API missing: AudioEngine.{method}"
+        )
+    timestamp = inspect.signature(engine_type.capture_global_start).parameters.get("received_at_ns")
+    assert timestamp is not None, "Native GLOBAL capture API invalid keyword: received_at_ns"
+    assert timestamp.default is None, "Native GLOBAL capture API invalid keyword: received_at_ns"
+    assert timestamp.kind in {
+        inspect.Parameter.POSITIONAL_OR_KEYWORD,
+        inspect.Parameter.KEYWORD_ONLY,
+    }, "Native GLOBAL capture API invalid keyword: received_at_ns"
+
+
+def check_ordinary_start_api(native_module: object) -> None:
+    """Reflect original ordinary-start ownership without constructing or running Native work."""
+    capture_type = getattr(native_module, "CapturedPadStart", None)
+    assert isinstance(capture_type, type), "Native ordinary-start API missing: CapturedPadStart"
+    assert inspect.getattr_static(capture_type, "diagnostic_slot", None) is not None, (
+        "Native ordinary-start API missing: CapturedPadStart.diagnostic_slot"
+    )
+    for method in (
+        "is_current",
+        "same_owner",
+        "original_owner_status",
+        "state",
+        "reason",
+        "accepted",
+        "effective_frame",
+        "original_frame",
+        "execution_frame",
+        "cancel",
+    ):
+        assert callable(inspect.getattr_static(capture_type, method, None)), (
+            f"Native ordinary-start API missing: CapturedPadStart.{method}"
+        )
+    engine_type = getattr(native_module, "AudioEngine", None)
+    for method in ("capture_pad_start", "prepare_captured_pad_start", "publish_pad_start"):
+        assert callable(getattr(engine_type, method, None)), (
+            f"Native ordinary-start API missing: AudioEngine.{method}"
+        )
+    for method, keyword, default in (
+        ("capture_pad_start", "exclusive", False),
+        ("capture_pad_start", "received_at_ns", None),
+        ("capture_pad_start", "expected_source_generation", None),
+        ("publish_pad_start", "window", None),
+        ("prepare_captured_pad_start", "window", None),
+    ):
+        parameter = inspect.signature(getattr(engine_type, method)).parameters.get(keyword)
+        assert parameter is not None, (
+            f"Native ordinary-start API missing keyword: AudioEngine.{method}.{keyword}"
+        )
+        assert parameter.kind in {
+            inspect.Parameter.POSITIONAL_OR_KEYWORD,
+            inspect.Parameter.KEYWORD_ONLY,
+        }, f"Native ordinary-start API missing keyword: AudioEngine.{method}.{keyword}"
+        assert parameter.default is default, (
+            f"Native ordinary-start API invalid default: AudioEngine.{method}.{keyword}"
+        )
+    trigger_type = getattr(native_module, "CapturedInputPadTrigger", None)
+    assert isinstance(trigger_type, type), (
+        "Native ordinary-start API missing: CapturedInputPadTrigger"
+    )
+    getter = inspect.getattr_static(trigger_type, "captured_start", None)
+    assert isinstance(getter, property) or inspect.isgetsetdescriptor(getter), (
+        "Native ordinary-start API missing getter: CapturedInputPadTrigger.captured_start"
+    )
+
+
 def check_runtime(root: Path, checkout: Path, runtime: Path) -> None:
     # Runtime imports must follow private-path/DLL setup, before any GUI/device opens.
     native_module = importlib.import_module("flitzis_looper_audio")
@@ -158,6 +293,9 @@ def check_runtime(root: Path, checkout: Path, runtime: Path) -> None:
     check_pad_copy_api(native_module.AudioEngine)
     check_pad_pair_hold_api(native_module.AudioEngine)
     check_timing_completion_api(native_module)
+    check_pitch_action_api(native_module)
+    check_ordinary_start_api(native_module)
+    check_captured_global_start_api(native_module)
     assert physical_path(Path(sys.executable)).is_relative_to(physical_path(runtime / "python"))
     customization = importlib.import_module("sitecustomize")
     assert physical_path(Path(customization.__file__)).is_relative_to(

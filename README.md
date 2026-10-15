@@ -30,8 +30,8 @@ the material that matters on stage.
   can also be controlled in a one-at-a-time style.
 - **BPM Lock:** Loops with tempo metadata can follow the master BPM, keeping
   different source loops aligned while the performer changes tempo.
-- **Pitch:** Speed-based pitch control can push loops up or down in energy and
-  help match the feel of different source material.
+- **Key + Transposition:** Choose a pad's base key, then add -18 to +18 semitones
+  of transposition. Pitch choices can keep playback running or retrigger the loop.
 - **Key Lock:** Tempo changes can be applied while reducing unwanted pitch
   movement, which makes BPM changes more useful for melodic material.
 - **Loop Editor:** Loaded audio can be inspected and adjusted with editable loop
@@ -66,6 +66,19 @@ Start the app, load audio onto pads, then trigger pads from the grid:
   downbeat information.
 - Use the bottom bar for transport, performance controls, quantization, stems,
   and settings.
+
+For pitch changes, select a loaded pad and open **Key** or **Transposition** in
+the left sidebar's **Key + Transposition** section. Key chooses a target in the
+source's major/minor mode; Transposition adds signed semitone steps, with quick
+-12, 0 and +12 choices. If the source key is unknown, set **Correction** before
+choosing a Key; correction only changes the source label. The two reset buttons
+reset Key and Transposition independently.
+
+Enable **Retrigger** to restart on each pitch choice; leave it off to preserve
+the current position or stopped state. Learn can map these choices to MIDI or
+keyboard controls, and each learned mapping keeps its own Retrigger setting.
+The sidebar shows preparation or unavailable-choice feedback. With **Key Lock**
+off, changing playback speed also changes the sounding pitch.
 
 ## How to Install
 

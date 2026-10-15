@@ -11,7 +11,7 @@ if TYPE_CHECKING:
     from collections.abc import Callable
 
     from flitzis_looper.controller.transport import TransportController
-    from flitzis_looper_audio import CapturedInputPadTrigger, ResidentWindowTicket
+    from flitzis_looper_audio import CapturedInputPadTrigger, CapturedPadStart, ResidentWindowTicket
 
 
 @dataclass(frozen=True, slots=True)
@@ -58,12 +58,26 @@ class _CapturedTrigger:
     cancel_requested: bool = False
 
 
+@dataclass(slots=True)
+class _CapturedStart:
+    start: CapturedPadStart
+    cache_backed: bool
+    requested: _Intent | None
+    ticket: ResidentWindowTicket | None = None
+    attempts: int = 0
+    deadline: float = 0.0
+    published: bool = False
+    geometry_acknowledged: bool = False
+    dependency: ResidentWindowTicket | None = None
+
+
 class ResidencyController:
     """Keep requested project intent separate from native acknowledged playback.
 
-    At most one latest request per pad is retained. Native preparation owns PCM,
-    the fixed worker queue, cancellation and adoption. Polling observes ACK; it
-    never moves a running playhead to compensate for timing.
+    Edit requests retain one latest intent per pad. Captured attacks remain
+    independent original owners through preparation and publication. Native owns
+    PCM, the fixed worker queue, cancellation and adoption. Polling observes ACK;
+    it never moves a running playhead to compensate for timing.
     """
 
     def __init__(self, transport: TransportController) -> None:
@@ -73,12 +87,16 @@ class ResidencyController:
         self._pending: dict[int, _Pending] = {}
         self._launched: dict[int, ResidentWindowTicket] = {}
         self._effective: dict[int, _Intent] = {}
+        # Geometry can be acknowledged while processing-mode feedback is absent.
+        # Values here provide geometry only; their requested mode is never effective.
+        self._acknowledged_geometry: dict[int, _Intent] = {}
         self._errors: dict[int, str] = {}
         self._error_sources: dict[int, tuple[object, ...]] = {}
         self._launch_errors: dict[int, str] = {}
         self._confirmed_modes: dict[int, tuple[tuple[object, ...], bool]] = {}
         self._closed = False
         self._captured_triggers: dict[int, _CapturedTrigger] = {}
+        self._captured_starts: dict[int, _CapturedStart] = {}
         transport._on_frame_render_callbacks.append(self.poll)
 
     def _intent(self, sample_id: int) -> _Intent:
@@ -96,10 +114,18 @@ class ResidencyController:
         """Capture the effective intent before a performer changes requested fields."""
         if sample_id not in self._pending:
             intent = self._intent(sample_id)
+            geometry = self._acknowledged_geometry.get(sample_id)
+            if geometry is not None:
+                intent = self._with_geometry(intent, geometry)
             mode = self._observe_mode(sample_id)
+            if geometry is not None and mode is None:
+                previous = self._effective.get(sample_id)
+                if previous is None:
+                    return
+                mode = previous.key_lock
             self._effective[sample_id] = intent if mode is None else replace(intent, key_lock=mode)
 
-    def ensure_start_assignment_ready(self, sample_id: int) -> None:
+    def _ensure_start_assignment_ready(self, sample_id: int) -> None:
         """An implicit Project loop cannot start until its incoming receipt is projected."""
         self._transport.ensure_current_source_assignment_ready(sample_id)
 
@@ -228,7 +254,20 @@ class ResidencyController:
                 return "unconfirmed", error
             status = pending.ticket.publication_status() if pending.ticket else "preparing"
             return status, error
-        return None, error
+        return self._captured_start_status(sample_id), error
+
+    def _captured_start_status(self, sample_id: int) -> str | None:
+        for pending in self._captured_starts.values():
+            if pending.start.diagnostic_slot != sample_id or pending.start.state() in {
+                "applied",
+                "rejected",
+            }:
+                continue
+            if pending.published:
+                return "pending"
+            status = pending.ticket.publication_status() if pending.ticket else "preparing"
+            return "pending" if status == "accepted" else status
+        return None
 
     def report_launch_error(self, sample_id: int, error: str | None) -> None:
         """Retain a terminal shared launch error for the existing pad readiness UI."""
@@ -236,6 +275,26 @@ class ResidencyController:
             self._launch_errors.pop(sample_id, None)
         else:
             self._launch_errors[sample_id] = error
+
+    def _global_start_dependency(
+        self, sample_id: int
+    ) -> tuple[float, float | None, ResidentWindowTicket] | None:
+        """Retain an existing edit's real request and original requested geometry.
+
+        A Python pending row without a native ticket has no durable ACK owner.
+        Reject before GLOBAL capture instead of attaching a later matching request.
+        """
+        pending = self._pending.get(sample_id)
+        if pending is None:
+            return None
+        if pending.unconfirmed or pending.ticket is None:
+            message = "global start unavailable: resident edit has no native request owner"
+            raise ValueError(message)
+        status = pending.ticket.publication_status()
+        if status in {"failed", "cancelled", "rejected"}:
+            message = pending.ticket.error() or "original global resident dependency failed"
+            raise ValueError(message)
+        return pending.start, pending.end, pending.ticket
 
     def acknowledged_region(self, sample_id: int) -> tuple[float, float | None] | None:
         """Return previous native geometry while another region is preparing."""
@@ -307,6 +366,7 @@ class ResidencyController:
                 **self._transport.source_generation_options(expected_source_generation),
             )
             self._effective[sample_id] = self._intent(sample_id)
+            self._acknowledged_geometry.pop(sample_id, None)
             return
         self._request(sample_id, start, end, expected_source_generation=expected_source_generation)
 
@@ -422,13 +482,20 @@ class ResidencyController:
         sample_id: int,
         start: float,
         end: float | None,
-        play: Callable[[], None],
+        play: Callable[[], None] | None = None,
         *,
         prepared_play: Callable[[ResidentWindowTicket], bool] | None = None,
         expected_source_generation: int | None = None,
+        captured_start: CapturedPadStart | None = None,
     ) -> None:
         """Retain the input's launch intent until the required source context is ready."""
-        self.ensure_start_assignment_ready(sample_id)
+        self._ensure_start_assignment_ready(sample_id)
+        if captured_start is not None:
+            self._retain_captured_start(sample_id, captured_start)
+            return
+        if play is None:
+            message = "Ordinary start requires its original capture or playback callback"
+            raise ValueError(message)
         if not self._cache_backed(sample_id):
             self._audio.set_pad_loop_region(
                 sample_id,
@@ -461,6 +528,199 @@ class ResidencyController:
             after_ack=launch,
             expected_source_generation=expected_source_generation,
         )
+
+    def _retain_captured_start(self, sample_id: int, start: CapturedPadStart) -> None:
+        identity = id(start)
+        if identity in self._captured_starts:
+            return
+        if len(self._captured_starts) >= 256:
+            start.cancel()
+            message = "Captured pad start capacity exhausted"
+            raise RuntimeError(message)
+        cache_backed = self._cache_backed(sample_id)
+        try:
+            dependency = self._captured_start_dependency(sample_id) if cache_backed else None
+        except ValueError as error:
+            start.cancel()
+            self.report_launch_error(sample_id, str(error))
+            return
+        pending = _CapturedStart(
+            start,
+            cache_backed,
+            self._intent(sample_id),
+            deadline=time.monotonic() + 30.0,
+            dependency=dependency,
+        )
+        self._captured_starts[identity] = pending
+        self._launch_errors.pop(sample_id, None)
+        if self._poll_captured_start(pending):
+            self._captured_starts.pop(identity, None)
+
+    def _captured_start_dependency(self, sample_id: int) -> ResidentWindowTicket | None:
+        """Freeze an independent edit's genuine request before any readiness polling."""
+        edit = self._pending.get(sample_id)
+        if edit is None:
+            return None
+        if edit.unconfirmed or edit.ticket is None:
+            message = "captured start unavailable: resident edit has no native request owner"
+            raise ValueError(message)
+        return edit.ticket
+
+    def observe_captured_start(self, start: CapturedPadStart) -> None:
+        """Observe an already-published original attack without preparing or publishing it."""
+        if any(pending.start.same_owner(start) for pending in self._captured_starts.values()):
+            return
+        if len(self._captured_starts) >= 256:
+            start.cancel()
+            message = "Captured pad start observation capacity exhausted"
+            if start.diagnostic_slot is not None:
+                self.report_launch_error(start.diagnostic_slot, message)
+            raise RuntimeError(message)
+        identity = id(start)
+        pending = _CapturedStart(
+            start,
+            cache_backed=False,
+            requested=None,
+            deadline=time.monotonic() + 30.0,
+            published=True,
+        )
+        self._captured_starts[identity] = pending
+        if self._poll_captured_start(pending):
+            self._captured_starts.pop(identity, None)
+
+    def _poll_captured_starts(self) -> None:
+        for identity, pending in tuple(self._captured_starts.items()):
+            if self._poll_captured_start(pending):
+                self._captured_starts.pop(identity, None)
+
+    def _poll_captured_start(self, pending: _CapturedStart) -> bool:
+        start = pending.start
+        state = start.state()
+        sample_id = start.diagnostic_slot
+        owner_status = start.original_owner_status()
+        if self._captured_start_terminal(pending, sample_id, state, owner_status):
+            return True
+        if pending.published or owner_status in {"pending", "admitted"} or sample_id is None:
+            return False
+        try:
+            self._ensure_start_assignment_ready(sample_id)
+            return self._advance_captured_start(pending, sample_id)
+        except (RuntimeError, ValueError) as error:
+            return self._captured_start_error(pending, sample_id, error)
+
+    def _captured_start_terminal(
+        self, pending: _CapturedStart, sample_id: int | None, state: str, owner_status: str
+    ) -> bool:
+        if state == "applied":
+            if sample_id is not None:
+                self._remember_captured_geometry(pending, sample_id)
+                self.report_launch_error(sample_id, None)
+            return True
+        if state == "rejected":
+            if sample_id is not None:
+                self.report_launch_error(
+                    sample_id, pending.start.reason() or "Captured pad start rejected"
+                )
+            return True
+        native_join_pending = (
+            pending.cache_backed and pending.ticket is None and not pending.published
+        )
+        if owner_status == "retired" or (owner_status == "superseded" and not native_join_pending):
+            self._cancel_captured_start(pending)
+            return True
+        if self._closed or time.monotonic() >= pending.deadline:
+            self._cancel_captured_start(pending)
+            if sample_id is not None and not self._closed:
+                self.report_launch_error(sample_id, "Captured pad start readiness deadline expired")
+            return True
+        return False
+
+    def _captured_start_error(
+        self, pending: _CapturedStart, sample_id: int, error: RuntimeError | ValueError
+    ) -> bool:
+        self.report_launch_error(sample_id, str(error))
+        retryable = isinstance(error, RuntimeError) and any(
+            marker in str(error)
+            for marker in ("queue is full", "queue full", "buffer may be full", "lock")
+        )
+        if retryable and pending.attempts < 8:
+            return False
+        self._cancel_captured_start(pending)
+        return True
+
+    @staticmethod
+    def _with_geometry(intent: _Intent, geometry: _Intent) -> _Intent:
+        return replace(
+            intent, start=geometry.start, end=geometry.end, auto=geometry.auto, bars=geometry.bars
+        )
+
+    def _remember_captured_geometry(self, pending: _CapturedStart, sample_id: int) -> None:
+        if pending.geometry_acknowledged or pending.requested is None:
+            return
+        ticket = pending.ticket
+        if ticket is not None:
+            try:
+                current_ack = ticket.publication_status() == "accepted" and ticket.is_current()
+            except RuntimeError, ValueError:
+                return
+            if not current_ack:
+                return
+        pending.geometry_acknowledged = True
+        self._acknowledged_geometry[sample_id] = pending.requested
+        mode = self._observe_mode(sample_id)
+        previous = self._effective.get(sample_id)
+        if mode is not None:
+            self._effective[sample_id] = replace(pending.requested, key_lock=mode)
+        elif previous is not None:
+            self._effective[sample_id] = self._with_geometry(previous, pending.requested)
+        edit = self._pending.get(sample_id)
+        if edit is not None:
+            edit.previous = self._with_geometry(edit.previous, pending.requested)
+
+    def _advance_captured_start(self, pending: _CapturedStart, sample_id: int) -> bool:
+        if pending.attempts >= 8:
+            self.report_launch_error(sample_id, "Captured pad start admission retry limit reached")
+            self._cancel_captured_start(pending)
+            return True
+        if pending.cache_backed and pending.ticket is None:
+            pending.attempts += 1
+            pending.ticket = (
+                self._audio.prepare_captured_pad_start(pending.start)
+                if pending.dependency is None
+                else self._audio.prepare_captured_pad_start(pending.start, pending.dependency)
+            )
+            return False
+        ticket = pending.ticket
+        if ticket is not None:
+            status = ticket.publication_status()
+            if status in {"failed", "cancelled", "rejected"}:
+                self.report_launch_error(
+                    sample_id, ticket.error() or "Captured pad start window rejected"
+                )
+                self._cancel_captured_start(pending)
+                return True
+            if status != "accepted":
+                return False
+            self._remember_captured_geometry(pending, sample_id)
+        pending.attempts += 1
+        published = (
+            self._audio.publish_pad_start(pending.start)
+            if ticket is None
+            else self._audio.publish_pad_start(pending.start, ticket)
+        )
+        if published:
+            pending.published = True
+            self.report_launch_error(sample_id, None)
+        else:
+            self.report_launch_error(sample_id, "Captured pad start launch remains unavailable")
+        return False
+
+    @staticmethod
+    def _cancel_captured_start(pending: _CapturedStart) -> None:
+        pending.start.cancel()
+        if pending.ticket is not None:
+            pending.ticket.cancel_launch()
+            pending.ticket.cancel()
 
     def _continue_start(
         self,
@@ -509,6 +769,9 @@ class ResidencyController:
         previous = self._pending.get(sample_id)
         requested = self._intent(sample_id)
         baseline = previous.previous if previous else self._effective.get(sample_id, requested)
+        geometry = self._acknowledged_geometry.get(sample_id)
+        if previous is None and geometry is not None and geometry.path == requested.path:
+            baseline = self._with_geometry(baseline, geometry)
         waiting = (previous.ticket or previous.waiting_ticket) if previous else None
         waiting_intent = (
             previous.requested
@@ -624,7 +887,7 @@ class ResidencyController:
             self._report_captured_trigger_error(pending, "Captured MIDI readiness deadline expired")
             pending.cancel_requested = True
             return self._cancel_captured_trigger_window(pending)
-        self.ensure_start_assignment_ready(sample_id)
+        self._ensure_start_assignment_ready(sample_id)
         if pending.ticket is None:
             return self._prepare_captured_trigger_window(pending)
         return self._launch_captured_trigger_window(pending, sample_id)
@@ -771,6 +1034,7 @@ class ResidencyController:
 
     def poll(self) -> None:
         """Observe bounded native completion, stale ownership and admission retries."""
+        self._poll_captured_starts()
         self._poll_captured_triggers()
         for sample_id, pending in tuple(self._pending.items()):
             if sample_id in getattr(self._transport, "_pair_deferred_sample_ids", ()):
@@ -814,6 +1078,7 @@ class ResidencyController:
 
     def _finish_ack(self, sample_id: int, pending: _Pending, ticket: ResidentWindowTicket) -> None:
         self._effective[sample_id] = pending.requested
+        self._acknowledged_geometry.pop(sample_id, None)
         pending.previous = pending.requested
         self._errors.pop(sample_id, None)
         if pending.position is not None and ticket.effective_seek_seconds is not None:
@@ -934,6 +1199,7 @@ class ResidencyController:
                 if ticket is not None:
                     ticket.cancel()
         self._effective.pop(sample_id, None)
+        self._acknowledged_geometry.pop(sample_id, None)
         self._confirmed_modes.pop(sample_id, None)
         self._errors.pop(sample_id, None)
         self._error_sources.pop(sample_id, None)
@@ -958,12 +1224,18 @@ class ResidencyController:
 
     def cancel_launch(self, sample_id: int) -> bool:
         """Capture and revoke admitted starts under the native admission fence."""
-        retained = sample_id in self._launched
+        retained = sample_id in self._launched or any(
+            pending.start.diagnostic_slot == sample_id for pending in self._captured_starts.values()
+        )
         admitted = self._audio.cancel_pad_launches(sample_id)
         self._cancel_launch_ownership(sample_id)
         return retained or admitted
 
     def _cancel_launch_ownership(self, sample_id: int) -> None:
+        for identity, captured in tuple(self._captured_starts.items()):
+            if captured.start.diagnostic_slot == sample_id:
+                self._cancel_captured_start(captured)
+                self._captured_starts.pop(identity, None)
         launched = self._launched.pop(sample_id, None)
         if launched is not None:
             launched.cancel_launch()
@@ -977,12 +1249,18 @@ class ResidencyController:
         admitted = frozenset(self._audio.cancel_all_launches()) | frozenset(self._launched)
         for sample_id in self._pending.keys() | self._launched.keys():
             self._cancel_launch_ownership(sample_id)
+        for identity, captured in tuple(self._captured_starts.items()):
+            self._cancel_captured_start(captured)
+            self._captured_starts.pop(identity, None)
         return admitted
 
     def shut_down(self) -> None:
         """Stop admission before native ownership and source readers are drained."""
         self._closed = True
         self._audio.cancel_all_launches()
+        for captured in tuple(self._captured_starts.values()):
+            self._cancel_captured_start(captured)
+        self._captured_starts.clear()
         for pending in tuple(self._captured_triggers.values()):
             try:
                 self._cancel_captured_trigger_window(pending)

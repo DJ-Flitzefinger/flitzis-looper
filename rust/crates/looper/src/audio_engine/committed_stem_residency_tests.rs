@@ -2151,6 +2151,44 @@ struct ReadyPlaybackAudio {
 
 #[pymethods]
 impl ReadyPlaybackAudio {
+    #[pyo3(signature=(id, start_s, end_s=None, volume=1.0, *, exclusive=false, received_at_ns=None, expected_source_generation=None))]
+    fn capture_pad_start(
+        &self,
+        id: usize,
+        start_s: f64,
+        end_s: Option<f64>,
+        volume: f32,
+        exclusive: bool,
+        received_at_ns: Option<&Bound<'_, PyAny>>,
+        expected_source_generation: Option<u64>,
+    ) -> PyResult<crate::audio_engine::pad_start::CapturedPadStart> {
+        self.engine.capture_pad_start(
+            id,
+            start_s,
+            end_s,
+            volume,
+            exclusive,
+            received_at_ns,
+            expected_source_generation,
+        )
+    }
+
+    fn prepare_captured_pad_start(
+        &self,
+        start: &crate::audio_engine::pad_start::CapturedPadStart,
+    ) -> PyResult<crate::audio_engine::resident_relocation::ResidentWindowTicket> {
+        self.engine.prepare_captured_pad_start(start)
+    }
+
+    #[pyo3(signature=(start, window=None))]
+    fn publish_pad_start(
+        &self,
+        start: &crate::audio_engine::pad_start::CapturedPadStart,
+        window: Option<&crate::audio_engine::resident_relocation::ResidentWindowTicket>,
+    ) -> PyResult<bool> {
+        self.engine.publish_pad_start(start, window)
+    }
+
     fn pause_sample(&self, id: usize) -> PyResult<()> {
         self.producer
             .lock()
@@ -3180,7 +3218,7 @@ fn controller_stopped_prepare_then_play(
     locals: &Py<PyDict>,
     callback: &mut Callback,
     consumer: &mut rtrb::Consumer<ControlMessage>,
-) {
+) -> u64 {
     let source = callback.mixer.bank_for_measurement()[0].clone().unwrap();
     assert!(!callback.mixer.voices.iter().any(|voice| voice.active));
     controller_python(
@@ -3233,7 +3271,9 @@ project.pad_loop_end_s[0] = 1517 / fixture['rate']
 project.pad_key_lock[0] = True
 transport = TransportController(project, session, ReadyTransportAudio())
 transport.playback.trigger_pad_keep_others(0)
-ready_start = transport.residency._pending[0].ticket
+ordinary_launch = next(iter(transport.residency._captured_starts.values()))
+ordinary_start = ordinary_launch.start
+ready_start = ordinary_launch.ticket
 assert ready_start is not None and ready_start.publication_status() == 'pending'
 assert not stopped.is_current()
 controller.on_frame_render()
@@ -3248,9 +3288,13 @@ assert not session.stem_generation_errors, session.stem_generation_errors
     );
     assert!(matches!(
         consumer.peek(),
-        Ok(ControlMessage::RelocateResident(_))
+        Ok(ControlMessage::CapturePadStartTarget(_))
     ));
-    assert_eq!(callback.drain(consumer), 1);
+    assert_eq!(
+        callback.drain(consumer),
+        2,
+        "original target then own resident ACK"
+    );
     assert!(Arc::ptr_eq(
         &source.samples,
         &callback.mixer.bank_for_measurement()[0]
@@ -3281,13 +3325,70 @@ assert not session.stem_generation_errors, session.stem_generation_errors
     );
     assert!(matches!(
         consumer.peek(),
-        Ok(ControlMessage::TriggerInputPad {
-            resident_control: Some(_),
-            ..
-        })
+        Ok(ControlMessage::PreparedStart(_))
     ));
     assert_eq!(callback.drain(consumer), 1);
     assert!(consumer.is_empty());
+    let start = Python::attach(|py| {
+        locals
+            .bind(py)
+            .get_item("ordinary_start")
+            .unwrap()
+            .unwrap()
+            .extract::<PyRef<crate::audio_engine::pad_start::CapturedPadStart>>()
+            .unwrap()
+            .clone()
+    });
+    let capture_frame = callback.transport.output_frame();
+    assert_eq!(start.original_frame(), Some(capture_frame));
+    let execution = start.execution_frame().unwrap();
+    assert!(execution > capture_frame);
+    wait_until(|| {
+        callback.mixer.pitch_runtime.as_mut().unwrap().poll();
+        assert_ne!(start.state(), "rejected", "{:?}", start.reason());
+        callback
+            .mixer
+            .pitch_runtime
+            .as_ref()
+            .unwrap()
+            .has_ready_action(start.sequence())
+    });
+    while callback.transport.output_frame() < execution {
+        let frame = callback.transport.output_frame();
+        let frames = (execution - frame).min(257) as usize;
+        let mut output = vec![0.0; frames * 2];
+        crate::audio_engine::audio_stream::render_scheduled_audio(
+            &mut callback.mixer,
+            &mut callback.scheduler,
+            &mut output,
+            &mut [0.0; NUM_SAMPLES],
+            frame,
+            2,
+            &mut callback.transport,
+            &mut callback.feedback,
+            &mut callback.retirement,
+        );
+        callback.transport.advance_by_rendered_frames(frames);
+        assert!(output.iter().all(|sample| *sample == 0.0));
+        assert!(callback.mixer.voices.iter().all(|voice| !voice.active));
+    }
+    crate::audio_engine::audio_stream::render_scheduled_audio(
+        &mut callback.mixer,
+        &mut callback.scheduler,
+        &mut [],
+        &mut [0.0; NUM_SAMPLES],
+        execution,
+        2,
+        &mut callback.transport,
+        &mut callback.feedback,
+        &mut callback.retirement,
+    );
+    assert_eq!(start.state(), "applied", "{:?}", start.reason());
+    assert_eq!(start.effective_frame(), Some(execution));
+    assert_eq!(
+        voice(&callback.mixer).stretch.adopted_request_id(),
+        Some(start.sequence())
+    );
     assert!(
         callback
             .mixer
@@ -3311,6 +3412,7 @@ assert audio.worker_call_count() == 1
         consumer.is_empty(),
         "observing a withdrawn receipt must not launch an automatic residency retry"
     );
+    execution
 }
 
 fn controller_stopped_fresh_all(
@@ -3406,8 +3508,89 @@ controller.shut_down()
     );
 }
 
+fn prepare_ordinary_controller_reference(mixer: &mut RtMixer, execution: u64) {
+    use crate::audio_engine::native_history_permit::NativeHistoryContext;
+    use crate::audio_engine::pitch_intent::PitchIntent;
+    use crate::audio_engine::prepared_native_history::NativeAdapterState;
+    let index = mixer
+        .voices
+        .iter()
+        .position(|voice| voice.is_playing_sample(0))
+        .unwrap();
+    let snapshot = mixer.capture_pitch_voice_snapshot(index).unwrap();
+    let ownership = mixer.input_ownership_for_effect().clone();
+    let acknowledgements =
+        Arc::new(crate::audio_engine::constant_timing::CurrentTimingAcknowledgements::default());
+    let epoch = Arc::new(std::sync::atomic::AtomicU64::new(1));
+    let permit = NativeHistoryContext {
+        id: 0,
+        ownership: &ownership,
+        acknowledgements: &acknowledgements,
+        preparation_epoch: &epoch,
+    }
+    .capture(&snapshot.sample, RATE, None)
+    .unwrap();
+    let request = snapshot
+        .into_request(permit, PitchIntent::default(), true, execution, 1, 1)
+        .unwrap();
+    let mut candidate = Box::new(NativeAdapterState::new(
+        Some(RubberBandLiveShifter::new(RATE, 2).unwrap()),
+        2,
+    ));
+    candidate.prepare_source_at_endpoint(request).unwrap();
+    assert!(mixer.adopt_prepared_pitch_voice(
+        index,
+        &mut candidate,
+        execution,
+        PitchIntent::default(),
+        true,
+        1,
+        1
+    ));
+}
+
+fn prepared_ordinary_controller_raw(playback: &ControllerPlayback) -> ControllerRawNative {
+    let mut raw = ControllerRawNative::new(playback.ratio, true);
+    let history = crate::audio_engine::prepared_native_history::PREPARED_HISTORY_FRAMES;
+    let start = playback.loop_start;
+    let end = playback.loop_end;
+    let period = (end - start) as f64;
+    // Independently replay the real periodic selected components before launch.
+    // No live read plan, cursor or prepared request supplies this expected feed.
+    let feed = std::array::from_fn(|channel| {
+        (0..history)
+            .map(|offset| {
+                let phase = ((offset as f64 - history as f64) * playback.ratio).rem_euclid(period);
+                let left = start + phase.floor() as usize;
+                let right = if left + 1 == end { start } else { left + 1 };
+                let sample = |frame| match playback.selection {
+                    None => playback.source.samples[frame * 2 + channel],
+                    Some(mask) => playback
+                        .components
+                        .iter()
+                        .enumerate()
+                        .filter(|(index, _)| mask & (1 << index) != 0)
+                        .map(|(_, component)| component.samples[frame * 2 + channel])
+                        .sum(),
+                };
+                let a = sample(left);
+                a + (sample(right) - a) * phase.fract() as f32
+            })
+            .collect()
+    });
+    raw.render(&feed);
+    assert!(raw.used);
+    raw
+}
+
 fn controller_active_round_trip(stopped_start: bool) {
     let mut h = long_harness();
+    // The device-free facade uses the real public capture/publication API with
+    // this harness's genuine control queue and stereo output format.
+    let (_feedback_producer, feedback_consumer) = rtrb::RingBuffer::new(1);
+    h.engine.test_control_channels =
+        Some((h.producer.clone(), Arc::new(Mutex::new(feedback_consumer))));
+    h.engine.test_output_format = Some((RATE, 2));
     // This process executes only the exact child above; no runner-wide cwd is
     // changed. Every written fixture remains inside the held temporary project.
     std::env::set_current_dir(h.root.parent().unwrap()).unwrap();
@@ -3599,7 +3782,7 @@ own_registration_pending = (
         r#"
 registration = controller._committed_residency._selections[0].ticket
 assert registration.publication_status() == 'pending'
-assert controller.stems_available(0)
+assert not controller.stems_available(0)
 assert project.stem_cache[0].pair == disk_selection
 assert controller.stem_residency_status(0).residency is None
 assert controller.stem_residency_status(0).effective is None
@@ -3610,11 +3793,11 @@ assert audio.worker_call_count() == 1 and audio.prepared_only_on_pool_threads()
     assert_eq!(h.callback.drain(&mut h.consumer), 1);
     controller_python(
         &locals,
-        "controller.on_frame_render()\nassert registration.publication_status() == 'accepted'\nassert registration.is_current()\nassert controller.stem_residency_status(0).effective is None",
+        "controller.on_frame_render()\nassert registration.publication_status() == 'accepted'\nassert registration.is_current()\nassert controller.stems_available(0)\nassert controller.stem_residency_status(0).effective is None",
     );
 
     let ratio = 0.75;
-    let make_reference = |all: bool| {
+    let make_reference = |all: bool, execution: u64| {
         let mut mixer = Box::new(RtMixer::new(2, RATE as f32));
         // Independent immutable renderer, with its own explicit KeyLock requests.
         let ownership = Arc::new(InputRuntimeOwnership::default());
@@ -3648,21 +3831,25 @@ assert audio.worker_call_count() == 1 and audio.prepared_only_on_pool_threads()
             assert!(mixer.set_stem_enabled_mask(0, 0b1010, hash));
             assert!(mixer.set_stem_mix_mode(0, StemMixMode::AllStems, hash));
         }
-        assert!(mixer.play_sample_at_output_frame(0, 1.0, 0));
+        assert!(mixer.play_sample_at_output_frame(0, 1.0, execution));
+        if stopped_start {
+            prepare_ordinary_controller_reference(&mut mixer, execution);
+        }
         mixer
     };
     h.callback.mixer.set_speed(ratio);
     h.callback.mixer.set_pad_eq(0, -12.0, -3.0, 4.0);
-    if stopped_start {
-        controller_stopped_prepare_then_play(&engine, &locals, &mut h.callback, &mut h.consumer);
+    let execution = if stopped_start {
+        controller_stopped_prepare_then_play(&engine, &locals, &mut h.callback, &mut h.consumer)
     } else {
         assert!(h.callback.mixer.play_sample_at_output_frame(0, 1.0, 0));
-    }
+        0
+    };
     let mut playback = ControllerPlayback {
         callback: h.callback,
-        reference: make_reference(stopped_start),
-        full_mix: make_reference(false),
-        frame: 0,
+        reference: make_reference(stopped_start, execution),
+        full_mix: make_reference(false, execution),
+        frame: execution,
         source_frame: 0,
         resumed_at: None,
         seek_epoch: None,
@@ -3675,7 +3862,7 @@ assert audio.worker_call_count() == 1 and audio.prepared_only_on_pool_threads()
         loop_start: LOOP_START,
         loop_end: LOOP_END,
         rate_ledger: None,
-        scheduled: false,
+        scheduled: stopped_start,
         selection: stopped_start.then_some(0b1010),
         previous: stopped_start.then_some(0b1010),
         ramp_start: 0,
@@ -3683,8 +3870,28 @@ assert audio.worker_call_count() == 1 and audio.prepared_only_on_pool_threads()
         candidate: None,
         filter: controller_filter(),
     };
+    if stopped_start {
+        playback.raw = Some(prepared_ordinary_controller_raw(&playback));
+    }
     playback.render(13, true);
-    let (initial_output, _) = playback.adopt_native(true);
+    let initial_output = if stopped_start {
+        let native = voice(&playback.callback.mixer)
+            .stretch
+            .native_state_address();
+        let mut output = Vec::new();
+        for frames in [1, 31, 137, 512, 777, 257] {
+            output.extend(playback.render(frames, true).0);
+            assert_eq!(
+                voice(&playback.callback.mixer)
+                    .stretch
+                    .native_state_address(),
+                native
+            );
+        }
+        output
+    } else {
+        playback.adopt_native(true).0
+    };
     if stopped_start {
         assert!(initial_output.iter().any(|sample| sample.abs() > 0.001));
         controller_stopped_fresh_all(&locals, &mut playback, &mut h.consumer);

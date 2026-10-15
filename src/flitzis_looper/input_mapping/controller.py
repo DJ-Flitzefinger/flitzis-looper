@@ -12,7 +12,12 @@ from flitzis_looper.constants import (
 )
 from flitzis_looper.controller.base import BaseController
 from flitzis_looper.controller.current_binding import capture_current_pad_binding
-from flitzis_looper.input_mapping.actions import LooperAction, PadEqBand
+from flitzis_looper.input_mapping.actions import (
+    LooperAction,
+    PadEqBand,
+    describe_pitch_rejection,
+    parse_pitch_action,
+)
 from flitzis_looper.input_mapping.bindings import KeyboardBinding, MidiBinding
 from flitzis_looper.input_mapping.storage import (
     KeyboardMappingEntry,
@@ -25,6 +30,7 @@ from flitzis_looper.input_mapping.storage import (
     save_midi_mapping_file,
 )
 from flitzis_looper.input_timing import validate_input_timestamp_ns
+from flitzis_looper.key_intent import recognize_key
 from flitzis_looper.models import (
     STEM_MASK_DISPLAY_MODES,
     STEM_MIX_MODES,
@@ -39,9 +45,40 @@ if TYPE_CHECKING:
 
     from flitzis_looper.controller import AppController
     from flitzis_looper.controller.current_timing import CurrentPadTiming
-    from flitzis_looper_audio import CapturedInputPadTrigger, InputRuntimePadBinding
+    from flitzis_looper.key_intent import MusicalKey
+    from flitzis_looper_audio import (
+        CapturedInputPadTrigger,
+        CapturedPitchAction,
+        InputRuntimePadBinding,
+    )
 
 type InputSource = Literal["midi", "keyboard"]
+
+
+@dataclass(frozen=True)
+class _InputPitchProjection:
+    source: MusicalKey | None = None
+    correction: MusicalKey | None = None
+    base_shift: int = 0
+    extra_shift: int = 0
+    key_lock: bool = False
+    quantize_step_64ths: int = 0
+    sync: bool = False
+    request_sequence: int = 0
+
+    def payload(self) -> dict[str, object]:
+        return {
+            "source_root": self.source.root if self.source is not None else None,
+            "source_mode": self.source.mode if self.source is not None else None,
+            "correction_root": self.correction.root if self.correction is not None else None,
+            "correction_mode": self.correction.mode if self.correction is not None else None,
+            "base_shift": self.base_shift,
+            "extra_shift": self.extra_shift,
+            "key_lock": self.key_lock,
+            "quantize_step_64ths": self.quantize_step_64ths,
+            "sync": self.sync,
+            "request_sequence": self.request_sequence,
+        }
 
 
 @dataclass(frozen=True)
@@ -54,6 +91,7 @@ class _InputRuntimePadSignature:
     binding_timing: CurrentPadTiming | None = None
     source_signature: tuple[object, ...] | None = None
     ready: bool = False
+    pitch: _InputPitchProjection = field(default_factory=_InputPitchProjection)
     binding: InputRuntimePadBinding | None = field(default=None, compare=False)
 
 
@@ -265,6 +303,8 @@ class InputMappingController(BaseController):
         """
         received_at_ns = validate_input_timestamp_ns(received_at_ns)
         key = action.key
+        if key.startswith("pitch."):
+            return self._execute_pitch_action(key, received_at_ns=received_at_ns)
         exact_handler = self._exact_action_handlers(received_at_ns=received_at_ns).get(key)
         if exact_handler is not None:
             exact_handler()
@@ -346,6 +386,17 @@ class InputMappingController(BaseController):
 
             if event is None:
                 return
+            self._discard_captured_pitch(event)
+
+    def _discard_captured_pitch(self, event: dict[str, object]) -> None:
+        """Cancel this undelivered owner through Native's guarded shadow rollback."""
+        captured = event.get("captured_pitch")
+        if captured is None:
+            return
+        try:
+            self._audio.cancel_pitch_action(cast("CapturedPitchAction", captured))
+        except (RuntimeError, ValueError, TypeError) as err:
+            self._session.input_mapping_error = f"Pitch choice cancellation failed: {err}"
 
     def _handle_rust_input_event(self, event: dict[str, object]) -> None:
         source = event.get("source")
@@ -353,39 +404,113 @@ class InputMappingController(BaseController):
         if source != "midi" or not isinstance(binding_key, str):
             return
         if not self._project.input_mapping_enabled:
+            self._discard_captured_pitch(event)
+            return
+        if _midi_note_release(event, binding_key):
             return
 
         if self._session.input_learn_active:
-            if (
-                self._session.input_learn_pending_source is None
-                or self._session.input_learn_pending_binding_key is None
-            ):
-                self._session.input_learn_pending_source = "midi"
-                self._session.input_learn_pending_binding_key = binding_key
-                self._record_midi_cc_value(binding_key, _midi_event_value(event))
-            return
-
-        if event.get("direct") is True and event.get("dispatched") is True:
+            self._discard_captured_pitch(event)
+            self._capture_midi_learn_input(event, binding_key)
             return
 
         action_key = event.get("action_key")
         if isinstance(action_key, str):
-            if self._execute_bound_midi_playback(
-                action_key, event.get("received_at_ns"), event.get("captured_trigger")
-            ):
-                return
-            if self._execute_relative_midi_action(
-                action_key,
-                binding_key,
-                _midi_event_value(event),
-            ):
-                return
-            try:
-                received_at_ns = validate_input_timestamp_ns(event.get("received_at_ns"))
-            except ValueError as err:
-                self._session.input_mapping_error = str(err)
-                received_at_ns = None
-            self.execute_action(LooperAction.from_key(action_key), received_at_ns=received_at_ns)
+            self._execute_midi_action(event, binding_key, action_key)
+
+    def _capture_midi_learn_input(self, event: dict[str, object], binding_key: str) -> None:
+        if (
+            self._session.input_learn_pending_source is not None
+            and self._session.input_learn_pending_binding_key is not None
+        ):
+            return
+        self._session.input_learn_pending_source = "midi"
+        self._session.input_learn_pending_binding_key = binding_key
+        self._record_midi_cc_value(binding_key, _midi_event_value(event))
+
+    def _execute_midi_action(
+        self, event: dict[str, object], binding_key: str, action_key: str
+    ) -> None:
+        if action_key.startswith("pitch."):
+            self._accept_captured_pitch_event(event)
+            return
+        if event.get("direct") is True and event.get("dispatched") is True:
+            if action_key.startswith("pad.trigger:"):
+                self._observe_dispatched_midi_trigger(event)
+            return
+        if action_key.startswith("ui.select_pad:"):
+            self._project_midi_selection(event, action_key)
+            return
+        if self._execute_bound_midi_playback(
+            action_key, event.get("received_at_ns"), event.get("captured_trigger")
+        ) or self._execute_relative_midi_action(action_key, binding_key, _midi_event_value(event)):
+            return
+        try:
+            received_at_ns = validate_input_timestamp_ns(event.get("received_at_ns"))
+        except ValueError as err:
+            self._session.input_mapping_error = str(err)
+            received_at_ns = None
+        self.execute_action(LooperAction.from_key(action_key), received_at_ns=received_at_ns)
+
+    def _observe_dispatched_midi_trigger(self, event: dict[str, object]) -> None:
+        captured = event.get("captured_trigger")
+        if captured is None:
+            return
+        trigger = cast("CapturedInputPadTrigger", captured)
+        try:
+            self._app.transport.residency.observe_captured_start(trigger.captured_start)
+        except (RuntimeError, ValueError, TypeError) as err:
+            self._session.input_mapping_error = str(err)
+
+    def _project_midi_selection(self, event: dict[str, object], action_key: str) -> None:
+        revision = event.get("selection_revision")
+        expected_revision = (
+            revision if not isinstance(revision, bool) and isinstance(revision, int) else None
+        )
+        self._execute_select_pad(
+            action_key,
+            native_selection_already_applied=True,
+            expected_native_selection_revision=expected_revision,
+        )
+
+    def _accept_captured_pitch_event(self, event: dict[str, object]) -> None:
+        rejection = event.get("pitch_rejection")
+        if isinstance(rejection, str) and rejection:
+            self._session.input_mapping_error = (
+                f"Pitch choice not accepted: {describe_pitch_rejection(rejection)}"
+            )
+            return
+        captured = event.get("captured_pitch")
+        if captured is None:
+            self._session.input_mapping_error = (
+                "Pitch choice not accepted: original selected content capture is unavailable"
+            )
+            return
+        self._clear_pitch_mapping_error()
+        try:
+            self._app.transport.pitch.accept_captured_event(cast("CapturedPitchAction", captured))
+        except (RuntimeError, ValueError, TypeError) as err:
+            self._session.input_mapping_error = f"Pitch choice not accepted: {err}"
+
+    def _execute_pitch_action(self, key: str, *, received_at_ns: int | None = None) -> bool:
+        action = parse_pitch_action(key)
+        if action is None:
+            self._session.input_mapping_error = (
+                f"Pitch choice not accepted: {describe_pitch_rejection('invalid_action')}"
+            )
+            return False
+        self._clear_pitch_mapping_error()
+        try:
+            self._app.transport.pitch.accept_selected_action(key, received_at_ns=received_at_ns)
+        except (RuntimeError, ValueError, TypeError) as err:
+            self._session.input_mapping_error = f"Pitch choice not accepted: {err}"
+            return False
+        return True
+
+    def _clear_pitch_mapping_error(self) -> None:
+        error = self._session.input_mapping_error
+        if error is not None and error.startswith("Pitch choice"):
+            self._session.input_mapping_error = None
 
     def _execute_bound_midi_playback(
         self, action_key: str, timestamp: object, captured_trigger: object = None
@@ -570,13 +695,23 @@ class InputMappingController(BaseController):
         bindings = [pad.binding for pad in pad_signatures]
 
         try:
-            self._audio.set_input_runtime_state(
-                multi_loop,
-                loaded,
-                loop_starts,
-                loop_ends,
-                bindings,
-            )
+            if callable(getattr(self._audio, "capture_selected_pitch_action", None)):
+                self._audio.set_input_runtime_state(
+                    multi_loop,
+                    loaded,
+                    loop_starts,
+                    loop_ends,
+                    bindings,
+                    pitch_rows=[pad.pitch.payload() for pad in pad_signatures],
+                )
+            else:
+                self._audio.set_input_runtime_state(
+                    multi_loop,
+                    loaded,
+                    loop_starts,
+                    loop_ends,
+                    bindings,
+                )
         except RuntimeError, ValueError, TypeError:
             return False
 
@@ -608,6 +743,7 @@ class InputMappingController(BaseController):
                     binding_timing=snapshot.accepted_timing if snapshot else None,
                     source_signature=snapshot.source_signature if snapshot else None,
                     ready=snapshot is not None,
+                    pitch=self._input_pitch_projection(sample_id),
                     binding=snapshot.binding if snapshot else None,
                 )
             )
@@ -615,6 +751,28 @@ class InputMappingController(BaseController):
             self._project.multi_loop,
             self._app.transport._output_sample_rate_hz(),
             tuple(pad_signatures),
+        )
+
+    def _input_pitch_projection(self, sample_id: int) -> _InputPitchProjection:
+        intent = self._project.pad_key_intent[sample_id]
+        source = intent.source.recognized if intent.source is not None else None
+        correction = recognize_key(intent.correction)
+        if intent.correction is not None and correction is None:
+            source = None
+        quantize_step = (
+            {"1_64": 1, "1_32": 2, "1_16": 4}[self._project.trigger_quantization_step]
+            if self._project.trigger_quantization_enabled
+            else 0
+        )
+        return _InputPitchProjection(
+            source=source,
+            correction=correction,
+            base_shift=intent.base_shift,
+            extra_shift=intent.extra_shift,
+            key_lock=self._project.resolve_pad_key_lock(sample_id),
+            quantize_step_64ths=quantize_step,
+            sync=self._project.bpm_lock,
+            request_sequence=self._app.transport.pitch.projection_sequence(sample_id),
         )
 
     def _set_rust_enabled(self, *, enabled: bool) -> None:
@@ -744,10 +902,23 @@ class InputMappingController(BaseController):
 
         self._app.transport.pad.set_pad_eq(pad_id, low_db, mid_db, high_db)
 
-    def _execute_select_pad(self, key: str) -> bool:
+    def _execute_select_pad(
+        self,
+        key: str,
+        *,
+        native_selection_already_applied: bool = False,
+        expected_native_selection_revision: int | None = None,
+    ) -> bool:
         if (pad_id := _parse_prefixed_sample_id(key, "ui.select_pad:")) is None:
             return False
-        self._app.select_pad(pad_id)
+        if native_selection_already_applied:
+            self._app.select_pad(
+                pad_id,
+                native_selection_already_applied=True,
+                expected_native_selection_revision=expected_native_selection_revision,
+            )
+        else:
+            self._app.select_pad(pad_id)
         return True
 
     def _execute_select_bank(self, key: str) -> bool:
@@ -887,6 +1058,17 @@ def _midi_event_value(event: dict[str, object]) -> int | None:
     if not isinstance(value, bool) and isinstance(value, int) and 0 <= value <= 127:
         return value
     return None
+
+
+def _midi_note_release(event: dict[str, object], binding_key: str) -> bool:
+    if not binding_key.startswith("midi:note:"):
+        return False
+    kind = event.get("kind")
+    return (
+        event.get("value") == 0
+        or event.get("velocity") == 0
+        or (isinstance(kind, str) and kind in {"note_off", "noteoff"})
+    )
 
 
 def _repeated_relative_midi_cc_direction(value: int) -> int | None:

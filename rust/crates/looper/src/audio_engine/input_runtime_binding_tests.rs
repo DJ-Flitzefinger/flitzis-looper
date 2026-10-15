@@ -1,13 +1,17 @@
 //! Current native acceptance coupled to productive MIDI queue/callback/scheduler.
 
 use super::*;
-use crate::audio_engine::audio_stream::{execute_scheduled_command, process_control_message};
+use crate::audio_engine::audio_stream::{
+    AudioMessageSink, execute_scheduled_command, process_control_message,
+};
 use crate::audio_engine::input_mapping::InputRuntime;
 use crate::audio_engine::input_runtime_binding::{self, InputRuntimePadBinding};
+use crate::audio_engine::pad_start::CapturedPadStart;
 use crate::audio_engine::scheduler::FixedCapacityScheduler;
 use crate::audio_engine::timing::InputClock;
 use crate::audio_engine::transport::TransportTimeline;
 use crate::messages::{AudioMessage, TriggerQuantization};
+use std::sync::atomic::Ordering;
 
 #[test]
 fn resident_context_metadata_and_window_fences_distinguish_every_context() {
@@ -62,6 +66,21 @@ fn resident_context_metadata_and_window_fences_distinguish_every_context() {
     }
 }
 
+#[derive(Default)]
+struct CapturedFeedback {
+    events: Vec<AudioMessage>,
+}
+
+impl AudioMessageSink for CapturedFeedback {
+    fn push_audio_message(&mut self, message: AudioMessage) {
+        self.events.push(message);
+    }
+
+    fn available_audio_message_slots(&mut self) -> usize {
+        usize::MAX
+    }
+}
+
 struct RuntimeFixture {
     engine: AudioEngine,
     producer: Arc<Mutex<Producer<ControlMessage>>>,
@@ -71,9 +90,10 @@ struct RuntimeFixture {
     transport: TransportTimeline,
     scheduler: FixedCapacityScheduler<8>,
     mode: TriggerQuantization,
-    messages: Vec<AudioMessage>,
+    messages: CapturedFeedback,
     multi_loop: bool,
     preserved_loop_phase_start: Option<usize>,
+    captured_start: Option<CapturedPadStart>,
 }
 
 impl RuntimeFixture {
@@ -85,6 +105,7 @@ impl RuntimeFixture {
             InputClock::new(),
             engine.input_runtime_ownership.clone(),
         );
+        runtime.set_render_format(RATE, 1).unwrap();
         let mut mixer = acknowledged_mixer(&engine);
         mixer.set_input_runtime_ownership(engine.input_runtime_ownership.clone());
         let mut fixture = Self {
@@ -96,10 +117,41 @@ impl RuntimeFixture {
             transport: TransportTimeline::new(RATE),
             scheduler: FixedCapacityScheduler::new(),
             mode: TriggerQuantization::Immediate,
-            messages: Vec::new(),
+            messages: CapturedFeedback::default(),
             multi_loop: false,
             preserved_loop_phase_start: None,
+            captured_start: None,
         };
+        // Control-side source publication alone grants no callback telemetry.
+        // Adopt the actual retained PCM through production LoadSample before
+        // the synthetic timing/input kernel below expects content-bound feedback.
+        let ownership = fixture.engine.input_runtime_ownership.clone();
+        let sample = fixture.engine.sample_cache.lock().unwrap()[0]
+            .clone()
+            .unwrap();
+        let (generation, rate) = fixture.engine.loaded_source_generations.lock().unwrap()[0];
+        let placement = ownership.slot_snapshot(0).unwrap();
+        let write = ownership
+            .prepare_slot_write_fixed(placement, placement.lifetime())
+            .unwrap();
+        let publication = ownership
+            .publish_source_write(
+                &write,
+                &sample,
+                rate,
+                generation,
+                ownership.authority_revision(0),
+                None,
+                false,
+                || true,
+            )
+            .unwrap();
+        fixture.apply(ControlMessage::LoadSample {
+            id: 0,
+            sample,
+            publication: Some(publication),
+        });
+        assert_eq!(ownership.callback_feedback_key(0), placement.content_key());
         fixture.accept(decision());
         fixture.refresh(0.125, Some(3.0)).unwrap();
         fixture
@@ -159,7 +211,64 @@ impl RuntimeFixture {
 
     fn trigger_message(&mut self) -> ControlMessage {
         assert!(self.runtime.trigger_pad(0, 42));
-        self.consumer.pop().unwrap()
+        let target = self.consumer.pop().unwrap();
+        let ControlMessage::CapturePadStartTarget(origin) = &target else {
+            panic!("original ordinary target must precede its prepared start");
+        };
+        assert_eq!(origin.received_timestamp(), 42);
+        assert_eq!(origin.control_guard().unwrap().id, 0);
+        assert_eq!(origin.exclusive(), !self.multi_loop);
+        let origin = origin.clone();
+        self.apply(target);
+        assert!(origin.target_frame().is_some());
+        self.captured_start = Some(origin);
+        let message = self.consumer.pop().unwrap();
+        assert!(matches!(&message, ControlMessage::PreparedStart(_)));
+        assert!(self.consumer.is_empty());
+        message
+    }
+
+    fn assert_started_feedback(&self) {
+        let [
+            event @ AudioMessage::ContentFeedback {
+                id: 0,
+                owner,
+                cell,
+                lifetime,
+                transport_revision,
+                kind: 1,
+                value,
+            },
+        ] = self.messages.events.as_slice()
+        else {
+            panic!(
+                "one original-content start receipt expected: {:?}, origin={:?}",
+                self.messages.events,
+                self.captured_start
+                    .as_ref()
+                    .map(|origin| (origin.state(), origin.reason()))
+            );
+        };
+        let binding = input_runtime_binding::capture(&self.engine, 0)
+            .unwrap()
+            .unwrap();
+        assert!(binding.current());
+        let placement = binding.binding.placement.unwrap();
+        let origin = self.captured_start.as_ref().unwrap();
+        assert_eq!(origin.state(), "applied");
+        assert_eq!(placement.content_key(), Some(origin.content_key()));
+        let ownership = &self.engine.input_runtime_ownership;
+        assert_eq!(*owner, ownership.owner_identity().diagnostic());
+        assert_eq!(*cell, placement.cell().index());
+        assert_eq!(*lifetime, placement.lifetime());
+        assert_eq!(
+            *transport_revision,
+            ownership
+                .transport_intent_for_cell(placement.cell())
+                .load(Ordering::Acquire)
+        );
+        assert_eq!(*value, 0.0);
+        assert_eq!(self.engine._resolve_pad_feedback(event).unwrap(), Some(0));
     }
 
     fn execute_due(&mut self) {
@@ -175,7 +284,7 @@ impl RuntimeFixture {
     }
 
     fn assert_no_trigger_effect(&mut self) {
-        assert!(self.messages.is_empty());
+        assert!(self.messages.events.is_empty());
         assert!(
             !self
                 .mixer
@@ -255,18 +364,9 @@ fn current_accepted_midi_binding_publishes_one_effect_with_exact_metadata() {
         );
     });
     let message = fixture.trigger_message();
-    assert!(matches!(
-        message,
-        ControlMessage::TriggerInputPad {
-            received_at_ns: 42,
-            ..
-        }
-    ));
+    assert!(matches!(&message, ControlMessage::PreparedStart(_)));
     fixture.apply(message);
-    assert!(matches!(
-        fixture.messages.as_slice(),
-        [AudioMessage::SampleStarted { id: 0 }]
-    ));
+    fixture.assert_started_feedback();
     assert_eq!(
         fixture
             .mixer
@@ -308,10 +408,7 @@ fn midi_pending_rejected_or_new_request_preserves_effective_accepted_binding() {
     fixture.refresh_with(&old, 0.125, Some(3.0)).unwrap();
     let trigger = fixture.trigger_message();
     fixture.apply(trigger);
-    assert!(matches!(
-        fixture.messages.as_slice(),
-        [AudioMessage::SampleStarted { id: 0 }]
-    ));
+    fixture.assert_started_feedback();
 }
 
 #[test]
@@ -323,10 +420,12 @@ fn revision_only_replacement_rejects_queued_and_quantized_midi_without_loop_or_e
         let old_binding = input_runtime_binding::capture(&fixture.engine, 0)
             .unwrap()
             .unwrap();
-        let trigger = fixture.trigger_message();
         if scheduled {
             fixture.transport.advance_by_rendered_frames(1);
             fixture.mode = TriggerQuantization::Grid { step_64ths: 4 };
+        }
+        let trigger = fixture.trigger_message();
+        if scheduled {
             fixture.apply(trigger.clone());
             assert_eq!(fixture.scheduler.len(), 1);
         }
@@ -402,26 +501,35 @@ fn source_revocation_rejects_old_bank_during_replacement_or_unload_gap() {
 }
 
 #[test]
-fn loop_refresh_rejects_scheduled_old_endpoints_but_identical_refresh_preserves_them() {
+fn desired_loop_refresh_preserves_published_original_attack_endpoints_and_target() {
     for changed in [false, true] {
         let mut fixture = RuntimeFixture::new();
         fixture.transport.advance_by_rendered_frames(1);
         fixture.mode = TriggerQuantization::Grid { step_64ths: 4 };
         let trigger = fixture.trigger_message();
         fixture.apply(trigger);
+        let original = fixture.captured_start.as_ref().unwrap().clone();
+        let target = original.target_frame().unwrap();
+        assert_eq!(target, u64::from(RATE) / 8);
+        assert_eq!(fixture.scheduler.peek_next_target_frame(), Some(target));
         fixture
             .refresh(if changed { 0.25 } else { 0.125 }, Some(3.0))
             .unwrap();
         fixture.preserve_new_loop();
         fixture.execute_due();
-        if changed {
-            fixture.assert_no_trigger_effect();
-        } else {
-            assert!(matches!(
-                fixture.messages.as_slice(),
-                [AudioMessage::SampleStarted { id: 0 }]
-            ));
-        }
+        fixture.assert_started_feedback();
+        assert_eq!(original.target_frame(), Some(target));
+        assert_eq!(original.effective_frame(), Some(target));
+        assert_eq!(fixture.mixer.loop_region_frames(0), (1_000, Some(24_000)));
+        let voice = fixture
+            .mixer
+            .voices
+            .iter()
+            .find(|voice| voice.active)
+            .unwrap();
+        assert_eq!(voice.frame_pos, 1_000);
+        assert_eq!(voice.source_playback.position().frame, 1_000);
+        assert_eq!(voice.source_playback.position().fraction, 0.0);
     }
 }
 

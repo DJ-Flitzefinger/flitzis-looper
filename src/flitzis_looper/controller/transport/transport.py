@@ -1,10 +1,12 @@
 from typing import TYPE_CHECKING, Literal, TypedDict
 
 from flitzis_looper.controller.base import BaseController
+from flitzis_looper.controller.current_binding import capture_current_pad_binding
 from flitzis_looper.controller.transport.bpm import BpmController
 from flitzis_looper.controller.transport.global_params import GlobalParametersController
 from flitzis_looper.controller.transport.loop import PadLoopController
 from flitzis_looper.controller.transport.pad import PadController
+from flitzis_looper.controller.transport.pitch import PitchController
 from flitzis_looper.controller.transport.playback import PadPlaybackController
 from flitzis_looper.controller.transport.residency import ResidencyController
 from flitzis_looper.controller.transport.state import ApplyProjectState
@@ -14,7 +16,7 @@ if TYPE_CHECKING:
     from collections.abc import Callable
 
     from flitzis_looper.models import ProjectState, SessionState
-    from flitzis_looper_audio import AudioEngine
+    from flitzis_looper_audio import AudioEngine, InputRuntimePadBinding, ResidentWindowTicket
 
 
 class _SourceGenerationOptions(TypedDict, total=False):
@@ -22,6 +24,22 @@ class _SourceGenerationOptions(TypedDict, total=False):
 
 
 class TransportController(BaseController):
+    def capture_global_start_entry(
+        self, sample_id: int
+    ) -> tuple[InputRuntimePadBinding, float, float | None, ResidentWindowTicket | None] | None:
+        """Capture one original source and its genuine existing readiness dependency."""
+        dependency = self.residency._global_start_dependency(sample_id)
+        timing = self.bpm.current_timing(sample_id)
+        snapshot = capture_current_pad_binding(self._audio, sample_id, timing=timing)
+        if snapshot is None:
+            return None
+        if dependency is None:
+            start, end = self.loop.requested_region(sample_id, timing=timing)
+            ticket = None
+        else:
+            start, end, ticket = dependency
+        return snapshot.binding, start, end, ticket
+
     def __init__(
         self,
         project: ProjectState,
@@ -44,6 +62,7 @@ class TransportController(BaseController):
         self.loop = PadLoopController(self)
         self.playback = PadPlaybackController(self)
         self.pad = PadController(self)
+        self.pitch = PitchController(self)
         self.waveform = WaveformController(self)
 
     def apply_project_state_to_audio(self) -> None:

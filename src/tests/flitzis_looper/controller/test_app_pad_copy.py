@@ -397,7 +397,10 @@ def test_copy_projects_only_own_component_availability_and_registration(
     )
 
     assert controller.project.model_dump() == expected.model_dump()
-    assert controller.stems.stems_available(TARGET) is components_available
+    current = controller.project.stem_cache[TARGET]
+    assert current is not None
+    assert current.available is components_available
+    assert controller.stems.stems_available(TARGET) is True
     status = controller.stems.stem_residency_status(TARGET)
     assert status is not None
     assert status.registration == "accepted"
@@ -431,9 +434,23 @@ def test_disk_only_copy_can_request_existing_residency_without_claiming_componen
     _bind_copied_pair(controller)
     controller.project.pad_stem_mix_mode[TARGET] = "full_mix"
     selection = _selection()
+    receipt = Mock(
+        spec=[
+            "is_current",
+            "residency_status",
+            "effective_mode_status",
+            "effective_failure_reason",
+            "error",
+        ]
+    )
+    receipt.is_current.return_value = True
+    receipt.residency_status.return_value = "pending"
+    receipt.effective_mode_status.return_value = "waiting"
+    receipt.effective_failure_reason.return_value = None
+    receipt.error.return_value = None
     audio = cast("Mock", controller._audio)
     audio.register_committed_stem_pair = Mock()
-    audio.request_committed_stem_residency = Mock()
+    audio.request_committed_stem_residency = Mock(return_value=receipt)
     controller._on_copy_committed(TARGET, _ticket(selection=selection))
     audio.reset_mock()
 
@@ -443,7 +460,15 @@ def test_disk_only_copy_can_request_existing_residency_without_claiming_componen
         selection, mode="all_stems", enabled_mask=0
     )
     assert controller.project.pad_stem_mix_mode[TARGET] == "all_stems"
-    assert controller.stems.stems_available(TARGET) is False
+    current = controller.project.stem_cache[TARGET]
+    assert current is not None
+    assert current.available is False
+    assert controller.stems.stems_available(TARGET) is True
+    status = controller.stems.stem_residency_status(TARGET)
+    assert status is not None
+    assert status.registration == "accepted"
+    assert status.residency == "pending"
+    assert status.effective == "waiting"
     audio.register_committed_stem_pair.assert_not_called()
     audio.capture_prepared_source.assert_not_called()
     audio.set_stem_mix_mode.assert_not_called()
@@ -466,7 +491,7 @@ def test_unavailable_pair_without_own_registration_cannot_request_residency(
     assert audio.mock_calls == []
 
 
-def test_disk_only_copy_unlocks_mask_only_after_own_current_component_receipt(
+def test_disk_only_copy_mask_uses_current_registration_independently_of_residency_receipt(
     controller: AppController,
 ) -> None:
     _bind_copied_pair(controller)
@@ -491,14 +516,34 @@ def test_disk_only_copy_unlocks_mask_only_after_own_current_component_receipt(
     audio.request_committed_stem_residency = Mock(return_value=receipt)
     controller._on_copy_committed(TARGET, _ticket(selection=selection))
 
-    assert controller.stems.set_stem_mix_mode(TARGET, "all_stems") is True
     assert controller.stems.stem_mask_controls_enabled(TARGET) is False
+    assert controller.stems.set_stem_mix_mode(TARGET, "all_stems") is True
+    assert controller.stems.stem_mask_controls_enabled(TARGET) is True
+    assert controller.stems._committed_residency.component_residency_current(TARGET) is False
+    status = controller.stems.stem_residency_status(TARGET)
+    assert status is not None
+    assert status.residency == "pending"
+    assert status.effective == "waiting"
 
     receipt.residency_status.return_value = "accepted"
+    assert controller.stems._committed_residency.component_residency_current(TARGET) is True
     assert controller.stems.stem_mask_controls_enabled(TARGET) is True
+    status = controller.stems.stem_residency_status(TARGET)
+    assert status is not None
+    assert status.effective == "waiting"
     receipt.is_current.return_value = False
+    assert controller.stems._committed_residency.component_residency_current(TARGET) is False
+    assert controller.stems.stem_mask_controls_enabled(TARGET) is True
+    status = controller.stems.stem_residency_status(TARGET)
+    assert status is not None
+    assert status.effective is None
+    cast("Mock", selection).is_current.return_value = False
     assert controller.stems.stem_mask_controls_enabled(TARGET) is False
     receipt.is_current.return_value = True
+    assert controller.stems._committed_residency.component_residency_current(TARGET) is False
+    assert controller.stems.stem_mask_controls_enabled(TARGET) is False
+    cast("Mock", selection).is_current.return_value = True
+    assert controller.stems.stem_mask_controls_enabled(TARGET) is True
     assert controller.stems.set_stem_enabled_mask(TARGET, 6) is True
 
     assert audio.request_committed_stem_residency.call_args_list == [
@@ -680,7 +725,9 @@ def test_overwrite_retires_original_control_owners_before_projecting_successor(
         controller.stems,
     )
     monkeypatch.setattr(
-        PadArrangementController, "fenced_sample_ids", property(lambda _self: frozenset({TARGET}))
+        PadArrangementController,
+        "observer_fenced_sample_ids",
+        property(lambda _self: frozenset({TARGET})),
     )
     events = Mock()
     events.attach_mock(Mock(), "resident")

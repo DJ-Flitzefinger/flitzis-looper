@@ -175,7 +175,9 @@ impl PublicIncomingAudio {
 fn public_python(locals: &Py<PyDict>, code: &str) {
     Python::attach(|py| {
         py.run(&CString::new(code).unwrap(), Some(locals.bind(py)), None)
-            .unwrap();
+            .unwrap_or_else(|error| {
+                panic!("public ordinary controller script failed: {error:?}\n{code}")
+            });
     });
 }
 
@@ -309,7 +311,16 @@ loader._assets.sync_assignments()
 received_transport_events = []
 def poll_transport():
     while (message := audio.receive_msg()) is not None:
-        if isinstance(message, messages.SampleStarted):
+        kind = message.feedback_kind()
+        if kind in {'started', 'stopped'}:
+            sample_id = audio._resolve_pad_feedback(message)
+            assert sample_id == message.sample_id()
+            received_transport_events.append((kind, sample_id))
+            if kind == 'started':
+                transport.playback.handle_sample_started_message(message, sample_id=sample_id)
+            else:
+                transport.playback.handle_sample_stopped_message(message, sample_id=sample_id)
+        elif isinstance(message, messages.SampleStarted):
             received_transport_events.append(('started', message.sample_id()))
             transport.playback.handle_sample_started_message(message)
         elif isinstance(message, messages.SampleStopped):
@@ -385,8 +396,7 @@ assert project.pad_key_lock[0] is None
     );
     // Synchronize the auxiliary Session only with a genuine callback event.
     // It remains inaudible and is never relaunched by any Pad0 operation below.
-    fixture.call("play_sample", (215, 0.0_f32));
-    assert_eq!(fixture.callback.drain(), 1);
+    fixture.play_legacy(215, 0.0);
     public_python(
         &locals,
         "poll_transport()\nassert session.active_sample_ids == {215}",
@@ -497,20 +507,33 @@ audio.set_pad_eq(0, -12., -3., 4.)
 transport.loop.set_full_track_region(0)
 assert project.pad_loop_start_s[0] == 0. and project.pad_loop_end_s[0] == frames / rate
 assert project.pad_loop_auto[0] is False
+mode_ticket = transport.residency._pending[0].ticket
+assert mode_ticket is not None
 transport.playback.trigger_pad_keep_others(0)
-pending = transport.residency._pending[0]
-assert pending.expected_source_generation == request
-launch_ticket = pending.ticket
+captured_pending, = transport.residency._captured_starts.values()
+original_start = captured_pending.start
+launch_ticket = captured_pending.ticket
 assert launch_ticket is not None
 assert (launch_ticket.start_frame, launch_ticket.end_frame, launch_ticket.full_frame_count) == (0, frames, frames)
 assert 0 not in session.active_sample_ids
 "#,
     );
+    let original = Python::attach(|py| {
+        locals
+            .bind(py)
+            .get_item("original_start")
+            .unwrap()
+            .unwrap()
+            .extract::<Py<CapturedPadStart>>()
+            .unwrap()
+            .borrow(py)
+            .clone()
+    });
+    let capture_frame = fixture.callback.frame;
     let bank_before = fixture.callback.mixer.bank_for_measurement()[0]
         .clone()
         .unwrap();
     assert_complete_window(&bank_before, &fixture, key_lock);
-    wait_until(|| fixture.callback.consumer.peek().is_ok());
     assert!(
         fixture
             .callback
@@ -520,20 +543,31 @@ assert 0 not in session.active_sample_ids
             .all(|voice| !voice.is_playing_sample(0)),
         "no Pad0 voice precedes its own public Resident ACK"
     );
-    assert_eq!(
-        fixture.callback.drain(),
-        1,
-        "own Resident window/effect ACK"
-    );
-    assert!(
-        fixture
-            .callback
-            .mixer
-            .voices
-            .iter()
-            .all(|voice| !voice.is_playing_sample(0)),
-        "Resident ACK cannot fabricate the separately guarded Play"
-    );
+    wait_until(|| {
+        fixture.callback.drain();
+        assert_ne!(
+            original.state(),
+            "rejected",
+            "reason={:?}",
+            original.reason()
+        );
+        if original.accepted() {
+            return true;
+        }
+        public_python(
+            &locals,
+            "poll_transport()\nassert 0 not in session.active_sample_ids",
+        );
+        false
+    });
+    fixture.callback.wait_start_ready(&original);
+    assert_eq!(original.original_frame(), Some(capture_frame));
+    let execution = original.execution_frame().unwrap();
+    assert!(execution >= capture_frame);
+    if key_lock {
+        assert!(execution > capture_frame);
+        assert_eq!(original.effective_frame(), None);
+    }
     public_python(
         &locals,
         r#"
@@ -545,21 +579,24 @@ assert (descriptor['resident_start_frame'], descriptor['resident_end_frame']) ==
 assert descriptor['resident_pcm_bytes'] == frames * 2 * 4
 assert descriptor['context'] == (
     'full-track-key-lock-continuation-unproved-v1' if key_lock else 'full-track-v1'), descriptor
-assert isinstance(launch_ticket.key_lock_request_id, int) and launch_ticket.key_lock_request_id > 0
+assert launch_ticket.key_lock_request_id == mode_ticket.key_lock_request_id
+assert mode_ticket.publication_status() == 'accepted'
+assert isinstance(mode_ticket.key_lock_request_id, int) and mode_ticket.key_lock_request_id > 0
+assert mode_ticket.window_revision == launch_ticket.window_revision
 def assert_own_mode(state, effective, ready):
     feedback = audio.pad_key_lock_status(0)
     assert feedback is not None
     assert feedback['source_generation'] == request, feedback
     assert feedback['source_identity'] == descriptor['source_identity'], feedback
     assert feedback['window_revision'] == launch_ticket.window_revision, feedback
-    assert feedback['request_id'] == launch_ticket.key_lock_request_id, feedback
+    assert feedback['request_id'] == mode_ticket.key_lock_request_id, feedback
     assert feedback['state'] == state, feedback
     assert feedback['effective'] is effective and feedback['ready'] is ready, feedback
     assert feedback['error'] is None, feedback
 assert_own_mode('armed' if key_lock else 'dry', key_lock, True)
-poll_transport()
 assert 0 not in session.active_sample_ids
-assert transport.residency._launched[0] is launch_ticket
+assert captured_pending.start is original_start
+assert captured_pending.ticket is launch_ticket
 "#,
     );
     let adopted = fixture.callback.mixer.bank_for_measurement()[0]
@@ -567,18 +604,15 @@ assert transport.residency._launched[0] is launch_ticket
         .unwrap();
     assert_complete_window(&adopted, &fixture, key_lock);
     assert!(adopted.same_source(&captured.sample));
-    assert_eq!(
-        fixture.callback.drain(),
-        1,
-        "actual play_resident_control launch"
-    );
+    fixture.callback.complete_start(&original);
+    assert_eq!(fixture.callback.frame, execution);
     assert_eq!(
         fixture.callback.mixer.loop_region_frames(0),
         (0, Some(COMPLETE_FRAMES))
     );
     public_python(
         &locals,
-        "assert 0 not in session.active_sample_ids\npoll_transport()\nassert session.active_sample_ids == {0, 215}\nassert received_transport_events == [('started', 215), ('stopped', 0), ('started', 0)]\nassert_own_mode('waiting' if key_lock else 'dry', False, not key_lock)",
+        "assert 0 not in session.active_sample_ids\npoll_transport()\nassert session.active_sample_ids == {0, 215}\nassert received_transport_events == [('started', 215), ('stopped', 0), ('started', 0)]\nassert original_start.state() == 'applied'\nassert original_start.effective_frame() == original_start.execution_frame()",
     );
     assert_eq!(fixture.callback.mixer.key_lock_for_measurement(0), key_lock);
     assert!(Arc::ptr_eq(
@@ -596,12 +630,27 @@ assert transport.residency._launched[0] is launch_ticket
             .frame,
         0
     );
-    let mut playback = oracle_after_public_birth(&fixture, key_lock);
+    let mut playback = oracle_after_public_birth(&fixture, key_lock, original);
     if key_lock {
-        // This boundary comes solely from the independent Raw Native handle.
-        // Exactly its first complete block reaches EQ as dry, even though that
-        // block has now warmed Native. Only the next chosen wet output settles
-        // this public launch's own processing receipt.
+        let current = voice(&fixture.callback.mixer, 0);
+        assert_eq!(
+            current.stretch.adopted_request_id(),
+            Some(playback.original.sequence())
+        );
+        assert_eq!(
+            current
+                .stretch
+                .productive_history()
+                .unwrap()
+                .fed_output_frames,
+            prepared_native_history::PREPARED_HISTORY_FRAMES as u64
+        );
+        assert!(
+            current.stretch.native_tap_observation().is_none(),
+            "the real complete source needs no finite-window proof"
+        );
+        // Every first-block output sample comes from independently prepared
+        // periodic history, including the first Native FIFO sample at E.
         let block = playback.raw.as_ref().unwrap().native.block_size();
         assert!(block > 0);
         for frames in [1, 31, 137, 512, 777].into_iter().cycle() {
@@ -609,8 +658,8 @@ assert transport.residency._launched[0] is launch_ticket
                 break;
             }
             let frames = frames.min(block - playback.consumed as usize);
-            render_public_start(&mut playback, &mut fixture, frames);
-            public_python(&locals, "assert_own_mode('waiting', False, False)");
+            playback.render(&mut fixture, frames, false);
+            public_python(&locals, "assert_own_mode('wet', True, True)");
         }
         assert!(playback.raw.as_ref().unwrap().used);
         playback.render(&mut fixture, 1, false);
@@ -673,7 +722,11 @@ fn assert_complete_window(sample: &SampleBuffer, fixture: &Fixture, key_lock: bo
 
 /// Construct only independent oracles after the actual public voice exists.
 /// Playback::new would itself call Engine.play_sample and steal voice birth.
-fn oracle_after_public_birth(fixture: &Fixture, key_lock: bool) -> Playback {
+fn oracle_after_public_birth(
+    fixture: &Fixture,
+    key_lock: bool,
+    original: CapturedPadStart,
+) -> Playback {
     let mut reference = Box::new(RtMixer::new(2, RATE as f32));
     let ownership = Arc::new(input_runtime_binding::InputRuntimeOwnership::tracked());
     ownership.publish_test_source(0, &fixture.complete, RATE, 1);
@@ -707,116 +760,23 @@ fn oracle_after_public_birth(fixture: &Fixture, key_lock: bool) -> Playback {
     }
     reference.set_pad_eq(0, -12.0, -3.0, 4.0);
     assert!(reference.play_sample_at_output_frame(0, 1.0, fixture.callback.frame));
+    if key_lock {
+        prepare_reference_start(&mut reference, fixture.callback.frame);
+    }
     Playback {
         reference,
-        raw: key_lock.then(|| RawNative::new(false)),
-        candidate: None,
+        raw: key_lock.then(|| RawNative::prepared_start(&fixture.complete, 0, COMPLETE_FRAMES)),
         filter: filter(),
         start: 0,
         end: COMPLETE_FRAMES,
         consumed: 0,
         seams: HashSet::new(),
+        original,
     }
 }
 
-/// The public tracked ON receipt chooses dry through its own first Native
-/// block. Parent Playback::render deliberately models untracked incoming ON,
-/// so only this independent initial interval uses chosen Raw Native output.
-/// Once the raw handle is used, the unchanged parent renderer owns the rest.
-fn render_public_start(playback: &mut Playback, fixture: &mut Fixture, frames: usize) {
-    assert!(playback.candidate.is_none());
-    assert!(!playback.raw.as_ref().unwrap().used);
-    let feed = playback.feed(fixture, playback.consumed, frames);
-    let raw = playback.raw.as_mut().unwrap().render(&feed, true);
-    let mut expected = vec![0.0; frames * 2];
-    playback
-        .reference
-        .render(&mut expected, &mut [0.0; NUM_SAMPLES]);
-    reset_tap_observation_for_test();
-    let actual = fixture.callback.render(frames, false, false);
-    assert_eq!(tap_observation_for_test().missing_reads, 0);
-    assert_eq!(
-        actual, expected,
-        "public startup complete PCM callback oracle at {}",
-        fixture.callback.frame
-    );
-    for (actual, raw) in actual.chunks_exact(2).zip(raw.chunks_exact(2)) {
-        playback.filter.begin_frame();
-        for channel in 0..2 {
-            assert_eq!(
-                actual[channel],
-                playback.filter.process_sample(channel, raw[channel]),
-                "independent chosen Raw Native + continuous EQ"
-            );
-        }
-    }
-    playback.consumed += frames as u64;
-    let phase =
-        (playback.consumed as f64 * RATIO).rem_euclid((playback.end - playback.start) as f64);
-    let current = voice(&fixture.callback.mixer, 0);
-    assert_eq!(
-        current.source_playback.position().frame,
-        playback.start + phase.floor() as usize
-    );
-    assert_eq!(
-        current.source_playback.position().fraction.to_bits(),
-        phase.fract().to_bits()
-    );
-    assert!(
-        current
-            .source_playback
-            .matches_exact(&voice(&playback.reference, 0).source_playback)
-    );
-    let raw = playback.raw.as_ref().unwrap();
-    assert_eq!(
-        current.stretch.pending_fifo_frames(),
-        (raw.input[0].len(), raw.output[0].len())
-    );
-    fixture.assert_other();
-}
-
+/// Timestamped continuation retains the first ordinary Native/FIFO owner.
 fn adopt_complete_native(playback: &mut Playback, fixture: &mut Fixture) {
-    playback.render(fixture, 13, true);
-    wait_until(|| {
-        voice_mut(&mut fixture.callback.mixer, 0)
-            .stretch
-            .source_preparation_ready()
-            && voice_mut(&mut playback.reference, 0)
-                .stretch
-                .source_preparation_ready()
-    });
-    let target = voice_mut(&mut fixture.callback.mixer, 0)
-        .stretch
-        .prepared_target_output_frame()
-        .unwrap();
-    assert_eq!(
-        voice_mut(&mut playback.reference, 0)
-            .stretch
-            .prepared_target_output_frame(),
-        Some(target)
-    );
-    let prepared = voice_mut(&mut fixture.callback.mixer, 0)
-        .stretch
-        .prepared_native_address();
-    let old = voice(&fixture.callback.mixer, 0)
-        .stretch
-        .native_state_address();
-    let generation = voice(&fixture.callback.mixer, 0).generation;
-    assert_ne!(prepared, 0);
-    assert_ne!(prepared, old);
-    let taps = voice_mut(&mut fixture.callback.mixer, 0)
-        .stretch
-        .prepared_tap_observation();
-    assert!(
-        taps.is_none(),
-        "genuine complete-source preparation has no finite plan"
-    );
-    assert!(
-        voice_mut(&mut playback.reference, 0)
-            .stretch
-            .prepared_tap_observation()
-            .is_none()
-    );
     assert_complete_window(
         fixture.callback.mixer.bank_for_measurement()[0]
             .as_ref()
@@ -824,41 +784,20 @@ fn adopt_complete_native(playback: &mut Playback, fixture: &mut Fixture) {
         fixture,
         true,
     );
-    assert_eq!(prepared_native_history::PREPARED_HISTORY_FRAMES, 4096);
-    let warm_start = target - prepared_native_history::PREPARED_HISTORY_FRAMES as u64;
-    let voice_birth_frame = fixture.callback.frame - playback.consumed;
-    let warm_consumed = warm_start
-        .checked_sub(voice_birth_frame)
-        .expect("own complete warm history starts after the public voice birth");
-    let feed = playback.feed(
-        fixture,
-        warm_consumed,
-        prepared_native_history::PREPARED_HISTORY_FRAMES,
+    assert!(
+        voice(&fixture.callback.mixer, 0)
+            .stretch
+            .native_tap_observation()
+            .is_none()
     );
-    let mut raw = RawNative::new(true);
-    let _ = raw.render(&feed, false);
-    playback.candidate = Some((target, raw));
-    for frames in [1, 31, 137, 512, 257].into_iter().cycle() {
-        if fixture.callback.frame == target {
-            break;
-        }
-        playback.render(
-            fixture,
-            frames.min((target - fixture.callback.frame) as usize),
-            true,
-        );
-    }
-    playback.render(fixture, 137, true);
-    let current = voice(&fixture.callback.mixer, 0);
-    assert_eq!(current.stretch.native_state_address(), prepared);
-    assert_eq!(current.stretch.native_tap_observation(), taps);
-    assert!(current.stretch.adopted_request_id().is_some());
-    assert_eq!(current.generation, generation);
-    for frames in [1, 31, 137, 512, 777, 96, 257] {
-        playback.render(fixture, frames, false);
-    }
+    playback.adopt_native(fixture);
+    assert!(
+        voice(&fixture.callback.mixer, 0)
+            .stretch
+            .native_tap_observation()
+            .is_none()
+    );
 }
-
 fn capture_file_identities(fixture: &mut Fixture) {
     fixture.file_identities = Python::attach(|py| {
         let engine = fixture.engine.borrow(py);

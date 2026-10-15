@@ -75,6 +75,7 @@ fn install_source(
             loop_region: None,
             resident_cancelled: None,
             incoming_defaults: None,
+            initial_pitch: crate::audio_engine::SourcePitchInitialization::FreshNeutral,
         },
     );
     assert_eq!(

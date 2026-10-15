@@ -6,6 +6,24 @@
 
 use crate::audio_engine::constants::MAX_SCHEDULED_EVENTS;
 use crate::audio_engine::input_runtime_binding::InputPadBinding;
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+
+static INPUT_ORDER: AtomicU64 = AtomicU64::new(1);
+static INPUT_ORDER_EXHAUSTED: AtomicBool = AtomicBool::new(false);
+
+/// A single total ordering domain covers input captures and ordinary queued effects.
+/// The reserved exhaustion margin exceeds all bounded producers; RT uses one atomic add.
+pub(crate) fn reserve_input_order() -> Option<u64> {
+    if INPUT_ORDER_EXHAUSTED.load(Ordering::Acquire) {
+        return None;
+    }
+    let sequence = INPUT_ORDER.fetch_add(1, Ordering::AcqRel);
+    if sequence >= u64::MAX - MAX_SCHEDULED_EVENTS as u64 {
+        INPUT_ORDER_EXHAUSTED.store(true, Ordering::Release);
+        return None;
+    }
+    Some(sequence)
+}
 
 pub(crate) type TransportScheduler = FixedCapacityScheduler<MAX_SCHEDULED_EVENTS>;
 
@@ -17,6 +35,10 @@ pub(crate) type TransportScheduler = FixedCapacityScheduler<MAX_SCHEDULED_EVENTS
 // to the generic variant-size heuristic, with fixed storage and bounded copies.
 #[allow(clippy::large_enum_variant)]
 pub(crate) enum ScheduledCommand {
+    PitchAction {
+        slot: usize,
+        action_sequence: u64,
+    },
     RefreshAcceptedTiming(std::sync::Arc<super::accepted_timing_refresh::AcceptedTimingRefresh>),
     GlobalPlaybackBatch(std::sync::Arc<super::global_playback_batch::GlobalPlaybackBatch>),
     TriggerInputPad {
@@ -55,6 +77,7 @@ pub(crate) enum ScheduledCommand {
 pub(crate) struct ScheduledEvent {
     pub(crate) target_frame: u64,
     pub(crate) sequence: u64,
+    order_sequence: u64,
     pub(crate) command: ScheduledCommand,
 }
 
@@ -135,6 +158,12 @@ impl<const CAPACITY: usize> FixedCapacityScheduler<CAPACITY> {
         let event = ScheduledEvent {
             target_frame,
             sequence: self.next_sequence,
+            order_sequence: match &command {
+                ScheduledCommand::PitchAction {
+                    action_sequence, ..
+                } => *action_sequence,
+                _ => reserve_input_order().ok_or(ScheduleError::Full)?,
+            },
             command,
         };
         let insert_at = self.insertion_index(&event);
@@ -235,7 +264,7 @@ impl<const CAPACITY: usize> FixedCapacityScheduler<CAPACITY> {
 
 fn event_sorts_before(left: &ScheduledEvent, right: &ScheduledEvent) -> bool {
     left.target_frame < right.target_frame
-        || (left.target_frame == right.target_frame && left.sequence < right.sequence)
+        || (left.target_frame == right.target_frame && left.order_sequence < right.order_sequence)
 }
 
 #[cfg(test)]
@@ -318,6 +347,28 @@ mod tests {
             vec![play(1), play(2), play(3)]
         );
         assert!(scheduler.is_empty());
+    }
+
+    #[test]
+    fn equal_frame_pitch_and_stop_use_one_transitive_capture_order() {
+        let mut scheduler = FixedCapacityScheduler::<8>::new();
+        let first = reserve_input_order().unwrap();
+        scheduler.schedule(10, ScheduledCommand::StopAll).unwrap();
+        let second = reserve_input_order().unwrap();
+        let first_pitch = ScheduledCommand::PitchAction {
+            slot: 0,
+            action_sequence: first,
+        };
+        let second_pitch = ScheduledCommand::PitchAction {
+            slot: 1,
+            action_sequence: second,
+        };
+        scheduler.schedule(10, second_pitch.clone()).unwrap();
+        scheduler.schedule(10, first_pitch.clone()).unwrap();
+        assert_eq!(
+            drain_commands(&mut scheduler, 10),
+            vec![first_pitch, ScheduledCommand::StopAll, second_pitch]
+        );
     }
 
     #[test]

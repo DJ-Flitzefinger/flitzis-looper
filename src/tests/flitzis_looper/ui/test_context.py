@@ -32,10 +32,26 @@ from flitzis_looper.ui.context import (
     UiContext,
     UiState,
 )
-from tests.flitzis_looper.conftest import current_timing_metadata
+from tests.flitzis_looper.conftest import FakeCapturedPadStart, current_timing_metadata
 
 if TYPE_CHECKING:
     from flitzis_looper.controller import AppController
+
+
+def _record_original_starts(audio: Mock) -> list[FakeCapturedPadStart]:
+    """Record the typed factory's actual returned owners without forwarding Play."""
+    originals: list[FakeCapturedPadStart] = []
+    factory = audio.capture_pad_start.side_effect
+    assert callable(factory)
+
+    def capture(*args: object, **kwargs: object) -> FakeCapturedPadStart:
+        original = factory(*args, **kwargs)
+        assert isinstance(original, FakeCapturedPadStart)
+        originals.append(original)
+        return original
+
+    audio.capture_pad_start.side_effect = capture
+    return originals
 
 
 class TestReadOnlyStateProxy:
@@ -318,12 +334,23 @@ class TestAudioActions:  # noqa: PLR0904
         """Test trigger_pad delegates to controller."""
         audio_actions = AudioActions(controller)
         controller.project.sample_paths[0] = "/path/to/sample.wav"
+        originals = _record_original_starts(audio_engine_mock)
 
         audio_actions.pads.trigger_pad(0)
 
-        audio_engine_mock.play_sample_exclusive.assert_called_once_with(
-            0, 1.0, expected_source_generation=1
+        audio_engine_mock.capture_pad_start.assert_called_once_with(
+            0, 0.0, None, 1.0, exclusive=True, received_at_ns=None, expected_source_generation=1
         )
+        (original,) = originals
+        audio_engine_mock.publish_pad_start.assert_called_once_with(original)
+        assert audio_engine_mock.publish_pad_start.call_args.args[0] is original
+        assert original.loop_region == (0.0, None)
+        assert original.exclusive is True
+        assert original.published is True
+        audio_engine_mock.play_sample.assert_not_called()
+        audio_engine_mock.play_sample_exclusive.assert_not_called()
+        audio_engine_mock.set_pad_loop_region.assert_not_called()
+        assert 0 not in controller.session.active_sample_ids
         # Simulate the audio message that would update state
         msg = Mock()
         msg.sample_id.return_value = 0
@@ -874,27 +901,43 @@ class TestWaveformEditorTransportControls:
         controller.project.sample_paths[1] = "/path/to/other.wav"
         controller.project.multi_loop = False  # Would normally stop others.
 
+        controller.project.pad_loop_auto[0] = False
         controller.project.pad_loop_start_s[0] = 2.0
         controller.project.pad_loop_end_s[0] = 5.0
 
         controller.session.active_sample_ids.update({0, 1})
         controller.session.paused_sample_ids.add(0)
         controller.session.pad_playhead_s[0] = 4.2
+        originals = _record_original_starts(audio_engine_mock)
 
         ctx.ui.waveform.play_restart_selected_pad_on_press()
 
         audio_engine_mock.stop_all.assert_not_called()
-        audio_engine_mock.play_sample.assert_called_once_with(0, 1.0, expected_source_generation=1)
-        audio_engine_mock.set_pad_loop_region.assert_called_once_with(
-            0, 2.0, 5.0, expected_source_generation=1
+        audio_engine_mock.capture_pad_start.assert_called_once_with(
+            0, 2.0, 5.0, 1.0, exclusive=False, received_at_ns=None, expected_source_generation=1
         )
+        (first,) = originals
+        audio_engine_mock.publish_pad_start.assert_called_once_with(first)
+        assert audio_engine_mock.publish_pad_start.call_args.args[0] is first
+        assert first.loop_region == (2.0, 5.0)
+        assert first.exclusive is False
+        audio_engine_mock.set_pad_loop_region.assert_not_called()
+        audio_engine_mock.play_sample.assert_not_called()
+        audio_engine_mock.play_sample_exclusive.assert_not_called()
         assert controller.session.pad_playhead_s[0] == pytest.approx(2.0)
         assert 0 not in controller.session.paused_sample_ids
 
         # Restart is a trigger: pressing again retriggers from loop start.
         ctx.ui.waveform.play_restart_selected_pad_on_press()
-        assert audio_engine_mock.play_sample.call_count == 2
-        assert audio_engine_mock.set_pad_loop_region.call_count == 2
+        first, second = originals
+        assert first is not second
+        assert audio_engine_mock.capture_pad_start.call_count == 2
+        assert audio_engine_mock.publish_pad_start.call_args_list == [call(first), call(second)]
+        assert second.loop_region == first.loop_region
+        assert second.exclusive is False
+        audio_engine_mock.set_pad_loop_region.assert_not_called()
+        audio_engine_mock.stop_all.assert_not_called()
+        assert controller.session.active_sample_ids == {0, 1}
         assert controller.session.pad_playhead_s[0] == pytest.approx(2.0)
 
     def test_set_loop_start_and_play_selected_pad_retriggers_from_new_start(
@@ -914,16 +957,31 @@ class TestWaveformEditorTransportControls:
         controller.session.active_sample_ids.add(1)
         controller.session.pad_playhead_s[0] = 7.5
         controller.session.pad_playhead_s[1] = 1.5
+        originals = _record_original_starts(audio_engine_mock)
 
         ctx.ui.waveform.set_loop_start_and_play_selected_pad(4.25)
 
         assert controller.project.pad_loop_start_s[0] == pytest.approx(4.25)
         audio_engine_mock.stop_all.assert_not_called()
-        assert audio_engine_mock.set_pad_loop_region.call_args_list == [
-            call(0, 4.25, 9.0, expected_source_generation=1),
-            call(0, 4.25, 9.0, expected_source_generation=1),
-        ]
-        audio_engine_mock.play_sample.assert_called_once_with(0, 1.0, expected_source_generation=1)
+        audio_engine_mock.set_pad_loop_region.assert_called_once_with(
+            0, 4.25, 9.0, expected_source_generation=1
+        )
+        capture_call = call.capture_pad_start(
+            0, 4.25, 9.0, 1.0, exclusive=False, received_at_ns=None, expected_source_generation=1
+        )
+        audio_engine_mock.capture_pad_start.assert_called_once_with(
+            *capture_call.args, **capture_call.kwargs
+        )
+        (original,) = originals
+        audio_engine_mock.publish_pad_start.assert_called_once_with(original)
+        assert audio_engine_mock.publish_pad_start.call_args.args[0] is original
+        assert original.loop_region == (4.25, 9.0)
+        assert original.exclusive is False
+        assert audio_engine_mock.method_calls.index(
+            call.set_pad_loop_region(0, 4.25, 9.0, expected_source_generation=1)
+        ) < audio_engine_mock.method_calls.index(capture_call)
+        audio_engine_mock.play_sample.assert_not_called()
+        audio_engine_mock.play_sample_exclusive.assert_not_called()
         assert controller.session.pad_playhead_s[0] == pytest.approx(4.25)
         assert controller.session.pad_playhead_s[1] == pytest.approx(1.5)
 

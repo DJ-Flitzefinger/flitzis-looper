@@ -507,19 +507,44 @@ Before changing UI code, check:
 - Can the behavior be tested without pixel automation?
 - Does the change preserve the audio callback boundary described above?
 
-## Pending R0 playable pitch and arrangement surfaces
+## Implemented Key + Transposition engineering surface
 
-Key + Transposition groups source correction/base/extra/result/retrigger checkbox.
-Two independent header-toggle menus stay open after repeats/MIDI; common content
-state drives open highlights, closed summaries and padchanges. Keyboard middle0,
-signed steps/unique enharmonics/-12/0/+12 use the base root, white/black only; no
-green/Camelot/scale recommendations or first-sample-note claim. NoteOff preserves
-choice/highlights. Checkbox affects GUI/new Learn only, learned SET/SET_RETRIGGER
-variants stay immutable. SET keeps cursor/stopped state; every repeated RETRIGGER
-is a distinct accepted event with tuple applied at the same existing dueframe.
-The delivered stem-start pending coalescer above is preserved; its replacement
-semantics MUST NOT be extended to distinct admitted pitch attacks. Only preparation
-work may share. Native/fallback/pending use captured content/lifetime, not late selection.
+The left sidebar's Key + Transposition section renders source correction, base
+Key, extra Transposition, nominal result and the Retrigger checkbox. The two
+independent header-toggle menus stay open after repeated choices and MIDI input.
+Content-derived intent drives their selected keys and closed summaries across
+pad changes. Correction changes metadata labels without retuning or moving
+playback. Absolute Key offers twelve roots in the recognized source's existing
+major/minor mode, with the shortest base shift -5..+6 and a fixed +6 tie. Unknown
+source keys disable absolute Key until corrected; numeric Transposition and the
+independent resets remain available.
+
+Transposition offers all 37 extra shifts -18..+18, including separate -12/0/+12
+shortcuts. Its zero and note labels use the chosen base root; octave-separated
+values retain distinct widget identities and signed distances. Together, base
+and extra cover 48 numeric totals -23..+24. The scrollable white/black key cells
+show one canonical spelling per root and a selection highlight. They do not
+recommend scales/Camelot matches or identify the sample's first note. NoteOff
+preserves choice and highlights.
+
+`UiContext` routes choices and resets through `PitchController` and the original
+Native `CapturedPitchAction`, shared with MIDI's SET/SET_RETRIGGER semantics.
+The checkbox affects GUI choices and new Learn bindings; learned variants remain
+fixed. SET preserves the cursor and stopped state. Each admitted SET_RETRIGGER,
+including a repeated identical choice, owns a distinct attack whose tuple and
+launch share the existing scheduler execution frame. Input time, content lifetime
+and original dueframe survive preparation; delayed fallback never resolves a new
+selection. The delivered stem-start coalescer's replacement semantics do not
+apply to distinct admitted pitch attacks; preparation work may share.
+
+Requested intent and Native effective feedback remain separate. The sidebar shows
+preparation and rejection reasons instead of treating the saved numeric choice
+as audio confirmation. This is an implemented engineering surface; variable-rate
+SET past/history reconstruction, performer deadlines, full B5 quality/transition/
+latency, B6 and Human device/listening/visual acceptance remain open. It grants no
+whole-arrangement or full-216 acceptance. See [Key Lock backend](key-lock-backend.md#durable-key-intent-and-engineering-pitch-controls).
+
+## Pending Re-Arrange surface
 
 Re-Arrange prefers warning-colored bottom-left toggle/help, OFF on restart. Gesture
 owner branches before pad trigger/stop; MIDI stays alive. LeftMove/Swap, rightCopy/
@@ -531,7 +556,8 @@ not disk/native truth. Selection/editor follows living content; waveform hold re
 is independent, delivered by existing input/control tick outside rendered controls.
 Current musical stem selections become independent durable CopySnapshot choices;
 physical presses/holds/voices/cursors/meters/progress/job tokens remain transient.
-All implementations/native effects/full216/quality/human evidence remain pending.
+This pending surface description does not establish whole-arrangement Native
+effects, full-216, quality or Human acceptance.
 
 ## Direct extension2026-10-11 and remaining acceptance
 

@@ -1266,6 +1266,7 @@ impl Harness {
                     loop_region: None,
                     resident_cancelled: None,
                     incoming_defaults: None,
+                    initial_pitch: crate::audio_engine::SourcePitchInitialization::FreshNeutral,
                     intent: None,
                 },
             )

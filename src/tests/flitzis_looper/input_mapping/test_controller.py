@@ -27,9 +27,39 @@ from flitzis_looper.input_mapping.storage import (
 )
 from flitzis_looper.models import STEM_MASK_VOCALS, PadContentIdentity
 from flitzis_looper.ui.context import UiContext
+from tests.flitzis_looper.conftest import FakeCapturedGlobalStart, FakeCapturedPadStart
 
 if TYPE_CHECKING:
     from flitzis_looper.controller import AppController
+
+
+def _assert_original_keyboard_start(audio: Mock, timestamp: int | None = None) -> None:
+    audio.capture_pad_start.assert_called_once_with(
+        0,
+        0.0,
+        None,
+        1.0,
+        exclusive=True,
+        received_at_ns=timestamp,
+        expected_source_generation=1,
+    )
+    original = audio.publish_pad_start.call_args.args[0]
+    assert isinstance(original, FakeCapturedPadStart)
+    assert original.original_id == 0
+    assert original.loop_region == (0.0, None)
+    assert original.exclusive is True
+    assert original.received_at_ns == timestamp
+    audio.publish_pad_start.assert_called_once_with(original)
+    audio.play_sample_exclusive.assert_not_called()
+
+
+def _assert_original_global_publish(audio: Mock) -> FakeCapturedGlobalStart:
+    original = audio.publish_captured_global_start.call_args.args[0]
+    assert isinstance(original, FakeCapturedGlobalStart)
+    assert original.entries == tuple(audio.capture_global_start.call_args.args[0])
+    audio.publish_captured_global_start.assert_called_once_with(original)
+    audio.start_global_playback_batch.assert_not_called()
+    return original
 
 
 class _OriginalMidiGesture:
@@ -515,9 +545,7 @@ def test_keyboard_mapping_executes_action_when_not_typing(
     )
 
     assert handled is True
-    audio_engine_mock.play_sample_exclusive.assert_called_once_with(
-        0, 1.0, expected_source_generation=1
-    )
+    _assert_original_keyboard_start(audio_engine_mock)
 
 
 def test_keyboard_mapping_executes_tap_bpm(controller: AppController) -> None:
@@ -569,13 +597,17 @@ def test_keyboard_mapping_executes_selected_tap_bpm(
 
 @pytest.mark.parametrize("source", ["keyboard", "midi"])
 def test_mapped_selection_recaptures_actual_content_after_same_slot_reuse(
-    controller: AppController, source: str
+    controller: AppController, audio_engine_mock: Mock, source: str
 ) -> None:
     controller.input_mapping.set_enabled(enabled=True)
     binding = KeyboardBinding(key_name="S")
     controller.input_mapping.save_mapping("keyboard", binding.key, LooperAction.select_pad(0))
+    audio_engine_mock.select_input_pad = Mock()
+    audio_engine_mock.input_selected_projection = Mock()
     for revision, identity in enumerate(("a" * 32, "b" * 32), start=1):
         controller.project.pad_content[0] = PadContentIdentity(instance_id=identity)
+        audio_engine_mock.select_input_pad.return_value = revision
+        audio_engine_mock.input_selected_projection.return_value = (revision, 0)
         if source == "keyboard":
             assert controller.input_mapping.capture_keyboard_input(
                 binding, text_input_focused=False
@@ -586,10 +618,15 @@ def test_mapped_selection_recaptures_actual_content_after_same_slot_reuse(
                 "binding_key": "midi:note:1:60",
                 "action_key": "ui.select_pad:0",
                 "direct": False,
+                "selection_revision": revision,
             })
         assert controller.project.selected_pad == 0
         assert controller.session.pad_selection_content_id == identity
         assert controller.session.pad_selection_revision == revision
+    if source == "keyboard":
+        assert audio_engine_mock.select_input_pad.call_count == 2
+    else:
+        audio_engine_mock.select_input_pad.assert_not_called()
 
 
 def test_midi_mapping_executes_selected_tap_bpm(controller: AppController) -> None:
@@ -1211,9 +1248,12 @@ def test_non_direct_rust_midi_event_executes_start_stop_action(
         "dispatched": True,
     })
 
-    audio_engine_mock.start_global_playback_batch.assert_called_once_with(
-        [(ANY, 0.0, None)], received_at_ns=None
+    audio_engine_mock.capture_global_start.assert_called_once_with(
+        [(ANY, 0.0, None, None)], received_at_ns=None
     )
+    original = _assert_original_global_publish(audio_engine_mock)
+    assert original.entries[0][0].metadata()["pad_id"] == 0
+    assert original.received_at_ns is None
     audio_engine_mock.play_sample.assert_not_called()
 
 
@@ -1534,9 +1574,7 @@ def test_keyboard_mapping_preserves_captured_input_time(
     )
 
     assert handled is True
-    audio_engine_mock.play_sample_exclusive.assert_called_once_with(
-        0, 1.0, received_at_ns=41, expected_source_generation=1
-    )
+    _assert_original_keyboard_start(audio_engine_mock, 41)
 
 
 def test_midi_controller_owned_global_restart_preserves_timestamp_for_batch(
@@ -1556,11 +1594,12 @@ def test_midi_controller_owned_global_restart_preserves_timestamp_for_batch(
         "dispatched": True,
     })
 
-    audio_engine_mock.start_global_playback_batch.assert_called_once_with(
-        [(ANY, 0.0, None), (ANY, 0.0, None)], received_at_ns=19
+    audio_engine_mock.capture_global_start.assert_called_once_with(
+        [(ANY, 0.0, None, None), (ANY, 0.0, None, None)], received_at_ns=19
     )
-    entries = audio_engine_mock.start_global_playback_batch.call_args.args[0]
-    assert [binding.metadata()["pad_id"] for binding, _, _ in entries] == [0, 1]
+    original = _assert_original_global_publish(audio_engine_mock)
+    assert [binding.metadata()["pad_id"] for binding, _, _, _ in original.entries] == [0, 1]
+    assert original.received_at_ns == 19
     audio_engine_mock.play_sample.assert_not_called()
 
 
