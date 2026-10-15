@@ -34,8 +34,8 @@ implemented behavior separately from those remaining acceptance obligations.
   old effective PCM until exact E, all-voice claim, original resident ticket kept
   adopting through SAME own mode ACK, positive/negative pitch and both mode directions,
   source/timing/window/pitch/Stop/supersession refusal and independent raw Native/FIFO
-  PCM comparison. Hardware-free evidence does not close B5 or paused/variable-history,
-  acoustic, performer-deadline or Human acceptance gates.
+  PCM comparison. Hardware-free evidence does not close B5, paused endpoints,
+  broader variable history, acoustic, performer-deadline or Human acceptance gates.
 
 Numeric intent, shared Native selection/captures, fixed action custody on the
 existing scheduler, atomic effect claim and both keyboards/Learn/Controller paths
@@ -56,9 +56,14 @@ passes with remaining warnings. A bounded genuine moving-SET SourceFeed journal
 and worker replay now have independent Intro/Tail A-reset PCM evidence and
 refusal/retry on the same public worker. This does not certify continuous-from-birth
 equivalence:
-the separate aligned-suffix probe retains its real negative PCM result. Broader
-history/prospective mode coverage, full acoustic predicates, resource/216 proofs
-and performer deadlines remain open.
+the separate aligned-suffix probe retains its real negative PCM result.
+Prospective nonzero Key Lock now reuses this bounded genuine replay with one
+recycled snapshot per source lane and a small SOURCE/voice guard retained by its
+fresh permit through E. Eight public +/- pitch, ON/OFF, Intro/Tail cases compare
+every adopted sample, phase and FIFO with an independent A-reset oracle; lane
+ownership, restored-control refusal/retry and permit guards have focused evidence.
+Broader history, paused/selection coverage, full acoustic predicates, resource/216
+proofs and performer deadlines remain open.
 
 - [x] K-META: neutral persisted source correction/epochs/base/extra/retrigger model;
   all12x12 same-mode roots, +6 tie/idempotence/unknown/mode/reset/late-analysis races.

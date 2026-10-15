@@ -5,6 +5,7 @@
 
 use super::constant_timing::{AcceptedTimingProjection, CurrentTimingAcknowledgements};
 use super::input_runtime_binding::{InputPadBinding, InputRuntimeOwnership};
+use super::source_feed_history::SourceFeedGuard;
 use crate::messages::SampleBuffer;
 use std::sync::{
     Arc,
@@ -62,6 +63,7 @@ pub(crate) struct NativeHistoryPermit {
     preparation_epoch: Arc<AtomicU64>,
     expected_epoch: u64,
     authority: NativeHistoryAuthority,
+    source_feed_guard: Option<SourceFeedGuard>,
 }
 
 impl NativeHistoryContext<'_> {
@@ -98,6 +100,7 @@ impl NativeHistoryContext<'_> {
                 ownership: self.ownership.clone(),
                 acknowledgements: self.acknowledgements.clone(),
             },
+            source_feed_guard: None,
         };
         permit.current(sample, rate).then_some(permit)
     }
@@ -186,6 +189,7 @@ impl NativeHistoryContext<'_> {
                 ownership: self.ownership.clone(),
                 acknowledgements: self.acknowledgements.clone(),
             },
+            source_feed_guard: None,
         };
         permit.current(sample, rate).then_some(permit)
     }
@@ -252,12 +256,24 @@ impl NativeVoiceHistoryContext<'_> {
                 lifetime: self.lifetime.clone(),
                 generation: self.generation,
             },
+            source_feed_guard: None,
         };
         permit.current(sample, rate).then_some(permit)
     }
 }
 
 impl NativeHistoryPermit {
+    /// Narrow a freshly captured strong permit once with its genuine source-feed/voice fence.
+    /// An existing guard is never replaced or refreshed. A repeated call must be worker/control
+    /// work because its incoming duplicate drops here. The attached guard follows this permit's
+    /// existing off-realtime source-owner retirement on every outcome.
+    pub(crate) fn with_source_feed_guard(mut self, guard: SourceFeedGuard) -> Self {
+        if self.source_feed_guard.is_none() {
+            self.source_feed_guard = Some(guard);
+        }
+        self
+    }
+
     /// Compare real source authority without transferring either permission/epoch.
     /// The caller must retain and validate a fresh original action permit separately.
     pub(crate) fn same_endpoint_authority(&self, other: &Self) -> bool {
@@ -352,7 +368,12 @@ impl NativeHistoryPermit {
     /// The double check is bounded and has no spin, owner allocation or address dereference.
     pub(crate) fn current(&self, sample: &SampleBuffer, rate: u32) -> bool {
         let current = || self.current_inner(sample, rate, true, true);
-        current() && current()
+        let source_feed_current = || {
+            self.source_feed_guard
+                .as_ref()
+                .is_none_or(SourceFeedGuard::is_current)
+        };
+        source_feed_current() && current() && current() && source_feed_current()
     }
 
     /// Physical endpoint data observation only, never action/adoption permission.
@@ -439,8 +460,137 @@ impl NativeHistoryPermit {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::audio_engine::source_feed_history::{SourceFeedHistory, SourceFeedSnapshot};
     use crate::messages::{CompleteSourceIdentity, ResidentContext, ResidentSourceView};
     use flitzis_looper_analysis::tempo_acceptance::TimingIntent;
+
+    fn capture_source_feed_guard(
+        lifetime: &Arc<AtomicU64>,
+        generation: u64,
+    ) -> (SourceFeedHistory, SourceFeedSnapshot, SourceFeedGuard) {
+        let history = SourceFeedHistory::new();
+        let mut snapshot = SourceFeedSnapshot::new();
+        assert!(history.capture_into(&mut snapshot));
+        // Empty history is deliberately enough for a fence, never for replay coverage or
+        // Native authority. Those independent obligations cannot come from this helper.
+        let guard = snapshot.guard(lifetime, generation).unwrap();
+        (history, snapshot, guard)
+    }
+
+    #[test]
+    fn recycled_source_snapshot_keeps_adoption_fences_without_revoking_productive_history() {
+        let sample = SampleBuffer {
+            residency: None,
+            samples: Arc::from([0.25; 32]),
+            channels: 1,
+        };
+        let ownership = Arc::new(InputRuntimeOwnership::tracked());
+        let acknowledgements = Arc::default();
+        let epoch = Arc::new(AtomicU64::new(7));
+        ownership.publish_test_source(0, &sample, 48_000, 3);
+        let context = NativeHistoryContext {
+            id: 0,
+            ownership: &ownership,
+            acknowledgements: &acknowledgements,
+            preparation_epoch: &epoch,
+        };
+        let lifetime = Arc::new(AtomicU64::new(11));
+        let (history, mut snapshot, guard) = capture_source_feed_guard(&lifetime, 11);
+        let permit = context
+            .capture(&sample, 48_000, None)
+            .unwrap()
+            .with_source_feed_guard(guard);
+        assert!(permit.current(&sample, 48_000));
+        snapshot.clear_for_reuse();
+        assert!(history.capture_into(&mut snapshot));
+        assert!(permit.current(&sample, 48_000));
+
+        history.invalidate_captures();
+        assert!(!permit.current(&sample, 48_000));
+        assert!(permit.current_effective_source(&sample, 48_000));
+        assert!(permit.endpoint_source_current(&sample, 48_000));
+        snapshot.clear_for_reuse();
+        assert!(history.capture_into(&mut snapshot));
+        let fresh_guard = snapshot.guard(&lifetime, 11).unwrap();
+        let still_original = permit.clone().with_source_feed_guard(fresh_guard.clone());
+        assert!(fresh_guard.is_current());
+        assert!(
+            !still_original.current(&sample, 48_000),
+            "an attached original guard cannot be replaced by a later SOURCE epoch"
+        );
+
+        let next_permit = context
+            .capture(&sample, 48_000, None)
+            .unwrap()
+            .with_source_feed_guard(fresh_guard);
+        snapshot.clear_for_reuse();
+        assert!(next_permit.current(&sample, 48_000));
+        lifetime.store(0, Ordering::Release);
+        assert!(!next_permit.current(&sample, 48_000));
+        lifetime.store(12, Ordering::Release);
+        assert!(!next_permit.current(&sample, 48_000));
+    }
+
+    #[test]
+    fn current_source_feed_guard_cannot_authorize_foreign_or_expired_native_context() {
+        let sample = SampleBuffer {
+            residency: None,
+            samples: Arc::from([0.25; 32]),
+            channels: 1,
+        };
+        let foreign_sample = SampleBuffer {
+            samples: Arc::from([0.5; 32]),
+            ..sample.clone()
+        };
+        let ownership = Arc::new(InputRuntimeOwnership::tracked());
+        let acknowledgements = Arc::new(CurrentTimingAcknowledgements::default());
+        let epoch = Arc::new(AtomicU64::new(7));
+        ownership.publish_test_source(0, &sample, 48_000, 3);
+        let accepted = AcceptedTimingProjection {
+            revision: [7; 32],
+            period_seconds: 0.5,
+            origin_seconds: 0.0,
+            sample_rate_hz: 48_000,
+            publication_epoch: 3,
+        };
+        let key = ownership.slot_snapshot(0).unwrap().content_key().unwrap();
+        assert!(acknowledgements.acknowledge_for_key(&ownership, key, 3));
+        let context = NativeHistoryContext {
+            id: 0,
+            ownership: &ownership,
+            acknowledgements: &acknowledgements,
+            preparation_epoch: &epoch,
+        };
+        let lifetime = Arc::new(AtomicU64::new(11));
+        let (_history, mut snapshot, guard) = capture_source_feed_guard(&lifetime, 11);
+        let permit = context
+            .capture(&sample, 48_000, Some(accepted))
+            .unwrap()
+            .with_source_feed_guard(guard.clone());
+        snapshot.clear_for_reuse();
+        assert!(permit.current(&sample, 48_000));
+        assert!(!permit.current(&foreign_sample, 48_000));
+        assert!(!permit.current(&sample, 44_100));
+
+        let foreign_ownership = Arc::new(InputRuntimeOwnership::tracked());
+        foreign_ownership.publish_test_source(0, &sample, 48_000, 3);
+        let foreign_permit = NativeHistoryPermit {
+            binding: InputPadBinding {
+                placement: foreign_ownership.binding_placement(0),
+                ..permit.binding
+            },
+            ..permit.clone()
+        };
+        assert!(!foreign_permit.current(&sample, 48_000));
+        assert!(acknowledgements.clear_for_key(&ownership, key));
+        assert!(!permit.current(&sample, 48_000));
+        assert!(guard.is_current());
+        assert!(acknowledgements.acknowledge_for_key(&ownership, key, 3));
+        assert!(permit.current(&sample, 48_000));
+        epoch.fetch_add(1, Ordering::AcqRel);
+        assert!(!permit.current(&sample, 48_000));
+        assert!(guard.is_current());
+    }
 
     #[test]
     fn own_action_history_ignores_only_mutable_runtime_rows_and_keeps_strong_source_fences() {
@@ -771,7 +921,14 @@ mod tests {
             preparation_epoch: &local_epoch,
             accepted: None,
         };
-        let pending = retained.capture(&original, 48_000).unwrap();
+        let (_history, mut snapshot, guard) = capture_source_feed_guard(&lifetime, 11);
+        let pending = retained
+            .capture(&original, 48_000)
+            .unwrap()
+            .with_source_feed_guard(guard.clone());
+        snapshot.clear_for_reuse();
+        assert!(guard.is_current());
+        assert!(pending.current(&original, 48_000));
         assert!(!pending.current(&next_window, 48_000));
         assert!(pending.current_effective_source(&next_window, 48_000));
         let fresh = retained.capture(&next_window, 48_000).unwrap();

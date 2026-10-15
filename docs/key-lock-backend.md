@@ -1008,6 +1008,35 @@ using the old numeric pitch still fails its own captured-pitch check after that
 SET applies at its original E. Restoring a changed rate before E cannot hide the
 intervening source edit.
 
+Prospective nonzero Key Lock changes use the same genuine-history replay. Each
+source lane owns one additional reusable snapshot Box, allocated before rendering.
+Capture reserves its storage and request capacity before holding the prospective
+DSP tuple. The existing source worker projects the frozen checkpoint once to the
+original E, replays actual past plus that future, then clears and returns the
+large snapshot through bounded recycling. Success, stale work, unavailable
+history and failed-worker retirement retain this ownership discipline.
+
+A small SOURCE/voice guard remains in the candidate's fresh Native permit after
+snapshot recycling. It narrows strict adoption before and after fresh authority
+checks; productive-history and physical endpoint observations retain their
+existing semantics. Mode supersession continues to use Stretch's separate
+preparation epoch. All participating voices and the original finite resident
+ticket still commit together at E.
+
+Public Intro/Tail tests cover both mode directions at +24 and -23 semitones after
+off-grid rate edits. Each compares all 4,097 adopted samples, source phase and
+FIFO against an independent direct-C-ABI A-reset reference. Restored-source-control
+refusal and a fresh request use the same lane. Lane ownership and permit tests
+cover snapshot reuse, stale work and bounded return saturation. The additional
+32 mode snapshot payloads total 20,185,088 bytes before owner and queue overhead;
+these structural counts do not establish total process memory or a deadline.
+An explicit Release profile filled all 1,024 spans in each of 32 mode snapshots:
+128 measured capture batches after eight warmups took 497.3 microseconds minimum,
+543.3 median, 627.9 p99 and 645.6 maximum on this host. Timing includes the fixed
+future assignment, excludes clearing, guards, projection, queues and Native replay,
+and establishes no callback deadline. Existing journal/SET plus mode span payloads
+derive to 80,740,352 bytes; allocator, Arc, queue, Native and PCM storage are separate.
+
 Variable replay declares a fresh reset A on the voice's active-frame origin O's
 512-frame lattice. H queries configure each actual pitch before measuring its
 reset-dependent bound. Alignment can add up to 511 frames and must fit the full
@@ -1024,8 +1053,8 @@ an off-grid 48 kHz/k=+24 probe retained identical FIFO counts but observed maxim
 PCM differences of 0.30 to 0.48 even with genuine aligned suffixes of 4,205 to
 49,261 frames.
 That negative equivalence result supplies no acoustic verdict; the original
-quality gates remain required. Broader variable history and
-prospective mode coverage, performer deadlines, the full B5 quality/latency/
+quality gates remain required. Broader variable history, paused endpoints and
+active selection transitions, performer deadlines, the full B5 quality/latency/
 unity-transition matrix, B6 and Human app/device/listening/visual acceptance remain
 open. R2 layout/hold and B7 captured pitch+retrigger retain their prepared ownership
 guards. Neither this surface nor persisted K-META completes whole-arrangement,

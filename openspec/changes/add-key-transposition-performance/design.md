@@ -89,8 +89,32 @@ mode tuple retains its original captured-pitch check after the earlier SET appli
 Independent Intro/Tail A-reset PCM and refusal/retry on the same public worker are
 bounded engineering evidence. They do not certify an arbitrarily continuous
 Native state: the separate aligned-suffix experiment records actual large PCM
-differences despite equal FIFO counts. Full continuous/acoustic, prospective mode,
-deadline, resource/216 and Human gates remain open.
+differences despite equal FIFO counts. Full continuous/acoustic, broader prospective
+mode, deadline, resource/216 and Human gates remain open.
+
+Prospective nonzero Key Lock now uses the shared bounded replay through the
+existing source lane. Each lane preallocates one reusable history-work Box.
+Callback capture reserves storage/queue capacity before DSP hold, copies genuine
+history and retains original F-to-E data. The existing snapshot projector builds
+the endpoint request at original E once. Ordinary automatic requests keep their
+existing catch-up path; history-bearing mode requests use the shared replay.
+
+The worker clears and returns that same Box on success, unavailable/stale work
+and failed-worker retirement, including cleanup when no Native spare is available.
+A small SOURCE/voice guard travels with the fresh Native permit through strict
+adoption; recycling the large snapshot cannot refresh or revoke that guard.
+The extra guard does not participate in productive-history or endpoint-data
+observations. All-voice claim and the resident transaction's same own final ACK
+remain authoritative. Explicit refusal still applies to paused endpoints, active
+selection transitions and unheld historical contexts.
+
+Eight public Intro/Tail cases at +24/-23, ON/OFF, compare every 4,097 adopted PCM
+samples against an independent scalar/direct-C-ABI A-reset oracle, including
+off-grid source-rate changes. Ownership/recycle and independent permit regressions
+are separate evidence. Additional mode span storage is 32 * 630,784 = 20,185,088
+bytes before work owners/queues; whole-process resources and performer deadlines
+remain open. This bounded engineering does not certify continuous-O equivalence,
+acoustic quality, the full B5/B6/P6 matrix or Human acceptance.
 
 The first automatic source-specific endpoint reserve is limited to one currently
 selected Normal start, independently of whether that content is stopped or playing.

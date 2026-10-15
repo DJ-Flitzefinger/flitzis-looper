@@ -8,7 +8,7 @@ use super::source_reader::{SourceReadPlan, StemReadSets};
 #[cfg(test)]
 use crate::audio_engine::key_lock_preparation::create_key_lock_preparation;
 use crate::audio_engine::key_lock_preparation::{
-    KeyLockPreparationLane, KeyLockPreparationWorker, SourceExchange,
+    KeyLockPreparationLane, KeyLockPreparationWorker, ProspectiveSourceHistory, SourceExchange,
 };
 #[cfg(test)]
 use crate::audio_engine::rubberband_backend::RubberBandLiveShifter;
@@ -332,15 +332,24 @@ impl StretchProcessor {
         self.prospective_request = Some(0);
     }
 
-    pub(crate) fn request_prospective_tuple(
+    /// Poll only the bounded recycler before the mixer holds a prospective request.
+    pub(crate) fn source_history_work_available(&mut self) -> bool {
+        self.preparation.source_history_work_available()
+    }
+
+    pub(crate) fn request_prospective_tuple_with_history(
         &mut self,
         feed: &ProductiveSourceFeed<'_>,
+        history: ProspectiveSourceHistory<'_>,
     ) -> Option<(u64, u64)> {
         let request_id = self.request_id.checked_add(1)?;
         if self.preparation_epoch == u64::MAX
-            || !self
-                .preparation
-                .request_source(feed, self.preparation_epoch, request_id)
+            || !self.preparation.request_source_with_history(
+                feed,
+                history,
+                self.preparation_epoch,
+                request_id,
+            )
         {
             return None;
         }
@@ -943,6 +952,73 @@ mod tests {
         assert!(processor.rubberband_start_delay() > 0);
         assert!(processor.rubberband_input_fifo_capacity() >= DEFAULT_BLOCK_SAMPLES);
         assert!(processor.rubberband_output_fifo_capacity() >= DEFAULT_BLOCK_SAMPLES);
+    }
+
+    #[test]
+    fn refused_history_capture_preserves_prospective_request_state_and_later_id() {
+        use super::super::prepared_native_history::tests::fixture;
+        use super::super::source_feed_history::SourceFeedHistory;
+        use super::super::source_reader::ExplicitSeekMode;
+        use std::sync::{Arc, atomic::AtomicU64};
+        use std::time::{Duration, Instant};
+
+        let mut processor = StretchProcessor::new(1);
+        let source = fixture(1, 48_000, 1.0, ExplicitSeekMode::Normal, None);
+        let feed = ProductiveSourceFeed {
+            pitch_intent: PitchIntent::new(3, 0).unwrap(),
+            key_lock: false,
+            sample: &source.sample,
+            stems: None,
+            outgoing_stems: None,
+            sample_rate_hz: 48_000,
+            accepted: None,
+            plan: source.plan,
+            playback: &source.playback,
+            permit: Some(&source.permit),
+            output_frame: Some(100),
+        };
+        let history = SourceFeedHistory::new();
+        let lifetime = Arc::new(AtomicU64::new(1));
+        assert!(processor.source_history_work_available());
+        processor.hold_prospective_tuple();
+        let epoch = processor.preparation_epoch;
+        assert!(
+            processor
+                .request_prospective_tuple_with_history(
+                    &feed,
+                    ProspectiveSourceHistory {
+                        history: &history,
+                        voice_lifetime: &lifetime,
+                        voice_generation: 2,
+                        execution_frame: 8292,
+                    },
+                )
+                .is_none()
+        );
+        assert_eq!(processor.preparation_epoch, epoch);
+        assert_eq!(processor.request_id, 0);
+        assert!(!processor.request_pending);
+        assert_eq!(processor.prospective_request, Some(0));
+
+        let deadline = Instant::now() + Duration::from_secs(2);
+        while !processor.source_history_work_available() && Instant::now() < deadline {
+            std::thread::sleep(Duration::from_millis(1));
+        }
+        assert!(processor.source_history_work_available());
+        assert_eq!(
+            processor.request_prospective_tuple_with_history(
+                &feed,
+                ProspectiveSourceHistory {
+                    history: &history,
+                    voice_lifetime: &lifetime,
+                    voice_generation: 1,
+                    execution_frame: 8292,
+                },
+            ),
+            Some((epoch, 1))
+        );
+        assert!(processor.request_pending);
+        assert_eq!(processor.prospective_request, Some(1));
     }
 
     #[test]

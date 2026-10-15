@@ -7,6 +7,8 @@ use crate::audio_engine::rubberband_backend::RubberBandLiveShifter;
 use std::collections::VecDeque;
 use std::time::{Duration, Instant};
 
+include!("key_lock_source_feed_tests.rs");
+
 fn wait(mut ready: impl FnMut() -> bool) {
     let deadline = Instant::now() + Duration::from_secs(5);
     while !ready() {
@@ -77,6 +79,16 @@ fn complete_fixture(lock: bool) -> Fixture {
 }
 
 fn submit_scalar(fixture: &mut Fixture, enabled: bool) -> u64 {
+    let fixed_frame = fixture.transport.output_frame();
+    wait(|| {
+        assert_eq!(fixture.transport.output_frame(), fixed_frame);
+        fixture
+            .mixer
+            .voices
+            .iter_mut()
+            .filter(|voice| voice.active && voice.sample_id == 0)
+            .all(|voice| voice.stretch.source_history_work_available())
+    });
     let request = fixture.control.engine.set_pad_key_lock(0, enabled).unwrap();
     fixture.drain();
     assert_eq!(
@@ -697,8 +709,19 @@ fn stale_timing_pitch_stop_and_source_never_adopt_a_prospective_mode_owner() {
 fn variable_history_refusal_is_request_local_and_worker_can_prepare_a_later_request() {
     let mut fixture = complete_fixture(false);
     start(&mut fixture, 18, false, 1.0);
-    // An actual new rate trajectory has no reconstructible expanded-pitch past.
-    // Exercise the existing typed UnavailableSourceHistory, not an endpoint-rate guess.
+    // A real seek begins a new active-feed lifecycle. Its subsequent variable
+    // request genuinely lacks the required pre-F past; the earlier voice's played
+    // history must not be borrowed to rescue it. A supported variable trajectory
+    // with enough genuine reads is covered by the independent PCM tests above.
+    assert!(fixture.mixer.seek_sample_at_output_frame(
+        0,
+        LOOP_START as f64 / f64::from(RATE),
+        fixture.transport.output_frame(),
+    ));
+    let mut after_seek = crate::audio_engine::source_feed_history::SourceFeedSnapshot::new();
+    assert!(fixture.voice(0).source_feed_history.capture_into(&mut after_seek));
+    assert_eq!(after_seek.active_frames(), after_seek.active_origin());
+    assert_eq!(after_seek.retained_range(), None);
     fixture.mixer.set_speed(1.5);
     submit_scalar(&mut fixture, true);
     wait(|| {

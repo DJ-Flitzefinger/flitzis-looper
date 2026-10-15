@@ -115,8 +115,24 @@ preflight. Preparation failure or unavailable history SHALL reject only that
 request visibly, preserve the old effective mode, and leave worker retirement
 and later requests usable. Existing strong Native history permits SHALL remain
 required at actual adoption. A constant endpoint SHALL NOT stand in for missing
-variable source history. This requirement does not claim unimplemented variable
-history, paused endpoint, acoustic, device or full B5 acceptance.
+variable source history. The bounded history contract below does not certify
+paused endpoint, acoustic, device or full B5 acceptance.
+
+Prospective mode preparation SHALL reuse the owning voice's genuine bounded
+source-read chronology before F and frozen F-to-original-E projection under the
+same declared O/A replay contract as a moving SET. Each replay span SHALL use the
+actual applied numeric pitch with the requested mode and its actual source rate.
+A settled endpoint SHALL NOT erase earlier rate, Intro/Tail or selection history.
+
+Each source lane SHALL acquire already allocated reusable snapshot storage before
+capture; exhausted storage SHALL cause local refusal without callback allocation
+or owner destruction. The worker SHALL clear and return snapshot owners through
+bounded recycling on successful, stale and unavailable-history paths. A small
+guard captured from the genuine snapshot SHALL retain its SOURCE-trajectory and
+voice-generation fences with the candidate through adoption even after the large
+snapshot has been recycled. That guard SHALL only narrow a fresh strong Native
+permit, never replace source/window/timing authority. Its later invalidation
+SHALL NOT by itself revoke already productive Native history.
 
 #### Scenario: Complete source changes Lock in either direction with nonzero pitch
 - **GIVEN** a playing complete source with positive or negative numeric transposition and actual r=1 or a nonunit rate
@@ -138,6 +154,26 @@ history, paused endpoint, acoustic, device or full B5 acceptance.
 - **THEN** no participant SHALL consume that candidate or change the shared effective mode
 - **AND** the original resident marker and owner SHALL settle exactly once through bounded off-thread retirement
 - **AND** an unavailable real source-history trajectory SHALL remain a request-local visible refusal without terminating the preparation worker or certifying unsupported history
+
+#### Scenario: Prospective mode replays actual variable history at its original E
+- **GIVEN** a live nonzero applied pitch with genuine off-block rate edits and an Intro or Tail passage inside its required pre-F history
+- **WHEN** an ON or OFF request needs a Native preparation bound greater than E minus F
+- **THEN** the existing worker SHALL replay the genuine retained past and original frozen future for the requested tuple
+- **AND** every adopted PCM sample, source phase and FIFO count SHALL match an independent scalar/direct-Native oracle with the same declared A reset
+- **AND** a backwards-constant reference SHALL disagree while old productive mode and owners remain effective until the unchanged original E
+
+#### Scenario: Recycled snapshot leaves strict adoption fences intact
+- **GIVEN** prepared prospective work whose large snapshot has already returned to its source lane
+- **WHEN** a source control changes and returns to its former value, or a captured voice lifetime ends before E
+- **THEN** the retained small guard SHALL refuse the whole tuple at adoption without changing old productive mode or partially swapping another participant
+- **AND** a later original request on the same worker SHALL capture retained genuine history and remain usable
+- **AND** a valid history guard SHALL NOT authorize expired or foreign Native source/window/timing ownership
+
+#### Scenario: History storage saturation preserves every original owner
+- **GIVEN** a source lane whose reusable history owner is in flight or awaiting bounded recycling
+- **WHEN** another prospective mode request arrives or unavailable history returns
+- **THEN** no callback SHALL allocate replacement snapshot storage, overwrite an owning request or destroy a filled snapshot
+- **AND** bounded worker retirement SHALL return that same reusable owner and leave a later request functional
 
 #### Scenario: Saturated retirement retains the original finite mode owner
 - **GIVEN** an adopting resident mode transaction and zero available retirement queue or backlog slots

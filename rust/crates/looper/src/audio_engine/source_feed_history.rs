@@ -301,8 +301,10 @@ impl SourceFeedHistory {
     }
 }
 
-/// Immutable-to-worker scalar copy. Its fixed Box is allocated once with the action work;
-/// capturing never exposes the callback's journal or mutable voice state to a worker.
+/// Immutable-to-worker scalar copy. Its fixed Box is allocated once with its source lane or
+/// action work; recycling keeps that same preallocated storage. Capturing never exposes the
+/// callback's journal or mutable voice state to a worker. The descriptors are historical data,
+/// never fresh source/window/timing authority.
 pub(crate) struct SourceFeedSnapshot {
     spans: Box<[Option<SourceFeedSpan>]>,
     len: usize,
@@ -310,6 +312,28 @@ pub(crate) struct SourceFeedSnapshot {
     active_frames: u64,
     captured_epoch: u64,
     continuity_owner: Option<Arc<AtomicU64>>,
+}
+
+/// Small additional adoption fence captured only from a genuine current snapshot and the
+/// actual voice lifetime. It carries no source/window/timing authority or replay coverage.
+/// Retain it with the Native permit and retire its Arc owners through that permit's existing
+/// off-realtime source-owner retirement, including stale or refused preparation.
+#[derive(Clone)]
+pub(crate) struct SourceFeedGuard {
+    continuity_owner: Arc<AtomicU64>,
+    captured_epoch: u64,
+    lifetime: Arc<AtomicU64>,
+    generation: u64,
+}
+
+impl SourceFeedGuard {
+    pub(crate) fn is_current(&self) -> bool {
+        self.captured_epoch != 0
+            && self.generation != 0
+            && self.generation != u64::MAX
+            && self.continuity_owner.load(Ordering::Acquire) == self.captured_epoch
+            && self.lifetime.load(Ordering::Acquire) == self.generation
+    }
 }
 
 impl SourceFeedSnapshot {
@@ -324,14 +348,41 @@ impl SourceFeedSnapshot {
         }
     }
 
-    /// Worker/control-only recycling: dropping the captured Arc is never callback work.
-    #[cfg(test)]
+    /// Worker/control-only recycling: resetting/dropping the captured Arc is never callback
+    /// work. Scalar slots retain no owners and the fixed Box remains allocated for recapture.
+    /// The callback must never clear or replace a filled snapshot.
     pub(crate) fn clear_for_reuse(&mut self) {
         self.continuity_owner = None;
         self.captured_epoch = 0;
         self.len = 0;
         self.active_origin = 0;
         self.active_frames = 0;
+    }
+
+    /// Retain the snapshot's original SOURCE fence and the actual voice lifetime before the
+    /// worker recycles this large copy. Arc clones allocate no new owner; the resulting guard
+    /// only narrows a separately captured strong Native permit and retires off realtime. If
+    /// the final check loses a race, these clones cannot be final owners: both original Arcs
+    /// remain borrowed throughout this call.
+    pub(crate) fn guard(
+        &self,
+        lifetime: &Arc<AtomicU64>,
+        generation: u64,
+    ) -> Option<SourceFeedGuard> {
+        if !self.is_current()
+            || generation == 0
+            || generation == u64::MAX
+            || lifetime.load(Ordering::Acquire) != generation
+        {
+            return None;
+        }
+        let guard = SourceFeedGuard {
+            continuity_owner: Arc::clone(self.continuity_owner.as_ref()?),
+            captured_epoch: self.captured_epoch,
+            lifetime: Arc::clone(lifetime),
+            generation,
+        };
+        guard.is_current().then_some(guard)
     }
 
     pub(crate) fn spans(
@@ -723,6 +774,70 @@ mod tests {
         assert_eq!(snapshot.spans.as_ptr(), storage);
         assert!(snapshot.is_current());
         assert_eq!(snapshot.active_frames(), 8);
+    }
+
+    #[test]
+    fn guard_keeps_original_source_and_voice_fences_after_snapshot_storage_is_reused() {
+        let mut history = SourceFeedHistory::new();
+        let playback = playback(19, ExplicitSeekMode::Normal, 1.0);
+        history.record_success(
+            playback,
+            plan(playback, StemTransition::default()),
+            context(),
+            5,
+        );
+        let lifetime = Arc::new(AtomicU64::new(11));
+        let mut snapshot = capture(&history);
+        let storage = snapshot.spans.as_ptr();
+        let guard = snapshot.guard(&lifetime, 11).unwrap();
+        let retained = guard.clone();
+        assert!(guard.is_current());
+        snapshot.clear_for_reuse();
+        assert!(!snapshot.is_current());
+        assert!(snapshot.guard(&lifetime, 11).is_none());
+        assert!(guard.is_current());
+
+        let next_history = SourceFeedHistory::new();
+        assert!(next_history.capture_into(&mut snapshot));
+        assert_eq!(snapshot.spans.as_ptr(), storage);
+        assert!(snapshot.is_current());
+        assert!(guard.is_current());
+        history.invalidate_captures();
+        assert!(!guard.is_current());
+        assert!(!retained.is_current());
+        assert!(
+            snapshot.is_current(),
+            "recycling cannot relabel the old guard"
+        );
+
+        let next_guard = snapshot.guard(&lifetime, 11).unwrap();
+        lifetime.store(0, Ordering::Release);
+        assert!(!next_guard.is_current());
+        lifetime.store(12, Ordering::Release);
+        assert!(
+            !next_guard.is_current(),
+            "another voice generation cannot revive it"
+        );
+    }
+
+    #[test]
+    fn guard_refuses_absent_stale_or_invalid_voice_generation() {
+        let history = SourceFeedHistory::new();
+        let lifetime = Arc::new(AtomicU64::new(11));
+        let mut snapshot = SourceFeedSnapshot::new();
+        assert!(snapshot.guard(&lifetime, 11).is_none());
+        assert!(history.capture_into(&mut snapshot));
+        assert!(snapshot.guard(&lifetime, 0).is_none());
+        assert!(snapshot.guard(&lifetime, u64::MAX).is_none());
+        assert!(snapshot.guard(&lifetime, 12).is_none());
+        lifetime.store(0, Ordering::Release);
+        assert!(snapshot.guard(&lifetime, 0).is_none());
+        lifetime.store(u64::MAX, Ordering::Release);
+        assert!(snapshot.guard(&lifetime, u64::MAX).is_none());
+        lifetime.store(11, Ordering::Release);
+        assert!(snapshot.guard(&lifetime, 11).is_some());
+        history.invalidate_captures();
+        assert!(snapshot.guard(&lifetime, 11).is_none());
     }
 
     #[test]

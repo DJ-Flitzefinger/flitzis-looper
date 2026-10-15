@@ -5,9 +5,13 @@
 //! warming and owner destruction happen outside rendering.
 
 use super::prepared_native_history::{
-    NativeAdapterState, NativeHistoryRequest, NativeSourcePreparationError, PREPARED_HISTORY_FRAMES,
+    NativeAdapterState, NativeHistoryRequest, NativeSourcePreparationError,
+    PREPARED_HISTORY_FRAMES, PitchSourceSnapshot,
 };
 use super::productive_source_history::ProductiveSourceBinding;
+use super::source_feed_history::{SourceFeedHistory, SourceFeedSnapshot};
+use super::source_playback::SourcePlayback;
+use super::source_reader::SourceReadPlan;
 use super::stretch_processor::ProductiveSourceFeed;
 use crate::audio_engine::constants::MAX_VOICES;
 use crate::audio_engine::rubberband_backend::{RubberBandError, RubberBandLiveShifter};
@@ -21,6 +25,46 @@ use std::time::Duration;
 
 const LANE_CAPACITY: usize = 1;
 const IDLE_POLL_INTERVAL: Duration = Duration::from_millis(1);
+
+/// The owning voice supplies its genuine chronology and the original execution coordinate.
+pub(crate) struct ProspectiveSourceHistory<'a> {
+    pub(crate) history: &'a SourceFeedHistory,
+    pub(crate) voice_lifetime: &'a Arc<AtomicU64>,
+    pub(crate) voice_generation: u64,
+    pub(crate) execution_frame: u64,
+}
+
+/// One reusable owner per source lane, allocated before rendering. Only the worker clears a
+/// filled snapshot; the callback merely moves this owner through bounded queues.
+struct SourceHistoryWork {
+    snapshot: SourceFeedSnapshot,
+    future: Option<(SourcePlayback, SourceReadPlan, u64)>,
+}
+
+impl SourceHistoryWork {
+    fn new() -> Self {
+        Self {
+            snapshot: SourceFeedSnapshot::new(),
+            future: None,
+        }
+    }
+
+    fn clear_for_reuse(&mut self) {
+        self.snapshot.clear_for_reuse();
+        self.future = None;
+    }
+}
+
+enum SourcePreparationRequest {
+    Ordinary(NativeHistoryRequest),
+    WithHistory {
+        request: Option<NativeHistoryRequest>,
+        history: Box<SourceHistoryWork>,
+        // Failed capture/queue admission still sends its owners to the worker, without
+        // publishing an unaccepted candidate or advancing the callback's request state.
+        prepare: bool,
+    },
+}
 
 #[derive(Debug, thiserror::Error)]
 pub(crate) enum KeyLockPreparationError {
@@ -75,12 +119,14 @@ impl<T> PreparedStateLane<T> {
 
 pub(crate) struct KeyLockPreparationLane {
     state: PreparedStateLane<RubberBandLiveShifter>,
-    requests: Producer<NativeHistoryRequest>,
+    requests: Producer<SourcePreparationRequest>,
     source_ready: Consumer<Box<NativeAdapterState>>,
     source_recycle: Producer<Box<NativeAdapterState>>,
     source_owner_recycle: Producer<NativeHistoryRequest>,
-    pending_request: Box<Option<NativeHistoryRequest>>,
+    pending_request: Box<Option<SourcePreparationRequest>>,
     pending_source_return: Option<Box<NativeAdapterState>>,
+    source_history: Option<Box<SourceHistoryWork>>,
+    source_history_return: Consumer<Box<SourceHistoryWork>>,
     source_epoch: Arc<AtomicU64>,
     completed_request: Arc<AtomicU64>,
     worker_failed: Arc<AtomicBool>,
@@ -126,6 +172,8 @@ impl KeyLockPreparationLane {
     /// Also polled for inactive/paused voices by the callback owner. A worker result published
     /// immediately after cancellation is then retired without requiring another source render.
     pub(crate) fn retire_prepared(&mut self) {
+        self.flush_pending_request();
+        self.reclaim_source_history();
         if let Some(pending) = self.pending_source_return.take()
             && let Err(PushError::Full(pending)) = self.source_recycle.push(pending)
         {
@@ -144,6 +192,30 @@ impl KeyLockPreparationLane {
                 self.pending_source_return = Some(state);
             }
         }
+    }
+
+    fn flush_pending_request(&mut self) {
+        if let Some(request) = self.pending_request.take()
+            && let Err(PushError::Full(request)) = self.requests.push(request)
+        {
+            *self.pending_request = Some(request);
+        }
+    }
+
+    fn reclaim_source_history(&mut self) {
+        if self.source_history.is_none() {
+            self.source_history = self.source_history_return.pop().ok();
+        }
+    }
+
+    /// Acquire the already allocated empty owner before a mixer starts holding a tuple.
+    pub(crate) fn source_history_work_available(&mut self) -> bool {
+        self.flush_pending_request();
+        self.reclaim_source_history();
+        !self.worker_failed()
+            && self.pending_request.is_none()
+            && self.requests.slots() != 0
+            && self.source_history.is_some()
     }
     /// A reset may release only the source pins while retaining dirty native state. Two slots cover
     /// the active and ready source owners; preparing another source requires worker progression.
@@ -216,10 +288,90 @@ impl KeyLockPreparationLane {
             request_id,
             epoch,
         };
-        if let Err(PushError::Full(request)) = self.requests.push(request) {
+        if let Err(PushError::Full(request)) = self
+            .requests
+            .push(SourcePreparationRequest::Ordinary(request))
+        {
             *self.pending_request = Some(request);
         }
         true
+    }
+
+    /// Capture the actual pre-F history and project the same frozen F-to-original-E once.
+    /// Every failure after taking the reusable owner sends it intact to worker recycling.
+    pub(crate) fn request_source_with_history(
+        &mut self,
+        feed: &ProductiveSourceFeed<'_>,
+        context: ProspectiveSourceHistory<'_>,
+        epoch: u64,
+        request_id: u64,
+    ) -> bool {
+        if !self.source_history_work_available() {
+            return false;
+        }
+        let (Some(permit), Some(capture_frame)) = (feed.permit, feed.output_frame) else {
+            return false;
+        };
+        let Some(delta) = context.execution_frame.checked_sub(capture_frame) else {
+            return false;
+        };
+        if !permit.current(feed.sample, feed.sample_rate_hz)
+            || !permit.matches_projection(feed.accepted)
+            || feed.plan.transition.is_active()
+        {
+            return false;
+        }
+
+        let mut history = self
+            .source_history
+            .take()
+            .expect("preflighted reusable source-history owner");
+        let request = if context.history.capture_into(&mut history.snapshot) {
+            history.future = Some((*feed.playback, feed.plan, delta));
+            history
+                .snapshot
+                .guard(context.voice_lifetime, context.voice_generation)
+                .and_then(|guard| {
+                    let mut endpoint = PitchSourceSnapshot {
+                        sample: feed.sample.clone(),
+                        stems: feed.stems.cloned(),
+                        accepted: feed.accepted,
+                        sample_rate_hz: feed.sample_rate_hz,
+                        paused: false,
+                        playback: *feed.playback,
+                        plan: feed.plan,
+                    };
+                    if !endpoint.project_output_frames(delta) {
+                        return None;
+                    }
+                    endpoint.into_request(
+                        permit.clone().with_source_feed_guard(guard),
+                        feed.pitch_intent,
+                        feed.key_lock,
+                        context.execution_frame,
+                        request_id,
+                        epoch,
+                    )
+                })
+        } else {
+            None
+        };
+        let accepted = request.is_some();
+        let queued = SourcePreparationRequest::WithHistory {
+            request,
+            history,
+            prepare: accepted,
+        };
+        match self.requests.push(queued) {
+            Ok(()) => accepted,
+            Err(PushError::Full(mut queued)) => {
+                if let SourcePreparationRequest::WithHistory { prepare, .. } = &mut queued {
+                    *prepare = false;
+                }
+                *self.pending_request = Some(queued);
+                false
+            }
+        }
     }
 
     pub(crate) fn chunk_until_prepared_adoption(
@@ -251,11 +403,7 @@ impl KeyLockPreparationLane {
         epoch: u64,
         expected_request_id: u64,
     ) -> SourceExchange {
-        if let Some(request) = self.pending_request.take()
-            && let Err(PushError::Full(request)) = self.requests.push(request)
-        {
-            *self.pending_request = Some(request);
-        }
+        self.flush_pending_request();
         if let Some(pending) = self.pending_source_return.take()
             && let Err(PushError::Full(pending)) = self.source_recycle.push(pending)
         {
@@ -371,20 +519,64 @@ struct WorkerLane {
     ready: Producer<RubberBandLiveShifter>,
     recycle: Consumer<RubberBandLiveShifter>,
     pending_ready: Option<RubberBandLiveShifter>,
-    requests: Consumer<NativeHistoryRequest>,
+    requests: Consumer<SourcePreparationRequest>,
     source_ready: Producer<Box<NativeAdapterState>>,
     source_recycle: Consumer<Box<NativeAdapterState>>,
     source_reserve: Option<Box<NativeAdapterState>>,
     source_owner_recycle: Consumer<NativeHistoryRequest>,
+    source_history_return: Producer<Box<SourceHistoryWork>>,
+    pending_history_return: Option<Box<SourceHistoryWork>>,
     source_epoch: Arc<AtomicU64>,
     completed_request: Arc<AtomicU64>,
 }
 
 impl WorkerLane {
+    fn flush_history_return(&mut self) -> bool {
+        if let Some(history) = self.pending_history_return.take()
+            && let Err(PushError::Full(history)) = self.source_history_return.push(history)
+        {
+            self.pending_history_return = Some(history);
+            return false;
+        }
+        true
+    }
+
+    fn return_source_history(&mut self, mut history: Box<SourceHistoryWork>) {
+        history.clear_for_reuse();
+        // Each lane has exactly one real history owner. Retain it if bounded return capacity
+        // is unavailable rather than replacing or destroying it on the callback.
+        debug_assert!(self.pending_history_return.is_none());
+        if let Err(PushError::Full(history)) = self.source_history_return.push(history) {
+            self.pending_history_return = Some(history);
+        }
+    }
+
+    fn retire_request(&mut self, queued: SourcePreparationRequest) {
+        let (request, history, accepted) = match queued {
+            SourcePreparationRequest::Ordinary(request) => (Some(request), None, true),
+            SourcePreparationRequest::WithHistory {
+                request,
+                history,
+                prepare,
+            } => (request, Some(history), prepare),
+        };
+        if let Some(request) = request {
+            if accepted {
+                self.completed_request
+                    .store(request.request_id, Ordering::Release);
+            }
+            drop(request);
+        }
+        if let Some(history) = history {
+            self.return_source_history(history);
+        }
+    }
+
     /// Preparation failure disables publication, but the worker remains an off-RT retirement
     /// owner until stream teardown. Source/native pins must still retire after stop or unload.
     fn drain_failed(&mut self) -> bool {
         let mut worked = false;
+        let can_return_history = self.flush_history_return();
         if let Ok(owner) = self.source_owner_recycle.pop() {
             drop(owner);
             worked = true;
@@ -393,10 +585,8 @@ impl WorkerLane {
             drop(state);
             worked = true;
         }
-        if let Ok(request) = self.requests.pop() {
-            self.completed_request
-                .store(request.request_id, Ordering::Release);
-            drop(request);
+        if can_return_history && let Ok(request) = self.requests.pop() {
+            self.retire_request(request);
             worked = true;
         }
         if let Ok(native) = self.recycle.pop() {
@@ -414,6 +604,21 @@ impl WorkerLane {
         let retired_owner = self.source_owner_recycle.pop().ok();
         let retired = retired_owner.is_some();
         drop(retired_owner);
+        if !self.flush_history_return() {
+            return Ok(retired);
+        }
+        // Even a refused capture must return its filled owner while the Native adapter is
+        // still in flight or its ready queue is occupied.
+        if self.requests.peek().is_ok_and(|request| {
+            matches!(
+                request,
+                SourcePreparationRequest::WithHistory { prepare: false, .. }
+            )
+        }) {
+            let request = self.requests.pop().expect("peeked source cleanup request");
+            self.retire_request(request);
+            return Ok(true);
+        }
         if self.source_reserve.is_none() {
             self.source_reserve = self.source_recycle.pop().ok();
             if let Some(state) = &mut self.source_reserve {
@@ -424,53 +629,88 @@ impl WorkerLane {
         if self.source_reserve.is_none() || self.source_ready.slots() == 0 {
             return Ok(retired);
         }
-        let Ok(request) = self.requests.pop() else {
+        let Ok(queued) = self.requests.pop() else {
             return Ok(retired);
+        };
+        let (request, history) = match queued {
+            SourcePreparationRequest::Ordinary(request) => (request, None),
+            SourcePreparationRequest::WithHistory {
+                request: Some(request),
+                history,
+                prepare: true,
+            } => (request, Some(history)),
+            queued => {
+                self.retire_request(queued);
+                return Ok(true);
+            }
         };
         let request_id = request.request_id;
         let mut state = self
             .source_reserve
             .take()
             .expect("reserved source adapter exists");
-        if request.epoch == self.source_epoch.load(Ordering::Acquire)
+        let result = if request.epoch == self.source_epoch.load(Ordering::Acquire)
             && request
                 .permit
                 .current(&request.sample, request.binding.sample_rate_hz)
             && request.permit.matches_projection(request.binding.accepted)
         {
-            match state.prepare_live_catchup(request) {
-                Ok(()) => {}
-                Err(NativeSourcePreparationError::Unavailable(_)) => {
-                    // A missing source/history proof rejects only this request. Retain the
-                    // unique adapter for another request; no half-prepared owner is published.
-                    self.completed_request.store(request_id, Ordering::Release);
-                    state.source = None;
-                    state.reset_adapter();
-                    self.source_reserve = Some(state);
-                    return Ok(true);
-                }
-                Err(NativeSourcePreparationError::Backend(error)) => {
-                    // Backend/adapter faults still terminate the shared worker. The callback
-                    // must observe completion even though no ready owner can be published.
-                    self.completed_request.store(request_id, Ordering::Release);
-                    return Err(error);
-                }
-            }
-            if state.source.as_ref().is_some_and(|source| {
-                source.epoch != self.source_epoch.load(Ordering::Acquire)
-                    || !source
-                        .permit
-                        .current(&source.sample, source.binding.sample_rate_hz)
-                    || !source.permit.matches_projection(source.binding.accepted)
-            }) {
-                state.source = None;
-                self.source_reserve = Some(state);
-                self.completed_request.store(request_id, Ordering::Release);
-                return Ok(true);
+            if let Some(history) = &history {
+                state
+                    .prepare_source_with_feed_history(
+                        request,
+                        &history.snapshot,
+                        history.future.expect("captured original F-to-E projection"),
+                    )
+                    .map_err(|error| match error {
+                        RubberBandError::UnavailableSourceHistory => {
+                            NativeSourcePreparationError::Unavailable(error)
+                        }
+                        _ => NativeSourcePreparationError::Backend(error),
+                    })
+                    .map(|()| true)
+            } else {
+                state.prepare_live_catchup(request).map(|()| true)
             }
         } else {
             // No stale owner reaches the callback. All pins are released on this worker.
             drop(request);
+            Ok(false)
+        };
+        if let Some(history) = history {
+            self.return_source_history(history);
+        }
+        match result {
+            Ok(false) => {
+                self.source_reserve = Some(state);
+                self.completed_request.store(request_id, Ordering::Release);
+                return Ok(true);
+            }
+            Ok(true) => {}
+            Err(NativeSourcePreparationError::Unavailable(_)) => {
+                // A missing source/history proof rejects only this request. Retain the
+                // unique adapter for another request; no half-prepared owner is published.
+                self.completed_request.store(request_id, Ordering::Release);
+                state.source = None;
+                state.reset_adapter();
+                self.source_reserve = Some(state);
+                return Ok(true);
+            }
+            Err(NativeSourcePreparationError::Backend(error)) => {
+                // Backend/adapter faults still terminate the shared worker. The callback
+                // must observe completion even though no ready owner can be published.
+                self.completed_request.store(request_id, Ordering::Release);
+                return Err(error);
+            }
+        }
+        if state.source.as_ref().is_some_and(|source| {
+            source.epoch != self.source_epoch.load(Ordering::Acquire)
+                || !source
+                    .permit
+                    .current(&source.sample, source.binding.sample_rate_hz)
+                || !source.permit.matches_projection(source.binding.accepted)
+        }) {
+            state.source = None;
             self.source_reserve = Some(state);
             self.completed_request.store(request_id, Ordering::Release);
             return Ok(true);
@@ -600,6 +840,7 @@ pub(crate) fn create_key_lock_preparation(
         let (source_ready_producer, source_ready_consumer) = RingBuffer::new(LANE_CAPACITY);
         let (source_recycle_producer, source_recycle_consumer) = RingBuffer::new(LANE_CAPACITY);
         let (source_owner_recycle_producer, source_owner_recycle_consumer) = RingBuffer::new(2);
+        let (source_history_producer, source_history_consumer) = RingBuffer::new(LANE_CAPACITY);
         let source_epoch = Arc::new(AtomicU64::new(0));
         let completed_request = Arc::new(AtomicU64::new(0));
         let source_reserve = Box::new(NativeAdapterState::new(
@@ -625,6 +866,8 @@ pub(crate) fn create_key_lock_preparation(
             source_owner_recycle: source_owner_recycle_producer,
             pending_request: Box::new(None),
             pending_source_return: None,
+            source_history: Some(Box::new(SourceHistoryWork::new())),
+            source_history_return: source_history_consumer,
             source_epoch: source_epoch.clone(),
             completed_request: completed_request.clone(),
             worker_failed: worker_failed.clone(),
@@ -640,6 +883,8 @@ pub(crate) fn create_key_lock_preparation(
             source_recycle: source_recycle_consumer,
             source_reserve: Some(source_reserve),
             source_owner_recycle: source_owner_recycle_consumer,
+            source_history_return: source_history_producer,
+            pending_history_return: None,
             source_epoch,
             completed_request,
         });
@@ -691,6 +936,524 @@ mod tests {
             ready_producer,
             recycle_consumer,
         )
+    }
+
+    fn source_history_lanes(return_capacity: usize) -> (KeyLockPreparationLane, WorkerLane) {
+        let (ready, ready_consumer) = RingBuffer::new(1);
+        let (recycle_producer, recycle) = RingBuffer::new(1);
+        let (requests, request_consumer) = RingBuffer::new(1);
+        let (source_ready, source_ready_consumer) = RingBuffer::new(1);
+        let (source_recycle_producer, source_recycle) = RingBuffer::new(1);
+        let (owner_producer, source_owner_recycle) = RingBuffer::new(2);
+        let (source_history_return, history_consumer) = RingBuffer::new(return_capacity);
+        let source_epoch = Arc::new(AtomicU64::new(0));
+        let completed_request = Arc::new(AtomicU64::new(0));
+        (
+            KeyLockPreparationLane {
+                state: PreparedStateLane {
+                    initial: None,
+                    ready: ready_consumer,
+                    recycle: recycle_producer,
+                    pending_return: None,
+                },
+                requests,
+                source_ready: source_ready_consumer,
+                source_recycle: source_recycle_producer,
+                source_owner_recycle: owner_producer,
+                pending_request: Box::new(None),
+                pending_source_return: None,
+                source_history: Some(Box::new(SourceHistoryWork::new())),
+                source_history_return: history_consumer,
+                source_epoch: source_epoch.clone(),
+                completed_request: completed_request.clone(),
+                worker_failed: Arc::new(AtomicBool::new(false)),
+                reserve_withheld: false,
+            },
+            WorkerLane {
+                ready,
+                recycle,
+                pending_ready: None,
+                requests: request_consumer,
+                source_ready,
+                source_recycle,
+                source_reserve: Some(Box::new(NativeAdapterState::new(
+                    Some(RubberBandLiveShifter::new(48_000, 1).unwrap()),
+                    1,
+                ))),
+                source_owner_recycle,
+                source_history_return,
+                pending_history_return: None,
+                source_epoch,
+                completed_request,
+            },
+        )
+    }
+
+    fn prospective_feed(request: &NativeHistoryRequest) -> ProductiveSourceFeed<'_> {
+        ProductiveSourceFeed {
+            pitch_intent: super::super::pitch_intent::PitchIntent::new(3, 0).unwrap(),
+            key_lock: false,
+            sample: &request.sample,
+            stems: request.stems.as_ref(),
+            outgoing_stems: None,
+            sample_rate_hz: 48_000,
+            accepted: None,
+            plan: request.plan,
+            playback: &request.playback,
+            permit: Some(&request.permit),
+            output_frame: Some(100),
+        }
+    }
+
+    fn history_context<'a>(
+        history: &'a SourceFeedHistory,
+        lifetime: &'a Arc<AtomicU64>,
+        delta: u64,
+    ) -> ProspectiveSourceHistory<'a> {
+        ProspectiveSourceHistory {
+            history,
+            voice_lifetime: lifetime,
+            voice_generation: 1,
+            execution_frame: 100 + delta,
+        }
+    }
+
+    fn history_address(lane: &KeyLockPreparationLane) -> usize {
+        lane.source_history.as_deref().unwrap() as *const SourceHistoryWork as usize
+    }
+
+    /// Opt-in full-voice scalar storage/capture characterization. It creates no Native state
+    /// and supplies no PCM authority; its storage figures describe these fixed owner counts.
+    #[test]
+    #[ignore = "host-specific 32-voice mode snapshot resource profile; run explicitly with --nocapture"]
+    fn prospective_mode_source_history_resource_profile() {
+        use super::super::source_feed_history::{
+            SOURCE_FEED_HISTORY_MAX_FRAMES, SOURCE_FEED_HISTORY_MAX_SPANS, SourceFeedContext,
+            SourceFeedGuard, SourceFeedSpan,
+        };
+        use super::super::source_reader::{
+            FrameRange, StemReadSets, StemRenderSelection, StemTransition,
+        };
+        use std::hint::black_box;
+        use std::mem::size_of;
+        use std::time::Instant;
+
+        const SET_WORKS: usize = 64;
+        const WARMUP_BATCHES: usize = 8;
+        const MEASURED_BATCHES: usize = 128;
+        let mut histories: Vec<_> = (0..MAX_VOICES).map(|_| SourceFeedHistory::new()).collect();
+        let mut works: Vec<_> = (0..MAX_VOICES)
+            .map(|_| Box::new(SourceHistoryWork::new()))
+            .collect();
+        let mut frozen = Vec::with_capacity(MAX_VOICES);
+        let mut addresses = Vec::with_capacity(MAX_VOICES);
+        let lifetime = Arc::new(AtomicU64::new(1));
+        let mut copied = [false; MAX_VOICES];
+        let mut durations_ns = [0_u128; MEASURED_BATCHES];
+
+        // Every allocation and journal fill precedes all capture timing. Distinct scalar
+        // address markers prevent coalescing but never stand for retained PCM ownership.
+        for (voice_index, (history, work)) in histories.iter_mut().zip(&works).enumerate() {
+            let mut playback = SourcePlayback::new(19, ExplicitSeekMode::Normal, 0.73);
+            let region = FrameRange {
+                start: 19,
+                end: 1519,
+            };
+            playback.configure(2003, region);
+            let mut transition = StemTransition::start(StemRenderSelection::full_mix(), 80_000);
+            for span_index in 0..SOURCE_FEED_HISTORY_MAX_SPANS {
+                playback.set_target(0.53 + ((span_index * 13 + voice_index) % 83) as f64 * 0.017);
+                let (frames, ratio) = playback.chunk(1 + (span_index + voice_index) % 29);
+                let position = playback.position();
+                let plan = SourceReadPlan {
+                    channels: 2,
+                    sample_frames: 2003,
+                    frame_pos: position.frame,
+                    loop_region: region,
+                    loop_period: None,
+                    seek_mode: position.seek_mode,
+                    selection: StemRenderSelection::full_mix(),
+                    transition,
+                };
+                let binding = ProductiveSourceBinding {
+                    resident: None,
+                    source_address: 17 + voice_index * SOURCE_FEED_HISTORY_MAX_SPANS + span_index,
+                    sample_count: 4006,
+                    channels: 2,
+                    sample_rate_hz: 48_000,
+                    accepted: None,
+                };
+                history.record_success(
+                    playback,
+                    plan,
+                    SourceFeedContext::new(binding, StemReadSets::default()),
+                    frames,
+                );
+                playback.advance(frames);
+                transition.advance_fractional(frames as f64 * ratio);
+            }
+            playback.chunk(1024);
+            let position = playback.position();
+            frozen.push((
+                playback,
+                SourceReadPlan {
+                    channels: 2,
+                    sample_frames: 2003,
+                    frame_pos: position.frame,
+                    loop_region: region,
+                    loop_period: None,
+                    seek_mode: position.seek_mode,
+                    selection: StemRenderSelection::full_mix(),
+                    transition,
+                },
+                4096,
+            ));
+            let address = work.as_ref() as *const SourceHistoryWork as usize;
+            assert!(!addresses.contains(&address));
+            addresses.push(address);
+        }
+
+        for batch in 0..WARMUP_BATCHES + MEASURED_BATCHES {
+            // Worker/control recycling, including Arc retirement, stays outside measurement.
+            for work in &mut works {
+                work.clear_for_reuse();
+            }
+            let started = Instant::now();
+            for voice_index in 0..MAX_VOICES {
+                let work = black_box(&mut works[voice_index]);
+                copied[voice_index] =
+                    black_box(&histories[voice_index]).capture_into(black_box(&mut work.snapshot));
+                work.future = Some(black_box(frozen[voice_index]));
+            }
+            let elapsed_ns = started.elapsed().as_nanos();
+
+            for (voice_index, work) in works.iter().enumerate() {
+                assert!(copied[voice_index]);
+                assert_eq!(
+                    work.as_ref() as *const SourceHistoryWork as usize,
+                    addresses[voice_index]
+                );
+                assert_eq!(work.snapshot.spans().len(), SOURCE_FEED_HISTORY_MAX_SPANS);
+                assert!(work.snapshot.guard(&lifetime, 1).unwrap().is_current());
+                black_box(work.snapshot.spans().fold(0_u64, |checksum, span| {
+                    checksum
+                        .wrapping_add(span.active_start)
+                        .wrapping_add(span.frames as u64)
+                        .wrapping_add(span.plan.frame_pos as u64)
+                        .wrapping_add(span.playback.tempo_ratio().to_bits())
+                        .wrapping_add(span.context.binding.source_address as u64)
+                }));
+            }
+            if batch >= WARMUP_BATCHES {
+                durations_ns[batch - WARMUP_BATCHES] = elapsed_ns;
+            }
+        }
+        for work in &mut works {
+            work.clear_for_reuse();
+        }
+
+        let span_box_bytes = SOURCE_FEED_HISTORY_MAX_SPANS * size_of::<Option<SourceFeedSpan>>();
+        let mode_span_bytes = MAX_VOICES * span_box_bytes;
+        let existing_span_bytes = (MAX_VOICES + SET_WORKS) * span_box_bytes;
+        let combined_span_bytes = existing_span_bytes + mode_span_bytes;
+        let mode_work_outer_bytes = MAX_VOICES * size_of::<SourceHistoryWork>();
+        let mode_work_pointer_bytes = MAX_VOICES * size_of::<Box<SourceHistoryWork>>();
+        let mode_guard_inline_bytes = MAX_VOICES * size_of::<SourceFeedGuard>();
+        let return_queue_payload_bytes =
+            MAX_VOICES * LANE_CAPACITY * size_of::<Box<SourceHistoryWork>>();
+        let return_queue_handle_bytes = MAX_VOICES
+            * (size_of::<Producer<Box<SourceHistoryWork>>>()
+                + size_of::<Consumer<Box<SourceHistoryWork>>>());
+        let retained_history_pointer_bytes =
+            2 * MAX_VOICES * size_of::<Option<Box<SourceHistoryWork>>>();
+        let request_enum_extra_bytes = size_of::<SourcePreparationRequest>()
+            .checked_sub(size_of::<NativeHistoryRequest>())
+            .unwrap();
+        durations_ns.sort_unstable();
+        eprintln!(
+            "prospective mode scalar pool: profile={} voice_count={} journal_count={} \
+             set_snapshot_count={} mode_work_count={} spans_per_owner={} retained_frame_bound={} \
+             span_bytes={} option_span_bytes={} span_box_bytes={} mode_span_bytes={} \
+             allocated_journal_mode_span_bytes={} \
+             derived_existing_journal_set_span_bytes={} derived_combined_span_bytes={}",
+            if cfg!(debug_assertions) {
+                "debug"
+            } else {
+                "release"
+            },
+            MAX_VOICES,
+            MAX_VOICES,
+            SET_WORKS,
+            MAX_VOICES,
+            SOURCE_FEED_HISTORY_MAX_SPANS,
+            SOURCE_FEED_HISTORY_MAX_FRAMES,
+            size_of::<SourceFeedSpan>(),
+            size_of::<Option<SourceFeedSpan>>(),
+            span_box_bytes,
+            mode_span_bytes,
+            2 * mode_span_bytes,
+            existing_span_bytes,
+            combined_span_bytes,
+        );
+        eprintln!(
+            "prospective mode separate overhead: work_outer_bytes_each={} \
+             mode_work_outer_bytes={} mode_work_pointer_bytes={} guard_inline_bytes_each={} \
+             mode_guard_inline_bytes={} recycle_queue_capacity_each={} \
+             recycle_queue_logical_payload_bytes={} recycle_queue_handle_bytes={} \
+             callback_worker_retained_history_pointer_bytes={} native_request_bytes={} \
+             request_enum_bytes={} enum_extra_bytes_each={} \
+             request_queue_enum_extra_bytes={} pending_request_enum_extra_bytes={} \
+             (logical payload/inline layout only; excludes allocator, Arc control blocks, \
+             ring metadata/alignment, Native/PCM and other work storage; guard clones allocate no owners)",
+            size_of::<SourceHistoryWork>(),
+            mode_work_outer_bytes,
+            mode_work_pointer_bytes,
+            size_of::<SourceFeedGuard>(),
+            mode_guard_inline_bytes,
+            LANE_CAPACITY,
+            return_queue_payload_bytes,
+            return_queue_handle_bytes,
+            retained_history_pointer_bytes,
+            size_of::<NativeHistoryRequest>(),
+            size_of::<SourcePreparationRequest>(),
+            request_enum_extra_bytes,
+            MAX_VOICES * LANE_CAPACITY * request_enum_extra_bytes,
+            MAX_VOICES * request_enum_extra_bytes,
+        );
+        eprintln!(
+            "prospective mode 32-voice capture-batch host timing: measured_batches={} \
+             warmup_batches={} captures_per_batch={} copied_spans_per_batch={} \
+             min_ns={} median_ns={} p99_ns={} max_ns={} \
+             (capture plus fixed future assignment only; clear/guard/projection/queues/replay \
+             excluded; no product RAM, callback deadline, RSS, Native, P6 or device acceptance claim)",
+            MEASURED_BATCHES,
+            WARMUP_BATCHES,
+            MAX_VOICES,
+            MAX_VOICES * SOURCE_FEED_HISTORY_MAX_SPANS,
+            durations_ns[0],
+            durations_ns[MEASURED_BATCHES / 2],
+            durations_ns[(MEASURED_BATCHES * 99).div_ceil(100) - 1],
+            durations_ns[MEASURED_BATCHES - 1],
+        );
+    }
+
+    #[test]
+    fn failed_history_capture_recycles_same_filled_owner_without_a_native_reserve() {
+        let (mut callback, mut worker) = source_history_lanes(1);
+        let address = history_address(&callback);
+        let request = fixture(1, 48_000, 1.0, ExplicitSeekMode::Normal, None);
+        let feed = prospective_feed(&request);
+        let history = SourceFeedHistory::new();
+        let lifetime = Arc::new(AtomicU64::new(2));
+        assert!(!callback.request_source_with_history(
+            &feed,
+            history_context(&history, &lifetime, 8192),
+            0,
+            1,
+        ));
+        assert!(callback.source_history.is_none());
+        let queued = worker.requests.peek().unwrap();
+        let SourcePreparationRequest::WithHistory {
+            history, prepare, ..
+        } = queued
+        else {
+            panic!("capture refusal retains its snapshot owner");
+        };
+        assert!(!*prepare);
+        assert!(history.snapshot.is_current());
+        assert_eq!(
+            history.as_ref() as *const SourceHistoryWork as usize,
+            address
+        );
+        worker.source_reserve = None;
+        assert!(worker.prepare_source().unwrap());
+        assert!(callback.source_history_work_available());
+        assert_eq!(history_address(&callback), address);
+        assert_eq!(
+            callback
+                .source_history
+                .as_ref()
+                .unwrap()
+                .snapshot
+                .captured_epoch(),
+            0
+        );
+        assert!(!callback.source_work_finished(1));
+    }
+
+    #[test]
+    fn source_history_saturation_preserves_owner_original_e_and_recycled_adoption_guard() {
+        let (mut callback, mut worker) = source_history_lanes(1);
+        let address = history_address(&callback);
+        let request = fixture(1, 48_000, 1.0, ExplicitSeekMode::Normal, None);
+        let feed = prospective_feed(&request);
+        let history = SourceFeedHistory::new();
+        let lifetime = Arc::new(AtomicU64::new(1));
+        assert!(
+            callback
+                .requests
+                .push(SourcePreparationRequest::Ordinary(fixture(
+                    1,
+                    48_000,
+                    1.0,
+                    ExplicitSeekMode::Normal,
+                    None
+                )))
+                .is_ok()
+        );
+        assert!(!callback.request_source_with_history(
+            &feed,
+            history_context(&history, &lifetime, 8192),
+            0,
+            1,
+        ));
+        assert_eq!(history_address(&callback), address);
+        drop(worker.requests.pop().unwrap());
+        assert!(callback.request_source_with_history(
+            &feed,
+            history_context(&history, &lifetime, 8192),
+            0,
+            1,
+        ));
+        assert!(!callback.request_source_with_history(
+            &feed,
+            history_context(&history, &lifetime, 12_288),
+            0,
+            2,
+        ));
+        let SourcePreparationRequest::WithHistory {
+            request: Some(queued),
+            history: captured,
+            ..
+        } = worker.requests.peek().unwrap()
+        else {
+            panic!("one original history request remains queued");
+        };
+        assert_eq!(queued.target_output_frame, 8292);
+        assert_eq!(captured.future.as_ref().unwrap().2, 8192);
+        assert_eq!(
+            captured.as_ref() as *const SourceHistoryWork as usize,
+            address
+        );
+        assert!(worker.prepare_source().unwrap());
+        assert!(callback.source_history_work_available());
+        assert_eq!(history_address(&callback), address);
+        let candidate = callback.prepared_state().unwrap();
+        let source = candidate.source.as_ref().unwrap();
+        assert_eq!(source.target_output_frame, 8292);
+        assert!(source.permit.current(&source.sample, 48_000));
+        history.invalidate_captures();
+        assert!(!source.permit.current(&source.sample, 48_000));
+        assert!(
+            source
+                .permit
+                .current_effective_source(&source.sample, 48_000)
+        );
+    }
+
+    #[test]
+    fn unavailable_source_history_returns_storage_and_keeps_later_request_usable() {
+        let (mut callback, mut worker) = source_history_lanes(1);
+        let address = history_address(&callback);
+        let request = fixture(1, 48_000, 1.0, ExplicitSeekMode::Normal, None);
+        let feed = prospective_feed(&request);
+        let mut history = SourceFeedHistory::new();
+        history.record_gap(1);
+        let lifetime = Arc::new(AtomicU64::new(1));
+        assert!(callback.request_source_with_history(
+            &feed,
+            history_context(&history, &lifetime, 17),
+            0,
+            1,
+        ));
+        assert!(worker.prepare_source().unwrap());
+        assert!(callback.source_work_finished(1));
+        assert!(callback.prepared_state().is_none());
+        assert!(callback.source_history_work_available());
+        assert_eq!(history_address(&callback), address);
+        assert!(!callback.worker_failed());
+        let valid = SourceFeedHistory::new();
+        assert!(callback.request_source_with_history(
+            &feed,
+            history_context(&valid, &lifetime, 8192),
+            0,
+            2,
+        ));
+        assert!(worker.prepare_source().unwrap());
+        assert!(callback.prepared_state().is_some());
+        assert!(callback.source_history_work_available());
+        assert_eq!(history_address(&callback), address);
+    }
+
+    #[test]
+    fn full_history_recycler_retains_same_cleared_box_until_callback_can_reclaim() {
+        let (mut callback, mut worker) = source_history_lanes(0);
+        let address = history_address(&callback);
+        let request = fixture(1, 48_000, 1.0, ExplicitSeekMode::Normal, None);
+        let feed = prospective_feed(&request);
+        let history = SourceFeedHistory::new();
+        let lifetime = Arc::new(AtomicU64::new(2));
+        assert!(!callback.request_source_with_history(
+            &feed,
+            history_context(&history, &lifetime, 8192),
+            0,
+            1,
+        ));
+        assert!(worker.prepare_source().unwrap());
+        assert!(!callback.source_history_work_available());
+        let pending = worker.pending_history_return.as_deref().unwrap();
+        assert_eq!(pending as *const SourceHistoryWork as usize, address);
+        assert_eq!(pending.snapshot.captured_epoch(), 0);
+        assert!(pending.future.is_none());
+        assert!(!worker.prepare_source().unwrap());
+        assert_eq!(
+            worker.pending_history_return.as_deref().unwrap() as *const SourceHistoryWork as usize,
+            address
+        );
+        let (producer, consumer) = RingBuffer::new(1);
+        worker.source_history_return = producer;
+        callback.source_history_return = consumer;
+        assert!(!worker.prepare_source().unwrap());
+        assert!(callback.source_history_work_available());
+        assert_eq!(history_address(&callback), address);
+        assert!(worker.pending_history_return.is_none());
+    }
+
+    #[test]
+    fn stale_and_failed_worker_requests_return_the_same_history_owner() {
+        for failed in [false, true] {
+            let (mut callback, mut worker) = source_history_lanes(1);
+            let address = history_address(&callback);
+            let request = fixture(1, 48_000, 1.0, ExplicitSeekMode::Normal, None);
+            let feed = prospective_feed(&request);
+            let history = SourceFeedHistory::new();
+            let lifetime = Arc::new(AtomicU64::new(1));
+            assert!(callback.request_source_with_history(
+                &feed,
+                history_context(&history, &lifetime, 8192),
+                0,
+                1,
+            ));
+            if failed {
+                assert!(worker.drain_failed());
+            } else {
+                worker.source_epoch.store(1, Ordering::Release);
+                assert!(worker.prepare_source().unwrap());
+            }
+            assert!(callback.source_work_finished(1));
+            assert!(callback.prepared_state().is_none());
+            assert!(callback.source_history_work_available());
+            assert_eq!(history_address(&callback), address);
+            assert_eq!(
+                callback
+                    .source_history
+                    .as_ref()
+                    .unwrap()
+                    .snapshot
+                    .captured_epoch(),
+                0
+            );
+        }
     }
 
     #[test]
@@ -941,6 +1704,7 @@ mod tests {
         let (source_ready, _source_ready_consumer) = RingBuffer::new(1);
         let (_source_recycle_producer, source_recycle) = RingBuffer::new(1);
         let (_owner_producer, source_owner_recycle) = RingBuffer::new(2);
+        let (source_history_return, _source_history_consumer) = RingBuffer::new(1);
         let completed_request = Arc::new(AtomicU64::new(0));
         let mut lane = WorkerLane {
             ready,
@@ -954,6 +1718,8 @@ mod tests {
                 2,
             ))),
             source_owner_recycle,
+            source_history_return,
+            pending_history_return: None,
             source_epoch: Arc::new(AtomicU64::new(0)),
             completed_request: completed_request.clone(),
         };
@@ -961,7 +1727,11 @@ mod tests {
         request.epoch = 0;
         request.request_id = 17;
         let weak = Arc::downgrade(&request.sample.samples);
-        assert!(requests.push(request).is_ok());
+        assert!(
+            requests
+                .push(SourcePreparationRequest::Ordinary(request))
+                .is_ok()
+        );
         assert!(matches!(
             lane.prepare_source(),
             Err(RubberBandError::BufferChannelCount {

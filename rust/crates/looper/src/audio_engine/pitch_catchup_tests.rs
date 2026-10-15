@@ -382,7 +382,11 @@ fn missing_coverage_is_local_but_native_fifo_invalid_block_size_remains_fatal() 
         request_id: 1,
         epoch: 0,
     };
-    assert!(lane.requests.push(request(None)).is_ok());
+    assert!(
+        lane.requests
+            .push(super::SourcePreparationRequest::Ordinary(request(None)))
+            .is_ok()
+    );
     wait_until(|| lane.source_work_finished(1));
     assert!(!lane.worker_failed());
     assert!(lane.prepared_state().is_none());

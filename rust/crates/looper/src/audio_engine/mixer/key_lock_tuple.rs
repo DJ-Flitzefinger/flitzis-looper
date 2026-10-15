@@ -5,6 +5,7 @@
 
 use super::*;
 use crate::audio_engine::input_runtime_binding::InputPadBinding;
+use crate::audio_engine::key_lock_preparation::ProspectiveSourceHistory;
 use crate::audio_engine::prepared_native_history::PREPARED_HISTORY_FRAMES;
 use std::cell::RefCell;
 
@@ -190,9 +191,14 @@ impl RtMixer {
             let Some(snapshot) = self.capture_pitch_voice_snapshot(index) else {
                 return false;
             };
-            // This lane advances F..E. A paused endpoint needs a different already-proven
-            // endpoint request; refuse this request without inventing that history.
+            // This lane replays genuine past and the frozen F..E projection. Paused or
+            // active selection transitions still need a separately admitted endpoint.
             if snapshot.paused || snapshot.plan.transition.is_active() {
+                return false;
+            }
+            // Reserve reusable callback storage before changing this voice's DSP request.
+            // A filled snapshot returns through the worker; no replacement is allocated here.
+            if !self.voices[index].stretch.source_history_work_available() {
                 return false;
             }
             let (pitch, previous_mode) = self.effective_voice_tuple(index);
@@ -242,10 +248,16 @@ impl RtMixer {
                 frame,
                 Some(&permit),
             );
-            let Some((epoch, request_id)) = self.voices[index]
-                .stretch
-                .request_prospective_tuple(&prospective)
-            else {
+            let voice = &mut self.voices[index];
+            let Some((epoch, request_id)) = voice.stretch.request_prospective_tuple_with_history(
+                &prospective,
+                ProspectiveSourceHistory {
+                    history: &voice.source_feed_history,
+                    voice_lifetime: &voice.history_lifetime,
+                    voice_generation: voice.generation,
+                    execution_frame: execution,
+                },
+            ) else {
                 return false;
             };
             pending.voices[index] = Some(TupleVoice {

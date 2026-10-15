@@ -207,7 +207,7 @@ impl Fixture {
         });
     }
 
-    fn capture(&self, id: usize, key: &str) -> CapturedPitchAction {
+    pub(super) fn capture(&self, id: usize, key: &str) -> CapturedPitchAction {
         self.refresh_clock();
         self.control
             .engine
@@ -215,7 +215,7 @@ impl Fixture {
             .unwrap()
     }
 
-    fn rows(&self, row: PitchPadProjection) {
+    pub(super) fn rows(&self, row: PitchPadProjection) {
         let runtime = self.control.engine.input_runtime.as_ref().unwrap();
         let mut rows = vec![PitchPadProjection::default(); NUM_SAMPLES];
         rows[0] = PitchPadProjection {
@@ -251,7 +251,7 @@ impl Fixture {
         }
     }
 
-    fn publish(&mut self, action: &CapturedPitchAction) {
+    pub(super) fn publish(&mut self, action: &CapturedPitchAction) {
         assert!(self.control.engine.publish_pitch_action(action).unwrap());
         self.drain();
         assert!(
@@ -265,7 +265,7 @@ impl Fixture {
 
     /// Host preparation gets a bounded wait while the virtual source/output clock stays still.
     /// Successful adoption below proves readiness; this does not measure a device deadline.
-    fn wait_worker(&mut self, actions: &[&CapturedPitchAction]) {
+    pub(super) fn wait_worker(&mut self, actions: &[&CapturedPitchAction]) {
         let frame = self.transport.output_frame();
         let deadline = Instant::now() + WORKER_WAIT;
         loop {
