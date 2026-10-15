@@ -217,9 +217,7 @@ impl RtMixer {
                 if self.pitch_action_scalar_ready(work, &snapshot, index)? {
                     return Ok(None);
                 }
-                if work.preparation_mode() == PitchActionPreparationMode::Endpoint
-                    && !snapshot.paused
-                {
+                if work.preparation_mode() == PitchActionPreparationMode::Endpoint {
                     let voice = &self.voices[index];
                     if !voice
                         .source_feed_history
@@ -230,7 +228,9 @@ impl RtMixer {
                     let delta = execution_frame
                         .checked_sub(callback_frame)
                         .ok_or(PitchActionReject::PreparedMismatch)?;
-                    work.source_feed_future = Some((snapshot.playback, snapshot.plan, delta));
+                    let active_delta = if snapshot.paused { 0 } else { delta };
+                    work.source_feed_future =
+                        Some((snapshot.playback, snapshot.plan, active_delta));
                     work.source_feed_voice =
                         Some((voice.history_lifetime.clone(), voice.generation));
                 }

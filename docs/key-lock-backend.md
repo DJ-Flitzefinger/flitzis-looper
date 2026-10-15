@@ -1008,6 +1008,22 @@ using the old numeric pitch still fails its own captured-pitch check after that
 SET applies at its original E. Restoring a changed rate before E cannot hide the
 intervening source edit.
 
+Paused nonstarting SET captures that same action-owned genuine history, ending
+at active F with zero future active frames while retaining its original global E.
+The existing worker and strong action permit prepare and adopt its own candidate;
+Resume continues with that Native/FIFO and retained source/filter state. Silent
+waiting time supplies no missing active past. Resume/Pause or restored rate edits
+before E still invalidate the original source-trajectory capture.
+
+Eight paused SET Intro/Tail variants at +24/-23 and both Lock modes compare each
+of 12,290 resumed samples against the independent scalar/direct-C-ABI A-reset
+reference, with exact source phase/FIFO and the same adopted Native owner beyond
+the later 4,096-frame boundary. A cloned warm-versus-reset filter probe makes
+retained filter state observable. Original sequence, timestamp, content and T/E
+remain fixed. Resume/Pause and rate-restore races refuse the original capture;
+insufficient variable past also refuses despite silent waiting, and each fresh
+same-worker retry retains its own independent resumed PCM proof.
+
 Prospective nonzero Key Lock changes use the same genuine-history replay. Each
 source lane owns one additional reusable snapshot Box, allocated before rendering.
 Capture reserves its storage and request capacity before holding the prospective

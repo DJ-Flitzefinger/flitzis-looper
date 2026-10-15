@@ -985,6 +985,11 @@ impl RtMixer {
         self.pad_dsp_chains[id].source_history()
     }
 
+    #[cfg(test)]
+    pub(crate) fn dsp_chain_snapshot_for_test(&self, id: usize) -> Option<PerPadDspChain> {
+        self.pad_dsp_chains.get(id).cloned()
+    }
+
     pub(crate) fn set_loop_region_frames(&mut self, id: usize, start: usize, end: Option<usize>) {
         if id < NUM_SAMPLES && self.loop_context_available(id, start, end) {
             if self.pad_loop_start_frame[id] != start || self.pad_loop_end_frame[id] != end {

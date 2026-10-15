@@ -72,6 +72,16 @@ and Stop refuse original work; fresh paused requests remain usable.
 Broader history and pause/selection coverage, full acoustic predicates,
 resource/216 proofs and performer deadlines remain open.
 
+Paused nonstarting SET now uses its original action-owned genuine history with
+zero active future and unchanged global E. Eight Intro/Tail, +/- total-pitch,
+ON/OFF cases compare each of 12,290 resumed PCM samples, exact phase/FIFO and the
+same adopted Native with no automatic replacement; warm filter state is retained.
+Resume/Pause and restored-rate captures refuse, and insufficient variable past
+cannot borrow silent global time. Fresh original requests on the same worker have
+independent resumed PCM evidence. Constant pre-origin start semantics remain
+covered separately; none of these finite A-reset checks certifies continuous-O,
+acoustic, performer-deadline or full parent acceptance.
+
 - [x] K-META: neutral persisted source correction/epochs/base/extra/retrigger model;
   all12x12 same-mode roots, +6 tie/idempotence/unknown/mode/reset/late-analysis races.
   Actual2978 Python PASS/35 device skips plus strengthened reset regression;

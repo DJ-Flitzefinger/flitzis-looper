@@ -127,6 +127,15 @@ bytes before work owners/queues; whole-process resources and performer deadlines
 remain open. This bounded engineering does not certify continuous-O equivalence,
 acoustic quality, the full B5/B6/P6 matrix or Human acceptance.
 
+Paused nonstarting SET uses its existing action-owned genuine SourceFeed snapshot
+and voice/source fences. It keeps the same original global E, but its frozen
+future contributes zero active source frames and replay ends at retained F.
+The existing paused endpoint projector, worker replay and strong action permit
+then adopt the exact candidate without a separate lane or MODE permit. Public
+Resume/Pause and source controls still fence stale captures even when restored;
+global silence supplies no missing history. After adoption Resume keeps the
+prepared owner, source smoothing and filter history.
+
 The first automatic source-specific endpoint reserve is limited to one currently
 selected Normal start, independently of whether that content is stopped or playing.
 It captures a fresh physical loop-start trajectory, never a live SET/voice history.

@@ -234,6 +234,15 @@ earlier rate changes, smoothing, Intro/Tail reads or loop-domain changes. Pause
 SHALL consume no active-feed frames; refused reads SHALL create an explicit gap.
 Start, restart, seek and Stop SHALL fence the retained chronology.
 
+For a nonstarting SET captured while its voice is paused at F, the original
+global execution frame E SHALL remain unchanged. Its active-feed endpoint SHALL
+remain at F and its frozen F-to-E future SHALL contain zero active source reads.
+The existing action-owned snapshot and strong action permit SHALL retain the
+genuine required past, original receipt and voice owner through adoption at E.
+Preparation and adoption while paused SHALL NOT consume source smoothing, filter
+history or Native FIFOs. Resume after adoption SHALL continue with that exact
+prepared Native/FIFO owner from the frozen active endpoint.
+
 The callback SHALL record and snapshot only bounded scalar spans in storage
 allocated before realtime use. An accepted action SHALL retain its own immutable
 snapshot, voice generation, continuity and source-trajectory fences; its worker
@@ -260,7 +269,9 @@ NOT certify earlier stem selections, masks or outgoing readers.
 
 Fresh Native replay SHALL declare its active-feed origin O and reset origin A.
 For the bounded variable suffix contract, A SHALL lie on O's Native input-block lattice
-and precede E by at least the configured preparation bound H. Alignment may add
+and precede the action's active-feed endpoint by at least the configured
+preparation bound H. A paused endpoint remains at active F despite global E.
+Alignment may add
 up to one block minus one frames; the complete interval SHALL fit the explicit
 retention budget, without clipping H. Native configuration and bound queries
 SHALL run off realtime, with reset-dependent bounds queried after configuring the
@@ -286,6 +297,19 @@ acoustic, performer-deadline and full B5/B6 acceptance gates SHALL remain requir
 - **WHEN** a required interval crosses a read gap, evicted history, unheld old stem context or a changed voice/source-trajectory fence
 - **THEN** only that original action SHALL be visibly refused without changing its original T or adopting a replacement capture
 - **AND** old productive audio SHALL remain owned and a later valid action on the same worker SHALL remain usable
+
+#### Scenario: Paused SET replays genuine variable past and retains its original E
+- **GIVEN** a publicly playing source whose retained active past contains off-grid rate smoothing and an Intro or Tail passage into Normal is paused at F
+- **WHEN** a positive or negative nonstarting SET is prepared under either Key Lock mode for its original global E
+- **THEN** its worker SHALL replay the actual required active past ending at F with zero active future, without inventing reads during the global wait
+- **AND** adoption at E SHALL preserve the original action sequence, timestamp, T/E, content and voice generation without START, seek or source advance
+- **AND** every resumed PCM sample, source phase and FIFO count SHALL match an independent direct-Native A-reset reference while retaining the same prepared owner and filter history
+
+#### Scenario: A paused SET cannot borrow silent waiting time or a restored control state
+- **GIVEN** an original paused SET with its own immutable history capture
+- **WHEN** its genuine required past is insufficient, or Resume/Pause or source-rate changes after F restore the same endpoint before E
+- **THEN** that original SET SHALL refuse locally without changing T/E or consuming the old productive owner
+- **AND** silent global frames SHALL NOT supply missing active history, while a later original request with valid retained history SHALL remain usable on the same worker
 
 #### Scenario: Later mode preparation preserves an earlier independent SET
 - **GIVEN** a moving SET prepared for its original E and an unchanged source trajectory
