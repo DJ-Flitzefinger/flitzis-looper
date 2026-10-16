@@ -5,6 +5,9 @@ use super::*;
 use crate::audio_engine::prepared_source::PreparedSourcePermit;
 use crate::messages::{PreparedStemSet, STEM_BUFFER_COUNT, STEM_COMPONENT_MASK, StemMixMode};
 
+#[path = "format_selection_tests.rs"]
+mod format_selection_tests;
+
 const HASH: u64 = 42;
 const PARTITIONS: [usize; 11] = [1, 73, 511, 127, 512, 379, 512, 512, 512, 512, 446];
 
@@ -14,18 +17,35 @@ pub(in crate::audio_engine) fn selection_setup(
     lock: bool,
     pitch: PitchIntent,
 ) -> (Fixture, SampleBuffer, PreparedStemSet, u64) {
-    let mut fixture = Fixture::new(lock);
-    let complete = synthetic_source();
+    selection_setup_format(lock, pitch, RATE, 1)
+}
+
+fn selection_setup_format(
+    lock: bool,
+    pitch: PitchIntent,
+    sample_rate_hz: u32,
+    channels: usize,
+) -> (Fixture, SampleBuffer, PreparedStemSet, u64) {
+    let mut fixture = Fixture::new_format(lock, sample_rate_hz, channels);
+    let start_frame = 4 * sample_rate_hz as usize / 3;
+    let end_frame = start_frame + 2 * sample_rate_hz as usize;
+    let extent = 5 * sample_rate_hz as usize;
+    let complete = synthetic_source_format(sample_rate_hz, channels, extent);
     let source = complete
         .clone()
-        .window(START, END, 2, ResidentContext::KeyLockFiniteLoop)
+        .window(
+            start_frame,
+            end_frame,
+            2,
+            ResidentContext::KeyLockFiniteLoop,
+        )
         .unwrap();
-    publish_tone(&fixture.control, 0, source.clone(), true);
+    publish_tone_with_rate(&fixture.control, 0, source.clone(), true, sample_rate_hz);
     fixture.mixer.load_sample(0, source.clone());
     fixture.mixer.set_pad_loop_region(
         0,
-        START as f64 / f64::from(RATE),
-        Some(END as f64 / f64::from(RATE)),
+        start_frame as f64 / f64::from(sample_rate_hz),
+        Some(end_frame as f64 / f64::from(sample_rate_hz)),
     );
     fixture.mixer.set_pad_bpm(0, Some(120.0));
     let binding = input_runtime_binding::capture(&fixture.control.engine, 0)
@@ -37,8 +57,8 @@ pub(in crate::audio_engine) fn selection_setup(
     let mut bindings = vec![None; NUM_SAMPLES];
     let mut rows = vec![PitchPadProjection::default(); NUM_SAMPLES];
     loaded[0] = true;
-    starts[0] = START as f64 / f64::from(RATE);
-    ends[0] = Some(END as f64 / f64::from(RATE));
+    starts[0] = start_frame as f64 / f64::from(sample_rate_hz);
+    ends[0] = Some(end_frame as f64 / f64::from(sample_rate_hz));
     bindings[0] = Some(binding);
     rows[0].key_lock = lock;
     rows[0].intent = PitchIntent::new(pitch.base_shift(), 0).unwrap();
@@ -105,24 +125,29 @@ pub(in crate::audio_engine) fn selection_setup(
         reference_residency: complete.residency.clone(),
         publication,
         source_version_hash: HASH,
-        sample_rate_hz: RATE,
-        channels: 1,
-        frame_count: EXTENT,
+        sample_rate_hz,
+        channels,
+        frame_count: extent,
         available_mask: (1 << STEM_BUFFER_COUNT) - 1,
         stems: std::array::from_fn(|component| SampleBuffer {
-            channels: 1,
+            channels,
             residency: None,
-            samples: (0..EXTENT)
-                .map(|frame| {
-                    let time = frame as f64 / f64::from(RATE);
-                    (0.11
-                        * (std::f64::consts::TAU
-                            * ((211.0 + 97.0 * component as f64) * time
-                                + (3.0 + component as f64) * time * time))
-                            .sin()
-                        + 0.03
-                            * (std::f64::consts::TAU * (617.0 + 73.0 * component as f64) * time)
-                                .cos()) as f32
+            samples: (0..extent)
+                .flat_map(|frame| {
+                    (0..channels).map(move |channel| {
+                        let time = frame as f64 / f64::from(sample_rate_hz);
+                        (0.11
+                            * (std::f64::consts::TAU
+                                * ((211.0 + 97.0 * component as f64 + 43.0 * channel as f64)
+                                    * time
+                                    + (3.0 + component as f64 + channel as f64) * time * time))
+                                .sin()
+                            + 0.03
+                                * (std::f64::consts::TAU
+                                    * (617.0 + 73.0 * component as f64 + 31.0 * channel as f64)
+                                    * time)
+                                    .cos()) as f32
+                    })
                 })
                 .collect::<Vec<_>>()
                 .into(),
@@ -144,7 +169,7 @@ pub(in crate::audio_engine) fn selection_setup(
     let output_origin = fixture.transport.output_frame();
     assert!(fixture.mixer.seek_sample_at_output_frame(
         0,
-        START as f64 / f64::from(RATE),
+        start_frame as f64 / f64::from(sample_rate_hz),
         output_origin,
     ));
     (fixture, source, stems, output_origin)
@@ -205,24 +230,28 @@ enum History {
 
 impl History {
     fn events(self) -> [(usize, Selection); 5] {
+        self.events_at(F)
+    }
+
+    fn events_at(self, capture_frame: usize) -> [(usize, Selection); 5] {
         let final_selection = match self {
             Self::FullToStems | Self::Mask => Selection::Stems(0b1010),
             Self::StemsToFull => Selection::Full,
             Self::Empty => Selection::Stems(0),
         };
         [
-            (F - 5_200, Selection::Stems(STEM_COMPONENT_MASK)),
-            (F - 4_000, Selection::Stems(0b0101)),
-            (F - 2_800, Selection::Stems(0)),
+            (capture_frame - 5_200, Selection::Stems(STEM_COMPONENT_MASK)),
+            (capture_frame - 4_000, Selection::Stems(0b0101)),
+            (capture_frame - 2_800, Selection::Stems(0)),
             (
-                F - 1_600,
+                capture_frame - 1_600,
                 if matches!(self, Self::FullToStems | Self::Empty) {
                     Selection::Full
                 } else {
                     Selection::Stems(0b0101)
                 },
             ),
-            (F - 43, final_selection),
+            (capture_frame - 43, final_selection),
         ]
     }
 }

@@ -252,19 +252,31 @@ fn bounded_origin(timeline: &[ScalarFrame], end: usize) -> (usize, usize, usize)
 }
 
 fn synthetic_source() -> SampleBuffer {
+    synthetic_source_format(RATE, 1, EXTENT)
+}
+
+fn synthetic_source_format(sample_rate_hz: u32, channels: usize, extent: usize) -> SampleBuffer {
     SampleBuffer {
-        channels: 1,
+        channels,
         residency: None,
-        samples: (0..EXTENT)
-            .map(|frame| {
-                let time = frame as f64 / f64::from(RATE);
-                (0.18 * (std::f64::consts::TAU * (149.0 * time + 7.0 * time * time)).sin()
-                    + 0.05 * (std::f64::consts::TAU * 431.0 * time).cos()) as f32
+        samples: (0..extent)
+            .flat_map(|frame| {
+                (0..channels).map(move |channel| {
+                    let time = frame as f64 / f64::from(sample_rate_hz);
+                    (0.18
+                        * (std::f64::consts::TAU
+                            * ((149.0 + 37.0 * channel as f64) * time
+                                + (7.0 + 2.0 * channel as f64) * time * time))
+                            .sin()
+                        + 0.05
+                            * (std::f64::consts::TAU * (431.0 + 53.0 * channel as f64) * time)
+                                .cos()) as f32
+                })
             })
             .collect::<Vec<_>>()
             .into(),
     }
-    .with_complete_source(RATE)
+    .with_complete_source(sample_rate_hz)
 }
 
 fn setup(passage: Passage) -> (Fixture, SampleBuffer, u64) {

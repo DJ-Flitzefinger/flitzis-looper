@@ -123,6 +123,17 @@ each subscriber's own pending then accepted/current publication. The full existi
   final impacted Native91 and exact private Release/API/Python808 checks pass.
   Requested and effective rates remain separate in the controls. These bounded
   proofs do not close the full B5 format/stem, acoustic, deadline or Human gates.
+- [x] Prove stereo44.1/96k x Key Lock ON/OFF x total -23/+24 through original
+  public SET with actual 0.5/2 rate histories, held selection ramps, independent
+  two-channel A-reset PCM and original clock/phase/FIFO/source/action ownership.
+  Preserve explicit limits rather than treating this matrix as full B5 acceptance.
+  All eight profiles match every sample of 4097 stereo output frames exactly in
+  Debug and optimized Release; each channel's wrong-FullMix-past control differs.
+  The real format is configured on mixer, sources, stems, output clock and both
+  control capture/publication paths. Current full pitch131/1 existing ignored and
+  affected mode-history3 pass; one independent review cleared the actual proof.
+  Production/Python are unchanged, so their last private Release/API/Python gates
+  are reused. Continuous-O, acoustic, deadline, resource and Human gates remain open.
 - [ ] B6-K-AUDIO/B7-K-ATOMIC: prepared one-pass pitch, captured native selected
   projection/content lifetime/permits, direct/fallback/pending, distinct repeated
   attacks, same existing dueframe event, allfour Quantize/SYNC and routing combinations.

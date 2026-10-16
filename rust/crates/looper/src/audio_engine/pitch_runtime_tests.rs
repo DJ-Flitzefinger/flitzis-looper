@@ -44,26 +44,48 @@ pub(super) const SOURCE_HZ: f64 = 160.0;
 const WORKER_WAIT: Duration = Duration::from_secs(2);
 
 fn tone(hz: f64) -> SampleBuffer {
+    tone_format(hz, RATE, 1)
+}
+
+fn tone_format(hz: f64, sample_rate_hz: u32, channels: usize) -> SampleBuffer {
     let complete = SampleBuffer {
-        channels: 1,
+        channels,
         samples: Arc::from(
-            (0..144_000)
-                .map(|frame| {
-                    (0.25 * (frame as f64 * hz * std::f64::consts::TAU / f64::from(RATE)).sin())
-                        as f32
+            (0..3 * sample_rate_hz as usize)
+                .flat_map(|frame| {
+                    (0..channels).map(move |channel| {
+                        let frequency = hz * (1.0 + 0.31 * channel as f64);
+                        (0.25
+                            * (frame as f64 * frequency * std::f64::consts::TAU
+                                / f64::from(sample_rate_hz)
+                                + 0.37 * channel as f64)
+                                .sin()) as f32
+                    })
                 })
                 .collect::<Vec<_>>(),
         ),
         residency: None,
     }
-    .with_complete_source(RATE);
+    .with_complete_source(sample_rate_hz);
+    let start = sample_rate_hz as usize / 10;
+    let end = start + 2 * sample_rate_hz as usize;
     complete
-        .window(LOOP_START, LOOP_END, 2, ResidentContext::KeyLockFiniteLoop)
+        .window(start, end, 2, ResidentContext::KeyLockFiniteLoop)
         .unwrap()
 }
 
 /// Publish actual source/lifetime/authority before the mixer adopts its bank image.
 pub(super) fn publish_tone(control: &LaunchFixture, id: usize, sample: SampleBuffer, refill: bool) {
+    publish_tone_with_rate(control, id, sample, refill, RATE);
+}
+
+pub(super) fn publish_tone_with_rate(
+    control: &LaunchFixture,
+    id: usize,
+    sample: SampleBuffer,
+    refill: bool,
+    sample_rate_hz: u32,
+) {
     let engine = &control.engine;
     let ownership = &engine.input_runtime_ownership;
     let before = ownership.slot_snapshot(id).unwrap();
@@ -80,7 +102,7 @@ pub(super) fn publish_tone(control: &LaunchFixture, id: usize, sample: SampleBuf
         .publish_source_write(
             &write,
             &sample,
-            RATE,
+            sample_rate_hz,
             generation,
             ownership.next_authority(id).unwrap(),
             Some(TimingIntent::Manual),
@@ -88,11 +110,11 @@ pub(super) fn publish_tone(control: &LaunchFixture, id: usize, sample: SampleBuf
             || true,
         )
         .unwrap();
-    assert!(publication.current(&sample, RATE));
+    assert!(publication.current(&sample, sample_rate_hz));
     assert_eq!(publication.key().unwrap().lifetime(), lifetime);
     engine.sample_cache.lock().unwrap()[id] = Some(sample);
     engine.pad_request_ids.lock().unwrap()[id] = generation;
-    engine.loaded_source_generations.lock().unwrap()[id] = (generation, RATE);
+    engine.loaded_source_generations.lock().unwrap()[id] = (generation, sample_rate_hz);
     engine.loaded_source_digests.lock().unwrap()[id] = Some(format!("{generation:064x}"));
     engine.timing_intents.lock().unwrap()[id] = TimingIntent::Manual;
     engine
@@ -102,6 +124,8 @@ pub(super) fn publish_tone(control: &LaunchFixture, id: usize, sample: SampleBuf
 }
 
 pub(super) struct Fixture {
+    pub(super) sample_rate_hz: u32,
+    pub(super) channels: usize,
     pub(super) control: LaunchFixture,
     pub(super) mixer: Box<RtMixer>,
     pub(super) scheduler: FixedCapacityScheduler<16>,
@@ -114,17 +138,39 @@ pub(super) struct Fixture {
 
 impl Fixture {
     pub(super) fn new(lock: bool) -> Self {
+        Self::new_format(lock, RATE, 1)
+    }
+
+    pub(super) fn new_format(lock: bool, sample_rate_hz: u32, channels: usize) -> Self {
+        assert!(matches!(channels, 1 | 2));
+        let loop_start = sample_rate_hz as usize / 10;
+        let loop_end = loop_start + 2 * sample_rate_hz as usize;
         let mut control = LaunchFixture::new(32);
         let (_, feedback) = RingBuffer::<AudioMessage>::new(64);
         control.engine.test_control_channels =
             Some((control.producer.clone(), Arc::new(Mutex::new(feedback))));
+        control.engine.test_output_format = Some((sample_rate_hz, channels));
         control.engine.input_runtime = Some(InputRuntime::new_with_ownership(
             control.producer.clone(),
             control.engine.input_clock,
             control.engine.input_runtime_ownership.clone(),
         ));
-        publish_tone(&control, 0, tone(SOURCE_HZ), true);
-        publish_tone(&control, 1, tone(320.0), true);
+        control
+            .engine
+            .input_runtime
+            .as_ref()
+            .unwrap()
+            .set_render_format(sample_rate_hz, channels)
+            .unwrap();
+        for (id, hz) in [(0, SOURCE_HZ), (1, 320.0)] {
+            publish_tone_with_rate(
+                &control,
+                id,
+                tone_format(hz, sample_rate_hz, channels),
+                true,
+                sample_rate_hz,
+            );
+        }
         let clock = Arc::new(SharedOutputClock::new());
         control
             .engine
@@ -134,8 +180,8 @@ impl Fixture {
             .attach_pitch_clock(clock.clone())
             .unwrap();
         let mut mixer = create_stream_mixer(
-            1,
-            RATE,
+            channels,
+            sample_rate_hz,
             control.engine.current_timing_acknowledgements.clone(),
             control.engine.input_runtime_ownership.clone(),
             control.engine.prepared_source_epochs.clone(),
@@ -150,8 +196,8 @@ impl Fixture {
             );
             mixer.set_pad_loop_region(
                 id,
-                LOOP_START as f64 / f64::from(RATE),
-                Some(LOOP_END as f64 / f64::from(RATE)),
+                loop_start as f64 / f64::from(sample_rate_hz),
+                Some(loop_end as f64 / f64::from(sample_rate_hz)),
             );
             mixer.set_pad_key_lock(id, lock);
         }
@@ -161,8 +207,8 @@ impl Fixture {
         let mut bindings = vec![None; NUM_SAMPLES];
         for id in [0, 1] {
             loaded[id] = true;
-            starts[id] = LOOP_START as f64 / f64::from(RATE);
-            ends[id] = Some(LOOP_END as f64 / f64::from(RATE));
+            starts[id] = loop_start as f64 / f64::from(sample_rate_hz);
+            ends[id] = Some(loop_end as f64 / f64::from(sample_rate_hz));
             bindings[id] = input_runtime_binding::capture(&control.engine, id).unwrap();
         }
         let rows = vec![
@@ -190,10 +236,12 @@ impl Fixture {
             .unwrap();
         let (retirement, worker) = create_audio_buffer_retirement();
         let fixture = Self {
+            sample_rate_hz,
+            channels,
             control,
             mixer,
             scheduler: FixedCapacityScheduler::new(),
-            transport: TransportTimeline::new(RATE),
+            transport: TransportTimeline::new(sample_rate_hz),
             clock,
             feedback: Vec::new(),
             retirement,
@@ -211,10 +259,10 @@ impl Fixture {
             observed_at_ns: now,
             audible_at_ns: now,
             output_frame: frame,
-            sample_rate_hz: RATE,
+            sample_rate_hz: self.sample_rate_hz,
             master_period_seconds: Some(0.5),
             downbeat_frame: 0,
-            master_beat: frame as f64 / 24_000.0,
+            master_beat: frame as f64 / (f64::from(self.sample_rate_hz) * 0.5),
             freshness_ns: 2_000_000_000,
         });
     }
@@ -335,9 +383,12 @@ impl Fixture {
     }
 
     pub(super) fn pcm(&mut self, frames: usize) -> Vec<f32> {
-        let mut pcm = Vec::with_capacity(frames);
-        while pcm.len() < frames {
-            pcm.extend(self.render((frames - pcm.len()).min(512)));
+        let mut pcm = Vec::with_capacity(frames * self.channels);
+        let mut rendered = 0;
+        while rendered < frames {
+            let count = (frames - rendered).min(512);
+            pcm.extend(self.render(count));
+            rendered += count;
         }
         pcm
     }
@@ -375,7 +426,7 @@ impl Fixture {
     }
 
     pub(super) fn render(&mut self, frames: usize) -> Vec<f32> {
-        let mut output = vec![0.0; frames];
+        let mut output = vec![0.0; frames * self.channels];
         let frame = self.transport.output_frame();
         render_scheduled_audio(
             &mut self.mixer,
@@ -383,7 +434,7 @@ impl Fixture {
             &mut output,
             &mut [0.0; NUM_SAMPLES],
             frame,
-            1,
+            self.channels,
             &mut self.transport,
             &mut self.feedback,
             &mut self.retirement,

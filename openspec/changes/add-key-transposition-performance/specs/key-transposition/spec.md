@@ -93,6 +93,14 @@ SHALL NOT create complete source PCM or two serial pitch shifters.
 - **THEN** B5 proves the combined range or records a concrete unsupported limit
 - **AND** no partial retune, time change or accepted-looking clamp conceals failure
 
+#### Scenario: Stereo formats preserve original selected history through extreme SET
+- **GIVEN** an actual stereo 44.1 or 96 kHz source with distinct left and right content, a genuinely held stem selection and real off-grid source-rate history reaching both 0.5 and 2
+- **WHEN** an original SET to total -23 or +24 prepares under either Key Lock mode while selection and rate transitions are active
+- **THEN** mixer format, source and stem format, output-clock beat geometry and Native channel grouping SHALL agree at the original quantized T/E
+- **AND** the adopted output on each channel SHALL preserve that source's genuine required past and frozen future, with its original content, action, voice generation, source phase and FIFO ownership
+- **AND** a mono comparison, a 48 kHz history-window constant at 96 kHz or repeating FullMix through a required stem past SHALL NOT certify that stereo history
+- **AND** bounded-reset software agreement SHALL NOT replace the required continuous, acoustic, latency, resource or Human acceptance gates
+
 #### Scenario: Native pitch unity differs from source rate unity
 - **WHEN** r=1 with k nonzero or h/r=1 with r nonunit
 - **THEN** prepared processing/transition preserves intended pitch and matched output history/latency

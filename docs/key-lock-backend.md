@@ -51,6 +51,19 @@ distinguishes requested speed from confirmed audio speed/period and pending or
 rejected state. This bounded handoff does not close continuous-from-birth, acoustic,
 resource, performer-deadline or Human acceptance.
 
+The public nonstarting SET history proof additionally covers eight stereo profiles:
+44.1/96 kHz, both Key Lock modes and total -23/+24. Actual source rates reach 0.5
+and 2 before a further off-grid transition remains active at capture and adoption.
+Distinct left/right source and held-stem signals feed one independent two-channel
+ChannelsTogether Native reference. Every sample of 4097 adopted output frames
+matches exactly in Debug and optimized Release, with original T/E, action, source,
+voice, phase and FIFO ownership retained. Each channel's incorrect FullMix-only
+history differs. Queried Native history bounds range from 13312 to 59904 frames;
+block-lattice alignment can extend replay. The reference uses the declared
+2048-frame Short window at 44.1 kHz and 4096 at 96 kHz. This
+extends bounded A-reset evidence; continuous-from-birth, acoustic and live timing
+acceptance still require their separate gates.
+
 The bounded resident-selection context additionally admits FullMix->Stems,
 Stems->FullMix and enabled-mask changes for active current-source NormalLoop
 voices with the identical already ACKed resident committed StemSet. An inactive
