@@ -2337,10 +2337,11 @@ The predeclared20Hz carrier/2Hz modulator/eight-frame weak-edge source instead
 has exactly one feasible pair and recovers its original gate and gauge. The
 initial assertion that this source would be ambiguous failed; the unchanged
 construction is retained as a uniquely identifiable control. An independent
-demonstration of multiple feasible landmark or complex-multiplier ambiguity
-remains OPEN, as does empirical cap-exhaustion coverage. The normative ambiguity
-requirement and the finite-gate evaluation task therefore remain OPEN. The full
-matrix is exploratory evidence, not completion of that required control sequence.
+demonstration of multiple feasible landmark or complex-multiplier ambiguity was
+still missing from that initial evaluation, as was empirical cap-exhaustion
+coverage. The added source control below demonstrates the landmark case;
+complex-multiplier ambiguity and the finite-gate evaluation task remain OPEN.
+The full matrix is exploratory evidence, not completion of that required sequence.
 
 Actual prior-HEAD comparisons cover four sources and all eight old preparation
 policies:32 complete reports and prepared arrays are exactly equal. Two shifted
@@ -2381,6 +2382,76 @@ parent gate remain unchanged. No native build or extra Release is warranted by
 this opt-in offline-only change; prior unchanged private Release/API evidence is
 reused. The remaining ambiguity controls must be demonstrated before this finite
 evaluation can be closed, independently of the improved AM acoustic measurements.
+
+### Independent Multiple-Feasible Finite-AM Gates — 2026-10-16
+
+The standalone command
+`uv run --no-sync python scripts/pitch_finite_am_ambiguity_controls.py` exercises
+an independent declared-source construction through the unchanged v9 fitter.
+The same control now runs inside the canonical finite-AM source controls before
+the quality matrix. No source-selection, search, fitting, rendering or production
+policy changes. Previous complete matrix and Native/API evidence are reused,
+not freshly rerun for this control-only addition. Finite-gate evaluation and
+the overall acoustic candidate remain OPEN/rejected.
+
+The source has32768frames at48kHz, carrier1000Hz, stereo direction(1,i)/sqrt(2),
+global multiplier .287*exp(-.61i), and positive modulation
+m(n)=1-.999998*cos(2*pi*(n-2052)/480). Independent real sine/cosine synthesis and
+sine-squared gate equations generate the PCM. The true onset/rise/end/release
+tuple is(2048,8,28456,8); an alternative is(2046,12,28458,12). Corresponding
+onset, rise-end, release-start and end landmarks differ by TWO frames. Both
+observation edges contain at least one full480-frame informative plateau period,
+while the modulation trough suppresses only the short ramps.
+
+Quadrature stereo gives the pointwise I/Q Gram F'F=m(n)^2*I/2. Consequently the
+alternative complete global least-squares multiplier is z times
+sum(gtrue*galt*m^2)/sum(galt^2*m^2), independently of the fitter. Before search,
+this scale is1.000000000011966 and its global/onset/release relative RMS are
+1.35243542e-6/7.09207263e-6/7.09207263e-6, all below the unchanged1e-4 threshold.
+A separate analytical upper bound is3.411e-5: differences occupy only ten
+samples per edge with m<.002144 and abs(gtrue-galt)<.11; the full plateau period
+supplies scalar energy at least480 and the global multiplier correction is
+less than1.24e-9. The source therefore has genuinely multiple feasible models.
+
+A third independently evaluated tuple(2049,3,28456,8) also passes global and
+each-edge RMS, with onset error3.288e-6. It touches maximum onset anchor and
+minimum width. Boundary refusal therefore has priority over a displayed landmark
+ambiguity refusal reason. The true model's six-parameter Jacobian also exceeds
+the condition limit. Neither isolated landmark-refusal nor isolated Jacobian-
+refusal branch coverage follows from this combined negative construction.
+
+This source cannot test complex-multiplier ambiguity. Every candidate gate is
+zero outside U=[1538,28966] and one on P=[2561,27943]. For two globally feasible
+models, F*(beta1-beta2) on P equals the difference of their source residuals.
+The global RMS limit epsilon and 0<=gate<=1 imply normalized multiplier diameter
+at most 2*epsilon*K/(1-epsilon), where K^2 is the largest union-support basis-Gram
+eigenvalue divided by the smallest common-plateau eigenvalue. Here the pointwise
+isotropic Gram and nonnegative480-periodic m^2 bound K^2 by58/52 complete periods.
+The resulting bound .0002112446663 is BELOW the existing .001 ambiguity limit.
+This is a conditional mathematical exclusion for these declared source models,
+not empirical coverage of the complex-ambiguity refusal branch or a general
+physical-error guarantee. The independent complex-multiplier ambiguity control,
+empirical cap-exhaustion coverage and full finite-gate evaluation remain OPEN.
+
+The unchanged exhaustive search completes in303.305894seconds with261120 edge
+candidates and194 survivors on EACH side. All37636 Cartesian pairs are directly
+confirmed feasible and counted, with no cap exhaustion or partial selection.
+Onset spans2036..2049, rise-end2048..2068, release-start28436..28456 and
+end28455..28468. It publishes no gate or multiplier and reports
+`feasible_set_touches_search_boundary`, exactly as independently predicted.
+All global I/Q designs pass condition; the best direct fit recovers the original
+gate with rank-six Jacobian condition3743820.30, above the unchanged1e6 bound.
+The complete original PCM remains bitwise unchanged; the allocation estimate is
+71303168bytes. Complex distance remains null because landmark disagreement already
+precludes admission, as required by the existing implementation.
+
+The first frozen-source fit is reused rather than duplicated: the final control
+constructor is verified bitwise equal to that source, and its independent equations
+and final report assertions are executed against the actual terminal search.
+The final canonical full probe is not freshly rerun. The control addition changes
+no fitter, source estimator, renderer, threshold or previously measured acoustic
+profile. This evidence closes only the independent multiple-feasible landmark
+negative-control item; the separately listed remaining items stay open.
 
 ## Settings Contract
 

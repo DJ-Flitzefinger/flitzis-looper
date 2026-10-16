@@ -11,6 +11,7 @@ from typing import TYPE_CHECKING
 
 import numpy as np
 from pitch_amfm_model import render as render_residual
+from pitch_finite_am_ambiguity_controls import landmark_ambiguity_control
 from pitch_finite_am_gate import FiniteSourceGate, fit_finite_am_gate
 from pitch_independent_modes import Prepared, prepare, render_prepared
 from pitch_source_modulation import SourceModulator
@@ -651,6 +652,7 @@ def integrity_controls() -> dict:
         ],
         "unsupported_underresolved_and_mismatched_sources": _negative_sources(elliptical),
         "predeclared_weak_edge_ambiguity_control": _ambiguity_control(),
+        "independent_multiple_feasible_landmark_control": landmark_ambiguity_control(),
         "public_source_certificate_gate_and_complete_render": [
             _public_pipeline(elliptical),
             _public_pipeline(collinear),

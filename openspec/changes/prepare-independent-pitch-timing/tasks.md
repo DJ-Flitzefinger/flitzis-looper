@@ -54,8 +54,10 @@
   complete-support band refusals and the unchanged full-response quality matrix.
 - [ ] Evaluate a conditional finite positive-AM source gate with joint I/Q, complete ambiguity
   search, independent finite/scale/refusal controls and the unchanged full-response matrix.
-- [ ] Demonstrate independent multiple-feasible landmark and complex-multiplier ambiguity
-  refusals before completing the finite-gate evaluation; the initial weak-edge case is unique.
+- [x] Demonstrate independent multiple-feasible landmark source models and complete-search
+  refusal; distinguish boundary/Jacobian co-failures from isolated branch coverage.
+- [ ] Demonstrate independent complex-multiplier ambiguity refusal before completing the
+  finite-gate evaluation; the quadrature-stereo landmark source excludes that ambiguity.
 - [ ] Test all37 extras/base -5..+6/total -23..+24 at actual r(n), lockON h/r
   (~.132433..8 for r=.5..2), lockOFF h, original .25..4 corners and finite bounds
   without clipping; prove quality/RT/readiness/latency/finite context/unity transitions.
