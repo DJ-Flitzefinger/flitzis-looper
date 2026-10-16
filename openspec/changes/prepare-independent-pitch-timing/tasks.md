@@ -68,6 +68,10 @@
   phase transport, phase/scale/identity controls and frozen close-pair/900-1100 comparisons.
   The frozen candidate is rejected by a77.85-cent close-pair tonal failure despite passing
   original timing predicates; the existing renderer and all product gates remain unchanged.
+- [x] Audit unchanged residual noise band-auto/whole/signed-cross energy at fixed profiles,
+  summing segment PCM per band before squaring and retaining original dry timing criteria.
+  The frozen audit attributes most balance changes to cross-band interference; it retains
+  all three noise timing failures and supplies no replacement or product acceptance.
 - [ ] Test all37 extras/base -5..+6/total -23..+24 at actual r(n), lockON h/r
   (~.132433..8 for r=.5..2), lockOFF h, original .25..4 corners and finite bounds
   without clipping; prove quality/RT/readiness/latency/finite context/unity transitions.

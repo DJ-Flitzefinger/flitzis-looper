@@ -2653,6 +2653,79 @@ discovered pytest tests. The existing v10 result remains six timing failures
 and no tonal failures across its unchanged full matrix. No baseline renderer,
 admission, acoustic threshold, Native installation or Human acceptance changes.
 
+### Residual Noise Band-Energy Attribution — 2026-10-17
+
+`uv run --no-sync python -B scripts/pitch_noise_energy_probe.py` audits the
+unchanged unseen_noise source through the existing finite-bank AM/FM operations.
+It changes no source, cue, exact-zero trim, phase rule, sampler, acoustic gate or
+renderer. The fixed requests are rate2 with -7,0,+7 semitones and k=12, where
+h=r=2 is the unwarped control. The complete nominal silence and every finite
+convolution tail remain captured.
+
+For each band b, the audit first adds all source-segment contributions in the
+global capture to form u_b. It then computes A=sum_b norm(u_b)^2, E=norm(sum_b
+u_b)^2 and signed C=E-A. Squaring segment atoms first would misclassify same-band
+segment cancellation as cross-band interference. Independent controls distinguish
+that case from cancellation between two different bands and compare signed
+smoothed balances against explicit scalar window sums. The actual frozen noise
+has one active segment; these results do not claim a measured multi-segment case.
+
+The audit uses the unchanged centered25-frame box. Only nonnegative A,E and dry
+energy receive quantiles. At each fixed canonical dry quantile time t_p, it
+reports R_X=sum(envelope(X) through t_p)-p*sum(envelope(X)), for X=A,E,C.
+Every balance and signed integral uses the same clock's dry energy denominator.
+The h=r control is subtracted separately. Signed C receives neither quantiles
+nor a CDF. An explicit length/epsilon/L1 comparison budget bounds the floating
+balance identity; it is separate from the unchanged2ms audio gate.
+
+The complete43.552-second audit passes its numerical controls. Source-grid
+reconstruction error is2.77556e-16; the decimated h=r output error is2.49801e-16
+and its whole-band autoenergy matches decimated source-grid autoenergy exactly.
+All four full audit outputs equal the corresponding frozen renderer PCM in
+this one-active-segment case. Their unchanged q10/q50/q90 offsets are:
+
+| k | Whole response, frames | Band autoenergy, frames |
+| --- | --- | --- |
+| -7 | +212/+222/+223 | +202/+125/+141 |
+| 0 | +135/+102/+211 | +205/+123/+140 |
+| +7 | -222/-236/+77 | +200/+122/+142 |
+| +12, h=r control | 0/0/0 | +200/+123/+142 |
+
+Delayed band autoenergy already exists in the unwarped control, whose whole
+response reconstructs the dry signal. Its cross terms restore the original
+chronology. Phase warping changes those cross terms strongly while the band
+autoenergy changes much less. For example, normalized q50 balance differences
+from the unwarped control are:
+
+| k | Whole delta R_E | Auto delta R_A | Cross delta R_C |
+| --- | ---: | ---: | ---: |
+| -7 | -.0040671764 | -.0000225144 | -.0040446620 |
+| 0 | -.0014979062 | +.0000182334 | -.0015161396 |
+| +7 | +.0042641943 | +.0000284554 | +.0042357389 |
+
+Across all three fixed boundaries and shifted profiles, absolute auto-balance
+change is at most6.927e-5; the cross changes explain most of the whole changes
+in this measured decomposition. This is attribution within the frozen model,
+not proof of a unique physical cause or a pure per-band allpass delay. Source-grid
+real autoenergy has q10/q50/q90 offsets+236/+248/+235 source frames; complex
+coefficient autoenergy has+235/+247/+236. Complex magnitude alone cannot establish
+the timing of the real squared output.
+
+The normalized balance identity error is at most3.993e-15 across output profiles
+and1.028e-14 on the source grid, below explicitly reported conservative budgets
+up to3.321e-5. Independent arithmetic controls have scalar-window error0 and
+linear-balance error2.887e-15. There is no timing tolerance change. Logical
+working storage is estimated at140467917 bytes below256MiB, using sequential
+bands and cached segment FFTs; no513-band PCM matrix is allocated. The initial
+frame guard also refuses a real readonly two-million-frame broadcast before
+cue/capture allocation. This logical estimate is not measured total process RSS.
+
+The next constructive work must address cross-band phase relationships in
+residual synthesis. Another independent-band envelope adjustment or fitted delay
+would not follow from these observations. No replacement synthesizer, Native
+build, realtime/resource acceptance or Human listening acceptance is delivered;
+the three noise failures and the baseline's six total timing failures remain.
+
 ### Public Exact-Model Complex-Gauge Bound — 2026-10-17
 
 `uv run --no-sync python scripts/pitch_finite_am_gauge_controls.py` evaluates a

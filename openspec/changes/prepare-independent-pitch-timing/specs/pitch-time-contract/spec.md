@@ -649,6 +649,38 @@ proof of real-PCM energy timing, alias safety, realtime or product acceptance.
 - **THEN** the experiment SHALL measure the original whole-response criteria and retain every residual tail
 - **AND** unresolved phase, numeric failure or failing tonal/timing measurements SHALL remain explicit negative evidence
 
+### Requirement: Residual Energy Attribution Keeps Complete Band And Segment Interference
+The offline noise audit SHALL retain the existing complete finite-bank renderer,
+source cues, exact-zero trimming, source coordinates, capture and every tail.
+It SHALL audit the unchanged noise source at rate2 with -7,0,+7 semitones and
+the h=r=2 identity control without changing synthesis parameters or acoustic
+criteria. Its independently accumulated whole output SHALL agree with the
+existing renderer under the declared numerical reconstruction bound.
+
+For each band the audit SHALL sum all of that band's segment contributions in
+the global capture before squaring. It SHALL define nonnegative autoenergy A as
+the sum of those whole-band squared stereo norms, whole energy E as the squared
+norm of their sum and signed cross energy C=E-A. Per-segment squares SHALL NOT
+be mislabeled as whole-band autoenergy. Source-grid and h=r reconstruction,
+source complex-coefficient autoenergy and complete support SHALL be checked.
+The audit SHALL use bounded sequential band storage rather than a complete
+band-by-time PCM matrix.
+
+The existing centered smoothing and quantiles SHALL apply only to nonnegative
+A,E and dry energy. Signed C SHALL NOT receive quantiles or a normalized CDF.
+At the fixed canonical dry quantile times, the audit SHALL report signed linear
+cumulative balances for A,E,C with the same dry-energy denominator and check
+that the whole balance equals the sum of auto and cross balances within an
+explicit numerical bound. The h=r control SHALL remain a separate comparison.
+Energy attribution SHALL NOT alone establish an allpass delay, a replacement
+synthesizer, realtime safety or acceptance of the still-failing audio backend.
+
+#### Scenario: Segment contributions overlap within one band
+- **GIVEN** two segment contributions cancel in the same band's complete capture
+- **WHEN** the audit measures that band's autoenergy and the bank's cross energy
+- **THEN** it SHALL sum the segment PCM before squaring and retain the cancellation inside the band
+- **AND** only interference between the resulting whole bands SHALL enter the signed cross term
+
 ### Requirement: Combined Pitch And Rate Bounds Are Never Silently Clipped
 The system SHALL validate and report the supported combined pitch/rate domain before accepting
 diagnostic transposition, retaining separate requested, pending, effective and rejected state.
