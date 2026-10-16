@@ -56,6 +56,8 @@
   search, independent finite/scale/refusal controls and the unchanged full-response matrix.
 - [x] Demonstrate independent multiple-feasible landmark source models and complete-search
   refusal; distinguish boundary/Jacobian co-failures from isolated branch coverage.
+- [x] Establish an exact-model complex-gauge bound for the actual public frequency enclosure,
+  separately check computed bases, and retain existing guards and uncovered numeric domains.
 - [ ] Demonstrate independent complex-multiplier ambiguity refusal before completing the
   finite-gate evaluation; the quadrature-stereo landmark source excludes that ambiguity.
 - [ ] Test all37 extras/base -5..+6/total -23..+24 at actual r(n), lockON h/r

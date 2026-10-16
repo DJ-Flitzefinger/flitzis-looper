@@ -2453,6 +2453,100 @@ no fitter, source estimator, renderer, threshold or previously measured acoustic
 profile. This evidence closes only the independent multiple-feasible landmark
 negative-control item; the separately listed remaining items stay open.
 
+### Public Exact-Model Complex-Gauge Bound — 2026-10-17
+
+`uv run --no-sync python scripts/pitch_finite_am_gauge_controls.py` evaluates a
+source-domain bound and twelve separately declared computed-basis examples. The
+same controls now precede the canonical finite-AM quality matrix. The fitter,
+actual all-pairs multiplier guard, source estimator, renderer and every original
+threshold remain unchanged. This is not a replacement admission rule or a new
+audio backend. Previous matrix, source-search and Native/API results are reused;
+no full303-second ambiguity search, acoustic matrix or Native build is repeated.
+
+For two feasible models write their fixed stereo I/Q basis as F, multipliers as
+beta1/beta2, and full-source residuals as e1/e2. Let P be their common plateau
+and U their contiguous union of nonzero gate support. When all four source-grid
+landmark diameters are at most one frame, P contains the entire8192-frame
+reference and U adds at most1024 endpoint samples to P. On P,
+F*(beta1-beta2)=e2-e1. Thus, with epsilon=1e-4 and
+K^2=lambdaMax(sum_U F'F)/lambdaMin(sum_P F'F),
+
+`abs(beta1-beta2)/max(abs(beta1),abs(beta2)) <= 2*epsilon*K/(1-epsilon)`.
+
+The numerator uses the two full-source residual bounds. The denominator follows
+from (1-epsilon)*norm(source)<=norm(mode)<=sqrt(lambdaMax(G_U))*norm(beta).
+No least-squares orthogonality, exact source factorization, isolated physical
+interpretation or unobserved-model error estimate is needed for this inequality.
+
+The public path is original carrier admission, AM grouping, immutable modulator
+validation and finite fitting. The retained central frequency stays within
+20..23520Hz and modulation spacing is at most11750Hz. Crucially, AM grouping
+symmetrizes the sidebands around the original center. Those adjusted sidebands
+are only guaranteed strictly inside0..24000Hz by modulator validation; they need
+not remain inside the original20..23520Hz interval. The proof uses this actual
+enclosing domain, not the stronger and unjustified sideband-floor assumption.
+Manually supplied carrier estimates and low-level declared bases can have a
+larger domain and do not receive this public-path theorem.
+
+For unit pooled stereo direction C, let w=m^2, S_I=sum_I w and
+T_I=sum_I w*exp(4*pi*i*fc*n/Fs). The Gram eigenvalues are
+(S_I +/- abs(sum(C^2)*T_I))/2, with abs(sum(C^2))<=1. For modulation nu>=9Hz,
+Dirichlet bounds at40,20,nu,2nu are respectively below383,765,1700,850. In the
+T expansion both potentially near-resonant +/-2nu terms are conservatively
+bounded by sample count, rather than assuming a sideband gap. With v=abs(u)<.5,
+S-|T|>=N-E(v), S+|T|<=N*(1+4v^2)+E(v), where
+E(v)=(1+2v^2)*383+4v*765+4v*1700+2v^2*850 <5930.
+Consequently K^2 < [2*(8192+1024)+5930]/[8192-5930] and normalized multiplier
+diameter is at most .000656423, below the existing .001 criterion.
+
+For0<nu<9Hz put r=2*abs(u)<1 and shift modulation phase into x. Then
+m^2=(1-r)^2+4r*(1-r)*sin^2(x)+4r^2*sin^4(x). All coefficients are nonnegative.
+For each of the three weights, an interval's continuous integral is at least
+its length times its maximum divided by8. Within one sine lobe, concavity gives
+the stronger tent bound1/5. If one zero splits two arms below a crest, their
+length ratio t reduces the fourth-power bound to
+8*t^5-5*t+3>=0; its interior minimum is3-4*8^(-1/4)>0. If either arm reaches a
+crest, its quarter-period integral3*pi/16 already exceeds the required bound.
+The squared-sine case follows by applying sin^2>=sin^4 after normalization.
+
+For N sampled consecutive frames, the Riemann/total-variation allowance gives
+max(w)<=8*sum(w)/(N-17). For phase spans shorter than one modulation period,
+Abel summation then bounds abs(T)/S by
+32/[(8192-17)*2*sin(2*pi*20/48000)] = .747591046 <.748.
+Longer spans contain k complete periods of length Tperiod>48000/9: their sum
+is at least k*(3*Tperiod/8-4) and the Abel endpoint/variation numerator is at
+most2*(k+2). The resulting ratio is below .575, hence also below .748.
+These inequalities transfer to m^2 through its nonnegative decomposition.
+
+Adding one endpoint yields S_(N+1)/S_N<=(N-16)/(N-24). Telescoping at most1024
+additions gives S_U/S_P<=(1+1024/8168)^8<2.573. Therefore K^2<2*2.573/(1-.748)
+and normalized multiplier diameter is at most .000903875. Constant modulation
+has the smaller bound .000221763. All three exact sampled-model bounds stay
+strictly below .001, independently of the original source phase.
+
+This exact-model theorem is distinct from universal floating-point certification.
+The existing cosine implementation can have cancellation near a deep slow trough;
+no theorem about every libm/platform/extreme input is inferred from the algebra.
+The actual computed-basis controls therefore form the finite I/Q Grams separately
+using the program's public modulation evaluator, compare them with an independent
+complex-moment identity, and include a conservative standard-dot-product rounding
+allowance. Its numeric enclosure is conditional on those rounding assumptions.
+No numeric result changes fitter admission or replaces the actual multiplier guard.
+
+All twelve predeclared cases pass, including central-frequency limits, strong
+slow troughs, nextafter(.5,0) depth,2**-35Hz modulation, long/late plateaus and
+adjusted sidebands below20Hz or above23520Hz. Their largest computed-basis
+distance bound is .000300849023; the largest relative Gram-identity error is
+2.314e-16. Three out-of-theorem-domain inputs are rejected by this control's
+proof-enclosure checker, not by a changed product or low-level fitter contract.
+No source-fit search or standalone complex-refusal branch is executed here.
+
+The exact public-model proof item is complete. Generic low-level complex
+ambiguity, universal floating-point/cancellation coverage, cap-exhaustion evidence,
+the full finite-gate evaluation and every product/Human gate remain open or
+unclaimed. The candidate still has the same seven actual acoustic timing failures;
+these source-domain bounds do not fix or conceal them.
+
 ## Settings Contract
 
 Project persistence stores the global `key_lock` boolean as default intent and
