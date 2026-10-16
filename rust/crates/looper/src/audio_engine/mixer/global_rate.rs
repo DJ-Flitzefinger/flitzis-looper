@@ -222,7 +222,7 @@ impl RtMixer {
         Ok(false)
     }
 
-    fn capture_rate_permit(
+    pub(super) fn capture_voice_history_permit(
         &self,
         index: usize,
         snapshot: &PitchSourceSnapshot,
@@ -319,7 +319,7 @@ impl RtMixer {
                 return Err(RateError::SourceChanged);
             }
             let permit = self
-                .capture_rate_permit(index, &snapshot)
+                .capture_voice_history_permit(index, &snapshot)
                 .ok_or(RateError::SourceChanged)?;
             let binding = ProductiveSourceBinding::new(
                 &snapshot.sample,

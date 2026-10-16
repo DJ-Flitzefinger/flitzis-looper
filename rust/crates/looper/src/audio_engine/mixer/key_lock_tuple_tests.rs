@@ -8,6 +8,8 @@ use std::collections::VecDeque;
 use std::time::{Duration, Instant};
 
 include!("key_lock_source_feed_tests.rs");
+include!("key_lock_same_pitch_tests.rs");
+include!("key_lock_two_pad_tests.rs");
 
 fn wait(mut ready: impl FnMut() -> bool) {
     let deadline = Instant::now() + Duration::from_secs(5);
@@ -236,7 +238,16 @@ fn prove_mode_change(
         .execution
         .unwrap();
     assert_eq!(e, f + 4096);
-    wait_candidate(&mut fixture);
+    let continuous = fixture.mixer.pending_key_lock_tuples[0]
+        .as_ref()
+        .unwrap()
+        .voices
+        .iter()
+        .flatten()
+        .all(|voice| voice.continuous);
+    if !continuous {
+        wait_candidate(&mut fixture);
+    }
     let before = fixture.render_to(e);
     let before_expected = reference.render_to(e);
     compare(&before, &before_expected, "old continuous PCM before E");
@@ -266,7 +277,13 @@ fn prove_mode_change(
     let mut actual = fixture.render(1);
     assert_eq!(fixture.mixer.pad_key_lock_enabled[0], !old);
     assert_eq!(fixture.voice(0).generation, generation);
-    assert_ne!(fixture.voice(0).stretch.native_state_address(), old_native);
+    if continuous {
+        assert_eq!(ratio, 1.0);
+        assert!(!resident, "finite windows retain prospective preparation");
+        assert_eq!(fixture.voice(0).stretch.native_state_address(), old_native);
+    } else {
+        assert_ne!(fixture.voice(0).stretch.native_state_address(), old_native);
+    }
     if let Some(ticket) = &ticket {
         assert_eq!(ticket.publication_status(), "accepted");
     }
@@ -275,10 +292,18 @@ fn prove_mode_change(
     assert_eq!(status.effective, !old);
     assert!(status.ready);
     actual.extend(fixture.pcm(23_999));
-    let p = 2.0_f64.powf(f64::from(extra) / 12.0) / if !old { ratio } else { 1.0 };
-    let mut raw = Raw::new(p);
-    raw.render(&source_pcm(phase, ratio, 0, 4096));
-    let expected = raw.render(&source_pcm(phase, ratio, 4096, 24_000));
+    let expected = if continuous {
+        // At settled unity no DSP parameter changes. The independent original
+        // owner, rather than a newly reset destination, is the specified reference.
+        let mut expected = reference.render(1);
+        expected.extend(reference.pcm(23_999));
+        expected
+    } else {
+        let p = 2.0_f64.powf(f64::from(extra) / 12.0) / if !old { ratio } else { 1.0 };
+        let mut raw = Raw::new(p);
+        raw.render(&source_pcm(phase, ratio, 0, 4096));
+        raw.render(&source_pcm(phase, ratio, 4096, 24_000))
+    };
     compare(
         &actual,
         &expected,
@@ -654,7 +679,8 @@ fn refused_mode_reconciles_its_actual_new_window_and_retry_prepares_real_pcm() {
 fn stale_timing_pitch_stop_and_source_never_adopt_a_prospective_mode_owner() {
     for race in ["timing", "pitch", "stop", "source", "window"] {
         let mut fixture = complete_fixture(false);
-        start(&mut fixture, 7, false, 1.0);
+        // Different numeric pitches require a genuine replacement candidate.
+        start(&mut fixture, 7, false, 1.25);
         submit_scalar(&mut fixture, true);
         wait_candidate(&mut fixture);
         let e = fixture.mixer.pending_key_lock_tuples[0]
@@ -664,7 +690,7 @@ fn stale_timing_pitch_stop_and_source_never_adopt_a_prospective_mode_owner() {
             .unwrap();
         let native = fixture.voice(0).stretch.native_state_address();
         match race {
-            "timing" => fixture.mixer.set_speed(1.25),
+            "timing" => fixture.mixer.set_speed(1.5),
             "pitch" => fixture.mixer.pad_pitch_intent[0] = PitchIntent::new(0, -7).unwrap(),
             "stop" => fixture.mixer.stop_sample(0),
             "source" => {
@@ -817,14 +843,20 @@ fn one_stale_participant_prevents_every_prospective_native_swap() {
 #[test]
 fn superseding_mode_request_keeps_old_audio_and_cannot_reuse_the_old_candidate() {
     let mut fixture = complete_fixture(false);
-    start(&mut fixture, 7, false, 1.0);
+    start(&mut fixture, 7, false, 1.25);
     let old_request = submit_scalar(&mut fixture, true);
     wait_candidate(&mut fixture);
+    let original_e = fixture.mixer.pending_key_lock_tuples[0]
+        .as_ref()
+        .unwrap()
+        .execution
+        .unwrap();
     let native = fixture.voice(0).stretch.native_state_address();
     let new_request = fixture.control.engine.set_pad_key_lock(0, false).unwrap();
     assert_ne!(old_request, new_request);
     fixture.drain();
     fixture.render(1);
+    fixture.render_to(original_e + 8193);
     assert!(fixture.mixer.pending_key_lock_tuples[0].is_none());
     assert!(!fixture.mixer.pad_key_lock_enabled[0]);
     assert_eq!(fixture.voice(0).stretch.native_state_address(), native);

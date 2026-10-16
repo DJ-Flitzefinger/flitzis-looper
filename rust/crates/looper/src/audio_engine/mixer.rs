@@ -253,6 +253,7 @@ pub struct RtMixer {
     pad_key_lock_status: [Option<super::input_runtime_binding::KeyLockStatus>; NUM_SAMPLES],
     queued_key_lock_tuples: Box<[Option<key_lock_tuple::KeyLockTupleRequest>]>,
     pending_key_lock_tuples: Box<[Option<key_lock_tuple::PendingKeyLockTuple>]>,
+    continuous_key_lock_voices: Box<[Option<key_lock_tuple::ContinuousTupleVoice>]>,
 
     /// Authoritative output seconds per quarter when BPM lock is enabled.
     master_period_seconds: Option<f64>,
@@ -782,6 +783,7 @@ impl RtMixer {
             pad_key_lock_status: [None; NUM_SAMPLES],
             queued_key_lock_tuples: (0..NUM_SAMPLES).map(|_| None).collect(),
             pending_key_lock_tuples: (0..NUM_SAMPLES).map(|_| None).collect(),
+            continuous_key_lock_voices: (0..MAX_VOICES).map(|_| None).collect(),
             master_period_seconds: None,
             pad_period_seconds: std::array::from_fn(|_| None),
             pad_phase_anchor_frame: std::array::from_fn(|_| 0.0),

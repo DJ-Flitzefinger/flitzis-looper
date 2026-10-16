@@ -319,8 +319,8 @@ struct Checkpoint {
 }
 
 struct LifecycleOracle {
-    actual: RtMixer,
-    complete: RtMixer,
+    actual: Box<RtMixer>,
+    complete: Box<RtMixer>,
     source: SampleBuffer,
     clock: AlgebraicClock,
     raw: RawChronology,
@@ -345,8 +345,8 @@ impl LifecycleOracle {
             )
             .unwrap();
         Self {
-            actual: lifecycle_mixer(&finite, period, ratio),
-            complete: lifecycle_mixer(&source, period, ratio),
+            actual: Box::new(lifecycle_mixer(&finite, period, ratio)),
+            complete: Box::new(lifecycle_mixer(&source, period, ratio)),
             source,
             clock: AlgebraicClock::new(admitted_musical_period(LIFECYCLE_RATE, period), ratio),
             raw: RawChronology::new(ratio, false),
@@ -375,20 +375,20 @@ impl LifecycleOracle {
             )
             .unwrap();
         let stems = super::finite_stem_transition_tests::components(&original, LIFECYCLE_RATE);
-        let mut actual = super::finite_stem_transition_tests::transition_mixer(
+        let mut actual = Box::new(super::finite_stem_transition_tests::transition_mixer(
             &finite,
             stems.clone().window_for(&finite).unwrap(),
             LIFECYCLE_RATE,
             period,
             ratio,
-        );
-        let mut complete = super::finite_stem_transition_tests::transition_mixer(
+        ));
+        let mut complete = Box::new(super::finite_stem_transition_tests::transition_mixer(
             &original,
             stems.clone(),
             LIFECYCLE_RATE,
             period,
             ratio,
-        );
+        ));
         for mixer in [&mut actual, &mut complete] {
             mixer.stop_sample(0);
             if selected {
@@ -611,31 +611,69 @@ impl LifecycleOracle {
 }
 
 #[test]
-fn finite_pause_before_and_after_preparation_keeps_wet_chronology_through_new_rate_adoptions() {
+fn finite_pause_cancels_unadopted_work_then_rate_ramps_retain_productive_wet_history() {
     for period in [1499.75, 1500.25] {
         let mut oracle = LifecycleOracle::new(period, 0.73);
         let stale = oracle.request();
+        let stale_e = oracle.checkpoint.as_ref().unwrap().target;
         let live = voice(&oracle.actual).stretch.native_state_address();
         oracle.pause_gap(257);
         let resumed = oracle.request();
+        let fresh_e = oracle.checkpoint.as_ref().unwrap().target;
+        assert!(fresh_e > stale_e);
         assert_ne!(resumed, live);
         assert_ne!(stale, live);
         assert_eq!(voice(&oracle.actual).stretch.native_state_address(), live);
+        while oracle.output_frame <= stale_e {
+            oracle.render(73.min((stale_e + 1 - oracle.output_frame) as usize));
+        }
+        assert!(oracle.output_frame < fresh_e);
+        assert_eq!(oracle.adoptions, 0);
+        assert_eq!(voice(&oracle.actual).stretch.native_state_address(), live);
+        assert_eq!(voice(&oracle.actual).stretch.adopted_request_id(), None);
         oracle.through_checkpoint();
         let adopted = voice(&oracle.actual).stretch.native_state_address();
+        let origin = voice(&oracle.actual).stretch.native_origin_tuple();
+        let adopted_request = voice(&oracle.actual).stretch.adopted_request_id();
+        assert!(origin.is_some() && adopted_request.is_some());
+        // Productive history is valid across later Pause/Resume and rate targets.
+        // Observe the same complete spans without forcing unnecessary candidates.
+        let continue_history = |oracle: &mut LifecycleOracle| {
+            let end = oracle.output_frame + PREPARED_HISTORY_FRAMES as u64 + 777;
+            let mut partition = 0;
+            let partitions = [1, 127, 384, 96, 257, 512, 31];
+            while oracle.output_frame < end {
+                oracle.render(
+                    partitions[partition % partitions.len()]
+                        .min((end - oracle.output_frame) as usize),
+                );
+                partition += 1;
+                assert_eq!(
+                    voice(&oracle.actual).stretch.native_state_address(),
+                    adopted
+                );
+                assert_eq!(voice(&oracle.actual).stretch.native_origin_tuple(), origin);
+                assert_eq!(
+                    voice(&oracle.actual).stretch.adopted_request_id(),
+                    adopted_request
+                );
+                for mixer in [&mut oracle.actual, &mut oracle.complete] {
+                    assert!(!voice(mixer).stretch.source_preparation_pending());
+                    assert!(!voice_mut(mixer).stretch.source_preparation_ready());
+                }
+            }
+        };
         oracle.pause_gap(97);
         assert_eq!(
             voice(&oracle.actual).stretch.native_state_address(),
             adopted
         );
-        oracle.request();
-        oracle.through_checkpoint();
+        continue_history(&mut oracle);
         for mixer in [&mut oracle.actual, &mut oracle.complete] {
             mixer.set_speed(1.97);
         }
         oracle.clock.set_target(1.97);
-        oracle.request();
-        oracle.through_checkpoint();
+        continue_history(&mut oracle);
         assert_ne!(voice(&oracle.actual).source_playback.tempo_ratio(), 1.97);
         let ramping_ratio = voice(&oracle.actual).source_playback.tempo_ratio();
         oracle.pause_gap(389);
@@ -643,13 +681,21 @@ fn finite_pause_before_and_after_preparation_keeps_wet_chronology_through_new_ra
             voice(&oracle.actual).source_playback.tempo_ratio(),
             ramping_ratio
         );
-        oracle.request();
-        oracle.through_checkpoint();
+        continue_history(&mut oracle);
         for frames in [31, 1, 512, 127, 384, 96, 257].into_iter().cycle().take(60) {
             oracle.render(frames);
         }
         assert_eq!(voice(&oracle.actual).source_playback.tempo_ratio(), 1.97);
-        assert_eq!(oracle.adoptions, 4);
+        assert_eq!(
+            voice(&oracle.actual).stretch.native_state_address(),
+            adopted
+        );
+        assert_eq!(voice(&oracle.actual).stretch.native_origin_tuple(), origin);
+        assert_eq!(
+            voice(&oracle.actual).stretch.adopted_request_id(),
+            adopted_request
+        );
+        assert_eq!(oracle.adoptions, 1);
         assert!(oracle.audible);
     }
 }

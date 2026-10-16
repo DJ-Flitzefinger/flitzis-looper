@@ -113,6 +113,11 @@ each subscriber's own pending then accepted/current publication. The full existi
   B5 depends map semantics, not B4 UI completion. Constant-rate Native frequency
   and bounded first-attack proofs are engineering evidence; variable trajectories,
   full acoustic predicates and performer deadlines remain open.
+- [x] Preserve productive Native/FIFO history for an own settled-r=1 Key Lock
+  mode request with unchanged nonzero pitch and current complete FullMix sources.
+  Keep original E, all-participant source/continuity claims and immutable origin
+  metadata; verify every continued sample and the newly effective later rate law.
+  Other mode requests retain prospective preparation; no acoustic parent gate closes.
 - [x] Prove public native-unity birth followed by an actual rate transition into
   wet processing, including the first irregular chunk, original voice/source
   history and generation, intended pitch and matched Native/FIFO ownership;

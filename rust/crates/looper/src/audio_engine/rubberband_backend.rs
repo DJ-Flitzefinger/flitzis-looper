@@ -103,7 +103,7 @@ pub(crate) struct RubberBandLiveShifter {
 unsafe impl Send for RubberBandLiveShifter {}
 
 impl RubberBandLiveShifter {
-    #[cfg(test)]
+    /// Comparison marker for the still-owned handle; never source authority or a dereference.
     pub(crate) fn state_address(&self) -> usize {
         self.handle.as_ptr() as usize
     }

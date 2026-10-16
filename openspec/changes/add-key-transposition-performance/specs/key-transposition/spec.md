@@ -168,7 +168,8 @@ bridge, callback Native preparation or invented constant past is permitted.
 For a live nonzero applied transposition, the system SHALL retain the previously
 effective Key Lock mode and its productive Native/FIFO history until the original
 mode request can atomically adopt source-specific prepared owners for every
-participating voice at one exact output frame E. Preparation SHALL use each
+participating voice at one exact output frame E, or perform the guarded
+numerically identical continuous handover below. Preparation SHALL use each
 voice's actual applied numeric pitch intent with the requested Key Lock mode,
 and SHALL retain the original request, content/source generation, actual window,
 accepted timing/ACK, voice generation and preparation epoch fences. An old
@@ -183,6 +184,26 @@ and later requests usable. Existing strong Native history permits SHALL remain
 required at actual adoption. A constant endpoint SHALL NOT stand in for missing
 variable source history. The bounded history contract below does not certify
 acoustic, device or full B5 acceptance.
+
+For a running complete FullMix source with unchanged nonzero numeric pitch,
+applied and requested source rate exactly one, no selection transition and an
+already productive matching Native owner, a mode request MAY retain that owner
+and its complete FIFOs instead of preparing an identical pitch again. This
+exception SHALL preserve the original request and E, and SHALL claim all voices
+atomically only after fresh source/window/timing permits, original participant
+and Native identities, preparation epochs, exact projected source phase and
+unchanged source-control continuity have been revalidated. A changed and restored
+rate or selection SHALL NOT bypass that continuity fence.
+
+The original Native request and its historical mode SHALL remain immutable. A
+separate effective mode association SHALL govern subsequent productive matching
+and actual rate changes: ON uses h/r(n), OFF uses h, on the retained owner while
+its source continuity remains valid. This association SHALL NOT authorize a
+pending candidate or replace fresh source authority. Ineligible voices SHALL
+retain the existing prospective preparation contract; failed validation of an
+already captured continuous handover SHALL refuse the whole original request
+without resetting productive Native history. This exception SHALL NOT certify
+general wet/dry alignment, acoustic quality or performer deadlines.
 
 Prospective mode preparation SHALL reuse the owning voice's genuine bounded
 source-read chronology before F and frozen F-to-original-E projection under the
@@ -216,9 +237,22 @@ from that voice's first actual successful Native output after Resume.
 #### Scenario: Complete source changes Lock in either direction with nonzero pitch
 - **GIVEN** a playing complete source with positive or negative numeric transposition and actual r=1 or a nonunit rate
 - **WHEN** its current own mode request changes Key Lock in either direction
-- **THEN** real source preparation targets the prospective tuple while uninterrupted old-mode PCM remains effective before E
-- **AND** all participating prepared Native/FIFO owners and the same own mode request adopt together at E without a source restart, numeric pitch change or tempo change
-- **AND** the first resulting PCM uses the prospective tuple and its matched prepared history
+- **THEN** real source preparation targets the prospective tuple unless every participant satisfies the guarded numerically identical continuous handover, while uninterrupted old-mode PCM remains effective before E
+- **AND** all participating prepared or qualified retained Native/FIFO owners and the same own mode request commit together at E without a source restart, numeric pitch change or tempo change
+- **AND** the first resulting PCM uses the prospective tuple and its matched prepared or qualified retained history
+
+#### Scenario: Unity-rate mode change preserves the unchanged productive pitch history
+- **GIVEN** every running participant is a current complete FullMix source with settled r=1 and an already productive nonzero pitch owner
+- **WHEN** its original Key Lock request commits at its unchanged E with all continuous-handover guards current
+- **THEN** every original Native/FIFO owner and every continued PCM sample SHALL remain unchanged relative to independent uninterrupted history, with its own mode acknowledgement first at E
+- **AND** a later genuine rate change SHALL use the newly effective mode law on that retained owner rather than the immutable originating request's old mode
+- **AND** stale source authority, changed source-control continuity, a changed participant or unavailable productive history SHALL NOT qualify as an equivalent scalar handover
+
+#### Scenario: Concurrent identical-pitch mode requests keep separate voice claims
+- **GIVEN** two complete sources have independent productive voices and pending guarded identical-pitch mode requests with different original E frames
+- **WHEN** one pad's request is superseded before its E
+- **THEN** only that original request's checkpoints SHALL be cleared, and the other pad SHALL retain its own original request and claim at its own E
+- **AND** both voices SHALL preserve their Native owners, source chronology and continued PCM relative to uninterrupted independent history
 
 #### Scenario: Finite window storage precedes the same own mode acknowledgement
 - **GIVEN** a finite source whose nonzero live transposition needs a new Key Lock tuple

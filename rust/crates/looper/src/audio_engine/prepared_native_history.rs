@@ -360,7 +360,7 @@ impl NativeHistoryRequest {
         feed: &ProductiveSourceFeed<'_>,
         _epoch: u64,
     ) -> bool {
-        self.matches_effective_contract_with_transition(feed, _epoch, None, false)
+        self.matches_effective_contract_with_transition(feed, _epoch, None, false, self.key_lock)
     }
 
     fn matches_effective_contract_with_transition(
@@ -369,6 +369,7 @@ impl NativeHistoryRequest {
         _epoch: u64,
         expected_transition: Option<StemTransition>,
         productive_continuity: bool,
+        effective_key_lock: bool,
     ) -> bool {
         if self.plan.transition.is_active()
             && expected_transition
@@ -380,7 +381,7 @@ impl NativeHistoryRequest {
         // Once adopted, this frozen action's own permit owns its lifetime. A later lane request
         // epoch is not authority to stale the already accepted attack or its productive history.
         self.pitch_intent == feed.pitch_intent
-            && self.key_lock == feed.key_lock
+            && effective_key_lock == feed.key_lock
             && self.coverage_matches_transition(
                 feed,
                 false,
@@ -467,6 +468,9 @@ pub(crate) struct NativeAdapterState {
     pub(crate) dirty: bool,
     pub(crate) used: bool,
     pub(crate) source: Option<NativeHistoryRequest>,
+    /// Effective scalar association after a claimed identical-pitch mode change.
+    /// The originating request and its historical mode remain immutable.
+    effective_mode: Option<bool>,
     /// Only genuine active-E preparation seeds this. Some(inactive) fences later restarts.
     pub(crate) source_transition: Option<StemTransition>,
     pub(crate) primed_output_frames: usize,
@@ -493,6 +497,7 @@ impl NativeAdapterState {
             dirty: false,
             used: false,
             source: None,
+            effective_mode: None,
             source_transition: None,
             primed_output_frames: 0,
         }
@@ -509,15 +514,26 @@ impl NativeAdapterState {
         self.pitch_scale = 1.0;
         self.primed_output_frames = 0;
         self.source_transition = None;
+        self.effective_mode = None;
     }
 
-    pub(crate) fn matches_effective_source(
+    pub(crate) fn effective_key_lock(&self) -> Option<bool> {
+        self.source
+            .as_ref()
+            .map(|source| self.effective_mode.unwrap_or(source.key_lock))
+    }
+
+    /// Called only inside the mixer's complete same-pitch/source claim.
+    pub(crate) fn retain_effective_mode_claimed(&mut self, enabled: bool) {
+        self.effective_mode = Some(enabled);
+    }
+
+    pub(crate) fn has_productive_continuity(
         &self,
         feed: &ProductiveSourceFeed<'_>,
-        epoch: u64,
         history: Option<super::productive_source_history::ProductiveSourceHistory>,
     ) -> bool {
-        let productive_continuity = self.active
+        self.active
             && self.used
             && !self.dirty
             && history.is_some_and(|history| {
@@ -526,7 +542,19 @@ impl NativeAdapterState {
                     feed.playback.position(),
                     Some(feed.plan.domain()),
                 )
-            });
+            })
+    }
+
+    pub(crate) fn matches_effective_source(
+        &self,
+        feed: &ProductiveSourceFeed<'_>,
+        epoch: u64,
+        history: Option<super::productive_source_history::ProductiveSourceHistory>,
+    ) -> bool {
+        let productive_continuity = self.has_productive_continuity(feed, history);
+        if self.effective_mode.is_some() && !productive_continuity {
+            return false;
+        }
         self.source.as_ref().is_some_and(|source| {
             if self.source_transition.is_some() || productive_continuity {
                 source.matches_effective_contract_with_transition(
@@ -534,6 +562,7 @@ impl NativeAdapterState {
                     epoch,
                     self.source_transition,
                     productive_continuity,
+                    self.effective_mode.unwrap_or(source.key_lock),
                 )
             } else {
                 source.matches_effective_contract(feed, epoch)

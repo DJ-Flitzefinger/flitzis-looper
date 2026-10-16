@@ -1,6 +1,7 @@
 //! Productive native/FIFO/filter ownership and chronological source continuity.
 
 use super::*;
+use crate::audio_engine::input_runtime_binding::InputPadBinding;
 use crate::audio_engine::prepared_source::PreparedSourcePermit;
 use crate::audio_engine::productive_source_history::ProductiveSourceHistory;
 use flitzis_looper_analysis::tempo_acceptance::TimingIntent;
@@ -522,8 +523,36 @@ fn finite_productive_continuity_case() {
     for mixer in [&mut actual, &mut complete] {
         mixer.stop_sample(0);
     }
-    assert!(actual.publish_prepared_stems(0, stems.clone().window_for(&finite).unwrap()));
-    assert!(complete.publish_prepared_stems(0, stems));
+    for (mixer, mut prepared) in [
+        (&mut actual, stems.clone().window_for(&finite).unwrap()),
+        (&mut complete, stems),
+    ] {
+        // Tracked sources require each mixer's own publication authority, even
+        // when both component sets came from the same complete immutable PCM.
+        let reference = mixer.sample_bank[0].as_ref().unwrap();
+        let ownership = &mixer.input_runtime_ownership;
+        let snapshot = ownership.slot_snapshot(0).unwrap();
+        let binding = InputPadBinding {
+            placement: Some(snapshot),
+            resident: reference.resident_binding(),
+            source_address: reference.source_address(),
+            sample_count: reference.source_sample_count(),
+            channels: reference.channels,
+            sample_rate_hz: RATE,
+            authority_revision: ownership.authority_revision(0),
+            runtime_revision: ownership.runtime_revision(0),
+            accepted: mixer.pad_accepted_timing[0],
+        };
+        prepared.publication = PreparedSourcePermit::for_native_binding_for_test(
+            0,
+            binding,
+            ownership.clone(),
+            mixer.current_timing_acknowledgements.clone(),
+            mixer.prepared_source_epochs[snapshot.cell().index()].clone(),
+        )
+        .unwrap();
+        assert!(mixer.publish_prepared_stems(0, prepared));
+    }
     for mixer in [&mut actual, &mut complete] {
         assert!(mixer.play_sample_at_output_frame(0, 1.0, 0));
     }

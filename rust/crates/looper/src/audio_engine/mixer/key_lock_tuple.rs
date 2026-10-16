@@ -9,6 +9,9 @@ use crate::audio_engine::key_lock_preparation::ProspectiveSourceHistory;
 use crate::audio_engine::prepared_native_history::PREPARED_HISTORY_FRAMES;
 use std::cell::RefCell;
 
+#[path = "key_lock_continuous.rs"]
+mod continuous;
+
 #[derive(Clone, Copy)]
 pub(super) struct KeyLockTupleRequest {
     pub(super) enabled: bool,
@@ -25,6 +28,16 @@ mod tests {
 }
 
 #[derive(Clone, Copy)]
+pub(super) struct ContinuousTupleVoice {
+    pad_id: usize,
+    request_id: u64,
+    native: usize,
+    continuity: u64,
+    playback: SourcePlayback,
+    plan: SourceReadPlan,
+}
+
+#[derive(Clone, Copy)]
 struct TupleVoice {
     generation: u64,
     paused: bool,
@@ -32,6 +45,7 @@ struct TupleVoice {
     request_id: u64,
     pitch: PitchIntent,
     previous_mode: bool,
+    continuous: bool,
 }
 
 pub(super) struct PendingKeyLockTuple {
@@ -186,6 +200,9 @@ impl RtMixer {
         let Some(execution) = frame.checked_add(PREPARED_HISTORY_FRAMES as u64) else {
             return false;
         };
+        if self.capture_continuous_key_lock_tuple(id, pending, frame, execution) {
+            return true;
+        }
         let mut saw_voice = false;
         for index in 0..MAX_VOICES {
             if !self.voices[index].active || self.voices[index].sample_id != id {
@@ -211,43 +228,9 @@ impl RtMixer {
                 request_id: 0,
                 pitch,
                 previous_mode,
+                continuous: false,
             });
-            let voice = &self.voices[index];
-            let permit = if self.sample_bank[id]
-                .as_ref()
-                .is_some_and(|bank| bank.same_source(&snapshot.sample))
-            {
-                let Some(slot) = self.input_runtime_ownership.slot_snapshot(id) else {
-                    return false;
-                };
-                NativeHistoryContext {
-                    id,
-                    ownership: &self.input_runtime_ownership,
-                    acknowledgements: &self.current_timing_acknowledgements,
-                    // Match productive rendering's actual source cell authority. The lane
-                    // epoch and genuine SOURCE guard separately fence pending mode work.
-                    preparation_epoch: &self.prepared_source_epochs[slot.cell().index()],
-                }
-                .capture(
-                    &snapshot.sample,
-                    snapshot.sample_rate_hz,
-                    snapshot.accepted,
-                )
-            } else {
-                voice.source_admission.as_ref().and_then(|admission| {
-                    NativeVoiceHistoryContext {
-                        admission,
-                        lifetime: &voice.history_lifetime,
-                        generation: voice.generation,
-                        // A retained source's admitted birth remains authoritative across
-                        // Pause/Resume; pending cancellation still uses its own lane epoch.
-                        preparation_epoch: &voice.history_lifetime,
-                        accepted: snapshot.accepted,
-                    }
-                    .capture(&snapshot.sample, snapshot.sample_rate_hz)
-                })
-            };
-            let Some(permit) = permit else {
+            let Some(permit) = self.capture_voice_history_permit(index, &snapshot) else {
                 return false;
             };
             let prospective = feed(
@@ -278,6 +261,7 @@ impl RtMixer {
                 request_id,
                 pitch,
                 previous_mode,
+                continuous: false,
             });
         }
         pending.execution = Some(execution);
@@ -289,11 +273,13 @@ impl RtMixer {
         id: usize,
         pending: &PendingKeyLockTuple,
         frame: u64,
+        continuous_permits: &[Option<crate::audio_engine::native_history_permit::NativeHistoryPermit>;
+             MAX_VOICES],
     ) -> bool {
         if pending.execution != Some(frame) || !self.key_lock_tuple_current(id, pending) {
             return false;
         }
-        for index in 0..MAX_VOICES {
+        for (index, permit) in continuous_permits.iter().enumerate() {
             let voice = &self.voices[index];
             let participates = voice.active && voice.sample_id == id;
             let Some(expected) = pending.voices[index] else {
@@ -308,6 +294,21 @@ impl RtMixer {
                 || self.effective_voice_tuple(index) != (expected.pitch, expected.previous_mode)
             {
                 return false;
+            }
+            if expected.continuous {
+                let Some(permit) = permit.as_ref() else {
+                    return false;
+                };
+                if !self.continuous_key_lock_voice_ready(
+                    index,
+                    pending.request.request_id,
+                    expected,
+                    frame,
+                    permit,
+                ) {
+                    return false;
+                }
+                continue;
             }
             let Some(snapshot) = self.capture_pitch_voice_snapshot(index) else {
                 return false;
@@ -336,6 +337,21 @@ impl RtMixer {
         pending: &PendingKeyLockTuple,
         frame: u64,
     ) -> bool {
+        // Capture current permits before entering our layout marker; obtaining a
+        // new slot observation inside that marker correctly refuses. The strong
+        // permits themselves are revalidated by the complete claim below.
+        let mut continuous_permits = std::array::from_fn(|_| None);
+        for (index, permit) in continuous_permits.iter_mut().enumerate() {
+            if pending.voices[index].is_some_and(|expected| expected.continuous) {
+                let Some(snapshot) = self.capture_pitch_voice_snapshot(index) else {
+                    return false;
+                };
+                let Some(current) = self.capture_voice_history_permit(index, &snapshot) else {
+                    return false;
+                };
+                *permit = Some(current);
+            }
+        }
         let ownership = self.input_runtime_ownership.clone();
         let Some(slot) = ownership.slot_snapshot(id) else {
             return false;
@@ -347,13 +363,24 @@ impl RtMixer {
         ownership
             .commit_slot_write_fixed(
                 &write,
-                || mixer.borrow_mut().key_lock_tuple_ready(id, pending, frame),
+                || {
+                    mixer
+                        .borrow_mut()
+                        .key_lock_tuple_ready(id, pending, frame, &continuous_permits)
+                },
                 |_| {
                     let mut mixer = mixer.borrow_mut();
                     for index in 0..MAX_VOICES {
                         let Some(expected) = pending.voices[index] else {
                             continue;
                         };
+                        if expected.continuous {
+                            mixer.voices[index]
+                                .stretch
+                                .retain_unit_rate_mode_claimed(pending.request.enabled);
+                            mixer.voice_key_lock[index] = pending.request.enabled;
+                            continue;
+                        }
                         let snapshot = mixer
                             .capture_pitch_voice_snapshot(index)
                             .expect("claimed voice snapshot");
@@ -384,9 +411,11 @@ impl RtMixer {
         accepted: bool,
         retirement: &mut impl AudioBufferRetirement,
     ) {
+        self.clear_continuous_key_lock_tuple(id, &pending);
         if !accepted {
             for (index, participant) in pending.voices.iter().enumerate() {
                 if let Some(expected) = participant
+                    && !expected.continuous
                     && self.voices[index].generation == expected.generation
                     && self.voices[index].stretch.preparation_epoch() == expected.epoch
                 {

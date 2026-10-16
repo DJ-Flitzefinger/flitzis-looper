@@ -132,15 +132,54 @@ impl StretchProcessor {
             && self.native.used
             && !self.native.dirty
             && self.native.source.as_ref().is_some_and(|source| {
-                source.pitch_intent == pitch_intent && source.key_lock == key_lock
+                source.pitch_intent == pitch_intent
+                    && self.native.effective_key_lock() == Some(key_lock)
             })
     }
 
     fn retain_aligned_unity_history(&self, pitch_intent: PitchIntent, key_lock: bool) -> bool {
         self.native.active
             && self.native.source.as_ref().is_some_and(|source| {
-                source.pitch_intent == pitch_intent && source.key_lock == key_lock
+                source.pitch_intent == pitch_intent
+                    && self.native.effective_key_lock() == Some(key_lock)
             })
+    }
+
+    pub(crate) fn native_identity(&self) -> usize {
+        self.native
+            .rubberband
+            .as_ref()
+            .map_or(0, |native| native.state_address())
+    }
+
+    /// Numeric equality alone cannot authorize keeping a source-specific DSP owner.
+    pub(crate) fn can_retain_mode_at_unit_rate(&self, feed: &ProductiveSourceFeed<'_>) -> bool {
+        !self.wet_mode_failed()
+            && !self.source_lane_busy()
+            && feed.pitch_intent.total_semitones() != 0
+            && feed.playback.tempo_ratio().to_bits() == 1.0_f64.to_bits()
+            && feed.playback.rate_target().to_bits() == 1.0_f64.to_bits()
+            && !feed.plan.transition.is_active()
+            && feed.plan.selection == super::source_reader::StemRenderSelection::full_mix()
+            && super::native_source_coverage::complete_view_available(feed.sample)
+            && feed.permit.is_some_and(|permit| {
+                permit.current(feed.sample, feed.sample_rate_hz)
+                    && permit.matches_projection(feed.accepted)
+            })
+            && self.native.pitch_scale.to_bits() == feed.pitch_intent.frequency_ratio().to_bits()
+            && self
+                .native
+                .has_productive_continuity(feed, self.productive_history)
+            && self.native.matches_effective_source(
+                feed,
+                self.preparation_epoch,
+                self.productive_history,
+            )
+    }
+
+    /// Preserve all native, FIFO, origin, source and request data after the complete mixer claim.
+    pub(crate) fn retain_unit_rate_mode_claimed(&mut self, enabled: bool) {
+        self.native.retain_effective_mode_claimed(enabled);
     }
 
     pub(crate) fn wet_mode_failed(&self) -> bool {
@@ -789,6 +828,14 @@ impl StretchProcessor {
             .rubberband
             .as_ref()
             .map_or(0, RubberBandLiveShifter::state_address)
+    }
+
+    #[cfg(test)]
+    pub(crate) fn native_origin_tuple(&self) -> Option<(PitchIntent, bool, u64)> {
+        self.native
+            .source
+            .as_ref()
+            .map(|source| (source.pitch_intent, source.key_lock, source.request_id))
     }
 
     #[cfg(test)]

@@ -1,7 +1,7 @@
 //! Actual mixer adoption, deadline splitting and current native source/authority rejection.
 
 use super::*;
-use crate::audio_engine::input_runtime_binding::InputRuntimeOwnership;
+use crate::audio_engine::input_runtime_binding::{InputPadBinding, InputRuntimeOwnership};
 use crate::audio_engine::prepared_native_history::PREPARED_HISTORY_FRAMES;
 use crate::audio_engine::prepared_source::PreparedSourcePermit;
 use crate::audio_engine::rubberband_backend::{RubberBandLiveShifter, pitch_scale_for_tempo_ratio};
@@ -70,6 +70,37 @@ fn fixture(sample: &SampleBuffer) -> RtMixer {
     mixer.set_pad_loop_region(0, 0.003125, Some(0.300125));
     assert!(mixer.play_sample_at_output_frame(0, 1.0, 0));
     mixer
+}
+
+fn bind_stem_publication(
+    mixer: &RtMixer,
+    id: usize,
+    rate: u32,
+    mut stems: PreparedStemSet,
+) -> PreparedStemSet {
+    let sample = mixer.sample_bank[id].as_ref().unwrap();
+    let ownership = &mixer.input_runtime_ownership;
+    let snapshot = ownership.slot_snapshot(id).unwrap();
+    let binding = InputPadBinding {
+        placement: Some(snapshot),
+        resident: sample.resident_binding(),
+        source_address: sample.source_address(),
+        sample_count: sample.source_sample_count(),
+        channels: sample.channels,
+        sample_rate_hz: rate,
+        authority_revision: ownership.authority_revision(id),
+        runtime_revision: ownership.runtime_revision(id),
+        accepted: mixer.pad_accepted_timing[id],
+    };
+    stems.publication = PreparedSourcePermit::for_native_binding_for_test(
+        id,
+        binding,
+        ownership.clone(),
+        mixer.current_timing_acknowledgements.clone(),
+        mixer.prepared_source_epochs[snapshot.cell().index()].clone(),
+    )
+    .unwrap();
+    stems
 }
 
 fn voice(mixer: &RtMixer) -> &VoiceSlot {
@@ -573,6 +604,7 @@ fn prepared_native_mixer_stem_selection_ramp_defers_then_adopts_actual_stem_hist
         }),
     };
     mixer.stop_sample(0);
+    let stems = bind_stem_publication(&mixer, 0, RATE, stems);
     assert!(mixer.publish_prepared_stems(0, stems));
     assert!(mixer.play_sample_at_output_frame(0, 1.0, 0));
     assert!(mixer.set_stem_mix_mode(0, StemMixMode::AllStems, 37));
@@ -824,6 +856,7 @@ fn musical_mixer_with_stems(
     if let Some(stems) = stems {
         // Admit authentic nonaccepted stem ownership while the source is inactive. The
         // following actual accepted publication refreshes the retained same-source set.
+        let stems = bind_stem_publication(&mixer, 0, rate, stems);
         assert!(mixer.publish_prepared_stems(0, stems));
     }
     let publication = PreparedSourcePermit::unrestricted();

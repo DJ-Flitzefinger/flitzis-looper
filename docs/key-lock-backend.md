@@ -269,6 +269,26 @@ Later B5 audible crop/delay/transition compensation is a separate gate.
 
 ## Live mode transactions and feedback
 
+An own nonzero-pitch mode request at settled source rate 1 can retain the current
+productive Native owner and all its FIFOs: ON and OFF then require the identical
+pitch scale. This applies only to current complete FullMix sources without a
+selection transition or source-lane work. The original request and E remain
+unchanged. Every participating voice must pass fresh source/window/timing permits,
+Native/generation/epoch identity, exact projected source phase and source-control
+continuity together in the existing claim. A stale captured request is refused
+without resetting productive history. Other changes retain prospective preparation.
+The originating Native request stays immutable; a separate effective association
+selects ON h/r(n) or OFF h for later actual rate changes. It cannot authorize pending
+candidates and is cleared by adapter reset. This removes an unnecessary history
+replacement; it does not establish general acoustic or performer acceptance.
+
+Public SourceACK/start tests cover total -7/+7 in both mode directions: all 24000
+frames from E equal independent uninterrupted old- and destination-mode owners,
+and all 48000 frames of a later real 1.25 rate change match destination history,
+including smoothing. Origin metadata stays immutable. Separate actual controls
+cover Pause/Resume cancellation, supersession and two concurrently waiting pads
+with different E frames. One pad's supersession preserves the other's checkpoint.
+
 Global and pad KEYLOCK actions use the same Residency transaction. A pure mode
 change prepares the current physical range without adding a loop edit or seek.
 Genuine pending geometry/seek edits remain coupled. Active finite admission is
