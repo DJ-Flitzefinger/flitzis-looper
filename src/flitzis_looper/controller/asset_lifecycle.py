@@ -139,8 +139,7 @@ class AssignmentPublicationPlan:
 
     @staticmethod
     def _lease_released(lease: ProjectAssetLease) -> bool:
-        released = getattr(lease, "released", None)
-        return callable(released) and released() is True
+        return lease.released
 
     def _retirement_transferred(self, lease: ProjectAssetLease) -> bool:
         assets = self._assets

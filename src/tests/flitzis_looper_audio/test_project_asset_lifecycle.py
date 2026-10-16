@@ -1,12 +1,56 @@
 import time
+from contextlib import closing
 from typing import TYPE_CHECKING
 
 import pytest
 
+from flitzis_looper.controller.asset_lifecycle import ProjectAssetLifecycle
+from flitzis_looper.models import ProjectState
 from flitzis_looper_audio import AudioEngine
 
 if TYPE_CHECKING:
+    from collections.abc import Iterator
     from pathlib import Path
+
+    from flitzis_looper.controller.asset_lifecycle import AssignmentImage, _AssignmentRetirement
+    from flitzis_looper_audio import ProjectAssetLease
+
+
+@pytest.fixture
+def native_assets(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> Iterator[ProjectAssetLifecycle]:
+    """Use actual Native file owners without starting audio or opening a device."""
+    monkeypatch.chdir(tmp_path)
+    (tmp_path / "samples").mkdir()
+    audio = AudioEngine()
+    assets = ProjectAssetLifecycle(ProjectState(), audio)
+    try:
+        yield assets
+    finally:
+        try:
+            assets.release_saved_assignments()
+        finally:
+            audio.shut_down()
+
+
+def _native_original(
+    assets: ProjectAssetLifecycle, sample_id: int, name: str
+) -> tuple[Path, ProjectAssetLease]:
+    source = assets._root / "samples" / name
+    source.write_bytes(name.encode())
+    assets._project.sample_paths[sample_id] = f"samples/{name}"
+    prepared = (source, assets.acquire(source))
+    assets._assignments["original", sample_id] = prepared
+    return prepared
+
+
+def _native_replacement(assets: ProjectAssetLifecycle, sample_id: int) -> AssignmentImage:
+    candidate = assets._project.model_copy(deep=True)
+    name = f"new-{sample_id}.wav"
+    (assets._root / "samples" / name).write_bytes(b"new Native assignment source")
+    candidate.sample_paths[sample_id] = f"samples/{name}"
+    return assets.prepare_assignment_image(candidate)
 
 
 def _wait_for_deletion(path: Path, audio: AudioEngine) -> None:
@@ -75,3 +119,101 @@ def test_native_retirement_cannot_delete_external_original_or_unknown_pad_contai
     assert external.read_bytes() == b"external source"
     assert private.read_bytes() == b"private"
     audio.shut_down()
+
+
+@pytest.mark.parametrize("released_owner", ["acquired", "reused"])
+def test_native_publication_rejects_released_required_owner_before_store(
+    native_assets: ProjectAssetLifecycle, released_owner: str
+) -> None:
+    original = _native_original(native_assets, 0, "old.wav")
+    reused = _native_original(native_assets, 1, "reused.wav")
+    image = _native_replacement(native_assets, 0)
+    try:
+        plan = native_assets.prepare_assignment_publication(image)
+        before = native_assets._assignments
+        required = image[1]["original", 0][1] if released_owner == "acquired" else reused[1]
+        required.release()
+        assert required.released is True
+
+        with pytest.raises(RuntimeError, match="ownership changed before"):
+            plan.apply()
+
+        assert native_assets._assignments is before
+        assert native_assets._assignments["original", 0] is original
+        assert native_assets._assignments["original", 1] is reused
+        assert not plan._store_attempted
+        assert not plan.applied
+        assert not plan.settled
+        assert plan.owns_unpublished_image
+        assert plan._retirement_index == 0
+        assert original[1].released is False
+        assert original[0].read_bytes() == b"old.wav"
+        assert not native_assets._pending
+        assert not native_assets._pending_groups
+    finally:
+        native_assets.release_assignment_image(image)
+
+
+def test_native_publication_retry_skips_released_old_owner_and_preserves_later_table(
+    native_assets: ProjectAssetLifecycle, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Inject only a Python return interruption; Native custody and cleanup stay real."""
+    original = _native_original(native_assets, 0, "old.wav")
+    image = _native_replacement(native_assets, 0)
+    witness = native_assets.acquire(original[0])
+    try:
+        plan = native_assets.prepare_assignment_publication(image)
+        retire = native_assets._retire_assignment
+        retirements: list[ProjectAssetLease] = []
+
+        def interrupt_after_release(
+            kind: str,
+            path: Path,
+            lease: ProjectAssetLease,
+            *,
+            progress: _AssignmentRetirement | None = None,
+        ) -> None:
+            retirements.append(lease)
+            retire(kind, path, lease, progress=progress)
+            if len(retirements) == 1:
+                assert lease.released is True
+                message = "interrupted after actual Native release"
+                raise RuntimeError(message)
+
+        monkeypatch.setattr(native_assets, "_retire_assignment", interrupt_after_release)
+        with closing(native_assets.reserve()) as reservation:
+            with (
+                reservation.activate(),
+                pytest.raises(RuntimeError, match="after actual Native release"),
+            ):
+                plan.apply()
+            assert original[1].released is True
+            assert plan.applied
+            assert not plan.settled
+            assert not plan.owns_unpublished_image
+            assert plan._retirement_index == 0
+            assert witness.released is False
+            assert original[0].read_bytes() == b"old.wav"
+
+            later = _native_original(native_assets, 0, "later-occupant.wav")
+            latest = native_assets._assignments.copy()
+            native_assets._assignments = latest
+            with reservation.activate():
+                plan.apply()
+
+            assert plan.settled
+            assert retirements == [original[1]]
+            assert native_assets._assignments is latest
+            assert native_assets._assignments["original", 0] is later
+            assert later[1].released is False
+            assert image[1]["original", 0][1].released is False
+            assert later[0].read_bytes() == b"later-occupant.wav"
+            assert image[1]["original", 0][0].read_bytes() == b"new Native assignment source"
+            plan.apply()
+            assert retirements == [original[1]]
+            assert native_assets._assignments is latest
+            witness.release()
+            _wait_for_deletion(original[0], native_assets._audio)
+    finally:
+        witness.release()
+        native_assets.release_assignment_image(image)

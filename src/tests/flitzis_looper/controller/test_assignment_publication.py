@@ -29,6 +29,7 @@ class _Lease:
         if not self.release_count:
             self.release_count = 1
 
+    @property
     def released(self) -> bool:
         return self.release_count != 0
 

@@ -138,7 +138,11 @@ stopped successor and retires only its old Hold/cohort/readers. Target observers
 stay fenced through own-ACK/control/config/asset settlement; controller retirement
 is delayed until own Native acceptance and shared jobs lose only that subscriber.
 The occupied asset publication retains its exact prepared table and retirement
-cursor across interrupted return and unrelated newer intent. Its distinct strict
+cursor across interrupted return and unrelated newer intent. Each required new
+or reused lease is checked through Native's actual boolean `released` property
+before table exchange. That same property settles an already released original
+retirement cursor after an interrupted return, without resubmitting cleanup or
+rewriting newer assignments. Its distinct strict
 `pad_copy_overwrite` journal retains immutable A/B, fixed C, independent source/stem
 pins and actual Config receipts through terminal settlement. Startup validates
 complete history and lineage before ordinary restore. Original-input replay needs

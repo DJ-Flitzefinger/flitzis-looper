@@ -62,6 +62,18 @@ The system SHALL retain the original Config writer, assignment and retirement ow
 - **AND** unchanged retry errors SHALL NOT consume bounded journal capacity
 - **AND** a failed append SHALL reopen and validate complete history and compare exact intended bytes before another append, retaining owners on partial evidence or capacity exhaustion
 
+#### Scenario: A required assignment lease was already released
+- **GIVEN** a prepared complete assignment image requires a newly acquired or reused Native lease
+- **WHEN** that lease's actual boolean released property is true before table publication
+- **THEN** the publication SHALL reject before exchanging the table or retiring any previous owner
+- **AND** it SHALL retain the identical current assignment table and unpublished-image ownership without claiming applied or settled success
+
+#### Scenario: Actual retirement completed before an interrupted return
+- **GIVEN** the original retirement cursor's Native lease was actually released before the caller observed an interrupted return
+- **WHEN** the same publication plan retries after newer assignment rows were installed
+- **THEN** it SHALL observe that actual released state and advance the original cursor without submitting the same cleanup again
+- **AND** it SHALL preserve the newer assignment table and every unrelated current owner rather than publishing its old table again
+
 #### Scenario: Fresh recovery recognizes an afterimage without another Swap
 - **WHEN** a fresh process opens complete Pair history after Config replacement or before a successful journal append
 - **THEN** it SHALL recognize an exact original pending Config or an exact recorded afterimage using actual Config evidence and obtain fresh Native acceptance before further settlement

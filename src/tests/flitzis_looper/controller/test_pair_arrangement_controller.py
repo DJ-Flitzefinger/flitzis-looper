@@ -57,6 +57,7 @@ class _Lease:
             raise RuntimeError(message)
         self.release_count = 1
 
+    @property
     def released(self) -> bool:
         return self.release_count == 1
 

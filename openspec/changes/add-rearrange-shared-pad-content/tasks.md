@@ -37,6 +37,15 @@ Use canonical program/coverage, not a new parallel order. R0 is docs/spec-only.
   Finished timing evidence and dispatched publication retain their original owners
   through Native Pending; own timing/derived acknowledgements still control projection.
   These bounded continuation proofs do not supply complete selection/Hold acceptance.
+- [x] Actual Native assignment lease state: reject released new or reused required
+  owners before table publication and resume an interrupted completed retirement
+  without duplicate cleanup or replacing newer assignments. Real Native property
+  regressions and affected Pair/Copy controller checks close only this bounded gap.
+  The three real Native regressions fail with the old callable-property check;
+  after the fix, affected Pair/Copy/Lifecycle integration385 passes and final
+  Native lifecycle6 passes. Production and two test modules pass mypy157 files;
+  the55 existing Pair-controller test diagnostics remain unchanged and open.
+  Full R2, whole-source type checks, resource and Human acceptance remain open.
 - [ ] R3: modeOFF/warning/help/left-right gestures/target feedback; branch before
   trigger/stop, cancel/self/invalid/empty no-op, existing control tick outside release
   even after editor close/focus/selection; global mute/latest volume regression.
