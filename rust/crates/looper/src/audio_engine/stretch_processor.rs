@@ -16,6 +16,10 @@ use crate::audio_engine::rubberband_backend::RubberBandLiveShifter;
 use crate::audio_engine::rubberband_backend::pitch_scale_for_tempo_ratio;
 use crate::messages::{PreparedStemSet, SampleBuffer};
 
+#[cfg(test)]
+#[path = "stretch_processor/coordinate_units_tests.rs"]
+mod coordinate_units_tests;
+
 pub(crate) struct ProductiveSourceFeed<'a> {
     pub(crate) pitch_intent: PitchIntent,
     pub(crate) key_lock: bool,

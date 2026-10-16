@@ -63,10 +63,18 @@ remain implicit in the native keyframe encoding to avoid a zero first divisor.
 - **AND** no selected measurement offset, early audible retune or production renderer change SHALL manufacture acceptance
 
 #### Scenario: Equal physical source and output progression has unit rate
-- **GIVEN** equal 48000-Hz source/output rates and a map advancing one source second per output second
+- **GIVEN** equal loaded-source/output rates at 44100, 48000 and 96000 Hz and a map advancing one source second per output second
 - **WHEN** the diagnostic derives r from inverse-map coordinates
 - **THEN** it converts seconds to source frames and obtains r=1
-- **AND** it does not treat 1/48000 seconds per output frame as the native tempo ratio
+- **AND** it does not treat 1/Fs seconds per output frame as the native tempo ratio
+
+#### Scenario: Accepted inverse coordinates agree with actual playback and native pitch
+- **GIVEN** a current owned source, a genuinely admitted and prepared nonzero pitch action and the actual transport at each equal loaded-source/output rate
+- **WHEN** a current acknowledged constant-timing publication reaches the voice through the real preparation path and the hardware-free diagnostic evaluates the Python scalar inverse in seconds, converts once to loaded frames and derives a non-wrapping source-frame/output-frame rate for unit, slower, faster and fractional-period progression
+- **THEN** absolute source coordinates and their progression SHALL agree with an independent physical time/beat oracle, the accepted render grid and the actual voice cursor
+- **AND** the retained pitch intent SHALL configure the actual native state to h/r with KEYLOCK on and h with KEYLOCK off without changing that source progression
+- **AND** omitting or duplicating the seconds-to-frames conversion SHALL fail the unit-rate comparison
+- **AND** unequal-rate arithmetic SHALL be identified separately from the productive loader's equal-rate resampling invariant; this diagnostic SHALL NOT claim unequal-rate live support, acoustic quality, realtime deadlines or device/Human acceptance
 
 The bounded causal source-filter diagnostic SHALL freeze its model order,
 original-source fixtures, innovation mapping, synthesis equations and frequency

@@ -2345,3 +2345,90 @@ snapshots/adapters and existing MAX_VOICES productive adapters are separate boun
 ordinary starts, mode work, endpoint reserve and other owners are additional.
 The historical resource table above is not a measurement of this new custody
 path and neither bound certifies total RSS, P6, 216 unique sources or a deadline.
+
+## Inverse Seconds, Loaded Frames And Native Rate — 2026-10-16
+
+`ScalarSourceGrid` evaluates the shared scalar projection in source **seconds**.
+`VoiceSourceTiming::grid` instead multiplies an accepted period and origin by
+the accepted loaded sample rate, so its inverse returns loaded **frames**.
+Transport projects output frames through its output sample rate and precise
+master period. Away from an explicit loop wrap, the dimensionless playback rate
+is therefore `delta(source_seconds * FsLoaded) / delta(output_frames)`.
+Equal physical progression at equal rates must give one; omitting the conversion
+gives `1/Fs`, and applying it twice gives `Fs`.
+
+The ordinary admitted loader prepares PCM at the configured output rate:
+`material_migration::prepare_disk_pcm` calls the productive
+`sample_loader/cold/stream.rs::prepare_playback_streamed`, which derives the
+complete output extent with integer ceiling and writes an artifact tagged with
+that output rate. Warm reuse checks the rate, transform, channels and extent.
+The similarly named `cold.rs::prepare_playback` is a test-only helper.
+`loaded_sample_shape` reports the stream rate, but that report alone is not
+proof of buffer provenance; `SampleBuffer` has no independent rate field.
+
+For hypothetical unequal loaded/output rates, physical progression instead
+requires `r=(FsLoaded/FsOutput)*(source_period/master_period)`. This arithmetic
+does not establish a productive unequal-rate playback route: ordinary preparation
+already resamples to equal rates. Integer extent conversion and pinned delay
+trimming also do not promise exact arbitrary-event phase below one output frame.
+Configured sample rates do not measure physical device-clock drift or certify
+stale cache metadata after a shutdown/device change.
+
+The hardware-free `stretch_processor/coordinate_units_tests.rs` proof covers
+44100/48000/96000 Hz, KEYLOCK off/on and +7 semitones at period pairs
+`(.5,1)`, `(.5,.5)`, `(1,.5)` and `(60/119.999,60/137.123456789)`.
+It admits the real captured pitch action first, then publishes current accepted
+timing through the callback queue. Current content, source, permit and ACK checks
+remain active. The old legacy period `.625` produces a demonstrably different
+resolver target before the accepted publication; the acknowledged target then
+agrees with the independent map rate.
+
+The actual Python class/method is called via PyO3 outside rendering and worker
+waits. Reduced integer fractions independently define physical source time from
+the selected `Fs/10` birth and elapsed output time. Both absolute inverse anchors
+are compared with that oracle, the accepted loaded-frame grid and the real voice
+cursor. KEYLOCK modes are compared at the same declared three-quarter-second
+output time followed by 2077 frames, without a wrap or fitted phase offset.
+The stored Native pitch and the actual DLL getter must both report `h/r` or `h`;
+generation and attack count stay unchanged. Missing and duplicate unit conversion
+and using output-rate units for a hypothetical unequal loaded rate are excluded.
+Nine separate unequal-rate arithmetic cases do not claim productive support.
+
+All 24 integrated cases and nine arithmetic cases pass. Unit live rates are
+exactly one; inverse-delta rates agree within `1e-11`. Native examples are
+`2.996614153753363` for half rate/KEYLOCK on, `0.749153538438341` for double
+rate/on, and `1.498307076876682` for KEYLOCK off. After the accepted domain
+changes, the expanded half-rate/on profile initially lacks reconstructible past
+history. The fixture advances actual post-publication playback only after a
+preparation request is terminal, then lets the existing worker adopt at that
+request's unchanged `F+4096`. Debug observed 7168 extra frames at 44.1/48 kHz
+and 15360 at 96 kHz; these are software observations, not universal latency or
+deadline guarantees. A new comparison made immediately after each differing
+adoption time would compare different physical times and is explicitly avoided.
+
+This closes the bounded units/rate evidence gap, without changing production
+DSP, clocks, maps, public APIs, scheduling, Native history policy or gates. It
+does not resolve any of the 13 rejected current-weight acoustic cases, certify
+all 37 extras/base/total corners, variable trajectories, seams, finite handover,
+continuous-output causality, realtime resources, devices or Human listening.
+
+Fresh validation: the two new Rust tests pass in Debug (7.08 s) and Release
+(5.53 s, optimized compilation 1 min 52 s), each executing all 24 integrated
+and nine arithmetic cases. The impacted integrated checks pass: streamed loader
+oracle one test/144 combinations (4.34 s), timing callbacks 10 tests (1.50 s),
+source playback 17 tests (.01 s), and pitch runtime 54 tests (72.65 s) with its
+one existing explicit Native-owner diagnostic ignored. That ignored diagnostic
+is not counted as passing. Production/Python/ABI remain unchanged; no new wheel,
+installation, App launch, device or listening check is claimed.
+
+Reproduce from the repository in PowerShell, using the existing compatible
+environment and Native build cache:
+
+```powershell
+$env:UV_NO_SYNC = 'true'
+& .\scripts\run-rust-tests.ps1 -CargoArgs @(
+    '--locked', '--release', '-p', 'flitzis-looper', '--lib',
+    'coordinate_units_tests', '--', '--nocapture',
+    '--skip', 'test_audio_stream_creation', '--test-threads=1'
+)
+```

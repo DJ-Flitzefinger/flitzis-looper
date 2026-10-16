@@ -44,7 +44,7 @@
   with independent full-hop, zero-crossing and prediction-sensitivity controls.
 - [x] Evaluate positive current weighting with independent signed source-knot
   responses and distinct weighted-target/PCM sensitivity before full quality.
-- [ ] Verify inverse-map seconds to loaded-frame conversion before deriving rate; equal physical
+- [x] Verify inverse-map seconds to loaded-frame conversion before deriving rate; equal physical
   progression at equal sample rates must yield r=1, including across supported device rates.
 - [ ] Test all37 extras/base -5..+6/total -23..+24 at actual r(n), lockON h/r
   (~.132433..8 for r=.5..2), lockOFF h, original .25..4 corners and finite bounds
