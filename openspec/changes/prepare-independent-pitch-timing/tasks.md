@@ -60,6 +60,10 @@
   separately check computed bases, and retain existing guards and uncovered numeric domains.
 - [ ] Demonstrate independent complex-multiplier ambiguity refusal before completing the
   finite-gate evaluation; the quadrature-stereo landmark source excludes that ambiguity.
+- [x] Evaluate independent per-carrier finite gates with complete joint I/Q/sparse-frame
+  source search, robust plateau and ambiguity controls and unchanged full quality matrix.
+  The conditional offline evaluation retains six timing failures; full product acceptance
+  and the separately listed finite-AM complex-ambiguity controls remain open.
 - [ ] Test all37 extras/base -5..+6/total -23..+24 at actual r(n), lockON h/r
   (~.132433..8 for r=.5..2), lockOFF h, original .25..4 corners and finite bounds
   without clipping; prove quality/RT/readiness/latency/finite context/unity transitions.

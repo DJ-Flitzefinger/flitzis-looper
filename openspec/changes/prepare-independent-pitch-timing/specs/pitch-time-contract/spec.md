@@ -535,6 +535,79 @@ variable-rate maps, realtime execution or any remaining Human/product gate.
 - **THEN** the separate experiment SHALL publish that source model and retain every complementary PCM sample and tail
 - **AND** incomplete, ambiguous, censored or ill-conditioned fits SHALL retain the prior signal path without manufacturing acoustic acceptance
 
+### Requirement: Independent Finite Carrier Gates Use A Complete Joint Source Fit
+The offline diagnostic SHALL offer a separate opt-in extension for at most two
+already source-certified stationary carriers with independent integer raised-cosine
+gates. Each gate SHALL have one onset, plateau and end, with rise/release widths
+3 through 512. The joint real I/Q design SHALL include every cross-carrier term.
+One optional nuisance frame SHALL have two unrestricted real stereo amplitudes;
+its position SHALL be determined from original PCM, never a fixture identifier,
+known event coordinate, requested output or scorer. This is a conditional sampled
+source model, not physical source identification or productive backend acceptance.
+
+A source-only 8192-frame reference SHALL be checked in sixteen 512-frame bins.
+Every proper carrier subset's least-squares error after arbitrary deletion of
+at most one whole stereo frame SHALL exceed the global feasible error budget in
+every bin before a common central 2048-frame plateau is certified. All permitted
+central-frame deletions SHALL contribute to a conservative joint I/Q enclosure.
+Ordinary activity traces, recurrence proposals and successful optimizers SHALL
+NOT replace these certificates or justify local edge brackets.
+
+The search SHALL examine the complete finite source grid using conservative
+interval lower bounds, including arbitrary nuisance-frame removal. It SHALL
+retain every candidate not proved infeasible and account for all feasible joint
+models. It SHALL use at most 4096 surviving anchors and edges per carrier side,
+2000000 width evaluations per side, 2000000 joint edge combinations/pairs,
+4096 direct model/support confirmations and 64-width batches.
+Each joint flank's stored survivor list SHALL separately be bounded to 4096
+entries before append, including simultaneous onset and release storage.
+Any exhausted cap,
+unresolved numerical bound or incomplete search SHALL refuse; best-subset
+selection SHALL NOT be presented as complete ambiguity analysis. Before allocation,
+additional working memory SHALL be bounded by 512 bytes per input frame plus
+96MiB, within the existing 256MiB limit.
+
+Joint least squares SHALL consider every possible nuisance frame and the
+no-nuisance case before direct original-source confirmation of surviving models.
+The coefficient enclosure SHALL include every vector satisfying each surviving
+gate/support model's global budget, not only its least-squares representative.
+When a global least-squares representative fails an edge check, rejection SHALL
+require an independent conservative edge-infeasibility bound. Unresolved joint
+coefficient feasibility SHALL refuse the experiment. The geometry condition
+check SHALL cover the retained coefficient enclosure using a conservative
+perturbation bound rather than certify only one representative phase.
+Global and every 1025-frame onset/end neighborhood SHALL separately meet the
+unchanged relative RMS limit 1e-4. Only the explicit nuisance contribution MAY
+be subtracted for evaluating model error; normalizers SHALL use original PCM.
+The full joint I/Q design and amplitude-invariant nuisance-projected 6K geometry
+Jacobian SHALL satisfy rank and condition 1e6. Every feasible gate's onset,
+rise-end, release-start and end SHALL agree within one source frame, and its
+source-normalized complex coefficients within 1e-3. Feasible source/ramp boundary
+contact, censored observations and unresolved support ambiguity SHALL refuse.
+Final physical coefficient rescaling SHALL refuse nonfinite or zero amplitudes
+before publishing modes, including finite-PCM cases whose modal amplitude exceeds
+the representable float64 range.
+
+Each admitted carrier SHALL retain its own fitted onset as phase birth and its
+own global complex I/Q phase. The prepared residual SHALL remain original PCM
+minus the entire tonal reconstruction, including the nuisance and all other
+complementary samples. Every residual sample and generated tail SHALL be
+transformed. Refusal SHALL preserve the previous v9 signal path. Previous variants,
+original sources, targets, criteria and all remaining acceptance gates SHALL
+remain unchanged. Conservative floating allowances SHALL be explicit; they SHALL
+NOT be described as universal floating-point or libm certification.
+
+Independent source controls SHALL cover staggered/shared gates, phase/translation/
+scale and stereo variation, missing or weak modes, impulses at plateau/edge,
+multiple transients/noise, non-raised-cosine/censored sources and actual cap
+exhaustion before the unchanged full source/profile measurements.
+
+#### Scenario: An impulse accompanies independently gated stationary carriers
+- **GIVEN** a source-only reference and a complete joint integer-gate search with at most one arbitrary stereo nuisance frame
+- **WHEN** every feasible directly confirmed model agrees within the unchanged source resolution and satisfies conditioning and residual checks
+- **THEN** each carrier SHALL retain its independent onset and complex phase, while the impulse remains in the fully transformed exact remainder
+- **AND** ambiguous, unsupported, numerically unresolved or incomplete cases SHALL retain the previous signal path without claiming acoustic or product acceptance
+
 ### Requirement: Combined Pitch And Rate Bounds Are Never Silently Clipped
 The system SHALL validate and report the supported combined pitch/rate domain before accepting
 diagnostic transposition, retaining separate requested, pending, effective and rejected state.

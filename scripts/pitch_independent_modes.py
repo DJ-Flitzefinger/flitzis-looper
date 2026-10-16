@@ -14,6 +14,7 @@ from pitch_am_groups import group_am_carriers
 from pitch_amfm_model import render as render_residual
 from pitch_chirplet_carriers import estimate_chirplet
 from pitch_finite_am_gate import fit_finite_am_gate
+from pitch_joint_finite_gates import fit_joint_finite_gates
 from pitch_mode_carriers import FS, CarrierEstimate, estimate_carriers
 from pitch_mode_certificate import inspect_window
 from pitch_mode_envelopes import (
@@ -70,6 +71,7 @@ def _validate_mode_policy(
     modulated_basis: bool,
     linear_chirplet: bool = False,
     finite_am_gate: bool = False,
+    joint_finite_gates: bool = False,
 ) -> None:
     if affine_endpoint and not certified_causal:
         message = "Affine endpoints require certified source-mode preparation"
@@ -91,6 +93,9 @@ def _validate_mode_policy(
         raise ValueError(message)
     if finite_am_gate and not linear_chirplet:
         message = "Finite AM gates require the complete certified v8 preparation policy"
+        raise ValueError(message)
+    if joint_finite_gates and not finite_am_gate:
+        message = "Joint finite gates require the complete certified v9 preparation policy"
         raise ValueError(message)
 
 
@@ -149,6 +154,51 @@ def _fit_finite_am_source(
     return updated, envelopes, report
 
 
+def _fit_joint_source(
+    pcm: Pcm, estimate: CarrierEstimate, *, stationary: bool
+) -> tuple[CarrierEstimate, Pcm, dict] | None:
+    """Reuse source-certified frequencies; discover gates and sparse support from PCM."""
+    starts = estimate.report.get("refinement", {}).get("starts", [])
+    if len(estimate.frequencies_hz) != 2 or not stationary or not starts:
+        estimate.report["joint_finite_gates"] = {
+            "accepted": False,
+            "refusal_reason": "requires_two_stationary_carriers_and_source_reference",
+        }
+        return None
+    fitted = fit_joint_finite_gates(
+        pcm,
+        np.asarray(estimate.frequencies_hz),
+        estimate.stereo_coefficients,
+        min(starts),
+    )
+    estimate.report["joint_finite_gates"] = fitted.report
+    if fitted.gates is None:
+        return None
+    amplitude = np.abs(fitted.multipliers)
+    coefficients = estimate.stereo_coefficients * (fitted.multipliers / amplitude)[:, None]
+    updated = CarrierEstimate(estimate.frequencies_hz, coefficients, estimate.report)
+    positions = np.arange(len(pcm))
+    envelopes = np.column_stack([
+        value * gate.values(positions) for value, gate in zip(amplitude, fitted.gates, strict=True)
+    ])
+    return (
+        updated,
+        envelopes,
+        {
+            **fitted.report,
+            "source_joint_finite_gates": True,
+            "offline_fit": True,
+            "envelope_fit_local_causal": False,
+            "complete_pipeline_causality_claim": False,
+            "source_model_phase_birth_frames": [gate.onset_frame for gate in fitted.gates],
+            "published_envelope_quantity": (
+                "independent finite gates times joint carrier amplitudes"
+            ),
+            "fitted_endpoints_crop_exact_residual": False,
+        },
+    )
+
+
 def _select_envelope_fit(
     *,
     certified_causal: bool,
@@ -183,6 +233,7 @@ def _fit_source_modes(
     modulated_basis: bool,
     linear_chirplet: bool = False,
     finite_am_gate: bool = False,
+    joint_finite_gates: bool = False,
 ) -> tuple[CarrierEstimate, Pcm, dict, tuple[LinearSourcePhase, ...] | None]:
     _validate_mode_policy(
         certified_causal=certified_causal,
@@ -193,6 +244,7 @@ def _fit_source_modes(
         modulated_basis=modulated_basis,
         linear_chirplet=linear_chirplet,
         finite_am_gate=finite_am_gate,
+        joint_finite_gates=joint_finite_gates,
     )
     estimate = estimate_carriers(
         pcm,
@@ -214,6 +266,12 @@ def _fit_source_modes(
         finite = _fit_finite_am_source(pcm, estimate, modulators)
         if finite is not None:
             return *finite, phase_laws
+    if joint_finite_gates:
+        joint = _fit_joint_source(
+            pcm, estimate, stationary=modulators is None and phase_laws is None
+        )
+        if joint is not None:
+            return *joint, phase_laws
     fit = _select_envelope_fit(
         certified_causal=certified_causal,
         affine_endpoint=affine_endpoint,
@@ -238,8 +296,10 @@ def _model_version(
     modulated_basis: bool,
     linear_chirplet: bool = False,
     finite_am_gate: bool = False,
+    joint_finite_gates: bool = False,
 ) -> str:
     for enabled, version in (
+        (joint_finite_gates, "conditional-independent-source-gates-v10"),
         (finite_am_gate, "conditional-source-finite-AM-gate-v9"),
         (linear_chirplet, "certified-source-linear-chirplet-v8"),
         (modulated_basis, "certified-fixed-positive-am-basis-v7"),
@@ -285,6 +345,7 @@ def prepare(
     modulated_basis: bool = False,
     linear_chirplet: bool = False,
     finite_am_gate: bool = False,
+    joint_finite_gates: bool = False,
 ) -> Prepared:
     """Decompose all original stereo samples without access to output intent."""
     if np.iscomplexobj(source):
@@ -304,15 +365,21 @@ def prepare(
         modulated_basis=modulated_basis,
         linear_chirplet=linear_chirplet,
         finite_am_gate=finite_am_gate,
+        joint_finite_gates=joint_finite_gates,
     )
     activity = np.flatnonzero(np.any(pcm != 0.0, axis=1))
     birth = int(activity[0]) if len(activity) else 0
     modes, reconstruction = [], np.zeros_like(pcm)
     clock = np.arange(len(pcm), dtype=np.float64)
+    births = envelope_report.get(
+        "source_model_phase_birth_frames",
+        [int(envelope_report.get("source_model_phase_birth_frame", birth))]
+        * len(estimate.frequencies_hz),
+    )
     for index, frequency in enumerate(estimate.frequencies_hz):
         mode = _build_mode(
             frequency,
-            int(envelope_report.get("source_model_phase_birth_frame", birth)),
+            int(births[index]),
             envelopes[:, index],
             estimate.stereo_coefficients[index],
             clock,
@@ -331,6 +398,7 @@ def prepare(
             modulated_basis=modulated_basis,
             linear_chirplet=linear_chirplet,
             finite_am_gate=finite_am_gate,
+            joint_finite_gates=joint_finite_gates,
         ),
         "mode_count": len(modes),
         "frequencies_hz": list(estimate.frequencies_hz),

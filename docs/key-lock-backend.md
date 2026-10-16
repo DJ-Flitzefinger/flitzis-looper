@@ -2453,6 +2453,115 @@ no fitter, source estimator, renderer, threshold or previously measured acoustic
 profile. This evidence closes only the independent multiple-feasible landmark
 negative-control item; the separately listed remaining items stay open.
 
+### Independent Finite Carrier Gates And Sparse PCM — 2026-10-17
+
+The separate offline `joint_finite_gates=True` experiment extends the complete
+v9 policy with independently gated stationary carriers. It does not change the
+Native backend, old policies, output intent, source clock or acoustic criteria.
+The current PCM-only dispatch requires exactly two existing stationary carrier
+certificates and reuses a source-only refinement reference. No fixture label,
+known impulse position, output request or target selects a source model.
+
+The conditional family is `y = A(g) beta + T_S d + e`, with a separate integer
+raised-cosine gate per carrier, all joint real I/Q cross terms and at most one
+arbitrary stereo nuisance frame. Gate widths remain 3..512. Original-PCM global
+and each 1025-frame edge RMS limits remain `1e-4`. The nuisance is an explicit
+part of fitting, never deleted from rendering: preparation publishes the exact
+whole residual `y - A(g) beta = T_S d + e`, including every complementary sample.
+Each carrier keeps its own fitted onset and global complex phase.
+
+An admitted 8192-frame source reference is tested in sixteen 512-frame bins.
+Every proper carrier subset, after every possible one-frame deletion, must have
+minimum error above the global budget. Each other carrier's two ramps can meet
+at most four bins, so five completely absent bins would contradict this test.
+This proves a common central 2048-frame plateau for every feasible declared
+model. All 2049 central support possibilities contribute coefficient ellipsoids.
+The resulting conservative I/Q box permits a complete source-grid anchor scan
+and bounded full ramp enumeration. A deterministic stride-16 partial-ramp lower
+bound avoids unnecessary full-ramp work; omitted nonnegative errors cannot make
+that necessary bound exclude a feasible model. One largest frame contribution
+is subtracted across each disjoint observation union, never once per overlap.
+Joint flank evaluation reuses constant-gate frame costs through 256-frame block
+sums and maxima. It evaluates only the disjoint variable ramp interiors for
+each tuple; prefix differences include outward cancellation allowances before
+the unchanged full-flank reduction bound. Complete tuple enumeration is retained.
+The canonical integrity controls include `scripts/pitch_joint_flank_bounds_controls.py`,
+which compares 72 retained K1/K2 onset/release tuples with dense full-flank
+equations, including block boundaries,
+overlapping ramps, widths3/256/512 and the first variable release frame at the
+plateau end. This regression does not claim universal floating-point coverage.
+
+Surviving joint gate tuples examine every possible sparse support through the
+same conservative SVD/downdate implementation. Direct full PCM confirms the
+survivors. Global coefficient ellipsoids contribute to all reported phase ranges
+and the nuisance-projected `6K` Jacobian perturbation bound. A representative's
+failed edge test can exclude a tuple only when a separate edge projection proves
+infeasibility; unresolved feasibility refuses. Local rank or an optimizer alone
+does not prove unique geometry. Gate landmarks must agree within one frame and
+source-normalized complex coefficients within `1e-3` across the entire retained
+set. Boundary, ambiguity, numerical uncertainty and incomplete search refuse.
+
+Fixed caps are 4096 surviving anchors/edges per side, 2000000 width evaluations
+per side, 2000000 joint flank combinations/pairs, 4096 direct model/support
+confirmations, 4096 stored joint survivors per flank and 64-width batches. The
+joint survivor cap applies before appending objects, including simultaneous
+onset/release storage. Final coefficient rescaling checks finite, nonzero
+amplitudes before publication. The preallocation guard is 512 bytes per
+input frame plus 96MiB, inside 256MiB. These are conditional resource limits;
+the valid no-nuisance control currently exposes a support-confirmation cap.
+That refusal remains a coverage limit and preserves the previous signal path.
+Floating allowances assume the stated arithmetic/libm model; no universal
+floating-point, physical interpretation, realtime, device or Human claim follows.
+
+Reproduce source controls with `uv run --no-sync python
+scripts/pitch_joint_finite_gate_controls.py`; the full ordered controls and
+unchanged 18-source/four-profile measurements use
+`uv run --no-sync python scripts/pitch_joint_finite_gate_probe.py`.
+Existing finite-AM ambiguity/phase requirements and all full product gates remain
+open independently of this experiment's measured outcomes.
+
+The completed source controls pass seven independent positive configurations and
+two amplitude scales, seven model refusals, fourteen malformed contracts, the
+actual preallocation guard and both publication guards. Whole public analytic
+error is at most6.91e-13; complete integer references are within3.86e-13 and
+fractional identity within4.45e-15. The transformed residual retains a measured
+nonunity tail energy0.0059097. Separate final controls prove bitwise unchanged
+source, modes, births, phase laws and whole residual for impulse, mono, chirp and
+an actual two-carrier/two-transient joint refusal. This control exercises the
+lower-level joint source search. Both the dense partition check and fallback checks
+are included in the canonical integrity controls; their fresh separate run took
+4.0498 seconds.
+
+The unchanged full matrix completes72 requests in605.4226 seconds, or679.2476
+including source controls:71 complete PCM responses and the same explicit
+19873.23Hz/+7 Nyquist refusal. All18 unity errors are at most7.67e-15 and complete
+source decomposition at most1.12e-16. All35 tonal measurements pass15 cents,
+with maximum1.17344 cents. Proportional stereo error, isolated pre-event energy
+and actual final retirement energy are zero; every isolated peak follows its
+source event. The51 PCM reports for sources not admitted by the new fitter are
+exactly equal to v9 after excluding only model name and measured runtime.
+
+Five unchanged matrix sources receive complete joint source fits:331.37/997.19Hz plus
+impulse, independently gated900/1100Hz, unseen427.43/1327.89Hz, close521.17/533.43Hz
+and independently gated371.39/1381.77Hz. The900/1100 timing failure is repaired,
+but six full-response timing failures remain. At rate2, q10/q50 offsets are:
+
+| Source | k=-7, frames | k=0 | k=+7 |
+| --- | --- | --- | --- |
+| Independently gated900/1100Hz | +47/+62 | -7/+47 | -50/-1 |
+| Close521.17/533.43Hz | +31/-947 | +172/+119 | -797/-798 |
+| Noise | +212/+222 | +135/+102 | -222/-236 |
+
+The close pair's gates match the generating source exactly, with one complete
+feasible model and residual energy0.171125, equal to the retained impulse. Its
+remaining timing failure therefore survives correct source fitting. Cross-carrier
+interference after transformation requires further work. Noise remains the
+unchanged zero-mode AM/FM residual path. Running background and unrelated-stereo
+inputs expose the support-confirmation cap; two busy multi-event inputs have no
+feasible declared one-frame model. These refusals preserve v9 and remain coverage
+limits. The entire candidate is still rejected by the full quality gate. No Native
+build, device or Human listening acceptance follows from this offline delivery.
+
 ### Public Exact-Model Complex-Gauge Bound — 2026-10-17
 
 `uv run --no-sync python scripts/pitch_finite_am_gauge_controls.py` evaluates a
