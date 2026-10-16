@@ -1067,6 +1067,52 @@ No production backend, scheduling, installation or callback changes follow from
 this bounded result. Variable maps, nonzero pitch, finite live handover, continuous
 history, resource/deadline/device and Human listening gates remain open.
 
+### Rejected Causal AR2 Source-Filter Candidate — 2026-10-16
+
+`uv run --no-sync python scripts/pitch_causal_model_probe.py` runs a bounded
+NumPy-only falsification without Native, an audio device or production changes.
+It reuses the original161538-frame stereo impulse at32768, and adds frozen
+one-second mono900.37-Hz and331.37/997.19-Hz-plus-impulse sources. The same
+source-rate2 map targets16384 and produces80769 captured frames. Each fixture
+also has a rate1/pitch1 identity control; rate2 uses k=-7,0,+7.
+
+One stereo-pooled biased Yule-Walker AR2 fit uses the whole known source offline.
+The exact source residual is retimed by causal innovation scatter at ceil(m/r).
+Synthesis changes pole radius to rho^r and angle to h*omega, retaining every
+nonzero innovation. Causal here describes synthesis support given prepared
+coefficients; whole-source fitting supplies no streaming-causal inference proof.
+This is an LPC simplification motivated by the source-filter equations in
+[Thornburg and Leistikow, sections2–3](https://dafx.de/paper-archive/2003/pdfs/dafx12.pdf),
+and does not implement that paper's complete Kalman/filterbank algorithm.
+
+The original impulse maps exactly, with no pre-target samples or tail and no
+energy change. All three identity controls pass; maximum absolute reconstruction
+error is5.533e-12 against the predeclared1e-9 numerical limit. Source frequency
+calibration is within.001725 cents. The fixed Hann/4x-FFT scoring window ranks
+actual strongest local peaks; it does not search near requested frequencies.
+
+| Mixed source, rate2 | Requested frequencies, Hz | Strongest measured pair, Hz | Maximum error |
+| --- | --- | --- | --- |
+| k=-7 | 221.163 / 665.544 | 662.740 / 1994.380 | 1900 cents |
+| k=0 | 331.370 / 997.190 | 662.740 / 1994.380 | 1200 cents |
+| k=+7 | 496.494 / 1494.097 | 662.740 / 1994.380 | 500 cents |
+
+Every mixed profile fails the unchanged15-cent limit, so this fixed candidate
+is rejected. A fixed synthesis filter changes gain and phase of persistent
+residual forcing; rotating its poles does not transpose that forcing. In these
+profiles it remains at twice the source frequencies regardless of requested h.
+This counterexample concerns untransformed residual forcing, not every causal
+model or every higher-order decomposition.
+
+Mono pitch alone is within.035 cents, but1.79–1.93% of captured output energy
+remains in its final20ms and the recursive state is nonzero. No infinite-tail
+bound, canonical q10/q50, complete finite-tail or overall acoustic acceptance is
+claimed. Float64 analytical synthesis is not a rendered-engine or live-handover
+proof. The script exports complete-capture metrics, strongest peaks and final
+state, without writing PCM. Python3.14.2/NumPy2.4.0 completed all12 profiles;
+execution success is explicitly separate from candidate rejection. Previous
+Live/Stretcher/continuous-history failures and all full B5 gates remain open.
+
 ## Settings Contract
 
 Project persistence stores the global `key_lock` boolean as default intent and

@@ -68,6 +68,26 @@ remain implicit in the native keyframe encoding to avoid a zero first divisor.
 - **THEN** it converts seconds to source frames and obtains r=1
 - **AND** it does not treat 1/48000 seconds per output frame as the native tempo ratio
 
+The bounded causal source-filter diagnostic SHALL freeze its model order,
+original-source fixtures, innovation mapping, synthesis equations and frequency
+windows before measurement. Its AR2 simplification SHALL retain the complete
+source residual, admit each innovation no earlier than its mapped frame, and
+separately test identity reconstruction and nonzero pitch on sustained and mixed
+tones. A causal impulse alone SHALL NOT establish tonal pitch preservation.
+The diagnostic SHALL report actual strongest spectral peaks without selecting
+only peaks near requested frequencies. Any failed original15-cent tonal predicate
+SHALL reject that fixed candidate. Unsupported poles and out-of-range transformed
+frequencies SHALL be explicit, with no coefficient, gain or pitch clipping.
+It SHALL NOT claim the original acoustic timing, complete-tail, finite-history,
+live or Human gates from this frequency-focused falsification. Previous Native
+and Stretcher failures SHALL remain visible; no production route is activated.
+
+#### Scenario: Causal innovations do not imply correct transformed residual pitch
+- **GIVEN** fixed original-source mono and two-tone fixtures, an identity control and k=-7,0,+7 at source-rate2
+- **WHEN** the same fitted AR2 source-filter model retimes residual innovations and rotates its pole pair
+- **THEN** source calibration, identity error, metrics over the complete captured output and actual strongest output frequencies SHALL be recorded separately from structural onset causality
+- **AND** an incorrect tonal frequency SHALL reject the candidate without changing its order, excitation map, scoring window or original acceptance thresholds
+
 #### Scenario: Unit-rate playback has deliberate nonzero transposition
 - **GIVEN** r=1 and nonzero diagnostic k
 - **WHEN** the renderer evaluates the requested pitch

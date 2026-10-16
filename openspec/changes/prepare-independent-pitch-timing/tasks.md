@@ -16,6 +16,9 @@
 - [x] Preserve direct-native partition failures and prove a bounded fixed-native-
   block offline adapter against both caller partitions and the complete direct
   fixed-block PCM, with identical source/map and zero fitted tolerance.
+- [x] Evaluate one frozen causal AR2 source-filter candidate on the original
+  impulse, sustained mono and mixed two-tone sources, identity and nonzero pitch;
+  preserve wrong-frequency residual forcing as rejection rather than impulse-only acceptance.
 - [ ] Verify inverse-map seconds to loaded-frame conversion before deriving rate; equal physical
   progression at equal sample rates must yield r=1, including across supported device rates.
 - [ ] Test all37 extras/base -5..+6/total -23..+24 at actual r(n), lockON h/r
