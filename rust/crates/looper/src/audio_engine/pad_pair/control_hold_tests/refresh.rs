@@ -8,10 +8,11 @@ use crate::audio_engine::cold_load::admit_for_format_selected;
 use crate::audio_engine::cold_residency::ResidentLoadHint;
 use crate::audio_engine::constant_timing::{self, AcceptedTimingProjection, ConstantTimingTicket};
 use crate::audio_engine::input_runtime_binding::{self, InputRuntimePadBinding};
+use crate::audio_engine::pad_start::CapturedPadStart;
 use crate::audio_engine::resident_relocation::{
     self, ResidentWindowTicket, WindowRequest, launch_with_producer, prepare_window_with_producer,
 };
-use crate::messages::LoaderEvent;
+use crate::messages::{ControlMessage, LoaderEvent};
 use flitzis_looper_analysis::tempo_acceptance::{
     IndependentTimingOrigin, TimingAcceptanceDecision, TimingIntent,
 };
@@ -178,53 +179,22 @@ impl RefreshFixture {
                 ..Default::default()
             },
         );
-        assert!(
-            launch_with_producer(
-                &fixture.callback.control.engine,
-                &ready,
-                false,
-                1,
-                &fixture.callback.control.producer,
-            )
-            .unwrap()
-        );
-        assert_eq!(fixture.callback.drain(), 1);
+        let start = fixture.launch(&ready);
+        let native = fixture.complete_launch(&start);
         fixture.render(13);
         let lane = fixture.lane(SOURCE);
-        wait_until(|| {
-            fixture.callback.mixer.voices[lane]
-                .stretch
-                .source_preparation_ready()
-        });
-        let prepared = fixture.callback.mixer.voices[lane]
-            .stretch
-            .prepared_native_address();
-        let target = fixture.callback.mixer.voices[lane]
-            .stretch
-            .prepared_target_output_frame()
-            .unwrap();
-        assert_ne!(prepared, 0);
-        assert_ne!(
-            prepared,
-            fixture.callback.mixer.voices[lane]
-                .stretch
-                .native_state_address()
-        );
-        let current = fixture.callback.transport.output_frame();
-        assert!(target >= current);
-        fixture.render((target - current) as usize);
         fixture.render(257);
         assert_eq!(
             fixture.callback.mixer.voices[lane]
                 .stretch
                 .native_state_address(),
-            prepared
+            native
         );
-        assert!(
+        assert_eq!(
             fixture.callback.mixer.voices[lane]
                 .stretch
-                .adopted_request_id()
-                .is_some()
+                .adopted_request_id(),
+            Some(start.sequence())
         );
         assert!(
             fixture.callback.mixer.voices[lane]
@@ -258,6 +228,64 @@ impl RefreshFixture {
 
     fn render(&mut self, frames: usize) {
         self.callback.render(frames);
+    }
+
+    fn launch(&mut self, ready: &ResidentWindowTicket) -> CapturedPadStart {
+        let frame = self.callback.transport.output_frame();
+        assert!(
+            launch_with_producer(
+                &self.callback.control.engine,
+                ready,
+                false,
+                1,
+                &self.callback.control.producer,
+            )
+            .unwrap()
+        );
+        // Retain the actual resident start already queued by the productive API.
+        // Observing its first target message transfers no Work or scheduling custody.
+        let start = match self.callback.control.consumer.peek().unwrap() {
+            ControlMessage::CapturePadStartTarget(start) => start.clone(),
+            _ => panic!("resident launch did not queue its original target first"),
+        };
+        assert_eq!(start.target_frame(), None);
+        // The original target capture and PreparedStart are distinct messages.
+        assert_eq!(self.callback.drain(), 2);
+        assert!(start.accepted(), "reason={:?}", start.reason());
+        assert_eq!(start.original_frame(), Some(frame));
+        assert_eq!(self.callback.transport.output_frame(), frame);
+        start
+    }
+
+    fn complete_launch(&mut self, start: &CapturedPadStart) -> usize {
+        let frame = self.callback.transport.output_frame();
+        let execution = start.execution_frame().unwrap();
+        assert!(execution > frame);
+        wait_until(|| {
+            let runtime = self.callback.mixer.pitch_runtime.as_mut().unwrap();
+            runtime.poll();
+            assert_ne!(start.state(), "rejected", "reason={:?}", start.reason());
+            runtime.has_ready_action(start.sequence())
+        });
+        assert_eq!(self.callback.transport.output_frame(), frame);
+        assert_eq!(
+            self.callback.scheduler.peek_next_target_frame(),
+            Some(execution)
+        );
+        self.render(usize::try_from(execution - frame).unwrap());
+        self.render(1);
+        assert_eq!(start.effective_frame(), Some(execution));
+        assert_eq!(start.execution_frame(), Some(execution));
+        assert_eq!(start.state(), "applied", "reason={:?}", start.reason());
+        let voice = &self.callback.mixer.voices[self.lane(SOURCE)];
+        assert_eq!(
+            voice.source_admission.as_ref().unwrap().content_key(),
+            Some(start.content_key())
+        );
+        assert_eq!(voice.stretch.adopted_request_id(), Some(start.sequence()));
+        let native = voice.stretch.native_state_address();
+        assert_ne!(native, 0);
+        native
     }
 
     fn publish_timing(&mut self, id: usize, decision: &str) -> ConstantTimingTicket {
@@ -648,18 +676,11 @@ fn hc21_physical_marker_refresh_rejects_and_real_resident_retrigger_fences_old_h
     assert_eq!(ready.publication_status(), "accepted");
     let current = fixture.sample(SOURCE);
     assert_paused_continuity(&before, &fixture, SOURCE, &current, before.accepted, 0);
-    assert!(
-        launch_with_producer(
-            &fixture.callback.control.engine,
-            &ready,
-            false,
-            1,
-            &fixture.callback.control.producer,
-        )
-        .unwrap()
-    );
-    assert_eq!(fixture.callback.drain(), 1);
+    let start = fixture.launch(&ready);
     assert_eq!(hold.action.state(), HoldActionState::Superseded);
+    assert_paused_continuity(&before, &fixture, SOURCE, &current, before.accepted, 0);
+    let native = fixture.complete_launch(&start);
+    assert_ne!(native, before.native);
     // New productive feed proves a replacement chronology. Its scalar cohort
     // generation already fenced H at the accepted launch, before this render.
     fixture.render(19);

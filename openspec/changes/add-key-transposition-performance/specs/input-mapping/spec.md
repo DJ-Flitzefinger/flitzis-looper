@@ -85,6 +85,20 @@ identity; removal/reassignment/overwrite SHALL fence its old lifetime.
 - **WHEN** A moves/swaps or its lifetime is removed before the event applies
 - **THEN** it follows live A or terminates fenced, never targets the former slot's replacement
 
+#### Scenario: Original pitch worker prepares before the Pair control mirror
+- **GIVEN** A owns an admitted nonneutral pitch retrigger with its original content lifetime, timestamp, numeric tuple, T and frozen E
+- **WHEN** a real Move or Swap publishes before that same action reaches its preparation worker and the Pair control mirror remains pending
+- **THEN** the worker SHALL prepare the original immutable source through its stable content-cell guards without requiring the control mirror
+- **AND** the same action SHALL retain exactly one work owner and one Native construction and SHALL apply at its unchanged E after coherent Native placement becomes available
+- **AND** no former-slot occupant or independent living voice SHALL receive that action, restart or lose its existing Native history
+
+#### Scenario: Prepared pitch crosses Pair and fresh former-slot loading
+- **GIVEN** A already owns its prepared pitch candidate and B has independent nonneutral living Native state
+- **WHEN** A moves to an empty slot followed by a genuine cold-source load into its former slot, or swaps with B
+- **THEN** the original action SHALL adopt only A's exact candidate and pitch at its original E, preserving its captured source phase contract
+- **AND** B SHALL retain its original source, generation, Native, pitch, phase and independent PCM progression
+- **AND** the fresh former-slot content SHALL retain its own new lifetime, source and neutral stopped state without an attack from A's original action
+
 ### Requirement: Pitch note releases have no attack or reset semantics
 The system SHALL treat MIDI NoteOff and NoteOn velocity0 as nonattack/nonreset for new pitch actions and SHALL preserve chosen pitch/highlights without resuming a mouse waveform hold.
 

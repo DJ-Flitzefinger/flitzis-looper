@@ -310,6 +310,22 @@ GLOBAL START captures a native `CapturedGlobalStart` before any resident readine
 
 A dependency retains the actual publication/state and original source binding. Only its genuine accepted adopted binding and launch permit can satisfy readiness. It follows the original content key through placement and cannot borrow a replacement ticket's ACK. Cancelling a global gesture cancels its attack owners, not the independently requested resident edit. A resident pending row without a native ticket is explicitly unavailable before global capture; this bounded rejection is not accepted queue-pressure preservation.
 
+## Original pitch preparation across placement
+
+Immutable pitch preparation consumes the original request's strong source/history
+owners, source-feed snapshot and frozen format. It does not resolve or publish
+control custody rows. Its worker guard therefore validates the captured ContentKey
+against its stable cell with the same lifetime, source, authority, timing, window,
+launch and action-epoch fences before and after Native preparation. The result
+grants no physical slot. A historical slot number cannot authorize a new occupant.
+
+Control admission and operations consuming control rows retain the coherent
+control-placement guard. Actual mixer adoption retains coherent Native placement,
+the exact original prepared permit, frozen E and complete existing mutation claim.
+This distinction preserves immutable preparation through both the short Native
+publication marker and a delayed control mirror without adding a retry queue,
+another clock or scheduler, or reconstructing a Native candidate.
+
 ## Shared ordinary readiness
 
 Native WindowState retains a fixed source/timing/loop/context seal and bounded

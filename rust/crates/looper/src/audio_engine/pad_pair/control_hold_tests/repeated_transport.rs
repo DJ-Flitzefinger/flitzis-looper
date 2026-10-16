@@ -4,12 +4,38 @@
 use super::*;
 use crate::audio_engine::cold_load;
 use crate::audio_engine::pad_pair::PairAcknowledgementSnapshot;
+use crate::audio_engine::pad_start::CapturedPadStart;
 use crate::messages::LoaderEvent;
 use std::fs;
 use std::path::Path;
 use std::time::{Duration, Instant};
 
 const NEXT_EMPTY: usize = 4;
+
+fn capture_start(fixture: &mut CallbackFixture, slot: usize) -> CapturedPadStart {
+    let frame = fixture.transport.output_frame();
+    let (from, to) = fixture.mixer.loop_region_frames(slot);
+    let start = fixture
+        .control
+        .engine
+        .capture_pad_start(
+            slot,
+            from as f64 / f64::from(RATE),
+            to.map(|end| end as f64 / f64::from(RATE)),
+            1.0,
+            false,
+            None,
+            None,
+        )
+        .unwrap();
+    assert_eq!(start.target_frame(), None);
+    assert_eq!(fixture.drain(), 1);
+    assert_eq!(start.target_frame(), Some(frame));
+    assert!(!start.accepted());
+    assert_eq!(start.effective_frame(), None);
+    assert_eq!(fixture.transport.output_frame(), frame);
+    start
+}
 
 fn assert_cached(fixture: &CallbackFixture, slot: usize, expected: Option<&SampleBuffer>) {
     let cache = fixture.control.engine.sample_cache.lock().unwrap();
@@ -315,16 +341,23 @@ fn actual_repeated_move_swap_one_hold_survives_delayed_mirrors_and_fresh_equal_o
     held.assert_retained(&fixture.mixer, EMPTY, 0);
     other.assert_retained(&fixture.mixer, OTHER, 0);
     assert_eq!(hold.action.projection(), original);
-    fixture
-        .control
-        .engine
-        .play_sample(SOURCE, 1.0, None)
-        .unwrap();
+    let fresh_start = capture_start(&mut fixture, SOURCE);
+    assert!(
+        fixture
+            .control
+            .engine
+            .publish_pad_start(&fresh_start, None)
+            .unwrap()
+    );
     assert_eq!(fixture.drain(), 1);
+    assert!(fresh_start.accepted(), "{:?}", fresh_start.reason());
+    assert_eq!(fresh_start.execution_frame(), fresh_start.original_frame());
+    assert_eq!(fresh_start.effective_frame(), fresh_start.original_frame());
     fixture.render(19);
     fixture.control.engine.pause_sample(SOURCE).unwrap();
     assert_eq!(fixture.drain(), 1);
     let fresh = LaneEvidence::capture(&fixture.mixer, SOURCE);
+    assert_eq!(fresh.key, fresh_start.content_key());
     assert_ne!(fresh.key, held.key);
     assert_ne!(fresh.key.lifetime(), held.key.lifetime());
     assert_eq!(fresh.sample.samples.as_ref(), held.sample.samples.as_ref());
@@ -396,12 +429,31 @@ enum LaterIntent {
 }
 
 impl LaterIntent {
-    fn admit(self, fixture: &mut CallbackFixture, slot: usize) {
+    fn admit(self, fixture: &mut CallbackFixture, slot: usize) -> Option<CapturedPadStart> {
         match self {
-            Self::Stop => fixture.control.engine.stop_sample(slot).unwrap(),
-            Self::Retrigger => fixture.control.engine.play_sample(slot, 1.0, None).unwrap(),
-            Self::ManualPause => fixture.control.engine.pause_sample(slot).unwrap(),
-            Self::Resume => fixture.control.engine.resume_sample(slot).unwrap(),
+            Self::Stop => {
+                fixture.control.engine.stop_sample(slot).unwrap();
+                None
+            }
+            Self::Retrigger => {
+                let start = capture_start(fixture, slot);
+                assert!(
+                    fixture
+                        .control
+                        .engine
+                        .publish_pad_start(&start, None)
+                        .unwrap()
+                );
+                Some(start)
+            }
+            Self::ManualPause => {
+                fixture.control.engine.pause_sample(slot).unwrap();
+                None
+            }
+            Self::Resume => {
+                fixture.control.engine.resume_sample(slot).unwrap();
+                None
+            }
         }
     }
 
@@ -502,7 +554,14 @@ fn actual_accepted_stop_retrigger_manual_pause_resume_after_pair_supersede_old_h
                     &[(other_slot, &other)],
                     &[],
                 );
-                intent.admit(&mut fixture, target);
+                let callback_frame = fixture.transport.output_frame();
+                let start = intent.admit(&mut fixture, target);
+                if start.is_some() {
+                    // Target capture has no transport effect. The original unity
+                    // PreparedStart remains queued before the release in either order.
+                    assert_eq!(hold.action.state(), HoldActionState::PausedOwned);
+                    held.assert_retained(&fixture.mixer, target, 0);
+                }
                 if release_before_transport_callback {
                     // The later real gesture is admitted first. The original release
                     // queues behind it before either callback effect/ACK is observed.
@@ -520,6 +579,13 @@ fn actual_accepted_stop_retrigger_manual_pause_resume_after_pair_supersede_old_h
                 assert_eq!(hold.action.state(), HoldActionState::Superseded);
                 assert_eq!(hold.action.effect(), Some(effect));
                 assert_eq!(hold.current_control_slot(), None);
+                if let Some(start) = &start {
+                    assert!(start.accepted(), "{:?}", start.reason());
+                    assert_eq!(start.original_frame(), Some(callback_frame));
+                    assert_eq!(start.execution_frame(), Some(callback_frame));
+                    assert_eq!(start.effective_frame(), Some(callback_frame));
+                    assert_eq!(start.content_key(), held.key);
+                }
                 intent.assert_applied(&fixture, target, &held);
                 other.assert_retained(&fixture.mixer, other_slot, 0);
                 assert!(fixture.mixer.voices[other.lane].paused);

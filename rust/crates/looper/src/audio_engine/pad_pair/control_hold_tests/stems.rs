@@ -189,6 +189,7 @@ impl SelectedWetFixture {
         let producer = Arc::new(Mutex::new(producer));
         let (_, feedback) = RingBuffer::new(32);
         engine.test_control_channels = Some((producer.clone(), Arc::new(Mutex::new(feedback))));
+        engine.test_output_format = Some((RATE, 2));
         let mut mixer = create_stream_mixer(
             2,
             RATE,
@@ -434,22 +435,97 @@ impl SelectedWetFixture {
         mixer.set_speed(RATIO);
         mixer.set_pad_eq(SOURCE, -12.0, -3.0, 4.0);
         mixer.set_pad_eq(OTHER, 1.0, -3.0, -9.0);
-        for id in [SOURCE, OTHER] {
-            engine.play_sample(id, 1.0, None).unwrap();
+        let captured_at = transport.output_frame();
+        assert_eq!(captured_at, 0);
+        let mut drain_start = |mixer: &mut RtMixer| {
+            drain_control_messages(
+                &mut consumer,
+                &mut scheduler,
+                captured_at,
+                &mut quantization,
+                &mut transport,
+                mixer,
+                &mut feedback,
+                &mut retirement,
+            )
+        };
+        let starts = [SOURCE, OTHER].map(|id| {
+            let start = engine
+                .capture_pad_start(
+                    id,
+                    LOOP_START as f64 / f64::from(RATE),
+                    Some(LOOP_END as f64 / f64::from(RATE)),
+                    1.0,
+                    false,
+                    None,
+                    None,
+                )
+                .unwrap();
+            assert_eq!(start.target_frame(), None);
+            assert_eq!(drain_start(&mut mixer), 1);
+            assert_eq!(start.target_frame(), Some(captured_at));
+            assert!(engine.publish_pad_start(&start, None).unwrap());
+            assert_eq!(drain_start(&mut mixer), 1);
+            assert!(start.accepted(), "reason={:?}", start.reason());
+            start
+        });
+        let execution = starts[0].execution_frame().unwrap();
+        assert!(execution > captured_at);
+        assert!(
+            starts
+                .iter()
+                .all(|start| start.execution_frame() == Some(execution))
+        );
+        // Host readiness retains both original ordinary owners at the same frozen
+        // output coordinate. Only actual rendering consumes their lead and first PCM.
+        wait_until(|| {
+            let runtime = mixer.pitch_runtime.as_mut().unwrap();
+            runtime.poll();
+            starts.iter().all(|start| {
+                assert_ne!(start.state(), "rejected", "reason={:?}", start.reason());
+                runtime.has_ready_action(start.sequence())
+            })
+        });
+        assert_eq!(transport.output_frame(), captured_at);
+        let frames = usize::try_from(execution - captured_at + 1).unwrap();
+        let mut output = vec![0.0; frames * 2];
+        render_scheduled_audio(
+            &mut mixer,
+            &mut scheduler,
+            &mut output,
+            &mut [0.0; NUM_SAMPLES],
+            captured_at,
+            2,
+            &mut transport,
+            &mut feedback,
+            &mut retirement,
+        );
+        transport.advance_by_rendered_frames(frames);
+        assert!(
+            output[..(frames - 1) * 2]
+                .iter()
+                .all(|sample| *sample == 0.0)
+        );
+        assert_eq!(transport.output_frame(), execution + 1);
+        let native = starts.each_ref().map(|start| {
+            assert_eq!(start.original_frame(), Some(captured_at));
+            assert_eq!(start.execution_frame(), Some(execution));
+            assert_eq!(start.effective_frame(), Some(execution));
+            assert_eq!(start.state(), "applied", "reason={:?}", start.reason());
+            let voice = mixer
+                .voices
+                .iter()
+                .find(|voice| voice.is_playing_sample(start.diagnostic_slot().unwrap()))
+                .unwrap();
             assert_eq!(
-                drain_control_messages(
-                    &mut consumer,
-                    &mut scheduler,
-                    0,
-                    &mut quantization,
-                    &mut transport,
-                    &mut mixer,
-                    &mut feedback,
-                    &mut retirement,
-                ),
-                1
+                voice.source_admission.as_ref().unwrap().content_key(),
+                Some(start.content_key())
             );
-        }
+            assert_eq!(voice.stretch.adopted_request_id(), Some(start.sequence()));
+            voice.stretch.native_state_address()
+        });
+        assert!(native.into_iter().all(|address| address != 0));
+        assert_ne!(native[0], native[1]);
         // Capture the already playing cohort so ALL's own effect receipt remains
         // current; a stopped receipt cannot certify a subsequent public launch.
         let all = engine
@@ -1125,44 +1201,71 @@ fn assert_selected_all_wet_composition(target: usize) {
                 .fed_output_frames
                 > source.history.unwrap().fed_output_frames
         );
-        // Pause/resume fences prepared work while retaining the actual productive
-        // processor. Its original source-specific epoch cannot certify the new
-        // resumed epoch. Wait for both renderers' genuinely prepared next owner,
-        // then compare through its own exact callback adoption boundary as well.
+        // Pause/resume fences pending work while the adopted owner's own permit
+        // still authorizes this unchanged source/selection. It must not require
+        // an unsolicited replacement. The genuine ALL change already crossed its
+        // exact preparation/adoption boundary in settle_current_native above.
+        // Continue beyond a full preparation lead with the same productive owner.
         let reference_lane = chronology.source_lane();
-        wait_until(|| {
-            actual.mixer.voices[source.lane]
-                .stretch
-                .source_preparation_ready()
-                && chronology.mixer.voices[reference_lane]
-                    .stretch
-                    .source_preparation_ready()
-        });
-        let next_frame = actual.mixer.voices[source.lane]
+        let reference_native = chronology.mixer.voices[reference_lane]
             .stretch
-            .prepared_target_output_frame()
-            .unwrap();
-        assert_eq!(
-            chronology.mixer.voices[reference_lane]
-                .stretch
-                .prepared_target_output_frame(),
-            Some(next_frame)
-        );
-        assert!(next_frame >= actual.transport.output_frame());
-        let next_native = actual.mixer.voices[source.lane]
+            .native_state_address();
+        let adopted = actual.mixer.voices[source.lane]
             .stretch
-            .prepared_native_address();
-        assert_ne!(next_native, 0);
-        assert_ne!(next_native, source.native);
-        while actual.transport.output_frame() < next_frame {
-            let frames = 257.min((next_frame - actual.transport.output_frame()) as usize);
+            .adopted_request_id();
+        let reference_adopted = chronology.mixer.voices[reference_lane]
+            .stretch
+            .adopted_request_id();
+        assert!(adopted.is_some());
+        assert!(reference_adopted.is_some());
+        let mut remaining =
+            crate::audio_engine::prepared_native_history::PREPARED_HISTORY_FRAMES + 137;
+        while remaining != 0 {
+            let frames = 257.min(remaining);
             assert_eq!(actual.render(frames), chronology.render(frames));
+            remaining -= frames;
+            let voice = &actual.mixer.voices[source.lane];
+            let reference_voice = &chronology.mixer.voices[reference_lane];
+            assert_eq!(voice.generation, source.generation);
+            assert_eq!(voice.stretch.native_state_address(), source.native);
+            assert_eq!(voice.stretch.adopted_request_id(), adopted);
             assert_eq!(
-                actual.mixer.voices[source.lane]
-                    .stretch
-                    .native_state_address(),
-                source.native
+                reference_voice.stretch.native_state_address(),
+                reference_native
             );
+            assert_eq!(
+                reference_voice.stretch.adopted_request_id(),
+                reference_adopted
+            );
+            assert!(
+                voice
+                    .source_playback
+                    .matches_exact(&reference_voice.source_playback)
+            );
+            assert_eq!(
+                voice.stretch.pending_fifo_frames(),
+                reference_voice.stretch.pending_fifo_frames()
+            );
+            let history = voice.stretch.productive_history().unwrap();
+            let reference_history = reference_voice.stretch.productive_history().unwrap();
+            assert_eq!(history.binding, source.history.unwrap().binding);
+            assert_eq!(history.next_position, reference_history.next_position);
+            assert_eq!(history.domain, reference_history.domain);
+            assert_eq!(
+                history.fed_output_frames,
+                reference_history.fed_output_frames
+            );
+            let dsp = actual.mixer.dsp_source_history_for_test(target).unwrap();
+            let reference_dsp = chronology
+                .mixer
+                .dsp_source_history_for_test(SOURCE)
+                .unwrap();
+            assert_eq!(dsp.binding, source.dsp.binding);
+            assert_eq!(dsp.next_position, reference_dsp.next_position);
+            assert_eq!(dsp.fed_output_frames, reference_dsp.fed_output_frames);
+            actual.assert_current_all(target);
+            actual.assert_productive_wet(target, &actual.all);
+            chronology.assert_productive_wet(SOURCE, &chronology.all);
             other.assert_retained(&actual.mixer, other_slot, 0);
             actual.assert_current_other_all(other_slot);
             actual.assert_control_readers(target, other_slot);
@@ -1173,13 +1276,6 @@ fn assert_selected_all_wet_composition(target: usize) {
                 &other_stems,
             );
         }
-        assert_eq!(actual.render(137), chronology.render(137));
-        assert_eq!(
-            actual.mixer.voices[source.lane]
-                .stretch
-                .native_state_address(),
-            next_native
-        );
         actual.assert_current_all(target);
         actual.assert_productive_wet(target, &actual.all);
         other.assert_retained(&actual.mixer, other_slot, 0);

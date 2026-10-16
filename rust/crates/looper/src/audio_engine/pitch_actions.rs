@@ -1,7 +1,7 @@
 //! Immutable pitch input and per-action native preparation ownership.
 //!
-//! Control allocates the owner and native adapter. Callback capture only moves a fixed
-//! request into that owner. The existing scheduler retains each work item separately;
+//! Control allocates the work owner; the worker constructs its native adapter. Callback
+//! capture only moves a fixed request into that owner. The scheduler retains each item;
 //! preparation or a newer pitch request never replaces another accepted attack.
 
 use super::constant_timing::CurrentTimingAcknowledgements;
@@ -516,6 +516,24 @@ impl CapturedPitchAction {
         Ok(PitchActionGuard { id, binding })
     }
 
+    /// Validate immutable worker inputs through the original stable content cell.
+    /// The historical slot is only an argument to binding-aware checks; returning
+    /// unit grants no authority to publish into that physical slot after a remap.
+    fn preparation_guard(
+        &self,
+        own_window: Option<InputPadBinding>,
+    ) -> Result<(), PitchActionReject> {
+        let placement = self
+            .owner
+            .admission
+            .binding
+            .placement
+            .ok_or(PitchActionReject::StaleContent)?;
+        let mut binding = own_window.unwrap_or(self.owner.admission.binding);
+        binding.placement = Some(placement);
+        self.guard_at(placement.slot(), binding).map(|_| ())
+    }
+
     pub(crate) fn control_guard(
         &self,
         own_window: Option<InputPadBinding>,
@@ -961,7 +979,7 @@ impl PitchActionWork {
 
     /// Worker-only native reset/warm/read/allocate; each action retains its own tuple and epoch.
     pub(crate) fn prepare(&mut self) -> Result<(), PitchActionReject> {
-        self.action.control_guard(self.own_window)?;
+        self.action.preparation_guard(self.own_window)?;
         if !self.preparation_required {
             return Ok(());
         }
@@ -1003,7 +1021,7 @@ impl PitchActionWork {
         if !self.source_feed_current() {
             return Err(PitchActionReject::PreparationFailed);
         }
-        self.action.control_guard(self.own_window)?;
+        self.action.preparation_guard(self.own_window)?;
         let status = self.action.owner.status.load(Ordering::Acquire);
         if !matches!(status, PREPARING | SCHEDULED)
             || self

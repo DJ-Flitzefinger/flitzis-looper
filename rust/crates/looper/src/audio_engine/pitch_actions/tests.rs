@@ -29,6 +29,46 @@ fn action(ownership: Arc<InputRuntimeOwnership>, key: &str) -> CapturedPitchActi
     .unwrap()
 }
 
+fn source_action(
+    ownership: &Arc<InputRuntimeOwnership>,
+    acknowledgements: &Arc<CurrentTimingAcknowledgements>,
+    sample: &SampleBuffer,
+) -> CapturedPitchAction {
+    let binding = InputPadBinding {
+        placement: ownership.slot_snapshot(0),
+        resident: sample.resident_binding(),
+        source_address: sample.source_address(),
+        sample_count: sample.source_sample_count(),
+        channels: sample.channels,
+        sample_rate_hz: 48_000,
+        authority_revision: ownership.authority_revision(0),
+        runtime_revision: 0,
+        accepted: None,
+    };
+    CapturedPitchAction::capture(PitchActionAdmission {
+        key: binding.placement.unwrap().content_key().unwrap(),
+        binding,
+        ownership: ownership.clone(),
+        acknowledgements: acknowledgements.clone(),
+        spec: PitchActionSpec::parse("pitch.extra:2:set_retrigger").unwrap(),
+        render: FrozenPitchRender {
+            pitch: PitchIntent::new(0, 2).unwrap(),
+            key_lock: true,
+        },
+        received_at_ns: 11,
+        due_frame: 700,
+        quantize_step_64ths: None,
+        sync: false,
+        exclusive: false,
+        loop_start_s: 0.0,
+        loop_end_s: None,
+        input_owners: None,
+        previous_requested: PitchIntent::default(),
+        previous_sequence: 0,
+    })
+    .unwrap()
+}
+
 #[test]
 fn every_absolute_target_uses_shortest_same_mode_distance_with_positive_tritone() {
     for mode in [PitchKeyMode::Major, PitchKeyMode::Minor] {
@@ -155,6 +195,10 @@ fn source_request_and_removed_lifetime_fence_the_original_action_without_retarge
         first.control_guard(None),
         Err(PitchActionReject::SourceChanged)
     ));
+    assert_eq!(
+        first.preparation_guard(None),
+        Err(PitchActionReject::SourceChanged)
+    );
     let second = action(ownership.clone(), "pitch.extra:-2:set_retrigger");
     second.mark_published().unwrap();
     let placement = ownership.slot_snapshot(0).unwrap();
@@ -162,6 +206,10 @@ fn source_request_and_removed_lifetime_fence_the_original_action_without_retarge
     ownership
         .commit_slot_write_fixed(&remove, || true, |_| {})
         .unwrap();
+    assert_eq!(
+        second.preparation_guard(None),
+        Err(PitchActionReject::StaleContent)
+    );
     let refill = ownership
         .prepare_slot_write_fixed(
             ownership.slot_snapshot(0).unwrap(),
@@ -179,6 +227,10 @@ fn source_request_and_removed_lifetime_fence_the_original_action_without_retarge
         second.callback_guard(None),
         Err(PitchActionReject::StaleContent)
     ));
+    assert_eq!(
+        second.preparation_guard(None),
+        Err(PitchActionReject::StaleContent)
+    );
 }
 
 #[test]
@@ -193,11 +245,18 @@ fn pitch_runtime_revision_does_not_globally_stale_prior_actions_and_local_reject
         .fetch_add(1, Ordering::AcqRel);
     assert!(first.control_guard(None).is_ok());
     assert!(second.control_guard(None).is_ok());
+    assert_eq!(first.preparation_guard(None), Ok(()));
+    assert_eq!(second.preparation_guard(None), Ok(()));
     second.reject(PitchActionReject::PreparationFailed);
     assert_eq!(second.reason(), Some("preparation_failed"));
     assert_eq!(second.epoch(), 0);
     assert_eq!(first.epoch(), 1);
     assert!(first.control_guard(None).is_ok());
+    assert_eq!(first.preparation_guard(None), Ok(()));
+    assert_eq!(
+        second.preparation_guard(None),
+        Err(PitchActionReject::StaleContent)
+    );
 }
 
 #[test]
@@ -206,6 +265,14 @@ fn admitted_content_follows_swap_and_native_control_gap_remains_pending() {
     let original = action(ownership.clone(), "pitch.extra:2:set_retrigger");
     InputRuntimePadBinding::for_test(1, ownership.clone());
     original.mark_published().unwrap();
+    let captured = (
+        original.render(),
+        original.original_due_frame(),
+        original.execution_target(),
+        original.received_timestamp(),
+        original.sequence(),
+        original.epoch(),
+    );
     let pair = ownership
         .prepare_placement_pair(
             ownership.slot_snapshot(0).unwrap(),
@@ -213,8 +280,32 @@ fn admitted_content_follows_swap_and_native_control_gap_remains_pending() {
         )
         .unwrap();
     let commit = ownership
-        .commit_placement_pair(&pair, true, || true, || {})
+        .commit_placement_pair(
+            &pair,
+            true,
+            || {
+                assert_eq!(original.preparation_guard(None), Ok(()));
+                assert!(matches!(
+                    original.control_guard(None),
+                    Err(PitchActionReject::PlacementPending)
+                ));
+                assert!(matches!(
+                    original.callback_guard(None),
+                    Err(PitchActionReject::PlacementPending)
+                ));
+                true
+            },
+            || {},
+        )
         .unwrap();
+    assert_eq!(original.preparation_guard(None), Ok(()));
+    assert_eq!(
+        original.preparation_guard(Some(InputPadBinding {
+            placement: Some(commit.source_after),
+            ..original.owner.admission.binding
+        })),
+        Ok(())
+    );
     assert!(matches!(
         original.control_guard(None),
         Err(PitchActionReject::PlacementPending)
@@ -224,6 +315,26 @@ fn admitted_content_follows_swap_and_native_control_gap_remains_pending() {
     assert_eq!(original.control_guard(None).unwrap().id, 1);
     assert_eq!(original.render().pitch.extra_shift(), 2);
     assert_eq!(original.original_due_frame(), 700);
+    assert_eq!(
+        (
+            original.render(),
+            original.original_due_frame(),
+            original.execution_target(),
+            original.received_timestamp(),
+            original.sequence(),
+            original.epoch(),
+        ),
+        captured
+    );
+    super::super::input_runtime_binding::cancel_launches_with_producer(&ownership, None, Some(0))
+        .unwrap();
+    assert_eq!(original.preparation_guard(None), Ok(()));
+    super::super::input_runtime_binding::cancel_launches_with_producer(&ownership, None, Some(1))
+        .unwrap();
+    assert_eq!(
+        original.preparation_guard(None),
+        Err(PitchActionReject::LaunchCancelled)
+    );
 }
 
 #[test]
@@ -242,11 +353,16 @@ fn accepted_action_survives_later_learn_changes_but_uncaptured_publication_does_
     enabled.store(false, Ordering::Release);
     learn.store(true, Ordering::Release);
     assert!(pending.control_guard(None).is_ok());
+    assert_eq!(pending.preparation_guard(None), Ok(()));
     let mut unadmitted = action(ownership, "pitch.extra:2:set");
     Arc::get_mut(&mut unadmitted.owner)
         .unwrap()
         .admission
         .input_owners = Some((mapping, enabled, learn));
+    assert_eq!(
+        unadmitted.preparation_guard(None),
+        Err(PitchActionReject::InputDisabled)
+    );
     assert_eq!(
         unadmitted.mark_published(),
         Err(PitchActionReject::InputDisabled)
@@ -273,6 +389,66 @@ fn newer_actual_timing_ack_cannot_reuse_old_static_binding_numbers() {
         original.callback_guard(None),
         Err(PitchActionReject::TimingChanged)
     ));
+    assert_eq!(
+        original.preparation_guard(None),
+        Err(PitchActionReject::TimingChanged)
+    );
+}
+
+#[test]
+fn preparation_keeps_tracked_source_generation_authority_and_window_fences() {
+    let sample = SampleBuffer {
+        samples: Arc::from([0.25; 128]),
+        channels: 1,
+        residency: None,
+    }
+    .with_complete_source(48_000);
+    let ownership = Arc::new(InputRuntimeOwnership::tracked());
+    ownership.publish_test_source(0, &sample, 48_000, 3);
+    let acknowledgements = Arc::new(CurrentTimingAcknowledgements::default());
+    let generation_action = source_action(&ownership, &acknowledgements, &sample);
+    assert_eq!(generation_action.preparation_guard(None), Ok(()));
+    ownership.publish_source(0, &sample, 48_000, 4);
+    assert!(ownership.content_key_current(generation_action.content_key()));
+    assert_eq!(
+        generation_action.preparation_guard(None),
+        Err(PitchActionReject::SourceChanged)
+    );
+
+    let authority_action = source_action(&ownership, &acknowledgements, &sample);
+    ownership
+        .authority_for_cell(authority_action.content_key().cell())
+        .fetch_add(1, Ordering::AcqRel);
+    assert_eq!(
+        authority_action.preparation_guard(None),
+        Err(PitchActionReject::SourceChanged)
+    );
+
+    let window_action = source_action(&ownership, &acknowledgements, &sample);
+    let next_window = SampleBuffer {
+        residency: Some(Arc::new(crate::messages::ResidentSourceView {
+            window_revision: 2,
+            ..sample.residency.as_ref().unwrap().as_ref().clone()
+        })),
+        ..sample.clone()
+    };
+    ownership.publish_window(0, &next_window);
+    assert_eq!(
+        window_action.preparation_guard(None),
+        Err(PitchActionReject::WindowPending)
+    );
+    let own_window = InputPadBinding {
+        resident: next_window.resident_binding(),
+        ..window_action.owner.admission.binding
+    };
+    assert_eq!(window_action.preparation_guard(Some(own_window)), Ok(()));
+    assert_eq!(
+        window_action.preparation_guard(Some(InputPadBinding {
+            source_address: own_window.source_address + 1,
+            ..own_window
+        })),
+        Err(PitchActionReject::SourceChanged)
+    );
 }
 
 #[test]
@@ -371,43 +547,8 @@ fn action_capture_requires_own_epoch_arc_even_when_all_scalar_pitch_source_and_d
     let ownership = Arc::new(InputRuntimeOwnership::tracked());
     ownership.publish_test_source(0, &sample, 48_000, 3);
     let acknowledgements = Arc::new(CurrentTimingAcknowledgements::default());
-    let capture = || {
-        let binding = InputPadBinding {
-            placement: ownership.slot_snapshot(0),
-            resident: sample.resident_binding(),
-            source_address: sample.source_address(),
-            sample_count: sample.source_sample_count(),
-            channels: 1,
-            sample_rate_hz: 48_000,
-            authority_revision: ownership.authority_revision(0),
-            runtime_revision: 0,
-            accepted: None,
-        };
-        CapturedPitchAction::capture(PitchActionAdmission {
-            key: binding.placement.unwrap().content_key().unwrap(),
-            binding,
-            ownership: ownership.clone(),
-            acknowledgements: acknowledgements.clone(),
-            spec: PitchActionSpec::parse("pitch.extra:2:set_retrigger").unwrap(),
-            render: FrozenPitchRender {
-                pitch: PitchIntent::new(0, 2).unwrap(),
-                key_lock: true,
-            },
-            received_at_ns: 11,
-            due_frame: 700,
-            quantize_step_64ths: None,
-            sync: false,
-            exclusive: false,
-            loop_start_s: 0.0,
-            loop_end_s: None,
-            input_owners: None,
-            previous_requested: PitchIntent::default(),
-            previous_sequence: 0,
-        })
-        .unwrap()
-    };
-    let first = capture();
-    let second = capture();
+    let first = source_action(&ownership, &acknowledgements, &sample);
+    let second = source_action(&ownership, &acknowledgements, &sample);
     let permit = first.capture_history_permit(&sample, 48_000, None).unwrap();
     let region = FrameRange { start: 0, end: 128 };
     let mut playback = SourcePlayback::new(0, ExplicitSeekMode::Normal, 1.0);

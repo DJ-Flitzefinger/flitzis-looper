@@ -153,11 +153,51 @@ impl CallbackFixture {
             },
             _worker: worker,
         };
-        for id in [SOURCE, OTHER] {
-            fixture.control.engine.play_sample(id, 1.0, None).unwrap();
+        let starts = [SOURCE, OTHER].map(|id| {
+            let start = fixture
+                .control
+                .engine
+                .capture_pad_start(
+                    id,
+                    16.0 / f64::from(RATE),
+                    Some(96.0 / f64::from(RATE)),
+                    1.0,
+                    false,
+                    None,
+                    None,
+                )
+                .unwrap();
+            assert_eq!(start.target_frame(), None);
             assert_eq!(fixture.drain(), 1);
-        }
+            assert_eq!(start.target_frame(), Some(0));
+            assert!(
+                fixture
+                    .control
+                    .engine
+                    .publish_pad_start(&start, None)
+                    .unwrap()
+            );
+            assert_eq!(fixture.drain(), 1);
+            assert!(start.accepted(), "reason={:?}", start.reason());
+            start
+        });
         fixture.render(19);
+        for start in starts {
+            assert_eq!(start.original_frame(), Some(0));
+            assert_eq!(start.execution_frame(), Some(0));
+            assert_eq!(start.effective_frame(), Some(0));
+            assert_eq!(start.state(), "applied", "reason={:?}", start.reason());
+            let voice = fixture
+                .mixer
+                .voices
+                .iter()
+                .find(|voice| voice.is_playing_sample(start.diagnostic_slot().unwrap()))
+                .unwrap();
+            assert_eq!(
+                voice.source_admission.as_ref().unwrap().content_key(),
+                Some(start.content_key())
+            );
+        }
         // B is intentionally paused by an independent accepted transport gesture.
         // A's hold and release must never acquire or undo B's pause.
         fixture.control.engine.pause_sample(OTHER).unwrap();

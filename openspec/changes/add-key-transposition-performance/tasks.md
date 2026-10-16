@@ -150,12 +150,41 @@ each subscriber's own pending then accepted/current publication. The full existi
   software evidence does not close physical-device, visual, acoustic or parent gates.
   Native pitch103 passed/1 ignored includes all16 matrix histories and the2 new
   routed cases; real ImGui plus existing keyboard15 passed. One independent review
-  had no findings. The wider Python run reached5310 passed/53 skipped/1 cancellation
-  exit-code failure in unchanged code; its affected rerun still had4 failures/30
-  passed. Whole-source mypy also remains negative in33 unchanged test files;
-  production155 files pass. These are retained open integration results.
+  had no findings. The historical wider Python run reached5310 passed/53 skipped/
+  1 cancellation exit-code failure; its affected rerun had4 failures/30 passed.
+  Subsequent cancellation and typed-fixture deliveries preserve those negatives:
+  current whole-source mypy331 files passes; the later wider Python run reached
+  5312 passed/53 skipped/2 identity-stage test-deadline failures, followed by58
+  passing checks of both repaired lifecycle/mirror modules. No second whole-run
+  pass or physical/acoustic/parent acceptance is claimed from those focused fixes.
 - [ ] K1b: common state/correction/result/resets, simultaneous stay-open menus,
   root-relative signed keyboard/unique enharmonics/highlights/closed summaries/padchange.
+- [x] Original pitch preparation across Pair: reproduce actual Move/Swap with the
+  original nonneutral action preparing before its control mirror, plus already
+  prepared work crossing Pair and genuine former-slot cold-source reuse. Preserve
+  original T/E, own Native, independent B and source phase/PCM assertions.
+- [x] Reuse full original stable-content fences for immutable worker preparation,
+  including an open Native placement marker; retain physical publication guards
+  for actual adoption and genuine source/lifetime/Stop/cancellation refusals.
+- [x] Validate the coherent Pair/pitch block with impacted Native suites, needed
+  private Release/import, affected strict checks and one independent final review;
+  retain earlier failed attempts and all unchanged parent acceptance gates.
+  Old-production baseline: both worker-during-mirror profiles rejected the original
+  action as placement_pending; both already-prepared profiles passed. The same four
+  real Move/Swap profiles now pass with original T/E, one work/Native owner, actual
+  former-slot cold loading and independent B PCM/phase/source guards. Unit checks
+  retain stale source/lifetime/window/timing/Stop/input/epoch refusals and distinguish
+  immutable preparation from actual publication inside an open Pair marker.
+  Integrated pitch108 passed/1 ignored, ordinary42, Pair41, history-permit9 and
+  placement25 passed. Existing Pair fixtures now execute actual original ordinary
+  captures/adoptions with their real format; the earlier30/11 and34/7 negatives
+  remain recorded. Pure Resume proves retained adopted Native/FIFO/history and
+  independent wet PCM beyond one preparation lead; the genuine ALL transition's
+  exact candidate/adoption gate remains. Private Release/import plus260 Python/
+  Portable-API checks passed. One reviewer checked the final implementation and
+  fixture repairs without findings. These are bounded software checks; the ignored
+  resource profile, full musical/acoustic/continuous-O/deadline/device/Human and
+  parent gates remain open. Earlier wider-Python negatives are not a fresh whole pass.
 - [ ] V0: complete new controls+copy/move/bank/hold/pending/restore workload and
   P6 resource/216/disk/RSS proofs repeated; preserve all failed attempts/source roles.
 - [ ] During implementation: focused meaningful compile/regressions and required

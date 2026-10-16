@@ -156,7 +156,7 @@ The system SHALL apply Move to empty or Swap to occupied target as one guarded n
 - **AND** interrupted, pending or failed reconciliation SHALL retain original custody and reservations without rolling Native back, repeating the pair mutation or declaring durable completion
 
 #### Scenario: Admitted source work waits for a coherent control placement
-- **GIVEN** an admitted worker or held source lease retains the original Native content key and the source, window, timing, intent and preparation owners required by that operation
+- **GIVEN** an admitted operation must resolve or publish into control custody rows and retains the original Native content key and the source, window, timing, intent and preparation owners required by that operation
 - **WHEN** Move or Swap changes Native placement before the complete control mirror is visible
 - **THEN** control placement resolution SHALL report Pending and retain the same work, result and owners until that mirror is coherent
 - **AND** after the mirror it SHALL resolve only the same surviving content and apply its original complete operation guards at that placement without obtaining permission from a fresh ticket, equal PCM or equal counters
@@ -167,6 +167,14 @@ The system SHALL apply Move to empty or Swap to occupied target as one guarded n
 - **AND** a previously queued resident result acknowledged after Pair audio publication but before its control mirror SHALL reconcile its own acknowledged window into the original custody row under the existing mutation boundary before Pair mirror validation, retaining external finish for later coherent placement
 - **AND** legitimate original-key control-Pending time SHALL NOT consume a private preparation's existing work deadline; original capture, queued Native adoption and queue-capacity bounds SHALL remain effective at their actual stages
 - **AND** the complete MIDI content mirror SHALL preserve original source, authority, timing and runtime guards while updating the bound resident descriptor to the same source's actually acknowledged current window before publishing the control placement
+
+#### Scenario: Immutable pitch preparation does not consume physical placement
+- **GIVEN** admitted pitch work owns its original strong source and history request, captured ContentKey and action epoch
+- **WHEN** pure Move or Swap has an open Native publication marker or awaits its control mirror
+- **THEN** its existing preparation worker SHALL validate the original stable content cell, source, lifetime, authority, timing, window, launch permission and action epoch before and after preparation without resolving a physical or control slot
+- **AND** pure placement SHALL NOT reject that original immutable preparation, recapture its request, construct another Native candidate or change its captured T, frozen E or render tuple
+- **AND** actual audio adoption SHALL still require coherent current Native placement, its complete original source and prepared permit checks, the existing mutation claim and exact frozen E
+- **AND** removal, source replacement, incompatible timing or window changes, Stop and cancellation SHALL retain their existing refusal semantics for the original owner
 
 #### Scenario: Accepted transport intent and caused pause are distinct
 - **GIVEN** a physical hold press has an accepted Native action bound to one surviving content
