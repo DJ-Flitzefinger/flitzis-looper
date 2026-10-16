@@ -115,6 +115,43 @@ the mixed-signal, finite live history, callback or Human acceptance gates.
 - **THEN** original timing, retention and strongest-frequency results SHALL be recorded without post-measurement tuning
 - **AND** two nearby attacks on a running background and its matched control SHALL reveal boundary gain, duplicated attacks or premature changes without manufacturing a passing isolated response
 
+The bounded full-phase-gradient diagnostic SHALL use an explicit common centered
+STFT coordinate convention for analysis, synthesis and scoring. It SHALL retain
+the complete signed output support of every admitted synthesis packet and finite
+resampling filter, including negative-time output. A predetermined capture-array
+origin MAY encode that signed support; it SHALL NOT change the original target,
+fit an acoustic delay or discard pre-target energy. Canonical dry references
+SHALL use the same declared coordinates.
+
+Temporal instantaneous-frequency and frequency-direction phase gradients SHALL
+both participate. Rounded synthesis centers SHALL retain their explicit phase
+correction. Static synthesis windows/dual weights and finite SRC coefficients
+SHALL be fixed before measurement; wet values SHALL NOT determine a fitted gain.
+Stereo channels SHALL share phase-correction decisions, retaining their measured
+interchannel spectral relation. A magnitude priority threshold SHALL NOT discard
+small nonzero spectral coefficients. Unsupported stretch factors SHALL fail
+explicitly instead of being clamped.
+
+Real DC/Nyquist corrections SHALL enter stored phase state before dependent
+frequency or subsequent-frame propagation uses them. Tail energy SHALL be
+measured on the actual renderer-end interval; appended silence SHALL NOT provide
+a passing tail predicate. Regression controls SHALL expose a sign-changing
+endpoint/state mismatch and a nonzero final renderer sample before their fixes.
+
+The diagnostic SHALL separately verify centered-coordinate gradients, unchanged
+coefficient unity reconstruction, source-frequency calibration and the original
+isolated timing/peak/retention criteria. It SHALL reuse the failed short attack
+and lower two-tone source, plus a matched busy-background attack control. Passing
+unity reconstruction SHALL NOT certify phase integration, complete live history,
+general pitch range, real-time execution or Human listening. Fixed SRC filter
+delay SHALL remain in every reported acoustic timing result.
+
+#### Scenario: Full phase gradients preserve the original signed acoustic response
+- **GIVEN** a frozen centered full-spectrum candidate, original source-only fixtures and unchanged source-rate2 k=-7,0,+7 plus unity controls
+- **WHEN** shared stereo phase correction and finite resampling render every admitted packet on its predetermined signed timeline
+- **THEN** gradient integrity, source calibration, short-attack timing, low-polyphonic pitch and complete pre-target energy SHALL be reported separately
+- **AND** no crop, fitted translation, wet gain, omitted tail or changed target SHALL manufacture acceptance
+
 #### Scenario: Unit-rate playback has deliberate nonzero transposition
 - **GIVEN** r=1 and nonzero diagnostic k
 - **WHEN** the renderer evaluates the requested pitch

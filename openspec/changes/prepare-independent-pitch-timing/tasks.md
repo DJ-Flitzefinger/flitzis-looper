@@ -22,6 +22,9 @@
 - [x] Evaluate one frozen source-segmented full-PCM overlap candidate with source-only
   cues, complete retained grain tails, identity/calibration, short and mixed tones,
   nearby attacks and a paired running-background control; preserve all negatives.
+- [x] Evaluate a frozen full-phase-gradient candidate with centered-coordinate
+  integrity, complete signed packet/SRC tails, original short-attack/lower-polyphony
+  failures, matched busy control and unchanged acoustic criteria.
 - [ ] Verify inverse-map seconds to loaded-frame conversion before deriving rate; equal physical
   progression at equal sample rates must yield r=1, including across supported device rates.
 - [ ] Test all37 extras/base -5..+6/total -23..+24 at actual r(n), lockON h/r

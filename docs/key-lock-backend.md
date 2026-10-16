@@ -1153,8 +1153,14 @@ error 2.22e-16 against the fixed 1e-9 limit. Three source-frequency calibrations
 are within .003804 cent. The centered 25-frame stereo energy formula matches an
 independent explicit-window scalar control exactly, including impulse quantiles
 H-10/H/H+10. This is a Python formula/control check, not fresh Rust execution.
-Every generated sample is captured, followed by 20 ms of exact zero after all
-admitted grains retire. All 32 profiles preserve the stereo relation exactly.
+The original run captured every generated sample and then appended 20 ms of
+silence. Its reported final slice therefore did not independently test tail
+energy. The shared scorer now measures the renderer's actual final 20 ms before
+any added silence; a deliberately nonzero final sample guards this distinction.
+All 32 original profiles preserve the stereo relation exactly.
+The affected 32-profile rerun retains the same timing and tonal negatives.
+Its running-background final slice reaches 1.183381% energy; that slice includes
+legitimate ending material and is not an isolated-response settling certificate.
 
 The original impulse, nearby isolated pair and percussion pass the bounded
 two-ms timing, original peak, pre-target retention and retired-tail predicates.
@@ -1186,6 +1192,92 @@ enlarging windows or tuning search constants to these failures would not prove
 the required joint behavior. Previous Live/Stretcher negatives, finite live
 handover, variable-map/full-pitch-range, continuous-history, realtime/resource,
 device and Human gates remain open; no production renderer is activated.
+
+### Centered Full-Phase-Gradient Diagnostic — 2026-10-16
+
+`uv run --no-sync python scripts/pitch_phase_gradient_probe.py` compares a full
+phase-gradient candidate with the unchanged sources and scoring from the overlap
+probe. Its basis is Prusa and Holighaus,
+[Phase Vocoder Done Right, sections II–III](https://www.eurasip.org/Proceedings/Eusipco/Eusipco2017/papers/1570343436.pdf)
+and the authors' [phase-vocoder implementation](https://raw.githubusercontent.com/ltfat/phaseret/main/sigproc/phasevocoder.m).
+Both temporal instantaneous frequency and frequency-direction group delay guide
+phase propagation. Magnitude-priority integration can follow separate spectral
+components instead of requiring one waveform lag for an entire overlap.
+
+This bounded implementation fixes a centered periodic Hann/FFT of 4096 frames
+and analysis step 256. Analysis centers A and synthesis centers B=floor(alpha*A)
+have explicit centered phase gauges, with alpha=h/r. Their fractional center
+d=B-alpha*A participates in both gradient directions. Every synthesis packet is
+captured on its complete signed timeline. Negative-time samples and pre-target
+energy remain in the report; the predetermined array origin changes no target.
+Static finite dual weights depend on admitted windows, never on wet values.
+Only 0<alpha<=1 is admitted in this first candidate; larger factors are explicit
+unsupported inputs and remain required future gates.
+
+The shared stereo multiplier is derived from pooled channel phase connections;
+source interchannel spectral phase is preserved. A coefficient priority threshold
+of 1e-6 selects integration work, while all magnitudes remain. Endpoint multipliers
+are common real signs. Empty connections, source-based initialization and heap
+ties are deterministic. This stereo extension and finite wrapper are specific
+to this diagnostic and do not inherit a general quality guarantee from the paper.
+
+The finite resampler uses a Kaiser-windowed sinc, following the
+[bandlimited interpolation method described by Julius O. Smith](https://www.dsprelated.com/freebooks/pasp/Windowed_Sinc_Interpolation.html).
+Radius 32, beta 8.6, rate-dependent cutoff and static kernel DC normalization are
+fixed before measurement. Its causal shift has physical group delay 32/h output
+frames, retained in the acoustic timing result. h=1 uses the exact copy conversion;
+live continuity across that branch remains unproved. All finite filter tails are
+captured. No fitted offset, wet gain or nominal-duration crop is applied.
+
+Independent analytic gradient controls, unchanged-coefficient unity reconstruction,
+the original centered energy metric and a deliberate negative-time-energy rejection
+precede quality scoring. The matrix retains all eight previous sources and adds
+the eight-ms tonal attack over the matched running background. Unity reconstruction
+does not test heap integration because unity explicitly preserves coefficients.
+No Native, callback, production renderer, device or Human acceptance is involved.
+
+The final run completes 36 profiles with every tested sustained pitch within
+15 cents; the largest error is .06757 cent on the lower two-tone background.
+Nine unchanged-coefficient identities have maximum error 4.44e-16. Analytic
+gradient/rounded-edge errors are at most 3.18e-13, and the small finite dual
+reconstructs first/last samples exactly. These controls establish their stated
+algebra and coordinate invariants, not general heap quality.
+
+The two-ms timing of the short tone improves, but the candidate remains rejected:
+
+| Original isolated response | r2/k-7 | r2/k0 | r2/k+7 |
+| --- | --- | --- | --- |
+| Eight-ms 900-Hz q10/q50 offsets | -19/+48 frames | -33/-1 frames | +10/+22 frames |
+| Same attack, energy before H | 3.827129% FAIL | 3.768322% FAIL | .007011% |
+| Eight-ms percussion, energy before H | .532876% FAIL | 10.557129% FAIL | .030079% |
+| Nearby isolated pair, energy before H | .521740% FAIL | .347312% FAIL | .173346% FAIL |
+
+The pre-target limit remains .1%. The nearby pair also fails its independent
+two-peak timing check at each shifted rate2 profile. Sustained mono/poly sources
+at k=-7/0 retain further timing or pre-target failures. A passing single impulse
+does not establish their response: its r2 q50 offsets are +48/0/+21 frames,
+including the actual finite SRC delay.
+
+The complete signed output intervals at r2 are [-4093,85083), [-3072,83968),
+and [-2391,83329) for k=-7/0/+7; nominal material duration remains 80769 frames.
+Actual renderer-end tail fractions are at most 2.20e-8, below 1e-6. This result
+uses the full retained finite renderer output, without an artificial silent
+slice or an IIR/native settling claim. For the busy short-tone/control pair,
+pre-H maximum PCM differences are .198771/.233195/.025978. They are nonlinear
+mixture differences, not isolated attack responses or retention certificates.
+
+The single independent review found and closed two diagnostic defects: appended
+silence had made tail scoring vacuous, and endpoint real-sign projection happened
+after heap propagation. Endpoint corrections now enter current and next-frame
+state with their emitted real sign. Both regression controls failed before their
+fixes; an actual sign-changing DC sequence also checks propagated neighbor and
+next-frame phases. The affected 36-profile run was repeated with unchanged DSP
+parameters and thresholds. Earlier negative results remain recorded.
+
+This narrows the unresolved mechanism: full-gradient phase propagation repairs
+the measured tonal errors, while transient energy still anticipates the original
+target. No gate is relaxed or response cropped. Full stretch range, variable maps,
+live handover, realtime/resource and Human gates remain open.
 
 ## Settings Contract
 

@@ -8,6 +8,7 @@ import math
 import sys
 from dataclasses import dataclass
 from itertools import starmap
+from typing import TYPE_CHECKING
 
 import numpy as np
 from pitch_causal_model_probe import (
@@ -24,6 +25,11 @@ from pitch_causal_model_probe import (
     frequency_report,
 )
 from pitch_overlap_model import render
+
+if TYPE_CHECKING:
+    from collections.abc import Callable
+
+type Renderer = Callable[[Pcm, float, int], tuple[Pcm, dict]]
 
 TIMING_FRAMES = FS * 2 // 1000
 HALF_WINDOW = round(FS * 0.00025)
@@ -164,7 +170,7 @@ def metric_controls() -> dict:
     }
 
 
-def ranked_temporal_peaks(output: Pcm) -> list[dict]:
+def ranked_temporal_peaks(output: Pcm, capture_origin: int = 0) -> list[dict]:
     """Rank actual local maxima without using the desired attack locations."""
     amplitude = np.max(np.abs(output), axis=1)
     candidates = np.flatnonzero(
@@ -175,16 +181,18 @@ def ranked_temporal_peaks(output: Pcm) -> list[dict]:
     for index in sorted(candidates.tolist(), key=lambda frame: (-amplitude[frame], frame)):
         if amplitude[index] <= 1.0e-7:
             continue
-        if all(abs(index - peak["frame"]) >= TIMING_FRAMES for peak in peaks):
-            peaks.append({"frame": index, "amplitude": float(amplitude[index])})
+        if all(abs(index + capture_origin - peak["frame"]) >= TIMING_FRAMES for peak in peaks):
+            peaks.append({"frame": index + capture_origin, "amplitude": float(amplitude[index])})
         if len(peaks) == 5:
             break
     return peaks
 
 
-def timing_report(energy: Pcm, dry_energy: Pcm) -> dict:
+def timing_report(energy: Pcm, dry_energy: Pcm, capture_origin: int = 0) -> dict:
     """Compare centered quantiles without a response-fitted alignment."""
     actual, reference = energy_times(energy), energy_times(dry_energy)
+    actual = [frame + capture_origin for frame in actual]
+    reference = [frame + capture_origin for frame in reference]
     offsets = [found - wanted for found, wanted in zip(actual, reference, strict=True)]
     return {
         "q10_q50_q90_frames": actual,
@@ -194,19 +202,21 @@ def timing_report(energy: Pcm, dry_energy: Pcm) -> dict:
     }
 
 
-def response_report(output: Pcm, dry: Pcm, fixture: Fixture, rate: int) -> dict:
+def response_report(
+    output: Pcm, dry: Pcm, fixture: Fixture, rate: int, capture_origin: int = 0
+) -> dict:
     """Score the full finite response; do not infer isolated attacks from mixtures."""
     energy, dry_energy = np.sum(output * output, axis=1), np.sum(dry * dry, axis=1)
     total = float(np.sum(energy))
     assert total > 0.0
     assert np.all(np.isfinite(output))
     origin = math.ceil(fixture.events[0] / rate) if fixture.events else 0
-    peak = int(np.argmax(np.max(np.abs(output), axis=1)))
-    timing = timing_report(energy, dry_energy)
-    prefix = float(np.sum(energy[:origin])) / total
+    peak = int(np.argmax(np.max(np.abs(output), axis=1))) + capture_origin
+    timing = timing_report(energy, dry_energy, capture_origin)
+    prefix = float(np.sum(energy[: origin - capture_origin])) / total
     tail = float(np.sum(energy[-RETIREMENT_FRAMES:])) / total
     retention = prefix <= 0.001 and peak >= origin
-    peaks = ranked_temporal_peaks(output)
+    peaks = ranked_temporal_peaks(output, capture_origin)
     pair_timing = None
     if fixture.name == "nearby_isolated_impulses":
         found = sorted(peak["frame"] for peak in peaks[:2])
@@ -217,12 +227,14 @@ def response_report(output: Pcm, dry: Pcm, fixture: Fixture, rate: int) -> dict:
         )
     return {
         "complete_capture_frames": len(output),
-        "canonical_dry_frames": len(dry),
+        "canonical_dry_frames": len(fixture.source[::rate]),
+        "reference_capture_frames": len(dry),
+        "capture_origin": capture_origin,
         "full_energy": total,
         "output_over_source_energy": total / float(np.sum(fixture.source * fixture.source)),
         **timing,
         "raw_peak_frame": peak,
-        "raw_peak_amplitude": float(np.max(np.abs(output[peak]))),
+        "raw_peak_amplitude": float(np.max(np.abs(output[peak - capture_origin]))),
         "pre_first_event_energy_fraction": prefix,
         "original_peak_after_first_event": peak >= origin,
         "final_retired_20ms_energy_fraction": tail,
@@ -242,13 +254,42 @@ def response_report(output: Pcm, dry: Pcm, fixture: Fixture, rate: int) -> dict:
     }
 
 
+def identity_error(output: Pcm, source: Pcm, capture_origin: int) -> float:
+    """Place the original source on the predetermined signed capture timeline."""
+    assert capture_origin <= 0
+    expected = np.zeros_like(output)
+    expected[-capture_origin : -capture_origin + len(source)] = source
+    return float(np.max(np.abs(output - expected)))
+
+
+def paired_prefix_report(output: Pcm, control: Pcm, target: int, capture_origin: int) -> dict:
+    """Expose complete pre-target changes, including negative-time output."""
+    boundary = target - capture_origin
+    prefix = np.abs(output[:boundary] - control[:boundary])
+    return {
+        "source_prefix_exactly_equal": True,
+        "first_event_target": target,
+        "full_pre_event_output_max_abs_difference": float(np.max(prefix)),
+        "changed_pre_event_sample_values": int(np.count_nonzero(prefix)),
+        "last_pre_event_stereo_difference": (output[boundary - 1] - control[boundary - 1]).tolist(),
+        "is_isolated_attack_response": False,
+        "original_retention_certified": False,
+    }
+
+
 def profile(
-    fixture: Fixture, rate: int, semitones: int, controls: dict[tuple[int, int], Pcm]
+    fixture: Fixture,
+    rate: int,
+    semitones: int,
+    controls: dict[tuple[int, int], Pcm],
+    *,
+    renderer: Renderer = render,
 ) -> dict:
     """Render and measure one unchanged candidate, preserving failed predicates."""
-    output, details = render(fixture.source, float(rate), semitones)
-    output = np.pad(output, ((0, RETIREMENT_FRAMES), (0, 0)))
-    dry = fixture.source[::rate]
+    output, details = renderer(fixture.source, float(rate), semitones)
+    capture_origin = int(details.get("capture_origin", 0))
+    assert capture_origin <= 0
+    dry = np.pad(fixture.source[::rate], ((-capture_origin, 0), (0, 0)))
     report = {
         "stage": "profile",
         "fixture": fixture.name,
@@ -256,37 +297,25 @@ def profile(
         "semitones": semitones,
         "h": 2.0 ** (semitones / 12.0),
         **details,
-        **response_report(output, dry, fixture, rate),
+        **response_report(output, dry, fixture, rate, capture_origin),
     }
     if rate == 1 and semitones == 0:
-        error = max(
-            float(np.max(np.abs(output[:SOURCE_FRAMES] - fixture.source))),
-            float(np.max(np.abs(output[SOURCE_FRAMES:]))),
-        )
+        error = identity_error(output, fixture.source, capture_origin)
         report["identity_maximum_absolute_error"] = error
         assert error <= IDENTITY_LIMIT, "same-path source identity reconstruction failed"
     if fixture.frequencies:
         origin = SOURCE_TARGET // rate if fixture.isolated else 0
         report["frequency"] = frequency_report(
-            output, origin, [frequency * report["h"] for frequency in fixture.frequencies]
+            output,
+            origin - capture_origin,
+            [frequency * report["h"] for frequency in fixture.frequencies],
         )
     if fixture.name == "running_background":
         controls[rate, semitones] = output
-    if fixture.name == "busy_nearby_impulses":
-        control = controls[rate, semitones]
-        boundary = math.ceil(SOURCE_TARGET / rate)
-        prefix = np.abs(output[:boundary] - control[:boundary])
-        report["paired_background_comparison"] = {
-            "source_prefix_exactly_equal": True,
-            "first_event_target": boundary,
-            "full_pre_event_output_max_abs_difference": float(np.max(prefix)),
-            "changed_pre_event_sample_values": int(np.count_nonzero(prefix)),
-            "last_pre_event_stereo_difference": (
-                output[boundary - 1] - control[boundary - 1]
-            ).tolist(),
-            "is_isolated_attack_response": False,
-            "original_retention_certified": False,
-        }
+    if fixture.name.startswith("busy_"):
+        report["paired_background_comparison"] = paired_prefix_report(
+            output, controls[rate, semitones], math.ceil(fixture.events[0] / rate), capture_origin
+        )
     return report
 
 
