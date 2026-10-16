@@ -64,6 +64,34 @@ block-lattice alignment can extend replay. The reference uses the declared
 extends bounded A-reset evidence; continuous-from-birth, acoustic and live timing
 acceptance still require their separate gates.
 
+The separate public variable-rate diagnostic fixes a 48 kHz stereo Normal loop,
+off-grid rate knots .73/1.41/.62/1.29 and four destination tuples: total -23/+24
+under both Lock modes. Two distinct analytic tones use the predeclared interval
+E+24000 through E+48000. All eight channel measurements meet the unchanged
+15-cent limit; the largest absolute error is below 5.835 cents. Every one of the 48000
+post-E stereo frames also matches the independent A-reset reference exactly.
+The continuous-O destination reference uses its own original first-block pitch;
+its PCM differences remain separate observations.
+
+Thirty-six separate isolated fixtures place an impulse, an 8-ms source-domain
+tone burst or percussion at source frame 138163 plus 0/17/511. These are source
+offsets, not output-phase offsets. Public output retains its actual pre-E part,
+while raw A and O retain their complete original responses. The shared fixed
+metrics preserve pooled stereo energy, centered 0.5-ms quantiles and each full
+response's own denominator and first original peak. Without an accepted timing
+compensation, all 36 A and O responses fail q10 and q50 against the dry source
+clock: q10 offsets span 3557..7069 frames and q50 3812..8665 frames. Their original
+peaks, fixed-E prefix-energy and final-20-ms tail checks pass in this bounded
+capture. All public cases fail at least q50. Two public original peaks precede E,
+and a hypothetical cut at E would remove up to 15.94% of a public response's
+energy. That pre-E audio was actually audible under the old tuple; it was not
+discarded by the implementation. No delay, gain, crop, target or threshold is
+fitted to these measurements. This diagnostic closes no acoustic, continuous-O,
+music, device, performer-deadline or Human acceptance gate. The optimized run
+also emits six Native insufficient-output messages, requesting 512 frames and
+reporting 511. Successful assertions do not resolve or attribute those messages
+between the actual owner and the two independent raw reference owners.
+
 The bounded resident-selection context additionally admits FullMix->Stems,
 Stems->FullMix and enabled-mask changes for active current-source NormalLoop
 voices with the identical already ACKed resident committed StemSet. An inactive

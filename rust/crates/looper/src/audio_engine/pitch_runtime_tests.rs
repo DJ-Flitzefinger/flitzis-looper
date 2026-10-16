@@ -462,6 +462,17 @@ fn assert_source_phase(
 }
 
 pub(super) fn assert_tone(pcm: &[f32], base: i32, extra: i32, rate: f64, lock: bool) {
+    assert_tone_for_source(pcm, SOURCE_HZ, base, extra, rate, lock);
+}
+
+fn assert_tone_for_source(
+    pcm: &[f32],
+    source_hz: f64,
+    base: i32,
+    extra: i32,
+    rate: f64,
+    lock: bool,
+) -> f64 {
     assert!(pcm.iter().all(|sample| sample.is_finite()));
     let energy = pcm
         .iter()
@@ -483,12 +494,13 @@ pub(super) fn assert_tone(pcm: &[f32], base: i32, extra: i32, rate: f64, lock: b
         (crossings.len() - 1) as f64 * f64::from(RATE) / (crossings.last().unwrap() - crossings[0]);
     // Independent raw integer oracle, deliberately outside production pitch helpers.
     let expected =
-        SOURCE_HZ * 2.0_f64.powf(f64::from(base + extra) / 12.0) * if lock { 1.0 } else { rate };
+        source_hz * 2.0_f64.powf(f64::from(base + extra) / 12.0) * if lock { 1.0 } else { rate };
     let cents = 1200.0 * (measured / expected).log2();
     assert!(
         cents.abs() < 15.0,
         "base={base} extra={extra} rate={rate} lock={lock} measured={measured} expected={expected} cents={cents}"
     );
+    cents
 }
 
 fn assert_native_source(fixture: &Fixture, id: usize, action: &CapturedPitchAction) {

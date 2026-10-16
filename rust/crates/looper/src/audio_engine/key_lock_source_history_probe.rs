@@ -3,12 +3,13 @@
 //! deliberately declared before measuring; this test reports failures without changing them.
 
 use super::*;
+use crate::audio_engine::audio_quality_metrics::{
+    MAX_CAPTURE_TAIL_ENERGY, MAX_DISCARDED_ENERGY, TIMING_BUDGET_MS, energy_times,
+    maximum_energy_discard, stereo_energy,
+};
 
 const HISTORIES: [usize; 3] = [0, 8192, 16_384];
 const MARKERS: [usize; 3] = [0, 17, 511];
-const TIMING_BUDGET_MS: f64 = 2.0;
-const MAX_DISCARDED_ENERGY: f64 = 0.001;
-const MAX_CAPTURE_TAIL_ENERGY: f64 = 0.000_001;
 
 #[derive(Clone, Copy)]
 enum Signal {
@@ -64,69 +65,6 @@ fn marker_fixture(
     }
     fixture.sample.samples = Arc::from(samples);
     fixture
-}
-
-fn stereo_energy(channels: &[Vec<f32>]) -> Vec<f64> {
-    assert_eq!(channels.len(), 2);
-    assert_eq!(channels[0].len(), channels[1].len());
-    channels[0]
-        .iter()
-        .zip(&channels[1])
-        .map(|(left, right)| f64::from(*left).powi(2) + f64::from(*right).powi(2))
-        .collect()
-}
-
-fn energy_time(energy: &[f64], fraction: f64) -> usize {
-    let total = energy.iter().sum::<f64>();
-    assert!(total.is_finite() && total > 0.0);
-    let target = total * fraction;
-    let mut cumulative = 0.0;
-    for (frame, value) in energy.iter().enumerate() {
-        cumulative += value;
-        if cumulative >= target {
-            return frame;
-        }
-    }
-    energy.len() - 1
-}
-
-/// Centered 0.5-ms box energy envelope. Its origin is the original sample timeline, with zero
-/// extension at capture edges, so no causal-window latency is added to the reported times.
-fn envelope_energy(energy: &[f64], rate: u32) -> Vec<f64> {
-    let half_window = (f64::from(rate) * 0.000_25).round() as usize;
-    let mut prefix = Vec::with_capacity(energy.len() + 1);
-    prefix.push(0.0);
-    for value in energy {
-        prefix.push(prefix.last().unwrap() + value);
-    }
-    // Include negative/after-capture envelope centers. Truncation at zero would lose half
-    // the envelope energy of a marker at zero and bias the reference quantiles.
-    (0..energy.len() + 2 * half_window)
-        .map(|frame| {
-            let start = frame.saturating_sub(2 * half_window).min(energy.len());
-            let end = (frame + 1).min(energy.len());
-            (prefix[end] - prefix[start]) / (2 * half_window + 1) as f64
-        })
-        .collect()
-}
-
-fn energy_times(energy: &[f64], rate: u32) -> [i64; 3] {
-    let envelope = envelope_energy(energy, rate);
-    let half_window = (f64::from(rate) * 0.000_25).round() as i64;
-    [0.1, 0.5, 0.9].map(|fraction| energy_time(&envelope, fraction) as i64 - half_window)
-}
-
-/// Largest raw discard D for which energy in [0,D) is within the declared budget.
-fn maximum_energy_discard(energy: &[f64]) -> usize {
-    let budget = energy.iter().sum::<f64>() * MAX_DISCARDED_ENERGY;
-    let mut cumulative = 0.0;
-    for (frame, value) in energy.iter().enumerate() {
-        cumulative += value;
-        if cumulative > budget {
-            return frame;
-        }
-    }
-    energy.len()
 }
 
 fn history_continuation(

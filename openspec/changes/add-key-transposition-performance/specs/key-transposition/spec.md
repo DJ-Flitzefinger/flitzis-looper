@@ -518,6 +518,12 @@ acoustic, performer-deadline and full B5/B6 acceptance gates SHALL remain requir
 - **THEN** productive matching SHALL retain its exact Native/FIFO owner without automatic replacement or readiness failure
 - **AND** a new preparation or adoption SHALL still require its own fresh current-window authority, while a changed held publication identity or an owning Native source/timing revocation SHALL still refuse
 
+#### Scenario: Public variable-rate SET retains independent acoustic diagnostics
+- **GIVEN** a genuine nonstarting SET with off-grid rate edits, a fixed analytic stereo source and separately isolated attack sources
+- **WHEN** its adopted output is evaluated against independent direct-Native A-reset and continuous-from-O destination histories
+- **THEN** the diagnostic SHALL retain the original action, source clock and uncropped response origins and use predeclared frequency windows, marker positions and unchanged timing, peak, energy-retention and tail limits
+- **AND** exact A-reset PCM agreement SHALL NOT stand in for continuous-history, acoustic or performer-deadline acceptance, and every measured failing criterion SHALL remain visible without fitted translation, gain, cropping or threshold changes
+
 #### Scenario: Ordinary Play withdraws a stopped selection receipt while retaining admitted stems
 - **GIVEN** an actual stopped committed ALL selection has admitted its physical StemSet through its original receipt
 - **WHEN** an ordinary Play obtains its own resident ACK and withdraws that earlier selection observation while retaining the same admitted PCM

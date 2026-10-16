@@ -4,6 +4,9 @@
 use super::*;
 use crate::audio_engine::rubberband_backend::RubberBandLiveStateOpaque;
 
+#[path = "quality_selection_tests.rs"]
+mod quality_selection_tests;
+
 const FORMAT_CHANNELS: usize = 2;
 const FORMAT_BLOCK: usize = 512;
 const ADOPTED_FRAMES: usize = 4_097;
@@ -87,7 +90,7 @@ impl StereoRawNative {
         // Independently pinned Short-window sizes: ceil(rate / 32), rounded up to
         // a power of two. In particular, 96 kHz must not reuse 48 kHz's 2048.
         let window = match rate {
-            44_100 => 2_048,
+            44_100 | 48_000 => 2_048,
             96_000 => 4_096,
             _ => panic!("undeclared stereo reference format: {rate}"),
         };

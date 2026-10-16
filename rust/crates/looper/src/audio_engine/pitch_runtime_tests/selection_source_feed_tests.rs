@@ -26,11 +26,22 @@ fn selection_setup_format(
     sample_rate_hz: u32,
     channels: usize,
 ) -> (Fixture, SampleBuffer, PreparedStemSet, u64) {
+    let complete = synthetic_source_format(sample_rate_hz, channels, 5 * sample_rate_hz as usize);
+    selection_setup_source(lock, pitch, sample_rate_hz, complete)
+}
+
+fn selection_setup_source(
+    lock: bool,
+    pitch: PitchIntent,
+    sample_rate_hz: u32,
+    complete: SampleBuffer,
+) -> (Fixture, SampleBuffer, PreparedStemSet, u64) {
+    let channels = complete.channels;
     let mut fixture = Fixture::new_format(lock, sample_rate_hz, channels);
     let start_frame = 4 * sample_rate_hz as usize / 3;
     let end_frame = start_frame + 2 * sample_rate_hz as usize;
     let extent = 5 * sample_rate_hz as usize;
-    let complete = synthetic_source_format(sample_rate_hz, channels, extent);
+    assert_eq!(complete.frame_count(), extent);
     let source = complete
         .clone()
         .window(

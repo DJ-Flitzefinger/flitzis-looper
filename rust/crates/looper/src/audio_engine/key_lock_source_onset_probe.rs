@@ -5,6 +5,7 @@
 //! beginning. Neither its numerical result nor exact suffix equality selects live behavior.
 
 use super::*;
+use crate::audio_engine::audio_quality_metrics::{stereo_peak, stereo_response};
 use std::collections::BTreeMap;
 
 const LONG_HISTORIES: [usize; 2] = [32_768, 65_536];
@@ -187,26 +188,6 @@ fn launch_bridge(dry: &[Vec<f32>], wet: &[Vec<f32>], rate: u32) -> Vec<Vec<f32>>
                 .collect()
         })
         .collect()
-}
-
-fn stereo_peak(channels: &[Vec<f32>]) -> (usize, f32) {
-    let mut result = (0, 0.0_f32);
-    for (frame, (left, right)) in channels[0].iter().zip(&channels[1]).enumerate() {
-        let value = left.abs().max(right.abs());
-        if value > result.1 {
-            result = (frame, value);
-        }
-    }
-    result
-}
-
-fn stereo_response(channels: &[Vec<f32>]) -> Response {
-    let magnitudes = channels[0]
-        .iter()
-        .zip(&channels[1])
-        .map(|(left, right)| left.abs().max(right.abs()))
-        .collect::<Vec<_>>();
-    response(&magnitudes)
 }
 
 fn max_adjacent_jump(channels: &[Vec<f32>]) -> f32 {

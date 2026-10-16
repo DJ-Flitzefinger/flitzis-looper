@@ -5,6 +5,7 @@
 //! an explicit output discard, not audible alignment or a production compensation rule.
 
 use super::*;
+use crate::audio_engine::audio_quality_metrics::{Response, response};
 use crate::audio_engine::source_reader::{
     ExplicitSeekMode, FrameRange, SourceReadPlan, StemRenderSelection, StemTransition,
 };
@@ -365,44 +366,6 @@ fn prepared_all_component_stems_match_the_same_full_mix_reference() {
                 prove_prepared_continuation(&stems, 17, &reference, reference.delay, pattern, 3077);
             }
         }
-    }
-}
-
-struct Response {
-    peak_frame: usize,
-    peak: f32,
-    onset: Option<usize>,
-    significant_onset: Option<usize>,
-}
-
-fn response(samples: &[f32]) -> Response {
-    assert!(!samples.is_empty());
-    assert!(samples.iter().all(|sample| sample.is_finite()));
-    // Select the first maximum, including a flat retained/clipped response.
-    let mut peak_frame = 0;
-    let mut peak = 0.0_f32;
-    for (frame, sample) in samples.iter().enumerate() {
-        if sample.abs() > peak {
-            peak_frame = frame;
-            peak = sample.abs();
-        }
-    }
-    let detected = peak > 1.0e-7;
-    Response {
-        peak_frame,
-        peak,
-        onset: detected.then(|| {
-            samples
-                .iter()
-                .position(|sample| sample.abs() > 1.0e-7)
-                .unwrap()
-        }),
-        significant_onset: detected.then(|| {
-            samples
-                .iter()
-                .position(|sample| sample.abs() >= peak * 0.01)
-                .unwrap()
-        }),
     }
 }
 

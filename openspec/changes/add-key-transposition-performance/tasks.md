@@ -134,6 +134,17 @@ each subscriber's own pending then accepted/current publication. The full existi
   affected mode-history3 pass; one independent review cleared the actual proof.
   Production/Python are unchanged, so their last private Release/API/Python gates
   are reused. Continuous-O, acoustic, deadline, resource and Human gates remain open.
+- [x] B5 bounded public variable-rate acoustic diagnostic: predeclare 48k stereo
+  analytic plateau and separate isolated markers, original action/source clocks,
+  raw A-reset and continuous-O destination histories; retain all fixed-criterion
+  positives/negatives without fitting compensation or closing parent/Human gates.
+  Four plateau tuples/eight channel measurements meet15cent(max<5.835); all40
+  fixtures match every48000 post-E stereo frame to independent A-reset. All36
+  isolated A/O cases fail natural-clock q10/q50; public cases all fail q50 and
+  retain actual audible pre-E energy. Fixed-E cut observations are hypothetical;
+  no compensation, continuous-O equality or acoustic acceptance is claimed.
+  Six Native insufficient-output(512/511) messages in the optimized run remain
+  recorded without attributing or resolving them through passing assertions.
 - [ ] B6-K-AUDIO/B7-K-ATOMIC: prepared one-pass pitch, captured native selected
   projection/content lifetime/permits, direct/fallback/pending, distinct repeated
   attacks, same existing dueframe event, allfour Quantize/SYNC and routing combinations.

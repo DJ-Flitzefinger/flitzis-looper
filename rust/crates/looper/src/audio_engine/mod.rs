@@ -96,6 +96,8 @@ pub(crate) mod pitch_publication;
 pub(crate) mod pitch_runtime;
 pub use pad_start::CapturedPadStart;
 #[cfg(test)]
+mod audio_quality_metrics;
+#[cfg(test)]
 mod ordinary_endpoint_reserve_tests;
 #[cfg(test)]
 mod ordinary_global_start_tests;
