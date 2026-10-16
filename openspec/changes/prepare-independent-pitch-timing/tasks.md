@@ -31,6 +31,9 @@
 - [x] Calibrate the unchanged finite bank's positive/negative image responses,
   onset winding, transformed synthesis gain and inverse conditioning against
   actual PCM; retain every out-of-span component and original acceptance gate.
+- [x] Evaluate source-derived independent stationary modes/envelopes plus a fully
+  transformed exact residual on original and unseen sources, preserving mode
+  birth gauges, full tails, fractional identity and unsupported-domain reports.
 - [ ] Verify inverse-map seconds to loaded-frame conversion before deriving rate; equal physical
   progression at equal sample rates must yield r=1, including across supported device rates.
 - [ ] Test all37 extras/base -5..+6/total -23..+24 at actual r(n), lockON h/r

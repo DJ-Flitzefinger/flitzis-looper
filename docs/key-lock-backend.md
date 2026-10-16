@@ -1438,6 +1438,113 @@ modes, conditioning, transient quality, aliasing, full pitch/rate range and all
 live/realtime/Human gates remain required. This calibration activates no backend
 and changes none of the five original timing failures.
 
+### Independent Source Modes And Complete Residual — 2026-10-16
+
+`uv run --no-sync python scripts/pitch_independent_modes_probe.py` evaluates
+source-derived stationary carriers with independent envelopes. The source-only
+decomposition is prepared once per fixture, without requested rate, pitch or
+scorer targets. This is an offline NumPy diagnostic. The
+[Hua/Sarkar matrix-pencil paper](https://www.math.ucdavis.edu/~saito/data/sonar/HuaSarkarPencilMethod.pdf)
+provides the exponential-estimation framework; the stationarity admission,
+stereo coherence, envelope fitting and complete-residual renderer here are custom
+rules, not a claimed published music-separation method.
+
+Before measurement, carrier estimation fixes 8192-frame windows, hop4096 and a
+pooled-stereo 32-lag Hankel pencil with direct thin SVD. Retained singular values
+exceed 1e-7 of the largest, with even rank2..12 and at most six carriers. Each
+window requires an eight-block minimum/maximum energy ratio of at least .25 and
+crest at most8. Poles require radius error at most .005, conjugate distance at
+most1e-6, frequencies20..23520Hz, eigenvector condition at most1e7, source-design
+condition at most1e6 and source relative RMS error at most1e-4. Clusters span at
+most1Hz and require three distinct source windows. Source-only variable projection
+uses at most six iterations, at most .5Hz per step, four trial line-search scales
+requiring decreasing source error, and normal-matrix condition at most1e12. Fixed complex stereo coefficients
+use source-zero phase coordinates and normalized inter-window distance at most1e-3.
+Refused carriers remain in the exact source residual.
+
+Joint nonnegative envelope fitting uses centered256-frame symmetric-Hann source
+windows with hop64, unpenalized active-set least squares and SVD least-squares solves. Its
+gradient tolerance is64*epsilon*norm(A)*norm(b), full-design condition limit1e6,
+and passive-solve cap128 per knot. A refused tile contributes an explicit zero
+knot and retains its entire error in the residual. Linear envelope interpolation
+is masked only outside the original common source activity hull. Every mode
+retains the first active source frame as its birth gauge; an unrelated impulse
+or global bank cue does not reset it. Centered fitting needs128 source frames of
+lookahead. Its nominal working arrays remain below256MiB in the diagnostic;
+offline allocation estimates are not native resource or deadline measurements.
+
+For analytic mode z and fixed source carrier omega, the transformed contribution
+is Re(linearSample(z,s)*exp(i*(h/r-1)*omega*(s-birth))), with s=r*n. Both channels
+share the phase correction. The exact complement e=x-Re(sum(z)) passes in full
+through the previous complete AM/FM bank, including every finite tail. The same
+zero-extended complex-linear sampling geometry preserves combined h=r identity,
+including fractional preview. No residual stays dry and no output gain, phase,
+delay or crop is fitted. A known admitted carrier with frequency*h>=Fs/2 rejects
+the request explicitly; unresolved residual aliasing remains unproved.
+
+The first matrix completes72 requested profiles in388.313 seconds:71 rendered
+responses and one explicit near-Nyquist rejection. It keeps all original40 and
+adds32 profiles with unseen frequencies,12.26Hz spacing, amplitudes, phases,
+independent gates and impulse positions, chirp, AM, noise, unrelated stereo and
+19873.23Hz. Original metric controls and nine source-frequency calibrations pass.
+All18 unity responses are within7.11e-15 of PCM, complete source decomposition
+within1.12e-16, and proportional-stereo error is zero. Every rendered isolated
+response has zero pre-target energy, a peak after its first event, and zero energy
+at the actual finite retirement interval. Fractional mode-plus-nonzero-residual
+identity error is2.22e-16; independent nonunity mode phase error is1.70e-15.
+Source-estimator controls on unseen independently gated modes are within1.60e-12Hz
+and5.20e-12 normalized stereo-coefficient distance. NNLS optimum, singular refusal,
+silence, nonnegative support and independent stereo-envelope controls pass.
+
+The original five mixture-timing failures now pass the unchanged96-frame limit.
+The sixteen original sustained tonal measurements are within .009750cent. At r2:
+
+| Source | k=-7 q10/q50, frames | k=0 q10/q50 | k=+7 q10/q50 |
+| --- | --- | --- | --- |
+| Original331.37/997.19Hz plus impulse | -11/-14 | +7/-16 | -7/-14 |
+| Independently gated900/1100Hz plus impulse | -11/+22 | -2/+25 | -2/+51 |
+| Unseen427.43/1327.89Hz plus impulse | +4/+10 | -5/-1 | -5/-4 |
+| Unseen371.39/1381.77Hz with independent gates | +2/+5 | -8/-3 | +9/+3 |
+
+Mono900.37Hz output/source energy is approximately .5 at each shifted profile,
+removing the previously calibrated full-bank gain for this admitted mode. The
+original eight-ms attacks are too short for carrier admission and retain the
+unchanged complete-bank response, including raw900Hz peaks up to1.88481. Passing
+the recorded timing and frequency predicates does not certify their gain quality.
+
+The candidate is rejected overall. Eleven unseen timing profiles fail: all three
+close-pair, chirp and noise profiles, and AM at -7/+7. Close-pair q10/q50 offsets
+are -1108/-2141, -901/-2029 and -1006/-1952 frames; tonal errors83.29/41.22/13.71cent
+fail15cent at -7/0. All13 nonzero close-pair windows are refused by the energy/crest
+guard before a pencil is attempted: stationary two-tone beating is not equivalent
+to nonstationary carrier frequency. No claim about a measured rank failure follows.
+All close-pair PCM therefore reaches the previous residual renderer. Chirp and
+noise also admit no stationary modes. Their q10/q50 offsets are +224/+431,
++145/+269,-106/-231 and +212/+222,+135/+102,-222/-236 respectively. The AM source
+admits three stationary sidebands and fails -7/+7 at +442/+382 and +210/-25 frames.
+A single physically modulated carrier and three sidebands are different valid
+interpretations of the same PCM; this run proves neither a unique interpretation
+nor acceptable arbitrary modulation behavior. The19873.23Hz +7 request is reported
+unsupported, with no clamp or aliased output presented as acceptance.
+
+Busy/control pre-event differences reach .023264 despite identical source
+prefixes, versus at most2.992e-14 for the previous complete-bank diagnostic.
+Centered source-envelope fitting/interpolation and globally estimated coefficients
+are not a proven source-causal decomposition. Busy tonal-attack whole-response
+q10/q50 offsets reach +4414/-5432 frames; these are reported as nonisolated music,
+not relabeled as isolated attack timing. The unrelated-stereo fixture measures
+left583.31Hz and general stereo deviation; it does not independently score right
+947.73Hz pitch or certify interchannel coherence. All residual energies and tails
+remain included, including unsupported mode assumptions and numerical error.
+
+No estimator, envelope, source, target or gate parameter was tuned after the
+first quality run. Review added only rejection of complex PCM before float
+conversion, with a focused passing invalid-input/control rerun. This does not
+change the measured real-PCM path. No Native, production API/ABI, installer,
+App/device or listening change follows this rejected candidate. Full-range,
+transient/mixture gain, source causality, aliasing, variable maps, continuous
+output, realtime/resources and Human acceptance remain open.
+
 ## Settings Contract
 
 Project persistence stores the global `key_lock` boolean as default intent and

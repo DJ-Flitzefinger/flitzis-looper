@@ -213,6 +213,38 @@ wet gain or omitted residual SHALL manufacture quality acceptance.
 - **THEN** response integrity, source estimation, predicted gain error, conditioning and out-of-span residual SHALL be reported separately
 - **AND** a resolved-mode calibration SHALL NOT close the original transient, mixture, full-range or live acceptance gates
 
+The explicit-mode diagnostic SHALL estimate carrier count, frequencies and
+interchannel phase coefficients from original source PCM alone. It SHALL freeze
+its window, rank, pole, coherence, refinement and conditioning rules before
+measurement. Independent nonnegative source envelopes SHALL be fitted jointly
+without observing wet PCM, timing targets or requested output gains. Continuing
+carriers SHALL retain their declared source birth gauge across unrelated impulses
+and global source-cue boundaries.
+
+The complete source residual SHALL equal original PCM minus the real sum of all
+admitted modes, including every uncertain, rejected, transient, noisy and numerical
+component. Every residual sample SHALL pass through the complete finite-bank
+transform with all generated tails retained. No unchanged residual, unpitched
+attack bridge or output normalization SHALL replace that transformation. Modes
+and residual SHALL share the same declared zero-extended interpolation geometry,
+so their combined h=r path reconstructs the original interpolated source.
+
+Source estimation, nonnegative-fit conditioning, exact decomposition, rate-only
+identity and nontrivial mode phase correction SHALL be checked separately. All
+original quality fixtures SHALL remain, and unseen frequencies, close spacing,
+independent gates, impulses, AM/chirps, noise, unrelated stereo and near-Nyquist
+sources SHALL expose assumptions and unsupported domains. A known carrier shifted
+outside the representable Nyquist interval SHALL be rejected explicitly rather
+than silently aliased or clamped. Unresolved residual aliasing SHALL remain an
+explicit unclosed limitation. A small source-fit residual SHALL NOT certify a
+small transformed-output error or universal physical-mode identification.
+
+#### Scenario: An unrelated impulse does not rebirth independent sustained modes
+- **GIVEN** source-derived stationary carriers with independent compact envelopes and an exact complementary residual
+- **WHEN** the full source is rendered at independent requested rate and pitch, including a later unrelated impulse
+- **THEN** continuing mode gauges SHALL persist and every residual component and tail SHALL be transformed
+- **AND** original and unseen timing, retention, frequency and gain evidence SHALL determine rejection without changing the original acceptance gates
+
 ### Requirement: Combined Pitch And Rate Bounds Are Never Silently Clipped
 The system SHALL validate and report the supported combined pitch/rate domain before accepting
 diagnostic transposition, retaining separate requested, pending, effective and rejected state.
