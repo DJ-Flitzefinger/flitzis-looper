@@ -199,10 +199,20 @@ See [prepared publication](prepared-stem-publication.md) for current ownership.
 - `FFmpeg/ffprobe unavailable`: install FFmpeg or set `FLITZIS_FFMPEG_DIR`.
 - `TorchCodec unavailable`: rerun `uv --no-cache sync`; if this persists, rebuild the environment.
 
-## Pending direct live/long-source extension
+## Direct live/long-source extension
 
 The [E11 plan](pre-rust-extension-20261011.md) requires streamed full source/five-WAV/PCM/mono alignment and fresh full warm verification without a total-duration/1-GiB extent cap. X11-LONG implements these complete-storage paths through bounded blocks and immutable disk generations; simultaneous scratch, separately admitted analysis and actual loop/ALL live budgets remain distinct. The [validation report](long-source-streaming-validation.md) records actual long/Boris/RF64 evidence and its final acceptance state. Demucs inference/model/activation peaks are not bounded by postprocessing claims.
 
 The bounded [L1 identity delivery](prepared-stem-publication.md#l1-effective-generation-identity--2026-10-11) resolves complete actual producer provenance before control-owned duplicate admission. Equal known fingerprints join one physical inference or reuse a verified completed pair; current verified selection disables duplicate generation without render-time hashing. Optional durable v3 provenance preserves historical UNKNOWN and model-free restore. Settings/material ABA fences and independent source/ticket interests prevent obsolete jobs from selecting newer content.
 
-X11-LIVE-STEMS still requires immutable offline jobs during playback, joint disk/config commit and current-voice/history/own-native-ACK new-set adoption. Independent older assignments/readers must retain immutable predecessors until actual last use. X11-BULK still requires all216 loaded slots/all banks, bounded fair2-worker/32-queue feeding and own-interest cooperative cancellation. Those behaviors remain pending; L1 preserves all current playing/new-generation guards. Existing model installation and model-free validated restore remain unchanged.
+X11-LIVE-STEMS implements source-leased offline generation during playback, joint
+disk/config commit and separately guarded new-set adoption in the supported
+residency domains. Each candidate needs its own current source, window, voice,
+history and Native acknowledgement; older assignments/readers retain immutable
+predecessors until actual last use. Ordinary direct active component publication
+remains guarded. The [prepared publication report](prepared-stem-publication.md)
+records the bounded software proofs and remaining domain, resource and Human
+acceptance limits; these are not a combined installed-inference/device/hearing
+acceptance claim. X11-BULK's all216 loaded slots/all banks, bounded fair2-worker/
+32-queue feeding and own-interest cooperative cancellation remain separate
+requirements. Existing model installation and model-free validated restore remain unchanged.

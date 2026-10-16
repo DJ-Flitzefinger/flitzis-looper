@@ -69,6 +69,18 @@ identity; removal/reassignment/overwrite SHALL fence its old lifetime.
 - **THEN** the admitted action belongs to A with original timestamp in direct/fallback/pending paths
 - **AND** existing device/channel collision rules are tested rather than invented per-device bindings
 
+#### Scenario: Routed selection order survives delayed pitch publication
+- **GIVEN** existing MIDI bindings select A, choose a nonneutral pitch and then select B
+- **WHEN** those messages pass through the existing dispatcher before the captured pitch owner is published and while its accepted preparation remains pending
+- **THEN** the pitch action SHALL retain A's original content lifetime, timestamp, tuple and T/E through its actual scheduled effect in either MultiLoop mode
+- **AND** later selection and NoteOff or velocity-zero messages SHALL neither retarget that owner nor add an attack or reset
+- **AND** capacity refusal before admission SHALL visibly reject that original owner without replaying it against B; a later fresh input SHALL capture the then-current content independently
+
+#### Scenario: GUI and MIDI independently retain Quantize and SYNC
+- **WHEN** either GUI or MIDI admits a pitch retrigger under each of the four Quantize/SYNC combinations and either Key Lock mode
+- **THEN** that route SHALL retain its own original T, separate preparation E, captured content, timestamp and numeric tuple despite later control projections
+- **AND** its actual source phase and rendered pitch SHALL follow the captured rate and Key Lock contract without a second scheduler
+
 #### Scenario: Move or overwrite after admission
 - **WHEN** A moves/swaps or its lifetime is removed before the event applies
 - **THEN** it follows live A or terminates fenced, never targets the former slot's replacement

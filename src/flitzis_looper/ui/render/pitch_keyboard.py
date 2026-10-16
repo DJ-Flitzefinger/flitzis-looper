@@ -142,7 +142,12 @@ def _render_keys(
         if hovered and imgui.is_mouse_clicked(imgui.MouseButton_.left):
             chosen = key.value
         if reveal_selection and key.value == selected_value:
-            imgui.set_scroll_here_x(0.5)
+            draw = imgui.get_window_draw_list()
+            if (
+                imgui.get_item_rect_min().x < draw.get_clip_rect_min().x
+                or imgui.get_item_rect_max().x > draw.get_clip_rect_max().x
+            ):
+                imgui.set_scroll_here_x(0.5)
     return chosen
 
 

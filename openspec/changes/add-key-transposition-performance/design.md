@@ -55,6 +55,13 @@ Both header-toggle menus stay open independently after selection/repeats/MIDI.
 Render from common selected-content state, including closed summaries; keyboard
 root is base-key root, middle0/signed steps, unique enharmonics, distinct -12/0/+12.
 White/black are keyboard colors only; a contrasting selection survives NoteOff.
+
+Selection reveal keeps an already visible key at its current screen position.
+Only a selected key outside the child draw clip queues horizontal reveal; this
+includes partial clipping. Unconditional recentering previously applied on the
+next frame and could move a neighboring key under a rapid second mouse press.
+Actual headless widget/input tests retain that repeat-click regression, draw
+colors, extreme-value reveal, closed summaries and independent menu state.
 Result is nominal for lockOFF, no first-sample-note claim or green/Camelot/scale UX.
 
 All source/trigger timing, M/B/S/phi, P/H, other pads and current routing remain

@@ -6,6 +6,9 @@ pub(in crate::audio_engine) mod source_feed_tests;
 #[path = "pitch_runtime_tests/custody_tests.rs"]
 mod custody_tests;
 
+#[path = "pitch_runtime_tests/routed_midi_tests.rs"]
+mod routed_midi_tests;
+
 use super::*;
 use crate::audio_engine::audio_stream::{
     create_stream_mixer, drain_control_messages, render_scheduled_audio,
@@ -962,83 +965,87 @@ fn stopped_and_paused_set_preserve_transport_while_ret_applies_one_own_nonzero_a
 fn captured_quantize_sync_gui_and_midi_keep_original_t_tuple_content_and_timestamp() {
     for quantize in [false, true] {
         for sync in [false, true] {
-            let mut fixture = Fixture::new(sync);
-            fixture.render_to(17_000);
-            // Existing global BPM_LOCK controls real source time. The per-input SYNC
-            // projection is frozen metadata and cannot toggle a later global setting.
-            fixture.mixer.set_pad_bpm(0, Some(80.0));
-            fixture.mixer.set_bpm_lock(sync);
-            if sync {
-                fixture.mixer.set_master_bpm(120.0);
+            for midi in [false, true] {
+                for lock in [false, true] {
+                    let mut fixture = Fixture::new(lock);
+                    fixture.render_to(17_000);
+                    // Existing global BPM_LOCK controls real source time. The per-input SYNC
+                    // projection is frozen metadata and cannot toggle a later global setting.
+                    fixture.mixer.set_pad_bpm(0, Some(80.0));
+                    fixture.mixer.set_bpm_lock(sync);
+                    if sync {
+                        fixture.mixer.set_master_bpm(120.0);
+                    }
+                    let source_rate = if sync { 120.0 / 80.0 } else { 1.0 };
+                    fixture.rows(PitchPadProjection {
+                        source_root: Some(0),
+                        source_mode: Some(PitchKeyMode::Major),
+                        intent: PitchIntent::new(-5, 3).unwrap(),
+                        key_lock: lock,
+                        quantize_step_64ths: quantize.then_some(16),
+                        sync,
+                        ..PitchPadProjection::default()
+                    });
+                    let action = if midi {
+                        fixture.midi_capture("pitch.extra:7:set_retrigger")
+                    } else {
+                        fixture.capture(0, "pitch.extra:7:set_retrigger")
+                    };
+                    let content = action.content_key();
+                    let timestamp = action.received_timestamp();
+                    let original = if quantize { 24_000 } else { 17_000 };
+                    assert_eq!(action.original_due_frame(), original);
+                    assert_eq!(action.render().pitch, PitchIntent::new(-5, 7).unwrap());
+                    assert_eq!(action.render().key_lock, lock);
+                    assert_eq!(action.sync(), sync);
+                    // Later GUI projection and clock grid edits cannot relabel this original input.
+                    fixture.rows(PitchPadProjection {
+                        source_root: Some(8),
+                        source_mode: Some(PitchKeyMode::Minor),
+                        intent: PitchIntent::new(6, -18).unwrap(),
+                        key_lock: !lock,
+                        quantize_step_64ths: Some(1),
+                        sync: !sync,
+                        ..PitchPadProjection::default()
+                    });
+                    let mut edited_clock = fixture.clock.read().unwrap();
+                    edited_clock.master_period_seconds = Some(0.75);
+                    edited_clock.master_beat = 100.0;
+                    fixture.clock.publish(edited_clock);
+                    fixture.publish(&action);
+                    assert_eq!(
+                        action.execution_target(),
+                        if quantize { original } else { original + 8192 }
+                    );
+                    fixture.wait_worker(&[&action]);
+                    assert_eq!(fixture.transport.output_frame(), 17_000);
+                    let before_e = fixture.apply(&action);
+                    assert!(before_e.iter().all(|sample| *sample == 0.0));
+                    assert_eq!(action.original_due_frame(), original);
+                    assert_eq!(action.content_key(), content);
+                    assert_eq!(action.received_timestamp(), timestamp);
+                    assert_eq!(
+                        fixture.mixer.pad_pitch_intent(0),
+                        Some(PitchIntent::new(-5, 7).unwrap())
+                    );
+                    assert_native_source(&fixture, 0, &action);
+                    assert_eq!(fixture.voice(0).source_playback.tempo_ratio(), source_rate);
+                    assert_source_phase(
+                        fixture.voice(0).source_playback.position(),
+                        LOOP_START as f64,
+                        1,
+                        source_rate,
+                    );
+                    let pcm = fixture.pcm(48_000);
+                    assert_tone(&pcm[12_000..], -5, 7, source_rate, lock);
+                    assert_source_phase(
+                        fixture.voice(0).source_playback.position(),
+                        LOOP_START as f64,
+                        48_001,
+                        source_rate,
+                    );
+                }
             }
-            let source_rate = if sync { 120.0 / 80.0 } else { 1.0 };
-            fixture.rows(PitchPadProjection {
-                source_root: Some(0),
-                source_mode: Some(PitchKeyMode::Major),
-                intent: PitchIntent::new(-5, 3).unwrap(),
-                key_lock: sync,
-                quantize_step_64ths: quantize.then_some(16),
-                sync,
-                ..PitchPadProjection::default()
-            });
-            let action = if sync {
-                fixture.midi_capture("pitch.extra:7:set_retrigger")
-            } else {
-                fixture.capture(0, "pitch.extra:7:set_retrigger")
-            };
-            let content = action.content_key();
-            let timestamp = action.received_timestamp();
-            let original = if quantize { 24_000 } else { 17_000 };
-            assert_eq!(action.original_due_frame(), original);
-            assert_eq!(action.render().pitch, PitchIntent::new(-5, 7).unwrap());
-            assert_eq!(action.render().key_lock, sync);
-            assert_eq!(action.sync(), sync);
-            // Later GUI projection and clock grid edits cannot relabel this original input.
-            fixture.rows(PitchPadProjection {
-                source_root: Some(8),
-                source_mode: Some(PitchKeyMode::Minor),
-                intent: PitchIntent::new(6, -18).unwrap(),
-                key_lock: !sync,
-                quantize_step_64ths: Some(1),
-                sync: !sync,
-                ..PitchPadProjection::default()
-            });
-            let mut edited_clock = fixture.clock.read().unwrap();
-            edited_clock.master_period_seconds = Some(0.75);
-            edited_clock.master_beat = 100.0;
-            fixture.clock.publish(edited_clock);
-            fixture.publish(&action);
-            assert_eq!(
-                action.execution_target(),
-                if quantize { original } else { original + 8192 }
-            );
-            fixture.wait_worker(&[&action]);
-            assert_eq!(fixture.transport.output_frame(), 17_000);
-            let before_e = fixture.apply(&action);
-            assert!(before_e.iter().all(|sample| *sample == 0.0));
-            assert_eq!(action.original_due_frame(), original);
-            assert_eq!(action.content_key(), content);
-            assert_eq!(action.received_timestamp(), timestamp);
-            assert_eq!(
-                fixture.mixer.pad_pitch_intent(0),
-                Some(PitchIntent::new(-5, 7).unwrap())
-            );
-            assert_native_source(&fixture, 0, &action);
-            assert_eq!(fixture.voice(0).source_playback.tempo_ratio(), source_rate);
-            assert_source_phase(
-                fixture.voice(0).source_playback.position(),
-                LOOP_START as f64,
-                1,
-                source_rate,
-            );
-            let pcm = fixture.pcm(48_000);
-            assert_tone(&pcm[12_000..], -5, 7, source_rate, sync);
-            assert_source_phase(
-                fixture.voice(0).source_playback.position(),
-                LOOP_START as f64,
-                48_001,
-                source_rate,
-            );
         }
     }
 }

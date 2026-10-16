@@ -143,6 +143,17 @@ each subscriber's own pending then accepted/current publication. The full existi
   This bounded extension closes no continuous-O, acoustic, deadline, P6 or Human gate.
 - [ ] K1a: stable semantic SET/SET_RETRIGGER Learn/persistence, immutable checkbox
   variant/two simultaneous mappings/zero/NoteOff/two-device selection-to-pitch ordering.
+- [x] K1 executed integration: independent GUI/MIDI × Quantize/SYNC × Key Lock
+  histories; actual dispatched selection/pitch/selection with delayed publication
+  and MultiLoop; real headless ImGui keyboard mouse edges, open-menu persistence,
+  scroll/reveal/highlights and closed summaries across content changes. This
+  software evidence does not close physical-device, visual, acoustic or parent gates.
+  Native pitch103 passed/1 ignored includes all16 matrix histories and the2 new
+  routed cases; real ImGui plus existing keyboard15 passed. One independent review
+  had no findings. The wider Python run reached5310 passed/53 skipped/1 cancellation
+  exit-code failure in unchanged code; its affected rerun still had4 failures/30
+  passed. Whole-source mypy also remains negative in33 unchanged test files;
+  production155 files pass. These are retained open integration results.
 - [ ] K1b: common state/correction/result/resets, simultaneous stay-open menus,
   root-relative signed keyboard/unique enharmonics/highlights/closed summaries/padchange.
 - [ ] V0: complete new controls+copy/move/bank/hold/pending/restore workload and
