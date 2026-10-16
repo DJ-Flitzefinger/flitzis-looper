@@ -145,6 +145,15 @@ each subscriber's own pending then accepted/current publication. The full existi
   no compensation, continuous-O equality or acoustic acceptance is claimed.
   Six Native insufficient-output(512/511) messages in the optimized run remain
   recorded without attributing or resolving them through passing assertions.
+- [x] Isolate the six historical Native-warning profiles into fresh public-DUT,
+  raw-A and raw-O processes; bind the actual imported DLL and identical runtime
+  binaries, exchange exact input/PCM bits, and preserve original clocks, bounds,
+  FIFO/provenance gates, raw process evidence and negative acoustic criteria.
+  A missing warning is a non-reproduction, not attribution or repair; unavailable
+  runtime version information must remain explicit.
+  All18 optimized children complete successfully without output/Resampler warnings;
+  each preserves exact A-reset PCM, FIFO and matching runtime files. All six
+  public/A/O responses still fail q10 and q50. The older warnings remain unresolved.
 - [ ] B6-K-AUDIO/B7-K-ATOMIC: prepared one-pass pitch, captured native selected
   projection/content lifetime/permits, direct/fallback/pending, distinct repeated
   attacks, same existing dueframe event, allfour Quantize/SYNC and routing combinations.

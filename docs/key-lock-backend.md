@@ -103,6 +103,34 @@ has not been established by this evidence; the upstream 4.0.0 implementation
 described in earlier audits pads a missing output sample rather than reporting
 the deficit through the void C API.
 
+The Windows opt-in diagnostic now runs each of those same six Key Lock ON
+profiles in three fresh, serial child processes: the real public DUT, raw A
+(including its independent history-bound queries), and raw O. The parent creates
+no Native state. The DUT retains its original production execution and exports
+the independent scalar input as exact f32 bits; each reference consumes those
+same bits with its original rate chronology and first-block pitch. Original
+PCM, FIFO, source/receipt and uncropped acoustic criteria remain in force. Raw
+output, PID, exit status and warning counts are saved separately for every child;
+cross-role comparisons run only after all children are terminal. This requires an
+existing verified absolute `LOOPER_NATIVE_DIAGNOSTIC_ROOT` with fresh profile
+directories. The actual imported function is resolved through its verified x64
+PE import thunk when needed, then checked against the loaded DLL export, path
+and file hash. All children must use identical executable, Python and RubberBand
+files. The observed RubberBand DLL has SHA256
+`4a8d323cc8c40d16413bbffe459811f93ebb5f7249b9e830bf4d11c62e4feb6d`;
+its PE file and product version fields are unavailable. Header/API constants do
+not establish its library version. A future warning can identify a process role;
+that alone cannot identify a particular DUT worker or instance. Missing warnings
+still do not attribute or repair the historical messages.
+
+The optimized isolated run completed all 18 children without an insufficient-output
+or Resampler message. Every post-E A-reset sample matched exactly and final FIFO
+states agreed. All six profiles still failed both q10 and q50 for public, A and O
+responses; the fixed failure mask was 3 in each case. The original warnings remain
+unresolved: fresh-process isolation changes preceding process history and removes
+cross-role concurrency. The focused regular Debug tests also retained all 40
+original profiles and their recorded acoustic negatives. Production code is unchanged.
+
 One bounded mixed-origin retrigger proof uses a live +7 Normal voice and one
 selected +7 endpoint. GUI +7, routed MIDI -7 and GUI +7 are captured before ACK
 for the same future quantized T, then published in order 1/3/2. The actual

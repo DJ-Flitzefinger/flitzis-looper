@@ -524,6 +524,13 @@ acoustic, performer-deadline and full B5/B6 acceptance gates SHALL remain requir
 - **THEN** the diagnostic SHALL retain the original action, source clock and uncropped response origins and use predeclared frequency windows, marker positions and unchanged timing, peak, energy-retention and tail limits
 - **AND** exact A-reset PCM agreement SHALL NOT stand in for continuous-history, acoustic or performer-deadline acceptance, and every measured failing criterion SHALL remain visible without fitted translation, gain, cropping or threshold changes
 
+#### Scenario: Native diagnostic messages require an isolated owner and actual runtime binding
+- **GIVEN** a Native output warning observed while a public SET and independent A-reset and continuous-O references can have surviving Native owners
+- **WHEN** a diagnostic attempts to attribute that warning to one of those roles
+- **THEN** the diagnostic SHALL isolate the roles in separate processes, preserve the original input samples, rate trajectory, pitch, lock mode and response origins, and identify the actually imported Native DLL and binary identity in each process
+- **AND** the diagnostic SHALL retain raw process output, exit status and unchanged PCM, FIFO and acoustic checks, while a non-reproduction SHALL NOT be reported as an attribution, a repair or acoustic acceptance
+- **AND** an unavailable library version SHALL remain explicitly unavailable rather than being inferred from a header, API constant or assumed installation
+
 #### Scenario: Ordinary Play withdraws a stopped selection receipt while retaining admitted stems
 - **GIVEN** an actual stopped committed ALL selection has admitted its physical StemSet through its original receipt
 - **WHEN** an ordinary Play obtains its own resident ACK and withdraws that earlier selection observation while retaining the same admitted PCM

@@ -21,6 +21,10 @@ mod controller_route_tests;
 #[path = "pitch_runtime_tests/allocation_tests.rs"]
 mod allocation_tests;
 
+#[cfg(windows)]
+#[path = "pitch_runtime_tests/native_identity_tests.rs"]
+pub(in crate::audio_engine) mod native_identity_tests;
+
 use super::*;
 use crate::audio_engine::audio_stream::{
     create_stream_mixer, drain_control_messages, render_scheduled_audio,

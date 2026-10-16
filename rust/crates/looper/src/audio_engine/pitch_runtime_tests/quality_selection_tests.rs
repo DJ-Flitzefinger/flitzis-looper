@@ -7,6 +7,10 @@ use crate::audio_engine::audio_quality_metrics::{
     stereo_peak,
 };
 
+#[cfg(windows)]
+#[path = "quality_selection_tests/isolated_roles.rs"]
+mod isolated_roles;
+
 const CAPTURE_START: usize = E - 24_000;
 const CAPTURE_END: usize = E + 48_000;
 const TONE_START: usize = E + 24_000;
@@ -87,16 +91,26 @@ struct Capture {
     a_origin: usize,
 }
 
+/// Original production execution, before any independent Native bound or replay.
+struct DutCapture {
+    fixture: Fixture,
+    source: SampleBuffer,
+    stems: PreparedStemSet,
+    output_origin: u64,
+    actual: Vec<f32>,
+    timeline: Vec<FormatFrame>,
+}
+
 fn capture(lock: bool, pitch: PitchIntent, attack: Option<(Attack, usize)>) -> Capture {
     capture_with_trace(lock, pitch, attack, false)
 }
 
-fn capture_with_trace(
+fn capture_dut_with_trace(
     lock: bool,
     pitch: PitchIntent,
     attack: Option<(Attack, usize)>,
     trace: bool,
-) -> Capture {
+) -> DutCapture {
     if trace {
         eprintln!(
             "NATIVE_SCOPE_BEGIN DUT total={} lock={lock} attack={attack:?}",
@@ -193,6 +207,31 @@ fn capture_with_trace(
     assert!(!fixture.voice(0).stretch.wet_mode_failed());
     assert!(fixture.scheduler.is_empty());
 
+    DutCapture {
+        fixture,
+        source,
+        stems,
+        output_origin,
+        actual,
+        timeline,
+    }
+}
+
+fn capture_with_trace(
+    lock: bool,
+    pitch: PitchIntent,
+    attack: Option<(Attack, usize)>,
+    trace: bool,
+) -> Capture {
+    let DutCapture {
+        fixture,
+        source,
+        stems,
+        output_origin,
+        actual,
+        timeline,
+    } = capture_dut_with_trace(lock, pitch, attack, trace);
+
     if trace {
         eprintln!("NATIVE_SCOPE_END DUT; NATIVE_SCOPE_BEGIN independent_bound_queries");
     }
@@ -285,20 +324,40 @@ fn capture_with_trace(
     }
 }
 
-/// Explicit reproduction only: mark call phases without changing Native settings,
-/// input, timing, preparation or metrics. Surviving DUT workers require separate
-/// thread/isolation evidence before assigning an interleaved message to an owner.
-#[test]
-#[ignore = "explicit bounded six-profile Native stderr owner diagnostic; no device or acoustic acceptance"]
-fn diagnose_variable_rate_native_output_owner() {
-    for (positive, signal, offset) in [
+#[cfg(windows)]
+const DIAGNOSTIC_TEST: &str = concat!(
+    module_path!(),
+    "::diagnose_variable_rate_native_output_owner"
+);
+
+fn diagnostic_profiles() -> [(bool, Attack, usize); 6] {
+    [
         (true, Attack::Impulse, 17),
         (true, Attack::Tone, 0),
         (true, Attack::Percussion, 511),
         (false, Attack::Impulse, 17),
         (false, Attack::Impulse, 511),
         (false, Attack::Percussion, 511),
-    ] {
+    ]
+}
+
+/// Explicit reproduction only. Windows uses separate DUT/A/O processes because
+/// a mixed-role trace cannot attribute messages while DUT workers survive.
+/// Original inputs and acoustic criteria remain unchanged.
+#[test]
+#[ignore = "explicit bounded six-profile Native stderr owner diagnostic; no device or acoustic acceptance"]
+fn diagnose_variable_rate_native_output_owner() {
+    #[cfg(windows)]
+    if std::env::var("LOOPER_NATIVE_DIAGNOSTIC_ROLE").as_deref() == Ok("identity") {
+        let identity = crate::audio_engine::pitch_runtime_tests::native_identity_tests::identify_loaded_native()
+            .expect("the actual linked Native module must be identifiable");
+        println!("NATIVE_CHILD_IDENTITY {identity}");
+        return;
+    }
+    #[cfg(windows)]
+    isolated_roles::run();
+    #[cfg(not(windows))]
+    for (positive, signal, offset) in diagnostic_profiles() {
         let pitch = if positive {
             PitchIntent::new(6, 18).unwrap()
         } else {
