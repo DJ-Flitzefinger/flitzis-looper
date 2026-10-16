@@ -13,6 +13,7 @@ import numpy as np
 from pitch_am_groups import group_am_carriers
 from pitch_amfm_model import render as render_residual
 from pitch_chirplet_carriers import estimate_chirplet
+from pitch_finite_am_gate import fit_finite_am_gate
 from pitch_mode_carriers import FS, CarrierEstimate, estimate_carriers
 from pitch_mode_certificate import inspect_window
 from pitch_mode_envelopes import (
@@ -24,10 +25,11 @@ from pitch_mode_envelopes import (
     fit_phase_current_weight_envelopes,
     fit_predictive_causal_envelopes,
 )
-from pitch_source_modulation import modulators_from_estimate
+from pitch_source_modulation import apply_source_modulation, modulators_from_estimate
 
 if TYPE_CHECKING:
     from numpy.typing import NDArray
+    from pitch_source_modulation import SourceModulator
     from pitch_source_phase import LinearSourcePhase
 
 type Pcm = NDArray[np.float64]
@@ -67,6 +69,7 @@ def _validate_mode_policy(
     am_family: bool,
     modulated_basis: bool,
     linear_chirplet: bool = False,
+    finite_am_gate: bool = False,
 ) -> None:
     if affine_endpoint and not certified_causal:
         message = "Affine endpoints require certified source-mode preparation"
@@ -86,6 +89,87 @@ def _validate_mode_policy(
     if linear_chirplet and not modulated_basis:
         message = "Linear chirplets require the complete certified v7 preparation policy"
         raise ValueError(message)
+    if finite_am_gate and not linear_chirplet:
+        message = "Finite AM gates require the complete certified v8 preparation policy"
+        raise ValueError(message)
+
+
+def _fit_finite_am_source(
+    pcm: Pcm, estimate: CarrierEstimate, modulators: tuple[SourceModulator, ...] | None
+) -> tuple[CarrierEstimate, Pcm, dict] | None:
+    """Use only an existing unique isolated source-family certificate and reference."""
+    grouping = estimate.report.get("am_grouping")
+    if (
+        len(estimate.frequencies_hz) != 1
+        or modulators is None
+        or grouping is None
+        or grouping["group_count"] != 1
+    ):
+        estimate.report["finite_am_gate"] = {
+            "admitted": False,
+            "rejection": "requires_one_certified_AM_family_without_other_retained_carriers",
+        }
+        return None
+    certificates = [candidate for candidate in grouping["candidates"] if candidate["grouped"]]
+    if len(certificates) != 1 or certificates[0]["reference_start"] is None:
+        message = "A finite gate requires one existing source reference certificate"
+        raise ValueError(message)
+    fitted = fit_finite_am_gate(
+        pcm,
+        estimate.frequencies_hz[0],
+        estimate.stereo_coefficients[0],
+        modulators[0],
+        certificates[0]["reference_start"],
+    )
+    estimate.report["finite_am_gate"] = fitted.report
+    if fitted.gate is None:
+        return None
+    amplitude = abs(fitted.multiplier)
+    coefficients = estimate.stereo_coefficients * (fitted.multiplier / amplitude)
+    updated = CarrierEstimate(estimate.frequencies_hz, coefficients, estimate.report)
+    envelopes = np.empty((len(pcm), 1))
+    for start in range(0, len(pcm), 8192):
+        stop = min(start + 8192, len(pcm))
+        envelopes[start:stop, 0] = amplitude * fitted.gate.values(np.arange(start, stop))
+    apply_source_modulation(envelopes, modulators)
+    report = {
+        **fitted.report,
+        "source_finite_am_gate": True,
+        "offline_fit": True,
+        "offline_noncausal_fit": True,
+        "envelope_fit_local_causal": False,
+        "complete_pipeline_causality_claim": False,
+        "source_modulation_applied_once_to_published_envelopes": True,
+        "source_model_phase_birth_frame": fitted.gate.onset_frame,
+        "published_envelope_quantity": (
+            "conditional finite gate times amplitude and source modulator"
+        ),
+        "fitted_endpoints_crop_exact_residual": False,
+    }
+    return updated, envelopes, report
+
+
+def _select_envelope_fit(
+    *,
+    certified_causal: bool,
+    affine_endpoint: bool,
+    predictive_envelope: bool,
+    current_weight: bool,
+    modulators: tuple[SourceModulator, ...] | None,
+    phase_laws: tuple[LinearSourcePhase, ...] | None,
+):
+    """Keep one authoritative dispatch for the existing envelope policies."""
+    if phase_laws is not None:
+        return partial(fit_phase_current_weight_envelopes, phase_laws=phase_laws)
+    if modulators is not None:
+        return partial(fit_modulated_current_weight_envelopes, modulators=modulators)
+    if current_weight:
+        return fit_current_weight_causal_envelopes
+    if predictive_envelope:
+        return fit_predictive_causal_envelopes
+    if affine_endpoint:
+        return fit_affine_causal_envelopes
+    return fit_causal_envelopes if certified_causal else fit_envelopes
 
 
 def _fit_source_modes(
@@ -98,6 +182,7 @@ def _fit_source_modes(
     am_family: bool,
     modulated_basis: bool,
     linear_chirplet: bool = False,
+    finite_am_gate: bool = False,
 ) -> tuple[CarrierEstimate, Pcm, dict, tuple[LinearSourcePhase, ...] | None]:
     _validate_mode_policy(
         certified_causal=certified_causal,
@@ -107,6 +192,7 @@ def _fit_source_modes(
         am_family=am_family,
         modulated_basis=modulated_basis,
         linear_chirplet=linear_chirplet,
+        finite_am_gate=finite_am_gate,
     )
     estimate = estimate_carriers(
         pcm,
@@ -124,18 +210,18 @@ def _fit_source_modes(
                 (chirplet.phase.frequency_hz,), chirplet.stereo_coefficients, estimate.report
             )
     modulators = modulators_from_estimate(estimate) if modulated_basis else None
-    if phase_laws is not None:
-        fit = partial(fit_phase_current_weight_envelopes, phase_laws=phase_laws)
-    elif modulators is not None:
-        fit = partial(fit_modulated_current_weight_envelopes, modulators=modulators)
-    elif current_weight:
-        fit = fit_current_weight_causal_envelopes
-    elif predictive_envelope:
-        fit = fit_predictive_causal_envelopes
-    elif affine_endpoint:
-        fit = fit_affine_causal_envelopes
-    else:
-        fit = fit_causal_envelopes if certified_causal else fit_envelopes
+    if finite_am_gate:
+        finite = _fit_finite_am_source(pcm, estimate, modulators)
+        if finite is not None:
+            return *finite, phase_laws
+    fit = _select_envelope_fit(
+        certified_causal=certified_causal,
+        affine_endpoint=affine_endpoint,
+        predictive_envelope=predictive_envelope,
+        current_weight=current_weight,
+        modulators=modulators,
+        phase_laws=phase_laws,
+    )
     envelopes, report = fit(
         pcm, np.asarray(estimate.frequencies_hz, dtype=np.float64), estimate.stereo_coefficients
     )
@@ -151,13 +237,15 @@ def _model_version(
     am_family: bool,
     modulated_basis: bool,
     linear_chirplet: bool = False,
+    finite_am_gate: bool = False,
 ) -> str:
-    if linear_chirplet or modulated_basis:
-        return (
-            "certified-source-linear-chirplet-v8"
-            if linear_chirplet
-            else "certified-fixed-positive-am-basis-v7"
-        )
+    for enabled, version in (
+        (finite_am_gate, "conditional-source-finite-AM-gate-v9"),
+        (linear_chirplet, "certified-source-linear-chirplet-v8"),
+        (modulated_basis, "certified-fixed-positive-am-basis-v7"),
+    ):
+        if enabled:
+            return version
     if am_family:
         return "certified-positive-am-families-v6"
     if current_weight:
@@ -196,6 +284,7 @@ def prepare(
     am_family: bool = False,
     modulated_basis: bool = False,
     linear_chirplet: bool = False,
+    finite_am_gate: bool = False,
 ) -> Prepared:
     """Decompose all original stereo samples without access to output intent."""
     if np.iscomplexobj(source):
@@ -214,6 +303,7 @@ def prepare(
         am_family=am_family,
         modulated_basis=modulated_basis,
         linear_chirplet=linear_chirplet,
+        finite_am_gate=finite_am_gate,
     )
     activity = np.flatnonzero(np.any(pcm != 0.0, axis=1))
     birth = int(activity[0]) if len(activity) else 0
@@ -222,7 +312,7 @@ def prepare(
     for index, frequency in enumerate(estimate.frequencies_hz):
         mode = _build_mode(
             frequency,
-            birth,
+            int(envelope_report.get("source_model_phase_birth_frame", birth)),
             envelopes[:, index],
             estimate.stereo_coefficients[index],
             clock,
@@ -240,6 +330,7 @@ def prepare(
             am_family=am_family,
             modulated_basis=modulated_basis,
             linear_chirplet=linear_chirplet,
+            finite_am_gate=finite_am_gate,
         ),
         "mode_count": len(modes),
         "frequencies_hz": list(estimate.frequencies_hz),

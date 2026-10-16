@@ -2258,6 +2258,130 @@ full source/profile matrix and original timing, tonal, peak and retention gates
 still determine measured quality. Variable actual-rate maps, arbitrary mixtures,
 native realtime execution and all remaining product/Human gates remain open.
 
+### Conditional Finite Positive-AM Source Gate — 2026-10-16
+
+The separately selected v9 experiment tries a finite raised-cosine gate only for
+one already certified positive-AM family with no other retained carrier. Its
+interior certified reference is explicitly restricted to the candidate plateau;
+AM algebra does not itself establish that physical interpretation. All other
+sources and every finite-gate refusal retain the v8 signal path. The prior locally
+causal envelope policies remain unchanged. This whole-source alternative is
+offline and noncausal.
+
+With fixed original carrier vector C and positive modulator m(s), the stereo I/Q
+columns are Q=[m*Re(C*exp(i*w*s)), -m*Im(C*exp(i*w*s))]. A global complex multiplier
+and integer onset/rise/end/release parameters determine the modeled source.
+The finite gate is zero at its onset/end and has a plateau between its ramps.
+The admitted modeled onset supplies its fixed phase birth, separately from the
+first observed nonzero sample. No musical target, source progression or residual
+support moves. Physical synthesis uses amplitude*gate*m and one rotated unit
+complex carrier direction; all unmatched PCM remains in the exact transformed
+complement, including samples outside the modeled finite gate.
+
+Before measurement the search is fixed at512-frame margins around each observed
+activity edge. Onset spans first-active minus511 through first-active, end spans
+last-active through last-active plus511, and each width spans3..512 intervals.
+Both1025-sample neighborhoods must be inside the finite input and disjoint, with
+the entire8192-frame reference inside every candidate plateau. Global and EACH
+edge relative RMS must pass1e-4 independently. Joint I/Q avoids division by a
+carrier sample. Plateau rank and the local six-parameter Jacobian use the existing
+1e6 condition limit; condition number is not an absolute physical error bound.
+
+Complete candidate accounting uses bounded edge sufficient statistics, direct
+SVD residual checks and full original-source residual confirmation. All feasible
+pairs contribute to landmark ranges and multiplier ambiguity. At most4096 edge
+survivors and2000000 paired evaluations are permitted, in batches no larger than
+512; incomplete search refuses, without best-K truncation. Any feasible model
+touching a declared search boundary refuses. All feasible onset/rise-end/release-
+start/end positions must span at most ONE source frame and complex multipliers
+must agree within1e-3. This fixed source-grid resolution is separate from the
+unchanged96-frame acoustic timing gate. The same256MiB allocation limit includes
+128bytes per source frame plus64MiB bounded workspace before fitting allocation.
+
+This is conditional isolated-model validity. Observed residual does not bound
+unknown physical model mismatch or prove unique musical intent. Original phase,
+finite-support, tonal, peak, retention and full-response criteria remain required;
+no native, realtime, variable-map or Human gate is closed by these equations.
+
+The reproducible command is
+`uv run --no-sync python scripts/pitch_finite_am_gate_probe.py`. Independent
+controls precede the unchanged full matrix. Two unseen32768-frame elliptical
+and collinear stereo sources recover all four source landmarks exactly; the
+collinear source has deliberately exact carrier zeros adjacent to both edges.
+Its first/last nonzero PCM samples are two frames inside the modeled onset/end.
+Global complex-multiplier relative errors are at most9.46e-14. At scales2**-400
+and2**400, fresh scale-normalized whole-analytic errors are1.215e-13 and complete
+complement reconstruction error is zero. The attenuated control was corrected
+to divide the reconstructed signal by its actual scale before comparison;
+the fitter, source, limits and search policy were unchanged.
+
+Public PCM-only source certification, finite fitting and complete integer-rate
+output are separately checked on both sources. Frequency error is at most
+3.41e-13Hz, whole-source analytic error6.92e-13 and complete r2/k-7,0,+7 output
+error6.73e-13. Fractional h=r combined-source identities retain a declared nonzero
+complement within2.23e-15, and a nonunity complement-tail control retains energy
+.00590972785. These identities do not establish fractional interpolation quality
+against a continuous physical model.
+
+Ten negative source categories refuse: a sub-domain two-frame edge, a carrier-zero
+three-frame edge with only one informative interior sample, no plateau, widths
+outside the frozen grid, one-sample pulse, silence, censored onset, an independent
+plateau transient, an independent outside-gate tail and additional stereo carriers.
+The underresolved case has both a failed Jacobian and unresolved boundary; its
+primary refusal reason is the boundary, so it does not isolate the rank branch.
+Twenty-two malformed contracts and two invalid reference geometries also refuse.
+A read-only two-million-frame broadcast source refuses the323108864-byte estimate
+against268435456bytes before source scanning or fitted-output allocation.
+
+The predeclared20Hz carrier/2Hz modulator/eight-frame weak-edge source instead
+has exactly one feasible pair and recovers its original gate and gauge. The
+initial assertion that this source would be ambiguous failed; the unchanged
+construction is retained as a uniquely identifiable control. An independent
+demonstration of multiple feasible landmark or complex-multiplier ambiguity
+remains OPEN, as does empirical cap-exhaustion coverage. The normative ambiguity
+requirement and the finite-gate evaluation task therefore remain OPEN. The full
+matrix is exploratory evidence, not completion of that required control sequence.
+
+Actual prior-HEAD comparisons cover four sources and all eight old preparation
+policies:32 complete reports and prepared arrays are exactly equal. Two shifted
+AM/chirp renders also have exactly equal PCM and reports. Three noneligible v9
+fallbacks preserve the prior prepared state except model/attempt metadata.
+An eligible certified AM source with its onset censored at the input boundary
+also refuses and preserves every prepared array and complete shifted PCM exactly;
+reports differ only by the declared version and attempt metadata. An initial
+unfiltered renderer-report assertion failed on that expected version field,
+while the numerical comparison was exact; no fitter correction was needed.
+The complete source-control pass is reused after adding summary-only keys; only
+the two scale controls are rerun after strengthening their normalization check.
+
+The frozen full18-by4 matrix completes in433.772387seconds:71 complete outputs
+and the unchanged explicit19873.23Hz/+7 Nyquist refusal. Only the AM source admits
+the finite model. Its onset/end32768/80767 and both127-frame ramps have exactly
+one feasible pair out of261120 candidates per edge. Direct global/onset/release
+relative RMS are1.4234e-12/2.1167e-12/2.9089e-12; the rank-six Jacobian condition
+is9871.94 and the conservative allocation estimate87785728bytes. Its exact
+complement retains source energy1.28318e-21. No subtraction error is discarded.
+
+At r2 and k-7/0/+7 the AM q10/q50 offsets are now -2/-4,0/-1,0/0 frames, all
+inside the original96-frame/2ms gate. This replaces -177/-80,-96/-29,-17/+2;
+the previous exact96-frame boundary now has margin. Raw peaks remain about
+.19599 and complete transformed complement energies9.266e-22/7.235e-22/
+6.467e-22 remain in the scored outputs. All67 non-AM complete measurement
+records equal v8 exactly after excluding only model version and elapsed time.
+All35 existing tonal checks still pass15cent, maximum.685237cent; three fresh
+additional AM-center measurements pass with maximum.001362cent. All18 identity
+errors remain at most8.44e-15 and complete decomposition at most1.111e-16.
+
+The candidate remains rejected overall with seven timing failures: independent
+900/1100 at-7 has q10/q50 -126/-8; close521/533 at-7/0/+7 has -666/-1573,
+-843/-658,-117/-560; noise has+212/+222,+135/+102,-222/-236. Earlier exact
+AM/close-pair reference evidence is reused, not freshly measured here. Production
+code, Native/API, installations, device/listening acceptance and every remaining
+parent gate remain unchanged. No native build or extra Release is warranted by
+this opt-in offline-only change; prior unchanged private Release/API evidence is
+reused. The remaining ambiguity controls must be demonstrated before this finite
+evaluation can be closed, independently of the improved AM acoustic measurements.
+
 ## Settings Contract
 
 Project persistence stores the global `key_lock` boolean as default intent and

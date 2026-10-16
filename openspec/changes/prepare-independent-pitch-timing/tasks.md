@@ -52,6 +52,10 @@
   physical-envelope sensitivity and future-cue controls, retaining the complete quality matrix.
 - [x] Evaluate source-certified integrated linear chirplet phase, fixed-phase envelope controls,
   complete-support band refusals and the unchanged full-response quality matrix.
+- [ ] Evaluate a conditional finite positive-AM source gate with joint I/Q, complete ambiguity
+  search, independent finite/scale/refusal controls and the unchanged full-response matrix.
+- [ ] Demonstrate independent multiple-feasible landmark and complex-multiplier ambiguity
+  refusals before completing the finite-gate evaluation; the initial weak-edge case is unique.
 - [ ] Test all37 extras/base -5..+6/total -23..+24 at actual r(n), lockON h/r
   (~.132433..8 for r=.5..2), lockOFF h, original .25..4 corners and finite bounds
   without clipping; prove quality/RT/readiness/latency/finite context/unity transitions.

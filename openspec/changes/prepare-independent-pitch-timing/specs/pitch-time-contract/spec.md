@@ -477,6 +477,64 @@ native realtime execution or any remaining product acceptance gate.
 - **THEN** its envelope features and output phase correction SHALL use the same integrated source phase law
 - **AND** complete residuals, finite tails, prior variants and all original full-response criteria SHALL remain observable
 
+### Requirement: Conditional Finite AM Gates Compare All Feasible Source Candidates
+The offline diagnostic SHALL provide a separate conditional finite-gate experiment
+for one already certified positive-AM family without other retained carriers.
+Its declared model SHALL combine a finite raised-cosine attack, plateau and release
+with one global complex amplitude/phase multiplier. Original stereo PCM and the
+fixed source carrier/modulator SHALL determine the fit. No pointwise division by
+a carrier sample, output intent, fixture identifier or scorer target SHALL select
+the model. A certified interior reference window SHALL be an explicit plateau
+restriction of this experiment, not a claim that certification proves a plateau.
+An admitted gate's fitted onset SHALL supply its fixed mode phase birth. This
+source-model coordinate SHALL remain distinct from the first observed nonzero PCM
+frame and SHALL NOT alter source progression, musical targets or residual support.
+
+The initial source grid SHALL be integer frames. Each edge observation neighborhood
+SHALL extend 512 frames on each side of the corresponding first/last active source
+frame and remain inside the finite input. Onset candidates SHALL span first-active
+minus 511 through first-active; end candidates SHALL span last-active through
+last-active plus 511. Rise and release widths SHALL span 3 through 512 frames.
+All complete candidate pairs SHALL preserve the entire reference window between
+their ramps. Censored boundaries and unresolved search-boundary optima SHALL refuse.
+
+Joint stereo I/Q least squares SHALL estimate the common complex multiplier.
+Global and each edge-local relative RMS SHALL separately satisfy the unchanged
+1e-4 source-fit policy. Numerical rank and the 1e6 condition bound SHALL apply to
+the plateau I/Q design and local six-parameter identifiability design. Absolute
+source-domain uncertainty SHALL NOT be inferred from condition number alone.
+Sufficient-statistic residuals SHALL receive conservative numerical allowance;
+final source residuals SHALL be recomputed directly against all original PCM.
+
+The search SHALL retain all feasible candidates within fixed resource limits of
+4096 survivors per edge, 2000000 paired evaluations and batches of at most 512.
+Exceeding a limit or leaving ambiguity search incomplete SHALL refuse, rather than
+selecting a best subset. All feasible onset, rise-end, release-start and end
+landmarks SHALL span at most one source frame, and normalized complex multipliers
+SHALL agree within 1e-3, before one representative source fit is published.
+This source-grid resolution SHALL NOT replace the original acoustic timing gates.
+Additional work SHALL fit within the existing 256MiB guard before allocation,
+including a conservative 128 bytes per input frame plus 64MiB bounded workspace.
+
+The result SHALL explicitly report conditional isolated-model validity and offline
+noncausality, without asserting unique physical interpretation or a bound on unknown
+latent model error. Every source sample outside the fitted gate and every fitting
+error SHALL remain in the exact fully transformed residual; fitted endpoints SHALL
+NOT crop that residual. Refusal SHALL preserve the prior v8 signal path. Prior
+variants, complete finite tails, existing unsupported domains and every original
+full-response acceptance gate SHALL remain available and unchanged.
+
+Independent unseen finite gates and negative underresolved, carrier-zero, scaled,
+truncated, out-of-domain, no-plateau and ambiguous cases SHALL precede the full
+unchanged source/profile matrix. Such controls SHALL NOT certify production,
+variable-rate maps, realtime execution or any remaining Human/product gate.
+
+#### Scenario: A conditional finite gate is identifiable in original stereo PCM
+- **GIVEN** one certified positive-AM family, an interior plateau restriction and a complete bounded source-grid search
+- **WHEN** all feasible direct source fits agree on gate landmarks and global complex amplitude/phase within the declared resolution
+- **THEN** the separate experiment SHALL publish that source model and retain every complementary PCM sample and tail
+- **AND** incomplete, ambiguous, censored or ill-conditioned fits SHALL retain the prior signal path without manufacturing acoustic acceptance
+
 ### Requirement: Combined Pitch And Rate Bounds Are Never Silently Clipped
 The system SHALL validate and report the supported combined pitch/rate domain before accepting
 diagnostic transposition, retaining separate requested, pending, effective and rejected state.

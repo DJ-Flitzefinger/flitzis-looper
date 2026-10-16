@@ -140,7 +140,13 @@ def known_am_reference(fixture: Fixture) -> None:
         })
 
 
-def candidate_am_tonal_controls(fixture: Fixture, *, modulated_basis: bool = False) -> None:
+def candidate_am_tonal_controls(
+    fixture: Fixture,
+    *,
+    modulated_basis: bool = False,
+    linear_chirplet: bool = False,
+    finite_am_gate: bool = False,
+) -> None:
     """Measure candidate carrier peaks without supplying an oracle to preparation."""
     estimated = prepare(
         fixture.source,
@@ -150,6 +156,8 @@ def candidate_am_tonal_controls(fixture: Fixture, *, modulated_basis: bool = Fal
         current_weight=True,
         am_family=True,
         modulated_basis=modulated_basis,
+        linear_chirplet=linear_chirplet,
+        finite_am_gate=finite_am_gate,
     )
     for rate, semitones in ((2, -7), (2, 0), (2, 7)):
         output, details = render_prepared(estimated, float(rate), semitones)
