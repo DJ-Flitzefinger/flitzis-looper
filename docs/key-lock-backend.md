@@ -1377,6 +1377,67 @@ No productive backend changes follow this rejected experiment. Full pitch/rate
 range, gain/mixture quality, variable maps, continuous live history, realtime
 preparation/resources and Human gates remain open.
 
+### Fixed-Bank Synthesis Calibration — 2026-10-16
+
+`uv run --no-sync python scripts/pitch_amfm_calibration.py` independently predicts
+the rejected bank's raw output. The renderer and its 40-profile quality results
+are unchanged. This control uses the original mono source's known carrier only
+in analytic expectations; the renderer still receives PCM/rate/semitones alone.
+
+The finite response is calculated as three geometric sums, with fixed
+alpha=pi/1023 and a zero empty sum. Positive and negative frequency responses are
+both retained. Direct convolution supplies the original 96-sample leading and
+falling ramps; partial responses supply exactly the flat source interval
+96..47903. All 49023 possible source-response coordinates, including full filter
+retirement, enter the prediction. Independent state arguments plus explicit
+integer winding reproduce the original carrier-anchored phase rule at its actual
+first active source frame 1. No phase alignment, gain or response crop is fitted.
+
+Closed-form versus explicit FIR responses agree within 1.91e-14; the real-bank
+response identity is within 1.87e-14. Selected complete complex states agree with
+direct original-PCM convolution within 5.05e-14, and their real sum reconstructs
+the original source within 2.55e-13. The smallest nonzero band magnitude is
+3.33e-15 and the minimum interior phase-branch margin is .000949913 radians.
+The predictor explicitly retains 592208 integer winding steps. No band is
+negative-image-dominated at this carrier; this does not mean image leakage is zero.
+
+The first actual run completes with all three whole-PCM predictions below the
+predeclared 1e-8 limit. Maximum raw PCM error is 5.39e-12 across all 80769 returned
+stereo frames. Whole-output energy prediction errors are below 2.31e-12 relative.
+These numbers include both ramps and complete finite retirement, rather than a
+single-period or stationary-window energy estimate.
+
+| k at r2 | Actual output/source energy | Sum of individual band energies | Signed cross-band energy |
+| --- | --- | --- | --- |
+| -7 | 2.420940 | 350.769741 | +4177.184176 |
+| 0 | 1.930568 | 350.768429 | +3260.028670 |
+| +7 | 1.129536 | 350.765722 | +1761.839027 |
+
+The changing constructive interference accounts quantitatively for these raw
+energy ratios. A deliberately incomplete surrogate using stationary analytic
+phase with principal filter phase differs from actual fixed-window PCM by
+.081860/.050785/.036574. It omits image/onset-winding effects and is not an
+alternative passing renderer. The control does not assign every observed mixture
+timing error to one cause.
+
+A source-only single-mode recurrence on the maximum-energy 16384-frame source
+window estimates 900.3699999999993 Hz, with relative recurrence residual 2.89e-13.
+That estimate, not the oracle frequency, builds the stacked positive/negative
+image matrix. Its condition number is 16.9963; recovered positive-mode phasors
+agree with the known source within 1.11e-13, and the relative out-of-span norm is
+1.96e-13. Applying this one-mode span to the original mixed 331.37/997.19-Hz source
+leaves .980171 of its observed coefficient norm outside the span. That remainder
+is reported in full; it has not been transformed by a new corrected renderer.
+
+The bounded next candidate therefore needs source-derived modes with independent
+envelopes and retained birth gauges, plus an explicitly transformed complete
+remainder. A later unrelated impulse must not rebirth every continuing carrier.
+Exact source reconstruction alone cannot choose a unique physical AM-versus-
+sideband interpretation of arbitrary audio. Separation assumptions, unresolved
+modes, conditioning, transient quality, aliasing, full pitch/rate range and all
+live/realtime/Human gates remain required. This calibration activates no backend
+and changes none of the five original timing failures.
+
 ## Settings Contract
 
 Project persistence stores the global `key_lock` boolean as default intent and

@@ -190,6 +190,29 @@ domain, live history, realtime resources or Human acceptance.
 - **THEN** analysis completeness and unity identity SHALL be checked before measuring the original timing, retention and strongest-frequency predicates
 - **AND** a failing mixed or transient response SHALL remain a rejection without omitting a residual, shifting targets or fitting output parameters
 
+The fixed-bank synthesis calibration SHALL independently calculate each finite
+filter response at both positive and negative source frequencies and compare it
+with explicit FIR evaluation. A real source sinusoid SHALL retain both images in
+the prediction. The linear reconstruction identity SHALL NOT be substituted for
+a transformed synthesis identity. Carrier-anchored phase winding and finite
+source-onset phase history SHALL remain explicit rather than replaced by a
+principal filter phase or a fitted output offset.
+
+Predicted transformed PCM and gain SHALL be compared with the actual unchanged
+renderer at predetermined source coordinates. Any oracle frequency used in an
+analytic integrity control SHALL remain confined to that control and SHALL NOT
+enter the PCM-only renderer. A source-derived estimate SHALL report its error
+separately. Any image-aware inverse SHALL report conditioning, reconstruction
+error and every component outside its modeled span. A mode-specific correction
+SHALL NOT be represented as a complete arbitrary-mixture renderer, and no fitted
+wet gain or omitted residual SHALL manufacture quality acceptance.
+
+#### Scenario: Known analysis responses explain or reject transformed synthesis gain
+- **GIVEN** the unchanged finite bank, original source-only mono/mixed fixtures and predetermined measurement coordinates
+- **WHEN** independent filter-response and image/winding predictions are compared with actual transformed PCM
+- **THEN** response integrity, source estimation, predicted gain error, conditioning and out-of-span residual SHALL be reported separately
+- **AND** a resolved-mode calibration SHALL NOT close the original transient, mixture, full-range or live acceptance gates
+
 ### Requirement: Combined Pitch And Rate Bounds Are Never Silently Clipped
 The system SHALL validate and report the supported combined pitch/rate domain before accepting
 diagnostic transposition, retaining separate requested, pending, effective and rejected state.
