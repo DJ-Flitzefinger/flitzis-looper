@@ -9,6 +9,13 @@
 
 - [ ] Add independent source/master/target oracles with nonzero test-only k and no live adoption.
 - [ ] Cover equal-rate h/r versus q=1/r,p=h paths and proposed KEYLOCK-off p=h behavior.
+- [x] Establish the first bounded original-source comparison on the existing
+  48-kHz/r2/H16384 impulse: predeclared offline R2/R3, q=.5,p=1, explicit geometry
+  and total duration, complete uncropped/strict-target fixed metrics and processing
+  partition comparison. Retain every negative and all wider parent obligations.
+- [x] Preserve direct-native partition failures and prove a bounded fixed-native-
+  block offline adapter against both caller partitions and the complete direct
+  fixed-block PCM, with identical source/map and zero fitted tolerance.
 - [ ] Verify inverse-map seconds to loaded-frame conversion before deriving rate; equal physical
   progression at equal sample rates must yield r=1, including across supported device rates.
 - [ ] Test all37 extras/base -5..+6/total -23..+24 at actual r(n), lockON h/r

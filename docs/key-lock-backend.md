@@ -1005,6 +1005,68 @@ checks. Continuous-native conformance can supply an additional no-extra-deformat
 it cannot retroactively turn the failed two-ms/peak/0.1%-energy gate into a pass. No new threshold,
 anchor, target delay, live scheduler policy or backend option is selected by this proof.
 
+### First Original-Source Offline Stretcher Comparison — 2026-10-16
+
+The test-only `history_probe::stretcher_probe` compares the existing 48-kHz,
+source-rate2, H16384 impulse against original-source offline Stretcher processing.
+The immutable stereo source contains 161,538 frames and its impulse at source
+32768 maps to output16384. Duration q=.5, pitch p=1, output80,769 frames and all
+anchors precede measurement. Both R2 and R3 use the default standard window,
+ChannelsTogether, ThreadingNever and a maximum native process size of512.
+The separate Live reference reads the independent varispeed source with p=.5;
+its complete native capture has84,480 frames, including native startup and rounding.
+Neither route receives a fitted offset, gain, crop, target or threshold.
+
+The semantic origin remains0->0; only positive keyframes32768->16384 and
+161538->80769 are passed to native. The first probe mistakenly passed an explicit
+0->0 entry. R3 emitted14 NaN/reset warnings and initially processed at unity;
+that failed setup is retained as a negative, not valid q=.5 acoustic evidence.
+The published [R3 map implementation](https://github.com/breakfastquay/rubberband/blob/v4.0.0/src/finer/R3Stretcher.cpp#L380-L394)
+divides the first target/source anchor. Omitting the redundant native origin
+preserves the complete original geometry. Constructor and first-process queries
+then both report q=.5,p=1; the corrected runs emit no native warnings.
+
+| Complete uncropped route | q10/q50 offsets from unchanged dry, frames | Energy before original H | Combined fixed criteria |
+| --- | --- | --- | --- |
+| Dry control | 0 / 0 | 0% | Pass |
+| R2, native512 or irregular | -191 / 508 | 16.490483% | Fail |
+| R3, native512 | 32 / 41 | 5.307944% | Fail |
+| R3, native irregular | 62 / 72 | 3.192099% | Fail |
+| Independent Live | 2771 / 3258 | 0% | Fail |
+
+R3 meets the unchanged96-frame/two-ms timing budget in this one fixture.
+Suppressing its pre-H output nevertheless discards more than the allowed0.1%
+of original response energy. Strict-gated q10/q50 are40/42 for native512 and
+70/73 for irregular input; those passing timing values do not repair energy
+loss. R2 strict-gated q10/q50 are510/511. Original response peaks remain after H
+and final20-ms energy is zero in these captures. Every wet combined raw/strict
+criterion remains false. A single impulse supplies no15-cent pitch proof.
+
+Direct R2 output is bitwise equal across the two native call partitions.
+Corrected direct R3 differs at7,868 stereo samples, maximum absolute error
+.4067295016720891. A512-frame process-size ceiling does not normalize calls.
+The bounded offline ingress adapter stages at most512 frames per channel,
+verifies every submitted sample against its original source, and sends exactly
+315 native blocks of512 plus one final258-frame block with identical draining.
+Both outer partitions (316 versus787 calls) therefore make316 native calls.
+All80,769 stereo output frames are bitwise equal across adapter partitions and
+each is exact to the direct512 reference: six complete comparisons, zero tolerance.
+This establishes adapter partition independence; the direct R3 failure remains.
+Published [R3 process/consume code](https://github.com/breakfastquay/rubberband/blob/v4.0.0/src/finer/R3Stretcher.cpp#L658-L809)
+provides a caller-boundary-sensitive mechanism, not proof of this DLL's exact build.
+
+Each of eight offline owners completes its entire study pass before processing,
+receives the original input exactly once per pass, finalizes once, drains to-1
+and retires on the same offline thread. Runtime identity reuses the existing
+loaded Live-import binding check: DLL SHA256
+`4a8d323cc8c40d16413bbffe459811f93ebb5f7249b9e830bf4d11c62e4feb6d`;
+its PE version fields are unavailable. R2/R3 engine queries and the published
+v4.0.0 mechanism do not establish the loaded library's semantic version.
+The previous Live C3678/U2080/1598-frame headroom counterexample also remains.
+No production backend, scheduling, installation or callback changes follow from
+this bounded result. Variable maps, nonzero pitch, finite live handover, continuous
+history, resource/deadline/device and Human listening gates remain open.
+
 ## Settings Contract
 
 Project persistence stores the global `key_lock` boolean as default intent and

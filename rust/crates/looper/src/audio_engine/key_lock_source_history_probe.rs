@@ -339,3 +339,6 @@ fn centered_envelope_has_no_causal_delay_and_stereo_energy_uses_both_channels() 
 
 #[path = "key_lock_source_onset_probe.rs"]
 mod onset_probe;
+
+#[path = "key_lock_stretcher_probe.rs"]
+mod stretcher_probe;

@@ -28,6 +28,40 @@ and SHALL NOT apply the same tempo change twice. It SHALL cover proposed future 
 varispeed plus p=h, whose audible pitch is r*h and whose k=0 case preserves legacy varispeed.
 This proposal SHALL NOT activate a new live control or reinterpret existing Key Lock behavior.
 
+The first bounded original-source comparison SHALL reuse the existing isolated
+48-kHz, source-rate2, H16384 impulse and its original source/output target. Offline
+Stretcher duration q=.5 and independent pitch p=1 SHALL be configured before its
+complete study pass. Its overall duration and source-to-output anchors SHALL be
+fixed from source geometry before processing, with no response-fitted offset,
+gain, crop, target or threshold. The diagnostic SHALL distinguish documented
+offline startup alignment from an illustrative nominal LiveShifter translation.
+
+Both predeclared R2 and R3 engines SHALL report their actual engine selection,
+duration/pitch factors, native frame counts and complete uncropped output. Study
+and process partitions SHALL preserve the same input and complete-output
+comparison. The unchanged two-ms q10/q50, original peak, .1-percent discarded
+energy and capture-tail criteria SHALL remain visible for uncropped output and
+strict first emission at the original target. A failed predicate SHALL remain a
+failed predicate, independently of API/coordinate/partition success. This
+bounded result SHALL NOT certify variable trajectories, finite live handover,
+nonzero pitch, callbacks, device latency or Human listening.
+
+The diagnostic SHALL distinguish direct native-call partition behavior from
+offline adapter ingress partition independence. An adapter MAY stage at most
+512 source frames per channel and submit fixed 512-frame native blocks plus
+one final remainder. It SHALL preserve every original input frame and anchor,
+record the actual native block sequence and require bitwise equality of the
+complete output across caller partitions and against the direct fixed-block
+reference. Passing this adapter check SHALL NOT relabel a failed direct-native
+partition or acoustic predicate as passing. The semantic zero origin SHALL
+remain implicit in the native keyframe encoding to avoid a zero first divisor.
+
+#### Scenario: Original-source duration processing is compared with the failed scalar route
+- **GIVEN** the existing source-rate2 H16384 impulse with a frozen source/output map and original target
+- **WHEN** separate offline R2 and R3 Stretcher instances study and process that original source with q=.5,p=1 while the mapped-reader LiveShifter retains p=.5
+- **THEN** full uncropped measurements and every original failed acoustic/causal criterion SHALL be reported separately from exact output duration and processing-partition agreement
+- **AND** no selected measurement offset, early audible retune or production renderer change SHALL manufacture acceptance
+
 #### Scenario: Equal physical source and output progression has unit rate
 - **GIVEN** equal 48000-Hz source/output rates and a map advancing one source second per output second
 - **WHEN** the diagnostic derives r from inverse-map coordinates
