@@ -162,6 +162,13 @@ and output-reader end. Parent alignment/hash checkpoints use the same sticky eve
 All newly executed process/cancellation helpers participate in the full sealed
 producer inventory and fail-closed loaded-code identity, with a bounded 64-file cap.
 
+The cooperative entrypoint tests allow four seconds for actual child exit and a
+five-second reap bound, including Python/Torch finalization after the flushed
+cancellation receipt. They retain exact exit130 and private-output cleanup checks.
+The blocked-model tests retain their separate 0.4-second grace, 0.5-second reap
+bound and actual descendant/read settlement within five seconds. The cooperative
+test budget is not a production cancellation-deadline claim.
+
 Gate L2 injects faults at WAV/PCM/descriptor/config commit boundaries, races
 Cancel/commit/unload/reload/model changes, verifies reopen and old-set usability,
 and renders current FullMix and selected-stem KEYLOCK output during an actual

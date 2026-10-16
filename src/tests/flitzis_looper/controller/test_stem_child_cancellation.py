@@ -185,6 +185,8 @@ def _run(
     temporary: Path,
     cancel: Event,
     retired: Event,
+    *,
+    cooperative_exit: bool = False,
 ) -> process.OwnedCommandResult:
     marker = temporary / "cancel"
     environment[CANCEL_PATH_ENV] = str(marker)
@@ -194,9 +196,11 @@ def _run(
         env=environment,
         cancel=cancel,
         retired=retired,
-        limits=WorkerLimits(timeout_seconds=40, reap_timeout_seconds=0.5),
+        limits=WorkerLimits(
+            timeout_seconds=40, reap_timeout_seconds=5.0 if cooperative_exit else 0.5
+        ),
         request_abort=partial(stem_process._request_abort, marker),
-        abort_grace_seconds=0.4,
+        abort_grace_seconds=4.0 if cooperative_exit else 0.4,
         receipt_prefixes=(ENCODER_RESULT.encode(), BS_INPUT_RESULT.encode()),
     )
 
@@ -227,7 +231,11 @@ def test_real_entry_cooperates_at_named_stage_and_cleans_before_exit_130(
     arguments, environment, output = _fixture(tmp_path, variant, stage)
     cancel, retired = Event(), Event()
     with ThreadPoolExecutor(max_workers=1) as executor:
-        future = executor.submit(_run, arguments, environment, tmp_path, cancel, retired)
+        # The flushed receipt precedes Python/Torch finalization. Prove the
+        # entrypoint's own exit here; blocked-model escalation keeps its short budget.
+        future = executor.submit(
+            _run, arguments, environment, tmp_path, cancel, retired, cooperative_exit=True
+        )
         try:
             _wait_ready(output / "ready", future)
             assert not retired.is_set()
