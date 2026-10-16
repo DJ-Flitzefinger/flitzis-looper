@@ -6,12 +6,14 @@ targets. This NumPy experiment is not a productive or realtime backend.
 
 import math
 from dataclasses import dataclass
+from functools import partial
 from typing import TYPE_CHECKING
 
 import numpy as np
 from pitch_amfm_model import render as render_residual
 from pitch_mode_carriers import FS, estimate_carriers
-from pitch_mode_envelopes import fit_envelopes
+from pitch_mode_certificate import inspect_window
+from pitch_mode_envelopes import fit_causal_envelopes, fit_envelopes
 
 if TYPE_CHECKING:
     from numpy.typing import NDArray
@@ -43,7 +45,7 @@ class Prepared:
     report: dict
 
 
-def prepare(source: Pcm) -> Prepared:
+def prepare(source: Pcm, *, certified_causal: bool = False) -> Prepared:
     """Decompose all original stereo samples without access to output intent."""
     if np.iscomplexobj(source):
         message = "Source must be real stereo PCM"
@@ -52,8 +54,11 @@ def prepare(source: Pcm) -> Prepared:
     if pcm.ndim != 2 or pcm.shape[1] != 2 or not np.all(np.isfinite(pcm)):
         message = "Source must be finite stereo PCM"
         raise ValueError(message)
-    estimate = estimate_carriers(pcm)
-    envelopes, envelope_report = fit_envelopes(
+    estimate = estimate_carriers(
+        pcm,
+        window_inspector=partial(inspect_window, geometry="spread") if certified_causal else None,
+    )
+    envelopes, envelope_report = (fit_causal_envelopes if certified_causal else fit_envelopes)(
         pcm, np.asarray(estimate.frequencies_hz, dtype=np.float64), estimate.stereo_coefficients
     )
     activity = np.flatnonzero(np.any(pcm != 0.0, axis=1))
@@ -68,6 +73,7 @@ def prepare(source: Pcm) -> Prepared:
         modes.append(Mode(float(frequency), birth, analytic))
     residual = pcm - reconstruction
     report = {
+        "model_version": "certified-causal-envelopes-v2" if certified_causal else "v1",
         "mode_count": len(modes),
         "frequencies_hz": list(estimate.frequencies_hz),
         "source_birth_frame": birth,
@@ -121,7 +127,8 @@ def render_prepared(prepared: Prepared, rate: float, semitones: int) -> tuple[Pc
         output += contribution
     assert np.all(np.isfinite(output)), "Nonfinite complete mode/residual output"
     return output, {
-        "model": "source-derived-independent-modes-with-complete-amfm-residual-v1",
+        "model": "source-derived-independent-modes-with-complete-amfm-residual-"
+        + prepared.report.get("model_version", "v1"),
         "capture_origin": origin,
         "mode_count": len(prepared.modes),
         "source_estimated_frequencies_hz": prepared.report.get("frequencies_hz", []),

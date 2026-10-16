@@ -17,10 +17,13 @@ from typing import TYPE_CHECKING
 import numpy as np
 
 if TYPE_CHECKING:
+    from collections.abc import Callable
+
     from numpy.typing import NDArray
 
 type Pcm = NDArray[np.float64]
 type ComplexPcm = NDArray[np.complex128]
+type WindowInspector = Callable[[Pcm, int], dict]
 
 FS = 48_000
 WINDOW_FRAMES = 8192
@@ -409,10 +412,21 @@ def _admit(
     return tuple(admitted_frequencies), coefficients, reports
 
 
-def _scan_windows(source: Pcm, report: dict) -> list[_Window]:
+def _scan_windows(
+    source: Pcm, report: dict, inspector: WindowInspector | None = None
+) -> list[_Window]:
     windows, window_reports = [], []
     for start in range(0, len(source) - WINDOW_FRAMES + 1, HOP_FRAMES):
-        window, window_report = _analyze_window(source, start)
+        if inspector is None:
+            window, window_report = _analyze_window(source, start)
+        else:
+            window_report = inspector(source, start)
+            window = (
+                _Window(start, tuple(window_report["frequencies_hz"]))
+                if window_report["accepted_certificate"]
+                else None
+            )
+            window_report["accepted"] = window is not None
         window_reports.append(window_report)
         if window is not None:
             windows.append(window)
@@ -471,11 +485,15 @@ def _refined_estimate(
     return CarrierEstimate(admitted, coefficients, report)
 
 
-def estimate_carriers(source: Pcm) -> CarrierEstimate:
+def estimate_carriers(
+    source: Pcm, *, window_inspector: WindowInspector | None = None
+) -> CarrierEstimate:
     """Discover recurring stationary carriers using only finite stereo source PCM.
 
     Args:
         source: Finite real PCM with shape (frames, 2), sampled at fixed 48000 Hz.
+        window_inspector: Optional source-only complete-window certificate. The
+            default retains the original energy-guarded contiguous pencil.
 
     Returns:
         Frequencies, unit pooled-norm complex stereo coefficients in global
@@ -499,7 +517,9 @@ def estimate_carriers(source: Pcm) -> CarrierEstimate:
         "phase_coordinates": "global source sample zero; no event phase reset",
         "unadmitted_samples": "caller exact remainder; this estimator discards no PCM",
     }
-    windows = _scan_windows(pcm, report)
+    if window_inspector is not None:
+        report["source_window_policy"] = "explicit_source_fit_certificate"
+    windows = _scan_windows(pcm, report, window_inspector)
     eligible = _eligible_clusters(windows, report)
     if not eligible or len(eligible) > MAX_CARRIERS:
         report["rejection"] = "no_recurrent_carriers" if not eligible else "carrier_cap_exceeded"

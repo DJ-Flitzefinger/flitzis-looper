@@ -7,11 +7,13 @@ scoring is retained, with target-blind dense peak ranking for one close pair.
 import math
 import time
 from functools import lru_cache
+from typing import TYPE_CHECKING
 
 import numpy as np
 from pitch_amfm_probe import sources as original_sources
 from pitch_causal_model_probe import FS, SOURCE_FRAMES, SOURCE_TARGET, Pcm, emit, frequency_report
 from pitch_independent_modes import (
+    Prepared,
     UnsupportedPitchDomainError,
     integrity_controls,
     prepare,
@@ -21,6 +23,9 @@ from pitch_mode_carriers import integrity_controls as carrier_controls
 from pitch_mode_envelopes import integrity_controls as envelope_controls
 from pitch_overlap_probe import RUN_PROFILES, Fixture, metric_controls, profile, stereo
 from pitch_phase_gradient_probe import signed_metric_controls
+
+if TYPE_CHECKING:
+    from collections.abc import Callable
 
 
 def gated(
@@ -125,10 +130,16 @@ def calibrate(sources: list[Fixture]) -> None:
         assert result["tonal_15_cent_pass"], "Source spectral calibration failed"
 
 
-def run_fixture(fixture: Fixture, controls: dict, negatives: dict) -> None:
+def run_fixture(
+    fixture: Fixture,
+    controls: dict,
+    negatives: dict,
+    *,
+    preparer: Callable[[Pcm], Prepared] = prepare,
+) -> None:
     """Use one fixed source decomposition for unity and nonunity intentions."""
     started = time.perf_counter()
-    prepared = prepare(fixture.source)
+    prepared = preparer(fixture.source)
     emit({
         "stage": "source_preparation",
         "fixture": fixture.name,

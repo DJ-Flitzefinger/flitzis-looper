@@ -1545,6 +1545,143 @@ App/device or listening change follows this rejected candidate. Full-range,
 transient/mixture gain, source causality, aliasing, variable maps, continuous
 output, realtime/resources and Human acceptance remain open.
 
+### Source Certificates And Trailing Envelopes — 2026-10-16
+
+The command uv run --no-sync python scripts/pitch_mode_certificate_probe.py
+separates the previous energy-guard refusal from actual stationary observability.
+Both frozen geometries use8192 source frames,4096 rows per channel,32 columns,
+and the same rank/pole/condition/full-window-fit thresholds. Compact offsets are
+j; spread offsets are floor(4095*j/31),j=0..31. X0[n,j]=x[n+offset_j] and
+X1[n,j]=x[n+offset_j+1] keep the one-original-sample eigenvalue exp(i*omega).
+There is no sample-rate division by the column spacing. All8192 original samples
+participate in the final real cosine/sine least-squares certificate.
+
+The first run inspects1368 certificates,18 sources times38 windows times two
+geometries, in4.146 seconds. Each geometry accepts the same174 of684 windows.
+Both certify the same six constant-amplitude close-pair windows beginning
+40960..61440 despite the original energy ratio of .114 to .190 being below .25.
+Both obtain real rank4. Compact maximum pole condition is1067.086 and full-window
+relative RMS2.576e-10; spread values are1.13956 and3.371e-13. Compact retained
+singular condition is1182..1239 versus1.69..1.70 for spread. This demonstrates
+false exclusion by mixture-power flatness and a conditioning improvement, not a
+measured inability of the compact pencil to resolve these carriers. Short attacks,
+impulses, chirp and noise obtain no stationary certificates in either geometry.
+Unseen-frequency controls pass within1.57e-10Hz, and exact zero/unobserved late
+impulse controls refuse explicitly without NaN. Every source sample is retained.
+
+The command uv run --no-sync python scripts/pitch_causal_modes_probe.py selects
+the separate certified v2 preparation. Complete spread-window source-fit
+certificates feed the existing recurrence clusters, source-only frequency
+refinement and global stereo coherence checks. The original energy/crest limits
+remain reported diagnostics; they are not admission gates in this candidate.
+The old centered v1 path remains the default. Three source-control comparisons
+load the actual40e22d7 carrier and envelope modules from Git into memory:
+mono900.37, independent900/1100 gates and unrelated stereo preserve frequencies,
+coefficients, complete estimator reports, centered envelope arrays and complete
+envelope reports bitwise.
+
+The v2 local envelope fitter keeps the256-frame symmetric Hann, hop64, NNLS
+solver, nonnegative coefficients, conditioning and iteration limits, but uses
+offsets[-255,0] and holds the last computed knot. Its fixed grid starts at the
+first active source frame and continues through the finite input. It neither
+appends a last-active/end knot nor masks fitted decay at a future last-active
+sample. That originally planned mask was corrected by source-level reasoning
+before the first v2 measurement: a later impulse can extend a source hull and
+otherwise reveal formerly masked earlier decay. Every retained decay sample
+belongs to the analytic modes and exact fully transformed residual; no fitted
+component or resulting tail is discarded.
+
+Fixed-basis controls use a deliberately off-grid future impulse and require
+exactly equal earlier envelopes, reconstructed source modes and complementary
+source errors. They also compare different last-active frames799 and1024, with
+nonzero earlier fitted decay retained. Both prefix differences are zero; later
+envelopes change, so the control is not vacuous. Shared NNLS/KKT, duplicate-carrier
+refusal and silence controls pass. This proves local envelope prefix invariance
+against the same fixed carrier basis. All-file carrier discovery/reference
+selection, fractional complex interpolation, complete output causality, gain,
+general mixtures, aliasing, native resources and live quality remain separate.
+
+The first complete v2 matrix finishes72 requests in389.055 seconds:71 rendered
+profiles and the same explicit19873.23Hz/+7 Nyquist rejection. All18 identities
+are within7.11e-15, exact decomposition within1.12e-16, proportional stereo error
+zero, and every isolated pre-target/actual finite-end energy fraction is zero.
+All35 tonal measurements pass15cent, with maximum .695105cent. Busy/control
+pre-event differences are at most1.646e-13, versus .023264 for centered v1.
+This bounded improvement does not certify all-file discovery or exact global
+causality. Busy tonal-attack whole-response q offsets still reach+4665/-5466;
+these remain nonisolated music measurements.
+
+The candidate is rejected overall:21 timing profiles fail, comprising four
+original and17 unseen cases. The original mono900.37 source fails all three
+shifted profiles and independent900/1100 gates fail at -7. Among unseen sources,
+427/1327 fails at -7, close521/533 at all three, independent371/1381 at -7/0,
+chirp/AM/noise at all three and near-Nyquist at -7/0. No gate was changed.
+
+| Source at r2 | k=-7 q10/q50 | k=0 q10/q50 | k=+7 q10/q50 |
+| --- | --- | --- | --- |
+| Mono900.37 | -177/-5 FAIL | -82/+114 FAIL | -10/+135 FAIL |
+| Original331/997 plus impulse | -77/+75 | -16/+90 | -1/+16 |
+| Independent900/1100 plus impulse | -326/+28 FAIL | -81/+28 | -29/+91 |
+| Close521/533 plus impulse | -632/-1506 FAIL | -768/-598 FAIL | +161/+96 FAIL |
+
+For a single carrier, constant trailing NNLS estimates a carrier-energy weighted
+past mean, not the current envelope endpoint. A linear envelope has bias minus
+its slope times the weighted sample age, approximately127.5 source frames for
+the symmetric Hann; holding a knot adds0..63 frames. That lag tendency alone
+does not explain negative q10 or pitch-dependent signs. The mono source residual
+has energy9.20643; transformed residual energies are16.04575/11.86306/7.20625.
+Its signed mode/residual cross energies change from -7.83923 at identity to
++1.23716/+7.84756/+7.64426. Source cancellation becomes constructive interference
+under different mode/residual transforms. Mono output/source energy ratios are
+.509006/.510206/.507623; no output normalization conceals the change. Short
+attacks and residual-only chirp/noise retain the previously rejected bank's
+limitations. A smaller source residual would not alone prove a smaller wet error.
+
+### Independent Known-Mode Mixture Reference — 2026-10-16
+
+The additional command uv run --no-sync python scripts/pitch_mode_reference.py
+uses a new impulse-free521.17/533.43Hz source with the declared amplitudes,
+phases,48k/36k gates,1733-frame start difference and145/217 ramps. It changes
+none of the original fixtures. Known analytic modes enter only this reference;
+the estimated v2 candidate still receives PCM alone on the same control source.
+The common birth is fixed at32769 source frames (SOURCE_TARGET+1), without a
+fitted phase, gain, delay or crop.
+
+The independent output-clock formula for each mode is
+A_i(r*n)*cos(h*omega_i*n+phi_i-(h/r-1)*omega_i*b), where
+phi_i=source_sine_phase_i-omega_i*source_start_i-pi/2. Its whole output agrees
+with the explicitly known-mode renderer with zero measured PCM difference.
+At r1/h1 and r2/h2 it matches canonical dry quantiles exactly; r2/h2 PCM is
+exactly equal to source[::2]. All five reference tonal measurements pass15cent,
+with maximum .676860cent.
+
+Even these exact independently transported modes fail the unchanged mixture
+energy timing limit at all three shifted profiles:
+
+| k at r2 | Exact-reference q10/q50 | Estimated-v2 q10/q50 on the same impulse-free source |
+| --- | --- | --- |
+| -7 | -656/-1570 | -632/-1506 |
+| 0 | -812/-649 | -768/-599 |
+| +7 | 0/-604 | +162/+94 |
+
+The difference-frequency energy term now beats at8.18257/12.26/18.36924Hz,
+versus canonical dry24.52Hz. During the common plateau its left-channel
+coefficient .0273 is about89.5% of the left-channel mean individual energy .0305;
+pooled stereo scales both by1.25. Individual source envelopes
+can therefore follow r exactly while the summed PCM energy quantiles move.
+The phase gauge matters: the common birth analytically extends the second
+carrier through its earlier silent gate, and is one declared interpretation,
+not a uniquely observable physical phase before that mode begins.
+
+This measurement establishes a contribution from the declared independent-mode
+interference model. It neither excuses estimator error nor proves universal
+impossibility or acceptable musical timing. Estimated versus exact-reference
+whole PCM differs by up to .342941/.436350/.349693; additional envelope/residual
+errors remain. Original21 timing failures, unsupported domain, gain/transient,
+AM interpretation, unrelated-right-channel/coherence, aliasing, full-range,
+continuous-output, resources and Human gates stay open. No productive backend,
+Native/API/ABI, install, App/device or listening change follows this experiment.
+
 ## Settings Contract
 
 Project persistence stores the global `key_lock` boolean as default intent and

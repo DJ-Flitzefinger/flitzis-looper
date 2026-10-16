@@ -1,9 +1,11 @@
 """Fit bounded nonnegative stationary-carrier envelopes from original stereo PCM.
 
-This frozen offline diagnostic uses centered source windows and global carrier
-phase. It has 128 source frames of lookahead; it is not a realtime causal model.
-The caller must retain every fitting error in an exact PCM remainder and fully
-transform that remainder. This fit makes no fractional-frequency quality claim.
+The default frozen offline diagnostic uses centered source windows and global
+carrier phase, with 128 source frames of lookahead. The opt-in trailing-window
+fit is locally causal only for envelopes against an already fixed carrier basis;
+it makes no global carrier-discovery causality claim. The caller must retain every
+fitting error in an exact PCM remainder and fully transform that remainder.
+Neither fit makes a fractional-frequency quality claim.
 """
 
 from dataclasses import dataclass
@@ -27,6 +29,7 @@ MAX_CONDITION = 1.0e6
 MAX_ACTIVE_SOLVES = 128
 MAX_MEMORY_BYTES = 256 * 1024 * 1024
 _OFFSETS = np.arange(WINDOW_FRAMES, dtype=np.int64) - WINDOW_FRAMES // 2
+_CAUSAL_OFFSETS = np.arange(WINDOW_FRAMES, dtype=np.int64) - (WINDOW_FRAMES - 1)
 _HANN = 0.5 - 0.5 * np.cos(2.0 * np.pi * np.arange(WINDOW_FRAMES) / (WINDOW_FRAMES - 1))
 
 
@@ -102,9 +105,14 @@ def _knot_centers(hull: tuple[int, int]) -> Indices:
 
 
 def _tile_system(
-    source: Real, frequencies_hz: Real, stereo_coefficients: Complex, center: int
+    source: Real,
+    frequencies_hz: Real,
+    stereo_coefficients: Complex,
+    center: int,
+    *,
+    offsets: Indices = _OFFSETS,
 ) -> tuple[Real, Real]:
-    positions = center + _OFFSETS
+    positions = center + offsets
     inside = (positions >= 0) & (positions < len(source))
     positions = positions[inside]
     weights = np.sqrt(_HANN[inside])
@@ -197,7 +205,12 @@ def _record_tile(summary: dict, center: int, result: _Solution) -> None:
 
 
 def _fit_knots(
-    source: Real, frequencies_hz: Real, stereo_coefficients: Complex, centers: Indices
+    source: Real,
+    frequencies_hz: Real,
+    stereo_coefficients: Complex,
+    centers: Indices,
+    *,
+    offsets: Indices = _OFFSETS,
 ) -> tuple[Real, dict]:
     amplitudes = np.zeros((len(centers), len(frequencies_hz)))
     summary = {
@@ -210,7 +223,9 @@ def _fit_knots(
         "first_rejected_tile_centers": [],
     }
     for index, center in enumerate(centers):
-        design, target = _tile_system(source, frequencies_hz, stereo_coefficients, int(center))
+        design, target = _tile_system(
+            source, frequencies_hz, stereo_coefficients, int(center), offsets=offsets
+        )
         result = _fit_tile(design, target)
         amplitudes[index] = result.values
         _record_tile(summary, int(center), result)
@@ -286,6 +301,65 @@ def fit_envelopes(
     return envelopes, report
 
 
+def fit_causal_envelopes(
+    source: Real, frequencies_hz: Real, stereo_coefficients: Complex
+) -> tuple[Real, dict]:
+    """Return trailing-window, left-held envelopes against a fixed global basis.
+
+    Args:
+        source: Original finite float64 PCM with shape (frames, 2), at 48 kHz.
+        frequencies_hz: Already fixed source-only carrier estimates, at most six.
+        stereo_coefficients: Fixed complex unit-norm stereo vectors with shape
+            (K, 2), referenced to the original source's sample-zero carrier phase.
+
+    Returns:
+        Nonnegative envelopes with shape (frames, K) and bounded-fit evidence.
+        Each knot fits the preceding 256 source frames, including its own frame,
+        using a symmetric Hann window. Integer source positions hold their most
+        recent knot; there is no interpolation from future knots. A fixed grid
+        from the first active frame continues through the finite input, retaining
+        fitted decay after its last active sample. All rejected-tile and other
+        fit error must remain in the caller's exact PCM remainder.
+
+        Local envelope fitting has zero source lookahead. This remains an offline
+        fit with an already fixed global carrier basis;
+        neither carrier discovery nor the complete pipeline is claimed causal.
+    """
+    _validate_inputs(source, frequencies_hz, stereo_coefficients)
+    hull = _activity_hull(source)
+    report = _base_report(source, frequencies_hz, hull)
+    report.update({
+        "window_offsets_inclusive": [-(WINDOW_FRAMES - 1), 0],
+        "window": "trailing symmetric Hann; sqrt weights in source least squares",
+        "source_lookahead_frames": 0,
+        "source_lookback_frames": WINDOW_FRAMES - 1,
+        "envelope_interpolation": "left hold; searchsorted(side=right)-1 at integer source frames",
+        "knot_grid": "first active source frame + 64-frame grid through finite input; no end knot",
+        "exact_hull_mask_only": False,
+        "last_active_source_frame_used_as_mask_or_knot": False,
+        "fitted_decay_retained_through_finite_input": True,
+        "offline_fit": True,
+        "offline_noncausal_fit": False,
+        "envelope_fit_local_causal": True,
+        "global_carrier_discovery_causality_claim": False,
+        "complete_pipeline_causality_claim": False,
+    })
+    envelopes = np.zeros((len(source), len(frequencies_hz)))
+    if hull is None or not len(frequencies_hz):
+        return envelopes, report
+    centers = np.arange(hull[0], len(source), HOP_FRAMES, dtype=np.int64)
+    amplitudes, summary = _fit_knots(
+        source, frequencies_hz, stereo_coefficients, centers, offsets=_CAUSAL_OFFSETS
+    )
+    positions = np.arange(hull[0], len(source))
+    knot_indices = np.searchsorted(centers, positions, side="right") - 1
+    for mode in range(len(frequencies_hz)):
+        envelopes[hull[0] :, mode] = amplitudes[knot_indices, mode]
+    report["causal_processing_span_inclusive"] = [hull[0], len(source) - 1]
+    report.update(summary)
+    return envelopes, report
+
+
 def _nnls_controls() -> dict:
     design = np.array([[1.0, 1.0], [1.0, 0.0], [0.0, 1.0]])
     target = np.array([1.0, 1.0, -1.0])
@@ -353,4 +427,137 @@ def integrity_controls() -> dict:
         **_gated_control(),
         "silence_exact_zero_without_fitting": True,
         "source_oracle_gate_parameters_only_in_integrity_controls": True,
+    }
+
+
+def _causal_control_fit(source: Real, frequencies: Real, coefficients: Complex) -> Real:
+    fitted, report = fit_causal_envelopes(source, frequencies, coefficients)
+    assert np.all(fitted >= 0.0)
+    assert np.all(fitted[:129] == 0.0)
+    assert np.any(fitted[1920:] != 0.0)
+    assert report["source_activity_hull_inclusive"] == [129, 1919]
+    assert report["fixed_mode_birth_frames"] == [129, 129]
+    assert report["rejected_tile_count"] == 0
+    assert report["source_lookahead_frames"] == 0
+    assert report["source_lookback_frames"] == 255
+    assert report["window_offsets_inclusive"] == [-255, 0]
+    assert report["causal_processing_span_inclusive"] == [129, 2047]
+    return fitted
+
+
+def _causal_future_impulse_control() -> dict:
+    event_frame = 1024
+    frequencies = np.array([683.17, 1901.29])
+    coefficients = _control_coefficients()
+    carriers = np.exp(2.0j * np.pi * np.outer(np.arange(2048), frequencies) / FS)
+    features = (carriers[:, :, None] * coefficients[None, :, :]).real
+    source = np.sum(np.array([0.24, 0.16])[None, :, None] * features, axis=1)
+    # An off-grid impulse exposes future-knot interpolation as well as future windows.
+    source[:129] = 0.0
+    source[1920:] = 0.0
+    changed = source.copy()
+    changed[event_frame] += np.array([0.47, -0.31])
+    assert np.array_equal(source[:event_frame], changed[:event_frame])
+    fitted = _causal_control_fit(source, frequencies, coefficients)
+    changed_fitted = _causal_control_fit(changed, frequencies, coefficients)
+    modes = np.sum(fitted[:, :, None] * features, axis=1)
+    changed_modes = np.sum(changed_fitted[:, :, None] * features, axis=1)
+    mode_error = source - modes
+    changed_mode_error = changed - changed_modes
+    assert np.array_equal(fitted[:event_frame], changed_fitted[:event_frame])
+    assert np.array_equal(modes[:event_frame], changed_modes[:event_frame])
+    assert np.array_equal(mode_error[:event_frame], changed_mode_error[:event_frame])
+    assert np.any(fitted[event_frame:] != changed_fitted[event_frame:])
+    assert np.max(np.abs(fitted[449:960] - np.array([0.24, 0.16]))) < 1e-10
+    return {
+        "common_fixed_carrier_frequencies_hz": frequencies.tolist(),
+        "identical_fixed_complex_stereo_basis_for_both_sources": True,
+        "future_impulse_frame": event_frame,
+        "future_impulse_between_envelope_knots": True,
+        "common_source_activity_hull_inclusive": [129, 1919],
+        "nonnegative_envelopes_and_fitted_post_activity_decay_retained": True,
+        "pre_event_envelope_max_abs_difference": float(
+            np.max(np.abs(fitted[:event_frame] - changed_fitted[:event_frame]))
+        ),
+        "pre_event_source_modes_max_abs_difference": float(
+            np.max(np.abs(modes[:event_frame] - changed_modes[:event_frame]))
+        ),
+        "pre_event_complementary_mode_error_max_abs_difference": float(
+            np.max(np.abs(mode_error[:event_frame] - changed_mode_error[:event_frame]))
+        ),
+        "future_impulse_changes_post_event_envelopes": True,
+        "local_causality_only_against_fixed_global_carrier_basis": True,
+        "target_renderer_or_output_fit_used": False,
+    }
+
+
+def _causal_refusal_control() -> dict:
+    fitted, report = fit_causal_envelopes(
+        np.ones((512, 2)),
+        np.array([421.73, 421.73]),
+        _control_coefficients()[[0, 0]],
+    )
+    assert report["tile_count"] > 0
+    assert report["rejected_tile_count"] == report["tile_count"]
+    assert set(report["tile_status_counts"]) == {"ill_conditioned"}
+    assert np.all(fitted == 0.0)
+    return {
+        "causal_duplicate_carrier_all_knots_refused": True,
+        "causal_duplicate_carrier_zero_envelopes_leave_source_in_exact_remainder": True,
+        "causal_duplicate_carrier_refused_tile_count": report["rejected_tile_count"],
+    }
+
+
+def _causal_different_hull_control() -> dict:
+    frequencies = np.array([683.17, 1901.29])
+    coefficients = _control_coefficients()
+    clock = np.arange(2048)
+    carriers = np.exp(2.0j * np.pi * np.outer(clock, frequencies) / FS)
+    features = (carriers[:, :, None] * coefficients[None, :, :]).real
+    source = np.sum(np.array([0.24, 0.16])[None, :, None] * features, axis=1)
+    source[:129] = 0.0
+    source[800:] = 0.0
+    changed = source.copy()
+    changed[1024] = (0.47, -0.31)
+    first, first_report = fit_causal_envelopes(source, frequencies, coefficients)
+    second, second_report = fit_causal_envelopes(changed, frequencies, coefficients)
+    assert first_report["source_activity_hull_inclusive"] == [129, 799]
+    assert second_report["source_activity_hull_inclusive"] == [129, 1024]
+    assert np.any(first[800:1024] != 0.0)
+    assert np.array_equal(first[:1024], second[:1024])
+    return {
+        "different_last_active_frames_prefix_envelopes_exactly_equal": True,
+        "post_activity_decay_not_removed_by_future_hull": True,
+        "different_hull_prefix_max_abs_difference": float(
+            np.max(np.abs(first[:1024] - second[:1024]))
+        ),
+    }
+
+
+def causal_integrity_controls() -> dict:
+    """Check local fixed-basis causality, retained decay, shared NNLS and refusal.
+
+    Returns:
+        Separate causal-path evidence without changing the default fit controls.
+        Two sources with the same hull and fixed carrier basis differ only by a
+        frame-1024 impulse. Their earlier envelopes and complementary source-mode
+        errors must remain exactly identical, while later envelopes must differ.
+        A separate changed-last-activity case checks retained decay without a
+        future-dependent hull mask or extra final knot.
+        This does not establish causality of global carrier discovery.
+    """
+    silence, report = fit_causal_envelopes(
+        np.zeros((512, 2)), np.array([421.73]), _control_coefficients()[:1]
+    )
+    assert np.all(silence == 0.0)
+    assert report["tile_count"] == 0
+    return {
+        "stage": "causal_mode_envelope_integrity_controls",
+        **_nnls_controls(),
+        **_causal_future_impulse_control(),
+        **_causal_refusal_control(),
+        **_causal_different_hull_control(),
+        "silence_exact_zero_without_fitting": True,
+        "source_oracle_gate_parameters_only_in_integrity_controls": True,
+        "global_carrier_discovery_causality_claim": False,
     }

@@ -245,6 +245,48 @@ small transformed-output error or universal physical-mode identification.
 - **THEN** continuing mode gauges SHALL persist and every residual component and tail SHALL be transformed
 - **AND** original and unseen timing, retention, frequency and gain evidence SHALL determine rejection without changing the original acceptance gates
 
+The source-window shadow diagnostic SHALL distinguish changing mixture energy
+from changing carrier frequency. It SHALL preserve the original energy/crest
+refusal while independently reporting source-only rank, pole, conditioning and
+complete-window exponential-fit evidence. Two fixed column geometries SHALL use
+the same original window, row count, one-sample shift and admission thresholds;
+the sparse column offsets SHALL NOT change the frequency sample rate or authorize
+aliasing. All original and unseen source windows, including chirp, noise, short
+attacks, silence and unrelated stereo, SHALL retain explicit refusal results.
+Shadow certificates SHALL NOT admit carriers into the frozen renderer or certify
+transformed timing, gain, source causality, aliasing or realtime quality.
+
+#### Scenario: Stationary close carriers beat below an energy-flatness guard
+- **GIVEN** source-only windows refused by the original energy/crest guard
+- **WHEN** fixed compact and spread-column pencils evaluate the same complete source windows
+- **THEN** the report SHALL retain the guard refusal alongside actual rank, pole and full-window source-fit evidence
+- **AND** unchanged rendering results and original acoustic acceptance gates SHALL remain in force
+
+The certified-mode candidate SHALL use full-window exponential-fit certificates
+before the existing recurrence, source refinement and stereo-coherence checks.
+Its local causal envelope option SHALL use only trailing source windows and
+already-computed envelope knots; no future knot SHALL be interpolated into the
+source prefix. The original centered-envelope candidate SHALL remain selectable
+with unchanged arithmetic. A fixed identical carrier basis SHALL separately
+isolate envelope prefix invariance from all-file carrier discovery. All-file
+carrier estimation SHALL NOT be called causal merely because local envelopes
+use no future samples. Exact residual transformation, all tails, unsupported
+domains and all original/unseen acoustic criteria SHALL remain required.
+
+#### Scenario: A later impulse cannot change earlier local envelopes on a fixed basis
+- **GIVEN** two sources with the same prefix and exactly the same frozen source-carrier basis
+- **WHEN** trailing-window NNLS and left-held knots fit their independent envelopes
+- **THEN** every envelope and exact complementary residual sample before the changed source frame SHALL remain equal
+- **AND** complete transformed profiles SHALL independently expose timing, gain, mixture and global-discovery limitations
+
+An independent known-mode reference SHALL separate declared exact carrier/envelope
+behavior from estimation and transformed-residual errors on the same additional
+control source. Its phase birth convention and complete support SHALL be fixed
+without fitting output. Known parameters SHALL enter only the analytic reference;
+the estimated candidate SHALL still receive source PCM alone. Any reference
+mixture-energy timing failure SHALL remain visible alongside original failures
+and SHALL NOT establish universal impossibility or relax an acoustic gate.
+
 ### Requirement: Combined Pitch And Rate Bounds Are Never Silently Clipped
 The system SHALL validate and report the supported combined pitch/rate domain before accepting
 diagnostic transposition, retaining separate requested, pending, effective and rejected state.
