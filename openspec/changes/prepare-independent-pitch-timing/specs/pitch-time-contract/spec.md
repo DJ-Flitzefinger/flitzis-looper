@@ -403,6 +403,41 @@ preparation or changing existing fixture frequency tuples and quality scores.
 - **THEN** the diagnostic MAY fit that family's source envelope using the unchanged current-weight model and pitch only its central phase
 - **AND** it SHALL preserve the complete transformed residual, all unsupported domains and every original full-response failure
 
+### Requirement: Certified Positive Modulation Can Belong To The Fixed Source Basis
+The offline diagnostic SHALL provide a separately selected fixed-modulator
+experiment after source-only positive-AM family certification. The certified
+global modulation frequency and conjugate sideband ratio SHALL define the real
+positive modulator in the original source coordinates. That modulator SHALL
+multiply the existing carrier features in every weighted source fit. The same
+bounded joint nonnegative affine endpoint solver, trailing 256-frame window,
+64-frame prediction grid, observation weights and rejection limits SHALL then
+estimate the common amplitude before modulation. Published physical envelopes
+SHALL multiply each nonnegative common-amplitude prediction by the certified
+modulator at that same source frame. No output intent, fixture identifier,
+scorer target, response-fitted phase or extra end mask SHALL select the basis.
+
+Common-amplitude endpoints and conditional fit-parameter sensitivity SHALL be
+reported separately from the published physical envelope. Independent weighted
+moment controls SHALL verify both fit-parameter and physical-envelope response
+to signed source cues, including modulation at prediction ages zero and 63.
+Physical-envelope row norms SHALL include the modulator's value at publication;
+neither norm SHALL claim nonlinear active-set or general mixture sensitivity.
+Additional bounded workspace SHALL be included before fitting allocation.
+
+Uncertified carriers SHALL use the unchanged stationary basis. Prior variants
+SHALL remain available, and source without a certified family SHALL preserve the
+prior signal path. Exact subtraction complements SHALL retain every fitting
+error and all decay; the existing complete residual transform SHALL process all
+of them. Source certificate refusals, original unsupported requests, source
+calibration, the full unchanged quality matrix and all product gates SHALL remain
+required. Algebraic controls SHALL NOT substitute for measured acoustic quality.
+
+#### Scenario: Fixed source modulation separates common amplitude from known curvature
+- **GIVEN** an independently certified positive AM family and an affine common source amplitude
+- **WHEN** the separate experiment fits original stereo PCM against the modulated carrier features
+- **THEN** complete supported prediction hops SHALL reproduce the common amplitude times its positive source modulator
+- **AND** independent source-cue and future-cue controls SHALL retain exact complements and distinguish common-amplitude from physical-envelope sensitivity
+
 ### Requirement: Combined Pitch And Rate Bounds Are Never Silently Clipped
 The system SHALL validate and report the supported combined pitch/rate domain before accepting
 diagnostic transposition, retaining separate requested, pending, effective and rejected state.

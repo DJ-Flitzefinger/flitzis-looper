@@ -12,9 +12,17 @@ from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
 import numpy as np
+from pitch_source_modulation import (
+    apply_source_modulation,
+    modulation_contract,
+    modulation_values,
+    modulation_workspace_bytes,
+    validate_modulators,
+)
 
 if TYPE_CHECKING:
     from numpy.typing import NDArray
+    from pitch_source_modulation import SourceModulator
 
 type Real = NDArray[np.float64]
 type Complex = NDArray[np.complex128]
@@ -122,6 +130,7 @@ def _tile_system(
     *,
     offsets: Indices = _OFFSETS,
     window_weights: Real = _HANN,
+    source_modulators: tuple[SourceModulator, ...] | None = None,
 ) -> tuple[Real, Real]:
     positions = center + offsets
     inside = (positions >= 0) & (positions < len(source))
@@ -129,6 +138,8 @@ def _tile_system(
     weights = np.sqrt(window_weights[inside])
     carriers = np.exp(2.0j * np.pi * np.outer(positions, frequencies_hz) / FS)
     features = (carriers[:, :, None] * stereo_coefficients[None, :, :]).real
+    if source_modulators is not None:
+        features *= modulation_values(positions, source_modulators)[:, :, None]
     design = (features * weights[:, None, None]).transpose(0, 2, 1)
     return design.reshape(-1, len(frequencies_hz)), (source[positions] * weights[:, None]).ravel()
 
@@ -384,6 +395,7 @@ def _affine_tile_system(
     center: int,
     *,
     window_weights: Real = _HANN,
+    source_modulators: tuple[SourceModulator, ...] | None = None,
 ) -> tuple[Real, Real]:
     """Expand the shared trailing carrier system into interleaved L/R columns."""
     design, target = _tile_system(
@@ -393,6 +405,7 @@ def _affine_tile_system(
         center,
         offsets=_CAUSAL_OFFSETS,
         window_weights=window_weights,
+        source_modulators=source_modulators,
     )
     positions = center + _CAUSAL_OFFSETS
     inside = (positions >= 0) & (positions < len(source))
@@ -622,6 +635,47 @@ def _finish_affine_diagnostics(endpoints: Real, diagnostics: _AffineDiagnostics)
     return summary
 
 
+def _physical_modulation_knot(detail: dict, modulators: tuple[SourceModulator, ...]) -> None:
+    center = detail["center_frame"]
+    factors = modulation_values(np.array([center, center + HOP_FRAMES - 1]), modulators)
+    for domain in ("weighted_target", "pcm"):
+        norms = detail[f"unconstrained_prediction_{domain}_row_norms"]
+        detail[f"physical_envelope_unconstrained_prediction_{domain}_row_norms"] = {
+            age: (np.asarray(norms[age]) * factors[index]).tolist()
+            if norms[age] is not None
+            else None
+            for index, age in enumerate(("age_0", "age_63"))
+        }
+
+
+def _physical_modulation_diagnostics(
+    centers: Indices,
+    diagnostics: _AffineDiagnostics,
+    summary: dict,
+    modulators: tuple[SourceModulator, ...],
+) -> dict:
+    for detail in summary["first_knot_details"]:
+        _physical_modulation_knot(detail, modulators)
+    current = modulation_values(centers, modulators)
+    future = modulation_values(centers + HOP_FRAMES - 1, modulators)
+    result = {}
+    for domain, rows in (
+        ("weighted_target", (diagnostics.current, diagnostics.future)),
+        ("pcm", (diagnostics.pcm_current, diagnostics.pcm_future)),
+    ):
+        result[f"physical_envelope_unconstrained_prediction_{domain}_row_norm_summary"] = {
+            "age_0": _finite_summary(current * rows[0]),
+            "age_63": _finite_summary(future * rows[1]),
+            "definition": (
+                "positive source modulator at publication frame times the corresponding "
+                "common-amplitude unconstrained prediction row norm"
+            ),
+            "fixed_carrier_and_modulator_basis_required": True,
+            "nnls_or_projection_active_set_sensitivity_claim": False,
+        }
+    return result
+
+
 def _fit_affine_knots(
     source: Real,
     frequencies_hz: Real,
@@ -630,6 +684,7 @@ def _fit_affine_knots(
     *,
     predictive: bool = False,
     current_weight: bool = False,
+    source_modulators: tuple[SourceModulator, ...] | None = None,
 ) -> tuple[Real, dict]:
     endpoints = np.zeros((len(centers), len(frequencies_hz), 2))
     diagnostics = _new_affine_diagnostics(
@@ -652,6 +707,7 @@ def _fit_affine_knots(
             stereo_coefficients,
             int(center),
             window_weights=_RISING_HALF_COSINE if current_weight else _HANN,
+            source_modulators=source_modulators,
         )
         result = _fit_tile(design, target)
         endpoints[index] = result.values.reshape(len(frequencies_hz), 2)
@@ -665,6 +721,10 @@ def _fit_affine_knots(
     )
     summary["omitted_knot_detail_count"] = len(centers) - len(summary["first_knot_details"])
     summary.update(_finish_affine_diagnostics(endpoints, diagnostics))
+    if source_modulators is not None:
+        summary.update(
+            _physical_modulation_diagnostics(centers, diagnostics, summary, source_modulators)
+        )
     return endpoints, summary
 
 
@@ -753,6 +813,31 @@ def fit_current_weight_causal_envelopes(
     )
 
 
+def fit_modulated_current_weight_envelopes(
+    source: Real,
+    frequencies_hz: Real,
+    stereo_coefficients: Complex,
+    modulators: tuple[SourceModulator, ...],
+) -> tuple[Real, dict]:
+    """Fit common amplitudes against fixed modulated features; publish physical envelopes.
+
+    The caller fixes source-certified positive modulators before this local fit.
+    Endpoint and original row-norm reports describe common amplitudes. Additional
+    physical-envelope norms include modulation at each reported publication age.
+    The returned real envelopes already include modulation exactly once; the
+    caller synthesizes them with its unmodulated complex carrier and retains all
+    subtraction error and decay in the complete transformed residual.
+    """
+    return _fit_affine_causal_envelopes(
+        source,
+        frequencies_hz,
+        stereo_coefficients,
+        predictive=True,
+        current_weight=True,
+        source_modulators=modulators,
+    )
+
+
 def _publish_affine_predictions(
     envelopes: Real, endpoints: Real, centers: Indices, first: int
 ) -> int:
@@ -792,15 +877,22 @@ def _current_weight_contract(carriers: int) -> dict:
     }
 
 
-def _fit_affine_causal_envelopes(
+def _affine_fit_memory(
     source: Real,
     frequencies_hz: Real,
     stereo_coefficients: Complex,
     *,
     predictive: bool,
     current_weight: bool = False,
-) -> tuple[Real, dict]:
+    source_modulators: tuple[SourceModulator, ...] | None = None,
+) -> int:
     _validate_inputs(source, frequencies_hz, stereo_coefficients)
+    if source_modulators is not None:
+        _require(
+            "A modulated basis requires current-weight predictive preparation.",
+            condition=predictive and current_weight,
+        )
+        validate_modulators(frequencies_hz, source_modulators)
     estimate = _affine_memory_estimate(len(source), len(frequencies_hz))
     if predictive:
         # Account for retained per-mode arrays and overlapping RHS temporaries.
@@ -812,9 +904,31 @@ def _fit_affine_causal_envelopes(
         estimate += ((len(source) + HOP_FRAMES - 1) // HOP_FRAMES + 1) * 32 * len(
             frequencies_hz
         ) + WINDOW_FRAMES * (128 * len(frequencies_hz) + 64)
+    if source_modulators is not None:
+        estimate += modulation_workspace_bytes(len(source), len(frequencies_hz))
     _require(
         "The conservative affine fit memory estimate exceeds the 256 MiB limit.",
         condition=estimate < MAX_MEMORY_BYTES,
+    )
+    return estimate
+
+
+def _fit_affine_causal_envelopes(
+    source: Real,
+    frequencies_hz: Real,
+    stereo_coefficients: Complex,
+    *,
+    predictive: bool,
+    current_weight: bool = False,
+    source_modulators: tuple[SourceModulator, ...] | None = None,
+) -> tuple[Real, dict]:
+    estimate = _affine_fit_memory(
+        source,
+        frequencies_hz,
+        stereo_coefficients,
+        predictive=predictive,
+        current_weight=current_weight,
+        source_modulators=source_modulators,
     )
     hull = _activity_hull(source)
     report = _base_report(source, frequencies_hz, hull)
@@ -856,6 +970,8 @@ def _fit_affine_causal_envelopes(
         report.update(_predictive_contract(len(frequencies_hz)))
     if current_weight:
         report.update(_current_weight_contract(len(frequencies_hz)))
+    if source_modulators is not None:
+        report.update(modulation_contract(source_modulators))
     envelopes = np.zeros((len(source), len(frequencies_hz)))
     if hull is None or not len(frequencies_hz):
         return envelopes, report
@@ -867,6 +983,7 @@ def _fit_affine_causal_envelopes(
         centers,
         predictive=predictive,
         current_weight=current_weight,
+        source_modulators=source_modulators,
     )
     if predictive:
         report["prediction_negative_sample_values_projected"] = _publish_affine_predictions(
@@ -879,6 +996,8 @@ def _fit_affine_causal_envelopes(
             envelopes[hull[0] :, mode] = endpoints[knot_indices, mode, 1]
     report["causal_processing_span_inclusive"] = [hull[0], len(source) - 1]
     report.update(summary)
+    if source_modulators is not None:
+        apply_source_modulation(envelopes, source_modulators)
     return envelopes, report
 
 

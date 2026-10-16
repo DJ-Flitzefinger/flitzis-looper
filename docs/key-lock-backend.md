@@ -2054,6 +2054,110 @@ bounded chirplet phase-law route also needs its own source certificate and
 negative controls before replacing any residual-only path. All original gates
 and rejected earlier experiments remain required evidence.
 
+### Fixed Positive-AM Fitting Basis — 2026-10-16
+
+The command uv run --no-sync python scripts/pitch_am_basis_probe.py selects the
+separate v7 experiment. A selected source certificate supplies its global
+modulation frequency nu and complex ratio u. The positive source function
+m(s)=1+2*real(u*exp(2j*pi*nu*s/Fs)) multiplies the existing real carrier features
+inside every source fit. The unchanged current-weight affine NNLS estimates
+common amplitude before modulation, rather than approximating the already known
+AM curvature again. Publication is max(0,R+d*(R-L)/255)*m(s), at that same source
+frame. Analytic synthesis multiplies this physical envelope by the unmodulated
+complex carrier exactly once; every subtraction error and decay remains in the
+fully transformed residual. An uncertified carrier uses the stationary basis.
+
+The model uses the unchanged source-only family certificate and global phase,
+trailing256 window,64-frame grid, half-cosine observation weights, condition1e6
+and128-solve cap. No output intent, fixture identifier, expected frequency or
+quantile target selects the model. Sources without a certified family retain
+the v6 signal path. Actual3b0dd50 envelope and mode modules compiled together in
+memory verify
+18 old-policy comparisons across three sources, including a positive AM source:
+all v1..v6 prepared arrays are bitwise equal and whole reports exactly equal.
+Two no-family v7/v6 comparisons also preserve whole reports except model version.
+No source, environment or runtime copies are made.
+
+Endpoint, slope and original prediction-row reports explicitly describe the
+common amplitude. Additional physical-envelope weighted-target and original-PCM
+row norms multiply the corresponding common-amplitude norm by m(c+d), separately
+at ages0 and63. For circular stereo C=[1,-i]/sqrt(2), independent moments give
+G=.5*sum(w*m^2*q*q.T), G2=.5*sum(w^2*m^2*q*q.T), q=[1-lambda,lambda]. Common PCM
+norm is sqrt(h*inverse(G)*G2*inverse(G)*h.T), h=[-d/255,1+d/255]; the physical norm
+is m(c+d) times that value. Physical interpolation is not affine even when the
+common amplitude is affine. These are conditional fixed-basis unconstrained
+maps, without an active-set, discovery-causality or general mixture claim.
+
+Two independently generated nonconstant-AM stereo bases reproduce26 whole
+supported affine common-amplitude hops each, with physical-envelope error at
+most2.34e-15, common endpoints1.57e-15 and gate slopes9.65e-18 per frame. The
+independent circular-source Gram matches direct moments within8.89e-15 and its
+actual condition within4.45e-15. Common and physical row norms agree within
+2.78e-16. The physical kernel obeys sum(K*m)=m_future and
+sum(K*m*past_offset)=m_future*d; raw unmodulated moment identities are not assumed.
+
+A signed physical current-frame cue of .001 times the unmodulated carrier at
+frame385 changes common endpoints by [-.000029572498,.000027202770] for its positive
+sign. All64 published physical response samples match independent moment algebra
+within5.61e-17, endpoints within3.06e-16. A separately derived unit original-PCM
+noise direction tests the age63 physical norm.241276581; signed whole-hop errors
+are within7.68e-17. Both controls prove positive common endpoints/predictions for
+both signs, so their checked NNLS/projection constraints remain inactive.
+
+The public source-certificate-to-basis control mixes a lower stationary carrier
+with one positive AM family. Four original carriers become two retained owners;
+the flat modulator stays at index0 and the recovered global family at index1.
+Four complete8192/4096 source windows support the certificate. Independently
+constructed stationary expansion agrees within7.54e-14; all complete supported
+prediction hops385..24512 agree with physical truth within3.25e-14, with source
+closure zero. This tests certificate phase, retained ordering and mixed features.
+
+Fixed-carrier/modulator future-cue pairs preserve bitwise-equal physical-envelope,
+mode and exact-complement prefixes, with same and different last-active hulls.
+Later effects are nonzero and fitted post-activity decay remains; closure is at
+most2.78e-17. Projection, duplicate/near-duplicate conditioning, silence, empty
+carriers and8 invalid-modulator refusals remain explicit. Additional blocked
+modulation and physical-norm workspace is included before output allocation;
+a2,680,000-frame silent source admitted by the old267,466,496-byte estimate is
+refused by the new total before fitting/output allocation. The256MiB guard is
+unchanged. These checks do not establish transformed-output quality or a Native,
+realtime, full-range, resource, device or Human acceptance result.
+
+The full unchanged matrix completes72 requests in413.505 seconds:71 complete PCM
+outputs and the same explicit19873.23Hz/+7 Nyquist refusal. All18 identities are
+within8.44e-15, decomposition within1.12e-16, proportional stereo error zero and
+isolated pre-target/end-tail energy fractions zero. All35 original tonal checks
+pass15cent, maximum.685237cent; three supplemental AM-center checks pass with
+maximum.001362cent. Busy/control prefix difference remains within3.399e-13,
+without granting isolated-attack acceptance.
+
+AM q10/q50 offsets at r2/-7,0,+7 are -177/-80,-96/-29,-17/+2. The zero-semitone
+request now passes exactly at the unchanged96-frame/2ms boundary; +7 remains
+within it and-7 still fails. Raw peaks are.292550/.270579/.232761 and the complete
+transformed residual energies1.66595/.993065/.579637 remain in every score.
+Source residual energy is1.09262 and maximum actual fit condition3.18024; these
+source-fit improvements are not a general quality guarantee. Every other v6
+failure is unchanged, so v7 remains rejected overall with11 timing failures
+(one original,10 unseen), zero tonal failures and one unsupported request.
+Five known-AM and five impulse-free known-pair references retain their separate
+meaning; no exact-reference success substitutes for fitted output quality.
+
+After that run became terminal, two conditional report strings were clarified
+to name common-amplitude prediction before positive modulation. The first raw
+source-preparation records retain their older general interpolation wording and
+their already explicit physical-envelope quantity field. This report-only
+correction changes no PCM, source model, scores, limits or prior-variant reports;
+focused controls are repeated, with the unchanged full matrix reused.
+
+Instantaneous one-family amplitude projection is not a safe shortcut based on
+the current certificate alone. Although E=max(0,v.T*y/(v.T*v)) is exact for a
+perfect known carrier v, its original-PCM gain is1/norm(v). A scalar condition
+number1 does not bound that gain near collinear carrier zeros, and small source
+phase uncertainty can cause severe amplification. A further source-only gate
+change-point/phase model needs bounded error and ambiguity controls; neither a
+new hand-tuned denominator threshold nor output-fitted gate corrections have
+been implemented or accepted here. All original product gates remain open.
+
 ## Settings Contract
 
 Project persistence stores the global `key_lock` boolean as default intent and

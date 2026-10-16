@@ -93,7 +93,7 @@ def _known_am_components() -> tuple[np.ndarray, list[tuple[float, np.ndarray]]]:
     return analytic, sidebands
 
 
-def _known_am_reference(fixture: Fixture) -> None:
+def known_am_reference(fixture: Fixture) -> None:
     """Keep declared AM and independent-sideband interpretations out of estimation."""
     analytic, sidebands = _known_am_components()
     source_error = float(np.max(np.abs(analytic.real - fixture.source[:, 0])))
@@ -140,7 +140,7 @@ def _known_am_reference(fixture: Fixture) -> None:
         })
 
 
-def candidate_am_tonal_controls(fixture: Fixture) -> None:
+def candidate_am_tonal_controls(fixture: Fixture, *, modulated_basis: bool = False) -> None:
     """Measure candidate carrier peaks without supplying an oracle to preparation."""
     estimated = prepare(
         fixture.source,
@@ -149,6 +149,7 @@ def candidate_am_tonal_controls(fixture: Fixture) -> None:
         predictive_envelope=True,
         current_weight=True,
         am_family=True,
+        modulated_basis=modulated_basis,
     )
     for rate, semitones in ((2, -7), (2, 0), (2, 7)):
         output, details = render_prepared(estimated, float(rate), semitones)
@@ -206,7 +207,7 @@ def main() -> None:
     })
     am_fixture = next(f for f in sources if f.name == "unseen_AM_interpretation")
     candidate_am_tonal_controls(am_fixture)
-    _known_am_reference(am_fixture)
+    known_am_reference(am_fixture)
     known_mode_reference(
         affine_endpoint=True, predictive_envelope=True, current_weight=True, am_family=True
     )

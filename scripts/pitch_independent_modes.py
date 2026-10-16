@@ -19,8 +19,10 @@ from pitch_mode_envelopes import (
     fit_causal_envelopes,
     fit_current_weight_causal_envelopes,
     fit_envelopes,
+    fit_modulated_current_weight_envelopes,
     fit_predictive_causal_envelopes,
 )
+from pitch_source_modulation import modulators_from_estimate
 
 if TYPE_CHECKING:
     from numpy.typing import NDArray
@@ -53,15 +55,15 @@ class Prepared:
     report: dict
 
 
-def _fit_source_modes(
-    pcm: Pcm,
+def _validate_mode_policy(
     *,
     certified_causal: bool,
     affine_endpoint: bool,
     predictive_envelope: bool,
     current_weight: bool,
     am_family: bool,
-) -> tuple[CarrierEstimate, Pcm, dict]:
+    modulated_basis: bool,
+) -> None:
     if affine_endpoint and not certified_causal:
         message = "Affine endpoints require certified source-mode preparation"
         raise ValueError(message)
@@ -74,13 +76,39 @@ def _fit_source_modes(
     if am_family and not current_weight:
         message = "AM families require the certified current-weight preparation"
         raise ValueError(message)
+    if modulated_basis and not am_family:
+        message = "A fixed modulated basis requires certified positive-AM families"
+        raise ValueError(message)
+
+
+def _fit_source_modes(
+    pcm: Pcm,
+    *,
+    certified_causal: bool,
+    affine_endpoint: bool,
+    predictive_envelope: bool,
+    current_weight: bool,
+    am_family: bool,
+    modulated_basis: bool,
+) -> tuple[CarrierEstimate, Pcm, dict]:
+    _validate_mode_policy(
+        certified_causal=certified_causal,
+        affine_endpoint=affine_endpoint,
+        predictive_envelope=predictive_envelope,
+        current_weight=current_weight,
+        am_family=am_family,
+        modulated_basis=modulated_basis,
+    )
     estimate = estimate_carriers(
         pcm,
         window_inspector=partial(inspect_window, geometry="spread") if certified_causal else None,
     )
     if am_family:
         estimate = group_am_carriers(pcm, estimate)
-    if current_weight:
+    modulators = modulators_from_estimate(estimate) if modulated_basis else None
+    if modulators is not None:
+        fit = partial(fit_modulated_current_weight_envelopes, modulators=modulators)
+    elif current_weight:
         fit = fit_current_weight_causal_envelopes
     elif predictive_envelope:
         fit = fit_predictive_causal_envelopes
@@ -101,7 +129,10 @@ def _model_version(
     predictive_envelope: bool,
     current_weight: bool,
     am_family: bool,
+    modulated_basis: bool,
 ) -> str:
+    if modulated_basis:
+        return "certified-fixed-positive-am-basis-v7"
     if am_family:
         return "certified-positive-am-families-v6"
     if current_weight:
@@ -121,6 +152,7 @@ def prepare(
     predictive_envelope: bool = False,
     current_weight: bool = False,
     am_family: bool = False,
+    modulated_basis: bool = False,
 ) -> Prepared:
     """Decompose all original stereo samples without access to output intent."""
     if np.iscomplexobj(source):
@@ -137,6 +169,7 @@ def prepare(
         predictive_envelope=predictive_envelope,
         current_weight=current_weight,
         am_family=am_family,
+        modulated_basis=modulated_basis,
     )
     activity = np.flatnonzero(np.any(pcm != 0.0, axis=1))
     birth = int(activity[0]) if len(activity) else 0
@@ -156,6 +189,7 @@ def prepare(
             predictive_envelope=predictive_envelope,
             current_weight=current_weight,
             am_family=am_family,
+            modulated_basis=modulated_basis,
         ),
         "mode_count": len(modes),
         "frequencies_hz": list(estimate.frequencies_hz),

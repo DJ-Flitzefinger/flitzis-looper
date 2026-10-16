@@ -48,6 +48,8 @@
   progression at equal sample rates must yield r=1, including across supported device rates.
 - [x] Evaluate source-certified positive-AM families with independent factorization/refusal
   controls, exact phase-owner references and the unchanged complete quality matrix.
+- [x] Evaluate a certified positive-modulator fitting basis with independent common-amplitude,
+  physical-envelope sensitivity and future-cue controls, retaining the complete quality matrix.
 - [ ] Test all37 extras/base -5..+6/total -23..+24 at actual r(n), lockON h/r
   (~.132433..8 for r=.5..2), lockOFF h, original .25..4 corners and finite bounds
   without clipping; prove quality/RT/readiness/latency/finite context/unity transitions.
