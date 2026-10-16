@@ -13,7 +13,12 @@ import numpy as np
 from pitch_amfm_model import render as render_residual
 from pitch_mode_carriers import FS, estimate_carriers
 from pitch_mode_certificate import inspect_window
-from pitch_mode_envelopes import fit_affine_causal_envelopes, fit_causal_envelopes, fit_envelopes
+from pitch_mode_envelopes import (
+    fit_affine_causal_envelopes,
+    fit_causal_envelopes,
+    fit_envelopes,
+    fit_predictive_causal_envelopes,
+)
 
 if TYPE_CHECKING:
     from numpy.typing import NDArray
@@ -47,28 +52,46 @@ class Prepared:
 
 
 def _fit_source_modes(
-    pcm: Pcm, *, certified_causal: bool, affine_endpoint: bool
+    pcm: Pcm, *, certified_causal: bool, affine_endpoint: bool, predictive_envelope: bool
 ) -> tuple[CarrierEstimate, Pcm, dict]:
     if affine_endpoint and not certified_causal:
         message = "Affine endpoints require certified source-mode preparation"
+        raise ValueError(message)
+    if predictive_envelope and not (certified_causal and affine_endpoint):
+        message = "Predictive envelopes require certified affine endpoint preparation"
         raise ValueError(message)
     estimate = estimate_carriers(
         pcm,
         window_inspector=partial(inspect_window, geometry="spread") if certified_causal else None,
     )
-    fit = (
-        fit_affine_causal_envelopes
-        if affine_endpoint
-        else (fit_causal_envelopes if certified_causal else fit_envelopes)
-    )
+    if predictive_envelope:
+        fit = fit_predictive_causal_envelopes
+    elif affine_endpoint:
+        fit = fit_affine_causal_envelopes
+    else:
+        fit = fit_causal_envelopes if certified_causal else fit_envelopes
     envelopes, report = fit(
         pcm, np.asarray(estimate.frequencies_hz, dtype=np.float64), estimate.stereo_coefficients
     )
     return estimate, envelopes, report
 
 
+def _model_version(
+    *, certified_causal: bool, affine_endpoint: bool, predictive_envelope: bool
+) -> str:
+    if predictive_envelope:
+        return "certified-affine-prediction-v4"
+    if affine_endpoint:
+        return "certified-affine-endpoints-v3"
+    return "certified-causal-envelopes-v2" if certified_causal else "v1"
+
+
 def prepare(
-    source: Pcm, *, certified_causal: bool = False, affine_endpoint: bool = False
+    source: Pcm,
+    *,
+    certified_causal: bool = False,
+    affine_endpoint: bool = False,
+    predictive_envelope: bool = False,
 ) -> Prepared:
     """Decompose all original stereo samples without access to output intent."""
     if np.iscomplexobj(source):
@@ -79,7 +102,10 @@ def prepare(
         message = "Source must be finite stereo PCM"
         raise ValueError(message)
     estimate, envelopes, envelope_report = _fit_source_modes(
-        pcm, certified_causal=certified_causal, affine_endpoint=affine_endpoint
+        pcm,
+        certified_causal=certified_causal,
+        affine_endpoint=affine_endpoint,
+        predictive_envelope=predictive_envelope,
     )
     activity = np.flatnonzero(np.any(pcm != 0.0, axis=1))
     birth = int(activity[0]) if len(activity) else 0
@@ -93,10 +119,10 @@ def prepare(
         modes.append(Mode(float(frequency), birth, analytic))
     residual = pcm - reconstruction
     report = {
-        "model_version": (
-            "certified-affine-endpoints-v3"
-            if affine_endpoint
-            else ("certified-causal-envelopes-v2" if certified_causal else "v1")
+        "model_version": _model_version(
+            certified_causal=certified_causal,
+            affine_endpoint=affine_endpoint,
+            predictive_envelope=predictive_envelope,
         ),
         "mode_count": len(modes),
         "frequencies_hz": list(estimate.frequencies_hz),

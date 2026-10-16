@@ -438,15 +438,61 @@ def _affine_diagnostic_summary(endpoints: Real, conditions: Real, leverages: Rea
     }
 
 
+def _unconstrained_prediction_leverage(design: Real) -> Real | None:
+    """Return age-63 weighted-target row norms, not PCM or active-NNLS gain."""
+    if design.shape[0] < design.shape[1]:
+        return None
+    try:
+        left, singular, right = np.linalg.svd(design, full_matrices=False)
+    except np.linalg.LinAlgError:
+        return None
+    if not np.isfinite(singular).all() or np.any(singular <= 0.0):
+        return None
+    rows = (right.T / singular[None, :]) @ left.T
+    ratio = (HOP_FRAMES - 1) / (WINDOW_FRAMES - 1)
+    predicted = (1.0 + ratio) * rows[1::2] - ratio * rows[::2]
+    leverage = np.linalg.norm(predicted, axis=1)
+    return leverage if np.isfinite(leverage).all() else None
+
+
+def _store_leverage(design: Real, destination: Real, *, predictive: bool = False) -> None:
+    values = (
+        _unconstrained_prediction_leverage(design)
+        if predictive
+        else _unconstrained_current_endpoint_leverage(design)
+    )
+    if values is not None:
+        destination[:] = values
+
+
+def _optional_values(values: Real) -> list[float] | None:
+    return values.tolist() if np.isfinite(values).all() else None
+
+
+def _prediction_summary(current: Real, future: Real) -> dict:
+    return {
+        "unconstrained_prediction_weighted_target_row_norm_summary": {
+            "age_0": _finite_summary(current),
+            "age_63": _finite_summary(future),
+            "definition": "unconstrained pseudoinverse row norm for (-d/255,1+d/255)",
+            "nnls_active_set_sensitivity_claim": False,
+            "actual_pcm_noise_sensitivity_claim": False,
+        }
+    }
+
+
 def _fit_affine_knots(
     source: Real,
     frequencies_hz: Real,
     stereo_coefficients: Complex,
     centers: Indices,
+    *,
+    predictive: bool = False,
 ) -> tuple[Real, dict]:
     endpoints = np.zeros((len(centers), len(frequencies_hz), 2))
     conditions = np.full(len(centers), np.nan)
     leverages = np.full((len(centers), len(frequencies_hz)), np.nan)
+    prediction_leverages = np.full_like(leverages, np.nan) if predictive else np.zeros((0, 0))
     summary = {
         "tile_count": len(centers),
         "tile_status_counts": {},
@@ -466,9 +512,9 @@ def _fit_affine_knots(
         _record_tile(summary, int(center), result)
         if result.condition is not None:
             conditions[index] = result.condition
-        leverage = _unconstrained_current_endpoint_leverage(design)
-        if leverage is not None:
-            leverages[index] = leverage
+        _store_leverage(design, leverages[index])
+        if predictive:
+            _store_leverage(design, prediction_leverages[index], predictive=True)
         if len(summary["first_knot_details"]) < 16:
             summary["first_knot_details"].append({
                 "center_frame": int(center),
@@ -480,15 +526,22 @@ def _fit_affine_knots(
                 "slopes_per_frame": (
                     (endpoints[index, :, 1] - endpoints[index, :, 0]) / (WINDOW_FRAMES - 1)
                 ).tolist(),
-                "unconstrained_current_endpoint_leverage": (
-                    leverage.tolist() if leverage is not None else None
-                ),
+                "unconstrained_current_endpoint_leverage": _optional_values(leverages[index]),
             })
+            if predictive:
+                summary["first_knot_details"][-1][
+                    "unconstrained_prediction_weighted_target_row_norms"
+                ] = {
+                    "age_0": _optional_values(leverages[index]),
+                    "age_63": _optional_values(prediction_leverages[index]),
+                }
     summary["omitted_rejected_tile_detail_count"] = summary["rejected_tile_count"] - len(
         summary["first_rejected_tile_centers"]
     )
     summary["omitted_knot_detail_count"] = len(centers) - len(summary["first_knot_details"])
     summary.update(_affine_diagnostic_summary(endpoints, conditions, leverages))
+    if predictive:
+        summary.update(_prediction_summary(leverages, prediction_leverages))
     return endpoints, summary
 
 
@@ -519,8 +572,75 @@ def fit_affine_causal_envelopes(
         unconstrained endpoint leverage does not certify NNLS active-set
         sensitivity or fractional-frequency quality.
     """
+    return _fit_affine_causal_envelopes(
+        source, frequencies_hz, stereo_coefficients, predictive=False
+    )
+
+
+def fit_predictive_causal_envelopes(
+    source: Real, frequencies_hz: Real, stereo_coefficients: Complex
+) -> tuple[Real, dict]:
+    """Project the same source-only affine fit forward until its next fixed knot.
+
+    Args:
+        source: Original finite float64 stereo PCM, at 48 kHz.
+        frequencies_hz: Fixed source-only carrier estimates, at most six.
+        stereo_coefficients: Fixed complex unit-norm stereo vectors, shape (K, 2).
+
+    Returns:
+        Nonnegative envelopes and bounded diagnostics. At age d=0..63 after a
+        knot, each envelope is max(0,R+d*(R-L)/255). The existing joint endpoint
+        solver, conditions, refusal limits and first-active grid are unchanged.
+        Fitted decay and exact complementary errors must remain fully retained.
+        Prediction uses no future samples against this fixed basis; global
+        discovery and full-pipeline causality remain unproved. Unconstrained
+        weighted-target row norms certify neither PCM-noise gain nor sensitivity
+        after NNLS or output projection changes the active constraints.
+    """
+    return _fit_affine_causal_envelopes(
+        source, frequencies_hz, stereo_coefficients, predictive=True
+    )
+
+
+def _publish_affine_predictions(
+    envelopes: Real, endpoints: Real, centers: Indices, first: int
+) -> int:
+    positions = np.arange(first, len(envelopes))
+    knot_indices = np.searchsorted(centers, positions, side="right") - 1
+    ages = positions - centers[knot_indices]
+    projected = 0
+    for mode in range(envelopes.shape[1]):
+        left, right = endpoints[knot_indices, mode, 0], endpoints[knot_indices, mode, 1]
+        prediction = right + ages * ((right - left) / (WINDOW_FRAMES - 1))
+        projected += int(np.count_nonzero(prediction < 0.0))
+        envelopes[first:, mode] = np.maximum(prediction, 0.0)
+    return projected
+
+
+def _predictive_contract(carriers: int) -> dict:
+    return {
+        "envelope_interpolation": (
+            "nonnegative causal linear extrapolation from current R and fitted slope"
+        ),
+        "published_affine_endpoint": "current right endpoint R and fitted slope",
+        "prediction_age_offsets_inclusive": [0, HOP_FRAMES - 1],
+        "prediction_nonnegative_projection": True,
+        "prediction_slope_divisor_frames": WINDOW_FRAMES - 1,
+        "prediction_negative_sample_values_projected": 0,
+        **_prediction_summary(np.zeros((0, carriers)), np.zeros((0, carriers))),
+    }
+
+
+def _fit_affine_causal_envelopes(
+    source: Real, frequencies_hz: Real, stereo_coefficients: Complex, *, predictive: bool
+) -> tuple[Real, dict]:
     _validate_inputs(source, frequencies_hz, stereo_coefficients)
     estimate = _affine_memory_estimate(len(source), len(frequencies_hz))
+    if predictive:
+        # Account for retained per-mode arrays and overlapping RHS temporaries.
+        estimate += len(source) * 40 + ((len(source) + HOP_FRAMES - 1) // HOP_FRAMES + 1) * 8 * len(
+            frequencies_hz
+        )
     _require(
         "The conservative affine fit memory estimate exceeds the 256 MiB limit.",
         condition=estimate < MAX_MEMORY_BYTES,
@@ -561,15 +681,24 @@ def fit_affine_causal_envelopes(
             np.zeros((0, len(frequencies_hz))),
         )
     )
+    if predictive:
+        report.update(_predictive_contract(len(frequencies_hz)))
     envelopes = np.zeros((len(source), len(frequencies_hz)))
     if hull is None or not len(frequencies_hz):
         return envelopes, report
     centers = np.arange(hull[0], len(source), HOP_FRAMES, dtype=np.int64)
-    endpoints, summary = _fit_affine_knots(source, frequencies_hz, stereo_coefficients, centers)
-    positions = np.arange(hull[0], len(source))
-    knot_indices = np.searchsorted(centers, positions, side="right") - 1
-    for mode in range(len(frequencies_hz)):
-        envelopes[hull[0] :, mode] = endpoints[knot_indices, mode, 1]
+    endpoints, summary = _fit_affine_knots(
+        source, frequencies_hz, stereo_coefficients, centers, predictive=predictive
+    )
+    if predictive:
+        report["prediction_negative_sample_values_projected"] = _publish_affine_predictions(
+            envelopes, endpoints, centers, hull[0]
+        )
+    else:
+        positions = np.arange(hull[0], len(source))
+        knot_indices = np.searchsorted(centers, positions, side="right") - 1
+        for mode in range(len(frequencies_hz)):
+            envelopes[hull[0] :, mode] = endpoints[knot_indices, mode, 1]
     report["causal_processing_span_inclusive"] = [hull[0], len(source) - 1]
     report.update(summary)
     return envelopes, report

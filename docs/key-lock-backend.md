@@ -1772,6 +1772,98 @@ not remove the reference's mixture beating or excuse additional estimator error.
 No universal impossibility, backend/B5, native, realtime, full-range, resource or
 Human acceptance follows. The original v1/v2 diagnostics remain selectable.
 
+### Projected Affine Prediction Diagnostic — 2026-10-16
+
+The command uv run --no-sync python scripts/pitch_predictive_modes_probe.py
+selects a separate v4 experiment. Its only signal-processing change from v3 is
+publication between fixed source knots: max(0,R+d*(R-L)/255),d=0..63. Carrier
+admission, the joint trailing256Hann endpoint fit, condition1e6,128-solve cap,
+first-active64-frame grid through finite input and complete residual renderer
+remain unchanged. Refused endpoints stay zero. Every fitted decay, projection
+error, complementary source sample and transformed output tail is retained.
+There is no future endpoint, retrospective interpolation or last-active mask.
+Old v1/v2/v3 remain selectable; three sources times three policies compare their
+complete prepared arrays and whole reports bitwise to actual e731a36 Git modules
+loaded into memory, without additional source/runtime copies.
+
+Independent physical controls cover two distinct carrier/stereo bases. Each
+checks26 complete fully supported hops, source frames385..2048, including final
+age63 without an appended end knot. Whole-hop envelope errors are6.11e-16 and
+4.45e-16. All regular knot values are bitwise equal to v3 left hold. The12 retained
+full-window details per basis additionally check endpoint/slope errors within5.56e-16 and
+2.37e-18. A decreasing affine envelope crosses zero at408.5: the checked hop
+385..448 precedes any later fitting window contaminated by source clipping;
+projected amplitude error is7.16e-18 and negative predictions become exact zero.
+This proves that declared projection locally, not exact recovery after an
+arbitrary source envelope changes shape.
+
+For a circular-stereo carrier the independent2x2 Hann Gram predicts the
+unconstrained weighted-target row norm sqrt(h*inverse(G)*transpose(h)), with
+h=(-d/255,1+d/255). It increases from .368391060512 at age0 to .532569384896 at
+age63; measured report errors are within1.67e-16. These norms do not measure
+actual PCM-noise gain or constrained NNLS/projected active-set sensitivity.
+Fixed-basis off-grid impulse controls retain exact earlier envelopes, modes and
+subtraction complements for both same and different last-active hulls, with
+nonzero later changes and earlier fitted decay retained. Duplicate/near-duplicate
+designs refuse all14 knots, leaving original PCM entirely in the complement;
+silence stays exact zero. Source reconstruction error is at most2.78e-17.
+Global discovery, arbitrary modulation, mixture beating and residual-only
+sources remain outside these independent affine controls.
+
+The first complete matrix finishes72 requests in416.881 seconds:71 full PCM
+outputs and the same explicit19873.23Hz/+7 Nyquist refusal. All18 identities
+are within7.22e-15, decomposition within1.12e-16, proportional R=.5L error zero,
+and isolated pre-target/finite-end fractions zero with peaks after the event.
+All35 tonal checks pass15cent, maximum .689759cent. Busy/control prefix differences
+are at most2.253e-13; busy tonal whole-response offsets still reach+4672/-5470
+and remain nonisolated measurements.
+
+The overall candidate is rejected:22 timing failures, four original and18 unseen.
+The long mono source now passes all three timing profiles, but independent900/1100
+now fails all three, and unrelated stereo also fails at -7. All failed profiles
+and the relevant mono comparison remain visible:
+
+| Source at r2 | k=-7 q10/q50 | k=0 q10/q50 | k=+7 q10/q50 |
+| --- | --- | --- | --- |
+| Mono900.37 | -94/-8 | -86/+24 | -9/+57 |
+| Original331/997 plus impulse | -166/-31 FAIL | -50/+25 | -61/-27 |
+| Independent900/1100 plus impulse | -264/-6 FAIL | -241/-24 FAIL | -175/-64 FAIL |
+| Unseen427/1327 | -243/-74 FAIL | -179/-97 FAIL | -86/-18 |
+| Close521/533 plus impulse | -710/-1582 FAIL | -778/-619 FAIL | -761/-738 FAIL |
+| Independent371/1381 | -82/+8 | -165/-88 FAIL | -58/-27 |
+| Chirp | +224/+431 FAIL | +145/+269 FAIL | -106/-231 FAIL |
+| AM interpretation | +6341/+11915 FAIL | +3811/+11900 FAIL | +386/+1606 FAIL |
+| Noise | +212/+222 FAIL | +135/+102 FAIL | -222/-236 FAIL |
+| Near Nyquist | -116/+10 FAIL | -79/-35 | unsupported |
+| Unrelated stereo | -118/-18 FAIL | -104/-44 FAIL | -49/-27 |
+
+The complete residual-only chirp/noise paths retain their earlier exact results.
+The mono source remainder energy is6.23722; projection affects189 envelope sample
+values. Close521/533 has1391 projected values and maximum age63 weighted-target
+row norm7.52334. The three-sideband AM interpretation has440 projected values,
+the unchanged actual-design condition1619.41452, maximum age63 row norm150.49246,
+and raw output peak8.04141. These diagnostic facts retain the amplification and
+conditioning limitations; no gain normalization or quality gate hides them.
+
+The five impulse-free known-pair controls preserve zero whole-PCM error between
+the independent analytic reference and known-mode renderer, and h=r identities.
+Exact reference q10/q50 remain -656/-1570,-812/-649,0/-604 at r2/-7,0,+7.
+Estimated v4 gives -710/-1581,-778/-619,-760/-742 on this same impulse-free source,
+with whole PCM errors .235006/.285580/.269450. Reference beating and additional
+estimator error remain distinct; exact affine full-hop controls certify neither.
+
+One final review found undercounted temporary arrays in the predictor's memory
+estimate. After this first run terminated, its additional allowance was increased
+from24 to40 bytes per source frame, retaining the256MiB guard. This accounting-only
+correction leaves prepared PCM and every other report bitwise equal on all18
+matrix sources; the estimate increases by16*N,2,584,608 bytes for these inputs.
+Independent prediction controls pass again. A2,800,000-frame silent stereo input
+with two carriers was admitted by the old258,997,392-byte estimate and is rejected
+before output/fitting allocation by the corrected303,797,392-byte estimate.
+First-run raw metadata keeps its original smaller estimate; its actual fixture
+inputs fit both bounds. No signal-processing change or second quality run follows
+this guard repair. Product/B5/full-range/realtime/resource/Human gates remain open.
+
 ## Settings Contract
 
 Project persistence stores the global `key_lock` boolean as default intent and

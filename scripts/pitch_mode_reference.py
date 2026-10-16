@@ -80,7 +80,7 @@ def compare(
     })
 
 
-def main(*, affine_endpoint: bool = False) -> None:
+def main(*, affine_endpoint: bool = False, predictive_envelope: bool = False) -> None:
     """Measure a new known pair without changing any original quality measurement."""
     emit({
         "stage": "contract",
@@ -88,14 +88,23 @@ def main(*, affine_endpoint: bool = False) -> None:
         "common_birth": SOURCE_TARGET + 1,
         "oracle_frequencies_and_envelopes_only_in_reference": True,
         "estimator_input": "PCM alone; certified source carriers",
-        "estimated_envelope_model": "affine-endpoint-v3" if affine_endpoint else "constant-v2",
+        "estimated_envelope_model": (
+            "affine-prediction-v4"
+            if predictive_envelope
+            else ("affine-endpoint-v3" if affine_endpoint else "constant-v2")
+        ),
         "reference_is_one_declared_independent_mode_interpretation": True,
         "unique_physical_mode_births_or_universal_impossibility_claim": False,
         "original_quality_gates_unchanged": True,
     })
     source, modes = known_source()
     fixture = Fixture("known_independent_close_pair_without_impulse", source)
-    estimated = prepare(source, certified_causal=True, affine_endpoint=affine_endpoint)
+    estimated = prepare(
+        source,
+        certified_causal=True,
+        affine_endpoint=affine_endpoint,
+        predictive_envelope=predictive_envelope,
+    )
     for rate, semitones in ((1, 0), (2, -7), (2, 0), (2, 7), (2, 12)):
         compare(fixture, modes, estimated, rate, semitones)
 
