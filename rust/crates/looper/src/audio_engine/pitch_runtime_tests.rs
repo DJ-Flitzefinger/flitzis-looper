@@ -15,6 +15,9 @@ mod remap_tests;
 #[path = "pitch_runtime_tests/unity_birth_tests.rs"]
 mod unity_birth_tests;
 
+#[path = "pitch_runtime_tests/controller_route_tests.rs"]
+mod controller_route_tests;
+
 use super::*;
 use crate::audio_engine::audio_stream::{
     create_stream_mixer, drain_control_messages, render_scheduled_audio,

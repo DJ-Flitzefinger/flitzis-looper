@@ -19,6 +19,7 @@ if TYPE_CHECKING:
 class _CapturedPitch:
     accepted_sequence: int
     content_lifetime: int = 77
+    content_is_current: bool = True
     base_shift: int = 0
     extra_shift: int = 2
     received_at_ns: int = 123
@@ -248,6 +249,126 @@ def test_accepted_midi_owner_waits_for_project_source_receipt_without_recapturin
     audio_engine_mock.capture_pad_pitch_action.assert_not_called()
     audio_engine_mock.capture_selected_pitch_action.assert_not_called()
     assert audio_engine_mock.publish_pitch_action.call_count == 1
+
+
+def test_applied_owner_waits_for_late_incoming_association_and_projects_once(
+    controller: AppController, audio_engine_mock: Mock, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _, publish, _ = _pitch_fixture(controller, audio_engine_mock)
+    capture = _CapturedPitch(9, extra_shift=7, received_at_ns=777)
+    controller.transport._incoming_load_request = lambda _slot: 123
+    controller.project.selected_pad = 1
+    write = Mock(wraps=controller.transport.pad._set_key_intent)
+    monkeypatch.setattr(controller.transport.pad, "_set_key_intent", write)
+    assert controller.transport.pitch.accept_captured_event(_as_native(capture))
+    capture.state = "applied"
+    capture.effective = True
+    capture.effective_output_frame = 24000
+    for _ in range(3):
+        controller.transport.pitch.poll()
+    assert controller.project.pad_key_intent[0].extra_shift == 0
+    assert controller.transport.pitch.status(0) == (None, None)
+    assert len(controller.transport.pitch._owners) == 1
+    controller.transport._incoming_load_request = lambda _slot: None
+    for _ in range(3):
+        controller.transport.pitch.poll()
+    assert controller.project.pad_key_intent[0].extra_shift == 7
+    assert controller.project.pad_key_intent[1].extra_shift == 0
+    assert controller.project.selected_pad == 1
+    assert controller.transport.pitch.status(0) == ("applied", None)
+    projection = controller.transport.pitch._projections["a" * 32]
+    assert (projection.queued_sequence, projection.effective_sequence) == (9, 9)
+    assert (projection.effective_pitch, projection.effective_frame) == ((0, 7), 24000)
+    assert not controller.transport.pitch._owners
+    write.assert_called_once()
+    publish.assert_called_once_with(capture)
+    assert capture.received_at_ns == 777
+    audio_engine_mock.capture_pad_pitch_action.assert_not_called()
+    audio_engine_mock.capture_selected_pitch_action.assert_not_called()
+
+
+def test_applied_owner_with_known_content_waits_for_pair_projection_receipt(
+    controller: AppController, audio_engine_mock: Mock
+) -> None:
+    _pitch_fixture(controller, audio_engine_mock)
+    capture = _CapturedPitch(1, extra_shift=7)
+
+    def publish_with_pair_barrier(original: _CapturedPitch) -> bool:
+        controller.transport._pair_deferred_sample_ids = frozenset({0})
+        original.accepted = True
+        original.state = "applied"
+        original.effective = True
+        original.effective_output_frame = 24000
+        return True
+
+    audio_engine_mock.publish_pitch_action.side_effect = publish_with_pair_barrier
+    assert controller.transport.pitch.accept_captured_event(_as_native(capture))
+    for _ in range(3):
+        controller.transport.pitch.poll()
+    assert controller.project.pad_key_intent[0].extra_shift == 0
+    assert len(controller.transport.pitch._owners) == 1
+    controller.transport._pair_deferred_sample_ids = frozenset()
+    controller.transport.pitch.poll()
+    assert controller.project.pad_key_intent[0].extra_shift == 7
+    assert controller.transport.pitch.status(0) == ("applied", None)
+    assert not controller.transport.pitch._owners
+    audio_engine_mock.publish_pitch_action.assert_called_once_with(capture)
+
+
+@pytest.mark.parametrize("terminal_state", ["applied", "rejected"])
+def test_terminal_unassociated_owner_cannot_project_into_replacement(
+    controller: AppController, audio_engine_mock: Mock, terminal_state: str
+) -> None:
+    lifetimes, publish, _ = _pitch_fixture(controller, audio_engine_mock)
+    capture = _CapturedPitch(1, extra_shift=7)
+    controller.transport._incoming_load_request = lambda _slot: 123
+    assert controller.transport.pitch.accept_captured_event(_as_native(capture))
+    capture.state = terminal_state
+    capture.effective = terminal_state == "applied"
+    capture.effective_output_frame = 24000 if capture.effective else None
+    capture.content_is_current = False
+    capture.current_control_slot = None
+    lifetimes[0] = 99
+    controller.project.pad_content[0] = PadContentIdentity(instance_id="c" * 32)
+    controller.project.pad_key_intent[0] = PadKeyIntent(extra_shift=-3)
+    controller.transport._incoming_load_request = lambda _slot: None
+    controller.transport.pitch.poll()
+    assert not controller.transport.pitch._owners
+    assert controller.project.pad_key_intent[0].extra_shift == -3
+    assert controller.transport.pitch.status(0) == (None, None)
+    publish.assert_called_once_with(capture)
+
+
+def test_applied_unassociated_owner_survives_placement_gap_and_follows_content(
+    controller: AppController, audio_engine_mock: Mock
+) -> None:
+    lifetimes, publish, _ = _pitch_fixture(controller, audio_engine_mock)
+    capture = _CapturedPitch(1, extra_shift=7)
+    controller.transport._pair_deferred_sample_ids = frozenset({0, 1})
+    assert controller.transport.pitch.accept_captured_event(_as_native(capture))
+    capture.state = "applied"
+    capture.effective = True
+    capture.effective_output_frame = 24000
+    capture.current_control_slot = None
+    for _ in range(3):
+        controller.transport.pitch.poll()
+    assert len(controller.transport.pitch._owners) == 1
+    project = controller.project
+    project.pad_content[0], project.pad_content[1] = project.pad_content[1], project.pad_content[0]
+    project.pad_key_intent[0], project.pad_key_intent[1] = (
+        project.pad_key_intent[1],
+        project.pad_key_intent[0],
+    )
+    lifetimes[0], lifetimes[1] = lifetimes[1], lifetimes[0]
+    capture.current_control_slot = 1
+    controller.transport._pair_deferred_sample_ids = frozenset()
+    controller.transport.pitch.poll()
+    assert project.pad_key_intent[1].extra_shift == 7
+    assert project.pad_key_intent[0].extra_shift == 0
+    assert controller.transport.pitch.status(1) == ("applied", None)
+    assert controller.transport.pitch.status(0) == (None, None)
+    assert not controller.transport.pitch._owners
+    publish.assert_called_once_with(capture)
 
 
 def test_capacity_cancels_only_unpublished_original_owner_and_shutdown_fences_retained_owner(

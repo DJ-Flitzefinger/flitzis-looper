@@ -81,6 +81,14 @@ identity; removal/reassignment/overwrite SHALL fence its old lifetime.
 - **THEN** that route SHALL retain its own original T, separate preparation E, captured content, timestamp and numeric tuple despite later control projections
 - **AND** its actual source phase and rendered pitch SHALL follow the captured rate and Key Lock contract without a second scheduler
 
+#### Scenario: Native effect precedes the project source association
+- **GIVEN** an original opaque pitch capture belongs to Native content A while its project source association remains pending and a later selection points to B
+- **WHEN** the original action is published through the real Controller handoff and reaches its Native effect before project association can complete
+- **THEN** polling SHALL retain the same original receipt until its living source can be associated and its chosen numeric intent and effective status can be projected onto A exactly once
+- **AND** association completion SHALL NOT recapture, republish, retarget B or reconstruct the original timestamp, sequence, content or T/E
+- **AND** a temporarily pending Move/Swap control mirror SHALL NOT count as a dead source lifetime; a known project content identity SHALL NOT release the receipt before its numeric projection is delivered or superseded
+- **AND** a rejected action or a source lifetime that can no longer be associated SHALL still terminate safely without changing replacement content
+
 #### Scenario: Move or overwrite after admission
 - **WHEN** A moves/swaps or its lifetime is removed before the event applies
 - **THEN** it follows live A or terminates fenced, never targets the former slot's replacement

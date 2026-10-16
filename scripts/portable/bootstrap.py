@@ -165,6 +165,7 @@ def check_pitch_action_api(native_module: object) -> None:
         "due_frame",
         "execution_frame",
         "content_lifetime",
+        "content_is_current",
         "base_shift",
         "extra_shift",
         "key_lock",

@@ -215,10 +215,16 @@ class PitchController:
 
     def _observe(self, owner: _PitchOwner) -> bool:
         state = owner.capture.state
+        if state == "applied" and not owner.capture.content_is_current:
+            return True
         if owner.content_id is None:
-            return state in {"applied", "rejected"}
+            return state == "rejected"
         projection = self._projections[owner.content_id]
         if state == "applied":
+            # Native effect can precede the incoming/Pair project receipt. Keep
+            # the original until its numeric choice is projected or superseded.
+            if projection.queued_sequence < owner.sequence:
+                return False
             frame = owner.capture.effective_output_frame
             if type(frame) is int and (frame, owner.sequence) > (
                 projection.effective_frame,

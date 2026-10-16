@@ -158,6 +158,16 @@ each subscriber's own pending then accepted/current publication. The full existi
   pitch134 pass; existing resource and new explicit diagnostic are the two
   ignored tests, with the diagnostic separately executed. This is Key Lock ON,
   SYNC OFF/future quantized T evidence, not a full timing or hardware matrix.
+- [x] Preserve actual Controller receipts when Native effect precedes project
+  source association. Reproduce the lost applied owner through real routed MIDI,
+  opaque capture, Python InputMapping/Transport controllers, worker, scheduler and
+  complete initial PCM before repairing retention. Keep the original receipt until
+  numeric projection is delivered/superseded or its stable lifetime dies; a pending
+  Move/Swap control mirror is still alive. A known content ID alone is insufficient.
+  Exact A/B start counts and one Work/Native construction remain unchanged. A real
+  Pair ACK/control-mirror gap and public Unload prove the passive lifetime getter;
+  Portable preflight rejects an older receipt API. Synthetic association/storage/
+  UI projection seams are explicit; no Loader, device, musical or deadline gate closes.
 - [x] Pitch work custody: reserve an engine-local 64-owner claim before work/history
   allocation, construct Native only on the existing worker after fresh validation,
   and prove saturation/refusal/cancellation/retirement recovery, scalar/no-op zero

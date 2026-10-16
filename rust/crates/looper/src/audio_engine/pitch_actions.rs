@@ -704,6 +704,14 @@ impl CapturedPitchAction {
     fn content_lifetime(&self) -> u64 {
         self.content_key().lifetime()
     }
+    /// Lifetime observation only: a pending Move/Swap control mirror is still alive.
+    #[getter]
+    pub(crate) fn content_is_current(&self) -> bool {
+        self.owner
+            .admission
+            .ownership
+            .content_key_current(self.content_key())
+    }
     #[getter]
     fn base_shift(&self) -> i32 {
         self.render().pitch.base_shift()
