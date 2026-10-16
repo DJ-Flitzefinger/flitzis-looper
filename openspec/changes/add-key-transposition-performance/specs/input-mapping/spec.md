@@ -38,6 +38,12 @@ T/E policy SHALL remain authoritative, and equal-target attacks SHALL stay disti
 - **AND** actual PCM and attack feedback SHALL prove each successful effect without coalescing
 - **AND** all terminal work SHALL release its claims exactly once after off-callback destruction
 
+#### Scenario: Original SET callback work reuses allocated storage
+- **GIVEN** an original live SET action has allocated its work and history storage off realtime while its preparation worker remains independent
+- **WHEN** the actual callback captures that action's history, adopts its prepared candidate, continues rendering or refuses its stale source
+- **THEN** those callback phases SHALL perform zero Rust heap allocation, zeroed-allocation or reallocation attempts and SHALL retain the original content, timing, effect and retirement guards
+- **AND** a calibrated current-thread allocator observation SHALL distinguish callback operations from concurrent worker allocations without treating Rust-only observation as proof about Native/C++ allocations, device deadlines or whole-process resources
+
 ### Requirement: Pitch Learn stores stable immutable action variants
 The system SHALL provide separate stable SET and SET_RETRIGGER semantic actions for every supported absolute Key and extra integer including0 and SHALL persist the variant selected during Learn.
 

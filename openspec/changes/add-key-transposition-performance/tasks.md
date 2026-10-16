@@ -168,6 +168,18 @@ each subscriber's own pending then accepted/current publication. The full existi
   Pair ACK/control-mirror gap and public Unload prove the passive lifetime getter;
   Portable preflight rejects an older receipt API. Synthetic association/storage/
   UI projection seams are explicit; no Loader, device, musical or deadline gate closes.
+- [x] Calibrate the existing test allocator for current-thread Rust alloc/zeroed/
+  realloc attempts and observe the real live SET drain/render phases with its preparation
+  worker running. Both Key Lock modes cover history capture, prepared-result
+  polling, E adoption, irregular Native continuation and stale-source refusal;
+  every measured phase requires zero Rust allocation attempts. Genuine initial
+  LoadSample/SourceACK setup, a real bounded feedback ring, exact independent PCM
+  and unchanged source phase/FIFO/voice generation prevent an empty-path proof.
+  Calibration uses consumed raw allocations, concurrent worker exclusion and
+  unwind/nesting/TLS cleanup. Custody release while receipts remain is bounded
+  terminal evidence only. This does not close the outer CPAL clock/parameter/
+  telemetry wrapper, C++/FFT allocations, destruction-thread, logging, deadline,
+  process-resource, acoustic or parent/Human gates.
 - [x] Pitch work custody: reserve an engine-local 64-owner claim before work/history
   allocation, construct Native only on the existing worker after fresh validation,
   and prove saturation/refusal/cancellation/retirement recovery, scalar/no-op zero

@@ -17,7 +17,7 @@ const WAIT: Duration = Duration::from_secs(3);
 
 fn fixture() -> Fixture {
     let mut fixture = Fixture::new(true);
-    adopt_current_sources(&mut fixture);
+    adopt_current_sources(&mut fixture, true);
     refresh_actual_runtime_bindings(&fixture);
     fixture
 }
@@ -25,7 +25,7 @@ fn fixture() -> Fixture {
 /// The shared pitch fixture installs its mixer bank directly. Endpoint preparation
 /// additionally requires the real callback SourceACK, so publish and adopt the exact
 /// retained source through the production complete LoadSample claim first.
-fn adopt_current_sources(fixture: &mut Fixture) {
+pub(in crate::audio_engine) fn adopt_current_sources(fixture: &mut Fixture, key_lock: bool) {
     for id in [0, 1] {
         let ownership = fixture.control.engine.input_runtime_ownership.clone();
         let placement = ownership.slot_snapshot(id).unwrap();
@@ -79,7 +79,7 @@ fn adopt_current_sources(fixture: &mut Fixture) {
             LOOP_START as f64 / f64::from(RATE),
             Some(LOOP_END as f64 / f64::from(RATE)),
         );
-        fixture.mixer.set_pad_key_lock(id, true);
+        fixture.mixer.set_pad_key_lock(id, key_lock);
         fixture.mixer.set_pad_pitch_intent(id, pitch).unwrap();
     }
 }
@@ -174,7 +174,7 @@ fn complete_pcm(fixture: &mut Fixture, execution: u64) -> Vec<f32> {
     pcm
 }
 
-fn refresh_actual_runtime_bindings(fixture: &Fixture) {
+pub(in crate::audio_engine) fn refresh_actual_runtime_bindings(fixture: &Fixture) {
     publish_actual_runtime_bindings(fixture, true);
 }
 
@@ -251,7 +251,7 @@ fn original_prepared_window_start_reuses_same_physical_cache_with_its_real_own_a
     for late in [false, true] {
         let mut fixture = fixture();
         let _files = super::ordinary_start_tests::install_synthetic_complete_lease(&mut fixture);
-        adopt_current_sources(&mut fixture);
+        adopt_current_sources(&mut fixture, true);
         refresh_actual_runtime_bindings(&fixture);
         set_pitch(&mut fixture, 7);
         fixture.render_to(1000);
@@ -409,7 +409,7 @@ fn original_prepared_window_start_reuses_same_physical_cache_with_its_real_own_a
 fn genuinely_changed_prepared_window_does_not_borrow_old_endpoint_native() {
     let mut fixture = fixture();
     let _files = super::ordinary_start_tests::install_synthetic_complete_lease(&mut fixture);
-    adopt_current_sources(&mut fixture);
+    adopt_current_sources(&mut fixture, true);
     refresh_actual_runtime_bindings(&fixture);
     set_pitch(&mut fixture, 7);
     let old_native = select_and_wait(&mut fixture);
