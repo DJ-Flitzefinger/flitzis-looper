@@ -92,6 +92,30 @@ also emits six Native insufficient-output messages, requesting 512 frames and
 reporting 511. Successful assertions do not resolve or attribute those messages
 between the actual owner and the two independent raw reference owners.
 
+A later opt-in test marks actual-owner capture, independent bound/constructor
+work and every completing Raw A/O block separately. The six formerly affected
+fixtures passed without Native output errors, as did the subsequent regular
+40-profile run using the same rebuilt binary. These non-reproductions neither
+attribute nor resolve the original six messages. The DUT workers remain alive
+during reference replay, so markers alone cannot assign a future interleaved
+message without separate thread or process isolation evidence. The actual loaded DLL version
+has not been established by this evidence; the upstream 4.0.0 implementation
+described in earlier audits pads a missing output sample rather than reporting
+the deficit through the void C API.
+
+One bounded mixed-origin retrigger proof uses a live +7 Normal voice and one
+selected +7 endpoint. GUI +7, routed MIDI -7 and GUI +7 are captured before ACK
+for the same future quantized T, then published in order 1/3/2. The actual
+scheduled renderer preserves old PCM before T and executes all three original
+actions in capture order. Only the first consumes the cached Native; subsequent
+actions use their own preparation. A complementary fixture observes each event
+through the original scheduler and the same production executor at frozen T,
+checking distinct Native/request/source/tuple ownership. Both fixtures compare
+all 48000 final output samples with an independent ordinary-start worker.
+This proves software effects for Key Lock ON/SYNC OFF with this source and
+timing; it does not claim three separately audible attacks at one sample, a
+Loader cold-source path, device timing or broader acoustic acceptance.
+
 The bounded resident-selection context additionally admits FullMix->Stems,
 Stems->FullMix and enabled-mask changes for active current-source NormalLoop
 voices with the identical already ACKed resident committed StemSet. An inactive

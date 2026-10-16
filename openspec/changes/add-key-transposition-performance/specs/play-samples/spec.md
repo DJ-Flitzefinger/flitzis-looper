@@ -169,6 +169,13 @@ The system SHALL keep each admitted repeated pitch attack as a distinct bounded 
 - **THEN** each action SHALL retain its own preparation epoch, source generation, actual window and timing ACK owner
 - **AND** the mutable row revision SHALL NOT alone revoke the earlier action or present its prepared state as the later tuple
 
+#### Scenario: Mixed-origin opposing attacks consume one selected reserve
+- **GIVEN** living playing content and one prepared selected Normal endpoint for its current pitch tuple
+- **WHEN** GUI-origin and routed MIDI attacks with equal and opposing frozen tuples are admitted for the same future T before preparation ACK, and later publication order differs from capture order
+- **THEN** at most one attack SHALL consume that prepared endpoint and every other accepted attack SHALL retain its own original work, permit, tuple and T/E
+- **AND** old productive PCM SHALL remain unchanged before T, while the existing scheduler SHALL execute every accepted attack in original sequence order with its own complete pitch-and-start effect
+- **AND** the final productive Native and PCM SHALL belong to the final original action rather than a later mutable control projection or reused consumed endpoint
+
 #### Scenario: Cancellation races with the complete native effect claim
 - **WHEN** cancellation and an original action compete for its complete native effect
 - **THEN** cancellation before the final claim SHALL leave pitch and transport unchanged

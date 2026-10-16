@@ -8,6 +8,9 @@ use crate::audio_engine::input_mapping::{InputRuntimeEvent, PitchPadProjection};
 use crate::audio_engine::pitch_actions::{CapturedPitchAction, PitchActionVariant, PitchKeyMode};
 use crate::audio_engine::source_reader::ExplicitSeekMode;
 
+#[path = "mixed_burst_tests.rs"]
+mod mixed_burst_tests;
+
 const EXTRA_SEVEN: &str = "pitch.extra:7:set_retrigger";
 
 #[derive(Clone, Copy)]

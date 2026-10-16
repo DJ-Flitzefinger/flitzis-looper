@@ -88,6 +88,21 @@ struct Capture {
 }
 
 fn capture(lock: bool, pitch: PitchIntent, attack: Option<(Attack, usize)>) -> Capture {
+    capture_with_trace(lock, pitch, attack, false)
+}
+
+fn capture_with_trace(
+    lock: bool,
+    pitch: PitchIntent,
+    attack: Option<(Attack, usize)>,
+    trace: bool,
+) -> Capture {
+    if trace {
+        eprintln!(
+            "NATIVE_SCOPE_BEGIN DUT total={} lock={lock} attack={attack:?}",
+            pitch.total_semitones()
+        );
+    }
     let timeline = format_chronology(START, END, &EVENTS, CAPTURE_END);
     assert_eq!(timeline[F].rate.to_bits(), 0.9200000000000003_f64.to_bits());
     assert_eq!(timeline[E].rate.to_bits(), 1.29_f64.to_bits());
@@ -178,13 +193,27 @@ fn capture(lock: bool, pitch: PitchIntent, attack: Option<(Attack, usize)>) -> C
     assert!(!fixture.voice(0).stretch.wet_mode_failed());
     assert!(fixture.scheduler.is_empty());
 
+    if trace {
+        eprintln!("NATIVE_SCOPE_END DUT; NATIVE_SCOPE_BEGIN independent_bound_queries");
+    }
     let (a_origin, bound) = format_reset_origin(&timeline, E, RATE, pitch, lock);
+    if trace {
+        eprintln!(
+            "NATIVE_SCOPE_END independent_bound_queries; NATIVE_SCOPE_BEGIN Raw_A_constructor"
+        );
+    }
     let mut raw_a = StereoRawNative::new(
         RATE,
         format_native_pitch(timeline[a_origin + 511], pitch, lock),
     );
+    if trace {
+        eprintln!("NATIVE_SCOPE_END Raw_A_constructor; NATIVE_SCOPE_BEGIN Raw_O_constructor");
+    }
     // Continuous-O uses its OWN first completed block, not A's cold pitch.
     let mut raw_o = StereoRawNative::new(RATE, format_native_pitch(timeline[511], pitch, lock));
+    if trace {
+        eprintln!("NATIVE_SCOPE_END Raw_O_constructor; NATIVE_SCOPE_BEGIN reference_replay");
+    }
     let mut a: [Vec<f32>; 2] = std::array::from_fn(|_| Vec::new());
     let mut o: [Vec<f32>; 2] = std::array::from_fn(|_| Vec::new());
     let mut dry: [Vec<f32>; 2] = std::array::from_fn(|_| Vec::new());
@@ -193,7 +222,13 @@ fn capture(lock: bool, pitch: PitchIntent, attack: Option<(Attack, usize)>) -> C
     for active in 0..CAPTURE_END {
         let input = format_selected_pcm(&timeline, active, &source, &stems, &[], START, END);
         let native = format_native_pitch(timeline[active], pitch, lock);
+        if trace && active % FORMAT_BLOCK == FORMAT_BLOCK - 1 {
+            eprintln!("NATIVE_CALL Raw_O active={active} pitch={native:.17}");
+        }
         let continuous = raw_o.frame(input, native);
+        if trace && active >= a_origin && active % FORMAT_BLOCK == FORMAT_BLOCK - 1 {
+            eprintln!("NATIVE_CALL Raw_A active={active} pitch={native:.17}");
+        }
         let reset = (active >= a_origin).then(|| raw_a.frame(input, native));
         assert!(input.into_iter().all(f32::is_finite));
         assert!(continuous.into_iter().all(f32::is_finite));
@@ -218,6 +253,9 @@ fn capture(lock: bool, pitch: PitchIntent, attack: Option<(Attack, usize)>) -> C
         a_error.into_iter().all(|error| error < 2.0e-6),
         "exact A provenance failed: {a_error:?}"
     );
+    if trace {
+        eprintln!("NATIVE_SCOPE_END reference_replay");
+    }
     assert_eq!(
         raw_a.fifos(),
         [fixture.voice(0).stretch.pending_fifo_frames(); 2]
@@ -244,6 +282,29 @@ fn capture(lock: bool, pitch: PitchIntent, attack: Option<(Attack, usize)>) -> C
         o,
         dry,
         a_origin,
+    }
+}
+
+/// Explicit reproduction only: mark call phases without changing Native settings,
+/// input, timing, preparation or metrics. Surviving DUT workers require separate
+/// thread/isolation evidence before assigning an interleaved message to an owner.
+#[test]
+#[ignore = "explicit bounded six-profile Native stderr owner diagnostic; no device or acoustic acceptance"]
+fn diagnose_variable_rate_native_output_owner() {
+    for (positive, signal, offset) in [
+        (true, Attack::Impulse, 17),
+        (true, Attack::Tone, 0),
+        (true, Attack::Percussion, 511),
+        (false, Attack::Impulse, 17),
+        (false, Attack::Impulse, 511),
+        (false, Attack::Percussion, 511),
+    ] {
+        let pitch = if positive {
+            PitchIntent::new(6, 18).unwrap()
+        } else {
+            PitchIntent::new(-5, -18).unwrap()
+        };
+        let _ = capture_with_trace(true, pitch, Some((signal, offset)), true);
     }
 }
 

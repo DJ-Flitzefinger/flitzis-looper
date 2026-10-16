@@ -148,6 +148,16 @@ each subscriber's own pending then accepted/current publication. The full existi
 - [ ] B6-K-AUDIO/B7-K-ATOMIC: prepared one-pass pitch, captured native selected
   projection/content lifetime/permits, direct/fallback/pending, distinct repeated
   attacks, same existing dueframe event, allfour Quantize/SYNC and routing combinations.
+- [x] B6 bounded mixed-origin opposing burst: live +7 Normal with one selected
+  reserve, capture GUI+7/MIDI-7/GUI+7 before ACK, publish1/3/2 at common future T.
+  Prove actual-renderer ordering/effects, one cache consumer, independent work,
+  original source/tuple/receipt/T/E and complete initial PCM; distinguish the
+  complementary per-event production-executor observation from full rendering.
+  Keep the allfour/device/acoustic/deadline and parent gates open.
+  Both complementary profiles pass in Debug and optimized Release. Impacted
+  pitch134 pass; existing resource and new explicit diagnostic are the two
+  ignored tests, with the diagnostic separately executed. This is Key Lock ON,
+  SYNC OFF/future quantized T evidence, not a full timing or hardware matrix.
 - [x] Pitch work custody: reserve an engine-local 64-owner claim before work/history
   allocation, construct Native only on the existing worker after fresh validation,
   and prove saturation/refusal/cancellation/retirement recovery, scalar/no-op zero
