@@ -366,6 +366,43 @@ unchanged complete-response acoustic obligations SHALL remain required.
 - **THEN** whole-hop cue responses SHALL match independent weighted-design algebra with inactive constraints
 - **AND** original failures, complete residuals, raw amplification and unsupported domains SHALL remain explicit
 
+### Requirement: Positive AM Families Have A Separately Certified Phase Owner
+The offline diagnostic SHALL provide a separately selected source-certified
+positive-AM phase-owner model. Only a certified symmetric three-carrier family
+MAY be replaced with its central carrier and a real positive source-clock
+envelope. Admission SHALL use original stereo PCM and source-estimated carriers
+only, independently of requested pitch/rate, fixture metadata and scoring targets.
+Constrained symmetric-frequency source fits, common complex stereo direction,
+conjugate sideband/center coefficient ratios, strict envelope positivity and
+consistent complete source-window support SHALL all be required. Existing source
+fit, conditioning, coherence and support limits SHALL remain in force. Ambiguous
+overlapping families SHALL retain the original independent carriers.
+
+The algebraic factorization SHALL NOT certify unique physical AM intent for an
+arbitrary mixture. Only a certified family's central phase SHALL follow pitch;
+its real envelope SHALL follow the unchanged source clock. The unchanged causal
+current-weight envelope fitter SHALL retain every subtraction error in the exact
+fully transformed residual, with all decay and generated tails. Uncertified
+carriers, prior variants, original/unseen sources and acoustic gates SHALL remain
+available and unchanged. No response-fitted phase, gain, offset, crop, target or
+threshold SHALL manufacture acceptance.
+
+Independent positive and negative source controls SHALL verify exact AM
+factorization, stereo/conjugacy/positivity/spacing/support refusals and ambiguous
+families before the full unchanged quality matrix. A known-source comparison
+SHALL distinguish grouped carrier/envelope semantics from independently pitched
+sidebands. Failure on a close pair or residual-only chirp/noise SHALL remain
+visible and SHALL NOT be relabeled as universal impossibility or acceptance.
+Additional independent source-center tonal controls SHALL measure the candidate
+AM carrier against the unchanged 15-cent bound without supplying that center to
+preparation or changing existing fixture frequency tuples and quality scores.
+
+#### Scenario: Source algebra certifies a positive AM triple without output intent
+- **GIVEN** source-estimated carriers and original PCM with at least the existing minimum clean complete-window support
+- **WHEN** symmetric constrained fits and conjugate vector coefficients certify a strictly positive real envelope around one central carrier
+- **THEN** the diagnostic MAY fit that family's source envelope using the unchanged current-weight model and pitch only its central phase
+- **AND** it SHALL preserve the complete transformed residual, all unsupported domains and every original full-response failure
+
 ### Requirement: Combined Pitch And Rate Bounds Are Never Silently Clipped
 The system SHALL validate and report the supported combined pitch/rate domain before accepting
 diagnostic transposition, retaining separate requested, pending, effective and rejected state.

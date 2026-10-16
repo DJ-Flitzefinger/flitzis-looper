@@ -1956,6 +1956,104 @@ additional estimator error remain separately visible. The candidate is rejected
 overall; no B5/backend, full-range, realtime, resource, device or Human acceptance
 follows. All previous negative results and original acoustic gates remain.
 
+### Source-Certified Positive-AM Families — 2026-10-16
+
+The command uv run --no-sync python scripts/pitch_am_family_probe.py selects
+the separate v6 offline experiment. A source-certified symmetric triple may be
+represented by one central phase owner with a positive real source-clock
+envelope. This changes which phase follows pitch; it does not change the v5
+256-frame current-weight affine NNLS, fixed64 prediction, all-mode reconstruction
+or complete transformed subtraction residual. The five prior policies remain
+selectable. Three source equations times those five policies preserve all
+prepared arrays bitwise and complete preparation reports exactly against the
+actual55ef554 Git module compiled in memory, without source/runtime copies.
+
+The certificate receives only original stereo PCM and source-estimated carriers.
+It considers at most20 triples among the existing maximum6 carriers. Each trial
+holds the central frequency fixed and refits all carriers jointly, constraining
+the selected sidebands to fc plus/minus nu. Every complete8192-frame window on
+the unchanged4096 raster that supports the original source fit must also support
+the constrained factorization. At least3 such windows are required, with the
+unchanged source RMS1e-4, design condition1e6 and coefficient coherence1e-3 limits.
+The sideband vectors must share the center's complex stereo direction and have
+conjugate sideband/center ratios u and conjugate(u), with 1-2*abs(u)>0. Global
+source phase and modulation ratio must remain coherent across all support.
+The largest actual center coefficient supplies its normalized stereo direction,
+with the earliest-window tie. Overlapping certified triples are all preserved
+as independent carriers; there is no output-fitted or greedy choice.
+
+Three independent complex-stereo positive sources verify the full-PCM algebra
+and center direction within9.64e-14. Five spacing, phase, channel-ratio,
+coherence and positivity negatives preserve the original carriers bitwise.
+Two disjoint families are admitted; two overlapping positive families sharing
+a sideband are both refused. Three piecewise sources change later modulator
+phase, modulation depth or common center/stereo phase. Each plateau individually
+certifies positive AM and independently preserves global source coordinates
+within2.54e-13. The complete sources have5 good windows followed by5 contradictory
+clean windows; every original carrier is retained despite the earlier support.
+Silence, empty/insufficient support and7 malformed
+frequency/vector contracts are covered. These controls supply their frequencies
+only to construct and independently check algebra; the full matrix instead uses
+the actual source-only carrier estimator. No algebraic test establishes unique
+physical AM intent for arbitrary musical PCM.
+
+The original AM source is estimated as689.72/713.19/736.66Hz, then certified to
+one713.19Hz phase owner by9 complete source windows. Its minimum positive margin
+is.6 and constrained source RMS is at most4.40e-13. The unchanged envelope
+fitter's maximum actual design condition becomes2.91603 versus the three-mode
+v5 value1622.94494. Its source residual energy1.29752/fraction.00204881 remains
+fully transformed; smaller conditioning is not itself a quality result.
+Original carrier*h Nyquist refusals remain conservatively in force, and known
+grouped sidebands fc*h+nu*r reaching Nyquist are additionally rejected before
+processing. Independent controls exercise both guards and the required opt-in
+preparation-policy chain. There is no clipping or silently widened domain.
+
+The declared-source reference constructs the same finite AM PCM within3.24e-14,
+and the sum of its three exact complex sidebands within6.37e-14. At r2 and
+k=-7/0/+7 the exact grouped reference has q10/q50 offsets -3/-4,+1/-1,0/0,
+whereas pitching the independent sidebands yields +338/-111,-84/-75,+216/-20.
+The grouped reference retains modulation at nu*r; independent sidebands move it
+to nu*h. Both h=r identities pass and grouped-reference tonal checks pass15cent.
+These declared-source results neither supply oracle parameters to preparation
+nor certify the source-only candidate or unique physical mixture semantics.
+
+The first full v6 matrix completes72 requests in455.948 seconds:71 complete PCM
+outputs and the same explicit19873.23Hz/+7 Nyquist refusal. All18 identities are
+within8.44e-15, decomposition within1.12e-16, proportional-stereo error zero,
+and isolated pre-target/finite-end energy fractions zero with peaks after the
+event. All35 existing tonal checks pass15cent, maximum.685237cent. Busy/control
+prefix differences remain at most3.399e-13, without isolated-attack acceptance.
+Three supplemental candidate-AM tonal controls pass15cent with maximum.004667cent.
+The declared source center is used only for independent spectral measurement,
+never for preparation; original fixture frequency tuples/scores are unchanged.
+
+The original AM case improves from three timing failures to two. At r2 and
+k=-7/0/+7 its candidate q10/q50 offsets are -179/-78,-129/-26,-18/+1; only+7
+passes the unchanged96-frame/2ms timing limit. Raw peaks are.305145/.275970/
+.232702 instead of the previous maximum3.89125. Complete transformed residual
+energies1.70345/1.10184/.719481 remain in those measurements. The exact grouped
+reference passes while the fitted candidate still fails two requests: source
+factorization and better conditioning do not prove envelope/residual quality.
+No gain, output alignment, residual trimming or threshold change hides the gap.
+
+All other previous matrix failures remain: independent900/1100 at-7 has q10/q50
+-126/-8; close521/533 has -666/-1573,-843/-658,-117/-560; chirp has+224/+431,
++145/+269,-106/-231; noise has+212/+222,+135/+102,-222/-236. The candidate is
+therefore still rejected overall, with12 timing failures (one original,11 unseen),
+zero existing tonal failures and one explicit unsupported request. Five additional
+impulse-free known-pair comparisons preserve the exact-reference/estimator
+distinction and previous failures. There is no productive Native change, selected
+backend, B5/full-range/variable-map/realtime/resource/device or Human acceptance.
+
+An actionable next source-model experiment is to use the already certified
+positive modulator as part of the fixed fitting basis and estimate only its
+common amplitude/gate, rather than approximating that known modulation again
+with affine envelope samples. This follows the source factorization, not the
+output quantile targets; it has not been implemented or accepted here. A separate
+bounded chirplet phase-law route also needs its own source certificate and
+negative controls before replacing any residual-only path. All original gates
+and rejected earlier experiments remain required evidence.
+
 ## Settings Contract
 
 Project persistence stores the global `key_lock` boolean as default intent and

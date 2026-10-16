@@ -85,6 +85,7 @@ def main(
     affine_endpoint: bool = False,
     predictive_envelope: bool = False,
     current_weight: bool = False,
+    am_family: bool = False,
 ) -> None:
     """Measure a new known pair without changing any original quality measurement."""
     envelope_model = "affine-endpoint-v3" if affine_endpoint else "constant-v2"
@@ -92,6 +93,8 @@ def main(
         envelope_model = "affine-prediction-v4"
     if current_weight:
         envelope_model = "current-weight-v5"
+    if am_family:
+        envelope_model = "positive-am-families-v6"
     emit({
         "stage": "contract",
         "source": "new impulse-free 521.17/533.43 pair with original declared gates/phases",
@@ -111,6 +114,7 @@ def main(
         affine_endpoint=affine_endpoint,
         predictive_envelope=predictive_envelope,
         current_weight=current_weight,
+        am_family=am_family,
     )
     for rate, semitones in ((1, 0), (2, -7), (2, 0), (2, 7), (2, 12)):
         compare(fixture, modes, estimated, rate, semitones)

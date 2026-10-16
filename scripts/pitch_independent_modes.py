@@ -10,6 +10,7 @@ from functools import partial
 from typing import TYPE_CHECKING
 
 import numpy as np
+from pitch_am_groups import group_am_carriers
 from pitch_amfm_model import render as render_residual
 from pitch_mode_carriers import FS, estimate_carriers
 from pitch_mode_certificate import inspect_window
@@ -59,6 +60,7 @@ def _fit_source_modes(
     affine_endpoint: bool,
     predictive_envelope: bool,
     current_weight: bool,
+    am_family: bool,
 ) -> tuple[CarrierEstimate, Pcm, dict]:
     if affine_endpoint and not certified_causal:
         message = "Affine endpoints require certified source-mode preparation"
@@ -69,10 +71,15 @@ def _fit_source_modes(
     if current_weight and not (certified_causal and affine_endpoint and predictive_envelope):
         message = "Current weighting requires certified affine predictive preparation"
         raise ValueError(message)
+    if am_family and not current_weight:
+        message = "AM families require the certified current-weight preparation"
+        raise ValueError(message)
     estimate = estimate_carriers(
         pcm,
         window_inspector=partial(inspect_window, geometry="spread") if certified_causal else None,
     )
+    if am_family:
+        estimate = group_am_carriers(pcm, estimate)
     if current_weight:
         fit = fit_current_weight_causal_envelopes
     elif predictive_envelope:
@@ -93,7 +100,10 @@ def _model_version(
     affine_endpoint: bool,
     predictive_envelope: bool,
     current_weight: bool,
+    am_family: bool,
 ) -> str:
+    if am_family:
+        return "certified-positive-am-families-v6"
     if current_weight:
         return "certified-current-weight-prediction-v5"
     if predictive_envelope:
@@ -110,6 +120,7 @@ def prepare(
     affine_endpoint: bool = False,
     predictive_envelope: bool = False,
     current_weight: bool = False,
+    am_family: bool = False,
 ) -> Prepared:
     """Decompose all original stereo samples without access to output intent."""
     if np.iscomplexobj(source):
@@ -125,6 +136,7 @@ def prepare(
         affine_endpoint=affine_endpoint,
         predictive_envelope=predictive_envelope,
         current_weight=current_weight,
+        am_family=am_family,
     )
     activity = np.flatnonzero(np.any(pcm != 0.0, axis=1))
     birth = int(activity[0]) if len(activity) else 0
@@ -143,6 +155,7 @@ def prepare(
             affine_endpoint=affine_endpoint,
             predictive_envelope=predictive_envelope,
             current_weight=current_weight,
+            am_family=am_family,
         ),
         "mode_count": len(modes),
         "frequencies_hz": list(estimate.frequencies_hz),
@@ -180,8 +193,30 @@ def render_prepared(prepared: Prepared, rate: float, semitones: int) -> tuple[Pc
     unsupported = [
         mode.frequency_hz for mode in prepared.modes if mode.frequency_hz * shift >= FS / 2
     ]
+    grouping = prepared.report.get("carrier_estimation", {}).get("am_grouping")
+    am_sideband_crossings = []
+    if grouping is not None:
+        # Preserve every previously explicit source-carrier refusal. AM envelopes additionally
+        # follow source rate, so their known modulation bandwidth is not multiplied by h.
+        unsupported = sorted(
+            set(unsupported)
+            | {
+                frequency
+                for frequency in grouping["original_frequencies_hz"]
+                if frequency * shift >= FS / 2
+            }
+        )
+        am_sideband_crossings = [
+            group["center_frequency_hz"] * shift + group["modulation_frequency_hz"] * rate
+            for group in grouping["accepted_groups"]
+            if group["center_frequency_hz"] * shift + group["modulation_frequency_hz"] * rate
+            >= FS / 2
+        ]
     if unsupported:
         message = f"Known carriers {unsupported} at pitch ratio {shift} reach or exceed Nyquist"
+        raise UnsupportedPitchDomainError(message)
+    if am_sideband_crossings:
+        message = f"Known source-clock AM sidebands {am_sideband_crossings} reach or exceed Nyquist"
         raise UnsupportedPitchDomainError(message)
     residual, details = render_residual(prepared.residual, rate, semitones)
     origin = details["capture_origin"]
@@ -196,7 +231,7 @@ def render_prepared(prepared: Prepared, rate: float, semitones: int) -> tuple[Pc
         mode_energy += float(np.sum(contribution * contribution))
         output += contribution
     assert np.all(np.isfinite(output)), "Nonfinite complete mode/residual output"
-    return output, {
+    report = {
         "model": "source-derived-independent-modes-with-complete-amfm-residual-"
         + prepared.report.get("model_version", "v1"),
         "capture_origin": origin,
@@ -222,6 +257,11 @@ def render_prepared(prepared: Prepared, rate: float, semitones: int) -> tuple[Pc
         "fitted_output_gain_phase_delay_crop": False,
         "native_or_production_or_realtime_acceptance": False,
     }
+    if grouping is not None:
+        report["am_group_count"] = grouping["group_count"]
+        report["original_carrier_nyquist_refusals_preserved"] = True
+        report["known_source_clock_am_sideband_nyquist_guard"] = True
+    return output, report
 
 
 def render(source: Pcm, rate: float, semitones: int) -> tuple[Pcm, dict]:
