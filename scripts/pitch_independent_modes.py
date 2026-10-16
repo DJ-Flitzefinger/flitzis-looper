@@ -16,6 +16,7 @@ from pitch_mode_certificate import inspect_window
 from pitch_mode_envelopes import (
     fit_affine_causal_envelopes,
     fit_causal_envelopes,
+    fit_current_weight_causal_envelopes,
     fit_envelopes,
     fit_predictive_causal_envelopes,
 )
@@ -52,7 +53,12 @@ class Prepared:
 
 
 def _fit_source_modes(
-    pcm: Pcm, *, certified_causal: bool, affine_endpoint: bool, predictive_envelope: bool
+    pcm: Pcm,
+    *,
+    certified_causal: bool,
+    affine_endpoint: bool,
+    predictive_envelope: bool,
+    current_weight: bool,
 ) -> tuple[CarrierEstimate, Pcm, dict]:
     if affine_endpoint and not certified_causal:
         message = "Affine endpoints require certified source-mode preparation"
@@ -60,11 +66,16 @@ def _fit_source_modes(
     if predictive_envelope and not (certified_causal and affine_endpoint):
         message = "Predictive envelopes require certified affine endpoint preparation"
         raise ValueError(message)
+    if current_weight and not (certified_causal and affine_endpoint and predictive_envelope):
+        message = "Current weighting requires certified affine predictive preparation"
+        raise ValueError(message)
     estimate = estimate_carriers(
         pcm,
         window_inspector=partial(inspect_window, geometry="spread") if certified_causal else None,
     )
-    if predictive_envelope:
+    if current_weight:
+        fit = fit_current_weight_causal_envelopes
+    elif predictive_envelope:
         fit = fit_predictive_causal_envelopes
     elif affine_endpoint:
         fit = fit_affine_causal_envelopes
@@ -77,8 +88,14 @@ def _fit_source_modes(
 
 
 def _model_version(
-    *, certified_causal: bool, affine_endpoint: bool, predictive_envelope: bool
+    *,
+    certified_causal: bool,
+    affine_endpoint: bool,
+    predictive_envelope: bool,
+    current_weight: bool,
 ) -> str:
+    if current_weight:
+        return "certified-current-weight-prediction-v5"
     if predictive_envelope:
         return "certified-affine-prediction-v4"
     if affine_endpoint:
@@ -92,6 +109,7 @@ def prepare(
     certified_causal: bool = False,
     affine_endpoint: bool = False,
     predictive_envelope: bool = False,
+    current_weight: bool = False,
 ) -> Prepared:
     """Decompose all original stereo samples without access to output intent."""
     if np.iscomplexobj(source):
@@ -106,6 +124,7 @@ def prepare(
         certified_causal=certified_causal,
         affine_endpoint=affine_endpoint,
         predictive_envelope=predictive_envelope,
+        current_weight=current_weight,
     )
     activity = np.flatnonzero(np.any(pcm != 0.0, axis=1))
     birth = int(activity[0]) if len(activity) else 0
@@ -123,6 +142,7 @@ def prepare(
             certified_causal=certified_causal,
             affine_endpoint=affine_endpoint,
             predictive_envelope=predictive_envelope,
+            current_weight=current_weight,
         ),
         "mode_count": len(modes),
         "frequencies_hz": list(estimate.frequencies_hz),

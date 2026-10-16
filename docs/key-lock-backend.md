@@ -1864,6 +1864,98 @@ First-run raw metadata keeps its original smaller estimate; its actual fixture
 inputs fit both bounds. No signal-processing change or second quality run follows
 this guard repair. Product/B5/full-range/realtime/resource/Human gates remain open.
 
+### Positive Current-Weight Diagnostic — 2026-10-16
+
+The command uv run --no-sync python scripts/pitch_current_weight_probe.py selects
+a separate v5 experiment. Its only signal-processing change from v4 is the fixed
+rising half-cosine w[m]=.5*(1-cos(pi*m/255)),m=0..255, with past-start weight0
+and current weight1. The same source-certified carriers, actual2K joint endpoint
+NNLS, condition1e6,128-solve cap, first-active64 grid, projected next-hop formula
+and complete residual renderer remain. Every fitted decay, projection error and
+transformed tail is retained. No last-active mask or extra end knot is added.
+Positive current weight is an observation weight, not exact knowledge of the
+current envelope or a guarantee of attack quality. The four old variants remain
+selectable; three sources times four policies preserve whole reports and all
+prepared source/mode/residual arrays bitwise against actual1fc4ab9 Git modules
+loaded into memory. No source/runtime copy is needed.
+
+The independent current-cue control uses a .24 plateau and circular complex
+stereo vector[1,-i]/sqrt(2), whose real feature energy is .5. Only source frame385
+receives a predeclared signed .001 times that real feature. Direct moments derive
+G=.5*sum(w*q*transpose(q)) and deltaBeta=.5*epsilon*w_last*inverse(G)*e_R,
+with q=(1-lambda,lambda). For positive epsilon the endpoint changes are
+[-.000030553161968,+.000023958501968]. Both signed endpoint errors are within
+2.23e-16, and every predicted frame385..448 matches independent h*deltaBeta
+within6.25e-17. Actual endpoints and predictions remain above .23996, proving
+that NNLS and output projection constraints are inactive for this comparison.
+The old Hann current-frame cue changes no sample of that immediate published
+hop, bitwise; later knots may respond. This is a bounded physical response proof.
+
+Weighted-target and original-PCM sensitivity now have separate reports. The
+fixed-basis unconstrained PCM map is A^+*diag(sqrt(w)), with stereo sample weights
+repeated in actual tile order. Independent G2=.5*sum(w^2*q*transpose(q)) gives
+PCM norm sqrt(h*inverse(G)*G2*inverse(G)*transpose(h)), versus weighted-target
+norm sqrt(h*inverse(G)*transpose(h)). At ages0/63 the respective PCM values are
+.202569852344/.305565167602 and weighted-target values .218899529317/.352497276020.
+Report errors are within4.45e-16. Moment-derived G agrees with the direct design
+within7.11e-15; equivalent kernels reproduce constants and first past moments
+within3.34e-16 and2.71e-13. These norms describe conditional unconstrained linear
+maps, not sensitivity after NNLS or projection changes the active constraints.
+
+Two independently generated carrier/stereo bases each check26 complete supported
+hops,385..2048, with envelope errors at most1.61e-15. The12 retained full-window
+details per basis verify endpoints/slopes within6.11e-16/2.59e-18. The projected
+408.5 crossing agrees within8.16e-18 on its pre-next-fit hop only. Same/different-
+hull off-grid future-cue prefixes have bitwise equal envelopes, modes and exact
+subtraction complements, retain decay and change nontrivially after the cue.
+Duplicate/near-duplicate designs refuse all14 knots; silence and zero-carrier
+controls retain exact zero modes and the complete original source remainder.
+Source closure error is at most2.78e-17. All-file discovery, curvature, general
+mixtures, beating, aliasing, residual-only quality and Human acceptance stay open.
+
+The first complete matrix finishes72 requests in422.650 seconds:71 full PCM
+outputs and the same explicit19873.23Hz/+7 Nyquist refusal. All18 identities are
+within8.44e-15, decomposition within1.12e-16, proportional R=.5L error zero, and
+isolated pre-target/finite-end fractions zero with peaks after the event. All35
+tonal checks pass15cent, maximum .685237cent. Busy/control prefix differences are
+at most3.399e-13; busy tonal whole-response offsets still reach+4667/-5462 and
+are not isolated-attack acceptance.
+
+Timing failures decrease from v4's22 to13, comprising one original and12 unseen
+profiles. The long mono and original331/997 sources pass all three timing
+profiles; independent900/1100 still fails at -7. Unseen427/1327,371/1381,
+near-Nyquist -7/0 and unrelated stereo now pass their measured timing predicates.
+The latter's tonal check still measures only the declared left-channel carrier;
+this grants no general unrelated-channel/coherence acceptance. Every remaining
+timing failure is retained below:
+
+| Source at r2 | k=-7 q10/q50 | k=0 q10/q50 | k=+7 q10/q50 |
+| --- | --- | --- | --- |
+| Independent900/1100 plus impulse | -126/-8 FAIL | -16/+27 | -32/+37 |
+| Close521/533 plus impulse | -666/-1573 FAIL | -843/-658 FAIL | -117/-560 FAIL |
+| Chirp | +224/+431 FAIL | +145/+269 FAIL | -106/-231 FAIL |
+| AM interpretation | +3246/+11875 FAIL | +1465/+6385 FAIL | +243/+235 FAIL |
+| Noise | +212/+222 FAIL | +135/+102 FAIL | -222/-236 FAIL |
+
+The residual-only chirp/noise outputs retain their earlier exact results; short
+attacks also retain the previously rejected bank's gain/transient limitations.
+The mono source remainder energy is3.01516 with233 projected envelope values.
+Close521/533 has remainder energy1.66783,1493 projected values, maximum design
+condition78.81531 and age63 weighted-target/PCM row norms6.12275/4.94587.
+The AM interpretation has remainder energy1.00898,439 projected values, maximum
+design condition1622.94494, age63 norms124.11547/90.42296, and raw output peak
+3.89125. Smaller source error and conditional linear sensitivity do not certify
+the separate nonlinear mode/residual transforms. No normalization hides failure.
+
+Five impulse-free known-pair controls preserve zero whole-PCM error between the
+independent analytic reference and known-mode renderer and pass h=r identities.
+Exact-reference q10/q50 remain -656/-1570,-812/-649,0/-604 at r2/-7,0,+7.
+Estimated v5 gives -666/-1572,-842/-659,-116/-570 on that same impulse-free source,
+with whole PCM errors .163358/.216447/.117831. Physical reference beating and
+additional estimator error remain separately visible. The candidate is rejected
+overall; no B5/backend, full-range, realtime, resource, device or Human acceptance
+follows. All previous negative results and original acoustic gates remain.
+
 ## Settings Contract
 
 Project persistence stores the global `key_lock` boolean as default intent and

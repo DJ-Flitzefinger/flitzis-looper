@@ -334,6 +334,30 @@ modulation, residual-only sources, full-pipeline causality or product quality.
 - **THEN** it SHALL compare full-hop amplitudes, knot identity and an independently projected zero crossing
 - **AND** it SHALL retain unchanged full-response acoustic gates and all conditioning, residual and tail failures
 
+### Requirement: Positive Current Weight Retains Complete Diagnostic Obligations
+The separately selected current-weight diagnostic SHALL use the fixed rising
+half-cosine weights w[m]=0.5*(1-cos(pi*m/255)),m=0..255, retaining the same causal
+affine endpoint model, source-only carriers, actual doubled-column conditioning,
+NNLS limits, fixed knot grid and projected next-hop publication. Old variants
+SHALL remain selectable. The positive current weight SHALL NOT be described as
+an exact current-envelope observation or guaranteed attack-quality improvement.
+
+Before quality measurement, independent positive-plateau controls with small
+signed physical current-frame perturbations SHALL verify the predicted full-hop
+response and the old Hann zero-response comparator. They SHALL verify that the
+declared unconstrained endpoint and projection constraints remain inactive.
+Independent Gram/moment controls SHALL distinguish weighted-target row norms
+from unconstrained actual-PCM row norms, including squared weights in the latter.
+Neither norm SHALL certify sensitivity after active-set changes or full quality.
+All affine, projection, prefix, refusal, exact-complement, finite-tail and
+unchanged complete-response acoustic obligations SHALL remain required.
+
+#### Scenario: Positive current weight responds to a physical source-knot perturbation
+- **GIVEN** a fixed circular-stereo carrier on a positive plateau and predeclared small signed current-frame cues
+- **WHEN** the diagnostic fits the original source window and predicts its next fixed hop
+- **THEN** whole-hop cue responses SHALL match independent weighted-design algebra with inactive constraints
+- **AND** original failures, complete residuals, raw amplification and unsupported domains SHALL remain explicit
+
 ### Requirement: Combined Pitch And Rate Bounds Are Never Silently Clipped
 The system SHALL validate and report the supported combined pitch/rate domain before accepting
 diagnostic transposition, retaining separate requested, pending, effective and rejected state.
