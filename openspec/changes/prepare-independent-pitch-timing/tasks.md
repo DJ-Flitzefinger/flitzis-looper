@@ -64,6 +64,10 @@
   source search, robust plateau and ambiguity controls and unchanged full quality matrix.
   The conditional offline evaluation retains six timing failures; full product acceptance
   and the separately listed finite-AM complex-ambiguity controls remain open.
+- [x] Evaluate explicit source-group analytic magnitude replacement with unchanged independent
+  phase transport, phase/scale/identity controls and frozen close-pair/900-1100 comparisons.
+  The frozen candidate is rejected by a77.85-cent close-pair tonal failure despite passing
+  original timing predicates; the existing renderer and all product gates remain unchanged.
 - [ ] Test all37 extras/base -5..+6/total -23..+24 at actual r(n), lockON h/r
   (~.132433..8 for r=.5..2), lockOFF h, original .25..4 corners and finite bounds
   without clipping; prove quality/RT/readiness/latency/finite context/unity transitions.

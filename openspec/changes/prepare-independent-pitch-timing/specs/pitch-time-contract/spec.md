@@ -608,6 +608,47 @@ exhaustion before the unchanged full source/profile measurements.
 - **THEN** each carrier SHALL retain its independent onset and complex phase, while the impulse remains in the fully transformed exact remainder
 - **AND** ambiguous, unsupported, numerically unresolved or incomplete cases SHALL retain the previous signal path without claiming acoustic or product acceptance
 
+### Requirement: Source Group Magnitude Is Evaluated As An Explicit Amplitude Change
+The offline experiment SHALL evaluate a separate source-group magnitude candidate
+using the complete already admitted stationary same-spatial-direction carrier
+set. Source PCM and its existing certificates SHALL determine group eligibility;
+fixture labels, requested output targets, fitted phase offsets, close-frequency
+cutoffs and adjustable component weights SHALL NOT select the group.
+
+At each declared source coordinate s, Z(s) SHALL be the sum of the existing
+zero-extended complex-linearly sampled analytic modes. V(s) SHALL be the sum of
+the same samples with their existing independent pitch-phase corrections.
+The candidate SHALL synthesize Re(norm(Z(s))*V(s)/norm(V(s))) with one shared
+complex-stereo norm. Complex interpolation SHALL precede the source norm so that
+combined h=r identity retains the existing fractional sampling contract.
+This is a deterministic time-varying analytic amplitude replacement. It SHALL
+NOT be described as unchanged gain or fitted measured-output compensation.
+
+When Z and V are both zero, the grouped contribution SHALL be zero. A positive
+source magnitude with zero or numerically unresolved transported phase SHALL
+refuse explicitly; an epsilon denominator, clipped gain or erased frame SHALL
+NOT conceal that failure. Working memory and final scaling SHALL be bounded
+before publication; nonfinite, underflow-lost or unrepresentable results SHALL
+refuse. Common binary normalization SHALL retain every accepted input component
+exactly, including values that would round up from subnormal to normal at the
+scaling boundary; adjacent nonzero cancellation SHALL NOT become a false zero.
+Inputs SHALL remain unchanged.
+
+The complete transformed exact residual, including nuisance samples and all
+generated tails, SHALL remain in the response. Existing carrier-domain refusals,
+source clock, legacy variants and acoustic criteria SHALL remain unchanged.
+Independent identity, phase-singularity, scaling and stereo controls SHALL
+precede the frozen close-pair and independently gated900/1100Hz comparisons.
+The experiment SHALL report generated spectral peaks and actual full-response
+15-cent/2-ms results. Analytic magnitude preservation SHALL NOT be presented as
+proof of real-PCM energy timing, alias safety, realtime or product acceptance.
+
+#### Scenario: A source group has a defined transported phase
+- **GIVEN** a complete eligible source group and its unchanged residual
+- **WHEN** source magnitude and independently transported phase define a finite grouped contribution on the entire capture
+- **THEN** the experiment SHALL measure the original whole-response criteria and retain every residual tail
+- **AND** unresolved phase, numeric failure or failing tonal/timing measurements SHALL remain explicit negative evidence
+
 ### Requirement: Combined Pitch And Rate Bounds Are Never Silently Clipped
 The system SHALL validate and report the supported combined pitch/rate domain before accepting
 diagnostic transposition, retaining separate requested, pending, effective and rejected state.

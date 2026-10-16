@@ -2562,6 +2562,97 @@ feasible declared one-frame model. These refusals preserve v9 and remain coverag
 limits. The entire candidate is still rejected by the full quality gate. No Native
 build, device or Human listening acceptance follows from this offline delivery.
 
+### Explicit Source-Group Amplitude Replacement — 2026-10-17
+
+The separate offline experiment in `scripts/pitch_group_magnitude_probe.py`
+evaluates one frozen amplitude-changing operator. It does not change the existing
+renderer, v10 default, Native backend, public API or source fitting. Eligible
+sources must already have a complete two-carrier joint fit, stationary phases
+and one common complex stereo direction. A source-only projection check uses
+64 machine epsilons; it does not establish physical source uniqueness. Fixture
+labels and expected frequencies appear only in source generation and scoring.
+There is no close-frequency cutoff, fitted output gain/phase/delay, component
+weight or identity special case.
+
+At the existing source coordinate, complex-linearly sample each complete analytic
+mode first. Let Z be their sum and V the sum after the existing independent
+pitch-phase corrections. The candidate is G=norm(Z)*V/norm(V), using the shared
+complex stereo norm. The real grouped output replaces the original real tonal
+sum while the complete transformed residual and every tail remain in place.
+This is deterministic time-varying analytic amplitude replacement and can create
+additional sidebands. Preserving norm(Z) is not proof of real-PCM energy timing,
+tonal accuracy, alias safety or unchanged gain.
+
+The bounded pure kernel uses stable nested hypot, a common binary normalization
+and phase resolution norm(V)>64*eps*sum(norm(v_k)) at source-active frames.
+Source-zero frames produce zero; positive source magnitude with undefined or
+unresolved transported phase explicitly refuses. There is no epsilon denominator
+or clipped gain. Numeric range loss, unrepresentable output and the existing
+256MiB logical kernel working-memory limit also refuse. Its N*(64*K+384)+1048576
+estimate covers kernel logical inputs, output and scratch, not process RSS,
+source preparation or the baseline renderer.
+
+An actual counterexample exposed false cancellation under arbitrary peak
+normalization: .7 and nextafter(.7,+inf) both divide by2.7 to the same float,
+although their difference is nonzero. The final kernel instead scales by the
+highest power of two at or below the finite input peak, retaining both values
+separately in its report. Every real/imag component must scale back exactly.
+That round-trip check also rejects nextafter(2*TINY,0)/2 rounding up to TINY;
+testing only subnormal results would miss it. Both genuine regressions refuse
+without erasing the source-active frame.
+
+Independent controls cover a scalar complex/math.hypot oracle, unchanged input
+bytes, homogeneity at 2**(-400) and 2**400, complex interpolation before the norm
+at four fractional-coordinate identities, unitary stereo/global-phase covariance,
+orthogonal-channel kernel identity, eight malformed inputs, actual extreme
+dynamic range, phase singularity, range overflow and a two-million-frame readonly
+broadcast memory refusal. The orthogonal-channel check concerns the pure operator;
+it does not expand the caller's common-direction source admission.
+
+For stored residual R, stored grouped real output g and two stored transported
+real components c1/c2, substitution is B+(g-(c1+c2)), where the existing baseline
+forms B from R and the components. A conservative gamma6 addition bound uses
+absolute component peaks and an upper bound on R inferred from B. This covers
+those stored additions and the direct R+g comparison, excluding interpolation,
+libm and kernel errors. Zero-tonal tails retain the residual's values; no
+signed-zero bit identity or general total-error bound is claimed.
+
+The final frozen two-source comparison is **rejected**. All eight original
+q10/q50, retention, pre-event and retirement predicates pass. At rate2, complete
+response q10/q50 offsets in frames are:
+
+| Source | k=-7 | k=0 | k=+7 |
+| --- | --- | --- | --- |
+| Independently gated900/1100Hz | +14/+62 | -9/+64 | -5/-3 |
+| Close521.17/533.43Hz | +18/+11 | -3/-1 | -1/+1 |
+
+The original timing predicate uses q10/q50. The900/1100Hz/-7 q90 offset is -105
+frames and remains reported; these measurements do not place every quantile
+inside96 frames. All900/1100 tonal checks pass with maximum .03429583cent,
+but substantial extra peaks appear, such as200.4398/467.1214/1000.6527Hz at-7.
+The close pair passes -7 and+7 at2.019275/.204155cent, yet fails k=0 at
+77.84790925cent. Its actual strongest two dense peaks are533.4281773 and
+557.9640695Hz against the expected521.17 and533.43Hz. The desired521.1174806Hz
+peak ranks third. No target-guided peak selection, parameter search or wider
+matrix is used to hide this new failure.
+
+Six combined h=r identities at rates.75,1.25,2 have full-PCM error at most
+7.66054e-15. For both actual sources at rate2/-7, direct complete residual+G
+error is8.32668e-17, below respective stored-addition bounds1.21786e-15 and
+9.23319e-16. Both retain all56770 zero-tonal tail frame values. The earlier
+arbitrary-normalization run is retained as negative evidence; fixing its actual
+numeric bug repeats only this same frozen comparison and does not change the
+candidate's rejection.
+
+Reproduce the arithmetic controls with
+`uv run --no-sync python -B scripts/pitch_group_magnitude_controls.py` and the
+controls plus frozen sources/profiles with
+`uv run --no-sync python -B scripts/pitch_group_magnitude_probe.py`.
+These are explicitly invoked offline diagnostic scripts, not automatically
+discovered pytest tests. The existing v10 result remains six timing failures
+and no tonal failures across its unchanged full matrix. No baseline renderer,
+admission, acoustic threshold, Native installation or Human acceptance changes.
+
 ### Public Exact-Model Complex-Gauge Bound — 2026-10-17
 
 `uv run --no-sync python scripts/pitch_finite_am_gauge_controls.py` evaluates a
