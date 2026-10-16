@@ -158,6 +158,38 @@ delay SHALL remain in every reported acoustic timing result.
 - **THEN** pitch processing produces the intended h ratio or reports rejection
 - **AND** a rate-only bypass does not silently omit the transposition
 
+The bounded subband AM/FM diagnostic SHALL define a finite complete analysis bank
+whose real subband sum reconstructs every original stereo sample, including DC,
+Nyquist and every complementary component. It SHALL freeze source-only segment
+births, filter support, phase unwrapping, stereo reference, interpolation and
+retirement rules before measuring output. All components SHALL receive the same
+requested envelope-time and carrier-frequency transformation; an unchanged
+persistent residual or untransposed attack bridge SHALL NOT substitute for a
+complete transformation.
+
+Segment reconstruction SHALL be verified separately from transformed-signal
+quality. Every generated subband and segment tail SHALL remain in the complete
+output, including overlap beyond a later segment and beyond nominal duration.
+The renderer SHALL receive only original PCM, rate and pitch intent. Source-only
+birth detection SHALL NOT receive the scorer's attack targets or authorize a
+fitted delay, gain, final-sum normalization or response crop. Known offline source
+access and nonanalytic finite-band leakage SHALL be reported as limitations.
+
+The original short tonal attack, nearby impulse pair, lower two-tone source and
+matched busy-background controls SHALL be retained. Two independently gated
+carriers plus an impulse SHALL additionally expose unresolved band mixtures and
+complementary energy. Original source calibration, strongest spectral peaks,
+complete pre-target energy, timing and actual renderer-end tail predicates SHALL
+remain unchanged. Any failed original predicate SHALL reject the candidate;
+perfect unity reconstruction SHALL NOT certify arbitrary mixtures, the full pitch
+domain, live history, realtime resources or Human acceptance.
+
+#### Scenario: Complete subband envelopes and carrier phases are independently scaled
+- **GIVEN** one frozen finite complete bank, source-only births and original PCM fixtures including independently gated carriers and nearby impulses
+- **WHEN** every subband envelope follows source coordinate r*n and every carrier follows the independently requested h ratio with all generated tails retained
+- **THEN** analysis completeness and unity identity SHALL be checked before measuring the original timing, retention and strongest-frequency predicates
+- **AND** a failing mixed or transient response SHALL remain a rejection without omitting a residual, shifting targets or fitting output parameters
+
 ### Requirement: Combined Pitch And Rate Bounds Are Never Silently Clipped
 The system SHALL validate and report the supported combined pitch/rate domain before accepting
 diagnostic transposition, retaining separate requested, pending, effective and rejected state.

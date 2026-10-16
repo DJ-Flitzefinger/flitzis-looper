@@ -77,6 +77,11 @@ def _cue_indices(source: Pcm) -> list[int]:
     return sorted({0, len(source), *accepted})
 
 
+def source_cues(source: Pcm) -> list[int]:
+    """Share the frozen source-only detector with independent offline probes."""
+    return _cue_indices(source)
+
+
 def _read_zero_extended(pcm: Pcm, indices: Indices) -> Pcm:
     """Read arbitrary integer indices with exact zero outside the segment."""
     values = np.zeros((*indices.shape, 2), dtype=np.float64)

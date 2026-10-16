@@ -1279,6 +1279,104 @@ the measured tonal errors, while transient energy still anticipates the original
 target. No gate is relaxed or response cropped. Full stretch range, variable maps,
 live handover, realtime/resource and Human gates remain open.
 
+### Complete Causal Subband AM/FM Diagnostic — 2026-10-16
+
+`uv run --no-sync python scripts/pitch_amfm_probe.py` evaluates an independent
+finite-bank construction. This is an original diagnostic, not an implementation
+of the published muTVS method. The [author's muTVS demo](https://neerajww.github.io/preprint/demo/tsm/tsm_demo.html)
+was read; its full paper equations/code were not obtained. The primary
+[Quatieri/Hanna filterbank summary](https://www.ll.mit.edu/r-d/publications/perfect-reconstruction-time-scaling-filterbanks)
+expressly makes elemental reconstruction conditional on the bank and requires
+additional signal-dependent conditions for mixtures. Neither source proves the
+project's original 2-ms, .1%-retention or 15-cent requirements for this construction.
+
+Before measurement, the diagnostic fixes a nondecimated causal bank with N=1024,
+lags l=0..1023, w[l]=(.5+.5*cos(pi*l/1023)), w[0]=1 and w[1023]=0.
+For k=0..512, g_k[l]=d_k*w[l]*exp(i*2*pi*k*l/1024)/1024, where endpoint d=1
+and interior d=2. Summing the real kernels gives delta[l] on this support, so
+Re(sum_k x*g_k)=x. DC and Nyquist participate; there is no omitted complement or
+unchanged residual. These finite causal filters are not strictly analytic.
+
+The source-only segment detector is reused unchanged from the overlap diagnostic:
+stereo first-difference norm exceeds eight times its zero-padded past-512 mean
+and 1e-12, with a 240-frame refractory period. Disjoint source segments sum to the
+original PCM. Each segment is independently decomposed, and every generated band
+tail survives beyond its segment and overlaps later streams. Trimming exact zero
+input support is an algebraic convolution optimization, not a measured output crop.
+Offline access to the complete source is explicit; this is no live-history proof.
+
+For each band, pooled stereo temporal complex products provide a common phase
+increment unwrapped around its bin carrier. Exact pooled cancellation falls back
+to the largest individual channel product, with left ties. A zero product uses
+the bin carrier; exact common-zero runs have explicit retirement/birth semantics.
+The birth gauge comes from the largest birth coefficient, with left ties.
+Both channels receive the same correction (h/r-1)*(phi(s)-phi_birth), at original
+source coordinate s=r*n-birth. Thus each band's envelope follows r and its common
+carrier follows h. Complex coefficients and unwrapped reference phase use fixed
+linear interpolation at fractional coordinates. Integer-coordinate unity and
+fractional rate-only h=r reconstruction are distinct controls; interpolation is
+not exact arbitrary-band analytic resynthesis or antialiasing. Zero-extended
+linear interpolation retains its full support, including up to one source frame
+of fractional preview before each component birth. Any negative-time output is
+captured with its declared origin; integer-coordinate r=1/r=2 has no preview.
+
+The first matrix retains the nine phase-gradient sources and adds independently
+gated 900/1100-Hz carriers plus a later impulse. Identity is measured first, then
+r=2/k=-7,0,+7, for 40 complete responses. Integrity controls precede quality
+measurement. Every original pre-target/timing/peak/tail/frequency threshold remains
+unchanged, and the renderer receives no attack targets. Causal image leakage,
+phase ambiguity at cancellations/endpoints, source cue chopping, aliasing and
+general mixture quality are explicit risks. Results below are recorded only after
+actual execution; no Native, install, App, device or hearing gate is claimed.
+
+The first complete run executed all 40 profiles in 248.246 seconds and rejects
+the candidate. No DSP parameter, source, target or threshold was adjusted after
+measurement. All 16 sustained tonal profiles pass 15 cents, with a maximum error
+of .437342 cent. All ten unity profiles and every pre-warp bank reconstruction
+remain within 7.11e-15 of the original. Independent explicit FIR summation, direct
+convolution and FFT comparisons pass; a known nonunity phase control is within
+1.75e-15. A 1034-frame structural zero region contains exactly zero coefficients
+and produces exactly two phase runs. Signed fractional rate-only controls at
+r=h=.5 and r=h=2^(7/12) match independently interpolated PCM within 1.78e-15.
+
+At source-rate2, the unchanged q10/q50 offsets are:
+
+| Source | k=-7, frames | k=0, frames | k=+7, frames |
+| --- | --- | --- | --- |
+| Original eight-ms 900-Hz attack | +15/+21 | +9/+13 | +5/+10 |
+| Original eight-ms percussion | +4/+8 | +2/+4 | +1/+2 |
+| Nearby isolated impulse pair | +1/0 | 0/0 | 0/0 |
+| Original 331.37/997.19-Hz pair plus impulse | -23/-130 FAIL | +123/+233 FAIL | -64/-75 |
+| Independently gated 900/1100-Hz carriers plus impulse | -948/-684 FAIL | -1249/-481 FAIL | -928/-790 FAIL |
+
+The original limit is 96 frames for both q10 and q50. All isolated profiles have
+zero pre-target energy and preserve the original peak-after-target predicate.
+The nearby pair's two strongest peaks retain their independent target timing at
+all three shifted profiles. Isolated actual renderer-end tail energy is zero:
+each finite response is retained inside the original source's trailing silence.
+The running background reaches the source end and its actual final interval
+contains remaining music (maximum .607275%); this is not an isolated decay proof.
+Busy/control pre-target differences are at most 2.992e-14, consistent with FFT
+roundoff in this bounded matrix, not a general floating-point causality proof.
+Stereo R=.5L error is zero throughout the matrix.
+
+Accurate frequency and short-attack timing do not establish acceptable gain or
+envelope shape. The mono 900.37-Hz output/source energy ratios at r2 are
+2.420940/1.930568/1.129536 for k=-7/0/+7, rather than a duration-only ratio of .5.
+The short 900-Hz attack reaches raw peaks 1.88481/1.81484/1.43382 from an original
+bounded source. These gains were measured, not normalized away. The independently
+gated mixture changes the energy distribution despite retaining both strongest
+carrier frequencies. Complete analysis reconstruction therefore does not provide
+the required transformed synthesis weighting/phase relationships. Negative-image
+leakage, ambiguous mixed-band phase and birth-dependent interband alignment remain
+concrete mechanisms to resolve; this result does not reject every AM/FM method.
+Metadata counts shifted phase increments outside Nyquist without clamping or
+amplitude weighting; those counts alone do not quantify audible alias energy.
+
+No productive backend changes follow this rejected experiment. Full pitch/rate
+range, gain/mixture quality, variable maps, continuous live history, realtime
+preparation/resources and Human gates remain open.
+
 ## Settings Contract
 
 Project persistence stores the global `key_lock` boolean as default intent and

@@ -25,6 +25,9 @@
 - [x] Evaluate a frozen full-phase-gradient candidate with centered-coordinate
   integrity, complete signed packet/SRC tails, original short-attack/lower-polyphony
   failures, matched busy control and unchanged acoustic criteria.
+- [x] Evaluate a frozen complete finite subband AM/FM candidate, transforming every
+  component and retaining all tails; distinguish analysis identity from short-attack,
+  nearby-pair, independently gated mixed-carrier and busy-background quality.
 - [ ] Verify inverse-map seconds to loaded-frame conversion before deriving rate; equal physical
   progression at equal sample rates must yield r=1, including across supported device rates.
 - [ ] Test all37 extras/base -5..+6/total -23..+24 at actual r(n), lockON h/r
