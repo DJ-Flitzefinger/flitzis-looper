@@ -287,6 +287,30 @@ the estimated candidate SHALL still receive source PCM alone. Any reference
 mixture-energy timing failure SHALL remain visible alongside original failures
 and SHALL NOT establish universal impossibility or relax an acoustic gate.
 
+The affine-envelope candidate SHALL jointly fit two nonnegative source-window
+endpoint amplitudes per admitted carrier on the same fixed trailing window and
+knot grid. Its current endpoint SHALL be predicted only from past weighted
+samples and SHALL retain the declared left hold. Both Hann endpoints have zero
+weight; the prediction SHALL NOT be represented as a directly observed current
+amplitude or guaranteed transient improvement. The actual doubled-column design
+SHALL retain existing conditioning, bounded NNLS and refusal rules, with no ridge,
+output gain fitting or altered quality threshold.
+
+The diagnostic SHALL report true design conditioning, endpoint/slope evidence,
+explicit refused tiles and unconstrained endpoint leverage separately from
+constrained active-set sensitivity. Every refused or imperfect sample SHALL
+remain in the exact completely transformed residual. Independent constant,
+affine-amplitude, off-grid future-impulse, differing-hull, stereo and conditioning
+controls SHALL precede complete original/unseen quality measurements. Exact
+endpoint recovery at resolved knots SHALL NOT certify between-knot interpolation,
+mixture energy timing, arbitrary modulation, aliasing or realtime quality.
+
+#### Scenario: A causal affine endpoint fit removes only resolved linear-envelope bias
+- **GIVEN** admitted fixed source carriers with independently known constant or affine control envelopes
+- **WHEN** bounded trailing-window NNLS fits nonnegative endpoints and holds the current endpoint
+- **THEN** knot prediction, declared between-knot hold error, prefix invariance, conditioning and refusal SHALL be reported independently
+- **AND** all source errors, finite decay and transformed tails SHALL remain in the unchanged full-response acoustic comparisons
+
 ### Requirement: Combined Pitch And Rate Bounds Are Never Silently Clipped
 The system SHALL validate and report the supported combined pitch/rate domain before accepting
 diagnostic transposition, retaining separate requested, pending, effective and rejected state.

@@ -13,10 +13,11 @@ import numpy as np
 from pitch_amfm_model import render as render_residual
 from pitch_mode_carriers import FS, estimate_carriers
 from pitch_mode_certificate import inspect_window
-from pitch_mode_envelopes import fit_causal_envelopes, fit_envelopes
+from pitch_mode_envelopes import fit_affine_causal_envelopes, fit_causal_envelopes, fit_envelopes
 
 if TYPE_CHECKING:
     from numpy.typing import NDArray
+    from pitch_mode_carriers import CarrierEstimate
 
 type Pcm = NDArray[np.float64]
 type ComplexPcm = NDArray[np.complex128]
@@ -45,7 +46,30 @@ class Prepared:
     report: dict
 
 
-def prepare(source: Pcm, *, certified_causal: bool = False) -> Prepared:
+def _fit_source_modes(
+    pcm: Pcm, *, certified_causal: bool, affine_endpoint: bool
+) -> tuple[CarrierEstimate, Pcm, dict]:
+    if affine_endpoint and not certified_causal:
+        message = "Affine endpoints require certified source-mode preparation"
+        raise ValueError(message)
+    estimate = estimate_carriers(
+        pcm,
+        window_inspector=partial(inspect_window, geometry="spread") if certified_causal else None,
+    )
+    fit = (
+        fit_affine_causal_envelopes
+        if affine_endpoint
+        else (fit_causal_envelopes if certified_causal else fit_envelopes)
+    )
+    envelopes, report = fit(
+        pcm, np.asarray(estimate.frequencies_hz, dtype=np.float64), estimate.stereo_coefficients
+    )
+    return estimate, envelopes, report
+
+
+def prepare(
+    source: Pcm, *, certified_causal: bool = False, affine_endpoint: bool = False
+) -> Prepared:
     """Decompose all original stereo samples without access to output intent."""
     if np.iscomplexobj(source):
         message = "Source must be real stereo PCM"
@@ -54,12 +78,8 @@ def prepare(source: Pcm, *, certified_causal: bool = False) -> Prepared:
     if pcm.ndim != 2 or pcm.shape[1] != 2 or not np.all(np.isfinite(pcm)):
         message = "Source must be finite stereo PCM"
         raise ValueError(message)
-    estimate = estimate_carriers(
-        pcm,
-        window_inspector=partial(inspect_window, geometry="spread") if certified_causal else None,
-    )
-    envelopes, envelope_report = (fit_causal_envelopes if certified_causal else fit_envelopes)(
-        pcm, np.asarray(estimate.frequencies_hz, dtype=np.float64), estimate.stereo_coefficients
+    estimate, envelopes, envelope_report = _fit_source_modes(
+        pcm, certified_causal=certified_causal, affine_endpoint=affine_endpoint
     )
     activity = np.flatnonzero(np.any(pcm != 0.0, axis=1))
     birth = int(activity[0]) if len(activity) else 0
@@ -73,7 +93,11 @@ def prepare(source: Pcm, *, certified_causal: bool = False) -> Prepared:
         modes.append(Mode(float(frequency), birth, analytic))
     residual = pcm - reconstruction
     report = {
-        "model_version": "certified-causal-envelopes-v2" if certified_causal else "v1",
+        "model_version": (
+            "certified-affine-endpoints-v3"
+            if affine_endpoint
+            else ("certified-causal-envelopes-v2" if certified_causal else "v1")
+        ),
         "mode_count": len(modes),
         "frequencies_hz": list(estimate.frequencies_hz),
         "source_birth_frame": birth,

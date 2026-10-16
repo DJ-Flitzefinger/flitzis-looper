@@ -38,6 +38,8 @@
   refusal without changing carrier admission, the renderer or acoustic gates.
 - [x] Evaluate certified stationary modes with trailing/left-held local envelopes,
   fixed-basis prefix controls and the unchanged original/unseen full-response matrix.
+- [x] Evaluate causal affine endpoint envelopes with actual-design conditioning,
+  independent source controls and the unchanged complete-response quality matrix.
 - [ ] Verify inverse-map seconds to loaded-frame conversion before deriving rate; equal physical
   progression at equal sample rates must yield r=1, including across supported device rates.
 - [ ] Test all37 extras/base -5..+6/total -23..+24 at actual r(n), lockON h/r

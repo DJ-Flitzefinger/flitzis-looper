@@ -1682,6 +1682,96 @@ AM interpretation, unrelated-right-channel/coherence, aliasing, full-range,
 continuous-output, resources and Human gates stay open. No productive backend,
 Native/API/ABI, install, App/device or listening change follows this experiment.
 
+### Causal Affine Endpoint Diagnostic — 2026-10-16
+
+The command uv run --no-sync python scripts/pitch_affine_modes_probe.py selects
+an additional v3 source-only envelope experiment. The v2 certified carriers,
+256-frame trailing symmetric Hann, offsets[-255,0], hop64, first-active fixed
+grid through finite input, left hold and complete residual renderer stay fixed.
+Each carrier has two nonnegative amplitudes L/R with lambda=(offset+255)/255.
+The joint weighted design contains interleaved (1-lambda)*f_k,lambda*f_k columns.
+The same unpenalized bounded NNLS solver checks this actual2K-column design
+against condition1e6 and128 active-set solves. Refused knots contribute zero;
+their whole error, all fitted decay and all transformed tails remain retained.
+Only R is published at the knot. Both Hann endpoint weights are zero, so this
+is a prediction from past observations, not a directly observed current attack.
+
+The report bounds detailed evidence to the first16 knots and counts omissions.
+It retains actual-design condition, endpoint/slope summaries and the row norms
+of the unconstrained weighted pseudoinverse for R. These norms are not NNLS
+active-set sensitivity. The affine memory guard remains256MiB. No output gain,
+phase, delay, crop, quality threshold or original fixture was fitted or changed.
+Actual a26037b envelope code loaded into memory gives bitwise equal arrays and
+whole reports for both old v1/v2 paths on three different source controls.
+
+Independent physical controls precede the quality run. All58 full-window affine
+knots verify current-R error at most5.00e-16. The12 full-window retained knot
+details additionally verify L error5.56e-16 and slope error2.37e-18. The predicted
+left-hold error agrees within5.19e-16 and still reaches .00189 between knots;
+the old constant fit's effective past age is127.4985..127.5001 source frames.
+A circular-stereo carrier gives an independently calculated2x2 Hann Gram matrix,
+whose two-column design has condition2.766159487 and unconstrained R row norm
+.368391060512. The NNLS
+boundary control instead has active-set row norm .235568892433 and the known
+optimum L=0,R=.223117008926, matched within2.78e-17. The unconstrained circular-case
+endpoint kernel has negative lobes down to -.01114205671, sum error3.34e-16 and first-moment
+error7.29e-14. Thus extrapolation removes resolved affine bias at a knot while
+increasing sensitivity; it supplies no general transient quality guarantee.
+Constant, silence, duplicate/near-duplicate conditioning refusal and fixed-basis
+off-grid future-impulse controls pass. Same/different-hull earlier envelopes,
+modes and exact complementary errors remain bitwise equal, with nonzero later
+changes. Global all-file carrier discovery remains outside that causal claim.
+
+The first complete matrix finishes72 requests in403.686 seconds:71 full PCM
+outputs and the same explicit19873.23Hz/+7 Nyquist rejection. All18 identities
+are within7.44e-15, decomposition within1.12e-16, proportional R=.5L error zero,
+and isolated pre-target/finite-end energy fractions zero with peaks after the
+event. All35 tonal measurements pass15cent, maximum .702022cent. Busy/control
+pre-event differences are at most1.913e-13; busy tonal whole-response offsets
+still reach+4671/-5470 and are not isolated-attack acceptance.
+
+The overall candidate is rejected with21 timing failures, four original and17
+unseen. The count equals v2, but the failing profiles differ. The unchanged
+impulse, short900/percussion and nearby-impulse cases pass their measured timing
+predicates; the short900 raw peak still reaches1.88481. Every failed timing
+profile is retained below, including new regressions:
+
+| Source at r2 | k=-7 q10/q50 | k=0 q10/q50 | k=+7 q10/q50 |
+| --- | --- | --- | --- |
+| Mono900.37 | -98/-10 FAIL | -53/+48 | +5/+70 |
+| Original331/997 plus impulse | -121/-19 FAIL | -30/+39 | -16/-6 |
+| Independent900/1100 plus impulse | -335/-100 FAIL | -39/+32 | -162/-53 FAIL |
+| Unseen427/1327 | -173/-55 FAIL | -130/-59 FAIL | -73/-2 |
+| Close521/533 plus impulse | -664/-1564 FAIL | -769/-613 FAIL | -542/-584 FAIL |
+| Independent371/1381 | -84/+11 | -128/-60 FAIL | -26/-6 |
+| Chirp | +224/+431 FAIL | +145/+269 FAIL | -106/-231 FAIL |
+| AM interpretation | +4427/+11911 FAIL | +3557/+11898 FAIL | +333/+1334 FAIL |
+| Noise | +212/+222 FAIL | +135/+102 FAIL | -222/-236 FAIL |
+| Near Nyquist | -109/+21 FAIL | -77/-33 | unsupported |
+| Unrelated stereo | -85/+17 | -150/-66 FAIL | -36/-19 |
+
+The mono source remainder energy falls from v2's9.20643 to6.08008, but its
+transformed remainder still has energy9.02059/6.60520/3.79453 and signed mode/rest
+cross energy -.98694/+2.50917/+1.80830, versus -8.22151 at identity. A smaller
+source error remains insufficient to certify the separately transformed mixture.
+Close-pair maximum actual-design condition is68.20845 and unconstrained endpoint
+row norm5.58096; the three-sideband AM interpretation reaches1619.41452 and
+123.38499 respectively, with no tile refused by the unchanged1e6 condition limit.
+Its raw peak reaches6.85979. These weighted-target row norms are not actual PCM
+noise gains or NNLS active-set sensitivity; no output normalization hides failure.
+Residual-only chirp/noise paths are unchanged by an envelope model with no modes.
+
+The same run also evaluates the unchanged impulse-free known-pair reference on
+five control profiles. Exact-reference/known-mode whole PCM difference stays
+zero, h=r identities pass, and reference tonal checks retain their earlier
+results. At r2/-7,0,+7 the exact-reference q10/q50 remain -656/-1570,
+-812/-649,0/-604. Estimated v3 instead gives -664/-1564,-769/-614,-540/-591,
+with whole PCM errors .243459/.304785/.205758. These differ from the nearby table
+because this control source has no impulse. Individual envelope accuracy does
+not remove the reference's mixture beating or excuse additional estimator error.
+No universal impossibility, backend/B5, native, realtime, full-range, resource or
+Human acceptance follows. The original v1/v2 diagnostics remain selectable.
+
 ## Settings Contract
 
 Project persistence stores the global `key_lock` boolean as default intent and

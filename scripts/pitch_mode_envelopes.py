@@ -360,6 +360,221 @@ def fit_causal_envelopes(
     return envelopes, report
 
 
+def _affine_memory_estimate(frames: int, carriers: int) -> int:
+    """Include both endpoint arrays, leverage diagnostics and summary scratch."""
+    knots = (frames + HOP_FRAMES - 1) // HOP_FRAMES + 1
+    return _memory_estimate(frames, carriers) + knots * (64 * carriers + 64) + 1024 * 1024
+
+
+def _affine_tile_system(
+    source: Real, frequencies_hz: Real, stereo_coefficients: Complex, center: int
+) -> tuple[Real, Real]:
+    """Expand the shared trailing carrier system into interleaved L/R columns."""
+    design, target = _tile_system(
+        source, frequencies_hz, stereo_coefficients, center, offsets=_CAUSAL_OFFSETS
+    )
+    positions = center + _CAUSAL_OFFSETS
+    inside = (positions >= 0) & (positions < len(source))
+    fraction = np.repeat((_CAUSAL_OFFSETS[inside] + WINDOW_FRAMES - 1) / (WINDOW_FRAMES - 1), 2)[
+        :, None
+    ]
+    endpoints = np.stack((design * (1.0 - fraction), design * fraction), axis=2)
+    return endpoints.reshape(len(target), 2 * len(frequencies_hz)), target
+
+
+def _unconstrained_current_endpoint_leverage(design: Real) -> Real | None:
+    """Return current-R row norms of the full-column-rank SVD pseudoinverse.
+
+    No singular-value cutoff is added: designs lacking finite positive singular
+    values have unavailable diagnostics. This linear least-squares diagnostic
+    does not certify sensitivity of the constrained NNLS active set.
+    """
+    if design.shape[0] < design.shape[1]:
+        return None
+    try:
+        left, singular, right = np.linalg.svd(design, full_matrices=False)
+    except np.linalg.LinAlgError:
+        return None
+    if not np.isfinite(singular).all() or np.any(singular <= 0.0):
+        return None
+    endpoint_rows = (right.T[1::2] / singular[None, :]) @ left.T
+    leverage = np.linalg.norm(endpoint_rows, axis=1)
+    return leverage if np.isfinite(leverage).all() else None
+
+
+def _finite_summary(values: Real) -> dict:
+    finite = values[np.isfinite(values)]
+    return {
+        "finite_count": int(finite.size),
+        "unavailable_count": int(values.size - finite.size),
+        "minimum": float(np.min(finite)) if finite.size else None,
+        "maximum": float(np.max(finite)) if finite.size else None,
+        "mean": float(np.mean(finite)) if finite.size else None,
+        "rms": float(np.linalg.norm(finite) / np.sqrt(finite.size)) if finite.size else None,
+    }
+
+
+def _affine_diagnostic_summary(endpoints: Real, conditions: Real, leverages: Real) -> dict:
+    leverage_summary = _finite_summary(leverages)
+    leverage_summary.update({
+        "definition": (
+            "Euclidean norm of each current-R row of the unconstrained weighted-design "
+            "SVD pseudoinverse; available only with finite positive singular values"
+        ),
+        "available_tile_count": int(np.count_nonzero(np.all(np.isfinite(leverages), axis=1))),
+        "unavailable_tile_count": int(np.count_nonzero(~np.all(np.isfinite(leverages), axis=1))),
+        "nnls_active_set_sensitivity_claim": False,
+    })
+    return {
+        "actual_design_condition_summary": _finite_summary(conditions),
+        "affine_endpoint_summary": {
+            "left_endpoints": _finite_summary(endpoints[:, :, 0]),
+            "current_right_endpoints": _finite_summary(endpoints[:, :, 1]),
+            "slopes_per_frame": _finite_summary(
+                (endpoints[:, :, 1] - endpoints[:, :, 0]) / (WINDOW_FRAMES - 1)
+            ),
+        },
+        "unconstrained_current_endpoint_leverage_summary": leverage_summary,
+    }
+
+
+def _fit_affine_knots(
+    source: Real,
+    frequencies_hz: Real,
+    stereo_coefficients: Complex,
+    centers: Indices,
+) -> tuple[Real, dict]:
+    endpoints = np.zeros((len(centers), len(frequencies_hz), 2))
+    conditions = np.full(len(centers), np.nan)
+    leverages = np.full((len(centers), len(frequencies_hz)), np.nan)
+    summary = {
+        "tile_count": len(centers),
+        "tile_status_counts": {},
+        "maximum_condition_number": None,
+        "maximum_active_set_solves": 0,
+        "total_active_set_solves": 0,
+        "rejected_tile_count": 0,
+        "first_rejected_tile_centers": [],
+        "first_knot_details": [],
+    }
+    for index, center in enumerate(centers):
+        design, target = _affine_tile_system(
+            source, frequencies_hz, stereo_coefficients, int(center)
+        )
+        result = _fit_tile(design, target)
+        endpoints[index] = result.values.reshape(len(frequencies_hz), 2)
+        _record_tile(summary, int(center), result)
+        if result.condition is not None:
+            conditions[index] = result.condition
+        leverage = _unconstrained_current_endpoint_leverage(design)
+        if leverage is not None:
+            leverages[index] = leverage
+        if len(summary["first_knot_details"]) < 16:
+            summary["first_knot_details"].append({
+                "center_frame": int(center),
+                "status": result.status,
+                "active_set_solves": result.solves,
+                "condition_number": result.condition,
+                "left_endpoints": endpoints[index, :, 0].tolist(),
+                "current_right_endpoints": endpoints[index, :, 1].tolist(),
+                "slopes_per_frame": (
+                    (endpoints[index, :, 1] - endpoints[index, :, 0]) / (WINDOW_FRAMES - 1)
+                ).tolist(),
+                "unconstrained_current_endpoint_leverage": (
+                    leverage.tolist() if leverage is not None else None
+                ),
+            })
+    summary["omitted_rejected_tile_detail_count"] = summary["rejected_tile_count"] - len(
+        summary["first_rejected_tile_centers"]
+    )
+    summary["omitted_knot_detail_count"] = len(centers) - len(summary["first_knot_details"])
+    summary.update(_affine_diagnostic_summary(endpoints, conditions, leverages))
+    return endpoints, summary
+
+
+def fit_affine_causal_envelopes(
+    source: Real, frequencies_hz: Real, stereo_coefficients: Complex
+) -> tuple[Real, dict]:
+    """Fit trailing affine carrier amplitudes and publish current endpoint R.
+
+    Args:
+        source: Original finite float64 PCM with shape (frames, 2), at 48 kHz.
+        frequencies_hz: Already fixed source-only carrier estimates, at most six.
+        stereo_coefficients: Fixed complex unit-norm stereo vectors with shape
+            (K, 2), referenced to the original source's sample-zero carrier phase.
+
+    Returns:
+        Nonnegative envelopes with shape (frames, K), left-held from each knot's
+        current endpoint R, and compact fit/conditioning diagnostics. Every
+        carrier has nonnegative L/R values across offsets -255 through 0, with
+        lambda=(offset+255)/255. The weighted actual 2K-column design is fit jointly
+        by the same bounded NNLS solver as the earlier candidates. A refused
+        tile contributes zero endpoints and leaves its source in the caller's
+        mandatory exact PCM remainder.
+
+        The first-active +64 grid continues through the finite input without an
+        end knot or last-active mask, retaining all fitted decay. Local fitting
+        uses no future source against this fixed global basis. Global carrier
+        discovery and the complete pipeline are not claimed causal. Reported
+        unconstrained endpoint leverage does not certify NNLS active-set
+        sensitivity or fractional-frequency quality.
+    """
+    _validate_inputs(source, frequencies_hz, stereo_coefficients)
+    estimate = _affine_memory_estimate(len(source), len(frequencies_hz))
+    _require(
+        "The conservative affine fit memory estimate exceeds the 256 MiB limit.",
+        condition=estimate < MAX_MEMORY_BYTES,
+    )
+    hull = _activity_hull(source)
+    report = _base_report(source, frequencies_hz, hull)
+    report.update({
+        "window_offsets_inclusive": [-(WINDOW_FRAMES - 1), 0],
+        "window": "trailing symmetric Hann; sqrt weights in source least squares",
+        "source_lookahead_frames": 0,
+        "source_lookback_frames": WINDOW_FRAMES - 1,
+        "envelope_interpolation": "left hold; searchsorted(side=right)-1 at integer source frames",
+        "knot_grid": "first active source frame + 64-frame grid through finite input; no end knot",
+        "exact_hull_mask_only": False,
+        "last_active_source_frame_used_as_mask_or_knot": False,
+        "fitted_decay_retained_through_finite_input": True,
+        "offline_fit": True,
+        "offline_noncausal_fit": False,
+        "envelope_fit_local_causal": True,
+        "global_carrier_discovery_causality_claim": False,
+        "complete_pipeline_causality_claim": False,
+        "affine_nonnegative_endpoint_fit": True,
+        "affine_endpoint_offsets_inclusive": [-(WINDOW_FRAMES - 1), 0],
+        "affine_endpoint_fraction": "lambda=(offset+255)/255",
+        "published_affine_endpoint": "current right endpoint R only",
+        "design_column_count": 2 * len(frequencies_hz),
+        "design_column_layout": "interleaved per carrier: left endpoint, current right endpoint",
+        "condition_number_definition": "2-norm condition of the actual weighted 2K endpoint design",
+        "full_column_rank_required_for_nnls": True,
+        "estimated_peak_working_bytes": estimate,
+        "first_knot_details": [],
+        "omitted_knot_detail_count": 0,
+    })
+    report.update(
+        _affine_diagnostic_summary(
+            np.zeros((0, len(frequencies_hz), 2)),
+            np.zeros(0),
+            np.zeros((0, len(frequencies_hz))),
+        )
+    )
+    envelopes = np.zeros((len(source), len(frequencies_hz)))
+    if hull is None or not len(frequencies_hz):
+        return envelopes, report
+    centers = np.arange(hull[0], len(source), HOP_FRAMES, dtype=np.int64)
+    endpoints, summary = _fit_affine_knots(source, frequencies_hz, stereo_coefficients, centers)
+    positions = np.arange(hull[0], len(source))
+    knot_indices = np.searchsorted(centers, positions, side="right") - 1
+    for mode in range(len(frequencies_hz)):
+        envelopes[hull[0] :, mode] = endpoints[knot_indices, mode, 1]
+    report["causal_processing_span_inclusive"] = [hull[0], len(source) - 1]
+    report.update(summary)
+    return envelopes, report
+
+
 def _nnls_controls() -> dict:
     design = np.array([[1.0, 1.0], [1.0, 0.0], [0.0, 1.0]])
     target = np.array([1.0, 1.0, -1.0])
