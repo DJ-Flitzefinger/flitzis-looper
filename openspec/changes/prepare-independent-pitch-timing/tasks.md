@@ -19,6 +19,9 @@
 - [x] Evaluate one frozen causal AR2 source-filter candidate on the original
   impulse, sustained mono and mixed two-tone sources, identity and nonzero pitch;
   preserve wrong-frequency residual forcing as rejection rather than impulse-only acceptance.
+- [x] Evaluate one frozen source-segmented full-PCM overlap candidate with source-only
+  cues, complete retained grain tails, identity/calibration, short and mixed tones,
+  nearby attacks and a paired running-background control; preserve all negatives.
 - [ ] Verify inverse-map seconds to loaded-frame conversion before deriving rate; equal physical
   progression at equal sample rates must yield r=1, including across supported device rates.
 - [ ] Test all37 extras/base -5..+6/total -23..+24 at actual r(n), lockON h/r

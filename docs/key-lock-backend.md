@@ -1113,6 +1113,80 @@ state, without writing PCM. Python3.14.2/NumPy2.4.0 completed all12 profiles;
 execution success is explicitly separate from candidate rejection. Previous
 Live/Stretcher/continuous-history failures and all full B5 gates remain open.
 
+### Rejected Source-Segmented PCM Overlap Candidate — 2026-10-16
+
+`uv run --no-sync python scripts/pitch_overlap_probe.py` evaluates a frozen
+NumPy-only full-PCM mechanism, separate from production and Native. Unlike the
+AR2 candidate above, local resampling transposes every source component. The
+custom short-window waveform alignment follows the
+[WSOLA principle](https://www.isca-archive.org/eurospeech_1993/roelands93_eurospeech.html);
+this is not a validation of the paper's implementation or every overlap method.
+
+Before measurement, the model fixes a periodic Hann of 192 output frames, hop 48
+and a search bound of 192 original source frames. Shared stereo normalized correlation
+selects integer analysis origins; exact score ties prefer the smallest source
+lag, then the lower origin. Source-only first-difference cues use an eightfold
+previous 512-frame mean, zero-padded history, a 1e-12 numerical floor and 240-frame
+refractory period. The renderer receives only PCM, rate and semitones. Scoring
+attack locations are never renderer inputs.
+
+Each source segment begins at ceil(source-origin/r), is locally floor/ZOH
+resampled with slope h, then waveform-aligned to its canonical duration. Four
+virtual initial windows are pinned to the segment origin; later windows cannot
+reread its first original source tap. All admitted positive-time window tails
+remain, even after the next segment starts. Static window-weight normalization
+is per segment; summed segments receive no final normalization, fitted gain,
+offset or nominal-duration crop. Finite grain retirement is distinct from nominal
+material duration. Whole-source cue knowledge and correlation are offline
+lookahead, not a proof of streaming causality or callback suitability.
+
+The first run executes 32 profiles: original impulse, one-second 900.37-Hz mono,
+331.37/997.19-Hz mixture plus impulse, existing eight-ms 900-Hz and percussion
+source equations, nearby isolated impulses, running 241.13/613.71-Hz background,
+and the same background with impulses at source 32768/33536. Each source uses
+r=1/k=0 identity and r=2/k=-7,0,+7. Source length is 161538 frames at 48 kHz;
+the two r=2 attack targets remain 16384/16768. Both channels share every cue,
+grain origin and tap; right is half left.
+
+Identity reconstruction through the same segmented overlap path has maximum
+error 2.22e-16 against the fixed 1e-9 limit. Three source-frequency calibrations
+are within .003804 cent. The centered 25-frame stereo energy formula matches an
+independent explicit-window scalar control exactly, including impulse quantiles
+H-10/H/H+10. This is a Python formula/control check, not fresh Rust execution.
+Every generated sample is captured, followed by 20 ms of exact zero after all
+admitted grains retire. All 32 profiles preserve the stereo relation exactly.
+
+The original impulse, nearby isolated pair and percussion pass the bounded
+two-ms timing, original peak, pre-target retention and retired-tail predicates.
+The higher two-tone mixture also passes 15 cents at each pitch: maximum errors
+8.5542/4.2239/1.6721 cents for k=-7/0/+7. These results do not certify waveform,
+amplitude or general musical quality. In particular, floor/ZOH duplicates the
+impulse's first source tap at k=-7, doubling its discrete output energy; no gain
+correction hides this.
+
+| Unchanged failed predicate | Actual result |
+| --- | --- |
+| Eight-ms 900-Hz attack, r2/k-7, q10/q50 | +85/+122 frames; q50=2.5417 ms exceeds 2 ms |
+| Sustained 900.37-Hz source, r2/k-7, q10/q50 | +67/+100 frames; q50=2.0833 ms exceeds 2 ms |
+| Running 241.13/613.71-Hz background, r2/k-7 | Actual strongest 156.6888/413.4909 Hz; maximum 46.2914 cents exceeds 15 |
+| Same background, r2/k0 | Actual strongest 237.3510/615.1466 Hz; maximum 27.3468 cents exceeds 15 |
+
+The paired busy source and control are bitwise equal before the first source
+impulse, yet their complete pre-H output differs. Maximum differences are
+.000618991/.016724686/.039321985 for k=-7/0/+7, affecting 28/220/50 sample values.
+Cue-dependent segmentation and nonlinear correlation therefore cannot be treated
+as an isolated linear attack response. Mixture prefix energy includes legitimate
+background and supplies no isolated retention certificate.
+
+Operational execution succeeds, but this frozen candidate is rejected. Its
+full-PCM processing removes the earlier AR2 residual's systematic 2f error; it
+does not resolve polyphonic phase, short-attack envelope timing, source-phase
+quantization, aliasing, boundary gain or early background dependence. Simply
+enlarging windows or tuning search constants to these failures would not prove
+the required joint behavior. Previous Live/Stretcher negatives, finite live
+handover, variable-map/full-pitch-range, continuous-history, realtime/resource,
+device and Human gates remain open; no production renderer is activated.
+
 ## Settings Contract
 
 Project persistence stores the global `key_lock` boolean as default intent and

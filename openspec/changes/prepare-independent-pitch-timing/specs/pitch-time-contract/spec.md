@@ -88,6 +88,33 @@ and Stretcher failures SHALL remain visible; no production route is activated.
 - **THEN** source calibration, identity error, metrics over the complete captured output and actual strongest output frequencies SHALL be recorded separately from structural onset causality
 - **AND** an incorrect tonal frequency SHALL reject the candidate without changing its order, excitation map, scoring window or original acceptance thresholds
 
+The bounded full-PCM overlap diagnostic SHALL freeze its source-only cue detector,
+window, hop, search bound, interpolation, segment mapping and retirement rules
+before measurement. Its renderer SHALL receive only original stereo PCM, rate
+and pitch intent, with no fixture attack coordinates or output scoring targets.
+It SHALL resample every component of each source segment and retain every
+generated positive-time grain sample, including overlap beyond the next segment.
+Source-derived segmentation SHALL NOT authorize a crop, fitted gain, fitted
+offset or final-sum normalization. Whole-source offline lookahead SHALL be
+reported explicitly and SHALL NOT be claimed as streaming causal inference.
+
+The diagnostic SHALL cover the original impulse, short tonal attack, sustained
+mono, mixed two-tone source and two nearby attacks over a running background.
+Source calibration, exact r=1/k=0 reconstruction, centered stereo energy timing,
+original peak, pre-target energy, complete finite retirement and actual strongest
+spectral peaks SHALL remain distinct predicates. A paired background control
+SHALL expose any changed pre-target PCM; nonlinear mixture differences SHALL NOT
+be relabeled isolated attack responses or used to certify original retention.
+Any failed original acoustic or 15-cent tonal predicate SHALL reject the frozen
+candidate. Identity reconstruction or an aligned single impulse SHALL NOT close
+the mixed-signal, finite live history, callback or Human acceptance gates.
+
+#### Scenario: Full PCM overlap preserves or rejects source-derived nearby attacks
+- **GIVEN** frozen original-source fixtures, k=-7,0,+7 at source-rate2, an r=1/k=0 identity control and no attack metadata passed to the renderer
+- **WHEN** source-derived boundaries and bounded stereo-shared waveform alignment render complete PCM with every admitted grain tail retained
+- **THEN** original timing, retention and strongest-frequency results SHALL be recorded without post-measurement tuning
+- **AND** two nearby attacks on a running background and its matched control SHALL reveal boundary gain, duplicated attacks or premature changes without manufacturing a passing isolated response
+
 #### Scenario: Unit-rate playback has deliberate nonzero transposition
 - **GIVEN** r=1 and nonzero diagnostic k
 - **WHEN** the renderer evaluates the requested pitch
