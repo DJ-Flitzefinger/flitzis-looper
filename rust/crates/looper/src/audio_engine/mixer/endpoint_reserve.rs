@@ -3,6 +3,9 @@ use crate::audio_engine::ordinary_endpoint_reserve::{
     EndpointDescriptor, SelectedEndpointSnapshot,
 };
 use crate::audio_engine::ordinary_start::OrdinaryStartWork;
+use crate::audio_engine::pitch_actions::{
+    PitchActionPreparationMode, PitchActionVariant, PitchActionWork,
+};
 use crate::audio_engine::prepared_native_history::NativeHistoryRequest;
 
 impl RtMixer {
@@ -92,5 +95,36 @@ impl RtMixer {
             return false;
         };
         source.matches_endpoint(&snapshot, render) && source.permit.same_endpoint_authority(&permit)
+    }
+
+    pub(crate) fn pitch_endpoint_matches(
+        &self,
+        work: &PitchActionWork,
+        source: &NativeHistoryRequest,
+    ) -> bool {
+        if work.action.variant() != PitchActionVariant::SetRetrigger
+            || work.preparation_mode() != PitchActionPreparationMode::Endpoint
+            || !work.validates_render_format(self.sample_rate_hz as u32, self.channels)
+        {
+            return false;
+        }
+        let Ok(guard) = self.pitch_action_guard(work) else {
+            return false;
+        };
+        let Some(selected) = self.capture_selected_normal_endpoint() else {
+            return false;
+        };
+        if selected.id != guard.id || work.action.render() != self.ordinary_start_render(guard.id) {
+            return false;
+        }
+        let Ok(snapshot) = self.pitch_action_start_snapshot(work, guard.id) else {
+            return false;
+        };
+        let Some(permit) = work.capture_history_permit(&snapshot.sample, snapshot.sample_rate_hz)
+        else {
+            return false;
+        };
+        source.matches_endpoint(&snapshot, work.action.render())
+            && source.permit.same_endpoint_authority(&permit)
     }
 }

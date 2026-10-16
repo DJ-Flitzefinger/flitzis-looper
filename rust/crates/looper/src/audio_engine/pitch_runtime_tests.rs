@@ -200,7 +200,7 @@ impl Fixture {
         fixture
     }
 
-    fn refresh_clock(&self) {
+    pub(super) fn refresh_clock(&self) {
         let frame = self.transport.output_frame();
         let now = self.control.engine.input_clock.capture_ns();
         self.clock.publish(OutputClockSnapshot {

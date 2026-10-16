@@ -1,5 +1,8 @@
 //! Actual selection, callback capture, worker, original action and Native/FIFO adoption.
 
+#[path = "ordinary_endpoint_reserve_tests/pitch_tests.rs"]
+mod pitch_tests;
+
 use super::audio_stream::drain_control_messages;
 use super::input_mapping::launch_admission_tests::RATE;
 use super::ordinary_start::OrdinaryStartWork;

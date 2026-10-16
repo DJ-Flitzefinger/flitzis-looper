@@ -214,6 +214,17 @@ A hit transfers one complete, consumable Native/FIFO bundle. Exact endpoint data
 must match a fresh original action request, whose own epoch/permit replaces the
 cache request without changing DSP state; the displaced request retires off the
 callback. The existing strict adoption and complete effect claim remain intact.
+Ordinary starts and same-applied-tuple pitch SET_RETRIGGER use the same Normal
+snapshot and whole-candidate transfer. Eligibility still resolves the original
+action against the currently selected endpoint descriptor, including the actual
+source incarnation, window/ACK, stem owners, rate and applied tuple. A pitch hit
+first captures its own exact request through the unchanged rt_capture guard.
+Only that request travels with the candidate; the cache request retains no action
+authority. The shared transfer clears reserve readiness at the ownership move,
+including when cancellation subsequently prevents the action becoming PREPARED.
+SET and changed tuples do not consume this one physical endpoint. Misses retain
+the original action and existing preparation policy; this adds no unseen-tuple
+cache or new timing/worker path.
 Physical cache observation ignores only unrelated RuntimeProjection advances, after
 fresh original action guards and its genuine own WindowACK association; cache
 observation itself grants no action permission. Source/incarnation, exact window,

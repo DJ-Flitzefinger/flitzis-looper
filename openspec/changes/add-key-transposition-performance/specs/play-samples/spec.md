@@ -72,8 +72,32 @@ The system SHALL finish a timing edit's legacy BPM/origin publications and final
 - **AND** that edit SHALL NOT invalidate its own request before its callback acknowledgement
 - **AND** a subsequent prepared ordinary attack SHALL expose actual wet readiness under the acknowledged request without replacing its ownership guards with the latest counter
 
-### Requirement: Selected ordinary starts may consume exact endpoint readiness
+### Requirement: Selected Normal attacks may consume exact endpoint readiness
 The system SHALL automatically prepare at most one currently selected Normal-start endpoint from the actual settled Native source, window, timing, loop, stem selection, output format and applied pitch/Key Lock tuple, for both stopped and already playing content. The Normal endpoint SHALL remain independent of a live voice's evolving chronology. Selection SHALL publish only preparation interest; SourceACK and WindowACK SHALL remain distinct from actual Native endpoint readiness. Background preparation SHALL use the existing worker at lower priority without occupying any of the 64 accepted action slots or action request cells.
+
+The same unique endpoint MAY serve an original pitch SET_RETRIGGER whose captured
+tuple exactly matches the actual applied tuple and complete Normal endpoint. Its
+cache request MUST NOT substitute for that action's original content owner,
+sequence, timestamp, T, frozen E, own epoch or fresh source/timing permit. SET and
+an unseen or different tuple SHALL retain their existing preparation semantics.
+
+#### Scenario: Same applied pitch retriggers consume ready Normal state
+- **GIVEN** stopped or playing selected content has a genuinely prepared exact Normal endpoint for its actual applied nonneutral tuple
+- **WHEN** an in-time original GUI or MIDI SET_RETRIGGER captures that same tuple and endpoint
+- **THEN** it SHALL consume the unique prepared Native/FIFO with E=T through the existing scheduler and its complete original action claim
+- **AND** an already playing voice SHALL retain its Native/FIFO, source trajectory and PCM before T
+- **AND** the candidate SHALL retain the fresh action's own request and permit while the displaced cache request retires outside realtime without Native reset, construction or data processing on the callback
+
+#### Scenario: Ordinary and pitch attacks compete for one consumable endpoint
+- **WHEN** ordinary and same-target pitch retriggers, or several pitch retriggers, are admitted against one ready endpoint
+- **THEN** at most one action SHALL consume that actual Native/FIFO and each accepted action SHALL retain a distinct original record, tuple, sequence, target and effect
+- **AND** a consumed or mismatched endpoint SHALL leave the remaining actions on their existing preparation or rejection path without borrowing another action's ACK or epoch
+- **AND** a rejected capacity or invalid action SHALL NOT consume an otherwise valid reserve, while a moved candidate SHALL never remain advertised as available even if cancellation wins before application
+
+#### Scenario: Fresh pitch authority remains mandatory after a hit
+- **WHEN** selection or the background cache epoch changes after the original pitch action consumes its exact endpoint
+- **THEN** its fresh original action permit SHALL remain independent of the retired cache request
+- **AND** real source, lifetime, authority, request-incarnation, window, timing, loop, stem, rate, Stop or cancellation changes SHALL still reject unsafe application without partial pitch or attack
 
 #### Scenario: A ready selected endpoint serves a fresh ordinary attack
 - **GIVEN** the selected content has one genuinely prepared exact Normal endpoint

@@ -158,20 +158,15 @@ impl OrdinaryStartWork {
         &mut self,
         reserve: &mut super::ordinary_endpoint_reserve::EndpointReserveWork,
     ) -> bool {
-        if self.candidate.is_some() || reserve.retired_request.is_some() {
-            return false;
-        }
         let Some(request) = self.request.as_ref() else {
             return false;
         };
-        let Some(source) = reserve
-            .candidate
-            .as_ref()
-            .and_then(|candidate| candidate.source.as_ref())
-        else {
-            return false;
-        };
-        if !source.same_endpoint_request(request)
+        if request.request_id != self.sequence()
+            || request.epoch != self.epoch()
+            || request.target_output_frame != self.execution_frame()
+            || self.render.is_none_or(|render| {
+                request.pitch_intent != render.pitch || request.key_lock != render.key_lock
+            })
             || !request.permit.matches_action_owner(
                 self.origin().ownership(),
                 self.origin().acknowledgements(),
@@ -181,9 +176,9 @@ impl OrdinaryStartWork {
         {
             return false;
         }
-        let mut candidate = reserve.candidate.take().unwrap();
-        reserve.retired_request = candidate.source.replace(self.request.take().unwrap());
-        self.candidate = Some(candidate);
+        if !reserve.transfer_to(&mut self.request, &mut self.candidate, self.render_format) {
+            return false;
+        }
         self.origin().mark_prepared();
         true
     }

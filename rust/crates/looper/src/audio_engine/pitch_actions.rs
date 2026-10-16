@@ -883,6 +883,62 @@ impl PitchActionWork {
         self.preparation_required
     }
 
+    pub(crate) fn is_ready(&self) -> bool {
+        !self.preparation_required
+            || (matches!(
+                self.action.owner.status.load(Ordering::Acquire),
+                PREPARED | SCHEDULED
+            ) && self.candidate.as_ref().is_some_and(|candidate| {
+                candidate.active && candidate.used && !candidate.dirty && candidate.source.is_some()
+            }))
+    }
+
+    pub(crate) fn validates_render_format(&self, rate: u32, channels: usize) -> bool {
+        self.render_format == (rate, channels)
+    }
+
+    /// The reserve transfers only DSP data; this work retains its freshly captured
+    /// original action request, exact epoch owner and complete adoption guards.
+    pub(crate) fn take_endpoint(
+        &mut self,
+        reserve: &mut super::ordinary_endpoint_reserve::EndpointReserveWork,
+    ) -> bool {
+        if !self.captured
+            || !self.execution_frozen
+            || !self.preparation_required
+            || self.action.variant() != PitchActionVariant::SetRetrigger
+            || self.preparation_mode != PitchActionPreparationMode::Endpoint
+            || self.source_feed_future.is_some()
+            || self.action.owner.status.load(Ordering::Acquire) != PREPARING
+            || self.current_guard().is_err()
+        {
+            return false;
+        }
+        let Some(request) = self.request.as_ref() else {
+            return false;
+        };
+        let render = self.action.render();
+        if request.request_id != self.action.sequence()
+            || request.epoch != self.action.epoch()
+            || request.target_output_frame != self.action.execution_target()
+            || request.pitch_intent != render.pitch
+            || request.key_lock != render.key_lock
+            || !self.action.matches_history_owner(request)
+        {
+            return false;
+        }
+        if !reserve.transfer_to(&mut self.request, &mut self.candidate, self.render_format) {
+            return false;
+        }
+        // A cancellation after the move keeps the candidate in this original work
+        // for off-callback retirement. The reserve is already marked consumed.
+        self.action
+            .owner
+            .status
+            .compare_exchange(PREPARING, PREPARED, Ordering::AcqRel, Ordering::Acquire)
+            .is_ok()
+    }
+
     /// Root has proved stopped SET or actual exact unity needs no native adoption.
     /// This is bounded scalar state only; it never changes tuning, position or playback.
     pub(crate) fn complete_without_preparation(&mut self) -> Result<(), PitchActionReject> {

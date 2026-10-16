@@ -172,7 +172,7 @@ impl PitchRuntime {
         retirement: &mut impl AudioBufferRetirement,
     ) {
         let index = self.slots.iter().position(|slot| slot.sequence == 0);
-        if index.is_none() || scheduler.is_full() || !self.preparation.preparation_available() {
+        if index.is_none() || scheduler.is_full() {
             work.action.reject(PitchActionReject::Capacity);
             retirement.retire_pitch_action(work);
             return;
@@ -185,7 +185,14 @@ impl PitchRuntime {
                 return;
             }
         };
-        let execution = execution_frame(work.action.original_due_frame(), callback, required);
+        let hit = required && self.endpoint.ready_for_pitch(mixer, &work);
+        if !hit && !self.preparation.preparation_available() {
+            work.action.reject(PitchActionReject::Capacity);
+            retirement.retire_pitch_action(work);
+            return;
+        }
+        let execution =
+            execution_frame(work.action.original_due_frame(), callback, required && !hit);
         let capture = work
             .freeze_execution_frame(execution)
             .and_then(|()| mixer.capture_pitch_action_request(&mut work, callback, execution));
@@ -201,6 +208,15 @@ impl PitchRuntime {
             Ok(None) => work.complete_without_preparation(),
             Err(reason) => Err(reason),
         };
+        let result = result.and_then(|()| {
+            if hit {
+                if !self.endpoint.consume_pitch(&mut work) {
+                    return Err(PitchActionReject::PreparedMismatch);
+                }
+                work.current_guard()?;
+            }
+            Ok(())
+        });
         if let Err(reason) = result {
             work.action.reject(reason);
             retirement.retire_pitch_action(work);

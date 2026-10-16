@@ -129,6 +129,22 @@ each subscriber's own pending then accepted/current publication. The full existi
   endpoint on the existing lower-priority worker lane; prove a consumable ready hit
   E=T for stopped/playing content with fresh original authority, stale-source/geometry/tuple misses and distinct
   burst records. This bounded vertical closes no full deadline/acoustic/resource gate.
+- [x] Same-applied pitch SET_RETRIGGER: reproduce stopped/playing public GUI-origin
+  and routed MIDI ready hits; consume the shared exact selected Normal endpoint
+  at original T with the action's own request/epoch/permit and complete initial PCM.
+- [x] Share whole-endpoint transfer with ordinary starts; retain descriptor and
+  complete original action/adoption fences, unique consumption, cache-epoch
+  independence and stale/mismatch/Stop/cancellation/capacity refusal semantics.
+- [x] Run affected endpoint/pitch/ordinary integrated checks, needed private
+  Release/import and strict validation, plus one independent final review;
+  preserve all negatives and the full parent acoustic/deadline/resource/Human gates.
+  Old production reproduced 5 passing/7 failing new cases. Final endpoint22,
+  integrated pitch120/1 existing ignored and ordinary54 pass; exact private locked
+  stripped Release/API and84 current Python checks pass. Shared transfer clears
+  readiness at the move, including cancellation; fresh original request/permit
+  remains mandatory at actual adoption. One independent final reviewer cleared
+  the actual source and repaired fixture oracle. These mono48k software profiles
+  do not close broad format/stem, cold-miss, acoustic, deadline, P6 or Human gates.
 - [x] Active-E selection: prove both logical reader roles from one genuinely held
   StemSet through genuine-history SET/MODE preparation, exact adoption, paused
   resume and scalar-tracked natural ramp completion without Native/FIFO replacement;

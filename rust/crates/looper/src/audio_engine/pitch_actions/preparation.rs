@@ -51,7 +51,7 @@ impl PreparedActionWork {
 
     pub(crate) fn is_ready(&self) -> bool {
         match self {
-            Self::Pitch(work) => !work.preparation_required() || work.action.state() == "prepared",
+            Self::Pitch(work) => work.is_ready(),
             Self::Ordinary(work) => work.is_ready(),
         }
     }

@@ -59,6 +59,9 @@ impl RtMixer {
         &self,
         work: &PitchActionWork,
     ) -> Result<bool, PitchActionReject> {
+        if !work.validates_render_format(self.sample_rate_hz as u32, self.channels) {
+            return Err(PitchActionReject::PreparedMismatch);
+        }
         let guard = self.pitch_action_guard(work)?;
         let render = work.action.render();
         match work.action.variant() {
@@ -104,7 +107,7 @@ impl RtMixer {
         Ok(same_owned || dry_unity)
     }
 
-    fn pitch_action_guard(
+    pub(super) fn pitch_action_guard(
         &self,
         work: &PitchActionWork,
     ) -> Result<PitchActionGuard, PitchActionReject> {
@@ -145,49 +148,13 @@ impl RtMixer {
         Ok(current)
     }
 
-    fn pitch_action_start_snapshot(
+    pub(super) fn pitch_action_start_snapshot(
         &self,
         work: &PitchActionWork,
         id: usize,
     ) -> Result<PitchSourceSnapshot, PitchActionReject> {
         let (start_s, end_s) = work.action.loop_region();
-        let (start, end) = self
-            .loop_intent_frames(id, start_s, end_s)
-            .ok_or(PitchActionReject::InvalidAction)?;
-        let sample = self.sample_bank[id]
-            .as_ref()
-            .ok_or(PitchActionReject::SourceChanged)?;
-        let region = effective_loop_region(start, end, sample.frame_count())
-            .ok_or(PitchActionReject::InvalidAction)?;
-        let mut snapshot = self
-            .capture_pitch_start_snapshot(id, region.start)
-            .ok_or(PitchActionReject::TimingUnavailable)?;
-        snapshot.playback = SourcePlayback::new(
-            region.start,
-            ExplicitSeekMode::Normal,
-            self.tempo_ratio_for_sample_id(id),
-        );
-        snapshot.playback.configure_domain(
-            self.timing_for_sample_id(id)
-                .loop_domain(sample.frame_count(), region),
-        );
-        snapshot.plan.frame_pos = region.start;
-        snapshot.plan.loop_region = region;
-        snapshot.plan.loop_period = snapshot.playback.loop_period();
-        snapshot.plan.seek_mode = ExplicitSeekMode::Normal;
-        // The existing normal retrigger ends the source selection ramp at its own restart.
-        snapshot.plan.transition.clear();
-        if !super::super::native_source_coverage::normal_loop_feed_available(
-            &snapshot.sample,
-            snapshot.stems.as_ref(),
-            snapshot.sample_rate_hz,
-            snapshot.accepted,
-            snapshot.plan,
-            &snapshot.playback,
-        ) {
-            return Err(PitchActionReject::WindowPending);
-        }
-        Ok(snapshot)
+        self.normal_start_snapshot(id, start_s, end_s)
     }
 
     pub(crate) fn capture_pitch_action_request(

@@ -7,7 +7,7 @@ use super::content_placement::ContentKey;
 use super::mixer::RtMixer;
 use super::native_history_permit::NativeHistoryContext;
 use super::ordinary_start::OrdinaryStartWork;
-use super::pitch_actions::{FrozenPitchRender, PitchActionPreparation};
+use super::pitch_actions::{FrozenPitchRender, PitchActionPreparation, PitchActionWork};
 use super::prepared_native_history::{
     NativeAdapterState, NativeHistoryRequest, PitchSourceSnapshot,
 };
@@ -114,6 +114,45 @@ impl EndpointReserveWork {
             attempted: true,
             ready: false,
         })
+    }
+
+    /// Move complete DSP state only after the caller proves its own action envelope.
+    /// Retain the displaced cache request for the existing worker to destroy.
+    pub(crate) fn transfer_to(
+        &mut self,
+        request: &mut Option<NativeHistoryRequest>,
+        candidate: &mut Option<Box<NativeAdapterState>>,
+        render_format: (u32, usize),
+    ) -> bool {
+        if !self.ready
+            || candidate.is_some()
+            || self.retired_request.is_some()
+            || self.format != Some(render_format)
+        {
+            return false;
+        }
+        let Some(original) = request.as_ref() else {
+            return false;
+        };
+        let Some(source) = self
+            .candidate
+            .as_ref()
+            .and_then(|state| state.source.as_ref())
+        else {
+            return false;
+        };
+        if (original.binding.sample_rate_hz, original.plan.channels) != render_format
+            || !source.same_endpoint_request(original)
+        {
+            return false;
+        }
+        let mut prepared = self.candidate.take().unwrap();
+        self.retired_request = prepared.source.replace(request.take().unwrap());
+        *candidate = Some(prepared);
+        // The move consumes readiness even if the action is concurrently cancelled.
+        self.ready = false;
+        self.attempted = false;
+        true
     }
 
     /// Worker only, including all failure/recycle drops and Native construction.
@@ -235,42 +274,45 @@ impl OrdinaryEndpointReserve {
         preparation.publish_endpoint(&mut self.work);
     }
 
-    pub(crate) fn ready_for(&self, mixer: &RtMixer, action: &OrdinaryStartWork) -> bool {
-        let Some(current) = mixer.capture_selected_normal_endpoint() else {
-            return false;
-        };
+    fn ready_source(&self, mixer: &RtMixer) -> Option<&NativeHistoryRequest> {
+        let current = mixer.capture_selected_normal_endpoint()?;
         if self
             .desired
             .is_none_or(|desired| !desired.matches(current.descriptor))
         {
-            return false;
+            return None;
         }
-        let Some(work) = self.work.as_ref().filter(|work| work.ready) else {
-            return false;
-        };
+        let work = self.work.as_ref().filter(|work| work.ready)?;
         if work.generation != self.epoch.load(Ordering::Acquire) {
-            return false;
+            return None;
         }
-        let Some(source) = work
-            .candidate
+        work.candidate
             .as_ref()
             .and_then(|candidate| candidate.source.as_ref())
-        else {
-            return false;
-        };
-        mixer.ordinary_endpoint_matches(action, source)
+    }
+
+    pub(crate) fn ready_for(&self, mixer: &RtMixer, action: &OrdinaryStartWork) -> bool {
+        self.ready_source(mixer)
+            .is_some_and(|source| mixer.ordinary_endpoint_matches(action, source))
+    }
+
+    pub(crate) fn ready_for_pitch(&self, mixer: &RtMixer, action: &PitchActionWork) -> bool {
+        self.ready_source(mixer)
+            .is_some_and(|source| mixer.pitch_endpoint_matches(action, source))
     }
 
     pub(crate) fn consume(&mut self, action: &mut OrdinaryStartWork) -> bool {
         let Some(work) = self.work.as_mut().filter(|work| work.ready) else {
             return false;
         };
-        if !action.take_endpoint(work) {
+        action.take_endpoint(work)
+    }
+
+    pub(crate) fn consume_pitch(&mut self, action: &mut PitchActionWork) -> bool {
+        let Some(work) = self.work.as_mut().filter(|work| work.ready) else {
             return false;
-        }
-        work.ready = false;
-        work.attempted = false;
-        true
+        };
+        action.take_endpoint(work)
     }
 
     #[cfg(test)]
