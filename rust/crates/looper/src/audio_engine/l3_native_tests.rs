@@ -180,10 +180,13 @@ pub(super) fn bpm_harness() -> Harness {
 
 fn master_bpm_through_callback(h: &mut Harness, bpm: f64) {
     let (mut producer, mut consumer) = rtrb::RingBuffer::new(1);
-    crate::audio_engine::push_global_timing_message(
+    crate::audio_engine::push_global_rate_message(
         &h.engine.global_timing_revision,
+        &h.engine.input_runtime_ownership.global_timing_publishing,
+        &h.engine.input_runtime_ownership.global_rate_status,
         &mut producer,
-        ControlParameterMessage::SetMasterBpm(bpm),
+        None,
+        Some(60.0 / bpm),
         "SetMasterBpm",
     )
     .unwrap();
@@ -379,6 +382,7 @@ fn bpm_productive(
         let mut producer = h.producer.lock().unwrap();
         crate::audio_engine::push_global_timing_message(
             &h.engine.global_timing_revision,
+            &h.engine.input_runtime_ownership.global_timing_publishing,
             &mut producer,
             ControlMessage::SetBpmLock(true),
             "SetBpmLock",
@@ -2544,10 +2548,13 @@ fn gliding_first_and_replacement_candidates_keep_source_distance_native_fifo_and
             let oracle = GlidingSourceOracle::new(&p);
             let revision = p.h.engine.global_timing_revision.load(Ordering::Acquire);
             let (mut parameters, mut parameter_consumer) = rtrb::RingBuffer::new(1);
-            crate::audio_engine::push_global_timing_message(
+            crate::audio_engine::push_global_rate_message(
                 &p.h.engine.global_timing_revision,
+                &p.h.engine.input_runtime_ownership.global_timing_publishing,
+                &p.h.engine.input_runtime_ownership.global_rate_status,
                 &mut parameters,
-                ControlParameterMessage::SetSpeed(2.0),
+                Some(2.0),
+                None,
                 "SetSpeed",
             )
             .unwrap();

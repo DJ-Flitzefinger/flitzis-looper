@@ -128,7 +128,9 @@ capture with original timestamps, publish/cancel, input polling and atomic
 also require the `CapturedPadStart` observations/cancellation methods and
 `capture_pad_start`, `prepare_captured_pad_start` and `publish_pad_start`, including
 optional original timestamp/source-generation/exclusive capture keywords and the
-default `window=None` publication parameter. Missing methods, receipt fields or
+default `window=None` publication parameter. The callable `global_rate_status`
+observation is also required so requested speed settings can be distinguished from
+the callback's pending, applied or rejected rate effect. Missing methods, receipt fields or
 incompatible keyword defaults reject the runtime before activation. These
 checks inspect the built Release
 class without constructing an engine or opening an audio device; an older

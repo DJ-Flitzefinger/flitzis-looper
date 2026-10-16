@@ -447,6 +447,9 @@ fn try_bootstrap_transport_from_reference(
     transport: &mut TransportTimeline,
     output_frame: u64,
 ) -> bool {
+    if mixer.has_pending_global_rate() {
+        return false;
+    }
     let Some(id) = transport.bootstrap_reference() else {
         return false;
     };
@@ -921,6 +924,9 @@ fn execute_accepted_timing_refresh<R: AudioBufferRetirement>(
     refresh: &super::accepted_timing_refresh::AcceptedTimingRefresh,
     retirement: &mut R,
 ) -> bool {
+    if refresh.master_period_seconds.is_some() && mixer.refuse_legacy_global_rate_if_pending() {
+        return false;
+    }
     if retirement.available_retirement_slots() < 1
         || !refresh.global_current()
         || !mixer.refresh_binding_current(refresh.id, refresh.binding)
@@ -1219,6 +1225,10 @@ fn render_scheduled_audio_tracking_pads<
         retirement,
     );
 
+    if scheduler.deferred_due().is_none() {
+        mixer.service_global_rate(callback_start_frame, transport, retirement);
+    }
+
     if channels == 0 {
         return;
     }
@@ -1234,21 +1244,10 @@ fn render_scheduled_audio_tracking_pads<
 
     while rendered_until_frame < callback_end_frame {
         try_bootstrap_transport_from_reference(mixer, transport, rendered_until_frame);
-        let Some(next_target_frame) = scheduler.peek_next_target_frame() else {
-            render_mixer_segment(
-                mixer,
-                output,
-                pad_peaks,
-                &mut segment_peaks,
-                pad_activity,
-                callback_start_frame,
-                rendered_until_frame,
-                callback_end_frame,
-                channels,
-                retirement,
-            );
-            break;
-        };
+        let next_target_frame = scheduler
+            .peek_next_target_frame()
+            .unwrap_or(callback_end_frame)
+            .min(mixer.next_global_rate_frame().unwrap_or(callback_end_frame));
 
         if next_target_frame >= callback_end_frame {
             render_mixer_segment(
@@ -1312,6 +1311,7 @@ fn render_scheduled_audio_tracking_pads<
             );
             break;
         }
+        mixer.service_global_rate(rendered_until_frame, transport, retirement);
     }
 }
 
@@ -1641,6 +1641,8 @@ pub(super) fn drain_control_messages<
     audio_messages: &mut S,
     retirement: &mut R,
 ) -> usize {
+    let drain_revision = mixer.begin_global_timing_drain();
+    mixer.set_global_commands_drained(false);
     let mut processed = 0;
 
     // An already due payload gets its one bounded retry before later queued effects.
@@ -1726,6 +1728,12 @@ pub(super) fn drain_control_messages<
         processed += 1;
     }
 
+    mixer.finish_global_control_drain(
+        drain_revision,
+        consumer.is_empty()
+            && mixer.deferred_control().is_none()
+            && scheduler.deferred_due().is_none(),
+    );
     processed
 }
 
@@ -1764,6 +1772,7 @@ struct PendingPadEq {
 
 struct PendingControlParameters {
     volume: Option<f32>,
+    rate_revision: u64,
     speed: Option<f64>,
     master_period_seconds: Option<f64>,
     pad_bpm: [PendingPadBpm; MAX_PARAMETER_MESSAGES_PER_CALLBACK],
@@ -1778,6 +1787,7 @@ impl Default for PendingControlParameters {
     fn default() -> Self {
         Self {
             volume: None,
+            rate_revision: 0,
             speed: None,
             master_period_seconds: None,
             pad_bpm: [PendingPadBpm {
@@ -1812,13 +1822,30 @@ impl PendingControlParameters {
     fn record(&mut self, message: ControlParameterMessage, mixer: &RtMixer) {
         match message {
             ControlParameterMessage::SetVolume(volume) => self.volume = Some(volume),
+            ControlParameterMessage::SetRateIntent {
+                revision,
+                speed,
+                period_seconds,
+            } => {
+                self.rate_revision = revision;
+                if let Some(speed) = speed {
+                    self.speed = Some(speed);
+                }
+                if let Some(period) = period_seconds {
+                    self.master_period_seconds = Some(period);
+                }
+            }
+            #[cfg(test)]
             ControlParameterMessage::SetSpeed(speed) => self.speed = Some(speed),
+            #[cfg(test)]
             ControlParameterMessage::SetMasterBpm(bpm) => {
                 self.master_period_seconds = Some(60.0 / bpm);
             }
+            #[cfg(test)]
             ControlParameterMessage::SetMasterPeriod(period) => {
                 self.master_period_seconds = Some(period);
             }
+            #[cfg(test)]
             ControlParameterMessage::SetSpeedAndMasterPeriod {
                 speed,
                 period_seconds,
@@ -2007,18 +2034,15 @@ impl PendingControlParameters {
             mixer.set_volume(volume);
             applied += 1;
         }
-        if let Some(speed) = self.speed {
-            mixer.set_speed(speed);
-            applied += 1;
-        }
-        if let Some(period) = self.master_period_seconds {
-            if transport.set_master_period_preserving_beat_position_at_frame(
-                period,
-                transport.output_frame(),
-            ) {
-                mixer.set_master_period(period);
-            }
-            applied += 1;
+        if self.speed.is_some() || self.master_period_seconds.is_some() {
+            mixer.stage_global_rate(
+                self.rate_revision,
+                self.speed,
+                self.master_period_seconds,
+                transport,
+            );
+            applied += usize::from(self.speed.is_some())
+                + usize::from(self.master_period_seconds.is_some());
         }
         for pending in self.pad_bpm[..self.pad_bpm_count].iter().copied() {
             let target = if pending.through_epoch.is_none() {
@@ -2089,6 +2113,7 @@ pub(super) fn drain_parameter_messages(
     mixer: &mut RtMixer,
     transport: &mut TransportTimeline,
 ) -> ParameterDrainResult {
+    let drain_revision = mixer.begin_global_timing_drain();
     let mut pending = PendingControlParameters::default();
     let mut messages_drained = 0;
 
@@ -2101,7 +2126,7 @@ pub(super) fn drain_parameter_messages(
         messages_drained += 1;
     }
 
-    mixer.set_global_parameters_drained(consumer.is_empty());
+    mixer.finish_global_parameter_drain(drain_revision, consumer.is_empty());
     ParameterDrainResult {
         messages_drained,
         parameters_applied: pending.apply_to(mixer, transport),
@@ -2850,12 +2875,14 @@ pub(super) fn process_control_message<
             }
         }
         ControlMessage::BootstrapTransportFromPad { id } => {
-            if id < NUM_SAMPLES {
+            if id < NUM_SAMPLES && !mixer.refuse_legacy_global_rate_if_pending() {
                 transport.request_bootstrap(id);
             }
         }
         ControlMessage::AnchorTransportPhaseFromPad { id } => {
-            anchor_transport_phase_from_pad(mixer, transport, id);
+            if !mixer.refuse_legacy_global_rate_if_pending() {
+                anchor_transport_phase_from_pad(mixer, transport, id);
+            }
         }
         ControlMessage::SetPadLoopRegion {
             id,

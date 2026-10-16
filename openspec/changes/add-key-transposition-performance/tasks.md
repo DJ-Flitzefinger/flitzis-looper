@@ -113,6 +113,16 @@ each subscriber's own pending then accepted/current publication. The full existi
   B5 depends map semantics, not B4 UI completion. Constant-rate Native frequency
   and bounded first-attack proofs are engineering evidence; variable trajectories,
   full acoustic predicates and performer deadlines remain open.
+- [x] Prove public native-unity birth followed by an actual rate transition into
+  wet processing, including the first irregular chunk, original voice/source
+  history and generation, intended pitch and matched Native/FIFO ownership;
+  generic warmed startup state must not certify a source-specific transition.
+  Ten mono48k public/real-drain regressions preserve first-chunk independent
+  A-reset PCM, original T/E, source ownership, coupled refusal/recovery and rate
+  receipt identity. The reproduced unread-publisher drain race is fixed; the
+  final impacted Native91 and exact private Release/API/Python808 checks pass.
+  Requested and effective rates remain separate in the controls. These bounded
+  proofs do not close the full B5 format/stem, acoustic, deadline or Human gates.
 - [ ] B6-K-AUDIO/B7-K-ATOMIC: prepared one-pass pitch, captured native selected
   projection/content lifetime/permits, direct/fallback/pending, distinct repeated
   attacks, same existing dueframe event, allfour Quantize/SYNC and routing combinations.

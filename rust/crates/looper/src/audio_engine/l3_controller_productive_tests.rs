@@ -8,6 +8,438 @@ use super::*;
 mod l3_public_loader_b_lifecycle_tests;
 use crate::audio_engine::buffer_retirement::AudioBufferRetirement;
 
+// These probes follow today's public ownership APIs. Updating a test carrier is
+// not evidence that the historical source passed; only a fresh run can establish it.
+struct ExpectedStoppedFeedback {
+    id: usize,
+    owner: usize,
+    cell: usize,
+    lifetime: u64,
+    transport_revision: u64,
+    kind: u8,
+}
+
+impl ExpectedStoppedFeedback {
+    fn source_command(
+        mixer: &RtMixer,
+        consumer: &rtrb::Consumer<ControlMessage>,
+        id: usize,
+    ) -> Self {
+        let (publication, key, revision) = match consumer.peek().unwrap() {
+            ControlMessage::UnloadSample {
+                publication: Some(publication),
+                id: target,
+            } => {
+                assert_eq!(*target, id);
+                let (key, revision) = publication
+                    .retired_feedback
+                    .expect("original retirement feedback");
+                (publication, key, revision)
+            }
+            ControlMessage::LoadColdSample {
+                publication,
+                id: target,
+                replace_assignment: true,
+                ..
+            } => {
+                assert_eq!(*target, id);
+                let key = publication.key().expect("original incoming source content");
+                let revision = publication
+                    .ownership
+                    .transport_intent_for_cell(key.cell())
+                    .load(Ordering::Acquire);
+                (publication, key, revision)
+            }
+            message => panic!("expected exact source STOP publication, got {message:?}"),
+        };
+        assert!(Arc::ptr_eq(
+            &mixer.input_ownership_for_effect(),
+            &publication.ownership
+        ));
+        assert!(key.belongs_to(publication.ownership.owner_identity()));
+        Self {
+            id,
+            owner: publication.ownership.owner_identity().diagnostic(),
+            cell: key.cell().index(),
+            lifetime: key.lifetime(),
+            transport_revision: revision,
+            kind: 2,
+        }
+    }
+
+    fn capture(mixer: &RtMixer, id: usize) -> Self {
+        let ownership = mixer.input_ownership_for_effect();
+        let key = ownership
+            .callback_feedback_key(id)
+            .expect("feedback must belong to the original callback content");
+        Self {
+            id,
+            owner: ownership.owner_identity().diagnostic(),
+            cell: key.cell().index(),
+            lifetime: key.lifetime(),
+            transport_revision: ownership
+                .transport_intent_for_cell(key.cell())
+                .load(Ordering::Acquire),
+            kind: 2,
+        }
+    }
+
+    fn capture_started(
+        mixer: &RtMixer,
+        id: usize,
+        start: &crate::audio_engine::pad_start::CapturedPadStart,
+    ) -> Self {
+        use crate::audio_engine::input_runtime_binding::LaunchWriteKind;
+        assert!(start.effective_frame().is_none());
+        assert!(
+            !start.exclusive(),
+            "these original starts keep the peer active"
+        );
+        let ownership = mixer.input_ownership_for_effect();
+        assert!(start.belongs_to(&ownership));
+        let key = start.content_key();
+        assert_eq!(ownership.callback_key_slot(key), Some(id));
+        let placement = ownership.slot_snapshot(id).unwrap();
+        assert_eq!(placement.content_key(), Some(key));
+        let claim = ownership
+            .prepare_launch_write_fixed(placement, LaunchWriteKind::Admit)
+            .unwrap();
+        assert!(ownership.launch_write_current(claim));
+        let mut expected = Self::capture(mixer, id);
+        assert_eq!(expected.cell, key.cell().index());
+        assert_eq!(expected.lifetime, key.lifetime());
+        // The original PreparedStart's successful Admit claim advances exactly
+        // this content's transport intent once BEFORE capturing START feedback.
+        // Freeze that next revision before the effect; no emitted message or
+        // audible source cursor supplies any expected field.
+        expected.transport_revision = expected.transport_revision.checked_add(1).unwrap();
+        expected.kind = 1;
+        expected
+    }
+
+    fn assert_message(&self, message: &AudioMessage) {
+        let AudioMessage::ContentFeedback {
+            id,
+            owner,
+            cell,
+            lifetime,
+            transport_revision,
+            kind,
+            value,
+        } = message
+        else {
+            panic!("expected original content-owned feedback, got {message:?}");
+        };
+        assert_eq!(*id, self.id);
+        assert_eq!(*owner, self.owner);
+        assert_eq!(*cell, self.cell);
+        assert_eq!(*lifetime, self.lifetime);
+        assert_eq!(*transport_revision, self.transport_revision);
+        assert_eq!(*kind, self.kind);
+        assert_eq!(value.to_bits(), 0.0_f64.to_bits());
+    }
+}
+
+/// Preserve the original public attack and optional independent window dependency.
+/// This facade supplies the existing device-free producer, never a replacement ACK.
+#[pyclass]
+struct PublicCapturedStartAudio {
+    engine: Arc<AudioEngine>,
+}
+
+#[pymethods]
+impl PublicCapturedStartAudio {
+    fn _resolve_pad_feedback(&self, message: &AudioMessage) -> PyResult<Option<usize>> {
+        self.engine._resolve_pad_feedback(message)
+    }
+
+    fn capture_input_timestamp_ns(&self) -> u64 {
+        self.engine.capture_input_timestamp_ns()
+    }
+
+    #[pyo3(signature = (captured, window=None))]
+    fn prepare_captured_pad_start(
+        &self,
+        captured: &crate::audio_engine::pad_start::CapturedPadStart,
+        window: Option<&crate::audio_engine::resident_relocation::ResidentWindowTicket>,
+    ) -> PyResult<crate::audio_engine::resident_relocation::ResidentWindowTicket> {
+        self.engine
+            .python_prepare_captured_pad_start(captured, window)
+    }
+}
+
+fn ordinary_start_from_python(
+    locals: &Py<PyDict>,
+) -> crate::audio_engine::pad_start::CapturedPadStart {
+    Python::attach(|py| {
+        locals
+            .bind(py)
+            .get_item("ordinary_start")
+            .unwrap()
+            .unwrap()
+            .extract::<PyRef<crate::audio_engine::pad_start::CapturedPadStart>>()
+            .unwrap()
+            .clone()
+    })
+}
+
+fn assert_original_target_at_front(consumer: &rtrb::Consumer<ControlMessage>, locals: &Py<PyDict>) {
+    let original = ordinary_start_from_python(locals);
+    let ControlMessage::CapturePadStartTarget(queued) = consumer.peek().unwrap() else {
+        panic!("expected original ordinary target before window publication");
+    };
+    assert!(queued.same_owner(&original));
+    assert_eq!(queued.sequence(), original.sequence());
+    assert_eq!(queued.received_timestamp(), original.received_timestamp());
+}
+
+fn synchronize_callback_frame(callback: &mut Callback, frame: u64) {
+    // `frame` is ControllerPlayback's count of callback frames already rendered
+    // through the unscheduled PCM oracle. This accounts for those same samples;
+    // it never jumps to a requested T/E or consumes unrendered source frames.
+    let before = callback.transport.output_frame();
+    assert!(before <= frame);
+    callback
+        .transport
+        .advance_by_rendered_frames((frame - before) as usize);
+    assert_eq!(callback.transport.output_frame(), frame);
+}
+
+fn drain_callback_at_current_frame(
+    callback: &mut Callback,
+    consumer: &mut rtrb::Consumer<ControlMessage>,
+) -> usize {
+    drain_control_messages(
+        consumer,
+        &mut callback.scheduler,
+        callback.transport.output_frame(),
+        &mut callback.quantization,
+        &mut callback.transport,
+        &mut callback.mixer,
+        &mut callback.feedback,
+        &mut callback.retirement,
+    )
+}
+
+/// Poll the original public launch only; no capture or substitute Trigger is allowed.
+fn admit_original_public_start(
+    callback: &mut Callback,
+    consumer: &mut rtrb::Consumer<ControlMessage>,
+    locals: &Py<PyDict>,
+) -> crate::audio_engine::pad_start::CapturedPadStart {
+    let start = ordinary_start_from_python(locals);
+    let original = start
+        .original_frame()
+        .expect("original target already drained");
+    let timestamp = start.received_timestamp();
+    let sequence = start.sequence();
+    controller_python(
+        locals,
+        r#"
+transport.on_frame_render()
+assert transport.residency.status(0)[1] is None
+assert ordinary_launch.start is ordinary_start
+assert captured_start_calls == [(ordinary_start, ordinary_timestamp)]
+assert all(owner is ordinary_start and dependency is ordinary_launch.dependency
+           for owner, dependency in captured_dependency_calls)
+"#,
+    );
+    let original_timestamp: u64 = Python::attach(|py| {
+        locals
+            .bind(py)
+            .get_item("ordinary_timestamp")
+            .unwrap()
+            .unwrap()
+            .extract()
+            .unwrap()
+    });
+    assert_eq!(timestamp, original_timestamp);
+    Python::attach(|py| {
+        let ticket = locals
+            .bind(py)
+            .get_item("ordinary_launch")
+            .unwrap()
+            .unwrap()
+            .getattr("ticket")
+            .unwrap();
+        let ticket = ticket
+            .extract::<PyRef<crate::audio_engine::resident_relocation::ResidentWindowTicket>>()
+            .unwrap();
+        assert!(ticket.is_current());
+        assert_eq!(ticket.publication_status(), "accepted");
+        assert!(
+            ticket
+                .capture_pad_start_launch_guard(&start)
+                .unwrap()
+                .is_some()
+        );
+    });
+    assert!(matches!(
+        consumer.peek(),
+        Ok(ControlMessage::PreparedStart(_))
+    ));
+    let before = callback.feedback.events.len();
+    let expected = ExpectedStoppedFeedback::capture_started(&callback.mixer, 0, &start);
+    assert_eq!(
+        drain_callback_at_current_frame(callback, consumer),
+        1,
+        "one original PreparedStart"
+    );
+    assert!(consumer.is_empty());
+    if start.state() == "applied" {
+        assert_eq!(callback.feedback.events.len(), before + 1);
+        expected.assert_message(&callback.feedback.events[before]);
+    } else {
+        assert_eq!(callback.feedback.events.len(), before);
+    }
+    wait_until(|| {
+        assert_ne!(start.state(), "rejected", "{:?}", start.reason());
+        assert_eq!(start.sequence(), sequence);
+        assert_eq!(start.received_timestamp(), timestamp);
+        assert_eq!(start.original_frame(), Some(original));
+        if start.state() == "applied" {
+            return true;
+        }
+        let runtime = callback.mixer.pitch_runtime.as_mut().unwrap();
+        runtime.poll();
+        runtime.has_ready_action(sequence)
+    });
+    assert!(start.execution_frame().unwrap() >= original);
+    start
+}
+
+fn execute_public_start_at_frame(
+    callback: &mut Callback,
+    start: &crate::audio_engine::pad_start::CapturedPadStart,
+) {
+    let execution = start.execution_frame().unwrap();
+    assert_eq!(callback.transport.output_frame(), execution);
+    let feedback_before = callback.feedback.events.len();
+    let already_applied = start.state() == "applied";
+    let expected = (!already_applied)
+        .then(|| ExpectedStoppedFeedback::capture_started(&callback.mixer, 0, start));
+    crate::audio_engine::audio_stream::render_scheduled_audio(
+        &mut callback.mixer,
+        &mut callback.scheduler,
+        &mut [],
+        &mut [0.0; NUM_SAMPLES],
+        execution,
+        2,
+        &mut callback.transport,
+        &mut callback.feedback,
+        &mut callback.retirement,
+    );
+    assert_eq!(start.state(), "applied", "{:?}", start.reason());
+    assert_eq!(start.effective_frame(), Some(execution));
+    assert!(callback.scheduler.is_empty());
+    // OFF may execute in the control drain at E, in which case the exact START
+    // already precedes this empty scheduled boundary. ON executes here.
+    if !already_applied {
+        assert_eq!(callback.feedback.events.len(), feedback_before + 1);
+        expected
+            .unwrap()
+            .assert_message(&callback.feedback.events[feedback_before]);
+    } else {
+        assert_eq!(callback.feedback.events.len(), feedback_before);
+    }
+}
+
+fn prepare_public_start_reference(mixer: &mut RtMixer, execution: u64) {
+    use crate::audio_engine::constant_timing::CurrentTimingAcknowledgements;
+    use crate::audio_engine::native_history_permit::NativeHistoryContext;
+    use crate::audio_engine::pitch_intent::PitchIntent;
+    use crate::audio_engine::prepared_native_history::NativeAdapterState;
+    let index = mixer
+        .voices
+        .iter()
+        .position(|voice| voice.is_playing_sample(0))
+        .unwrap();
+    let snapshot = mixer.capture_pitch_voice_snapshot(index).unwrap();
+    let accepted = snapshot.accepted;
+    let ownership = mixer.input_ownership_for_effect();
+    let acknowledgements = Arc::new(CurrentTimingAcknowledgements::default());
+    if let Some(projection) = accepted {
+        if let Some(key) = ownership
+            .binding_placement(0)
+            .and_then(|placement| placement.content_key())
+        {
+            assert!(acknowledgements.acknowledge_for_key(
+                &ownership,
+                key,
+                projection.publication_epoch
+            ));
+        } else {
+            acknowledgements.acknowledge(0, projection.publication_epoch);
+        }
+    }
+    mixer.set_current_timing_acknowledgements(acknowledgements.clone());
+    let epoch = mixer.voices[index].stretch.preparation_epoch();
+    let permit = NativeHistoryContext {
+        id: 0,
+        ownership: &ownership,
+        acknowledgements: &acknowledgements,
+        preparation_epoch: mixer.voices[index].stretch.source_epoch_owner(),
+    }
+    .capture(&snapshot.sample, RATE, accepted)
+    .unwrap();
+    let request = snapshot
+        .into_request(permit, PitchIntent::default(), true, execution, 1, epoch)
+        .unwrap();
+    let mut candidate = Box::new(NativeAdapterState::new(
+        Some(RubberBandLiveShifter::new(RATE, 2).unwrap()),
+        2,
+    ));
+    candidate.prepare_source_at_endpoint(request).unwrap();
+    assert!(mixer.adopt_prepared_pitch_voice(
+        index,
+        &mut candidate,
+        execution,
+        PitchIntent::default(),
+        true,
+        epoch,
+        1
+    ));
+}
+
+fn prepared_public_start_raw(playback: &ControllerPlayback) -> ControllerRawNative {
+    let mut raw = ControllerRawNative::new(playback.ratio, true);
+    let history = crate::audio_engine::prepared_native_history::PREPARED_HISTORY_FRAMES;
+    let period = playback.loop_period;
+    let last = (period.ceil() as usize - 1).min(playback.loop_end - playback.loop_start - 1);
+    let feed = std::array::from_fn(|channel| {
+        (0..history)
+            .map(|offset| {
+                let phase = ((offset as f64 - history as f64) * playback.ratio).rem_euclid(period);
+                let (left, right, fraction) = if phase >= last as f64 {
+                    (
+                        playback.loop_start + last,
+                        playback.loop_start,
+                        (phase - last as f64) / (period - last as f64),
+                    )
+                } else {
+                    let left = playback.loop_start + phase.floor() as usize;
+                    (left, left + 1, phase.fract())
+                };
+                let sample = |frame| match playback.selection {
+                    None => playback.source.samples[frame * 2 + channel],
+                    Some(mask) => playback
+                        .components
+                        .iter()
+                        .enumerate()
+                        .filter(|(index, _)| mask & (1 << index) != 0)
+                        .map(|(_, component)| component.samples[frame * 2 + channel])
+                        .sum(),
+                };
+                let a = sample(left);
+                a + (sample(right) - a) * fraction as f32
+            })
+            .collect()
+    });
+    raw.render(&feed);
+    assert!(raw.used);
+    raw
+}
+
 #[path = "l4_disk_settlement_tests.rs"]
 mod l4_disk_settlement_tests;
 #[path = "l4_shared_job_tests.rs"]
@@ -257,6 +689,13 @@ impl PublicLoadAudio {
         self.engine.poll_loader_events(py)
     }
 
+    fn _resolve_loader_event(
+        &self,
+        delivery: &crate::audio_engine::loader_events::LoaderEventDelivery,
+    ) -> PyResult<Option<(usize, bool)>> {
+        self.engine._resolve_loader_event(delivery)
+    }
+
     fn pad_timing_intent(&self, id: usize) -> PyResult<&'static str> {
         self.engine.pad_timing_intent(id)
     }
@@ -412,11 +851,14 @@ assert not session.stem_generation_errors, session.stem_generation_errors
     let speed = accepted.period_seconds * (210.0 / 60.0);
     let master = accepted.period_seconds / speed;
     let ratio = accepted.period_seconds / master;
-    assert!(engine.global_timing_revision.load(Ordering::Acquire) > revision);
+    let rate_revision = original_public_rate_revision(locals);
+    assert!(rate_revision > revision);
+    assert!(engine.global_timing_revision.load(Ordering::Acquire) > rate_revision);
     assert!(
-        matches!(parameters.peek(), Ok(ControlParameterMessage::SetSpeedAndMasterPeriod {
-        speed: actual, period_seconds
-    }) if actual.to_bits() == speed.to_bits() && period_seconds.to_bits() == master.to_bits())
+        matches!(parameters.peek(), Ok(ControlParameterMessage::SetRateIntent {
+        revision, speed: Some(actual), period_seconds: Some(period_seconds)
+    }) if *revision == rate_revision && actual.to_bits() == speed.to_bits()
+        && period_seconds.to_bits() == master.to_bits())
     );
     assert_eq!(playback.drain(consumer), 1, "own public BPM Bootstrap");
     crate::audio_engine::audio_stream::drain_parameter_messages(
@@ -492,6 +934,7 @@ fn live_bpm_then_explicit_retry(
     key_lock: bool,
 ) -> ControllerRateLedger {
     use crate::audio_engine::committed_stem_residency::CommittedStemRtWork;
+    use crate::audio_engine::pitch_intent::PitchIntent;
     assert_eq!(playback.drain(consumer), 1, "actual V2 Capture at old BPM");
     wait_until(|| consumer.peek().is_ok());
     let queued = match consumer.peek().unwrap() {
@@ -547,11 +990,14 @@ assert live.attempt is bpm_selection and first.is_current()
     let speed = accepted.period_seconds * (162.0 / 60.0);
     let master = accepted.period_seconds / speed;
     let ratio = accepted.period_seconds / master;
-    assert!(engine.global_timing_revision.load(Ordering::Acquire) > revision);
+    let rate_revision = original_public_rate_revision(locals);
+    assert!(rate_revision > revision);
+    assert!(engine.global_timing_revision.load(Ordering::Acquire) > rate_revision);
     assert!(
-        matches!(parameters.peek(), Ok(ControlParameterMessage::SetSpeedAndMasterPeriod {
-        speed: actual, period_seconds
-    }) if actual.to_bits() == speed.to_bits() && period_seconds.to_bits() == master.to_bits())
+        matches!(parameters.peek(), Ok(ControlParameterMessage::SetRateIntent {
+        revision, speed: Some(actual), period_seconds: Some(period_seconds)
+    }) if *revision == rate_revision && actual.to_bits() == speed.to_bits()
+        && period_seconds.to_bits() == master.to_bits())
     );
     let unchanged = voice(&playback.callback.mixer);
     assert!(unchanged.source_playback.matches_exact(&clock));
@@ -605,6 +1051,9 @@ assert live.attempt is bpm_selection and first.is_current()
         assert!(changed.stretch.productive_history().is_none());
     }
     let start = playback.source_frame;
+    // Keep the history and its consumption anchor together: the later V2 claim
+    // snapshot is taken after an unpaused one-frame probe and shadows `history`.
+    let rate_history = voice(&playback.callback.mixer).stretch.productive_history();
     let mut other = ControllerRateLedger::new(
         accepted.period_seconds * (150.0 / 60.0),
         (LOOP_END - LOOP_START) as f64,
@@ -792,10 +1241,27 @@ assert session.stem_generation_errors == {0: bpm_error}
             .to_bits(),
         ratio.to_bits()
     );
-    // The live glide is finished before a fresh V2 attempt. Adopt V1's own new
-    // source-bound Native first, with an independently warmed complete PCM oracle.
+    // The live glide is finished before a fresh V2 attempt. Productive V1 keeps
+    // its own uninterrupted Native/FIFO, rather than waiting for a replacement.
     if key_lock {
-        playback.adopt_native(false);
+        let retained = voice(&playback.callback.mixer);
+        assert_eq!(retained.stretch.native_state_address(), native);
+        assert!(
+            retained
+                .stretch
+                .owns_pitch_contract(PitchIntent::default(), true)
+        );
+        let original_history = rate_history.expect("V1 already owns source-specific history");
+        let retained_history = retained.stretch.productive_history().unwrap();
+        assert_eq!(retained_history.binding, original_history.binding);
+        assert_eq!(
+            retained_history.fed_output_frames,
+            original_history.fed_output_frames + playback.source_frame - start
+        );
+        assert_eq!(
+            retained_history.next_position,
+            retained.source_playback.position()
+        );
     } else {
         for frames in [512, 257, 31] {
             render_varispeed(playback, frames);
@@ -867,9 +1333,13 @@ assert session.master_period_seconds == accepted_period
         consumer.peek(),
         Ok(ControlMessage::SetBpmLock(true))
     ));
+    let master_revision = original_public_rate_revision(locals);
+    assert!(master_revision > 0);
+    assert!(callback.mixer.global_rate_timing_revision() > master_revision);
     assert!(
-        matches!(parameters.peek(), Ok(ControlParameterMessage::SetMasterPeriod(period))
-        if period.to_bits() == projection.period_seconds.to_bits())
+        matches!(parameters.peek(), Ok(ControlParameterMessage::SetRateIntent {
+            revision, speed: None, period_seconds: Some(period)
+        }) if *revision == master_revision && period.to_bits() == projection.period_seconds.to_bits())
     );
     assert_eq!(callback.drain(consumer), 2, "actual BPM Lock and Bootstrap");
     crate::audio_engine::audio_stream::drain_parameter_messages(
@@ -890,6 +1360,9 @@ assert transport.bpm.current_timing(0) == timing_before_bpm
     );
     let admitted_speed = projection.period_seconds * (target_bpm / 60.0);
     let admitted_master = projection.period_seconds / admitted_speed;
+    let rate_revision = original_public_rate_revision(locals);
+    assert!(rate_revision > master_revision);
+    assert!(callback.mixer.global_rate_timing_revision() > rate_revision);
     // Python display/model admission is not an audio ACK: the actual callback
     // still uses its previously applied accepted source period at this point.
     assert_eq!(
@@ -897,9 +1370,9 @@ assert transport.bpm.current_timing(0) == timing_before_bpm
         60.0 / projection.period_seconds
     );
     assert!(
-        matches!(parameters.peek(), Ok(ControlParameterMessage::SetSpeedAndMasterPeriod {
-        speed, period_seconds
-    }) if speed.to_bits() == admitted_speed.to_bits()
+        matches!(parameters.peek(), Ok(ControlParameterMessage::SetRateIntent {
+        revision, speed: Some(speed), period_seconds: Some(period_seconds)
+    }) if *revision == rate_revision && speed.to_bits() == admitted_speed.to_bits()
         && period_seconds.to_bits() == admitted_master.to_bits())
     );
     assert!(matches!(
@@ -952,6 +1425,7 @@ struct PublicBpmAudio {
     engine: Arc<AudioEngine>,
     producer: Arc<Mutex<rtrb::Producer<ControlMessage>>>,
     parameter_producer: Arc<Mutex<rtrb::Producer<ControlParameterMessage>>>,
+    original_rate_revision: AtomicU64,
 }
 
 #[pymethods]
@@ -969,6 +1443,7 @@ impl PublicBpmAudio {
         let _requests = self.engine.pad_request_ids.lock().unwrap();
         crate::audio_engine::push_global_timing_message(
             &self.engine.global_timing_revision,
+            &self.engine.input_runtime_ownership.global_timing_publishing,
             &mut self.producer.lock().unwrap(),
             ControlMessage::SetBpmLock(enabled),
             "SetBpmLock",
@@ -982,6 +1457,7 @@ impl PublicBpmAudio {
         let _requests = self.engine.pad_request_ids.lock().unwrap();
         crate::audio_engine::push_global_timing_message(
             &self.engine.global_timing_revision,
+            &self.engine.input_runtime_ownership.global_timing_publishing,
             &mut self.producer.lock().unwrap(),
             ControlMessage::BootstrapTransportFromPad { id },
             "BootstrapTransportFromPad",
@@ -998,12 +1474,22 @@ impl PublicBpmAudio {
             ));
         }
         let _requests = self.engine.pad_request_ids.lock().unwrap();
-        crate::audio_engine::push_global_timing_message(
+        crate::audio_engine::push_global_rate_message(
             &self.engine.global_timing_revision,
+            &self.engine.input_runtime_ownership.global_timing_publishing,
+            &self.engine.input_runtime_ownership.global_rate_status,
             &mut self.parameter_producer.lock().unwrap(),
-            ControlParameterMessage::SetMasterPeriod(period_seconds),
+            None,
+            Some(period_seconds),
             "SetMasterPeriod",
-        )
+        )?;
+        // Capture the stamped request while its publisher still owns the lock,
+        // before Python can enqueue a separate Bootstrap timing revocation.
+        self.original_rate_revision.store(
+            self.engine.global_timing_revision.load(Ordering::Acquire),
+            Ordering::Release,
+        );
+        Ok(())
     }
 
     fn set_speed_and_master_period(&self, speed: f64, period_seconds: f64) -> PyResult<()> {
@@ -1022,16 +1508,35 @@ impl PublicBpmAudio {
             ));
         }
         let _requests = self.engine.pad_request_ids.lock().unwrap();
-        crate::audio_engine::push_global_timing_message(
+        crate::audio_engine::push_global_rate_message(
             &self.engine.global_timing_revision,
+            &self.engine.input_runtime_ownership.global_timing_publishing,
+            &self.engine.input_runtime_ownership.global_rate_status,
             &mut self.parameter_producer.lock().unwrap(),
-            ControlParameterMessage::SetSpeedAndMasterPeriod {
-                speed,
-                period_seconds,
-            },
+            Some(speed),
+            Some(period_seconds),
             "SetSpeedAndMasterPeriod",
-        )
+        )?;
+        self.original_rate_revision.store(
+            self.engine.global_timing_revision.load(Ordering::Acquire),
+            Ordering::Release,
+        );
+        Ok(())
     }
+}
+
+fn original_public_rate_revision(locals: &Py<PyDict>) -> u64 {
+    Python::attach(|py| {
+        locals
+            .bind(py)
+            .get_item("bpm_audio")
+            .unwrap()
+            .unwrap()
+            .extract::<PyRef<PublicBpmAudio>>()
+            .unwrap()
+            .original_rate_revision
+            .load(Ordering::Acquire)
+    })
 }
 
 enum FixtureSet {
@@ -3010,9 +3515,15 @@ assert not previous_control.ticket.is_current()
     let expected_context = if key_lock {
         ResidentContext::KeyLockFullTrack
     } else {
-        ResidentContext::FiniteLoop
+        // Prepared migration preserves the actual effective tuple, so its
+        // finite coverage is Native-capable even while logical KEY LOCK is OFF.
+        ResidentContext::KeyLockFiniteLoop
     };
     assert_eq!(b.residency.as_ref().unwrap().context, expected_context);
+    assert_eq!(
+        playback.callback.mixer.key_lock_for_measurement(0),
+        key_lock
+    );
     assert_eq!(
         b.samples.as_ref(),
         &expected_b[b.resident_start() * 2..b.resident_end() * 2]
@@ -4177,6 +4688,8 @@ del prepared_v2, candidate, live
         probe.assert_retained();
     }
     let before = playback.callback.feedback.events.len();
+    let stopped_feedback =
+        ExpectedStoppedFeedback::source_command(&playback.callback.mixer, consumer, 0);
     crate::audio_engine::audio_stream::drain_parameter_messages(
         parameters,
         &mut playback.callback.mixer,
@@ -4200,10 +4713,7 @@ del prepared_v2, candidate, live
             .any(|voice| voice.is_playing_sample(0))
     );
     assert_eq!(playback.callback.feedback.events.len(), before + 1);
-    assert!(matches!(
-        playback.callback.feedback.events[before],
-        AudioMessage::SampleStopped { id: 0 }
-    ));
+    stopped_feedback.assert_message(&playback.callback.feedback.events[before]);
     let assert_other = |playback: &ControllerPlayback| {
         let other = other_voice(&playback.callback.mixer);
         let phase = ((playback.frame - pause_gap) as f64 * playback.ratio).rem_euclid(1500.0);
@@ -4732,6 +5242,8 @@ assert unload_notifications == [0]
     // voice and Native/history still exist, before own Unload's callback ACK.
     drop(stems);
     playback.callback.retirement.slots = usize::MAX;
+    let stopped_feedback =
+        ExpectedStoppedFeedback::source_command(&playback.callback.mixer, consumer, 0);
     assert_eq!(
         playback.drain(consumer),
         4,
@@ -4749,10 +5261,7 @@ assert unload_notifications == [0]
             .any(|voice| voice.is_playing_sample(0))
     );
     assert_eq!(playback.callback.feedback.events.len(), feedback_count + 1);
-    assert!(matches!(
-        playback.callback.feedback.events[feedback_count],
-        AudioMessage::SampleStopped { id: 0 }
-    ));
+    stopped_feedback.assert_message(&playback.callback.feedback.events[feedback_count]);
     assert_other(playback);
     let frozen_source_frame = playback.source_frame;
     for frames in [1, 31, 137, 257, 511] {
@@ -5190,6 +5699,8 @@ assert not source_audio.success_receipts
         .pending_fifo_frames();
     let feedback_before = playback.callback.feedback.events.len();
     playback.callback.retirement.slots = usize::MAX;
+    let stopped_feedback =
+        ExpectedStoppedFeedback::source_command(&playback.callback.mixer, consumer, 0);
     assert_eq!(playback.drain(consumer), 1, "actual replacement source ACK");
     assert!(consumer.is_empty());
     assert_eq!(adoption.load(Ordering::Acquire), 2);
@@ -5217,10 +5728,8 @@ assert not source_audio.success_receipts
         playback.callback.mixer.stem_demand_for_measurement(0),
         (demand.0, 0b1111, demand.2)
     );
-    assert!(matches!(
-        &playback.callback.feedback.events[feedback_before..],
-        [AudioMessage::SampleStopped { id: 0 }]
-    ));
+    assert_eq!(playback.callback.feedback.events.len(), feedback_before + 1);
+    stopped_feedback.assert_message(&playback.callback.feedback.events[feedback_before]);
     let other = other_voice(&playback.callback.mixer);
     assert!(other.source_playback.matches_exact(&other_clock));
     assert_eq!(other.generation, other_generation);
@@ -5378,6 +5887,7 @@ fn public_replaced_source_play(
     trace: CandidateTrace,
 ) -> Option<[Arc<InputRuntimeOwnership>; 2]> {
     assert!(!playback.scheduled && playback.rate_ledger.is_none());
+    synchronize_callback_frame(&mut playback.callback, playback.frame);
     assert_eq!(playback.loop_period, 1500.0);
     assert_eq!(playback.loop_end, LOOP_END);
     let assigned = playback.callback.mixer.bank_for_measurement()[0]
@@ -5398,7 +5908,7 @@ fn public_replaced_source_play(
         locals,
         r#"
 from flitzis_looper.controller.transport import TransportController
-class ReplacementPlayAudio:
+class ReplacementPlayAudio(CapturedTransportAudio):
     def __getattr__(self, name):
         return getattr(playback_audio, name)
     def play_sample(self, *args, **kwargs):
@@ -5412,8 +5922,11 @@ project.pad_loop_auto[0] = False
 project.pad_loop_start_s[0] = 17 / fixture['rate']
 project.pad_loop_end_s[0] = 1517 / fixture['rate']
 transport = TransportController(project, session, ReplacementPlayAudio(), persistence.mark_dirty)
-transport.playback.trigger_pad_keep_others(0)
-source_play_window = transport.residency._pending[0].ticket
+ordinary_timestamp = captured_audio.capture_input_timestamp_ns()
+transport.playback.trigger_pad_keep_others(0, received_at_ns=ordinary_timestamp)
+ordinary_launch = next(iter(transport.residency._captured_starts.values()))
+ordinary_start = ordinary_launch.start
+source_play_window = ordinary_launch.ticket
 assert source_play_window is not None
 assert source_play_window.publication_status() in {'preparing', 'pending'}
 assert source_play_window.error() is None
@@ -5427,16 +5940,32 @@ assert audio.worker_call_count() == source_worker_calls
             .source_playback
             .matches_exact(&other_clock)
     );
-    wait_until(|| consumer.peek().is_ok());
+    wait_until(|| {
+        Python::attach(|py| {
+            locals
+                .bind(py)
+                .get_item("source_play_window")
+                .unwrap()
+                .unwrap()
+                .extract::<PyRef<crate::audio_engine::resident_relocation::ResidentWindowTicket>>()
+                .unwrap()
+                .control_published_for_test()
+        })
+    });
+    assert_original_target_at_front(consumer, locals);
+    assert_eq!(
+        playback.drain(consumer),
+        1,
+        "original target precedes held real new-source window"
+    );
+    assert_eq!(
+        ordinary_start_from_python(locals).original_frame(),
+        Some(playback.frame)
+    );
     assert!(matches!(
         consumer.peek(),
         Ok(ControlMessage::RelocateResident(_))
     ));
-    assert_eq!(
-        playback.drain(consumer),
-        0,
-        "real new-source window retirement gate"
-    );
     let is_stopped = |playback: &ControllerPlayback| {
         !playback
             .callback
@@ -5555,31 +6084,36 @@ assert audio.worker_call_count() == source_worker_calls
             "controller.on_frame_render()\nassert not source_candidate.claimed()\nassert audio.worker_call_count() == source_worker_calls",
         );
     }
+    synchronize_callback_frame(&mut playback.callback, playback.frame);
+    let expected_started = ExpectedStoppedFeedback::capture_started(
+        &playback.callback.mixer,
+        0,
+        &ordinary_start_from_python(locals),
+    );
+    let start = admit_original_public_start(&mut playback.callback, consumer, locals);
+    let birth = start.execution_frame().unwrap();
+    while playback.frame < birth {
+        let frames = (birth - playback.frame).min(257) as usize;
+        let mut output = vec![0.0; frames * 2];
+        let callback = playback.callback.as_mut();
+        crate::audio_engine::audio_stream::render_scheduled_audio(
+            &mut callback.mixer,
+            &mut callback.scheduler,
+            &mut output,
+            &mut [0.0; NUM_SAMPLES],
+            playback.frame,
+            2,
+            &mut callback.transport,
+            &mut callback.feedback,
+            &mut callback.retirement,
+        );
+        callback.transport.advance_by_rendered_frames(frames);
+        playback.frame += frames as u64;
+        assert!(output.iter().all(|sample| *sample == 0.0));
+        assert!(is_stopped(playback) && start.effective_frame().is_none());
+    }
     let other_clock = other_voice(&playback.callback.mixer).source_playback;
-    controller_python(
-        locals,
-        r#"
-transport.on_frame_render()
-assert transport.residency.status(0) == (None, None)
-assert transport.residency.status(0)[1] is None
-assert source_candidate.residency_status() == 'rejected' and not source_candidate.claimed()
-"#,
-    );
-    assert!(matches!(
-        consumer.peek(),
-        Ok(ControlMessage::TriggerInputPad {
-            id: 0,
-            resident_control: Some(_),
-            exclusive: false,
-            ..
-        })
-    ));
-    let birth = playback.frame;
-    assert_eq!(
-        playback.drain(consumer),
-        1,
-        "actual public launch starts B's own voice"
-    );
+    execute_public_start_at_frame(&mut playback.callback, &start);
     assert!(consumer.is_empty());
     let current = voice(&playback.callback.mixer);
     let generation = current.generation;
@@ -5598,10 +6132,8 @@ assert source_candidate.residency_status() == 'rejected' and not source_candidat
         current.source_playback.tempo_ratio().to_bits(),
         playback.ratio.to_bits()
     );
-    assert!(matches!(
-        &playback.callback.feedback.events[feedback_before..],
-        [AudioMessage::SampleStarted { id: 0 }]
-    ));
+    assert_eq!(playback.callback.feedback.events.len(), feedback_before + 1);
+    expected_started.assert_message(&playback.callback.feedback.events[feedback_before]);
     assert!(
         other_voice(&playback.callback.mixer)
             .source_playback
@@ -5802,7 +6334,7 @@ fn public_replaced_source_key_lock_on(
         .events
         .iter()
         .rev()
-        .find(|event| matches!(event, AudioMessage::SampleStarted { id: 0 }))
+        .find(|event| matches!(event, AudioMessage::ContentFeedback { id: 0, kind: 1, .. }))
         .expect("actual B public Play feedback")
         .clone();
     Python::attach(|py| {
@@ -5815,7 +6347,9 @@ fn public_replaced_source_key_lock_on(
         locals,
         r#"
 assert 0 not in session.active_sample_ids
-transport.playback.handle_sample_started_message(b_on_started)
+resolved_started = captured_audio._resolve_pad_feedback(b_on_started)
+assert resolved_started == 0
+transport.playback.handle_sample_started_message(b_on_started, sample_id=resolved_started)
 assert 0 in session.active_sample_ids
 b_on_path = project.sample_paths[0]
 b_on_content = project.pad_content[0]
@@ -6117,7 +6651,7 @@ fn public_replaced_source_stems(
         .events
         .iter()
         .rev()
-        .find(|event| matches!(event, AudioMessage::SampleStarted { id: 0 }))
+        .find(|event| matches!(event, AudioMessage::ContentFeedback { id: 0, kind: 1, .. }))
         .expect("B's genuine public launch feedback")
         .clone();
     Python::attach(|py| {
@@ -6135,7 +6669,9 @@ fn public_replaced_source_stems(
         r#"
 if not b_stem_key_lock:
     assert 0 not in session.active_sample_ids
-    transport.playback.handle_sample_started_message(b_started)
+    resolved_started = captured_audio._resolve_pad_feedback(b_started)
+    assert resolved_started == 0
+    transport.playback.handle_sample_started_message(b_started, sample_id=resolved_started)
 assert 0 in session.active_sample_ids and 0 not in session.paused_sample_ids
 assert project.stem_cache[0] is None and project.pad_stem_mix_mode[0] == 'full_mix'
 b_path = project.sample_paths[0]
@@ -6891,6 +7427,7 @@ fn public_play_then_explicit_retry(
 ) -> (u64, u64) {
     use crate::audio_engine::committed_stem_residency::CommittedStemRtWork;
     assert!(!playback.scheduled && playback.rate_ledger.is_none());
+    synchronize_callback_frame(&mut playback.callback, playback.frame);
     assert_eq!(playback.drain(consumer), 1, "actual old-voice V2 Capture");
     wait_until(|| consumer.peek().is_ok());
     let queued = match consumer.peek().unwrap() {
@@ -6941,7 +7478,7 @@ assert failed_play.residency_status() == 'pending' and failed_play.effective_mod
                 locals,
                 r#"
 from flitzis_looper.controller.transport import TransportController
-class ReadyTransportAudio:
+class ReadyTransportAudio(CapturedTransportAudio):
     def __getattr__(self, name):
         return getattr(playback_audio, name)
     def play_sample(self, *args, **kwargs):
@@ -6952,8 +7489,11 @@ project.pad_loop_start_s[0] = 17 / fixture['rate']
 project.pad_loop_end_s[0] = 1517 / fixture['rate']
 project.pad_key_lock[0] = play_key_lock
 transport = TransportController(project, session, ReadyTransportAudio())
-transport.playback.trigger_pad_keep_others(0)
-ready_play = transport.residency._pending[0].ticket
+ordinary_timestamp = captured_audio.capture_input_timestamp_ns()
+transport.playback.trigger_pad_keep_others(0, received_at_ns=ordinary_timestamp)
+ordinary_launch = next(iter(transport.residency._captured_starts.values()))
+ordinary_start = ordinary_launch.start
+ready_play = ordinary_launch.ticket
 assert ready_play is not None and ready_play.publication_status() == 'pending'
 assert failed_play.residency_status() == 'pending' and failed_play.effective_mode_status() == 'rejected'
 assert not failed_play.is_current() and not failed_play.claimed()
@@ -6970,17 +7510,23 @@ assert play_registration.error() is None
                 matches!(consumer.peek(), Ok(ControlMessage::CommittedStemWork(work))
                 if work.as_ref() as *const CommittedStemRtWork as usize == queued)
             );
-            assert_eq!(consumer.slots(), 2);
+            assert_eq!(consumer.slots(), 3);
         } else {
             assert!(
                 matches!(consumer.peek(), Ok(ControlMessage::CommittedStemWork(work))
                 if work.as_ref() as *const CommittedStemRtWork as usize == queued)
             );
             playback.callback.retirement.slots = usize::MAX;
+            synchronize_callback_frame(&mut playback.callback, playback.frame);
+            let capture_frame = playback.frame;
             assert_eq!(
                 playback.drain(consumer),
-                2,
-                "unchanged old Adopt rejects before real same-window ACK"
+                3,
+                "unchanged old Adopt rejects before original target and real same-window ACK"
+            );
+            assert_eq!(
+                ordinary_start_from_python(locals).original_frame(),
+                Some(capture_frame)
             );
             assert!(consumer.is_empty());
             controller_python(
@@ -7080,7 +7626,7 @@ for _ in range(16):
         );
         assert_eq!(
             consumer.slots(),
-            if stage == 0 { 2 } else { 0 },
+            if stage == 0 { 3 } else { 0 },
             "stem polling cannot retry or launch Play"
         );
         for frames in [1, 31, 137, 257] {
@@ -7094,26 +7640,25 @@ for _ in range(16):
             assert_eq!(voice(&playback.callback.mixer).generation, old_generation);
         }
     }
+    synchronize_callback_frame(&mut playback.callback, playback.frame);
+    let start = admit_original_public_start(&mut playback.callback, consumer, locals);
+    let birth = start.execution_frame().unwrap();
+    playback.scheduled = true;
+    while playback.frame < birth {
+        let frames = (birth - playback.frame).min(257) as usize;
+        let output = if key_lock {
+            playback.render(frames, true)
+        } else {
+            render_varispeed(playback, frames)
+        }
+        .0;
+        assert!(output.iter().any(|sample| sample.abs() > 0.001));
+        assert_eq!(voice(&playback.callback.mixer).generation, old_generation);
+        assert!(start.effective_frame().is_none());
+    }
     let other_clock = other_voice(&playback.callback.mixer).source_playback;
-    controller_python(
-        locals,
-        "transport.on_frame_render()\nassert transport.residency.status(0) == (None, None)\nassert failed_play.residency_status() == 'rejected' and not failed_play.claimed()",
-    );
-    assert!(matches!(
-        consumer.peek(),
-        Ok(ControlMessage::TriggerInputPad {
-            id: 0,
-            resident_control: Some(_),
-            exclusive: false,
-            ..
-        })
-    ));
-    let birth = playback.frame;
-    assert_eq!(
-        playback.drain(consumer),
-        1,
-        "actual public prepared Play retriggers its own voice"
-    );
+    execute_public_start_at_frame(&mut playback.callback, &start);
+    playback.scheduled = false;
     assert!(consumer.is_empty());
     let new_voice = voice(&playback.callback.mixer);
     let generation = new_voice.generation;
@@ -7128,21 +7673,27 @@ for _ in range(16):
             .source_playback
             .matches_exact(&other_clock)
     );
-    // The authorized Trigger, not queue admission or Window ACK, starts all
+    // The original PreparedStart effect starts all
     // three independent new-voice clocks. Absolute callback time remains intact.
     for reference in [&mut playback.reference, &mut playback.full_mix] {
         assert!(reference.play_sample_at_output_frame(0, 1.0, birth));
+        if key_lock {
+            prepare_public_start_reference(reference, birth);
+        }
     }
     playback.source_frame = 0;
     playback.resumed_at = Some(birth);
     playback.previous = playback.selection;
     playback.ramp_start = 0;
-    playback.raw = key_lock.then(|| ControllerRawNative::new(playback.ratio, false));
+    playback.raw = key_lock.then(|| prepared_public_start_raw(playback));
     playback.candidate = None;
     playback.filter = controller_filter();
     if key_lock {
-        playback.render(13, true);
-        let (actual, _) = playback.adopt_native(true);
+        assert_eq!(
+            voice(&playback.callback.mixer).stretch.adopted_request_id(),
+            Some(start.sequence())
+        );
+        let (actual, _) = playback.render(137, true);
         assert!(actual.iter().any(|sample| sample.abs() > 0.001));
     } else {
         for frames in [1, 31, 137, 257, 511] {
@@ -8133,7 +8684,7 @@ fn stopped_candidate_play(
     before_poll: bool,
     key_lock: bool,
     complete_partial: bool,
-) {
+) -> u64 {
     let source = callback.mixer.bank_for_measurement()[0].clone().unwrap();
     let set = callback.mixer.stems_for_measurement()[0].clone().unwrap();
     Python::attach(|py| {
@@ -8158,7 +8709,7 @@ if not before_poll:
 else:
     assert live.control is previous_control and live.attempt is live.disk.selection
 from flitzis_looper.controller.transport import TransportController
-class ReadyTransportAudio:
+class ReadyTransportAudio(CapturedTransportAudio):
     def __getattr__(self, name):
         return getattr(playback_audio, name)
     def play_sample(self, *args, **kwargs):
@@ -8169,8 +8720,11 @@ project.pad_loop_start_s[0] = 17 / fixture['rate']
 project.pad_loop_end_s[0] = 1517 / fixture['rate']
 project.pad_key_lock[0] = stopped_key_lock
 transport = TransportController(project, session, ReadyTransportAudio())
-transport.playback.trigger_pad_keep_others(0)
-ready_start = transport.residency._pending[0].ticket
+ordinary_timestamp = captured_audio.capture_input_timestamp_ns()
+transport.playback.trigger_pad_keep_others(0, received_at_ns=ordinary_timestamp)
+ordinary_launch = next(iter(transport.residency._captured_starts.values()))
+ordinary_start = ordinary_launch.start
+ready_start = ordinary_launch.ticket
 assert ready_start is not None
 assert ready_start.publication_status() in ({'preparing', 'pending'} if complete_partial else {'pending'})
 "#,
@@ -8178,11 +8732,19 @@ assert ready_start.publication_status() in ({'preparing', 'pending'} if complete
     // A changed physical window remains a proposal during heavy preparation.
     // Its actual queued transaction proves the worker armed the new intent;
     // only that boundary can revoke the accepted stopped observation.
-    wait_until(|| consumer.peek().is_ok());
-    assert!(matches!(
-        consumer.peek(),
-        Ok(ControlMessage::RelocateResident(_))
-    ));
+    wait_until(|| {
+        Python::attach(|py| {
+            locals
+                .bind(py)
+                .get_item("ready_start")
+                .unwrap()
+                .unwrap()
+                .extract::<PyRef<crate::audio_engine::resident_relocation::ResidentWindowTicket>>()
+                .unwrap()
+                .control_published_for_test()
+        })
+    });
+    assert_original_target_at_front(consumer, locals);
     controller_python(
         locals,
         r#"
@@ -8204,7 +8766,16 @@ assert project.pad_stem_mix_mode[0] == 'all_stems'
 assert not session.stem_generation_errors, session.stem_generation_errors
 "#,
     );
-    assert_eq!(callback.drain(consumer), 1, "ordinary Play window ACK");
+    let capture_frame = callback.transport.output_frame();
+    assert_eq!(
+        drain_callback_at_current_frame(callback, consumer),
+        2,
+        "original target then ordinary Play window ACK"
+    );
+    assert_eq!(
+        ordinary_start_from_python(locals).original_frame(),
+        Some(capture_frame)
+    );
     controller_python(
         locals,
         "assert ready_start.is_current() and ready_start.publication_status() == 'accepted'\nassert ready_start.error() is None\nassert 0 not in session.active_sample_ids",
@@ -8260,22 +8831,57 @@ assert not session.stem_generation_errors, session.stem_generation_errors
             "ordinary Play either reuses its ready window or owns its new finite preparation"
         );
     });
-    controller_python(
-        locals,
-        "transport.on_frame_render()\nassert transport.residency.status(0)[1] is None",
-    );
-    assert!(matches!(
-        consumer.peek(),
-        Ok(ControlMessage::TriggerInputPad {
-            resident_control: Some(_),
-            ..
-        })
-    ));
-    assert_eq!(callback.drain(consumer), 1, "ordinary Play launch");
+    let start = admit_original_public_start(callback, consumer, locals);
+    let execution = start.execution_frame().unwrap();
+    while callback.transport.output_frame() < execution {
+        let frame = callback.transport.output_frame();
+        let frames = (execution - frame).min(257) as usize;
+        let mut output = vec![0.0; frames * 2];
+        crate::audio_engine::audio_stream::render_scheduled_audio(
+            &mut callback.mixer,
+            &mut callback.scheduler,
+            &mut output,
+            &mut [0.0; NUM_SAMPLES],
+            frame,
+            2,
+            &mut callback.transport,
+            &mut callback.feedback,
+            &mut callback.retirement,
+        );
+        callback.transport.advance_by_rendered_frames(frames);
+        assert!(output.iter().all(|sample| *sample == 0.0));
+        assert!(callback.mixer.voices.iter().all(|voice| !voice.active));
+        assert!(start.effective_frame().is_none());
+    }
+    execute_public_start_at_frame(callback, &start);
+    if key_lock {
+        assert_eq!(
+            voice(&callback.mixer).stretch.adopted_request_id(),
+            Some(start.sequence())
+        );
+        assert_eq!(
+            voice(&callback.mixer)
+                .stretch
+                .productive_history()
+                .unwrap()
+                .fed_output_frames,
+            crate::audio_engine::prepared_native_history::PREPARED_HISTORY_FRAMES as u64
+        );
+    }
+    let started = callback.feedback.events.last().unwrap().clone();
+    Python::attach(|py| {
+        locals
+            .bind(py)
+            .set_item("ordinary_started_feedback", Py::new(py, started).unwrap())
+            .unwrap()
+    });
     controller_python(
         locals,
         r#"
-session.active_sample_ids.add(0)
+ordinary_started_slot = captured_audio._resolve_pad_feedback(ordinary_started_feedback)
+assert ordinary_started_slot == 0
+transport.playback.handle_sample_started_message(ordinary_started_feedback, sample_id=ordinary_started_slot)
+assert session.active_sample_ids == {0}
 for _ in range(16):
     controller.on_frame_render()
 assert live.control.receipt is None
@@ -8310,6 +8916,7 @@ assert audio.worker_call_count() == 1
             );
         }
     }
+    execution
 }
 
 fn public_explicit_seek(
@@ -9290,11 +9897,12 @@ fn round_trip_with_lifecycle(
     });
     let (parameter_producer, mut parameter_consumer) = rtrb::RingBuffer::new(8);
     let parameter_producer = Arc::new(Mutex::new(parameter_producer));
-    if source_controls {
+    {
         let (_feedback, feedback_rx) = rtrb::RingBuffer::new(8);
         h.engine.test_control_channels =
             Some((h.producer.clone(), Arc::new(Mutex::new(feedback_rx))));
         h.engine.test_parameter_producer = Some(parameter_producer.clone());
+        h.engine.test_output_format = Some((RATE, 2));
     }
     let engine = Arc::new(h.engine);
     let locals = Python::attach(|py| {
@@ -9365,6 +9973,7 @@ fn round_trip_with_lifecycle(
                             engine: engine.clone(),
                             producer: h.producer.clone(),
                             parameter_producer: parameter_producer.clone(),
+                            original_rate_revision: AtomicU64::new(0),
                         },
                     )
                     .unwrap(),
@@ -9372,6 +9981,18 @@ fn round_trip_with_lifecycle(
                 .unwrap();
         }
         locals.set_item("repeated_sets", repeated_sets).unwrap();
+        locals
+            .set_item(
+                "captured_audio",
+                Py::new(
+                    py,
+                    PublicCapturedStartAudio {
+                        engine: engine.clone(),
+                    },
+                )
+                .unwrap(),
+            )
+            .unwrap();
         locals.set_item("preclaim_masks", preclaim_masks).unwrap();
         locals.set_item("retrigger", retrigger).unwrap();
         locals.set_item("window_change", window_change).unwrap();
@@ -9443,6 +10064,17 @@ from flitzis_looper.controller.stems import StemController
 from flitzis_looper.controller.stem_workers import StemWorkerPool
 from flitzis_looper.controller.persistence import ProjectPersistence
 from flitzis_looper.stem_pair_selection import StemPairSelection
+captured_start_calls, captured_dependency_calls = [], []
+class CapturedTransportAudio:
+    def __getattr__(self, name):
+        return getattr(playback_audio, name)
+    def capture_pad_start(self, *args, **kwargs):
+        original = playback_audio.capture_pad_start(*args, **kwargs)
+        captured_start_calls.append((original, kwargs.get('received_at_ns')))
+        return original
+    def prepare_captured_pad_start(self, original, window=None):
+        captured_dependency_calls.append((original, window))
+        return captured_audio.prepare_captured_pad_start(original, window)
 fixture = json.loads(input_json)
 project = ProjectState()
 project.sample_paths[0] = fixture['original_reference']
@@ -9646,7 +10278,7 @@ persistence.flush()
                 "controller.on_frame_render()\nassert stopped.is_current() and stopped.effective_mode_status() == 'waiting'\nassert not session.active_sample_ids\nassert controller.stem_residency_status(0).effective_stem_set_identity is None",
             );
         }
-        stopped_candidate_play(
+        let birth = stopped_candidate_play(
             &locals,
             &mut h.callback,
             &mut h.consumer,
@@ -9678,21 +10310,27 @@ persistence.flush()
             StemMixMode::AllStems,
             full_stems.source_version_hash
         ));
-        assert!(reference.play_sample_at_output_frame(0, 1.0, 0));
+        assert!(reference.play_sample_at_output_frame(0, 1.0, birth));
+        let mut full_mix = complete_reference_at_loop(
+            &full,
+            &full_stems,
+            ratio,
+            key_lock,
+            oracle_timing,
+            loop_region,
+        );
+        assert!(full_mix.play_sample_at_output_frame(0, 1.0, birth));
+        if key_lock {
+            prepare_public_start_reference(&mut reference, birth);
+            prepare_public_start_reference(&mut full_mix, birth);
+        }
         let mut playback = ControllerPlayback {
             callback: h.callback,
             reference,
-            full_mix: complete_reference_at_loop(
-                &full,
-                &full_stems,
-                ratio,
-                key_lock,
-                oracle_timing,
-                loop_region,
-            ),
-            frame: 0,
+            full_mix,
+            frame: birth,
             source_frame: 0,
-            resumed_at: None,
+            resumed_at: Some(birth),
             seek_epoch: None,
             complete_resident: false,
             source: full.clone(),
@@ -9709,13 +10347,20 @@ persistence.flush()
             selection: Some(0b0011),
             previous: Some(0b0011),
             ramp_start: 0,
-            raw: key_lock.then(|| ControllerRawNative::new(ratio, false)),
+            raw: None,
             candidate: None,
             filter: controller_filter(),
         };
+        playback.raw = key_lock.then(|| prepared_public_start_raw(&playback));
         let (actual, counterfactual) = if key_lock {
-            playback.render(13, true);
-            playback.adopt_native(true)
+            let mut actual = Vec::new();
+            let mut counterfactual = Vec::new();
+            for frames in [13, 31, 137, 257, 511] {
+                let (output, full_mix) = playback.render(frames, true);
+                actual.extend(output);
+                counterfactual.extend(full_mix);
+            }
+            (actual, counterfactual)
         } else {
             let mut actual = Vec::new();
             let mut counterfactual = Vec::new();

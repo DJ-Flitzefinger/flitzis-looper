@@ -307,10 +307,20 @@ impl ModeOracle {
                 .into(),
         }
         .with_complete_source(48_000);
-        let mut complete = Box::new(RtMixer::new(2, 48_000.0));
         let ownership = Arc::new(InputRuntimeOwnership::tracked());
         ownership.publish_test_source(0, &full, 48_000, 1);
-        complete.set_input_runtime_ownership(ownership.clone());
+        // Use the actual boxed callback constructor; returning the complete fixed mixer
+        // through the test-only by-value wrapper adds large default-stack temporaries.
+        let mut complete = crate::audio_engine::audio_stream::create_stream_mixer(
+            2,
+            48_000,
+            Arc::default(),
+            ownership.clone(),
+            (0..NUM_SAMPLES)
+                .map(|_| Arc::new(std::sync::atomic::AtomicU64::new(1)))
+                .collect(),
+        )
+        .unwrap();
         complete.load_sample(0, full);
         complete.set_pad_loop_region(0, 24.0 / 48_000.0, Some(96.0 / 48_000.0));
         complete.set_speed(ratio);

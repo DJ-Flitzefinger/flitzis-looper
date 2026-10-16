@@ -284,11 +284,11 @@ assert controller.is_stem_generation_running(job_survivor)
             );
         }
         let before = playback.callback.feedback.events.len();
+        let stopped_feedback =
+            ExpectedStoppedFeedback::source_command(&playback.callback.mixer, consumer, id);
         drain_defaults(playback, consumer, parameters);
         assert_eq!(playback.callback.feedback.events.len(), before + 1);
-        assert!(
-            matches!(playback.callback.feedback.events[before], AudioMessage::SampleStopped { id: own } if own == id)
-        );
+        stopped_feedback.assert_message(&playback.callback.feedback.events[before]);
         assert!(playback.callback.mixer.bank_for_measurement()[id].is_none());
         assert!(playback.callback.mixer.stems_for_measurement()[id].is_none());
         playback.render(137, false);

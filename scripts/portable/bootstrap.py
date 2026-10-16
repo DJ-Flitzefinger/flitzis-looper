@@ -148,6 +148,13 @@ def check_timing_completion_api(native_module: object) -> None:
         )
 
 
+def check_global_rate_api(engine_type: object) -> None:
+    """Require callback rate observation before activating the global rate controls."""
+    assert callable(getattr(engine_type, "global_rate_status", None)), (
+        "Native rate confirmation API missing: AudioEngine.global_rate_status"
+    )
+
+
 def check_pitch_action_api(native_module: object) -> None:
     """Require immutable pitch capture and atomic runtime projection without Native work."""
     capture_type = getattr(native_module, "CapturedPitchAction", None)
@@ -296,6 +303,7 @@ def check_runtime(root: Path, checkout: Path, runtime: Path) -> None:
     check_pitch_action_api(native_module)
     check_ordinary_start_api(native_module)
     check_captured_global_start_api(native_module)
+    check_global_rate_api(native_module.AudioEngine)
     assert physical_path(Path(sys.executable)).is_relative_to(physical_path(runtime / "python"))
     customization = importlib.import_module("sitecustomize")
     assert physical_path(Path(customization.__file__)).is_relative_to(

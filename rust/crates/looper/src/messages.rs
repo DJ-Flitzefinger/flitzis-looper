@@ -430,16 +430,27 @@ pub(crate) enum ControlParameterMessage {
     SetVolume(f32),
 
     /// Set the global speed multiplier.
+    #[cfg(test)]
     SetSpeed(f64),
 
     /// Set the current master BPM when BPM lock is enabled.
+    #[cfg(test)]
     SetMasterBpm(f64),
 
     /// Set the authoritative output seconds per quarter without a BPM roundtrip.
+    #[cfg(test)]
     SetMasterPeriod(f64),
 
     /// Admit a coupled speed/output period in one bounded callback message.
+    #[cfg(test)]
     SetSpeedAndMasterPeriod { speed: f64, period_seconds: f64 },
+
+    /// Original control identity survives coalescing and asynchronous rate preparation.
+    SetRateIntent {
+        revision: u64,
+        speed: Option<f64>,
+        period_seconds: Option<f64>,
+    },
 
     /// Set per-pad BPM metadata.
     #[cfg(test)]
@@ -492,6 +503,15 @@ impl ControlParameterMessage {
         match self {
             ControlParameterMessage::SetVolume(_) => ControlParameterKey::Volume,
             ControlParameterMessage::SetSpeed(_) => ControlParameterKey::Speed,
+            ControlParameterMessage::SetRateIntent {
+                speed,
+                period_seconds,
+                ..
+            } => match (speed, period_seconds) {
+                (Some(_), Some(_)) => ControlParameterKey::SpeedAndMasterPeriod,
+                (Some(_), None) => ControlParameterKey::Speed,
+                _ => ControlParameterKey::MasterBpm,
+            },
             ControlParameterMessage::SetSpeedAndMasterPeriod { .. } => {
                 ControlParameterKey::SpeedAndMasterPeriod
             }

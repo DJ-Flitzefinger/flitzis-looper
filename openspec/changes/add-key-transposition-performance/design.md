@@ -337,6 +337,48 @@ This distinction preserves immutable preparation through both the short Native
 publication marker and a delayed control mirror without adding a retry queue,
 another clock or scheduler, or reconstructing a Native candidate.
 
+## Native-unity birth and pending rate effect
+
+The real public +12/LockON/r2 birth starts immediately with transparent dry PCM.
+An immediate later rate target1.8 used to render a generic Native at the first
+smoothed rate1.95: the first73 frames were zero, with no source owner or primed
+history. Preserve this healthy birth timing. When a rate edit needs a first wet
+owner, keep the old effective global speed/period/transport and original PCM until
+one exact boundary E on the existing outer render clock. Prepare endangered voices
+for their OLD trajectory through E using the current source-history snapshot,
+worker and recycle lanes. Preflight the complete fixed participant set and a copied
+transport under the existing ownership marker, adopt the unity history owners,
+then commit the final coalesced rate tuple and begin ordinary smoothing from E.
+Established productive Native owners stay in place. A source-specific request's
+frozen old rate target alone must not revoke that uninterrupted productive history.
+
+Stamp rate payload identity at its original publication. Capture the separate
+global timing fence only after the genuine combined drains settle: Controller
+anchor/bootstrap commands also advance that fence, so it is not the rate request
+identity. Partial prefixes cannot borrow the newest producer revision. Preserve
+one bounded pending rate record and preallocated status with requested/effective
+tuple, queued/preparing/applied/rejected state, original identity, E and reason.
+Capture a bounded revision/publisher-clear token before each drain's first queue
+read, then require the same token, an empty queue and a clear publisher at its end.
+An end-only revision snapshot can otherwise acknowledge an unread publication
+whose producer finishes between the empty observation and finalization.
+Allocate the fixed coordinator storage once with mixer construction and retain its
+box throughout callback service. It must not enlarge every by-value mixer temporary
+with a complete participant array or allocate a fallback coordinator on the callback.
+Each queued action carries its own explicitly changed fields. The callback's
+single coalesced intent resolves the full pending tuple; superseding stale worker
+work does not erase those preceding fields. Existing authoritative controls rebase
+that intent when they take effect. In particular, a later speed-only action cannot
+restore a period cleared by BPM Lock OFF or replaced by accepted timing refresh.
+The control-side requested observation is never the source of audio authority.
+Expose it beside existing rate controls through the normal runtime poll; project
+settings remain requested intent and must not masquerade as callback confirmation.
+Supersession or any changed participant/source/clock refuses the whole old effect.
+Other authoritative rate changes must share this gate or explicitly refuse while
+it is pending. No new generic transaction framework, scheduler, queue, DSP bridge
+or callback Native work is introduced. Full acoustic/continuous-O/resource/Human
+proof remains separate from the bounded functional handoff.
+
 ## Shared ordinary readiness
 
 Native WindowState retains a fixed source/timing/loop/context seal and bounded

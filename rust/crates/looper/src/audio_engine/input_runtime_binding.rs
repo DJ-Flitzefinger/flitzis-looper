@@ -162,6 +162,10 @@ impl Default for CurrentSourceFence {
 /// Control publishes revocation before queued callback work. Preparation requests
 /// deliberately do not change these source/authority epochs.
 pub(crate) struct InputRuntimeOwnership {
+    // One original control revocation fence, shared with the callback's rate capture.
+    pub(crate) global_timing_revision: Arc<AtomicU64>,
+    pub(crate) global_timing_publishing: AtomicBool,
+    pub(crate) global_rate_status: super::global_rate_status::GlobalRateStatusSlot,
     authority: [AtomicU64; NUM_SAMPLES],
     runtime: [AtomicU64; NUM_SAMPLES],
     timing_intent: [AtomicU8; NUM_SAMPLES],
@@ -195,6 +199,9 @@ pub(crate) struct InputRuntimeOwnership {
 impl Default for InputRuntimeOwnership {
     fn default() -> Self {
         Self {
+            global_timing_revision: Arc::new(AtomicU64::new(1)),
+            global_timing_publishing: AtomicBool::new(false),
+            global_rate_status: super::global_rate_status::GlobalRateStatusSlot::default(),
             authority: std::array::from_fn(|_| AtomicU64::new(1)),
             runtime: std::array::from_fn(|_| AtomicU64::new(0)),
             timing_intent: std::array::from_fn(|_| AtomicU8::new(0)),

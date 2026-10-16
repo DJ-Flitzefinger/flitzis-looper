@@ -37,6 +37,20 @@ Current saved-load KEYLOCK retains its
 labelled complete fallback; normal-loop control preparation can obtain finite
 supply. The full P4b gate and device/acoustic acceptance remain open.
 
+A stopped transposed voice whose Native pitch scale is exactly unity still starts
+immediately with transparent source PCM. If a later global speed/master-period
+edit needs its first source-owned wet history, the previous effective global tuple
+and audio remain in effect until one common output boundary. The existing source
+workers prepare the old trajectories to that boundary. Complete participant,
+source, timing, selection, voice and retirement checks precede adoption of every
+required Native/FIFO owner and the joint rate/transport effect. Existing productive
+owners retain their history across canonical rate smoothing; a frozen pending
+candidate still requires its exact original target. Stop, Pause, supersession or
+unavailable preparation refuses the old rate effect as a whole. The Pitch sidebar
+distinguishes requested speed from confirmed audio speed/period and pending or
+rejected state. This bounded handoff does not close continuous-from-birth, acoustic,
+resource, performer-deadline or Human acceptance.
+
 The bounded resident-selection context additionally admits FullMix->Stems,
 Stems->FullMix and enabled-mask changes for active current-source NormalLoop
 voices with the identical already ACKed resident committed StemSet. An inactive

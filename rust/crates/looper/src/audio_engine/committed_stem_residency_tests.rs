@@ -2448,7 +2448,9 @@ impl ControllerRawNative {
 
     fn set_rate(&mut self, ratio: f64) {
         let pitch = pitch_scale_for_tempo_ratio(ratio);
-        if (pitch - self.pitch).abs() > 0.001 {
+        // The declared binary64 trajectory includes the final sub-.001 step.
+        // Keep this independent C-ABI oracle exact, like the current adapter.
+        if pitch != self.pitch {
             self.native.set_pitch_scale(pitch).unwrap();
             self.pitch = pitch;
         }

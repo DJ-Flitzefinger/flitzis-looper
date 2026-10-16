@@ -71,6 +71,7 @@ pub(crate) mod input_runtime_binding;
 mod ordinary_loader_incoming_tests;
 mod transport_intent_control;
 pub use input_runtime_binding::InputRuntimePadBinding;
+pub(crate) mod global_rate_status;
 mod key_lock_feedback;
 pub(crate) mod key_lock_preparation;
 #[cfg(test)]
@@ -218,6 +219,7 @@ fn parse_stem_mix_mode(mode: &str) -> Option<StemMixMode> {
 /// Reserve capacity before publishing a global timing edit's revocation fence.
 fn push_global_timing_message<T>(
     revision: &AtomicU64,
+    publishing: &AtomicBool,
     producer: &mut Producer<T>,
     message: T,
     name: &str,
@@ -228,10 +230,43 @@ fn push_global_timing_message<T>(
         )));
     }
     let next = next_epoch(revision).map_err(PyRuntimeError::new_err)?;
+    publishing.store(true, Ordering::Release);
     revision.store(next, Ordering::Release);
-    producer
+    let result = producer
         .push(message)
-        .map_err(|_| PyRuntimeError::new_err("reserved single-producer capacity lost"))
+        .map_err(|_| PyRuntimeError::new_err("reserved single-producer capacity lost"));
+    publishing.store(false, Ordering::Release);
+    result
+}
+
+/// Keep the originally queued rate identity distinct from later global revocations.
+fn push_global_rate_message(
+    revision: &AtomicU64,
+    publishing: &AtomicBool,
+    status: &global_rate_status::GlobalRateStatusSlot,
+    producer: &mut Producer<ControlParameterMessage>,
+    speed: Option<f64>,
+    period_seconds: Option<f64>,
+    name: &str,
+) -> PyResult<()> {
+    if producer.is_full() {
+        return Err(PyRuntimeError::new_err(format!(
+            "Failed to send {name} - buffer may be full"
+        )));
+    }
+    let next = next_epoch(revision).map_err(PyRuntimeError::new_err)?;
+    publishing.store(true, Ordering::Release);
+    revision.store(next, Ordering::Release);
+    status.publish_requested(next, speed, period_seconds);
+    let result = producer
+        .push(ControlParameterMessage::SetRateIntent {
+            revision: next,
+            speed,
+            period_seconds,
+        })
+        .map_err(|_| PyRuntimeError::new_err("reserved single-producer rate capacity lost"));
+    publishing.store(false, Ordering::Release);
+    result
 }
 
 fn push_control_message(
@@ -1202,6 +1237,10 @@ impl AudioEngine {
             .watch_history(Arc::downgrade(&cold_pcm_history))
             .map_err(|error| PyRuntimeError::new_err(error.to_string()))?;
 
+        let input_runtime_ownership =
+            Arc::new(input_runtime_binding::InputRuntimeOwnership::tracked());
+        let global_timing_revision = input_runtime_ownership.global_timing_revision.clone();
+
         Ok(AudioEngine {
             stream_handle: None,
             #[cfg(test)]
@@ -1232,11 +1271,9 @@ impl AudioEngine {
             current_timing_acknowledgements: Arc::default(),
             loop_acceptance: Arc::default(),
             current_constant_timing: Mutex::new((0..NUM_SAMPLES).map(|_| Vec::new()).collect()),
-            input_runtime_ownership: Arc::new(
-                input_runtime_binding::InputRuntimeOwnership::tracked(),
-            ),
+            input_runtime_ownership,
             pitch_work_capacity: pitch_publication::PitchWorkCapacity::default(),
-            global_timing_revision: Arc::new(AtomicU64::new(1)),
+            global_timing_revision,
             constant_timing_busy: Arc::new(AtomicBool::new(false)),
             offline_jobs: analysis_jobs::OfflineJobs::default(),
             cold_jobs: cold_jobs::ColdJobs::new()
@@ -3355,10 +3392,13 @@ impl AudioEngine {
             .lock()
             .map_err(|_| PyRuntimeError::new_err("Failed to acquire producer lock"))?;
 
-        push_global_timing_message(
+        push_global_rate_message(
             &self.global_timing_revision,
+            &self.input_runtime_ownership.global_timing_publishing,
+            &self.input_runtime_ownership.global_rate_status,
             &mut producer_guard,
-            ControlParameterMessage::SetSpeed(speed),
+            Some(speed),
+            None,
             "SetSpeed",
         )
     }
@@ -3375,6 +3415,7 @@ impl AudioEngine {
 
         push_global_timing_message(
             &self.global_timing_revision,
+            &self.input_runtime_ownership.global_timing_publishing,
             &mut producer_guard,
             ControlMessage::SetBpmLock(enabled),
             "SetBpmLock",
@@ -3443,6 +3484,41 @@ impl AudioEngine {
         key_lock_feedback::status(self, py, id)
     }
 
+    /// Observe queued global rate intent separately from the callback-confirmed effect.
+    pub fn global_rate_status(&self, py: Python<'_>) -> PyResult<Option<Py<PyDict>>> {
+        use global_rate_status::RateState;
+        let Some(status) = self.input_runtime_ownership.global_rate_status.read() else {
+            return Ok(None);
+        };
+        let queued = status.request_revision != status.effect.revision;
+        let state = if queued {
+            "queued"
+        } else {
+            match status.effect.state {
+                RateState::Preparing => "preparing",
+                RateState::Applied => "applied",
+                RateState::Rejected => "rejected",
+            }
+        };
+        let dict = PyDict::new(py);
+        dict.set_item("request_revision", status.request_revision)?;
+        dict.set_item("effect_revision", status.effect.revision)?;
+        dict.set_item("state", state)?;
+        dict.set_item("requested_speed", status.requested.speed)?;
+        dict.set_item("requested_master_period", status.requested.period)?;
+        dict.set_item("effective_speed", status.effect.effective.speed)?;
+        dict.set_item("effective_master_period", status.effect.effective.period)?;
+        dict.set_item(
+            "execution_frame",
+            (!queued).then_some(status.effect.execution_frame).flatten(),
+        )?;
+        dict.set_item(
+            "error",
+            (!queued).then(|| status.effect.error.message()).flatten(),
+        )?;
+        Ok(Some(dict.unbind()))
+    }
+
     pub fn set_master_bpm(&mut self, bpm: f64) -> PyResult<()> {
         if !bpm.is_finite() || bpm <= 0.0 || !(60.0 / bpm).is_finite() {
             return Err(PyValueError::new_err("bpm out of range"));
@@ -3463,10 +3539,13 @@ impl AudioEngine {
             .lock()
             .map_err(|_| PyRuntimeError::new_err("Failed to acquire producer lock"))?;
 
-        push_global_timing_message(
+        push_global_rate_message(
             &self.global_timing_revision,
+            &self.input_runtime_ownership.global_timing_publishing,
+            &self.input_runtime_ownership.global_rate_status,
             &mut producer_guard,
-            ControlParameterMessage::SetMasterBpm(bpm),
+            None,
+            Some(60.0 / bpm),
             "SetMasterBpm",
         )
     }
@@ -3492,10 +3571,13 @@ impl AudioEngine {
             .lock()
             .map_err(|_| PyRuntimeError::new_err("Failed to acquire producer lock"))?;
 
-        push_global_timing_message(
+        push_global_rate_message(
             &self.global_timing_revision,
+            &self.input_runtime_ownership.global_timing_publishing,
+            &self.input_runtime_ownership.global_rate_status,
             &mut producer,
-            ControlParameterMessage::SetMasterPeriod(period_seconds),
+            None,
+            Some(period_seconds),
             "SetMasterPeriod",
         )
     }
@@ -3520,13 +3602,13 @@ impl AudioEngine {
             .parameter_producer()?
             .lock()
             .map_err(|_| PyRuntimeError::new_err("Failed to acquire producer lock"))?;
-        push_global_timing_message(
+        push_global_rate_message(
             &self.global_timing_revision,
+            &self.input_runtime_ownership.global_timing_publishing,
+            &self.input_runtime_ownership.global_rate_status,
             &mut producer,
-            ControlParameterMessage::SetSpeedAndMasterPeriod {
-                speed,
-                period_seconds,
-            },
+            Some(speed),
+            Some(period_seconds),
             "SetSpeedAndMasterPeriod",
         )
     }
@@ -3610,6 +3692,7 @@ impl AudioEngine {
 
         push_global_timing_message(
             &self.global_timing_revision,
+            &self.input_runtime_ownership.global_timing_publishing,
             &mut producer_guard,
             ControlMessage::AnchorTransportPhaseFromPad { id },
             "AnchorTransportPhaseFromPad",
@@ -3637,6 +3720,7 @@ impl AudioEngine {
             .map_err(|_| PyRuntimeError::new_err("Failed to acquire producer lock"))?;
         push_global_timing_message(
             &self.global_timing_revision,
+            &self.input_runtime_ownership.global_timing_publishing,
             &mut producer,
             ControlMessage::BootstrapTransportFromPad { id },
             "BootstrapTransportFromPad",

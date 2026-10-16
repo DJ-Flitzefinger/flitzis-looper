@@ -371,6 +371,7 @@ class AppController:
         self.loader.poll_loader_events()
         self.material_migration.poll()
         self._poll_audio_messages()
+        self.transport.global_params._poll_global_rate_status()
         self.accepted_timing.poll()
         self.transport.residency.poll()
         self.transport.pitch.poll()

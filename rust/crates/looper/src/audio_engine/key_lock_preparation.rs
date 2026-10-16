@@ -143,6 +143,12 @@ pub(crate) enum SourceExchange {
 }
 
 impl KeyLockPreparationLane {
+    pub(crate) fn source_result_pending(&self) -> bool {
+        !self.source_ready.is_empty()
+            || self.pending_source_return.is_some()
+            || self.pending_request.is_some()
+    }
+
     pub(crate) fn worker_failed(&self) -> bool {
         self.worker_failed.load(Ordering::Acquire)
     }

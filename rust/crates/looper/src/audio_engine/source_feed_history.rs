@@ -234,6 +234,11 @@ pub(crate) struct SourceFeedHistory {
 }
 
 impl SourceFeedHistory {
+    /// Scalar ABA fence for a pending effect that keeps an existing productive owner.
+    pub(crate) fn continuity_revision(&self) -> u64 {
+        self.continuity_owner.load(Ordering::Acquire)
+    }
+
     pub(crate) fn new() -> Self {
         Self {
             spans: vec![None; SOURCE_FEED_HISTORY_MAX_SPANS].into_boxed_slice(),

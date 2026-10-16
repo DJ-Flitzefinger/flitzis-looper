@@ -98,6 +98,64 @@ SHALL NOT create complete source PCM or two serial pitch shifters.
 - **THEN** prepared processing/transition preserves intended pitch and matched output history/latency
 - **AND** rate-only/dry bypass cannot silently omit transposition or reset voices
 
+#### Scenario: A dry native-unity birth later requires wet processing
+- **GIVEN** an original accepted pitch attack starts at nonunit source rate with h/r=1 and no source-specific Native candidate
+- **WHEN** a subsequent accepted rate transition requires nonunity Native pitch
+- **THEN** the first emitted wet output SHALL use valid history belonging to that original source and voice while preserving intended pitch, source time and voice generation
+- **AND** a generic warmed Native's startup FIFO or readiness flag SHALL NOT certify matched source-specific history
+- **AND** unavailable preparation SHALL remain an explicit supported pending or refusal condition rather than an accepted-looking partial retune or hidden source-clock reset
+
+### Requirement: A rate edit cannot expose an unowned wet entry
+The system SHALL guard a global rate edit that moves an active native-unity voice
+into wet processing without established source-owned Native history, retaining the
+previous effective speed, master period, transport and productive output until
+one original coalesced rate intent can commit at one exact existing render boundary
+E. Healthy free native-unity births SHALL remain immediate. The rate intent SHALL
+retain its original stamped identity separately from the settled global timing
+fence captured after the actual command and parameter drains. A partially drained
+prefix SHALL NOT borrow a later intent's identity or certify its application.
+
+Each drain's settled-fence observation SHALL begin before its first queue read
+with a stable revision and publisher-clear observation, and SHALL remain valid
+through the completed empty drain. An end-only observation SHALL NOT acknowledge
+a publication that entered the queue after the callback observed it empty.
+
+The original rate payload SHALL retain exactly the fields changed by that control
+action. The callback SHALL resolve those fields through its one coalesced rate
+intent before freezing the complete pending tuple. A speed-only edit SHALL NOT
+restore a master period cleared or replaced by an intervening authoritative
+control. Superseded preparation SHALL NOT erase the preceding rate intent needed
+to resolve a later original master-period-only edit from the same mailbox.
+
+Preparation SHALL reuse the existing per-voice history workers and bounded lanes
+to prepare endangered voices for their old effective source trajectory at E,
+including genuine dry reads and frozen F-to-E chronology. At E the complete
+unchanged participant set, source/content/voice/tuple/paused guards, own preparation
+epochs, exact prepared endpoints and retirement capacity SHALL pass before any
+mutation. The existing complete ownership claim SHALL adopt the required complete
+Native/FIFO owners and apply speed, master period and transport together. Already
+productive source-owned Native voices SHALL retain their own history. Ordinary
+source-rate smoothing SHALL begin from that boundary; no second scheduler, output
+bridge, callback Native preparation or invented constant past is permitted.
+
+#### Scenario: Pending rate preparation preserves confirmed audio
+- **WHEN** an accepted speed or coupled master-period edit needs an endangered voice's first source-owned wet history
+- **THEN** output before E SHALL retain its previous effective rate, PCM, source trajectory, voice generation and original pitch action
+- **AND** status beside the rate control SHALL distinguish requested settings from callback-confirmed effective settings and queued, preparing, applied or rejected state
+- **AND** the first wet output after the complete effect SHALL have matched declared history rather than generic startup silence
+
+#### Scenario: A publisher finishing after an empty observation remains unread
+- **GIVEN** a global publisher has raised revision N but has not yet queued its original payload
+- **WHEN** a callback observes the queue empty and the publisher queues that payload and finishes before drain finalization
+- **THEN** the drain SHALL NOT acknowledge N or let another empty drain certify the combined timing fence while that original payload remains unread
+- **AND** a later genuine drain SHALL consume that same payload before a fresh stable fence can authorize rate preparation or adoption
+
+#### Scenario: A pending rate edit cannot partially affect participants
+- **WHEN** supersession, Stop, restart, source/lifetime/authority/window/timing/selection change, Pause/Resume, participant birth/removal, insufficient history or missed readiness invalidates an original pending rate edit
+- **THEN** that edit SHALL visibly refuse as a whole, retaining the previously effective global tuple and unrelated accepted actions
+- **AND** its own stale work SHALL retire through existing worker lanes while a later fresh request remains usable
+- **AND** another global control that changes the authoritative rate SHALL use the same pending effect or explicitly refuse while it is pending
+
 ### Requirement: A live Key Lock change owns a prospective numeric tuple
 For a live nonzero applied transposition, the system SHALL retain the previously
 effective Key Lock mode and its productive Native/FIFO history until the original

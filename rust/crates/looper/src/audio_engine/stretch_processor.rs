@@ -337,6 +337,29 @@ impl StretchProcessor {
         self.preparation.source_history_work_available()
     }
 
+    /// A different accepted mode/source request retains its lane until retirement.
+    pub(crate) fn source_lane_busy(&self) -> bool {
+        self.request_pending
+            || self.prospective_request.is_some()
+            || self.preparation.source_result_pending()
+    }
+
+    /// Refusal may revoke only the exact source request this effect accepted.
+    pub(crate) fn cancel_source_request_if_owned(&mut self, epoch: u64, request_id: u64) {
+        if self.request_id != request_id {
+            return;
+        }
+        if self.preparation_epoch == epoch && self.prospective_request == Some(request_id) {
+            self.invalidate_prepared();
+            self.request_pending = false;
+        } else if self.preparation_epoch > epoch && self.prospective_request.is_none() {
+            // Pause/source invalidation may already have revoked this same accepted request.
+            // Its unique id still proves ownership; a later request always has a new id.
+            self.preparation.retire_prepared();
+            self.request_pending = false;
+        }
+    }
+
     pub(crate) fn request_prospective_tuple_with_history(
         &mut self,
         feed: &ProductiveSourceFeed<'_>,
@@ -529,9 +552,11 @@ impl StretchProcessor {
             }
             if wet
                 && !self.request_pending
-                && !self
-                    .native
-                    .matches_effective_source(&feed, self.preparation_epoch)
+                && !self.native.matches_effective_source(
+                    &feed,
+                    self.preparation_epoch,
+                    self.productive_history,
+                )
                 && let Some(request_id) = self.request_id.checked_add(1)
                 && self.preparation_epoch != u64::MAX
                 && self
@@ -571,9 +596,11 @@ impl StretchProcessor {
             feed.pitch_intent,
         );
         self.wet_source_rendered = self.wet_render_ready()
-            && self
-                .native
-                .matches_effective_source(&feed, self.preparation_epoch);
+            && self.native.matches_effective_source(
+                &feed,
+                self.preparation_epoch,
+                self.productive_history,
+            );
         if self.wet_source_rendered
             && let Some(expected) = &mut self.native.source_transition
         {

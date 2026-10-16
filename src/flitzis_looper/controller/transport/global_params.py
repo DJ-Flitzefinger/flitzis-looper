@@ -1,4 +1,6 @@
-from typing import TYPE_CHECKING, cast
+import math
+from dataclasses import dataclass, replace
+from typing import TYPE_CHECKING, Literal, cast
 
 from flitzis_looper.constants import (
     PITCH_BPM_STEP,
@@ -28,6 +30,121 @@ if TYPE_CHECKING:
     )
 
 
+@dataclass(frozen=True, slots=True)
+class GlobalRateStatus:
+    """Separate requested settings from one coherent callback-owned rate observation."""
+
+    requested_speed: float
+    request_revision: int | None = None
+    effect_revision: int | None = None
+    state: Literal["queued", "preparing", "applied", "rejected"] | None = None
+    requested_master_period: float | None = None
+    effective_speed: float | None = None
+    effective_master_period: float | None = None
+    execution_frame: int | None = None
+    error: str | None = None
+
+
+def _rate_number(value: object, *, optional: bool = False) -> float | None:
+    if value is None and optional:
+        return None
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        message = "Native rate confirmation has an invalid numeric setting."
+        raise TypeError(message)
+    try:
+        number = float(value)
+    except OverflowError as error:
+        message = "Native rate confirmation has an invalid numeric setting."
+        raise ValueError(message) from error
+    if not math.isfinite(number) or number <= 0.0:
+        message = "Native rate confirmation has an invalid numeric setting."
+        raise ValueError(message)
+    return number
+
+
+def _rate_revision(value: object) -> int:
+    if type(value) is not int:
+        message = "Native rate confirmation has an invalid receipt revision."
+        raise TypeError(message)
+    if value < 0:
+        message = "Native rate confirmation has an invalid receipt revision."
+        raise ValueError(message)
+    return value
+
+
+def _rate_state(
+    value: object, *, request: int, effect: int
+) -> Literal["queued", "preparing", "applied", "rejected"]:
+    if not isinstance(value, str):
+        message = "Native rate confirmation has an invalid receipt state."
+        raise TypeError(message)
+    if value not in {"queued", "preparing", "applied", "rejected"}:
+        message = "Native rate confirmation has an invalid receipt state."
+        raise ValueError(message)
+    if (value == "queued") != (effect != request):
+        message = "Native rate confirmation has inconsistent receipt revisions."
+        raise ValueError(message)
+    return cast('Literal["queued", "preparing", "applied", "rejected"]', value)
+
+
+def _rate_error(value: object, *, state: str) -> str | None:
+    if value is not None and not isinstance(value, str):
+        message = "Native rate confirmation has an invalid receipt error."
+        raise TypeError(message)
+    if (state == "rejected") != (value is not None) or (value is not None and not value):
+        message = "Native rate confirmation has an inconsistent refusal reason."
+        raise ValueError(message)
+    return value
+
+
+def _decode_rate_status(feedback: object, *, minimum_revision: int) -> GlobalRateStatus:
+    if not isinstance(feedback, dict):
+        message = "Native rate confirmation is unavailable."
+        raise TypeError(message)
+    values = cast("dict[str, object]", feedback)
+    required = {
+        "request_revision",
+        "effect_revision",
+        "state",
+        "requested_speed",
+        "requested_master_period",
+        "effective_speed",
+        "effective_master_period",
+        "execution_frame",
+        "error",
+    }
+    if not required.issubset(values):
+        message = "Native rate confirmation has an incomplete receipt."
+        raise ValueError(message)
+    request = _rate_revision(values["request_revision"])
+    effect = _rate_revision(values["effect_revision"])
+    if request < minimum_revision:
+        message = "Native rate confirmation returned an older request receipt."
+        raise ValueError(message)
+    if effect > request:
+        message = "Native rate confirmation has an invalid receipt."
+        raise ValueError(message)
+    state = _rate_state(values["state"], request=request, effect=effect)
+    frame_value = values["execution_frame"]
+    frame = None if frame_value is None else _rate_revision(frame_value)
+    if state == "queued" and frame is not None:
+        message = "Native rate confirmation has an unconfirmed execution frame."
+        raise ValueError(message)
+    requested = _rate_number(values["requested_speed"])
+    assert requested is not None
+    return GlobalRateStatus(
+        requested_speed=requested,
+        request_revision=request,
+        effect_revision=effect,
+        state=state,
+        requested_master_period=_rate_number(values["requested_master_period"], optional=True),
+        effective_speed=_rate_number(values["effective_speed"]),
+        effective_master_period=_rate_number(values["effective_master_period"], optional=True),
+        execution_frame=frame,
+        error=_rate_error(values["error"], state=state),
+    )
+
+
 class GlobalParametersController:
     """Manage global playback modes/states (multi-loop, key lock, BPM lock, etc.)."""
 
@@ -37,6 +154,52 @@ class GlobalParametersController:
         self._session = transport._session
         self._audio = transport._audio
         self._bpm = transport.bpm
+        self._rate_status: GlobalRateStatus | None = None
+        self._rate_status_error: str | None = None
+        self._rate_request_unobserved = False
+        self._rate_observed_revision = 0
+        self._rate_request_after_revision = 0
+
+    def _poll_global_rate_status(self) -> None:
+        """Observe Native once on the normal runtime tick without publishing control intent."""
+        observe = getattr(self._audio, "global_rate_status", None)
+        self._rate_status = None
+        self._rate_status_error = None
+        if not callable(observe):
+            self._rate_status_error = "Rate confirmation requires the current audio runtime."
+            return
+        try:
+            feedback = observe()
+            if feedback is None:
+                return
+            status = _decode_rate_status(feedback, minimum_revision=self._rate_observed_revision)
+            revision = status.request_revision
+            assert revision is not None
+            self._rate_status = status
+            self._rate_observed_revision = revision
+            if revision > self._rate_request_after_revision:
+                self._rate_request_unobserved = False
+        except (RuntimeError, ValueError, TypeError) as error:
+            self._rate_status_error = str(error)
+
+    def global_rate_status(self) -> GlobalRateStatus:
+        """Return cached audio confirmation independently of the persisted speed control."""
+        status = self._rate_status
+        if status is None:
+            return GlobalRateStatus(
+                requested_speed=float(self._project.speed), error=self._rate_status_error
+            )
+        if self._rate_request_unobserved:
+            return replace(
+                status,
+                requested_speed=float(self._project.speed),
+                request_revision=None,
+                state="queued",
+                requested_master_period=None,
+                execution_frame=None,
+                error=None,
+            )
+        return status
 
     def set_multi_loop(self, *, enabled: bool) -> None:
         """Enable or disable Multi Loop mode."""
@@ -245,6 +408,8 @@ class GlobalParametersController:
             self._audio.set_speed_and_master_period(clamped, anchor_timing.period_seconds / clamped)
         else:
             self._audio.set_speed(clamped)
+        self._rate_request_unobserved = True
+        self._rate_request_after_revision = self._rate_observed_revision
         self._project.speed = clamped
         self._transport._mark_project_changed()
         self._bpm.recompute_master_bpm(timing=anchor_timing, publish_master=not accepted_anchor)
@@ -279,7 +444,7 @@ class GlobalParametersController:
         return (timing.period_seconds if timing is not None else None), UNRESOLVED_TIMING
 
     def effective_display_bpm(self) -> float | None:
-        """Return the BPM currently displayed above the global Pitch control."""
+        """Return requested BPM for the existing global Pitch target control."""
         period = self.speed_reference_period_seconds()
         if period is None:
             return None

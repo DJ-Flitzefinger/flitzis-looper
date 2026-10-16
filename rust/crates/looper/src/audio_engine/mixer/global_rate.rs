@@ -1,0 +1,727 @@
+//! One coalesced global-rate effect on the existing source-history lanes.
+//!
+//! The previous global tuple remains effective until endangered unity-born voices
+//! own prepared history at one old-trajectory endpoint. Only then does normal rate
+//! smoothing start. Candidates and their displaced owners stay on existing lanes.
+
+use super::*;
+use crate::audio_engine::content_placement::{ContentKey, SlotSnapshot};
+use crate::audio_engine::global_rate_status::{RateEffect, RateError, RateState, RateTuple};
+use crate::audio_engine::key_lock_preparation::ProspectiveSourceHistory;
+use crate::audio_engine::native_history_permit::NativeHistoryPermit;
+use crate::audio_engine::prepared_native_history::PREPARED_HISTORY_FRAMES;
+use crate::audio_engine::source_feed_history::SourceFeedContext;
+use crate::audio_engine::transport::TransportTimeline;
+use std::cell::RefCell;
+
+#[derive(Clone, Copy)]
+struct RateWork {
+    epoch: u64,
+    request_id: u64,
+}
+
+struct RateVoice {
+    id: usize,
+    placement: SlotSnapshot,
+    key: ContentKey,
+    incarnation: u64,
+    authority: u64,
+    generation: u64,
+    paused: bool,
+    continuity: u64,
+    pitch: PitchIntent,
+    key_lock: bool,
+    binding: ProductiveSourceBinding,
+    permit: NativeHistoryPermit,
+    playback: SourcePlayback,
+    plan: SourceReadPlan,
+    context: SourceFeedContext,
+    needs_history: bool,
+    work: Option<RateWork>,
+}
+
+struct RateCapture {
+    execution: u64,
+    timing_fence: u64,
+    voices: [Option<RateVoice>; MAX_VOICES],
+}
+
+struct PendingRate {
+    revision: u64,
+    requested: RateTuple,
+    previous: RateTuple,
+    bpm_lock: bool,
+    capture: Option<RateCapture>,
+}
+
+#[derive(Default)]
+pub(super) struct GlobalRateCoordinator {
+    // Sole callback-owned coalescing authority. Refusing an earlier drained
+    // prefix does not erase its requested field before the next original edit.
+    requested: RateTuple,
+    pending: Option<PendingRate>,
+}
+
+fn feed<'a>(
+    snapshot: &'a PitchSourceSnapshot,
+    pitch: PitchIntent,
+    key_lock: bool,
+    frame: u64,
+    permit: Option<&'a NativeHistoryPermit>,
+) -> ProductiveSourceFeed<'a> {
+    let readers = snapshot.readers().unwrap_or_default();
+    ProductiveSourceFeed {
+        pitch_intent: pitch,
+        key_lock,
+        sample: &snapshot.sample,
+        stems: readers.current.or(snapshot.stems.as_ref()),
+        outgoing_stems: readers.outgoing,
+        sample_rate_hz: snapshot.sample_rate_hz,
+        accepted: snapshot.accepted,
+        playback: &snapshot.playback,
+        plan: snapshot.plan,
+        permit,
+        output_frame: Some(frame),
+    }
+}
+
+impl RtMixer {
+    fn effective_global_rate(&self) -> RateTuple {
+        RateTuple {
+            speed: self.speed,
+            period: self.master_period_seconds,
+        }
+    }
+
+    fn publish_global_rate_effect(
+        &self,
+        pending: &PendingRate,
+        state: RateState,
+        error: RateError,
+        execution: Option<u64>,
+    ) {
+        self.input_runtime_ownership
+            .global_rate_status
+            .publish_effect(RateEffect {
+                revision: pending.revision,
+                requested: pending.requested,
+                effective: self.effective_global_rate(),
+                state,
+                execution_frame: execution,
+                error,
+            });
+    }
+
+    /// Called once for the parameter drain's final coalesced tuple. No requested
+    /// observation is read back as authority for its values.
+    pub(crate) fn stage_global_rate(
+        &mut self,
+        revision: u64,
+        speed: Option<f64>,
+        period: Option<f64>,
+        transport: &mut TransportTimeline,
+    ) {
+        let Some(mut coordinator) = self.global_rate.take() else {
+            return;
+        };
+        if coordinator
+            .pending
+            .as_ref()
+            .is_some_and(|pending| pending.revision > revision)
+        {
+            self.global_rate = Some(coordinator);
+            return;
+        }
+        let base = coordinator.requested;
+        coordinator.requested = RateTuple {
+            speed: speed.unwrap_or(base.speed),
+            period: period.or(base.period),
+        };
+        if let Some(previous) = coordinator.pending.take() {
+            self.finish_global_rate(previous, RateError::Superseded);
+        }
+        let pending = PendingRate {
+            revision,
+            requested: coordinator.requested,
+            previous: self.effective_global_rate(),
+            bpm_lock: self.bpm_lock_enabled,
+            capture: None,
+        };
+        let valid = pending.requested.speed.is_finite()
+            && (SPEED_MIN..=SPEED_MAX).contains(&pending.requested.speed)
+            && pending.requested.period.is_none_or(|period| {
+                period.is_finite()
+                    && period > 0.0
+                    && (period * f64::from(self.sample_rate_hz) * 4.0).is_finite()
+            });
+        if !valid {
+            self.finish_global_rate(pending, RateError::InvalidTransport);
+        } else {
+            match self.global_rate_needs_history(pending.requested) {
+                Ok(false) => {
+                    let frame = transport.output_frame();
+                    if self.apply_global_rate_tuple(pending.requested, transport, frame) {
+                        self.publish_global_rate_effect(
+                            &pending,
+                            RateState::Applied,
+                            RateError::None,
+                            Some(frame),
+                        );
+                    } else {
+                        self.finish_global_rate(pending, RateError::InvalidTransport);
+                    }
+                }
+                Ok(true) => {
+                    self.publish_global_rate_effect(
+                        &pending,
+                        RateState::Preparing,
+                        RateError::None,
+                        None,
+                    );
+                    coordinator.pending = Some(pending);
+                }
+                Err(error) => self.finish_global_rate(pending, error),
+            }
+        }
+        self.global_rate = Some(coordinator);
+    }
+
+    fn effective_rate_voice_tuple(&self, index: usize) -> (PitchIntent, bool) {
+        self.effective_voice_tuple(index)
+    }
+
+    fn rate_voice_needs_history(
+        &self,
+        index: usize,
+        requested: RateTuple,
+    ) -> Result<bool, RateError> {
+        let (pitch, key_lock) = self.effective_rate_voice_tuple(index);
+        if self.voices[index]
+            .stretch
+            .owns_pitch_contract(pitch, key_lock)
+        {
+            return Ok(false);
+        }
+        let target = self.tempo_ratio_for_source_period_with_rate(
+            self.timing_for_voice(&self.voices[index]).period_seconds(),
+            requested.speed,
+            requested.period,
+        );
+        pitch
+            .native_pitch_scale(target, key_lock)
+            .map(|pitch| pitch != 1.0)
+            .map_err(|_| RateError::HistoryUnavailable)
+    }
+
+    fn global_rate_needs_history(&self, requested: RateTuple) -> Result<bool, RateError> {
+        for index in 0..MAX_VOICES {
+            if self.voices[index].active && self.rate_voice_needs_history(index, requested)? {
+                return Ok(true);
+            }
+        }
+        Ok(false)
+    }
+
+    fn capture_rate_permit(
+        &self,
+        index: usize,
+        snapshot: &PitchSourceSnapshot,
+    ) -> Option<NativeHistoryPermit> {
+        let voice = &self.voices[index];
+        let id = voice.sample_id;
+        if self.sample_bank[id]
+            .as_ref()
+            .is_some_and(|bank| bank.same_source(&snapshot.sample))
+        {
+            let placement = self.input_runtime_ownership.slot_snapshot(id)?;
+            NativeHistoryContext {
+                id,
+                ownership: &self.input_runtime_ownership,
+                acknowledgements: &self.current_timing_acknowledgements,
+                preparation_epoch: &self.prepared_source_epochs[placement.cell().index()],
+            }
+            .capture(&snapshot.sample, snapshot.sample_rate_hz, snapshot.accepted)
+        } else {
+            NativeVoiceHistoryContext {
+                admission: voice.source_admission.as_ref()?,
+                lifetime: &voice.history_lifetime,
+                generation: voice.generation,
+                preparation_epoch: &voice.history_lifetime,
+                accepted: snapshot.accepted,
+            }
+            .capture(&snapshot.sample, snapshot.sample_rate_hz)
+        }
+    }
+
+    /// A stopped bank reserve needs its real SourceACK. This request instead
+    /// belongs to an already living voice: its actual admitted birth can also
+    /// prove the same source while all original source/window/timing fences hold.
+    /// Keeping PCM, a slot observation or a generic warmed Native cannot do so.
+    fn rate_voice_source_admitted(
+        &self,
+        index: usize,
+        key: ContentKey,
+        snapshot: &PitchSourceSnapshot,
+    ) -> bool {
+        let voice = &self.voices[index];
+        self.input_runtime_ownership
+            .callback_feedback_key(voice.sample_id)
+            == Some(key)
+            || voice.source_admission.as_ref().is_some_and(|admission| {
+                admission.content_key() == Some(key)
+                    && admission.current_for_birth(
+                        &self.input_runtime_ownership,
+                        &self.current_timing_acknowledgements,
+                        &snapshot.sample,
+                        snapshot.sample_rate_hz,
+                        false,
+                    )
+            })
+    }
+
+    fn capture_global_rate(
+        &mut self,
+        pending: &mut PendingRate,
+        frame: u64,
+    ) -> Result<(), RateError> {
+        let execution = frame
+            .checked_add(PREPARED_HISTORY_FRAMES as u64)
+            .ok_or(RateError::MissedBoundary)?;
+        let timing_fence = self
+            .input_runtime_ownership
+            .global_timing_revision
+            .load(Ordering::Acquire);
+        let mut capture = RateCapture {
+            execution,
+            timing_fence,
+            voices: std::array::from_fn(|_| None),
+        };
+        for index in 0..MAX_VOICES {
+            let voice = &self.voices[index];
+            if !voice.active {
+                continue;
+            }
+            let id = voice.sample_id;
+            if self.pending_key_lock_tuples[id].is_some()
+                || self.queued_key_lock_tuples[id].is_some()
+            {
+                return Err(RateError::Capacity);
+            }
+            let placement = self
+                .input_runtime_ownership
+                .slot_snapshot(id)
+                .ok_or(RateError::SourceChanged)?;
+            let key = placement.content_key().ok_or(RateError::SourceChanged)?;
+            let mut snapshot = self
+                .capture_pitch_voice_snapshot(index)
+                .ok_or(RateError::SourceChanged)?;
+            if !self.rate_voice_source_admitted(index, key, &snapshot) {
+                return Err(RateError::SourceChanged);
+            }
+            let permit = self
+                .capture_rate_permit(index, &snapshot)
+                .ok_or(RateError::SourceChanged)?;
+            let binding = ProductiveSourceBinding::new(
+                &snapshot.sample,
+                snapshot.sample_rate_hz,
+                snapshot.accepted,
+            );
+            let context = snapshot.source_feed_context;
+            if !snapshot.project_output_frames(execution - frame) {
+                return Err(RateError::HistoryUnavailable);
+            }
+            let (pitch, key_lock) = self.effective_rate_voice_tuple(index);
+            capture.voices[index] = Some(RateVoice {
+                id,
+                placement,
+                key,
+                incarnation: self
+                    .input_runtime_ownership
+                    .key_source_request_incarnation(key)
+                    .ok_or(RateError::SourceChanged)?,
+                authority: self
+                    .input_runtime_ownership
+                    .authority_for_cell(key.cell())
+                    .load(Ordering::Acquire),
+                generation: voice.generation,
+                paused: voice.paused,
+                continuity: voice.source_feed_history.continuity_revision(),
+                pitch,
+                key_lock,
+                binding,
+                permit,
+                playback: snapshot.playback,
+                plan: snapshot.plan,
+                context: context.for_plan(snapshot.plan),
+                needs_history: self.rate_voice_needs_history(index, pending.requested)?,
+                work: None,
+            });
+        }
+        // All foreign owners and reusable storage are checked before the first
+        // lane changes epoch. A partial capture retires only our successful work.
+        for index in 0..MAX_VOICES {
+            if capture.voices[index]
+                .as_ref()
+                .is_some_and(|voice| voice.needs_history)
+                && (self.voices[index].stretch.source_lane_busy()
+                    || !self.voices[index].stretch.source_history_work_available())
+            {
+                return Err(RateError::Capacity);
+            }
+        }
+        pending.capture = Some(capture);
+        for index in 0..MAX_VOICES {
+            let captured = pending.capture.as_mut().unwrap().voices[index].as_mut();
+            let Some(captured) = captured.filter(|voice| voice.needs_history) else {
+                continue;
+            };
+            let snapshot = self
+                .capture_pitch_voice_snapshot(index)
+                .ok_or(RateError::SourceChanged)?;
+            let prospective = feed(
+                &snapshot,
+                captured.pitch,
+                captured.key_lock,
+                frame,
+                Some(&captured.permit),
+            );
+            let voice = &mut self.voices[index];
+            voice.stretch.invalidate_prepared();
+            let Some((epoch, request_id)) = voice.stretch.request_prospective_tuple_with_history(
+                &prospective,
+                ProspectiveSourceHistory {
+                    history: &voice.source_feed_history,
+                    voice_lifetime: &voice.history_lifetime,
+                    voice_generation: voice.generation,
+                    execution_frame: execution,
+                    paused: snapshot.paused,
+                    source_feed_context: snapshot.source_feed_context,
+                },
+            ) else {
+                return Err(RateError::HistoryUnavailable);
+            };
+            captured.work = Some(RateWork { epoch, request_id });
+        }
+        self.global_rate_current(pending)
+    }
+
+    fn global_rate_current(&self, pending: &PendingRate) -> Result<(), RateError> {
+        if self
+            .input_runtime_ownership
+            .global_rate_status
+            .requested_revision()
+            > pending.revision
+        {
+            return Err(RateError::Superseded);
+        }
+        if self.effective_global_rate() != pending.previous
+            || self.bpm_lock_enabled != pending.bpm_lock
+        {
+            return Err(RateError::TimingChanged);
+        }
+        let Some(capture) = pending.capture.as_ref() else {
+            return Ok(());
+        };
+        if !self.global_rate_drains_settled()
+            || self
+                .input_runtime_ownership
+                .global_timing_revision
+                .load(Ordering::Acquire)
+                != capture.timing_fence
+        {
+            return Err(RateError::TimingChanged);
+        }
+        for index in 0..MAX_VOICES {
+            let voice = &self.voices[index];
+            let Some(expected) = capture.voices[index].as_ref() else {
+                if voice.active {
+                    return Err(RateError::ParticipantChanged);
+                }
+                continue;
+            };
+            if !voice.active
+                || voice.sample_id != expected.id
+                || voice.generation != expected.generation
+                || voice.paused != expected.paused
+                || voice.source_feed_history.continuity_revision() != expected.continuity
+                || self.effective_rate_voice_tuple(index) != (expected.pitch, expected.key_lock)
+                || self.pending_key_lock_tuples[expected.id].is_some()
+                || self.queued_key_lock_tuples[expected.id].is_some()
+            {
+                return Err(RateError::ParticipantChanged);
+            }
+            let ownership = &self.input_runtime_ownership;
+            if !ownership.slot_snapshot_fields_current(expected.placement)
+                || ownership.callback_key_slot(expected.key) != Some(expected.id)
+                || ownership.key_source_request_incarnation(expected.key)
+                    != Some(expected.incarnation)
+                || ownership
+                    .authority_for_cell(expected.key.cell())
+                    .load(Ordering::Acquire)
+                    != expected.authority
+            {
+                return Err(RateError::SourceChanged);
+            }
+            let sample = voice.sample.as_ref().ok_or(RateError::SourceChanged)?;
+            if ProductiveSourceBinding::new(
+                sample,
+                self.sample_rate_hz as u32,
+                self.timing_for_voice(voice).accepted,
+            ) != expected.binding
+                || !expected.permit.current(sample, self.sample_rate_hz as u32)
+            {
+                return Err(RateError::SourceChanged);
+            }
+        }
+        if self
+            .input_runtime_ownership
+            .global_timing_revision
+            .load(Ordering::Acquire)
+            != capture.timing_fence
+            || self
+                .input_runtime_ownership
+                .global_rate_status
+                .requested_revision()
+                > pending.revision
+            || !self.global_rate_drains_settled()
+        {
+            return Err(RateError::TimingChanged);
+        }
+        Ok(())
+    }
+
+    fn global_rate_ready(&mut self, pending: &PendingRate, frame: u64) -> bool {
+        let Some(capture) = pending
+            .capture
+            .as_ref()
+            .filter(|capture| capture.execution == frame)
+        else {
+            return false;
+        };
+        if self.global_rate_current(pending).is_err() {
+            return false;
+        }
+        for index in 0..MAX_VOICES {
+            let Some(expected) = capture.voices[index].as_ref() else {
+                continue;
+            };
+            let Some(snapshot) = self.capture_pitch_voice_snapshot(index) else {
+                return false;
+            };
+            if !snapshot.playback.matches_exact(&expected.playback)
+                || !snapshot.plan.matches_exact(expected.plan)
+                || !snapshot.source_feed_context.same_source(expected.context)
+            {
+                return false;
+            }
+            if let Some(work) = expected.work {
+                let prospective = feed(&snapshot, expected.pitch, expected.key_lock, frame, None);
+                if !self.voices[index].stretch.prospective_tuple_matches(
+                    &prospective,
+                    work.epoch,
+                    work.request_id,
+                ) {
+                    return false;
+                }
+            }
+        }
+        true
+    }
+
+    fn apply_global_rate_tuple(
+        &mut self,
+        tuple: RateTuple,
+        transport: &mut TransportTimeline,
+        frame: u64,
+    ) -> bool {
+        let mut candidate = *transport;
+        if let Some(period) = tuple.period
+            && !candidate.set_master_period_preserving_beat_position_at_frame(period, frame)
+        {
+            return false;
+        }
+        if self.effective_global_rate() != tuple {
+            self.invalidate_source_for_all();
+        }
+        self.speed = tuple.speed;
+        self.master_period_seconds = tuple.period;
+        *transport = candidate;
+        true
+    }
+
+    fn commit_global_rate(
+        &mut self,
+        pending: &PendingRate,
+        frame: u64,
+        transport: &mut TransportTimeline,
+    ) -> Result<(), RateError> {
+        let mut candidate = *transport;
+        if let Some(period) = pending.requested.period
+            && !candidate.set_master_period_preserving_beat_position_at_frame(period, frame)
+        {
+            return Err(RateError::InvalidTransport);
+        }
+        if !self.global_rate_ready(pending, frame) {
+            return Err(RateError::MissedBoundary);
+        }
+        let capture = pending.capture.as_ref().unwrap();
+        let anchor = capture
+            .voices
+            .iter()
+            .flatten()
+            .next()
+            .ok_or(RateError::ParticipantChanged)?
+            .placement;
+        let ownership = self.input_runtime_ownership.clone();
+        let write = ownership
+            .prepare_slot_write_fixed(anchor, anchor.lifetime())
+            .map_err(|_| RateError::SourceChanged)?;
+        let mixer = RefCell::new(self);
+        ownership
+            .commit_slot_write_fixed(
+                &write,
+                || mixer.borrow_mut().global_rate_ready(pending, frame),
+                |_| {
+                    let mut mixer = mixer.borrow_mut();
+                    for index in 0..MAX_VOICES {
+                        let Some(expected) = capture.voices[index].as_ref() else {
+                            continue;
+                        };
+                        let Some(work) = expected.work else {
+                            continue;
+                        };
+                        let snapshot = mixer
+                            .capture_pitch_voice_snapshot(index)
+                            .expect("claimed old rate endpoint");
+                        let prospective =
+                            feed(&snapshot, expected.pitch, expected.key_lock, frame, None);
+                        mixer.voices[index]
+                            .stretch
+                            .adopt_prospective_tuple_claimed(&prospective, work.request_id);
+                    }
+                    // Actual source controls change only after every endangered owner is adopted.
+                    // Invalidation cannot revoke those now-productive Native/FIFO trajectories.
+                    mixer.invalidate_source_for_all();
+                    mixer.speed = pending.requested.speed;
+                    mixer.master_period_seconds = pending.requested.period;
+                    *transport = candidate;
+                },
+            )
+            .map(|_| ())
+            .map_err(|_| RateError::SourceChanged)
+    }
+
+    fn finish_global_rate(&mut self, pending: PendingRate, error: RateError) {
+        if let Some(capture) = pending.capture.as_ref() {
+            for (index, expected) in capture.voices.iter().enumerate() {
+                if let Some(expected) = expected
+                    && self.voices[index].generation == expected.generation
+                    && let Some(work) = expected.work
+                {
+                    self.voices[index]
+                        .stretch
+                        .cancel_source_request_if_owned(work.epoch, work.request_id);
+                }
+            }
+        }
+        self.publish_global_rate_effect(
+            &pending,
+            RateState::Rejected,
+            error,
+            pending.capture.as_ref().map(|capture| capture.execution),
+        );
+    }
+
+    /// Services only the existing exact render boundary; it creates no scheduled event.
+    pub(crate) fn service_global_rate(
+        &mut self,
+        frame: u64,
+        transport: &mut TransportTimeline,
+        _retirement: &mut impl AudioBufferRetirement,
+    ) {
+        let Some(mut coordinator) = self.global_rate.take() else {
+            return;
+        };
+        let Some(mut pending) = coordinator.pending.take() else {
+            self.global_rate = Some(coordinator);
+            return;
+        };
+        let result = self.global_rate_current(&pending).and_then(|()| {
+            if pending.capture.is_none() {
+                if !self.global_rate_drains_settled() {
+                    return Ok(false);
+                }
+                self.capture_global_rate(&mut pending, frame)?;
+                self.publish_global_rate_effect(
+                    &pending,
+                    RateState::Preparing,
+                    RateError::None,
+                    pending.capture.as_ref().map(|capture| capture.execution),
+                );
+            }
+            let execution = pending.capture.as_ref().unwrap().execution;
+            if frame < execution {
+                return Ok(false);
+            }
+            if frame != execution {
+                return Err(RateError::MissedBoundary);
+            }
+            self.commit_global_rate(&pending, frame, transport)?;
+            Ok(true)
+        });
+        match result {
+            Ok(true) => self.publish_global_rate_effect(
+                &pending,
+                RateState::Applied,
+                RateError::None,
+                Some(frame),
+            ),
+            Ok(false) => coordinator.pending = Some(pending),
+            Err(error) => self.finish_global_rate(pending, error),
+        }
+        self.global_rate = Some(coordinator);
+    }
+
+    pub(crate) fn next_global_rate_frame(&self) -> Option<u64> {
+        self.global_rate
+            .as_ref()?
+            .pending
+            .as_ref()?
+            .capture
+            .as_ref()
+            .map(|capture| capture.execution)
+    }
+
+    pub(crate) fn has_pending_global_rate(&self) -> bool {
+        self.global_rate
+            .as_ref()
+            .is_some_and(|coordinator| coordinator.pending.is_some())
+    }
+
+    /// Legacy effects have no held rate request. Their actual callback state is
+    /// the next coalescing base, including an explicitly cleared master period.
+    pub(super) fn refresh_global_rate_intent(&mut self) {
+        let effective = self.effective_global_rate();
+        if let Some(coordinator) = self.global_rate.as_mut()
+            && coordinator.pending.is_none()
+        {
+            coordinator.requested = effective;
+        }
+    }
+
+    /// Legacy global edits have no separately held complete rate tuple. Refuse both
+    /// pending effects instead of refreshing an old captured fence or applying half.
+    pub(crate) fn refuse_legacy_global_rate_if_pending(&mut self) -> bool {
+        let Some(mut coordinator) = self.global_rate.take() else {
+            return false;
+        };
+        let refused = if let Some(pending) = coordinator.pending.take() {
+            self.finish_global_rate(pending, RateError::OtherRatePending);
+            true
+        } else {
+            false
+        };
+        self.global_rate = Some(coordinator);
+        refused
+    }
+}

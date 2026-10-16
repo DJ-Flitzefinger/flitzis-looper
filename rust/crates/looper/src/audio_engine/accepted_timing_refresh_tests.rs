@@ -144,10 +144,22 @@ impl Fixture {
     }
 
     fn global_parameter(&mut self, message: ControlParameterMessage) {
-        super::super::super::push_global_timing_message(
+        let (speed, period) = match message {
+            ControlParameterMessage::SetSpeed(speed) => (Some(speed), None),
+            ControlParameterMessage::SetMasterPeriod(period) => (None, Some(period)),
+            ControlParameterMessage::SetSpeedAndMasterPeriod {
+                speed,
+                period_seconds,
+            } => (Some(speed), Some(period_seconds)),
+            _ => panic!("fixture requires a global rate parameter"),
+        };
+        super::super::super::push_global_rate_message(
             &self.engine.global_timing_revision,
+            &self.engine.input_runtime_ownership.global_timing_publishing,
+            &self.engine.input_runtime_ownership.global_rate_status,
             &mut self.parameter_producer,
-            message,
+            speed,
+            period,
             "fixture-global-parameter",
         )
         .unwrap();
@@ -465,6 +477,10 @@ fn accepted_refresh_newer_global_parameter_or_lock_edit_rejects_loop_and_master(
             3 => {
                 super::super::super::push_global_timing_message(
                     &fixture.engine.global_timing_revision,
+                    &fixture
+                        .engine
+                        .input_runtime_ownership
+                        .global_timing_publishing,
                     &mut fixture.producer.lock().unwrap(),
                     ControlMessage::SetBpmLock(false),
                     "SetBpmLock",
@@ -475,6 +491,10 @@ fn accepted_refresh_newer_global_parameter_or_lock_edit_rejects_loop_and_master(
             _ => {
                 super::super::super::push_global_timing_message(
                     &fixture.engine.global_timing_revision,
+                    &fixture
+                        .engine
+                        .input_runtime_ownership
+                        .global_timing_publishing,
                     &mut fixture.producer.lock().unwrap(),
                     ControlMessage::BootstrapTransportFromPad { id: 1 },
                     "BootstrapTransportFromPad",
@@ -940,6 +960,10 @@ fn accepted_refresh_global_capacity_or_revision_failure_preserves_current_ack_an
     assert!(
         super::super::super::push_global_timing_message(
             &fixture.engine.global_timing_revision,
+            &fixture
+                .engine
+                .input_runtime_ownership
+                .global_timing_publishing,
             &mut producer,
             ControlParameterMessage::SetSpeed(1.25),
             "SetSpeed"
@@ -965,6 +989,10 @@ fn accepted_refresh_global_capacity_or_revision_failure_preserves_current_ack_an
     assert!(
         super::super::super::push_global_timing_message(
             &fixture.engine.global_timing_revision,
+            &fixture
+                .engine
+                .input_runtime_ownership
+                .global_timing_publishing,
             &mut producer,
             ControlParameterMessage::SetSpeed(1.25),
             "SetSpeed"

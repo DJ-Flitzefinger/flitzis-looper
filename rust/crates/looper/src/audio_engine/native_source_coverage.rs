@@ -341,6 +341,7 @@ impl NormalLoopCoverage {
         self.plan
             .transition
             .matches_source_contract(plan.transition)
+            && self.playback.matches_rate_target(playback)
             && self.matches_reader_data(
                 sample,
                 readers,
@@ -364,14 +365,8 @@ impl NormalLoopCoverage {
         playback: &SourcePlayback,
         expected_transition: Option<StemTransition>,
     ) -> bool {
-        let transition_matches = if self.plan.transition.is_active() {
-            expected_transition.is_some_and(|expected| expected.matches_exact(plan.transition))
-        } else {
-            self.plan
-                .transition
-                .matches_source_contract(plan.transition)
-        };
-        transition_matches
+        self.playback.matches_rate_target(playback)
+            && self.effective_transition_matches(plan, expected_transition)
             && self.matches_reader_data(
                 sample,
                 readers,
@@ -379,6 +374,39 @@ impl NormalLoopCoverage {
                 accepted,
                 plan,
                 playback,
+                false,
+            )
+    }
+
+    fn effective_transition_matches(
+        &self,
+        plan: SourceReadPlan,
+        expected_transition: Option<StemTransition>,
+    ) -> bool {
+        if self.plan.transition.is_active() {
+            expected_transition.is_some_and(|expected| expected.matches_exact(plan.transition))
+        } else {
+            self.plan
+                .transition
+                .matches_source_contract(plan.transition)
+        }
+    }
+
+    /// Only the already productive Native owner may use this after proving exact next-phase
+    /// continuity. Current physical taps and all source/reader/timing guards still apply.
+    pub(crate) fn matches_productive_with_readers(
+        &self,
+        feed: &super::stretch_processor::ProductiveSourceFeed<'_>,
+        expected_transition: Option<StemTransition>,
+    ) -> bool {
+        self.effective_transition_matches(feed.plan, expected_transition)
+            && self.matches_reader_data(
+                feed.sample,
+                StemReadSets::new(feed.stems, feed.outgoing_stems),
+                feed.sample_rate_hz,
+                feed.accepted,
+                feed.plan,
+                feed.playback,
                 false,
             )
     }
@@ -410,7 +438,6 @@ impl NormalLoopCoverage {
             && self.binding.accepted == accepted
             && (!exact_window || sample.resident_binding() == Some(self.resident))
             && self.plan.matches_source_contract(plan)
-            && self.playback.matches_rate_target(playback)
             && normal_loop_feed_available_with_readers(
                 sample,
                 readers,

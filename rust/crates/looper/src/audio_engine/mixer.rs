@@ -8,6 +8,7 @@
 //! [`decode_audio_file_to_sample_buffer`](crate::audio_engine::sample_loader::decode_audio_file_to_sample_buffer).
 
 mod endpoint_reserve;
+mod global_rate;
 #[path = "mixer/hold_action.rs"]
 mod hold_action;
 mod key_lock_tuple;
@@ -237,6 +238,10 @@ pub struct RtMixer {
     /// Enable BPM lock (tempo matching).
     bpm_lock_enabled: bool,
     global_parameters_drained: bool,
+    global_commands_drained: bool,
+    global_commands_revision: u64,
+    global_parameters_revision: u64,
+    global_rate: Option<Box<global_rate::GlobalRateCoordinator>>,
 
     /// Per-pad Key Lock state (preserve pitch when tempo changes).
     pad_key_lock_enabled: [bool; NUM_SAMPLES],
@@ -764,6 +769,10 @@ impl RtMixer {
             speed: 1.0,
             bpm_lock_enabled: false,
             global_parameters_drained: true,
+            global_commands_drained: true,
+            global_commands_revision: 1,
+            global_parameters_revision: 1,
+            global_rate: Some(Box::new(global_rate::GlobalRateCoordinator::default())),
             pad_key_lock_enabled: std::array::from_fn(|_| false),
             pad_pitch_intent: [PitchIntent::default(); NUM_SAMPLES],
             pad_key_lock_request_id: [0; NUM_SAMPLES],
@@ -840,8 +849,64 @@ impl RtMixer {
         self.prepared_source_epochs = epochs;
     }
 
-    pub(crate) fn set_global_parameters_drained(&mut self, drained: bool) {
-        self.global_parameters_drained = drained;
+    pub(crate) fn set_global_commands_drained(&mut self, drained: bool) {
+        self.global_commands_drained = drained;
+        if drained {
+            self.global_commands_revision = self.global_rate_timing_revision();
+        }
+    }
+
+    pub(crate) fn global_rate_timing_revision(&self) -> u64 {
+        self.input_runtime_ownership
+            .global_timing_revision
+            .load(Ordering::Acquire)
+    }
+
+    /// Freeze the publication fence before the first queue observation. A later
+    /// snapshot could acknowledge a publication whose payload is still unread.
+    pub(crate) fn begin_global_timing_drain(&self) -> Option<u64> {
+        let revision = self.global_rate_timing_revision();
+        (!self
+            .input_runtime_ownership
+            .global_timing_publishing
+            .load(Ordering::Acquire)
+            && self.global_rate_timing_revision() == revision)
+            .then_some(revision)
+    }
+
+    fn validate_global_timing_drain(&self, revision: Option<u64>, empty: bool) -> Option<u64> {
+        revision.filter(|&revision| {
+            empty
+                && !self
+                    .input_runtime_ownership
+                    .global_timing_publishing
+                    .load(Ordering::Acquire)
+                && self.global_rate_timing_revision() == revision
+        })
+    }
+
+    pub(crate) fn finish_global_control_drain(&mut self, revision: Option<u64>, empty: bool) {
+        let completed = self.validate_global_timing_drain(revision, empty);
+        self.global_commands_drained = completed.is_some();
+        self.global_commands_revision = completed.unwrap_or(0);
+    }
+
+    pub(crate) fn finish_global_parameter_drain(&mut self, revision: Option<u64>, empty: bool) {
+        let completed = self.validate_global_timing_drain(revision, empty);
+        self.global_parameters_drained = completed.is_some();
+        self.global_parameters_revision = completed.unwrap_or(0);
+    }
+
+    pub(super) fn global_rate_drains_settled(&self) -> bool {
+        let revision = self.global_rate_timing_revision();
+        self.global_commands_drained
+            && self.global_parameters_drained
+            && self.global_commands_revision == revision
+            && self.global_parameters_revision == revision
+            && !self
+                .input_runtime_ownership
+                .global_timing_publishing
+                .load(Ordering::Acquire)
     }
 
     pub(crate) fn accepted_refresh_master_matches(
@@ -3631,16 +3696,25 @@ impl RtMixer {
             return;
         }
 
+        if self.refuse_legacy_global_rate_if_pending() {
+            return;
+        }
+
         self.invalidate_source_for_all();
         self.speed = speed;
+        self.refresh_global_rate_observation();
     }
 
     pub fn set_bpm_lock(&mut self, enabled: bool) {
+        if self.refuse_legacy_global_rate_if_pending() {
+            return;
+        }
         self.invalidate_source_for_all();
         self.bpm_lock_enabled = enabled;
         if !enabled {
             self.master_period_seconds = None;
         }
+        self.refresh_global_rate_observation();
     }
 
     pub fn set_key_lock(&mut self, enabled: bool) {
@@ -4055,9 +4129,23 @@ impl RtMixer {
 
     pub(crate) fn set_master_period(&mut self, period: f64) {
         if period.is_finite() && period > 0.0 {
+            if self.refuse_legacy_global_rate_if_pending() {
+                return;
+            }
             self.invalidate_source_for_all();
             self.master_period_seconds = Some(period);
+            self.refresh_global_rate_observation();
         }
+    }
+
+    fn refresh_global_rate_observation(&mut self) {
+        self.refresh_global_rate_intent();
+        self.input_runtime_ownership
+            .global_rate_status
+            .refresh_effective(super::global_rate_status::RateTuple {
+                speed: self.speed,
+                period: self.master_period_seconds,
+            });
     }
 
     pub fn set_pad_bpm(&mut self, id: usize, bpm: Option<f64>) {
@@ -4598,11 +4686,23 @@ impl RtMixer {
     }
 
     fn tempo_ratio_for_source_period(&self, source_period: Option<f64>) -> f64 {
-        let mut ratio = self.speed;
+        self.tempo_ratio_for_source_period_with_rate(
+            source_period,
+            self.speed,
+            self.master_period_seconds,
+        )
+    }
+
+    fn tempo_ratio_for_source_period_with_rate(
+        &self,
+        source_period: Option<f64>,
+        speed: f64,
+        master_period: Option<f64>,
+    ) -> f64 {
+        let mut ratio = speed;
 
         if self.bpm_lock_enabled
-            && let (Some(master_period), Some(source_period)) =
-                (self.master_period_seconds, source_period)
+            && let (Some(master_period), Some(source_period)) = (master_period, source_period)
         {
             ratio = source_period / master_period;
         }

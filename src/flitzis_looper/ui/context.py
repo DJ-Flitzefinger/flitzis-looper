@@ -36,6 +36,7 @@ if TYPE_CHECKING:
     from flitzis_looper.controller.current_timing import CurrentPadTiming
     from flitzis_looper.controller.performance_confirmation import PerformanceConfirmation
     from flitzis_looper.controller.stems import StemResidencySummary
+    from flitzis_looper.controller.transport.global_params import GlobalRateStatus
     from flitzis_looper.controller.transport.key_lock_status import KeyLockStatus
     from flitzis_looper.key_intent import MusicalKey, PadKeyIntent
     from flitzis_looper.models import (
@@ -277,6 +278,10 @@ class GlobalSelectors:
     def key_lock_status(self) -> KeyLockStatus:
         """Return the aggregate confirmed/pending/mixed state of loaded targets."""
         return self._controller.transport.global_params.key_lock_status()
+
+    def global_rate_status(self) -> GlobalRateStatus:
+        """Return the last coherent callback rate confirmation from the runtime tick."""
+        return self._controller.transport.global_params.global_rate_status()
 
     def effective_bpm(self) -> float | None:
         """Return the current effective global BPM."""

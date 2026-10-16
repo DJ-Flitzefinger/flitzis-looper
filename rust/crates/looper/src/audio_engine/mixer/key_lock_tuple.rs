@@ -96,7 +96,7 @@ impl RtMixer {
                 .any(|voice| voice.active && voice.sample_id == id)
     }
 
-    fn effective_voice_tuple(&self, index: usize) -> (PitchIntent, bool) {
+    pub(super) fn effective_voice_tuple(&self, index: usize) -> (PitchIntent, bool) {
         let voice = &self.voices[index];
         if voice.frozen_stems.is_some()
             && !self.sample_bank[voice.sample_id]

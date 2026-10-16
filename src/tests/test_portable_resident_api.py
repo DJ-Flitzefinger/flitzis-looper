@@ -304,6 +304,20 @@ def test_missing_pitch_capture_type_cannot_activate() -> None:
         check(SimpleNamespace(AudioEngine=_CompatiblePitchEngine))
 
 
+def test_global_rate_observation_is_reflected_without_native_work() -> None:
+    check = runpy.run_path(str(REPO / "scripts/portable/bootstrap.py"))["check_global_rate_api"]
+    engine_type = type("RateEngine", (), {"global_rate_status": _forbidden_native_work})
+    check(engine_type)
+
+
+@pytest.mark.parametrize("missing", [False, True], ids=["not-callable", "absent"])
+def test_global_rate_without_callback_confirmation_cannot_activate(*, missing: bool) -> None:
+    check = runpy.run_path(str(REPO / "scripts/portable/bootstrap.py"))["check_global_rate_api"]
+    attributes = {} if missing else {"global_rate_status": None}
+    with pytest.raises(AssertionError, match=r"AudioEngine\.global_rate_status"):
+        check(type("OldRateEngine", (), attributes))
+
+
 _ORDINARY_START_METHODS = (
     "capture_pad_start",
     "prepare_captured_pad_start",
@@ -372,7 +386,9 @@ _ORDINARY_START_IMPLEMENTATIONS: dict[str, object] = {
     "publish_captured_global_start": _publish_captured_global_start,
 }
 _CompatibleOrdinaryEngine = type(
-    "CompatibleOrdinaryEngine", (_CompatiblePitchEngine,), _ORDINARY_START_IMPLEMENTATIONS
+    "CompatibleOrdinaryEngine",
+    (_CompatiblePitchEngine,),
+    _ORDINARY_START_IMPLEMENTATIONS | {"global_rate_status": _forbidden_native_work},
 )
 _ORDINARY_CAPTURE_IMPLEMENTATIONS = dict.fromkeys(
     _ORDINARY_CAPTURE_METHODS, _forbidden_native_work
@@ -754,3 +770,29 @@ def test_runtime_preflight_accepts_complete_reflected_native_before_activation(
     bootstrap["check_runtime"](tmp_path, checkout, runtime)
     assert runner.call_count == 3
     assert '"portable_preflight": "passed"' in capsys.readouterr().out
+
+
+def test_runtime_rejects_missing_rate_confirmation_before_app_imports(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    bootstrap = runpy.run_path(str(REPO / "scripts/portable/bootstrap.py"))
+    checkout = tmp_path / "flitzis-looper"
+    old_engine = type("OldRateEngine", (_CompatibleOrdinaryEngine,), {"global_rate_status": None})
+    native = SimpleNamespace(
+        flitzis_looper_audio=SimpleNamespace(
+            __file__=str(checkout / "src/flitzis_looper_audio/native.pyd")
+        ),
+        native_build_profile=lambda: "release",
+        AudioEngine=old_engine,
+        CapturedPitchAction=_CompatiblePitchCapture,
+        CapturedPadStart=_CompatibleOrdinaryCapture,
+        CapturedInputPadTrigger=_CompatibleOrdinaryTrigger,
+        ConstantTimingTicket=_CompatibleTimingTicket,
+        CapturedGlobalStart=_CompatibleGlobalCapture,
+        AcceptedTimingRefreshTicket=_CompatibleTimingTicket,
+    )
+    imported = Mock(return_value=native)
+    monkeypatch.setattr(bootstrap["importlib"], "import_module", imported)
+    with pytest.raises(AssertionError, match=r"AudioEngine\.global_rate_status"):
+        bootstrap["check_runtime"](tmp_path, checkout, tmp_path / "Runtime")
+    imported.assert_called_once_with("flitzis_looper_audio")

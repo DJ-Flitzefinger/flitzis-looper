@@ -223,6 +223,8 @@ del first, previous_control
         assert_other(playback);
     }
     let feedback_before = playback.callback.feedback.events.len();
+    let stopped_feedback =
+        ExpectedStoppedFeedback::source_command(&playback.callback.mixer, consumer, 0);
     crate::audio_engine::audio_stream::drain_parameter_messages(
         parameters,
         &mut playback.callback.mixer,
@@ -236,10 +238,7 @@ del first, previous_control
     );
     assert!(consumer.is_empty());
     assert_eq!(playback.callback.feedback.events.len(), feedback_before + 1);
-    assert!(matches!(
-        playback.callback.feedback.events[feedback_before],
-        AudioMessage::SampleStopped { id: 0 }
-    ));
+    stopped_feedback.assert_message(&playback.callback.feedback.events[feedback_before]);
     assert!(playback.callback.mixer.bank_for_measurement()[0].is_none());
     assert!(playback.callback.mixer.stems_for_measurement()[0].is_none());
     let marker = Arc::new(AtomicU8::new(0));

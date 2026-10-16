@@ -287,7 +287,7 @@ impl NativeHistoryRequest {
     }
 
     fn coverage_matches(&self, feed: &ProductiveSourceFeed<'_>, exact_window: bool) -> bool {
-        self.coverage_matches_transition(feed, exact_window, None)
+        self.coverage_matches_transition(feed, exact_window, None, false)
     }
 
     fn coverage_matches_transition(
@@ -295,6 +295,7 @@ impl NativeHistoryRequest {
         feed: &ProductiveSourceFeed<'_>,
         exact_window: bool,
         expected_transition: Option<StemTransition>,
+        productive_continuity: bool,
     ) -> bool {
         let readers = feed
             .plan
@@ -323,6 +324,8 @@ impl NativeHistoryRequest {
                     feed.playback,
                     true,
                 )
+            } else if productive_continuity {
+                coverage.matches_productive_with_readers(feed, expected_transition)
             } else {
                 coverage.matches_effective_with_readers(
                     feed.sample,
@@ -357,7 +360,7 @@ impl NativeHistoryRequest {
         feed: &ProductiveSourceFeed<'_>,
         _epoch: u64,
     ) -> bool {
-        self.matches_effective_contract_with_transition(feed, _epoch, None)
+        self.matches_effective_contract_with_transition(feed, _epoch, None, false)
     }
 
     fn matches_effective_contract_with_transition(
@@ -365,6 +368,7 @@ impl NativeHistoryRequest {
         feed: &ProductiveSourceFeed<'_>,
         _epoch: u64,
         expected_transition: Option<StemTransition>,
+        productive_continuity: bool,
     ) -> bool {
         if self.plan.transition.is_active()
             && expected_transition
@@ -377,7 +381,12 @@ impl NativeHistoryRequest {
         // epoch is not authority to stale the already accepted attack or its productive history.
         self.pitch_intent == feed.pitch_intent
             && self.key_lock == feed.key_lock
-            && self.coverage_matches_transition(feed, false, expected_transition)
+            && self.coverage_matches_transition(
+                feed,
+                false,
+                expected_transition,
+                productive_continuity,
+            )
             && self.binding.same_source(binding)
             && self.binding.accepted == binding.accepted
             && self
@@ -385,7 +394,10 @@ impl NativeHistoryRequest {
                 .current_effective_source(feed.sample, feed.sample_rate_hz)
             && self.permit.matches_projection(feed.accepted)
             && self.plan.matches_source_contract(feed.plan)
-            && self.playback.matches_rate_target(feed.playback)
+            // Pending candidates still require their frozen exact target below. Once adopted,
+            // the same real Native/FIFO owner may follow a new rate only while its next source
+            // phase continues exactly; selection, source, permit and timing remain guarded.
+            && (self.playback.matches_rate_target(feed.playback) || productive_continuity)
             && self.required_stems_match(feed, false)
     }
     pub(crate) fn matches_contract(&self, feed: &ProductiveSourceFeed<'_>, epoch: u64) -> bool {
@@ -503,10 +515,26 @@ impl NativeAdapterState {
         &self,
         feed: &ProductiveSourceFeed<'_>,
         epoch: u64,
+        history: Option<super::productive_source_history::ProductiveSourceHistory>,
     ) -> bool {
+        let productive_continuity = self.active
+            && self.used
+            && !self.dirty
+            && history.is_some_and(|history| {
+                history.continues(
+                    ProductiveSourceBinding::new(feed.sample, feed.sample_rate_hz, feed.accepted),
+                    feed.playback.position(),
+                    Some(feed.plan.domain()),
+                )
+            });
         self.source.as_ref().is_some_and(|source| {
-            if let Some(expected) = self.source_transition {
-                source.matches_effective_contract_with_transition(feed, epoch, Some(expected))
+            if self.source_transition.is_some() || productive_continuity {
+                source.matches_effective_contract_with_transition(
+                    feed,
+                    epoch,
+                    self.source_transition,
+                    productive_continuity,
+                )
             } else {
                 source.matches_effective_contract(feed, epoch)
             }

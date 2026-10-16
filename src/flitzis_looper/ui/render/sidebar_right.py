@@ -10,8 +10,9 @@ from flitzis_looper.ui.constants import (
     DARK_RGBA,
     SPACING,
     TEXT_BPM_RGBA,
+    TEXT_MUTED_RGBA,
 )
-from flitzis_looper.ui.contextmanager import button_style, style_var
+from flitzis_looper.ui.contextmanager import button_style, style_color, style_var
 from flitzis_looper.ui.render.bpm_entry import (
     filtered_bpm_entry_char,
     format_bpm_entry_value,
@@ -166,7 +167,7 @@ def _bpm_display(ctx: UiContext) -> None:
 
     if bpm is not None and imgui.is_item_hovered():
         imgui.set_tooltip(
-            f"Effective BPM: {format_bpm_entry_value(bpm)}\n"
+            f"Requested BPM: {format_bpm_entry_value(bpm)}\n"
             "Display rounded to two decimals. Double-click to edit full precision."
         )
 
@@ -182,6 +183,7 @@ def _speed_controls(ctx: UiContext) -> None:
     avail = imgui.get_content_region_avail()
 
     _bpm_display(ctx)
+    _render_global_rate_status(ctx)
 
     slider_width = 42
     slider_height = 400
@@ -221,6 +223,29 @@ def _speed_controls(ctx: UiContext) -> None:
             ctx.audio.global_.decrease_speed()
         elif minus_steps:
             ctx.audio.global_.nudge_speed_by_bpm_steps(-minus_steps)
+
+
+def _render_global_rate_status(ctx: UiContext) -> None:
+    """Keep requested rate controls separate from callback-confirmed audio and refusal."""
+    status = ctx.state.global_.global_rate_status()
+    effective = (
+        "unconfirmed" if status.effective_speed is None else f"{status.effective_speed:.2f}x"
+    )
+    with style_color(imgui.Col_.text, TEXT_MUTED_RGBA):
+        imgui.text_wrapped(f"Requested {ctx.state.project.speed:.2f}x")
+        imgui.text_wrapped(f"Audio {effective}")
+        if status.effective_master_period is not None:
+            imgui.text_wrapped(f"{60.0 / status.effective_master_period:.2f} BPM")
+    if status.error:
+        imgui.text_wrapped(f"Rate change: {status.error}")
+    if status.state == "queued":
+        imgui.text_wrapped("Rate change queued")
+    elif status.state == "preparing":
+        imgui.text_wrapped("Preparing rate change…")
+    elif status.state == "rejected":
+        imgui.text_wrapped("Rate change rejected")
+    elif status.state == "applied":
+        imgui.text_wrapped("Rate applied")
 
 
 def _speed_slider_with_bpm_reference(

@@ -164,7 +164,8 @@ impl Peer {
         );
         Self {
             at: playback.frame,
-            consumed: playback.source_frame,
+            // Public peer T=E=0 precedes the main voice's prepared Native E.
+            consumed: playback.frame,
             generation: peer.generation,
             native: peer.stretch.native_state_address(),
             fifo: peer.stretch.pending_fifo_frames(),
@@ -1058,6 +1059,8 @@ del generated2, generated_live2, generate_job2, generated2_reopened
     assert!(voice(&playback.callback.mixer).is_playing_sample(0));
     playback.callback.retirement.slots = usize::MAX;
     let before = playback.callback.feedback.events.len();
+    let stopped_feedback =
+        ExpectedStoppedFeedback::source_command(&playback.callback.mixer, consumer, 0);
     crate::audio_engine::audio_stream::drain_parameter_messages(
         &mut parameters,
         &mut playback.callback.mixer,
@@ -1072,10 +1075,8 @@ del generated2, generated_live2, generate_job2, generated2_reopened
     assert!(consumer.is_empty());
     assert!(playback.callback.mixer.bank_for_measurement()[0].is_none());
     assert!(playback.callback.mixer.stems_for_measurement()[0].is_none());
-    assert!(matches!(
-        &playback.callback.feedback.events[before..],
-        [AudioMessage::SampleStopped { id: 0 }]
-    ));
+    assert_eq!(playback.callback.feedback.events.len(), before + 1);
+    stopped_feedback.assert_message(&playback.callback.feedback.events[before]);
     complete::feedback(locals, &mut playback.callback);
     for frames in [1, 31, 137] {
         let mut silence = vec![0.0; frames * 2];
