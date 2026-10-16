@@ -461,6 +461,7 @@ def test_genuinely_missing_config_captured_under_writer_fence_admits_only_origin
     owner = PairJournalOwner(samples, journal)
     owner.append(journal)
     reopened = PairJournalOwner.open(samples, _TRANSACTION)
+    assert reopened.journal is not None
     assert inspect_pair_recovery(reopened.journal, None).disposition == "original_pending"
     different = ProjectState().model_dump_json().encode("utf-8")
     assert inspect_pair_recovery(reopened.journal, different).disposition == "conflict"

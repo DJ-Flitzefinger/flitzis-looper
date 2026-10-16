@@ -1,7 +1,7 @@
 """Controller intent/ACK proofs; native PCM and ownership use separate real tests."""
 
 from dataclasses import replace
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, cast
 from unittest.mock import Mock, patch
 
 import pytest
@@ -15,6 +15,7 @@ from tests.flitzis_looper.conftest import (
 
 if TYPE_CHECKING:
     from flitzis_looper.controller import AppController
+    from flitzis_looper_audio import CapturedInputPadTrigger, ResidentWindowTicket
 
 
 class Ticket:
@@ -27,6 +28,11 @@ class Ticket:
         self.window_revision = 2
         self.key_lock_request_id: int | None = None
         self.launch_cancelled = False
+
+    @property
+    def native_ticket(self) -> ResidentWindowTicket:
+        """Expose only the Native boundary view; retain this fake for state changes."""
+        return cast("ResidentWindowTicket", self)
 
     def cancel_launch(self) -> bool:
         previous = self.launch_cancelled
@@ -57,6 +63,11 @@ class CapturedMidiGesture:
         self.native_intent = ("midi:note:1:60", received_at_ns, True, self.owner_identity)
         self.diagnostic_slot: int | None = 0
         self.owner_status = "current"
+
+    @property
+    def native_trigger(self) -> CapturedInputPadTrigger:
+        """Keep the original fake handle alongside its opaque Native boundary view."""
+        return cast("CapturedInputPadTrigger", self)
 
     def original_owner_status(self) -> str:
         return self.owner_status
@@ -143,7 +154,9 @@ def legacy_start(controller: AppController, audio: Mock, received_at_ns: int) ->
     )
 
 
-def schedule_captured_start(start: FakeCapturedPadStart, ticket: Ticket | None = None) -> bool:
+def schedule_captured_start(
+    start: FakeCapturedPadStart, ticket: ResidentWindowTicket | None = None
+) -> bool:
     """Retain an explicitly queued receipt without claiming a first Native effect."""
     if not start.publish(ticket):
         return False
@@ -686,10 +699,10 @@ def test_midi_unprepared_context_uses_own_ack_route_and_original_guard(
     controller.input_mapping._handle_rust_input_event(midi_event(original))
     residency = controller.transport.residency
     retained = residency._captured_triggers[id(original)]
-    assert retained.trigger is original
+    assert retained.trigger is original.native_trigger
     residency.poll()
     audio_engine_mock.prepare_captured_input_trigger.assert_called_once_with(original)
-    assert retained.ticket is ticket
+    assert retained.ticket is ticket.native_ticket
     audio_engine_mock.prepare_resident_control.assert_not_called()
     audio_engine_mock.play_sample_exclusive.assert_not_called()
     audio_engine_mock.play_resident_control.assert_not_called()
@@ -750,7 +763,7 @@ def test_midi_post_ack_pressure_retries_original_guard_with_same_timestamp(
     controller.input_mapping._handle_rust_input_event(midi_event(original))
     controller.transport.residency.poll()
     pending = controller.transport.residency._captured_triggers[id(original)]
-    assert pending.ticket is ticket
+    assert pending.ticket is ticket.native_ticket
     ticket.status = "accepted"
     for _ in range(20):
         controller.transport.residency.poll()
@@ -762,7 +775,7 @@ def test_midi_post_ack_pressure_retries_original_guard_with_same_timestamp(
         assert not controller.transport.residency._captured_triggers
     else:
         assert controller.transport.residency._captured_triggers[id(original)] is pending
-        assert pending.ticket is ticket
+        assert pending.ticket is ticket.native_ticket
         assert pending.cancel_requested
         assert ticket.launch_cancelled
         original.owner_status = "superseded"
@@ -988,7 +1001,7 @@ def test_post_ack_ui_launch_keeps_opaque_ticket_and_rejects_retired_source(
     ticket = resident(controller, audio_engine_mock)
 
     def retire_original(start: FakeCapturedPadStart, window: Ticket) -> bool:
-        assert start.window is window
+        assert start.window is window.native_ticket
         start.status = "rejected"
         start.failure = "source_changed"
         return False

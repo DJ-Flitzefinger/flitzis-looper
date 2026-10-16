@@ -4,6 +4,7 @@ import json
 import os
 import subprocess
 from pathlib import Path
+from typing import cast
 
 import pytest
 
@@ -90,7 +91,8 @@ try {
     assert len(records) == 1, result.stdout + result.stderr
     assert (root / "marker.txt").read_text(encoding="utf-8") == "original fixture"
     assert (replacement / "marker.txt").read_text(encoding="utf-8") == "replacement fixture"
-    return json.loads(records[0])
+    # The controlled PowerShell fixture emits one JSON object with named fields.
+    return cast("dict[str, object]", json.loads(records[0]))
 
 
 def test_real_alias_handles_unicode_and_shell_punctuation_and_removes_only_own_mapping(

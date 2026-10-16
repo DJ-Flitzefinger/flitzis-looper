@@ -105,6 +105,7 @@ def test_swap_exchanges_complete_images_with_unchanged_birth_and_copy_lineage() 
     assert candidate.pad_content[0] is not None
     assert candidate.pad_content[0].copied_from == "a" * 32
     assert candidate.pad_content[0].material_creation is not None
+    assert project.pad_content[215] is not None
     assert candidate.pad_content[0].material_creation == project.pad_content[215].material_creation
     assert project.model_dump_json() == before
 

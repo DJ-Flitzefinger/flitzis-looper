@@ -8,7 +8,6 @@ import hashlib
 from concurrent.futures import Future
 from dataclasses import dataclass
 from pathlib import Path
-from types import SimpleNamespace
 from typing import TYPE_CHECKING, cast
 
 import pytest
@@ -26,6 +25,7 @@ from flitzis_looper.controller.pair_arrangement_journal import (
 )
 from flitzis_looper.controller.pair_arrangement_recovery import inspect_pair_recovery
 from flitzis_looper.controller.persistence import ProjectPersistence
+from flitzis_looper.controller.stem_intent import StemGenerationIntent
 from flitzis_looper.controller.stems import StemController
 from flitzis_looper.controller.transport import TransportController
 from flitzis_looper.models import PadContentIdentity, ProjectState, SessionState
@@ -40,8 +40,16 @@ if TYPE_CHECKING:
     from flitzis_looper.controller.asset_lifecycle import AssignmentImage
     from flitzis_looper.controller.pair_arrangement import _Pair
     from flitzis_looper.controller.pair_arrangement_journal import PairArrangementJournal
-    from flitzis_looper_audio import AudioEngine, ConstantTimingTicket, ProjectAssetLease
-    from tests.flitzis_looper.controller.test_pair_arrangement import _Ticket
+    from flitzis_looper.controller.persistence import ConfigCommitReceipt
+    from flitzis_looper.controller.transport import residency
+    from flitzis_looper_audio import (
+        AudioEngine,
+        ConstantTimingTicket,
+        OfflineStemSourceLease,
+        PadPairAcknowledgement,
+        ProjectAssetLease,
+    )
+    from tests.flitzis_looper.controller.test_pair_arrangement import _Captured, _Ticket
 
 
 @dataclass(slots=True)
@@ -90,8 +98,42 @@ class _Native(_PairNative):
 
 
 @dataclass(slots=True)
+class _Arrangement:
+    active: bool = False
+
+
+@dataclass(slots=True)
+class _AppFixture:
+    _project: ProjectState
+    _session: SessionState
+    _audio: _Native
+    _assets: ProjectAssetLifecycle
+    project: ProjectState
+    session: SessionState
+    persistence: ProjectPersistence
+    transport: TransportController
+    loader: LoaderController
+    accepted_timing: AcceptedTimingController
+    metering: MeteringController
+    stems: StemController
+    arrangement: _Arrangement
+    _pair_waveform_views: list[WaveformEditorActions]
+
+
+@dataclass(slots=True)
+class _OriginalState:
+    identity: PadContentIdentity | None
+    voice: object
+    pending: residency._Pending
+    future: Future[ConstantTimingTicket]
+    stem_source: OfflineStemSourceLease
+    stem_intent: StemGenerationIntent
+    zoom: tuple[float, float]
+
+
+@dataclass(slots=True)
 class _Harness:
-    app: SimpleNamespace
+    app: _AppFixture
     controller: PairArrangementController
     native: _Native
     assets: ProjectAssetLifecycle
@@ -129,6 +171,7 @@ def _harness(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> _Harness:
     project = _project(tmp_path)
     session = SessionState(active_sample_ids={0, 215}, paused_sample_ids={215})
     native = _Native()
+    # Only the controller-facing view is Native; tests retain the scripted handle above.
     audio = cast("AudioEngine", native)
     assets = ProjectAssetLifecycle(project, audio)
     assets.sync_assignments()
@@ -136,7 +179,7 @@ def _harness(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> _Harness:
     persistence = ProjectPersistence(project)
     persistence.config_path = samples / "owning.config.json"
     persistence.flush()
-    app = SimpleNamespace(
+    app = _AppFixture(
         _project=project,
         _session=session,
         _audio=native,
@@ -151,11 +194,12 @@ def _harness(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> _Harness:
         stems=StemController(
             project, session, audio, stem_task_runner=lambda run: run(), asset_lifecycle=assets
         ),
-        arrangement=SimpleNamespace(active=False),
+        arrangement=_Arrangement(),
         _pair_waveform_views=[],
     )
+    # This fixture supplies the AppController components exercised by the real mirrors.
     WaveformEditorActions(cast("AppController", app))
-    images = []
+    images: list[AssignmentImage] = []
     prepare = assets.prepare_assignment_image
 
     def prepare_image(candidate: ProjectState) -> AssignmentImage:
@@ -167,6 +211,43 @@ def _harness(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> _Harness:
     return _Harness(
         app, PairArrangementController(cast("AppController", app)), native, assets, images
     )
+
+
+def _native_ticket(pair: _Pair) -> _Ticket:
+    """Recover the scripted Native handle held behind the production Native view."""
+    ticket = pair.ticket
+    assert ticket is not None
+    return cast("_Ticket", ticket)
+
+
+def _native_capture(pair: _Pair) -> _Captured:
+    """Recover the scripted Native state used by this fixture's acknowledgement oracle."""
+    captured = pair.captured
+    assert captured is not None
+    return cast("_Captured", captured)
+
+
+def _receipt(pair: _Pair) -> ConfigCommitReceipt:
+    """Read and validate the receipt in the current controller phase."""
+    receipt = pair.receipt
+    assert receipt is not None
+    return receipt
+
+
+def _acknowledgement(pair: _Pair) -> PadPairAcknowledgement:
+    """Read the acknowledgement afresh after a controller transition."""
+    acknowledgement = pair.acknowledgement
+    assert acknowledgement is not None
+    return acknowledgement
+
+
+def _journal(pair: _Pair) -> PairArrangementJournal:
+    """Read the current journal after a controller transition."""
+    owner = pair.journal
+    assert owner is not None
+    journal = owner.journal
+    assert journal is not None
+    return journal
 
 
 def _fail_config_writes(harness: _Harness, monkeypatch: pytest.MonkeyPatch, count: int) -> None:
@@ -205,26 +286,34 @@ def _assert_live_assignment_leases(native: _Native) -> None:
     assert all(lease.release_count == 0 for lease in native.leases[2:])
 
 
+def _seed_original_state(harness: _Harness) -> _OriginalState:
+    """Install concrete original owners whose identities the live mirror must preserve."""
+    app = harness.app
+    original = _OriginalState(
+        identity=app.project.pad_content[0],
+        voice=harness.native.voices[0],
+        pending=_pending(),
+        future=Future(),
+        # The mirror moves this opaque Native owner without invoking source operations.
+        stem_source=cast("OfflineStemSourceLease", object()),
+        stem_intent=StemGenerationIntent(0, 0, 0, "scripted pair mirror fixture", ()),
+        zoom=(-0.4, 8.6),
+    )
+    app.transport.residency._pending[0] = original.pending
+    app.accepted_timing._preparations[0] = original.future
+    app.stems._generation_sources[0] = original.stem_source
+    app.stems._generation_intents[0] = original.stem_intent
+    app.session.stem_generating_sample_ids.add(0)
+    app._pair_waveform_views[0]._pad_view_ranges[0] = original.zoom
+    return original
+
+
 def test_original_live_owner_crosses_real_mirrors_config_journal_and_assets_once(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     harness = _harness(tmp_path, monkeypatch)
     app = harness.app
-    original = {
-        "identity": app.project.pad_content[0],
-        "voice": harness.native.voices[0],
-        "pending": _pending(),
-        "future": Future(),
-        "stem_source": object(),
-        "stem_intent": object(),
-        "zoom": (-0.4, 8.6),
-    }
-    app.transport.residency._pending[0] = original["pending"]
-    app.accepted_timing._preparations[0] = cast("Future[ConstantTimingTicket]", original["future"])
-    app.stems._generation_sources[0] = original["stem_source"]
-    app.stems._generation_intents[0] = original["stem_intent"]
-    app.session.stem_generating_sample_ids.add(0)
-    app._pair_waveform_views[0]._pad_view_ranges[0] = original["zoom"]
+    original = _seed_original_state(harness)
     harness.native.publish_failures = 1
     assert harness.controller.begin(0, 215, operation="swap")
     pair = harness.original_pair()
@@ -238,34 +327,38 @@ def test_original_live_owner_crosses_real_mirrors_config_journal_and_assets_once
     app.session.tap_bpm_pad_id = 36
     app.persistence.mark_dirty()
     harness.complete()
-    ack = pair.acknowledgement
-    assert ack is pair.captured.ack
+    ack = _acknowledgement(pair)
+    assert ack is _native_capture(pair).ack
+    assert pair.mirror is not None
+    assert pair.stems is not None
     assert pair.mirror.applied
     assert pair.stems.applied
     assert pair.mirror._acknowledgement is ack
     assert pair.stems._acknowledgement is ack
-    assert app.project.pad_content[215] is original["identity"]
-    assert harness.native.voices[215] is original["voice"]
-    assert app.transport.residency._pending[215] is original["pending"]
-    assert app.accepted_timing._preparations[215] is original["future"]
-    assert app.stems._generation_sources[215] is original["stem_source"]
-    assert app.stems._generation_intents[215] is original["stem_intent"]
-    assert app._pair_waveform_views[0]._pad_view_ranges[215] is original["zoom"]
+    assert app.project.pad_content[215] is original.identity
+    assert harness.native.voices[215] is original.voice
+    assert app.transport.residency._pending[215] is original.pending
+    assert app.accepted_timing._preparations[215] is original.future
+    assert app.stems._generation_sources[215] is original.stem_source
+    assert app.stems._generation_intents[215] is original.stem_intent
+    assert app._pair_waveform_views[0]._pad_view_ranges[215] is original.zoom
     assert app.session.active_sample_ids == {0, 215}
     assert app.session.paused_sample_ids == {0}
     assert app.session.waveform_editor_pad_id == app.session.tap_bpm_pad_id == 36
     assert len(harness.native.captures) == len(harness.native.tickets) == 1
     assert len(harness.native.publish_calls) == 2
     assert all(
-        ticket is pair.ticket and actual is ack for ticket, actual in harness.native.validations
+        ticket is _native_ticket(pair) and actual is ack
+        for ticket, actual in harness.native.validations
     )
-    assert harness.native.finish_calls == [(pair.ticket, ack)]
+    assert harness.native.finish_calls == [(_native_ticket(pair), ack)]
     assert len(harness.images) == 1
+    assert pair.assignment_publication is not None
     assert pair.assignment_publication.settled
     assert harness.assets._assignments["original", 215][0].name == "source-0.wav"
     _assert_live_assignment_leases(harness.native)
     _assert_complete_receipt(harness, pair, 1)
-    saved = pair.receipt.projected()
+    saved = _receipt(pair).projected()
     assert saved.pad_gain_db[36] == -18.0
     assert saved.volume == 0.4
 
@@ -283,7 +376,7 @@ def test_postclaim_config_failures_retain_exact_candidate_image_and_ack_until_sa
     retained = (pair.candidate, pair.assignment, pair.assignment_publication, pair.acknowledgement)
     assert pair.receipt is None
     assert pair.published
-    assert pair.journal.journal.phase == "native_ack_observed"
+    assert _journal(pair).phase == "native_ack_observed"
     assert harness.assets._assignments is before_assignments
     assert harness.app.persistence.config_path.read_bytes() == before
     harness.controller.poll()
@@ -297,6 +390,7 @@ def test_postclaim_config_failures_retain_exact_candidate_image_and_ack_until_sa
     )
     assert len(harness.images) == 1
     assert pair.images == [pair.assignment]
+    assert pair.assignment_publication is not None
     assert pair.assignment_publication.owns_unpublished_image
     assert all(lease.release_count == 0 for lease in harness.native.leases)
     assert harness.app.persistence._migration_owner == pair.owner
@@ -333,6 +427,8 @@ def test_interrupted_real_mirror_keeps_same_ack_and_merges_newer_unrelated_confi
     pair = harness.original_pair()
     mirror, stem_mirror, ack = pair.mirror, pair.stems, pair.acknowledgement
     assert pair.receipt is not None
+    assert mirror is not None
+    assert stem_mirror is not None
     assert not mirror.applied
     assert mirror._acknowledgement is ack
     assert harness.native.finish_calls == []
@@ -347,12 +443,13 @@ def test_interrupted_real_mirror_keeps_same_ack_and_merges_newer_unrelated_confi
     assert stem_mirror.applied
     assert harness.app.project.pad_content[215] is original_identity
     assert len(harness.native.captures) == len(harness.native.publish_calls) == 1
-    assert harness.native.finish_calls == [(pair.ticket, ack)]
+    assert harness.native.finish_calls == [(_native_ticket(pair), ack)]
     assert all(
-        ticket is pair.ticket and actual is ack for ticket, actual in harness.native.validations
+        ticket is _native_ticket(pair) and actual is ack
+        for ticket, actual in harness.native.validations
     )
     _assert_complete_receipt(harness, pair, 1)
-    saved = pair.receipt.projected()
+    saved = _receipt(pair).projected()
     assert saved.pad_gain_db[36] == -22.0
     assert saved.volume == 0.5
 
@@ -368,7 +465,7 @@ def test_selected_content_has_identical_live_config_and_journal_placement(
     pair = harness.original_pair()
     harness.complete()
     assert harness.app.project.selected_pad == expected
-    assert pair.receipt.projected().selected_pad == expected
+    assert _receipt(pair).projected().selected_pad == expected
     assert (
         ProjectState.model_validate_json(
             harness.app.persistence.config_path.read_text(encoding="utf-8")
@@ -403,7 +500,7 @@ def test_navigation_during_actual_config_write_recaptures_content_and_regenerate
     harness.complete()
     assert navigated
     assert app.session.pad_selection_content_id == "1" * 32
-    assert app.project.selected_pad == pair.receipt.projected().selected_pad == 215
+    assert app.project.selected_pad == _receipt(pair).projected().selected_pad == 215
     assert len(harness.native.captures) == len(harness.native.publish_calls) == 1
     _assert_complete_receipt(harness, pair, 4)
 
@@ -432,14 +529,16 @@ def test_lost_config_replace_return_recognizes_actual_selected_pair_mirror_image
     harness.controller.poll()
     pair = harness.original_pair()
     assert pair.receipt is None
+    assert pair.mirror is not None
     assert not pair.mirror.applied
     assert app.project.selected_pad == selected
-    decision = inspect_pair_recovery(pair.journal.journal, app.persistence.config_path.read_bytes())
+    decision = inspect_pair_recovery(_journal(pair), app.persistence.config_path.read_bytes())
     assert decision.disposition == "recognized_after"
+    assert decision.receipt is not None
     assert decision.receipt.projected().selected_pad == expected
     assert app.persistence._migration_owner == pair.owner
     harness.complete()
-    assert app.project.selected_pad == pair.receipt.projected().selected_pad == expected
+    assert app.project.selected_pad == _receipt(pair).projected().selected_pad == expected
     assert len(harness.native.captures) == len(harness.native.publish_calls) == 1
     _assert_complete_receipt(harness, pair, 1)
 
@@ -472,6 +571,7 @@ def test_selection_aba_during_interrupted_pair_rewrites_the_same_own_config_rece
     pair = harness.original_pair()
     mirror, ack = pair.mirror, pair.acknowledgement
     assert interrupted
+    assert mirror is not None
     assert not mirror.applied
     for selected in (0, 36, 0):
         record_pad_selection(app.project, app.session, selected)
@@ -479,7 +579,7 @@ def test_selection_aba_during_interrupted_pair_rewrites_the_same_own_config_rece
     harness.complete()
     chosen = "1" * 32 if interruption == "sample_paths" else "2" * 32
     assert app.session.pad_selection_content_id == chosen
-    assert app.project.selected_pad == pair.receipt.projected().selected_pad == expected
+    assert app.project.selected_pad == _receipt(pair).projected().selected_pad == expected
     assert pair.mirror is mirror
     assert pair.acknowledgement is ack
     assert len(harness.native.captures) == len(harness.native.publish_calls) == 1
@@ -495,6 +595,7 @@ def test_newer_intent_replaces_only_unpublished_image_and_keeps_original_native_
     harness.controller.poll()
     pair = harness.original_pair()
     obsolete = pair.assignment
+    assert obsolete is not None
     ack = pair.acknowledgement
     harness.app.project.pad_gain_db[36] = -23.0
     harness.app.project.volume = 0.25
@@ -502,13 +603,14 @@ def test_newer_intent_replaces_only_unpublished_image_and_keeps_original_native_
     harness.complete()
     assert len(harness.images) == 2
     assert pair.assignment is not obsolete
+    assert pair.assignment is not None
     assert all(cast("_Lease", lease).release_count == 1 for _, lease in obsolete[1].values())
     assert all(cast("_Lease", lease).release_count == 0 for _, lease in pair.assignment[1].values())
     assert pair.images == []
     assert pair.acknowledgement is ack
     assert len(harness.native.captures) == len(harness.native.publish_calls) == 1
     _assert_complete_receipt(harness, pair, 1)
-    saved = pair.receipt.projected()
+    saved = _receipt(pair).projected()
     assert saved.pad_gain_db[36] == -23.0
     assert saved.volume == 0.25
 
@@ -522,11 +624,14 @@ def test_published_asset_cleanup_exception_retains_plan_before_native_and_writer
     harness.controller.poll()
     pair = harness.original_pair()
     publication = pair.assignment_publication
+    assert publication is not None
     assert publication.applied
     assert not publication.settled
     assert not publication.owns_unpublished_image
     assert pair.images == []
     assert pair.receipt is not None
+    assert pair.mirror is not None
+    assert pair.stems is not None
     assert pair.mirror.applied
     assert pair.stems.applied
     assert harness.native.finish_calls == []
@@ -539,7 +644,7 @@ def test_published_asset_cleanup_exception_retains_plan_before_native_and_writer
     assert publication.settled
     assert harness.assets._assignments is current
     assert len(harness.images) == 1
-    assert harness.native.finish_calls == [(pair.ticket, pair.acknowledgement)]
+    assert harness.native.finish_calls == [(_native_ticket(pair), pair.acknowledgement)]
     _assert_complete_receipt(harness, pair, 0)
 
 
@@ -552,20 +657,20 @@ def test_claimed_cancellation_keeps_actual_owner_and_polls_ack_without_republica
     assert harness.controller.begin(0, 215, operation="swap")
     harness.controller.poll()
     pair = harness.original_pair()
-    assert pair.captured.claimed
+    assert _native_capture(pair).claimed
     assert pair.acknowledgement is None
     assert not harness.controller.prepare_shutdown()
     assert not harness.controller.prepare_shutdown()
     assert harness.controller._pair is pair
     assert not pair.cancelled
-    assert all(captured is pair.captured for captured in harness.native.cancel_calls)
+    assert all(actual is _native_capture(pair) for actual in harness.native.cancel_calls)
     assert harness.app.persistence._migration_owner == pair.owner
     assert pair.retirement.remaining > 0
     assert harness.images == []
     assert harness.app.persistence.config_path.read_bytes() == before
-    pair.captured.acknowledged = True
+    _native_capture(pair).acknowledged = True
     harness.complete()
-    assert pair.acknowledgement is pair.captured.ack
+    assert _acknowledgement(pair) is _native_capture(pair).ack
     assert len(harness.native.captures) == len(harness.native.publish_calls) == 1
     _assert_complete_receipt(harness, pair, 0)
 
@@ -592,14 +697,15 @@ def test_preclaim_captured_journal_failure_cancels_safely_without_native_capture
     assert harness.controller.begin(0, 215, operation="swap")
     pair = harness.original_pair()
     assert pair.captured is None
+    assert pair.journal is not None
     assert pair.journal.journal is None
     assert harness.app.persistence._migration_owner == pair.owner
     assert harness.controller.prepare_shutdown()
     assert harness.controller.status == "cancelled"
-    assert pair.journal.journal.phase == "cancelled"
-    assert (
-        harness.native.captures == harness.native.publish_calls == harness.native.finish_calls == []
-    )
+    assert _journal(pair).phase == "cancelled"
+    assert harness.native.captures == []
+    assert harness.native.publish_calls == []
+    assert harness.native.finish_calls == []
     assert harness.app.persistence.config_path.read_bytes() == before
     assert harness.app.persistence._migration_owner is None
     assert pair.retirement.remaining == 0
@@ -628,8 +734,9 @@ def test_settled_journal_return_loss_releases_retained_writer_without_backward_a
     assert harness.controller.begin(0, 215, operation="swap")
     harness.controller.poll()
     pair = harness.original_pair()
-    assert pair.journal.journal.phase == "settled"
+    assert _journal(pair).phase == "settled"
     assert pair.native_finished
+    assert pair.journal is not None
     receipt, assignment, encoded = pair.receipt, pair.assignment, pair.journal.encoded.copy()
     assert harness.app.persistence._migration_owner == pair.owner
     assert pair.retirement.remaining > 0
@@ -637,6 +744,6 @@ def test_settled_journal_return_loss_releases_retained_writer_without_backward_a
     assert pair.receipt is receipt
     assert pair.assignment is assignment
     assert pair.journal.encoded == encoded
-    assert harness.native.finish_calls == [(pair.ticket, pair.acknowledgement)]
+    assert harness.native.finish_calls == [(_native_ticket(pair), pair.acknowledgement)]
     assert len(harness.images) == 1
     _assert_complete_receipt(harness, pair, 0)

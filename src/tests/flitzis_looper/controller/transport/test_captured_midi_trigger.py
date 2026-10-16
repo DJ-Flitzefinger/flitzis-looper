@@ -7,8 +7,10 @@ from unittest.mock import Mock
 import pytest
 
 if TYPE_CHECKING:
+    from collections.abc import Iterator
+
     from flitzis_looper.controller import AppController
-    from flitzis_looper_audio import CapturedInputPadTrigger
+    from flitzis_looper_audio import CapturedInputPadTrigger, ResidentWindowTicket
 
 
 @dataclass(frozen=True)
@@ -45,6 +47,11 @@ class _Window:
         self.cancel_launch_calls = 0
         self.cancel_calls = 0
 
+    @property
+    def native_ticket(self) -> ResidentWindowTicket:
+        """Expose only the Native boundary view; retain this fake for state changes."""
+        return cast("ResidentWindowTicket", self)
+
     def publication_status(self) -> str:
         return self.status
 
@@ -78,12 +85,12 @@ def _event(trigger: object = None) -> dict[str, object]:
     }
 
 
-def _facade(controller: AppController, audio: Mock) -> Mock:
+def _facade(controller: AppController, audio: Mock, monkeypatch: pytest.MonkeyPatch) -> Mock:
     controller.project.input_mapping_enabled = True
     controller.session.input_learn_active = False
     audio.reset_mock()
     gate = Mock()
-    controller.transport.ensure_current_source_assignment_ready = gate
+    monkeypatch.setattr(controller.transport, "ensure_current_source_assignment_ready", gate)
     return gate
 
 
@@ -97,7 +104,11 @@ def _assert_no_numeric_fallback(audio: Mock) -> None:
 def _original_window_launch(
     trigger: _OpaqueTrigger, window: _Window, seen: list[tuple[object, object, _NativeIntent]]
 ) -> Mock:
-    outcomes = iter([RuntimeError("resident command queue is full"), False, True])
+    outcomes: Iterator[RuntimeError | bool] = iter([
+        RuntimeError("resident command queue is full"),
+        False,
+        True,
+    ])
 
     def native_launch(original: object, own_window: object) -> bool:
         assert original is trigger
@@ -114,9 +125,9 @@ def _original_window_launch(
 
 
 def test_original_event_keeps_exact_token_and_window_through_pair_and_queue_pressure(
-    controller: AppController, audio_engine_mock: Mock
+    controller: AppController, audio_engine_mock: Mock, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    gate = _facade(controller, audio_engine_mock)
+    gate = _facade(controller, audio_engine_mock, monkeypatch)
     trigger = _OpaqueTrigger()
     window = _Window()
     audio_engine_mock.trigger_captured_input_pad = Mock(
@@ -144,7 +155,7 @@ def test_original_event_keeps_exact_token_and_window_through_pair_and_queue_pres
     assert len(residency._captured_triggers) == 1
     assert residency._captured_triggers[id(trigger)] is pending
     residency.poll()
-    assert pending.ticket is window
+    assert pending.ticket is window.native_ticket
     for _ in range(3):
         residency.poll()
     audio_engine_mock.trigger_prepared_input_pad.assert_not_called()
@@ -152,14 +163,14 @@ def test_original_event_keeps_exact_token_and_window_through_pair_and_queue_pres
     window.status = "accepted"
     residency.poll()
     assert residency._captured_triggers[id(trigger)] is pending
-    assert pending.ticket is window
+    assert pending.ticket is window.native_ticket
     trigger.owner_status, trigger.diagnostic_slot = "pending", None
     residency.poll()
-    assert pending.ticket is window
+    assert pending.ticket is window.native_ticket
     trigger.owner_status, trigger.diagnostic_slot = "current", 36
     residency.poll()
     assert residency._captured_triggers[id(trigger)] is pending
-    assert pending.ticket is window
+    assert pending.ticket is window.native_ticket
     residency.poll()
     assert not residency._captured_triggers
     assert audio_engine_mock.prepare_captured_input_trigger.call_count == 2
@@ -172,9 +183,9 @@ def test_original_event_keeps_exact_token_and_window_through_pair_and_queue_pres
 
 
 def test_missing_original_owner_rejects_event_without_numeric_or_native_recapture(
-    controller: AppController, audio_engine_mock: Mock
+    controller: AppController, audio_engine_mock: Mock, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    gate = _facade(controller, audio_engine_mock)
+    gate = _facade(controller, audio_engine_mock, monkeypatch)
     controller.input_mapping._handle_rust_input_event(_event())
     assert (
         controller.session.input_mapping_error
@@ -190,9 +201,12 @@ def test_missing_original_owner_rejects_event_without_numeric_or_native_recaptur
 
 @pytest.mark.parametrize("terminal", ["retired", "superseded", "admitted"])
 def test_only_known_terminal_original_owner_removes_retained_window(
-    controller: AppController, audio_engine_mock: Mock, terminal: str
+    controller: AppController,
+    audio_engine_mock: Mock,
+    monkeypatch: pytest.MonkeyPatch,
+    terminal: str,
 ) -> None:
-    _facade(controller, audio_engine_mock)
+    _facade(controller, audio_engine_mock, monkeypatch)
     trigger = _OpaqueTrigger()
     trigger.owner_status, trigger.diagnostic_slot = "current", 178
     window = _Window()
@@ -205,7 +219,7 @@ def test_only_known_terminal_original_owner_removes_retained_window(
     trigger.observation_error = ValueError("original owner observation is temporarily unavailable")
     residency.poll()
     assert residency._captured_triggers[id(trigger)] is pending
-    assert pending.ticket is window
+    assert pending.ticket is window.native_ticket
     trigger.observation_error, trigger.owner_status = None, terminal
     residency.poll()
     assert not residency._captured_triggers
@@ -214,9 +228,9 @@ def test_only_known_terminal_original_owner_removes_retained_window(
 
 
 def test_shutdown_keeps_claimed_window_under_native_cancel_rules_and_admits_no_new_work(
-    controller: AppController, audio_engine_mock: Mock
+    controller: AppController, audio_engine_mock: Mock, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    _facade(controller, audio_engine_mock)
+    _facade(controller, audio_engine_mock, monkeypatch)
     trigger = _OpaqueTrigger()
     trigger.owner_status, trigger.diagnostic_slot = "current", 178
     window = _Window()
@@ -232,7 +246,7 @@ def test_shutdown_keeps_claimed_window_under_native_cancel_rules_and_admits_no_n
     for _ in range(3):
         residency.poll()
     assert residency._captured_triggers[id(trigger)] is pending
-    assert pending.ticket is window
+    assert pending.ticket is window.native_ticket
     audio_engine_mock.prepare_captured_input_trigger.assert_called_once()
     audio_engine_mock.trigger_prepared_input_pad.assert_not_called()
     trigger.owner_status = "superseded"
@@ -244,7 +258,7 @@ def test_shutdown_keeps_claimed_window_under_native_cancel_rules_and_admits_no_n
 def test_original_captured_deadline_survives_pair_pending_redelivery_and_own_window(
     controller: AppController, audio_engine_mock: Mock, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    _facade(controller, audio_engine_mock)
+    _facade(controller, audio_engine_mock, monkeypatch)
     now = [100.0]
     monkeypatch.setattr(
         "flitzis_looper.controller.transport.residency.time.monotonic", lambda: now[0]
@@ -265,13 +279,13 @@ def test_original_captured_deadline_survives_pair_pending_redelivery_and_own_win
     audio_engine_mock.prepare_captured_input_trigger.assert_not_called()
     trigger.owner_status, trigger.diagnostic_slot = "current", 178
     residency.poll()
-    assert pending.ticket is window
+    assert pending.ticket is window.native_ticket
     assert pending.deadline == 130.0
     window.status = "accepted"
     now[0] = 130.0
     residency.poll()
     assert residency._captured_triggers[id(trigger)] is pending
-    assert pending.ticket is window
+    assert pending.ticket is window.native_ticket
     assert pending.cancel_requested
     audio_engine_mock.prepare_captured_input_trigger.assert_called_once_with(trigger)
     audio_engine_mock.trigger_prepared_input_pad.assert_not_called()
@@ -286,7 +300,7 @@ def test_original_captured_deadline_survives_pair_pending_redelivery_and_own_win
 def test_original_own_window_pressure_keeps_eight_attempt_limit_and_cancels_only_that_owner(
     controller: AppController, audio_engine_mock: Mock, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    _facade(controller, audio_engine_mock)
+    _facade(controller, audio_engine_mock, monkeypatch)
     monkeypatch.setattr(
         "flitzis_looper.controller.transport.residency.time.monotonic", lambda: 100.0
     )
@@ -300,7 +314,7 @@ def test_original_own_window_pressure_keeps_eight_attempt_limit_and_cancels_only
     controller.input_mapping._handle_rust_input_event(_event(trigger))
     pending = residency._captured_triggers[id(trigger)]
     residency.poll()
-    assert pending.ticket is window
+    assert pending.ticket is window.native_ticket
     window.status = "accepted"
     for _ in range(20):
         residency.poll()
@@ -312,7 +326,7 @@ def test_original_own_window_pressure_keeps_eight_attempt_limit_and_cancels_only
         assert call.args == (trigger, window)
         assert call.kwargs == {}
     assert residency._captured_triggers[id(trigger)] is pending
-    assert pending.ticket is window
+    assert pending.ticket is window.native_ticket
     assert pending.cancel_requested
     assert window.cancel_launch_calls >= 1
     assert window.cancel_calls >= 1
@@ -329,7 +343,7 @@ def test_no_window_exhaustion_retains_original_budget_before_repeated_direct_del
     monkeypatch: pytest.MonkeyPatch,
     exhaustion: str,
 ) -> None:
-    _facade(controller, audio_engine_mock)
+    _facade(controller, audio_engine_mock, monkeypatch)
     now = [100.0]
     monkeypatch.setattr(
         "flitzis_looper.controller.transport.residency.time.monotonic", lambda: now[0]

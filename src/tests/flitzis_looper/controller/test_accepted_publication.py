@@ -3,7 +3,7 @@
 import struct
 from concurrent.futures import Future
 from threading import Event
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, cast
 from unittest.mock import Mock, patch
 
 import pytest
@@ -44,6 +44,11 @@ class _PublicationTicket:
         self.status = status
         self.control_slot = control_slot
         self.marker_pending = False
+
+    @property
+    def native_ticket(self) -> ConstantTimingTicket:
+        """Expose only the Native boundary view; retain this fake for state changes."""
+        return cast("ConstantTimingTicket", self)
 
     def current_control_slot(self) -> int | None:
         return self.control_slot
@@ -123,7 +128,7 @@ def _submit_publication(
         "flitzis_looper.controller.accepted_publication.ThreadPoolExecutor",
         lambda **_kwargs: worker,
     )
-    assert controller.accepted_timing.publish(0, ticket, ASSESSMENT) is future  # type: ignore[arg-type]
+    assert controller.accepted_timing.publish(0, ticket.native_ticket, ASSESSMENT) is future
     worker.submit.assert_called_once_with(
         controller._audio.publish_constant_timing,
         ticket,
@@ -830,7 +835,7 @@ def test_native_pending_retry_keeps_original_ticket_assessment_and_attempt_futur
     captured_metadata.return_value = {"pad_id": 215, "request_id": 100}
     controller.poll_runtime_events()
     assert controller.accepted_timing._publications[0] is owner
-    assert owner.ticket is ticket
+    assert owner.ticket is ticket.native_ticket
     assert owner.assessment is ASSESSMENT
     assert owner.request_metadata is request_metadata
     assert request_metadata == {"request_id": 9}
@@ -931,7 +936,7 @@ def test_accepted_publication_reader_race_retains_original_until_both_acks(
     controller.poll_runtime_events()
     controller.poll_runtime_events()
     assert controller.accepted_timing._publications[0] is owner
-    assert owner.ticket is ticket
+    assert owner.ticket is ticket.native_ticket
     assert owner.original_future is future
     worker.submit.assert_called_once()
     audio_engine_mock.refresh_current_constant_timing.assert_not_called()
@@ -1255,7 +1260,7 @@ def test_pending_publication_retry_follows_pair_mirror_with_same_original_owners
     assert app.accepted_timing._publications[215] is owner
     assert 0 not in app.accepted_timing._publications
     assert owner.request_metadata is request_metadata
-    assert owner.ticket is ticket
+    assert owner.ticket is ticket.native_ticket
     assert owner.assessment is ASSESSMENT
     assert owner.original_future is future
     ticket.marker_pending = False
@@ -1305,7 +1310,7 @@ def test_publication_retains_original_when_reader_pending_closes_before_marker_p
     controller.accepted_timing.poll()
     assert controller.accepted_timing._publications[0] is owner
     assert owner.original_future is future
-    assert owner.ticket is ticket
+    assert owner.ticket is ticket.native_ticket
     assert not ticket.marker_pending
     assert audio_engine_mock._content_placement_pending() is False
     worker.submit.assert_called_once()

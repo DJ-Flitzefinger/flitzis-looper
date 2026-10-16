@@ -1,4 +1,4 @@
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, cast
 from unittest.mock import Mock, call, patch
 
 import pytest
@@ -11,7 +11,11 @@ from tests.flitzis_looper.conftest import (
 )
 
 if TYPE_CHECKING:
+    from collections.abc import Callable
+    from typing import Literal
+
     from flitzis_looper.controller import AppController
+    from flitzis_looper.controller.transport.global_playback import GlobalPlaybackController
 
 
 def _success(*, revision: int = 0, key_lock: bool = False) -> dict[str, object]:
@@ -528,11 +532,12 @@ def test_explicit_incoming_period_absence_rejects_without_native_or_overlay_muta
     before = controller.loader._incoming_loads[0]
 
     with pytest.raises(ValueError, match="period must be positive and finite"):
+        # Deliberately violate the typed boundary to prove runtime absence rejection.
         controller.loader.set_incoming_timing_intent(
             0,
             7,
-            period_seconds=None,
-            grid_origin_s=10.0,  # type: ignore[arg-type]
+            period_seconds=cast("float", None),
+            grid_origin_s=10.0,
         )
 
     assert controller.loader._incoming_loads[0] is before
@@ -586,7 +591,7 @@ def test_ordinary_pending_gesture_rejects_before_any_predecessor_read_or_mutatio
     before = project.model_dump()
     taps = list(controller.session.tap_bpm_timestamps)
     baseline = dict(controller.transport.residency._effective)
-    gestures = {
+    gestures: dict[str, Callable[[], object]] = {
         "pad": lambda: controller.transport.pad.set_pad_key_lock(0, enabled=False),
         "pad-clear": lambda: controller.transport.pad.clear_pad_key_lock_override(0),
         "toggle": lambda: controller.transport.pad.toggle_pad_key_lock(0),
@@ -882,10 +887,15 @@ def test_toggle_captures_source_before_derived_read_and_cannot_retarget_adoption
     )
     resolve = ProjectState.resolve_pad_key_lock
 
-    def adopt_during_read(project: ProjectState, sample_id: int, **kwargs: object) -> bool:
+    def adopt_during_read(
+        project: ProjectState,
+        sample_id: int,
+        *,
+        assignment_override: bool | Literal["current"] | None = "current",
+    ) -> bool:
         nonlocal generation
         generation = 7
-        return resolve(project, sample_id, **kwargs)
+        return resolve(project, sample_id, assignment_override=assignment_override)
 
     def guard(_sample_id: int, _enabled: object, *, expected_source_generation: int) -> None:
         assert expected_source_generation == 3
@@ -920,6 +930,22 @@ def _own_binding(sample_id: int = 0) -> FakeInputRuntimePadBinding:
     binding._metadata["source_generation"] = 7
     binding._metadata["source_id"] = f"incoming-{sample_id}-7"
     return binding
+
+
+def _assert_input_mapping_error(controller: AppController, expected: str) -> None:
+    """Check the error in this input phase without retaining an earlier optional value."""
+    error = controller.session.input_mapping_error
+    assert error is not None
+    assert expected in error
+
+
+def _deferred_global_capture(global_playback: GlobalPlaybackController) -> FakeCapturedGlobalStart:
+    """Read and narrow this phase's original fixture capture before later state changes."""
+    deferred = global_playback._deferred
+    assert deferred is not None
+    captured = deferred.capture
+    assert isinstance(captured, FakeCapturedGlobalStart)
+    return captured
 
 
 def test_global_change_cannot_publish_predecessor_inheritance_over_adopted_explicit_incoming_on(
@@ -970,7 +996,7 @@ def test_midi_snapshot_withholds_pending_own_source_and_preserves_other_ready_pa
     captured.diagnostic_slot = 0
     captured.original_owner_status.return_value = "current"
     controller.input_mapping._retry_guarded_midi_trigger("pad.trigger:0", 123_456_789, captured)
-    assert "receipt is pending" in controller.session.input_mapping_error
+    _assert_input_mapping_error(controller, "receipt is pending")
     audio_engine_mock.trigger_input_runtime_pad.assert_not_called()
     audio_engine_mock.prepare_resident_control.assert_not_called()
     audio_engine_mock.trigger_captured_input_pad.assert_not_called()
@@ -1036,9 +1062,7 @@ def test_global_start_rejects_whole_batch_before_pending_own_project_loop_read(
         audio_engine_mock.prepare_resident_control.return_value = window
         controller.transport.residency.publish_loop(0, 3.0, 4.0)
         playback.start_or_restart_global_start_stop(received_at_ns=99)
-        assert global_playback._deferred is not None
-        original = global_playback._deferred.capture
-        assert isinstance(original, FakeCapturedGlobalStart)
+        original = _deferred_global_capture(global_playback)
         assert original.entries[0][3] is window
     _admit(controller, audio_engine_mock)
     audio_engine_mock.current_input_runtime_pad_binding.side_effect = lambda sample_id: (

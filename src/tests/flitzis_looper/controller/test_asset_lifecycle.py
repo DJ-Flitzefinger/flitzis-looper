@@ -47,17 +47,16 @@ def _track_leases(audio_engine_mock: Mock) -> list[FakeProjectAssetLease]:
     return leases
 
 
-def _start_resolved_inference_threads(
-    controller: AppController, worker_threads: list[threading.Thread]
+def _resolve_and_queue_inference(
+    controller: AppController, queued_tasks: list[Callable[[], None]]
 ) -> StemGenerationJob:
     assert controller.stems.generate_stems_async(0)
     job = next(iter(controller.stems._jobs.values()))
-    assert len(worker_threads) == 1
-    worker_threads[0].join(5)
-    assert not worker_threads[0].is_alive()
+    assert len(queued_tasks) == 1
+    queued_tasks.pop(0)()
     assert str(job.phase) == "resolved"
     controller.stems.on_frame_render()
-    assert len(worker_threads) == 2
+    assert len(queued_tasks) == 1
     return job
 
 
@@ -365,7 +364,7 @@ def test_cancelled_running_separator_retains_source_until_backend_returns(
     source = _source(controller, tmp_path)
     leases = _track_leases(audio_engine_mock)
     entered, finish = threading.Event(), threading.Event()
-    worker_threads: list[threading.Thread] = []
+    queued_tasks: list[Callable[[], None]] = []
     original_generate = stem_backend.generate
 
     def blocked_backend(
@@ -378,16 +377,15 @@ def test_cancelled_running_separator_retains_source_until_backend_returns(
 
     monkeypatch.setattr(stem_backend, "generate", blocked_backend)
 
-    def schedule(target: Callable[[], None]) -> None:
-        thread = threading.Thread(target=target)
-        worker_threads.append(thread)
-        thread.start()
-
-    controller.stems._stem_task_runner = schedule
-    job = _start_resolved_inference_threads(controller, worker_threads)
+    controller.stems._stem_task_runner = queued_tasks.append
+    job = _resolve_and_queue_inference(controller, queued_tasks)
     subscriber = job.subscribers()[0]
+    worker_thread = threading.Thread(target=queued_tasks.pop(0))
+    worker_thread.start()
     try:
         assert entered.wait(5)
+        assert worker_thread.is_alive()
+        assert not finish.is_set()
         controller.loader.unload_sample(0)
         if shutdown:
             controller.shut_down()
@@ -400,8 +398,8 @@ def test_cancelled_running_separator_retains_source_until_backend_returns(
         assert source_owners[2].released is True
     finally:
         finish.set()
-        worker_threads[1].join(5)
-    assert not worker_threads[1].is_alive()
+        worker_thread.join(5)
+    assert not worker_thread.is_alive()
     assert all(lease.released for lease in source_owners)
     assert job._generation_lease.released
     assert controller._assets._reserved == 0

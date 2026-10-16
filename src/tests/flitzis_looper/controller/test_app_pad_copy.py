@@ -14,6 +14,8 @@ from flitzis_looper.stem_intent import PadStemIntent
 from flitzis_looper.stem_pair_selection import StemPairSelection
 
 if TYPE_CHECKING:
+    from collections.abc import Callable
+
     from flitzis_looper.controller import AppController
     from flitzis_looper_audio import CommittedStemSetTicket, PadCopyTicket
 
@@ -143,7 +145,7 @@ def test_target_guard_rejects_before_project_or_native_edits(
     monkeypatch.setattr(
         PadArrangementController, "fenced_sample_ids", property(lambda _self: frozenset({TARGET}))
     )
-    edits = {
+    edits: dict[str, Callable[[], object]] = {
         "gain": lambda: controller.transport.pad.set_pad_gain(TARGET, -6.0),
         "eq": lambda: controller.transport.pad.set_pad_eq(TARGET, -3.0, 2.0, 1.0),
         "mask": lambda: controller.stems.set_stem_enabled_mask(TARGET, 0),

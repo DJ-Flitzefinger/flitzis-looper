@@ -19,6 +19,7 @@ if TYPE_CHECKING:
 
     from flitzis_looper.controller.loader import LoaderController
     from flitzis_looper.pair_snapshot import PairOperation
+    from flitzis_looper_audio import CapturedPadPair
 
 
 @dataclass(slots=True)
@@ -69,15 +70,15 @@ class _ObserverHarness:
 
     @property
     def loader(self) -> LoaderController:
-        return cast("LoaderController", self.pair.app.loader)
+        return self.pair.app.loader
 
     @property
     def project(self) -> ProjectState:
-        return cast("ProjectState", self.pair.app.project)
+        return self.pair.app.project
 
     @property
     def session(self) -> SessionState:
-        return cast("SessionState", self.pair.app.session)
+        return self.pair.app.session
 
 
 def _analysis(bpm: float) -> SampleAnalysis:
@@ -172,7 +173,9 @@ def _hold_through_claim(
     rig.pair.controller.poll()
     pair = rig.pair.original_pair()
     captured = rig.pair.native.captures[-1]
-    assert pair.captured is captured
+    # This is the same scripted fake viewed at the production Native boundary.
+    native_capture = cast("CapturedPadPair", captured)
+    assert pair.captured is native_capture
     assert captured.claimed
     assert pair.acknowledgement is None
     rig.loader.poll_loader_events()
@@ -182,7 +185,9 @@ def _hold_through_claim(
 
 def _finish_pair(rig: _ObserverHarness) -> None:
     captured = rig.pair.native.captures[-1]
-    assert rig.pair.original_pair().captured is captured
+    # Retain the typed fake for its acknowledgement state alongside its Native view.
+    native_capture = cast("CapturedPadPair", captured)
+    assert rig.pair.original_pair().captured is native_capture
     captured.acknowledged = True
     rig.pair.complete()
     assert rig.loader._pair_deferred_sample_ids == frozenset()

@@ -364,7 +364,7 @@ def _publish_captured_global_start(self: object, captured: object) -> None:
     _forbidden_native_work(self, captured)
 
 
-_ORDINARY_START_IMPLEMENTATIONS = {
+_ORDINARY_START_IMPLEMENTATIONS: dict[str, object] = {
     "capture_pad_start": _capture_pad_start,
     "prepare_captured_pad_start": _prepare_captured_pad_start,
     "publish_pad_start": _publish_pad_start,
@@ -488,7 +488,7 @@ def test_complete_ordinary_start_api_is_reflected_without_native_work() -> None:
 @pytest.mark.parametrize("method", _ORDINARY_START_METHODS)
 @pytest.mark.parametrize("missing", [False, True], ids=["not-callable", "absent"])
 def test_incomplete_ordinary_start_engine_cannot_activate(method: str, *, missing: bool) -> None:
-    methods: dict[str, object] = _ORDINARY_START_IMPLEMENTATIONS.copy()
+    methods: dict[str, object] = dict(_ORDINARY_START_IMPLEMENTATIONS)
     if missing:
         del methods[method]
     else:
@@ -531,7 +531,9 @@ def test_incomplete_ordinary_start_receipt_cannot_activate(
 def test_incompatible_ordinary_start_keywords_cannot_activate(
     method: str, keyword: str, incompatibility: str
 ) -> None:
-    complete = signature(_ORDINARY_START_IMPLEMENTATIONS[method])
+    implementation = _ORDINARY_START_IMPLEMENTATIONS[method]
+    assert callable(implementation)
+    complete = signature(implementation)
     parameters = list(complete.parameters.values())
     position = next(
         index for index, parameter in enumerate(parameters) if parameter.name == keyword

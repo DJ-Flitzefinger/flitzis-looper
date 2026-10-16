@@ -826,15 +826,15 @@ def test_restore_verifies_complete_pair_without_component_demand_with_preload_of
     source.parent.mkdir(parents=True, exist_ok=True)
     source.write_bytes(b"declared controller source")
     controller.project.sample_paths[0] = "samples/old.wav"
-    jobs, prepared, _, entry = _queued(
+    jobs, prepared, _, _entry = _queued(
         controller, audio_engine_mock, monkeypatch, tmp_path, components=False
     )
     # The fixture's first worker represents complete disk preparation, not residency.
     jobs[0]()
     controller.stems._poll_pair_preparations()
-    entry = controller.project.stem_cache[0]
-    assert entry is not None
-    saved = entry.model_copy(update={"available": False})
+    restored_entry = controller.project.stem_cache[0]
+    assert restored_entry is not None
+    saved = restored_entry.model_copy(update={"available": False})
     controller.project.stem_cache[0] = saved
     controller.project.pad_stem_mix_mode[0] = "all_stems" if saved_all else "full_mix"
     controller.stems._restored_stem_candidates[0] = saved

@@ -5,8 +5,10 @@ from typing import TYPE_CHECKING
 from unittest.mock import Mock
 
 import pytest
+from imgui_bundle import hello_imgui, imgui, immapp
 
 from flitzis_looper.ui import run
+from flitzis_looper.ui.context import UiContext
 
 if TYPE_CHECKING:
     from imgui_bundle.hello_imgui import RunnerParams
@@ -16,8 +18,8 @@ if TYPE_CHECKING:
 
 @pytest.fixture(autouse=True)
 def _runtime_input_without_native_imgui(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setattr(run.imgui, "get_io", lambda: SimpleNamespace(app_focus_lost=False))
-    monkeypatch.setattr(run.imgui, "is_mouse_down", lambda _button: True)
+    monkeypatch.setattr(imgui, "get_io", lambda: SimpleNamespace(app_focus_lost=False))
+    monkeypatch.setattr(imgui, "is_mouse_down", lambda _button: True)
 
 
 @pytest.mark.parametrize("sticky_os_close", [False, True])
@@ -35,7 +37,7 @@ def test_close_waits_across_frames_and_notifies_exit_only_after_settlement(
     monkeypatch.setattr(run, "_show_close_pending", pending)
 
     def frames(params: RunnerParams, _addons: object) -> None:
-        monkeypatch.setattr(run.hello_imgui, "get_runner_params", lambda: params)
+        monkeypatch.setattr(hello_imgui, "get_runner_params", lambda: params)
         params.callbacks.after_swap()
         prepare.assert_not_called()
         params.app_shall_exit = True
@@ -61,7 +63,7 @@ def test_close_waits_across_frames_and_notifies_exit_only_after_settlement(
         shutdown.assert_called_once()
         exited.assert_called_once()
 
-    monkeypatch.setattr(run.immapp, "run", frames)
+    monkeypatch.setattr(immapp, "run", frames)
 
     run.run_ui(controller, on_exit=exited)
 
@@ -74,13 +76,13 @@ def test_close_without_copy_can_exit_in_the_requested_frame(
     monkeypatch.setattr(run, "UiContext", Mock())
 
     def frames(params: RunnerParams, _addons: object) -> None:
-        monkeypatch.setattr(run.hello_imgui, "get_runner_params", lambda: params)
+        monkeypatch.setattr(hello_imgui, "get_runner_params", lambda: params)
         params.app_shall_exit = True
         params.callbacks.after_swap()
         assert params.app_shall_exit is True
         prepare.assert_called_once()
 
-    monkeypatch.setattr(run.immapp, "run", frames)
+    monkeypatch.setattr(immapp, "run", frames)
 
     run.run_ui(controller)
 
@@ -91,10 +93,10 @@ def test_pending_close_keeps_native_error_visible_and_balances_popup(
     opened = Mock()
     text = Mock()
     ended = Mock()
-    monkeypatch.setattr(run.imgui, "open_popup", opened)
-    monkeypatch.setattr(run.imgui, "begin_popup_modal", Mock(return_value=(True, None)))
-    monkeypatch.setattr(run.imgui, "text_wrapped", text)
-    monkeypatch.setattr(run.imgui, "end_popup", ended)
+    monkeypatch.setattr(imgui, "open_popup", opened)
+    monkeypatch.setattr(imgui, "begin_popup_modal", Mock(return_value=(True, None)))
+    monkeypatch.setattr(imgui, "text_wrapped", text)
+    monkeypatch.setattr(imgui, "end_popup", ended)
 
     run._show_close_pending("own Copy acknowledgement pending")
 
@@ -106,24 +108,20 @@ def test_pending_close_keeps_native_error_visible_and_balances_popup(
 
 @pytest.mark.parametrize("cancellation", ["button_up", "focus_cancel", "editor_hidden", "close"])
 def test_global_runtime_tick_delivers_release_before_poll_even_without_toolbar(
-    monkeypatch: pytest.MonkeyPatch, cancellation: str
+    controller: AppController, monkeypatch: pytest.MonkeyPatch, cancellation: str
 ) -> None:
-    order = []
+    order: list[str] = []
     release = Mock(side_effect=order.append)
     poll = Mock(side_effect=lambda: order.append("poll"))
-    context = SimpleNamespace(
-        ui=SimpleNamespace(waveform=SimpleNamespace(pause_selected_pad_hold_on_release=release)),
-        audio=SimpleNamespace(poll=SimpleNamespace(poll=poll)),
-        state=SimpleNamespace(
-            session=SimpleNamespace(
-                settings_open=cancellation == "editor_hidden", waveform_editor_open=True
-            )
-        ),
-    )
+    context = UiContext(controller)
+    monkeypatch.setattr(context.ui.waveform, "pause_selected_pad_hold_on_release", release)
+    monkeypatch.setattr(context.audio.poll, "poll", poll)
+    controller.session.settings_open = cancellation == "editor_hidden"
+    controller.session.waveform_editor_open = True
     monkeypatch.setattr(
-        run.imgui, "get_io", lambda: SimpleNamespace(app_focus_lost=cancellation == "focus_cancel")
+        imgui, "get_io", lambda: SimpleNamespace(app_focus_lost=cancellation == "focus_cancel")
     )
-    monkeypatch.setattr(run.imgui, "is_mouse_down", lambda _button: cancellation != "button_up")
+    monkeypatch.setattr(imgui, "is_mouse_down", lambda _button: cancellation != "button_up")
     run._poll_runtime_tick(context, closing=cancellation == "close")
     assert order == [cancellation, "poll"]
     poll.assert_called_once()

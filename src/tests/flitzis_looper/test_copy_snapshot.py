@@ -525,7 +525,7 @@ def test_invalid_target_identity_is_a_complete_noop(fault: str) -> None:
     snapshot = capture_copy_snapshot(project, 0)
     project.pad_content[1] = PadContentIdentity(instance_id="5" * 32)
     identity = _target_identity(snapshot)
-    changes = {
+    changes: dict[str, dict[str, object]] = {
         "reuse_source": {"instance_id": "a" * 32, "copied_from": None},
         "reuse_existing": {"instance_id": "5" * 32},
         "material": {"material_id": "6" * 32},

@@ -5,6 +5,7 @@ import os
 import shlex
 import subprocess
 from pathlib import Path
+from typing import cast
 
 import pytest
 
@@ -103,7 +104,8 @@ def _run_toolchain(tmp_path: Path, commands: str) -> dict[str, object]:
         if line.startswith(RESULT_PREFIX)
     ]
     assert len(records) == 1, result.stdout + result.stderr
-    return json.loads(records[0])
+    # The controlled PowerShell fixture emits one JSON object with named fields.
+    return cast("dict[str, object]", json.loads(records[0]))
 
 
 def test_missing_msvc_downloads_verified_microsoft_tools_and_explicit_components(

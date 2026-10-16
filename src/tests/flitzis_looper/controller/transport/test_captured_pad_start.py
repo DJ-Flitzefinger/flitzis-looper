@@ -1,10 +1,11 @@
 """Original GUI owner/readiness routing; actual Native/FIFO proof is Rust-owned."""
 
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, cast
 from unittest.mock import Mock, call
 
 if TYPE_CHECKING:
     from flitzis_looper.controller import AppController
+    from flitzis_looper_audio import ResidentWindowTicket
 
 
 class _Start:
@@ -76,6 +77,11 @@ class _Window:
         self.status = "preparing"
         self.launch_cancelled = False
 
+    @property
+    def native_ticket(self) -> ResidentWindowTicket:
+        """Expose only the Native boundary view; retain this fake for state changes."""
+        return cast("ResidentWindowTicket", self)
+
     def publication_status(self) -> str:
         return self.status
 
@@ -128,15 +134,15 @@ def test_gui_retains_exact_independent_edit_for_native_member_and_cancels_only_a
     original = _Start()
     audio.prepare_resident_control.return_value = edit
     controller.transport.residency.publish_loop(0, 3.0, 4.0)
-    assert controller.transport.residency._pending[0].ticket is edit
+    assert controller.transport.residency._pending[0].ticket is edit.native_ticket
     audio.capture_pad_start.return_value = original
     audio.prepare_captured_pad_start.return_value = member
 
     controller.transport.playback.trigger_pad_keep_others(0, received_at_ns=777)
 
     (pending,) = controller.transport.residency._captured_starts.values()
-    assert pending.dependency is edit
-    assert pending.ticket is member
+    assert pending.dependency is edit.native_ticket
+    assert pending.ticket is member.native_ticket
     audio.prepare_captured_pad_start.assert_called_once_with(original, edit)
     controller.transport.residency._cancel_captured_start(pending)
     assert original.cancelled is True

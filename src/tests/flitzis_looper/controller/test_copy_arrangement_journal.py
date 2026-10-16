@@ -125,7 +125,10 @@ def test_actual_receipt_keeps_surviving_a_and_fixed_c_with_distinct_original_b_e
     assert receipt.sha256 == hashlib.sha256(persistence.config_path.read_bytes()).hexdigest()
     assert receipt.sha256 != hashlib.sha256(candidate_text.encode("utf-8")).hexdigest()
     actual = receipt.projected()
-    assert [actual.pad_content[i].instance_id for i in (0, 215)] == ["1" * 32, "3" * 32]
+    source_identity, target_identity = actual.pad_content[0], actual.pad_content[215]
+    assert source_identity is not None
+    assert target_identity is not None
+    assert [source_identity.instance_id, target_identity.instance_id] == ["1" * 32, "3" * 32]
     assert actual.sample_paths[215] == "samples/A.wav"
     assert actual.pad_gain_db[0] == actual.pad_gain_db[215] == -6.0
     assert actual.manual_bpm[215] == 123.456789
@@ -236,6 +239,7 @@ def test_postclaim_before_image_and_actual_receipt_preserve_newer_surviving_sour
     assert actual.pad_content[215] == journal.target_identity
     if source_change == "edited":
         assert actual.pad_gain_db[0] == -24.0
+        assert actual.pad_content[0] is not None
         assert actual.pad_content[0].instance_id == "1" * 32
     else:
         assert actual.pad_content[0] is None
@@ -590,6 +594,7 @@ def test_replacement_retry_records_new_pre_c_image_only_at_strictly_newer_revisi
     assert newer_receipt.projected().pad_gain_db[0] == -24.0
     assert newer_receipt.projected().pad_gain_db[215] == -6.0
     assert newer_receipt.projected().volume == 0.25
+    assert owner.journal is not None
     assert owner.journal.after == journal.after
 
 

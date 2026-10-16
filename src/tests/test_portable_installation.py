@@ -12,7 +12,7 @@ import time
 from contextlib import contextmanager
 from dataclasses import dataclass
 from pathlib import Path
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, cast
 from zipfile import ZipFile, ZipInfo
 
 import pytest
@@ -308,7 +308,11 @@ class Installation:
         )
 
     def pointer(self) -> dict[str, object]:
-        return json.loads((self.target / "current.json").read_text(encoding="utf-8-sig"))
+        # The installer pointer is a JSON object; tests check its specific fields.
+        return cast(
+            "dict[str, object]",
+            json.loads((self.target / "current.json").read_text(encoding="utf-8-sig")),
+        )
 
     def trace(self, name: str) -> list[dict[str, object]]:
         path = self.target / "cache" / name

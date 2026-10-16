@@ -64,7 +64,9 @@ class _ScriptedNative:
     def __init__(self) -> None:
         self.bindings = {0: cast("InputRuntimePadBinding", object())}
         self.captured = _Capture()
+        self.captured_view = cast("CapturedPadCopy", self.captured)
         self.ticket = _Ticket(self.captured)
+        self.ticket_view = cast("PadCopyTicket", self.ticket)
         self.envelope: dict[str, object] | None = None
         self.complete_ack = False
         self.ordinary_source_ack = False
@@ -96,10 +98,10 @@ class _ScriptedNative:
         self.capture_count += 1
         self.target_binding = target_binding
         self.envelope = json.loads(intent_json)
-        return cast("CapturedPadCopy", self.captured)
+        return self.captured_view
 
     def prepare_pad_copy(self, captured: CapturedPadCopy) -> PadCopyTicket:
-        assert captured is self.captured
+        assert captured is self.captured_view
         self.prepare_thread = threading.get_ident()
         if self.prepare_error is not None:
             raise self.prepare_error
@@ -107,28 +109,28 @@ class _ScriptedNative:
             message = "Native Copy cancelled before preparation returned"
             raise ValueError(message)
         self.captured.phase = self.prepared_status
-        return cast("PadCopyTicket", self.ticket)
+        return self.ticket_view
 
     def publish_pad_copy(self, ticket: PadCopyTicket) -> None:
-        assert ticket is self.ticket
+        assert ticket is self.ticket_view
         self.publish_count += 1
         if self.publish_error is not None:
             raise self.publish_error
         self.captured.phase = "adopting"
 
     def reconcile_pad_copy(self, ticket: PadCopyTicket) -> bool:
-        assert ticket is self.ticket
+        assert ticket is self.ticket_view
         if self.complete_ack:
             self.captured.phase = "accepted"
         return self.complete_ack
 
     def finish_pad_copy(self, ticket: PadCopyTicket) -> None:
-        assert ticket is self.ticket
+        assert ticket is self.ticket_view
         assert self.complete_ack is True
         self.finish_count += 1
 
     def cancel_pad_copy(self, captured: CapturedPadCopy) -> bool:
-        assert captured is self.captured
+        assert captured is self.captured_view
         self.cancel_count += 1
         if self.cancel_error is not None:
             raise self.cancel_error
@@ -425,7 +427,7 @@ def test_worker_only_prepares_and_full_ack_precedes_config_model_assets_callback
     assert harness.project.sample_paths is paths_identity
     assert _source_session(harness.session) == source_session
     assert harness.project.selected_pad == 0
-    assert callbacks == [(215, harness.native.ticket)]
+    assert callbacks == [(215, harness.native.ticket_view)]
     saved = json.loads(harness.persistence.config_path.read_text(encoding="utf-8"))
     assert saved["pad_content"][215]["instance_id"] == target.instance_id
 

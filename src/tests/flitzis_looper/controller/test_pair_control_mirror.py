@@ -7,6 +7,7 @@ from types import SimpleNamespace
 from typing import TYPE_CHECKING, cast
 from unittest.mock import Mock
 
+import numpy as np
 import pytest
 
 from flitzis_looper.controller import accepted_publication, loader, pair_control_mirror
@@ -20,7 +21,10 @@ from flitzis_looper.pair_snapshot import PairSnapshot, capture_pair_snapshot
 from flitzis_looper.ui.context import WaveformEditorActions
 
 if TYPE_CHECKING:
+    from collections.abc import Callable
+
     from flitzis_looper.controller.app import AppController
+    from flitzis_looper.controller.asset_lifecycle import AssetRetirementReservation
     from flitzis_looper.controller.pair_control_mirror import PreparedPairControlMirror
     from flitzis_looper_audio import (
         AcceptedTimingRefreshTicket,
@@ -29,6 +33,7 @@ if TYPE_CHECKING:
         ConstantTimingTicket,
         GlobalPlaybackBatchTicket,
         ResidentWindowTicket,
+        WaveFormRenderData,
     )
 
 
@@ -112,7 +117,9 @@ def _pending() -> residency._Pending:
     )
 
 
-def _refresh(anchor: int, callback: object | None = None) -> accepted_publication._RefreshRequest:
+def _refresh(
+    anchor: int, callback: Callable[[int], None] | None = None
+) -> accepted_publication._RefreshRequest:
     return accepted_publication._RefreshRequest(
         CurrentPadTiming(0.5, 0.0, 48_000),
         (
@@ -157,14 +164,34 @@ def _populate_session(session: SessionState) -> None:
     session.bpm_lock_anchor_pad_id = 0
 
 
+def _retirement() -> AssetRetirementReservation:
+    # These identity-only owners must reject every unexpected lifecycle operation.
+    return cast("AssetRetirementReservation", object())
+
+
+def _rendered_waveform() -> WaveFormRenderData:
+    return (
+        True,
+        np.array([0.0, 0.5], dtype=np.float64),
+        np.zeros(2, dtype=np.float32),
+        None,
+    )
+
+
 def _populate(
     bundle: _Bundle,
-) -> tuple[residency._Pending, accepted_publication._RefreshRequest, Future[None], object]:
+) -> tuple[
+    residency._Pending,
+    accepted_publication._RefreshRequest,
+    Future[None],
+    AssetRetirementReservation,
+]:
     app = bundle.app
     _populate_session(app._session)
     pending = _pending()
     residency_control = app.transport.residency
     residency_control._pending[0] = pending
+    assert pending.ticket is not None
     residency_control._launched[0] = pending.ticket
     residency_control._effective[0] = pending.requested
     residency_control._error_sources[0] = pending.owner
@@ -184,7 +211,7 @@ def _populate(
     app.loader._incoming_loads[0] = loader._IncomingLoad(
         loader._IncomingIntent(request_id=7, revision=2, override=None, key_lock=True)
     )
-    retirement = object()
+    retirement = _retirement()
     app.loader._load_retirements[0, 7] = retirement
     app.transport.waveform._readiness[0] = ("ready", None)
     app.metering._active_peak_sample_ids.add(0)
@@ -195,7 +222,7 @@ def _populate(
     bundle.view._last_start_s = -0.4
     bundle.view._last_end_s = 8.6
     bundle.view._last_source_identity = bundle.view._pad_view_sources[0]
-    bundle.view._last_waveform_value = object()
+    bundle.view._last_waveform_value = _rendered_waveform()
     return pending, refresh, future, retirement
 
 
@@ -213,6 +240,20 @@ def _assert_moved_session(session: SessionState, timestamps: list[float]) -> Non
     assert session.waveform_pause_hold_pad_id == 215
     assert session.tap_bpm_pad_id == 215
     assert session.tap_bpm_timestamps is timestamps
+
+
+def _assert_swap_candidate_contents(
+    candidate: ProjectState,
+    original: tuple[PadContentIdentity | None, PadContentIdentity | None],
+) -> None:
+    source, target = original
+    projected_source, projected_target = candidate.pad_content[215], candidate.pad_content[0]
+    assert source is not None
+    assert target is not None
+    assert projected_source is not None
+    assert projected_target is not None
+    assert projected_source.instance_id == source.instance_id
+    assert projected_target.instance_id == target.instance_id
 
 
 def test_move_retains_original_rows_and_independent_empty_defaults() -> None:
@@ -271,7 +312,7 @@ def test_latest_unrelated_rows_navigation_and_global_replacement_survive() -> No
     prior_ticket = cast("GlobalPlaybackBatchTicket", Mock(spec=[]))
     global_control._pending = global_playback._PendingGlobalBatch(prior_ticket, frozenset({0}), 3)
     plan = bundle.prepare()
-    newer = object()
+    newer = _pending()
     app.transport.residency._pending[36] = newer
     app._session.sample_load_progress[36] = 0.9
     app._session.loading_sample_ids.add(36)
@@ -291,7 +332,7 @@ def test_latest_unrelated_rows_navigation_and_global_replacement_survive() -> No
     view_range = (40.0, 60.0)
     bundle.view._pad_view_ranges[36] = view_range
     bundle.view._last_pad_id = 36
-    rendered = object()
+    rendered = _rendered_waveform()
     bundle.view._last_waveform_value = rendered
     plan.apply(bundle.acknowledgement)
     assert app.transport.residency._pending[36] is newer
@@ -399,13 +440,12 @@ def test_interrupted_swap_retries_same_plan_once_with_latest_unrelated_rows(
     assert not plan.applied
     with pytest.raises(RuntimeError, match="another transaction acknowledgement"):
         plan.apply(object())
-    latest = object()
+    latest = _pending()
     app.transport.residency._pending[36] = latest
     app._session.sample_analysis_stage[36] = "Newest unrelated analysis"
     app._project.pad_gain_db[36] = -7.0
     candidate = plan.projected_project()
-    assert candidate.pad_content[215].instance_id == original[0].instance_id
-    assert candidate.pad_content[0].instance_id == original[1].instance_id
+    _assert_swap_candidate_contents(candidate, original)
     assert candidate.pad_gain_db[36] == -7.0
     plan.apply(bundle.acknowledgement)
     assert plan.applied
@@ -430,7 +470,7 @@ def test_historical_retirements_keep_original_keys_and_current_receipt_moves() -
     bundle = _bundle()
     app = bundle.app
     app.loader._load_request_ids[0] = 7
-    current, predecessor, old_target = object(), object(), object()
+    current, predecessor, old_target = _retirement(), _retirement(), _retirement()
     app.loader._load_retirements = {(0, 7): current, (0, 3): predecessor, (215, 99): old_target}
     plan = bundle.prepare()
     plan.apply(bundle.acknowledgement)
@@ -445,7 +485,7 @@ def test_retirement_destination_collision_rejects_before_any_exchange() -> None:
     bundle = _bundle()
     app = bundle.app
     app.loader._load_request_ids[0] = 7
-    app.loader._load_retirements = {(0, 7): object(), (215, 7): object()}
+    app.loader._load_retirements = {(0, 7): _retirement(), (215, 7): _retirement()}
     original_content = app._project.pad_content
     plan = bundle.prepare()
     with pytest.raises(RuntimeError, match="_load_retirements changed"):
@@ -454,7 +494,9 @@ def test_retirement_destination_collision_rejects_before_any_exchange() -> None:
     assert not plan.applied
 
 
-def test_replaced_participant_or_component_rejects_before_any_exchange() -> None:
+def test_replaced_participant_or_component_rejects_before_any_exchange(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     bundle = _bundle()
     app = bundle.app
     pending = _pending()
@@ -466,7 +508,7 @@ def test_replaced_participant_or_component_rejects_before_any_exchange() -> None
         plan.apply(bundle.acknowledgement)
     assert app._project.pad_content is original_content
     app.transport.residency._pending[0] = pending
-    app.transport.residency = SimpleNamespace()
+    monkeypatch.setattr(app.transport, "residency", SimpleNamespace())
     with pytest.raises(RuntimeError, match="component or model ownership changed"):
         plan.apply(bundle.acknowledgement)
     assert app._project.pad_content is original_content

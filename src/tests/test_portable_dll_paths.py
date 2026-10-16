@@ -5,6 +5,7 @@ import json
 import os
 import subprocess
 from pathlib import Path
+from typing import cast
 
 import pytest
 
@@ -68,7 +69,8 @@ def _run_child(commands: str, payload: dict[str, str | None]) -> dict[str, objec
     )
     assert ctypes.CDLL.__init__ is original_init
     assert result.returncode == 0, result.stdout + result.stderr
-    return json.loads(result.stdout)
+    # The isolated child fixture emits one JSON object with named fields.
+    return cast("dict[str, object]", json.loads(result.stdout))
 
 
 @pytest.mark.parametrize("kind", ["string", "pathlike"])

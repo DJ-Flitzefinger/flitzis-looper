@@ -7,6 +7,7 @@ import json
 import os
 import subprocess
 import sys
+import urllib.request
 from pathlib import Path
 from types import ModuleType, SimpleNamespace
 from typing import TYPE_CHECKING, cast
@@ -166,7 +167,7 @@ def fake_demucs(
 
     downloader = Mock(side_effect=download)
     pretrained = SimpleNamespace(get_model=downloader)
-    original_import = helper.importlib.import_module
+    original_import = importlib.import_module
 
     def imported(name: str, package: str | None = None) -> ModuleType | SimpleNamespace:
         if name == "demucs.repo":
@@ -279,7 +280,7 @@ def test_bs_asset_repair_reuses_size_digest_and_atomic_resolver(
         downloads.append(filename)
         return io.BytesIO(payloads[filename])
 
-    monkeypatch.setattr(bs_roformer_assets.urllib.request, "urlopen", download)
+    monkeypatch.setattr(urllib.request, "urlopen", download)
     helper.operate_model("bs-roformer:musdb18hq", tmp_path, "prepare")
 
     bs_roformer_assets.verify_model_assets(tmp_path)
@@ -300,7 +301,7 @@ def test_bs_failed_download_preserves_existing_asset_and_blocks_repair(
         ((target.name, len(payload), hashlib.sha256(payload).hexdigest()),),
     )
     monkeypatch.setattr(
-        bs_roformer_assets.urllib.request,
+        urllib.request,
         "urlopen",
         lambda _url, **_kwargs: io.BytesIO(b"x" * len(payload)),
     )
@@ -322,7 +323,7 @@ def test_bs_check_verifies_before_actual_cpu_loader_without_download(
         bs_roformer_assets, "verify_model_assets", lambda _path: calls.append("verify")
     )
     loader = Mock(side_effect=lambda *_args: calls.append("load"))
-    original_import = helper.importlib.import_module
+    original_import = importlib.import_module
 
     def imported(name: str, package: str | None = None) -> ModuleType | SimpleNamespace:
         if name == "flitzis_bs_roformer.model":

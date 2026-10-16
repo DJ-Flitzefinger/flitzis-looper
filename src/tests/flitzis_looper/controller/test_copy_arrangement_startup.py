@@ -11,8 +11,8 @@ import subprocess
 import sys
 from collections import Counter
 from contextlib import nullcontext
+from dataclasses import dataclass
 from pathlib import Path
-from types import SimpleNamespace
 from typing import TYPE_CHECKING, cast
 
 import pytest
@@ -40,7 +40,9 @@ from flitzis_looper_audio import MaterialMigrationJournalStore
 
 if TYPE_CHECKING:
     from flitzis_looper.controller.app import AppController
+    from flitzis_looper.controller.asset_lifecycle import ProjectAssetLifecycle
     from flitzis_looper.controller.copy_arrangement_startup import OriginalCopyRecoveryHandoff
+    from flitzis_looper_audio import InputRuntimePadBinding, RecoveredCopyAcceptance
 
 _TRANSACTION = "a" * 32
 _SOURCE = 0
@@ -53,18 +55,22 @@ _COPY_ID = "3" * 32
 class _Acceptance:
     """Scripted Controller receipt; intentionally has no Native authority."""
 
-    def __init__(self, audio: _Audio, binding: object) -> None:
+    def __init__(self, audio: _Audio, binding: InputRuntimePadBinding) -> None:
         self.audio = audio
         self.binding = binding
         self.released = False
+
+    @property
+    def native_view(self) -> RecoveredCopyAcceptance:
+        return cast("RecoveredCopyAcceptance", self)
 
 
 class _Audio:
     """Require only the exact target binding; fail accidental A or mutation paths."""
 
     def __init__(self) -> None:
-        self.binding = object()
-        self.source_binding = object()
+        self.binding = cast("InputRuntimePadBinding", object())
+        self.source_binding = cast("InputRuntimePadBinding", object())
         self.allow_source = False
         self.binding_available = True
         self.ready = False
@@ -76,7 +82,7 @@ class _Audio:
         self.release_pressure = 0
         self.release_error = False
 
-    def current_input_runtime_pad_binding(self, sample_id: int) -> object | None:
+    def current_input_runtime_pad_binding(self, sample_id: int) -> InputRuntimePadBinding | None:
         assert sample_id == _TARGET or (self.allow_source and sample_id == _SOURCE), (
             "recognized C must not look up surviving A"
         )
@@ -85,32 +91,36 @@ class _Audio:
             return None
         return self.source_binding if sample_id == _SOURCE else self.binding
 
-    def capture_recovered_pad_copy(self, binding: object) -> _Acceptance:
+    def capture_recovered_pad_copy(
+        self, binding: InputRuntimePadBinding
+    ) -> RecoveredCopyAcceptance:
         assert binding is self.binding
         if not self.ready:
             message = "restored C lacks actual source/selection/timing acceptance"
             raise RuntimeError(message)
         acceptance = _Acceptance(self, binding)
         self.captures.append(acceptance)
-        return acceptance
+        return acceptance.native_view
 
-    def validate_recovered_pad_copy(self, acceptance: _Acceptance) -> bool:
-        assert acceptance.audio is self
-        assert acceptance is self.captures[-1]
-        self.validations.append(acceptance)
-        return self.valid and not acceptance.released
+    def validate_recovered_pad_copy(self, acceptance: RecoveredCopyAcceptance) -> bool:
+        captured = self.captures[-1]
+        assert captured.audio is self
+        assert acceptance is captured.native_view
+        self.validations.append(captured)
+        return self.valid and not captured.released
 
-    def release_recovered_pad_copy(self, acceptance: _Acceptance) -> bool:
-        assert acceptance.audio is self
-        assert acceptance is self.captures[-1]
-        self.releases.append(acceptance)
+    def release_recovered_pad_copy(self, acceptance: RecoveredCopyAcceptance) -> bool:
+        captured = self.captures[-1]
+        assert captured.audio is self
+        assert acceptance is captured.native_view
+        self.releases.append(captured)
         if self.release_pressure:
             self.release_pressure -= 1
             if self.release_error:
                 message = "recovered C reservation release is temporarily unavailable"
                 raise RuntimeError(message)
             return False
-        acceptance.released = True
+        captured.released = True
         return True
 
     def capture_pad_copy(self, *args: object) -> None:
@@ -159,7 +169,7 @@ class _Retirement:
         self.closed = 0
         self.activations = 0
 
-    def activate(self) -> nullcontext:
+    def activate(self) -> nullcontext[_Retirement]:
         self.activations += 1
         return nullcontext(self)
 
@@ -175,6 +185,10 @@ class _Assets:
         self.retirement = _Retirement()
         self.readers: list[_Reader] = []
         self.synced: list[list[str | None]] = []
+
+    @property
+    def native_view(self) -> ProjectAssetLifecycle:
+        return cast("ProjectAssetLifecycle", self)
 
     def reserve(self, capacity: int) -> _Retirement:
         assert capacity == 64
@@ -199,13 +213,13 @@ def _captured(
     for name in ("A.wav", "B.wav"):
         (samples / name).write_bytes(f"actual fixture {name}".encode())
     project = ProjectState(key_lock=True)
-    for slot, name, identity in (
+    for slot, name, content_id in (
         (_SOURCE, "A.wav", _SOURCE_ID),
         (_TARGET, "B.wav", _PREDECESSOR_ID),
     ):
         project.sample_paths[slot] = f"samples/{name}"
         project.pad_content[slot] = PadContentIdentity(
-            instance_id=identity, material_id=("4" if slot == _SOURCE else "5") * 32
+            instance_id=content_id, material_id=("4" if slot == _SOURCE else "5") * 32
         )
         if stems:
             reference = f"samples/stems/#{slot + 1}"
@@ -295,10 +309,20 @@ def _prior(
     return persistence.config_path, current
 
 
-def _app(config: Path) -> SimpleNamespace:
+@dataclass(slots=True)
+class _App:
+    persistence: ProjectPersistence
+    project: ProjectState
+    session: SessionState
+    _audio: _Audio
+    _assets: _Assets
+    stems: _Stems
+
+
+def _app(config: Path) -> _App:
     persistence = ProjectPersistence.from_config_path(config)
     persistence.config_path = config
-    return SimpleNamespace(
+    return _App(
         persistence=persistence,
         project=persistence.project,
         session=SessionState(),
@@ -308,7 +332,7 @@ def _app(config: Path) -> SimpleNamespace:
     )
 
 
-def _startup(app: SimpleNamespace) -> CopyArrangementStartup:
+def _startup(app: _App) -> CopyArrangementStartup:
     return CopyArrangementStartup(cast("AppController", app))
 
 
@@ -326,7 +350,9 @@ def test_custody_retry_and_ordinary_loader_preserve_missing_original_participant
 ) -> None:
     config, _journal = _prior(tmp_path, monkeypatch, after=False)
     app = _app(config)
-    missing_path = tmp_path / app.project.sample_paths[missing_slot]
+    missing_reference = app.project.sample_paths[missing_slot]
+    assert missing_reference is not None
+    missing_path = tmp_path / missing_reference
     original_bytes = missing_path.read_bytes()
     missing_path.unlink()
     startup = _startup(app)
@@ -402,8 +428,10 @@ def test_recovered_latest_ack_records_newer_intent_before_actual_replace_without
     app.persistence.mark_dirty()
     original_commit = app.persistence.commit_migration_receipt
 
-    def replace_then_fail(*args: object, **kwargs: object) -> None:
-        original_commit(*args, **kwargs)
+    def replace_then_fail(
+        transaction_id: str, expected_revision: int, snapshot: ProjectState
+    ) -> None:
+        original_commit(transaction_id, expected_revision, snapshot)
         message = "process boundary after actual replacement"
         raise RuntimeError(message)
 
@@ -422,7 +450,9 @@ def test_recovered_latest_ack_records_newer_intent_before_actual_replace_without
     assert not resumed.active
     assert reopened.project.volume == 0.125
     assert reopened.project.pad_gain_db[_SOURCE] == -30.0
-    assert reopened.project.pad_content[_TARGET].instance_id == _COPY_ID
+    copied_content = reopened.project.pad_content[_TARGET]
+    assert copied_content is not None
+    assert copied_content.instance_id == _COPY_ID
 
 
 @pytest.mark.parametrize("recognized_after", [False, True])
@@ -494,6 +524,7 @@ def test_selection_change_across_native_capture_retains_acceptance_without_confi
     monkeypatch.setattr(app.stems, "recovered_copy_selection_ready", lambda *_args: next(readiness))
     startup.poll()
     assert startup.active
+    assert startup.error is not None
     assert "across its Native capture" in startup.error
     assert len(app._audio.captures) == 1
     assert config.read_bytes() == before
@@ -542,9 +573,7 @@ def _child(
     return current
 
 
-def _settle_handoff(
-    app: SimpleNamespace, handoff: OriginalCopyRecoveryHandoff
-) -> CopyArrangementJournal:
+def _settle_handoff(app: _App, handoff: OriginalCopyRecoveryHandoff) -> CopyArrangementJournal:
     pending = handoff.journal.append(handoff.initial.changed(phase="publication_pending"))
     acknowledged = handoff.journal.append(pending.changed(phase="native_ack_observed"))
     receipt = app.persistence.commit_migration_receipt(
@@ -601,9 +630,11 @@ def test_actual_after_and_replace_before_append_wait_for_fresh_c_without_recopy(
     assert app._audio.releases == [acceptance]
     assert acceptance.released
     assert set(app._audio.lookups) == {_TARGET}
+    assert app.project.pad_content[_SOURCE] is not None
     assert app.project.pad_content[_SOURCE].instance_id == _SOURCE_ID
     assert app.project.pad_content[_TARGET] == journal.target_identity
     reopened = CopyJournalOwner.open(config.parent, _TRANSACTION)
+    assert reopened.journal is not None
     assert reopened.journal.phase == "settled"
     assert (
         reopened.journal.committed_config_sha256 == hashlib.sha256(config.read_bytes()).hexdigest()
@@ -642,7 +673,9 @@ def test_recognized_fixed_c_preserves_newer_or_deleted_a_and_unrelated_intent(
         assert app.project.pad_content[_SOURCE] is None
         assert app.project.sample_paths[_SOURCE] is None
     elif source_change == "aba":
-        assert app.project.pad_content[_SOURCE].instance_id == "7" * 32
+        source_content = app.project.pad_content[_SOURCE]
+        assert source_content is not None
+        assert source_content.instance_id == "7" * 32
     else:
         assert app.project.pad_gain_db[_SOURCE] == -24.0
     assert app._audio.lookups == [_TARGET]
@@ -691,8 +724,10 @@ def test_missing_original_or_selected_stem_custody_fences_before_fresh_acceptanc
     startup = _startup(app)
     startup.poll()
     assert startup.active
+    assert startup.error is not None
     assert "custody" in startup.error
-    assert app._audio.lookups == app._audio.captures == app._audio.releases == []
+    assert app._audio.lookups == []
+    assert app._audio.captures == app._audio.releases == []
     assert app.persistence._migration_owner == _TRANSACTION
     assert config.read_bytes() == original
     assert app._assets.retirement.closed == 0
@@ -710,9 +745,10 @@ def test_missing_original_or_selected_stem_custody_fences_before_fresh_acceptanc
     )
     owned = list(app._assets.readers)
     journal = CopyJournalOwner.open(config.parent, _TRANSACTION).journal
+    assert journal is not None
     with pytest.raises(RuntimeError, match="custody"):
         startup._custody.acquire(
-            app._assets, tmp_path, (journal.source, journal.predecessor, journal.after)
+            app._assets.native_view, tmp_path, (journal.source, journal.predecessor, journal.after)
         )
     assert app._assets.readers == owned, "retry must retain the same independently owned readers"
 
@@ -770,7 +806,8 @@ def test_stale_c_acceptance_keeps_writer_pins_and_config_until_same_owner_is_val
     startup.poll()
     assert startup.active
     assert startup.status == "recovery_pending"
-    assert startup._after.acceptance is acceptance
+    assert startup._after is not None
+    assert startup._after.acceptance is acceptance.native_view
     assert app._audio.captures == [acceptance]
     assert app._audio.releases == []
     assert all(not reader.released for reader in app._assets.readers)
@@ -899,10 +936,9 @@ def test_original_handoff_retains_fixed_c_and_transfers_only_its_existing_writer
     assert not startup.active
     assert handoff.completed
     assert not (config.parent / ".material-migrations" / _TRANSACTION).exists()
-    assert (
-        CopyJournalOwner.open(config.parent, handoff.initial.transaction_id).journal.phase
-        == "settled"
-    )
+    latest = CopyJournalOwner.open(config.parent, handoff.initial.transaction_id).journal
+    assert latest is not None
+    assert latest.phase == "settled"
     assert app.persistence._migration_owner == handoff.initial.transaction_id
     assert app._assets.retirement.closed == 0
     assert all(not reader.released for reader in app._assets.readers)
@@ -928,8 +964,11 @@ def test_original_a_aba_never_replays_copy_from_new_occupant(
         app.persistence.mark_dirty()
     startup.poll()
     assert startup.active
+    assert startup.error is not None
     assert "A/B changed" in startup.error
-    assert app.project.pad_content[_TARGET].instance_id == _PREDECESSOR_ID
+    target_content = app.project.pad_content[_TARGET]
+    assert target_content is not None
+    assert target_content.instance_id == _PREDECESSOR_ID
     assert config.read_bytes() == original_config
     assert app._audio.captures == app._audio.releases == []
     assert app.persistence._migration_owner == _TRANSACTION
@@ -944,6 +983,7 @@ def test_failed_owned_append_keeps_same_acceptance_and_independent_pins_for_retr
     app = _app(config)
     app._audio.ready = True
     startup = _startup(app)
+    assert startup._after is not None
     owner = startup._after.owner
     append = owner.append
     failed = False
@@ -961,13 +1001,16 @@ def test_failed_owned_append_keeps_same_acceptance_and_independent_pins_for_retr
     acceptance = app._audio.captures[0]
     assert startup.active
     assert app.persistence._migration_owner == _TRANSACTION
-    assert startup._after.acceptance is acceptance
+    assert startup._after is not None
+    assert startup._after.acceptance is acceptance.native_view
     assert all(not reader.released for reader in app._assets.readers)
     assert app._assets.retirement.closed == 0
     startup.poll()
     assert not startup.active
     assert app._audio.captures == [acceptance]
-    assert CopyJournalOwner.open(config.parent, _TRANSACTION).journal.phase == "settled"
+    latest = CopyJournalOwner.open(config.parent, _TRANSACTION).journal
+    assert latest is not None
+    assert latest.phase == "settled"
 
 
 def test_asset_reader_release_failure_keeps_terminal_recovery_writer_owned_for_retry(
@@ -981,7 +1024,9 @@ def test_asset_reader_release_failure_keeps_terminal_recovery_writer_owned_for_r
     startup.poll()
     acceptance = app._audio.captures[0]
     assert startup.active
-    assert CopyJournalOwner.open(config.parent, _TRANSACTION).journal.phase == "settled"
+    latest = CopyJournalOwner.open(config.parent, _TRANSACTION).journal
+    assert latest is not None
+    assert latest.phase == "settled"
     assert app.persistence._migration_owner == _TRANSACTION
     assert app._assets.retirement.closed == 0
     assert startup._custody.readers
@@ -1020,7 +1065,8 @@ def test_invalid_complete_history_is_preserved_with_no_native_or_cleanup_admissi
     assert startup.error
     assert startup.fenced_sample_ids == frozenset(range(216))
     assert startup.observer_fenced_sample_ids == frozenset()
-    assert app._audio.lookups == app._audio.captures == []
+    assert app._audio.lookups == []
+    assert app._audio.captures == []
     assert app._assets.readers == []
     assert config.read_bytes() == original
     assert {entry.name: entry.read_bytes() for entry in directory.glob("*.json")} == history

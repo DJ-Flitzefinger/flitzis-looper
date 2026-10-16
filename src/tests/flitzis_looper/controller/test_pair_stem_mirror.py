@@ -385,15 +385,17 @@ def test_committed_live_attempt_effective_and_preload_keep_their_exact_owners() 
     registration = _RegistrationTicket(state="accepted")
     receipt = _ResidencyReceipt(residency="accepted", effective="effective")
     preload = _ResidencyReceipt(residency="accepted")
+    receipt_view = cast("ResidentStemTicket", receipt)
+    preload_view = cast("ResidentStemTicket", preload)
     control = committed_stem_residency._CommittedSelection(
         entry,
         "a" * 32,
         controller._project.sample_paths[0],
         cast("CommittedStemSetTicket", registration),
         desired=("all_stems", 5),
-        receipt=cast("ResidentStemTicket", receipt),
+        receipt=receipt_view,
         receipt_intent=("all_stems", 5),
-        preload_receipt=cast("ResidentStemTicket", preload),
+        preload_receipt=preload_view,
         preload_enabled=True,
     )
     attempt = replace(control, candidate=True)
@@ -428,8 +430,8 @@ def test_committed_live_attempt_effective_and_preload_keep_their_exact_owners() 
     assert live.disk is disk
     assert live.control is control
     assert live.attempt is attempt
-    assert control.receipt is receipt
-    assert control.preload_receipt is preload
+    assert control.receipt is receipt_view
+    assert control.preload_receipt is preload_view
     assert live.effective_identity == "retained-effective-identity"
     assert controller._demands[215].explicit
     assert controller._demands[215].policy

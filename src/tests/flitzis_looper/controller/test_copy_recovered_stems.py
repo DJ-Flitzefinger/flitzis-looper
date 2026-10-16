@@ -2,7 +2,6 @@
 
 from contextlib import nullcontext
 from dataclasses import dataclass, field
-from types import SimpleNamespace
 from typing import TYPE_CHECKING, cast
 from unittest.mock import Mock
 
@@ -18,10 +17,12 @@ from tests.flitzis_looper.controller.test_committed_stem_residency import (
 )
 
 if TYPE_CHECKING:
+    from collections.abc import Callable
     from pathlib import Path
 
+    from flitzis_looper.controller.asset_lifecycle import ProjectAssetLifecycle
     from flitzis_looper.models import StemCacheEntry
-    from flitzis_looper_audio import AudioEngine, ProjectAssetLease
+    from flitzis_looper_audio import AudioEngine, PreparedStemPair, ProjectAssetLease
 
 _TARGET = 215
 
@@ -39,6 +40,10 @@ class _Prepared:
         self.entry = entry
         self.selected = 0
         self.discarded = 0
+
+    @property
+    def native_view(self) -> PreparedStemPair:
+        return cast("PreparedStemPair", self)
 
     def selection_json(self) -> str:
         assert self.entry.pair is not None
@@ -71,7 +76,7 @@ class _Retirement:
     closed: int = 0
     splits: list[_Retirement] = field(default_factory=list)
 
-    def activate(self) -> nullcontext:
+    def activate(self) -> nullcontext[_Retirement]:
         return nullcontext(self)
 
     def split(self, capacity: int) -> _Retirement:
@@ -107,7 +112,23 @@ class _Assets:
         self.syncs += 1
 
 
-def _fixture(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> SimpleNamespace:
+@dataclass(slots=True)
+class _Fixture:
+    controller: StemController
+    project: ProjectState
+    session: SessionState
+    entry: StemCacheEntry
+    audio: Mock
+    source: _SourceTicket
+    prepared: _Prepared
+    registration: _RegistrationTicket
+    residency: _ResidencyReceipt
+    jobs: list[Callable[[], None]]
+    assets: _Assets
+    changed: Mock
+
+
+def _fixture(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> _Fixture:
     monkeypatch.chdir(tmp_path)
     entry = _entry().model_copy(update={"available": False})
     cache = tmp_path / entry.cache_dir
@@ -130,11 +151,12 @@ def _fixture(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> SimpleNamespace
     source = _SourceTicket()
     prepared = _Prepared(entry)
     registration = _RegistrationTicket()
+    residency = _ResidencyReceipt()
     audio.capture_prepared_source.return_value = source
     audio.prepare_stem_pair.return_value = prepared
     audio.register_committed_stem_pair.return_value = registration
-    audio.request_committed_stem_residency.return_value = _ResidencyReceipt()
-    jobs: list[object] = []
+    audio.request_committed_stem_residency.return_value = residency
+    jobs: list[Callable[[], None]] = []
     changed = Mock()
     assets = _Assets()
     controller = StemController(
@@ -143,9 +165,9 @@ def _fixture(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> SimpleNamespace
         cast("AudioEngine", audio),
         changed,
         stem_task_runner=jobs.append,
-        asset_lifecycle=assets,
+        asset_lifecycle=cast("ProjectAssetLifecycle", assets),
     )
-    return SimpleNamespace(
+    return _Fixture(
         controller=controller,
         project=project,
         session=session,
@@ -154,13 +176,14 @@ def _fixture(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> SimpleNamespace
         source=source,
         prepared=prepared,
         registration=registration,
+        residency=residency,
         jobs=jobs,
         assets=assets,
         changed=changed,
     )
 
 
-def _prepare_restored(fixture: SimpleNamespace) -> None:
+def _prepare_restored(fixture: _Fixture) -> None:
     controller = fixture.controller
     assert not controller.recovered_copy_selection_ready(_TARGET, fixture.entry)
     controller._poll_residency_demands()
@@ -184,6 +207,7 @@ def test_saved_pair_verifies_and_registers_under_real_copy_writer_without_config
     original_entry = fixture.project.stem_cache[_TARGET]
     _prepare_restored(fixture)
     fixture.audio.prepare_stem_pair.assert_called_once()
+    assert fixture.entry.pair is not None
     expected_arguments = (
         _TARGET,
         fixture.entry.source_version,
@@ -217,7 +241,7 @@ def test_registration_pressure_retains_same_preparation_and_disk_lease_until_adm
     controller = fixture.controller
     settlement = controller._disk_selection_settlements[_TARGET]
     retained_lease = settlement.lease
-    assert settlement.request.prepared is fixture.prepared
+    assert settlement.request.prepared is fixture.prepared.native_view
     assert not retained_lease.released
     assert fixture.prepared.discarded == 0
     assert not controller.recovered_copy_selection_ready(_TARGET, fixture.entry)
@@ -260,7 +284,7 @@ def test_all_stems_waits_for_matching_mask_and_actual_current_component_ack(
     fixture.registration.state = "accepted"
     assert fixture.controller.stems_available(_TARGET)
     fixture.controller._poll_residency_demands()
-    receipt = fixture.audio.request_committed_stem_residency.return_value
+    receipt = fixture.residency
     assert not fixture.controller.recovered_copy_selection_ready(_TARGET, fixture.entry)
     receipt.residency = "accepted"
     assert fixture.controller.recovered_copy_selection_ready(_TARGET, fixture.entry)
@@ -286,7 +310,7 @@ def test_preload_interest_requires_its_own_ack_only_when_enabled(
     fixture.audio.request_committed_stem_residency.assert_called_once_with(
         fixture.registration, mode="full_mix", interest="preload"
     )
-    receipt = fixture.audio.request_committed_stem_residency.return_value
+    receipt = fixture.residency
     assert not fixture.controller.recovered_copy_selection_ready(_TARGET, fixture.entry)
     receipt.residency = "accepted"
     assert fixture.controller.recovered_copy_selection_ready(_TARGET, fixture.entry)

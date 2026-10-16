@@ -6,7 +6,7 @@ from contextlib import nullcontext
 from dataclasses import dataclass
 from pathlib import Path
 from types import SimpleNamespace
-from typing import TYPE_CHECKING, cast
+from typing import TYPE_CHECKING, Protocol, cast
 
 import pytest
 
@@ -21,8 +21,17 @@ from flitzis_looper.models import PadContentIdentity, ProjectState, SessionState
 from flitzis_looper_audio import MaterialMigrationJournalStore
 
 if TYPE_CHECKING:
+    from collections.abc import Callable, Iterable
+
     from flitzis_looper.controller.app import AppController
+    from flitzis_looper.controller.pair_arrangement import _Pair
+    from flitzis_looper.controller.pair_arrangement_journal import (
+        PairArrangementJournal,
+        PairJournalOwner,
+    )
+    from flitzis_looper.controller.persistence import ConfigCommitReceipt
     from flitzis_looper.pair_snapshot import PairSnapshot
+    from flitzis_looper.ui.context import WaveformEditorActions
 
 
 class _Captured:
@@ -117,7 +126,7 @@ class _Retirement:
         self.closed = 0
         self.activations = 0
 
-    def activate(self) -> nullcontext:
+    def activate(self) -> nullcontext[_Retirement]:
         self.activations += 1
         return nullcontext(self)
 
@@ -206,7 +215,7 @@ class _Mirror:
 
 
 class _StemMirror:
-    projected_entries: tuple = ()
+    projected_entries: tuple[()] = ()
 
     def __init__(self) -> None:
         self.acks: list[object] = []
@@ -215,12 +224,24 @@ class _StemMirror:
         self.acks.append(ack)
 
 
+class _MirrorFactory(Protocol):
+    def __call__(
+        self,
+        app: AppController,
+        snapshot: PairSnapshot,
+        *,
+        validate_acknowledgement: Callable[[object], bool],
+        waveform_views: Iterable[WaveformEditorActions] = (),
+    ) -> _Mirror: ...
+
+
 @dataclass
 class _Rig:
     app: SimpleNamespace
     controller: PairArrangementController
     mirrors: list[_Mirror]
     stem_mirrors: list[_StemMirror]
+    prepare_mirror: _MirrorFactory
 
 
 def _rig(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> _Rig:
@@ -248,8 +269,14 @@ def _rig(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> _Rig:
     mirrors: list[_Mirror] = []
     stem_mirrors: list[_StemMirror] = []
 
-    def prepare_mirror(app: SimpleNamespace, snapshot: PairSnapshot, **kwargs: object) -> _Mirror:
-        mirror = _Mirror(app, snapshot)
+    def prepare_mirror(
+        app: AppController,
+        snapshot: PairSnapshot,
+        *,
+        validate_acknowledgement: Callable[[object], bool],
+        waveform_views: Iterable[WaveformEditorActions] = (),
+    ) -> _Mirror:
+        mirror = _Mirror(cast("SimpleNamespace", app), snapshot)
         mirrors.append(mirror)
         return mirror
 
@@ -261,7 +288,32 @@ def _rig(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> _Rig:
     monkeypatch.setattr(pair_arrangement, "prepare_pair_control_mirror", prepare_mirror)
     monkeypatch.setattr(pair_arrangement, "prepare_pair_stem_mirror", prepare_stems)
     controller = PairArrangementController(cast("AppController", app))
-    return _Rig(app, controller, mirrors, stem_mirrors)
+    return _Rig(app, controller, mirrors, stem_mirrors, prepare_mirror)
+
+
+def _journal_owner(pair: _Pair) -> PairJournalOwner:
+    owner = pair.journal
+    assert owner is not None
+    return owner
+
+
+def _journal(pair: _Pair) -> PairArrangementJournal:
+    journal = _journal_owner(pair).journal
+    assert journal is not None
+    return journal
+
+
+def _receipt(pair: _Pair) -> ConfigCommitReceipt:
+    receipt = pair.receipt
+    assert receipt is not None
+    return receipt
+
+
+def _captured_handle(pair: _Pair) -> _Captured:
+    """Read the scripted Native boundary while retaining its fake-specific controls."""
+    captured = pair.captured
+    assert captured is not None
+    return cast("_Captured", captured)
 
 
 def _poll_complete(rig: _Rig) -> None:
@@ -302,11 +354,11 @@ def test_queue_retry_preserves_original_native_owner_and_latest_unrelated_intent
     assert saved.volume == 0.25
     assert saved.config_revision == rig.app.persistence.revision == 1
     assert (
-        original.receipt.sha256
+        _receipt(original).sha256
         == hashlib.sha256(rig.app.persistence.config_path.read_bytes()).hexdigest()
     )
     assert (
-        original.receipt.written_text.encode("utf-8")
+        _receipt(original).written_text.encode("utf-8")
         == rig.app.persistence.config_path.read_bytes()
     )
     assert rig.app._assets.retirement.closed == 1
@@ -317,16 +369,27 @@ def test_mirror_factory_failure_preserves_captured_ticket_and_own_ack_for_retry(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     rig = _rig(tmp_path, monkeypatch)
-    prepare = pair_arrangement.prepare_pair_control_mirror
+    prepare = rig.prepare_mirror
     attempts = 0
 
-    def fail_once(*args: object, **kwargs: object) -> object:
+    def fail_once(
+        app: AppController,
+        snapshot: PairSnapshot,
+        *,
+        validate_acknowledgement: Callable[[object], bool],
+        waveform_views: Iterable[WaveformEditorActions] = (),
+    ) -> _Mirror:
         nonlocal attempts
         attempts += 1
         if attempts == 1:
             message = "prepared mirror temporarily unavailable"
             raise RuntimeError(message)
-        return prepare(*args, **kwargs)
+        return prepare(
+            app,
+            snapshot,
+            validate_acknowledgement=validate_acknowledgement,
+            waveform_views=waveform_views,
+        )
 
     monkeypatch.setattr(pair_arrangement, "prepare_pair_control_mirror", fail_once)
     assert rig.controller.begin(0, 215, operation="swap")
@@ -349,10 +412,21 @@ def test_partial_mirror_retry_recommits_newer_unrelated_intent_without_another_s
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     rig = _rig(tmp_path, monkeypatch)
-    prepare = pair_arrangement.prepare_pair_control_mirror
+    prepare = rig.prepare_mirror
 
-    def partial_mirror(*args: object, **kwargs: object) -> _Mirror:
-        mirror = prepare(*args, **kwargs)
+    def partial_mirror(
+        app: AppController,
+        snapshot: PairSnapshot,
+        *,
+        validate_acknowledgement: Callable[[object], bool],
+        waveform_views: Iterable[WaveformEditorActions] = (),
+    ) -> _Mirror:
+        mirror = prepare(
+            app,
+            snapshot,
+            validate_acknowledgement=validate_acknowledgement,
+            waveform_views=waveform_views,
+        )
         mirror.apply_failures = 1
         mirror.partial = True
         return mirror
@@ -363,7 +437,7 @@ def test_partial_mirror_retry_recommits_newer_unrelated_intent_without_another_s
     original = rig.controller._pair
     assert original is not None
     assert original.receipt is not None
-    first_revision = original.receipt.revision
+    first_revision = _receipt(original).revision
     first_assignment = original.assignment
     assert first_assignment not in rig.app._assets.released
     rig.app.project.pad_gain_db[36] = -23.0
@@ -375,15 +449,17 @@ def test_partial_mirror_retry_recommits_newer_unrelated_intent_without_another_s
     assert len(rig.mirrors[0].apply_calls) == 2
     assert rig.mirrors[0].apply_calls[0] is rig.mirrors[0].apply_calls[1]
     assert len(rig.app._audio.publish_calls) == 1
-    assert original.receipt.revision == first_revision + 1 == rig.app.persistence.revision
-    saved = original.receipt.projected()
+    assert _receipt(original).revision == first_revision + 1 == rig.app.persistence.revision
+    saved = _receipt(original).projected()
+    assert saved.pad_content[0] is not None
+    assert saved.pad_content[215] is not None
     assert saved.pad_content[0].instance_id == "2" * 32
     assert saved.pad_content[215].instance_id == "1" * 32
     assert saved.pad_gain_db[36] == -23.0
     assert saved.volume == 0.2
     assert first_assignment in rig.app._assets.released
     assert rig.app._assets.published == [original.assignment]
-    assert original.journal.journal.phase == "settled"
+    assert _journal(original).phase == "settled"
 
 
 @pytest.mark.parametrize("partial", [False, True])
@@ -422,13 +498,14 @@ def test_owned_journal_append_loss_reconciles_complete_file_or_retains_partial_c
             fail = json.loads(text)["phase"] == "config_committed" and not type(self).failed
             if fail and partial:
                 ordinal = len(self.native.history())
-                path = (
+                leaf = (
                     Path(self.samples)
                     / ".material-migrations"
                     / self.transaction
                     / f"{ordinal:02}.json"
                 )
-                path.write_text(text[:100], encoding="utf-8")
+                leaf.write_text(text[:100], encoding="utf-8")
+                path = str(leaf)
             else:
                 path = self.native.append(text)
             if fail:
@@ -446,22 +523,22 @@ def test_owned_journal_append_loss_reconciles_complete_file_or_retains_partial_c
     if partial:
         assert rig.controller.active
         assert rig.controller.status == "settlement_pending"
-        assert original.journal.intended is not None
+        assert _journal_owner(original).intended is not None
         assert original.receipt is not None
         assert original.acknowledgement is not None
-        assert original.journal.journal.phase == "native_ack_observed"
+        assert _journal(original).phase == "native_ack_observed"
         assert rig.app._assets.published == []
         assert rig.app._assets.retirement.closed == 0
         assert rig.app.persistence._migration_owner == original.owner
         rig.controller.poll()
         assert rig.controller._pair is original
-        assert original.journal.intended is not None
+        assert _journal_owner(original).intended is not None
         assert rig.app._audio.finish_calls == []
     else:
         assert rig.controller.status == "completed", rig.controller.error
-        assert original.journal.intended is None
-        assert len(original.journal.encoded) == 5
-        assert original.journal.journal.phase == "settled"
+        assert _journal_owner(original).intended is None
+        assert len(_journal_owner(original).encoded) == 5
+        assert _journal(original).phase == "settled"
     assert len(rig.app._audio.captures) == len(rig.app._audio.publish_calls) == 1
 
 
@@ -487,11 +564,12 @@ def test_config_replace_exception_keeps_native_owner_then_actual_after_recovery_
     original = rig.controller._pair
     assert original is not None
     assert original.receipt is None
-    assert original.journal.journal.phase == "native_ack_observed"
+    assert _journal(original).phase == "native_ack_observed"
     decision = inspect_pair_recovery(
-        original.journal.journal, rig.app.persistence.config_path.read_bytes()
+        _journal(original), rig.app.persistence.config_path.read_bytes()
     )
     assert decision.disposition == "recognized_after"
+    assert decision.receipt is not None
     assert decision.receipt.projected().selected_pad == 215
     assert rig.app.project.selected_pad == 0
     assert rig.app.persistence._migration_owner == original.owner
@@ -505,7 +583,7 @@ def test_config_replace_exception_keeps_native_owner_then_actual_after_recovery_
     assert len(rig.app._assets.prepared) == 1
     _poll_complete(rig)
     assert len(rig.app._audio.captures) == len(rig.app._audio.publish_calls) == 1
-    assert original.receipt.revision == rig.app.persistence.revision
+    assert _receipt(original).revision == rig.app.persistence.revision
     assert len(rig.app._assets.prepared) == 1
     assert rig.app._assets.published == [assignment]
     assert rig.app._assets.released == []
@@ -526,7 +604,7 @@ def test_preclaim_shutdown_cancels_original_capture_and_preserves_config_bytes(
     assert rig.controller.status == "cancelled"
     assert rig.app._audio.cancel_calls == [original.captured]
     assert rig.app._audio.publish_calls == []
-    assert original.journal.journal.phase == "cancelled"
+    assert _journal(original).phase == "cancelled"
     assert rig.app.persistence._migration_owner is None
     assert rig.app.persistence.config_path.read_bytes() == before
     assert rig.app._assets.retirement.closed == 1
@@ -547,10 +625,10 @@ def test_shutdown_after_claim_before_ack_keeps_owner_and_polls_genuine_own_ack(
     assert not rig.controller.prepare_shutdown()
     assert rig.app._assets.retirement.closed == 0
     assert rig.app.persistence._migration_owner == original.owner
-    original.captured.acknowledged = True
+    _captured_handle(original).acknowledged = True
     _poll_complete(rig)
-    assert original.acknowledgement is original.captured.ack
-    assert original.journal.journal.phase == "settled"
+    assert original.acknowledgement is _captured_handle(original).ack
+    assert _journal(original).phase == "settled"
     assert len(rig.app._audio.publish_calls) == 1
 
 
@@ -573,4 +651,4 @@ def test_native_finish_retry_keeps_exact_assignment_and_receipt_until_settled(
     assert original.receipt is receipt
     assert rig.app._assets.published == [assignment]
     assert rig.app._audio.finish_calls == [(original.ticket, ack), (original.ticket, ack)]
-    assert original.journal.journal.phase == "settled"
+    assert _journal(original).phase == "settled"

@@ -1,6 +1,6 @@
 """Current native source and timing ownership in productive MIDI publication."""
 
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, cast
 from unittest.mock import Mock
 
 import pytest
@@ -9,6 +9,7 @@ from tests.flitzis_looper.conftest import FakeInputRuntimePadBinding, current_ti
 
 if TYPE_CHECKING:
     from flitzis_looper.controller import AppController
+    from flitzis_looper_audio import CapturedInputPadTrigger
 
 
 class _CapturedRuntimeGesture:
@@ -18,6 +19,11 @@ class _CapturedRuntimeGesture:
         self.owner_identity = object()
         self.diagnostic_slot = 0
         self.owner_status = "current"
+
+    @property
+    def native_trigger(self) -> CapturedInputPadTrigger:
+        """Keep the original fake handle alongside its opaque Native boundary view."""
+        return cast("CapturedInputPadTrigger", self)
 
     def original_owner_status(self) -> str:
         return self.owner_status
@@ -298,7 +304,7 @@ def test_failed_guarded_trigger_never_falls_back_to_unbound_loop_and_play(
         audio_engine_mock.prepare_captured_input_trigger.assert_not_called()
     else:
         pending = controller.transport.residency._captured_triggers[id(original)]
-        assert pending.trigger is original
+        assert pending.trigger is original.native_trigger
         assert pending.ticket is None
     audio_engine_mock.set_pad_loop_region.assert_not_called()
     audio_engine_mock.play_sample.assert_not_called()

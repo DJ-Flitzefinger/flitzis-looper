@@ -277,14 +277,16 @@ def test_successful_replacement_resets_retired_state_without_deleting_owned_file
 
 
 def test_derived_refresh_queue_failure_keeps_matching_loaded_metadata(
-    controller: AppController, audio_engine_mock: Mock
+    controller: AppController, audio_engine_mock: Mock, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     controller.project.sample_paths[0] = "samples/old.wav"
     controller.project.sample_durations[0] = 600.0
     audio_engine_mock.load_incoming_sample_async.return_value = 7
     controller.loader.load_sample_async(0, "new.wav")
-    controller.stems.reuse_compatible_stems_on_load = Mock(
-        side_effect=RuntimeError("parameter queue full")
+    monkeypatch.setattr(
+        controller.stems,
+        "reuse_compatible_stems_on_load",
+        Mock(side_effect=RuntimeError("parameter queue full")),
     )
     audio_engine_mock.poll_loader_events.side_effect = [
         {

@@ -9,7 +9,7 @@ from unittest.mock import Mock
 import pytest
 
 from flitzis_looper.controller import stems
-from flitzis_looper.controller.stem_cache import expected_stem_files
+from flitzis_looper.controller.stem_cache import expected_stem_files, promote_generation_artifacts
 from flitzis_looper.controller.stem_generation import AudioShape, StemGenerationRequest
 from flitzis_looper.controller.stem_job import StemGenerationJob
 from flitzis_looper.controller.stems import StemController
@@ -87,7 +87,7 @@ def _rig(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> _ObserverRig:
     )
 
     def capture(sample_id: int, source: OfflineStemSourceLease) -> FakePreparedSourceTicket:
-        assert rig.placements[sample_id] is source
+        assert cast("OfflineStemSourceLease", rig.placements[sample_id]) is source
         return FakePreparedSourceTicket("accepted")
 
     def queue(
@@ -255,7 +255,7 @@ def _completed_entry(rig: _ObserverRig, job: StemGenerationJob) -> StemCacheEntr
         generation_fingerprint=job.generation_fingerprint,
         producer_identity=job.producer_identity,
     )
-    return stems.promote_generation_artifacts(entry, request.cache_dir)
+    return promote_generation_artifacts(entry, request.cache_dir)
 
 
 def test_progress_backlog_coalesces_without_blocking_unrelated_job_terminal(
@@ -331,7 +331,7 @@ def test_shared_success_retains_one_promotion_until_remaining_moved_interest_is_
         rig.accepts.remove(36)
     if mirror_first:
         _move(rig, mirror, acknowledgement)
-    promote = stems.promote_generation_artifacts
+    promote = promote_generation_artifacts
     promotions: list[Path] = []
 
     def promote_once(entry: StemCacheEntry, directory: Path) -> StemCacheEntry:

@@ -26,6 +26,8 @@ from tests.flitzis_looper.controller.test_pair_arrangement import _Assets
 from tests.flitzis_looper.controller.test_pair_arrangement_journal import _TRANSACTION, _captured
 
 if TYPE_CHECKING:
+    from typing import Never
+
     from flitzis_looper.controller.app import AppController
     from flitzis_looper.pair_snapshot import PairOperation
 
@@ -144,6 +146,13 @@ def _startup(app: SimpleNamespace) -> PairArrangementStartup:
     return PairArrangementStartup(cast("AppController", app))
 
 
+def _journal(samples: Path, transaction: str) -> PairArrangementJournal:
+    """Read the current durable phase and prove that reopening yielded a record."""
+    journal = PairJournalOwner.open(samples, transaction).journal
+    assert journal is not None
+    return journal
+
+
 @pytest.mark.parametrize("operation", ["move", "swap"])
 @pytest.mark.parametrize("recorded", [False, True])
 def test_actual_after_startup_waits_for_fresh_restore_then_settles_without_another_layout(
@@ -179,6 +188,7 @@ def test_actual_after_startup_waits_for_fresh_restore_then_settles_without_anoth
     assert app._audio.releases == [acceptance]
     assert acceptance.released
     reopened = PairJournalOwner.open(tmp_path / "samples", _TRANSACTION)
+    assert reopened.journal is not None
     assert reopened.journal.phase == "settled"
     assert (
         reopened.journal.committed_config_sha256 == hashlib.sha256(config.read_bytes()).hexdigest()
@@ -244,7 +254,9 @@ def test_stale_actual_acceptance_keeps_original_owner_fence_and_config_untouched
     assert startup.status == "recovery_pending"
     assert len(app._audio.captures) == 1
     assert app._audio.releases == []
-    assert startup._after.acceptance is acceptance
+    after = startup._after
+    assert after is not None
+    assert after.acceptance is acceptance
     assert not acceptance.released
     assert app.persistence._migration_owner == _TRANSACTION
     assert app._assets.retirement.closed == 0
@@ -273,15 +285,17 @@ def test_after_config_replace_signal_retains_fresh_acceptance_and_retries_same_r
     monkeypatch.setattr(app.persistence, "_atomic_write_text", replace_then_signal)
     startup.poll()
     assert startup.active
-    assert startup._after.receipt is None
-    acceptance = startup._after.acceptance
+    after = startup._after
+    assert after is not None
+    assert after.receipt is None
+    acceptance = after.acceptance
     assert app._audio.releases == []
     assert app._assets.retirement.closed == 0
     startup.poll()
     assert not startup.active
     assert len(app._audio.captures) == 1
     assert app._audio.releases == [acceptance]
-    assert PairJournalOwner.open(tmp_path / "samples", _TRANSACTION).journal.committed_revision == 0
+    assert _journal(tmp_path / "samples", _TRANSACTION).committed_revision == 0
 
 
 def test_original_unsaved_intent_restores_before_loader_then_hands_one_fresh_successor(
@@ -310,7 +324,9 @@ def test_original_unsaved_intent_restores_before_loader_then_hands_one_fresh_suc
     assert handoff.initial.phase == "captured"
     assert handoff.initial.resume_of == _TRANSACTION
     assert handoff.owner != _TRANSACTION
-    assert handoff.snapshot.projected().source.source_identity.instance_id == "1" * 32
+    source_identity = handoff.snapshot.projected().source.source_identity
+    assert source_identity is not None
+    assert source_identity.instance_id == "1" * 32
     assert app.persistence._migration_owner == handoff.owner
     assert app._audio.captures == []
     assert startup.poll() is None
@@ -348,7 +364,7 @@ def test_original_successor_creation_capacity_keeps_predecessor_and_restored_int
         def open(samples: Path, transaction: str) -> PairJournalOwner:
             return native_owner.open(samples, transaction)
 
-        def __new__(cls, *args: object, **kwargs: object) -> object:
+        def __new__(cls, *args: object, **kwargs: object) -> Never:
             message = "journal inventory capacity exhausted"
             raise ValueError(message)
 
@@ -362,10 +378,7 @@ def test_original_successor_creation_capacity_keeps_predecessor_and_restored_int
     assert app.persistence._migration_owner == _TRANSACTION
     assert app._assets.retirement.closed == 0
     assert config.read_bytes() == before
-    assert (
-        PairJournalOwner.open(tmp_path / "samples", _TRANSACTION).journal.phase
-        == "native_ack_observed"
-    )
+    assert _journal(tmp_path / "samples", _TRANSACTION).phase == "native_ack_observed"
 
 
 @pytest.mark.parametrize(
@@ -454,7 +467,7 @@ def test_durable_fresh_preclaim_cancellation_preserves_original_config_and_recov
     assert app.persistence._migration_owner == handoff.owner
     assert app._assets.retirement.closed == 0
     assert not (tmp_path / "samples" / ".material-migrations" / _TRANSACTION).exists()
-    assert PairJournalOwner.open(tmp_path / "samples", handoff.owner).journal.phase == "cancelled"
+    assert _journal(tmp_path / "samples", handoff.owner).phase == "cancelled"
 
 
 def test_compaction_failure_keeps_exact_parent_successor_and_transferred_writer_owned(
@@ -629,7 +642,7 @@ def test_cancelled_terminal_tip_restores_latest_unsaved_before_intent_without_pa
     assert app._audio.captures == []
     assert app._audio.releases == []
     assert config.read_bytes() == original
-    assert PairJournalOwner.open(config.parent, child.transaction_id).journal.phase == "cancelled"
+    assert _journal(config.parent, child.transaction_id).phase == "cancelled"
 
 
 def test_original_handoff_carries_and_compacts_complete_ancestor_chain_after_real_receipt(
@@ -659,7 +672,7 @@ def test_original_handoff_carries_and_compacts_complete_ancestor_chain_after_rea
     assert not startup.active
     assert not (config.parent / ".material-migrations" / _TRANSACTION).exists()
     assert not (config.parent / ".material-migrations" / child.transaction_id).exists()
-    assert PairJournalOwner.open(config.parent, handoff.owner).journal.phase == "settled"
+    assert _journal(config.parent, handoff.owner).phase == "settled"
     assert app.persistence._migration_owner == handoff.owner
 
 
@@ -719,16 +732,16 @@ def test_unknown_or_ambiguous_lineage_is_fenced_without_touching_config_or_histo
         else:
             project = ProjectState.model_validate_json(child.project_image_json)
             project.pad_gain_db[0] = -7.0
-            before = capture_pair_snapshot(project, 0, 215, operation="swap")
+            before_snapshot = capture_pair_snapshot(project, 0, 215, operation="swap")
             record = child.changed(
-                before=before,
-                after=PairArrangementAfterImage.from_before(before),
+                before=before_snapshot,
+                after=PairArrangementAfterImage.from_before(before_snapshot),
                 project_image_json=project.model_dump_json(),
             )
         leaf = config.parent / ".material-migrations" / child.transaction_id / "00.json"
         leaf.write_text(record.model_dump_json(), encoding="utf-8")
     directory = config.parent / ".material-migrations"
-    before = {
+    before_history = {
         str(leaf.relative_to(directory)): leaf.read_bytes() for leaf in directory.glob("*/*.json")
     }
     app = _app(config)
@@ -742,4 +755,4 @@ def test_unknown_or_ambiguous_lineage_is_fenced_without_touching_config_or_histo
     assert app._audio.captures == []
     assert {
         str(leaf.relative_to(directory)): leaf.read_bytes() for leaf in directory.glob("*/*.json")
-    } == before
+    } == before_history

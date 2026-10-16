@@ -4,16 +4,18 @@ import hashlib
 import json
 import os
 from typing import TYPE_CHECKING
-
-if TYPE_CHECKING:
-    from pathlib import Path
 from unittest.mock import Mock
 
 import pytest
 
+import flitzis_looper_audio
 from flitzis_looper.controller import material_migration_recovery as recovery
 from flitzis_looper.material_migration_model import MaterialMigrationJournal, MigrationAssignment
 from flitzis_looper.models import ProjectState
+from flitzis_looper_audio import MaterialMigrationJournalStore
+
+if TYPE_CHECKING:
+    from pathlib import Path
 
 
 def _reference(path: Path) -> str:
@@ -26,7 +28,7 @@ def _native_locations(monkeypatch: pytest.MonkeyPatch, locations: dict[str, str]
 
     resolver = Mock(side_effect=resolve)
     monkeypatch.setattr(
-        recovery.flitzis_looper_audio, "resolve_migration_config_reference", resolver, raising=False
+        flitzis_looper_audio, "resolve_migration_config_reference", resolver, raising=False
     )
     return resolver
 
@@ -71,7 +73,7 @@ def test_unverified_native_projection_keeps_recovery_visible_without_reading_int
     samples.mkdir()
     resolver = Mock(side_effect=RuntimeError("projection custody changed"))
     monkeypatch.setattr(
-        recovery.flitzis_looper_audio, "resolve_migration_config_reference", resolver, raising=False
+        flitzis_looper_audio, "resolve_migration_config_reference", resolver, raising=False
     )
     scan = Mock()
     monkeypatch.setattr(recovery, "MaterialMigrationJournalStore", Mock(scan=scan))
@@ -87,9 +89,7 @@ def test_unverified_native_projection_keeps_recovery_visible_without_reading_int
 def test_missing_native_location_api_fails_closed_without_import_failure(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    monkeypatch.delattr(
-        recovery.flitzis_looper_audio, "resolve_migration_config_reference", raising=False
-    )
+    monkeypatch.delattr(flitzis_looper_audio, "resolve_migration_config_reference", raising=False)
 
     with pytest.raises(RuntimeError, match="Native config-location resolution is unavailable"):
         recovery.resolve_config_reference(
@@ -121,7 +121,7 @@ def test_newer_current_config_wins_over_relocated_pending_snapshot(
         ),
     )
     encoded = journal.model_dump_json()
-    store = recovery.MaterialMigrationJournalStore(str(samples), journal.transaction_id)
+    store = MaterialMigrationJournalStore(str(samples), journal.transaction_id)
     store.append(encoded)
     history = store.history()
     before = config.read_bytes()
@@ -136,7 +136,7 @@ def test_newer_current_config_wins_over_relocated_pending_snapshot(
     assert config.read_bytes() == before
     assert result.pending[0].config_reference == historical
     assert (
-        recovery.MaterialMigrationJournalStore.open(str(samples), journal.transaction_id).history()
+        MaterialMigrationJournalStore.open(str(samples), journal.transaction_id).history()
         == history
         == [encoded]
     )

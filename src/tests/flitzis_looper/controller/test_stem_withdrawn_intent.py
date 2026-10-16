@@ -1,7 +1,7 @@
 """Scripted own receipts exercise actual StemController frame ordering, without audio."""
 
 from dataclasses import dataclass, replace
-from typing import TYPE_CHECKING, cast
+from typing import TYPE_CHECKING, TypedDict, cast
 from unittest.mock import Mock, call
 
 import pytest
@@ -14,8 +14,17 @@ from flitzis_looper.stem_pair_selection import StemPairSelection
 
 if TYPE_CHECKING:
     from flitzis_looper.controller import AppController
-    from flitzis_looper.models import StemMaskDisplayMode
+    from flitzis_looper.models import StemMaskDisplayMode, StemMixMode
     from flitzis_looper_audio import PreparedSourceTicket, PreparedStemPair
+
+
+class _WithdrawnChange(TypedDict, total=False):
+    content_id: str | None
+    source_path: str | None
+    source_version: str
+    stem_set_identity: str | None
+    mode: StemMixMode
+    enabled_mask: int
 
 
 @dataclass(slots=True)
@@ -344,7 +353,7 @@ def test_withdrawal_cannot_retire_a_different_binding_or_newer_intent(
     controller: AppController,
     audio_engine_mock: Mock,
     monkeypatch: pytest.MonkeyPatch,
-    changed: dict[str, object],
+    changed: _WithdrawnChange,
 ) -> None:
     receipt, registration, request = _bind(controller, audio_engine_mock, monkeypatch, active=False)
     entry = controller.project.stem_cache[0]
