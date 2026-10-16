@@ -2158,6 +2158,106 @@ change-point/phase model needs bounded error and ambiguity controls; neither a
 new hand-tuned denominator threshold nor output-fitted gate corrections have
 been implemented or accepted here. All original product gates remain open.
 
+### Source-Certified Integrated Linear Chirplets — 2026-10-16
+
+The separate opt-in v8 diagnostic only tries a single isolated linear chirplet
+after v7 stationary carrier discovery returns K=0. Sign-changing source zero
+crossings initialize a local quadratic phase. Complete original stereo windows
+then undergo bounded projected variable-projection refinement. The unchanged
+8192/4096 scan, minimum three clean supports, source RMS1e-4, design condition1e6
+and normalized complex stereo coherence1e-3 remain necessary. Source energy and
+crest guards apply. Multiple supported incompatible frequency laws refuse.
+
+An immutable law at source epoch e stores frequency f_e and slope alpha. With
+tau=(s-e)/Fs, integrated cycles are f_e*tau+alpha*tau^2/2. All support fits share
+that gauge; complex stereo coefficients are compared without independently
+aligning window phases. A scan beyond4096 complete windows refuses conservatively.
+Matrices remain window sized; compact scan reports and temporary work have a
+reported32MiB estimate under a64MiB estimator budget, excluding caller PCM storage.
+Neither zero crossings nor a successful source fit establish general musical
+mode semantics.
+
+The existing positive current-weight256/64 affine NNLS evaluates this integrated
+phase in its carrier features. Its solver, rejection limits, interpolation of
+amplitude predictions and full decay remain unchanged. Additional source-length
+phase temporaries and bounded tile workspace enter the existing256MiB fitting
+guard before output allocation. Analytic synthesis uses the same epoch law.
+For constant source rate r and pitch ratio h the correction is
+exp(i*(h/r-1)*(theta(s)-theta(b))), at unchanged fixed birth b. Continuous phase
+algebra gives instantaneous output frequency h*f(r*n), with slope h*r*alpha;
+using instantaneous frequency times elapsed time would integrate the slope twice.
+
+Original active source support must satisfy the source frequency band. Rendering
+separately guards the entire nonzero fitted analytic mode and its +/-1-frame
+zero-extended interpolation support against DC/source Nyquist/output Nyquist.
+Even an infinitesimal final nonzero sample remains part of that guard. No end
+mask or crop hides a crossing. Exact subtraction error remains in the fully
+transformed residual, including every generated tail. Fractional interpolation
+is explicitly an approximation to continuous analytic phase, while h=r retains
+the complete combined-source linear interpolation identity.
+
+Independent ascending/descending unseen sources each supply five clean windows.
+Full frequency-law and slope errors are below4.55e-13Hz and4.55e-13Hz/s; common
+epoch stereo factorization relative RMS is below4.92e-13. A separate public
+prepare-to-render descending source at r2/k+7 measures actual mixed-output
+frequency/slope errors3.19e-12Hz/1.37e-12Hz/s on10752 supported interior frames,
+with PCM error2.74e-13. These declared synthetic controls do not certify general
+residual or finite-onset quality.
+
+Two fixed known phase laws reproduce full positive affine prediction hops385
+through2048 with maximum envelope error6.03e-15. Independently constructed joint
+stereo Gram/cue responses agree within3.06e-16 for both cue signs across whole
+64-frame hops. Fixed-phase future cues, including changed activity hulls, preserve
+envelope/mode/complement prefixes bitwise, retain decay and cause a nonzero later
+response. This is local fixed-basis causality, without a global discovery claim.
+Known integer-position mode corrections agree within1.55e-14; a nonzero residual
+retains its complete transformed tail with energy.00364556 beyond nominal length.
+Full h=r fractional identities agree within1.12e-15. A separate whole finite
+response comparison at r=.75/k+7 differs from the declared continuous ideal by
+.0643066, including finite edges; it is expressly not analytic interpolation
+exactness or an acoustic PASS.
+
+Nine independent source-negative categories refuse, including unrelated stereo,
+phase jumps and two incompatible laws each with exactly three clean supports.
+Three complete-support band controls include an interpolation-only crossing and
+an infinitesimal1e-30 last sample. Seven malformed/workspace contracts refuse.
+The same2.4-million-frame two-carrier silent input is accepted by the prior
+public fitter with estimated263179376bytes, but additional phase workspace
+refuses before fitted output allocation. Twenty-one actual-HEAD dual-module
+comparisons preserve every prior preparation array and whole report; a shifted
+v7 AM render is also bitwise/report identical. V8 fallback changes only its
+explicit model and source-refusal metadata.
+
+The unchanged18-source/72-request matrix completes in429.416076s:71 complete PCM
+responses and the same explicit19873.23Hz/+7 Nyquist refusal. The chirp now admits
+one law at source epoch56767.5, frequency849.990625Hz and slope900Hz/s, supported
+by nine clean complete windows. Maximum common-gauge coefficient distance is
+7.90e-14, source support relative RMS5.06e-13, actual envelope condition2.94859
+and reported fitting memory20735840bytes. Residual source energy1.07763645 remains
+fully transformed; source energy864.106851 is not used to normalize the output.
+
+At r2 and k=-7,0,+7, chirp q10/q50 offsets improve from224/431,145/269,-106/-231
+to-72/-42,-22/+14,-15/+17frames. All three now pass the original96-frame/2ms
+bound and the complete timing/retention/tail predicate. Raw peaks are.26438828,
+.25593531,.20520025; transformed residual output energies.94288685,.83374978,
+.82742422 and full output energies433.80498,433.55260,433.56577 remain unscaled.
+Its r1/k0 response has zero quantile offsets. All67 non-chirp complete profile
+measurement records equal v7 exactly after excluding only model version and
+elapsed seconds. All35 existing tonal measurements still pass, with the same
+maximum.685237cent; the full decomposition error remains below1.12e-16.
+
+V8 is still rejected overall: eight timing failures remain, comprising900/1100
+at-7, all three close-pair requests, AM at-7 and all three noise requests. AM at0
+still has no margin beyond its exact96-frame boundary. Prior failures are retained
+in earlier results. The unchanged additional AM tonal and known-AM/known-pair
+references from v7 are reused, rather than reported as fresh v8 executions.
+
+Source without an admitted chirplet retains the v7 signal path. Every prior
+variant and explicit unsupported-domain refusal remains available. The unchanged
+full source/profile matrix and original timing, tonal, peak and retention gates
+still determine measured quality. Variable actual-rate maps, arbitrary mixtures,
+native realtime execution and all remaining product/Human gates remain open.
+
 ## Settings Contract
 
 Project persistence stores the global `key_lock` boolean as default intent and

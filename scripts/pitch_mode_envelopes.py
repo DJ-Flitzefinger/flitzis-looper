@@ -19,6 +19,7 @@ from pitch_source_modulation import (
     modulation_workspace_bytes,
     validate_modulators,
 )
+from pitch_source_phase import LinearSourcePhase
 
 if TYPE_CHECKING:
     from numpy.typing import NDArray
@@ -131,12 +132,17 @@ def _tile_system(
     offsets: Indices = _OFFSETS,
     window_weights: Real = _HANN,
     source_modulators: tuple[SourceModulator, ...] | None = None,
+    source_phase_laws: tuple[LinearSourcePhase, ...] | None = None,
 ) -> tuple[Real, Real]:
     positions = center + offsets
     inside = (positions >= 0) & (positions < len(source))
     positions = positions[inside]
     weights = np.sqrt(window_weights[inside])
-    carriers = np.exp(2.0j * np.pi * np.outer(positions, frequencies_hz) / FS)
+    if source_phase_laws is None:
+        carriers = np.exp(2.0j * np.pi * np.outer(positions, frequencies_hz) / FS)
+    else:
+        cycles = np.column_stack([law.cycles(positions) for law in source_phase_laws])
+        carriers = np.exp(2.0j * np.pi * cycles)
     features = (carriers[:, :, None] * stereo_coefficients[None, :, :]).real
     if source_modulators is not None:
         features *= modulation_values(positions, source_modulators)[:, :, None]
@@ -396,6 +402,7 @@ def _affine_tile_system(
     *,
     window_weights: Real = _HANN,
     source_modulators: tuple[SourceModulator, ...] | None = None,
+    source_phase_laws: tuple[LinearSourcePhase, ...] | None = None,
 ) -> tuple[Real, Real]:
     """Expand the shared trailing carrier system into interleaved L/R columns."""
     design, target = _tile_system(
@@ -406,6 +413,7 @@ def _affine_tile_system(
         offsets=_CAUSAL_OFFSETS,
         window_weights=window_weights,
         source_modulators=source_modulators,
+        source_phase_laws=source_phase_laws,
     )
     positions = center + _CAUSAL_OFFSETS
     inside = (positions >= 0) & (positions < len(source))
@@ -685,6 +693,7 @@ def _fit_affine_knots(
     predictive: bool = False,
     current_weight: bool = False,
     source_modulators: tuple[SourceModulator, ...] | None = None,
+    source_phase_laws: tuple[LinearSourcePhase, ...] | None = None,
 ) -> tuple[Real, dict]:
     endpoints = np.zeros((len(centers), len(frequencies_hz), 2))
     diagnostics = _new_affine_diagnostics(
@@ -708,6 +717,7 @@ def _fit_affine_knots(
             int(center),
             window_weights=_RISING_HALF_COSINE if current_weight else _HANN,
             source_modulators=source_modulators,
+            source_phase_laws=source_phase_laws,
         )
         result = _fit_tile(design, target)
         endpoints[index] = result.values.reshape(len(frequencies_hz), 2)
@@ -838,6 +848,23 @@ def fit_modulated_current_weight_envelopes(
     )
 
 
+def fit_phase_current_weight_envelopes(
+    source: Real,
+    frequencies_hz: Real,
+    stereo_coefficients: Complex,
+    phase_laws: tuple[LinearSourcePhase, ...],
+) -> tuple[Real, dict]:
+    """Use fixed integrated source phase in the unchanged affine NNLS solver."""
+    return _fit_affine_causal_envelopes(
+        source,
+        frequencies_hz,
+        stereo_coefficients,
+        predictive=True,
+        current_weight=True,
+        source_phase_laws=phase_laws,
+    )
+
+
 def _publish_affine_predictions(
     envelopes: Real, endpoints: Real, centers: Indices, first: int
 ) -> int:
@@ -885,8 +912,22 @@ def _affine_fit_memory(
     predictive: bool,
     current_weight: bool = False,
     source_modulators: tuple[SourceModulator, ...] | None = None,
+    source_phase_laws: tuple[LinearSourcePhase, ...] | None = None,
 ) -> int:
     _validate_inputs(source, frequencies_hz, stereo_coefficients)
+    if source_phase_laws is not None:
+        _require(
+            "Integrated phase requires a separate current-weight predictive basis.",
+            condition=predictive and current_weight and source_modulators is None,
+        )
+        _require(
+            "Each carrier requires one finite linear source phase law at its epoch frequency.",
+            condition=len(source_phase_laws) == len(frequencies_hz)
+            and all(
+                isinstance(law, LinearSourcePhase) and law.frequency_hz == float(frequency)
+                for law, frequency in zip(source_phase_laws, frequencies_hz, strict=True)
+            ),
+        )
     if source_modulators is not None:
         _require(
             "A modulated basis requires current-weight predictive preparation.",
@@ -906,6 +947,9 @@ def _affine_fit_memory(
         ) + WINDOW_FRAMES * (128 * len(frequencies_hz) + 64)
     if source_modulators is not None:
         estimate += modulation_workspace_bytes(len(source), len(frequencies_hz))
+    if source_phase_laws is not None:
+        # Phase evaluation adds source-length temporaries and bounded per-tile cycles.
+        estimate += len(source) * 16 + WINDOW_FRAMES * 32 * len(frequencies_hz) + 4096
     _require(
         "The conservative affine fit memory estimate exceeds the 256 MiB limit.",
         condition=estimate < MAX_MEMORY_BYTES,
@@ -921,6 +965,7 @@ def _fit_affine_causal_envelopes(
     predictive: bool,
     current_weight: bool = False,
     source_modulators: tuple[SourceModulator, ...] | None = None,
+    source_phase_laws: tuple[LinearSourcePhase, ...] | None = None,
 ) -> tuple[Real, dict]:
     estimate = _affine_fit_memory(
         source,
@@ -929,6 +974,7 @@ def _fit_affine_causal_envelopes(
         predictive=predictive,
         current_weight=current_weight,
         source_modulators=source_modulators,
+        source_phase_laws=source_phase_laws,
     )
     hull = _activity_hull(source)
     report = _base_report(source, frequencies_hz, hull)
@@ -972,6 +1018,16 @@ def _fit_affine_causal_envelopes(
         report.update(_current_weight_contract(len(frequencies_hz)))
     if source_modulators is not None:
         report.update(modulation_contract(source_modulators))
+    if source_phase_laws is not None:
+        report.update({
+            "source_phase_basis": "integral of affine instantaneous frequency at fixed epoch",
+            "source_phase_epochs_frames": [law.epoch_frame for law in source_phase_laws],
+            "source_frequency_slopes_hz_per_second": [
+                law.slope_hz_per_second for law in source_phase_laws
+            ],
+            "global_carrier_phase_origin_frame": None,
+            "global_carrier_phase_gauge": "declared source epoch per law; no window phase resets",
+        })
     envelopes = np.zeros((len(source), len(frequencies_hz)))
     if hull is None or not len(frequencies_hz):
         return envelopes, report
@@ -984,6 +1040,7 @@ def _fit_affine_causal_envelopes(
         predictive=predictive,
         current_weight=current_weight,
         source_modulators=source_modulators,
+        source_phase_laws=source_phase_laws,
     )
     if predictive:
         report["prediction_negative_sample_values_projected"] = _publish_affine_predictions(

@@ -12,7 +12,8 @@ from typing import TYPE_CHECKING
 import numpy as np
 from pitch_am_groups import group_am_carriers
 from pitch_amfm_model import render as render_residual
-from pitch_mode_carriers import FS, estimate_carriers
+from pitch_chirplet_carriers import estimate_chirplet
+from pitch_mode_carriers import FS, CarrierEstimate, estimate_carriers
 from pitch_mode_certificate import inspect_window
 from pitch_mode_envelopes import (
     fit_affine_causal_envelopes,
@@ -20,13 +21,14 @@ from pitch_mode_envelopes import (
     fit_current_weight_causal_envelopes,
     fit_envelopes,
     fit_modulated_current_weight_envelopes,
+    fit_phase_current_weight_envelopes,
     fit_predictive_causal_envelopes,
 )
 from pitch_source_modulation import modulators_from_estimate
 
 if TYPE_CHECKING:
     from numpy.typing import NDArray
-    from pitch_mode_carriers import CarrierEstimate
+    from pitch_source_phase import LinearSourcePhase
 
 type Pcm = NDArray[np.float64]
 type ComplexPcm = NDArray[np.complex128]
@@ -38,11 +40,12 @@ class UnsupportedPitchDomainError(ValueError):
 
 @dataclass(frozen=True, slots=True)
 class Mode:
-    """Retain one source-derived stationary carrier and its full analytic PCM."""
+    """Retain one source-derived phase owner and its full analytic PCM."""
 
     frequency_hz: float
     birth: int
     analytic_pcm: ComplexPcm
+    phase_law: LinearSourcePhase | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -63,6 +66,7 @@ def _validate_mode_policy(
     current_weight: bool,
     am_family: bool,
     modulated_basis: bool,
+    linear_chirplet: bool = False,
 ) -> None:
     if affine_endpoint and not certified_causal:
         message = "Affine endpoints require certified source-mode preparation"
@@ -79,6 +83,9 @@ def _validate_mode_policy(
     if modulated_basis and not am_family:
         message = "A fixed modulated basis requires certified positive-AM families"
         raise ValueError(message)
+    if linear_chirplet and not modulated_basis:
+        message = "Linear chirplets require the complete certified v7 preparation policy"
+        raise ValueError(message)
 
 
 def _fit_source_modes(
@@ -90,7 +97,8 @@ def _fit_source_modes(
     current_weight: bool,
     am_family: bool,
     modulated_basis: bool,
-) -> tuple[CarrierEstimate, Pcm, dict]:
+    linear_chirplet: bool = False,
+) -> tuple[CarrierEstimate, Pcm, dict, tuple[LinearSourcePhase, ...] | None]:
     _validate_mode_policy(
         certified_causal=certified_causal,
         affine_endpoint=affine_endpoint,
@@ -98,6 +106,7 @@ def _fit_source_modes(
         current_weight=current_weight,
         am_family=am_family,
         modulated_basis=modulated_basis,
+        linear_chirplet=linear_chirplet,
     )
     estimate = estimate_carriers(
         pcm,
@@ -105,8 +114,19 @@ def _fit_source_modes(
     )
     if am_family:
         estimate = group_am_carriers(pcm, estimate)
+    phase_laws = None
+    if linear_chirplet and not estimate.frequencies_hz:
+        chirplet = estimate_chirplet(pcm)
+        estimate.report["linear_chirplet"] = chirplet.report
+        if chirplet.phase is not None:
+            phase_laws = (chirplet.phase,)
+            estimate = CarrierEstimate(
+                (chirplet.phase.frequency_hz,), chirplet.stereo_coefficients, estimate.report
+            )
     modulators = modulators_from_estimate(estimate) if modulated_basis else None
-    if modulators is not None:
+    if phase_laws is not None:
+        fit = partial(fit_phase_current_weight_envelopes, phase_laws=phase_laws)
+    elif modulators is not None:
         fit = partial(fit_modulated_current_weight_envelopes, modulators=modulators)
     elif current_weight:
         fit = fit_current_weight_causal_envelopes
@@ -119,7 +139,7 @@ def _fit_source_modes(
     envelopes, report = fit(
         pcm, np.asarray(estimate.frequencies_hz, dtype=np.float64), estimate.stereo_coefficients
     )
-    return estimate, envelopes, report
+    return estimate, envelopes, report, phase_laws
 
 
 def _model_version(
@@ -130,9 +150,14 @@ def _model_version(
     current_weight: bool,
     am_family: bool,
     modulated_basis: bool,
+    linear_chirplet: bool = False,
 ) -> str:
-    if modulated_basis:
-        return "certified-fixed-positive-am-basis-v7"
+    if linear_chirplet or modulated_basis:
+        return (
+            "certified-source-linear-chirplet-v8"
+            if linear_chirplet
+            else "certified-fixed-positive-am-basis-v7"
+        )
     if am_family:
         return "certified-positive-am-families-v6"
     if current_weight:
@@ -144,6 +169,23 @@ def _model_version(
     return "certified-causal-envelopes-v2" if certified_causal else "v1"
 
 
+def _build_mode(
+    frequency: float,
+    birth: int,
+    envelope: Pcm,
+    coefficients: ComplexPcm,
+    clock: Pcm,
+    phase_law: LinearSourcePhase | None,
+) -> Mode:
+    if phase_law is None:
+        carrier = envelope * np.exp(2.0j * np.pi * frequency / FS * clock)
+    else:
+        carrier = envelope * np.exp(2.0j * np.pi * phase_law.cycles(clock))
+    analytic = carrier[:, None] * coefficients
+    analytic.setflags(write=False)
+    return Mode(float(frequency), birth, analytic, phase_law)
+
+
 def prepare(
     source: Pcm,
     *,
@@ -153,6 +195,7 @@ def prepare(
     current_weight: bool = False,
     am_family: bool = False,
     modulated_basis: bool = False,
+    linear_chirplet: bool = False,
 ) -> Prepared:
     """Decompose all original stereo samples without access to output intent."""
     if np.iscomplexobj(source):
@@ -162,7 +205,7 @@ def prepare(
     if pcm.ndim != 2 or pcm.shape[1] != 2 or not np.all(np.isfinite(pcm)):
         message = "Source must be finite stereo PCM"
         raise ValueError(message)
-    estimate, envelopes, envelope_report = _fit_source_modes(
+    estimate, envelopes, envelope_report, phase_laws = _fit_source_modes(
         pcm,
         certified_causal=certified_causal,
         affine_endpoint=affine_endpoint,
@@ -170,17 +213,23 @@ def prepare(
         current_weight=current_weight,
         am_family=am_family,
         modulated_basis=modulated_basis,
+        linear_chirplet=linear_chirplet,
     )
     activity = np.flatnonzero(np.any(pcm != 0.0, axis=1))
     birth = int(activity[0]) if len(activity) else 0
     modes, reconstruction = [], np.zeros_like(pcm)
     clock = np.arange(len(pcm), dtype=np.float64)
     for index, frequency in enumerate(estimate.frequencies_hz):
-        carrier = envelopes[:, index] * np.exp(2.0j * np.pi * frequency / FS * clock)
-        analytic = carrier[:, None] * estimate.stereo_coefficients[index]
-        reconstruction += analytic.real
-        analytic.setflags(write=False)
-        modes.append(Mode(float(frequency), birth, analytic))
+        mode = _build_mode(
+            frequency,
+            birth,
+            envelopes[:, index],
+            estimate.stereo_coefficients[index],
+            clock,
+            phase_laws[index] if phase_laws is not None else None,
+        )
+        reconstruction += mode.analytic_pcm.real
+        modes.append(mode)
     residual = pcm - reconstruction
     report = {
         "model_version": _model_version(
@@ -190,6 +239,7 @@ def prepare(
             current_weight=current_weight,
             am_family=am_family,
             modulated_basis=modulated_basis,
+            linear_chirplet=linear_chirplet,
         ),
         "mode_count": len(modes),
         "frequencies_hz": list(estimate.frequencies_hz),
@@ -204,6 +254,15 @@ def prepare(
         "fitted_wet_parameters_or_scorer_metadata": False,
         "all_residual_samples_will_be_transformed": True,
     }
+    if phase_laws is not None:
+        report["source_phase_laws"] = [
+            {
+                "epoch_source_frame": law.epoch_frame,
+                "epoch_frequency_hz": law.frequency_hz,
+                "slope_hz_per_second": law.slope_hz_per_second,
+            }
+            for law in phase_laws
+        ]
     pcm.setflags(write=False)
     residual.setflags(write=False)
     return Prepared(pcm, tuple(modes), residual, report)
@@ -216,6 +275,32 @@ def sample_complex(values: ComplexPcm, positions: Pcm) -> ComplexPcm:
     return np.column_stack([
         np.interp(positions, knots, padded[:, channel], left=0.0, right=0.0) for channel in range(2)
     ])
+
+
+def _chirplet_output_bounds(prepared: Prepared, shift: float) -> list[dict]:
+    """Validate phase over every fitted sample and its zero-extended interpolation support."""
+    bounds = []
+    for mode in prepared.modes:
+        if mode.phase_law is None:
+            continue
+        active = np.flatnonzero(np.any(mode.analytic_pcm != 0.0, axis=1))
+        if not len(active):
+            continue
+        support = np.array([float(active[0]) - 1.0, float(active[-1]) + 1.0])
+        frequencies = mode.phase_law.frequency_at(support)
+        lower, upper = float(np.min(frequencies)), float(np.max(frequencies))
+        if lower <= 0.0 or upper >= FS / 2 or upper * shift >= FS / 2:
+            message = (
+                f"Known chirplet frequency interval [{lower}, {upper}] Hz over complete "
+                f"fitted/interpolation support at pitch ratio {shift} crosses DC or Nyquist"
+            )
+            raise UnsupportedPitchDomainError(message)
+        bounds.append({
+            "source_interpolation_support_inclusive": support.tolist(),
+            "source_frequency_interval_hz": [lower, upper],
+            "pitched_frequency_interval_hz": [lower * shift, upper * shift],
+        })
+    return bounds
 
 
 def render_prepared(prepared: Prepared, rate: float, semitones: int) -> tuple[Pcm, dict]:
@@ -252,15 +337,26 @@ def render_prepared(prepared: Prepared, rate: float, semitones: int) -> tuple[Pc
     if am_sideband_crossings:
         message = f"Known source-clock AM sidebands {am_sideband_crossings} reach or exceed Nyquist"
         raise UnsupportedPitchDomainError(message)
+    chirplet_bounds = _chirplet_output_bounds(prepared, shift)
     residual, details = render_residual(prepared.residual, rate, semitones)
     origin = details["capture_origin"]
     positions = rate * (origin + np.arange(len(residual), dtype=np.float64))
     output = residual.copy()
     mode_energy = 0.0
     for mode in prepared.modes:
-        correction = np.exp(
-            2.0j * np.pi * mode.frequency_hz / FS * (shift / rate - 1.0) * (positions - mode.birth)
-        )
+        if mode.phase_law is None:
+            correction = np.exp(
+                2.0j
+                * np.pi
+                * mode.frequency_hz
+                / FS
+                * (shift / rate - 1.0)
+                * (positions - mode.birth)
+            )
+        else:
+            correction = np.exp(
+                1.0j * (shift / rate - 1.0) * mode.phase_law.phase_difference(positions, mode.birth)
+            )
         contribution = np.real(sample_complex(mode.analytic_pcm, positions) * correction[:, None])
         mode_energy += float(np.sum(contribution * contribution))
         output += contribution
@@ -295,6 +391,10 @@ def render_prepared(prepared: Prepared, rate: float, semitones: int) -> tuple[Pc
         report["am_group_count"] = grouping["group_count"]
         report["original_carrier_nyquist_refusals_preserved"] = True
         report["known_source_clock_am_sideband_nyquist_guard"] = True
+    if any(mode.phase_law is not None for mode in prepared.modes):
+        report["source_chirplet_phase_correction"] = "(h/r-1)*(theta(s)-theta(b))"
+        report["chirplet_complete_support_frequency_bounds"] = chirplet_bounds
+        report["chirplet_fractional_interpolation_equals_analytic_phase"] = False
     return output, report
 
 

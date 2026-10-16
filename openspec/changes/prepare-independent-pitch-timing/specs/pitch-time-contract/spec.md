@@ -438,6 +438,45 @@ required. Algebraic controls SHALL NOT substitute for measured acoustic quality.
 - **THEN** complete supported prediction hops SHALL reproduce the common amplitude times its positive source modulator
 - **AND** independent source-cue and future-cue controls SHALL retain exact complements and distinguish common-amplitude from physical-envelope sensitivity
 
+### Requirement: Source Certified Linear Chirplets Retain One Integrated Phase Law
+The offline diagnostic SHALL provide a separately selected source-only linear-chirplet
+experiment when the existing stationary estimator admits no carrier. Blind source
+zero crossings MAY initialize frequency and slope, but original complete stereo
+windows SHALL certify the model by bounded projected refinement. Admission SHALL
+retain the existing minimum three clean complete 8192-frame windows, 4096-frame
+scan hop, relative source RMS limit of 1e-4, design condition limit of 1e6 and
+normalized complex stereo coefficient distance limit of 1e-3. Support windows
+SHALL agree on one affine instantaneous-frequency law and one fixed stereo phase
+gauge at a declared source epoch. Independent window phase resets, output intent,
+fixture identifiers and scorer targets SHALL NOT determine that law. Ambiguous,
+insufficient or invalid source models SHALL remain in the complete residual.
+
+The same current-weight nonnegative affine envelope solver SHALL evaluate the
+integrated source phase in its features. The source phase SHALL integrate the
+affine frequency once. For constant source rate r and pitch ratio h, each admitted
+mode SHALL apply exp(i*(h/r-1)*(theta(s)-theta(b))) at source position s and fixed
+birth b. Independent controls SHALL verify the resulting instantaneous frequency
+h*f(r*n), including the slope h*r*alpha. Fractional interpolation error SHALL be
+reported separately from continuous phase algebra. The h=r combined-source identity,
+exact fully transformed complement and all finite decay tails SHALL be retained.
+
+Known instantaneous frequencies SHALL be positive and below Nyquist over the
+original active source support. Rendering SHALL additionally refuse output-band
+crossings over the entire nonzero fitted mode and its interpolation support;
+neither cropping nor a new end mask SHALL hide a crossing. Bounded phase workspace
+SHALL be accounted for before fitting allocation. Prior variants and every existing
+unsupported-domain refusal SHALL remain available. Independent unseen ascending
+and descending chirplets and negative noise, impulse, nonlinear-FM, phase-jump,
+close-pair and unrelated-stereo controls SHALL precede the unchanged full quality
+matrix. Source algebra SHALL NOT certify general mixtures, variable-rate maps,
+native realtime execution or any remaining product acceptance gate.
+
+#### Scenario: A source glide shares one phase law across clean stereo windows
+- **GIVEN** original PCM supports one linear instantaneous-frequency law and coherent stereo phase in at least three clean complete windows
+- **WHEN** the separately selected diagnostic prepares and transforms that source
+- **THEN** its envelope features and output phase correction SHALL use the same integrated source phase law
+- **AND** complete residuals, finite tails, prior variants and all original full-response criteria SHALL remain observable
+
 ### Requirement: Combined Pitch And Rate Bounds Are Never Silently Clipped
 The system SHALL validate and report the supported combined pitch/rate domain before accepting
 diagnostic transposition, retaining separate requested, pending, effective and rejected state.
