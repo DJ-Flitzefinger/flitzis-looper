@@ -194,7 +194,16 @@ mod tests {
     }
 
     fn capture(runtime: &InputRuntime, key: &str, base: i32, extra: i32) -> CapturedPitchAction {
-        let event = event(runtime);
+        capture_event(runtime, event(runtime), key, base, extra)
+    }
+
+    fn capture_event(
+        runtime: &InputRuntime,
+        event: InputRuntimeEvent,
+        key: &str,
+        base: i32,
+        extra: i32,
+    ) -> CapturedPitchAction {
         assert_eq!(event.action_key.as_deref(), Some(key));
         assert!(event.direct && !event.dispatched);
         assert_eq!(event.pitch_rejection, None);
@@ -204,6 +213,10 @@ mod tests {
             PitchIntent::new(base, extra).unwrap()
         );
         assert_eq!(action.received_timestamp(), event.received_at_ns);
+        assert_eq!(
+            Some(action.content_key()),
+            runtime.ownership.slot_snapshot(0).unwrap().content_key()
+        );
         assert_eq!(action.control_guard(None).unwrap().id, 0);
         assert_eq!(action.loop_region(), (0.25, Some(1.0)));
         action
@@ -217,6 +230,34 @@ mod tests {
         assert!(runtime.inject_midi_message(&[0x90, 62, 100]));
         capture(runtime, BARRIER_KEY, 0, extra);
         assert!(runtime.poll_event().is_none());
+    }
+
+    fn select_nrpn(runtime: &InputRuntime, channel: u8, parameter: u16) {
+        let status = 0xB0 | (channel - 1);
+        assert!(!runtime.inject_midi_message(&[status, 99, (parameter / 128) as u8]));
+        assert!(!runtime.inject_midi_message(&[status, 98, (parameter % 128) as u8]));
+    }
+
+    fn data_entry(runtime: &InputRuntime, channel: u8, value: u8) {
+        assert!(runtime.inject_midi_message(&[0xB0 | (channel - 1), 6, value]));
+    }
+
+    fn optional_low_byte(runtime: &InputRuntime, channel: u8, value: u8) {
+        assert!(!runtime.inject_midi_message(&[0xB0 | (channel - 1), 38, value]));
+    }
+
+    fn capture_input(
+        runtime: &InputRuntime,
+        binding: &str,
+        key: &str,
+        value: u8,
+        pitch: (i32, i32),
+    ) -> CapturedPitchAction {
+        let event = event(runtime);
+        assert_eq!(event.binding_key, binding);
+        assert_eq!(event.value, value);
+        assert!(event.received_at_ns > 0);
+        capture_event(runtime, event, key, pitch.0, pitch.1)
     }
 
     #[test]
@@ -410,6 +451,192 @@ mod tests {
         assert!(runtime.inject_midi_message(&[0xB0, 97, 0]));
         capture(&runtime, key, 0, 1);
         capture(&runtime, key, 0, 0);
+    }
+
+    #[test]
+    fn routed_nrpn_data_entry_keeps_parameter_channel_and_button_owners_independent() {
+        let key = "pitch.extra.step:1:set_retrigger";
+        let runtime = runtime("midi:nrpn:1:130", key);
+        let mut saved = mappings("midi:nrpn:1:130", key);
+        saved.extend([
+            ("midi:nrpn:1:131".into(), key.into()),
+            ("midi:nrpn:2:130".into(), key.into()),
+        ]);
+        runtime.replace_mappings(saved.clone());
+
+        let mut previous = None;
+        for (channel, parameter, binding, extra) in [
+            (1, 130, "midi:nrpn:1:130", 1),
+            (1, 131, "midi:nrpn:1:131", 2),
+            (2, 130, "midi:nrpn:2:130", 3),
+        ] {
+            select_nrpn(&runtime, channel, parameter);
+            data_entry(&runtime, channel, 127);
+            optional_low_byte(&runtime, channel, 0);
+            data_entry(&runtime, channel, 127);
+            let action = capture_input(&runtime, binding, key, 127, (0, extra));
+            if let Some(sequence) = previous {
+                assert!(sequence < action.sequence());
+            }
+            previous = Some(action.sequence());
+            assert_eq!(action.variant(), PitchActionVariant::SetRetrigger);
+        }
+        barrier(&runtime, 3);
+
+        // An unchanged saved mapping keeps its own held state. Releasing 131
+        // must not release either 130 owner, including the other channel.
+        runtime.replace_mappings(saved.clone());
+        select_nrpn(&runtime, 1, 131);
+        data_entry(&runtime, 1, 0);
+        optional_low_byte(&runtime, 1, 127);
+        select_nrpn(&runtime, 1, 130);
+        data_entry(&runtime, 1, 127);
+        data_entry(&runtime, 2, 127);
+        barrier(&runtime, 3);
+        select_nrpn(&runtime, 1, 131);
+        data_entry(&runtime, 1, 127);
+        capture_input(&runtime, "midi:nrpn:1:131", key, 127, (0, 4));
+        barrier(&runtime, 4);
+
+        runtime.replace_mappings(mappings("midi:nrpn:1:130", key));
+        runtime.replace_mappings(saved);
+        data_entry(&runtime, 1, 127);
+        capture_input(&runtime, "midi:nrpn:1:131", key, 127, (0, 5));
+        barrier(&runtime, 5);
+    }
+
+    #[test]
+    fn routed_nrpn_data_entry_piano_and_original_keep_variants_and_only_high_edges() {
+        for (variant, expected_variant) in [
+            ("set", PitchActionVariant::Set),
+            ("set_retrigger", PitchActionVariant::SetRetrigger),
+        ] {
+            for target in ["pitch.note:12", "pitch.original"] {
+                let key = format!("{target}:{variant}");
+                let runtime = runtime("midi:nrpn:1:130", &key);
+                {
+                    let mut state = runtime.runtime_state.lock().unwrap();
+                    state.pads[0].pitch.intent = PitchIntent::new(12, 1).unwrap();
+                    state.pads[0].pitch.correction_root = Some(7);
+                    state.pads[0].pitch.correction_mode = Some(PitchKeyMode::Minor);
+                }
+                select_nrpn(&runtime, 1, 130);
+                data_entry(&runtime, 1, 127);
+                optional_low_byte(&runtime, 1, 0);
+                data_entry(&runtime, 1, 127);
+                data_entry(&runtime, 1, 0);
+                optional_low_byte(&runtime, 1, 127);
+                let original = target == "pitch.original";
+                let pitch = if original { (0, 0) } else { (12, 1) };
+                let first = capture_input(&runtime, "midi:nrpn:1:130", &key, 127, pitch);
+                assert_eq!(first.variant(), expected_variant);
+                assert_eq!(first.resets_key_correction(), original);
+                barrier(&runtime, pitch.1);
+
+                // Neither the optional low byte nor the Note barrier clears
+                // selection or substitutes a second high edge.
+                data_entry(&runtime, 1, 127);
+                let second = capture_input(&runtime, "midi:nrpn:1:130", &key, 127, pitch);
+                assert!(first.sequence() < second.sequence());
+                assert_eq!(first.content_key(), second.content_key());
+                assert_eq!(second.variant(), expected_variant);
+                assert_eq!(second.resets_key_correction(), original);
+                barrier(&runtime, pitch.1);
+            }
+        }
+    }
+
+    #[test]
+    fn routed_nrpn_data_entry_uses_all_four_existing_modes_and_learned_step_signs() {
+        type StepCase = (&'static str, &'static [u8], &'static [(u8, i32)]);
+        let cases: [StepCase; 4] = [
+            ("step", &[127, 127, 0, 0, 127], &[(127, 1), (127, 2)]),
+            (
+                "absolute",
+                &[127, 127, 0, 127, 126, 126, 0],
+                &[(0, 1), (127, 0), (126, -1), (0, 0)],
+            ),
+            ("twos_complement", &[1, 127, 0, 64], &[(1, 1), (127, 0)]),
+            ("offset_binary", &[65, 63, 0, 64], &[(65, 1), (63, 0)]),
+        ];
+        for (mode, values, expected) in cases {
+            for step in [-1, 1] {
+                for (variant, expected_variant) in [
+                    ("set", PitchActionVariant::Set),
+                    ("set_retrigger", PitchActionVariant::SetRetrigger),
+                ] {
+                    let key = if mode == "step" {
+                        format!("pitch.extra.step:{step}:{variant}")
+                    } else {
+                        format!("pitch.extra.encoder:{step}:{mode}:{variant}")
+                    };
+                    let runtime = runtime("midi:nrpn:1:130", &key);
+                    select_nrpn(&runtime, 1, 130);
+                    for &value in values {
+                        data_entry(&runtime, 1, value);
+                        optional_low_byte(&runtime, 1, 127 - value);
+                    }
+                    let mut previous = None;
+                    for &(value, direction) in expected {
+                        let action = capture_input(
+                            &runtime,
+                            "midi:nrpn:1:130",
+                            &key,
+                            value,
+                            (0, direction * step),
+                        );
+                        if let Some(sequence) = previous {
+                            assert!(sequence < action.sequence());
+                        }
+                        previous = Some(action.sequence());
+                        assert_eq!(action.variant(), expected_variant);
+                    }
+                    barrier(&runtime, expected.last().unwrap().1 * step);
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn routed_nrpn_data_entry_preserves_opposite_learned_octave_without_folding() {
+        for step in [-12, 12] {
+            let key = format!("pitch.note.encoder:{step}:offset_binary:set");
+            let runtime = runtime("midi:nrpn:1:131", &key);
+            select_nrpn(&runtime, 1, 131);
+            for value in [65, 63, 0, 64] {
+                data_entry(&runtime, 1, value);
+                optional_low_byte(&runtime, 1, 127);
+            }
+            let first = capture_input(&runtime, "midi:nrpn:1:131", &key, 65, (step, 0));
+            let second = capture_input(&runtime, "midi:nrpn:1:131", &key, 63, (0, 0));
+            assert!(first.sequence() < second.sequence());
+            assert_eq!(first.variant(), PitchActionVariant::Set);
+            assert_eq!(second.variant(), PitchActionVariant::Set);
+            barrier(&runtime, 0);
+        }
+    }
+
+    #[test]
+    fn routed_data_entry_without_own_selection_keeps_plain_cc_mapping_identity() {
+        let key = "pitch.extra.step:1:set";
+        let runtime = runtime("midi:cc:1:6", key);
+        let mut saved = mappings("midi:cc:1:6", key);
+        saved.extend([
+            ("midi:cc:1:38".into(), key.into()),
+            ("midi:cc:2:6".into(), key.into()),
+            ("midi:cc:2:38".into(), key.into()),
+        ]);
+        runtime.replace_mappings(saved);
+        data_entry(&runtime, 1, 127);
+        capture_input(&runtime, "midi:cc:1:6", key, 127, (0, 1));
+        assert!(runtime.inject_midi_message(&[0xB0, 38, 127]));
+        capture_input(&runtime, "midi:cc:1:38", key, 127, (0, 2));
+        select_nrpn(&runtime, 1, 130);
+        data_entry(&runtime, 2, 127);
+        capture_input(&runtime, "midi:cc:2:6", key, 127, (0, 3));
+        assert!(runtime.inject_midi_message(&[0xB1, 38, 127]));
+        capture_input(&runtime, "midi:cc:2:38", key, 127, (0, 4));
+        barrier(&runtime, 4);
     }
 
     #[test]

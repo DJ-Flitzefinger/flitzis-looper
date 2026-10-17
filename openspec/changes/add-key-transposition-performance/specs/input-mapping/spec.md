@@ -1,5 +1,34 @@
 ## ADDED Requirements
 
+### Requirement: NRPN Data Entry retains selected parameter identity
+The system SHALL extend the earlier Increment/Decrement-only NRPN scope with
+seven-bit Data Entry values. Under the existing fresh per-channel NRPN parameter
+selection, CC6 SHALL emit one event for that complete fourteen-bit parameter
+number with the unchanged seven-bit MSB value and original timestamp. Selection
+SHALL remain available for later Data Entry and existing Increment/Decrement.
+An optional CC38 under that same fresh selection SHALL be consumed without a
+second Learn input, button edge, encoder movement or pitch attack. This bounded
+path SHALL NOT assemble or claim fourteen-bit Data Entry value resolution.
+
+Absent, incomplete, expired or RPN-cleared NRPN selection SHALL retain plain CC6
+and CC38 behavior. Existing per-channel selection, freshness timeout, unrelated-CC
+clearing and value-keyed standalone Inc/Dec rules SHALL remain intact. Existing
+Inc/Dec normalized values 65/63 and saved action encodings SHALL NOT be changed;
+the existing offset-binary encoding remains the matching Inc/Dec step format.
+Data Entry values SHALL use the explicitly learned button or encoder encoding
+through the original Native capture, controller, worker and sole scheduler.
+
+#### Scenario: Independent NRPN parameters do not collapse into CC6
+- **WHEN** fresh NRPN parameters 130 and 131 send Data Entry high/release values on their selected channels, with optional low bytes
+- **THEN** Learn and saved mappings SHALL distinguish their full parameter identities
+- **AND** fixed piano and Original Key buttons SHALL capture only their own fresh high edges, without an extra low-byte or release attack
+- **AND** saved/reloaded encoder bindings SHALL retain their explicit variants and original selected content through productive effect and PCM
+
+#### Scenario: Data Entry selection guards preserve existing CC controls
+- **WHEN** Data Entry arrives without a complete fresh NRPN selection, on another channel, after expiry, after RPN selection or after an unrelated CC
+- **THEN** it SHALL retain its ordinary CC binding instead of borrowing a stale or foreign parameter
+- **AND** established NRPN and value-keyed CC Increment/Decrement mappings SHALL retain their previous binding identities and values
+
 ### Requirement: Pitch work owns bounded custody before allocation
 Each audio engine SHALL reserve one of 64 non-cloneable pitch-work claims before
 allocating its work envelope or callback history snapshot. The existing control

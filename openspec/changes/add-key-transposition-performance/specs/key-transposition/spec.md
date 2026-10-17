@@ -58,6 +58,13 @@ The new octave-bearing piano-note and Original Key actions SHALL likewise use on
 
 Encoder resolution SHALL happen at the original Native input capture, retaining original content, timestamp and variant through the existing scheduler. Absolute encoding SHALL initialize on its first value, ignore equal values and resolve later modular 7-bit movement by direction. Two's complement SHALL use 1..63 as positive and 65..127 as negative; offset binary SHALL use 65..127 as positive and 1..63 as negative. Zero and 64 SHALL be neutral for both relative encodings. Each signed message SHALL apply one chosen semitone or octave step, with negative learned steps inverting direction. Capture state SHALL be scoped to the current learned mapping owner and retained off realtime.
 
+NRPN Data Entry SHALL support these same seven-bit button/encoder values under
+the selected full parameter identity, consuming the optional low byte without
+another attack. This SHALL remain distinct from fourteen-bit value resolution.
+Existing NRPN Increment/Decrement SHALL retain Looper's normalized values 65/63
+and the matching offset-binary step encoding, without rewriting saved mappings
+or guessing another encoding.
+
 #### Scenario: Encoder reversal and button release preserve exact step count
 - **WHEN** a two's complement encoder learned to offset +1 sends 1 and then 127
 - **THEN** the offset SHALL advance one semitone and return one semitone, retaining separate original capture identities

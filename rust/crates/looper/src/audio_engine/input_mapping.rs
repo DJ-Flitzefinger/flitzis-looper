@@ -18,6 +18,8 @@ const MIDI_NRPN_MSB_CC: u8 = 99;
 const MIDI_NRPN_LSB_CC: u8 = 98;
 const MIDI_RPN_MSB_CC: u8 = 101;
 const MIDI_RPN_LSB_CC: u8 = 100;
+const MIDI_DATA_ENTRY_MSB_CC: u8 = 6;
+const MIDI_DATA_ENTRY_LSB_CC: u8 = 38;
 const MIDI_DATA_INCREMENT_CC: u8 = 96;
 const MIDI_DATA_DECREMENT_CC: u8 = 97;
 const MIDI_RELATIVE_INCREMENT_VALUE: u8 = 65;
@@ -1181,6 +1183,24 @@ impl MidiNormalizer {
                     self.nrpn_parameters[channel_index].clear();
                     return None;
                 }
+                if (controller == MIDI_DATA_ENTRY_MSB_CC || controller == MIDI_DATA_ENTRY_LSB_CC)
+                    && let Some(parameter) =
+                        self.nrpn_parameters[channel_index].active_number(received_at_ns)
+                {
+                    self.nrpn_parameters[channel_index].touch(received_at_ns);
+                    // Coarse seven-bit values share the existing parameter identity.
+                    // The optional low byte is not another control/attack, and this
+                    // path neither waits for it nor assembles a fourteen-bit value.
+                    return (controller == MIDI_DATA_ENTRY_MSB_CC).then_some(NormalizedMidiEvent {
+                        binding: MidiBinding {
+                            kind: MidiBindingKind::Nrpn,
+                            channel,
+                            number: parameter,
+                        },
+                        value: data_value,
+                        received_at_ns,
+                    });
+                }
                 if controller == MIDI_DATA_INCREMENT_CC || controller == MIDI_DATA_DECREMENT_CC {
                     let value = if controller == MIDI_DATA_INCREMENT_CC {
                         MIDI_RELATIVE_INCREMENT_VALUE
@@ -1332,6 +1352,101 @@ mod tests {
         );
         assert_eq!(event.binding.key(), "midi:cc:4:7");
         assert_eq!(event.value, 99);
+    }
+
+    #[test]
+    fn nrpn_data_entry_keeps_parameter_and_consumes_optional_low_byte() {
+        let mut normalizer = MidiNormalizer::default();
+        assert!(normalizer.normalize(&[0xb0, 99, 1], 10).is_none());
+        assert!(normalizer.normalize(&[0xb0, 98, 2], 11).is_none());
+        let high = normalizer.normalize(&[0xb0, 6, 127], 12).unwrap();
+        assert_eq!(high.binding.key(), "midi:nrpn:1:130");
+        assert_eq!(high.value, 127);
+        assert_eq!(high.received_at_ns, 12);
+        assert!(normalizer.normalize(&[0xb0, 38, 93], 13).is_none());
+        let release = normalizer.normalize(&[0xb0, 6, 0], 14).unwrap();
+        assert_eq!(release.binding, high.binding);
+        assert_eq!(release.value, 0);
+        assert_eq!(release.received_at_ns, 14);
+        let increment = normalizer.normalize(&[0xb0, 96, 0], 15).unwrap();
+        assert_eq!(increment.binding, high.binding);
+        assert_eq!(increment.value, 65);
+    }
+
+    #[test]
+    fn nrpn_data_entry_guards_leave_unselected_and_expired_values_as_plain_cc() {
+        for (setup, at) in [
+            (vec![], 20),
+            (vec![[99, 1]], 20),
+            (vec![[98, 2]], 20),
+            (vec![[99, 1], [98, 2]], 11 + MIDI_NRPN_ACTIVE_TTL_NS + 1),
+            (vec![[99, 1], [98, 2], [101, 0]], 20),
+            (vec![[99, 1], [98, 2], [100, 0]], 20),
+            (vec![[99, 1], [98, 2], [7, 100]], 20),
+        ] {
+            let mut selected = MidiNormalizer::default();
+            for (index, [number, value]) in setup.into_iter().enumerate() {
+                let _ = selected.normalize(&[0xb0, number, value], 10 + index as u64);
+            }
+            for controller in [6, 38] {
+                let event = selected
+                    .clone()
+                    .normalize(&[0xb0, controller, 91], at)
+                    .unwrap();
+                assert_eq!(event.binding.key(), format!("midi:cc:1:{controller}"));
+                assert_eq!(event.value, 91);
+                assert_eq!(event.received_at_ns, at);
+            }
+        }
+    }
+
+    #[test]
+    fn nrpn_data_entry_selection_is_channel_local_and_low_bytes_keep_its_freshness() {
+        let mut normalizer = MidiNormalizer::default();
+        for (status, msb, lsb) in [(0xb0, 1, 2), (0xb1, 2, 3)] {
+            assert!(normalizer.normalize(&[status, 99, msb], 10).is_none());
+            assert!(normalizer.normalize(&[status, 98, lsb], 11).is_none());
+        }
+        let foreign = normalizer.normalize(&[0xb2, 6, 41], 12).unwrap();
+        assert_eq!(foreign.binding.key(), "midi:cc:3:6");
+        assert_eq!(
+            normalizer
+                .normalize(&[0xb0, 6, 42], 13)
+                .unwrap()
+                .binding
+                .key(),
+            "midi:nrpn:1:130"
+        );
+        assert_eq!(
+            normalizer
+                .normalize(&[0xb1, 6, 43], 14)
+                .unwrap()
+                .binding
+                .key(),
+            "midi:nrpn:2:259"
+        );
+        let low_at = 13 + MIDI_NRPN_ACTIVE_TTL_NS - 1;
+        assert!(normalizer.normalize(&[0xb0, 38, 127], low_at).is_none());
+        let next = normalizer.normalize(&[0xb0, 6, 44], low_at + 2).unwrap();
+        assert_eq!(next.binding.key(), "midi:nrpn:1:130");
+        assert_eq!(next.value, 44);
+        let _ = normalizer.normalize(&[0xb1, 7, 100], low_at + 3);
+        assert_eq!(
+            normalizer
+                .normalize(&[0xb1, 6, 45], low_at + 4)
+                .unwrap()
+                .binding
+                .key(),
+            "midi:cc:2:6"
+        );
+        assert_eq!(
+            normalizer
+                .normalize(&[0xb0, 6, 46], low_at + 5)
+                .unwrap()
+                .binding
+                .key(),
+            "midi:nrpn:1:130"
+        );
     }
 
     #[test]

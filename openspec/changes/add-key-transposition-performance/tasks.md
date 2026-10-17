@@ -30,6 +30,12 @@ not replace the full milestone or close any parent, DSP-quality or Human gate.
   capture, Controller, preparation, scheduler and PCM with fixed SET/RETRIGGER
   variants. Retain full encoder/actual-r(n)/acoustic/resource/Human parent gates.
 
+- [x] Repair NRPN seven-bit Data Entry parameter identity for actual Learn,
+  saved/reloaded encoders, fixed piano and Original Key buttons. Consume optional
+  low bytes without duplicate input; retain channel/freshness/RPN/CC and legacy
+  Increment/Decrement behavior. Prove productive original ownership and PCM;
+  no fourteen-bit value, physical-device or full parent acceptance claim.
+
 ## Latest Human execution priority — 2026-10-14
 
 ### Native occupied Copy and original pitch ownership — 2026-10-17

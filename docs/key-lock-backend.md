@@ -3136,6 +3136,31 @@ repeated NoteOn attacks remain independent. Use encoded step controls for an
 encoder, and fixed piano-note controls for buttons or MIDI notes. Legacy
 base/extra/base-reset CC bindings keep their previous behavior.
 
+NRPN Data Entry retains the selected full parameter number instead of appearing
+as generic CC6. Its seven-bit MSB carries the button or explicit encoder value;
+the optional low byte produces no second input or attack. The same parameter may
+send further values without repeating setup while its existing selection is fresh.
+No complete fourteen-bit value is assembled. Without a complete fresh selection,
+CC6 and CC38 remain ordinary CC inputs; channel, timeout, RPN and unrelated-CC
+selection guards still apply. Existing NRPN Increment/Decrement retains Looper's
+normalized 65/63 convention: choose Relative 65/63 for that input. This convention
+does not mean the hardware sends 65/63 as the command's wire data byte.
+
+The [MIDI Association Control Change table](https://midi.org/midi-1-0-control-change-messages)
+identifies Data Entry MSB/LSB as CC6/38 and parameter selection as CC99/98. Its
+[message overview](https://midi.org/about-midi-part-3midi-messages) describes selecting
+NRPN before Data Entry or Increment/Decrement. Consuming the low byte without
+assembling a high-resolution value is this application's bounded coarse-value
+contract, not a claim of complete NRPN value support.
+
+Device-free tests reproduce the old parameter130→CC6 failure, then exercise
+freshness/channel/RPN/plain-CC guards and real raw NRPN Learn/save/reload through
+the same production Controller, Native preparation, scheduler and PCM route as
+CC. Parameters130/131 remain independent. All four Data Entry encodings retain
+their saved SET/SET_RETRIGGER variants; fixed piano and Original Key bindings
+ignore held/release/LSB messages and accept fresh repeated presses. These checks
+retain the same unity-rate, virtual-clock and device/quality limits below.
+
 The device-free production-route regression learns eight CC mappings using actual
 Native MIDI events, writes a private mapping JSON and reloads it into a fresh
 controller. Each encoding has a piano SET and an offset SET_RETRIGGER binding.

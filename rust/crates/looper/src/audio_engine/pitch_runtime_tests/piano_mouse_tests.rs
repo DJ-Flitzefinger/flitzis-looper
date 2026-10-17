@@ -195,13 +195,14 @@ class PianoProbe:
         self.input_mapping.toggle_learn()
         assert self.session.input_learn_active
 
-    def finish_encoder_learn(self, number, mode, piano, retrigger):
+    def finish_encoder_learn(self, number, mode, piano, retrigger, nrpn=False):
         deadline = monotonic() + 2
         while self.session.input_learn_pending_binding_key is None:
             self.input_mapping._poll_rust_input_events()
             assert monotonic() < deadline, "actual CC Learn input did not arrive"
             sleep(0.001)
-        assert self.session.input_learn_pending_binding_key == f"midi:cc:1:{number}"
+        kind = "nrpn" if nrpn else "cc"
+        assert self.session.input_learn_pending_binding_key == f"midi:{kind}:1:{number}"
         self.ctx.ui.set_pitch_cc_mode(mode)
         self.ctx.audio.pads.step_pitch(
             0, 1, piano=piano, retrigger=retrigger,
@@ -209,7 +210,21 @@ class PianoProbe:
         assert not self.session.input_learn_active
         assert not self.transport.pitch._owners
 
-    def restore_encoder_learn(self):
+    def finish_nrpn_button_learn(self, number, original):
+        deadline = monotonic() + 2
+        while self.session.input_learn_pending_binding_key is None:
+            self.input_mapping._poll_rust_input_events()
+            assert monotonic() < deadline, "actual NRPN button Learn input did not arrive"
+            sleep(0.001)
+        assert self.session.input_learn_pending_binding_key == f"midi:nrpn:1:{number}"
+        if original:
+            self.ctx.audio.pads.original_key(0, retrigger=True)
+        else:
+            self.ctx.audio.pads.choose_piano_note(0, 12, retrigger=True)
+        assert not self.session.input_learn_active
+        assert not self.transport.pitch._owners
+
+    def restore_encoder_learn(self, expected_count=10):
         for slot in (0, 1):
             # Both GUI preferences deliberately disagree with their stored lane:
             # piano learned SET, offset learned SET_RETRIGGER.
@@ -222,7 +237,7 @@ class PianoProbe:
         self.saved = self.mapping_path.read_bytes()
         # New production controller, real JSON/Pydantic load, no retained mapping object.
         self.input_mapping = InputMappingController(self)
-        assert len(self.input_mapping._midi.mappings) == 10
+        assert len(self.input_mapping._midi.mappings) == expected_count
         assert self.input_mapping._midi == load_midi_mapping_file(self.mapping_path)
         self.input_mapping._sync_rust_mapping_snapshot()
         self.input_mapping._sync_rust_learn_state()
@@ -534,18 +549,17 @@ impl MouseRoute {
 
     fn encoder_message(
         &self,
-        number: u8,
+        number: u16,
         values: &[u8],
         key: Option<&str>,
+        nrpn: bool,
     ) -> Option<Py<CapturedPitchAction>> {
         self.refresh_clock();
         Python::attach(|py| {
             let engine = self.engine.borrow(py);
             let runtime = engine.input_runtime.as_ref().unwrap();
             assert!(runtime.inject_midi_message(&[0x90, 40, 127]));
-            for value in values {
-                assert!(runtime.inject_midi_message(&[0xb0, number, *value]));
-            }
+            inject_control_values(runtime, number, values, nrpn);
             assert!(runtime.inject_midi_message(&[0x90, 41, 127]));
             drop(engine);
             self.probe
@@ -782,8 +796,7 @@ fn real_gui_refreshes_same_frame_correction_and_learn_keeps_pitch_inaudible() {
     route.close();
 }
 
-#[test]
-fn real_learned_restored_encoders_keep_variants_content_and_productive_pcm() {
+fn learned_restored_encoder_cases(nrpn: bool) {
     let _context = MOUSE_CONTEXT
         .lock()
         .unwrap_or_else(|poisoned| poisoned.into_inner());
@@ -801,24 +814,22 @@ fn real_learned_restored_encoders_keep_variants_content_and_productive_pcm() {
         let modes = ["button", "absolute", "twos_complement", "offset_binary"];
         for (index, mode) in modes.iter().enumerate() {
             for retrigger in [false, true] {
-                let number = 70 + (2 * index) as u8 + u8::from(retrigger);
+                let number =
+                    if nrpn { 130 } else { 70 } + (2 * index) as u16 + u16::from(retrigger);
                 Python::attach(|py| {
                     route.probe.call_method0(py, "begin_encoder_learn").unwrap();
-                    assert!(
-                        route
-                            .engine
-                            .borrow(py)
-                            .input_runtime
-                            .as_ref()
-                            .unwrap()
-                            .inject_midi_message(&[0xb0, number, 127])
+                    inject_control_values(
+                        route.engine.borrow(py).input_runtime.as_ref().unwrap(),
+                        number,
+                        &[127],
+                        nrpn,
                     );
                     route
                         .probe
                         .call_method1(
                             py,
                             "finish_encoder_learn",
-                            (number, *mode, !retrigger, retrigger),
+                            (number, *mode, !retrigger, retrigger, nrpn),
                         )
                         .unwrap();
                 });
@@ -847,7 +858,8 @@ fn real_learned_restored_encoders_keep_variants_content_and_productive_pcm() {
                     .unwrap()
             });
             for retrigger in [false, true] {
-                let number = 70 + (2 * index) as u8 + u8::from(retrigger);
+                let number =
+                    if nrpn { 130 } else { 70 } + (2 * index) as u16 + u16::from(retrigger);
                 let axis = if retrigger { "extra" } else { "note" };
                 let variant = if retrigger { "set_retrigger" } else { "set" };
                 let key = if *mode == "button" {
@@ -861,7 +873,7 @@ fn real_learned_restored_encoders_keep_variants_content_and_productive_pcm() {
                     } else {
                         &[0, 64, 64]
                     };
-                    assert!(route.encoder_message(number, neutral, None).is_none());
+                    assert!(route.encoder_message(number, neutral, None, nrpn).is_none());
                 }
                 let inputs: Vec<(Vec<u8>, i32)> = match *mode {
                     "button" => vec![(vec![127, 127, 0], 1), (vec![127, 0], 1)],
@@ -884,7 +896,9 @@ fn real_learned_restored_encoders_keep_variants_content_and_productive_pcm() {
                         }
                     }
                     let frame = route.transport.output_frame();
-                    let captured = route.encoder_message(number, &values, Some(&key)).unwrap();
+                    let captured = route
+                        .encoder_message(number, &values, Some(&key), nrpn)
+                        .unwrap();
                     let sequence = Python::attach(|py| {
                         let action = captured.borrow(py);
                         assert_eq!(
@@ -921,6 +935,113 @@ fn real_learned_restored_encoders_keep_variants_content_and_productive_pcm() {
                     );
                 }
             }
+        }
+        route.close();
+    }
+}
+
+fn inject_control_values(runtime: &InputRuntime, number: u16, values: &[u8], nrpn: bool) {
+    if nrpn {
+        assert!(!runtime.inject_midi_message(&[0xb0, 99, (number >> 7) as u8]));
+        assert!(!runtime.inject_midi_message(&[0xb0, 98, (number & 127) as u8]));
+    }
+    for value in values {
+        let controller = if nrpn {
+            6
+        } else {
+            u8::try_from(number).unwrap()
+        };
+        assert!(runtime.inject_midi_message(&[0xb0, controller, *value]));
+        if nrpn {
+            // Nonzero low bytes must not appear as a second action or clear the
+            // parameter before the next held value, reversal or release.
+            assert!(!runtime.inject_midi_message(&[0xb0, 38, 91]));
+        }
+    }
+}
+
+#[test]
+fn real_learned_restored_encoders_keep_variants_content_and_productive_pcm() {
+    learned_restored_encoder_cases(false);
+}
+
+#[test]
+fn real_nrpn_data_entry_learn_restores_parameter_encodings_and_productive_pcm() {
+    learned_restored_encoder_cases(true);
+}
+
+#[test]
+fn real_nrpn_piano_and_original_buttons_ignore_low_bytes_releases_and_held_values() {
+    let _context = MOUSE_CONTEXT
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    let parent = std::env::var_os("FLITZI_PIANO_MIDI_PARENT")
+        .map(std::path::PathBuf::from)
+        .unwrap_or_else(|| std::env::temp_dir().join("codex"));
+    std::fs::create_dir_all(&parent).unwrap();
+    for lock in [false, true] {
+        let root = tempfile::Builder::new()
+            .prefix("nrpn-buttons-")
+            .tempdir_in(&parent)
+            .unwrap()
+            .keep();
+        let mut route = MouseRoute::new_with_storage(lock, Some(&root.join("midi.json")));
+        for (number, original) in [(130, false), (131, true)] {
+            Python::attach(|py| {
+                route.probe.call_method0(py, "begin_encoder_learn").unwrap();
+                inject_control_values(
+                    route.engine.borrow(py).input_runtime.as_ref().unwrap(),
+                    number,
+                    &[127],
+                    true,
+                );
+                route
+                    .probe
+                    .call_method1(py, "finish_nrpn_button_learn", (number, original))
+                    .unwrap();
+            });
+        }
+        Python::attach(|py| {
+            route
+                .probe
+                .call_method1(py, "restore_encoder_learn", (4,))
+                .unwrap()
+        });
+        let initial = route.capture("click", Some(0));
+        route.apply(&initial, 0, lock);
+        let mut previous = Python::attach(|py| initial.borrow(py).sequence());
+        for (index, (number, key, shift, original)) in [
+            (130, "pitch.note:12:set_retrigger", 12, false),
+            (130, "pitch.note:12:set_retrigger", 12, false),
+            (131, "pitch.original:set_retrigger", 0, true),
+            (131, "pitch.original:set_retrigger", 0, true),
+        ]
+        .into_iter()
+        .enumerate()
+        {
+            let captured = route
+                .encoder_message(number, &[127, 127, 0], Some(key), true)
+                .unwrap();
+            Python::attach(|py| {
+                let action = captured.borrow(py);
+                assert_eq!(action.variant(), PitchActionVariant::SetRetrigger);
+                assert_eq!(action.resets_key_correction(), original);
+                assert!(action.sequence() > previous);
+                previous = action.sequence();
+            });
+            route.apply(&captured, shift, lock);
+            assert_eq!(route.starts(0), index + 2);
+            assert_eq!(route.starts(1), 0);
+            assert_eq!(
+                route.mixer.pad_pitch_intent(1),
+                Some(PitchIntent::default())
+            );
+            Python::attach(|py| {
+                route
+                    .probe
+                    .call_method1(py, "encoder_applied", (captured.clone_ref(py),))
+                    .unwrap()
+            });
         }
         route.close();
     }
