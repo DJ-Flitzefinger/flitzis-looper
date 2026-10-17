@@ -360,6 +360,18 @@ each subscriber's own pending then accepted/current publication. The full existi
   piano model rather than rendered highlight geometry. Constant endpoint and
   old-owner birth chronology do not close general continuous-O, other formats,
   actual-r(n), acoustic, resource, device, listening or Human acceptance.
+- [x] Prove repeated successful GUI/MIDI custody saturation and reuse with
+  productive 1/2/4/6 voices, original T/E/receipts, actual bounded queues,
+  independent mixed PCM/Native/FIFO and explicit refusal/retirement/recovery.
+  Distinguish shared immutable PCM from independent voice state and separate
+  process resource observations from oracle cost and full P6/V0/Human gates.
+  Optimized Release: 16 isolated profiles PASS, each 192 successful pressure
+  actions, three refused originals, three fresh recoveries and zero retired work
+  claims while receipts remain retained. Per-cut independent live membership,
+  Native/FIFO/phase/generation and mixed PCM match (max error zero). Adjacent
+  Piano/Hold 8, custody 4, callback allocation 2, ordinary endpoint 23 and optimized
+  allocator calibration 6 PASS. Process observations and controlled-wait limits
+  are retained in docs/key-lock-backend.md; no parent gate closes here.
 - [ ] V0: complete new controls+copy/move/bank/hold/pending/restore workload and
   P6 resource/216/disk/RSS proofs repeated; preserve all failed attempts/source roles.
 - [ ] During implementation: focused meaningful compile/regressions and required

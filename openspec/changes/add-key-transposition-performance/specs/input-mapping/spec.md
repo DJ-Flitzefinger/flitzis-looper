@@ -67,6 +67,15 @@ T/E policy SHALL remain authoritative, and equal-target attacks SHALL stay disti
 - **AND** actual PCM and attack feedback SHALL prove each successful effect without coalescing
 - **AND** all terminal work SHALL release its claims exactly once after off-callback destruction
 
+#### Scenario: Successful custody cycles coexist with productive independent voices
+- **GIVEN** one, two, four or six productive voices own declared shared or distinct immutable sources and independent Native and transport state
+- **WHEN** genuine GUI and routed MIDI retriggers fill and reuse the existing 64-work limit over several controlled cycles through bounded production-sized queues and the existing scheduler
+- **THEN** every successful original action SHALL retain its own sequence, timestamp, content, T and frozen E, with its own attack feedback and independently matched mixed PCM between distinct effects
+- **AND** capacity refusal SHALL allocate no additional work or Native, and fresh input SHALL recover only after real off-callback work retirement
+- **AND** retaining terminal receipts SHALL NOT retain heavy work claims or grant another source or voice their authority
+- **AND** controlled worker waits, source sharing, output format, process-counter boundaries and any verification-oracle cost SHALL be declared explicitly
+- **AND** process CPU, working-set, private-commit and peak observations SHALL NOT be relabelled as performer-deadline, complete P6/V0, 216-content, device or Human acceptance
+
 #### Scenario: Original SET callback work reuses allocated storage
 - **GIVEN** an original live SET action has allocated its work and history storage off realtime while its preparation worker remains independent
 - **WHEN** the actual callback captures that action's history, adopts its prepared candidate, continues rendering or refuses its stale source

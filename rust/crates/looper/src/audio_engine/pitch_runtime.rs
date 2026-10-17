@@ -88,6 +88,25 @@ impl PitchRuntime {
                 && slot.work.as_ref().is_some_and(PreparedActionWork::is_ready)
         })
     }
+    #[cfg(all(test, windows))]
+    pub(super) fn ready_pitch_native_address(&self, sequence: u64) -> Option<usize> {
+        self.slots.iter().find_map(|slot| {
+            if slot.sequence != sequence {
+                return None;
+            }
+            let PreparedActionWork::Pitch(work) = slot.work.as_ref()? else {
+                return None;
+            };
+            if !work.is_ready() {
+                return None;
+            }
+            work.candidate
+                .as_ref()?
+                .rubberband
+                .as_ref()
+                .map(|native| native.state_address())
+        })
+    }
     pub(crate) fn new() -> std::io::Result<(Self, PitchActionPreparationWorker)> {
         let (preparation, worker) = PitchActionPreparation::new(MAX_PITCH_ACTIONS)?;
         let slots = (0..MAX_PITCH_ACTIONS)

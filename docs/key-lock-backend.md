@@ -3513,6 +3513,50 @@ ordinary starts, mode work, endpoint reserve and other owners are additional.
 The historical resource table above is not a measurement of this new custody
 path and neither bound certifies total RSS, P6, 216 unique sources or a deadline.
 
+### Productive successful pitch custody — 2026-10-17
+
+`pitch_runtime_tests/productive_custody_workload_tests.rs` adds a separate
+optimized Release measurement of the accepted custody path. Sixteen fresh
+Windows children cover 1/2/4/6 audible voices, shared or distinct immutable PCM,
+and both Key Lock modes at 48 kHz mono and actual r=1. Each child runs three
+successful 64-action bursts through the real ImGui piano and routed raw MIDI,
+1024-cell control/feedback queues, SourceACK, worker and existing 1024-event
+scheduler. The original T/E, content and receipts stay fixed; each distinct E
+produces one attack with its own prepared Native. Equal and opposing targets
+remain separate. Each 65th action refuses without another work/Native allocation;
+real off-callback retirement reaches zero claims and a fresh action succeeds.
+All 195+voice-count successful receipts and three refusals remain retained.
+
+The final 16 profiles pass (parent 32.44 s, children 1.78–2.13 s). Deferred direct
+Native references verify every recorded sample, source phase, FIFO and generation
+with maximum PCM error zero. Every cut also requires exactly the independently
+born voice IDs, including uniqueness: an earlier review found that summing only
+observed voices could miss a transiently absent peer, and that oracle gap was
+fixed before this final run. Every measured callback observes zero Rust allocator
+requests; the optimized current-thread calibration is checked separately.
+
+All process snapshots below precede construction or execution of any reference
+Native. They include Python, control/harness work and retained PCM. Peak values
+are cumulative process-lifetime counters through that boundary, not per-cycle
+peaks. MiB means 1,048,576 bytes; each row spans four topology/Key Lock profiles.
+
+| Audible voices | Baseline working set, MiB | Lifetime peak working set, MiB | Lifetime peak private commit, MiB | Final private commit above baseline, MiB | Product-phase process CPU, ms |
+| ---: | ---: | ---: | ---: | ---: | ---: |
+| 1 | 292.73–293.65 | 441.60–442.61 | 1162.49–1163.72 | 9.45–11.28 | 640.62–781.25 |
+| 2 | 292.70–293.78 | 441.34–442.75 | 1162.11–1163.45 | 7.82–13.99 | 671.88–765.62 |
+| 4 | 293.06–295.00 | 442.43–443.53 | 1163.00–1164.07 | 9.52–15.54 | 687.50–828.12 |
+| 6 | 292.93–295.43 | 442.35–444.94 | 1163.03–1165.54 | 10.73–13.70 | 750.00–843.75 |
+
+Retained output PCM is 276,000/308,772/374,316/439,860 bytes respectively.
+Aggregate callback wall observations are 28.96–29.50/52.16–54.89/105.82–111.28/
+168.85–179.12 ms and include allocator-instrumentation overhead. The output clock
+is deliberately held during bounded worker waits, so none of these observations
+certifies an 8192-frame performer deadline, C++ allocator behavior, device timing,
+general continuous-O, variable-r, acoustic quality, complete P6/V0/216/30-minute
+resources or Human acceptance. One-voice sharing and its same-loaded-slot MIDI
+selection barrier are explicitly degenerate. Zero retired work claims does not
+mean live voice or endpoint-reserve Native owners have been destroyed.
+
 ## Inverse Seconds, Loaded Frames And Native Rate — 2026-10-16
 
 `ScalarSourceGrid` evaluates the shared scalar projection in source **seconds**.

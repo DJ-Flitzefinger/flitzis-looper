@@ -13,6 +13,8 @@ use std::ffi::CString;
 static MOUSE_CONTEXT: Mutex<()> = Mutex::new(());
 #[path = "hold_pitch_tests.rs"]
 mod hold_pitch_tests;
+#[path = "productive_custody_workload_tests.rs"]
+mod productive_custody_workload_tests;
 
 const PROBE: &str = r#"
 from contextlib import ExitStack
@@ -339,7 +341,10 @@ impl MouseRoute {
     }
 
     fn new_with_storage(lock: bool, mapping_path: Option<&std::path::Path>) -> Self {
-        let fixture = Fixture::new(lock);
+        Self::from_fixture(Fixture::new(lock), lock, mapping_path)
+    }
+
+    fn from_fixture(fixture: Fixture, lock: bool, mapping_path: Option<&std::path::Path>) -> Self {
         // Source custody is genuinely ready, but the once-per-frame control rows
         // have not observed it. This is the pre-fix first-action admission gap.
         fixture

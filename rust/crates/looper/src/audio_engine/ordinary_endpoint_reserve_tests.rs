@@ -26,7 +26,15 @@ fn fixture() -> Fixture {
 /// additionally requires the real callback SourceACK, so publish and adopt the exact
 /// retained source through the production complete LoadSample claim first.
 pub(in crate::audio_engine) fn adopt_current_sources(fixture: &mut Fixture, key_lock: bool) {
-    for id in [0, 1] {
+    adopt_current_source_ids(fixture, key_lock, &[0, 1]);
+}
+
+pub(in crate::audio_engine) fn adopt_current_source_ids(
+    fixture: &mut Fixture,
+    key_lock: bool,
+    ids: &[usize],
+) {
+    for &id in ids {
         let ownership = fixture.control.engine.input_runtime_ownership.clone();
         let placement = ownership.slot_snapshot(id).unwrap();
         if ownership.callback_feedback_key(id) == placement.content_key() {
