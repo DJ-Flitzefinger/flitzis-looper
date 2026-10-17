@@ -244,6 +244,14 @@ The system SHALL bind a complete prepared immutable StemSet version independentl
 - **AND** a late old publication ACK SHALL NOT recreate resident demand after a successfully ordered FULL MIX release
 - **AND** a later ALL STEMS request SHALL prepare current components and require its own publication ACK
 
+#### Scenario: A restored disk selection can request fresh preparation after rejected registration
+- **GIVEN** a saved paired disk selection whose restored metadata is unavailable until independently verified and whose prior registration was rejected or cancelled
+- **WHEN** FULL MIX is ordered and a later explicit ALL STEMS request occurs on the still-loaded source
+- **THEN** the request SHALL be allowed to capture fresh current-source authority and enter the existing bounded pair preparation path without treating metadata availability as an effective audio acknowledgement
+- **AND** the GUI ALL STEMS control SHALL remain usable to request that fresh preparation while actual availability/effective status remains unconfirmed
+- **AND** fresh source validation, worker verification, registration and component/effective receipts SHALL remain required before activation
+- **AND** missing or stale loaded-source authority SHALL refuse without changing effective audio or granting authority from the saved pair
+
 #### Scenario: Weak history retires its historical source lease
 - **GIVEN** historical pair descriptors retain a canonical source lease for living logical readers
 - **WHEN** the final voice, queued set, job and retirement sink release that logical identity

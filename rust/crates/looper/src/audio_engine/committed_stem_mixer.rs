@@ -704,12 +704,20 @@ impl RtMixer {
             .filter(|voice| voice.active && voice.sample_id == id)
         {
             active = true;
-            let wet = self.pad_key_lock_enabled[id]
-                && (crate::audio_engine::rubberband_backend::pitch_scale_for_tempo_ratio(
-                    voice.source_playback.tempo_ratio(),
-                ) - 1.0)
-                    .abs()
-                    > crate::audio_engine::prepared_native_history::PITCH_SCALE_EPSILON;
+            let pitch_intent = self.pad_pitch_intent[id];
+            let key_lock = self.pad_key_lock_enabled[id];
+            let wet = match pitch_intent
+                .native_pitch_scale(voice.source_playback.tempo_ratio(), key_lock)
+            {
+                Ok(scale) => voice
+                    .stretch
+                    .wet_processing_required(scale, pitch_intent, key_lock),
+                Err(_) => {
+                    failed = true;
+                    ready = false;
+                    continue;
+                }
+            };
             if wet
                 && voice.stretch.wet_mode_failed()
                 && !voice.stretch.wet_current_source_output_ready()

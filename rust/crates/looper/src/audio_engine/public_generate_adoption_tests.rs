@@ -10,6 +10,43 @@ use pyo3::types::PyBytes;
 
 const CHILD: &str = "FLITZI_PUBLIC_GENERATE_ADOPTION_CHILD";
 const TEST: &str = "audio_engine::cold_load::tests::stem_pair_publication_tests::committed_stem_residency_tests::l3_controller_productive_tests::public_generate_adoption_tests::actual_public_generate_first_and_model_replacement_require_own_live_adoption";
+const PIANO_CHILD: &str = "FLITZI_PUBLIC_GENERATE_PIANO_CHILD";
+const PIANO_TEST: &str = "audio_engine::cold_load::tests::stem_pair_publication_tests::committed_stem_residency_tests::l3_controller_productive_tests::public_generate_adoption_tests::actual_public_generate_piano_pitch_waits_for_own_wet_output_with_either_lock";
+
+#[test]
+fn actual_public_generate_piano_pitch_waits_for_own_wet_output_with_either_lock() {
+    if let Ok(lock) = std::env::var(PIANO_CHILD) {
+        let (key_lock, followup): (bool, complete::PublicCompleteFollowup) = match lock.as_str() {
+            "on" => (true, piano_history_on),
+            "off" => (false, piano_history_off),
+            _ => panic!("unknown declared piano lock profile"),
+        };
+        complete::history_with_piano_followup(key_lock, followup);
+        eprintln!(
+            "pitched public Generate child {lock} PID={}",
+            std::process::id()
+        );
+        return;
+    }
+    for lock in ["off", "on"] {
+        let output = std::process::Command::new(std::env::current_exe().unwrap())
+            .args(["--exact", PIANO_TEST, "--nocapture", "--test-threads=1"])
+            .env(PIANO_CHILD, lock)
+            .output()
+            .unwrap();
+        assert!(
+            output.status.success(),
+            "pitched public Generate {lock} child failed:\n{}\n{}",
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr)
+        );
+        assert!(String::from_utf8_lossy(&output.stdout).contains("1 passed; 0 failed"));
+        assert!(
+            String::from_utf8_lossy(&output.stderr)
+                .contains(&format!("pitched public Generate child {lock} PID="))
+        );
+    }
+}
 
 #[test]
 fn actual_public_generate_first_and_model_replacement_require_own_live_adoption() {
@@ -145,7 +182,16 @@ fn key_lock_identity(engine: &AudioEngine) -> [u64; 4] {
     })
 }
 
+#[derive(Clone, Copy)]
+struct ProcessingProfile {
+    ratio: f64,
+    key_lock: bool,
+    piano_shift: i32,
+    native_pitch: f64,
+}
+
 struct Peer {
+    profile: ProcessingProfile,
     at: u64,
     consumed: u64,
     generation: u64,
@@ -156,13 +202,23 @@ struct Peer {
 }
 
 impl Peer {
-    fn new(playback: &ControllerPlayback) -> Self {
+    fn new(playback: &ControllerPlayback, profile: ProcessingProfile) -> Self {
+        assert_eq!(playback.ratio, profile.ratio);
+        assert_eq!(
+            playback.callback.mixer.key_lock_for_measurement(0),
+            profile.key_lock
+        );
+        assert_eq!(
+            playback.callback.mixer.pad_pitch_intent(0).unwrap(),
+            crate::audio_engine::pitch_intent::PitchIntent::new(profile.piano_shift, 0).unwrap()
+        );
         let peer = complete::other(&playback.callback.mixer);
         assert_eq!(
             peer.volume, 0.0,
             "this peer proves phase/owners, not audibility"
         );
         Self {
+            profile,
             at: playback.frame,
             // Public peer T=E=0 precedes the main voice's prepared Native E.
             consumed: playback.frame,
@@ -176,7 +232,8 @@ impl Peer {
 
     fn assert_current(&self, playback: &ControllerPlayback) {
         let peer = complete::other(&playback.callback.mixer);
-        let phase = ((self.consumed + playback.frame - self.at) as f64 * 0.75).rem_euclid(4096.0);
+        let phase = ((self.consumed + playback.frame - self.at) as f64 * self.profile.ratio)
+            .rem_euclid(4096.0);
         assert_eq!(
             peer.source_playback.position().frame,
             phase.floor() as usize
@@ -186,7 +243,7 @@ impl Peer {
             phase.fract().to_bits()
         );
         assert_eq!(peer.generation, self.generation);
-        assert_eq!(peer.source_playback.tempo_ratio(), 0.75);
+        assert_eq!(peer.source_playback.tempo_ratio(), self.profile.ratio);
         assert_eq!(peer.volume, 0.0);
         assert_eq!(peer.stretch.native_state_address(), self.native);
         assert_eq!(peer.stretch.pending_fifo_frames(), self.fifo);
@@ -210,7 +267,10 @@ fn render(playback: &mut ControllerPlayback, peer: &Peer, frames: usize) -> (Vec
             .pending_fifo_frames(),
         (raw.input[0].len(), raw.output[0].len())
     );
-    assert!(playback.callback.mixer.key_lock_for_measurement(0));
+    assert_eq!(
+        playback.callback.mixer.key_lock_for_measurement(0),
+        peer.profile.key_lock
+    );
     peer.assert_current(playback);
     outputs
 }
@@ -265,6 +325,7 @@ fn setup(
     engine: &Arc<AudioEngine>,
     first: &[Vec<u8>; 5],
     second: &[Vec<u8>; 5],
+    profile: ProcessingProfile,
 ) -> GenerationFixture {
     let (root, producer) = Python::attach(|py| {
         let worker = locals
@@ -333,7 +394,7 @@ persistence.flush()
 controller.bind_disk_selection_commit(persistence.commit_stem_selection, persistence.flush)
 settings = SettingsController(project, session, audio, persistence.mark_dirty)
 assert project.stem_separator == 'demucs:htdemucs'
-assert project.pad_stem_mix_mode[0] == 'full_mix' and project.pad_key_lock[0] is True
+assert project.pad_stem_mix_mode[0] == 'full_mix' and project.pad_key_lock[0] is key_lock
 assert session.active_sample_ids == {0, 215}
 generate_path, generate_content = project.sample_paths[0], project.pad_content[0]
 generate_source_version = fixture['source_version']
@@ -443,7 +504,7 @@ assert controller.stem_generation_block_reason(0) is None
             })
             .into()
     }));
-    assert_eq!(playback.ratio, 0.75);
+    assert_eq!(playback.ratio, profile.ratio);
     assert_eq!(
         playback.callback.mixer.stem_demand_for_measurement(0).0,
         StemMixMode::FullMix
@@ -680,7 +741,7 @@ fn settle(
     let native = voice(&playback.callback.mixer)
         .stretch
         .native_state_address();
-    let mut remaining = (128.0_f64 / 0.75).ceil() as usize;
+    let mut remaining = (128.0_f64 / peer.profile.ratio).ceil() as usize;
     for frames in [1_usize, 31, 17, 7].into_iter().cycle() {
         let count = frames.min(remaining);
         render(playback, peer, count);
@@ -713,6 +774,12 @@ fn settle(
             .stem_transition_for_measurement(0)
             .is_active()
     );
+    assert!(
+        !voice(&playback.callback.mixer)
+            .stretch
+            .wet_current_source_output_ready(),
+        "completed source ramp still has no own current-selection wet output"
+    );
     assert_eq!(
         controller_ticket_status(locals, name, "effective_mode_status"),
         "transitioning"
@@ -723,7 +790,7 @@ fn settle(
     let source_anchor = playback.source_frame;
     assert!(anchor > ack);
     let expected_target = anchor + 4096;
-    let mut raw = ControllerRawNative::new(0.75, true);
+    let mut raw = ControllerRawNative::new_with_pitch(peer.profile.native_pitch, true);
     raw.render(&playback.feed(source_anchor, 4096));
     if let Some((_, old)) = retiring {
         old.assert_retained();
@@ -892,9 +959,76 @@ fn history(
     consumer: &mut rtrb::Consumer<ControlMessage>,
     locals: &Py<PyDict>,
     engine: &Arc<AudioEngine>,
-    _: &[Arc<InputRuntimeOwnership>; 2],
+    owners: &[Arc<InputRuntimeOwnership>; 2],
 ) {
-    let peer = Peer::new(playback);
+    history_profile(
+        playback,
+        consumer,
+        locals,
+        engine,
+        owners,
+        ProcessingProfile {
+            ratio: 0.75,
+            key_lock: true,
+            piano_shift: 0,
+            native_pitch: 1.0 / 0.75,
+        },
+    );
+}
+
+fn piano_history_on(
+    playback: &mut ControllerPlayback,
+    consumer: &mut rtrb::Consumer<ControlMessage>,
+    locals: &Py<PyDict>,
+    engine: &Arc<AudioEngine>,
+    owners: &[Arc<InputRuntimeOwnership>; 2],
+) {
+    history_profile(
+        playback,
+        consumer,
+        locals,
+        engine,
+        owners,
+        ProcessingProfile {
+            ratio: 1.0,
+            key_lock: true,
+            piano_shift: 12,
+            native_pitch: 2.0,
+        },
+    );
+}
+
+fn piano_history_off(
+    playback: &mut ControllerPlayback,
+    consumer: &mut rtrb::Consumer<ControlMessage>,
+    locals: &Py<PyDict>,
+    engine: &Arc<AudioEngine>,
+    owners: &[Arc<InputRuntimeOwnership>; 2],
+) {
+    history_profile(
+        playback,
+        consumer,
+        locals,
+        engine,
+        owners,
+        ProcessingProfile {
+            ratio: 1.0,
+            key_lock: false,
+            piano_shift: 12,
+            native_pitch: 2.0,
+        },
+    );
+}
+
+fn history_profile(
+    playback: &mut ControllerPlayback,
+    consumer: &mut rtrb::Consumer<ControlMessage>,
+    locals: &Py<PyDict>,
+    engine: &Arc<AudioEngine>,
+    _: &[Arc<InputRuntimeOwnership>; 2],
+    profile: ProcessingProfile,
+) {
+    let peer = Peer::new(playback, profile);
     let DeclaredOutputs {
         first: first_wavs,
         second: second_wavs,
@@ -915,7 +1049,7 @@ fn history(
         root,
         mut parameters,
         release,
-    } = setup(playback, locals, engine, &first_wavs, &second_wavs);
+    } = setup(playback, locals, engine, &first_wavs, &second_wavs, profile);
     let generation = voice(&playback.callback.mixer).generation;
     let source_window = key_lock_identity(engine);
     let hash = crate::audio_engine::stem_cache::source_version_hash(&Python::attach(|py| {

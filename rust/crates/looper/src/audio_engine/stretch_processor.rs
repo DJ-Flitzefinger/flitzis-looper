@@ -149,6 +149,17 @@ impl StretchProcessor {
             })
     }
 
+    /// Classify an already validated Native scale without losing aligned unity history.
+    pub(crate) fn wet_processing_required(
+        &self,
+        pitch_scale: f64,
+        pitch_intent: PitchIntent,
+        key_lock: bool,
+    ) -> bool {
+        (pitch_scale - 1.0).abs() > PITCH_SCALE_EPSILON
+            || self.retain_aligned_unity_history(pitch_intent, key_lock)
+    }
+
     pub(crate) fn native_identity(&self) -> usize {
         self.native
             .rubberband
@@ -533,8 +544,7 @@ impl StretchProcessor {
             self.wet_render_failed = true;
             return false;
         };
-        let wet = (pitch_scale - 1.0).abs() > PITCH_SCALE_EPSILON
-            || self.retain_aligned_unity_history(feed.pitch_intent, feed.key_lock);
+        let wet = self.wet_processing_required(pitch_scale, feed.pitch_intent, feed.key_lock);
         let finite = !super::native_source_coverage::complete_view_available(feed.sample);
         if finite {
             if (wet
@@ -703,9 +713,7 @@ impl StretchProcessor {
             return;
         };
 
-        if (pitch_scale - 1.0).abs() > PITCH_SCALE_EPSILON
-            || self.retain_aligned_unity_history(pitch_intent, key_lock)
-        {
+        if self.wet_processing_required(pitch_scale, pitch_intent, key_lock) {
             if self.native.rubberband.is_some() {
                 self.process_rubberband(output_samples, pitch_scale);
             } else {

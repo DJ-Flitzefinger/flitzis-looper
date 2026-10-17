@@ -216,6 +216,9 @@ class StemSelectors:
     def stems_available(self, pad_id: int) -> bool:
         return self._controller.stems.stems_available(pad_id)
 
+    def can_request_all_stems(self, pad_id: int) -> bool:
+        return self._controller.stems.can_request_all_stems(pad_id)
+
     def has_stem_cache(self, pad_id: int) -> bool:
         return self._controller.stems.has_stem_cache(pad_id)
 

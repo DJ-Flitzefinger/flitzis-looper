@@ -1083,6 +1083,7 @@ def _stem_audio_description(status: StemResidencyStatus, *, previous_set: bool) 
 def _render_stem_mix_mode(ctx: UiContext, info: _SidebarPadInfo) -> None:
     current_mode = ctx.state.stems.stem_mix_mode(info.pad_id)
     has_stems = ctx.state.stems.stems_available(info.pad_id)
+    can_request = ctx.state.stems.can_request_all_stems(info.pad_id)
     button_width = max(72.0, info.avail_x / len(_STEM_MIX_OPTIONS))
 
     imgui.text_colored(TEXT_MUTED_RGBA, "Stem Mix")
@@ -1093,7 +1094,7 @@ def _render_stem_mix_mode(ctx: UiContext, info: _SidebarPadInfo) -> None:
 
             style_name: ButtonStyleName = "mode-on" if current_mode == mode else "mode-off"
             with button_style(style_name):
-                imgui.begin_disabled(disabled=not has_stems and mode == "all_stems")
+                imgui.begin_disabled(disabled=not can_request and mode == "all_stems")
                 if imgui.button(f"{label}##stem_mix_{mode}", (button_width, 0)):
                     ctx.audio.stems.set_stem_mix_mode(info.pad_id, mode)
                 imgui.end_disabled()

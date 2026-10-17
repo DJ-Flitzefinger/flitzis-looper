@@ -1178,6 +1178,16 @@ class StemController(BaseController):  # noqa: PLR0904
             )
         return status
 
+    def can_request_all_stems(self, sample_id: int) -> bool:
+        """Allow fresh pair verification without claiming current audio readiness."""
+        validate_sample_id(sample_id)
+        if self._project.sample_paths[sample_id] is None:
+            return False
+        entry = self._project.stem_cache[sample_id]
+        return self.stems_available(sample_id) or (
+            entry is not None and entry.pair is not None and self._committed_residency.supported
+        )
+
     def stems_available(self, sample_id: int) -> bool:
         """Return whether current stem cache metadata is available for UI controls."""
         validate_sample_id(sample_id)
@@ -1257,8 +1267,13 @@ class StemController(BaseController):  # noqa: PLR0904
         if (
             entry is not None
             and entry.pair is not None
-            and self._committed_residency.contains(sample_id)
+            and (
+                self._committed_residency.contains(sample_id)
+                or (not entry.available and self.can_request_all_stems(sample_id))
+            )
         ):
+            # Revoked restored registrations leave disk metadata unavailable.
+            # Only fresh source capture and worker verification can restore authority.
             return self._request_pair_mode(sample_id, entry, entry.source_version)
 
         source_version = self._current_prepared_source_version(sample_id)

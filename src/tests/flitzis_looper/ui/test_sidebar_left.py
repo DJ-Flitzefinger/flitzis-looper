@@ -565,3 +565,110 @@ def test_actual_stem_render_separates_saved_replacement_and_own_audio_confirmati
         assert not any("b" * 64 in label or "c" * 64 in label for label in descriptions)
     assert selector.call_args_list == [((0,), {}), ((0,), {})]
     generation.assert_not_called()
+
+
+class _StemMixRender:
+    """Observe real disabled buttons, rectangles and labels while retaining mouse behavior."""
+
+    def __init__(self, ctx: UiContext, monkeypatch: pytest.MonkeyPatch) -> None:
+        self.ctx = ctx
+        self.disabled = Mock(wraps=imgui.begin_disabled)
+        self.buttons: dict[str, tuple[bool, float, float]] = {}
+        self.descriptions: list[str] = []
+        self._native_button = imgui.button
+        self._native_text = imgui.text_colored
+        monkeypatch.setattr(imgui, "begin_disabled", self.disabled)
+        monkeypatch.setattr(imgui, "button", self.button)
+        monkeypatch.setattr(imgui, "text_colored", self.text)
+
+    def button(self, label: str, size: imgui.ImVec2Like) -> bool:
+        clicked = self._native_button(label, size)
+        minimum = imgui.get_item_rect_min()
+        maximum = imgui.get_item_rect_max()
+        self.buttons[label] = (
+            self.disabled.call_args.kwargs["disabled"],
+            (minimum.x + maximum.x) / 2,
+            (minimum.y + maximum.y) / 2,
+        )
+        return clicked
+
+    def text(self, color: imgui.ImVec4Like, value: str) -> None:
+        self.descriptions.append(value)
+        self._native_text(color, value)
+
+    def frame(self) -> None:
+        self.disabled.reset_mock()
+        self.buttons.clear()
+        self.descriptions.clear()
+        imgui.new_frame()
+        imgui.set_next_window_pos((0, 0))
+        imgui.set_next_window_size((280, 350))
+        imgui.begin("Stem retry render", flags=imgui.WindowFlags_.no_saved_settings)
+        sidebar_left._render_stem_mix_mode(
+            self.ctx, sidebar_left._SidebarPadInfo(0, 240.0, is_loaded=True, is_loading=False)
+        )
+        imgui.end()
+        imgui.render()
+        assert imgui.get_draw_data().total_vtx_count > 0
+
+
+@pytest.mark.parametrize(
+    ("source_present", "can_request"),
+    [(True, True), (True, False), (False, False)],
+    ids=["unavailable-paired-retry", "unavailable-no-pair", "missing-source"],
+)
+def test_actual_all_stems_button_requests_retry_without_claiming_availability(
+    controller: AppController,
+    monkeypatch: pytest.MonkeyPatch,
+    *,
+    source_present: bool,
+    can_request: bool,
+) -> None:
+    """Prove UI eligibility and intent forwarding, without manufacturing Native adoption."""
+    controller.project.sample_paths[0] = "samples/retry.wav" if source_present else None
+    controller.project.pad_stem_mix_mode[0] = "all_stems"
+    status = StemResidencyStatus(
+        registration="accepted", residency=None, effective=None, requested_mode=None
+    )
+    available = Mock(return_value=False)
+    eligibility = Mock(return_value=can_request)
+    set_mode = Mock()
+    generation = Mock(side_effect=AssertionError("a mix retry must not start a separator"))
+    monkeypatch.setattr(controller.stems, "stems_available", available)
+    monkeypatch.setattr(controller.stems, "can_request_all_stems", eligibility, raising=False)
+    monkeypatch.setattr(controller.stems, "stem_residency_status", Mock(return_value=status))
+    monkeypatch.setattr(controller.stems, "set_stem_mix_mode", set_mode)
+    monkeypatch.setattr(controller.stems, "generate_stems_async", generation)
+    before_project = controller.project.model_dump()
+    before_session = controller.session.model_dump()
+    render = _StemMixRender(UiContext(controller), monkeypatch)
+    with _imgui_context():
+        render.frame()
+        render.frame()
+        all_stems_label = "ALL STEMS##stem_mix_all_stems"
+        disabled, x, y = render.buttons[all_stems_label]
+        assert disabled is not can_request
+        assert not render.buttons["FULL MIX##stem_mix_full_mix"][0]
+        set_mode.assert_not_called()
+        io = imgui.get_io()
+        io.add_mouse_pos_event(x, y)
+        pressed, released = True, False
+        io.add_mouse_button_event(0, pressed)
+        render.frame()
+        io.add_mouse_button_event(0, released)
+        render.frame()
+        if can_request:
+            set_mode.assert_called_once_with(0, "all_stems")
+        else:
+            set_mode.assert_not_called()
+        assert "All stems pending current cache" in render.descriptions
+        assert "Stems saved; audio mode unconfirmed" in render.descriptions
+        assert "Audio: ALL STEMS" not in render.descriptions
+        assert "Audio: FULL MIX" not in render.descriptions
+    assert available.call_args_list == [((0,), {})] * 4
+    assert eligibility.call_args_list == [((0,), {})] * 4
+    assert status.residency is None
+    assert status.effective is None
+    assert controller.project.model_dump() == before_project
+    assert controller.session.model_dump() == before_session
+    generation.assert_not_called()

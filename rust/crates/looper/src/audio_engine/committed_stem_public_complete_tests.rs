@@ -166,6 +166,7 @@ fn reference_with_ownership(
     ratio: f64,
     key_lock: bool,
     execution: u64,
+    pitch: crate::audio_engine::pitch_intent::PitchIntent,
 ) -> (Box<RtMixer>, Arc<InputRuntimeOwnership>) {
     let mut mixer = Box::new(RtMixer::new(2, RATE as f32));
     // Immutable standalone PCM oracle: its unrestricted permit has no Engine source owner.
@@ -194,9 +195,12 @@ fn reference_with_ownership(
         },
         1,
     );
+    // Declared intent belongs only to this independent PCM reference. The tested
+    // mixer receives its tuple through the production PitchController below.
+    mixer.set_pad_pitch_intent(0, pitch).unwrap();
     mixer.set_pad_eq(0, -12.0, -3.0, 4.0);
     assert!(mixer.play_sample_at_output_frame(0, 1.0, 0));
-    if key_lock {
+    if pitch.native_pitch_scale(ratio, key_lock).unwrap() != 1.0 {
         // The public ordinary attack owns prepared endpoint PCM before its first sample.
         // Give this independent full-file reference its own source/Native owner at that
         // same physical launch endpoint; the raw oracle below independently checks PCM.
@@ -221,14 +225,7 @@ fn reference_with_ownership(
         .capture(&snapshot.sample, RATE, None)
         .unwrap();
         let request = snapshot
-            .into_request(
-                permit,
-                crate::audio_engine::pitch_intent::PitchIntent::default(),
-                true,
-                execution,
-                1,
-                epoch,
-            )
+            .into_request(permit, pitch, key_lock, execution, 1, epoch)
             .unwrap();
         let mut candidate = Box::new(
             crate::audio_engine::prepared_native_history::NativeAdapterState::new(
@@ -240,8 +237,8 @@ fn reference_with_ownership(
         let mut snapshot = mixer.capture_pitch_voice_snapshot(index).unwrap();
         snapshot.stems = None;
         let feed = crate::audio_engine::stretch_processor::ProductiveSourceFeed {
-            pitch_intent: crate::audio_engine::pitch_intent::PitchIntent::default(),
-            key_lock: true,
+            pitch_intent: pitch,
+            key_lock,
             sample: &snapshot.sample,
             stems: None,
             outgoing_stems: None,
@@ -261,8 +258,16 @@ fn reference_with_ownership(
     (mixer, ownership)
 }
 
-fn initial_raw_native(full: &SampleBuffer, ratio: f64) -> ControllerRawNative {
-    let mut raw = ControllerRawNative::new(ratio, true);
+fn initial_raw_native(
+    full: &SampleBuffer,
+    ratio: f64,
+    pitch: crate::audio_engine::pitch_intent::PitchIntent,
+    key_lock: bool,
+) -> ControllerRawNative {
+    let mut raw = ControllerRawNative::new_with_pitch(
+        pitch.native_pitch_scale(ratio, key_lock).unwrap(),
+        true,
+    );
     // Independently address the real loop history before physical launch zero.
     // No production playback clock, reader or preparation helper supplies this feed.
     let history = std::array::from_fn(|channel| {
@@ -285,7 +290,7 @@ fn render(
     key_lock: bool,
     frames: usize,
 ) -> (Vec<f32>, Vec<f32>) {
-    if key_lock {
+    if key_lock || playback.raw.is_some() {
         return playback.render(frames, true);
     }
     render_off_with_historical_adoption(playback, frames, None)
@@ -676,6 +681,24 @@ pub(super) fn history_with_followup(
     key_lock: bool,
     followup: Option<(bool, PublicCompleteFollowup)>,
 ) {
+    history_with_profile(key_lock, followup, if key_lock { 0.75 } else { 1.25 }, None);
+}
+
+/// Apply a genuine stopped piano SET before the ordinary public complete birth.
+/// Both lock profiles retain r=1 and independently compare their h=2 Native PCM.
+pub(super) fn history_with_piano_followup(key_lock: bool, followup: PublicCompleteFollowup) {
+    history_with_profile(key_lock, Some((false, followup)), 1.0, Some(12));
+}
+
+fn history_with_profile(
+    key_lock: bool,
+    followup: Option<(bool, PublicCompleteFollowup)>,
+    ratio: f64,
+    piano_note: Option<i32>,
+) {
+    let pitch =
+        crate::audio_engine::pitch_intent::PitchIntent::new(piano_note.unwrap_or(0), 0).unwrap();
+    let needs_native = pitch.native_pitch_scale(ratio, key_lock).unwrap() != 1.0;
     let previous_cwd = std::env::current_dir().unwrap();
     let mut h = long_harness();
     h.callback
@@ -719,8 +742,19 @@ pub(super) fn history_with_followup(
     h.engine.test_control_channels =
         Some((h.producer.clone(), Arc::new(Mutex::new(feedback_consumer))));
     h.engine.test_output_format = Some((RATE, 2));
+    let pitch_clock = piano_note.map(|_| {
+        let runtime = crate::audio_engine::input_mapping::InputRuntime::new_with_ownership(
+            h.producer.clone(),
+            h.engine.input_clock,
+            h.engine.input_runtime_ownership.clone(),
+        );
+        runtime.set_render_format(RATE, 2).unwrap();
+        let clock = Arc::new(crate::audio_engine::timing::SharedOutputClock::new());
+        runtime.attach_pitch_clock(clock.clone()).unwrap();
+        h.engine.input_runtime = Some(runtime);
+        clock
+    });
     h.callback.feedback.events.clear();
-    let ratio = if key_lock { 0.75 } else { 1.25 };
     h.callback.mixer.set_speed(ratio);
     h.callback.mixer.set_pad_eq(0, -12.0, -3.0, 4.0);
     h.engine.play_sample(215, 0.0, None).unwrap();
@@ -829,6 +863,7 @@ pub(super) fn history_with_followup(
             .set_item("input_json", serde_json::to_string(&fixture).unwrap())
             .unwrap();
         locals.set_item("key_lock", key_lock).unwrap();
+        locals.set_item("piano_note", piano_note).unwrap();
         locals
             .set_item("messages", py.get_type::<AudioMessage>())
             .unwrap();
@@ -899,6 +934,12 @@ project.pad_timing_intent[0] = 'legacy'
 project.pad_key_lock[0] = key_lock
 project.pad_key_lock[215] = False
 project.pad_stem_mix_mode[0] = 'full_mix'
+if piano_note is not None:
+    from flitzis_looper.key_intent import PadKeyIntent, SourceKeyVersion
+    project.pad_key_intent[0] = PadKeyIntent(source=SourceKeyVersion(raw_key='C'))
+    project.multi_loop = True
+    project.bpm_lock = False
+    project.trigger_quantization_enabled = False
 disk_selection = StemPairSelection.model_validate(fixture['pair'])
 project.stem_cache[0] = StemCacheEntry(source_version=fixture['source_version'],
     cache_dir=disk_selection.wav_generation, stems=expected_stem_files(disk_selection.wav_generation),
@@ -985,6 +1026,95 @@ assert controller.publish_restored_stem_cache_if_available(0)
         "own committed set registration ACK"
     );
     feedback(&locals, &mut h.callback);
+    if let Some(clock) = pitch_clock {
+        let now = engine.input_clock.capture_ns();
+        clock.publish(crate::audio_engine::timing::OutputClockSnapshot {
+            valid: true,
+            observed_at_ns: now,
+            audible_at_ns: now,
+            output_frame: 0,
+            sample_rate_hz: RATE,
+            master_period_seconds: Some(0.5),
+            downbeat_frame: 0,
+            master_beat: 0.0,
+            freshness_ns: 2_000_000_000,
+        });
+        controller_python(
+            &locals,
+            r#"
+runtime_loaded = [False] * len(project.sample_paths)
+runtime_starts = [0.] * len(project.sample_paths)
+runtime_ends = [None] * len(project.sample_paths)
+runtime_bindings = [None] * len(project.sample_paths)
+runtime_pitch_rows = [dict(source_root=None, source_mode=None,
+    correction_root=None, correction_mode=None, base_shift=0, extra_shift=0,
+    key_lock=False, quantize_step_64ths=None, sync=False, request_sequence=0)
+    for _ in project.sample_paths]
+for slot in (0, 215):
+    runtime_loaded[slot] = True
+    runtime_ends[slot] = fixture['frames'] / fixture['rate']
+    runtime_bindings[slot] = playback_audio.current_input_runtime_pad_binding(slot)
+    assert runtime_bindings[slot] is not None
+runtime_pitch_rows[0].update(source_root=0, source_mode='major', key_lock=key_lock)
+playback_audio.publish_piano_runtime(runtime_loaded, runtime_starts,
+    runtime_ends, runtime_bindings, pitch_rows=runtime_pitch_rows)
+piano_timestamp = feedback_audio.capture_input_timestamp_ns()
+transport.pitch.choose_piano_note(0, piano_note, retrigger=False,
+    received_at_ns=piano_timestamp)
+assert session.input_mapping_error is None, session.input_mapping_error
+assert len(transport.pitch._owners) == 1, transport.pitch.status(0)
+piano_owner = next(iter(transport.pitch._owners.values()))
+piano_capture = piano_owner.capture
+assert piano_owner.published and piano_owner.content_id == '9' * 32
+assert piano_capture.base_shift == 12 and piano_capture.extra_shift == 0
+assert not piano_capture.retrigger and piano_capture.received_at_ns == piano_timestamp
+assert project.pad_key_intent[0].base_shift == 12
+assert project.pad_key_lock[0] is key_lock
+assert session.active_sample_ids == {215}
+"#,
+        );
+        assert_eq!(
+            h.callback.drain(&mut h.consumer),
+            1,
+            "original stopped piano SET"
+        );
+        {
+            let callback = h.callback.as_mut();
+            crate::audio_engine::audio_stream::render_scheduled_audio(
+                &mut callback.mixer,
+                &mut callback.scheduler,
+                &mut [],
+                &mut [0.0; NUM_SAMPLES],
+                0,
+                2,
+                &mut callback.transport,
+                &mut callback.feedback,
+                &mut callback.retirement,
+            );
+        }
+        assert_eq!(h.callback.transport.output_frame(), 0);
+        assert!(h.callback.scheduler.is_empty());
+        assert_eq!(h.callback.mixer.pad_pitch_intent(0), Some(pitch));
+        assert_eq!(h.callback.mixer.key_lock_for_measurement(0), key_lock);
+        assert!(
+            h.callback
+                .mixer
+                .voices
+                .iter()
+                .all(|voice| !voice.is_playing_sample(0))
+        );
+        controller_python(
+            &locals,
+            r#"
+assert piano_capture.state == 'applied' and piano_capture.effective
+assert piano_capture.due_frame == piano_capture.effective_output_frame == 0
+transport.pitch.poll()
+assert transport.pitch.status(0) == ('applied', None) and not transport.pitch._owners
+assert session.active_sample_ids == {215}
+assert transport_events == [('started', 215)]
+"#,
+        );
+    }
     controller_python(
         &locals,
         r#"
@@ -1114,7 +1244,7 @@ assert captured_start_calls == [(ordinary_birth, original_timestamp)]
     assert_eq!(ordinary_birth.original_frame(), Some(0));
     assert_eq!(
         execution > 0,
-        key_lock,
+        needs_native,
         "only the actual non-unity Native tuple needs preparation"
     );
     controller_python(
@@ -1194,7 +1324,7 @@ assert captured_start_calls == [(ordinary_birth, original_timestamp)]
     }
     assert_eq!(ordinary_birth.effective_frame(), Some(execution));
     assert!(h.callback.scheduler.is_empty());
-    if key_lock {
+    if needs_native {
         assert_eq!(
             voice(&h.callback.mixer).stretch.adopted_request_id(),
             Some(ordinary_birth.sequence())
@@ -1231,9 +1361,9 @@ assert captured_start_calls == [(ordinary_birth, original_timestamp)]
         .is_none()
         .then(|| h.callback.mixer.bank_for_measurement()[0].clone().unwrap());
     let (reference, reference_owner) =
-        reference_with_ownership(&full, &full_stems, ratio, key_lock, execution);
+        reference_with_ownership(&full, &full_stems, ratio, key_lock, execution, pitch);
     let (full_mix, full_mix_owner) =
-        reference_with_ownership(&full, &full_stems, ratio, key_lock, execution);
+        reference_with_ownership(&full, &full_stems, ratio, key_lock, execution, pitch);
     let reference_owners = [reference_owner, full_mix_owner];
     let mut playback = ControllerPlayback {
         callback: h.callback,
@@ -1256,7 +1386,7 @@ assert captured_start_calls == [(ordinary_birth, original_timestamp)]
         selection: None,
         previous: None,
         ramp_start: 0,
-        raw: key_lock.then(|| initial_raw_native(&full, ratio)),
+        raw: needs_native.then(|| initial_raw_native(&full, ratio, pitch, key_lock)),
         candidate: None,
         filter: controller_filter(),
     };
@@ -1270,7 +1400,7 @@ assert captured_start_calls == [(ordinary_birth, original_timestamp)]
             .native_state_address(),
         initial_native
     );
-    if key_lock {
+    if needs_native {
         assert_eq!(
             voice(&playback.callback.mixer).stretch.adopted_request_id(),
             Some(ordinary_birth.sequence())

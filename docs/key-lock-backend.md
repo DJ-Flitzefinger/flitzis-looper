@@ -168,6 +168,15 @@ separate [P5a work](pcm-cache-residency.md#active-same-set-residency-p5a-2026-10
 No resident-transition result alone closes those workflows or the remaining P4b
 matrix.
 
+Effective stem-mode acknowledgement uses the same combined piano-pitch and
+matching Native-history wet decision as rendering. Nonneutral piano pitch at
+source rate 1 still needs the new selection's own current-source wet output with
+KEY LOCK OFF or ON. A fresh Native-unity birth can remain dry, while an existing
+matching Native owner retains its aligned history at unity. Completing the
+128-source-frame ramp alone does not certify that wet output. The bounded
+[public Generate profiles](prepared-stem-publication.md#piano-pitch-and-live-generate-mode-acknowledgement--2026-10-17)
+retain the existing own preparation/adoption path and its separate acceptance limits.
+
 The bounded lifecycle/source-custody implementation keeps finite NormalLoop
 physical geometry fixed at
 production k=0/non-unity. Pause/resume before and after preparation capture,

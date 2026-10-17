@@ -186,6 +186,13 @@ SHALL NOT create complete source PCM or two serial pitch shifters.
 - **THEN** prepared processing/transition preserves intended pitch and matched output history/latency
 - **AND** rate-only/dry bypass cannot silently omit transposition or reset voices
 
+#### Scenario: Stem-mode acknowledgement shares the actual pitch processing decision
+- **GIVEN** a live stem-mode handover on a voice with an applied numeric piano intent
+- **WHEN** its mode receipt is finalized
+- **THEN** required wet processing SHALL follow p=h/r with KEY LOCK ON or p=h with KEY LOCK OFF and the same matching Native-history retention decision used by rendering
+- **AND** nonneutral piano pitch at r=1 SHALL await that selection's own current-source wet output under either lock mode
+- **AND** a fresh +12/r=2 ON voice with no matching Native history SHALL remain dry at p=1, while an already productive matching Native owner SHALL retain aligned wet history and require its own current-source output
+
 #### Scenario: A dry native-unity birth later requires wet processing
 - **GIVEN** an original accepted pitch attack starts at nonunit source rate with h/r=1 and no source-specific Native candidate
 - **WHEN** a subsequent accepted rate transition requires nonunity Native pitch

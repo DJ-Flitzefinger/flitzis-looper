@@ -813,6 +813,160 @@ def test_rejected_full_mix_retry_uses_ordered_release_despite_saved_full_mix(
     audio_engine_mock.set_stem_mix_mode.assert_called_once_with(0, "full_mix")
 
 
+def _restored_pair_after_rejected_full_mix(
+    controller: AppController,
+    audio_engine_mock: Mock,
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> tuple[list[Callable[[], None]], StemCacheEntry, Mock, Mock, Mock]:
+    """Unit receipt doubles exercise fresh admission, without claiming Native ACK/audio."""
+    source_path = tmp_path / "samples" / "old.wav"
+    source_path.parent.mkdir(parents=True, exist_ok=True)
+    source_path.write_bytes(b"declared controller source")
+    controller.project.sample_paths[0] = "samples/old.wav"
+    jobs, _, _, _ = _queued(controller, audio_engine_mock, monkeypatch, tmp_path, components=False)
+    controller.project.pad_stem_mix_mode[0] = "full_mix"
+    jobs[0]()
+    controller.stems._poll_pair_preparations()
+    entry = controller.project.stem_cache[0]
+    assert entry is not None
+    assert entry.pair is not None
+    saved = entry.model_copy(update={"available": False})
+    controller.project.stem_cache[0] = saved
+    controller.stems._restored_stem_candidates[0] = saved
+    registration = Mock(**{
+        "publication_status.return_value": "accepted",
+        "is_current.return_value": True,
+        "error.return_value": "selection callback rejected",
+    })
+    fresh_registration = Mock(**{
+        "publication_status.return_value": "pending",
+        "is_current.return_value": True,
+    })
+    register = Mock(side_effect=[registration, fresh_registration])
+    receipt = Mock(**{
+        "residency_status.return_value": "pending",
+        "effective_mode_status.return_value": "waiting",
+        "is_current.return_value": True,
+        "error.return_value": None,
+    })
+    residency = Mock(return_value=receipt)
+    monkeypatch.setattr(audio_engine_mock, "register_committed_stem_pair", register)
+    monkeypatch.setattr(audio_engine_mock, "request_committed_stem_residency", residency)
+    assert controller.stems.publish_restored_stem_cache_if_available(0)
+    controller.stems._poll_residency_demands()
+    assert len(jobs) == 2
+    jobs[1]()
+    controller.stems._poll_pair_preparations()
+    assert controller.project.stem_cache[0] is saved
+    assert not saved.available
+    assert controller.stems.stems_available(0)
+    register.assert_called_once()
+    residency.assert_not_called()
+
+    registration.publication_status.return_value = "rejected"
+    registration.is_current.return_value = False
+    assert controller.stems.set_stem_mix_mode(0, "full_mix")
+    registration.cancel.assert_called_once()
+    audio_engine_mock.set_stem_pair_full_mix.assert_called_once_with(0)
+    assert not controller.stems._committed_residency.contains(0)
+    assert not controller.stems.stems_available(0)
+    assert controller.project.pad_stem_mix_mode[0] == "full_mix"
+
+    # The ordinary availability query stays real: no current registration means
+    # this restored disk entry cannot grant readiness to the explicit retry.
+    assert controller.stems._current_prepared_source_version(0) is None
+    return jobs, saved, register, residency, fresh_registration
+
+
+def test_unavailable_restored_pair_retries_after_public_full_mix_registration_rejection(
+    controller: AppController,
+    audio_engine_mock: Mock,
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    jobs, saved, register, residency, fresh_registration = _restored_pair_after_rejected_full_mix(
+        controller, audio_engine_mock, monkeypatch, tmp_path
+    )
+    source_ticket = FakePreparedSourceTicket()
+    capture = audio_engine_mock.capture_prepared_source
+    capture.reset_mock()
+    capture.return_value = source_ticket
+    fresh_prepared = _PreparedPair(components=False)
+    audio_engine_mock.prepare_stem_pair.reset_mock()
+    audio_engine_mock.prepare_stem_pair.return_value = fresh_prepared
+
+    assert controller.stems.can_request_all_stems(0)
+    assert controller.stems.set_stem_mix_mode(0, "all_stems")
+    capture.assert_called_once_with(0, saved.source_version)
+    assert len(jobs) == 3
+    pending = controller.stems._pair_preparations.pending[0]
+    assert pending.entry is saved
+    assert pending.ticket is source_ticket
+    assert pending.residency_only
+    assert controller.project.pad_stem_mix_mode[0] == "all_stems"
+    assert not controller.stems.stems_available(0)
+    register.assert_called_once()
+    residency.assert_not_called()
+    jobs[2]()
+    controller.stems._poll_pair_preparations()
+    register.assert_called_with(fresh_prepared, source_ticket)
+    assert register.call_count == 2
+    assert audio_engine_mock.prepare_stem_pair.call_args.args[4] is False
+    audio_engine_mock.publish_stem_pair.assert_not_called()
+    controller.stems._committed_residency.poll()
+    status = controller.stems.stem_residency_status(0)
+    assert status is not None
+    assert status.registration == "pending"
+    assert status.residency is None
+    assert status.effective is None
+    residency.assert_not_called()
+    fresh_registration.publication_status.return_value = "accepted"
+    controller.stems._committed_residency.poll()
+    residency.assert_called_once_with(fresh_registration, mode="all_stems", enabled_mask=15)
+    status = controller.stems.stem_residency_status(0)
+    assert status is not None
+    assert status.registration == "accepted"
+    assert status.residency == "pending"
+    assert status.effective == "waiting"
+
+
+@pytest.mark.parametrize("source_state", ["stale", "missing"])
+def test_unavailable_restored_pair_retry_requires_current_loaded_source(
+    controller: AppController,
+    audio_engine_mock: Mock,
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    source_state: str,
+) -> None:
+    jobs, saved, register, residency, _ = _restored_pair_after_rejected_full_mix(
+        controller, audio_engine_mock, monkeypatch, tmp_path
+    )
+    capture = audio_engine_mock.capture_prepared_source
+    capture.reset_mock()
+    if source_state == "stale":
+        capture.side_effect = ValueError("loaded source changed")
+    else:
+        controller.project.sample_paths[0] = None
+    audio_engine_mock.prepare_stem_pair.reset_mock()
+
+    assert controller.stems.can_request_all_stems(0) is (source_state != "missing")
+    assert not controller.stems.set_stem_mix_mode(0, "all_stems")
+    assert len(jobs) == 2
+    assert 0 not in controller.stems._pair_preparations.pending
+    assert not controller.stems._committed_residency.contains(0)
+    assert controller.project.pad_stem_mix_mode[0] == "full_mix"
+    register.assert_called_once()
+    residency.assert_not_called()
+    audio_engine_mock.prepare_stem_pair.assert_not_called()
+    audio_engine_mock.publish_stem_pair.assert_not_called()
+    if source_state == "stale":
+        capture.assert_called_once_with(0, saved.source_version)
+        assert controller.session.stem_generation_errors[0] == "loaded source changed"
+    else:
+        capture.assert_not_called()
+
+
 @pytest.mark.parametrize("saved_all", [False, True])
 def test_restore_verifies_complete_pair_without_component_demand_with_preload_off(
     controller: AppController,

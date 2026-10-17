@@ -6,7 +6,9 @@ use super::*;
 use crate::audio_engine::committed_stem_residency::{CommittedStemSetTicket, ResidentStemTicket};
 use crate::audio_engine::constants::NUM_SAMPLES;
 use crate::audio_engine::dsp::{DspNodeSlot, DspParameterId, DspParameterSlot, PerPadDspChain};
-use crate::audio_engine::input_runtime_binding::{InputPadBinding, InputRuntimeOwnership};
+use crate::audio_engine::input_runtime_binding::{
+    InputPadBinding, InputRuntimeOwnership, InputRuntimePadBinding,
+};
 use crate::audio_engine::prepared_source::PreparedSourcePermit;
 use crate::audio_engine::resident_relocation::{
     WindowRequest, prepare_window_with_producer, reconcile,
@@ -2151,6 +2153,45 @@ struct ReadyPlaybackAudio {
 
 #[pymethods]
 impl ReadyPlaybackAudio {
+    #[pyo3(signature=(sample_id, action_key, received_at_ns=None))]
+    fn capture_pad_pitch_action(
+        &self,
+        sample_id: usize,
+        action_key: &str,
+        received_at_ns: Option<&Bound<'_, PyAny>>,
+    ) -> PyResult<crate::audio_engine::pitch_actions::CapturedPitchAction> {
+        self.engine
+            .capture_pad_pitch_action(sample_id, action_key, received_at_ns)
+    }
+
+    fn publish_pitch_action(
+        &self,
+        action: &crate::audio_engine::pitch_actions::CapturedPitchAction,
+    ) -> PyResult<bool> {
+        self.engine.publish_pitch_action(action)
+    }
+
+    #[pyo3(signature=(loaded, loop_starts, loop_ends, bindings=None, pitch_rows=None))]
+    fn publish_piano_runtime(
+        &self,
+        py: Python<'_>,
+        loaded: Vec<bool>,
+        loop_starts: Vec<f64>,
+        loop_ends: Vec<Option<f64>>,
+        bindings: Option<Vec<Option<Py<InputRuntimePadBinding>>>>,
+        pitch_rows: Option<Vec<Py<PyDict>>>,
+    ) -> PyResult<()> {
+        self.engine.set_input_runtime_state(
+            py,
+            true,
+            loaded,
+            loop_starts,
+            loop_ends,
+            bindings,
+            pitch_rows,
+        )
+    }
+
     #[pyo3(signature=(id, start_s, end_s=None, volume=1.0, *, exclusive=false, received_at_ns=None, expected_source_generation=None))]
     fn capture_pad_start(
         &self,
@@ -2425,16 +2466,16 @@ impl ControllerRateLedger {
 
 impl ControllerRawNative {
     fn new(ratio: f64, prepared: bool) -> Self {
+        Self::new_with_pitch(pitch_scale_for_tempo_ratio(ratio), prepared)
+    }
+
+    fn new_with_pitch(pitch: f64, prepared: bool) -> Self {
         let mut native = RubberBandLiveShifter::new(RATE, 2).unwrap();
         if prepared {
-            native
-                .prepare_exact_pitch(pitch_scale_for_tempo_ratio(ratio))
-                .unwrap();
+            native.prepare_exact_pitch(pitch).unwrap();
         } else {
             native.prepare_for_reuse().unwrap();
-            native
-                .set_pitch_scale(pitch_scale_for_tempo_ratio(ratio))
-                .unwrap();
+            native.set_pitch_scale(pitch).unwrap();
         }
         let block = native.block_size();
         Self {
@@ -2442,7 +2483,7 @@ impl ControllerRawNative {
             input: std::array::from_fn(|_| VecDeque::new()),
             output: std::array::from_fn(|_| VecDeque::from(vec![0.0; block - 1])),
             used: false,
-            pitch: pitch_scale_for_tempo_ratio(ratio),
+            pitch,
         }
     }
 

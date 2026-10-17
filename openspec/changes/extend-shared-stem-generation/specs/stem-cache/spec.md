@@ -78,6 +78,15 @@ source/set/timing/history even after current bank B changes.
 - **AND** old set owners SHALL retire only after their actual final Native/history/reader use, while the replacement remains usable through own public unload
 - **AND** declared output at the inference boundary SHALL establish only the controller-to-disk-to-Native flow; actual neural execution, model quality, musical/resource/device/Human and whole-parent acceptance SHALL remain separate
 
+#### Scenario: Piano transposition requires its own wet acknowledgement during live Generate
+- **GIVEN** a publicly started complete-resident NormalLoop voice at source rate 1 with an applied octave-bearing piano shift +12 and KEY LOCK OFF or ON
+- **WHEN** public Generate first adopts ALL or public Settings selects a different separator and Generate replaces the still-preferred ALL set
+- **THEN** completion of the consumed 128-source-frame handover SHALL remain transitioning until that voice emits its own current-selection wet output from matched prepared Native history
+- **AND** disk completion, component residency, source rate 1 and previous-set wet output SHALL NOT certify the new effective mode
+- **AND** the existing off-thread preparation horizon, source phase, voice generation, FIFO/filter chronology and final-reader retirement SHALL remain intact without a new START, STOP or retrigger
+- **AND** effective-mode readiness SHALL use the same applied pitch and retained-history wet decision as rendering, including a retained matching Native history at Native pitch unity
+- **AND** a fresh dry Native-unity voice SHALL NOT require a wet acknowledgement solely because its source rate differs from 1
+
 The system SHALL permit first and replacement new-complete-set adoption on a
 physically complete resident NormalLoop `[0,N)` with KEY LOCK OFF or ON through
 the same own Capture, off-thread preparation and guarded Adopt transaction.

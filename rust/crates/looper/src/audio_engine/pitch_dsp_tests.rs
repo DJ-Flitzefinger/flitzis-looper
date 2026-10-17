@@ -179,6 +179,80 @@ fn pitch_unity_bypasses_at_nonunit_rate_and_nonzero_pitch_processes_at_unit_rate
 }
 
 #[test]
+fn wet_processing_tracks_combined_pitch_and_only_matching_prepared_unity_history() {
+    let octave = PitchIntent::new(12, 0).unwrap();
+    let input = (0..512)
+        .map(|frame| (frame as f32 * 0.043).sin() * 0.3)
+        .collect::<Vec<_>>();
+    for (intent, rate, lock, expected_wet) in [
+        (octave, 1.0, false, true),
+        (octave, 1.0, true, true),
+        (PitchIntent::default(), 0.5, false, false),
+        (PitchIntent::default(), 2.0, false, false),
+        (octave, 2.0, true, false),
+    ] {
+        let mut processor = StretchProcessor::new(1);
+        let pitch_scale = intent.native_pitch_scale(rate, lock).unwrap();
+        assert_eq!(
+            processor.wet_processing_required(pitch_scale, intent, lock),
+            expected_wet,
+            "fresh intent={intent:?} rate={rate} lock={lock}"
+        );
+        processor.resampled_buffers_mut(512)[0][..512].copy_from_slice(&input);
+        processor.process_resampled_with_pitch(512, rate, lock, intent);
+        assert_eq!(processor.native.active, expected_wet);
+        if !expected_wet {
+            assert_eq!(&processor.output_buffers()[0][..512], input.as_slice());
+        }
+    }
+
+    for (prepared_intent, prepared_lock, expected_wet) in [
+        (octave, true, true),
+        (PitchIntent::new(11, 0).unwrap(), true, false),
+        (octave, false, false),
+    ] {
+        // Prime a real chronological source through Native. Mere scalar state or a
+        // generic warmed handle cannot supply the source-specific unity exception.
+        let mut request = fixture(1, 48_000, 1.7, ExplicitSeekMode::Normal, None);
+        request.pitch_intent = prepared_intent;
+        request.key_lock = prepared_lock;
+        let mut processor = StretchProcessor::new(1);
+        processor.native.prepare_source(request).unwrap();
+        assert!(processor.owns_pitch_contract(prepared_intent, prepared_lock));
+        assert!(processor.native_primed_output_frames() >= 4096);
+        let address = processor.native_state_address();
+        assert_ne!(address, 0);
+
+        let pitch_scale = octave.native_pitch_scale(2.0, true).unwrap();
+        assert_eq!(pitch_scale, 1.0);
+        assert_eq!(
+            processor.wet_processing_required(pitch_scale, octave, true),
+            expected_wet,
+            "prepared intent={prepared_intent:?} lock={prepared_lock}"
+        );
+        processor.resampled_buffers_mut(512)[0][..512].copy_from_slice(&input);
+        processor.process_resampled_with_pitch(512, 2.0, true, octave);
+        assert_eq!(processor.native.active, expected_wet);
+        if expected_wet {
+            assert_eq!(processor.native_state_address(), address);
+            assert_eq!(processor.native.pitch_scale, 1.0);
+            let (input_frames, output_frames) = processor.pending_fifo_frames();
+            assert_eq!(
+                input_frames + output_frames,
+                processor.adapter_delay_frames()
+            );
+            assert!(
+                processor.output_buffers()[0][..512]
+                    .iter()
+                    .all(|sample| sample.is_finite())
+            );
+        } else {
+            assert_eq!(&processor.output_buffers()[0][..512], input.as_slice());
+        }
+    }
+}
+
+#[test]
 fn near_unity_native_pitch_is_never_silently_replaced_with_dry() {
     let intent = PitchIntent::new(0, 7).unwrap();
     for factor in [1.0 - 0.000_1, 1.0 + 0.000_1] {

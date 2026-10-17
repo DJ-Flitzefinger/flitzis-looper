@@ -78,6 +78,8 @@ pub(crate) enum RubberBandError {
 ///
 /// The native pitch scale is an inverse rate, not a second source-rate application. The ABI
 /// preserves binary64; PCM samples remain `c_float` and never define the timing precision.
+/// Production resolves the combined numeric intent through `PitchIntent::native_pitch_scale`.
+#[cfg(test)]
 pub(crate) fn pitch_scale_for_tempo_ratio(tempo_ratio: f64) -> f64 {
     if !tempo_ratio.is_finite() || tempo_ratio <= 0.0 {
         return 1.0;

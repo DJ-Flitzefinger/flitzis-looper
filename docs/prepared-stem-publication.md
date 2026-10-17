@@ -3022,6 +3022,53 @@ admission, ordinary publication, all216/resource/music, full E11/P4b/P5a/P5b and
 Human/program gates remain open. Full Rust-port planning/implementation and
 Slice8 remain out of scope.
 
+## Piano pitch and live Generate mode acknowledgement — 2026-10-17
+
+The public Generate history additionally covers a real stopped +12 piano SET
+through `TransportController.pitch`, original Native capture/publication and the
+sole scheduler, followed by ordinary public Play at source rate 1 with either
+KEY LOCK mode. First Generate/ALL and the public Settings-to-BS replacement keep
+the same independent component PCM, raw Native, FIFO, EQ, source phase and actual
+final-reader checks described below. The zero-gain peer remains an ownership and
+phase check, and the inference adapters still return declared fixture WAVs.
+
+The previous mode-finalization predicate ignored numeric piano pitch. Both lock
+profiles reproduced `effective` immediately after the 128-source-frame ramp,
+while the new selection had no own current-source wet output. Finalization now
+uses rendering's combined Native-pitch and matching-history decision. It keeps
+the receipt transitioning through the existing own 4096-frame preparation horizon,
+guarded Native adoption and first current-selection wet output. It does not add
+a second preparation route or change the legacy direct-active-publication guard.
+
+At Native pitch unity, a fresh dry +12/r=2 ON voice remains dry; an existing
+matching prepared Native retains its aligned history and requires current-source
+wet output. Focused tests use actual prepared chronological PCM to distinguish
+these cases from mismatched pitch or lock ownership. These bounded software
+checks do not establish acoustic, actual-rate-matrix, resource, model-inference,
+device, hearing, Human or full-parent acceptance.
+
+A restored paired selection keeps metadata availability false until actual
+verification/registration provides current authority. After a rejected registration
+and ordered FullMix release, a later explicit ALL request can capture fresh source
+authority and enter the existing bounded preparation path. The metadata itself
+does not authorize component activation. Missing or stale loaded sources still
+refuse, and a fresh registration and own residency/effective receipts remain
+mandatory. The controller regression uses receipt doubles; the existing actual
+Native/controller round trip separately exercises cancellation and fresh return.
+The GUI keeps ALL requestable in that loaded paired state while its availability
+and effective-mode labels remain unconfirmed; real ImGui mouse tests verify the
+request and the disabled missing-source/no-pair cases without inventing audio ACKs.
+
+Validation: 600 affected controller/stems/sidebar tests passed. Focused Native
+checks passed for the corrected controller retry, 11 pitch-DSP cases, 27 processor
+cases, five piano/input histories and both public Generate histories. The broader
+stem run passed 128 cases and exposed the retry failure; that failed case then
+passed after the controller correction. Its stopped-216-PAD state test is not a
+216-voice musical/resource acceptance. Both original pitched ACK failures remain
+recorded. The final private Release/import and eight production bootstrap API
+checks passed, with no App start or Native installation, and independent review
+found no open issue. See the scenarios above for the retained acceptance limits.
+
 ## Public Generate completion and live model replacement — 2026-10-13
 
 The bounded [public Generate test](../rust/crates/looper/src/audio_engine/public_generate_adoption_tests.rs) connects the existing public request to
