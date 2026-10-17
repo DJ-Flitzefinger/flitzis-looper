@@ -35,6 +35,12 @@ not replace the full milestone or close any parent, DSP-quality or Human gate.
   both Key Lock modes. This FullMix software proof does not close selected-ALL,
   complete R2, quality/resource or Human gates.
 
+- [x] Extend the bounded Copy/pitch proof to actual nonzero selected components,
+  independent B mask and Native, own stopped C readiness, current effective-mode
+  ACK and source-specific wet output, retained A reader/component owners, and
+  distinct A/B/C assignments. Keep acoustic masking, cancellation-negative,
+  complete R2, resource and Human acceptance separate.
+
 The Human prioritizes a complete, testable Key + Transposition / playable keyboard /
 MIDI SET and SET_RETRIGGER product milestone before bank, bulk and RECORD delivery.
 Finish the current Controller/Durable/Hold block first. Close the actual remaining

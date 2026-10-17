@@ -2,6 +2,7 @@
 //! Host worker waits freeze virtual time; no device or musical acceptance is claimed.
 
 use super::*;
+use crate::audio_engine::committed_stem_residency::{CommittedStemSetTicket, ResidentStemTicket};
 use crate::audio_engine::input_mapping::{InputRuntime, PitchPadProjection};
 use crate::audio_engine::pitch_actions::{CapturedPitchAction, PitchKeyMode};
 use crate::audio_engine::pitch_intent::PitchIntent;
@@ -15,23 +16,13 @@ const ORIGINAL_E: u64 = 48_000;
 struct PitchFixture {
     copy: Fixture,
     clock: Arc<SharedOutputClock>,
+    selected: Option<CommittedStemSetTicket>,
 }
 
 impl PitchFixture {
     fn new(lock: bool) -> Self {
         let copy = Fixture::new(false, lock, "manual");
-        let clock = Arc::new(SharedOutputClock::new());
-        copy.with_engine(|engine| {
-            engine.input_runtime = Some(InputRuntime::new_with_ownership(
-                copy.producer.clone(),
-                engine.input_clock,
-                engine.input_runtime_ownership.clone(),
-            ));
-            let runtime = engine.input_runtime.as_ref().unwrap();
-            runtime.set_render_format(RATE, 2).unwrap();
-            runtime.attach_pitch_clock(clock.clone()).unwrap();
-        });
-        let mut fixture = Self { copy, clock };
+        let mut fixture = Self::from_copy(copy);
         // Both components are real actions, not an injected mixer scalar. The
         // copied octave and offset must remain distinct even though total = +7.
         fixture.apply_set("pitch.note:12:set");
@@ -45,6 +36,124 @@ impl PitchFixture {
             0
         );
         fixture
+    }
+
+    fn from_copy(copy: Fixture) -> Self {
+        let clock = Arc::new(SharedOutputClock::new());
+        copy.with_engine(|engine| {
+            engine.input_runtime = Some(InputRuntime::new_with_ownership(
+                copy.producer.clone(),
+                engine.input_clock,
+                engine.input_runtime_ownership.clone(),
+            ));
+            let runtime = engine.input_runtime.as_ref().unwrap();
+            runtime.set_render_format(RATE, 2).unwrap();
+            runtime.attach_pitch_clock(clock.clone()).unwrap();
+        });
+        Self {
+            copy,
+            clock,
+            selected: None,
+        }
+    }
+
+    fn new_selected(lock: bool) -> Self {
+        // Reuse the already accepted own registration. The unregistered pair
+        // prepared before the fixture's ordinary start is not a fresh candidate.
+        // Fixed original targets below align the independent later histories.
+        let copy = Fixture::new(true, lock, "manual");
+        let selection = copy.with_engine(|engine| {
+            let source = engine
+                .capture_prepared_source(0, copy.version.clone())
+                .unwrap();
+            engine
+                .register_committed_stem_pair_with_producer(
+                    copy.pair.as_ref().unwrap(),
+                    &source,
+                    &copy.producer,
+                )
+                .unwrap()
+        });
+        let mut fixture = Self::from_copy(copy);
+        fixture.copy.callback.drain();
+        assert_eq!(
+            selection.publication_status(),
+            "accepted",
+            "{:?}",
+            selection.error()
+        );
+        assert!(selection.is_current());
+        let mode = fixture.components(&selection, 15);
+        fixture.selected = Some(selection);
+        fixture.render_to(18_000);
+        assert_eq!(
+            mode.effective_mode_status(),
+            "effective",
+            "{:?}",
+            mode.error()
+        );
+        // Fixed original targets align both independent musical histories. A's
+        // later normal-start retrigger also resets its own Native/DSP history.
+        for (capture_at, key, retrigger, due) in [
+            (18_000, "pitch.extra:-5:set", false, 24_000),
+            (42_000, "pitch.note:12:set_retrigger", true, 48_000),
+        ] {
+            fixture.render_to(capture_at);
+            let action = fixture.capture(0, key, true);
+            assert_eq!(action.original_due_frame(), due);
+            if retrigger {
+                fixture.expect_pitch_start(&action);
+            }
+            fixture.publish(&action);
+            fixture.wait_ready(&action);
+            assert_eq!(action.execution_target(), due);
+            fixture.render_to(due);
+            fixture.copy.callback.render(1);
+            assert!(action.effective(), "{:?}", action.reason());
+        }
+        assert_eq!(
+            fixture.copy.callback.mixer.pad_pitch_intent(0),
+            Some(copied_pitch())
+        );
+        fixture
+    }
+
+    fn components(&mut self, selection: &CommittedStemSetTicket, mask: u8) -> ResidentStemTicket {
+        assert!(selection.is_current());
+        let ticket = self.copy.with_engine(|engine| {
+            engine
+                .request_committed_stem_residency_with_producer(
+                    selection,
+                    "all_stems",
+                    mask,
+                    &self.copy.producer,
+                )
+                .unwrap()
+        });
+        let frame = self.copy.callback.frame;
+        let deadline = Instant::now() + Duration::from_secs(10);
+        loop {
+            self.copy.callback.drain();
+            if ticket.residency_status() == "accepted" {
+                break;
+            }
+            assert_ne!(
+                ticket.residency_status(),
+                "rejected",
+                "{:?}",
+                ticket.error()
+            );
+            assert!(
+                Instant::now() < deadline,
+                "own selected components did not acknowledge"
+            );
+            std::thread::sleep(Duration::from_millis(1));
+        }
+        self.copy
+            .with_engine(|engine| resident_relocation::reconcile(engine).unwrap());
+        assert_eq!(self.copy.callback.frame, frame);
+        assert!(ticket.is_current(), "{:?}", ticket.error());
+        ticket
     }
 
     fn sync_rows(&self, quantized: Option<usize>) {
@@ -154,6 +263,10 @@ impl PitchFixture {
 
     fn envelope(&self) -> String {
         let mut envelope: Value = serde_json::from_str(&self.copy.envelope()).unwrap();
+        if self.selected.is_some() {
+            envelope["snapshot"]["stem_intent"]["enabled_mask"] = json!(15);
+            envelope["snapshot"]["stem_intent"]["display_mode"] = json!("all");
+        }
         envelope["snapshot"]["key_intent"] = json!({
             "schema_version":1,"source":null,"correction":null,
             "analysis_epoch":0,"correction_epoch":0,
@@ -191,6 +304,7 @@ impl PitchFixture {
 
     fn expect_pitch_start(&mut self, action: &CapturedPitchAction) {
         let key = action.content_key();
+        let id = action.current_control_slot().unwrap();
         let ownership = &self.copy.callback.feedback.ownership;
         let expected = StartFeedback {
             owner: ownership.owner_identity().diagnostic(),
@@ -203,7 +317,7 @@ impl PitchFixture {
                 .unwrap(),
         };
         assert!(
-            self.copy.callback.feedback.expected_starts[TARGET]
+            self.copy.callback.feedback.expected_starts[id]
                 .replace(expected)
                 .is_none()
         );
@@ -254,8 +368,124 @@ enum Order {
 }
 
 fn case(order: Order, lock: bool) {
-    let mut actual = PitchFixture::new(lock);
-    let mut reference = PitchFixture::new(lock);
+    run_case(order, lock, false);
+}
+
+fn assert_selected_view(
+    fixture: &PitchFixture,
+    id: usize,
+    selection: &CommittedStemSetTicket,
+    mask: u8,
+    live: bool,
+) {
+    assert_eq!(selection.publication_status(), "accepted");
+    assert!(selection.is_current());
+    let mixer = &fixture.copy.callback.mixer;
+    assert_eq!(
+        mixer.stem_demand_for_measurement(id),
+        (
+            StemMixMode::AllStems,
+            mask,
+            source_version_hash(&fixture.copy.version)
+        )
+    );
+    let stems = mixer.stems_for_measurement()[id].as_ref().unwrap();
+    assert_eq!(stems.available_mask, 15);
+    assert_eq!(
+        *stems.complete_set_identity,
+        *fixture.copy.pair.as_ref().unwrap()._identity
+    );
+    assert!(
+        stems
+            .stems
+            .iter()
+            .all(|stem| stem.samples.iter().any(|value| value.abs() > 0.0001))
+    );
+    fixture.copy.with_engine(|engine| {
+        let cache = engine.resident_stem_cache.lock().unwrap();
+        let pair = cache[id].accepted.as_ref().unwrap().pair.as_ref().unwrap();
+        assert_eq!(
+            pair.descriptor_reference,
+            fixture.copy.pair.as_ref().unwrap().descriptor_reference
+        );
+        let leases = engine.cold_leases.lock().unwrap();
+        assert_eq!(
+            pair.source_lease.assignment_id(),
+            leases[id].as_ref().unwrap().assignment_id()
+        );
+    });
+    if live {
+        let voice = mixer
+            .voices
+            .iter()
+            .find(|voice| voice.is_playing_sample(id))
+            .unwrap();
+        assert_ne!(voice.stretch.native_state_address(), 0);
+        assert!(voice.stretch.wet_render_ready());
+        assert!(voice.stretch.wet_output_ready());
+        assert!(voice.stretch.wet_current_source_output_ready());
+        assert!(
+            voice
+                .stretch
+                .output_buffers()
+                .iter()
+                .flatten()
+                .any(|value| value.abs() > 0.0001)
+        );
+    }
+}
+
+fn current_wet_ready(fixture: &PitchFixture, id: usize) -> bool {
+    fixture
+        .copy
+        .callback
+        .mixer
+        .voices
+        .iter()
+        .find(|voice| voice.is_playing_sample(id))
+        .is_some_and(|voice| voice.stretch.wet_current_source_output_ready())
+}
+
+fn run_case(order: Order, lock: bool, selected: bool) {
+    let mut actual = if selected {
+        PitchFixture::new_selected(lock)
+    } else {
+        PitchFixture::new(lock)
+    };
+    let mut reference = if selected {
+        PitchFixture::new_selected(lock)
+    } else {
+        PitchFixture::new(lock)
+    };
+    let source_modes = if selected {
+        let selection = actual.selected.as_ref().unwrap().clone();
+        let reference_selection = reference.selected.as_ref().unwrap().clone();
+        let mode = actual.components(&selection, 15);
+        let reference_mode = reference.components(&reference_selection, 15);
+        let deadline = Instant::now() + Duration::from_secs(10);
+        while mode.effective_mode_status() != "effective"
+            || reference_mode.effective_mode_status() != "effective"
+            || !current_wet_ready(&actual, 0)
+            || !current_wet_ready(&reference, 0)
+        {
+            actual.copy.callback.drain();
+            reference.copy.callback.drain();
+            assert_eq!(
+                actual.copy.callback.render(17),
+                reference.copy.callback.render(17)
+            );
+            assert!(
+                Instant::now() < deadline,
+                "source selected modes lack own effect ACK"
+            );
+            std::thread::sleep(Duration::from_millis(1));
+        }
+        assert_selected_view(&actual, 0, &selection, 15, true);
+        assert_selected_view(&reference, 0, &reference_selection, 15, true);
+        Some((mode, reference_mode))
+    } else {
+        None
+    };
     assert_eq!(actual.copy.callback.frame, reference.copy.callback.frame);
     let original_b = actual.copy_to_target(false);
     actual
@@ -265,8 +495,51 @@ fn case(order: Order, lock: bool) {
     actual.settle(&original_b);
     actual.sync_rows(None);
     actual.copy.start(TARGET);
-    actual.render_to(CAPTURE_FRAME);
-    reference.render_to(CAPTURE_FRAME);
+    reference.render_to(actual.copy.callback.frame);
+    let old_selection = original_b.committed_stem_ticket().unwrap();
+    let old_mode = if let Some(selection) = &old_selection {
+        let mode = actual.components(selection, 5);
+        let deadline = Instant::now() + Duration::from_secs(10);
+        while mode.effective_mode_status() != "effective" || !current_wet_ready(&actual, TARGET) {
+            actual.copy.callback.drain();
+            actual.copy.callback.render(17);
+            reference.copy.callback.render(17);
+            assert!(
+                Instant::now() < deadline,
+                "B lacks its own selected effect ACK"
+            );
+            std::thread::sleep(Duration::from_millis(1));
+        }
+        assert_selected_view(&actual, TARGET, selection, 5, true);
+        assert_ne!(
+            actual.copy.source_voice().stretch.native_state_address(),
+            actual
+                .copy
+                .callback
+                .mixer
+                .voices
+                .iter()
+                .find(|voice| voice.is_playing_sample(TARGET))
+                .unwrap()
+                .stretch
+                .native_state_address()
+        );
+        Some(mode)
+    } else {
+        None
+    };
+    let original_e = if selected {
+        (actual.copy.callback.frame / 24_000 + 2) * 24_000
+    } else {
+        ORIGINAL_E
+    };
+    let capture_frame = if selected {
+        original_e - 6_000
+    } else {
+        CAPTURE_FRAME
+    };
+    actual.render_to(capture_frame);
+    reference.render_to(capture_frame);
     assert_source_chronology(&actual, &reference);
 
     let action = actual.capture(TARGET, "pitch.note:0:set_retrigger", true);
@@ -276,13 +549,37 @@ fn case(order: Order, lock: bool) {
         action.received_timestamp(),
     );
     assert_eq!(action.render().pitch, PitchIntent::new(0, -5).unwrap());
-    assert_eq!(action.original_due_frame(), ORIGINAL_E);
+    assert_eq!(action.original_due_frame(), original_e);
     if matches!(order, Order::Prepared) {
         actual.publish(&action);
         actual.wait_ready(&action);
-        assert_eq!(action.execution_target(), ORIGINAL_E);
+        assert_eq!(action.execution_target(), original_e);
     }
     let source_native = actual.copy.source_voice().stretch.native_state_address();
+    let (source_assignment, old_assignment) = actual.copy.with_engine(|engine| {
+        let leases = engine.cold_leases.lock().unwrap();
+        (
+            leases[0].as_ref().unwrap().assignment_id().to_owned(),
+            leases[TARGET].as_ref().unwrap().assignment_id().to_owned(),
+        )
+    });
+    assert_ne!(source_assignment, old_assignment);
+    let source_reader = selected.then(|| {
+        actual.copy.with_engine(|engine| {
+            engine.resident_stem_cache.lock().unwrap()[0]
+                .accepted
+                .as_ref()
+                .unwrap()
+                .pair
+                .as_ref()
+                .unwrap()
+                .reader
+                .clone()
+        })
+    });
+    let source_components = actual.copy.callback.mixer.stems_for_measurement()[0]
+        .as_ref()
+        .map(|stems| stems.stems.clone());
     let source_key = actual.copy.with_engine(|engine| {
         engine
             .input_runtime_ownership
@@ -320,7 +617,32 @@ fn case(order: Order, lock: bool) {
     });
     actual.copy.callback.drain();
     actual.settle(&replacement);
-    assert_eq!(actual.copy.callback.frame, CAPTURE_FRAME);
+    actual.copy.with_engine(|engine| {
+        let leases = engine.cold_leases.lock().unwrap();
+        assert_eq!(
+            leases[0].as_ref().unwrap().assignment_id(),
+            source_assignment
+        );
+        let copied_assignment = leases[TARGET].as_ref().unwrap().assignment_id();
+        assert_ne!(copied_assignment, source_assignment);
+        assert_ne!(copied_assignment, old_assignment);
+    });
+    assert_eq!(actual.copy.callback.frame, capture_frame);
+    if let Some(selection) = &old_selection {
+        assert!(!selection.is_current());
+    }
+    if let Some(mode) = &old_mode {
+        assert!(!mode.is_current());
+    }
+    let new_selection = replacement.committed_stem_ticket().unwrap();
+    let stopped_mode = if let Some(selection) = &new_selection {
+        let mode = actual.components(selection, 15);
+        assert_eq!(mode.effective_mode_status(), "waiting");
+        assert_selected_view(&actual, TARGET, selection, 15, false);
+        Some(mode)
+    } else {
+        None
+    };
     assert_eq!(actual.copy.callback.feedback.starts, starts_before);
     let new_binding = actual.copy.with_engine(|engine| {
         engine
@@ -380,6 +702,38 @@ fn case(order: Order, lock: bool) {
         );
         audible |= pcm.iter().any(|sample| sample.abs() > 0.0001);
         assert_source_chronology(&actual, &reference);
+        if let Some((mode, reference_mode)) = &source_modes {
+            assert_eq!(mode.effective_mode_status(), "effective");
+            assert_eq!(reference_mode.effective_mode_status(), "effective");
+            assert_selected_view(&actual, 0, actual.selected.as_ref().unwrap(), 15, true);
+            actual.copy.with_engine(|engine| {
+                let cache = engine.resident_stem_cache.lock().unwrap();
+                assert!(Arc::ptr_eq(
+                    &cache[0]
+                        .accepted
+                        .as_ref()
+                        .unwrap()
+                        .pair
+                        .as_ref()
+                        .unwrap()
+                        .reader,
+                    source_reader.as_ref().unwrap()
+                ));
+            });
+            for (current, original) in actual.copy.callback.mixer.stems_for_measurement()[0]
+                .as_ref()
+                .unwrap()
+                .stems
+                .iter()
+                .zip(source_components.as_ref().unwrap())
+            {
+                assert!(Arc::ptr_eq(&current.samples, &original.samples));
+                assert!(Arc::ptr_eq(
+                    &current.residency.as_ref().unwrap().source,
+                    &original.residency.as_ref().unwrap().source
+                ));
+            }
+        }
         let source = actual.copy.source_voice();
         assert_eq!(source.generation, source_generation);
         assert_eq!(source.stretch.native_state_address(), source_native);
@@ -409,7 +763,7 @@ fn case(order: Order, lock: bool) {
         );
     }
     assert!(audible);
-    assert!(actual.copy.callback.frame > ORIGINAL_E + 8192);
+    assert!(actual.copy.callback.frame > original_e + 8192);
     assert_eq!(action.state(), "rejected");
     assert_eq!(action.reason(), Some("stale_content"));
     assert!(!action.effective());
@@ -417,7 +771,7 @@ fn case(order: Order, lock: bool) {
         assert!(!action.accepted());
     } else {
         assert!(action.accepted());
-        assert_eq!(action.execution_target(), ORIGINAL_E);
+        assert_eq!(action.execution_target(), original_e);
     }
     assert_eq!(
         (
@@ -427,7 +781,7 @@ fn case(order: Order, lock: bool) {
         ),
         original
     );
-    assert_eq!(action.original_due_frame(), ORIGINAL_E);
+    assert_eq!(action.original_due_frame(), original_e);
     assert!(actual.copy.callback.scheduler.is_empty());
 
     let fresh = actual.capture(TARGET, "pitch.extra.step:1:set_retrigger", false);
@@ -485,9 +839,69 @@ fn case(order: Order, lock: bool) {
             .any(|(a, b)| (a - b).abs() > 0.0001)
     );
     assert_source_chronology(&actual, &reference);
+    if let Some(selection) = &new_selection {
+        // Admit advances transport intent but preserves the cancellation revision.
+        // This same-content component receipt can remain current across a pitch
+        // attack; its earlier stopped "waiting" state was never an audible ACK.
+        assert!(stopped_mode.as_ref().unwrap().is_current());
+        assert_eq!(
+            stopped_mode.as_ref().unwrap().residency_status(),
+            "accepted"
+        );
+        let mode = actual.components(selection, 15);
+        let deadline = Instant::now() + Duration::from_secs(10);
+        while mode.effective_mode_status() != "effective" || !current_wet_ready(&actual, TARGET) {
+            actual.copy.callback.drain();
+            actual.copy.callback.render(17);
+            reference.copy.callback.render(17);
+            assert_source_chronology(&actual, &reference);
+            assert!(
+                Instant::now() < deadline,
+                "C lacks its own current effective-mode ACK"
+            );
+            std::thread::sleep(Duration::from_millis(1));
+        }
+        assert_selected_view(&actual, TARGET, selection, 15, true);
+    }
     assert_eq!(
         actual.copy.source_voice().stretch.native_state_address(),
         source_native
+    );
+}
+
+#[test]
+fn selected_copy_fences_prepared_pitch_with_own_components_and_wet_native() {
+    isolated(
+        "overwrite_pitch_tests::selected_copy_fences_prepared_pitch_with_own_components_and_wet_native",
+        || {
+            for lock in [false, true] {
+                run_case(Order::Prepared, lock, true);
+            }
+        },
+    );
+}
+
+#[test]
+fn selected_copy_fences_pitch_first_queue_and_preserves_productive_source() {
+    isolated(
+        "overwrite_pitch_tests::selected_copy_fences_pitch_first_queue_and_preserves_productive_source",
+        || {
+            for lock in [false, true] {
+                run_case(Order::PitchFirst, lock, true);
+            }
+        },
+    );
+}
+
+#[test]
+fn selected_copy_fences_copy_first_queue_and_adopts_fresh_wet_pitch() {
+    isolated(
+        "overwrite_pitch_tests::selected_copy_fences_copy_first_queue_and_adopts_fresh_wet_pitch",
+        || {
+            for lock in [false, true] {
+                run_case(Order::CopyFirst, lock, true);
+            }
+        },
     );
 }
 

@@ -87,6 +87,29 @@ Productive selected-ALL overwrite, the full selection/Hold matrix, DSP quality,
 resource, device, musical and Human acceptance remain open. Production audio and
 scheduler code are unchanged by this regression block.
 
+### Selected-component extension
+
+Six additional profiles exercise the same original pitch/occupied-Copy orders
+with both Key Lock modes, A and C using mask 15 and B its own mask 5. They require
+current own registrations, demanded component acknowledgements, slot-consistent
+leases, distinct A/B/C assignment IDs, exact retained A reader/component owners,
+and actual source-specific wet Native output. A still matches an independently
+constructed reference sample for sample through Copy and the old B effect frame.
+
+C's stopped component receipt is explicitly waiting without a voice or attack.
+The same-content pitch Admit preserves its cancellation revision, so that receipt
+may remain current; it is never treated as an audible acknowledgement while
+stopped. After C's fresh attack, the test requests current mode confirmation and
+requires both its effective ACK and actual current-source wet output. A generic
+wet flag or a mode ACK alone does not satisfy this test. Native readiness is
+established before the Copy comparison, not asserted at the first attack sample.
+
+Mask 15 sums to the canonical FullMix source in this fixture. Selection/demand,
+real component owners, distinct mask 5 and actual Native-source matching therefore
+supplement PCM equality; this is not an independent acoustic masking oracle.
+Cancellation-negative profiles, broader selection/Hold matrices, complete R2,
+DSP quality, resource, device, musical and Human acceptance remain open.
+
 ## Durable intent and the snapshot
 
 `ProjectState.pad_stem_intent` is the single musical stem-selection authority for

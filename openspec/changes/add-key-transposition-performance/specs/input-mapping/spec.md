@@ -109,6 +109,15 @@ identity; removal/reassignment/overwrite SHALL fence its old lifetime.
 - **AND** a fresh C action SHALL use C's own content, source preparation and Native owner through the existing scheduler
 - **AND** host preparation waits SHALL NOT be represented as device deadline or Human acceptance
 
+#### Scenario: Selected components retain their own Copy and pitch adoption
+- **GIVEN** nonneutral A renders a nonzero selected-component mask while occupied B owns a different selected mask and independent living Native state
+- **WHEN** occupied Copy replaces B with stopped C and the original B pitch owner is fenced
+- **THEN** A SHALL retain its selected readers and independent productive Native, PCM, FIFO and source chronology
+- **AND** C SHALL obtain its own current selection registration and demanded component acknowledgement before its fresh pitch attack
+- **AND** stopped component readiness SHALL NOT be reported as an audible effect
+- **AND** C's fresh original action SHALL adopt its own nonneutral selected-source Native and actual wet output
+- **AND** if a later launch or cancellation invalidates a mode receipt, that stale receipt SHALL NOT substitute for C's own current effective-mode acknowledgement
+
 #### Scenario: Original pitch worker prepares before the Pair control mirror
 - **GIVEN** A owns an admitted nonneutral pitch retrigger with its original content lifetime, timestamp, numeric tuple, T and frozen E
 - **WHEN** a real Move or Swap publishes before that same action reaches its preparation worker and the Pair control mirror remains pending
