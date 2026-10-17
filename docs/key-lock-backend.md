@@ -2726,6 +2726,98 @@ would not follow from these observations. No replacement synthesizer, Native
 build, realtime/resource acceptance or Human listening acceptance is delivered;
 the three noise failures and the baseline's six total timing failures remain.
 
+### Complete-Bank Joint Residual Phase — 2026-10-17
+
+The separate offline experiment in `scripts/pitch_joint_residual_phase.py`
+addresses the noise audit's cross-band observation by summing every band and
+every source segment before one phase extraction. It leaves all previous
+renderers, source estimators, production DSP and APIs unchanged. It uses no
+fixture labels, fitted gain, component weights, phase offsets, output delay,
+cutoff, window search or magnitude replacement.
+
+For the existing1024-tap bank the mathematical complete complex kernel is
+H[l]=delta[l]+i*q[l], with q[l]=2*w[l]/1024*cot(pi*l/1024) at odd l and zero
+at even l. The existing cosine window has an exact final zero tap. Thus the
+global source field is Q=x+i*(x*q). Four direct real convolutions, separating
+source parity and channel, retain every quadrature tail and the exact structural
+zeros. There is no FFT or amplitude gate. The algebraic kernel differs from the
+floating computed513-band sum by at most8.339e-15 in the impulse control;
+bitwise equality with that roundoff-affected sum is not claimed.
+
+The existing pooled elapsed phase Psi is computed once on Q at reference omega0.
+It keeps the principal negative-pi tie, largest-channel pooled-zero fallback,
+exact-common-zero runs and birth semantics. Source cues do not reset it.
+At the original source coordinate s, the frozen output is
+Re(L(Q,s)*exp(i*(h/r-1)*L(Psi,s))). Complex interpolation precedes phase action.
+A common rotation preserves relative band phase but does not establish real
+cross-energy or timing preservation. This is distinct from replacing magnitude
+while keeping the sum of independently pitched modes' phase.
+
+Source and Q have immutable bytes backing, including protection against later
+caller mutation. The nominal silence and original signed capture bounds remain:
+origin=min(0,floor(-1/r)+1), nominal=ceil(Nsource/r), and
+retired=max(nominal,floor((last_nonzero+1023)/r)+1). All-silent inputs retire at
+nominal; empty inputs are empty. Bounds use the exact supplied float ratio as
+integers to avoid preflight overflow at tiny positive rates. Invalid input,
+unbounded logical allocation or observed numerical overflow refuses before
+publishing output. The256MiB logical estimate includes immutable-copy overlap,
+prepared arrays and render scratch; it is not measured total RSS. A separate
+source-length cap bounds the four511-tap direct convolutions.
+
+Independent controls compare the full513-band kernel, scalar convolution,
+pooled phase and complete sampling equation. Scalar convolution error is
+1.041e-17; the original three scalar render checks are at most1.388e-17.
+Long-gap and continuous-source-with-cue checks add genuine two-run birth
+coverage and a source cue at1300 without a phase reset, with error at most
+1.997e-15. Nine independent capture checks include a last-frame impulse,
+fractional rates and long nominal trailing silence. Four fractional combined
+h=r identities, empty/silent inputs, immutable backing/caller mutation and
+six malformed sources/five malformed profiles pass. Actual readonly large
+inputs exercise memory and convolution-work refusal; tiny and minimum-subnormal
+rates refuse capture allocation, and a real1e200 source triggers the phase-product
+overflow refusal. Nonfinite phase-multiplier metadata is represented by an
+explicit refusal with a finite/None report value.
+
+The fixed first comparison uses unchanged impulse, mono900.37Hz and unseen_noise
+sources at r1/k0 and r2/k-7,0,+7,+12: exactly15 complete responses. The final
+comparison takes .850 seconds after its controls; preparation is about .02 seconds
+per source in the initial run. All three unity and all three full-capture h=r2
+identities are exact. Pre-event energy, final retirement energy and proportional
+stereo error are zero for all15 responses, and every peak follows its source event.
+All five mono tonal measurements pass15 cents with maximum .001091cent.
+
+The first comparison nevertheless **rejects** the candidate. At rate2 the
+q10/q50/q90 offsets in frames are:
+
+| Source | k=-7 | k=0 | k=+7 | k=+12, h=r |
+| --- | --- | --- | --- | --- |
+| Impulse | 0/0/0 | 0/0/0 | 0/0/0 | 0/0/0 |
+| Mono900.37Hz | -1/-3/-1 | 0/0/0 | -1/+3/+1 | 0/0/0 |
+| Noise | +92/-139/-53 | +146/-76/+12 | +16/+7/+74 | 0/0/0 |
+
+Noise/+7 passes the original timing predicates, but -7 and0 still fail the
+unchanged96-frame q10/q50 limit. No larger matrix or parameter adjustment follows.
+The even-born impulse has511 exact phase runs and its rate2 samples skip the
+odd quadrature taps, so its pass alone is weak evidence for the phase action.
+The mono and noise sources provide the needed nontrivial comparisons.
+
+Passing the strongest-frequency test does not certify distortion: mono/+7 has
+the desired1349.0304Hz peak at amplitude .22714 but also2252.4498Hz at .11233;
+mono/k0 has900.3706Hz at .23322 and2701.1098Hz at .09549. Shifted noise output
+energies are .37483/.37581/.37309 of source energy, against .50064 for the dry
+h=r2 control. These values remain observations, with no fitted normalization.
+The finite causal Q is imperfectly analytic; mixture cancellations, negative
+images, real phase projection, underflow/fallback, fractional phase accuracy,
+aliasing, finite live context, realtime and Human listening remain open.
+
+Reproduce controls with
+`uv run --no-sync python -B scripts/pitch_joint_residual_phase_controls.py`
+and the frozen comparison with
+`uv run --no-sync python -B scripts/pitch_joint_residual_phase_probe.py`.
+They are explicitly invoked offline diagnostics. No existing v10 renderer is
+replaced, and its baseline six timing failures remain. The new isolated/+7
+observation is not product, Native or Human acceptance.
+
 ### Public Exact-Model Complex-Gauge Bound — 2026-10-17
 
 `uv run --no-sync python scripts/pitch_finite_am_gauge_controls.py` evaluates a

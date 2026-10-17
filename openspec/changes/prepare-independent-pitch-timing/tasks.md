@@ -72,6 +72,10 @@
   summing segment PCM per band before squaring and retaining original dry timing criteria.
   The frozen audit attributes most balance changes to cross-band interference; it retains
   all three noise timing failures and supplies no replacement or product acceptance.
+- [x] Evaluate one complete-bank joint residual phase with structural-zero/kernel controls
+  and the frozen noise/impulse/mono15-response comparison, without synthesis fitting.
+  The candidate passes noise/+7 but is rejected by two remaining original noise timing
+  failures; it does not replace the existing renderer or close product acceptance.
 - [ ] Test all37 extras/base -5..+6/total -23..+24 at actual r(n), lockON h/r
   (~.132433..8 for r=.5..2), lockOFF h, original .25..4 corners and finite bounds
   without clipping; prove quality/RT/readiness/latency/finite context/unity transitions.

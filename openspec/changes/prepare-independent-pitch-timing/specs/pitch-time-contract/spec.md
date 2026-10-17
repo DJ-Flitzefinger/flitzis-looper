@@ -681,6 +681,43 @@ synthesizer, realtime safety or acceptance of the still-failing audio backend.
 - **THEN** it SHALL sum the segment PCM before squaring and retain the cancellation inside the band
 - **AND** only interference between the resulting whole bands SHALL enter the signed cross term
 
+### Requirement: Joint Residual Phase Is Evaluated Before Independent Band Rotation
+The separate offline candidate SHALL form the complete complex sum of the
+existing finite bank before extracting its single pooled reference phase.
+All source-segment and band contributions SHALL share this global field; source
+cues SHALL NOT reset its phase. The candidate SHALL retain the existing principal
+negative-pi tie, exact-common-zero run and birth semantics with reference omega0.
+
+For N=1024 the field SHALL equal Q=x+i*(x*q), where q[l]=2*w[l]/N*cot(pi*l/N)
+at odd l and zero at even l, with w[l]=(.5+.5*cos(pi*l/(N-1))) and the existing
+exact final zero tap. Independent controls SHALL compare this algebraic kernel
+with the complete original bank sum. Convolution SHALL preserve structural zero
+parity and support; FFT roundoff or an amplitude threshold SHALL NOT invent or
+erase activity at a theoretically zero impulse tap.
+
+The frozen output SHALL be Re(L(Q,s)*exp(i*(h/r-1)*L(Psi,s))), where Psi is the
+existing pooled elapsed phase of the global field and s is the existing source
+coordinate. Complex interpolation SHALL precede phase action. This is one common
+rotation, not a fitted gain, mode weight, output delay or magnitude replacement.
+The complete nominal silence, predetermined signed capture and finite generated
+tails SHALL remain. Invalid or unbounded input/allocation SHALL refuse explicitly.
+Input ownership and all existing production paths SHALL remain unchanged.
+
+The first comparison SHALL use the unchanged noise, original impulse and
+mono900.37Hz sources, each at r1/k0 and r2/k-7,0,+7,+12, with the existing
+target-blind tonal, 2-ms, prefix, peak, retention and complete-tail criteria.
+The mono source SHALL remain necessary because even-born impulse decimation can
+skip the quadrature tail. A failed first comparison SHALL remain negative evidence,
+without output fitting or a larger parameter search. Shared relative band phase
+SHALL NOT be presented as proof of real-energy timing, alias safety, finite
+causality, realtime resources or product acceptance.
+
+#### Scenario: An impulse has algebraically zero quadrature taps
+- **GIVEN** an isolated source impulse and the complete declared finite kernel
+- **WHEN** the joint source field and its phase runs are constructed
+- **THEN** even quadrature lags and the final tap SHALL remain exactly zero without a threshold
+- **AND** the unchanged tonal source SHALL exercise the joint phase action separately from the decimated impulse
+
 ### Requirement: Combined Pitch And Rate Bounds Are Never Silently Clipped
 The system SHALL validate and report the supported combined pitch/rate domain before accepting
 diagnostic transposition, retaining separate requested, pending, effective and rejected state.
