@@ -24,23 +24,34 @@ pub(crate) fn complete_view_available(sample: &SampleBuffer) -> bool {
         && sample.resident_end() == sample.frame_count()
 }
 
-/// Whole physical input and current publications for every actually required role.
-/// This narrows complete reset preparation; the ordinary feed checks still prove
-/// the reference identity, layout, accepted timing and actual source-domain taps.
-pub(crate) fn complete_read_sets_available(
+/// Current Normal-loop input covers every physical tap, including shifted phases.
+/// Finite views retain their separately captured exact Native coverage and permits;
+/// this check never grants window ownership or authorizes a selection transition.
+pub(crate) fn reset_source_feed_available(
     sample: &SampleBuffer,
     readers: StemReadSets<'_>,
+    sample_rate_hz: u32,
+    accepted: Option<AcceptedTimingProjection>,
     plan: SourceReadPlan,
+    playback: &SourcePlayback,
 ) -> bool {
-    complete_view_available(sample)
+    plan.seek_mode == ExplicitSeekMode::Normal
+        && !plan.transition.is_active()
+        && normal_loop_feed_available_with_readers(
+            sample,
+            readers,
+            sample_rate_hz,
+            accepted,
+            plan,
+            playback,
+        )
         && std::iter::once(plan.selection)
             .chain(plan.transition.required_from_selection())
             .all(|selection| {
                 selection.required_stem_hash().is_none()
-                    || readers.for_selection(selection).is_some_and(|stems| {
-                        stems.publication.current()
-                            && stems.stems.iter().all(complete_view_available)
-                    })
+                    || readers
+                        .for_selection(selection)
+                        .is_some_and(|stems| stems.publication.current())
             })
 }
 

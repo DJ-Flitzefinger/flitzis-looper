@@ -4,7 +4,7 @@
 //! not equality to a Native handle that has processed arbitrary earlier history.
 
 use super::native_source_coverage::{
-    complete_read_sets_available, normal_loop_feed_available_with_readers,
+    normal_loop_feed_available_with_readers, reset_source_feed_available,
 };
 use super::prepared_native_history::{NativeAdapterState, NativeHistoryRequest};
 use super::rubberband_backend::RubberBandError;
@@ -31,8 +31,14 @@ pub(crate) struct EndpointResetHistory {
 impl EndpointResetHistory {
     fn phase_shift(self, request: &NativeHistoryRequest) -> Result<f64, RubberBandError> {
         let readers = StemReadSets::new(request.stems.as_ref(), None);
-        if !complete_read_sets_available(&request.sample, readers, request.plan)
-            || request.plan.seek_mode != ExplicitSeekMode::Normal
+        if !reset_source_feed_available(
+            &request.sample,
+            readers,
+            request.binding.sample_rate_hz,
+            request.binding.accepted,
+            request.plan,
+            &request.playback,
+        ) || request.plan.seek_mode != ExplicitSeekMode::Normal
             || self.plan.seek_mode != ExplicitSeekMode::Normal
             || request.plan.transition.is_active()
             || self.plan.transition.is_active()
@@ -421,10 +427,13 @@ impl NativeAdapterState {
                 .permit
                 .current(&request.sample, request.binding.sample_rate_hz)
             || (endpoint_reset.is_some()
-                && !complete_read_sets_available(
+                && !reset_source_feed_available(
                     &request.sample,
                     StemReadSets::new(request.stems.as_ref(), None),
+                    request.binding.sample_rate_hz,
+                    request.binding.accepted,
                     request.plan,
+                    &request.playback,
                 ))
         {
             return Err(unavailable());

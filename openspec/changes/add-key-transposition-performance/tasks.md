@@ -453,6 +453,22 @@ each subscriber's own pending then accepted/current publication. The full existi
   after repairing its fixture's missing bounded Pending-feedback retry, with a
   deterministic exact-message STOP regression. The initial negative run remains
   recorded; private Release/API/imports and existing App feedback 8 tests pass.
+- [x] Enable wet Normal SET_RETRIGGER during an actual-rate glide on an already
+  genuinely acknowledged finite whole-loop window, with unchanged exact source,
+  physical views, timing/domain, stable selection and every required current pin.
+  First reproduce the complete-view refusal; retain mandatory finite coverage,
+  original T/E, actual rate epochs, shifted seam taps and own Native/FIFO/EQ with
+  independent complete-original PCM, peer/master and relevant refusal/retry proof.
+  Keep finite handover, active transitions, continuous-O, acoustic, deadlines,
+  resource, Human and every original parent acceptance gate open.
+  Six actual WindowACK GUI/MIDI/refusal/retry profiles pass Debug (9.94 s) and
+  Release (8.59 s), including selected +12 ON, H=13312 and cold p=4. First adopted
+  PCM is exact; continuing maximum is 1.49e-8. A genuine new WindowACK after READY
+  preserves old-note PCM at E and rejects the unchanged original at E+1; its
+  fresh settled retry succeeds. Whole pitch 67 plus one existing ignored
+  diagnostic and adjacent coverage/replay/permit/action/endpoint/controller/
+  lifecycle checks pass. Private Release/API/imports, App feedback 8, lint,
+  formatting and affected strict pass; original negative attempts are retained.
 - [ ] V0: complete new controls+copy/move/bank/hold/pending/restore workload and
   P6 resource/216/disk/RSS proofs repeated; preserve all failed attempts/source roles.
 - [ ] During implementation: focused meaningful compile/regressions and required

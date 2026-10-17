@@ -13,6 +13,8 @@ use super::*;
 use crate::audio_engine::constants::{SPEED_MAX, SPEED_MIN};
 use crate::audio_engine::source_playback::SourcePlayback;
 
+#[path = "finite_window_rate_glide_tests.rs"]
+mod finite_window_rate_glide_tests;
 #[path = "selected_stem_rate_glide_tests.rs"]
 mod selected_stem_rate_glide_tests;
 

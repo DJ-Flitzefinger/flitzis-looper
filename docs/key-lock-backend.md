@@ -3999,7 +3999,91 @@ or hook was attempted. This records a tool/documentation mismatch, not access
 denial or zero observed C++ allocations. See [Microsoft's example](https://learn.microsoft.com/en-us/windows-hardware/drivers/devtest/example-11--starting-a-private-trace-session)
 and [command reference](https://learn.microsoft.com/en-us/windows-hardware/drivers/devtest/tracelog-command-syntax).
 
-Native/C++ allocation and arbitrary logging, outer CPAL/device deadlines,
-active-ramp/finite readiness, continuous-O and full actual-rate/acoustic matrices,
+At this preceding checkpoint, Native/C++ allocation and arbitrary logging, outer
+CPAL/device deadlines, active-ramp/finite readiness, continuous-O and full actual-rate/acoustic matrices,
 P6/V0/216/30-minute resources and Human/device/listening/parent acceptance remain
 open. No Human App, device, installation or held Native was changed.
+
+### Already acknowledged finite Normal windows during a glide — 2026-10-17
+
+The complete-view restriction from the preceding selected-stem delivery also
+refused an original wet glide attack on an already acknowledged finite loop
+window. The new fixture first received its real Native WindowACK at frame zero
+for [4800, 100800) of a 144000-frame source, with revision 2 and bit-exact stored
+PCM. Both voices started normally. An unmodified failing backtrace then identified
+`apply_wet_attack` rather than initial birth or window setup: the original action
+was rejected with `preparation_failed`. An earlier fixture attempt supplied a
+parent path containing `..`; canonicalizing the existing output parent fixed
+that setup error without relaxing the source-path validator.
+
+The shared reset-input check now requires Normal mode, no active transition,
+current required StemSet publications and the existing all-phase Normal-loop
+coverage proof. A finite window that physically holds the whole loop union and
+both interpolation seam taps does not need unrelated complete-track samples.
+The same check runs on both actual capture contexts, the frozen reset endpoint
+and after replay. Existing original and shifted checked reads, exact historical
+resident bindings, accepted timing, source/voice guards and final Native/action
+claim remain intact. Finite requests still carry mandatory NormalLoopCoverage;
+its test tap counters observe reads and grant no authority. Pre-ACK spans within
+the required history still refuse because their original bindings differ.
+
+The fixture writes declared deterministic original f32 PCM into canonical cold
+artifacts, attaches their verified identity before source publication, retains
+actual lease/assets and requests the finite range through the existing worker
+and callback transaction. This direct PCM publication seam does not test decoding,
+inference or Human input. A separate complete PCM allocation precedes attachment
+and supplies the scalar/direct-Native oracle. Selected component sums are formed
+from complete declared inputs before their actual finite views are retained.
+
+The initial four FullMix/selected and OFF/ON GUI/MIDI cases pass in Debug (6.72 s,
+19.32 s compilation). Each compares 83195 output frames through the first natural
+physical loop seam. First adopted samples are exact; maximum continuing error is
+1.4901161193847656e-8 for FullMix and zero for selected signals. Prepared finite
+coverage observes 4096 left and right reads with no missing taps. Actual following
+reads span [4800, 100799], including the independently predicted seam, with zero
+missing reads. Original T/E, actual r=1.3500000000000008, target 2, remaining 439
+frames, own Native/FIFO/filter state and peer/master chronology remain checked.
+The final six-child Debug parent passes in 9.94 s (16.49 s compilation). A selected
++12 ON case retains its actual finite owners and needs H=13312 rather than the
+endpoint's 4096 frames, with cold p=4 across 18 independently queried profiles.
+Its 33192 compared output frames have zero error and no missing reads. All five
+gliding positive profiles explicitly observe fractional right reads.
+
+A real storage-only WindowWork/ACK after genuine READY changes revision 2 and
+[4800, 100800) to revision 3 and [4783, 100823), while the admitted piano action's
+original T=17192 and E=25384 stay frozen. The existing WindowPending policy first
+defers the old action at E; its first E sample remains exactly the old independent
+PCM. At the next callback, E+1, the exact-E guard rejects with prepared_mismatch,
+without any late pitch, restart or Native/FIFO/filter effect. This observation
+does not describe an immediate rejected status at E. A fresh GUI +7 action after
+the genuine glide settles obtains its own current-window candidate and applies
+at its own E=45384. Its first sample is exact and continuing error is at most
+1.49e-8 across 51804 total compared frames. At settled r=2 its integer reset
+positions read exactly 4096 left taps and zero fractional right taps; mandatory
+finite coverage still proves both physical seam taps are held.
+
+Two earlier fixture expectations failed and remain recorded: expecting terminal
+rejection at E rather than observing the existing deferred check at E+1, and
+requiring fractional reads for the declared integer-position settled retry.
+Neither correction changes production scheduling, permissions or audio references.
+Optimized Release passes all six children in 8.59 s (1 min 47 s compilation),
+replay 3, coverage 12 and Native permit 9 tests. Integrated Debug passes coverage
+12, replay 3, permit 9, actions 20, ordinary endpoint 23, controller 17, callback
+lifecycle 2 and the complete pitch suite, 67 tests with one existing explicitly
+ignored Native diagnostic, in 152.72 s. Its 16 productive-pressure profiles still
+finish 3072 pressure and 48 recovery actions with zero final claims and zero
+independent PCM error. Existing fixed acoustic diagnostic failures remain failures.
+
+All-target lint passes in 12.99 s with the same 95 library-test warnings and 45
+duplicates; formatting, affected official strict validation and whitespace pass.
+A private locked stripped Release wheel builds in 27.04 s with 23 existing
+warnings. Its actual private Native origin, release profile, eight bootstrap API
+checks and real App/piano/global-parameter/BS-RoFormer imports pass; the existing
+App feedback tests pass 8 cases in 0.31 s against it. No module was installed and
+the Human's held Native was unchanged. One independent final source review covers
+this bounded delivery.
+
+This is unchanged-window Normal-loop engineering. Finite window handover, active
+selection transitions, continuous-O, acoustic predicates, performer/device
+deadlines, Native/C++ allocation/logging, P6/V0/216/30-minute resource and all
+Human/parent acceptance gates remain open.

@@ -14,7 +14,7 @@ use crate::messages::{ControlMessage, PreparedStemSet, STEM_BUFFER_COUNT, StemMi
 const SELECTED_CHILD: &str = "FLITZI_SELECTED_PIANO_RATE_GLIDE_CHILD";
 const SELECTED_TEST: &str = "audio_engine::pitch_runtime_tests::piano_mouse_tests::piano_rate_controller_tests::piano_rate_glide_tests::selected_stem_rate_glide_tests::selected_stem_piano_retrigger_keeps_original_glide";
 const SELECTED_HASH: u64 = 0x71_65_79_67;
-const SELECTED_MASK: u8 = 0b0101;
+pub(super) const SELECTED_MASK: u8 = 0b0101;
 
 fn declared_component(component: usize, extent: usize) -> SampleBuffer {
     SampleBuffer {
@@ -60,9 +60,7 @@ fn selected_pcm_source(stems: &PreparedStemSet, mask: u8) -> SampleBuffer {
     }
 }
 
-fn selected_start(lock: bool) -> (RateRoute, [Original; 2], PreparedStemSet) {
-    let mut route = RateRoute::new(lock);
-    let source = &route.sources[0];
+pub(super) fn publish_selected(route: &mut RateRoute, source: &SampleBuffer) -> PreparedStemSet {
     let (publication, accepted) = Python::attach(|py| {
         let engine = route.route.engine.borrow(py);
         let captured = engine
@@ -108,7 +106,7 @@ fn selected_start(lock: bool) -> (RateRoute, [Original; 2], PreparedStemSet) {
         .unwrap();
         (permit, binding.accepted)
     });
-    let stems = PreparedStemSet {
+    let complete_stems = PreparedStemSet {
         complete_set_identity: Arc::new([0x71; 32]),
         accepted_timing: accepted,
         reference_samples: source.samples.clone(),
@@ -120,13 +118,11 @@ fn selected_start(lock: bool) -> (RateRoute, [Original; 2], PreparedStemSet) {
         frame_count: source.frame_count(),
         available_mask: (1 << STEM_BUFFER_COUNT) - 1,
         stems: std::array::from_fn(|component| declared_component(component, source.frame_count())),
-    }
-    .window_for(source)
-    .unwrap();
-    assert!(route.route.mixer.publish_prepared_stems(0, stems.clone()));
-    assert_eq!(stems.publication.status(), "accepted");
-    let selected = selected_pcm_source(&stems, SELECTED_MASK);
-    let difference: f64 = source
+    };
+    // Preserve an independently mixed complete source before the productive
+    // descriptor crops its component views to the actually acknowledged window.
+    let selected = selected_pcm_source(&complete_stems, SELECTED_MASK);
+    let difference: f64 = route.reference_sources[0]
         .samples
         .iter()
         .zip(selected.samples.iter())
@@ -135,6 +131,9 @@ fn selected_start(lock: bool) -> (RateRoute, [Original; 2], PreparedStemSet) {
     assert!(difference > 100.0, "selected PCM must distinguish FullMix");
     assert_eq!(route.sources[0].source_address(), source.source_address());
     route.reference_sources[0] = selected;
+    let stems = complete_stems.window_for(source).unwrap();
+    assert!(route.route.mixer.publish_prepared_stems(0, stems.clone()));
+    assert_eq!(stems.publication.status(), "accepted");
 
     // The queue and normal production handlers apply selection while stopped,
     // so the entire actual lifecycle has this same stable selected reader.
@@ -164,6 +163,27 @@ fn selected_start(lock: bool) -> (RateRoute, [Original; 2], PreparedStemSet) {
     });
     route.callback(0);
     route.assert_no_attacks();
+    eprintln!(
+        "selected_stem_rate_glide_source {}",
+        serde_json::json!({
+            "mask":SELECTED_MASK,"components":STEM_BUFFER_COUNT,
+            "selected_vs_FullMix_squared_difference":difference,
+            "physical_source":route.sources[0].source_address(),
+            "peer_source":route.sources[1].source_address(),
+            "set_owner":Arc::as_ptr(&stems.complete_set_identity) as usize,
+            "publication_owner":Arc::as_ptr(&stems.publication.epoch) as usize,
+            "publication_generation":stems.publication.expected,
+            "source_window_start":source.resident_start(),"source_window_end":source.resident_end(),
+            "scope":"declared component PCM, source-bound initial publication seam, genuine queued stable selection before first birth; independently mixed complete reference before component window cropping"
+        })
+    );
+    stems
+}
+
+fn selected_start(lock: bool) -> (RateRoute, [Original; 2], PreparedStemSet) {
+    let mut route = RateRoute::new(lock);
+    let source = route.sources[0].clone();
+    let stems = publish_selected(&mut route, &source);
     public_speed(&route, INITIAL_SPEED);
     route.callback(0);
     route.assert_no_attacks();
@@ -180,23 +200,10 @@ fn selected_start(lock: bool) -> (RateRoute, [Original; 2], PreparedStemSet) {
     route.callback(733);
     route.assert_no_attacks();
     assert_selected(&route, &stems);
-    eprintln!(
-        "selected_stem_rate_glide_source {}",
-        serde_json::json!({
-            "mask":SELECTED_MASK,"components":STEM_BUFFER_COUNT,
-            "selected_vs_FullMix_squared_difference":difference,
-            "physical_source":route.sources[0].source_address(),
-            "peer_source":route.sources[1].source_address(),
-            "set_owner":Arc::as_ptr(&stems.complete_set_identity) as usize,
-            "publication_owner":Arc::as_ptr(&stems.publication.epoch) as usize,
-            "publication_generation":stems.publication.expected,
-            "scope":"declared complete PCM, source-bound initial publication seam, genuine queued stable selection before first birth; independent component mix"
-        })
-    );
     (route, originals, stems)
 }
 
-fn assert_selected(route: &RateRoute, stems: &PreparedStemSet) {
+pub(super) fn assert_selected(route: &RateRoute, stems: &PreparedStemSet) {
     let index = route
         .route
         .mixer

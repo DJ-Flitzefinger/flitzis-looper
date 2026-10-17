@@ -294,17 +294,23 @@ impl RtMixer {
                     if gliding {
                         if current.paused
                             || current.readers().is_none_or(|readers| {
-                                !super::super::native_source_coverage::complete_read_sets_available(
+                                !super::super::native_source_coverage::reset_source_feed_available(
                                     &current.sample,
                                     readers,
+                                    current.sample_rate_hz,
+                                    current.accepted,
                                     current.plan,
+                                    &current.playback,
                                 )
                             })
                             || snapshot.readers().is_none_or(|readers| {
-                                !super::super::native_source_coverage::complete_read_sets_available(
+                                !super::super::native_source_coverage::reset_source_feed_available(
                                     &snapshot.sample,
                                     readers,
+                                    snapshot.sample_rate_hz,
+                                    snapshot.accepted,
                                     snapshot.plan,
+                                    &snapshot.playback,
                                 )
                             })
                             || current.plan.seek_mode != ExplicitSeekMode::Normal

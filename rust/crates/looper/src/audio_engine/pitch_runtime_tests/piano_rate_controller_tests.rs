@@ -393,6 +393,14 @@ fn complete_source(id: usize) -> SampleBuffer {
 
 impl RateRoute {
     fn new(lock: bool) -> Self {
+        Self::new_with_sources(lock, [complete_source(0), complete_source(1)], |_, _| {})
+    }
+
+    fn new_with_sources(
+        lock: bool,
+        sources: [SampleBuffer; 2],
+        initialize: impl FnOnce(&mut Fixture, &[SampleBuffer; 2]),
+    ) -> Self {
         let mut fixture = Fixture::new(lock);
         let (producer, consumer) = RingBuffer::new(CAPACITY);
         *fixture.control.producer.lock().unwrap() = producer;
@@ -403,7 +411,9 @@ impl RateRoute {
             Some((fixture.control.producer.clone(), messages.clone()));
         let (parameters, parameter_consumer) = RingBuffer::new(CAPACITY);
         fixture.control.engine.test_parameter_producer = Some(Arc::new(Mutex::new(parameters)));
-        let sources = [complete_source(0), complete_source(1)];
+        // Optional fixture-owned canonical material is installed before the real
+        // source publication. The normal source/ACK/controller path stays shared.
+        initialize(&mut fixture, &sources);
         for (id, source) in sources.iter().enumerate() {
             publish_tone(&fixture.control, id, source.clone(), true);
             fixture.mixer.load_sample(id, source.clone());
