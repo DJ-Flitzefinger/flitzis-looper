@@ -1887,7 +1887,7 @@ impl ColdLoad {
 
 #[cfg(test)]
 #[path = "cold_load_tests.rs"]
-mod tests;
+pub(in crate::audio_engine) mod tests;
 
 #[cfg(test)]
 #[path = "cold_cancellation_publication_tests.rs"]

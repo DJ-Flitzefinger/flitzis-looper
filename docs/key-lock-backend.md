@@ -3386,9 +3386,46 @@ reads. They retain the claimed Native address and queue no automatic replacement
 including after the later 4,096-frame boundary. Real filter-history probes distinguish
 warm and reset state and stay unchanged through pause, adoption and Resume. Public
 Controller +7/-3 GLOBAL tests retain separate resident tickets and E values one
-frame apart for running and paused targets, with independent explicit-peer PCM/EQ
-checks and armed versus first actual wet feedback. Refusal/retry retains original
-receipts across Resume/Pause, supersession and Stop.
+frame apart for running and paused targets, with armed versus first actual wet
+feedback. The same public controller history now also compares the target voices'
+individual raw Native channels and continuing EQ against independent original-PCM
+references, alongside uninterrupted explicit ON/OFF peers and their audible sum.
+The target clocks, serialized PCM copies and EQ histories originate at their
+public births; nonstarting SET and each mode adoption replace only the target's
+independent Native reference at its own E. Pause consumes no source, Native FIFO
+or EQ state, and the first adopted and resumed samples use the same comparison.
+
+This constant 48 kHz mono FullMix NormalLoop profile at r=.73 uses the established
+exact endpoint-H reset. Its +7 ON tuple has p=2.052475447776276 and independently
+configured H=8192; +7 OFF and -3 in either mode use H=4096. The p>2 cold profile's
+silent unity initialization precedes the real source feed and adds no source or
+adapter FIFO time. The reused two-channel direct-Native adapter computes its
+bound from the pinned Short-window profile and actual delay, without calling the
+production source-history bound or reading productive PCM. The variable-history
+O/512 replay origin does not apply to this constant endpoint fast path.
+
+The focused history passes in Debug (2.66 s) and optimized Release (1.32 s):
+13,319 target samples at +7 and 4,097 at -3 have zero maximum raw/EQ-peak error,
+including own E and Resume boundaries;
+the independently summed four-voice output differs by at most 5.9604645e-8.
+Actual DLL pitch, Native/FIFO identity and counts, source/DSP chronology, exact
+live pad membership, receipts and intent origins are also checked. This closes
+the target-reference gap in that existing software history; it proves no new
+runtime defect or continuous-from-O, variable-rate, acoustic, resource or Human
+acceptance. The entire affected public controller family passes 16 Debug cases
+in 13.05 s. The productive Release build, eight existing bootstrap API checks
+and actual App entry-point imports from the preceding rate-glide delivery are
+reused because this extension changes only tests and their scoped visibility;
+no productive API, dependency, DLL, schema or installer layout changes.
+The broader reused-adapter integration completed 129 cases with one P5b harness
+startup timeout in 715.82 s. That timing-event case then passed alone (0.57 s),
+and the five focused P5b admission cases passed (5.10 s); no source or timeout
+was changed. The original 129/1 result remains a negative observation with an
+unestablished cause, rather than a fresh all-green 130-case claim. Formatting,
+affected strict validation and all-target Clippy pass; Clippy retains the 95
+existing test warnings. No new target-oracle warning is reported.
+Refusal/retry retains original receipts across Resume/Pause,
+supersession and Stop.
 
 Prepared ordinary local and GLOBAL births rearm the existing zero-pitch ON
 first-live-wet guard after adopting their clean candidate. A previous voice's

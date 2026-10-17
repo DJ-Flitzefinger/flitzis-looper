@@ -410,6 +410,13 @@ from that voice's first actual successful Native output after Resume.
 - **AND** another inherited target SHALL remain independently eligible for its own E and acknowledgement
 - **AND** a later paused request on the same worker SHALL remain usable without borrowing another target's receipt or refreshing the refused E
 
+#### Scenario: Nonneutral GLOBAL targets own their first adopted and resumed PCM
+- **GIVEN** independently audible inherited positive and negative transpositions, one running and one paused, alongside explicit ON and OFF peers
+- **WHEN** the public GLOBAL controller changes Lock in either direction through separate current resident transactions with distinct own E frames
+- **THEN** each target SHALL retain its old effective PCM before its own E and its own prospective Native/FIFO from that E, without a pitch, source-clock or filter restart
+- **AND** its first adopted or resumed sample and following Native blocks SHALL match independent original-source/direct-Native/filter chronology for the declared preparation origin and actual pitch-dependent history bound
+- **AND** paused output SHALL consume no source, Native FIFO or filter state, while each explicit peer continues its own uninterrupted PCM and retains its override and acknowledgement
+
 #### Scenario: A prepared ordinary birth owns its first live wet acknowledgement
 - **GIVEN** a tracked zero-pitch KEY LOCK ON voice previously emitted confirmed wet output and was stopped
 - **WHEN** a new addressed or global ordinary start adopts its own prepared Native/FIFO at its original E

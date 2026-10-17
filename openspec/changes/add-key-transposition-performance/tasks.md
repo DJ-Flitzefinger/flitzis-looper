@@ -414,6 +414,16 @@ each subscriber's own pending then accepted/current publication. The full existi
   imports pass; affected strict, formatting and lint checks pass.
   Successful wet reset-phase attacks while still gliding remain unsupported here;
   retain all variable-r/continuous-O/quality/P6/V0/Human gates.
+- [x] Extend the existing public nonneutral GLOBAL running/paused target history
+  with independent original-source, direct-Native and continuous per-pad EQ PCM
+  for both target voices from nonstarting SET through each own mode E and Resume.
+  Check the actual pitch-dependent H and declared constant endpoint history,
+  first samples and following FIFO blocks, unchanged explicit peers and receipts;
+  preserve continuous-O, variable-rate, acoustic, resource and Human gates.
+  The same history passes in Debug (2.66 s) and Release (1.32 s): +7 target
+  13,319 samples and -3 target 4,097 samples, raw/EQ maximum error zero;
+  four-voice sum maximum 5.9604645e-8. The actual +7 ON history is 8,192 frames,
+  the other declared tuples 4,096. Entire controller family: 16 Debug PASS.
 - [ ] V0: complete new controls+copy/move/bank/hold/pending/restore workload and
   P6 resource/216/disk/RSS proofs repeated; preserve all failed attempts/source roles.
 - [ ] During implementation: focused meaningful compile/regressions and required

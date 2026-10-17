@@ -2378,7 +2378,7 @@ struct ControllerSeekEpoch {
     target: usize,
 }
 
-struct ControllerRawNative {
+pub(in crate::audio_engine) struct ControllerRawNative {
     native: RubberBandLiveShifter,
     input: [VecDeque<f32>; 2],
     output: [VecDeque<f32>; 2],
@@ -2481,7 +2481,7 @@ impl ControllerRawNative {
         Self::new_with_pitch(pitch_scale_for_tempo_ratio(ratio), prepared)
     }
 
-    fn new_with_pitch(pitch: f64, prepared: bool) -> Self {
+    pub(in crate::audio_engine) fn new_with_pitch(pitch: f64, prepared: bool) -> Self {
         let mut native = RubberBandLiveShifter::new(RATE, 2).unwrap();
         if prepared {
             native.prepare_exact_pitch(pitch).unwrap();
@@ -2499,6 +2499,29 @@ impl ControllerRawNative {
         }
     }
 
+    /// Independent pinned 48 kHz Short-window bound, measured after this exact reset profile.
+    /// This deliberately does not call the production source-history bound helper.
+    pub(in crate::audio_engine) fn constant_history_frames(pitch: f64) -> usize {
+        let raw = Self::new_with_pitch(pitch, true);
+        if (0.5..=2.0).contains(&pitch) {
+            4096
+        } else {
+            let block = raw.native.block_size();
+            ((2048.0 * pitch.max(1.0 / pitch)).ceil() as usize
+                + raw.native.start_delay()
+                + 2 * block)
+                .max(4096)
+                .div_ceil(block)
+                * block
+        }
+    }
+
+    pub(in crate::audio_engine) fn fifo_frames(&self) -> (usize, usize) {
+        assert_eq!(self.input[0].len(), self.input[1].len());
+        assert_eq!(self.output[0].len(), self.output[1].len());
+        (self.input[0].len(), self.output[0].len())
+    }
+
     fn set_rate(&mut self, ratio: f64) {
         let pitch = pitch_scale_for_tempo_ratio(ratio);
         // The declared binary64 trajectory includes the final sub-.001 step.
@@ -2509,7 +2532,7 @@ impl ControllerRawNative {
         }
     }
 
-    fn render(&mut self, feed: &[Vec<f32>; 2]) -> Vec<f32> {
+    pub(in crate::audio_engine) fn render(&mut self, feed: &[Vec<f32>; 2]) -> Vec<f32> {
         let frames = feed[0].len();
         for (input, feed) in self.input.iter_mut().zip(feed) {
             input.extend(feed.iter().copied());

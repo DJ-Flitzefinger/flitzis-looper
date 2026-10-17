@@ -7,7 +7,7 @@
 use super::*;
 
 #[path = "committed_stem_residency_tests.rs"]
-mod committed_stem_residency_tests;
+pub(in crate::audio_engine) mod committed_stem_residency_tests;
 use crate::audio_engine::material_migration::{
     PreparedMigrationMaterial, prepare_material_complete_for_test as prepare_material,
 };
