@@ -99,6 +99,16 @@ identity; removal/reassignment/overwrite SHALL fence its old lifetime.
 - **WHEN** A moves/swaps or its lifetime is removed before the event applies
 - **THEN** it follows live A or terminates fenced, never targets the former slot's replacement
 
+#### Scenario: Occupied Copy fences an original target pitch attack
+- **GIVEN** living source A has a nonneutral piano and offset tuple and occupied target B owns an original captured and published pitch retrigger
+- **WHEN** a real occupied Copy replaces B with fresh stopped C before that retrigger's effect, including an already admitted/prepared candidate or either queue order
+- **THEN** the original B action SHALL terminate fenced without attacking or retuning C at its original frame
+- **AND** an admitted action SHALL retain its frozen execution frame while Copy-first processing SHALL reject stale B before scheduler admission
+- **AND** C SHALL retain A's copied numeric tuple and its own fresh lifetime until a fresh C action is admitted
+- **AND** A SHALL retain its original Native owner, source, FIFO, DSP history and independent PCM chronology through Copy claim and settlement
+- **AND** a fresh C action SHALL use C's own content, source preparation and Native owner through the existing scheduler
+- **AND** host preparation waits SHALL NOT be represented as device deadline or Human acceptance
+
 #### Scenario: Original pitch worker prepares before the Pair control mirror
 - **GIVEN** A owns an admitted nonneutral pitch retrigger with its original content lifetime, timestamp, numeric tuple, T and frozen E
 - **WHEN** a real Move or Swap publishes before that same action reaches its preparation worker and the Pair control mirror remains pending

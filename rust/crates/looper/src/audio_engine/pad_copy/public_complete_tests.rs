@@ -8,6 +8,9 @@ mod midi_binding_tests;
 #[path = "overwrite_public_tests.rs"]
 mod overwrite_public_tests;
 
+#[path = "overwrite_pitch_tests.rs"]
+mod overwrite_pitch_tests;
+
 use super::{CapturedPadCopy, PadCopyTicket};
 use crate::audio_engine::AudioEngine;
 use crate::audio_engine::audio_stream::{
@@ -340,9 +343,7 @@ impl Callback {
                     .fed_output_frames
                     >= 4096
             );
-            let taps = voice.stretch.native_tap_observation().unwrap();
-            assert!(taps.left_reads > 0);
-            assert_eq!(taps.missing_reads, 0);
+            assert_productive_native_source(voice);
         }
     }
 
@@ -371,6 +372,26 @@ impl Callback {
         assert!(engine.publish_pad_start(&start, None).unwrap());
         assert_eq!(self.drain(), 0, "the same original start is one-shot");
         assert_eq!(self.feedback.starts[id], starts_before + 1);
+    }
+}
+
+fn assert_productive_native_source(voice: &crate::audio_engine::voice_slot::VoiceSlot) {
+    let sample = voice.sample.as_ref().unwrap();
+    let history = voice.stretch.productive_history().unwrap();
+    assert!(history.binding.same_source(
+        crate::audio_engine::productive_source_history::ProductiveSourceBinding::new(
+            sample, RATE, None,
+        )
+    ));
+    assert_eq!(history.binding.resident, sample.resident_binding());
+    if let Some(taps) = voice.stretch.native_tap_observation() {
+        assert!(taps.left_reads > 0);
+        assert_eq!(taps.missing_reads, 0);
+    } else {
+        // Complete-source replay does not construct a bounded-window coverage
+        // certificate. Require the actual complete-view branch and real source
+        // binding instead; finite windows still require their tap evidence.
+        assert!(crate::audio_engine::native_source_coverage::complete_view_available(sample));
     }
 }
 

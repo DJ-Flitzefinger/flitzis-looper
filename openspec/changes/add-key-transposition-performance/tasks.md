@@ -27,6 +27,14 @@ not replace the full milestone or close any parent, DSP-quality or Human gate.
 
 ## Latest Human execution priority — 2026-10-14
 
+### Native occupied Copy and original pitch ownership — 2026-10-17
+
+- [x] Prove nonneutral octave/offset intent through actual public occupied Copy,
+  prepared and both queued pitch orders, old-target lifetime fencing, independent
+  source PCM/Native/FIFO/DSP chronology and fresh replacement pitch adoption in
+  both Key Lock modes. This FullMix software proof does not close selected-ALL,
+  complete R2, quality/resource or Human gates.
+
 The Human prioritizes a complete, testable Key + Transposition / playable keyboard /
 MIDI SET and SET_RETRIGGER product milestone before bank, bulk and RECORD delivery.
 Finish the current Controller/Durable/Hold block first. Close the actual remaining

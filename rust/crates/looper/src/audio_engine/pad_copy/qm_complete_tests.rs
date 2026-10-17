@@ -139,6 +139,7 @@ impl Harness {
         let (feedback, messages) = RingBuffer::new(128);
         engine.test_control_channels = Some((producer.clone(), Arc::new(Mutex::new(messages))));
         engine.test_parameter_producer = Some(Arc::new(Mutex::new(parameter_producer)));
+        engine.test_output_format = Some((rate, 1));
         let mut mixer = Box::new(RtMixer::new(1, rate as f32));
         mixer.set_input_runtime_ownership(engine.input_runtime_ownership.clone());
         mixer.set_prepared_source_epochs(engine.prepared_source_epochs.clone());
@@ -759,8 +760,19 @@ fn actual_qm_automatic_copy_own_ack_persistence_and_fresh_engine_restore() {
         );
         assert_eq!(fresh.export(215, &canonical).unwrap(), historical_json);
         fresh.with_engine(|engine| engine.play_sample(215, 1.0, None).unwrap());
+        let ControlMessage::CapturePadStartTarget(start) = fresh.callback.controls.peek().unwrap()
+        else {
+            panic!("fresh public launch must retain its original source owner");
+        };
+        let start = start.clone();
+        let effect_frame = fresh.callback.frame;
         fresh.callback.drain();
+        assert!(start.accepted(), "reason={:?}", start.reason());
+        assert_eq!(start.target_frame(), Some(effect_frame));
+        assert_eq!(start.execution_frame(), Some(effect_frame));
         fresh.callback.render(17);
+        assert_eq!(start.state(), "applied", "reason={:?}", start.reason());
+        assert_eq!(start.effective_frame(), Some(effect_frame));
         let voice = fresh
             .callback
             .mixer

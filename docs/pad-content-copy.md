@@ -60,6 +60,33 @@ selection/Hold matrices and whole R2 acceptance remain open, as do musical,
 resource, device and Human gates. It does not expose the pending
 Key/transposition performance milestone.
 
+## Scheduled pitch across an occupied Copy — 2026-10-17
+
+The device-free public stereo regression now composes a real occupied Copy with
+an old target's original pitch attack. Source A first adopts piano +12 and offset
+-5 through real captures, workers and scheduler effects. Its complete musical
+snapshot carries both nonneutral components into fresh stopped C when A replaces
+occupied B. The old B action cannot attack or retune C, whether B already had a
+prepared candidate or Pitch and Copy are processed in either queue order.
+Admitted B actions retain their frozen execution frame; Copy-first processing
+rejects stale B before scheduler admission. The terminal reason is `stale_content`.
+
+For both Key Lock modes, an independently constructed A reference checks exact
+PCM, source progression, Native/FIFO chronology and DSP history through Copy's own
+acknowledgement, mirror and finish, across the old effect frame and beyond a full
+preparation lead. C has a lifetime distinct from A and B, retains the copied
+tuple, and remains stopped until its fresh offset-step retrigger. That original
+C capture adopts its own prepared Native and source binding and contributes
+actual additional PCM while A continues independently.
+
+This profile uses FullMix and complete-source replay. The fixture checks actual
+productive source/resident bindings; bounded-window preparation still requires
+its tap certificate, whereas complete-source replay has no such certificate.
+Host readiness waits freeze virtual time and do not establish a device deadline.
+Productive selected-ALL overwrite, the full selection/Hold matrix, DSP quality,
+resource, device, musical and Human acceptance remain open. Production audio and
+scheduler code are unchanged by this regression block.
+
 ## Durable intent and the snapshot
 
 `ProjectState.pad_stem_intent` is the single musical stem-selection authority for
