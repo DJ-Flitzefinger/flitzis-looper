@@ -3633,6 +3633,10 @@ acceptance. Worker waits hold the virtual clock; no App or device is started.
 
 ### Piano retrigger preserves an unfinished actual rate glide — 2026-10-17
 
+This section records checkpoint `d3b8b55`. Its whole-wet refusal and six-case
+profile are historical; the following section extends supported complete Normal
+sources with a separately declared reset-phase history.
+
 The genuine ImGui piano/public `UiContext` rate route exposed a K20 defect. Two
 audible nonneutral voices start at speed .5, then an accepted public speed 2
 request starts the existing .05-per-512-active-frame glide. A real +7 piano attack
@@ -3689,6 +3693,81 @@ Engine or device start. Native API, dependencies and installer layout are unchan
 Host worker waits hold the virtual clock. Successful wet attacks during unfinished
 smoothing, general continuous-O/actual-r(n), complete B5/P6/V0/216/30-minute,
 acoustic, device, deadline and Human gates remain open.
+
+### Wet Normal piano retrigger uses original glide epochs — 2026-10-17
+
+A wet piano attack on a running complete FullMix NormalLoop can now keep its
+original E during an accepted rate glide and adopt its own prepared Native.
+The existing preallocated action snapshot captures the original actual source
+journal, frozen F-to-E projection and voice generation. A separate scalar
+`EndpointResetHistory` retains the unmodified original E checkpoint. The worker
+first proves that exact checkpoint, then proves that the prescribed Normal seek
+and unchanged domain exactly match the action's reset endpoint.
+
+The same bounded source-history worker derives its new input phases by translating
+the original Normal epoch origins by the negative original E phase modulo the
+actual physical or musical period. It preserves each epoch's elapsed frames,
+actual rate, accepted target and smoothing interval. These are explicitly derived
+new-start reads; the actual journal remains unchanged. Every shifted read uses
+current complete-source coverage. The new owner starts at A=E minus whole Native
+blocks covering the pitch-dependent H fixed point across every included epoch.
+The epoch completing the first real input block selects the cold profile,
+including the existing p>2 silent-unity initialization. After this declared input
+history, the candidate retains the exact frozen reset endpoint; live candidate
+and adoption comparisons remain strict.
+
+Only wet actions with F or E still gliding use this path. A glide settling before
+E can still occur inside the required H history and is therefore replayed.
+Already settled F/E starts retain their existing endpoint policy; dry OFF h=1
+retains its immediate path. Paused projection, finite storage, stems, transitions,
+Intro/Tail, changed source/timing/domain, gaps, evicted or insufficient epochs,
+late work and unavailable custody still refuse the whole action. The original
+worker, permits, source/voice fences, custody, scheduler and off-thread retirement
+remain authoritative; no E is extended to await settling.
+
+The existing real ImGui/public-rate regression now runs eight isolated children.
+Wet OFF/ON, momentary ON unity, a glide settling before E and a same-note target-cache miss succeed
+with their own Native while the unrelated READY cache remains unconsumed. Dry
+OFF remains immediate. A +12 ON case independently derives H=13,312 instead of
+the endpoint-only 4,096, A_active=3,880 and E_active=17,192; its cold p=4 differs
+from endpoint p=1.4814814814814807. The E-anchored origin has residue 296 against
+the previous voice's 512-frame lattice. A genuinely fresh -4 ON birth followed
+by +12 has only 8,266 active frames at E and refuses without modifying the old
+pitch, Native, generation, peer or accepted rate.
+
+All eight children pass in Debug (8.97 s, 40.11 s compile) and optimized Release
+(7.94 s, 1 min 38 s compile). At original
+T=17,192/E=25,384, r=1.3500000000000008, target 2 and the remaining 439-frame
+interval survive; first adopted mixed samples have zero error and FIFO changes
+from (0,511) to (1,510). Independent public-birth scalar epochs, copied original
+PCM, direct-Native output, fresh normal-attack EQ, peer and master clocks continue
+beyond settling. Maximum error is 1.4901161193847656e-8 for wet success and
+2.9802322387695312e-8 for continued old audio after the young-history refusal;
+momentary unity and dry profiles have zero error. The first compile separately
+found six existing test literals missing the new optional field; adding `None`
+changed no assertion or productive behavior.
+
+The final impacted pitch suite passes 65 tests with one existing explicit Native
+owner diagnostic ignored in 134.92 s. Its 16 productive custody profiles retain
+3,072 pressure actions, 48 recoveries, zero final claims and zero independent PCM
+error. The existing 36-case acoustic diagnostic still fails its fixed criteria
+in all public/A/O cases; its diagnostic test result supplies no quality acceptance.
+Adjacent original source replay 2, pitch-action 20, ordinary endpoint 23 and
+public KEYLOCK controller 16 tests pass. Formatting, affected strict validation
+and all-target Clippy pass, retaining the 95 existing test warnings.
+A fresh private locked/stripped Release build passes in 26.94 s with the 23
+existing library warnings. Its actual isolated .pyd reports the Release profile;
+all eight existing bootstrap API checks and actual App, piano, GlobalParams and
+BS-RoFormer entry-point imports pass. No Engine, device or App is started and no
+Native is installed; the Human-held extension remains unchanged.
+
+Current action inline storage measures 4,056 bytes; the additional scalar
+checkpoint and its Option each measure 264 bytes. The 64 admitted action slots
+add 16,896 bounded inline bytes, with their existing snapshot backing unchanged.
+This is a declared reset-profile software proof. Continuous-from-O equivalence,
+broader finite/selection/variable-rate history, acoustic quality, deadlines,
+Native/C++ allocation, P6/V0/216/30-minute and Human/device/listening gates remain
+open. No productive API, ABI, dependency, DLL, schema or installer layout changes.
 
 ### Actual Native lifetime and complete callback-owner close — 2026-10-17
 

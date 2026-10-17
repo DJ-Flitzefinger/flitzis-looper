@@ -583,6 +583,7 @@ fn worker_returns_failed_original_owner_and_callback_lane_retires_intact() {
         source_feed: SourceFeedSnapshot::new(),
         source_feed_future: None,
         source_feed_voice: None,
+        endpoint_reset_history: None,
         _custody: super::super::pitch_publication::PitchWorkCapacity::default()
             .claim()
             .unwrap(),
@@ -628,6 +629,7 @@ fn deferred_execution_coordinate_is_once_only_and_original_input_target_is_uncha
         source_feed: SourceFeedSnapshot::new(),
         source_feed_future: None,
         source_feed_voice: None,
+        endpoint_reset_history: None,
         _custody: super::super::pitch_publication::PitchWorkCapacity::default()
             .claim()
             .unwrap(),
@@ -705,6 +707,7 @@ fn action_capture_requires_own_epoch_arc_even_when_all_scalar_pitch_source_and_d
         source_feed: SourceFeedSnapshot::new(),
         source_feed_future: None,
         source_feed_voice: None,
+        endpoint_reset_history: None,
         _custody: super::super::pitch_publication::PitchWorkCapacity::default()
             .claim()
             .unwrap(),
@@ -735,6 +738,7 @@ fn no_preparation_completion_keeps_set_pending_until_actual_application() {
         source_feed: SourceFeedSnapshot::new(),
         source_feed_future: None,
         source_feed_voice: None,
+        endpoint_reset_history: None,
         _custody: super::super::pitch_publication::PitchWorkCapacity::default()
             .claim()
             .unwrap(),
@@ -774,6 +778,7 @@ fn fixed_claim_guard_remains_valid_inside_existing_placement_marker() {
         source_feed: SourceFeedSnapshot::new(),
         source_feed_future: None,
         source_feed_voice: None,
+        endpoint_reset_history: None,
         _custody: super::super::pitch_publication::PitchWorkCapacity::default()
             .claim()
             .unwrap(),
@@ -805,6 +810,7 @@ fn history_mode_is_explicit_and_cannot_be_changed_after_preparation_free_complet
         source_feed: SourceFeedSnapshot::new(),
         source_feed_future: None,
         source_feed_voice: None,
+        endpoint_reset_history: None,
         _custody: super::super::pitch_publication::PitchWorkCapacity::default()
             .claim()
             .unwrap(),

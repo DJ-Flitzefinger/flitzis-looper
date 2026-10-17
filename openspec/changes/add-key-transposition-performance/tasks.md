@@ -412,8 +412,9 @@ each subscriber's own pending then accepted/current publication. The full existi
   Release allocator calibration 6 pass.
   Fresh private Release, eight existing bootstrap API checks and actual App
   imports pass; affected strict, formatting and lint checks pass.
-  Successful wet reset-phase attacks while still gliding remain unsupported here;
-  retain all variable-r/continuous-O/quality/P6/V0/Human gates.
+  At checkpoint d3b8b55, successful wet reset-phase attacks while still gliding
+  remained unsupported; the separate bounded reset-history task below extends
+  this path. Retain all variable-r/continuous-O/quality/P6/V0/Human gates.
 - [x] Extend the existing public nonneutral GLOBAL running/paused target history
   with independent original-source, direct-Native and continuous per-pad EQ PCM
   for both target voices from nonstarting SET through each own mode E and Resume.
@@ -424,6 +425,20 @@ each subscriber's own pending then accepted/current publication. The full existi
   13,319 samples and -3 target 4,097 samples, raw/EQ maximum error zero;
   four-voice sum maximum 5.9604645e-8. The actual +7 ON history is 8,192 frames,
   the other declared tuples 4,096. Entire controller family: 16 Debug PASS.
+- [x] Enable successful wet Normal SET_RETRIGGER at original E during an accepted
+  actual-rate glide for complete unchanged FullMix sources. Reuse existing
+  bounded source-history capture, preparation worker, custody, own permit and
+  sole scheduler with explicitly separate E-anchored reset-phase provenance.
+  Preserve exact original and reset endpoint guards, actual rate epochs,
+  pitch-dependent H and first-block cold profile, independent PCM/Native/FIFO/EQ
+  and peer/master chronology; retain genuine unavailable-history refusal and all
+  finite, continuous-O, acoustic, resource and Human acceptance gates.
+  Eight isolated GUI/public-rate profiles pass in Debug (8.97 s) and Release
+  (7.94 s), including H=13,312/cold p=4 at +12 ON and a genuinely too-young
+  history refusal. First adopted samples match exactly; maximum continuing PCM
+  error is 2.98e-8. Final affected pitch suite: 65 PASS/one existing diagnostic
+  ignored (134.92 s); original replay 2, action 20, endpoint 23 and controller 16
+  tests pass. Formatting, affected strict validation and all-target lint pass.
 - [ ] V0: complete new controls+copy/move/bank/hold/pending/restore workload and
   P6 resource/216/disk/RSS proofs repeated; preserve all failed attempts/source roles.
 - [ ] During implementation: focused meaningful compile/regressions and required

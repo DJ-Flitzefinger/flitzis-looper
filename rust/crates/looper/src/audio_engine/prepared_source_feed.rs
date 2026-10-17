@@ -1,22 +1,68 @@
-//! Worker-only replay of the voice's genuine bounded source chronology.
+//! Worker-only replay of genuine bounded source chronology and declared new-start history.
 //!
 //! A fresh reset on the declared active-feed lattice proves this finite replay,
 //! not equality to a Native handle that has processed arbitrary earlier history.
 
-use super::native_source_coverage::normal_loop_feed_available_with_readers;
+use super::native_source_coverage::{
+    complete_view_available, normal_loop_feed_available_with_readers,
+};
 use super::prepared_native_history::{NativeAdapterState, NativeHistoryRequest};
 use super::rubberband_backend::RubberBandError;
 use super::source_feed_history::{
     SOURCE_FEED_HISTORY_MAX_FRAMES, SourceFeedContext, SourceFeedSnapshot, SourceFeedSpan,
 };
 use super::source_playback::SourcePlayback;
-use super::source_reader::SourceReadPlan;
 #[cfg(test)]
 use super::source_reader::StemReadSets;
+use super::source_reader::{ExplicitSeekMode, SourceReadPlan, StemRenderSelection};
 use super::stretch_processor::DEFAULT_BLOCK_SAMPLES;
 
 fn unavailable() -> RubberBandError {
     RubberBandError::UnavailableSourceHistory
+}
+
+/// Original, unshifted E checkpoint for a separately declared fresh Normal start.
+/// The actual journal remains untouched; only worker-local input reads are derived.
+#[derive(Clone, Copy)]
+pub(crate) struct EndpointResetHistory {
+    pub(crate) playback: SourcePlayback,
+    pub(crate) plan: SourceReadPlan,
+}
+
+impl EndpointResetHistory {
+    fn phase_shift(self, request: &NativeHistoryRequest) -> Result<f64, RubberBandError> {
+        if !complete_view_available(&request.sample)
+            || request.plan.selection != StemRenderSelection::full_mix()
+            || self.plan.selection != StemRenderSelection::full_mix()
+            || request.plan.seek_mode != ExplicitSeekMode::Normal
+            || self.plan.seek_mode != ExplicitSeekMode::Normal
+            || request.plan.transition.is_active()
+            || self.plan.transition.is_active()
+            || !self.plan.matches_source_contract(request.plan)
+            || !self.playback.matches_domain(self.plan.domain())
+        {
+            return Err(unavailable());
+        }
+        let mut reset = self.playback;
+        reset.seek(request.plan.loop_region.start, ExplicitSeekMode::Normal);
+        reset.configure_domain(request.plan.domain());
+        let mut plan = self.plan;
+        plan.frame_pos = request.plan.loop_region.start;
+        plan.seek_mode = ExplicitSeekMode::Normal;
+        plan.transition.clear();
+        if !reset.matches_exact(&request.playback) || !plan.matches_exact(request.plan) {
+            return Err(unavailable());
+        }
+        let position = self.playback.position();
+        if position.seek_mode != ExplicitSeekMode::Normal
+            || position.frame < request.plan.loop_region.start
+            || !position.fraction.is_finite()
+            || !(0.0..1.0).contains(&position.fraction)
+        {
+            return Err(unavailable());
+        }
+        Ok(-((position.frame - request.plan.loop_region.start) as f64 + position.fraction))
+    }
 }
 
 fn constant_chronology_matches(
@@ -81,6 +127,28 @@ impl NativeAdapterState {
         history: &SourceFeedSnapshot,
         future: (SourcePlayback, SourceReadPlan, u64, SourceFeedContext),
     ) -> Result<(), RubberBandError> {
+        self.prepare_source_feed_history(request, history, future, None)
+    }
+
+    /// Prepare a new Normal endpoint from actual rate epochs and explicitly shifted
+    /// source phases. This does not certify actual old-voice PCM or continuous history.
+    pub(crate) fn prepare_source_with_endpoint_reset_history(
+        &mut self,
+        request: NativeHistoryRequest,
+        history: &SourceFeedSnapshot,
+        future: (SourcePlayback, SourceReadPlan, u64, SourceFeedContext),
+        endpoint: EndpointResetHistory,
+    ) -> Result<(), RubberBandError> {
+        self.prepare_source_feed_history(request, history, future, Some(endpoint))
+    }
+
+    fn prepare_source_feed_history(
+        &mut self,
+        request: NativeHistoryRequest,
+        history: &SourceFeedSnapshot,
+        future: (SourcePlayback, SourceReadPlan, u64, SourceFeedContext),
+        endpoint_reset: Option<EndpointResetHistory>,
+    ) -> Result<(), RubberBandError> {
         if !history.is_current()
             || !request
                 .permit
@@ -88,6 +156,9 @@ impl NativeAdapterState {
         {
             return Err(unavailable());
         }
+        let reset_shift = endpoint_reset
+            .map(|endpoint| endpoint.phase_shift(&request))
+            .transpose()?;
         let endpoint_pitch = request
             .pitch_intent
             .native_pitch_scale(request.playback.tempo_ratio(), request.key_lock)
@@ -133,16 +204,20 @@ impl NativeAdapterState {
         let position = playback.position();
         plan.frame_pos = position.frame;
         plan.seek_mode = position.seek_mode;
+        let (expected_playback, expected_plan) = endpoint_reset
+            .map(|endpoint| (endpoint.playback, endpoint.plan))
+            .unwrap_or((request.playback, request.plan));
         if remaining != 0
-            || !playback.matches_exact(&request.playback)
-            || !plan.matches_exact(request.plan)
+            || !playback.matches_exact(&expected_playback)
+            || !plan.matches_exact(expected_plan)
         {
             return Err(unavailable());
         }
-        if request
-            .playback
-            .history_before_constant(bound as usize)
-            .is_some()
+        if endpoint_reset.is_none()
+            && request
+                .playback
+                .history_before_constant(bound as usize)
+                .is_some()
             && constant_chronology_matches(&request, history, &spans, end, bound)
         {
             return self.prepare_source_at_endpoint(request);
@@ -161,14 +236,22 @@ impl NativeAdapterState {
             .retained_range()
             .map_or(history.active_frames(), |range| range.start);
         for _ in 0..=spans.len() {
-            let lattice = history.active_origin();
-            origin = end
-                .checked_sub(bound)
-                .and_then(|start| start.checked_sub(lattice))
-                .ok_or_else(unavailable)?
-                / block
-                * block
-                + lattice;
+            origin = if endpoint_reset.is_some() {
+                // A new owner completes whole input blocks exactly at its own E.
+                let frames = bound
+                    .div_ceil(block)
+                    .checked_mul(block)
+                    .ok_or_else(unavailable)?;
+                end.checked_sub(frames).ok_or_else(unavailable)?
+            } else {
+                let lattice = history.active_origin();
+                end.checked_sub(bound)
+                    .and_then(|start| start.checked_sub(lattice))
+                    .ok_or_else(unavailable)?
+                    / block
+                    * block
+                    + lattice
+            };
             if end - origin > SOURCE_FEED_HISTORY_MAX_FRAMES as u64 || origin < retained_start {
                 return Err(unavailable());
             }
@@ -226,6 +309,13 @@ impl NativeAdapterState {
                 .ok_or_else(unavailable)?;
             let actual = SourceFeedContext::new(request.binding, readers);
             if !part.context.same_source(actual)
+                || (endpoint_reset.is_some()
+                    && (part.context.binding != request.binding
+                        || part.plan.seek_mode != ExplicitSeekMode::Normal
+                        || part.playback.position().seek_mode != ExplicitSeekMode::Normal
+                        || !part.playback.matches_domain(request.plan.domain())
+                        || part.plan.transition.is_active()
+                        || !part.plan.matches_source_contract(request.plan)))
                 || !normal_loop_feed_available_with_readers(
                     &request.sample,
                     readers,
@@ -288,10 +378,35 @@ impl NativeAdapterState {
                 {
                     return Err(unavailable());
                 }
-                part.plan.fill_fractional_buffers_checked_with_readers(
+                let (read_playback, read_plan) = if let Some(shift) = reset_shift {
+                    let playback = part
+                        .playback
+                        .shifted_normal_history(shift)
+                        .ok_or_else(unavailable)?;
+                    let position = playback.position();
+                    let plan = SourceReadPlan {
+                        frame_pos: position.frame,
+                        seek_mode: position.seek_mode,
+                        ..part.plan
+                    };
+                    if !normal_loop_feed_available_with_readers(
+                        &request.sample,
+                        readers,
+                        request.binding.sample_rate_hz,
+                        request.binding.accepted,
+                        plan,
+                        &playback,
+                    ) {
+                        return Err(unavailable());
+                    }
+                    (playback, plan)
+                } else {
+                    (part.playback, part.plan)
+                };
+                read_plan.fill_fractional_buffers_checked_with_readers(
                     &request.sample,
                     readers,
-                    &part.playback,
+                    &read_playback,
                     &mut feed,
                     frames,
                 )?;
@@ -317,8 +432,11 @@ impl NativeAdapterState {
             coverage.prepared_taps = super::source_reader::tap_observation_for_test();
         }
         self.primed_output_frames = (end - origin) as usize;
-        // Seed only after genuine replay reaches exact E; callback consumption owns
-        // subsequent scalar progress, including the retained completed state.
+        // For EndpointReset, the request deliberately retains the exact seek-at-E
+        // representation after derived pre-E input. Binary64 translated phase need
+        // not accumulate to that representation. Adoption remains strictly exact.
+        // The frozen request retains exact E. Callback consumption owns subsequent
+        // scalar progress, including a genuine continuation's retained transition.
         self.source_transition = request
             .plan
             .transition

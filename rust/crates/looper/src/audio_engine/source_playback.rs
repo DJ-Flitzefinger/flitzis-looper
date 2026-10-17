@@ -132,6 +132,36 @@ impl SourcePlayback {
         Some((history, silent_prefix))
     }
 
+    /// Worker-only phase translation for a declared new Normal-start history.
+    /// Keep the original rate epoch and its elapsed count, so slicing one epoch
+    /// never introduces a new rounding anchor. This is derived input, not a claim
+    /// that the live voice actually read these shifted source positions.
+    pub(crate) fn shifted_normal_history(mut self, shift: f64) -> Option<Self> {
+        let domain = self.domain?;
+        if self.origin.seek_mode != ExplicitSeekMode::Normal
+            || self.origin.frame < domain.region.start
+            || !shift.is_finite()
+            || !self.origin.fraction.is_finite()
+            || !(0.0..1.0).contains(&self.origin.fraction)
+            || domain.region.start >= domain.region.end
+            || domain.region.end > domain.sample_frames
+        {
+            return None;
+        }
+        let period = domain.musical_period.unwrap_or(domain.region.len() as f64);
+        if !period.is_finite() || period <= 0.0 || (period - domain.region.len() as f64).abs() > 1.0
+        {
+            return None;
+        }
+        let phase =
+            ((self.origin.frame - domain.region.start) as f64 + self.origin.fraction + shift)
+                .rem_euclid(period);
+        let whole = phase.floor();
+        self.origin.frame = domain.region.start.checked_add(whole as usize)?;
+        self.origin.fraction = phase - whole;
+        Some(self)
+    }
+
     /// Compare the complete copied trajectory at a prepared native adoption boundary.
     ///
     /// Equal current source phase is insufficient: a pending rate target or a different active

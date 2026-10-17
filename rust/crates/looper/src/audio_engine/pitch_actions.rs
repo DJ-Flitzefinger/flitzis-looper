@@ -10,6 +10,7 @@ use super::input_runtime_binding::{InputPadBinding, InputRuntimeOwnership};
 use super::native_history_permit::{NativeHistoryContext, NativeHistoryPermit};
 use super::pitch_intent::PitchIntent;
 use super::prepared_native_history::{NativeAdapterState, NativeHistoryRequest};
+use super::prepared_source_feed::EndpointResetHistory;
 use super::rubberband_backend::{RubberBandError, RubberBandLiveShifter};
 use super::source_feed_history::{SourceFeedContext, SourceFeedSnapshot};
 use super::source_playback::SourcePlayback;
@@ -887,6 +888,9 @@ pub(crate) struct PitchActionWork {
     pub(crate) source_feed: SourceFeedSnapshot,
     pub(crate) source_feed_future: Option<(SourcePlayback, SourceReadPlan, u64, SourceFeedContext)>,
     pub(crate) source_feed_voice: Option<(Arc<AtomicU64>, u64)>,
+    // Some means source_feed proves actual rate epochs, while input phase is
+    // explicitly derived for a new Normal owner rather than continued live PCM.
+    pub(crate) endpoint_reset_history: Option<EndpointResetHistory>,
     // Must remain LAST: storage and displaced Native/source owners die before reuse.
     _custody: super::pitch_publication::PitchWorkClaim,
 }
@@ -920,6 +924,7 @@ impl PitchActionWork {
             source_feed: SourceFeedSnapshot::new(),
             source_feed_future: None,
             source_feed_voice: None,
+            endpoint_reset_history: None,
             _custody: custody,
         });
         #[cfg(test)]
@@ -1002,6 +1007,7 @@ impl PitchActionWork {
             || self.action.variant() != PitchActionVariant::SetRetrigger
             || self.preparation_mode != PitchActionPreparationMode::Endpoint
             || self.source_feed_future.is_some()
+            || self.endpoint_reset_history.is_some()
             || self.action.owner.status.load(Ordering::Acquire) != PREPARING
             || self.current_guard().is_err()
         {
@@ -1116,6 +1122,9 @@ impl PitchActionWork {
     }
 
     fn source_feed_current(&self) -> bool {
+        if self.endpoint_reset_history.is_some() && self.source_feed_future.is_none() {
+            return false;
+        }
         self.source_feed_future.is_none()
             || (self.source_feed.is_current()
                 && self
@@ -1135,7 +1144,7 @@ impl PitchActionWork {
         if !self.source_feed_current() {
             return Err(PitchActionReject::PreparationFailed);
         }
-        let request = self
+        let mut request = self
             .request
             .take()
             .ok_or(PitchActionReject::PreparedMismatch)?;
@@ -1148,6 +1157,20 @@ impl PitchActionWork {
         {
             return Err(PitchActionReject::SourceChanged);
         }
+        if self.endpoint_reset_history.is_some() {
+            let (lifetime, generation) = self
+                .source_feed_voice
+                .as_ref()
+                .ok_or(PitchActionReject::PreparationFailed)?;
+            let guard = self
+                .source_feed
+                .guard(lifetime, *generation)
+                .ok_or(PitchActionReject::PreparationFailed)?;
+            // Only the derived new-start path adds this fence. It remains current
+            // through the final effect claim; effective adopted history deliberately
+            // does not require the preceding voice's journal after its own restart.
+            request.permit = request.permit.with_source_feed_guard(guard);
+        }
         // Worker-only construction follows the original request's fresh authority checks.
         let (rate, channels) = self.render_format;
         let native = RubberBandLiveShifter::new(rate, channels)
@@ -1159,7 +1182,20 @@ impl PitchActionWork {
         match self.preparation_mode {
             PitchActionPreparationMode::Endpoint => {
                 if let Some(future) = self.source_feed_future {
-                    candidate.prepare_source_with_feed_history(request, &self.source_feed, future)
+                    if let Some(endpoint) = self.endpoint_reset_history {
+                        candidate.prepare_source_with_endpoint_reset_history(
+                            request,
+                            &self.source_feed,
+                            future,
+                            endpoint,
+                        )
+                    } else {
+                        candidate.prepare_source_with_feed_history(
+                            request,
+                            &self.source_feed,
+                            future,
+                        )
+                    }
                 } else {
                     candidate.prepare_source_at_endpoint(request)
                 }

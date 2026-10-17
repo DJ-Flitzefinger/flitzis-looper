@@ -62,6 +62,18 @@ Piano and transposition actions SHALL change only pitch intent h=2^(k/12), not a
 - **AND** unavailable reset-phase history SHALL NOT be replaced by constant history at the bank target or by relabelling another phase's prepared FIFO, and the original execution frame SHALL NOT be delayed merely to wait for the rate glide to settle
 - **AND** a ready cached endpoint for the same note at the eventual target SHALL NOT qualify as ready for a different actual rate or smoothing interval, consume that unrelated prepared owner or shorten the existing preparation execution policy
 
+#### Scenario: A complete Normal retrigger prepares its own reset phase during a glide
+- **GIVEN** a running complete FullMix NormalLoop source has unchanged source, accepted timing and loop domain, and retained genuine rate epochs covering the required preparation
+- **WHEN** its original wet SET_RETRIGGER is captured during the accepted rate glide or has E inside it, including a glide that settles between F and E
+- **THEN** the existing worker SHALL prepare a new Native owner for the Normal beginning using a separately declared reset-phase history, preserving the original rate epochs and E
+- **AND** the unmodified actual journal and frozen F-to-E projection SHALL first match their original nonreset endpoint exactly, and that endpoint's prescribed Normal reset SHALL exactly match the action's frozen reset endpoint
+- **AND** derived Normal read phases SHALL translate the original epoch origins by one common phase shift modulo the actual physical or musical loop period, without replacing the rate, target or smoothing interval or relabelling actual past reads
+- **AND** the new owner's preparation origin SHALL be E minus a whole Native-block count covering the maximum required pitch-dependent H across all included epochs, with its cold profile chosen from the epoch completing its first real input block
+- **AND** every derived tap SHALL have current complete-source coverage, and the actual-history, source, voice-generation, timing and action guards SHALL remain valid before preparation, after replay and at the unchanged E
+- **AND** preparation SHALL restore the exact frozen reset endpoint after its declared pre-E replay without weakening strict live adoption comparisons or claiming continuous-from-birth equivalence
+- **AND** the first adopted sample, following FIFO blocks and remaining actual glide SHALL match independent original-PCM, rate-epoch, direct-Native and continuous-filter references while peers and master timing continue unchanged
+- **AND** missing, gapped, evicted or insufficient epochs, a changed domain or source, paused projection, Intro/Tail, stems or transitions, late work or unavailable custody SHALL retain whole-action refusal rather than fabricate history or delay E
+
 ### Requirement: Learned pitch steps distinguish CC buttons and encoder encoding
 The system SHALL keep Note and keyboard step actions as explicit signed attacks and SHALL treat a newly learned fixed step on a MIDI CC/NRPN button as one high-edge attack, ignoring release and repeated held-high values. The compact MIDI controls SHALL expose an explicit encoding preference for newly learned CC/NRPN step bindings: button, absolute encoder, two's complement encoder or offset-binary encoder. The saved semantic action SHALL retain that encoding; changing the UI preference SHALL not reinterpret existing bindings. Existing fixed-note/base/extra bindings SHALL retain their established semantics.
 

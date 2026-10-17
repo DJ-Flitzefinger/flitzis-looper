@@ -11,6 +11,7 @@ use crate::audio_engine::pitch_actions::{
     PitchActionVariant, PitchActionWork,
 };
 use crate::audio_engine::prepared_native_history::{NativeHistoryRequest, PREPARED_HISTORY_FRAMES};
+use crate::audio_engine::prepared_source_feed::EndpointResetHistory;
 use crate::messages::AudioMessage;
 use std::cell::RefCell;
 
@@ -23,7 +24,7 @@ fn retrigger_needs_native(
         .native_pitch_scale(snapshot.playback.tempo_ratio(), render.key_lock)
         .map_err(|_| PitchActionReject::UnsupportedPitch)?;
     // A momentary ON unity point during smoothing is not a dry future trajectory.
-    // The existing endpoint worker must prove history; it refuses pending glides.
+    // A fresh endpoint must prove its own rate-epoch and reset-phase history.
     Ok(pitch != 1.0
         || (render.key_lock
             && snapshot.playback.tempo_ratio().to_bits()
@@ -270,13 +271,68 @@ impl RtMixer {
                 if work.preparation_mode() != PitchActionPreparationMode::Endpoint {
                     return Err(PitchActionReject::PreparedMismatch);
                 }
-                self.pitch_action_start_snapshot(
-                    work,
-                    guard.id,
-                    execution_frame
-                        .checked_sub(callback_frame)
-                        .ok_or(PitchActionReject::PreparedMismatch)?,
-                )?
+                let delta = execution_frame
+                    .checked_sub(callback_frame)
+                    .ok_or(PitchActionReject::PreparedMismatch)?;
+                let snapshot = self.pitch_action_start_snapshot(work, guard.id, delta)?;
+                let active = match self.pitch_action_voice(guard.id, guard.binding) {
+                    Ok(active) => active,
+                    // A different old source cannot supply this new source's clock/history.
+                    Err(PitchActionReject::SourceChanged) => None,
+                    Err(reason) => return Err(reason),
+                };
+                if retrigger_needs_native(render, &snapshot)?
+                    && let Some(index) = active
+                {
+                    let mut current = self
+                        .capture_pitch_voice_snapshot(index)
+                        .ok_or(PitchActionReject::TimingUnavailable)?;
+                    let gliding = current.playback.tempo_ratio().to_bits()
+                        != current.playback.rate_target().to_bits()
+                        || snapshot.playback.tempo_ratio().to_bits()
+                            != snapshot.playback.rate_target().to_bits();
+                    if gliding {
+                        if current.paused
+                            || !super::super::native_source_coverage::complete_view_available(
+                                &snapshot.sample,
+                            )
+                            || current.plan.seek_mode != ExplicitSeekMode::Normal
+                            || current.playback.position().seek_mode != ExplicitSeekMode::Normal
+                            || current.plan.selection != StemRenderSelection::full_mix()
+                            || current.plan.transition.is_active()
+                            || !current.plan.matches_source_contract(snapshot.plan)
+                            || !current.playback.matches_domain(snapshot.plan.domain())
+                            || current.source_feed_context.binding
+                                != snapshot.source_feed_context.binding
+                            || current.accepted != guard.binding.accepted
+                        {
+                            return Err(PitchActionReject::PreparationFailed);
+                        }
+                        let voice = &self.voices[index];
+                        if !voice
+                            .source_feed_history
+                            .capture_into(&mut work.source_feed)
+                        {
+                            return Err(PitchActionReject::PreparationFailed);
+                        }
+                        work.source_feed_future = Some((
+                            current.playback,
+                            current.plan,
+                            delta,
+                            current.source_feed_context,
+                        ));
+                        work.source_feed_voice =
+                            Some((voice.history_lifetime.clone(), voice.generation));
+                        if !current.project_output_frames(delta) {
+                            return Err(PitchActionReject::PreparationFailed);
+                        }
+                        work.endpoint_reset_history = Some(EndpointResetHistory {
+                            playback: current.playback,
+                            plan: current.plan,
+                        });
+                    }
+                }
+                snapshot
             }
         };
         let pitch = render

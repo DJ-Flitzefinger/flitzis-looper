@@ -368,6 +368,7 @@ struct RateRoute {
     lock: bool,
     maximum: f32,
     compared: usize,
+    last_callback_first: Option<(u64, f32, f32)>,
     starts: [usize; 2],
 }
 
@@ -479,6 +480,7 @@ impl RateRoute {
             lock,
             maximum: 0.0,
             compared: 0,
+            last_callback_first: None,
             starts: [0, 0],
         };
         result.callback(0);
@@ -571,6 +573,9 @@ impl RateRoute {
                         .sample(&self.sources[*id]);
                 }
                 let difference = (actual - expected).abs();
+                if offset == 0 {
+                    self.last_callback_first = Some((frame, actual, expected));
+                }
                 self.maximum = self.maximum.max(difference);
                 assert!(actual.is_finite() && expected.is_finite());
                 assert!(
