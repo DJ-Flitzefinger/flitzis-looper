@@ -842,6 +842,14 @@ impl StretchProcessor {
             .map_or(0, RubberBandLiveShifter::state_address)
     }
 
+    #[cfg(all(test, windows))]
+    pub(crate) fn native_pitch_scale_observation(&self) -> Option<f64> {
+        self.native
+            .rubberband
+            .as_ref()
+            .map(RubberBandLiveShifter::pitch_scale)
+    }
+
     #[cfg(test)]
     pub(crate) fn native_origin_tuple(&self) -> Option<(PitchIntent, bool, u64)> {
         self.native

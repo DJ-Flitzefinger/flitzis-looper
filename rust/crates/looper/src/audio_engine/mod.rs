@@ -3712,12 +3712,8 @@ impl AudioEngine {
             .map_err(|_| PyRuntimeError::new_err("request lock poisoned"))?;
         self.input_runtime_ownership
             .ensure_no_copy_reservation(id)?;
-        let handle = self
-            .stream_handle
-            .as_ref()
-            .ok_or_else(|| PyRuntimeError::new_err("Audio engine not initialized"))?;
-        let mut producer = handle
-            .producer
+        let mut producer = self
+            .control_producer()?
             .lock()
             .map_err(|_| PyRuntimeError::new_err("Failed to acquire producer lock"))?;
         push_global_timing_message(

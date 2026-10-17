@@ -3557,6 +3557,43 @@ resources or Human acceptance. One-voice sharing and its same-loaded-slot MIDI
 selection barrier are explicitly degenerate. Zero retired work claims does not
 mean live voice or endpoint-reserve Native owners have been destroyed.
 
+### Public piano and global-rate controller composition — 2026-10-17
+
+`piano_rate_controller_tests.rs` joins the actual ImGui piano/raw MIDI route with
+`UiContext` BPM-lock and speed controls, current source/timing ACKs, the existing
+rate coordinator and sole scheduler. Four isolated GUI/MIDI × Key Lock OFF/ON
+profiles use two complete-resident 48 kHz mono synthetic sources with accepted
+Automatic periods .5/.375 seconds and physical Normal loops of 96,000/72,000
+frames. Timing labels are declared fixture inputs; this is no inference result.
+Python manual BPM values are cleared and accepted identity/revision checked so
+the controller publishes the real coupled speed/master-period request.
+
+At speed 2/master .25, A's +12 piano birth has actual r=2 and B's +7 birth r=1.5.
+An original +7 action for A is genuinely ready before a public speed 1.8 request
+changes the master period to .5/1.8. With Key Lock ON, A owns the first wet history
+and the rate effect waits 4,096 frames; OFF retains its already productive Native
+and applies immediately. Both effects precede the old pitch E. That action refuses
+exactly `prepared_mismatch` at unchanged T/E, without an attack, generation change,
+peer reset or rollback of confirmed timing. Controller status reports the existing
+preparation error. A fresh same-note action then adopts its own prepared Native
+and restarts only A at confirmed r=1.8; B continues at r=1.35.
+
+Independent scalar interpolation/loop modulo, active 512-frame rate epochs,
+direct Native history and per-voice filter chronology match every compared mixed
+sample, FIFO, source phase, generation and actual Native pitch getter (`h/r` ON,
+`h` OFF). The virtual input clock comes from the current Rust transport; a separate
+piecewise beat calculation checks its master-period change. Each OFF/ON child
+compares 43,069/34,877 total output frames respectively, including staged births.
+Maximum PCM error is 2.9802322e-8. Debug four-child parent passes in 4.53 s;
+optimized Release in 4.00 s. Adjacent Piano/Hold 9, unity-birth/rate 10 and
+post-capture rate-refusal 1 pass. A fresh private Release and eight production
+bootstrap API checks plus actual App/UI/controller/model imports also pass.
+
+This complete-resident, bounded-history software proof does not certify finite
+window storage admission, general continuous-O, all B5 values/trajectories,
+acoustic quality, performer/device timing, P6/V0/216/30-minute resources or Human
+acceptance. Worker waits hold the virtual clock; no App or device is started.
+
 ## Inverse Seconds, Loaded Frames And Native Rate — 2026-10-16
 
 `ScalarSourceGrid` evaluates the shared scalar projection in source **seconds**.

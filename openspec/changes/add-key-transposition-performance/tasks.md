@@ -372,6 +372,19 @@ each subscriber's own pending then accepted/current publication. The full existi
   Piano/Hold 8, custody 4, callback allocation 2, ordinary endpoint 23 and optimized
   allocator calibration 6 PASS. Process observations and controlled-wait limits
   are retained in docs/key-lock-backend.md; no parent gate closes here.
+- [x] Compose genuine piano/routed MIDI pitch actions with public global rate
+  controls at nonunit accepted source rates, both Key Lock laws, honest requested
+  versus effective state, original prepared-future refusal and fresh recovery.
+  Verify own Native/FIFO/source/PCM and unchanged peer/timing through the existing
+  rate coordinator; retain full B5/continuous-O/acoustic/resource/Human gates.
+  Four isolated GUI/MIDI × Lock profiles: Debug PASS 4.53 s, optimized Release
+  PASS 4.00 s, mixed PCM max error 2.9802322e-8. Actual rates 2/1.5 become
+  1.8/1.35 through the accepted-anchor coupled public request; own ON wet history
+  waits 4096 frames, OFF retains productive Native. Old prepared action refuses
+  exactly prepared_mismatch, fresh same-note action succeeds, peer continues.
+  Adjacent Piano/Hold 9, unity-birth/rate 10 and old-rate-refusal 1 PASS; fresh
+  private Release/eight bootstrap API checks/App imports PASS. See backend docs
+  for source format, timing labels, clock/oracle boundaries and retained gates.
 - [ ] V0: complete new controls+copy/move/bank/hold/pending/restore workload and
   P6 resource/216/disk/RSS proofs repeated; preserve all failed attempts/source roles.
 - [ ] During implementation: focused meaningful compile/regressions and required

@@ -13,6 +13,8 @@ use std::ffi::CString;
 static MOUSE_CONTEXT: Mutex<()> = Mutex::new(());
 #[path = "hold_pitch_tests.rs"]
 mod hold_pitch_tests;
+#[path = "piano_rate_controller_tests.rs"]
+mod piano_rate_controller_tests;
 #[path = "productive_custody_workload_tests.rs"]
 mod productive_custody_workload_tests;
 

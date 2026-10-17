@@ -239,6 +239,15 @@ bridge, callback Native preparation or invented constant past is permitted.
 - **AND** status beside the rate control SHALL distinguish requested settings from callback-confirmed effective settings and queued, preparing, applied or rejected state
 - **AND** the first wet output after the complete effect SHALL have matched declared history rather than generic startup silence
 
+#### Scenario: Public rate controls compose with original piano and MIDI actions
+- **GIVEN** independently productive voices have current accepted source timing and original piano or routed MIDI pitch actions at nonunit source rates
+- **WHEN** the existing public global controller requests a speed and coupled master-period change through the sole rate coordinator
+- **THEN** requested and confirmed settings SHALL remain distinct until the actual complete effect, and each voice SHALL retain its own source, pitch intent and transport trajectory under the accepted timing
+- **AND** KEY LOCK ON SHALL use h/r and OFF SHALL use h at each voice's actual accepted rate rather than a fixture's nominal speed
+- **AND** an original pitch action whose prepared future is invalidated by an earlier effective rate change SHALL refuse wholly at its unchanged original T/E without an attack or rollback of the confirmed global tuple
+- **AND** a later fresh piano or MIDI action SHALL use its own current capture and prepared ownership, preserving the confirmed source/master timing and unaffected voices
+- **AND** software PCM and controller evidence SHALL NOT replace general continuous-O, full acoustic, resource, device or Human acceptance
+
 #### Scenario: A publisher finishing after an empty observation remains unread
 - **GIVEN** a global publisher has raised revision N but has not yet queued its original payload
 - **WHEN** a callback observes the queue empty and the publisher queues that payload and finishes before drain finalization
