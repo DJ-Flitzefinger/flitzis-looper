@@ -123,6 +123,105 @@ fn unknown_and_different_mode_absolute_targets_reject_but_relative_and_reset_rem
 }
 
 #[test]
+fn piano_notes_preserve_octaves_and_the_existing_total_envelope() {
+    for base in -23..=23 {
+        let spec = PitchActionSpec::parse(&format!("pitch.note:{base}:set")).unwrap();
+        assert_eq!(
+            spec.resolve(None, PitchIntent::default()),
+            Ok(PitchIntent::new(base, 0).unwrap())
+        );
+    }
+    for base in [-12, 0, 12] {
+        let note = PitchActionSpec::parse(&format!("pitch.note:{base}:set_retrigger")).unwrap();
+        assert_eq!(
+            note.resolve(None, PitchIntent::default())
+                .unwrap()
+                .base_shift(),
+            base
+        );
+        assert_eq!(note.variant, PitchActionVariant::SetRetrigger);
+    }
+    let extreme = PitchActionSpec::parse("pitch.note:23:set").unwrap();
+    assert_eq!(
+        extreme.resolve(None, PitchIntent::new(0, 18).unwrap()),
+        Err(PitchActionReject::UnsupportedPitch)
+    );
+    let extra = PitchActionSpec::parse("pitch.extra:-1:set").unwrap();
+    assert_eq!(
+        extra.resolve(None, PitchIntent::new(-23, 0).unwrap()),
+        Err(PitchActionReject::UnsupportedPitch)
+    );
+}
+
+#[test]
+fn piano_and_offset_steps_resolve_at_admission_without_clamping() {
+    for step in [-12, -1, 1, 12] {
+        let note = PitchActionSpec::parse(&format!("pitch.note.step:{step}:set")).unwrap();
+        assert_eq!(
+            note.resolve(None, PitchIntent::new(0, 2).unwrap()),
+            Ok(PitchIntent::new(step, 2).unwrap())
+        );
+        let extra =
+            PitchActionSpec::parse(&format!("pitch.extra.step:{step}:set_retrigger")).unwrap();
+        assert_eq!(
+            extra.resolve(None, PitchIntent::new(2, 0).unwrap()),
+            Ok(PitchIntent::new(2, step).unwrap())
+        );
+    }
+    for (key, before) in [
+        ("pitch.note.step:1:set", PitchIntent::new(23, 0).unwrap()),
+        ("pitch.extra.step:1:set", PitchIntent::new(6, 18).unwrap()),
+        ("pitch.extra.step:-1:set", PitchIntent::new(-23, 0).unwrap()),
+    ] {
+        assert_eq!(
+            PitchActionSpec::parse(key).unwrap().resolve(None, before),
+            Err(PitchActionReject::UnsupportedPitch)
+        );
+    }
+}
+
+#[test]
+fn original_key_is_one_unknown_source_safe_action_with_a_reset_marker() {
+    let original = PitchActionSpec::parse("pitch.original:set_retrigger").unwrap();
+    assert_eq!(
+        original.resolve(None, PitchIntent::new(12, 7).unwrap()),
+        Ok(PitchIntent::default())
+    );
+    let ownership = Arc::new(InputRuntimeOwnership::default());
+    let captured = action(ownership.clone(), "pitch.original:set_retrigger");
+    assert!(captured.resets_key_correction());
+    assert_eq!(captured.variant(), PitchActionVariant::SetRetrigger);
+    assert_eq!(captured.render().pitch, PitchIntent::default());
+    assert!(!action(ownership, "pitch.extra:0:set").resets_key_correction());
+}
+
+#[test]
+fn encoder_actions_require_original_midi_resolution_and_preserve_explicit_modes() {
+    for mode in ["absolute", "twos_complement", "offset_binary"] {
+        for lane in ["note", "extra"] {
+            for step in [-12, -1, 1, 12] {
+                for variant in ["set", "set_retrigger"] {
+                    let key = format!("pitch.{lane}.encoder:{step}:{mode}:{variant}");
+                    let spec = PitchActionSpec::parse(&key).unwrap();
+                    assert_eq!(
+                        spec.resolve(None, PitchIntent::default()),
+                        Err(PitchActionReject::InvalidAction)
+                    );
+                    assert_eq!(
+                        spec.variant,
+                        if variant == "set" {
+                            PitchActionVariant::Set
+                        } else {
+                            PitchActionVariant::SetRetrigger
+                        }
+                    );
+                }
+            }
+        }
+    }
+}
+
+#[test]
 fn malformed_and_outside_domain_actions_never_become_python_fallback_semantics() {
     for key in [
         "pitch.base:12:minor:set",
@@ -138,6 +237,22 @@ fn malformed_and_outside_domain_actions_never_become_python_fallback_semantics()
         "pitch.extra:01:set",
         "pitch.extra:-0:set",
         "pitch.base:01:minor:set",
+        "pitch.note:24:set",
+        "pitch.note:-24:set",
+        "pitch.note:+1:set",
+        "pitch.note:01:set",
+        "pitch.note:-0:set",
+        "pitch.note.step:0:set",
+        "pitch.note.step:2:set",
+        "pitch.note.step:+12:set",
+        "pitch.extra.step:2:set",
+        "pitch.original:0:set",
+        "pitch.note.encoder:1:unknown:set",
+        "pitch.note.encoder:2:absolute:set",
+        "pitch.extra.encoder:+1:absolute:set",
+        "pitch.extra.encoder:1:button:set",
+        "pitch.extra.encoder:01:twos_complement:set",
+        "pitch.extra.encoder:1:twos_complement:set:extra",
     ] {
         assert!(PitchActionSpec::parse(key).is_none(), "{key}");
     }

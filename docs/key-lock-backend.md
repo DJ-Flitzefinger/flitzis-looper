@@ -3086,9 +3086,11 @@ Reference URLs:
 
 K-META implements `key_intent.py` and the saved fixed-216 `pad_key_intent` table:
 immutable source versions, independent correction/analysis epochs, numeric
-`base_shift` (-5..+6 with fixed +6 tie), all 37 `extra_shift` values (-18..+18)
-and the retrigger flag.
-Legacy `manual_key` delegates to this same table. Its three resets are independent;
+`base_shift` (-23..+23), all 37 `extra_shift` values (-18..+18), and independent
+piano/offset retrigger preferences. The combined total remains -23..+24; out-of-range
+combinations refuse without clamping. Legacy absolute-root Learn actions retain
+their original nearest -5..+6 mapping and fixed +6 tie.
+Legacy `manual_key` delegates to this same table. Metadata correction remains independent;
 unknown source text remains display metadata without guessed root or mode.
 Failed deliberate analysis admission preserves correction; a genuinely admitted
 request can remove its prior correction, while later corrections survive its
@@ -3096,14 +3098,72 @@ guarded result. Accepted replacement resets source-bound intent; restore retains
 it. New explicit correction `None` prevents legacy resurrection on reopen and
 malformed new fields recover locally without discarding valid performer settings.
 
-The implemented left-sidebar Key + Transposition surface now routes GUI choices
-and learned MIDI/keyboard SET or SET_RETRIGGER actions through the same Native
-`CapturedPitchAction` and Python `PitchController`. Absolute Key retains the
-recognized source's major/minor mode; unknown source labels require correction
-before an absolute choice. All 37 numeric extra shifts and the independent base/
-extra resets remain available. Correction relabels without retuning or changing
-position. The Retrigger checkbox affects GUI choices and newly learned variants;
-existing bindings retain their stored variant.
+The Piano button opens one responsive three-octave piano above the central PAD
+grid. The opening state belongs to the UI and stays open across PAD changes;
+selected note/octave, offset and both retrigger preferences follow the selected
+content. Raised black keys have hit priority over the white geometry beneath.
+The original detected root appears in the middle octave, marked separately from
+the chosen note. A recognized metadata correction defines note labels and signed
+targets consistently, while the detected original keeps its own separate marker.
+Unknown correction metadata shows signed relative targets without guessing
+an absolute note. These are key-root references, not detected first melody notes.
+
+Piano and the offset row route GUI choices and learned MIDI/keyboard SET or
+SET_RETRIGGER actions through the same Native `CapturedPitchAction` and Python
+`PitchController`. `pitch.note` keeps signed octave identity; `pitch.note.step`
+and `pitch.extra.step` resolve chromatic/octave deltas from the current Native
+requested tuple, including rapid inputs. Legacy actions keep their meanings.
+Original Key is one captured reset of piano note/octave, extra offset and manual
+correction, retaining detected source metadata and unrelated controls. The offset
+Reset changes only extra to zero. Each retrigger checkbox affects its own GUI
+actions and newly learned variants; existing bindings retain their stored variant.
+Old saved shared retrigger values initialize both preferences once on restore.
+
+The collapsed MIDI / octave steps section selects CC step encoding for new Learn:
+Button, Absolute encoder, Relative 1/127 (two's complement) or Relative 65/63
+(offset binary). Choose the format actually sent by the controller. Button mode
+uses a single high edge and ignores release/held repeats. Absolute mode uses the
+first value as its reference and later modular direction; relative formats use
+one signed tick per message. Learned action keys retain the selected encoding;
+the selector never rewrites existing bindings or changes ordinary GUI/Note steps.
+New piano-note and Original Key CC bindings also use one button high edge;
+repeated NoteOn attacks remain independent. Use encoded step controls for an
+encoder, and fixed piano-note controls for buttons or MIDI notes. Legacy
+base/extra/base-reset CC bindings keep their previous behavior.
+
+The real mouse/controller/Native route exposed an admission serialization bug:
+Python used integer zero for disabled Quantize, while Native requires `None`.
+Default unloaded PAD rows also used zero, invalidating the entire atomic runtime
+publication. Disabled Quantize now sends `None` for loaded and empty rows.
+GUI capture refreshes same-frame source/metadata rows before admission; refresh
+failure reports its actual reason. Learn intentionally consumes a choice for
+binding and the central piano labels that state. The original reported Human
+failure still requires an actual App retest; software evidence is not listening
+or complete musical acceptance.
+
+For the next Human App test, close the App yourself before rebuilding with
+`start-release.bat --build-only`, then launch with `start.bat`. Codex's private
+test build does not replace an extension held by a running App.
+
+1. Load an analyzed source, select its PAD, open Piano and enable its Retrigger.
+   Press different white and black keys, repeat one note, then choose the same
+   root in lower and higher octaves. Each press should select that exact note
+   and restart the regular loop beginning through the current Quantize/SYNC policy.
+2. Leave Piano open and select another loaded PAD, then return. Opening stays
+   stable; each content restores its own note, octave, offset and both preferences.
+3. With piano C selected, offset +1 should show the nominal C# result while C
+   stays selected. Offset Reset should restore only zero offset. Original Key
+   should restore the detected root/original octave, offset zero and no correction.
+4. Learn separate SET and SET_RETRIGGER bindings using the desired Note/CC/encoder
+   input. Leaving Learn, exercise both; learned variants should retain their own
+   behavior when either GUI checkbox changes. Watch the pending/applied/refusal
+   status instead of treating a selected highlight as proof of audible adoption.
+5. In MULTI LOOP, compare the source timing and the other PAD while changing notes.
+   Notes must not change BPM or loop length. KEY LOCK OFF follows later speed
+   changes, so the displayed note is nominal at nonneutral source rate.
+
+Record actual device, musical quality, timing and listening failures separately;
+these steps do not substitute for the remaining full acceptance gates.
 
 SET preserves the source cursor and stopped state. Every admitted SET_RETRIGGER,
 including repeated identical choices, retains its own content/lifetime, input

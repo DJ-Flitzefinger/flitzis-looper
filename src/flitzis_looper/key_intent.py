@@ -7,7 +7,7 @@ certify support in the current audio backend.
 from collections.abc import Iterable, MutableSequence
 from typing import Annotated, Literal, overload
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 MAX_KEY_EPOCH = (1 << 64) - 1
 type KeyEpoch = Annotated[int, Field(strict=True, ge=0, le=MAX_KEY_EPOCH)]
@@ -70,9 +70,30 @@ class PadKeyIntent(BaseModel):
     correction: str | None = Field(default=None, strict=True)
     analysis_epoch: KeyEpoch = 0
     correction_epoch: KeyEpoch = 0
-    base_shift: int = Field(default=0, strict=True, ge=-5, le=6)
+    base_shift: int = Field(default=0, strict=True, ge=-23, le=23)
     extra_shift: int = Field(default=0, strict=True, ge=-18, le=18)
     retrigger: bool = Field(default=False, strict=True)
+    extra_retrigger: bool = Field(default=False, strict=True)
+
+    @model_validator(mode="before")
+    @classmethod
+    def migrate_retrigger(cls, value: object) -> object:
+        """Preserve the old shared preference in both controls on legacy restore."""
+        if isinstance(value, dict) and "extra_retrigger" not in value:
+            return value | {"extra_retrigger": value.get("retrigger", False)}
+        return value
+
+    @model_validator(mode="after")
+    def validate_total(self) -> PadKeyIntent:
+        """Keep octave choices inside the established combined Native envelope."""
+        if not -23 <= self.base_shift + self.extra_shift <= 24:
+            msg = "combined pitch must be between -23 and +24 semitones"
+            raise ValueError(msg)
+        return self
+
+    def original(self) -> PadKeyIntent:
+        """Remove all pitch modifications together, preserving the detected source."""
+        return self.corrected(None).changed(base_shift=0, extra_shift=0)
 
     def changed(self, **updates: object) -> PadKeyIntent:
         """Construct a fully validated new value before replacing saved intent."""

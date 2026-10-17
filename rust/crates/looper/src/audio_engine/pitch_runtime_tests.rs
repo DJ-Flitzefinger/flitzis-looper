@@ -17,6 +17,7 @@ mod unity_birth_tests;
 
 #[path = "pitch_runtime_tests/controller_route_tests.rs"]
 mod controller_route_tests;
+mod piano_mouse_tests;
 
 #[path = "pitch_runtime_tests/allocation_tests.rs"]
 mod allocation_tests;

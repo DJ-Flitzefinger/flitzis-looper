@@ -4,6 +4,27 @@ R0 introduced the contracts. Only bounded neutral K-META is independently accept
 all remaining implementation and human checks below remain OPEN.
 Use the canonical extended program and exact coverage rows for complete acceptance.
 
+## Direct Human piano revision — 2026-10-17
+
+This supersedes the older two-sidebar-keyboard/menu presentation below. It does
+not replace the full milestone or close any parent, DSP-quality or Human gate.
+
+- [x] Deliver one central responsive three-octave piano above PADs 1–6 with real
+  black/white geometry, exact mouse hit priority, independent original/chosen
+  markers, global stable opening and content-bound note/offset/retrigger state.
+- [x] Reproduce and repair GUI/Native admission, including disabled Quantize and
+  empty default rows, same-frame source/metadata changes, repeated equal notes,
+  Learn, and original capture/worker/scheduler/PCM rather than fake receipts alone.
+- [x] Retain octave-bearing note identities and independent retrigger preferences,
+  legacy Learn/migration, all37 offsets and the original total -23..+24 envelope;
+  reject unsupported new combinations without expanding backend claims.
+- [x] Original Key clears piano/octave, offset and correction as one original action;
+  the separate offset Reset preserves piano/octave and metadata. Preserve original
+  due frames, source rate/BPM/loop cycles, KEY LOCK and unrelated PADs.
+- [x] Complete affected integrated checks, private Release/import/preflight and one
+  independent final review; supply a short real App test procedure. Human hearing
+  and the full acoustic/resource/continuous-O/parent gates remain separate and open.
+
 ## Latest Human execution priority — 2026-10-14
 
 The Human prioritizes a complete, testable Key + Transposition / playable keyboard /

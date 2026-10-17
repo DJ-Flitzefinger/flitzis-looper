@@ -1906,7 +1906,7 @@ mod source_pitch_initialization_tests {
                 let base = py.eval(c"2", None, None).unwrap();
                 assert!(parse_initial_pitch(source, Some(&base), None, None).is_err());
             }
-            for expression in [c"True", c"False", c"2.0", c"'2'", c"7", c"-6"] {
+            for expression in [c"True", c"False", c"2.0", c"'2'", c"24", c"-24"] {
                 let base = py.eval(expression, None, None).unwrap();
                 assert!(parse_initial_pitch("restore", Some(&base), None, None).is_err());
             }

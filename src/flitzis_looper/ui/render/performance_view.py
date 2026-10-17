@@ -15,6 +15,7 @@ from flitzis_looper.ui.constants import (
     TEXT_RGBA,
 )
 from flitzis_looper.ui.contextmanager import button_style, style_var
+from flitzis_looper.ui.render.pitch_keyboard import render_piano_keyboard
 
 if TYPE_CHECKING:
     from flitzis_looper.models import StemGridIndicatorState
@@ -348,10 +349,47 @@ def performance_view(ctx: UiContext) -> None:
     avail = imgui.get_content_region_avail()
 
     with style_var(imgui.StyleVar_.item_spacing, (0, SPACING)):
-        imgui.begin_child("pad_grid", (avail.x, avail.y - BANK_BUTTONS_HEIGHT - SPACING))
+        piano_height = 0.0
+        if ctx.state.pitch_menus.base_open:
+            piano_height = max(60.0, (avail.y - BANK_BUTTONS_HEIGHT - SPACING) / (GRID_SIZE + 1))
+            _render_piano(ctx, piano_height)
+        grid_height = avail.y - BANK_BUTTONS_HEIGHT - SPACING
+        if piano_height:
+            grid_height -= piano_height + SPACING
+        imgui.begin_child("pad_grid", (avail.x, max(1.0, grid_height)))
         _render_pad_grid(ctx)
         imgui.end_child()
 
         imgui.begin_child("bank_buttons", (avail.x, BANK_BUTTONS_HEIGHT))
         _render_banks(ctx)
         imgui.end_child()
+
+
+def _render_piano(ctx: UiContext, height: float) -> None:
+    """Render one shared surface with the selected content's own numerical note."""
+    pad_id = ctx.state.project.selected_pad
+    intent = ctx.state.pads.key_intent(pad_id)
+    original = intent.source.recognized if intent.source is not None else None
+    source = intent.source_key
+    phase, reason = ctx.state.pads.pitch_status(pad_id)
+    status = reason or phase or "Nominal note; Key Lock OFF also follows speed"
+    if ctx.state.session.input_learn_active:
+        status = "LEARN: this choice learns a binding instead of playing"
+    imgui.text(
+        f"PAD {pad_id + 1} Piano {intent.base_shift:+d} st | "
+        f"Offset {intent.extra_shift:+d} | {status}"
+    )
+    chosen = render_piano_keyboard(
+        "performance_piano",
+        source_root=source.root if source is not None else None,
+        selected_shift=intent.base_shift,
+        height=max(16.0, height - imgui.get_text_line_height_with_spacing()),
+        original_root=original.root if original is not None else None,
+    )
+    if chosen is not None:
+        ctx.audio.pads.choose_piano_note(
+            pad_id,
+            chosen,
+            retrigger=intent.retrigger,
+            received_at_ns=ctx.input.capture_timestamp_ns(),
+        )

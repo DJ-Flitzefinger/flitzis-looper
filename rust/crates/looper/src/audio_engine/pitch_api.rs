@@ -65,6 +65,12 @@ pub(super) fn parse_rows(
                 source_mode: optional_mode(row, "source_mode")?,
                 correction_root: optional_root(row, "correction_root")?,
                 correction_mode: optional_mode(row, "correction_mode")?,
+                correction_unknown: row
+                    .get_item("correction_unknown")?
+                    .map(|value| value.extract::<bool>())
+                    .transpose()?
+                    .unwrap_or(false),
+                correction_reset_sequence: 0,
                 intent,
                 key_lock: required(row, "key_lock")?.extract()?,
                 quantize_step_64ths,

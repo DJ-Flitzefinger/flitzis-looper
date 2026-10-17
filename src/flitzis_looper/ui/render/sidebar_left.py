@@ -28,8 +28,7 @@ from flitzis_looper.constants import (
     PAD_GAIN_DB_DEFAULT,
     PAD_GAIN_FINE_STEP_DB,
 )
-from flitzis_looper.input_mapping.actions import describe_pitch_rejection
-from flitzis_looper.key_intent import MusicalKey
+from flitzis_looper.input_mapping.actions import PitchCcMode, describe_pitch_rejection
 from flitzis_looper.ui.constants import (
     CONTROL_ACTIVE_BORDER_RGBA,
     CONTROL_BORDER_RGBA,
@@ -47,12 +46,7 @@ from flitzis_looper.ui.render.bpm_entry import (
 )
 from flitzis_looper.ui.render.control_gestures import hovered_wheel_steps, item_middle_clicked
 from flitzis_looper.ui.render.key_lock import render_pad_key_lock_buttons
-from flitzis_looper.ui.render.pitch_keyboard import (
-    base_key_choices,
-    extra_shift_choices,
-    format_extra_shift,
-    render_pitch_keyboard,
-)
+from flitzis_looper.ui.render.pitch_keyboard import format_extra_shift
 
 if TYPE_CHECKING:
     from flitzis_looper.controller.committed_stem_residency import StemResidencyStatus
@@ -63,24 +57,15 @@ if TYPE_CHECKING:
     from flitzis_looper.ui.styles import ButtonStyleName
 
 
-_KEYS = (
-    "C",
-    "C#",
-    "D",
-    "D#",
-    "E",
-    "F",
-    "F#",
-    "G",
-    "G#",
-    "A",
-    "A#",
-    "B",
-)
-_KEY_OPTIONS = [*_KEYS, *(f"{key}m" for key in _KEYS)]
 _STEM_MIX_OPTIONS: tuple[tuple[StemMixMode, str], ...] = (
     ("full_mix", "FULL MIX"),
     ("all_stems", "ALL STEMS"),
+)
+_PITCH_CC_MODES: tuple[tuple[PitchCcMode, str], ...] = (
+    ("button", "Button"),
+    ("absolute", "Absolute encoder"),
+    ("twos_complement", "Relative 1 / 127"),
+    ("offset_binary", "Relative 65 / 63"),
 )
 _EQ_KNOBS: tuple[tuple[str, str, PadEqBand, str], ...] = (
     ("Low", "##pad_eq_low", "low", "pad_eq_low_db"),
@@ -438,18 +423,23 @@ def _render_key(ctx: UiContext, info: _SidebarPadInfo) -> None:
     intent = ctx.state.pads.key_intent(info.pad_id)
     imgui.text_wrapped("Key + Transposition")
     _labeled_wrapped_value_row("Source", intent.source_label or "Unknown", avail_x=info.avail_x)
-    _render_source_correction(ctx, info, intent)
-    changed, retrigger = imgui.checkbox("Retrigger", intent.retrigger)
-    if imgui.is_item_hovered():
-        imgui.set_tooltip(
-            "Retrigger on pitch choice. Existing learned bindings keep their own retrigger setting."
-        )
+    opened = ctx.state.pitch_menus.base_open
+    if imgui.button(f"{'v' if opened else '>'} Piano##pitch_piano_toggle"):
+        ctx.ui.toggle_pitch_menu("base")
+    imgui.same_line()
+    changed, retrigger = imgui.checkbox("Retrigger##pitch_piano_retrigger", intent.retrigger)
     if changed:
         ctx.audio.pads.set_pitch_retrigger_intent(info.pad_id, enabled=retrigger)
         intent = ctx.state.pads.key_intent(info.pad_id)
-
-    _render_base_pitch(ctx, info, intent)
-    _render_extra_pitch(ctx, info, intent)
+    if imgui.button("Original Key##pitch_original", (-1, 0)):
+        ctx.audio.pads.original_key(
+            info.pad_id,
+            retrigger=intent.retrigger,
+            received_at_ns=ctx.input.capture_timestamp_ns(),
+        )
+        intent = ctx.state.pads.key_intent(info.pad_id)
+    _render_transposition(ctx, info, intent)
+    intent = ctx.state.pads.key_intent(info.pad_id)
     result = intent.result_key
     if result is not None:
         imgui.text_colored(TEXT_MUTED_RGBA, "Nominal result")
@@ -468,124 +458,65 @@ def _render_key(ctx: UiContext, info: _SidebarPadInfo) -> None:
         imgui.text_wrapped(f"Analysis failed: {analysis_error}")
 
 
-def _render_source_correction(ctx: UiContext, info: _SidebarPadInfo, intent: PadKeyIntent) -> None:
-    imgui.text_colored(TEXT_MUTED_RGBA, "Correction")
-    input_width = 92.0
-    imgui.same_line(max(0.0, info.avail_x - input_width))
-    imgui.set_next_item_width(input_width)
-    if imgui.begin_combo("##sidebar_key_correction", intent.correction or "-"):
-        for key in _KEY_OPTIONS:
-            is_selected = key == intent.correction
-            if imgui.selectable(key, is_selected)[0]:
-                ctx.audio.pads.set_manual_key(info.pad_id, key)
-            if is_selected:
-                imgui.set_item_default_focus()
-        imgui.end_combo()
-    if imgui.button("Clear correction", (-1, 0)):
-        ctx.audio.pads.clear_manual_key(info.pad_id)
-    if imgui.is_item_hovered():
-        imgui.set_tooltip(
-            "Source correction changes labels; it leaves chosen pitch and playback alone."
-        )
-
-
-def _render_base_pitch(ctx: UiContext, info: _SidebarPadInfo, intent: PadKeyIntent) -> None:
-    opened = ctx.state.pitch_menus.base_open
-    base = intent.base_key
-    summary = f"{base.label if base is not None else 'Unknown'} / {intent.base_shift:+d} st"
-    if imgui.button(f"{'v' if opened else '>'} Key\n{summary}##pitch_base_header", (-1, 0)):
-        ctx.ui.toggle_pitch_menu("base")
-        opened = ctx.state.pitch_menus.base_open
-    if opened:
-        _render_base_keyboard(ctx, info, intent)
-    if imgui.button("Reset Key (0)##pitch_base_reset", (-1, 0)):
-        ctx.audio.pads.reset_base_pitch(
-            info.pad_id,
-            retrigger=intent.retrigger,
-            received_at_ns=ctx.input.capture_timestamp_ns(),
-        )
-
-
-def _render_base_keyboard(ctx: UiContext, info: _SidebarPadInfo, intent: PadKeyIntent) -> None:
-    source = intent.source_key
-    base = intent.base_key
-    if source is None or base is None:
-        imgui.begin_disabled()
-        imgui.button("Key unavailable", (-1, 0))
-        imgui.end_disabled()
-        imgui.text_wrapped(
-            "Source key is unknown. Set a recognized source correction to choose a Key."
-        )
-        return
-    chosen = render_pitch_keyboard(
-        "pitch_base_keyboard",
-        base_key_choices(source.mode),
-        selected_value=base.root,
-        reveal_selection=lambda: ctx.ui.consume_pitch_scroll_request(
-            "base", info.pad_id, base.root
-        ),
-    )
-    if chosen is not None:
-        ctx.audio.pads.choose_base_key(
-            info.pad_id,
-            MusicalKey(root=chosen, mode=source.mode),
-            retrigger=intent.retrigger,
-            received_at_ns=ctx.input.capture_timestamp_ns(),
-        )
-
-
-def _render_extra_pitch(ctx: UiContext, info: _SidebarPadInfo, intent: PadKeyIntent) -> None:
-    opened = ctx.state.pitch_menus.extra_open
-    summary = f"{intent.extra_shift:+d} st" if intent.extra_shift else "0 st"
-    if imgui.button(
-        f"{'v' if opened else '>'} Transposition\n{summary}##pitch_extra_header", (-1, 0)
-    ):
-        ctx.ui.toggle_pitch_menu("extra")
-        opened = ctx.state.pitch_menus.extra_open
-    if opened:
-        _render_extra_keyboard(ctx, info, intent)
-    if imgui.button("Reset Extra (0)##pitch_extra_reset", (-1, 0)):
-        ctx.audio.pads.reset_extra_pitch(
-            info.pad_id,
-            retrigger=intent.retrigger,
-            received_at_ns=ctx.input.capture_timestamp_ns(),
-        )
-
-
-def _render_extra_keyboard(ctx: UiContext, info: _SidebarPadInfo, intent: PadKeyIntent) -> None:
-    _render_pitch_octaves(ctx, info, intent)
-    chosen = render_pitch_keyboard(
-        "pitch_extra_keyboard",
-        extra_shift_choices(intent.base_key),
-        selected_value=intent.extra_shift,
-        reveal_selection=lambda: ctx.ui.consume_pitch_scroll_request(
-            "extra", info.pad_id, intent.extra_shift
-        ),
-    )
-    if chosen is not None:
-        _choose_extra_pitch(ctx, info.pad_id, chosen, intent)
-
-
-def _render_pitch_octaves(ctx: UiContext, info: _SidebarPadInfo, intent: PadKeyIntent) -> None:
+def _render_transposition(ctx: UiContext, info: _SidebarPadInfo, intent: PadKeyIntent) -> None:
+    imgui.text_colored(TEXT_MUTED_RGBA, f"Transposition: {format_extra_shift(intent.extra_shift)}")
     gap = imgui.get_style().item_spacing.x
     width = max(1.0, (info.avail_x - gap * 2.0) / 3.0)
-    for index, value in enumerate((-12, 0, 12)):
+    for index, (label, step) in enumerate((("+1", 1), ("Reset", 0), ("-1", -1))):
         if index:
             imgui.same_line()
-        style: ButtonStyleName = "regular-selected" if value == intent.extra_shift else "regular"
-        with button_style(style):
-            imgui.button(f"{value:+d} st##pitch_octave_{value}", (width, 0))
-            if imgui.is_item_hovered() and imgui.is_mouse_clicked(imgui.MouseButton_.left):
-                _choose_extra_pitch(ctx, info.pad_id, value, intent)
+        if imgui.button(f"{label}##pitch_offset_{step}", (width, 0)):
+            timestamp = ctx.input.capture_timestamp_ns()
+            if step:
+                ctx.audio.pads.step_pitch(
+                    info.pad_id,
+                    step,
+                    retrigger=intent.extra_retrigger,
+                    received_at_ns=timestamp,
+                    cc_mode=ctx.state.pitch_menus.midi_cc_mode,
+                )
+            else:
+                ctx.audio.pads.reset_extra_pitch(
+                    info.pad_id,
+                    retrigger=intent.extra_retrigger,
+                    received_at_ns=timestamp,
+                )
+    changed, retrigger = imgui.checkbox("Retrigger##pitch_offset_retrigger", intent.extra_retrigger)
+    if changed:
+        ctx.audio.pads.set_extra_retrigger_intent(info.pad_id, enabled=retrigger)
+    _render_pitch_steps(ctx, info, intent)
 
 
-def _choose_extra_pitch(ctx: UiContext, pad_id: int, chosen: int, intent: PadKeyIntent) -> None:
-    ctx.audio.pads.choose_extra_shift(
-        pad_id,
-        chosen,
-        retrigger=intent.retrigger,
-        received_at_ns=ctx.input.capture_timestamp_ns(),
-    )
+def _render_pitch_steps(ctx: UiContext, info: _SidebarPadInfo, intent: PadKeyIntent) -> None:
+    """Keep learnable note/offset octave and chromatic steps compact."""
+    if imgui.tree_node("MIDI / octave steps##pitch_steps"):
+        current_mode = ctx.state.pitch_menus.midi_cc_mode
+        mode_label = dict(_PITCH_CC_MODES)[current_mode]
+        imgui.set_next_item_width(-1)
+        if imgui.begin_combo("##pitch_cc_mode", mode_label):
+            for mode, label in _PITCH_CC_MODES:
+                if imgui.selectable(label, mode == current_mode)[0]:
+                    ctx.ui.set_pitch_cc_mode(mode)
+            imgui.end_combo()
+        for piano, lane in ((True, "Piano"), (False, "Offset")):
+            imgui.text(lane)
+            for index, step in enumerate((-12, -1, 1, 12)):
+                if index:
+                    imgui.same_line()
+                if imgui.small_button(f"{step:+d}##pitch_{lane}_{step}"):
+                    ctx.audio.pads.step_pitch(
+                        info.pad_id,
+                        step,
+                        piano=piano,
+                        retrigger=intent.retrigger if piano else intent.extra_retrigger,
+                        received_at_ns=ctx.input.capture_timestamp_ns(),
+                        cc_mode=ctx.state.pitch_menus.midi_cc_mode,
+                    )
+        imgui.text_wrapped(
+            "Learn a note, step or Reset with MIDI Note, CC or encoder. "
+            "Learn consumes the next control choice instead of playing it."
+        )
+        imgui.tree_pop()
 
 
 def _gain_rgba(*, active: bool, hovered: bool) -> imgui.ImVec4Like:

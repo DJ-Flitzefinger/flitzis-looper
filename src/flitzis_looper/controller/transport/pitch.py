@@ -4,12 +4,20 @@ import threading
 from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
-from flitzis_looper.input_mapping.actions import describe_pitch_rejection, parse_pitch_action
+from flitzis_looper.input_mapping.actions import (
+    describe_pitch_rejection,
+    parse_pitch_action,
+    pitch_note_action,
+    pitch_original_action,
+    pitch_step_action,
+)
 from flitzis_looper.input_timing import validate_input_timestamp_ns
 from flitzis_looper.key_intent import PadKeyIntent
 from flitzis_looper.models import validate_sample_id
 
 if TYPE_CHECKING:
+    from collections.abc import Callable
+
     from flitzis_looper.controller.transport import TransportController
     from flitzis_looper_audio import CapturedPitchAction
 
@@ -49,7 +57,12 @@ class PitchController:
         self._owners: dict[int, _PitchOwner] = {}
         self._projections: dict[str, _PitchProjection] = {}
         self._closed = False
+        self._refresh_runtime: Callable[[], bool] | None = None
         transport._on_frame_render_callbacks.append(self.poll)
+
+    def bind_runtime_refresh(self, refresh: Callable[[], bool]) -> None:
+        """Bind control-row synchronization without coupling Transport to its App owner."""
+        self._refresh_runtime = refresh
 
     def _ensure_thread(self) -> None:
         if threading.get_ident() != self._thread:
@@ -89,11 +102,43 @@ class PitchController:
             return False
         try:
             self._transport.ensure_current_source_assignment_ready(sample_id)
+            if self._refresh_runtime is not None and not self._refresh_runtime():
+                self._report_error(
+                    sample_id, "Audio control state is not ready for this pitch choice."
+                )
+                return False
             capture = capture_api(sample_id, action_key, received_at_ns=timestamp)
             return self.accept_captured_event(capture)
         except (RuntimeError, ValueError, TypeError) as error:
             self._report_error(sample_id, str(error))
             return False
+
+    def choose_piano_note(
+        self, sample_id: int, semitones: int, *, retrigger: bool, received_at_ns: int | None = None
+    ) -> None:
+        """Choose a distinct octave-bearing piano target without changing source timing."""
+        action = pitch_note_action(semitones, retrigger=retrigger)
+        self.choose_pad_action(sample_id, action.key, received_at_ns=received_at_ns)
+
+    def original_key(
+        self, sample_id: int, *, retrigger: bool, received_at_ns: int | None = None
+    ) -> None:
+        """Admit one complete pitch reset, including manual correction removal."""
+        action = pitch_original_action(retrigger=retrigger)
+        self.choose_pad_action(sample_id, action.key, received_at_ns=received_at_ns)
+
+    def step_pitch(
+        self,
+        sample_id: int,
+        semitones: int,
+        *,
+        piano: bool = False,
+        retrigger: bool,
+        received_at_ns: int | None = None,
+    ) -> None:
+        """Resolve a relative step from Native requested state, including rapid repeated inputs."""
+        action = pitch_step_action(semitones, piano=piano, retrigger=retrigger)
+        self.choose_pad_action(sample_id, action.key, received_at_ns=received_at_ns)
 
     def accept_selected_action(self, action_key: str, *, received_at_ns: int | None = None) -> bool:
         """Capture the authoritative Native selection for a keyboard semantic action."""
@@ -202,11 +247,19 @@ class PitchController:
         if owner.sequence <= projection.queued_sequence:
             return
         current = self._project.pad_key_intent[slot]
+        correction_updates: dict[str, object] = {}
+        if owner.capture.resets_key_correction is True:
+            cleared = current.corrected(None)
+            correction_updates = {
+                "correction": cleared.correction,
+                "correction_epoch": cleared.correction_epoch,
+            }
         self._transport.pad._set_key_intent(
             slot,
             current.changed(
                 base_shift=owner.numeric.base_shift,
                 extra_shift=owner.numeric.extra_shift,
+                **correction_updates,
             ),
         )
         projection.queued_sequence = owner.sequence

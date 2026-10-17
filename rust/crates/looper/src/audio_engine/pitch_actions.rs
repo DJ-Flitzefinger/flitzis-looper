@@ -49,10 +49,34 @@ pub(crate) enum PitchActionVariant {
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum PitchEncoderMode {
+    Absolute,
+    TwosComplement,
+    OffsetBinary,
+}
+
+impl PitchEncoderMode {
+    fn parse(value: &str) -> Option<Self> {
+        match value {
+            "absolute" => Some(Self::Absolute),
+            "twos_complement" => Some(Self::TwosComplement),
+            "offset_binary" => Some(Self::OffsetBinary),
+            _ => None,
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum PitchActionTarget {
     Base { root: u8, mode: PitchKeyMode },
+    Note(i32),
+    NoteStep(i32),
+    NoteEncoder(i32, PitchEncoderMode),
     ResetBase,
+    Original,
     Extra(i32),
+    ExtraStep(i32),
+    ExtraEncoder(i32, PitchEncoderMode),
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -71,6 +95,7 @@ impl PitchActionSpec {
         };
         let target = match fields.as_slice() {
             ["pitch.base.reset", _] => PitchActionTarget::ResetBase,
+            ["pitch.original", _] => PitchActionTarget::Original,
             ["pitch.base", root, mode, _] => {
                 let root: u8 = root.parse().ok()?;
                 if root > 11 || root.to_string() != fields[1] {
@@ -87,6 +112,41 @@ impl PitchActionSpec {
                     return None;
                 }
                 PitchActionTarget::Extra(extra)
+            }
+            ["pitch.note", base, _] => {
+                let base: i32 = base.parse().ok()?;
+                if !(-23..=23).contains(&base) || base.to_string() != fields[1] {
+                    return None;
+                }
+                PitchActionTarget::Note(base)
+            }
+            [kind @ ("pitch.note.step" | "pitch.extra.step"), step, _] => {
+                let step: i32 = step.parse().ok()?;
+                if ![-12, -1, 1, 12].contains(&step) || step.to_string() != fields[1] {
+                    return None;
+                }
+                if *kind == "pitch.note.step" {
+                    PitchActionTarget::NoteStep(step)
+                } else {
+                    PitchActionTarget::ExtraStep(step)
+                }
+            }
+            [
+                kind @ ("pitch.note.encoder" | "pitch.extra.encoder"),
+                step,
+                mode,
+                _,
+            ] => {
+                let step: i32 = step.parse().ok()?;
+                if ![-12, -1, 1, 12].contains(&step) || step.to_string() != fields[1] {
+                    return None;
+                }
+                let mode = PitchEncoderMode::parse(mode)?;
+                if *kind == "pitch.note.encoder" {
+                    PitchActionTarget::NoteEncoder(step, mode)
+                } else {
+                    PitchActionTarget::ExtraEncoder(step, mode)
+                }
             }
             _ => return None,
         };
@@ -115,7 +175,28 @@ impl PitchActionSpec {
                 (difference, current.extra_shift())
             }
             PitchActionTarget::Extra(extra) => (current.base_shift(), extra),
+            PitchActionTarget::Note(base) => (base, current.extra_shift()),
+            PitchActionTarget::NoteStep(step) => {
+                let base = current
+                    .base_shift()
+                    .checked_add(step)
+                    .ok_or(PitchActionReject::UnsupportedPitch)?;
+                (base, current.extra_shift())
+            }
+            PitchActionTarget::ExtraStep(step) => {
+                let extra = current
+                    .extra_shift()
+                    .checked_add(step)
+                    .ok_or(PitchActionReject::UnsupportedPitch)?;
+                (current.base_shift(), extra)
+            }
             PitchActionTarget::ResetBase => (0, current.extra_shift()),
+            PitchActionTarget::Original => (0, 0),
+            // Encoder actions require an original MIDI value and mapping-owned
+            // decoder state. Direct GUI/keyboard capture cannot invent either.
+            PitchActionTarget::NoteEncoder(_, _) | PitchActionTarget::ExtraEncoder(_, _) => {
+                return Err(PitchActionReject::InvalidAction);
+            }
         };
         PitchIntent::new(base, extra).map_err(|_| PitchActionReject::UnsupportedPitch)
     }
@@ -719,6 +800,10 @@ impl CapturedPitchAction {
     #[getter]
     fn extra_shift(&self) -> i32 {
         self.render().pitch.extra_shift()
+    }
+    #[getter]
+    pub(crate) fn resets_key_correction(&self) -> bool {
+        self.owner.admission.spec.target == PitchActionTarget::Original
     }
     #[getter]
     fn key_lock(&self) -> bool {

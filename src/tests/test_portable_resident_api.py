@@ -171,6 +171,7 @@ _PITCH_CAPTURE_ATTRIBUTES = (
     "extra_shift",
     "key_lock",
     "retrigger",
+    "resets_key_correction",
     "quantize_step_64ths",
     "sync_enabled",
     "accepted",

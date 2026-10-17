@@ -24,6 +24,7 @@ class _CapturedPitch:
     extra_shift: int = 2
     received_at_ns: int = 123
     retrigger: bool = False
+    resets_key_correction: bool = False
     accepted: bool = False
     effective: bool = False
     state: str = "captured"
@@ -45,6 +46,7 @@ def _as_native(capture: _CapturedPitch) -> CapturedPitchAction:
 
 
 def _pitch_fixture(controller: AppController, audio: Mock) -> tuple[dict[int, int], Mock, Mock]:
+    controller.transport.pitch.bind_runtime_refresh(lambda: True)
     controller.project.sample_paths[0] = "samples/synthetic-source-a.wav"
     controller.project.pad_content[0] = PadContentIdentity(instance_id="a" * 32)
     controller.project.pad_key_intent[0] = PadKeyIntent(source=SourceKeyVersion(raw_key="Em"))

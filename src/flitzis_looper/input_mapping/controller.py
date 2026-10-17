@@ -59,10 +59,11 @@ type InputSource = Literal["midi", "keyboard"]
 class _InputPitchProjection:
     source: MusicalKey | None = None
     correction: MusicalKey | None = None
+    correction_unknown: bool = False
     base_shift: int = 0
     extra_shift: int = 0
     key_lock: bool = False
-    quantize_step_64ths: int = 0
+    quantize_step_64ths: int | None = None
     sync: bool = False
     request_sequence: int = 0
 
@@ -72,6 +73,7 @@ class _InputPitchProjection:
             "source_mode": self.source.mode if self.source is not None else None,
             "correction_root": self.correction.root if self.correction is not None else None,
             "correction_mode": self.correction.mode if self.correction is not None else None,
+            "correction_unknown": self.correction_unknown,
             "base_shift": self.base_shift,
             "extra_shift": self.extra_shift,
             "key_lock": self.key_lock,
@@ -117,6 +119,8 @@ class InputMappingController(BaseController):
         self._midi_cc_values: dict[str, int] = {}
         self._midi_cc_directions: dict[str, int] = {}
         self._last_input_runtime_state_signature: _InputRuntimeStateSignature | None = None
+        self._last_input_runtime_state_error: str | None = None
+        app.transport.pitch.bind_runtime_refresh(self.refresh_pitch_runtime_state)
         self._on_frame_render_callbacks.append(self._sync_rust_runtime_state)
         self._on_frame_render_callbacks.append(self._poll_rust_input_events)
 
@@ -680,10 +684,20 @@ class InputMappingController(BaseController):
     def _sync_rust_runtime_state(self) -> None:
         self._refresh_rust_runtime_state()
 
+    def refresh_pitch_runtime_state(self) -> bool:
+        """Synchronize same-frame source and metadata edits before explicit GUI capture."""
+        if not self._refresh_rust_runtime_state():
+            message = "Audio control state is not ready for this pitch choice."
+            if self._last_input_runtime_state_error:
+                message += f" {self._last_input_runtime_state_error}"
+            raise RuntimeError(message)
+        return True
+
     def _refresh_rust_runtime_state(self) -> bool:
         try:
             signature = self._input_runtime_state_signature()
-        except RuntimeError, ValueError, TypeError:
+        except (RuntimeError, ValueError, TypeError) as error:
+            self._last_input_runtime_state_error = str(error)
             return False
         if signature == self._last_input_runtime_state_signature:
             return True
@@ -712,10 +726,12 @@ class InputMappingController(BaseController):
                     loop_ends,
                     bindings,
                 )
-        except RuntimeError, ValueError, TypeError:
+        except (RuntimeError, ValueError, TypeError) as error:
+            self._last_input_runtime_state_error = str(error)
             return False
 
         self._last_input_runtime_state_signature = signature
+        self._last_input_runtime_state_error = None
         return True
 
     def _input_runtime_state_signature(self) -> _InputRuntimeStateSignature:
@@ -757,16 +773,15 @@ class InputMappingController(BaseController):
         intent = self._project.pad_key_intent[sample_id]
         source = intent.source.recognized if intent.source is not None else None
         correction = recognize_key(intent.correction)
-        if intent.correction is not None and correction is None:
-            source = None
         quantize_step = (
             {"1_64": 1, "1_32": 2, "1_16": 4}[self._project.trigger_quantization_step]
             if self._project.trigger_quantization_enabled
-            else 0
+            else None
         )
         return _InputPitchProjection(
             source=source,
             correction=correction,
+            correction_unknown=intent.correction is not None and correction is None,
             base_shift=intent.base_shift,
             extra_shift=intent.extra_shift,
             key_lock=self._project.resolve_pad_key_lock(sample_id),

@@ -12,15 +12,17 @@ if TYPE_CHECKING:
 
 type LooperActionSource = Literal["direct", "python"]
 type PadEqBand = Literal["low", "mid", "high"]
+type PitchCcMode = Literal["button", "absolute", "twos_complement", "offset_binary"]
 
 
 @dataclass(frozen=True)
 class PitchAction:
     """Parsed stable pitch target and the variant fixed when the input was learned."""
 
-    kind: Literal["base", "extra", "reset_base"]
+    kind: Literal["base", "extra", "reset_base", "note", "original", "note_step", "extra_step"]
     target: MusicalKey | int | None
     retrigger: bool
+    cc_mode: PitchCcMode = "button"
 
 
 class LooperAction(BaseModel):
@@ -155,6 +157,49 @@ def pitch_reset_base_action(*, retrigger: bool) -> LooperAction:
     )
 
 
+def pitch_note_action(semitones: int, *, retrigger: bool) -> LooperAction:
+    """Choose an octave-bearing relative piano note through the existing pitch route."""
+    if type(semitones) is not int or not -23 <= semitones <= 23:
+        msg = "piano semitones must be an integer between -23 and +23"
+        raise ValueError(msg)
+    return LooperAction(
+        key=f"pitch.note:{semitones}:{_pitch_variant(retrigger=retrigger)}",
+        label=f"Piano {semitones:+d} st{' + retrigger' if retrigger else ''}",
+        source="direct",
+    )
+
+
+def pitch_original_action(*, retrigger: bool) -> LooperAction:
+    """Reset the original note, offset and correction as one captured action."""
+    return LooperAction(
+        key=f"pitch.original:{_pitch_variant(retrigger=retrigger)}",
+        label=f"Original Key{' + retrigger' if retrigger else ''}",
+        source="direct",
+    )
+
+
+def pitch_step_action(
+    semitones: int, *, piano: bool = False, retrigger: bool, cc_mode: PitchCcMode = "button"
+) -> LooperAction:
+    """Capture a chromatic or octave step against the original Native requested tuple."""
+    if type(semitones) is not int or semitones not in {-12, -1, 1, 12}:
+        msg = "pitch step must be -12, -1, +1 or +12 semitones"
+        raise ValueError(msg)
+    lane = "note" if piano else "extra"
+    if cc_mode not in {"button", "absolute", "twos_complement", "offset_binary"}:
+        msg = "unknown MIDI pitch step encoding"
+        raise ValueError(msg)
+    target = f"pitch.{lane}.step:{semitones}"
+    if cc_mode != "button":
+        target = f"pitch.{lane}.encoder:{semitones}:{cc_mode}"
+    return LooperAction(
+        key=f"{target}:{_pitch_variant(retrigger=retrigger)}",
+        label=f"{'Piano' if piano else 'Transpose'} step {semitones:+d}"
+        f"{' + retrigger' if retrigger else ''}",
+        source="direct",
+    )
+
+
 def _pitch_variant(*, retrigger: bool) -> Literal["set", "set_retrigger"]:
     if not isinstance(retrigger, bool):
         msg = "retrigger must be a boolean"
@@ -170,16 +215,56 @@ def parse_pitch_action(key: str) -> PitchAction | None:
     retrigger = parts[-1] == "set_retrigger"
     if len(parts) == 2 and parts[0] == "pitch.base.reset":
         return PitchAction("reset_base", None, retrigger)
+    if len(parts) == 2 and parts[0] == "pitch.original":
+        return PitchAction("original", None, retrigger)
     if len(parts) == 4 and parts[0] == "pitch.base" and parts[2] in {"major", "minor"}:
         root = _pitch_integer(parts[1], minimum=0, maximum=11)
         if root is not None:
             mode: Literal["major", "minor"] = "major" if parts[2] == "major" else "minor"
             return PitchAction("base", MusicalKey(root=root, mode=mode), retrigger)
+    return _parse_numeric_pitch_action(parts, retrigger=retrigger)
+
+
+def _parse_numeric_pitch_action(parts: list[str], *, retrigger: bool) -> PitchAction | None:
+    """Parse octave-aware fixed and relative numeric targets independently of legacy roots."""
+    if len(parts) == 3 and parts[0] == "pitch.note":
+        semitones = _pitch_integer(parts[1], minimum=-23, maximum=23)
+        if semitones is not None:
+            return PitchAction("note", semitones, retrigger)
+    if len(parts) == 3 and parts[0] in {"pitch.note.step", "pitch.extra.step"}:
+        semitones = _pitch_integer(parts[1], minimum=-12, maximum=12)
+        if semitones in {-12, -1, 1, 12}:
+            return PitchAction(
+                "note_step" if parts[0] == "pitch.note.step" else "extra_step",
+                semitones,
+                retrigger,
+            )
     if len(parts) == 3 and parts[0] == "pitch.extra":
         semitones = _pitch_integer(parts[1], minimum=-18, maximum=18)
         if semitones is not None:
             return PitchAction("extra", semitones, retrigger)
-    return None
+    return _parse_encoder_pitch_action(parts, retrigger=retrigger)
+
+
+def _parse_encoder_pitch_action(parts: list[str], *, retrigger: bool) -> PitchAction | None:
+    """Retain explicit CC encoding in saved actions without guessing from a single value."""
+    if len(parts) != 4 or parts[0] not in {"pitch.note.encoder", "pitch.extra.encoder"}:
+        return None
+    modes: dict[str, PitchCcMode] = {
+        "absolute": "absolute",
+        "twos_complement": "twos_complement",
+        "offset_binary": "offset_binary",
+    }
+    mode = modes.get(parts[2])
+    step = _pitch_integer(parts[1], minimum=-12, maximum=12)
+    if mode is None or step not in {-12, -1, 1, 12}:
+        return None
+    return PitchAction(
+        "note_step" if parts[0] == "pitch.note.encoder" else "extra_step",
+        step,
+        retrigger,
+        mode,
+    )
 
 
 def _pitch_integer(raw: str, *, minimum: int, maximum: int) -> int | None:

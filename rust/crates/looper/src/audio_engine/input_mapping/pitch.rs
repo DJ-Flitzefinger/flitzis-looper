@@ -24,6 +24,9 @@ pub(crate) struct PitchPadProjection {
     pub(crate) source_mode: Option<PitchKeyMode>,
     pub(crate) correction_root: Option<u8>,
     pub(crate) correction_mode: Option<PitchKeyMode>,
+    pub(crate) correction_unknown: bool,
+    // Control-owned pending Original Key marker; never restored from Python.
+    pub(crate) correction_reset_sequence: u64,
     pub(crate) intent: PitchIntent,
     pub(crate) key_lock: bool,
     pub(crate) quantize_step_64ths: Option<u32>,
@@ -38,6 +41,8 @@ impl Default for PitchPadProjection {
             source_mode: None,
             correction_root: None,
             correction_mode: None,
+            correction_unknown: false,
+            correction_reset_sequence: 0,
             intent: PitchIntent::default(),
             key_lock: true,
             quantize_step_64ths: None,
@@ -57,6 +62,9 @@ impl PitchPadProjection {
                 return Err(PitchActionReject::InvalidAction);
             }
         }
+        if self.correction_unknown && self.correction_root.is_some() {
+            return Err(PitchActionReject::InvalidAction);
+        }
         if self
             .quantize_step_64ths
             .is_some_and(|step| grid_for_step(step).is_none())
@@ -67,6 +75,9 @@ impl PitchPadProjection {
     }
 
     fn source_key(self) -> Option<(u8, PitchKeyMode)> {
+        if self.correction_unknown {
+            return None;
+        }
         self.correction_root
             .zip(self.correction_mode)
             .or_else(|| self.source_root.zip(self.source_mode))
@@ -74,8 +85,35 @@ impl PitchPadProjection {
 }
 
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+struct RequestedKeyCorrection {
+    root: Option<u8>,
+    mode: Option<PitchKeyMode>,
+    unknown: bool,
+    reset_sequence: u64,
+}
+
+impl RequestedKeyCorrection {
+    fn from_projection(projection: PitchPadProjection) -> Self {
+        Self {
+            root: projection.correction_root,
+            mode: projection.correction_mode,
+            unknown: projection.correction_unknown,
+            reset_sequence: projection.correction_reset_sequence,
+        }
+    }
+
+    fn apply(self, projection: &mut PitchPadProjection) {
+        projection.correction_root = self.root;
+        projection.correction_mode = self.mode;
+        projection.correction_unknown = self.unknown;
+        projection.correction_reset_sequence = self.reset_sequence;
+    }
+}
+
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 pub(super) struct RequestedPitchAnchor {
     intent: PitchIntent,
+    correction: RequestedKeyCorrection,
     sequence: u64,
 }
 
@@ -83,12 +121,18 @@ impl RequestedPitchAnchor {
     fn from_row(row: &RuntimePadState) -> Self {
         Self {
             intent: row.pitch.intent,
+            correction: RequestedKeyCorrection::from_projection(row.pitch),
             sequence: row.latest_request_sequence,
         }
     }
 
     fn restore(self, row: &mut RuntimePadState) {
         row.pitch.intent = self.intent;
+        // Ordinary numeric requests do not own metadata. Only restoring across
+        // a pending Original Key boundary may replace the current correction.
+        if row.pitch.correction_reset_sequence != self.correction.reset_sequence {
+            self.correction.apply(&mut row.pitch);
+        }
         row.pitch.request_sequence = self.sequence;
         row.latest_request_sequence = self.sequence;
     }
@@ -103,6 +147,7 @@ struct RequestedPitchRecord {
     key: ContentKey,
     sequence: u64,
     intent: PitchIntent,
+    correction: RequestedKeyCorrection,
     previous: RequestedPitchAnchor,
     observation: PitchActionShadow,
 }
@@ -138,7 +183,12 @@ impl RequestedPitchJournal {
         self.records.iter().any(Option::is_none)
     }
 
-    fn insert(&mut self, action: &CapturedPitchAction) {
+    fn insert(
+        &mut self,
+        action: &CapturedPitchAction,
+        previous_correction: RequestedKeyCorrection,
+        correction: RequestedKeyCorrection,
+    ) {
         let (intent, sequence) = action.previous_requested();
         *self
             .records
@@ -148,7 +198,12 @@ impl RequestedPitchJournal {
             key: action.content_key(),
             sequence: action.sequence(),
             intent: action.render().pitch,
-            previous: RequestedPitchAnchor { intent, sequence },
+            correction,
+            previous: RequestedPitchAnchor {
+                intent,
+                correction: previous_correction,
+                sequence,
+            },
             observation: action.requested_shadow(),
         });
     }
@@ -175,6 +230,23 @@ impl RequestedPitchJournal {
             .and_then(|binding| binding.placement?.content_key())
             .zip(row.pitch_anchor)
         {
+            if row.pitch.correction_reset_sequence == 0 {
+                let correction = RequestedKeyCorrection::from_projection(row.pitch);
+                // Metadata can change independently of numeric request order.
+                // Update only acknowledged correction history, retaining any
+                // newer pending Original clear as its own component owner.
+                for record in self.records.iter_mut().flatten() {
+                    if record.key != key {
+                        continue;
+                    }
+                    if record.correction.reset_sequence <= anchor.sequence {
+                        record.correction = correction;
+                    }
+                    if record.previous.correction.reset_sequence <= anchor.sequence {
+                        record.previous.correction = correction;
+                    }
+                }
+            }
             self.anchor(key, anchor);
         }
     }
@@ -241,12 +313,31 @@ impl RequestedPitchJournal {
             }
             let row = &mut pads[placement.expect("current placement").slot()];
             if record.observation.rejected() {
+                let owns_correction_reset = record.correction.reset_sequence == record.sequence;
+                if owns_correction_reset {
+                    if row.pitch.correction_reset_sequence == record.sequence {
+                        record.previous.correction.apply(&mut row.pitch);
+                    }
+                    if let Some(anchor) = &mut row.pitch_anchor
+                        && anchor.correction.reset_sequence == record.sequence
+                    {
+                        anchor.correction = record.previous.correction;
+                    }
+                }
                 if row.latest_request_sequence == record.sequence {
                     record.previous.restore(row);
                 }
                 // Remove the tombstone immediately, including when a later
                 // capture is current. Arbitrary cancellation order is bounded.
                 for successor in self.records.iter_mut().flatten() {
+                    if owns_correction_reset && successor.key == record.key {
+                        if successor.correction.reset_sequence == record.sequence {
+                            successor.correction = record.previous.correction;
+                        }
+                        if successor.previous.correction.reset_sequence == record.sequence {
+                            successor.previous.correction = record.previous.correction;
+                        }
+                    }
                     if successor.key == record.key && successor.previous.sequence == record.sequence
                     {
                         successor.previous = record.previous;
@@ -261,6 +352,7 @@ impl RequestedPitchJournal {
                 // predecessor; it needs no reference to the terminal action.
                 row.pitch_anchor = Some(RequestedPitchAnchor {
                     intent: record.intent,
+                    correction: record.correction,
                     sequence: record.sequence,
                 });
             }
@@ -273,7 +365,14 @@ pub(super) fn apply_pitch_projection(
     projection: PitchPadProjection,
 ) -> bool {
     let requested = row.pitch.intent;
+    let correction = RequestedKeyCorrection::from_projection(row.pitch);
     row.pitch = projection;
+    // A stale numeric projection may carry a legitimate independent metadata
+    // edit. Only a pending Original clear fences that metadata component.
+    let correction_acknowledged = projection.request_sequence >= correction.reset_sequence;
+    if !correction_acknowledged {
+        correction.apply(&mut row.pitch);
+    }
     if projection.request_sequence < row.latest_request_sequence {
         row.pitch.intent = requested;
         row.pitch.request_sequence = row.latest_request_sequence;
@@ -286,11 +385,15 @@ pub(super) fn apply_pitch_projection(
             // predecessor's own tuple; preserving the newer row is independent.
             row.pitch_anchor = Some(RequestedPitchAnchor {
                 intent: projection.intent,
+                correction: RequestedKeyCorrection::from_projection(projection),
                 sequence: projection.request_sequence,
             });
             true
         } else {
-            false
+            if correction_acknowledged && let Some(anchor) = &mut row.pitch_anchor {
+                anchor.correction = RequestedKeyCorrection::from_projection(row.pitch);
+            }
+            correction_acknowledged
         }
     } else {
         row.latest_request_sequence = projection.request_sequence;
@@ -480,10 +583,22 @@ fn capture_row(
     if state.pads[id].pitch_anchor.is_none() {
         state.pads[id].pitch_anchor = Some(RequestedPitchAnchor::from_row(&state.pads[id]));
     }
-    state.pitch_shadow.insert(&action);
+    let previous_correction = RequestedKeyCorrection::from_projection(projection);
+    let correction = if action.resets_key_correction() {
+        RequestedKeyCorrection {
+            reset_sequence: action.sequence(),
+            ..RequestedKeyCorrection::default()
+        }
+    } else {
+        previous_correction
+    };
+    state
+        .pitch_shadow
+        .insert(&action, previous_correction, correction);
     // This is requested control intent only. Native/effective tuning stays untouched
     // while preparation is pending, and every event keeps its independently frozen tuple.
     state.pads[id].pitch.intent = pitch;
+    correction.apply(&mut state.pads[id].pitch);
     state.pads[id].pitch.request_sequence = action.sequence();
     state.pads[id].latest_request_sequence = action.sequence();
     Ok(action)
@@ -1128,6 +1243,230 @@ mod tests {
                 .cancel_pitch_capture(&next, PitchActionReject::InputDisabled)
                 .unwrap()
         );
+    }
+
+    #[test]
+    fn original_key_shadow_clears_correction_and_survives_a_stale_python_projection() {
+        for unknown in [false, true] {
+            let runtime = cancellation_runtime();
+            let before = PitchPadProjection {
+                source_root: Some(4),
+                source_mode: Some(PitchKeyMode::Minor),
+                correction_root: (!unknown).then_some(9),
+                correction_mode: (!unknown).then_some(PitchKeyMode::Minor),
+                correction_unknown: unknown,
+                intent: PitchIntent::new(12, 2).unwrap(),
+                ..PitchPadProjection::default()
+            };
+            let mut rows = vec![PitchPadProjection::default(); NUM_SAMPLES];
+            rows[0] = before;
+            runtime.set_pitch_runtime_state(rows.clone()).unwrap();
+            let original = capture_for_cancel(&runtime, "pitch.original:set_retrigger");
+            assert!(original.resets_key_correction());
+            assert_eq!(original.render().pitch, PitchIntent::default());
+            runtime.set_pitch_runtime_state(rows).unwrap();
+            {
+                let guard = runtime.runtime_state.lock().unwrap();
+                let row = &guard.pads[0];
+                assert_eq!(row.pitch.intent, PitchIntent::default());
+                assert_eq!(row.pitch.source_key(), Some((4, PitchKeyMode::Minor)));
+                assert_eq!(row.pitch.correction_root, None);
+                assert!(!row.pitch.correction_unknown);
+                assert_eq!(row.latest_request_sequence, original.sequence());
+            }
+            // A fast successor resolves against the retained detected reference,
+            // before Python has projected the original reset's requested tuple.
+            assert_next_base_extra(&runtime, 0);
+            assert!(
+                runtime
+                    .cancel_pitch_capture(&original, PitchActionReject::Capacity)
+                    .unwrap()
+            );
+            assert_eq!(runtime.runtime_state.lock().unwrap().pads[0].pitch, before);
+        }
+    }
+
+    #[test]
+    fn original_key_projection_anchors_correction_clear_when_its_audio_later_refuses() {
+        let runtime = cancellation_runtime();
+        let mut rows = vec![PitchPadProjection::default(); NUM_SAMPLES];
+        rows[0] = PitchPadProjection {
+            source_root: Some(4),
+            source_mode: Some(PitchKeyMode::Minor),
+            correction_root: Some(9),
+            correction_mode: Some(PitchKeyMode::Minor),
+            intent: PitchIntent::new(-12, 2).unwrap(),
+            ..PitchPadProjection::default()
+        };
+        runtime.set_pitch_runtime_state(rows.clone()).unwrap();
+        let original = capture_for_cancel(&runtime, "pitch.original:set");
+        rows[0].correction_root = None;
+        rows[0].correction_mode = None;
+        rows[0].intent = PitchIntent::default();
+        rows[0].request_sequence = original.sequence();
+        runtime.set_pitch_runtime_state(rows.clone()).unwrap();
+        let successor = capture_for_cancel(&runtime, "pitch.note:12:set");
+        assert!(original.reject(PitchActionReject::PreparationFailed));
+        assert!(
+            runtime
+                .cancel_pitch_capture(&successor, PitchActionReject::Capacity)
+                .unwrap()
+        );
+        assert_next_base_extra(&runtime, 0);
+        assert_eq!(
+            runtime.runtime_state.lock().unwrap().pads[0]
+                .pitch
+                .correction_root,
+            None
+        );
+    }
+
+    #[test]
+    fn ordinary_numeric_cancel_preserves_an_independent_metadata_projection() {
+        let runtime = cancellation_runtime();
+        let action = capture_for_cancel(&runtime, "pitch.extra:2:set");
+        let mut rows = vec![PitchPadProjection::default(); NUM_SAMPLES];
+        rows[0] = PitchPadProjection {
+            source_root: Some(4),
+            source_mode: Some(PitchKeyMode::Minor),
+            correction_root: Some(7),
+            correction_mode: Some(PitchKeyMode::Minor),
+            ..PitchPadProjection::default()
+        };
+        runtime.set_pitch_runtime_state(rows).unwrap();
+        assert!(
+            runtime
+                .cancel_pitch_capture(&action, PitchActionReject::Capacity)
+                .unwrap()
+        );
+        let guard = runtime.runtime_state.lock().unwrap();
+        assert_eq!(guard.pads[0].pitch.intent, PitchIntent::default());
+        assert_eq!(guard.pads[0].pitch.correction_root, Some(7));
+        assert_eq!(guard.pads[0].pitch.correction_reset_sequence, 0);
+    }
+
+    #[test]
+    fn original_key_then_note_protects_only_the_unacknowledged_correction_clear() {
+        let runtime = cancellation_runtime();
+        let before = PitchPadProjection {
+            source_root: Some(4),
+            source_mode: Some(PitchKeyMode::Minor),
+            correction_root: Some(9),
+            correction_mode: Some(PitchKeyMode::Minor),
+            intent: PitchIntent::new(2, 3).unwrap(),
+            ..PitchPadProjection::default()
+        };
+        let mut rows = vec![PitchPadProjection::default(); NUM_SAMPLES];
+        rows[0] = before;
+        runtime.set_pitch_runtime_state(rows.clone()).unwrap();
+        let original = capture_for_cancel(&runtime, "pitch.original:set");
+        let note = capture_for_cancel(&runtime, "pitch.note:12:set");
+        runtime.set_pitch_runtime_state(rows.clone()).unwrap();
+        {
+            let guard = runtime.runtime_state.lock().unwrap();
+            assert_eq!(guard.pads[0].pitch.intent, PitchIntent::new(12, 0).unwrap());
+            assert_eq!(guard.pads[0].pitch.correction_root, None);
+            assert_eq!(
+                guard.pads[0].pitch.correction_reset_sequence,
+                original.sequence()
+            );
+        }
+        rows[0].intent = original.render().pitch;
+        rows[0].correction_root = None;
+        rows[0].correction_mode = None;
+        rows[0].request_sequence = original.sequence();
+        runtime.set_pitch_runtime_state(rows.clone()).unwrap();
+        // After Python acknowledges the reset, correction metadata is again
+        // independent of the newer pending numeric note's request sequence.
+        rows[0].correction_root = Some(7);
+        rows[0].correction_mode = Some(PitchKeyMode::Minor);
+        runtime.set_pitch_runtime_state(rows).unwrap();
+        assert!(
+            runtime
+                .cancel_pitch_capture(&note, PitchActionReject::Capacity)
+                .unwrap()
+        );
+        let guard = runtime.runtime_state.lock().unwrap();
+        assert_eq!(guard.pads[0].pitch.intent, PitchIntent::default());
+        assert_eq!(guard.pads[0].pitch.correction_root, Some(7));
+        assert_eq!(guard.pads[0].pitch.correction_reset_sequence, 0);
+    }
+
+    #[test]
+    fn cancelled_original_clear_does_not_leave_a_later_note_owning_that_metadata_change() {
+        let runtime = cancellation_runtime();
+        let before = PitchPadProjection {
+            source_root: Some(4),
+            source_mode: Some(PitchKeyMode::Minor),
+            correction_root: Some(9),
+            correction_mode: Some(PitchKeyMode::Minor),
+            intent: PitchIntent::new(2, 3).unwrap(),
+            ..PitchPadProjection::default()
+        };
+        let mut rows = vec![PitchPadProjection::default(); NUM_SAMPLES];
+        rows[0] = before;
+        runtime.set_pitch_runtime_state(rows).unwrap();
+        let original = capture_for_cancel(&runtime, "pitch.original:set");
+        let note = capture_for_cancel(&runtime, "pitch.note:12:set");
+        assert!(
+            runtime
+                .cancel_pitch_capture(&original, PitchActionReject::Capacity)
+                .unwrap()
+        );
+        {
+            let guard = runtime.runtime_state.lock().unwrap();
+            assert_eq!(guard.pads[0].pitch.intent, note.render().pitch);
+            assert_eq!(guard.pads[0].pitch.correction_root, before.correction_root);
+            assert_eq!(guard.pads[0].pitch.correction_reset_sequence, 0);
+        }
+        assert!(
+            runtime
+                .cancel_pitch_capture(&note, PitchActionReject::Capacity)
+                .unwrap()
+        );
+        assert_eq!(runtime.runtime_state.lock().unwrap().pads[0].pitch, before);
+    }
+
+    #[test]
+    fn unsupported_piano_sum_does_not_change_the_requested_tuple_or_sequence() {
+        let runtime = cancellation_runtime();
+        let first = capture_for_cancel(&runtime, "pitch.extra:18:set");
+        let refused = capture_selected(
+            PitchActionSpec::parse("pitch.note:23:set").unwrap(),
+            10_000_000,
+            10_000_000,
+            &runtime.runtime_state,
+            &runtime.ownership,
+            None,
+        );
+        assert!(matches!(refused, Err(PitchActionReject::UnsupportedPitch)));
+        let guard = runtime.runtime_state.lock().unwrap();
+        assert_eq!(guard.pads[0].pitch.intent, first.render().pitch);
+        assert_eq!(guard.pads[0].latest_request_sequence, first.sequence());
+    }
+
+    #[test]
+    fn rapid_relative_steps_and_repeated_notes_each_keep_one_original_capture() {
+        let runtime = cancellation_runtime();
+        let first = capture_for_cancel(&runtime, "pitch.extra.step:1:set");
+        let second = capture_for_cancel(&runtime, "pitch.extra.step:1:set");
+        assert_eq!(first.render().pitch, PitchIntent::new(0, 1).unwrap());
+        assert_eq!(second.render().pitch, PitchIntent::new(0, 2).unwrap());
+        let note = capture_for_cancel(&runtime, "pitch.note:12:set_retrigger");
+        let repeated = capture_for_cancel(&runtime, "pitch.note:12:set_retrigger");
+        assert_eq!(note.render().pitch, PitchIntent::new(12, 2).unwrap());
+        assert_eq!(repeated.render().pitch, note.render().pitch);
+        assert!(first.sequence() < second.sequence());
+        assert!(second.sequence() < note.sequence());
+        assert!(note.sequence() < repeated.sequence());
+        assert_eq!(
+            note.variant(),
+            crate::audio_engine::pitch_actions::PitchActionVariant::SetRetrigger
+        );
+        assert_eq!(repeated.original_due_frame(), note.original_due_frame());
+        assert_eq!(repeated.received_timestamp(), note.received_timestamp());
+        assert_eq!(repeated.loop_region(), note.loop_region());
+        assert_eq!(repeated.sync(), note.sync());
     }
 
     #[test]

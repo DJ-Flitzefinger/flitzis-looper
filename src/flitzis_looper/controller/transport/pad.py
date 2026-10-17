@@ -170,6 +170,13 @@ class PadController:
             sample_id, action.key, received_at_ns=received_at_ns
         )
 
+    def set_extra_retrigger_intent(self, sample_id: int, *, enabled: bool) -> None:
+        """Persist only the transposition control's independent retrigger preference."""
+        validate_sample_id(sample_id)
+        self._set_key_intent(
+            sample_id, self._project.pad_key_intent[sample_id].changed(extra_retrigger=enabled)
+        )
+
     def reset_base_pitch(
         self, sample_id: int, *, retrigger: bool, received_at_ns: int | None = None
     ) -> None:

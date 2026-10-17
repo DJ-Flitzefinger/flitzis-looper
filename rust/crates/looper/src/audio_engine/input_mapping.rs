@@ -66,6 +66,7 @@ struct InputMapping {
     action_key: String,
     action: InputAction,
     owner: Arc<AtomicBool>,
+    pitch_step_state: Arc<Mutex<pitch_steps::PitchStepState>>,
 }
 
 #[derive(Clone)]
@@ -163,6 +164,7 @@ pub(super) use pair_mirror::CapturedPairRuntime;
 mod captured_trigger;
 pub use captured_trigger::CapturedInputPadTrigger;
 mod pitch;
+mod pitch_steps;
 pub(crate) use pitch::PitchPadProjection;
 use pitch::RuntimeSelectedContent;
 
@@ -270,11 +272,32 @@ impl InputRuntime {
     }
 
     pub fn set_enabled(&self, enabled: bool) {
-        self.enabled.store(enabled, Ordering::Release);
+        if enabled && !self.enabled.load(Ordering::Acquire) {
+            self.reset_pitch_step_state();
+            self.enabled.store(true, Ordering::Release);
+        } else if !enabled && self.enabled.swap(false, Ordering::AcqRel) {
+            self.reset_pitch_step_state();
+        }
     }
 
     pub fn set_learn_capture_active(&self, active: bool) {
-        self.learn_capture_active.store(active, Ordering::Release);
+        if active && !self.learn_capture_active.swap(true, Ordering::AcqRel) {
+            self.reset_pitch_step_state();
+        } else if !active && self.learn_capture_active.load(Ordering::Acquire) {
+            self.reset_pitch_step_state();
+            self.learn_capture_active.store(false, Ordering::Release);
+        }
+    }
+
+    fn reset_pitch_step_state(&self) {
+        let Ok(mappings) = self.mappings.lock() else {
+            return;
+        };
+        for mapping in mappings.iter() {
+            if let Ok(mut state) = mapping.pitch_step_state.lock() {
+                *state = pitch_steps::PitchStepState::default();
+            }
+        }
     }
 
     pub fn replace_mappings(&self, mappings: Vec<(String, String)>) {
@@ -285,16 +308,18 @@ impl InputRuntime {
             .into_iter()
             .map(|(binding_key, action_key)| {
                 let action = parse_input_action(&action_key);
+                let previous = guard.iter().find(|mapping| {
+                    mapping.binding_key == binding_key && mapping.action_key == action_key
+                });
                 InputMapping {
-                    owner: guard
-                        .iter()
-                        .find(|mapping| {
-                            mapping.binding_key == binding_key && mapping.action_key == action_key
-                        })
-                        .map_or_else(
-                            || Arc::new(AtomicBool::new(true)),
-                            |mapping| mapping.owner.clone(),
-                        ),
+                    owner: previous.map_or_else(
+                        || Arc::new(AtomicBool::new(true)),
+                        |mapping| mapping.owner.clone(),
+                    ),
+                    pitch_step_state: previous.map_or_else(
+                        || Arc::new(Mutex::new(pitch_steps::PitchStepState::default())),
+                        |mapping| mapping.pitch_step_state.clone(),
+                    ),
                     binding_key,
                     action_key,
                     action,
@@ -792,15 +817,21 @@ impl InputDispatcher {
 
             if let Some(mapping) = mapping {
                 if let InputAction::Pitch { spec } = mapping.action {
-                    match pitch::capture_selected(
-                        spec,
-                        event.received_at_ns,
-                        self.clock.capture_ns(),
-                        &self.runtime_state,
-                        &self.ownership,
-                        Some((&mapping.owner, &self.enabled, &self.learn_capture_active)),
-                    ) {
-                        Ok(action) => captured_pitch = Some(action),
+                    match pitch_steps::resolve(&mapping, &event, spec) {
+                        Ok(Some(spec)) => match pitch::capture_selected(
+                            spec,
+                            event.received_at_ns,
+                            self.clock.capture_ns(),
+                            &self.runtime_state,
+                            &self.ownership,
+                            Some((&mapping.owner, &self.enabled, &self.learn_capture_active)),
+                        ) {
+                            Ok(action) => captured_pitch = Some(action),
+                            Err(reason) => pitch_rejection = Some(reason),
+                        },
+                        // Releases, held button repeats, neutral relative data
+                        // and absolute initialization are not pitch attacks.
+                        Ok(None) => continue,
                         Err(reason) => pitch_rejection = Some(reason),
                     }
                 } else if matches!(mapping.action, InputAction::InvalidPitch) {
@@ -1766,10 +1797,17 @@ mod tests {
         assert!(event.received_at_ns >= before);
         assert!(event.received_at_ns <= clock.capture_ns());
         assert!(event.dispatched);
-        assert!(
-            matches!(consumer.pop().unwrap(), ControlMessage::TriggerInputPad { received_at_ns: timestamp, .. }
-            if timestamp == event.received_at_ns)
-        );
+        let ControlMessage::CapturePadStartTarget(target) = consumer.pop().unwrap() else {
+            panic!("ordinary MIDI attack must first retain its original target");
+        };
+        assert_eq!(target.received_timestamp(), event.received_at_ns);
+        let ControlMessage::PreparedStart(publication) = consumer.pop().unwrap() else {
+            panic!("ordinary MIDI attack must publish its original prepared owner");
+        };
+        let work = publication.take().unwrap();
+        assert_eq!(work.origin().received_timestamp(), event.received_at_ns);
+        assert_eq!(work.origin().sequence(), target.sequence());
+        assert!(consumer.pop().is_err());
     }
 
     #[test]

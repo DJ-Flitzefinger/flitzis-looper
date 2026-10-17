@@ -1,22 +1,21 @@
-"""Small scrollable pitch surfaces with persistent, content-derived selection."""
+"""Piano geometry and pitch surfaces with content-derived selection."""
 
+import math
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, Literal
+from typing import Literal
 
 from imgui_bundle import imgui
 
 from flitzis_looper.key_intent import MusicalKey
-from flitzis_looper.ui.contextmanager import style_var
-
-if TYPE_CHECKING:
-    from collections.abc import Callable
 
 _ROOT_NAMES = ("C", "C#", "D", "D#", "E", "F", "F#", "G", "G#", "A", "A#", "B")
 _BLACK_ROOTS = frozenset({1, 3, 6, 8, 10})
 KEY_WIDTH = 42.0
-KEY_HEIGHT = 88.0
-KEYBOARD_HEIGHT = 112.0
 _CHOSEN_RGBA = (0.24, 0.65, 1.0, 1.0)
+_ORIGINAL_RGBA = (0.92, 0.57, 0.19, 1.0)
+_PIANO_WHITE_COUNT = 21
+_PIANO_BLACK_WIDTH = 0.64
+_PIANO_BLACK_HEIGHT = 0.62
 
 
 @dataclass(frozen=True)
@@ -40,6 +39,212 @@ class PitchKeyGeometry:
     def center_x(self) -> float:
         """Return this target's horizontal center for scroll positioning."""
         return self.x + self.width / 2.0
+
+
+@dataclass(frozen=True)
+class PianoKeyGeometry:
+    """One chromatic target, with black keys overlaying neighboring white keys."""
+
+    key: PitchKeyboardKey
+    semitone_index: int
+    x: float
+    width: float
+    height: float
+    is_original: bool
+
+    @property
+    def center_x(self) -> float:
+        """Return the key's horizontal center in piano-local coordinates."""
+        return self.x + self.width / 2.0
+
+    def contains(self, x: float, y: float) -> bool:
+        """Use half-open bounds so shared white-key edges have one owner."""
+        return self.x <= x < self.x + self.width and 0.0 <= y < self.height
+
+
+def piano_geometry(
+    source_root: int | None,
+    *,
+    width: float,
+    height: float,
+    original_root: int | Literal["source"] | None = "source",
+) -> tuple[PianoKeyGeometry, ...]:
+    """Fit three C-based chromatic octaves with the source in the middle octave.
+
+    Values are signed semitones from the original source. An unknown source uses
+    the same physical layout with zero at its middle C position, but labels only
+    relative intervals and does not claim any absolute note or original key.
+    """
+    if source_root is not None and (type(source_root) is not int or not 0 <= source_root < 12):
+        message = "Source root must be a chromatic index from 0 through 11."
+        raise ValueError(message)
+    detected = source_root if original_root == "source" else original_root
+    if detected is not None and (type(detected) is not int or not 0 <= detected < 12):
+        message = "Original root must be a chromatic index from 0 through 11."
+        raise ValueError(message)
+    if not math.isfinite(width) or not math.isfinite(height) or min(width, height) <= 0.0:
+        message = "Piano dimensions must be finite and positive."
+        raise ValueError(message)
+    white_width = width / _PIANO_WHITE_COUNT
+    original_index = 12 + (source_root if source_root is not None else 0)
+    white_count = 0
+    geometry: list[PianoKeyGeometry] = []
+    for index in range(36):
+        black = index % 12 in _BLACK_ROOTS
+        x = white_count * width / _PIANO_WHITE_COUNT
+        if black:
+            key_width = white_width * _PIANO_BLACK_WIDTH
+            x -= key_width / 2.0
+        else:
+            key_width = (white_count + 1) * width / _PIANO_WHITE_COUNT - x
+        shift = index - original_index
+        label = _piano_key_label(index, shift, source_root)
+        geometry.append(
+            PianoKeyGeometry(
+                key=PitchKeyboardKey(shift, label, black),
+                semitone_index=index,
+                x=x,
+                width=key_width,
+                height=height * _PIANO_BLACK_HEIGHT if black else height,
+                is_original=source_root is not None
+                and detected is not None
+                and index == 12 + detected,
+            )
+        )
+        white_count += not black
+    return tuple(geometry)
+
+
+def _piano_key_label(index: int, shift: int, source_root: int | None) -> str:
+    if source_root is None:
+        return format_extra_shift(shift)
+    octave = index // 12 - 1
+    octave_label = "original octave" if octave == 0 else f"{octave:+d} octave"
+    return f"{_ROOT_NAMES[index % 12]}\n{octave_label}"
+
+
+def piano_hit_test(
+    geometry: tuple[PianoKeyGeometry, ...], x: float, y: float
+) -> PianoKeyGeometry | None:
+    """Resolve a piano-local point, giving raised black keys first priority."""
+    for black in (True, False):
+        for item in geometry:
+            if item.key.black is black and item.contains(x, y):
+                return item
+    return None
+
+
+def render_piano_keyboard(
+    menu_id: str,
+    *,
+    source_root: int | None,
+    selected_shift: int,
+    height: float = 136.0,
+    original_root: int | Literal["source"] | None = "source",
+) -> int | None:
+    """Draw a width-fitted piano and emit one signed target on each mouse press.
+
+    A single item owns interaction. Black/white overlap is resolved geometrically,
+    and pressing the selected note again emits the same action for retriggering.
+    """
+    width = max(1.0, imgui.get_content_region_avail().x)
+    geometry = piano_geometry(source_root, width=width, height=height, original_root=original_root)
+    imgui.invisible_button(menu_id, (width, height))
+    origin = imgui.get_item_rect_min()
+    hovered = None
+    if imgui.is_item_hovered():
+        mouse = imgui.get_mouse_pos()
+        hovered = piano_hit_test(geometry, mouse.x - origin.x, mouse.y - origin.y)
+    for black in (False, True):
+        for item in geometry:
+            if item.key.black is black:
+                _draw_piano_key(
+                    item,
+                    origin=(origin.x, origin.y),
+                    selected=item.key.value == selected_shift,
+                    hovered=item is hovered,
+                    known_source=source_root is not None,
+                )
+    if hovered is not None:
+        description = hovered.key.label.replace("\n", " Â· ")
+        if source_root is not None:
+            description += f"\n{format_extra_shift(hovered.key.value)}"
+        else:
+            description += "\nSource key unknown: relative note"
+        if hovered.is_original:
+            description += "\nOriginal Key"
+        imgui.set_tooltip(description)
+        if imgui.is_mouse_clicked(imgui.MouseButton_.left):
+            return hovered.key.value
+    return None
+
+
+def _draw_piano_key(
+    item: PianoKeyGeometry,
+    *,
+    origin: tuple[float, float],
+    selected: bool,
+    hovered: bool,
+    known_source: bool,
+) -> None:
+    draw = imgui.get_window_draw_list()
+    left, top = origin[0] + item.x, origin[1]
+    right, bottom = left + item.width, top + item.height
+    background = (0.09, 0.10, 0.12, 1.0) if item.key.black else (0.88, 0.89, 0.91, 1.0)
+    if hovered:
+        background = (0.18, 0.23, 0.29, 1.0) if item.key.black else (0.77, 0.86, 0.94, 1.0)
+    border = _CHOSEN_RGBA if selected else (0.20, 0.22, 0.26, 1.0)
+    inset = min(0.5, item.width / 8.0)
+    minimum, maximum = (left + inset, top + inset), (right - inset, bottom - inset)
+    draw.add_rect_filled(minimum, maximum, imgui.get_color_u32(background), rounding=2.0)
+    draw.add_rect(
+        minimum,
+        maximum,
+        imgui.get_color_u32(border),
+        rounding=2.0,
+        thickness=2.5 if selected else 1.0,
+    )
+    if selected:
+        draw.add_rect_filled(
+            (left + inset, top + 2.0),
+            (right - inset, top + 6.0),
+            imgui.get_color_u32(_CHOSEN_RGBA),
+        )
+    if item.is_original:
+        draw.add_circle_filled(
+            (item.center_x + origin[0], bottom - 9.0),
+            min(3.0, item.width / 5.0),
+            imgui.get_color_u32(_ORIGINAL_RGBA),
+        )
+    _draw_piano_key_label(item, origin=origin, known_source=known_source)
+
+
+def _draw_piano_key_label(
+    item: PianoKeyGeometry, *, origin: tuple[float, float], known_source: bool
+) -> None:
+    if item.width < 8.0 or item.height < 31.0:
+        return
+    if known_source:
+        octave = item.semitone_index // 12 - 1
+        lines = (_ROOT_NAMES[item.semitone_index % 12], "0" if octave == 0 else f"{octave:+d}")
+    else:
+        lines = ("0" if item.key.value == 0 else f"{item.key.value:+d}", "st")
+    sizes = [imgui.calc_text_size(line) for line in lines]
+    scale = min(
+        1.0,
+        (item.width - 4.0) / max(size.x for size in sizes),
+        (item.height - 23.0) / (2.0 * imgui.get_font_size()),
+    )
+    font_size = imgui.get_font_size() * scale
+    line_height = font_size + 2.0
+    color = (0.92, 0.93, 0.96, 1.0) if item.key.black else (0.14, 0.16, 0.20, 1.0)
+    draw = imgui.get_window_draw_list()
+    for index, (line, size) in enumerate(zip(lines, sizes, strict=True)):
+        position = (
+            origin[0] + item.center_x - size.x * scale / 2.0,
+            origin[1] + item.height - 17.0 - (2 - index) * line_height,
+        )
+        draw.add_text(imgui.get_font(), font_size, position, imgui.get_color_u32(color), line)
 
 
 def base_key_choices(mode: Literal["major", "minor"]) -> tuple[PitchKeyboardKey, ...]:
@@ -87,94 +292,3 @@ def format_extra_shift(value: int) -> str:
     if value in {-12, 12}:
         return f"{signed} st ({value // 12:+d} octave)"
     return f"{signed} st"
-
-
-def render_pitch_keyboard(
-    menu_id: str,
-    keys: tuple[PitchKeyboardKey, ...],
-    *,
-    selected_value: int | None,
-    reveal_selection: Callable[[], bool],
-) -> int | None:
-    """Draw a scrollable keyboard and return one mouse attack without closing the menu."""
-    chosen: int | None = None
-    text_sizes = [imgui.calc_text_size(key.label) for key in keys]
-    width = max(KEY_WIDTH, max((size.x for size in text_sizes), default=0.0) + 10.0)
-    height = max(KEY_HEIGHT, max((size.y for size in text_sizes), default=0.0) + 40.0)
-    style = imgui.get_style()
-    child_height = max(
-        KEYBOARD_HEIGHT, height + style.scrollbar_size + style.window_padding.y * 2.0
-    )
-    visible = imgui.begin_child(
-        menu_id,
-        (-1, child_height),
-        window_flags=imgui.WindowFlags_.horizontal_scrollbar,
-    )
-    try:
-        if visible:
-            with style_var(imgui.StyleVar_.item_spacing, (0.0, 0.0)):
-                chosen = _render_keys(
-                    keyboard_geometry(keys, key_width=width),
-                    selected_value=selected_value,
-                    reveal_selection=reveal_selection(),
-                    height=height,
-                )
-    finally:
-        imgui.end_child()
-    return chosen
-
-
-def _render_keys(
-    geometry: tuple[PitchKeyGeometry, ...],
-    *,
-    selected_value: int | None,
-    reveal_selection: bool,
-    height: float,
-) -> int | None:
-    chosen: int | None = None
-    for index, item in enumerate(geometry):
-        if index:
-            imgui.same_line()
-        key = item.key
-        imgui.invisible_button(f"##pitch_{key.value}", (item.width, height))
-        hovered = imgui.is_item_hovered()
-        _draw_key(key, selected=key.value == selected_value, hovered=hovered)
-        if hovered and imgui.is_mouse_clicked(imgui.MouseButton_.left):
-            chosen = key.value
-        if reveal_selection and key.value == selected_value:
-            draw = imgui.get_window_draw_list()
-            if (
-                imgui.get_item_rect_min().x < draw.get_clip_rect_min().x
-                or imgui.get_item_rect_max().x > draw.get_clip_rect_max().x
-            ):
-                imgui.set_scroll_here_x(0.5)
-    return chosen
-
-
-def _draw_key(key: PitchKeyboardKey, *, selected: bool, hovered: bool) -> None:
-    position = imgui.get_item_rect_min()
-    maximum = imgui.get_item_rect_max()
-    draw = imgui.get_window_draw_list()
-    dark = key.black is not False
-    background = (0.12, 0.12, 0.14, 1.0) if dark else (0.86, 0.86, 0.88, 1.0)
-    text = (0.95, 0.95, 0.97, 1.0) if dark else (0.09, 0.09, 0.11, 1.0)
-    border = _CHOSEN_RGBA if selected else (0.43, 0.43, 0.46, 1.0)
-    bottom = maximum.y - (12.0 if key.black else 0.0)
-    left_top = (position.x + 1.0, position.y + 1.0)
-    right_bottom = (maximum.x - 1.0, bottom - 1.0)
-    draw.add_rect_filled(left_top, right_bottom, imgui.get_color_u32(background))
-    draw.add_rect(
-        left_top, right_bottom, imgui.get_color_u32(border), thickness=3.0 if selected else 1.0
-    )
-    if selected or hovered:
-        draw.add_rect_filled(
-            (position.x + 3.0, position.y + 3.0),
-            (maximum.x - 3.0, position.y + 7.0),
-            imgui.get_color_u32(border if selected else (0.65, 0.65, 0.69, 1.0)),
-        )
-    size = imgui.calc_text_size(key.label)
-    draw.add_text(
-        (position.x + (maximum.x - position.x - size.x) / 2.0, position.y + 14.0),
-        imgui.get_color_u32(text),
-        key.label,
-    )

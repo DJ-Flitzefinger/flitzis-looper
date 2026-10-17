@@ -8,10 +8,12 @@ pub(crate) struct PitchIntent {
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq, thiserror::Error)]
 pub(crate) enum PitchIntentError {
-    #[error("base_shift must be an integer between -5 and 6")]
+    #[error("base_shift must be an integer between -23 and 23")]
     InvalidBaseShift,
     #[error("extra_shift must be an integer between -18 and 18")]
     InvalidExtraShift,
+    #[error("combined semitone shift must be between -23 and 24")]
+    InvalidTotalShift,
     #[error("source rate must be finite and greater than zero")]
     InvalidSourceRate,
     #[error("combined native pitch scale must be finite and greater than zero")]
@@ -20,11 +22,16 @@ pub(crate) enum PitchIntentError {
 
 impl PitchIntent {
     pub(crate) fn new(base_shift: i32, extra_shift: i32) -> Result<Self, PitchIntentError> {
-        if !(-5..=6).contains(&base_shift) {
+        if !(-23..=23).contains(&base_shift) {
             return Err(PitchIntentError::InvalidBaseShift);
         }
         if !(-18..=18).contains(&extra_shift) {
             return Err(PitchIntentError::InvalidExtraShift);
+        }
+        // Octave-bearing piano choices widen the base representation only. The
+        // established Native numeric pitch/rate envelope retains the same total.
+        if !(-23..=24).contains(&(base_shift + extra_shift)) {
+            return Err(PitchIntentError::InvalidTotalShift);
         }
         Ok(Self {
             base_shift: base_shift as i8,
@@ -83,7 +90,7 @@ mod tests {
                 assert_eq!(intent.total_semitones(), base + extra);
             }
         }
-        for base in [i32::MIN, -6, 7, i32::MAX] {
+        for base in [i32::MIN, -24, 24, i32::MAX] {
             assert_eq!(
                 PitchIntent::new(base, 0),
                 Err(PitchIntentError::InvalidBaseShift)
@@ -97,6 +104,26 @@ mod tests {
         }
         assert_eq!(PitchIntent::new(-5, -18).unwrap().total_semitones(), -23);
         assert_eq!(PitchIntent::new(6, 18).unwrap().total_semitones(), 24);
+    }
+
+    #[test]
+    fn octave_bearing_bases_keep_the_existing_combined_native_domain() {
+        for root in 0..12 {
+            for index in 0..36 {
+                let base = index - (12 + root);
+                assert_eq!(PitchIntent::new(base, 0).unwrap().base_shift(), base);
+            }
+        }
+        for base in -23..=23 {
+            for extra in -18..=18 {
+                let actual = PitchIntent::new(base, extra);
+                if (-23..=24).contains(&(base + extra)) {
+                    assert_eq!(actual.unwrap().total_semitones(), base + extra);
+                } else {
+                    assert_eq!(actual, Err(PitchIntentError::InvalidTotalShift));
+                }
+            }
+        }
     }
 
     #[test]

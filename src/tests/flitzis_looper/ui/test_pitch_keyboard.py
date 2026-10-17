@@ -2,20 +2,20 @@ from typing import TYPE_CHECKING, Literal
 from unittest.mock import Mock
 
 import pytest
+from imgui_bundle import imgui
 
 from flitzis_looper.key_intent import MusicalKey, PadKeyIntent, SourceKeyVersion
 from flitzis_looper.ui.context import UiContext
-from flitzis_looper.ui.render import sidebar_left
+from flitzis_looper.ui.render import performance_view
 from flitzis_looper.ui.render.pitch_keyboard import (
     base_key_choices,
     extra_shift_choices,
     format_extra_shift,
     keyboard_geometry,
 )
+from tests.flitzis_looper.ui.test_key_lock_render import _imgui_context
 
 if TYPE_CHECKING:
-    from collections.abc import Callable
-
     from flitzis_looper.controller import AppController
 
 
@@ -67,67 +67,60 @@ def test_absolute_keyboard_has_twelve_same_mode_roots(mode: str) -> None:
     assert keys[1].label == ("C#" if mode == "major" else "C#m")
 
 
-def test_pitch_menu_visibility_and_scroll_requests_are_independent_and_context_local(
+def test_piano_expansion_is_global_across_pad_selection_and_context_local(
     controller: AppController,
 ) -> None:
     ctx = UiContext(controller)
     other = UiContext(controller)
     ctx.ui.toggle_pitch_menu("base")
-    ctx.ui.toggle_pitch_menu("extra")
     assert ctx.state.pitch_menus.base_open
-    assert ctx.state.pitch_menus.extra_open
     assert not other.state.pitch_menus.base_open
-    assert not other.state.pitch_menus.extra_open
-    assert ctx.ui.consume_pitch_scroll_request("extra", 0, 0)
-    assert not ctx.ui.consume_pitch_scroll_request("extra", 0, 0)
-    assert ctx.ui.consume_pitch_scroll_request("extra", 0, 2)
-    assert ctx.ui.consume_pitch_scroll_request("base", 0, 0)
-    assert ctx.ui.consume_pitch_scroll_request("extra", 4, 2)
+    controller.project.selected_pad = 1
     assert ctx.state.pitch_menus.base_open
-    assert ctx.state.pitch_menus.extra_open
+    controller.project.selected_pad = 0
+    assert ctx.state.pitch_menus.base_open
     ctx.ui.toggle_pitch_menu("base")
     assert not ctx.state.pitch_menus.base_open
-    assert ctx.state.pitch_menus.extra_open
+    assert not other.state.pitch_menus.base_open
 
 
-def test_mouse_choices_keep_both_menus_open_and_highlight_base_separately_from_result(
-    controller: AppController, monkeypatch: pytest.MonkeyPatch
+@pytest.mark.parametrize("source", ["Em", "unrecognized"])
+def test_shared_piano_routes_signed_octave_target_and_selected_pad_intent(
+    controller: AppController, monkeypatch: pytest.MonkeyPatch, source: str
 ) -> None:
     ctx = UiContext(controller)
     intent = PadKeyIntent(
-        source=SourceKeyVersion(raw_key="Em"), base_shift=-4, extra_shift=2, retrigger=True
+        source=SourceKeyVersion(raw_key=source), base_shift=-4, extra_shift=2, retrigger=True
     )
-    controller.project.pad_key_intent[0] = intent
+    controller.project.selected_pad = 1
+    controller.project.pad_key_intent[1] = intent
     ctx.ui.toggle_pitch_menu("base")
-    ctx.ui.toggle_pitch_menu("extra")
-    chosen_base = Mock()
-    chosen_extra = Mock()
-    monkeypatch.setattr(ctx.audio.pads, "choose_base_key", chosen_base)
-    monkeypatch.setattr(ctx.audio.pads, "choose_extra_shift", chosen_extra)
+    chosen_note = Mock()
+    monkeypatch.setattr(ctx.audio.pads, "choose_piano_note", chosen_note)
     monkeypatch.setattr(ctx.input, "capture_timestamp_ns", lambda: 123)
-    monkeypatch.setattr(sidebar_left, "_render_pitch_octaves", lambda *_args: None)
-    surfaces: list[tuple[str, int | None]] = []
+    surfaces: list[tuple[str, int | None, int, float]] = []
 
     def choose(
         _id: str,
-        _keys: object,
         *,
-        selected_value: int | None,
-        reveal_selection: Callable[[], bool],
+        source_root: int | None,
+        selected_shift: int,
+        height: float,
+        original_root: int | None,
     ) -> int:
-        assert reveal_selection()
-        surfaces.append((_id, selected_value))
-        return 7 if _id == "pitch_base_keyboard" else -12
+        surfaces.append((_id, source_root, selected_shift, height))
+        return -12
 
-    monkeypatch.setattr(sidebar_left, "render_pitch_keyboard", choose)
-    info = sidebar_left._SidebarPadInfo(0, 220.0, is_loaded=True, is_loading=False)
-    sidebar_left._render_base_keyboard(ctx, info, intent)
-    sidebar_left._render_extra_keyboard(ctx, info, intent)
-    assert surfaces == [("pitch_base_keyboard", 0), ("pitch_extra_keyboard", 2)]
-    chosen_base.assert_called_once_with(
-        0, MusicalKey(root=7, mode="minor"), retrigger=True, received_at_ns=123
-    )
-    chosen_extra.assert_called_once_with(0, -12, retrigger=True, received_at_ns=123)
+    monkeypatch.setattr(performance_view, "render_piano_keyboard", choose)
+    with _imgui_context():
+        imgui.new_frame()
+        imgui.begin("Piano routing", flags=imgui.WindowFlags_.no_saved_settings)
+        expected_height = 120.0 - imgui.get_text_line_height_with_spacing()
+        performance_view._render_piano(ctx, 120.0)
+        imgui.end()
+        imgui.render()
+    assert surfaces == [("performance_piano", 4 if source == "Em" else None, -4, expected_height)]
+    chosen_note.assert_called_once_with(1, -12, retrigger=True, received_at_ns=123)
     assert ctx.state.pitch_menus.base_open
-    assert ctx.state.pitch_menus.extra_open
+    assert controller.project.pad_key_intent[1] == intent
     assert format_extra_shift(-12) != format_extra_shift(0) != format_extra_shift(12)

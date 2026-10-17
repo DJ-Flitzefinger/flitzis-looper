@@ -22,6 +22,14 @@ starts perform no build, dependency installation, update or model preflight.
 `START-LOOPER.bat --check` runs the isolated runtime import/DLL/FFmpeg/offline-worker
 checks without opening the GUI or an audio device.
 
+The piano-control revision requires Native's immutable
+`CapturedPitchAction.resets_key_correction` receipt field. The installer preflight
+rejects an older incompatible binary before activation. Saved schema-1 key intent
+remains compatible: a missing independent offset-retrigger preference inherits
+the old shared preference, while note octaves and both explicit preferences
+survive project and portable relocation. Existing running installations are
+protected by the same update lock.
+
 Every successful installation or update also prepares `demucs:htdemucs` and
 `bs-roformer:musdb18hq` using the existing model resolvers. It verifies checkpoint
 assets and loads each real model on CPU in a separate fresh process, sequentially.

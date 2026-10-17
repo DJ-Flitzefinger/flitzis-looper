@@ -247,30 +247,40 @@ fn analysis(value: &Value) -> io::Result<()> {
     Ok(())
 }
 fn key_intent(value: &Value) -> io::Result<()> {
-    exact_keys(
-        value,
-        &[
-            "schema_version",
-            "source",
-            "correction",
-            "analysis_epoch",
-            "correction_epoch",
-            "base_shift",
-            "extra_shift",
-            "retrigger",
-        ],
-    )?;
+    let mut keys = vec![
+        "schema_version",
+        "source",
+        "correction",
+        "analysis_epoch",
+        "correction_epoch",
+        "base_shift",
+        "extra_shift",
+        "retrigger",
+    ];
+    if value.get("extra_retrigger").is_some() {
+        keys.push("extra_retrigger");
+    }
+    exact_keys(value, &keys)?;
+    let pitch_valid = value["base_shift"]
+        .as_i64()
+        .and_then(|number| i32::try_from(number).ok())
+        .zip(
+            value["extra_shift"]
+                .as_i64()
+                .and_then(|number| i32::try_from(number).ok()),
+        )
+        .is_some_and(|(base, extra)| {
+            crate::audio_engine::pitch_intent::PitchIntent::new(base, extra).is_ok()
+        });
     if value["schema_version"].as_u64() != Some(1)
         || !optional_text(&value["correction"])
         || value["analysis_epoch"].as_u64().is_none()
         || value["correction_epoch"].as_u64().is_none()
-        || !value["base_shift"]
-            .as_i64()
-            .is_some_and(|number| (-5..=6).contains(&number))
-        || !value["extra_shift"]
-            .as_i64()
-            .is_some_and(|number| (-18..=18).contains(&number))
+        || !pitch_valid
         || !boolean(&value["retrigger"])
+        || value
+            .get("extra_retrigger")
+            .is_some_and(|value| !boolean(value))
     {
         return Err(invalid("portable durable key intent invalid"));
     }
@@ -601,7 +611,7 @@ fn path_key(samples: &Path, record: &Value, path: &str) -> io::Result<String> {
     };
     Ok(reference_key(&mapped))
 }
-fn without_timing(mut image: Value) -> Value {
+fn normalized_slot(mut image: Value) -> Value {
     if image["analysis"].is_object() {
         image["analysis"]["accepted_timing"] = Value::Null;
         if image["analysis"]
@@ -609,6 +619,12 @@ fn without_timing(mut image: Value) -> Value {
         {
             image["analysis"] = Value::Null;
         }
+    }
+    // Schema 1 predates the independently persisted offset preference. Its
+    // explicit migration default must compare equal after Python reserializes
+    // the same musical intent; a genuinely different preference stays distinct.
+    if image["key_intent"].is_object() && image["key_intent"].get("extra_retrigger").is_none() {
+        image["key_intent"]["extra_retrigger"] = image["key_intent"]["retrigger"].clone();
     }
     image
 }
@@ -618,8 +634,8 @@ pub(super) fn slot_matches(
     actual: &Value,
     expected: &Value,
 ) -> io::Result<bool> {
-    let mut actual = without_timing(actual.clone());
-    let expected = without_timing(expected.clone());
+    let mut actual = normalized_slot(actual.clone());
+    let expected = normalized_slot(expected.clone());
     if let (Some(left), Some(right)) = (
         actual["source_path"].as_str(),
         expected["source_path"].as_str(),
@@ -638,12 +654,46 @@ pub(super) fn project_intent(samples: &Path, record: &Value) -> io::Result<Value
         if let Some(path) = project["sample_paths"][sample].as_str() {
             project["sample_paths"][sample] = json!(path_key(samples, record, path)?);
         }
-        let normalized = without_timing(project_slot(&project, sample)?);
+        let normalized = normalized_slot(project_slot(&project, sample)?);
         project["sample_analysis"][sample] = normalized["analysis"].clone();
+        project["pad_key_intent"][sample] = normalized["key_intent"].clone();
         if project["sample_paths"][sample].is_null() {
             project["pad_key_lock"][sample] = Value::Null;
             project["pad_timing_intent"][sample] = json!("legacy");
         }
     }
     Ok(project)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn key_intent_accepts_legacy_and_independent_preferences_but_never_an_expanded_total() {
+        let mut slot = empty_slot();
+        slot["key_intent"]["retrigger"] = json!(true);
+        assert!(key_intent(&slot["key_intent"]).is_ok());
+        let legacy = slot.clone();
+        slot["key_intent"]["extra_retrigger"] = json!(true);
+        assert!(key_intent(&slot["key_intent"]).is_ok());
+        assert_eq!(normalized_slot(legacy), normalized_slot(slot.clone()));
+        slot["key_intent"]["extra_retrigger"] = json!(false);
+        assert!(key_intent(&slot["key_intent"]).is_ok());
+        slot["key_intent"]["extra_retrigger"] = json!(1);
+        assert!(key_intent(&slot["key_intent"]).is_err());
+        slot["key_intent"]["extra_retrigger"] = json!(false);
+        slot["key_intent"]["base_shift"] = json!(23);
+        assert!(key_intent(&slot["key_intent"]).is_ok());
+        slot["key_intent"]["extra_shift"] = json!(18);
+        assert!(key_intent(&slot["key_intent"]).is_err());
+        slot["key_intent"]["extra_shift"] = json!(0);
+        slot["key_intent"]["base_shift"] = json!(-23);
+        assert!(key_intent(&slot["key_intent"]).is_ok());
+        slot["key_intent"]["extra_shift"] = json!(-1);
+        assert!(key_intent(&slot["key_intent"]).is_err());
+        slot["key_intent"]["extra_shift"] = json!(0);
+        slot["key_intent"]["unexpected"] = json!(false);
+        assert!(key_intent(&slot["key_intent"]).is_err());
+    }
 }

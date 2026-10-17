@@ -21,7 +21,11 @@ if os.environ['LAUNCHER_NATIVE_MODE'] == 'import-error':
     raise ImportError('deliberate native import failure')
 if os.environ['LAUNCHER_NATIVE_MODE'] != 'older':
     def native_build_profile():
-        return os.environ['LAUNCHER_NATIVE_MODE']
+        mode = os.environ['LAUNCHER_NATIVE_MODE']
+        return 'release' if mode == 'old-piano' else mode
+class CapturedPitchAction:
+    if os.environ['LAUNCHER_NATIVE_MODE'] != 'old-piano':
+        resets_key_correction = property(lambda self: False)
 """
 _APP_STUB = """
 import json
@@ -172,7 +176,7 @@ def test_double_click_release_build_checks_profile_and_keeps_success_visible(
     assert not launchers.app_log.exists()
 
 
-@pytest.mark.parametrize("profile", ["debug", "older", "import-error", "missing"])
+@pytest.mark.parametrize("profile", ["debug", "older", "old-piano", "import-error", "missing"])
 def test_release_rejects_wrong_older_or_unimportable_native_build(
     launchers: _Launchers,
     profile: str,

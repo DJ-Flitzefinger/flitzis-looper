@@ -21,9 +21,13 @@ from flitzis_looper.input_mapping import (
     start_stop_action,
 )
 from flitzis_looper.input_mapping.actions import (
+    PitchCcMode,
     pitch_base_action,
     pitch_extra_action,
+    pitch_note_action,
+    pitch_original_action,
     pitch_reset_base_action,
+    pitch_step_action,
 )
 from flitzis_looper.input_timing import validate_input_timestamp_ns
 from flitzis_looper.ui.waveform_grid import waveform_view_start
@@ -68,6 +72,7 @@ class PitchMenuState:
 
     base_open: bool = False
     extra_open: bool = False
+    midi_cc_mode: PitchCcMode = "button"
 
 
 class ReadOnlyStateProxy[T]:
@@ -479,6 +484,55 @@ class PadAudioActions:  # noqa: PLR0904 - pad action facade mirrors selected-pad
     def set_pitch_retrigger_intent(self, pad_id: int, *, enabled: bool) -> None:
         """Persist the GUI/new-Learn preference without changing existing input variants."""
         self._controller.transport.pad.set_pitch_retrigger_intent(pad_id, enabled=enabled)
+
+    def choose_piano_note(
+        self, pad_id: int, semitones: int, *, retrigger: bool, received_at_ns: int | None = None
+    ) -> None:
+        """Learn or capture the exact octave-bearing note, including repeated attacks."""
+        self._controller.input_mapping.perform_learnable_action(
+            pitch_note_action(semitones, retrigger=retrigger),
+            lambda: self._controller.transport.pitch.choose_piano_note(
+                pad_id, semitones, retrigger=retrigger, received_at_ns=received_at_ns
+            ),
+        )
+
+    def original_key(
+        self, pad_id: int, *, retrigger: bool, received_at_ns: int | None = None
+    ) -> None:
+        """Learn or submit the one complete Original Key reset."""
+        self._controller.input_mapping.perform_learnable_action(
+            pitch_original_action(retrigger=retrigger),
+            lambda: self._controller.transport.pitch.original_key(
+                pad_id, retrigger=retrigger, received_at_ns=received_at_ns
+            ),
+        )
+
+    def step_pitch(
+        self,
+        pad_id: int,
+        semitones: int,
+        *,
+        piano: bool = False,
+        retrigger: bool,
+        received_at_ns: int | None = None,
+        cc_mode: PitchCcMode = "button",
+    ) -> None:
+        """Learn a chromatic or octave delta without resolving it from stale GUI state."""
+        self._controller.input_mapping.perform_learnable_action(
+            pitch_step_action(
+                semitones,
+                piano=piano,
+                retrigger=retrigger,
+                cc_mode=cc_mode if _midi_cc_learn_input_pending(self._controller) else "button",
+            ),
+            lambda: self._controller.transport.pitch.step_pitch(
+                pad_id, semitones, piano=piano, retrigger=retrigger, received_at_ns=received_at_ns
+            ),
+        )
+
+    def set_extra_retrigger_intent(self, pad_id: int, *, enabled: bool) -> None:
+        """Change the offset control preference without modifying learned variants."""
+        self._controller.transport.pad.set_extra_retrigger_intent(pad_id, enabled=enabled)
 
     def set_pad_gain(self, pad_id: int, gain_db: float) -> None:
         action = (
@@ -1083,6 +1137,13 @@ class UiActions:
         else:
             self._state._pitch_menus = replace(current, extra_open=not current.extra_open)
         self._pitch_menu_selection.pop(menu, None)
+
+    def set_pitch_cc_mode(self, mode: PitchCcMode) -> None:
+        """Choose explicit CC encoding for future step Learn without rewriting bindings."""
+        if mode not in {"button", "absolute", "twos_complement", "offset_binary"}:
+            message = "unknown MIDI pitch step encoding"
+            raise ValueError(message)
+        self._state._pitch_menus = replace(self._state.pitch_menus, midi_cc_mode=mode)
 
     def consume_pitch_scroll_request(self, menu: PitchMenu, pad_id: int, value: int | None) -> bool:
         """Reveal a newly opened/changed chosen value while leaving manual scrolling free."""

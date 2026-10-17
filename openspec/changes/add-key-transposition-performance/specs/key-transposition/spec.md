@@ -1,5 +1,64 @@
 ## ADDED Requirements
 
+### Requirement: One central three octave performance piano
+The system SHALL provide one responsive three-octave piano above the central PAD grid, outside both sidebars. This requirement supersedes the older two-keyboard and popup-menu presentation. Opening the piano SHALL reserve approximately one responsive PAD row and reduce the grid below it; closing it SHALL restore that space. Its open state SHALL belong to the UI and remain stable across PAD changes. Notes, offsets, highlights and the two retrigger preferences SHALL remain independent per content.
+
+The piano SHALL use actual white and overlaid shorter black key geometry with black-key hit priority, large pointer targets and all twelve chromatic pitches. The original source root SHALL appear in the middle octave. Each of the 36 displayed notes SHALL have its own signed octave-bearing identity; no modulo-twelve folding SHALL occur. Unknown source metadata SHALL retain explicitly relative semitone choices without inventing an original note. The source root is a key reference, not an estimate of the first melody note.
+
+#### Scenario: Repeated real mouse attacks and PAD changes
+- **WHEN** a performer presses a white or black piano key, including the already selected key
+- **THEN** that mouse-down SHALL submit one original SET or SET_RETRIGGER action through the existing content-bound controller, capture, worker and sole scheduler
+- **AND** repeated equal notes SHALL be real repeated attacks, with fresh identities and timestamps
+- **AND** PAD changes SHALL update the content's note, octave, offset and preferences without closing or flickering the piano or borrowing the previous PAD's settings
+- **AND** admission failures SHALL be visible rather than silently represented as successful effective audio
+
+### Requirement: Octave-bearing notes retain the supported total domain
+The system SHALL retain legacy learned absolute-root actions with their existing nearest-root and fixed +6 tie semantics, while providing distinct octave-bearing piano actions. For a recognized root R, three C-based octaves indexed 0 through 35 SHALL map to base_shift=index-(12+R), putting the source root in the middle octave. The union of the new base domain SHALL be -23 through +23. Unknown-root relative choices SHALL use explicit signed values and no guessed note labels.
+
+Additional transposition SHALL retain all 37 integer offsets -18 through +18. The shared validated combined intent SHALL remain -23 through +24, including the original -5..+6 base domain and every original base/extra combination as regression coverage. A new base/extra combination outside that total SHALL explicitly refuse without clamping or changing timing. Widening the numerical base representation SHALL NOT certify new DSP capability or close any existing quality, actual-r(n), finite-history, readiness, resource or Human gate.
+
+#### Scenario: Octaves remain distinct and extreme combinations refuse
+- **WHEN** three displayed C notes are chosen with known source C and offset zero
+- **THEN** they SHALL retain base shifts -12, 0 and +12 as different saved and captured targets
+- **AND** selecting base +23 with offset +18 SHALL refuse the unsupported total rather than silently accept +41 or clamp it
+- **AND** legacy twelve-root actions and all original 37-offset/total -23..+24 cases SHALL retain their original meanings
+
+### Requirement: Original Key and transposition reset have separate meanings
+The system SHALL replace the Correction dropdown and both old sidebar keyboards with compact Piano, piano Retrigger and Original Key controls, and a separate transposition row ordered +1, Reset, -1 with a value and its own independent Retrigger preference. Half-step controls SHALL count every chromatic semitone; octave, note, reset and existing MIDI Note/CC/encoder Learn variants SHALL use the same semantic action pipeline and retain learned SET versus SET_RETRIGGER identity.
+
+Original Key SHALL remove all pitch modifications in one original action: base_shift=0, extra_shift=0 and manual source-key correction removed, retaining the detected source reference. It SHALL preserve KEY LOCK, BPM, Learn bindings, unrelated PADs and the global piano open state. The transposition Reset SHALL change only extra_shift to zero, preserving the complete chosen piano note and octave and source metadata. Original Key SHALL not publish intermediate audible states or create multiple implicit retriggers.
+
+#### Scenario: Independent reset paths
+- **GIVEN** original source C, chosen piano D and offset +1
+- **WHEN** transposition Reset is invoked
+- **THEN** piano D SHALL remain selected with offset zero and unchanged correction metadata
+- **WHEN** Original Key is invoked
+- **THEN** piano C at the original octave, offset zero and no manual correction SHALL be the one resulting requested tuple
+- **AND** an admission failure or stale content SHALL not separately clear another content's correction
+
+### Requirement: Piano attacks preserve source timing and lock policy
+Piano and transposition actions SHALL change only pitch intent h=2^(k/12), not actual source rate r, master BPM, beat grid, loop cycle or other PADs. KEY LOCK ON SHALL retain p=h/r and OFF p=h, with the audible OFF ratio r*h. The UI SHALL describe a key as nominal when speed changes its audible pitch, and SHALL not automatically enable KEY LOCK or change master tempo.
+
+#### Scenario: Quantized retrigger and independent controls
+- **WHEN** a piano or offset SET_RETRIGGER is captured under Quantize or SYNC
+- **THEN** pitch adoption and restart at the regular loop beginning SHALL occur together at the existing original due frame
+- **AND** audio before that frame SHALL retain the previous effective pitch without early retuning or a second scheduler
+- **AND** the two GUI retrigger preferences SHALL remain independently persisted while existing learned variants keep their fixed behavior
+
+### Requirement: Learned pitch steps distinguish CC buttons and encoder encoding
+The system SHALL keep Note and keyboard step actions as explicit signed attacks and SHALL treat a newly learned fixed step on a MIDI CC/NRPN button as one high-edge attack, ignoring release and repeated held-high values. The compact MIDI controls SHALL expose an explicit encoding preference for newly learned CC/NRPN step bindings: button, absolute encoder, two's complement encoder or offset-binary encoder. The saved semantic action SHALL retain that encoding; changing the UI preference SHALL not reinterpret existing bindings. Existing fixed-note/base/extra bindings SHALL retain their established semantics.
+
+The new octave-bearing piano-note and Original Key actions SHALL likewise use one high edge when learned to a CC/NRPN button, and SHALL retain repeated genuine NoteOn attacks. Legacy base/extra/base-reset CC actions SHALL retain their established behavior. Encoders SHALL use the explicitly encoded step actions rather than infer a direction from a fixed piano-note target.
+
+Encoder resolution SHALL happen at the original Native input capture, retaining original content, timestamp and variant through the existing scheduler. Absolute encoding SHALL initialize on its first value, ignore equal values and resolve later modular 7-bit movement by direction. Two's complement SHALL use 1..63 as positive and 65..127 as negative; offset binary SHALL use 65..127 as positive and 1..63 as negative. Zero and 64 SHALL be neutral for both relative encodings. Each signed message SHALL apply one chosen semitone or octave step, with negative learned steps inverting direction. Capture state SHALL be scoped to the current learned mapping owner and retained off realtime.
+
+#### Scenario: Encoder reversal and button release preserve exact step count
+- **WHEN** a two's complement encoder learned to offset +1 sends 1 and then 127
+- **THEN** the offset SHALL advance one semitone and return one semitone, retaining separate original capture identities
+- **WHEN** a button learned to offset +1 sends 127, repeated 127 and release 0
+- **THEN** exactly one offset action SHALL be captured
+- **AND** a subsequent new press SHALL remain usable without an extra release attack
+
 ### Requirement: Source metadata and two numeric shifts remain separate
 The system SHALL represent detected or corrected source key, numeric audible base_shift and numeric extra_shift as separate per-content state and SHALL derive base and result labels without conflating them.
 

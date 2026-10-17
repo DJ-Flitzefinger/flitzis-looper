@@ -170,6 +170,7 @@ def check_pitch_action_api(native_module: object) -> None:
         "extra_shift",
         "key_lock",
         "retrigger",
+        "resets_key_correction",
         "quantize_step_64ths",
         "sync_enabled",
         "accepted",

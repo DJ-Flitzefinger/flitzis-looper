@@ -179,8 +179,8 @@ def test_all_extra_choices_are_absolute_and_preserve_source_and_base(extra: int)
 @pytest.mark.parametrize(
     "updates",
     [
-        {"base_shift": -6},
-        {"base_shift": 7},
+        {"base_shift": -24},
+        {"base_shift": 24},
         {"base_shift": True},
         {"base_shift": 1.0},
         {"base_shift": "1"},

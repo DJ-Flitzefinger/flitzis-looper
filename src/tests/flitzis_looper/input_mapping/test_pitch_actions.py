@@ -437,10 +437,11 @@ def test_runtime_pitch_projection_keeps_unknown_correction_authoritative_and_str
     controller.project.bpm_lock = True
     payload = controller.input_mapping._input_pitch_projection(0).payload()
     assert payload == {
-        "source_root": None,
-        "source_mode": None,
+        "source_root": 4,
+        "source_mode": "minor",
         "correction_root": None,
         "correction_mode": None,
+        "correction_unknown": True,
         "base_shift": -4,
         "extra_shift": 12,
         "key_lock": True,
@@ -472,6 +473,7 @@ def test_pitch_metadata_and_numeric_changes_republish_one_atomic_native_snapshot
     audio_engine_mock.set_input_runtime_state.assert_called_once()
     call = audio_engine_mock.set_input_runtime_state.call_args
     assert call.args[4][0] is not None
+
     assert call.kwargs["pitch_rows"][0]["extra_shift"] == 2
     assert len(call.kwargs["pitch_rows"]) == 216
     audio_engine_mock.reset_mock()
@@ -486,6 +488,19 @@ def test_pitch_metadata_and_numeric_changes_republish_one_atomic_native_snapshot
         ]
         == 2
     )
+
+
+@pytest.mark.parametrize("quantized", [False, True])
+def test_public_runtime_rows_encode_disabled_quantize_as_none_for_empty_and_loaded_pads(
+    controller: AppController, audio_engine_mock: Mock, *, quantized: bool
+) -> None:
+    _configure_accepted_pad(controller, audio_engine_mock)
+    controller.project.trigger_quantization_enabled = quantized
+    controller.project.trigger_quantization_step = "1_32"
+    controller.input_mapping._sync_rust_runtime_state()
+    rows = audio_engine_mock.set_input_runtime_state.call_args.kwargs["pitch_rows"]
+    assert rows[0]["quantize_step_64ths"] == (2 if quantized else None)
+    assert all(row["quantize_step_64ths"] is None for row in rows[1:])
 
 
 def test_midi_selection_receipt_projects_only_its_original_native_revision(
