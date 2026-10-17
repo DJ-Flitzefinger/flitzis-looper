@@ -11,6 +11,9 @@ use pyo3::types::PyModule;
 use std::ffi::CString;
 
 static MOUSE_CONTEXT: Mutex<()> = Mutex::new(());
+#[path = "hold_pitch_tests.rs"]
+mod hold_pitch_tests;
+
 const PROBE: &str = r#"
 from contextlib import ExitStack
 from pathlib import Path

@@ -230,6 +230,24 @@ musical ContentInstance and source bytes remain equal.
 - **AND** a refresh that replaces the cohort instead invalidates H
 - **AND** software proof SHALL use the actual prepared timing or resident publication and its own callback acknowledgement while the original Hold is owned, then complete Move or Swap and release against the preserved cohort
 
+#### Scenario: Prepared pitch variants preserve or supersede the actual mouse hold
+- **GIVEN** a real waveform mouse Hold H owns a paused nonneutral voice and an original pitch action uses its existing capture, preparation and scheduler
+- **WHEN** a nonstarting SET becomes effective while that same cohort remains paused
+- **THEN** H SHALL retain its caused-pause authority, source position, generation and filter history until its matching physical release
+- **AND** that release SHALL resume the same cohort with the SET's own prepared Native and FIFO without starting or seeking it
+- **WHEN** instead an original SET_RETRIGGER becomes effective at its frozen E
+- **THEN** only that effect SHALL create the new attack and supersede H's old cohort claim
+- **AND** H's later physical release SHALL settle without pausing, resuming, restarting or resetting the new voice
+- **AND** software proof SHALL compose actual waveform-controller admission and release with an actually prepared pitch action and independently matched resumed or retriggered Native output
+
+#### Scenario: Matching physical release arrives before the prepared pitch effect
+- **GIVEN** H owns the paused cohort and an original pitch candidate is genuinely ready before its frozen E
+- **WHEN** H's matching physical release resumes that cohort before E
+- **THEN** the resumed old voice SHALL preserve its Native, FIFO, source and filter chronology until another valid effect
+- **AND** a SET candidate whose captured paused source projection became stale SHALL be rejected wholly without pitch, position or attack changes, recapture or requantization
+- **AND** a separately valid SET_RETRIGGER Normal endpoint SHALL retain its original T/E and produce exactly its own attack at E; the earlier Hold release SHALL NOT redirect or fabricate that attack
+- **AND** repeated old releases or MIDI pitch-key releases SHALL NOT change either resulting voice
+
 #### Scenario: Selected ALL and productive wet history follow the held content
 - **GIVEN** A owns its selected immutable StemPair registration, accepted component and effective-mask results, and productive KEY LOCK processor, FIFO and source/filter history
 - **WHEN** its actual waveform Hold pauses A, an acknowledged Move or Swap relocates it, and its matching release executes
@@ -264,6 +282,7 @@ point rather than be falsely described as already content-bound.
 - **WHEN** NoteOff or NoteOn velocity0 is received on existing device/channel routing
 - **THEN** it causes no attack, pitch reset, highlight reset or waveform HoldRelease
 - **AND** later matching mouse release still settles H correctly
+- **AND** software proof SHALL receive real mapped pitch-key NoteOff and NoteOn velocity0 while H actually owns a native pause, preserving the chosen numeric pitch and highlight without inventing a HoldRelease or another attack
 
 ### Requirement: Related pressed projections and last-user release remain bounded
 The system SHALL preserve distinct content, gesture, global-output and immutable-resource ownership, and SHALL retire material only after every assignment, voice, reader, job, accepted action and native ACK owner has ended.

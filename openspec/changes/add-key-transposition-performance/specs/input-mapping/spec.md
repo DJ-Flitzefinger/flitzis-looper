@@ -182,6 +182,13 @@ identity; removal/reassignment/overwrite SHALL fence its old lifetime.
 ### Requirement: Pitch note releases have no attack or reset semantics
 The system SHALL treat MIDI NoteOff and NoteOn velocity0 as nonattack/nonreset for new pitch actions and SHALL preserve chosen pitch/highlights without resuming a mouse waveform hold.
 
+#### Scenario: Pitch releases coexist with a real waveform pause owner
+- **GIVEN** an actual mouse waveform Hold owns the paused native cohort and a mapped pitch SET or SET_RETRIGGER retains its original captured action
+- **WHEN** its routed MIDI NoteOff or NoteOn velocity0 is received before the matching physical mouse release
+- **THEN** those pitch-key releases SHALL create no attack, pitch or highlight reset, or waveform release
+- **AND** SET SHALL preserve the original paused cohort until its matching release, while an effective SET_RETRIGGER SHALL supersede that old cohort claim only at the original action's frozen E
+- **AND** the original waveform controller SHALL settle the same physical owner against actual native acknowledgement rather than derive release authority from the selected slot or requested pitch
+
 #### Scenario: Release after repeated attacks
 - **WHEN** repeated equal-target NoteOn attacks are followed by NoteOff or velocity0
 - **THEN** attacks remain distinct and release neither adds attack nor resets pitch0/highlight/hold

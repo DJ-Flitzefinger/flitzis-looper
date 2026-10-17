@@ -345,6 +345,21 @@ each subscriber's own pending then accepted/current publication. The full existi
   clock uses GUI 1/16 quantization; declared inference WAVs and a silent peer
   verify this bounded composition, not neural execution, audible multi-voice
   mixing, device deadlines or complete musical/resource/Human acceptance.
+- [x] Compose actual waveform-controller Hold admission/physical release with
+  prepared nonneutral SET and SET_RETRIGGER, each KEYLOCK OFF/ON, and actual mapped
+  pitch NoteOff/velocity0. Prove preserved versus superseded native pause custody,
+  original T/E, no release-generated attack/reset, independent Native/FIFO/PCM and
+  source/filter continuity. Include matching release before E: reject a stale paused
+  SET projection wholly while a separately valid Normal retrigger retains T/E.
+  Retain full format, acoustic, resource and Human gates.
+  Three real Native tests cover eight declared FullMix/48 kHz/mono/r1 cases,
+  each with exact independent PCM, original T/E and actual waveform tickets.
+  Adjacent piano integration: 8 PASS; paused source-feed: 3 PASS; repeated native
+  Hold transport: 2 PASS; complementary Python controller contracts: 66 PASS.
+  The gain-zero peer verifies phase/ownership, and chosen intent verifies the
+  piano model rather than rendered highlight geometry. Constant endpoint and
+  old-owner birth chronology do not close general continuous-O, other formats,
+  actual-r(n), acoustic, resource, device, listening or Human acceptance.
 - [ ] V0: complete new controls+copy/move/bank/hold/pending/restore workload and
   P6 resource/216/disk/RSS proofs repeated; preserve all failed attempts/source roles.
 - [ ] During implementation: focused meaningful compile/regressions and required
