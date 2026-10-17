@@ -385,6 +385,18 @@ each subscriber's own pending then accepted/current publication. The full existi
   Adjacent Piano/Hold 9, unity-birth/rate 10 and old-rate-refusal 1 PASS; fresh
   private Release/eight bootstrap API checks/App imports PASS. See backend docs
   for source format, timing labels, clock/oracle boundaries and retained gates.
+- [x] Prove individual actual Native creation/completed deletion and original
+  pitch custody through productive adoption, terminal work, retirement pressure
+  and the real complete callback-owner close. Calibrate bounded test observation;
+  retain receipts while checking off-callback destruction, displaced versus
+  adopted ownership, final source-reader release and actual worker completion.
+  Keep Native/C++ allocation, deadline, acoustic and complete P6/V0/Human gates.
+  Fresh-child calibration and four OFF/ON retirement/close cases pass in Debug
+  and optimized Release (two parent tests, 1.02 s). Per child: 100 real wrapper
+  lifetimes/200 events, exact independent PCM, claims and final PCM readers zero
+  with four receipts retained. Adjacent close/allocation/custody/endpoint/allocator/
+  two-MiB/retirement: 2/2/4/23/6/1/2 PASS. Fresh private Release/eight existing API
+  checks/actual App imports PASS; no App/device or parent acceptance inferred.
 - [ ] V0: complete new controls+copy/move/bank/hold/pending/restore workload and
   P6 resource/216/disk/RSS proofs repeated; preserve all failed attempts/source roles.
 - [ ] During implementation: focused meaningful compile/regressions and required

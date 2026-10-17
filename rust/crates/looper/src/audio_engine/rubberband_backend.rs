@@ -90,6 +90,8 @@ pub(crate) fn pitch_scale_for_tempo_ratio(tempo_ratio: f64) -> f64 {
 
 pub(crate) struct RubberBandLiveShifter {
     handle: NonNull<RubberBandLiveStateOpaque>,
+    #[cfg(all(test, windows))]
+    native_id: u64,
     channels: usize,
     block_size: usize,
     start_delay: usize,
@@ -139,8 +141,14 @@ impl RubberBandLiveShifter {
         #[cfg(test)]
         super::c3_observation::native_created();
 
+        #[cfg(all(test, windows))]
+        let native_id =
+            super::native_lifecycle_observation::native_created(handle.as_ptr() as usize);
+
         let mut shifter = Self {
             handle,
+            #[cfg(all(test, windows))]
+            native_id,
             channels,
             block_size: 0,
             start_delay: 0,
@@ -384,6 +392,11 @@ impl Drop for RubberBandLiveShifter {
         unsafe {
             rubberband_live_delete(self.handle.as_ptr());
         }
+        #[cfg(all(test, windows))]
+        super::native_lifecycle_observation::native_delete_completed(
+            self.native_id,
+            self.handle.as_ptr() as usize,
+        );
         #[cfg(test)]
         super::c3_observation::native_deleted();
     }

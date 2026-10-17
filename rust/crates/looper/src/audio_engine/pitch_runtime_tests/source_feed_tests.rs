@@ -47,7 +47,7 @@ unsafe extern "C" {
     );
 }
 
-pub(super) struct RawRubberBand {
+pub(in crate::audio_engine) struct RawRubberBand {
     state: *mut RubberBandLiveStateOpaque,
     pitch: f64,
     input: VecDeque<f32>,
@@ -55,7 +55,7 @@ pub(super) struct RawRubberBand {
 }
 
 impl RawRubberBand {
-    pub(super) fn new(pitch: f64) -> Self {
+    pub(in crate::audio_engine) fn new(pitch: f64) -> Self {
         // WINDOW_SHORT | CHANNELS_TOGETHER, the pinned mono production profile.
         let state = unsafe { raw_new(RATE, 1, 0x1000_0000) };
         assert!(!state.is_null());
@@ -85,7 +85,7 @@ impl RawRubberBand {
         output
     }
 
-    pub(super) fn history_bound(pitch: f64) -> usize {
+    pub(in crate::audio_engine) fn history_bound(pitch: f64) -> usize {
         let native = Self::new(pitch);
         if (0.5..=2.0).contains(&pitch) {
             4_096
@@ -100,7 +100,7 @@ impl RawRubberBand {
         }
     }
 
-    pub(super) fn sample(&mut self, sample: f32, pitch: f64) -> f32 {
+    pub(in crate::audio_engine) fn sample(&mut self, sample: f32, pitch: f64) -> f32 {
         if pitch != self.pitch {
             unsafe { raw_pitch(self.state, pitch) };
             self.pitch = pitch;
@@ -114,7 +114,7 @@ impl RawRubberBand {
         self.output.pop_front().unwrap()
     }
 
-    pub(super) fn fifo(&self) -> (usize, usize) {
+    pub(in crate::audio_engine) fn fifo(&self) -> (usize, usize) {
         (self.input.len(), self.output.len())
     }
 }

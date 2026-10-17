@@ -3594,6 +3594,57 @@ window storage admission, general continuous-O, all B5 values/trajectories,
 acoustic quality, performer/device timing, P6/V0/216/30-minute resources or Human
 acceptance. Worker waits hold the virtual clock; no App or device is started.
 
+### Actual Native lifetime and complete callback-owner close — 2026-10-17
+
+`pitch_callback_lifecycle_tests.rs`, stored beside `audio_stream.rs`,
+uses the real boxed `AudioCallbackState`, shared production constructor, existing
+control drains, renderer, sole scheduler and callback-close owner. Four isolated
+children cover productive retirement and blocked complete close, each with Key
+Lock OFF/ON, two nonneutral audible 48 kHz mono voices at actual r=1 and their
+original Engine, source ACKs, captures, producer and work claims. Native references
+process independent copied PCM outside marked render scopes; membership, source
+phase, FIFO, generation and mixed PCM must agree. These actions use the public
+Native capture/publication methods; the genuine GUI/MIDI controller routes are
+covered by the preceding tests rather than reimplemented here.
+
+A Windows-only test observer records each productive wrapper's successful C ABI
+creation and completed C ABI deletion with a monotonic lifetime ID, actual Windows
+thread ID and scoped render/close role. Pointer reuse cannot identify a lifetime.
+Its hooks write bounded atomic scalar cells; snapshot allocation and decoding run
+outside callbacks. A separate fresh-child calibration detects a deliberately bad
+render role around a real deletion on the setup thread, with zero observed Rust
+allocation requests from deletion/observation/role handling. This deliberate
+negative control never runs inside a productive callback.
+
+The existing retirement worker is held before consuming the normal 1,024-entry
+queue plus 128-entry backlog. Releasing it before the original E preserves that
+E and permits A's own prepared Native adoption. The displaced Native and a later
+cancelled ready candidate are actually deleted on the measured live retirement
+worker before terminal claims reach zero; the adopted Native and peer remain
+productive. In the close cases, ready cancelled and public-Stop-fenced work stay
+held behind full storage. Engine/cache/producer aliases are removed, then the
+actual unique callback owner closes on another marked thread. All four named
+Native lifetimes and both source weak probes survive until worker release. The
+outer worker join completes callback destruction and nested worker shutdown;
+every observed wrapper lifetime has exactly one completed deletion outside render
+and close, work claims are zero and both productive PCM weak probes have no
+readers, while four scalar receipts remain retained.
+
+Debug calibration and all four lifecycle children pass; both optimized Release
+parents pass in 1.02 s after a 1 min 56 s compilation. Every lifecycle child
+observes 100 wrapper lifetimes/200 events; successful retirement compares 35,476
+frames and blocked close 17,954 frames, with nonzero output energy and maximum
+PCM error zero. Adjacent callback close 2, callback allocation 2, custody 4,
+ordinary endpoint 23, allocator calibration 6, two-MiB constructor 1 and retirement
+2 tests also pass. A fresh private locked/stripped Release build, eight existing
+bootstrap API checks and actual App/UI/controller/model imports pass without
+installing or constructing an Engine. The marked scopes execute the actual shared
+drain/render kernels and complete close; they do not include CPAL timestamp/
+telemetry/device code.
+No C++ allocator/deallocator instrumentation, device deadline, acoustic quality,
+general continuous-O/actual-r(n), full P6/V0/216/30-minute resource or Human
+acceptance is claimed. No runtime defect or DSP correction was established.
+
 ## Inverse Seconds, Loaded Frames And Native Rate — 2026-10-16
 
 `ScalarSourceGrid` evaluates the shared scalar projection in source **seconds**.

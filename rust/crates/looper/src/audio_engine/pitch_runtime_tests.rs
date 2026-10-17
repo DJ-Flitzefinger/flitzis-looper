@@ -141,10 +141,10 @@ pub(super) struct Fixture {
     pub(super) mixer: Box<RtMixer>,
     pub(super) scheduler: FixedCapacityScheduler<16>,
     pub(super) transport: TransportTimeline,
-    clock: Arc<SharedOutputClock>,
+    pub(super) clock: Arc<SharedOutputClock>,
     pub(super) feedback: Vec<AudioMessage>,
     pub(super) retirement: RtAudioBufferRetirement,
-    _retirement_worker: AudioBufferRetirementWorker,
+    pub(super) _retirement_worker: AudioBufferRetirementWorker,
 }
 
 impl Fixture {

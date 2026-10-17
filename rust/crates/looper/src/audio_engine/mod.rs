@@ -47,6 +47,8 @@ mod cold_residency_tests;
 mod cold_store;
 pub(crate) mod committed_stem_residency;
 mod complete_context;
+#[cfg(all(test, windows))]
+mod native_lifecycle_observation;
 pub use committed_stem_residency::{CommittedStemSetTicket, ResidentStemTicket};
 pub(crate) use complete_context::NativeAnalysisOwner;
 pub(crate) mod constant_timing;

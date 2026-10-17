@@ -82,6 +82,16 @@ T/E policy SHALL remain authoritative, and equal-target attacks SHALL stay disti
 - **THEN** those callback phases SHALL perform zero Rust heap allocation, zeroed-allocation or reallocation attempts and SHALL retain the original content, timing, effect and retirement guards
 - **AND** a calibrated current-thread allocator observation SHALL distinguish callback operations from concurrent worker allocations without treating Rust-only observation as proof about Native/C++ allocations, device deadlines or whole-process resources
 
+#### Scenario: Native custody survives retirement pressure and callback-owner close
+- **GIVEN** independently productive nonneutral voices and original prepared pitch work retain their own Native and source owners
+- **WHEN** the existing retirement storage is full, terminal work awaits destruction, or the actual complete callback owner closes
+- **THEN** original work custody SHALL remain held until its storage and displaced or unadopted Native/source owners are actually destroyed off the callback
+- **AND** a successful effect SHALL retain its original T/E and own adopted Native, while cancelled, stale or unavailable effects SHALL produce no partial attack or peer reset
+- **AND** callback rendering and callback-owner close SHALL NOT construct or finally destroy any Native instance, including when normal retirement storage is full
+- **AND** eventual worker completion SHALL destroy each required Native lifetime exactly once and release the final callback-owned source readers without terminal receipts retaining heavy work
+- **AND** lifecycle evidence SHALL distinguish individual Native lifetimes despite opaque-address reuse and SHALL observe completed actual deletion and execution context rather than inferring destruction from a receipt or aggregate live count
+- **AND** bounded test observation SHALL NOT introduce callback allocation, locks, logging or unbounded work, or certify Native/C++ allocation absence, device deadlines, acoustic quality or complete P6/V0/Human acceptance
+
 ### Requirement: Pitch Learn stores stable immutable action variants
 The system SHALL provide separate stable SET and SET_RETRIGGER semantic actions for every supported absolute Key and extra integer including0 and SHALL persist the variant selected during Learn.
 

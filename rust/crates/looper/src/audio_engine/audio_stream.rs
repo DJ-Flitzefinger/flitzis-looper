@@ -2989,29 +2989,83 @@ fn create_stream_callback_owner(
     CallbackCloseOwner<AudioCallbackState>,
     AudioBufferRetirementWorker,
 )> {
+    create_audio_buffer_retirement_with_callback(|retired_buffers| {
+        boxed_stream_callback_state(
+            (consumer_in, parameter_consumer_in, producer_out),
+            mixer,
+            sample_rate_hz,
+            callback_clock,
+            loop_acceptance,
+            retired_buffers,
+        )
+    })
+}
+
+fn boxed_stream_callback_state(
+    queues: (
+        Consumer<ControlMessage>,
+        Consumer<ControlParameterMessage>,
+        Producer<AudioMessage>,
+    ),
+    mixer: Box<RtMixer>,
+    sample_rate_hz: u32,
+    callback_clock: Arc<SharedOutputClock>,
+    loop_acceptance: Arc<super::loop_acceptance::SharedLoopAcceptance>,
+    retired_buffers: RtAudioBufferRetirement,
+) -> Box<AudioCallbackState> {
+    let (consumer_in, parameter_consumer_in, producer_out) = queues;
     let producer_out = ContentFeedbackProducer {
         producer: producer_out,
         ownership: mixer.input_ownership_for_effect(),
     };
-    create_audio_buffer_retirement_with_callback(|retired_buffers| {
-        Box::new(AudioCallbackState {
-            consumer_in,
-            parameter_consumer_in,
-            producer_out,
-            mixer,
-            transport: TransportTimeline::new(sample_rate_hz),
-            scheduler: TransportScheduler::new(),
-            trigger_quantization: TriggerQuantization::Immediate,
-            callback_clock,
-            clock_mapper: OutputClockMapper::new(),
-            loop_acceptance,
-            pad_peaks: [0.0; NUM_SAMPLES],
-            pad_activity: RtRenderPadActivity::default(),
-            last_pad_emit_frame: 0,
-            last_master_emit_frame: 0,
-            retired_buffers,
-        })
+    Box::new(AudioCallbackState {
+        consumer_in,
+        parameter_consumer_in,
+        producer_out,
+        mixer,
+        transport: TransportTimeline::new(sample_rate_hz),
+        scheduler: TransportScheduler::new(),
+        trigger_quantization: TriggerQuantization::Immediate,
+        callback_clock,
+        clock_mapper: OutputClockMapper::new(),
+        loop_acceptance,
+        pad_peaks: [0.0; NUM_SAMPLES],
+        pad_activity: RtRenderPadActivity::default(),
+        last_pad_emit_frame: 0,
+        last_master_emit_frame: 0,
+        retired_buffers,
     })
+}
+
+#[cfg(all(test, windows))]
+fn create_stream_callback_owner_with_start(
+    queues: (
+        Consumer<ControlMessage>,
+        Consumer<ControlParameterMessage>,
+        Producer<AudioMessage>,
+    ),
+    mixer: Box<RtMixer>,
+    sample_rate_hz: u32,
+    callback_clock: Arc<SharedOutputClock>,
+    loop_acceptance: Arc<super::loop_acceptance::SharedLoopAcceptance>,
+    worker_start: impl FnOnce() + Send + 'static,
+) -> std::io::Result<(
+    CallbackCloseOwner<AudioCallbackState>,
+    AudioBufferRetirementWorker,
+)> {
+    super::buffer_retirement::create_audio_buffer_retirement_with_callback_paused(
+        |retired_buffers| {
+            boxed_stream_callback_state(
+                queues,
+                mixer,
+                sample_rate_hz,
+                callback_clock,
+                loop_acceptance,
+                retired_buffers,
+            )
+        },
+        worker_start,
+    )
 }
 
 /// Create and configure the audio stream
@@ -5565,6 +5619,10 @@ mod tests {
 #[cfg(test)]
 #[path = "source_callback_close_tests.rs"]
 mod source_callback_close_tests;
+
+#[cfg(all(test, windows))]
+#[path = "pitch_callback_lifecycle_tests.rs"]
+mod pitch_callback_lifecycle_tests;
 
 #[cfg(test)]
 #[path = "parameter_placement_tests.rs"]
