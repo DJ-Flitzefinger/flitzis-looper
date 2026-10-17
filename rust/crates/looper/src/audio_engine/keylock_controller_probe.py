@@ -2,6 +2,8 @@
 # This fixture is compiled into Rust tests rather than imported as a Python package.
 # ruff: noqa: INP001
 
+from collections import deque
+
 from flitzis_looper.controller.transport import TransportController
 from flitzis_looper.models import ProjectState, SessionState
 from flitzis_looper.ui.context import PadSelectors
@@ -13,8 +15,9 @@ class _ControllerFixture:
     def __init__(self, audio, paths, initial, rate, start, end, frames, message_type):
         self.audio = audio
         # The embedded fixture supplies the real enum from this Rust image.
-        # This uses the same variant handling as AppController._handle_message.
+        # Keep AppController's bounded retry for pending Native feedback placement.
         self._messages = message_type
+        self._pending_content_feedback = deque()
         self.project = ProjectState()
         self.project.key_lock = initial
         self.session = SessionState()
@@ -72,22 +75,34 @@ class _ControllerFixture:
         self.transport.playback.resume_pad(sample_id)
 
     def poll(self):
+        for _ in range(len(self._pending_content_feedback)):
+            self._handle_audio_message(self._pending_content_feedback.popleft())
         while (message := self.audio.receive_msg()) is not None:
-            kind = message.feedback_kind()
-            if kind in {"started", "stopped"}:
-                sample_id = self.audio._resolve_pad_feedback(message)
-                if sample_id is not None:
-                    handler = (
-                        self.transport.playback.handle_sample_started_message
-                        if kind == "started"
-                        else self.transport.playback.handle_sample_stopped_message
-                    )
-                    handler(message, sample_id=sample_id)
-            elif isinstance(message, self._messages.SampleStarted):
-                self.transport.playback.handle_sample_started_message(message)
-            elif isinstance(message, self._messages.SampleStopped):
-                self.transport.playback.handle_sample_stopped_message(message)
+            self._handle_audio_message(message)
         self.transport.on_frame_render()
+
+    def _handle_audio_message(self, message):
+        kind = message.feedback_kind()
+        if kind in {"started", "stopped"}:
+            try:
+                sample_id = self.audio._resolve_pad_feedback(message)
+            except RuntimeError as error:
+                if str(error) != "content feedback placement pending":
+                    raise
+                if len(self._pending_content_feedback) < 1024:
+                    self._pending_content_feedback.append(message)
+                return
+            if sample_id is not None:
+                handler = (
+                    self.transport.playback.handle_sample_started_message
+                    if kind == "started"
+                    else self.transport.playback.handle_sample_stopped_message
+                )
+                handler(message, sample_id=sample_id)
+        elif isinstance(message, self._messages.SampleStarted):
+            self.transport.playback.handle_sample_started_message(message)
+        elif isinstance(message, self._messages.SampleStopped):
+            self.transport.playback.handle_sample_stopped_message(message)
 
     def settled(self, sample_id, enabled):
         state = self.transport.residency.key_lock_status(sample_id)
@@ -130,6 +145,38 @@ class _ControllerFixture:
 
 class Probe(_ControllerFixture):
     """Assertions against real public controller and callback feedback."""
+
+    def observe_stopped_feedback(self):
+        self._stopped_feedback_attempts = []
+        self._stopped_feedback_deliveries = []
+        handle_message = self._handle_audio_message
+        handle_stopped = self.transport.playback.handle_sample_stopped_message
+
+        def observe_message(message):
+            if message.feedback_kind() == "stopped":
+                self._stopped_feedback_attempts.append(message)
+            handle_message(message)
+
+        def observe_stopped(message, *, sample_id=None):
+            self._stopped_feedback_deliveries.append(message)
+            handle_stopped(message, sample_id=sample_id)
+
+        self._handle_audio_message = observe_message
+        self.transport.playback.handle_sample_stopped_message = observe_stopped
+
+    def assert_stopped_feedback(self, sample_id, attempts, delivered):
+        assert len(self._stopped_feedback_attempts) == attempts
+        original = self._stopped_feedback_attempts[0]
+        assert all(message is original for message in self._stopped_feedback_attempts)
+        assert len(self._stopped_feedback_deliveries) == int(delivered)
+        if delivered:
+            assert self._stopped_feedback_deliveries[0] is original
+            assert not self._pending_content_feedback
+            assert sample_id not in self.session.active_sample_ids
+        else:
+            assert len(self._pending_content_feedback) == 1
+            assert self._pending_content_feedback[0] is original
+            assert sample_id in self.session.active_sample_ids
 
     def assert_pending(self, sample_id, enabled):
         state = self.transport.residency.key_lock_status(sample_id)

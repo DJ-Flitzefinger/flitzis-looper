@@ -3906,3 +3906,100 @@ $env:UV_NO_SYNC = 'true'
     '--skip', 'test_audio_stream_creation', '--test-threads=1'
 )
 ```
+
+### Stable complete selected StemSet attacks during rate glides — 2026-10-17
+
+The original FullMix-only guard rejected a genuine piano retrigger with
+`preparation_failed` even though a complete source-bound StemSet and stable
+component selection were already playing. The integration regression reproduced
+that refusal before production changes. Its first fixture attempt failed earlier
+because input capture intentionally reports runtime revision zero; the corrected
+fixture binds the actual published row, matching the existing selection fixture,
+and verifies source, window and accepted ACK authority before publication.
+
+The same capture and bounded endpoint-reset replay now admit one stable selected
+complete StemSet. Both actual captured reader contexts must resolve and match;
+all required component owners, immutable identities and publication epochs remain
+exact. The new complete-read-set check requires the physical source and all four
+components, including an empty selected mask's real owner. Existing format,
+reference, accepted-timing, domain, shifted-tap and unmodified-journal checks
+remain. Active selection transitions, finite input windows and unsupported history
+still refuse the whole action at its original T/E.
+
+The worker attaches the exact selected publication once to the existing
+SourceFeedGuard. This only narrows the original Native permit, including the
+second candidate check inside the final placement claim. It cannot refresh an
+expired publication or grant source authority. The existing productive-history
+check ignores that pre-adoption journal/publication fence after a successful
+restart, so the adopted Native retains its own history. All new Arc cloning and
+retirement use the established worker/Native-permit path.
+
+Seven isolated selected-glide children cover real GUI and routed MIDI attacks
+with Key Lock OFF/ON, a genuinely young selected history followed by a successful
+fresh MIDI retry, and publication expiry after actual READY in both lock modes.
+Initial declared StemSet publication uses the existing source-bound fixture seam;
+selection uses the real control queue before birth. Every reference tap comes
+from an independently summed component signal, distinguishable from FullMix,
+with public-birth scalar rate epochs, direct C ABI Native, independent filters,
+unchanged audible peer and master timing. The expiry cases explicitly increment
+the actual held publication epoch; they do not claim public Generate/V2 coverage.
+
+Focused Debug passes all seven children in 8.11 s. First adopted samples match
+exactly; maximum continuing PCM error is 2.980232238769531e-8. The unchanged E
+retains actual r=1.3500000000000008, target 2 and 439 frames until the next step.
+Young +12 ON has only 8266 active history frames and refuses; fresh +7 succeeds
+on the same worker and current pin. Both READY-expiry cases refuse with
+`prepared_mismatch`, preserving old pitch, Native, generation and selected PCM.
+Three replay tests pass, including six explicit missing/foreign-set/foreign-PCM/
+incomplete/expired-publication/actual-selection-ABA cases with fresh valid
+recovery on the same preparation owner. Those mutations are worker request tests,
+not public source-replacement workflows. Measured PitchActionWork is 4368 bytes
+(previously 4056): +312 bytes per slot, +19968 over 64 slots. The fixed source
+journal backing is unchanged.
+
+The impacted Debug pitch family passes 66 tests with its one existing explicit
+Native-owner diagnostic ignored (142.83 s). Source-feed history passes 15 with its
+existing resource diagnostic ignored; Native permit 9, coverage 12, action 20,
+ordinary endpoint 23 and actual callback-lifecycle 2 tests pass. The 16 productive
+pressure profiles retain 3072 successful pressure actions, 48 recoveries, zero
+terminal claims and zero independent PCM error. Acoustic diagnostic success does
+not turn the retained failed acoustic predicates into quality acceptance.
+
+The first controller integration had 15 passes and one transient Native
+`content feedback placement pending` exception in the embedded probe. Its
+unmodified isolated retry and full 16-test retry passed. The real AppController
+already retains that exact message and retries on a later poll; the probe lacked
+this behavior. The fixture now mirrors bounded retention without spinning or
+catching other errors. A deterministic genuine STOP/PendingWriter regression
+holds two pending polls, then requires one delivery of the original message and
+no duplicate. The final 17-test controller family passes in 13.10 s. The original
+transient trigger remains unproven; no product polling defect is claimed. A new
+Native-permit unit extension also initially requested a guard from a deliberately
+cleared snapshot; explicit fresh history recapture corrected that fixture error
+without weakening the original assertions.
+
+Optimized Release passes all seven selected-glide children in 7.05 s (1 min 44 s
+compilation), replay 3, extended permit 1 and deterministic feedback 1 tests.
+All-target lint passes with the existing 95 library-test warnings, formatting,
+fixture lint/formatting, affected official strict validation and whitespace pass.
+A private locked stripped Release build completes in 26.91 s; its actual private
+Native origin, release profile, eight bootstrap API checks and real App, piano,
+global-parameter and BS-RoFormer imports pass. The existing App feedback tests
+pass 8 cases in 0.30 s against that private module. Nothing was installed.
+
+The separate Windows-heap observation feasibility did not produce a measurement.
+Installed SDK tracelog 10.0.26100.8249 returned error 87, `Need exactly one GUID
+for PRIVATE loggers`, both with bounded QPC/buffer options and with the exact
+unmodified Microsoft `-start NAME -um -heap -pids 1 OWN_PID -f OWN.etl` example.
+Both exact unique session queries subsequently returned 4201, no such instance.
+The owned children aborted before allocation controls; there was no ETL or Native
+callback observation. Microsoft explicitly prohibits combining `-guid` with
+`-heap`; no undocumented correction, elevation, registry/OS change, installation
+or hook was attempted. This records a tool/documentation mismatch, not access
+denial or zero observed C++ allocations. See [Microsoft's example](https://learn.microsoft.com/en-us/windows-hardware/drivers/devtest/example-11--starting-a-private-trace-session)
+and [command reference](https://learn.microsoft.com/en-us/windows-hardware/drivers/devtest/tracelog-command-syntax).
+
+Native/C++ allocation and arbitrary logging, outer CPAL/device deadlines,
+active-ramp/finite readiness, continuous-O and full actual-rate/acoustic matrices,
+P6/V0/216/30-minute resources and Human/device/listening/parent acceptance remain
+open. No Human App, device, installation or held Native was changed.

@@ -24,6 +24,26 @@ pub(crate) fn complete_view_available(sample: &SampleBuffer) -> bool {
         && sample.resident_end() == sample.frame_count()
 }
 
+/// Whole physical input and current publications for every actually required role.
+/// This narrows complete reset preparation; the ordinary feed checks still prove
+/// the reference identity, layout, accepted timing and actual source-domain taps.
+pub(crate) fn complete_read_sets_available(
+    sample: &SampleBuffer,
+    readers: StemReadSets<'_>,
+    plan: SourceReadPlan,
+) -> bool {
+    complete_view_available(sample)
+        && std::iter::once(plan.selection)
+            .chain(plan.transition.required_from_selection())
+            .all(|selection| {
+                selection.required_stem_hash().is_none()
+                    || readers.for_selection(selection).is_some_and(|stems| {
+                        stems.publication.current()
+                            && stems.stems.iter().all(complete_view_available)
+                    })
+            })
+}
+
 fn sample_layout_available(sample: &SampleBuffer) -> bool {
     if sample.channels == 0
         || sample.samples.is_empty()

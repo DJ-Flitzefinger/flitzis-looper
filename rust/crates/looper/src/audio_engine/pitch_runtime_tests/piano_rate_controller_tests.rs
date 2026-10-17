@@ -362,6 +362,7 @@ struct RateRoute {
     feedback: Producer<AudioMessage>,
     messages: Arc<Mutex<Consumer<AudioMessage>>>,
     sources: [SampleBuffer; 2],
+    reference_sources: [SampleBuffer; 2],
     references: [Option<Reference>; 2],
     master: Option<MasterClock>,
     origin: f64,
@@ -473,6 +474,7 @@ impl RateRoute {
             scheduler: FixedCapacityScheduler::new(),
             feedback,
             messages,
+            reference_sources: sources.clone(),
             sources,
             references: [None, None],
             master: None,
@@ -570,7 +572,7 @@ impl RateRoute {
                     expected += self.references[*id]
                         .as_mut()
                         .unwrap()
-                        .sample(&self.sources[*id]);
+                        .sample(&self.reference_sources[*id]);
                 }
                 let difference = (actual - expected).abs();
                 if offset == 0 {

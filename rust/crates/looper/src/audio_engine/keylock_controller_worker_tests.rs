@@ -485,6 +485,48 @@ impl Harness {
 }
 
 #[test]
+fn controller_fixture_retries_original_stop_feedback_after_actual_pending_marker() {
+    let mut harness = Harness::new(false, &[0]);
+    harness.start();
+    harness.call0("observe_stopped_feedback");
+    harness.target("stop", 0);
+    // Queue genuine callback STOP feedback before the fixture observes it.
+    harness.drain_native();
+    assert!(
+        !harness
+            .callback
+            .mixer
+            .voices
+            .iter()
+            .any(|voice| voice.active)
+    );
+    let ownership = Python::attach(|py| harness.engine.borrow(py).input_runtime_ownership.clone());
+    let pending =
+        crate::audio_engine::resident_relocation::control_publication_tests::PendingWriter::hold(
+            ownership,
+        );
+    let assert_feedback = |attempts: usize, delivered: bool| {
+        Python::attach(|py| {
+            harness
+                .probe
+                .call_method1(py, "assert_stopped_feedback", (0, attempts, delivered))
+                .unwrap();
+        });
+    };
+    // This proves fixture parity with AppController's existing bounded retry;
+    // it adds no new product behavior and never advances the audio clock.
+    harness.call0("poll");
+    assert_feedback(1, false);
+    harness.call0("poll");
+    assert_feedback(2, false);
+    pending.complete();
+    harness.call0("poll");
+    assert_feedback(3, true);
+    harness.call0("poll");
+    assert_feedback(3, true);
+}
+
+#[test]
 fn actual_python_controller_native_failure_and_exhausted_reserve_keep_previous_dry_output() {
     for failure in 0..3 {
         let mut harness = Harness::new(false, &[0]);

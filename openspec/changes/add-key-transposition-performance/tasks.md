@@ -439,6 +439,20 @@ each subscriber's own pending then accepted/current publication. The full existi
   error is 2.98e-8. Final affected pitch suite: 65 PASS/one existing diagnostic
   ignored (134.92 s); original replay 2, action 20, endpoint 23 and controller 16
   tests pass. Formatting, affected strict validation and all-target lint pass.
+- [x] Enable wet Normal SET_RETRIGGER during an actual-rate glide for one current
+  fully held stable selected StemSet. Reproduce the original FullMix-only refusal;
+  preserve exact original/reset E, physical publication and component ownership,
+  actual rate epochs and independent selected PCM/Native/FIFO/EQ plus peer/master.
+  Verify whole-action refusal and fresh valid retry after relevant ownership or
+  selection changes. Keep finite/active-ramp/continuous-O/acoustic/resource/Human
+  and every full parent gate open.
+  Seven selected GUI/MIDI/refusal/retry/publication profiles pass Debug (8.11 s)
+  and Release (7.05 s); first adopted PCM is exact, continuing maximum 2.98e-8.
+  Worker 3, permit 9, coverage 12, action 20, endpoint 23, lifecycle 2 and whole
+  pitch 66 with one existing ignored diagnostic pass. Final controller 17 passes
+  after repairing its fixture's missing bounded Pending-feedback retry, with a
+  deterministic exact-message STOP regression. The initial negative run remains
+  recorded; private Release/API/imports and existing App feedback 8 tests pass.
 - [ ] V0: complete new controls+copy/move/bank/hold/pending/restore workload and
   P6 resource/216/disk/RSS proofs repeated; preserve all failed attempts/source roles.
 - [ ] During implementation: focused meaningful compile/regressions and required

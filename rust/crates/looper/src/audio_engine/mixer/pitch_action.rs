@@ -293,17 +293,30 @@ impl RtMixer {
                             != snapshot.playback.rate_target().to_bits();
                     if gliding {
                         if current.paused
-                            || !super::super::native_source_coverage::complete_view_available(
-                                &snapshot.sample,
-                            )
+                            || current.readers().is_none_or(|readers| {
+                                !super::super::native_source_coverage::complete_read_sets_available(
+                                    &current.sample,
+                                    readers,
+                                    current.plan,
+                                )
+                            })
+                            || snapshot.readers().is_none_or(|readers| {
+                                !super::super::native_source_coverage::complete_read_sets_available(
+                                    &snapshot.sample,
+                                    readers,
+                                    snapshot.plan,
+                                )
+                            })
                             || current.plan.seek_mode != ExplicitSeekMode::Normal
                             || current.playback.position().seek_mode != ExplicitSeekMode::Normal
-                            || current.plan.selection != StemRenderSelection::full_mix()
                             || current.plan.transition.is_active()
                             || !current.plan.matches_source_contract(snapshot.plan)
                             || !current.playback.matches_domain(snapshot.plan.domain())
                             || current.source_feed_context.binding
                                 != snapshot.source_feed_context.binding
+                            || !current
+                                .source_feed_context
+                                .same_source(snapshot.source_feed_context)
                             || current.accepted != guard.binding.accepted
                         {
                             return Err(PitchActionReject::PreparationFailed);

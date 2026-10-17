@@ -529,6 +529,30 @@ mod tests {
         assert!(!next_permit.current(&sample, 48_000));
         lifetime.store(12, Ordering::Release);
         assert!(!next_permit.current(&sample, 48_000));
+
+        let publication = super::super::prepared_source::PreparedSourcePermit::unrestricted();
+        assert!(history.capture_into(&mut snapshot));
+        let publication_guard = snapshot
+            .guard(&lifetime, 12)
+            .unwrap()
+            .with_stem_publication(&publication)
+            .unwrap();
+        assert!(
+            publication_guard
+                .clone()
+                .with_stem_publication(&publication)
+                .is_none(),
+            "an exact publication fence cannot be refreshed or replaced"
+        );
+        let selected_permit = context
+            .capture(&sample, 48_000, None)
+            .unwrap()
+            .with_source_feed_guard(publication_guard);
+        assert!(selected_permit.current(&sample, 48_000));
+        publication.epoch.fetch_add(1, Ordering::AcqRel);
+        assert!(!selected_permit.current(&sample, 48_000));
+        assert!(selected_permit.current_effective_source(&sample, 48_000));
+        assert!(selected_permit.endpoint_source_current(&sample, 48_000));
     }
 
     #[test]

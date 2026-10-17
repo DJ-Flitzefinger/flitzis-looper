@@ -4,6 +4,7 @@
 //! comparison markers, never dereferenced owners or fresh source/timing authority. A request
 //! must separately pin and admit every historical physical context it intends to replay.
 
+use super::prepared_source::PreparedSourcePermit;
 use super::productive_source_history::ProductiveSourceBinding;
 use super::source_playback::SourcePlayback;
 use super::source_reader::{SourceReadPlan, StemReadSets};
@@ -422,7 +423,8 @@ pub(crate) struct SourceFeedSnapshot {
 }
 
 /// Small additional adoption fence captured only from a genuine current snapshot and the
-/// actual voice lifetime. It carries no source/window/timing authority or replay coverage.
+/// actual voice lifetime. An optional exact selected publication only narrows adoption;
+/// this guard cannot grant source/window/timing authority or replay coverage.
 /// Retain it with the Native permit and retire its Arc owners through that permit's existing
 /// off-realtime source-owner retirement, including stale or refused preparation.
 #[derive(Clone)]
@@ -431,6 +433,7 @@ pub(crate) struct SourceFeedGuard {
     captured_epoch: u64,
     lifetime: Arc<AtomicU64>,
     generation: u64,
+    stem_publication: Option<PreparedSourcePermit>,
 }
 
 impl SourceFeedGuard {
@@ -440,6 +443,23 @@ impl SourceFeedGuard {
             && self.generation != u64::MAX
             && self.continuity_owner.load(Ordering::Acquire) == self.captured_epoch
             && self.lifetime.load(Ordering::Acquire) == self.generation
+            && self
+                .stem_publication
+                .as_ref()
+                .is_none_or(PreparedSourcePermit::current)
+    }
+
+    /// Worker-only one-shot narrowing by the actual retained selected pin.
+    /// Arc owners retire with the existing Native permit, never in the callback.
+    pub(crate) fn with_stem_publication(
+        mut self,
+        publication: &PreparedSourcePermit,
+    ) -> Option<Self> {
+        if self.stem_publication.is_some() || !publication.current() {
+            return None;
+        }
+        self.stem_publication = Some(publication.clone());
+        self.is_current().then_some(self)
     }
 }
 
@@ -488,6 +508,7 @@ impl SourceFeedSnapshot {
             captured_epoch: self.captured_epoch,
             lifetime: Arc::clone(lifetime),
             generation,
+            stem_publication: None,
         };
         guard.is_current().then_some(guard)
     }

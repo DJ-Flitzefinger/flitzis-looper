@@ -13,6 +13,9 @@ use super::*;
 use crate::audio_engine::constants::{SPEED_MAX, SPEED_MIN};
 use crate::audio_engine::source_playback::SourcePlayback;
 
+#[path = "selected_stem_rate_glide_tests.rs"]
+mod selected_stem_rate_glide_tests;
+
 const GLIDE_CHILD: &str = "FLITZI_PIANO_RATE_GLIDE_CHILD";
 const GLIDE_TEST: &str = "audio_engine::pitch_runtime_tests::piano_mouse_tests::piano_rate_controller_tests::piano_rate_glide_tests::piano_retrigger_preserves_unfinished_public_rate_glide";
 const INITIAL_SPEED: f64 = 0.5;
@@ -94,7 +97,7 @@ fn initial_birth_note(route: &mut RateRoute, id: usize, speed: f64, note: i32) -
     // The parent settled-rate helper has period .25 assumptions. Initial births
     // use their actual accepted public period, without changing that helper.
     route.references[id] = Some(Reference::birth(
-        &route.sources[id],
+        &route.reference_sources[id],
         id,
         note,
         rate,
@@ -478,14 +481,15 @@ fn apply_wet_attack(
     accepted: &RateReceipt,
     initial_speed: f64,
     note: i32,
-    case: &str,
+    input: (&str, bool),
     cached: Option<usize>,
 ) {
+    let (case, midi) = input;
     let old = VoiceWitness::capture(route, 0);
     let peer = VoiceWitness::capture(route, 1);
     let starts = route.starts;
     let frame = route.route.transport.output_frame();
-    let mut attack = route.admit(0, note, false);
+    let mut attack = route.admit(0, note, midi);
     assert_eq!(attack.t, frame);
     assert_eq!(attack.e, attack.t + 8192);
     route.assert_no_attacks();
@@ -506,7 +510,7 @@ fn apply_wet_attack(
         attack.e,
     );
     let oracle = ResetOracle::new(
-        &route.sources[0],
+        &route.reference_sources[0],
         &timeline,
         note,
         route.lock,
@@ -644,7 +648,7 @@ fn wet_attack(lock: bool, initial_speed: f64, note: i32, case: &str) {
         &accepted,
         initial_speed,
         note,
-        case,
+        (case, false),
         None,
     );
     route.route.close();
@@ -807,7 +811,7 @@ fn wet_after_settling() {
         &accepted,
         INITIAL_SPEED,
         7,
-        "wet-off-original-E-after-settling",
+        ("wet-off-original-E-after-settling", false),
         None,
     );
     route.route.close();
@@ -957,7 +961,7 @@ fn ready_cache_same_note() {
         &accepted,
         INITIAL_SPEED,
         2,
-        "wet-off-ready-cache-same-note",
+        ("wet-off-ready-cache-same-note", false),
         Some(cached),
     );
     route.route.close();

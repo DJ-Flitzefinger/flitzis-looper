@@ -1162,10 +1162,21 @@ impl PitchActionWork {
                 .source_feed_voice
                 .as_ref()
                 .ok_or(PitchActionReject::PreparationFailed)?;
-            let guard = self
+            let mut guard = self
                 .source_feed
                 .guard(lifetime, *generation)
                 .ok_or(PitchActionReject::PreparationFailed)?;
+            if request.plan.selection.required_stem_hash().is_some() {
+                guard = guard
+                    .with_stem_publication(
+                        &request
+                            .stems
+                            .as_ref()
+                            .ok_or(PitchActionReject::PreparationFailed)?
+                            .publication,
+                    )
+                    .ok_or(PitchActionReject::PreparationFailed)?;
+            }
             // Only the derived new-start path adds this fence. It remains current
             // through the final effect claim; effective adopted history deliberately
             // does not require the preceding voice's journal after its own restart.

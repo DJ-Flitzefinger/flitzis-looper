@@ -4,7 +4,7 @@
 //! not equality to a Native handle that has processed arbitrary earlier history.
 
 use super::native_source_coverage::{
-    complete_view_available, normal_loop_feed_available_with_readers,
+    complete_read_sets_available, normal_loop_feed_available_with_readers,
 };
 use super::prepared_native_history::{NativeAdapterState, NativeHistoryRequest};
 use super::rubberband_backend::RubberBandError;
@@ -12,9 +12,8 @@ use super::source_feed_history::{
     SOURCE_FEED_HISTORY_MAX_FRAMES, SourceFeedContext, SourceFeedSnapshot, SourceFeedSpan,
 };
 use super::source_playback::SourcePlayback;
-#[cfg(test)]
 use super::source_reader::StemReadSets;
-use super::source_reader::{ExplicitSeekMode, SourceReadPlan, StemRenderSelection};
+use super::source_reader::{ExplicitSeekMode, SourceReadPlan};
 use super::stretch_processor::DEFAULT_BLOCK_SAMPLES;
 
 fn unavailable() -> RubberBandError {
@@ -31,9 +30,8 @@ pub(crate) struct EndpointResetHistory {
 
 impl EndpointResetHistory {
     fn phase_shift(self, request: &NativeHistoryRequest) -> Result<f64, RubberBandError> {
-        if !complete_view_available(&request.sample)
-            || request.plan.selection != StemRenderSelection::full_mix()
-            || self.plan.selection != StemRenderSelection::full_mix()
+        let readers = StemReadSets::new(request.stems.as_ref(), None);
+        if !complete_read_sets_available(&request.sample, readers, request.plan)
             || request.plan.seek_mode != ExplicitSeekMode::Normal
             || self.plan.seek_mode != ExplicitSeekMode::Normal
             || request.plan.transition.is_active()
@@ -422,6 +420,12 @@ impl NativeAdapterState {
             || !request
                 .permit
                 .current(&request.sample, request.binding.sample_rate_hz)
+            || (endpoint_reset.is_some()
+                && !complete_read_sets_available(
+                    &request.sample,
+                    StemReadSets::new(request.stems.as_ref(), None),
+                    request.plan,
+                ))
         {
             return Err(unavailable());
         }
@@ -476,6 +480,7 @@ mod tests {
         history: SourceFeedHistory,
         playback: SourcePlayback,
         plan: SourceReadPlan,
+        stems: Option<PreparedStemSet>,
     }
 
     impl Fixture {
@@ -484,6 +489,15 @@ mod tests {
         }
 
         fn with_controls(gap: bool, missing_context: bool, rate_edit: bool) -> Self {
+            Self::with_selection_controls(gap, missing_context, rate_edit, false)
+        }
+
+        fn with_selection_controls(
+            gap: bool,
+            missing_context: bool,
+            rate_edit: bool,
+            selected: bool,
+        ) -> Self {
             let sample = SampleBuffer {
                 channels: 1,
                 residency: None,
@@ -562,9 +576,16 @@ mod tests {
                 let position = playback.position();
                 plan.frame_pos = position.frame;
                 plan.seek_mode = position.seek_mode;
-                let stems = (missing_context && active < 32_017).then_some(&old_stems);
+                let stems =
+                    (selected || (missing_context && active < 32_017)).then_some(&old_stems);
                 plan.selection = stems.map_or_else(StemRenderSelection::full_mix, |set| {
-                    StemRenderSelection::for_stems(set, 1)
+                    let mask =
+                        if selected && !(missing_context && (32_017..34_017).contains(&active)) {
+                            5
+                        } else {
+                            1
+                        };
+                    StemRenderSelection::for_stems(set, mask)
                 });
                 plan.fill_fractional_buffers_checked(&sample, stems, &playback, &mut read, frames)
                     .unwrap();
@@ -589,13 +610,14 @@ mod tests {
                 history,
                 playback,
                 plan,
+                stems: selected.then_some(old_stems),
             }
         }
 
         fn request(&self, sequence: u64) -> NativeHistoryRequest {
             let mut endpoint = PitchSourceSnapshot {
                 sample: self.sample.clone(),
-                stems: None,
+                stems: self.stems.clone(),
                 accepted: None,
                 sample_rate_hz: RATE,
                 paused: false,
@@ -637,8 +659,24 @@ mod tests {
                     RATE,
                     None,
                 ),
-                StemReadSets::default(),
+                StemReadSets::new(self.stems.as_ref(), None),
             )
+        }
+
+        fn reset_request(&self, sequence: u64) -> (NativeHistoryRequest, EndpointResetHistory) {
+            let mut request = self.request(sequence);
+            let endpoint = EndpointResetHistory {
+                playback: request.playback,
+                plan: request.plan,
+            };
+            request
+                .playback
+                .seek(request.plan.loop_region.start, ExplicitSeekMode::Normal);
+            request.playback.configure_domain(request.plan.domain());
+            request.plan.frame_pos = request.plan.loop_region.start;
+            request.plan.seek_mode = ExplicitSeekMode::Normal;
+            request.plan.transition.clear();
+            (request, endpoint)
         }
     }
 
@@ -706,5 +744,86 @@ mod tests {
             .unwrap();
         assert_eq!(candidate.source.as_ref().unwrap().request_id, 4);
         assert!(candidate.used && candidate.active && !candidate.dirty);
+    }
+
+    #[test]
+    fn selected_reset_history_requires_exact_complete_pin_and_unchanged_actual_selection() {
+        let mut candidate =
+            NativeAdapterState::new(Some(RubberBandLiveShifter::new(RATE, 1).unwrap()), 1);
+        for corruption in [
+            "missing",
+            "foreign_set",
+            "foreign_pcm",
+            "incomplete",
+            "expired",
+            "selection_aba",
+        ] {
+            // Every journal entry below follows a real checked input read; the ABA
+            // case actually reads the other mask before returning to the endpoint mask.
+            let invalid =
+                Fixture::with_selection_controls(false, corruption == "selection_aba", true, true);
+            let (mut request, endpoint) = invalid.reset_request(5);
+            match corruption {
+                "missing" => request.stems = None,
+                "foreign_set" => {
+                    request.stems.as_mut().unwrap().complete_set_identity = Arc::new([3; 32]);
+                }
+                "foreign_pcm" => {
+                    let component = &mut request.stems.as_mut().unwrap().stems[0];
+                    component.samples = component
+                        .samples
+                        .iter()
+                        .map(|value| value + 0.01)
+                        .collect::<Vec<_>>()
+                        .into();
+                }
+                "incomplete" => {
+                    let component = &mut request.stems.as_mut().unwrap().stems[3];
+                    component.samples = component.samples[0..1000].to_vec().into();
+                }
+                "expired" => {
+                    request
+                        .stems
+                        .as_ref()
+                        .unwrap()
+                        .publication
+                        .epoch
+                        .fetch_add(1, std::sync::atomic::Ordering::AcqRel);
+                }
+                "selection_aba" => {}
+                _ => unreachable!(),
+            }
+            assert!(
+                matches!(
+                    candidate.prepare_source_with_endpoint_reset_history(
+                        request,
+                        &invalid.snapshot(),
+                        (
+                            invalid.playback,
+                            invalid.plan,
+                            FUTURE,
+                            invalid.feed_context()
+                        ),
+                        endpoint,
+                    ),
+                    Err(RubberBandError::UnavailableSourceHistory)
+                ),
+                "{corruption}"
+            );
+            // The same preparation owner can recover with a genuinely fresh current
+            // request. Never restore an old publication epoch or relabel its readers.
+            let valid = Fixture::with_selection_controls(false, false, true, true);
+            let (request, endpoint) = valid.reset_request(6);
+            candidate
+                .prepare_source_with_endpoint_reset_history(
+                    request,
+                    &valid.snapshot(),
+                    (valid.playback, valid.plan, FUTURE, valid.feed_context()),
+                    endpoint,
+                )
+                .unwrap();
+            assert!(candidate.used && candidate.active && !candidate.dirty);
+            assert_eq!(candidate.source.as_ref().unwrap().request_id, 6);
+        }
     }
 }
