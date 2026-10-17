@@ -332,6 +332,19 @@ each subscriber's own pending then accepted/current publication. The full existi
   fixture repairs without findings. These are bounded software checks; the ignored
   resource profile, full musical/acoustic/continuous-O/deadline/device/Human and
   parent gates remain open. Earlier wider-Python negatives are not a fresh whole pass.
+- [x] Compose an original actually prepared selected-V1 piano/MIDI SET_RETRIGGER
+  with public live Generate/Settings V2 replacement before its frozen E, proving
+  whole old-action refusal, unchanged original custody, V2/peer PCM continuity and
+  actual final-reader retirement; then require a fresh V2 attack's own capture,
+  current selected preparation, scheduler ACK and independent Native/FIFO/PCM.
+  Use existing GUI quantize settings or label synthetic timing explicitly; retain
+  all neural/acoustic/actual-r(n)/resource/device/Human/parent gates.
+  GUI and raw NRPN, each with KEYLOCK OFF/ON, pass through real production
+  capture/preparation/public replacement/scheduler/retirement and independent
+  selected Native PCM. Public Generate integration: 3 PASS. The declared 15 BPM
+  clock uses GUI 1/16 quantization; declared inference WAVs and a silent peer
+  verify this bounded composition, not neural execution, audible multi-voice
+  mixing, device deadlines or complete musical/resource/Human acceptance.
 - [ ] V0: complete new controls+copy/move/bank/hold/pending/restore workload and
   P6 resource/216/disk/RSS proofs repeated; preserve all failed attempts/source roles.
 - [ ] During implementation: focused meaningful compile/regressions and required

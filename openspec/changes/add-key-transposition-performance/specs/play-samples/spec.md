@@ -99,6 +99,13 @@ an unseen or different tuple SHALL retain their existing preparation semantics.
 - **THEN** its fresh original action permit SHALL remain independent of the retired cache request
 - **AND** real source, lifetime, authority, request-incarnation, window, timing, loop, stem, rate, Stop or cancellation changes SHALL still reject unsafe application without partial pitch or attack
 
+#### Scenario: A prepared retrigger cannot restore a superseded live stem generation
+- **GIVEN** an original future pitch retrigger owns prepared V1 selected-source history while the same content continues playing
+- **WHEN** a separately acknowledged public live Generate/model replacement makes V2 current before the original effect frame
+- **THEN** retained V1 lifetime pins SHALL NOT substitute for current V2 effect authority and the unsafe old attack SHALL be rejected as a whole
+- **AND** V2 playback and unrelated voices SHALL remain continuous, with no old selection rollback, early pitch application or extra START
+- **AND** a fresh V2 attack SHALL require its own original identity, T/E, current-source permit and matched prepared selected Native history rather than relabel the rejected V1 candidate
+
 #### Scenario: A ready selected endpoint serves a fresh ordinary attack
 - **GIVEN** the selected content has one genuinely prepared exact Normal endpoint
 - **WHEN** a fresh ordinary attack is admitted at its immutable original target T

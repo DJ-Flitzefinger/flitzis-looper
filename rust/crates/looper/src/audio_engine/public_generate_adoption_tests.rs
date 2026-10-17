@@ -8,6 +8,9 @@ use super::*;
 use crate::audio_engine::OfflineStemSourceLease;
 use pyo3::types::PyBytes;
 
+#[path = "public_generate_pitch_action_tests.rs"]
+mod pitch_action_tests;
+
 const CHILD: &str = "FLITZI_PUBLIC_GENERATE_ADOPTION_CHILD";
 const TEST: &str = "audio_engine::cold_load::tests::stem_pair_publication_tests::committed_stem_residency_tests::l3_controller_productive_tests::public_generate_adoption_tests::actual_public_generate_first_and_model_replacement_require_own_live_adoption";
 const PIANO_CHILD: &str = "FLITZI_PUBLIC_GENERATE_PIANO_CHILD";

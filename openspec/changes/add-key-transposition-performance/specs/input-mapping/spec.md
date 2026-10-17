@@ -155,6 +155,16 @@ identity; removal/reassignment/overwrite SHALL fence its old lifetime.
 - **AND** C's old component receipt SHALL lose current effective authority while A retains its own launch revision, readers, Native, PCM, FIFO and source chronology
 - **AND** a later fresh C input SHALL obtain current own component readiness and adopt its own selected-source Native through the existing scheduler, without reviving the cancelled action or stale receipt
 
+#### Scenario: Public live stem replacement fences an original prepared piano attack
+- **GIVEN** a current selected V1 voice with nonneutral piano pitch and an original GUI or routed MIDI SET_RETRIGGER already prepared for its frozen future effect E
+- **WHEN** public Generate and a public separator change adopt a distinct V2 set with its own effective acknowledgement before E while the content remains the same
+- **THEN** the original V1 action SHALL terminate fenced without retuning or attacking the voice or restoring V1 selection, Native or readers over V2
+- **AND** its original content identity, timestamp, numeric target, T and frozen E SHALL remain unchanged without recapture or requantization
+- **AND** living V2 and independent other-pad PCM, source phase, Native, FIFO and filter chronology SHALL continue through that rejected application
+- **AND** actual V1 readers SHALL remain protected until their original action and all other real readers reach terminal retirement
+- **AND** a later fresh V2 SET_RETRIGGER SHALL use its own capture, current selection, preparation and scheduler acknowledgement, producing one own attack with independently matched selected-source Native output
+- **AND** declared timing or inference fixtures SHALL NOT certify device deadlines, neural execution or complete musical/resource/Human acceptance
+
 #### Scenario: Original pitch worker prepares before the Pair control mirror
 - **GIVEN** A owns an admitted nonneutral pitch retrigger with its original content lifetime, timestamp, numeric tuple, T and frozen E
 - **WHEN** a real Move or Swap publishes before that same action reaches its preparation worker and the Pair control mirror remains pending

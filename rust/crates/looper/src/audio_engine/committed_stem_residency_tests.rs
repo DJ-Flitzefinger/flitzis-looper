@@ -2153,6 +2153,18 @@ struct ReadyPlaybackAudio {
 
 #[pymethods]
 impl ReadyPlaybackAudio {
+    fn set_input_mapping_snapshot(&self, mappings: Vec<(String, String)>) -> PyResult<()> {
+        self.engine.set_input_mapping_snapshot(mappings)
+    }
+
+    fn set_input_mapping_enabled(&self, enabled: bool) -> PyResult<()> {
+        self.engine.set_input_mapping_enabled(enabled)
+    }
+
+    fn poll_input_events(&self, py: Python<'_>) -> PyResult<Option<Py<PyAny>>> {
+        self.engine.poll_input_events(py)
+    }
+
     #[pyo3(signature=(sample_id, action_key, received_at_ns=None))]
     fn capture_pad_pitch_action(
         &self,
