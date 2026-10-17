@@ -296,9 +296,14 @@ impl OrdinaryEndpointReserve {
             .is_some_and(|source| mixer.ordinary_endpoint_matches(action, source))
     }
 
-    pub(crate) fn ready_for_pitch(&self, mixer: &RtMixer, action: &PitchActionWork) -> bool {
+    pub(crate) fn ready_for_pitch(
+        &self,
+        mixer: &RtMixer,
+        action: &PitchActionWork,
+        projection_frames: u64,
+    ) -> bool {
         self.ready_source(mixer)
-            .is_some_and(|source| mixer.pitch_endpoint_matches(action, source))
+            .is_some_and(|source| mixer.pitch_endpoint_matches(action, source, projection_frames))
     }
 
     pub(crate) fn consume(&mut self, action: &mut OrdinaryStartWork) -> bool {

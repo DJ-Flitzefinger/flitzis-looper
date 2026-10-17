@@ -397,6 +397,23 @@ each subscriber's own pending then accepted/current publication. The full existi
   with four receipts retained. Adjacent close/allocation/custody/endpoint/allocator/
   two-MiB/retirement: 2/2/4/23/6/1/2 PASS. Fresh private Release/eight existing API
   checks/actual App imports PASS; no App/device or parent acceptance inferred.
+- [x] Reproduce and prevent active piano SET_RETRIGGER from replacing an unfinished
+  accepted actual-r(n) glide with its bank target. Preserve
+  original T/E, source-phase-only restart, active-frame smoothing interval, own
+  Native/pitch law/PCM and independent peer where original history is available;
+  retain whole-action refusal otherwise through the existing controller,
+  preparation and sole scheduler. The old r=1.35-to-2 jump was reproduced at
+  original E=25384. Six isolated GUI/public-rate cases pass in Debug (6.72 s) and
+  Release (5.88 s), including
+  momentary ON unity, actual READY same-note target-cache miss, dry OFF success,
+  settled-before-E preparation and fresh recovery. Maximum PCM error 2.98e-8.
+  Full pitch: 65 pass, one existing diagnostic ignored on unchanged Runtime before
+  the final cache-only test. Adjacent endpoint 23, Copy/pitch 8, lifecycle 2 and
+  Release allocator calibration 6 pass.
+  Fresh private Release, eight existing bootstrap API checks and actual App
+  imports pass; affected strict, formatting and lint checks pass.
+  Successful wet reset-phase attacks while still gliding remain unsupported here;
+  retain all variable-r/continuous-O/quality/P6/V0/Human gates.
 - [ ] V0: complete new controls+copy/move/bank/hold/pending/restore workload and
   P6 resource/216/disk/RSS proofs repeated; preserve all failed attempts/source roles.
 - [ ] During implementation: focused meaningful compile/regressions and required

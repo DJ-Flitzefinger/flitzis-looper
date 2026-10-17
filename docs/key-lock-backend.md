@@ -3594,6 +3594,65 @@ window storage admission, general continuous-O, all B5 values/trajectories,
 acoustic quality, performer/device timing, P6/V0/216/30-minute resources or Human
 acceptance. Worker waits hold the virtual clock; no App or device is started.
 
+### Piano retrigger preserves an unfinished actual rate glide — 2026-10-17
+
+The genuine ImGui piano/public `UiContext` rate route exposed a K20 defect. Two
+audible nonneutral voices start at speed .5, then an accepted public speed 2
+request starts the existing .05-per-512-active-frame glide. A real +7 piano attack
+captured at T=17,192 owns its prepared Native and E=25,384. Immediately before E,
+A has actual r=1.3500000000000008, target 2 and 439 frames left in the current
+rate epoch. The old successful adoption replaced that clock with constant r=2
+and no remaining interval. Every pre-E reference sample agreed (25,384 frames,
+maximum error 1.4901161193847656e-8), so the observed jump belongs to the attack.
+The first reproduction attempt separately found a fixture assumption below the
+established .5 minimum; the independent initial-rate model now explicitly applies
+the existing bounds before claiming this product defect.
+
+The shared pitch-retrigger snapshot now retains the ordinary current source,
+stems and loop pins, copies the matching active voice's clock, projects it to the
+original execution frame and seeks only its source phase to the loop beginning.
+Admission and reserve matching use the provisional existing effect frame;
+capture uses the once-selected E and execution rechecks the same snapshot. The
+accepted target and remaining active-frame interval survive. Fresh-source starts
+retain the ordinary launch semantics and exact source/permit/candidate matching.
+An instantaneous ON p=1 during a pending glide still requires proven Native
+history for subsequent wet frames; OFF h=1 can retain its existing dry path.
+
+This correction retains the endpoint worker's existing refusal of unavailable
+reset-phase history. A wet attack whose E is still inside the glide refuses
+wholly with `preparation_failed`, preserving live audio and original T/E. It
+does not borrow another phase's FIFO, prime at the eventual bank target, extend
+E until settling or claim successful wet-glide support. After settling a fresh
+same-note attack earns its own Native and succeeds. An attack captured during
+the glide whose original E is already after settling can also prepare and succeed.
+
+`piano_rate_glide_tests.rs` covers six isolated genuine mouse/public-rate cases:
+wet OFF/ON refusal and fresh recovery, ON momentary unity (.95 to 2, actual r=1
+at capture), successful dry OFF phase-only restart, and wet OFF with its original
+E after settling. The final extra case selects A through the public Native and
+existing selection controller, confirms its same-note +2/OFF endpoint really
+READY at target r=2 while live r=.55, then presses that same piano note. The
+unrelated cache stays READY and unconsumed; the original misses it, keeps the
+existing T+8192 policy and refuses wholly without changing productive audio.
+Final Debug passes in 6.72 s and optimized Release in 5.88 s (1 min 57 s
+compilation). Independent scalar rate/phase epochs,
+direct Native/EQ PCM, original receipts, exact peer/Native/FIFO/generation and
+confirmed master-period observations remain checked through refusals and after
+successful effects. Maximum mixed PCM error is 2.9802322387695312e-8.
+Before the final cache-only test addition, the same production source passes the
+whole impacted pitch module: 65 tests, one existing explicit Native diagnostic
+ignored, 132.89 s. This includes all 16 productive custody profiles. Its existing
+36-case acoustic diagnostic still reports fixed-criterion failures in all
+public/A/O cases; a passing diagnostic test does not certify those criteria.
+Adjacent ordinary endpoint 23, Copy/pitch 8, actual Native lifecycle 2 and
+optimized allocator calibration 6 tests pass on the final production source.
+A fresh private locked/stripped Release build (29.88 s), eight existing bootstrap
+API checks and actual App/UI/GlobalParams/model imports also pass without an
+Engine or device start. Native API, dependencies and installer layout are unchanged.
+Host worker waits hold the virtual clock. Successful wet attacks during unfinished
+smoothing, general continuous-O/actual-r(n), complete B5/P6/V0/216/30-minute,
+acoustic, device, deadline and Human gates remain open.
+
 ### Actual Native lifetime and complete callback-owner close — 2026-10-17
 
 `pitch_callback_lifecycle_tests.rs`, stored beside `audio_stream.rs`,

@@ -7,12 +7,28 @@ use crate::audio_engine::input_runtime_binding::{
     InputPadBinding, LaunchWriteKind, PreparedLaunchWrite,
 };
 use crate::audio_engine::pitch_actions::{
-    PitchActionGuard, PitchActionPreparationMode, PitchActionReject, PitchActionVariant,
-    PitchActionWork,
+    FrozenPitchRender, PitchActionGuard, PitchActionPreparationMode, PitchActionReject,
+    PitchActionVariant, PitchActionWork,
 };
 use crate::audio_engine::prepared_native_history::{NativeHistoryRequest, PREPARED_HISTORY_FRAMES};
 use crate::messages::AudioMessage;
 use std::cell::RefCell;
+
+fn retrigger_needs_native(
+    render: FrozenPitchRender,
+    snapshot: &PitchSourceSnapshot,
+) -> Result<bool, PitchActionReject> {
+    let pitch = render
+        .pitch
+        .native_pitch_scale(snapshot.playback.tempo_ratio(), render.key_lock)
+        .map_err(|_| PitchActionReject::UnsupportedPitch)?;
+    // A momentary ON unity point during smoothing is not a dry future trajectory.
+    // The existing endpoint worker must prove history; it refuses pending glides.
+    Ok(pitch != 1.0
+        || (render.key_lock
+            && snapshot.playback.tempo_ratio().to_bits()
+                != snapshot.playback.rate_target().to_bits()))
+}
 
 pub(super) fn placement_rejection(error: PlacementError) -> PitchActionReject {
     match error {
@@ -58,6 +74,7 @@ impl RtMixer {
     pub(crate) fn requires_pitch_action_preparation(
         &self,
         work: &PitchActionWork,
+        projection_frames: u64,
     ) -> Result<bool, PitchActionReject> {
         if !work.validates_render_format(self.sample_rate_hz as u32, self.channels) {
             return Err(PitchActionReject::PreparedMismatch);
@@ -75,12 +92,9 @@ impl RtMixer {
                 Ok(!self.pitch_action_scalar_ready(work, &snapshot, index)?)
             }
             PitchActionVariant::SetRetrigger => {
-                let snapshot = self.pitch_action_start_snapshot(work, guard.id)?;
-                Ok(render
-                    .pitch
-                    .native_pitch_scale(snapshot.playback.tempo_ratio(), render.key_lock)
-                    .map_err(|_| PitchActionReject::UnsupportedPitch)?
-                    != 1.0)
+                let snapshot =
+                    self.pitch_action_start_snapshot(work, guard.id, projection_frames)?;
+                retrigger_needs_native(render, &snapshot)
             }
         }
     }
@@ -152,9 +166,37 @@ impl RtMixer {
         &self,
         work: &PitchActionWork,
         id: usize,
+        projection_frames: u64,
     ) -> Result<PitchSourceSnapshot, PitchActionReject> {
         let (start_s, end_s) = work.action.loop_region();
-        self.normal_start_snapshot(id, start_s, end_s)
+        let mut snapshot = self.normal_start_snapshot(id, start_s, end_s)?;
+        let guard = self.pitch_action_guard(work)?;
+        let active = match self.pitch_action_voice(id, guard.binding) {
+            Ok(active) => active,
+            // A fresh source can replace a still audible old source at this slot.
+            // Its new launch retains ordinary bank-source start semantics.
+            Err(PitchActionReject::SourceChanged) => None,
+            Err(reason) => return Err(reason),
+        };
+        if let Some(index) = active {
+            let mut current = self
+                .capture_pitch_voice_snapshot(index)
+                .ok_or(PitchActionReject::TimingUnavailable)?;
+            if !current.project_output_frames(projection_frames) {
+                return Err(PitchActionReject::PreparationFailed);
+            }
+            // A piano attack resets phase, not the accepted active-frame rate clock.
+            // Native history remains subject to its existing exact endpoint guard.
+            let mut playback = current.playback;
+            playback.seek(snapshot.plan.loop_region.start, ExplicitSeekMode::Normal);
+            playback.configure_domain(
+                self.timing_for_sample_id(id)
+                    .loop_domain(snapshot.sample.frame_count(), snapshot.plan.loop_region),
+            );
+            snapshot.playback = playback;
+            snapshot.plan.loop_period = playback.loop_period();
+        }
+        Ok(snapshot)
     }
 
     pub(crate) fn capture_pitch_action_request(
@@ -228,14 +270,23 @@ impl RtMixer {
                 if work.preparation_mode() != PitchActionPreparationMode::Endpoint {
                     return Err(PitchActionReject::PreparedMismatch);
                 }
-                self.pitch_action_start_snapshot(work, guard.id)?
+                self.pitch_action_start_snapshot(
+                    work,
+                    guard.id,
+                    execution_frame
+                        .checked_sub(callback_frame)
+                        .ok_or(PitchActionReject::PreparedMismatch)?,
+                )?
             }
         };
         let pitch = render
             .pitch
             .native_pitch_scale(snapshot.playback.tempo_ratio(), render.key_lock)
             .map_err(|_| PitchActionReject::UnsupportedPitch)?;
-        if pitch == 1.0 && work.action.variant() == PitchActionVariant::SetRetrigger {
+        if pitch == 1.0
+            && work.action.variant() == PitchActionVariant::SetRetrigger
+            && !retrigger_needs_native(render, &snapshot)?
+        {
             return Ok(None);
         }
         // Permits use the admitted action's own epoch and current resolved storage window.
@@ -379,7 +430,7 @@ impl RtMixer {
             return Err(PitchActionReject::Capacity);
         }
         let snapshot = if retrigger {
-            Some(self.pitch_action_start_snapshot(work, id)?)
+            Some(self.pitch_action_start_snapshot(work, id, 0)?)
         } else {
             active_index.and_then(|index| self.capture_pitch_voice_snapshot(index))
         };
@@ -390,11 +441,7 @@ impl RtMixer {
                 }
             } else {
                 let scalar_ready = if retrigger {
-                    render
-                        .pitch
-                        .native_pitch_scale(snapshot.playback.tempo_ratio(), render.key_lock)
-                        .map_err(|_| PitchActionReject::UnsupportedPitch)?
-                        == 1.0
+                    !retrigger_needs_native(render, snapshot)?
                 } else {
                     self.pitch_action_scalar_ready(work, snapshot, index)?
                 };

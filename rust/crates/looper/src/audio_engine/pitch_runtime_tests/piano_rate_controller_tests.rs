@@ -7,6 +7,9 @@
 
 #![cfg(windows)]
 
+#[path = "piano_rate_glide_tests.rs"]
+mod piano_rate_glide_tests;
+
 use super::*;
 use crate::audio_engine::audio_stream::drain_parameter_messages;
 use crate::audio_engine::constant_timing::{self, l3_constant_timing_fixture};

@@ -51,6 +51,17 @@ Piano and transposition actions SHALL change only pitch intent h=2^(k/12), not a
 - **AND** audio before that frame SHALL retain the previous effective pitch without early retuning or a second scheduler
 - **AND** the two GUI retrigger preferences SHALL remain independently persisted while existing learned variants keep their fixed behavior
 
+#### Scenario: Piano retrigger during an unfinished accepted rate glide
+- **GIVEN** an active PAD has a confirmed rate target while its actual source rate is still following the existing active-frame smoothing trajectory
+- **WHEN** a piano SET_RETRIGGER prepares and takes effect before that trajectory reaches its target
+- **THEN** the effect SHALL restart only the intended source phase at the normal loop beginning and SHALL preserve the actual rate, pending target and remaining active-frame smoothing interval at its original execution frame
+- **AND** preparation and effect validation SHALL use the projected actual rate at that frame rather than substituting the bank's eventual rate target
+- **AND** its own prepared Native and following PCM SHALL obey the existing Key Lock law on that preserved trajectory, with no early retuning, target-rate jump, peer restart or clock/master-period change
+- **AND** unavailable or invalid original preparation SHALL retain the existing whole-action refusal and original T/E policy rather than partially applying pitch or restart
+- **AND** an instantaneous ON pitch scale of one during an unfinished glide SHALL NOT certify a dry future trajectory; OFF with neutral pitch MAY retain its existing dry path while preserving the same source-rate clock
+- **AND** unavailable reset-phase history SHALL NOT be replaced by constant history at the bank target or by relabelling another phase's prepared FIFO, and the original execution frame SHALL NOT be delayed merely to wait for the rate glide to settle
+- **AND** a ready cached endpoint for the same note at the eventual target SHALL NOT qualify as ready for a different actual rate or smoothing interval, consume that unrelated prepared owner or shorten the existing preparation execution policy
+
 ### Requirement: Learned pitch steps distinguish CC buttons and encoder encoding
 The system SHALL keep Note and keyboard step actions as explicit signed attacks and SHALL treat a newly learned fixed step on a MIDI CC/NRPN button as one high-edge attack, ignoring release and repeated held-high values. The compact MIDI controls SHALL expose an explicit encoding preference for newly learned CC/NRPN step bindings: button, absolute encoder, two's complement encoder or offset-binary encoder. The saved semantic action SHALL retain that encoding; changing the UI preference SHALL not reinterpret existing bindings. Existing fixed-note/base/extra bindings SHALL retain their established semantics.
 

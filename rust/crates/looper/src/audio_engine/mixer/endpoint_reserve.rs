@@ -101,6 +101,7 @@ impl RtMixer {
         &self,
         work: &PitchActionWork,
         source: &NativeHistoryRequest,
+        projection_frames: u64,
     ) -> bool {
         if work.action.variant() != PitchActionVariant::SetRetrigger
             || work.preparation_mode() != PitchActionPreparationMode::Endpoint
@@ -117,7 +118,8 @@ impl RtMixer {
         if selected.id != guard.id || work.action.render() != self.ordinary_start_render(guard.id) {
             return false;
         }
-        let Ok(snapshot) = self.pitch_action_start_snapshot(work, guard.id) else {
+        let Ok(snapshot) = self.pitch_action_start_snapshot(work, guard.id, projection_frames)
+        else {
             return false;
         };
         let Some(permit) = work.capture_history_permit(&snapshot.sample, snapshot.sample_rate_hz)

@@ -196,7 +196,12 @@ impl PitchRuntime {
             retirement.retire_pitch_action(work);
             return;
         }
-        let required = match mixer.requires_pitch_action_preparation(&work) {
+        // Classify at the original possible effect, then keep the existing one-time
+        // preparation lead. Neither classification nor a cache hit may use the bank
+        // target in place of an active voice's still changing actual rate.
+        let provisional = execution_frame(work.action.original_due_frame(), callback, false);
+        let projection_frames = provisional - callback;
+        let required = match mixer.requires_pitch_action_preparation(&work, projection_frames) {
             Ok(required) => required,
             Err(reason) => {
                 work.action.reject(reason);
@@ -204,7 +209,10 @@ impl PitchRuntime {
                 return;
             }
         };
-        let hit = required && self.endpoint.ready_for_pitch(mixer, &work);
+        let hit = required
+            && self
+                .endpoint
+                .ready_for_pitch(mixer, &work, projection_frames);
         if !hit && !self.preparation.preparation_available() {
             work.action.reject(PitchActionReject::Capacity);
             retirement.retire_pitch_action(work);
