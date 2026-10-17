@@ -718,6 +718,48 @@ causality, realtime resources or product acceptance.
 - **THEN** even quadrature lags and the final tap SHALL remain exactly zero without a threshold
 - **AND** the unchanged tonal source SHALL exercise the joint phase action separately from the decimated impulse
 
+### Requirement: Symmetric Quadrature Is A Separate Signed-Support Experiment
+The offline comparison SHALL separately evaluate the antisymmetric mirror of the
+already fixed causal quadrature kernel. Positive taps and window SHALL remain
+unchanged, negative taps SHALL be their negative mirror and zero/even/final
+plus-or-minus1023 taps SHALL remain structurally zero. This new Qsym=x+i*(x*qs)
+SHALL NOT be described as the original complete513-band sum.
+
+The field SHALL retain its declared source origin -1023 and all positive and
+negative finite support. Complex sampling followed by the same single pooled
+phase action SHALL use the declared source coordinate and field origin.
+Source cues, fixture labels and measured targets SHALL NOT alter synthesis.
+All nominal silence, pre-event samples and complete tails SHALL be scored.
+A fitted delay, output crop or hidden causalizing shift SHALL NOT remove
+lookahead or retention failures. The1023-source-frame lookahead SHALL remain an
+explicit offline limitation, with no finite live-context or realtime acceptance.
+
+Existing immutable ownership, bounded-allocation preflight, work/range refusals
+and independent scalar controls SHALL be reused and extended to signed support.
+Controls SHALL independently check antisymmetric impulse taps, scalar two-sided
+convolution, whole phase/sampling, fractional identity, full capture bounds,
+caller mutation and actual resource refusals. There SHALL be no gain, window,
+weight, cutoff or fitted phase adjustment.
+
+The first comparison SHALL keep the same unchanged noise, impulse and
+mono900.37Hz sources and fifteen requests. The original target-blind15-cent,
+2-ms, prefix, peak, retention and complete-tail predicates SHALL remain.
+Finite-event measurements SHALL determine the result; marginal properness or
+an ensemble circularity argument SHALL NOT substitute for those measurements.
+The causal predecessor and all production paths SHALL retain their behavior.
+If the first comparison passes, the same frozen candidate SHALL be evaluated
+with the existing eighteen sources and four profiles, including the unchanged
+target-blind close-pair ranking, unrelated stereo and near-Nyquist input.
+Every requested full response and negative result SHALL remain visible; the
+comparison SHALL NOT invent an aliasing admission guard or claim realtime,
+finite-context, acoustic or product acceptance from the first fifteen passes.
+
+#### Scenario: Symmetric preparation generates pre-event quadrature
+- **GIVEN** the mirrored finite kernel can use future source samples
+- **WHEN** the joint phase action generates real PCM before the source event
+- **THEN** every generated pre-event sample SHALL remain in the original retention measurement
+- **AND** a failure SHALL remain negative evidence without a fitted delay or crop
+
 ### Requirement: Combined Pitch And Rate Bounds Are Never Silently Clipped
 The system SHALL validate and report the supported combined pitch/rate domain before accepting
 diagnostic transposition, retaining separate requested, pending, effective and rejected state.

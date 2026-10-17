@@ -76,6 +76,10 @@
   and the frozen noise/impulse/mono15-response comparison, without synthesis fitting.
   The candidate passes noise/+7 but is rejected by two remaining original noise timing
   failures; it does not replace the existing renderer or close product acceptance.
+- [x] Evaluate the fixed mirrored quadrature with explicit negative support/lookahead,
+  independent signed controls and the same fifteen complete responses without delay fitting.
+  All fifteen pass; the unchanged eighteen-by-four extension rejects the same candidate
+  with three percussion retention failures and21 tonal failures. No renderer is replaced.
 - [ ] Test all37 extras/base -5..+6/total -23..+24 at actual r(n), lockON h/r
   (~.132433..8 for r=.5..2), lockOFF h, original .25..4 corners and finite bounds
   without clipping; prove quality/RT/readiness/latency/finite context/unity transitions.

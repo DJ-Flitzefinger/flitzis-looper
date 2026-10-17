@@ -2818,6 +2818,106 @@ They are explicitly invoked offline diagnostics. No existing v10 renderer is
 replaced, and its baseline six timing failures remain. The new isolated/+7
 observation is not product, Native or Human acceptance.
 
+### Fixed Symmetric Quadrature With Joint Phase — 2026-10-17
+
+`scripts/pitch_symmetric_residual_phase.py` evaluates one separate offline source
+field. It mirrors the preceding fixed kernel antisymmetrically: qs[l]=q[l] for
+positive l, qs[-l]=-q[l], qs[0]=0. The positive taps and cosine window are
+unchanged; even taps and both final taps at +/-1023 are exactly zero. This is
+Qsym=x+i*(x*qs), **not** the original513-band bank sum. Forward and reversed
+calls to the unchanged causal preparation construct its complete convolution
+without FFT, source labels or fitted gain, cutoff, window, weight, phase or delay.
+
+The field has source origin -1023 and1023 source frames of lookahead. The same
+pooled elapsed phase and single complex-sampling/phase-action equation use
+u=r*(capture_origin+n)-field_origin. Nonempty nonzero input keeps
+origin=min(0,floor(-1024/r)+1), nominal=ceil(N/r) and
+retired=max(nominal,floor((last_nonzero+1023)/r)+1), using exact float-ratio
+integer arithmetic. Empty/silent input keeps the original nominal rule.
+Every negative coordinate, pre-event sample and positive tail is scored.
+Causalizing by1023/r would add511.5 output frames at r2; this delay is never
+hidden inside the unchanged96-frame timing limit. No live causality is claimed.
+
+Independent controls pass: exact antisymmetric kernel with1022 nonzero taps,
+two-sided scalar convolution error1.735e-17, three scalar phase/sampling errors
+at most6.939e-18, four fractional h=r identities exactly zero, nine signed
+capture cases, immutable backing/caller mutation and empty/silent sources.
+Five actual refusals cover a readonly2M-frame source, the reachable halved
+direct-convolution work cap, tiny/minimum-subnormal capture rates and phase-product
+overflow from a1e200 source. The conservative256MiB logical preflight includes
+both causal preparations and symmetric-copy overlap; it is not measured RSS.
+The direct-work source limit is491520 frames. Existing numeric cancellation,
+underflow fallback, aliasing and fractional-phase limitations remain explicit.
+
+The shared first-comparison runner preserves the preceding causal experiment:
+all22 JSON records, including15 profiles, are exactly equal after excluding
+only top-level elapsed_seconds. The causal scalar-render helper adds an optional
+field origin whose default remains zero. No existing renderer or scorer changes.
+
+The same fixed15 responses now all pass the original measured predicates in
+1.174 seconds after controls. Three unity and three full h=r2 captures are exact;
+all five mono tonal checks pass with maximum .001091cent. Noise offsets at r2
+are -7:[92,-49,8],0:[74,-4,10],+7:[95,-38,28],+12:[0,0,0] frames.
+The +7 q10 pass is narrow against the96-frame limit. Noise energies/source
+are .500037/.497865/.493622, against .500636 dry. Mono/+7's desired1349.0304Hz
+amplitude is .250014; the2252.4506Hz line falls to .0000103. Mono/k0's
+2701.1099Hz line falls to .00000882 beside the .250022 desired line. These
+observations support the quadrature hypothesis without proving general quality.
+
+Because the first comparison is useful, `--full` runs the existing18 sources
+and four unchanged profiles, including target-blind dense close-pair ranking
+and unrelated stereo. The terminal run renders all72 requests in3.498 seconds.
+All18 unity captures are exact; original metric, signed-coordinate and source
+spectral calibrations pass. The first wider invocation exposed a wrapper-only
+KeyError after28 profiles because paired-background controls were not shared;
+the wrapper now passes the same control dictionary across sources, as the
+original scorer requires. The complete rerun is terminal with empty stderr.
+Neither synthesis nor scoring predicates changed to resolve that wiring issue.
+
+The wider matrix **rejects** the frozen candidate. Three original8ms-percussion
+profiles fail the .1% isolated pre-event retention bound: fractions at -7/0/+7
+are .345071/.277508/.120553, despite q10/q50 offsets only[-14,-11],[-11,-9],
+[-6,-6] frames. No negative-time crop, amplitude threshold or fitted delay follows.
+Twenty-one tonal profiles fail15 cents:
+
+| Source | k=-7 max cents | k=0 max cents | k=+7 max cents |
+| --- | ---: | ---: | ---: |
+| Poly plus impulse | 1466.72 | 885.43 | 349.32 |
+| Running background | 1374.53 | 821.34 | 320.37 |
+| Independent900/1100 plus impulse | 536.15 | 289.21 | 102.31 |
+| Unseen427.43/1327.89 | 1962.46 | 175.49 | 2115.80 |
+| Close521.17/533.43 | 83.24 | 41.18 | 13.70, pass |
+| Independently gated371.39/1381.77 | 2274.61 | 939.43 | 4186.93 |
+| Unrelated stereo, left583.31 | 650.13 | 295.27 | 93.36 |
+| Near Nyquist19873.23 | .0000044, pass | .0000329, pass | 850.00 |
+
+The near-Nyquist/+7 request is rendered and aliases here; no new admission guard
+is invented. This differs from the baseline's explicit refusal of that request.
+Of36 tonal measurements,15 pass and21 fail. All three noise comparisons and
+all close-pair timing predicates pass, but these are not tonal acceptance.
+Proportional sources retain exact R=.5L. The unrelated source has no such
+required relation; its observed R-.5L error is not a stereo-corruption verdict.
+Busy-background comparisons remain nonisolated: tonal-attack pre-event output
+differences reach .000540/.000380/.000660, and they certify no isolated retention.
+
+There is also an algebraic limitation even for ideal quadrature. A single phase
+factor preserves the sampled whole-mixture complex magnitude and stereo Gram
+matrix pointwise. For ideal z(s)=exp(i*w1*s)*(1+epsilon*exp(i*dw*s)), small positive
+epsilon, and k=h/r, its first-order action is
+exp(i*k*w1*s)*[1+epsilon*(1+k)/2*exp(i*dw*s)+epsilon*(1-k)/2*exp(-i*dw*s)].
+At s=r*t the sidebands are h*f1 +/- r*df, while independently transposed tones
+require h*f1 and h*f1+h*df. Symmetry cannot fix that whole-mixture phase limit.
+This is an ideal-case structural argument, not a fit or a proof assigning every
+finite fixture failure to one cause; finite filtering and interpolation add risks.
+
+Reproduce the controls with
+`uv run --no-sync python -B scripts/pitch_symmetric_residual_phase_controls.py`,
+the frozen15 with `uv run --no-sync python -B scripts/pitch_symmetric_residual_phase_probe.py`,
+and the unchanged18x4 extension with the same probe's `--full` option.
+No parameter search or further matrix follows this rejection. Production/API,
+the v10 baseline and its six timing failures remain unchanged; finite live
+context, continuous maps, Native/RT/resources and Human acceptance remain open.
+
 ### Public Exact-Model Complex-Gauge Bound — 2026-10-17
 
 `uv run --no-sync python scripts/pitch_finite_am_gauge_controls.py` evaluates a

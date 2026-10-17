@@ -13,11 +13,11 @@ from pitch_overlap_probe import metric_controls, profile
 PROFILES = ((1, 0), (2, -7), (2, 0), (2, 7), (2, 12))
 
 
-def _run_source(fixture, negatives: dict) -> None:
+def _run_source(fixture, negatives: dict, prepare_source, render_source, stage_prefix: str) -> None:
     started = time.perf_counter()
-    prepared = prepare(fixture.source)
+    prepared = prepare_source(fixture.source)
     emit({
-        "stage": "joint_residual_source_preparation",
+        "stage": f"{stage_prefix.removesuffix('_phase')}_source_preparation",
         "fixture": fixture.name,
         "elapsed_seconds": time.perf_counter() - started,
         **prepared.report,
@@ -25,7 +25,7 @@ def _run_source(fixture, negatives: dict) -> None:
 
     @lru_cache(maxsize=1)
     def render_intent(rate: float, semitones: int) -> tuple[np.ndarray, dict]:
-        return render_prepared(prepared, rate, semitones)
+        return render_source(prepared, rate, semitones)
 
     def whole_renderer(source: np.ndarray, rate: float, semitones: int) -> tuple[np.ndarray, dict]:
         assert np.array_equal(source, prepared.source)
@@ -49,11 +49,18 @@ def _run_source(fixture, negatives: dict) -> None:
             negatives["tonal"].append([fixture.name, rate, semitones])
 
 
-def main() -> None:
-    """Run the declared controls and exactly the first fifteen complete responses."""
+def run_comparison(
+    *,
+    prepare_source=prepare,
+    render_source=render_prepared,
+    controls=integrity_controls,
+    stage_prefix: str = "joint_residual_phase",
+    field_equation: str = "Q=sum_all_bands_and_segments",
+) -> None:
+    """Score the same frozen fifteen requests for a declared source-field experiment."""
     emit({
-        "stage": "joint_residual_phase_contract",
-        "equation": "Re(L(Q,s)*exp(i*(h/r-1)*L(Psi,s))); Q=sum_all_bands_and_segments",
+        "stage": f"{stage_prefix}_contract",
+        "equation": f"Re(L(Q,s)*exp(i*(h/r-1)*L(Psi,s))); {field_equation}",
         "global_pooled_phase_reference_omega": 0,
         "source_cue_phase_resets_used": False,
         "kernel_structural_zero_threshold": None,
@@ -61,7 +68,7 @@ def main() -> None:
         "original_sources_targets_and_acoustic_criteria_unchanged": True,
         "native_or_product_acceptance": False,
     })
-    emit(integrity_controls())
+    emit(controls())
     emit(metric_controls())
     selected = {"impulse", "mono_900.37", "unseen_noise"}
     negatives = {"timing": [], "tonal": []}
@@ -70,11 +77,11 @@ def main() -> None:
     for fixture in cases():
         if fixture.name in selected:
             found.append(fixture.name)
-            _run_source(fixture, negatives)
+            _run_source(fixture, negatives, prepare_source, render_source, stage_prefix)
     assert set(found) == selected
     assert len(found) == 3
     emit({
-        "stage": "joint_residual_phase_summary",
+        "stage": f"{stage_prefix}_summary",
         "negatives": negatives,
         "first_fifteen_complete_responses_passed": not any(negatives.values()),
         "source_count": len(found),
@@ -82,6 +89,11 @@ def main() -> None:
         "elapsed_seconds": time.perf_counter() - started,
         "full_product_gate_closed": False,
     })
+
+
+def main() -> None:
+    """Run the causal experiment with the original frozen requests and scorer."""
+    run_comparison()
 
 
 if __name__ == "__main__":

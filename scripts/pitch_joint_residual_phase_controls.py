@@ -77,12 +77,12 @@ def _sample(values: np.ndarray, position: float) -> complex:
 
 
 def _scalar_render(
-    field: np.ndarray, rate: float, shift: float, origin: int, count: int
+    field: np.ndarray, rate: float, shift: float, origin: int, count: int, field_origin: int = 0
 ) -> np.ndarray:
     elapsed = _scalar_phase(field)
     result = np.zeros((count, 2))
     for frame in range(count):
-        position = rate * (origin + frame)
+        position = rate * (origin + frame) - field_origin
         phase = _sample(elapsed, position).real
         correction = cmath.exp(1.0j * (shift / rate - 1) * phase)
         for channel in (0, 1):
