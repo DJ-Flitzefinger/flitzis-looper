@@ -118,6 +118,14 @@ identity; removal/reassignment/overwrite SHALL fence its old lifetime.
 - **AND** C's fresh original action SHALL adopt its own nonneutral selected-source Native and actual wet output
 - **AND** if a later launch or cancellation invalidates a mode receipt, that stale receipt SHALL NOT substitute for C's own current effective-mode acknowledgement
 
+#### Scenario: Stop cancels a prepared selected replacement attack
+- **GIVEN** occupied Copy has produced stopped selected C with its own accepted component receipt while nonneutral selected A continues independently
+- **WHEN** a future original C pitch retrigger is prepared and public pad Stop or targeted launch cancellation revokes it before its frozen effect frame
+- **THEN** the original action SHALL terminate as launch-cancelled without attacking or changing C's copied pitch, content lifetime or source assignment
+- **AND** its captured identity, timestamp and original due and execution frames SHALL remain unchanged
+- **AND** C's old component receipt SHALL lose current effective authority while A retains its own launch revision, readers, Native, PCM, FIFO and source chronology
+- **AND** a later fresh C input SHALL obtain current own component readiness and adopt its own selected-source Native through the existing scheduler, without reviving the cancelled action or stale receipt
+
 #### Scenario: Original pitch worker prepares before the Pair control mirror
 - **GIVEN** A owns an admitted nonneutral pitch retrigger with its original content lifetime, timestamp, numeric tuple, T and frozen E
 - **WHEN** a real Move or Swap publishes before that same action reaches its preparation worker and the Pair control mirror remains pending

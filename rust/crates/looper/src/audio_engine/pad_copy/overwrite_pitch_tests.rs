@@ -447,6 +447,10 @@ fn current_wet_ready(fixture: &PitchFixture, id: usize) -> bool {
 }
 
 fn run_case(order: Order, lock: bool, selected: bool) {
+    run_case_with_cancellation(order, lock, selected, None);
+}
+
+fn run_case_with_cancellation(order: Order, lock: bool, selected: bool, cancel_only: Option<bool>) {
     let mut actual = if selected {
         PitchFixture::new_selected(lock)
     } else {
@@ -617,7 +621,7 @@ fn run_case(order: Order, lock: bool, selected: bool) {
     });
     actual.copy.callback.drain();
     actual.settle(&replacement);
-    actual.copy.with_engine(|engine| {
+    let copied_assignment = actual.copy.with_engine(|engine| {
         let leases = engine.cold_leases.lock().unwrap();
         assert_eq!(
             leases[0].as_ref().unwrap().assignment_id(),
@@ -626,6 +630,7 @@ fn run_case(order: Order, lock: bool, selected: bool) {
         let copied_assignment = leases[TARGET].as_ref().unwrap().assignment_id();
         assert_ne!(copied_assignment, source_assignment);
         assert_ne!(copied_assignment, old_assignment);
+        copied_assignment.to_owned()
     });
     assert_eq!(actual.copy.callback.frame, capture_frame);
     if let Some(selection) = &old_selection {
@@ -635,7 +640,7 @@ fn run_case(order: Order, lock: bool, selected: bool) {
         assert!(!mode.is_current());
     }
     let new_selection = replacement.committed_stem_ticket().unwrap();
-    let stopped_mode = if let Some(selection) = &new_selection {
+    let mut stopped_mode = if let Some(selection) = &new_selection {
         let mode = actual.components(selection, 15);
         assert_eq!(mode.effective_mode_status(), "waiting");
         assert_selected_view(&actual, TARGET, selection, 15, false);
@@ -784,7 +789,162 @@ fn run_case(order: Order, lock: bool, selected: bool) {
     assert_eq!(action.original_due_frame(), original_e);
     assert!(actual.copy.callback.scheduler.is_empty());
 
+    let cancelled_mode = cancel_only.map(|cancel_only| {
+        let selection = new_selection.as_ref().unwrap();
+        let due = (actual.copy.callback.frame / 24_000 + 2) * 24_000;
+        while actual.copy.callback.frame < due - 6_000 {
+            let frames = (due - 6_000 - actual.copy.callback.frame).min(257) as usize;
+            assert_eq!(
+                actual.copy.callback.render(frames),
+                reference.copy.callback.render(frames)
+            );
+            assert_source_chronology(&actual, &reference);
+        }
+        let pending = actual.capture(TARGET, "pitch.note:0:set_retrigger", true);
+        let captured = (
+            pending.sequence(),
+            pending.content_key(),
+            pending.received_timestamp(),
+        );
+        assert_eq!(pending.content_key(), new_key);
+        assert_eq!(pending.render().pitch, PitchIntent::new(0, -5).unwrap());
+        assert_eq!(pending.original_due_frame(), due);
+        actual.publish(&pending);
+        actual.wait_ready(&pending);
+        assert_eq!(pending.execution_target(), due);
+        let revisions = actual.copy.with_engine(|engine| {
+            let ownership = &engine.input_runtime_ownership;
+            let before = (
+                ownership.launch_revision(0),
+                ownership.launch_revision(TARGET),
+            );
+            if cancel_only {
+                // Pending-only attacks may not yet count as admitted active pads.
+                // The public operation must revoke them regardless of its bool.
+                engine.cancel_pad_launches(TARGET).unwrap();
+            } else {
+                engine.stop_sample(TARGET).unwrap();
+            }
+            let ownership = &engine.input_runtime_ownership;
+            assert_eq!(ownership.launch_revision(0), before.0);
+            assert!(ownership.launch_revision(TARGET) > before.1);
+            let leases = engine.cold_leases.lock().unwrap();
+            assert_eq!(
+                leases[0].as_ref().unwrap().assignment_id(),
+                source_assignment
+            );
+            assert_eq!(
+                leases[TARGET].as_ref().unwrap().assignment_id(),
+                copied_assignment
+            );
+            before
+        });
+        actual.copy.callback.drain();
+        let obsolete = stopped_mode.take().unwrap();
+        assert!(!obsolete.is_current());
+        assert_eq!(obsolete.effective_mode_status(), "rejected");
+        assert!(selection.is_current());
+        let endpoint = due + 8193;
+        for frames in [1, 127, 257, 509].into_iter().cycle() {
+            if actual.copy.callback.frame >= endpoint {
+                break;
+            }
+            assert_eq!(
+                actual.copy.callback.render(frames),
+                reference.copy.callback.render(frames),
+                "cancel_only={cancel_only} lock={lock}"
+            );
+            assert_source_chronology(&actual, &reference);
+            assert_selected_view(&actual, 0, actual.selected.as_ref().unwrap(), 15, true);
+            assert_eq!(actual.copy.callback.feedback.starts, starts_before);
+            assert_eq!(actual.copy.source_voice().generation, source_generation);
+            assert_eq!(
+                actual.copy.source_voice().stretch.native_state_address(),
+                source_native
+            );
+            assert_eq!(
+                actual.copy.source_voice().stretch.adopted_request_id(),
+                source_adopted
+            );
+            assert_eq!(
+                actual.copy.callback.mixer.pad_pitch_intent(TARGET),
+                Some(copied_pitch())
+            );
+            assert!(
+                !actual
+                    .copy
+                    .callback
+                    .mixer
+                    .voices
+                    .iter()
+                    .any(|voice| voice.is_playing_sample(TARGET))
+            );
+        }
+        assert_eq!(pending.state(), "rejected");
+        assert_eq!(pending.reason(), Some("launch_cancelled"));
+        assert!(!pending.effective());
+        assert_eq!(
+            (
+                pending.sequence(),
+                pending.content_key(),
+                pending.received_timestamp()
+            ),
+            captured
+        );
+        assert_eq!(pending.original_due_frame(), due);
+        assert_eq!(pending.execution_target(), due);
+        assert!(actual.copy.callback.scheduler.is_empty());
+        actual.copy.with_engine(|engine| {
+            assert_eq!(
+                engine.input_runtime_ownership.launch_revision(0),
+                revisions.0
+            );
+            let binding = engine
+                .current_input_runtime_pad_binding(TARGET)
+                .unwrap()
+                .unwrap();
+            assert_eq!(
+                binding.binding.placement.unwrap().content_key(),
+                Some(new_key)
+            );
+            let cache = engine.resident_stem_cache.lock().unwrap();
+            assert!(Arc::ptr_eq(
+                &cache[0]
+                    .accepted
+                    .as_ref()
+                    .unwrap()
+                    .pair
+                    .as_ref()
+                    .unwrap()
+                    .reader,
+                source_reader.as_ref().unwrap()
+            ));
+        });
+        for (current, original) in actual.copy.callback.mixer.stems_for_measurement()[0]
+            .as_ref()
+            .unwrap()
+            .stems
+            .iter()
+            .zip(source_components.as_ref().unwrap())
+        {
+            assert!(Arc::ptr_eq(&current.samples, &original.samples));
+            assert!(Arc::ptr_eq(
+                &current.residency.as_ref().unwrap().source,
+                &original.residency.as_ref().unwrap().source
+            ));
+        }
+        let renewed = actual.components(selection, 15);
+        assert!(renewed.is_current());
+        assert_eq!(renewed.effective_mode_status(), "waiting");
+        assert!(!obsolete.is_current());
+        stopped_mode = Some(renewed);
+        (obsolete, pending)
+    });
+
     let fresh = actual.capture(TARGET, "pitch.extra.step:1:set_retrigger", false);
+    if let Some((_, cancelled)) = &cancelled_mode {
+        assert_ne!(fresh.sequence(), cancelled.sequence());
+    }
     assert_eq!(fresh.content_key(), new_key);
     assert_ne!(fresh.content_key(), original.1);
     assert_eq!(fresh.render().pitch, PitchIntent::new(12, -4).unwrap());
@@ -863,9 +1023,40 @@ fn run_case(order: Order, lock: bool, selected: bool) {
         }
         assert_selected_view(&actual, TARGET, selection, 15, true);
     }
+    if let Some((obsolete, cancelled)) = &cancelled_mode {
+        assert!(!obsolete.is_current());
+        assert_eq!(obsolete.effective_mode_status(), "rejected");
+        assert_eq!(cancelled.state(), "rejected");
+        assert_eq!(cancelled.reason(), Some("launch_cancelled"));
+        assert!(!cancelled.effective());
+    }
     assert_eq!(
         actual.copy.source_voice().stretch.native_state_address(),
         source_native
+    );
+}
+
+#[test]
+fn selected_copy_public_stop_cancels_prepared_pitch_and_renews_own_mode() {
+    isolated(
+        "overwrite_pitch_tests::selected_copy_public_stop_cancels_prepared_pitch_and_renews_own_mode",
+        || {
+            for lock in [false, true] {
+                run_case_with_cancellation(Order::Prepared, lock, true, Some(false));
+            }
+        },
+    );
+}
+
+#[test]
+fn selected_copy_targeted_cancel_fences_prepared_pitch_and_preserves_source() {
+    isolated(
+        "overwrite_pitch_tests::selected_copy_targeted_cancel_fences_prepared_pitch_and_preserves_source",
+        || {
+            for lock in [false, true] {
+                run_case_with_cancellation(Order::Prepared, lock, true, Some(true));
+            }
+        },
     );
 }
 

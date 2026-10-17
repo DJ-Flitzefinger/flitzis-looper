@@ -107,8 +107,22 @@ established before the Copy comparison, not asserted at the first attack sample.
 Mask 15 sums to the canonical FullMix source in this fixture. Selection/demand,
 real component owners, distinct mask 5 and actual Native-source matching therefore
 supplement PCM equality; this is not an independent acoustic masking oracle.
-Cancellation-negative profiles, broader selection/Hold matrices, complete R2,
-DSP quality, resource, device, musical and Human acceptance remain open.
+Four further profiles compose stopped selected C with a genuinely prepared future
+pitch retrigger, then call public pad Stop or targeted launch cancellation in both
+Key Lock modes. These operations advance C's cancellation revision without changing
+its content lifetime or source assignment. The original action retains its capture
+and frozen T/E and terminates `launch_cancelled`; it neither starts C nor changes
+its copied pitch. C's old component receipt loses current/effective authority,
+while the selection registration itself stays current. A keeps its revision,
+readers, component owners and living Native and matches independent reference PCM,
+FIFO and source/DSP history across the original effect frame and another lead.
+
+A fresh component receipt is accepted/current but waiting while C remains stopped.
+Fresh C input then adopts its own selected-source Native and current wet mode; the
+old action and receipt stay rejected. Targeted cancellation here concerns a stopped
+pad with a pending-only attack; it does not replace the ordered Stop required for
+an already living voice. Broader selection/Hold/cancellation matrices, complete
+R2, DSP quality, resource, device, musical and Human acceptance remain open.
 
 ## Durable intent and the snapshot
 

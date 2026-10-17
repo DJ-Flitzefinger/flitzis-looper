@@ -41,6 +41,13 @@ not replace the full milestone or close any parent, DSP-quality or Human gate.
   distinct A/B/C assignments. Keep acoustic masking, cancellation-negative,
   complete R2, resource and Human acceptance separate.
 
+- [x] Compose selected replacement C's prepared future pitch with real public
+  pad Stop and targeted launch cancellation in both Key Lock modes. Require
+  launch-cancelled original ownership, invalidated old component authority,
+  unchanged C content/assignment and copied pitch, independently continuing A,
+  and fresh own C readiness/adoption. Broader selection/Hold/cancellation matrices
+  and acoustic/resource/Human/parent acceptance remain open.
+
 The Human prioritizes a complete, testable Key + Transposition / playable keyboard /
 MIDI SET and SET_RETRIGGER product milestone before bank, bulk and RECORD delivery.
 Finish the current Controller/Durable/Hold block first. Close the actual remaining
