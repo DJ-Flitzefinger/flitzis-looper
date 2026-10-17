@@ -165,6 +165,13 @@ def render_piano_keyboard(
                     hovered=item is hovered,
                     known_source=source_root is not None,
                 )
+    _draw_piano_range_feedback(
+        source_root=source_root,
+        selected_shift=selected_shift,
+        origin=(origin.x, origin.y),
+        width=width,
+        height=height,
+    )
     if hovered is not None:
         description = hovered.key.label.replace("\n", " Â· ")
         if source_root is not None:
@@ -177,6 +184,43 @@ def render_piano_keyboard(
         if imgui.is_mouse_clicked(imgui.MouseButton_.left):
             return hovered.key.value
     return None
+
+
+def _draw_piano_range_feedback(
+    *,
+    source_root: int | None,
+    selected_shift: int,
+    origin: tuple[float, float],
+    width: float,
+    height: float,
+) -> None:
+    """Keep an undisplayed exact selection visible without changing piano bounds."""
+    selected_index = 12 + (source_root if source_root is not None else 0) + selected_shift
+    if 0 <= selected_index < 36:
+        return
+    direction = "below" if selected_index < 0 else "above"
+    note = _ROOT_NAMES[selected_index % 12] if source_root is not None else "relative note"
+    description = (
+        f"Selected: {note} | {selected_shift:+d} st | "
+        f"{selected_index // 12 - 1:+d} octave | {direction} displayed range"
+    )
+    size = imgui.calc_text_size(description)
+    scale = min(1.0, max(0.0, width - 16.0) / size.x, max(0.0, height - 8.0) / size.y)
+    position = (origin[0] + (width - size.x * scale) / 2.0, origin[1] + 4.0)
+    draw = imgui.get_window_draw_list()
+    draw.add_rect_filled(
+        (position[0] - 4.0, position[1] - 2.0),
+        (position[0] + size.x * scale + 4.0, position[1] + size.y * scale + 2.0),
+        imgui.get_color_u32((0.09, 0.10, 0.12, 0.96)),
+        rounding=2.0,
+    )
+    draw.add_text(
+        imgui.get_font(),
+        imgui.get_font_size() * scale,
+        position,
+        imgui.get_color_u32((0.88, 0.92, 0.97, 1.0)),
+        description,
+    )
 
 
 def _draw_piano_key(

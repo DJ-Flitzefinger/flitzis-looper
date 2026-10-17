@@ -1,7 +1,7 @@
 """Actual central piano mouse frames; only Native admission is a control-flow fake."""
 
 from dataclasses import dataclass, field
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, cast
 
 import pytest
 from imgui_bundle import imgui
@@ -20,6 +20,7 @@ from tests.flitzis_looper.controller.transport.test_pitch_actions import (
 from tests.flitzis_looper.ui.test_key_lock_render import _imgui_context
 
 if TYPE_CHECKING:
+    from collections.abc import Callable
     from unittest.mock import Mock
 
     from flitzis_looper.controller import AppController
@@ -104,6 +105,38 @@ class _Frame:
     piano_items: int = 0
     horizontal_scroll: float = 0.0
     central_content_top: float = 0.0
+    piano_feedback: list[tuple[str, _Rect, int]] = field(default_factory=list)
+
+
+class _DrawListObserver:
+    """Forward every draw operation and retain actual range-feedback text bounds."""
+
+    def __init__(self, native: imgui.ImDrawList, frame: _Frame) -> None:
+        self.native = native
+        self.frame = frame
+
+    def __getattr__(self, name: str) -> object:
+        return cast("object", getattr(self.native, name))
+
+    def add_text(self, *args: object, **kwargs: object) -> None:
+        before = len(self.native.vtx_buffer)
+        cast("Callable[..., None]", self.native.add_text)(*args, **kwargs)
+        if len(args) != 5 or not isinstance(args[4], str) or not args[4].startswith("Selected:"):
+            return
+        value = args[4]
+        position = cast("tuple[float, float]", args[2])
+        scale = cast("float", args[1]) / imgui.get_font_size()
+        size = imgui.calc_text_size(value)
+        self.frame.piano_feedback.append((
+            value,
+            _Rect(
+                position[0],
+                position[1],
+                position[0] + size.x * scale,
+                position[1] + size.y * scale,
+            ),
+            len(self.native.vtx_buffer) - before,
+        ))
 
 
 def _resolve_capture(
@@ -168,12 +201,20 @@ class _PitchRender:
         self._native_begin_child = imgui.begin_child
         self._native_text_wrapped = imgui.text_wrapped
         self._native_text_colored = imgui.text_colored
+        self._native_get_window_draw_list = imgui.get_window_draw_list
         monkeypatch.setattr(imgui, "button", self._button)
         monkeypatch.setattr(imgui, "checkbox", self._checkbox)
         monkeypatch.setattr(imgui, "invisible_button", self._invisible_button)
         monkeypatch.setattr(imgui, "begin_child", self._begin_child)
         monkeypatch.setattr(imgui, "text_wrapped", self._text_wrapped)
         monkeypatch.setattr(imgui, "text_colored", self._text_colored)
+        monkeypatch.setattr(imgui, "get_window_draw_list", self._get_window_draw_list)
+
+    def _get_window_draw_list(self) -> imgui.ImDrawList:
+        return cast(
+            "imgui.ImDrawList",
+            _DrawListObserver(self._native_get_window_draw_list(), self.observed),
+        )
 
     def _record_control(self, label: str) -> None:
         identifier = label.partition("##")[2] or label
@@ -567,3 +608,138 @@ def test_actual_corrected_reference_plays_labelled_notes_and_retains_detected_or
     audio_engine_mock.capture_pad_pitch_action.assert_called_once_with(
         0, "pitch.note:-2:set", received_at_ns=123
     )
+
+
+def _assert_range_feedback(frame: _Frame, description: str) -> None:
+    assert frame.piano is not None
+    assert len(frame.piano.keys) == 36
+    assert not frame.piano.marker_vertices(_SELECTED_RGBA)
+    assert len(frame.piano_feedback) == 1
+    text, rectangle, vertex_count = frame.piano_feedback[0]
+    assert text == description
+    assert vertex_count > 0
+    assert frame.piano.bounds.contains(rectangle.left, rectangle.top)
+    assert frame.piano.bounds.contains(rectangle.right, rectangle.bottom)
+    assert frame.piano_items == 1
+    assert frame.horizontal_scroll == 0.0
+
+
+@pytest.mark.parametrize(
+    ("source", "shift", "description"),
+    [
+        ("C", -23, "Selected: C# | -23 st | -2 octave | below displayed range"),
+        ("B", 23, "Selected: A# | +23 st | +2 octave | above displayed range"),
+        (None, -23, "Selected: relative note | -23 st | -2 octave | below displayed range"),
+        (
+            "unrecognized",
+            -13,
+            "Selected: relative note | -13 st | -2 octave | below displayed range",
+        ),
+    ],
+)
+def test_restored_undisplayed_note_renders_exact_relative_octave_without_folded_marker(
+    pitch_render: _PitchRender,
+    audio_engine_mock: Mock,
+    source: str | None,
+    shift: int,
+    description: str,
+) -> None:
+    pitch_render.controller.project.pad_key_intent[0] = PadKeyIntent(
+        source=SourceKeyVersion(raw_key=source) if source is not None else None,
+        base_shift=shift,
+    )
+    with _imgui_context():
+        frame = pitch_render.open()
+        _assert_range_feedback(frame, description)
+        assert frame.piano is not None
+        assert shift not in frame.piano.keys
+        if source in {None, "unrecognized"}:
+            assert not frame.piano.marker_vertices(_ORIGINAL_RGBA)
+    assert pitch_render.controller.project.pad_key_intent[0].base_shift == shift
+    audio_engine_mock.capture_pad_pitch_action.assert_not_called()
+    audio_engine_mock.capture_selected_pitch_action.assert_not_called()
+    audio_engine_mock.publish_pitch_action.assert_not_called()
+
+
+@pytest.mark.parametrize("central_width", [620.0, 1000.0])
+@pytest.mark.parametrize(
+    ("source", "shift", "description"),
+    [
+        ("C", -13, "Selected: B | -13 st | -2 octave | below displayed range"),
+        ("B", 13, "Selected: C | +13 st | +2 octave | above displayed range"),
+        (None, -13, "Selected: relative note | -13 st | -2 octave | below displayed range"),
+    ],
+)
+def test_midi_undisplayed_note_preserves_receipt_and_pad_return_then_restores_in_range_marker(
+    pitch_render: _PitchRender,
+    audio_engine_mock: Mock,
+    central_width: float,
+    source: str | None,
+    shift: int,
+    description: str,
+) -> None:
+    controller = pitch_render.controller
+    controller.project.pad_key_intent[0] = PadKeyIntent(
+        source=SourceKeyVersion(raw_key=source) if source is not None else None
+    )
+    controller.input_mapping.set_enabled(enabled=True)
+    pitch_render.central_width = central_width
+    original = _CapturedPitch(1, base_shift=shift, extra_shift=0, received_at_ns=777)
+    event: dict[str, object] = {
+        "source": "midi",
+        "binding_key": "midi:note:1:60",
+        "action_key": f"pitch.note:{shift}:set",
+        "value": 100,
+        "captured_pitch": _as_native(original),
+        "received_at_ns": 777,
+        "direct": True,
+        "dispatched": False,
+    }
+    with _imgui_context():
+        frame = pitch_render.open()
+        assert frame.piano is not None
+        frame.piano.assert_markers(0, original_value=0 if source is not None else None)
+        bounds, grid = frame.piano.bounds, frame.children["pad_grid"]
+        controller.input_mapping._handle_rust_input_event(event)
+        controller.input_mapping._handle_rust_input_event(event | {"value": 0})
+        frame = pitch_render.frame()
+        _assert_range_feedback(frame, description)
+        assert controller.project.pad_key_intent[0].base_shift == shift
+        audio_engine_mock.publish_pitch_action.assert_called_once_with(original)
+        assert original.received_at_ns == 777
+        pitch_render.ctx.ui.select_pad(1)
+        frame = pitch_render.frame()
+        assert frame.piano is not None
+        frame.piano.assert_markers(-2)
+        assert not frame.piano_feedback
+        assert frame.piano.bounds == bounds
+        assert frame.children["pad_grid"] == grid
+        pitch_render.ctx.ui.select_pad(0)
+        frame = pitch_render.frame()
+        _assert_range_feedback(frame, description)
+        assert frame.piano is not None
+        assert frame.piano.bounds == bounds
+        assert frame.children["pad_grid"] == grid
+        assert pitch_render.ctx.state.pitch_menus.base_open
+        in_range = _CapturedPitch(2, base_shift=0, extra_shift=0, received_at_ns=888)
+        controller.input_mapping._handle_rust_input_event(
+            event
+            | {
+                "action_key": "pitch.note:0:set",
+                "captured_pitch": _as_native(in_range),
+                "received_at_ns": 888,
+            }
+        )
+        frame = pitch_render.frame()
+        assert frame.piano is not None
+        frame.piano.assert_markers(0, original_value=0 if source is not None else None)
+        assert not frame.piano_feedback
+        assert frame.piano.bounds == bounds
+        assert frame.children["pad_grid"] == grid
+    assert [call.args[0] for call in audio_engine_mock.publish_pitch_action.call_args_list] == [
+        original,
+        in_range,
+    ]
+    assert controller.project.pad_key_intent[0].base_shift == 0
+    audio_engine_mock.capture_pad_pitch_action.assert_not_called()
+    audio_engine_mock.capture_selected_pitch_action.assert_not_called()

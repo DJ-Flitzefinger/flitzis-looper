@@ -5,6 +5,7 @@
 //! waits for workers; this proves no CPAL device, listening or performer deadline.
 
 use super::*;
+use crate::audio_engine::pitch_actions::PitchActionVariant;
 use pyo3::prelude::*;
 use pyo3::types::PyModule;
 use std::ffi::CString;
@@ -12,14 +13,18 @@ use std::ffi::CString;
 static MOUSE_CONTEXT: Mutex<()> = Mutex::new(());
 const PROBE: &str = r#"
 from contextlib import ExitStack
+from pathlib import Path
+from time import monotonic, sleep
 from unittest.mock import patch
 
 from imgui_bundle import imgui
 
 from flitzis_looper.controller.transport import TransportController
 from flitzis_looper.input_mapping.bindings import KeyboardBinding
+from flitzis_looper.input_mapping.actions import LooperAction
 from flitzis_looper.input_mapping.controller import InputMappingController
-from flitzis_looper.input_mapping.storage import KeyboardMappingFile, MidiMappingFile
+from flitzis_looper.input_mapping.storage import (
+    KeyboardMappingFile, MidiMappingFile, load_midi_mapping_file, save_midi_mapping_file)
 from flitzis_looper.key_intent import MusicalKey, PadKeyIntent, SourceKeyVersion
 from flitzis_looper.models import PadContentIdentity, ProjectState, SessionState
 from flitzis_looper.ui.context import UiContext
@@ -27,7 +32,7 @@ from flitzis_looper.ui.render.pitch_keyboard import piano_geometry, render_piano
 
 
 class PianoProbe:
-    def __init__(self, audio, lock):
+    def __init__(self, audio, lock, mapping_path=None):
         self._audio = audio
         self.project = ProjectState()
         self.project.input_mapping_enabled = False
@@ -49,9 +54,18 @@ class PianoProbe:
             self.project.pad_loop_end_s[slot] = 2.1
         self.transport = TransportController(self.project, self.session, audio)
         self.storage = ExitStack()
-        self.storage.enter_context(patch(
-            "flitzis_looper.input_mapping.controller.load_midi_mapping_file",
-            return_value=MidiMappingFile()))
+        if mapping_path is None:
+            self.storage.enter_context(patch(
+                "flitzis_looper.input_mapping.controller.load_midi_mapping_file",
+                return_value=MidiMappingFile()))
+        else:
+            self.mapping_path = Path(mapping_path)
+            self.storage.enter_context(patch(
+                "flitzis_looper.input_mapping.controller.load_midi_mapping_file",
+                side_effect=lambda: load_midi_mapping_file(self.mapping_path)))
+            self.storage.enter_context(patch(
+                "flitzis_looper.input_mapping.controller.save_midi_mapping_file",
+                side_effect=lambda data: save_midi_mapping_file(data, self.mapping_path)))
         self.storage.enter_context(patch(
             "flitzis_looper.input_mapping.controller.load_keyboard_mapping_file",
             return_value=KeyboardMappingFile()))
@@ -168,6 +182,116 @@ class PianoProbe:
         assert self.project.pad_key_intent[0].base_shift == 1
         assert not self.transport.pitch._owners
 
+    def select_pad(self, slot, *, native_selection_already_applied=False,
+                   expected_native_selection_revision=None):
+        assert native_selection_already_applied
+        if self._audio.input_selected_projection() == (expected_native_selection_revision, slot):
+            self.project.selected_pad = slot
+
+    def begin_encoder_learn(self):
+        # Exercise Learn without opening an actual MIDI port or audio device.
+        self.project.input_mapping_enabled = True
+        self._audio.set_input_mapping_enabled(True)
+        self.input_mapping.toggle_learn()
+        assert self.session.input_learn_active
+
+    def finish_encoder_learn(self, number, mode, piano, retrigger):
+        deadline = monotonic() + 2
+        while self.session.input_learn_pending_binding_key is None:
+            self.input_mapping._poll_rust_input_events()
+            assert monotonic() < deadline, "actual CC Learn input did not arrive"
+            sleep(0.001)
+        assert self.session.input_learn_pending_binding_key == f"midi:cc:1:{number}"
+        self.ctx.ui.set_pitch_cc_mode(mode)
+        self.ctx.audio.pads.step_pitch(
+            0, 1, piano=piano, retrigger=retrigger,
+            cc_mode=self.ctx.state.pitch_menus.midi_cc_mode)
+        assert not self.session.input_learn_active
+        assert not self.transport.pitch._owners
+
+    def restore_encoder_learn(self):
+        for slot in (0, 1):
+            # Both GUI preferences deliberately disagree with their stored lane:
+            # piano learned SET, offset learned SET_RETRIGGER.
+            self.ctx.audio.pads.set_pitch_retrigger_intent(slot, enabled=True)
+            self.ctx.audio.pads.set_extra_retrigger_intent(slot, enabled=False)
+        self.ctx.ui.set_pitch_cc_mode("button")
+        for number, slot in ((40, 0), (41, 1)):
+            self.input_mapping.save_mapping(
+                "midi", f"midi:note:1:{number}", LooperAction(key=f"ui.select_pad:{slot}"))
+        self.saved = self.mapping_path.read_bytes()
+        # New production controller, real JSON/Pydantic load, no retained mapping object.
+        self.input_mapping = InputMappingController(self)
+        assert len(self.input_mapping._midi.mappings) == 10
+        assert self.input_mapping._midi == load_midi_mapping_file(self.mapping_path)
+        self.input_mapping._sync_rust_mapping_snapshot()
+        self.input_mapping._sync_rust_learn_state()
+        self.input_mapping.refresh_pitch_runtime_state()
+        assert self.mapping_path.read_bytes() == self.saved
+        assert not self.transport.pitch._owners
+
+    def configure_encoder_timing(self, quantize, sync):
+        self.project.trigger_quantization_enabled = quantize
+        self.project.trigger_quantization_step = "1_16"
+        self.project.bpm_lock = sync
+        self.input_mapping.refresh_pitch_runtime_state()
+
+    def encoder_handoff(self, expected_key):
+        events = []
+        deadline = monotonic() + 2
+        while not events or events[-1].get("action_key") != "ui.select_pad:1":
+            event = self._audio.poll_input_events()
+            if event is not None:
+                events.append(event)
+            else:
+                assert monotonic() < deadline, "actual CC dispatcher barrier did not arrive"
+                sleep(0.001)
+        keys = [event["action_key"] for event in events]
+        expected = ["ui.select_pad:0"]
+        if expected_key is not None:
+            expected.append(expected_key)
+        expected.append("ui.select_pad:1")
+        assert keys == expected, (keys, expected)
+        captures = [event for event in events if event.get("captured_pitch") is not None]
+        for event in events:
+            self.input_mapping._handle_rust_input_event(event)
+        assert self.project.selected_pad == 1
+        assert self.session.input_mapping_error is None
+        assert self.mapping_path.read_bytes() == self.saved
+        if expected_key is None:
+            assert not captures and not self.transport.pitch._owners
+            return None
+        assert len(captures) == 1
+        event = captures[0]
+        capture = event["captured_pitch"]
+        assert event["direct"] and not event["dispatched"]
+        assert capture.received_at_ns == event["received_at_ns"]
+        assert capture.current_control_slot == 0 and capture.content_is_current
+        owner = self.transport.pitch._owners[capture.accepted_sequence]
+        assert owner.capture is capture and owner.published
+        assert owner.content_id == self.project.pad_content[0].instance_id
+        return capture
+
+    def encoder_applied(self, capture):
+        assert capture.effective and capture.state == "applied"
+        self.transport.pitch.poll()
+        assert not self.transport.pitch._owners
+        assert self.transport.pitch.status(0) == ("applied", None)
+        intent = self.project.pad_key_intent[0]
+        assert (intent.base_shift, intent.extra_shift) == (capture.base_shift, capture.extra_shift)
+        other = self.project.pad_key_intent[1]
+        assert (other.base_shift, other.extra_shift) == (0, 0)
+        assert self.project.selected_pad == 1
+        # Render the same central piano after switching back; source and selected
+        # intent are production projections. Exact out-of-range rendering has its
+        # separate ImGui vertex/text regression.
+        self.project.selected_pad = 0
+        self.frame()
+        self.project.selected_pad = 1
+        self.frame()
+        assert self.mapping_path.read_bytes() == self.saved
+        assert self.session.input_mapping_error is None
+
     def close(self):
         if self.imgui_context is None:
             return
@@ -193,6 +317,10 @@ struct MouseRoute {
 
 impl MouseRoute {
     fn new(lock: bool) -> Self {
+        Self::new_with_storage(lock, None)
+    }
+
+    fn new_with_storage(lock: bool, mapping_path: Option<&std::path::Path>) -> Self {
         let fixture = Fixture::new(lock);
         // Source custody is genuinely ready, but the once-per-frame control rows
         // have not observed it. This is the pre-fix first-action admission gap.
@@ -235,7 +363,11 @@ impl MouseRoute {
             let probe = module
                 .getattr("PianoProbe")
                 .unwrap()
-                .call1((engine.clone_ref(py), lock))
+                .call1((
+                    engine.clone_ref(py),
+                    lock,
+                    mapping_path.map(|path| path.to_string_lossy().into_owned()),
+                ))
                 .unwrap()
                 .unbind();
             (engine, probe)
@@ -387,6 +519,183 @@ impl MouseRoute {
     fn close(&self) {
         Python::attach(|py| self.probe.call_method0(py, "close").unwrap());
     }
+
+    fn starts(&self, id: usize) -> usize {
+        self.feedback
+            .iter()
+            .filter(|message| {
+                matches!(message,
+                    AudioMessage::SampleStarted { id: actual }
+                    | AudioMessage::ContentFeedback { id: actual, kind: 1, .. } if *actual == id
+                )
+            })
+            .count()
+    }
+
+    fn encoder_message(
+        &self,
+        number: u8,
+        values: &[u8],
+        key: Option<&str>,
+    ) -> Option<Py<CapturedPitchAction>> {
+        self.refresh_clock();
+        Python::attach(|py| {
+            let engine = self.engine.borrow(py);
+            let runtime = engine.input_runtime.as_ref().unwrap();
+            assert!(runtime.inject_midi_message(&[0x90, 40, 127]));
+            for value in values {
+                assert!(runtime.inject_midi_message(&[0xb0, number, *value]));
+            }
+            assert!(runtime.inject_midi_message(&[0x90, 41, 127]));
+            drop(engine);
+            self.probe
+                .call_method1(py, "encoder_handoff", (key,))
+                .unwrap()
+                .extract(py)
+                .unwrap()
+        })
+    }
+
+    fn apply_encoder(
+        &mut self,
+        captured: &Py<CapturedPitchAction>,
+        pitch: PitchIntent,
+        lock: bool,
+        sync: bool,
+        retrigger: bool,
+    ) {
+        let action = Python::attach(|py| captured.borrow(py).clone());
+        let original = (
+            action.sequence(),
+            action.content_key(),
+            action.received_timestamp(),
+            action.original_due_frame(),
+        );
+        assert_eq!(
+            action.variant(),
+            if retrigger {
+                PitchActionVariant::SetRetrigger
+            } else {
+                PitchActionVariant::Set
+            }
+        );
+        let starts = self.starts(0);
+        let generation = self
+            .mixer
+            .voices
+            .iter()
+            .find(|voice| voice.is_playing_sample(0))
+            .unwrap()
+            .generation;
+        assert_eq!(action.render().pitch, pitch);
+        assert_eq!(action.render().key_lock, lock);
+        assert_eq!(action.sync(), sync);
+        assert_eq!(action.current_control_slot(), Some(0));
+        self.drain();
+        assert!(action.accepted(), "{:?}", action.reason());
+        let execution = action.execution_target();
+        let frame = self.transport.output_frame();
+        let deadline = Instant::now() + WORKER_WAIT;
+        while !self
+            .mixer
+            .pitch_runtime
+            .as_ref()
+            .unwrap()
+            .has_ready_action(action.sequence())
+        {
+            self.mixer.pitch_runtime.as_mut().unwrap().poll();
+            assert_ne!(action.state(), "rejected", "{:?}", action.reason());
+            assert!(
+                Instant::now() < deadline,
+                "restored encoder worker did not prepare"
+            );
+            std::thread::sleep(Duration::from_millis(1));
+        }
+        assert_eq!(self.transport.output_frame(), frame);
+        assert_eq!(action.execution_target(), execution);
+        while self.transport.output_frame() < execution {
+            self.render((execution - self.transport.output_frame()).min(512) as usize);
+            assert!(!action.effective());
+        }
+        let before_effect = self
+            .mixer
+            .voices
+            .iter()
+            .find(|voice| voice.is_playing_sample(0))
+            .unwrap()
+            .source_playback
+            .position();
+        self.render(1);
+        assert!(action.effective(), "{:?}", action.reason());
+        assert_eq!(self.starts(0), starts + usize::from(retrigger));
+        let voice = self
+            .mixer
+            .voices
+            .iter()
+            .find(|voice| voice.is_playing_sample(0))
+            .unwrap();
+        if retrigger {
+            assert_eq!(voice.stretch.adopted_request_id(), Some(action.sequence()));
+            assert_eq!(
+                voice.stretch.native_origin_tuple(),
+                Some((pitch, lock, action.sequence()))
+            );
+        } else {
+            assert_eq!(voice.generation, generation);
+            assert_source_phase(
+                voice.source_playback.position(),
+                before_effect.frame as f64 + before_effect.fraction,
+                1,
+                1.0,
+            );
+        }
+        assert_eq!(voice.source_playback.tempo_ratio(), 1.0);
+        assert!(voice.stretch.owns_pitch_contract(pitch, lock));
+        assert!(
+            !self
+                .mixer
+                .voices
+                .iter()
+                .any(|voice| voice.is_playing_sample(1))
+        );
+        assert_eq!(self.starts(1), 0);
+        assert_eq!(self.mixer.pad_pitch_intent(1), Some(PitchIntent::default()));
+        let mut pcm = Vec::new();
+        for _ in 0..96 {
+            pcm.extend(self.render(512));
+        }
+        assert_tone(
+            &pcm[12_000..],
+            pitch.base_shift(),
+            pitch.extra_shift(),
+            1.0,
+            lock,
+        );
+        assert_eq!(
+            (
+                action.sequence(),
+                action.content_key(),
+                action.received_timestamp(),
+                action.original_due_frame()
+            ),
+            original
+        );
+        assert_eq!(action.execution_target(), execution);
+        Python::attach(|py| {
+            assert_eq!(
+                captured
+                    .getattr(py, "effective_output_frame")
+                    .unwrap()
+                    .extract::<u64>(py)
+                    .unwrap(),
+                execution
+            );
+            self.probe
+                .call_method1(py, "encoder_applied", (captured.clone_ref(py),))
+                .unwrap();
+        });
+        assert!(self.scheduler.is_empty());
+    }
 }
 
 impl Drop for MouseRoute {
@@ -471,4 +780,148 @@ fn real_gui_refreshes_same_frame_correction_and_learn_keeps_pitch_inaudible() {
     });
     assert_eq!(after, before, "Learn captured an audible Native action");
     route.close();
+}
+
+#[test]
+fn real_learned_restored_encoders_keep_variants_content_and_productive_pcm() {
+    let _context = MOUSE_CONTEXT
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    let parent = std::env::var_os("FLITZI_PIANO_MIDI_PARENT")
+        .map(std::path::PathBuf::from)
+        .unwrap_or_else(|| std::env::temp_dir().join("codex"));
+    std::fs::create_dir_all(&parent).unwrap();
+    for lock in [false, true] {
+        let root = tempfile::Builder::new()
+            .prefix("encoder-")
+            .tempdir_in(&parent)
+            .unwrap()
+            .keep();
+        let mut route = MouseRoute::new_with_storage(lock, Some(&root.join("midi.json")));
+        let modes = ["button", "absolute", "twos_complement", "offset_binary"];
+        for (index, mode) in modes.iter().enumerate() {
+            for retrigger in [false, true] {
+                let number = 70 + (2 * index) as u8 + u8::from(retrigger);
+                Python::attach(|py| {
+                    route.probe.call_method0(py, "begin_encoder_learn").unwrap();
+                    assert!(
+                        route
+                            .engine
+                            .borrow(py)
+                            .input_runtime
+                            .as_ref()
+                            .unwrap()
+                            .inject_midi_message(&[0xb0, number, 127])
+                    );
+                    route
+                        .probe
+                        .call_method1(
+                            py,
+                            "finish_encoder_learn",
+                            (number, *mode, !retrigger, retrigger),
+                        )
+                        .unwrap();
+                });
+            }
+        }
+        Python::attach(|py| {
+            route
+                .probe
+                .call_method0(py, "restore_encoder_learn")
+                .unwrap()
+        });
+        let initial = route.capture("click", Some(0));
+        route.apply(&initial, 0, lock);
+        let mut base = 0;
+        let mut extra = 0;
+        let mut previous = Python::attach(|py| initial.borrow(py).sequence());
+        for (index, mode) in modes.iter().enumerate() {
+            // All four Quantize/SYNC pairs occur across the four explicit modes;
+            // this is not their full Cartesian acoustic/actual-r(n) matrix.
+            let quantize = index & 1 != 0;
+            let sync = index & 2 != 0;
+            Python::attach(|py| {
+                route
+                    .probe
+                    .call_method1(py, "configure_encoder_timing", (quantize, sync))
+                    .unwrap()
+            });
+            for retrigger in [false, true] {
+                let number = 70 + (2 * index) as u8 + u8::from(retrigger);
+                let axis = if retrigger { "extra" } else { "note" };
+                let variant = if retrigger { "set_retrigger" } else { "set" };
+                let key = if *mode == "button" {
+                    format!("pitch.{axis}.step:1:{variant}")
+                } else {
+                    format!("pitch.{axis}.encoder:1:{mode}:{variant}")
+                };
+                if *mode != "button" {
+                    let neutral: &[u8] = if *mode == "absolute" {
+                        &[64, 64]
+                    } else {
+                        &[0, 64, 64]
+                    };
+                    assert!(route.encoder_message(number, neutral, None).is_none());
+                }
+                let inputs: Vec<(Vec<u8>, i32)> = match *mode {
+                    "button" => vec![(vec![127, 127, 0], 1), (vec![127, 0], 1)],
+                    "absolute" => vec![(vec![65, 65], 1), (vec![64, 64], -1)],
+                    "twos_complement" => {
+                        vec![(vec![1], 1), (vec![1], 1), (vec![127], -1), (vec![127], -1)]
+                    }
+                    "offset_binary" => {
+                        vec![(vec![65], 1), (vec![65], 1), (vec![63], -1), (vec![63], -1)]
+                    }
+                    _ => unreachable!(),
+                };
+                for (values, direction) in inputs {
+                    if quantize {
+                        let before_grid = (route.transport.output_frame() / 6000 + 1) * 6000 - 1000;
+                        while route.transport.output_frame() < before_grid {
+                            route
+                                .render((before_grid - route.transport.output_frame()).min(512)
+                                    as usize);
+                        }
+                    }
+                    let frame = route.transport.output_frame();
+                    let captured = route.encoder_message(number, &values, Some(&key)).unwrap();
+                    let sequence = Python::attach(|py| {
+                        let action = captured.borrow(py);
+                        assert_eq!(
+                            action.original_due_frame(),
+                            if quantize {
+                                (frame / 6000 + 1) * 6000
+                            } else {
+                                frame
+                            }
+                        );
+                        assert_eq!(
+                            captured
+                                .getattr(py, "quantize_step_64ths")
+                                .unwrap()
+                                .extract::<Option<u32>>(py)
+                                .unwrap(),
+                            quantize.then_some(4)
+                        );
+                        action.sequence()
+                    });
+                    assert!(sequence > previous);
+                    previous = sequence;
+                    if retrigger {
+                        extra += direction;
+                    } else {
+                        base += direction;
+                    }
+                    route.apply_encoder(
+                        &captured,
+                        PitchIntent::new(base, extra).unwrap(),
+                        lock,
+                        sync,
+                        retrigger,
+                    );
+                }
+            }
+        }
+        route.close();
+    }
 }

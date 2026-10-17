@@ -25,6 +25,11 @@ not replace the full milestone or close any parent, DSP-quality or Human gate.
   independent final review; supply a short real App test procedure. Human hearing
   and the full acoustic/resource/continuous-O/parent gates remain separate and open.
 
+- [x] Verify exact visible feedback for valid notes beyond the fixed piano range,
+  including MIDI/PAD return, and real saved/reloaded CC Learn through Native
+  capture, Controller, preparation, scheduler and PCM with fixed SET/RETRIGGER
+  variants. Retain full encoder/actual-r(n)/acoustic/resource/Human parent gates.
+
 ## Latest Human execution priority — 2026-10-14
 
 ### Native occupied Copy and original pitch ownership — 2026-10-17

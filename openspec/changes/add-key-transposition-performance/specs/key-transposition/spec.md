@@ -5,6 +5,12 @@ The system SHALL provide one responsive three-octave piano above the central PAD
 
 The piano SHALL use actual white and overlaid shorter black key geometry with black-key hit priority, large pointer targets and all twelve chromatic pitches. The original source root SHALL appear in the middle octave. Each of the 36 displayed notes SHALL have its own signed octave-bearing identity; no modulo-twelve folding SHALL occur. Unknown source metadata SHALL retain explicitly relative semitone choices without inventing an original note. The source root is a key reference, not an estimate of the first melody note.
 
+#### Scenario: A learned note lies beyond the displayed octaves
+- **GIVEN** a valid exact piano shift outside the selected content's displayed three-octave range is chosen by a learned action, semitone step or restored state
+- **WHEN** the piano renders, including after selecting another PAD and returning
+- **THEN** it SHALL visibly identify the exact selected signed shift and, for a known source, its note and relative octave, together with the direction beyond the displayed range
+- **AND** it SHALL retain the fixed 36-key geometry and exact chosen identity without highlighting an octave-folded substitute or claiming an absolute note for unknown metadata
+
 #### Scenario: Repeated real mouse attacks and PAD changes
 - **WHEN** a performer presses a white or black piano key, including the already selected key
 - **THEN** that mouse-down SHALL submit one original SET or SET_RETRIGGER action through the existing content-bound controller, capture, worker and sole scheduler
@@ -58,6 +64,14 @@ Encoder resolution SHALL happen at the original Native input capture, retaining 
 - **WHEN** a button learned to offset +1 sends 127, repeated 127 and release 0
 - **THEN** exactly one offset action SHALL be captured
 - **AND** a subsequent new press SHALL remain usable without an extra release attack
+
+#### Scenario: Restored encoder Learn retains original productive ownership
+- **GIVEN** Learn has saved separate piano SET and transposition SET_RETRIGGER CC mappings with explicit encodings and a new controller reloads that mapping file
+- **WHEN** later checkbox and encoding preferences differ and Native dispatch selects A, receives the CC input and selects B before the controller polls
+- **THEN** each admitted action SHALL retain its stored variant, encoding, original A content and input timestamp through preparation and the sole scheduler
+- **AND** SET SHALL retune A without adding a restart while every genuine SET_RETRIGGER SHALL produce one own attack and selected numeric projection on A, leaving B unchanged
+- **AND** absolute initialization/equal values, relative neutral values and button release/held repeats SHALL NOT create phantom captures or attacks
+- **AND** productive PCM and actual effect receipts SHALL be checked separately from saved intent and the rendered piano selection
 
 ### Requirement: Source metadata and two numeric shifts remain separate
 The system SHALL represent detected or corrected source key, numeric audible base_shift and numeric extra_shift as separate per-content state and SHALL derive base and result labels without conflating them.

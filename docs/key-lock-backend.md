@@ -3107,6 +3107,11 @@ the chosen note. A recognized metadata correction defines note labels and signed
 targets consistently, while the detected original keeps its own separate marker.
 Unknown correction metadata shows signed relative targets without guessing
 an absolute note. These are key-root references, not detected first melody notes.
+Valid learned, stepped or restored notes outside those fixed three octaves now
+show their exact selected note, signed shift, relative octave and direction beyond
+the displayed range inside the existing piano row. Unknown metadata remains
+explicitly relative. No other octave is highlighted as a substitute; returning to
+a displayed note restores its normal marker, without shifting the 36-key layout.
 
 Piano and the offset row route GUI choices and learned MIDI/keyboard SET or
 SET_RETRIGGER actions through the same Native `CapturedPitchAction` and Python
@@ -3130,6 +3135,18 @@ New piano-note and Original Key CC bindings also use one button high edge;
 repeated NoteOn attacks remain independent. Use encoded step controls for an
 encoder, and fixed piano-note controls for buttons or MIDI notes. Legacy
 base/extra/base-reset CC bindings keep their previous behavior.
+
+The device-free production-route regression learns eight CC mappings using actual
+Native MIDI events, writes a private mapping JSON and reloads it into a fresh
+controller. Each encoding has a piano SET and an offset SET_RETRIGGER binding.
+Later GUI checkbox/encoding changes leave these saved variants intact. Native
+selection A -> CC -> B precedes polling; the retained original A owner then reaches
+real preparation, the existing scheduler, effect feedback and PCM. SET preserves
+the source cursor and adds no start; retriggers have distinct requests and attacks.
+The bounded profiles cover both Key Lock modes and distribute the four captured
+Quantize/SYNC pairs across the four encodings at unity source rate. They do not certify
+the full encoding/timing/rate Cartesian matrix, NRPN devices, physical MIDI,
+performer deadlines, DSP quality or Human acceptance.
 
 The real mouse/controller/Native route exposed an admission serialization bug:
 Python used integer zero for disabled Quantize, while Native requires `None`.
