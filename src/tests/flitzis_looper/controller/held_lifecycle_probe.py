@@ -8,20 +8,27 @@ it never supplies a source publication, Native acknowledgement or audio effect.
 import hashlib
 import json
 from collections import deque
-from contextlib import ExitStack, chdir
+from contextlib import ExitStack, chdir, contextmanager
 from dataclasses import dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING
 
 import pytest
+from imgui_bundle import imgui
 
 from flitzis_looper.controller.accepted_publication import AcceptedTimingController
 from flitzis_looper.controller.app import AppController
 from flitzis_looper.controller.asset_lifecycle import ProjectAssetLifecycle
 from flitzis_looper.controller.loader import LoaderController
 from flitzis_looper.controller.material_migration import MaterialMigrationController
+from flitzis_looper.controller.material_migration_recovery import resolve_config_reference
 from flitzis_looper.controller.metering import MeteringController
 from flitzis_looper.controller.pad_arrangement import PadArrangementController
+from flitzis_looper.controller.pair_arrangement_journal import (
+    PairJournalOwner,
+    validated_pair_history,
+)
+from flitzis_looper.controller.pair_arrangement_recovery import inspect_pair_recovery
 from flitzis_looper.controller.performance_confirmation import PerformanceConfirmationController
 from flitzis_looper.controller.persistence import ProjectPersistence
 from flitzis_looper.controller.settings import SettingsController
@@ -29,10 +36,22 @@ from flitzis_looper.controller.stems import StemController
 from flitzis_looper.controller.transport import TransportController
 from flitzis_looper.input_mapping import InputMappingController
 from flitzis_looper.models import ProjectState, SessionState
+from flitzis_looper.ui import run as ui_run
+from flitzis_looper.ui.context import UiContext
 
 if TYPE_CHECKING:
+    from collections.abc import Callable, Iterator
+    from contextlib import AbstractContextManager
+
+    from flitzis_looper.controller.pair_arrangement import _Pair
     from flitzis_looper.controller.transport.waveform import _HoldOwner
-    from flitzis_looper_audio import AudioEngine, HoldActionTicket
+    from flitzis_looper_audio import (
+        AudioEngine,
+        HoldActionTicket,
+        InputRuntimePadBinding,
+        ProjectAssetLease,
+        WaveFormRenderData,
+    )
 
 
 @dataclass(frozen=True, slots=True)
@@ -47,13 +66,333 @@ class LoadedSource:
     lifetime: int
 
 
-class HeldLifecycleProbe(AppController):
+@dataclass(frozen=True, slots=True)
+class _JoinBefore:
+    project: ProjectState
+    session: SessionState
+    config: bytes
+    revision: int
+    dirty: bool
+    hold: tuple[object, ...]
+    sources: tuple[tuple[int, str, int, int] | None, ...]
+    digests: tuple[str | None, ...]
+    bindings: tuple[InputRuntimePadBinding, ...]
+    binding_metadata: tuple[dict[str, object], ...]
+    assignments: dict[tuple[str, int], tuple[Path, ProjectAssetLease]]
+    lease_objects: dict[tuple[str, int], int]
+    reserved: int
+    selection: tuple[int, int | None]
+
+
+class _HeldLifecycleJoin:
+    """One real UI/Pair rejection join, independent of the old lifecycle profiles."""
+
+    def _init_join_state(self, probe: HeldLifecycleProbe) -> None:
+        self._join_probe = probe
+        self.join_context: UiContext | None = None
+        self.join_pair: _Pair | None = None
+        self._join_before: _JoinBefore | None = None
+        self._join_view: WaveFormRenderData | None = None
+        self._join_native: Callable[[], AbstractContextManager[None]] | None = None
+
+    def setup_join_ui(self) -> None:
+        """Create only an isolated native ImGui context and the real UI facades."""
+        assert self.join_context is None
+        app = self._join_probe
+        previous = imgui.get_current_context()
+        owned = imgui.create_context()
+
+        @contextmanager
+        def native_scope() -> Iterator[None]:
+            current = imgui.get_current_context()
+            imgui.set_current_context(owned)
+            try:
+                yield
+            finally:
+                if current is not None:
+                    imgui.set_current_context(current)
+
+        def destroy_owned() -> None:
+            current = imgui.get_current_context()
+            imgui.destroy_context(owned)
+            if current is not None and current is not owned:
+                imgui.set_current_context(current)
+
+        self._join_native = native_scope
+        app._storage.callback(destroy_owned)
+        try:
+            io = imgui.get_io()
+            io.set_ini_filename(None)
+            io.display_size = imgui.ImVec2(1000, 700)
+            io.delta_time = 1 / 60
+            io.backend_flags |= imgui.BackendFlags_.renderer_has_textures
+            io.fonts.add_font_default()
+            self.join_context = UiContext(app)
+            assert app.input_mapping._refresh_rust_runtime_state()
+            self.join_context.ui.select_pad(0)
+            self.join_context.ui.waveform.open(0)
+            assert app.project.selected_pad == 0
+            assert app.session.waveform_editor_pad_id == 0
+            assert app._audio.input_selected_projection()[1] == 0
+            assert self.join_context.ui.waveform in app._pair_waveform_views
+        finally:
+            if previous is not None:
+                imgui.set_current_context(previous)
+
+    def prime_join_view(self) -> bool:
+        """Obtain actual worker-produced A data before testing its Native cancellation."""
+        assert self.join_context is not None
+        app = self._join_probe
+        duration = app.project.sample_durations[0]
+        assert duration is not None
+        assert duration * app._audio.output_sample_rate() > 4096
+        data = self.join_context.ui.waveform.get_render_data(0, 128, 0.0, duration)
+        if data is None:
+            status, error = app._audio.waveform_readiness(0)
+            # The real worker may finish after the request returned None and
+            # before this status read; fetch its data on the next control poll.
+            assert status in {"idle", "pending", "ready"}, (status, error)
+            return False
+        assert app._audio.waveform_readiness(0) == ("ready", None)
+        assert self.join_context.ui.waveform._last_waveform_value is data
+        self._join_view = data
+        return True
+
+    def press_join(self) -> HoldActionTicket:
+        """Use actual ImGui button state and the public waveform UI press route."""
+        assert self._join_native is not None
+        assert self.join_context is not None
+        app = self._join_probe
+        waveform = app.transport.waveform
+        assert not waveform.has_pending_holds
+        assert app.session.waveform_editor_pad_id == 0
+        with self._join_native():
+            down = True
+            imgui.get_io().add_mouse_button_event(imgui.MouseButton_.right, down)
+            imgui.new_frame()
+            try:
+                assert imgui.is_mouse_down(imgui.MouseButton_.right)
+                self.join_context.ui.waveform.pause_selected_pad_hold_on_press()
+            finally:
+                imgui.end_frame()
+        assert waveform._physical_hold_press is not None, waveform.hold_status()
+        assert len(waveform._hold_owners) == 1
+        app.owner = next(iter(waveform._hold_owners.values()))
+        app.hold = app.owner.ticket
+        app.hold_slot = 0
+        assert app.owner.physical_press_id == waveform._physical_hold_press
+        return app.hold
+
+    def remember_join_before(self) -> None:
+        """Capture the saved before image and exact current Python/Native owners."""
+        app = self._join_probe
+        assert app.hold is not None
+        assert app.hold.publication_status() == "paused_owned"
+        assert app.session.active_sample_ids == {0, 1}
+        assert app.session.paused_sample_ids == {1}
+        app.save()
+        bindings = []
+        for slot in (0, 1):
+            binding = app._audio.current_input_runtime_pad_binding(slot)
+            assert binding is not None
+            assert binding.is_current()
+            bindings.append(binding)
+        self._join_before = _JoinBefore(
+            app.project.model_copy(deep=True),
+            app.session.model_copy(deep=True),
+            app.persistence.config_path.read_bytes(),
+            app.persistence.revision,
+            app.persistence._dirty,
+            app._hold_image(),
+            tuple(app._audio.waveform_source_identity(slot) for slot in (0, 1)),
+            tuple(app._audio.loaded_source_digest(slot) for slot in (0, 1)),
+            tuple(bindings),
+            tuple(binding.metadata() for binding in bindings),
+            app._assets._assignments.copy(),
+            {key: id(lease) for key, (_, lease) in app._assets._assignments.items()},
+            app._assets._reserved,
+            app._audio.input_selected_projection(),
+        )
+
+    def begin_rejected_join(self) -> None:
+        """Capture a real complete Pair while H remains owned; Rust supplies queue pressure."""
+        assert self._join_before is not None
+        app = self._join_probe
+        assert app.pairs.begin(0, 1, operation="swap"), app.pairs.error
+        self.join_pair = app.pairs._pair
+        assert self.join_pair is not None
+        assert self.join_pair.acknowledgement is None
+        assert self.join_pair.receipt is None
+
+    def poll_rejected_join(self) -> bool:
+        """Observe genuine publication pressure without fabricating a rejected ticket."""
+        app = self._join_probe
+        pair = self.join_pair
+        assert pair is not None
+        app.pairs.poll()
+        assert app.pairs._pair is pair
+        if not pair.worker_done or pair.ticket is None:
+            return False
+        assert app.pairs.error == "pair publication queue is full", app.pairs.error
+        assert app.pairs.status == "settlement_pending"
+        assert pair.captured is not None
+        assert not pair.published
+        assert pair.acknowledgement is None
+        assert pair.ticket.own_acknowledgement() is None
+        metadata = json.loads(pair.ticket.metadata_json())
+        assert metadata["native_phase"] == 0
+        assert metadata["own_native_ack"] is False
+        assert pair.ticket.publication_status() != "rejected"
+        self.assert_join_before()
+        return True
+
+    def assert_join_before(self) -> None:
+        """Pair preparation/publication rejection cannot mutate the admitted before image."""
+        app = self._join_probe
+        before = self._join_before
+        assert before is not None
+        assert app.project == before.project
+        assert app.session == before.session
+        assert app.persistence.config_path.read_bytes() == before.config
+        assert app.persistence.revision == before.revision
+        assert app.persistence._dirty == before.dirty
+        assert app._hold_image() == before.hold
+        selection = app._audio.input_selected_projection()
+        assert selection[0] == before.selection[0]
+        # Reserved participants intentionally cannot admit fresh selected actions.
+        assert selection[1] == (None if app.pairs.active else before.selection[1])
+        assert tuple(app._audio.waveform_source_identity(slot) for slot in (0, 1)) == before.sources
+        assert tuple(app._audio.loaded_source_digest(slot) for slot in (0, 1)) == before.digests
+        assert app._assets._assignments == before.assignments
+        lease_objects = {key: id(lease) for key, (_, lease) in app._assets._assignments.items()}
+        assert lease_objects == before.lease_objects
+        assert all(not lease.released for _, lease in before.assignments.values())
+        for slot, binding in enumerate(before.bindings):
+            assert binding.metadata() == before.binding_metadata[slot]
+            if not app.pairs.active:
+                current = app._audio.current_input_runtime_pad_binding(slot)
+                assert current is not None
+                assert current.is_current()
+                assert current.metadata() == before.binding_metadata[slot]
+
+    def cancel_rejected_join(self) -> None:
+        """Cancel only the actual preclaim Pair and verify complete durable cancellation."""
+        app = self._join_probe
+        pair = self.join_pair
+        before = self._join_before
+        assert pair is not None
+        assert before is not None
+        assert pair.ticket is not None
+        assert app.pairs.prepare_shutdown()
+        assert app.pairs.status == "cancelled"
+        assert not app.pairs.active
+        assert pair.cancelled
+        assert pair.writer_released
+        assert not pair.published
+        assert pair.ticket.own_acknowledgement() is None
+        assert json.loads(pair.ticket.metadata_json())["native_phase"] == 3
+        assert pair.ticket.publication_status() == "rejected"
+        assert pair.acknowledgement is None
+        assert pair.receipt is None
+        assert pair.mirror is None
+        assert pair.stems is None
+        assert not pair.assets_published
+        assert not pair.native_finished
+        assert pair.retirement.remaining == 0
+        assert app._assets._reserved == before.reserved
+        assert app.persistence._migration_owner is None
+        for component in (app.transport, app.loader, app.accepted_timing, app.stems):
+            assert component._pair_deferred_sample_ids == frozenset()
+        samples = Path.cwd() / "samples"
+        journal = PairJournalOwner.open(samples, pair.owner)
+        records = validated_pair_history(journal.encoded, pair.owner)
+        assert records[-1].phase == "cancelled"
+        assert all(record.phase != "native_ack_observed" for record in records)
+        resolved = resolve_config_reference(samples, app.persistence.config_reference)
+        assert resolved == app.persistence.config_reference
+        assert inspect_pair_recovery(records[-1], before.config).disposition == "cancelled"
+        self.assert_join_before()
+
+    def retarget_join(self) -> None:
+        """Retarget actual selection/editor and cancel A's genuine Native view request."""
+        assert self.join_context is not None
+        assert self._join_view is not None
+        app = self._join_probe
+        ui = self.join_context.ui
+        waveform = app.transport.waveform
+        revision = waveform.view_revision
+        assert app._audio.waveform_readiness(0) == ("ready", None)
+        assert ui.waveform._last_waveform_value is self._join_view
+        ui.select_pad(1)
+        ui.waveform.open(1)
+        assert app.project.selected_pad == 1
+        assert app._audio.input_selected_projection()[1] == 1
+        assert app.session.waveform_editor_pad_id == 1
+        assert waveform.view_revision == revision + 1
+        assert app._audio.waveform_readiness(0) == ("idle", None)
+        assert waveform._physical_hold_press is None
+        assert app.owner is not None
+        assert app.owner.release_requested
+        duration = app.project.sample_durations[1]
+        assert duration is not None
+        end = min(duration, 4096 / app._audio.output_sample_rate())
+        data = ui.waveform.get_render_data(1, 128, 0.0, end)
+        assert data is not None
+        assert data is not self._join_view
+        assert ui.waveform._last_waveform_value is data
+        assert ui.waveform._last_pad_id == 1
+        assert ui.waveform._last_view_revision == waveform.view_revision
+        assert ui.waveform._last_source_identity is not None
+        assert ui.waveform._last_source_identity[3] == app._audio.waveform_source_identity(1)
+
+    def outside_join_tick(self) -> None:
+        """Run real global button-up and App polling without toolbar rendering or hover."""
+        assert self._join_native is not None
+        assert self.join_context is not None
+        app = self._join_probe
+        with self._join_native():
+            io = imgui.get_io()
+            io.add_mouse_pos_event(-10_000.0, -10_000.0)
+            down = False
+            io.add_mouse_button_event(imgui.MouseButton_.right, down)
+            imgui.new_frame()
+            try:
+                assert not io.app_focus_lost
+                assert not imgui.is_mouse_down(imgui.MouseButton_.right)
+                assert not app.session.settings_open
+                assert app.session.waveform_editor_open
+                ui_run._poll_runtime_tick(self.join_context)
+            finally:
+                imgui.end_frame()
+
+    def assert_join_released(self) -> None:
+        """Require the actual global tick to observe and remove the original terminal H."""
+        app = self._join_probe
+        waveform = app.transport.waveform
+        assert app.hold is not None
+        assert app.owner is not None
+        assert app.hold.publication_status() == "resumed"
+        assert app.owner.ticket is app.hold
+        assert app.owner.release_requested
+        assert app.owner.release_admitted
+        assert app.owner.status == "resumed"
+        assert not waveform.has_pending_holds
+        assert waveform._physical_hold_press is None
+        assert waveform.hold_status() == (None, None)
+        assert app.session.waveform_pause_hold_pad_id is None
+        assert app.session.active_sample_ids == {0, 1}
+        assert app.session.paused_sample_ids == {1}
+        assert app.session.waveform_editor_pad_id == 1
+
+
+class HeldLifecycleProbe(AppController, _HeldLifecycleJoin):
     """Inject a headless engine while retaining actual App component behavior."""
 
     def __init__(self, audio: AudioEngine, root: str, *, restore: bool = False) -> None:
         self._storage = ExitStack()
         self._closed = False
         self.app = self
+        self._init_join_state(self)
         self.hold: HoldActionTicket | None = None
         self.owner: _HoldOwner | None = None
         self.hold_slot: int | None = None

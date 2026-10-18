@@ -154,6 +154,7 @@ SHALL NOT introduce a second scheduler or persist physical hold state.
 - **AND** right-button-up occurs outside both controls
 - **THEN** the existing control tick releases H against A only
 - **AND** B is unchanged even if B is paused
+- **AND** the software proof SHALL join an actual owned Native PauseEffect, actual selection/editor retarget and view release, and the existing global runtime tick without replacing its release or runtime poll with a facade; the original toolbar or hover SHALL NOT be required
 
 #### Scenario: HC-14 Editor closed or input cancelled while held
 - **GIVEN** H owns a live pause of A
@@ -167,6 +168,7 @@ SHALL NOT introduce a second scheduler or persist physical hold state.
 - **THEN** contents, epochs, voices, holds, selection and owners are unchanged
 - **WHEN** H releases
 - **THEN** A resumes as before the attempted mutation
+- **AND** the software proof SHALL reject an actual public Pair publication before claim while H owns A's pause, settle its actual cancellation, preserve complete Native/controller/Config/custody before-state and then deliver the matching release with independent continuation PCM evidence
 
 ### Requirement: Release-before-ACK and capacity failure settle honestly
 The system SHALL retain one bounded identity-bound release-requested record when release precedes pause-effect ACK or complete release admission, and SHALL settle it through the existing ordered native command/ACK path.

@@ -410,8 +410,75 @@ by the four Native profiles above. The single independent final review is clear
 after the request-oracle correction.
 
 This closes only the named HC-06/07/19/26 software joins. The earlier Python225
-batch's two unresolved backend-entry failures remain recorded above. Full R2
-requires its separate nonauthor closure; HC-13 runtime-tick/retarget composition
-and HC-15 rejected-Pair-with-owned-Hold evidence still need explicit assessment.
+batch's two unresolved backend-entry failures remain recorded above. At this
+boundary full R2 still required its separate nonauthor closure and explicit
+HC-13 runtime-tick/retarget and HC-15 rejected-Pair-with-owned-Hold assessment.
 Public R3 gestures and all resource, realtime, acoustic, musical, device and Human
 gates remain open.
+
+## Owned Hold, rejected Pair and actual editor retarget — 2026-10-18
+
+The child module `held_lifecycle_tests/retarget_tests.rs` joins the two previously
+missing HC-13/15 executions. Two sequential isolated engines each publicly load
+the same generated 16,384-frame stereo PCM16 file through actual Cold workers,
+start A and B, independently pause B and cause A's original Native Hold through
+the actual waveform UI action with real headless ImGui button state. They run
+the same callback/render chronology with independently initialized DSP histories.
+No callback owner is cloned to provide the reference.
+
+The tested engine fills its actual producer with Pings. A public Pair swap then
+prepares but fails publication before claim. Its original ticket remains captured
+with no own ACK. The controller's actual Pair-only shutdown preparation cancels
+that same operation, records durable cancellation and releases reservations and
+the writer. The original Hold stays owned throughout. Before images require
+unchanged Project, Session, Config bytes/revision/dirty state, source digests and
+bindings, exact live Python assignment owners, Native physical/logical requests,
+prepared epochs, authority/cache/Cold assignment/loading state, transport and
+launch revisions, slot/content/binding epochs and both voice histories.
+
+Reservation intentionally fences fresh selection admission: Native projects the
+same selection revision with no admissible slot while reserved and the exact
+original selection after cancellation. Reserve and release each publish one
+seqlock marker, so the test requires exact layout-publication increments of two
+and four while retaining each actual slot/content/binding epoch. These markers
+are not a content move. The initial stronger-than-contract full SlotSnapshot
+equality failed on that expected marker change; source inspection of the actual
+reserve/release path established the corrected exact oracle.
+
+The actual UI selects B and opens its editor. A genuine worker-produced A view
+must have been ready first; retargeting cancels A's Native view request to idle,
+advances the view revision and replaces the cached A projection with B data.
+This is the actual view lifetime, not an invented persistent waveform PCM lease.
+The existing global runtime tick observes real button-up outside the controls and
+performs real App polling without rendering the original toolbar or using a
+release/poll facade. Only the original A effect resumes, exactly once; independently
+paused B and both original processor/FIFO/position/source/filter histories remain
+unchanged. Repeated ticks enqueue no further release. The next 96 stereo frames
+must be finite, nonzero and exactly equal to the independent reference, which
+releases the same kind of owned Hold through the ordinary direct controller route.
+
+The first driver failed because the ImGui binding cannot restore a nonexistent
+context with `set_current_context(None)`. Context restoration now follows the
+existing isolated UI fixtures and restores only a prior real context. Together
+with the marker-oracle correction this changes test setup only; production UI,
+controller, Native DSP and callback code remain unchanged. The combined Debug
+profile passes in 4.32 seconds. Final Release passes both test entries and all
+five isolated lifecycle/join profiles in 7.54 seconds after a 1m57 build. The
+three adjacent pressure/cancellation, reservation/matching-release and GUI/Native
+selection regressions pass. The fresh locked, stripped private Release wheel
+builds in 32.35 seconds; its eight bootstrap API checks and actual App/UI/BS
+imports pass without installation. Impacted Python integration against that
+private Native passes 108 tests in 9.04 seconds. Lint, formatting, typing and
+strict OpenSpec checks pass. The independent review determines the separate
+scoped R2 software closure; this entry does not declare full R2 acceptance.
+
+The single independent final review is clear and accepts separate R2 SOFTWARE
+closure using the prior 19 assigned HC cases plus this actual HC-13/15 join.
+The software prerequisite for beginning canonical R3 implementation is therefore
+satisfied. R3 gestures receive no advance acceptance; full R2 and all final
+resource, realtime, acoustic, musical, device and Human gates remain open.
+
+This synthetic FullMix software join supplies no recorded-music, acoustic,
+resource, realtime, device or Human acceptance. The earlier Python225 batch's two
+unexplained backend-entry failures remain open; unchanged prior wet/timing/refresh,
+Hold/Pair, custody and lifecycle results retain their original profiles.

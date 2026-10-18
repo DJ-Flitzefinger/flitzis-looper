@@ -61,6 +61,17 @@ Use canonical program/coverage, not a new parallel order. R0 is docs/spec-only.
   Four isolated stereo FullMix profiles pass final Release. Native request/epoch
   and exact Cold assignment snapshots cover rejected unload; actual callback close
   precedes fresh restore. Impacted Python263 passes with two existing skips.
+- [x] HC-13/15 combined execution join: actual owned H and independently paused B,
+  rejected public Pair publication/cancel with unchanged complete before-state,
+  then actual view/selection/editor retarget and global runtime tick outside release.
+  Require original ticket/effect/lifetime, one A resume, unchanged B/history and
+  independently continuing PCM; retain all existing R2 and parent-gate evidence.
+  The combined Debug profile passes, and final Release passes all five isolated
+  lifecycle/join profiles. Impacted private-Native Python integration108 passes.
+- [x] Separate nonauthor R2 SOFTWARE closure: the existing 19 assigned HC cases
+  plus the actual HC-13/15 join satisfy the software prerequisite for beginning
+  canonical R3 implementation. This does not close full R2, P6/V0/resource/RT,
+  acoustic/musical/device/Human or Full Goal gates, or accept R3 gestures in advance.
 - [ ] R3: modeOFF/warning/help/left-right gestures/target feedback; branch before
   trigger/stop, cancel/self/invalid/empty no-op, existing control tick outside release
   even after editor close/focus/selection; global mute/latest volume regression.

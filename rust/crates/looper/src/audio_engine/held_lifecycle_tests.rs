@@ -25,6 +25,9 @@ const PROBE: &str = include_str!(concat!(
     "/../../../src/tests/flitzis_looper/controller/held_lifecycle_probe.py"
 ));
 
+#[path = "held_lifecycle_tests/retarget_tests.rs"]
+mod retarget_tests;
+
 fn write_input(root: &Path) -> PathBuf {
     let input = root.join("input");
     fs::create_dir(&input).unwrap();
