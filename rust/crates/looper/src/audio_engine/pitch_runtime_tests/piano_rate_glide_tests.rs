@@ -15,6 +15,8 @@ use crate::audio_engine::source_playback::SourcePlayback;
 
 #[path = "finite_window_rate_glide_tests.rs"]
 mod finite_window_rate_glide_tests;
+#[path = "lower_total_rate_glide_tests.rs"]
+mod lower_total_rate_glide_tests;
 #[path = "selected_stem_rate_glide_tests.rs"]
 mod selected_stem_rate_glide_tests;
 
@@ -66,7 +68,17 @@ fn initial_birth(route: &mut RateRoute, id: usize, speed: f64) -> Original {
 }
 
 fn initial_birth_note(route: &mut RateRoute, id: usize, speed: f64, note: i32) -> Original {
-    let mut original = route.admit(id, note, false);
+    let original = route.admit(id, note, false);
+    initial_birth_admitted(route, id, speed, original)
+}
+
+fn initial_birth_admitted(
+    route: &mut RateRoute,
+    id: usize,
+    speed: f64,
+    mut original: Original,
+) -> Original {
+    assert_eq!(original.id, id);
     route.assert_no_attacks();
     route.wait_action(&mut original);
     route.render_to(original.e);
@@ -101,12 +113,14 @@ fn initial_birth_note(route: &mut RateRoute, id: usize, speed: f64, note: i32) -
     route.references[id] = Some(Reference::birth(
         &route.reference_sources[id],
         id,
-        note,
+        original.note + original.extra,
         rate,
         route.lock,
         native,
         generation,
     ));
+    route.references[id].as_mut().unwrap().contract =
+        PitchIntent::new(original.note, original.extra).unwrap();
     assert_eq!(
         route.take_attacks(),
         vec![(
@@ -353,6 +367,7 @@ impl ResetOracle {
                 // Ordinary retrigger clears the pad filter independently of prefeed.
                 filter: PerPadDspChain::new(0, RATE as f32, 1),
                 note,
+                contract: PitchIntent::new(note, 0).unwrap(),
                 lock,
                 native,
                 generation,
@@ -487,11 +502,49 @@ fn apply_wet_attack(
     cached: Option<usize>,
 ) {
     let (case, midi) = input;
+    apply_wet_attack_from(
+        route,
+        originals,
+        accepted,
+        initial_speed,
+        WetAttack {
+            case,
+            pitch: PitchIntent::new(note, 0).unwrap(),
+            cached,
+        },
+        |route| route.admit(0, note, midi),
+    );
+}
+
+struct WetAttack<'a> {
+    case: &'a str,
+    pitch: PitchIntent,
+    cached: Option<usize>,
+}
+
+fn apply_wet_attack_from(
+    route: &mut RateRoute,
+    originals: &[Original; 2],
+    accepted: &RateReceipt,
+    initial_speed: f64,
+    input: WetAttack<'_>,
+    admit: impl FnOnce(&mut RateRoute) -> Original,
+) {
+    let WetAttack {
+        case,
+        pitch,
+        cached,
+    } = input;
+    let note = pitch.total_semitones();
     let old = VoiceWitness::capture(route, 0);
     let peer = VoiceWitness::capture(route, 1);
     let starts = route.starts;
     let frame = route.route.transport.output_frame();
-    let mut attack = route.admit(0, note, midi);
+    let mut attack = admit(route);
+    assert_eq!(
+        (attack.note, attack.extra),
+        (pitch.base_shift(), pitch.extra_shift())
+    );
     assert_eq!(attack.t, frame);
     assert_eq!(attack.e, attack.t + 8192);
     route.assert_no_attacks();
@@ -511,7 +564,7 @@ fn apply_wet_attack(
         accepted.execution.unwrap(),
         attack.e,
     );
-    let oracle = ResetOracle::new(
+    let mut oracle = ResetOracle::new(
         &route.reference_sources[0],
         &timeline,
         note,
@@ -519,6 +572,7 @@ fn apply_wet_attack(
         native,
         old.generation + 1,
     );
+    oracle.reference.contract = pitch;
     if case == "wet-on-plus12-cold-above2" {
         assert!(oracle.cold_pitch > 2.0);
         assert!(oracle.endpoint_pitch <= 2.0);
@@ -556,6 +610,11 @@ fn apply_wet_attack(
     assert_eq!(voice.source_playback.position().fraction, 0.0);
     assert_eq!(voice.generation, old.generation + 1);
     assert_eq!(voice.stretch.native_state_address(), native);
+    assert_eq!(voice.stretch.adopted_request_id(), Some(attack.sequence));
+    assert_eq!(
+        voice.stretch.native_origin_tuple(),
+        Some((pitch, route.lock, attack.sequence))
+    );
     assert_eq!(
         voice.stretch.native_primed_output_frames(),
         oracle.active_end - oracle.active_origin
@@ -567,10 +626,7 @@ fn apply_wet_attack(
     let fifo_at_e = voice.stretch.pending_fifo_frames();
     peer_at_e.unchanged(route, 1);
     assert_ready_cache(route, cached);
-    assert_eq!(
-        route.route.mixer.pad_pitch_intent(0),
-        Some(PitchIntent::new(note, 0).unwrap())
-    );
+    assert_eq!(route.route.mixer.pad_pitch_intent(0), Some(pitch));
     assert_eq!(
         route.take_attacks(),
         vec![(0, attack.content.cell().index(), attack.content.lifetime())]
@@ -587,7 +643,8 @@ fn apply_wet_attack(
         );
     });
     let history_evidence = serde_json::json!({
-        "case":case,"original_birth":originals[0].e,"original_T":attack.t,"original_E":attack.e,
+        "case":case,"base":pitch.base_shift(),"extra":pitch.extra_shift(),"total":note,
+        "original_birth":originals[0].e,"original_T":attack.t,"original_E":attack.e,
         "A_active":oracle.active_origin,"E_active":oracle.active_end,"H":oracle.bound,
         "endpoint_H":oracle.endpoint_bound,"cold_p":oracle.cold_pitch,"endpoint_p":oracle.endpoint_pitch,
         "first_prefeed_p":scalar_pitch(note, route.lock, timeline[oracle.active_origin].rate),

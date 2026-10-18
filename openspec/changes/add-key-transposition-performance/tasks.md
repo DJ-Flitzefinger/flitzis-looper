@@ -469,6 +469,20 @@ each subscriber's own pending then accepted/current publication. The full existi
   diagnostic and adjacent coverage/replay/permit/action/endpoint/controller/
   lifecycle checks pass. Private Release/API/imports, App feedback 8, lint,
   formatting and affected strict pass; original negative attempts are retained.
+- [x] Verify the original supported lower total -23 through distinct piano note
+  -5 and offset -18 during an accepted actual-rate glide: real stopped offset
+  SET controls, genuine birth/history, GUI and learned MIDI retrigger, both locks,
+  original T/E and content despite later selection, independent total/r(n)/H/
+  cold-profile/PCM/Native/FIFO/EQ and peer/master references. Reuse existing
+  complete FullMix path first; fix only a demonstrated product defect and retain
+  all full-domain, acoustic, finite, continuous-O, resource and Human gates.
+  Four GUI/MIDI × OFF/ON cases pass Debug (5.01 s) and Release (4.28 s) without
+  production changes. Actual H=15360 OFF/20480 ON, genuine prior history
+  16384/30208, independently queried maximum H=15360/29184; first PCM exact,
+  continuing maximum 1.49e-8. Whole pitch 68 plus one existing ignored diagnostic
+  passes; unchanged-source private Release/API/import and adjacent guard checks
+  are reused. Formatting, affected strict and all-target lint pass; full new
+  embedded-helper lint passes and older literal's 16 existing findings remain.
 - [ ] V0: complete new controls+copy/move/bank/hold/pending/restore workload and
   P6 resource/216/disk/RSS proofs repeated; preserve all failed attempts/source roles.
 - [ ] During implementation: focused meaningful compile/regressions and required

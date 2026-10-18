@@ -96,6 +96,15 @@ Piano and transposition actions SHALL change only pitch intent h=2^(k/12), not a
 - **AND** missing, foreign, stale or wrong-window ACK, changed physical views or selection, unavailable seam coverage or history, invalid publication or late work SHALL refuse the whole original action rather than expand an unproved window, delay E or partially apply pitch/restart
 - **AND** a fresh valid acknowledged request SHALL remain usable on the same existing worker; this bounded unchanged-window behavior SHALL NOT certify finite window handover, active transitions, continuous-from-birth equivalence, acoustic quality, performer deadlines, resource or Human acceptance
 
+#### Scenario: A lower total piano and offset retrigger keeps the original glide
+- **GIVEN** a supported complete FullMix source has an independently chosen transposition offset of -18 semitones established through ordinary stopped SET controls, and its playing voice has sufficient genuine source history for the pitch-dependent reset requirement
+- **WHEN** a real piano note of -5 semitones or its learned MIDI SET_RETRIGGER is captured during an accepted actual-rate glide with its original E inside that glide
+- **THEN** the captured action SHALL retain the distinct piano note -5 and offset -18, resolving total -23 without replacing the offset, folding the octave or borrowing another selected pad's content
+- **AND** the action SHALL use its own existing worker, current history and Native authority to apply pitch plus one retrigger at its unchanged original E; a later pad selection SHALL NOT redirect it
+- **AND** the reset history SHALL retain h=2^(-23/12), actual r(n), OFF p=h and ON p=h/r(n), the independently required maximum H and first-block cold profile without substituting the bank target for the actual glide
+- **AND** the first adopted sample, continuing PCM, FIFO and filters SHALL match independent original-PCM, scalar-rate and direct-Native references while peer and master chronology remain unchanged
+- **AND** this supported-domain interaction SHALL NOT certify the full domain matrix, finite handover, active selection transitions, continuous-from-birth equivalence, acoustic quality, Native allocation/logging, deadlines, resources or Human acceptance
+
 ### Requirement: Learned pitch steps distinguish CC buttons and encoder encoding
 The system SHALL keep Note and keyboard step actions as explicit signed attacks and SHALL treat a newly learned fixed step on a MIDI CC/NRPN button as one high-edge attack, ignoring release and repeated held-high values. The compact MIDI controls SHALL expose an explicit encoding preference for newly learned CC/NRPN step bindings: button, absolute encoder, two's complement encoder or offset-binary encoder. The saved semantic action SHALL retain that encoding; changing the UI preference SHALL not reinterpret existing bindings. Existing fixed-note/base/extra bindings SHALL retain their established semantics.
 

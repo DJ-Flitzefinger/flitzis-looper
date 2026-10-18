@@ -4087,3 +4087,55 @@ This is unchanged-window Normal-loop engineering. Finite window handover, active
 selection transitions, continuous-O, acoustic predicates, performer/device
 deadlines, Native/C++ allocation/logging, P6/V0/216/30-minute resource and all
 Human/parent acceptance gates remain open.
+
+### Lower combined piano/offset during a public glide — 2026-10-17
+
+The original K13/K16–K22 range obligations also need the actual combined controls,
+not only constant-rate DSP or stopped r=1 births. Four isolated cases now establish
+offset -18 through eighteen real stopped Transposition SET captures, drain each
+applied receipt and retain its controller projection. Actual MIDI Learn saves
+`pitch.note:-5:set_retrigger` to owned JSON, reloads a fresh mapping controller and
+keeps those saved bytes unchanged. The final real ImGui note -5 or learned MIDI
+attack retains the distinct captured tuple (-5, -18), total -23. Genuine selection
+receipts surround it and leave pad 1 selected; the accepted action still owns pad
+0. Selection receipts are the limited PianoProbe's projection seam, not a full
+App/device test. Complete deterministic PCM, accepted timing labels and host waits
+are declared inputs; reference PCM has separate independently evaluated allocations.
+
+Initial A is wet at the previously proved total +2 OFF or -5 ON, represented by
+piano +20/-18 or +13/-18; B retains its previous independent birth. The scalar and
+Raw C-ABI reference query every declared .5→2 public rate before choosing genuine
+history to render. A later read-only journal snapshot verifies retained coverage;
+it supplies no reference phase, rate, pitch or PCM. The shared reset oracle uses
+total -23 for h=2^(-23/12), with OFF p=h and ON p=h/r(n), while separately retaining
+the captured piano/offset contract and the action's own adopted Native request.
+Earlier zero-offset callers keep their original defaults and 4096-frame birth check.
+
+All four GUI/MIDI × OFF/ON Debug cases pass in 5.01 s (23.49 s compilation) without
+any production change or demonstrated runtime defect. OFF needs H=15360 and renders
+16384 actual frames before the rate event; ON renders 30208 against the independently
+queried conservative maximum H=29184, then needs H=20480 across 18 profiles for its
+original E. ON cold p=0.5297315471796477 differs from endpoint p=0.19619686932579533;
+OFF remains p=0.2648657735898238. Original T/E are 24649/32841 OFF and 38473/46665 ON,
+with actual E rate 1.3500000000000008, target 2 and 439 frames until its next step.
+Every first sample is exact. Following comparisons total 40649 frames OFF and
+54473 ON, with maximum errors 1.49e-8 and zero respectively. Own Native/FIFO/filter,
+peer and master chronology remain checked. Optimized Release passes all four
+children in 4.28 s (1 min 42 s compilation). The entire affected pitch suite passes
+68 tests with one existing explicitly ignored Native diagnostic in 157.57 s.
+Its 16 productive profiles still complete 3072 pressure plus 48 recovery actions
+with zero final claims and zero independent PCM error. All-target lint passes in
+12.66 s with the same 95 library-test warnings and 45 duplicates; formatting,
+affected official strict validation and whitespace pass. One independent final
+review covers the source, preserved defaults and declared evidence limits.
+
+The new embedded Python helper passes full project lint after fixing seven
+style findings while preserving assertions. Extracting the older common literal
+also exposed pre-existing lint debt: 17 baseline findings become 16 after formatting
+removes one long-line finding; no new diagnostic was added. This is not a claim
+that the older literal passes full lint. No production lint suppression was added.
+
+This bounded supported-domain interaction does not close the full numerical/rate
+matrix, continuous-from-birth/acoustic/finite/active-transition, Native heap/logging,
+deadline/resource or Human/device/parent gates. The preceding private Release/API/
+import/App-feedback proof is reused because production sources are unchanged.

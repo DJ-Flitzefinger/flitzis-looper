@@ -38,14 +38,15 @@ from flitzis_looper.input_mapping.actions import LooperAction
 
 
 def configure(probe):
-    probe.storage.enter_context(patch(
-        "flitzis_looper.input_mapping.controller.save_midi_mapping_file"))
-    for slot, period, end in ((0, .5, 2.1), (1, .375, 1.6)):
+    probe.storage.enter_context(
+        patch("flitzis_looper.input_mapping.controller.save_midi_mapping_file")
+    )
+    for slot, period, end in ((0, 0.5, 2.1), (1, 0.375, 1.6)):
         # PianoProbe's legacy manual120 would bypass accepted-anchor publication.
         probe.project.manual_bpm[slot] = None
         probe.project.pad_timing_intent[slot] = "automatic"
         probe.project.pad_loop_auto[slot] = False
-        probe.project.pad_loop_start_s[slot] = .1
+        probe.project.pad_loop_start_s[slot] = 0.1
         probe.project.pad_loop_end_s[slot] = end
         timing = probe.transport.bpm.current_timing(slot)
         metadata = probe._audio.current_constant_timing(slot)
@@ -59,39 +60,50 @@ def configure(probe):
     probe.project.selected_pad = 0
     probe.project.input_mapping_enabled = True
     probe._audio.set_input_mapping_enabled(True)
-    for number, key in ((40, "ui.select_pad:0"), (41, "ui.select_pad:1"),
-                        (60, "pitch.note:7:set_retrigger")):
-        probe.input_mapping.save_mapping(
-            "midi", f"midi:note:1:{number}", LooperAction(key=key))
+    for number, key in (
+        (40, "ui.select_pad:0"),
+        (41, "ui.select_pad:1"),
+        (60, "pitch.note:7:set_retrigger"),
+    ):
+        probe.input_mapping.save_mapping("midi", f"midi:note:1:{number}", LooperAction(key=key))
     assert probe.input_mapping.refresh_pitch_runtime_state()
     probe.ctx.audio.global_.toggle_bpm_lock()
     assert probe.project.bpm_lock
     assert probe.session.bpm_lock_anchor_pad_id == 0
-    assert probe.session.bpm_lock_anchor_revision == probe.transport.bpm.current_timing(0).accepted_revision
+    assert (
+        probe.session.bpm_lock_anchor_revision
+        == probe.transport.bpm.current_timing(0).accepted_revision
+    )
     probe.ctx.audio.global_.set_speed(2.0)
     assert probe.project.speed == 2.0
-    assert probe.session.master_period_seconds == .25
+    assert probe.session.master_period_seconds == 0.25
 
 
-def mouse(probe, slot, note):
+def mouse(probe, slot, note, extra=0):
     probe.project.selected_pad = slot
     probe.frame()
     before = set(probe.transport.pitch._owners)
     item = next(item for item in probe.geometry if item.key.value == note)
     io = imgui.get_io()
-    io.add_mouse_pos_event(probe.origin[0] + item.center_x,
-        probe.origin[1] + item.height * (.45 if item.key.black else .85))
+    io.add_mouse_pos_event(
+        probe.origin[0] + item.center_x,
+        probe.origin[1] + item.height * (0.45 if item.key.black else 0.85),
+    )
     io.add_mouse_button_event(0, True)
     probe.frame()
     io.add_mouse_button_event(0, False)
     probe.frame()
     created = set(probe.transport.pitch._owners) - before
-    assert len(created) == 1, (slot, note, probe.session.input_mapping_error,
-                               probe.transport.pitch.status(slot))
+    assert len(created) == 1, (
+        slot,
+        note,
+        probe.session.input_mapping_error,
+        probe.transport.pitch.status(slot),
+    )
     owner = probe.transport.pitch._owners[created.pop()]
     assert owner.published and owner.content_id == probe.project.pad_content[slot].instance_id
     capture = owner.capture
-    assert (capture.base_shift, capture.extra_shift, capture.retrigger) == (note, 0, True)
+    assert (capture.base_shift, capture.extra_shift, capture.retrigger) == (note, extra, True)
     assert capture.current_control_slot == slot and capture.content_is_current
     assert probe.session.input_mapping_error is None
     return capture
@@ -104,11 +116,14 @@ def midi_handoff(probe):
         event = probe._audio.poll_input_events()
         if event is None:
             assert monotonic() < deadline, "actual MIDI barrier did not arrive"
-            sleep(.001)
+            sleep(0.001)
         else:
             events.append(event)
     assert [event.get("action_key") for event in events] == [
-        "ui.select_pad:0", "pitch.note:7:set_retrigger", "ui.select_pad:1"]
+        "ui.select_pad:0",
+        "pitch.note:7:set_retrigger",
+        "ui.select_pad:1",
+    ]
     event = events[1]
     capture = event["captured_pitch"]
     assert event["direct"] and not event["dispatched"]
@@ -127,15 +142,15 @@ def request_rate(probe):
     assert probe.session.bpm_lock_anchor_pad_id == 0
     timing = probe.transport.bpm.current_timing(0)
     assert timing is not None and timing.accepted_revision
-    assert timing.accepted_identity is not None and timing.period_seconds == .5
+    assert timing.accepted_identity is not None and timing.period_seconds == 0.5
     assert probe.project.manual_bpm[0] is None and probe.project.manual_bpm[1] is None
     probe.ctx.audio.global_.set_speed(1.8)
     assert probe.project.speed == 1.8
-    assert probe.session.master_period_seconds == .5 / 1.8
+    assert probe.session.master_period_seconds == 0.5 / 1.8
     # Requested Python intent is not Native effective confirmation.
     status = probe.transport.global_params.global_rate_status()
     assert status.state == "queued" and status.requested_speed == 1.8
-    assert status.effective_speed == 2.0 and status.effective_master_period == .25
+    assert status.effective_speed == 2.0 and status.effective_master_period == 0.25
 
 
 def observe_rate(probe):
@@ -143,9 +158,17 @@ def observe_rate(probe):
     status = probe.ctx.state.global_.global_rate_status()
     actual = probe._audio.global_rate_status()
     assert actual is not None
-    for field in ("state", "request_revision", "effect_revision", "requested_speed",
-                  "effective_speed", "requested_master_period", "effective_master_period",
-                  "execution_frame", "error"):
+    for field in (
+        "state",
+        "request_revision",
+        "effect_revision",
+        "requested_speed",
+        "effective_speed",
+        "requested_master_period",
+        "effective_master_period",
+        "execution_frame",
+        "error",
+    ):
         assert getattr(status, field) == actual[field], (field, status, actual)
 
 
@@ -155,7 +178,9 @@ def settle(probe, capture, rejected):
     if rejected:
         assert capture.state == "rejected" and not capture.effective
         assert probe.transport.pitch.status(0) == (
-            "error", "Audio changed during pitch preparation; try again.")
+            "error",
+            "Audio changed during pitch preparation; try again.",
+        )
     else:
         assert capture.state == "applied" and capture.effective
         assert probe.transport.pitch.status(capture.current_control_slot) == ("applied", None)
@@ -185,6 +210,7 @@ struct Original {
     e: u64,
     id: usize,
     note: i32,
+    extra: i32,
     prepared_native: Option<usize>,
 }
 
@@ -197,7 +223,7 @@ impl Original {
         assert_eq!(self.action.execution_target(), self.e);
         assert_eq!(
             self.action.render().pitch,
-            PitchIntent::new(self.note, 0).unwrap()
+            PitchIntent::new(self.note, self.extra).unwrap()
         );
         assert!(!self.action.exclusive());
         assert!(self.action.sync());
@@ -276,6 +302,9 @@ struct Reference {
     raw: Option<RawRubberBand>,
     filter: PerPadDspChain,
     note: i32,
+    // The independent scalar note is TOTAL semitones; retain the separately
+    // captured base/offset contract when equal totals use different controls.
+    contract: PitchIntent,
     lock: bool,
     native: usize,
     generation: u64,
@@ -315,6 +344,7 @@ impl Reference {
             raw,
             filter: PerPadDspChain::new(id, RATE as f32, 1),
             note,
+            contract: PitchIntent::new(note, 0).unwrap(),
             lock,
             native,
             generation,
@@ -643,10 +673,9 @@ impl RateRoute {
             if let Some(raw) = &reference.raw {
                 assert_eq!(voice.stretch.pending_fifo_frames(), raw.fifo());
                 assert!(
-                    voice.stretch.owns_pitch_contract(
-                        PitchIntent::new(reference.note, 0).unwrap(),
-                        self.lock
-                    )
+                    voice
+                        .stretch
+                        .owns_pitch_contract(reference.contract, self.lock)
                 );
                 let actual_pitch = voice.stretch.native_pitch_scale_observation().unwrap();
                 assert!((actual_pitch - reference.pitch()).abs() < 1e-12);
@@ -734,8 +763,18 @@ impl RateRoute {
     }
 
     fn admit(&mut self, id: usize, note: i32, midi: bool) -> Original {
-        let frame = self.route.transport.output_frame();
         let py = self.capture(id, note, midi);
+        self.admit_capture(id, note, 0, py)
+    }
+
+    fn admit_capture(
+        &mut self,
+        id: usize,
+        note: i32,
+        extra: i32,
+        py: Py<CapturedPitchAction>,
+    ) -> Original {
+        let frame = self.route.transport.output_frame();
         let action = Python::attach(|py_context| py.borrow(py_context).clone());
         assert_eq!(action.original_due_frame(), frame);
         self.callback(0);
@@ -747,6 +786,7 @@ impl RateRoute {
             e: action.execution_target(),
             id,
             note,
+            extra,
             py,
             action,
             prepared_native: None,
