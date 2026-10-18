@@ -29,6 +29,7 @@ from flitzis_looper.constants import (
     PAD_GAIN_FINE_STEP_DB,
 )
 from flitzis_looper.input_mapping.actions import PitchCcMode, describe_pitch_rejection
+from flitzis_looper.key_intent import MusicalKey
 from flitzis_looper.ui.constants import (
     CONTROL_ACTIVE_BORDER_RGBA,
     CONTROL_BORDER_RGBA,
@@ -53,7 +54,7 @@ if TYPE_CHECKING:
     from flitzis_looper.input_mapping import PadEqBand
     from flitzis_looper.key_intent import PadKeyIntent
     from flitzis_looper.models import StemMixMode
-    from flitzis_looper.ui.context import UiContext
+    from flitzis_looper.ui.context import SourceKeyEditor, UiContext
     from flitzis_looper.ui.styles import ButtonStyleName
 
 
@@ -419,10 +420,76 @@ def _render_bpm(ctx: UiContext, info: _SidebarPadInfo) -> None:
         ctx.audio.pads.clear_manual_bpm(info.pad_id)
 
 
+def _apply_source_key(ctx: UiContext, editor: SourceKeyEditor, key: str | None) -> None:
+    if ctx.ui.source_key.is_current(editor):
+        try:
+            if key is None:
+                ctx.audio.pads.clear_manual_key(editor.pad_id)
+            else:
+                ctx.audio.pads.set_manual_key(editor.pad_id, key)
+        except (RuntimeError, ValueError) as error:
+            ctx.ui.source_key.error = str(error)
+            return
+    ctx.ui.source_key.close()
+    imgui.close_current_popup()
+
+
+def _render_source_key_choices(ctx: UiContext, editor: SourceKeyEditor) -> None:
+    imgui.text("Source key metadata")
+    if ctx.ui.source_key.error is not None:
+        imgui.text_wrapped(f"Source correction unavailable: {ctx.ui.source_key.error}")
+    imgui.text("Major / Minor")
+    minor_column = imgui.get_cursor_pos_x() + imgui.calc_text_size("Major").x + 24
+    for root in range(12):
+        for minor in (False, True):
+            if minor:
+                imgui.same_line()
+                imgui.set_cursor_pos_x(minor_column)
+            label = MusicalKey(root=root, mode="minor" if minor else "major").label
+            if imgui.small_button(f"{label} ##pitch_source_key_{label}"):
+                _apply_source_key(ctx, editor, label)
+                return
+    if imgui.small_button("Use detected source##pitch_source_clear"):
+        _apply_source_key(ctx, editor, None)
+
+
+def _render_source_key(ctx: UiContext, info: _SidebarPadInfo, intent: PadKeyIntent) -> None:
+    available = ctx.ui.source_key.capture(info.pad_id) is not None
+    marker = " (manual)" if intent.correction is not None else ""
+    imgui.begin_disabled(not available)
+    clicked = imgui.small_button("Source##pitch_source_edit")
+    imgui.end_disabled()
+    if imgui.is_item_hovered(imgui.HoveredFlags_.allow_when_disabled):
+        detected = intent.source.raw_key if intent.source is not None else "Unknown"
+        imgui.set_tooltip(
+            f"Detected: {detected}\nCorrect source-key metadata; pitch and playback stay unchanged."
+            if available
+            else "Source is not ready for metadata editing."
+        )
+    imgui.same_line()
+    imgui.text_wrapped(f"{intent.source_label or 'Unknown'}{marker}")
+    popup = "Source key metadata##pitch_source_correction"
+    if clicked and ctx.ui.source_key.open(info.pad_id):
+        imgui.open_popup(popup)
+    if not imgui.begin_popup(popup):
+        ctx.ui.source_key.close()
+        return
+    try:
+        editor = ctx.ui.source_key.pending
+        if editor is None or not ctx.ui.source_key.is_current(editor):
+            ctx.ui.source_key.close()
+            imgui.close_current_popup()
+            return
+        _render_source_key_choices(ctx, editor)
+    finally:
+        imgui.end_popup()
+
+
 def _render_key(ctx: UiContext, info: _SidebarPadInfo) -> None:
     intent = ctx.state.pads.key_intent(info.pad_id)
     imgui.text_wrapped("Key + Transposition")
-    _labeled_wrapped_value_row("Source", intent.source_label or "Unknown", avail_x=info.avail_x)
+    _render_source_key(ctx, info, intent)
+    intent = ctx.state.pads.key_intent(info.pad_id)
     opened = ctx.state.pitch_menus.base_open
     if imgui.button(f"{'v' if opened else '>'} Piano##pitch_piano_toggle"):
         ctx.ui.toggle_pitch_menu("base")

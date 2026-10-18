@@ -363,8 +363,37 @@ def pitch_render(
         source=SourceKeyVersion(raw_key="Dm"), base_shift=-2, extra_shift=-12
     )
     audio_engine_mock.capture_input_timestamp_ns.return_value = 123
+    # Source-editor ownership uses a synthetic strict Native identity, not real audio admission.
+    audio_engine_mock.waveform_source_identity.return_value = (7, "b" * 64, 128, 44_100)
     audio_engine_mock.capture_pad_pitch_action.side_effect = _PitchCapture(controller)
     return _PitchRender(controller, monkeypatch)
+
+
+def test_actual_source_editor_exposes_manual_reference_choices_beside_source(
+    pitch_render: _PitchRender, audio_engine_mock: Mock
+) -> None:
+    """Real mouse/render baseline; Native admission is unused by metadata controls."""
+    with _imgui_context():
+        pitch_render.frame()
+        frame = pitch_render.frame()
+        assert "pitch_source_edit" in frame.controls
+        frame = pitch_render.click(frame.controls["pitch_source_edit"])
+        choices = {
+            identifier
+            for identifier in frame.controls
+            if identifier.startswith("pitch_source_key_")
+        }
+        assert choices == {
+            f"pitch_source_key_{root}{suffix}"
+            for root in ("C", "C#", "D", "D#", "E", "F", "F#", "G", "G#", "A", "A#", "B")
+            for suffix in ("", "m")
+        }
+        assert frame.labels["pitch_source_clear"] == "Use detected source"
+        assert frame.piano is None
+        assert frame.piano_items == 0
+    audio_engine_mock.capture_pad_pitch_action.assert_not_called()
+    audio_engine_mock.capture_selected_pitch_action.assert_not_called()
+    audio_engine_mock.publish_pitch_action.assert_not_called()
 
 
 @pytest.mark.parametrize(

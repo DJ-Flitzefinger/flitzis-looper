@@ -517,6 +517,16 @@ its own marker; a chosen note outside the displayed range receives an exact text
 description instead of a folded highlight. Unknown source keys retain numerical
 note and offset controls. NoteOff preserves the choice and highlight.
 
+The compact Source button opens metadata correction with twelve Major and twelve
+Minor choices. Use detected source removes only that correction. Both actions
+preserve the numeric piano shift and octave, offset, Retrigger preferences and
+playback; Original Key remains the separate reset of all pitch modifications. Raw unknown/legacy
+labels remain readable, a manual marker identifies corrections and the tooltip
+shows detected metadata. The popup retains its original content/path/Native source
+identity and closes after a different selection or replacement. Metadata analysis
+completion alone does not invalidate a conscious new correction. Existing edit
+reservations and exhausted metadata epochs display their refusal in the popup.
+
 Transposition's +1/Reset/-1 row supports the signed extra range -18..+18 with its
 own Retrigger. Reset clears only that offset, preserving the piano note/octave and
 source correction. Original Key clears the chosen note, offset and manual source

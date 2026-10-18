@@ -5,6 +5,7 @@ from typing import TYPE_CHECKING, Literal, TypeVar, cast
 from pydantic import BaseModel
 
 from flitzis_looper.controller.current_timing import UNRESOLVED_TIMING, UnresolvedTiming
+from flitzis_looper.controller.key_metadata import loaded_source_identity
 from flitzis_looper.input_mapping import (
     KeyboardBinding,
     LooperAction,
@@ -73,6 +74,16 @@ class PitchMenuState:
     base_open: bool = False
     extra_open: bool = False
     midi_cc_mode: PitchCcMode = "button"
+
+
+@dataclass(frozen=True)
+class SourceKeyEditor:
+    """Transient metadata target; never an audio or analysis permit."""
+
+    pad_id: int
+    content_instance: str
+    path: str
+    source_identity: tuple[int, str, int, int]
 
 
 class ReadOnlyStateProxy[T]:
@@ -1118,6 +1129,45 @@ class PerformanceConfirmationActions:
         self._controller.performance_confirmation.dismiss(intent)
 
 
+class SourceKeyEditorActions:
+    """Keep one metadata popup bound to its original living source."""
+
+    def __init__(self, controller: AppController):
+        self._controller = controller
+        self.pending: SourceKeyEditor | None = None
+        self.error: str | None = None
+
+    def capture(self, pad_id: int) -> SourceKeyEditor | None:
+        """Read a selected living source without using timing or metadata epochs."""
+        project = self._controller.project
+        if project.selected_pad != pad_id:
+            return None
+        loader = self._controller.loader
+        if loader.is_sample_loading(pad_id) or not loader.is_sample_loaded(pad_id):
+            return None
+        content = project.pad_content[pad_id]
+        path = project.sample_paths[pad_id]
+        identity = loaded_source_identity(self._controller._audio, pad_id)
+        if content is None or path is None or identity is None:
+            return None
+        return SourceKeyEditor(pad_id, content.instance_id, path, identity)
+
+    def open(self, pad_id: int) -> bool:
+        """Capture this popup's source independently of later selection changes."""
+        self.pending = self.capture(pad_id)
+        self.error = None
+        return self.pending is not None
+
+    def is_current(self, editor: SourceKeyEditor) -> bool:
+        """Refuse replacement and equal-byte Native-generation ABA, not analysis."""
+        return self.pending == editor and self.capture(editor.pad_id) == editor
+
+    def close(self) -> None:
+        """Dismiss only transient metadata UI state."""
+        self.pending = None
+        self.error = None
+
+
 class UiActions:
     """UI-related actions."""
 
@@ -1128,6 +1178,7 @@ class UiActions:
         self._controller = controller
         self._state = state if state is not None else UiState(controller)
         self._pitch_menu_selection: dict[PitchMenu, tuple[int, int | None]] = {}
+        self.source_key = SourceKeyEditorActions(controller)
         self.settings = SettingsActions(controller)
         self.waveform = WaveformEditorActions(controller)
         self.confirmation = PerformanceConfirmationActions(controller)

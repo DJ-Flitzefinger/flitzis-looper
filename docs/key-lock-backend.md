@@ -4265,3 +4265,70 @@ clock and controlled worker waits remain declared seams. No App, MIDI port,
 Engine.run, device or installation was started. All retained acoustic timing
 failures, full actual-rate/continuous-O/finite-transition, Native heap/logging,
 deadline/resource and Human/parent acceptance gates remain open.
+
+### Independent Source correction beside the central piano — 2026-10-18
+
+Replacing the old Correction dropdown had left the retained Group1 source-key
+correction and independent removal with no rendered callers. Original Key could
+not substitute because it also clears both numeric shifts. A real ImGui baseline
+failed on the missing Source editor (0.39 s). The compact Source button now opens
+twelve Major and twelve Minor metadata choices plus Use detected source, using
+the existing metadata-only set/clear methods. It preserves the Piano toggle,
+central keyboard, offset row and asymmetric reset meanings.
+
+One immutable context-local UI capture retains selected pad, content instance,
+path and the existing strict loaded-source generation/digest/frames/rate tuple.
+The popup validates this capture both before rendering choices and immediately
+before applying them. Selection, content/path replacement or equal-byte Native
+generation ABA closes the old editor; a fresh editor can choose the current
+content independently. Timing, processing mode, analysis completion and correction
+epochs do not constitute source replacement. No Native owner or timing permit is
+stored in this UI capture. Unready sources disable metadata editing visibly.
+Existing edit reservations or exhausted correction epochs refuse through the
+original controller guard, retain old intent, show the reason and permit a fresh
+valid retry in the popup. Only the expected RuntimeError/ValueError is handled.
+
+The actual rendered regressions cover all 24 canonical choices, independent
+clearing with detected/unknown/missing metadata, major/minor changes, unchanged
+numeric shifts/preferences/source and analysis epochs, master settings and
+projected playhead. Real JSON flush/reopen retains a correction and its explicit
+removal. Existing captured-MIDI and already-published pending-owner tests retain
+their original synthetic envelope, owner and timestamp; they do not claim Native
+effectiveness. Stale-popup selection/content/path/generation cases and both real
+epoch-capacity and declared reservation-refusal/retry cases pass. The Native
+identities, input envelopes and audio engine in these GUI/controller fixtures are
+explicit fakes. Their command observation permits only existing read getters;
+capture, publish, cancel and timestamp admission remain absent for metadata edits.
+
+The initial 36-case focused run failed in 2.65 s. It exposed a real label problem:
+appending an ImGui hidden-ID delimiter directly after C# made a triple-hash label
+and lost visible sharp/identifier text. A separator preserves all canonical
+choices. Its observation also wrongly counted ordinary piano timing reads as
+audio commands; adding only those two read getters retained every command guard.
+A later valid legacy label containing a double hash independently failed in
+0.39 s. The final Source button has a fixed label/identity and renders raw metadata
+as separate wrapped text, preserving unknown strings without interpreting them
+as widget syntax. An initial new-test observation forgot to reset fixture-startup
+Mock calls; isolating the GUI observation corrected that failure without allowing
+any mutating call. No real Engine.run or device was invoked by those mocks.
+
+The final affected UI/input-mapping/piano/pitch/metadata/persistence/key-intent
+suites pass 1327 tests in 33.37 s. An earlier 1326-case run passed in 35.31 s before
+the additional legacy-label regression and presentation repair. Changed Python
+full lint, formatting and types pass across four files; initial complexity limits
+were resolved by separating the context-local editor and rendering helpers,
+without suppressions. A locked stripped private Release wheel is freshly produced
+in 0.17 s from the unchanged cached Native build, with its 23 existing warnings.
+Actual private Native origin, release profile, eight bootstrap API checks, the
+existing waveform source-identity method and real App/piano/sidebar/context/global-
+parameter/BS-RoFormer imports pass. All 74 Source/piano GUI and App-feedback tests
+pass in 4.60 s against it. No module was installed; one independent final review
+covers this bounded change.
+
+No Rust production, Native API/ABI, dependency, saved schema, scheduler or DSP
+changed. The preceding 70-test Native pitch suite plus one existing ignored
+diagnostic, 18 MIDI-step checks and Native lint retain their original unchanged
+source results; they were not rerun as new Source-audio evidence. Human App,
+held Native, settings and original audio remain unchanged. All acoustic timing,
+continuous-O/actual-rate/finite-transition, Native heap/logging, deadline/resource,
+device/listening and Human/parent acceptance gates remain open.

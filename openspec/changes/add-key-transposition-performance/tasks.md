@@ -512,6 +512,19 @@ each subscriber's own pending then accepted/current publication. The full existi
   including zero. Whole pitch 70 plus one existing ignored diagnostic, MIDI
   step 18, private Release/API/import and private GUI/App-feedback 35 pass.
   Changed Python lint/types, Rust formatting/lint and affected strict pass.
+- [x] Restore reachable independent source metadata correction/removal at the
+  Source row through the existing set/clear methods. Reproduce the missing UI;
+  prove actual rendered major/minor choices and independent clear, persisted
+  correction/analysis epochs, unchanged numeric/audio/accepted-event state and
+  safe editor behavior across selected-content changes. Preserve the central
+  piano, removed Correction dropdown and asymmetric reset contracts.
+  Missing-control baseline fails; real GUI tests cover all 24 keys, independent
+  removal/unknown labels, actual JSON reopen, pending captured envelopes, stale
+  selected/content/path/Native-generation owners and guarded refusal/retry.
+  Final affected Python suites pass 1327 cases; private Release/API/import checks
+  and 74 private GUI/App-feedback cases pass. Changed lint/format/types and
+  affected official strict pass. Existing unchanged Native/RT/quality gates retain
+  their original source profiles and acceptance limits.
 - [ ] V0: complete new controls+copy/move/bank/hold/pending/restore workload and
   P6 resource/216/disk/RSS proofs repeated; preserve all failed attempts/source roles.
 - [ ] During implementation: focused meaningful compile/regressions and required

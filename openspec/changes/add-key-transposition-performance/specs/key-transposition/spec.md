@@ -165,6 +165,15 @@ SHALL be three independent actions.
 - **THEN** source/base/result labels update consistently without sound/cursor/retrigger change
 - **AND** copies' corrections and both numeric shifts remain independent
 
+#### Scenario: Source metadata editing remains reachable beside the central piano
+- **GIVEN** a living selected content has detected, unknown or manually corrected source-key metadata
+- **WHEN** the user opens the compact Source-row editor and chooses a major/minor correction or independently restores detected metadata
+- **THEN** the rendered controls SHALL use the existing metadata-only set/clear path and persist the correction independently of the piano note, offset and both Retrigger preferences
+- **AND** the edit SHALL NOT capture or publish pitch audio work, move playback, change master timing or alter any already accepted action's original tuple, timestamp, content or T/E
+- **AND** a selection or content replacement while the editor is open SHALL NOT apply its stale choice to another content
+- **AND** an existing edit reservation or exhausted metadata epoch SHALL refuse the edit without changing intent or audio, keep the editor available and display the reason rather than escaping through the render loop
+- **AND** the editor SHALL preserve the central piano, Piano toggle, independent offset Reset and all-modification Original Key semantics without restoring the removed Correction dropdown
+
 ### Requirement: Analysis epochs preserve newer correction intent
 The system SHALL remove only a preexisting correction at successful deliberate new analysis admission and SHALL fence late analysis metadata by source/lifetime/analysis and correction epochs.
 
