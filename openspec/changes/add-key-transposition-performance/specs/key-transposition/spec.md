@@ -105,6 +105,16 @@ Piano and transposition actions SHALL change only pitch intent h=2^(k/12), not a
 - **AND** the first adopted sample, continuing PCM, FIFO and filters SHALL match independent original-PCM, scalar-rate and direct-Native references while peer and master chronology remain unchanged
 - **AND** this supported-domain interaction SHALL NOT certify the full domain matrix, finite handover, active selection transitions, continuous-from-birth equivalence, acoustic quality, Native allocation/logging, deadlines, resources or Human acceptance
 
+#### Scenario: An upper total piano and offset retrigger retains its cold profile
+- **GIVEN** a supported complete FullMix source has offset +18 established through ordinary stopped SET controls, and its genuine initial piano note -12 produces total +6 with independently verified pitch-dependent birth preparation
+- **AND** sufficient genuine post-birth source history has been rendered for the independently required maximum reset H; birth preroll SHALL NOT count as actual voice history
+- **WHEN** a real piano note +6 or its learned MIDI SET_RETRIGGER is captured during an accepted .5-to-2 actual-rate glide with its original E inside the glide
+- **THEN** the captured action SHALL retain piano note +6 and offset +18 as distinct intent, resolving supported total +24 without treating +24 as a standalone piano-note representation
+- **AND** its own existing worker and Native request SHALL retain the actual rate epochs, ON p=4/r(n) and OFF p=4, maximum included H and exact first-block cold profile, including ON p=8 during the earlier .5-rate history
+- **AND** pitch plus one retrigger SHALL apply at the unchanged original E with independent first/continuing PCM, Native/FIFO/filter and scalar references while peer/master chronology continues unchanged and a later pad selection does not redirect the captured content
+- **AND** unavailable genuine history or authority SHALL retain existing whole-action refusal rather than relabelling a birth preroll, using a bank-target cold profile or moving E
+- **AND** this bounded upper-domain interaction SHALL NOT certify the full domain/rate matrix, finite handover, active selection transitions, continuous-from-birth equivalence, acoustic quality, Native allocation/logging, deadlines, resources or Human acceptance
+
 ### Requirement: Learned pitch steps distinguish CC buttons and encoder encoding
 The system SHALL keep Note and keyboard step actions as explicit signed attacks and SHALL treat a newly learned fixed step on a MIDI CC/NRPN button as one high-edge attack, ignoring release and repeated held-high values. The compact MIDI controls SHALL expose an explicit encoding preference for newly learned CC/NRPN step bindings: button, absolute encoder, two's complement encoder or offset-binary encoder. The saved semantic action SHALL retain that encoding; changing the UI preference SHALL not reinterpret existing bindings. Existing fixed-note/base/extra bindings SHALL retain their established semantics.
 

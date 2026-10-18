@@ -483,6 +483,21 @@ each subscriber's own pending then accepted/current publication. The full existi
   passes; unchanged-source private Release/API/import and adjacent guard checks
   are reused. Formatting, affected strict and all-target lint pass; full new
   embedded-helper lint passes and older literal's 16 existing findings remain.
+- [x] Verify supported total +24 through distinct piano +6 and offset +18 during
+  the accepted .5-to-2 actual-rate glide. Retain real stopped offset SETs, Learn
+  and mapping reload, GUI/MIDI capture and later selection, dynamic independent
+  first-birth H for total +6, genuine post-birth history, typed captured contract,
+  ON cold p=8, included maximum H, original T/E and independent PCM/Native/FIFO/EQ
+  plus peer/master chronology. Preserve lower/default regressions and every
+  broad quality/resource/Human gate; change production only for a proven defect.
+  Four GUI/MIDI × OFF/ON cases pass Debug (5.78 s) without a production change.
+  Birth H is independently 4096 OFF/10240 ON; actual prior history is
+  14336/24576 and reset H=13312/23552. ON retains cold p=8 across 18 profiles,
+  exceeding endpoint H=10240. Every first sample is exact; continuing maximum
+  is 1.49e-8. Combined lower/upper Release passes eight children (8.53 s), whole
+  pitch Debug 69 passes plus one existing ignored diagnostic (162.52 s).
+  All-target lint, formatting and affected strict pass; new/shared total helper
+  passes full embedded lint, with the older common literal's 16 findings unchanged.
 - [ ] V0: complete new controls+copy/move/bank/hold/pending/restore workload and
   P6 resource/216/disk/RSS proofs repeated; preserve all failed attempts/source roles.
 - [ ] During implementation: focused meaningful compile/regressions and required

@@ -325,14 +325,82 @@ impl Reference {
         native: usize,
         generation: u64,
     ) -> Self {
+        Self::birth_captured(
+            source,
+            id,
+            PitchIntent::new(note, 0).unwrap(),
+            rate,
+            lock,
+            native,
+            generation,
+        )
+    }
+
+    fn birth_captured(
+        source: &SampleBuffer,
+        id: usize,
+        contract: PitchIntent,
+        rate: f64,
+        lock: bool,
+        native: usize,
+        generation: u64,
+    ) -> Self {
+        Self::birth_with_bound(
+            source,
+            id,
+            contract,
+            rate,
+            lock,
+            (native, generation),
+            |pitch| {
+                let bound = RawRubberBand::history_bound(pitch);
+                assert_eq!(bound, HISTORY);
+                bound
+            },
+        )
+    }
+
+    fn birth_captured_dynamic(
+        source: &SampleBuffer,
+        id: usize,
+        contract: PitchIntent,
+        rate: f64,
+        lock: bool,
+        native: usize,
+        generation: u64,
+    ) -> Self {
+        Self::birth_with_bound(
+            source,
+            id,
+            contract,
+            rate,
+            lock,
+            (native, generation),
+            RawRubberBand::history_bound,
+        )
+    }
+
+    fn birth_with_bound(
+        source: &SampleBuffer,
+        id: usize,
+        contract: PitchIntent,
+        rate: f64,
+        lock: bool,
+        owner: (usize, u64),
+        history_bound: fn(f64) -> usize,
+    ) -> Self {
+        let (native, generation) = owner;
+        let note = contract.base_shift() + contract.extra_shift();
         let h = 2.0_f64.powf(f64::from(note) / 12.0);
         let pitch = if lock { h / rate } else { h };
         let raw = if pitch == 1.0 {
             None
         } else {
-            assert_eq!(RawRubberBand::history_bound(pitch), HISTORY);
+            let bound = history_bound(pitch);
             let mut raw = RawRubberBand::new(pitch);
-            for age in -(HISTORY as i64)..0 {
+            // Negative Normal-loop prefeed primes this separate Raw owner. It
+            // never contributes to the DUT's genuine post-birth feed journal.
+            for age in -(bound as i64)..0 {
                 let phase = LOOP_START as f64
                     + (age as f64 * rate).rem_euclid((ENDS[id] - LOOP_START) as f64);
                 raw.sample(scalar_pcm(source, phase, ENDS[id]), pitch);
@@ -344,7 +412,7 @@ impl Reference {
             raw,
             filter: PerPadDspChain::new(id, RATE as f32, 1),
             note,
-            contract: PitchIntent::new(note, 0).unwrap(),
+            contract,
             lock,
             native,
             generation,

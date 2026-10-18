@@ -4139,3 +4139,54 @@ This bounded supported-domain interaction does not close the full numerical/rate
 matrix, continuous-from-birth/acoustic/finite/active-transition, Native heap/logging,
 deadline/resource or Human/device/parent gates. The preceding private Release/API/
 import/App-feedback proof is reused because production sources are unchanged.
+
+### Upper combined piano/offset during a public glide — 2026-10-18
+
+Four further GUI/MIDI × OFF/ON cases reach total +24 through distinct piano +6
+and offset +18. Eighteen actual stopped offset SET captures receive their applied
+receipts before birth. Actual MIDI Learn saves `pitch.note:6:set_retrigger` to
+owned JSON and reloads it; the GUI route clicks the corresponding real black key.
+Later selection leaves pad 1 selected while the admitted action still owns pad 0.
+The fixture retains the preceding declared-input and limited controller-projection
+seams; it does not exercise a full App, device or performer.
+
+Initial A is independently wet at piano -12/+18, total +6. The shared birth oracle
+now queries its declared scalar pitch through the direct C ABI and primes exactly
+that independent Normal history before birth. OFF needs H=4096 at p=sqrt(2); ON
+needs H=10240 at p=2sqrt(2). The real adopted birth must report that same primed
+frame count and its own request identity. Default callers retain their original
+4096 check. Birth preroll is never counted as actual post-birth voice history.
+The reset oracle receives the independently declared typed (+6,+18) contract
+upfront, avoiding an invalid +24 piano-base placeholder.
+
+Before the accepted .5-to-2 public glide, OFF renders 14336 actual history frames
+against maximum queried H=13312; ON renders 24576 against H=23552. The original
+T/E remain 22601/30793 OFF and 32841/41033 ON. At E both retain actual rate
+1.3500000000000008, target 2 and 439 frames until its next step. OFF reset p=4
+needs H=13312. ON independently retains cold p=8 and 18 profiles, requiring
+H=23552 rather than endpoint p=2.9629629629629615's H=10240. These profiles come
+from public scalar epochs, never from the DUT journal, phase, rate or PCM.
+
+All four initial Debug children pass in 5.78 s (21.94 s compilation), with every
+first adopted sample exact. Continuing comparisons cover 38601 frames OFF and
+48841 ON, with maximum errors 1.49e-8 and zero respectively. Own Native/FIFO/EQ,
+peer and master chronology remain checked. The final combined lower/upper Release
+passes eight children in 8.53 s (1 min 39 s compilation). The whole affected pitch
+suite passes 69 tests with one existing explicitly ignored Native diagnostic in
+162.52 s; its 16 productive-pressure profiles still complete 3072 pressure and 48
+recovery actions with zero final claims and zero independent PCM error.
+
+All-target lint passes in 12.66 s with the same 95 library-test warnings and 45
+duplicates. Formatting, affected strict validation and whitespace pass. Full lint
+passes for the shared total helper after one style correction; the older common
+literal retains exactly its 16 existing diagnostics, with none added or suppressed.
+A final line-ending normalization removes only CRLF from that literal's containing
+Rust file, verified against its exact LF-normalized content. One independent final
+review covers the bounded diff. No production defect was demonstrated and no
+production, API, ABI, dependency or installed Native changed. The preceding private
+Release/import/App-feedback proof is reused on unchanged production sources.
+
+This adds one upper supported-domain interaction. It does not resolve the existing
+acoustic timing failures, full numerical/rate matrix, continuous-O, finite handover,
+active transitions, Native heap/logging, deadlines/resources or Human/device/parent
+acceptance. Those remain part of the full pre-Rust Goal.

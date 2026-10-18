@@ -19,6 +19,8 @@ mod finite_window_rate_glide_tests;
 mod lower_total_rate_glide_tests;
 #[path = "selected_stem_rate_glide_tests.rs"]
 mod selected_stem_rate_glide_tests;
+#[path = "upper_total_rate_glide_tests.rs"]
+mod upper_total_rate_glide_tests;
 
 const GLIDE_CHILD: &str = "FLITZI_PIANO_RATE_GLIDE_CHILD";
 const GLIDE_TEST: &str = "audio_engine::pitch_runtime_tests::piano_mouse_tests::piano_rate_controller_tests::piano_rate_glide_tests::piano_retrigger_preserves_unfinished_public_rate_glide";
@@ -76,7 +78,19 @@ fn initial_birth_admitted(
     route: &mut RateRoute,
     id: usize,
     speed: f64,
+    original: Original,
+) -> Original {
+    initial_birth_admitted_with_reference(route, id, speed, original, Reference::birth_captured)
+}
+
+type BirthReference = fn(&SampleBuffer, usize, PitchIntent, f64, bool, usize, u64) -> Reference;
+
+fn initial_birth_admitted_with_reference(
+    route: &mut RateRoute,
+    id: usize,
+    speed: f64,
     mut original: Original,
+    birth_reference: BirthReference,
 ) -> Original {
     assert_eq!(original.id, id);
     route.assert_no_attacks();
@@ -110,17 +124,15 @@ fn initial_birth_admitted(
     }
     // The parent settled-rate helper has period .25 assumptions. Initial births
     // use their actual accepted public period, without changing that helper.
-    route.references[id] = Some(Reference::birth(
+    route.references[id] = Some(birth_reference(
         &route.reference_sources[id],
         id,
-        original.note + original.extra,
+        PitchIntent::new(original.note, original.extra).unwrap(),
         rate,
         route.lock,
         native,
         generation,
     ));
-    route.references[id].as_mut().unwrap().contract =
-        PitchIntent::new(original.note, original.extra).unwrap();
     assert_eq!(
         route.take_attacks(),
         vec![(
@@ -329,11 +341,12 @@ impl ResetOracle {
     fn new(
         source: &SampleBuffer,
         timeline: &[ScalarClock],
-        note: i32,
+        contract: PitchIntent,
         lock: bool,
         native: usize,
         generation: u64,
     ) -> Self {
+        let note = contract.base_shift() + contract.extra_shift();
         let end = timeline.len() - 1;
         let (origin, bound, queried_pitches) =
             reset_bound(timeline, note, lock).expect("independent real lifecycle must cover H");
@@ -367,7 +380,7 @@ impl ResetOracle {
                 // Ordinary retrigger clears the pad filter independently of prefeed.
                 filter: PerPadDspChain::new(0, RATE as f32, 1),
                 note,
-                contract: PitchIntent::new(note, 0).unwrap(),
+                contract,
                 lock,
                 native,
                 generation,
@@ -535,7 +548,7 @@ fn apply_wet_attack_from(
         pitch,
         cached,
     } = input;
-    let note = pitch.total_semitones();
+    let note = pitch.base_shift() + pitch.extra_shift();
     let old = VoiceWitness::capture(route, 0);
     let peer = VoiceWitness::capture(route, 1);
     let starts = route.starts;
@@ -564,15 +577,14 @@ fn apply_wet_attack_from(
         accepted.execution.unwrap(),
         attack.e,
     );
-    let mut oracle = ResetOracle::new(
+    let oracle = ResetOracle::new(
         &route.reference_sources[0],
         &timeline,
-        note,
+        pitch,
         route.lock,
         native,
         old.generation + 1,
     );
-    oracle.reference.contract = pitch;
     if case == "wet-on-plus12-cold-above2" {
         assert!(oracle.cold_pitch > 2.0);
         assert!(oracle.endpoint_pitch <= 2.0);
