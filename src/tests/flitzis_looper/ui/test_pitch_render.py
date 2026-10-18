@@ -1,12 +1,14 @@
 """Actual central piano mouse frames; only Native admission is a control-flow fake."""
 
 from dataclasses import dataclass, field
-from typing import TYPE_CHECKING, cast
+from typing import TYPE_CHECKING, Protocol, cast
 
 import pytest
 from imgui_bundle import imgui
 
 from flitzis_looper.input_mapping.actions import parse_pitch_action
+from flitzis_looper.input_mapping.controller import InputMappingController
+from flitzis_looper.input_mapping.storage import load_midi_mapping_file, save_midi_mapping_file
 from flitzis_looper.key_intent import MusicalKey, PadKeyIntent, SourceKeyVersion
 from flitzis_looper.ui.constants import SPACING
 from flitzis_looper.ui.context import UiContext
@@ -20,11 +22,12 @@ from tests.flitzis_looper.controller.transport.test_pitch_actions import (
 from tests.flitzis_looper.ui.test_key_lock_render import _imgui_context
 
 if TYPE_CHECKING:
-    from collections.abc import Callable
+    from pathlib import Path
     from unittest.mock import Mock
 
     from flitzis_looper.controller import AppController
-    from flitzis_looper.input_mapping.actions import PitchAction
+    from flitzis_looper.input_mapping.actions import PitchAction, PitchCcMode
+    from flitzis_looper.input_mapping.storage import MidiMappingFile
     from flitzis_looper_audio import CapturedPitchAction
 
 _PIANO = "performance_piano"
@@ -108,6 +111,10 @@ class _Frame:
     piano_feedback: list[tuple[str, _Rect, int]] = field(default_factory=list)
 
 
+class _DrawText(Protocol):
+    def __call__(self, *args: object, **kwargs: object) -> None: ...
+
+
 class _DrawListObserver:
     """Forward every draw operation and retain actual range-feedback text bounds."""
 
@@ -120,7 +127,7 @@ class _DrawListObserver:
 
     def add_text(self, *args: object, **kwargs: object) -> None:
         before = len(self.native.vtx_buffer)
-        cast("Callable[..., None]", self.native.add_text)(*args, **kwargs)
+        cast("_DrawText", self.native.add_text)(*args, **kwargs)
         if len(args) != 5 or not isinstance(args[4], str) or not args[4].startswith("Selected:"):
             return
         value = args[4]
@@ -196,6 +203,8 @@ class _PitchRender:
         self.observed = _Frame()
         self.central_width = 1000.0
         self._native_button = imgui.button
+        self._native_small_button = imgui.small_button
+        self._native_tree_node = imgui.tree_node
         self._native_checkbox = imgui.checkbox
         self._native_invisible_button = imgui.invisible_button
         self._native_begin_child = imgui.begin_child
@@ -203,6 +212,8 @@ class _PitchRender:
         self._native_text_colored = imgui.text_colored
         self._native_get_window_draw_list = imgui.get_window_draw_list
         monkeypatch.setattr(imgui, "button", self._button)
+        monkeypatch.setattr(imgui, "small_button", self._small_button)
+        monkeypatch.setattr(imgui, "tree_node", self._tree_node)
         monkeypatch.setattr(imgui, "checkbox", self._checkbox)
         monkeypatch.setattr(imgui, "invisible_button", self._invisible_button)
         monkeypatch.setattr(imgui, "begin_child", self._begin_child)
@@ -223,6 +234,16 @@ class _PitchRender:
 
     def _button(self, label: str, size: imgui.ImVec2Like = (0, 0)) -> bool:
         result = self._native_button(label, size)
+        self._record_control(label)
+        return result
+
+    def _small_button(self, label: str) -> bool:
+        result = self._native_small_button(label)
+        self._record_control(label)
+        return result
+
+    def _tree_node(self, label: str) -> bool:
+        result = self._native_tree_node(label)
         self._record_control(label)
         return result
 
@@ -477,6 +498,163 @@ def test_actual_retrigger_checkboxes_are_independent_and_fix_their_own_action_va
     ]
     assert controller.project.pad_key_intent[0].base_shift == 1
     assert controller.project.pad_key_intent[0].extra_shift == 1
+
+
+@pytest.mark.parametrize("retrigger", [False, True])
+def test_actual_fixed_offset_click_uses_its_own_variant_and_original_timestamp(
+    pitch_render: _PitchRender, audio_engine_mock: Mock, *, retrigger: bool
+) -> None:
+    controller = pitch_render.controller
+    intent = PadKeyIntent(
+        source=SourceKeyVersion(raw_key="C"),
+        correction="D",
+        base_shift=-5,
+        extra_shift=7,
+        retrigger=not retrigger,
+        extra_retrigger=retrigger,
+    )
+    controller.project.pad_key_intent[0] = intent
+    with _imgui_context():
+        frame = pitch_render.open()
+        assert "pitch_offset_fixed" not in frame.controls
+        frame = pitch_render.click(frame.controls["pitch_steps"])
+        assert {"pitch_Piano_-12", "pitch_Offset_12"} <= frame.controls.keys()
+        assert frame.labels["pitch_offset_fixed"] == "Fixed offset +7 st"
+        frame = pitch_render.click(frame.controls["pitch_offset_fixed"])
+        assert frame.piano is not None
+        frame.piano.assert_markers(-5, original_value=-2)
+        assert frame.piano_items == 1
+        assert {"pitch_offset_1", "pitch_offset_0", "pitch_offset_-1"} <= frame.controls.keys()
+    variant = "set_retrigger" if retrigger else "set"
+    audio_engine_mock.capture_pad_pitch_action.assert_called_once_with(
+        0, f"pitch.extra:7:{variant}", received_at_ns=123
+    )
+    audio_engine_mock.capture_selected_pitch_action.assert_not_called()
+    audio_engine_mock.publish_pitch_action.assert_called_once()
+    assert controller.project.pad_key_intent[0] == intent
+
+
+def _replay_restored_fixed_offsets(
+    controller: AppController, audio: Mock, restored: MidiMappingFile
+) -> None:
+    """Check stored semantics through the existing explicit Native admission fake."""
+    original = controller.project.pad_key_intent[0]
+    controller.project.selected_pad = 1
+    captures = _PitchCapture(controller)
+
+    def selected(key: str, *, received_at_ns: int | None) -> CapturedPitchAction:
+        return captures(1, key, received_at_ns=received_at_ns)
+
+    audio.capture_selected_pitch_action.side_effect = selected
+    for index, entry in enumerate(restored.mappings):
+        action = parse_pitch_action(entry.action.key)
+        assert action is not None
+        assert action.kind == "extra"
+        controller.project.pad_key_intent[1] = PadKeyIntent(
+            source=SourceKeyVersion(raw_key="Dm"),
+            correction="E",
+            base_shift=-5,
+            extra_shift=1 if action.target != 1 else -1,
+            retrigger=action.retrigger,
+            extra_retrigger=not action.retrigger,
+        )
+        assert controller.input_mapping.execute_action(entry.action, received_at_ns=777 + index)
+        capture = captures.captures[-1]
+        assert (capture.base_shift, capture.extra_shift, capture.retrigger) == (
+            -5,
+            action.target,
+            action.retrigger,
+        )
+        assert capture.received_at_ns == 777 + index
+        intent = controller.project.pad_key_intent[1]
+        assert (intent.base_shift, intent.extra_shift, intent.correction) == (
+            -5,
+            action.target,
+            "E",
+        )
+        assert intent.extra_retrigger is not action.retrigger
+        assert controller.project.pad_key_intent[0] == original
+        capture.state = "applied"
+        capture.effective = True
+        capture.effective_output_frame = index + 1
+        controller.transport.pitch.poll()
+        assert not controller.transport.pitch._owners
+    assert audio.capture_selected_pitch_action.call_count == len(restored.mappings)
+    assert audio.publish_pitch_action.call_count == len(restored.mappings)
+    audio.capture_pad_pitch_action.assert_not_called()
+
+
+def test_actual_fixed_offset_learn_exposes_every_signed_target_and_restores_both_variants(
+    pitch_render: _PitchRender,
+    audio_engine_mock: Mock,
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    """Render and click real controls; Python MIDI events and Native admission are synthetic."""
+    controller = pitch_render.controller
+    path = tmp_path / "fixed-offset-midi.json"
+    monkeypatch.setattr(
+        "flitzis_looper.input_mapping.controller.load_midi_mapping_file",
+        lambda: load_midi_mapping_file(path),
+    )
+    monkeypatch.setattr(
+        "flitzis_looper.input_mapping.controller.save_midi_mapping_file",
+        lambda data: save_midi_mapping_file(data, path),
+    )
+    controller.input_mapping = InputMappingController(controller)
+    controller.input_mapping.set_enabled(enabled=True)
+    expected: dict[str, str] = {}
+    modes: tuple[PitchCcMode, ...] = ("button", "absolute", "twos_complement", "offset_binary")
+    with _imgui_context():
+        frame = pitch_render.open()
+        assert "pitch_offset_fixed" not in frame.controls
+        frame = pitch_render.click(frame.controls["pitch_steps"])
+        for value in range(-18, 19):
+            for retrigger in (False, True):
+                controller.project.pad_key_intent[0] = PadKeyIntent(
+                    source=SourceKeyVersion(raw_key="C"),
+                    correction="D",
+                    base_shift=-5,
+                    extra_shift=value,
+                    retrigger=not retrigger,
+                    extra_retrigger=retrigger,
+                )
+                pitch_render.ctx.ui.set_pitch_cc_mode(modes[len(expected) % len(modes)])
+                frame = pitch_render.frame()
+                signed = "0" if value == 0 else f"{value:+d}"
+                assert frame.labels["pitch_offset_fixed"].startswith(f"Fixed offset {signed} st")
+                before = tuple(controller.project.pad_key_intent)
+                binding = f"midi:cc:1:{20 + len(expected)}"
+                controller.input_mapping.toggle_learn()
+                controller.input_mapping._handle_rust_input_event({
+                    "source": "midi",
+                    "binding_key": binding,
+                    "value": 127,
+                })
+                assert controller.session.input_learn_pending_binding_key == binding
+                frame = pitch_render.click(frame.controls["pitch_offset_fixed"])
+                assert not controller.session.input_learn_active
+                assert controller.session.input_learn_pending_binding_key is None
+                assert tuple(controller.project.pad_key_intent) == before
+                assert not controller.transport.pitch._owners
+                assert frame.piano is not None
+                frame.piano.assert_markers(-5, original_value=-2)
+                variant = "set_retrigger" if retrigger else "set"
+                expected[binding] = f"pitch.extra:{value}:{variant}"
+    audio_engine_mock.capture_pad_pitch_action.assert_not_called()
+    audio_engine_mock.capture_selected_pitch_action.assert_not_called()
+    audio_engine_mock.publish_pitch_action.assert_not_called()
+    saved = path.read_bytes()
+    learned = controller.input_mapping._midi
+    controller.input_mapping = InputMappingController(controller)
+    restored = controller.input_mapping._midi
+    assert restored is not learned
+    assert {entry.input.key: entry.action.key for entry in restored.mappings} == expected
+    assert all(entry.action.source == "direct" for entry in restored.mappings)
+    pitch_render.ctx.ui.set_pitch_cc_mode("button")
+    _replay_restored_fixed_offsets(controller, audio_engine_mock, restored)
+    assert controller.project.selected_pad == 1
+    assert path.read_bytes() == saved
 
 
 @pytest.mark.parametrize("central_width", [620.0, 1000.0])

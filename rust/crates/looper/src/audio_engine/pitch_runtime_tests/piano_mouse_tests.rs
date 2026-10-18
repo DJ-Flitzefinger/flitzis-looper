@@ -11,6 +11,8 @@ use pyo3::types::PyModule;
 use std::ffi::CString;
 
 static MOUSE_CONTEXT: Mutex<()> = Mutex::new(());
+#[path = "fixed_offset_learn_tests.rs"]
+mod fixed_offset_learn_tests;
 #[path = "hold_pitch_tests.rs"]
 mod hold_pitch_tests;
 #[path = "piano_rate_controller_tests.rs"]
@@ -18,7 +20,7 @@ mod piano_rate_controller_tests;
 #[path = "productive_custody_workload_tests.rs"]
 mod productive_custody_workload_tests;
 
-const PROBE: &str = r#"
+const PROBE: &str = r###"
 from contextlib import ExitStack
 from pathlib import Path
 from time import monotonic, sleep
@@ -35,6 +37,7 @@ from flitzis_looper.input_mapping.storage import (
 from flitzis_looper.key_intent import MusicalKey, PadKeyIntent, SourceKeyVersion
 from flitzis_looper.models import PadContentIdentity, ProjectState, SessionState
 from flitzis_looper.ui.context import UiContext
+from flitzis_looper.ui.render import sidebar_left
 from flitzis_looper.ui.render.pitch_keyboard import piano_geometry, render_piano_keyboard
 
 
@@ -146,6 +149,56 @@ class PianoProbe:
         assert self.project.pad_key_intent[0].base_shift == shift
         assert self.session.input_mapping_error is None
         return capture
+
+    def offset_frame(self):
+        # Forward the real widget results; retain only their rendered hit boxes.
+        # No forced-open tree, fabricated click result or replacement GUI action.
+        self.offset_items = {}
+
+        def observe(native):
+            def rendered(label, *args, **kwargs):
+                result = native(label, *args, **kwargs)
+                lo, hi = imgui.get_item_rect_min(), imgui.get_item_rect_max()
+                self.offset_items[label.split("##")[-1]] = (
+                    (lo.x + hi.x) / 2,
+                    (lo.y + hi.y) / 2,
+                    label,
+                )
+                return result
+
+            return rendered
+
+        imgui.new_frame()
+        imgui.set_next_window_pos((0, 0))
+        imgui.set_next_window_size((1000, 300))
+        imgui.begin("Real Native fixed offset", flags=imgui.WindowFlags_.no_saved_settings)
+        slot = self.project.selected_pad
+        info = sidebar_left._SidebarPadInfo(
+            pad_id=slot,
+            avail_x=imgui.get_content_region_avail().x,
+            is_loaded=True,
+            is_loading=False,
+        )
+        with (
+            patch.object(imgui, "button", observe(imgui.button)),
+            patch.object(imgui, "small_button", observe(imgui.small_button)),
+            patch.object(imgui, "checkbox", observe(imgui.checkbox)),
+            patch.object(imgui, "tree_node", observe(imgui.tree_node)),
+        ):
+            sidebar_left._render_transposition(self.ctx, info, self.ctx.state.pads.key_intent(slot))
+        imgui.end()
+        imgui.render()
+        assert imgui.get_draw_data().total_vtx_count > 0
+
+    def offset_click(self, item_id):
+        x, y, _ = self.offset_items[item_id]
+        io = imgui.get_io()
+        io.add_mouse_pos_event(x, y)
+        pressed, released = True, False
+        io.add_mouse_button_event(0, pressed)
+        self.offset_frame()
+        io.add_mouse_button_event(0, released)
+        self.offset_frame()
 
     def applied(self, capture):
         assert capture.state == "applied" and capture.effective
@@ -322,7 +375,7 @@ class PianoProbe:
         if self.previous_context is not None:
             imgui.set_current_context(self.previous_context)
         self.storage.close()
-"#;
+"###;
 
 struct MouseRoute {
     engine: Py<AudioEngine>,
@@ -635,6 +688,23 @@ impl MouseRoute {
             );
             std::thread::sleep(Duration::from_millis(1));
         }
+        #[cfg(windows)]
+        let prepared_native = if retrigger {
+            self.mixer
+                .pitch_runtime
+                .as_ref()
+                .unwrap()
+                .ready_pitch_native_address(action.sequence())
+        } else {
+            None
+        };
+        #[cfg(windows)]
+        if retrigger && pitch.total_semitones() != 0 {
+            assert!(
+                prepared_native.is_some(),
+                "nonneutral retrigger lost its own Native"
+            );
+        }
         assert_eq!(self.transport.output_frame(), frame);
         assert_eq!(action.execution_target(), execution);
         while self.transport.output_frame() < execution {
@@ -659,6 +729,11 @@ impl MouseRoute {
             .find(|voice| voice.is_playing_sample(0))
             .unwrap();
         if retrigger {
+            #[cfg(windows)]
+            if let Some(address) = prepared_native {
+                assert_ne!(address, 0);
+                assert_eq!(voice.stretch.native_state_address(), address);
+            }
             assert_eq!(voice.stretch.adopted_request_id(), Some(action.sequence()));
             assert_eq!(
                 voice.stretch.native_origin_tuple(),

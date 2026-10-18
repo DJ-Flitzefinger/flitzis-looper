@@ -4190,3 +4190,78 @@ This adds one upper supported-domain interaction. It does not resolve the existi
 acoustic timing failures, full numerical/rate matrix, continuous-O, finite handover,
 active transitions, Native heap/logging, deadlines/resources or Human/device/parent
 acceptance. Those remain part of the full pre-Rust Goal.
+
+### Rendered fixed-offset Learn — 2026-10-18
+
+The fixed extra-shift action already supported stable targets and persistence,
+but had no rendered caller for newly learning nonzero targets. A real ImGui
+regression opened the existing MIDI foldout and failed on its missing fixed-offset
+control (0.41 s). The foldout now displays a compact Fixed offset button using
+the current signed target, fresh offset-lane Retrigger and captured timestamp
+through the existing `choose_extra_shift` Learn/admission path. The offset
+checkbox also refreshes the intent used by later controls in that same frame.
+The single central piano and +1/Reset/-1 row retain their existing behavior.
+
+The actual GUI regression learns all 37 signed offsets with both variants:
+74 bindings spanning the four cycled encoder modes. Real widget decisions and
+mouse events remain intact; its MIDI event envelope and Native admission are
+explicit Python fakes. Learn creates no audible work or intent change. Owned JSON
+is reopened by a fresh production mapping controller, then each fixed semantic
+action retains its target and variant after selected pad, requested offset and both
+GUI preferences change. Separate direct clicks preserve the original timestamp,
+chosen piano/correction, one keyboard and main control row. The three focused
+tests pass in 1.18 s; affected UI, input mapping and piano/pitch controller suites
+pass 790 tests in 29.85 s. Changed Python lint/formatting and type checks pass.
+The test observer's earlier explicit-Any callable annotation was replaced by a
+precise variadic protocol, without adding a lint/type suppression.
+
+A separate genuine Native integration learns through the actual rendered
+foldout, real injected CC input and owned JSON reload. Sixteen profiles cover
+offsets -18, 0, +7 and +18, both immutable variants and both Key Locks. Piano -5
+is first established by a real mouse action; a later public offset SET makes the
+audible state differ from the learned target. Routed select-0/pitch/select-1
+barriers then leave pad 1 selected while every admitted action retains content 0,
+its original timestamp, T/E and typed tuple through worker, sole scheduler and
+actual effect. SET preserves phase and generation; equal-target SET keeps its
+owned Native. Each SET_RETRIGGER adopts its own prepared Native/request and adds
+one attack. The settled PCM predicate checks finite nonsilent output within 15
+cents of the independent scalar tone; it is not a first-sample PCM or acoustic
+latency oracle. Peer stopped state/intent and master timing remain unchanged.
+
+The first Native probe failed in 1.10 s after 22.53 s compilation because it
+incorrectly expected one edge from fixed extra CC values [127,127,0]. Existing
+normative compatibility and its named regression require each such value,
+including zero, to invoke its own fixed action. The corrected probe individually
+admits and fully applies all three originals: 48 successful effects, including
+16 zero values, in 10.13 s (21.42 s compilation). Runtime routing, old saved
+encodings and the legacy regression are unchanged. New piano/Original CC button
+edges remain distinct. This fixture correction does not establish a new product
+filter or silently discard admitted actions.
+
+Embedded-helper preparation first stopped on two direct-Boolean mouse-call lint
+findings, then Rust formatting caught the added `"##"` text closing the older raw
+string delimiter. Named press/release states and a longer Rust raw delimiter
+corrected these test-only errors before execution. The new helper and frame
+methods pass full project lint; the older complete probe retains its same 14
+existing findings, with no new diagnostic or suppression.
+
+Final integration passes the complete pitch suite, 70 tests and one existing
+explicitly ignored Native diagnostic, in 179.04 s. Its 16 productive-pressure
+profiles retain 3072 successful pressure actions, 48 recoveries, zero final
+claims and zero independent PCM error. All 18 MIDI-step tests pass in 0.77 s,
+including the unchanged legacy fixed-CC regression. All-target lint passes in
+13.10 s with 95 existing library-test warnings (one duplicate in this invocation),
+with none naming the changed test files. Rust formatting, changed Python full
+lint/format/types, affected official strict validation and whitespace pass.
+A private locked stripped Release build passes in 32.22 s with 23 existing
+warnings. Its actual private Native origin, release profile, eight bootstrap API
+checks and real App/piano/sidebar/global-parameter/BS-RoFormer imports pass.
+The sidebar import is verified against the current source and its fixed-offset
+path; all 27 actual GUI and 8 App-feedback tests pass against that private module
+in 2.45 s. No module was installed. One independent final review covers the diff.
+
+The Python project/source envelope, complete deterministic mono signal, virtual
+clock and controlled worker waits remain declared seams. No App, MIDI port,
+Engine.run, device or installation was started. All retained acoustic timing
+failures, full actual-rate/continuous-O/finite-transition, Native heap/logging,
+deadline/resource and Human/parent acceptance gates remain open.

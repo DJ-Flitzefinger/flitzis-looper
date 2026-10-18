@@ -484,11 +484,12 @@ def _render_transposition(ctx: UiContext, info: _SidebarPadInfo, intent: PadKeyI
     changed, retrigger = imgui.checkbox("Retrigger##pitch_offset_retrigger", intent.extra_retrigger)
     if changed:
         ctx.audio.pads.set_extra_retrigger_intent(info.pad_id, enabled=retrigger)
+        intent = ctx.state.pads.key_intent(info.pad_id)
     _render_pitch_steps(ctx, info, intent)
 
 
 def _render_pitch_steps(ctx: UiContext, info: _SidebarPadInfo, intent: PadKeyIntent) -> None:
-    """Keep learnable note/offset octave and chromatic steps compact."""
+    """Keep fixed offset and learnable note/offset steps compact."""
     if imgui.tree_node("MIDI / octave steps##pitch_steps"):
         current_mode = ctx.state.pitch_menus.midi_cc_mode
         mode_label = dict(_PITCH_CC_MODES)[current_mode]
@@ -498,6 +499,16 @@ def _render_pitch_steps(ctx: UiContext, info: _SidebarPadInfo, intent: PadKeyInt
                 if imgui.selectable(label, mode == current_mode)[0]:
                     ctx.ui.set_pitch_cc_mode(mode)
             imgui.end_combo()
+        fixed_intent = ctx.state.pads.key_intent(info.pad_id)
+        if imgui.small_button(
+            f"Fixed offset {format_extra_shift(fixed_intent.extra_shift)}##pitch_offset_fixed"
+        ):
+            ctx.audio.pads.choose_extra_shift(
+                info.pad_id,
+                fixed_intent.extra_shift,
+                retrigger=fixed_intent.extra_retrigger,
+                received_at_ns=ctx.input.capture_timestamp_ns(),
+            )
         for piano, lane in ((True, "Piano"), (False, "Offset")):
             imgui.text(lane)
             for index, step in enumerate((-12, -1, 1, 12)):
@@ -513,7 +524,8 @@ def _render_pitch_steps(ctx: UiContext, info: _SidebarPadInfo, intent: PadKeyInt
                         cc_mode=ctx.state.pitch_menus.midi_cc_mode,
                     )
         imgui.text_wrapped(
-            "Learn a note, step or Reset with MIDI Note, CC or encoder. "
+            "Set the offset before Learn; Fixed offset stores that exact value. "
+            "Learn a note, fixed offset, step or Reset with MIDI Note, CC or encoder. "
             "Learn consumes the next control choice instead of playing it."
         )
         imgui.tree_pop()

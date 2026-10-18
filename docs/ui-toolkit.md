@@ -509,28 +509,37 @@ Before changing UI code, check:
 
 ## Implemented Key + Transposition engineering surface
 
-The left sidebar's Key + Transposition section renders source correction, base
-Key, extra Transposition, nominal result and the Retrigger checkbox. The two
-independent header-toggle menus stay open after repeated choices and MIDI input.
-Content-derived intent drives their selected keys and closed summaries across
-pad changes. Correction changes metadata labels without retuning or moving
-playback. Absolute Key offers twelve roots in the recognized source's existing
-major/minor mode, with the shortest base shift -5..+6 and a fixed +6 tie. Unknown
-source keys disable absolute Key until corrected; numeric Transposition and the
-independent resets remain available.
+The sidebar's Piano toggle opens one central three-octave keyboard above pads
+1–6. Its open state survives pad changes; chosen note, octave, offset and the two
+independent Retrigger preferences belong to the selected content. Real white and
+black keys retain their distinct octave identities. The original source key has
+its own marker; a chosen note outside the displayed range receives an exact text
+description instead of a folded highlight. Unknown source keys retain numerical
+note and offset controls. NoteOff preserves the choice and highlight.
 
-Transposition offers all 37 extra shifts -18..+18, including separate -12/0/+12
-shortcuts. Its zero and note labels use the chosen base root; octave-separated
-values retain distinct widget identities and signed distances. Together, base
-and extra cover 48 numeric totals -23..+24. The scrollable white/black key cells
-show one canonical spelling per root and a selection highlight. They do not
-recommend scales/Camelot matches or identify the sample's first note. NoteOff
-preserves choice and highlights.
+Transposition's +1/Reset/-1 row supports the signed extra range -18..+18 with its
+own Retrigger. Reset clears only that offset, preserving the piano note/octave and
+source correction. Original Key clears the chosen note, offset and manual source
+correction together. The piano's highlight stays on the chosen note when the
+offset changes. Its nominal result does not claim to identify the sample's first
+note; with Key Lock OFF, tempo still contributes to audible pitch.
+
+The compact MIDI / octave steps foldout retains piano and offset ±1/±12 actions
+and encoder mode selection. Its Fixed offset button displays the current signed
+offset and uses the existing absolute extra-shift action with the offset lane's
+own Retrigger preference. Set the desired offset before starting Learn, then
+choose this button: Learn stores that exact target without playing or changing
+the note/offset. Encoder mode does not turn it into a relative step. Reopened
+bindings retain their fixed target and SET or SET_RETRIGGER variant even when
+later GUI preferences, offsets or pad selection differ.
+Fixed extra CC bindings keep their established per-value behavior: repeated
+values and zero each apply the stored action. Piano/Original CC buttons retain
+their separate high-edge behavior.
 
 `UiContext` routes choices and resets through `PitchController` and the original
 Native `CapturedPitchAction`, shared with MIDI's SET/SET_RETRIGGER semantics.
-The checkbox affects GUI choices and new Learn bindings; learned variants remain
-fixed. SET preserves the cursor and stopped state. Each admitted SET_RETRIGGER,
+Each checkbox affects its own GUI lane and new Learn bindings; learned variants
+remain fixed. SET preserves the cursor and stopped state. Each admitted SET_RETRIGGER,
 including a repeated identical choice, owns a distinct attack whose tuple and
 launch share the existing scheduler execution frame. Input time, content lifetime
 and original dueframe survive preparation; delayed fallback never resolves a new

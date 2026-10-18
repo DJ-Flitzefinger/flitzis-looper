@@ -498,6 +498,20 @@ each subscriber's own pending then accepted/current publication. The full existi
   pitch Debug 69 passes plus one existing ignored diagnostic (162.52 s).
   All-target lint, formatting and affected strict pass; new/shared total helper
   passes full embedded lint, with the older common literal's 16 findings unchanged.
+- [x] Restore newly learnable fixed nonzero offsets in the actual rendered MIDI
+  foldout using the existing absolute extra-shift path and independent offset
+  Retrigger. Reproduce the missing rendered route; prove Learn consumes it without
+  an attack, save/reload retains exact signed targets and both variants despite
+  later preferences/offset/selection changes, and genuine routed MIDI reaches the
+  existing controller/worker/sole scheduler and PCM. Keep the central piano and
+  +1/Reset/-1 row, all supported offsets and every full acceptance gate.
+  The actual missing-control GUI baseline fails; the fix passes 74 learned
+  bindings across 37 targets/both variants and four cycled CC modes. Affected
+  Python suites pass 790 tests. Real Native Learn/JSON reload/routed CC passes
+  16 profiles and 48 effects, explicitly retaining legacy per-value CC behavior,
+  including zero. Whole pitch 70 plus one existing ignored diagnostic, MIDI
+  step 18, private Release/API/import and private GUI/App-feedback 35 pass.
+  Changed Python lint/types, Rust formatting/lint and affected strict pass.
 - [ ] V0: complete new controls+copy/move/bank/hold/pending/restore workload and
   P6 resource/216/disk/RSS proofs repeated; preserve all failed attempts/source roles.
 - [ ] During implementation: focused meaningful compile/regressions and required

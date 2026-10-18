@@ -103,6 +103,16 @@ for the same target SHALL be simultaneously learnable and restorable.
 - **WHEN** SET0 and SET_RETRIGGER0 are learned on different keys and checkbox/selection later changes
 - **THEN** each saved binding keeps its semantic target/variant through save/reopen
 
+#### Scenario: Fixed offset Learn is reachable from the rendered MIDI controls
+- **GIVEN** a selected pad has a chosen piano note and a supported signed offset
+- **WHEN** the user opens the existing MIDI controls and chooses the displayed fixed current offset during Learn
+- **THEN** the rendered control SHALL use the existing absolute extra-shift action with that exact signed target and the offset lane's own Retrigger variant, independently of relative encoder mode
+- **AND** Learn SHALL persist that target and immutable SET or SET_RETRIGGER variant without playing, creating pitch work or changing the chosen piano note or offset
+- **AND** after file reload, later GUI preference, offset and selection changes SHALL NOT convert the stored target into a relative step or change its variant
+- **AND** routed input SHALL retain its originally captured content, timestamp and T/E through the existing controller, preparation and sole scheduler path, with SET preserving playback phase and SET_RETRIGGER producing one coherent attack
+- **AND** fixed extra CC mappings SHALL preserve their established per-value dispatch, including repeated equal values and zero; each admitted value SHALL retain its own action and effect rather than gaining the newer piano/Original button-edge semantics
+- **AND** the action SHALL remain compact inside the existing MIDI controls while preserving the central piano and Transposition +1/Reset/-1 row
+
 ### Requirement: Pitch input captures selected content at authoritative admission
 The system SHALL capture and guard each pitch action at authoritative admission.
 
