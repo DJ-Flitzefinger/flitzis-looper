@@ -23,11 +23,14 @@ pre-target content, controllable gate crop and authorized late missed content wi
 counting. Retained suffix equality proves only no extra post-cut deformation, not click safety,
 musical anchoring or device alignment. Detailed coordinate/policy tables are in the backend doc.
 
-The required product decision is first permitted sound at T versus musical anchoring at T
-with earlier native content allowed. Insufficient headroom cannot be promised away. The
-recorded nearest/catch-up contract permits late missed content, but does not silently accept
-on-time native cropping or pre-target emission. Keep task7.2 pending until that decision and
-recorded-track musical evidence justify the anchor/content criterion. Existing dry q10/q50,
+On 2026-10-18 the Human selected "Kräftiger Anschlag auf der „1“": the main perceived attack
+should sit at T, with a quieter native lead permitted when needed and causally available.
+This resolves the product direction; it does not select a measured compensation anchor or
+certify a candidate's sound. Insufficient headroom cannot be promised away. The recorded
+nearest/catch-up contract still preserves T and exposes unavailable content. The preference
+does not accept on-time cropping, a target delay or unconditional early emission. Keep task7.2
+pending until recorded-track musical/listening evidence and explicit insufficient-headroom
+behavior justify the measured anchor/content criterion. Existing dry q10/q50,
 peak and 0.1%-energy failures remain unchanged. No live adoption or Quantize activation follows
 from this proof. All allocation, DSP preparation and measurements remain cfg(test)/offline.
 

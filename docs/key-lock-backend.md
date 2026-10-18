@@ -1000,13 +1000,15 @@ not accepted musical timing or evidence that all mixture context is preserved.
 
 ### Product Decision And Acceptance Boundary
 
-The outstanding decision is whether T means the first permitted sound, or a musical/source
-anchor that permits earlier native content. The latter needs an explicit insufficient-headroom
-rule: the current nearest target and phase catch-up can preserve available continuation while
-reporting unavailable content, but cannot promise complete transient retention for every press.
-The former preserves silence until T while accepting a separate pre-target crop; authorized
-late catch-up alone does not authorize that on-time crop. Neither alternative currently meets
-the unchanged strict dry-timing/retention criterion.
+On 2026-10-18 the Human chose "Kräftiger Anschlag auf der „1“": the main perceived attack
+belongs at T, allowing a quieter native lead when needed and causally available. The product
+direction is resolved; the accepted measured anchor and recorded-track/listening evidence
+remain open. This still needs an explicit insufficient-headroom rule: the current nearest
+target and phase catch-up can preserve available continuation while reporting unavailable
+content, but cannot promise complete transient retention for every press. The strict
+first-sound-at-T policy remains a comparison which exposes its separate pre-target crop;
+authorized late catch-up does not accept that on-time crop. Neither measured alternative
+currently meets the unchanged strict dry-timing/retention criterion.
 
 Before live adoption, an accepted musical anchor must be justified on matched continuous
 recorded-track references and listening evidence, with click-safe entry and device/deadline

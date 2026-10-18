@@ -22,7 +22,8 @@ mixture energy, nonlinear subtraction or supplied source audio SHALL NOT replace
 The evidence SHALL preserve failed dry-timing/retention bounds. Exact retained continuation
 SHALL NOT establish accepted musical anchoring, click-safe entry, device accuracy or recovered
 omitted content. The proof SHALL remain test-only, perform no device rendering and leave live
-identity/adoption and synchronized Quantize pending until the product/content decision is resolved.
+identity/adoption and synchronized Quantize pending until the remaining musical anchor/content
+validation is accepted.
 
 #### Scenario: Strict gating removes controllable pre-target native content
 - **GIVEN** declared translation C exceeds original isolated retention bound U
@@ -36,6 +37,13 @@ identity/adoption and synchronized Quantize pending until the product/content de
 - **WHEN** hypothetical earlier output starts no earlier than E
 - **THEN** the report identifies insufficient headroom for original isolated retention
 - **AND** it does not defer T or reinterpret suffix equality as retained attack acceptance
+
+#### Scenario: The main musical attack defines the selected product direction
+- **GIVEN** the Human selected a strong perceived attack on the beat on 2026-10-18
+- **WHEN** audible compensation is evaluated against that direction
+- **THEN** the intended musical anchor SHALL place the main perceived attack at T, allowing a quieter native lead before T when needed and causally available
+- **AND** the proof SHALL declare its recorded-track attack reference before measurement and report actual lead content, necessary headroom and unavailable content without silently moving T
+- **AND** the preference SHALL NOT select the API delay, raw peak or an energy quantile as the accepted anchor, change existing timing/retention limits or certify live adoption without recorded-track musical and listening evidence
 
 #### Scenario: Late catch-up preserves the selected target
 - **GIVEN** the earliest controllable frame E is after the captured-input-selected target T
