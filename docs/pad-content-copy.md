@@ -237,3 +237,81 @@ A private optimized Release passes API/Portable/import checks without installati
 537 focused model/control/UI tests also pass against that private Native module.
 The earlier broad Native failures and their individual repairs remain recorded in
 the local test log; this is not a claim of a fresh whole-workspace test run.
+
+## Hold/Pair controllers and durable completion — 2026-10-18
+
+The HC-18 integration now joins the real Python `WaveformController` and
+`PairArrangementController` with genuine Native Hold/Pair tickets, the boxed
+callback mixer, actual Config replacement, journal records, assignment leases,
+both controller mirrors and Native finish. This complements the earlier Native
+composition and the separate Python tests with a scripted Native facade.
+
+`control_hold_tests/controller_native_tests.rs` executes eight isolated child
+profiles: Move or Swap, release before or after Pair publication, and release
+before or after the pause acknowledgement. In each case B has its own previously
+accepted pause. The original physical press/ticket remains the controller owner
+until its actual terminal Native observation. The Pair acknowledgement records
+whether that owned effect preceded or followed the layout claim. No direct
+Native finish or preparation substitute bypasses the Python controller.
+
+The probe writes two matching 128-frame stereo PCM16 sources at 48 kHz. Their
+Native source publications, starts and independently paused B are genuine; the
+small App/project envelope is synthetic. Public `_prepare_pad_pair` uses its
+normal no-device stereo format. Original mono fixtures retain their mono path.
+Preparation runs synchronously on the test control thread, outside the callback;
+the next ordinary controller poll collects and publishes its original result.
+This is no cold Loader, neural inference or device proof.
+
+After the actual callback drain, the test verifies the exact Native cohort,
+content lifetime, generation, sample backing, source position, Native/FIFO and
+DSP history. Real controller settlement must use its own acknowledgement, write
+the same-revision Config bytes/digest, reopen a settled journal, publish live
+Native assignment leases at the exact destination-to-source file paths, retire
+displaced assignment owners, clear observer fences and release the original
+reservation. Persisted content, numeric pitch
+intent, loop/EQ/gain, selected content, waveform zoom and independent B pause
+follow their surviving contents. A subsequent 96-frame stereo render must equal
+an independently continuing unchanged-layout fixture exactly and remain finite
+and non-silent. This neutral FullMix profile does not replace existing nonneutral
+pitch, accepted-timing, selected-ALL or productive wet-history profiles.
+
+Fixture negatives remain recorded: the initial generic PyO3 extraction failed
+compilation; incomplete stereo setup first rejected the ordinary start as
+`prepared_mismatch`, then rejected its mono source as `source_changed`. A Path
+object inserted into `sys.path` prevented imports. Finally, the deliberately
+seeded Native manual timing and the initial legacy Python label disagreed, so
+the strict journal rejected the committed image. The probe now asserts matching
+initial timing intent and uses actual stereo sources and a string import path.
+No production guards or assertions were weakened and no production defect is
+inferred from these invalid fixture states.
+
+The independent final review found that the first custody oracle could accept
+an unchanged pre-Swap assignment table. An executed negative with the actual
+live before table reproduced that gap. The final oracle requires both exact
+absolute destination paths and released displaced leases; only unaffected B in
+Move may reuse its original tuple. Every profile also checks that its unchanged
+before table cannot certify the after-layout custody.
+
+The focused eight-profile Debug gate passes. All 42 affected Native Pair tests
+pass in 53.46 seconds before the custody-oracle refinement; the unchanged other
+41 cases are reused. The final eight-profile Release repetition, including the
+before-table negative, passes in 11.94 seconds. Changed Python lint, formatting
+and typing, Rust formatting and strict affected OpenSpec validation pass. Clippy
+passes with 95 existing lib-test warnings and no references to changed Rust files.
+Production code, API and packaging are unchanged; the private Release/API/import
+checks from delivery `96c07db` are reused without a new installation.
+
+The broader Python Pair/mirror/observer/assets/Hold batch remains **failed**:
+223 passed and two failed in 674.61 seconds. Both unchanged cancellation tests
+failed to observe their backend-entry event within five seconds. Their isolated
+repetition passes both in 39.63 seconds with unchanged assertions and deadlines.
+The failure cause remains unknown; pre-backend identity/file verification and
+scheduling are possible delay locations, not established causes. This is no
+fresh whole-suite pass, and no timeout, verification or custody gate was relaxed.
+
+This closes the named controller-to-Native/durable seam only. Actual owned Hold
+removal under failed unload capacity, successful removal/refill or equal-byte
+reassignment with delayed old actions (HC-06/07/19), and live/awaiting-ACK Hold
+shutdown (HC-26) still require their separate software integration. Whole R2 and
+public Re-Arrange gestures remain gated. Full resource, realtime measurement,
+acoustic, musical, device and Human acceptance remain open.

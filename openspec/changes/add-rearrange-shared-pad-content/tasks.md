@@ -46,6 +46,13 @@ Use canonical program/coverage, not a new parallel order. R0 is docs/spec-only.
   Native lifecycle6 passes. Production and two test modules pass mypy157 files;
   the55 existing Pair-controller test diagnostics remain unchanged and open.
   Full R2, whole-source type checks, resource and Human acceptance remain open.
+- [x] HC-18 Controller/Native/durable seam: compose actual WaveformController and
+  PairArrangementController with genuine Hold/Pair tickets, public Native
+  preparation, callback ACK, Config/journal, both mirrors, assignment custody and
+  finish for Move/Swap, both release/layout orders, release before pause ACK and
+  independently paused B. Eight stereo FullMix profiles preserve continuing PCM.
+  This bounded seam does not close whole R2 or HC-06/07/19 removal and HC-26
+  live/awaiting-ACK shutdown integration; no public R3 exposure follows.
 - [ ] R3: modeOFF/warning/help/left-right gestures/target feedback; branch before
   trigger/stop, cancel/self/invalid/empty no-op, existing control tick outside release
   even after editor close/focus/selection; global mute/latest volume regression.

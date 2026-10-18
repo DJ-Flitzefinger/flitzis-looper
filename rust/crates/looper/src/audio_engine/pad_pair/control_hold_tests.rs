@@ -106,6 +106,7 @@ impl AudioBufferRetirement for RetirementGate {
 struct CallbackFixture {
     control: LaunchFixture,
     mixer: Box<RtMixer>,
+    channels: usize,
     scheduler: FixedCapacityScheduler<8>,
     transport: TransportTimeline,
     quantization: TriggerQuantization,
@@ -116,12 +117,29 @@ struct CallbackFixture {
 
 impl CallbackFixture {
     fn new(capacity: usize) -> Self {
+        Self::new_with_channels(capacity, 1)
+    }
+
+    fn new_with_channels(capacity: usize, channels: usize) -> Self {
         let mut control = LaunchFixture::new(capacity);
+        control.engine.test_output_format = Some((RATE, channels));
+        if channels != 1 {
+            assert_eq!(channels, 2);
+            for (id, value) in [(SOURCE, 0.25), (OTHER, -0.5)] {
+                let sample = SampleBuffer {
+                    samples: Arc::from(vec![value; 128 * channels]),
+                    channels,
+                    residency: None,
+                }
+                .with_complete_source(RATE);
+                crate::audio_engine::pitch_runtime_tests::publish_tone(&control, id, sample, true);
+            }
+        }
         let (_, feedback) = RingBuffer::<AudioMessage>::new(32);
         control.engine.test_control_channels =
             Some((control.producer.clone(), Arc::new(Mutex::new(feedback))));
         let mut mixer = create_stream_mixer(
-            1,
+            channels,
             RATE,
             control.engine.current_timing_acknowledgements.clone(),
             control.engine.input_runtime_ownership.clone(),
@@ -143,6 +161,7 @@ impl CallbackFixture {
         let mut fixture = Self {
             control,
             mixer,
+            channels,
             scheduler: FixedCapacityScheduler::new(),
             transport: TransportTimeline::new(RATE),
             quantization: TriggerQuantization::Immediate,
@@ -219,7 +238,7 @@ impl CallbackFixture {
     }
 
     fn render(&mut self, frames: usize) -> Vec<f32> {
-        let mut output = vec![0.0; frames];
+        let mut output = vec![0.0; frames * self.channels];
         let frame = self.transport.output_frame();
         render_scheduled_audio(
             &mut self.mixer,
@@ -227,7 +246,7 @@ impl CallbackFixture {
             &mut output,
             &mut [0.0; crate::audio_engine::constants::NUM_SAMPLES],
             frame,
-            1,
+            self.channels,
             &mut self.transport,
             &mut self.feedback,
             &mut self.retirement,
@@ -564,6 +583,8 @@ fn actual_pair_then_release_callback_retirement_pressure_preserves_own_effect_un
     }
 }
 
+#[path = "control_hold_tests/controller_native_tests.rs"]
+mod controller_native_tests;
 #[path = "control_hold_tests/refresh.rs"]
 mod refresh;
 #[path = "control_hold_tests/repeated_transport.rs"]
