@@ -37,10 +37,18 @@ type ButtonStyleName = Literal[
     "bank-active",
     "mode-on",
     "mode-off",
+    "arrange-on",
 ]
 type ButtonStyles = dict[ButtonStyleName, dict[int, imgui.ImVec4Like]]
 
 BUTTON_STYLES: ButtonStyles = {
+    "arrange-on": {
+        imgui.Col_.button: BANK_RGBA,
+        imgui.Col_.button_active: BANK_PRESSED_RGBA,
+        imgui.Col_.button_hovered: BANK_HOVERED_RGBA,
+        imgui.Col_.border: BANK_BORDER_RGBA,
+        imgui.Col_.text: TEXT_RGBA,
+    },
     "regular": {
         imgui.Col_.button: CONTROL_RGBA,
         imgui.Col_.button_active: CONTROL_PRESSED_RGBA,

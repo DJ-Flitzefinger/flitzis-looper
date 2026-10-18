@@ -589,6 +589,22 @@ def _bottom_bar_controls(ctx: UiContext, center_y: float) -> None:
     _stem_mask_controls(ctx, center_y)
 
 
+def _start_stop_transport_input(ctx: UiContext, *, hovered: bool) -> None:
+    """Keep a pad-owned press out of the existing START/STOP transport actions."""
+    if ctx.ui.arrangement.owns_pointer:
+        ctx.ui.store_global_start_stop_pressed(pressed=False)
+        return
+    if imgui.is_mouse_down(imgui.MouseButton_.left):
+        if hovered and not ctx.state.session.global_start_stop_left_pressed:
+            received_at_ns = ctx.input.capture_timestamp_ns()
+            ctx.audio.global_.start_or_restart_start_stop(received_at_ns=received_at_ns)
+            ctx.ui.store_global_start_stop_pressed(pressed=True)
+    else:
+        ctx.ui.store_global_start_stop_pressed(pressed=False)
+    if hovered and imgui.is_mouse_down(imgui.MouseButton_.right):
+        ctx.audio.global_.stop_start_stop()
+
+
 def _start_stop_button(ctx: UiContext) -> None:
     with button_style(start_stop_button_style(stopped=ctx.state.session.global_stop_engaged)):
         imgui.button(
@@ -598,26 +614,18 @@ def _start_stop_button(ctx: UiContext) -> None:
 
     hovered = imgui.is_item_hovered()
     learn_pending = _has_pending_learn_input(ctx)
+    arrangement_pointer = ctx.ui.arrangement.owns_pointer
 
     if learn_pending:
         ctx.ui.store_global_start_stop_pressed(pressed=False)
-        if hovered and imgui.is_mouse_clicked(imgui.MouseButton_.left):
+        if not arrangement_pointer and hovered and imgui.is_mouse_clicked(imgui.MouseButton_.left):
             received_at_ns = ctx.input.capture_timestamp_ns()
             ctx.audio.global_.start_or_restart_start_stop(received_at_ns=received_at_ns)
         if hovered:
             imgui.set_tooltip("Set START/STOP mapping")
         return
 
-    if imgui.is_mouse_down(imgui.MouseButton_.left):
-        if hovered and not ctx.state.session.global_start_stop_left_pressed:
-            received_at_ns = ctx.input.capture_timestamp_ns()
-            ctx.audio.global_.start_or_restart_start_stop(received_at_ns=received_at_ns)
-            ctx.ui.store_global_start_stop_pressed(pressed=True)
-    else:
-        ctx.ui.store_global_start_stop_pressed(pressed=False)
-
-    if hovered and imgui.is_mouse_down(imgui.MouseButton_.right):
-        ctx.audio.global_.stop_start_stop()
+    _start_stop_transport_input(ctx, hovered=hovered)
 
     if hovered and imgui.is_mouse_clicked(imgui.MouseButton_.middle):
         ctx.audio.global_.set_momentary_output_mute(enabled=True)

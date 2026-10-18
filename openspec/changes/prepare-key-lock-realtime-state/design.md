@@ -23,16 +23,25 @@ pre-target content, controllable gate crop and authorized late missed content wi
 counting. Retained suffix equality proves only no extra post-cut deformation, not click safety,
 musical anchoring or device alignment. Detailed coordinate/policy tables are in the backend doc.
 
-On 2026-10-18 the Human selected "Kräftiger Anschlag auf der „1“": the main perceived attack
-should sit at T, with a quieter native lead permitted when needed and causally available.
-This resolves the product direction; it does not select a measured compensation anchor or
-certify a candidate's sound. Insufficient headroom cannot be promised away. The recorded
+On 2026-10-18 the Human subsequently requested both real global Settings policies for a
+listening comparison: "Erster Klang am Raster" (silence before T) and "Anschlag am Raster"
+(principal perceived attack at T, with necessary causally available quiet lead). The earlier
+attack preference is not an exclusive final choice. Neither is artificial gain. Both remain
+available; implementation follows the currently begun R3 block as the immediate next product
+block, using one authoritative audio path and persisted global control. Changes are allowed
+only when authoritative playback is completely stopped, including held/paused resumable
+history and admitted pending playback. Otherwise Settings is disabled with
+"Zum Ändern Wiedergabe stoppen"; there is no queued/next-start/live policy change.
+This authorization does not select a measured compensation anchor or certify sound.
+Insufficient headroom cannot be promised away. The recorded
 nearest/catch-up contract still preserves T and exposes unavailable content. The preference
 does not accept on-time cropping, a target delay or unconditional early emission. Keep task7.2
 pending until recorded-track musical/listening evidence and explicit insufficient-headroom
 behavior justify the measured anchor/content criterion. Existing dry q10/q50,
-peak and 0.1%-energy failures remain unchanged. No live adoption or Quantize activation follows
-from this proof. All allocation, DSP preparation and measurements remain cfg(test)/offline.
+peak and 0.1%-energy failures remain unchanged. The offline proof alone authorizes no live
+adoption or Quantize activation; the new direct request authorizes actual implementation of
+both policies while preserving remaining quality, realtime and Human acceptance gates.
+Heavy allocation, DSP preparation and measurements remain outside realtime rendering.
 
 ### Fixed unity-source attack experiment
 

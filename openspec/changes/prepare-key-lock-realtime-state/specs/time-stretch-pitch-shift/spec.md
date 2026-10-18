@@ -38,12 +38,16 @@ validation is accepted.
 - **THEN** the report identifies insufficient headroom for original isolated retention
 - **AND** it does not defer T or reinterpret suffix equality as retained attack acceptance
 
-#### Scenario: The main musical attack defines the selected product direction
-- **GIVEN** the Human selected a strong perceived attack on the beat on 2026-10-18
-- **WHEN** audible compensation is evaluated against that direction
+#### Scenario: Both start contracts remain available for the Human comparison
+- **GIVEN** the Human requested both genuinely distinct global start policies on 2026-10-18
+- **WHEN** the first-sound policy is selected
+- **THEN** the first audible output SHALL occur no earlier than T and output before T SHALL remain silent
+- **WHEN** the attack policy is selected
 - **THEN** the intended musical anchor SHALL place the main perceived attack at T, allowing a quieter native lead before T when needed and causally available
 - **AND** the proof SHALL declare its recorded-track attack reference before measurement and report actual lead content, necessary headroom and unavailable content without silently moving T
-- **AND** the preference SHALL NOT select the API delay, raw peak or an energy quantile as the accepted anchor, change existing timing/retention limits or certify live adoption without recorded-track musical and listening evidence
+- **AND** both policies SHALL use the existing authoritative audio path with actual distinct emission behavior, not cosmetic or identical modes; the prior attack preference SHALL NOT remove the first-sound policy before the Human comparison
+- **AND** attack alignment SHALL NOT mean artificial gain, and neither policy SHALL change source identity, loop markers, BPM, pitch, existing timing/retention limits or silently move T or source content when headroom is insufficient
+- **AND** implementation authorization SHALL NOT select the API delay, raw peak or an energy quantile as an accepted anchor or certify musical/device/listening acceptance without its required evidence
 
 #### Scenario: Late catch-up preserves the selected target
 - **GIVEN** the earliest controllable frame E is after the captured-input-selected target T

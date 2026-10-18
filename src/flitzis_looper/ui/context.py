@@ -31,6 +31,7 @@ from flitzis_looper.input_mapping.actions import (
     pitch_step_action,
 )
 from flitzis_looper.input_timing import validate_input_timestamp_ns
+from flitzis_looper.ui.pad_arrangement import PadArrangementGestures
 from flitzis_looper.ui.waveform_grid import waveform_view_start
 
 if TYPE_CHECKING:
@@ -1182,6 +1183,7 @@ class UiActions:
         self.settings = SettingsActions(controller)
         self.waveform = WaveformEditorActions(controller)
         self.confirmation = PerformanceConfirmationActions(controller)
+        self.arrangement = PadArrangementGestures(controller)
 
     def toggle_pitch_menu(self, menu: PitchMenu) -> None:
         """Toggle only the requested surface; choices and MIDI never close either menu."""

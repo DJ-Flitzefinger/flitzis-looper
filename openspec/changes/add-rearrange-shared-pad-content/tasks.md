@@ -72,9 +72,12 @@ Use canonical program/coverage, not a new parallel order. R0 is docs/spec-only.
   plus the actual HC-13/15 join satisfy the software prerequisite for beginning
   canonical R3 implementation. This does not close full R2, P6/V0/resource/RT,
   acoustic/musical/device/Human or Full Goal gates, or accept R3 gestures in advance.
-- [ ] R3: modeOFF/warning/help/left-right gestures/target feedback; branch before
+- [x] R3 SOFTWARE: modeOFF/warning/help/left-right gestures/target feedback; branch before
   trigger/stop, cancel/self/invalid/empty no-op, existing control tick outside release
   even after editor close/focus/selection; global mute/latest volume regression.
+  The single final nonauthor review accepts this software closure after actual
+  rendered UI/Cold/Native/ACK/Config profiles and the corrected START/STOP crossing
+  regression. All resource, musical, device, Human and full parent gates stay open.
 - [ ] R4: prepared guarded atomic all36 bank image/clear including empties, full
   reservation/reforder/native/config/journal recovery/pre-claim no-op/post-claim fence;
   source holds survive/removed target holds fenced; execute all R4 HC native oracles

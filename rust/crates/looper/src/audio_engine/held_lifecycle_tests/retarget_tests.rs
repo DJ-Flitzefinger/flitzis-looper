@@ -157,7 +157,7 @@ fn assert_history(
 }
 
 impl Fixture {
-    fn load_join_slot(&mut self, slot: usize, path: &Path) {
+    pub(super) fn load_join_slot(&mut self, slot: usize, path: &Path) {
         Python::attach(|py| {
             self.probe
                 .call_method1(py, "load", (slot, path.to_string_lossy().as_ref()))
@@ -186,7 +186,7 @@ impl Fixture {
         assert!(self.state().mixer.bank_for_measurement()[slot].is_some());
     }
 
-    fn start_join_slot(&mut self, slot: usize) {
+    pub(super) fn start_join_slot(&mut self, slot: usize) {
         Python::attach(|py| {
             self.probe.call_method1(py, "start", (slot,)).unwrap();
         });

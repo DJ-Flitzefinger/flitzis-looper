@@ -330,8 +330,14 @@ class PadArrangementController:
             message = "Key Lock inheritance is reserved by a pending Copy"
             raise RuntimeError(message)
 
-    def copy_to_empty(self, source_id: int, target_id: int) -> bool:
-        """Admit an asynchronous complete Copy, returning False for unsupported targets."""
+    def copy_to_empty(
+        self,
+        source_id: int,
+        target_id: int,
+        *,
+        source_binding: InputRuntimePadBinding | None = None,
+    ) -> bool:
+        """Copy to an empty target using the original source binding when supplied."""
         self._require_control_thread()
         if self._closing or not self._can_admit():
             return False
@@ -345,9 +351,14 @@ class PadArrangementController:
             return False
         try:
             self._ensure_config_writable()
-            binding = self._audio.current_input_runtime_pad_binding(source_id)
+            binding = (
+                source_binding
+                if source_binding is not None
+                else self._audio.current_input_runtime_pad_binding(source_id)
+            )
             if (
                 binding is None
+                or (source_binding is not None and binding.metadata().get("pad_id") != source_id)
                 or self._audio.current_input_runtime_pad_binding(target_id) is not None
             ):
                 return False
@@ -357,12 +368,14 @@ class PadArrangementController:
             self._session.sample_load_errors[target_id] = f"Copy failed: {error}"
             return False
 
-    def copy_overwrite(self, source_id: int, target_id: int) -> bool:
-        """Prepare a stopped copy replacing only the exact original occupied target.
-
-        This internal admission shares the empty-target transaction. Public gestures
-        remain gated by the complete arrangement integration and recovery proof.
-        """
+    def copy_overwrite(
+        self,
+        source_id: int,
+        target_id: int,
+        *,
+        source_binding: InputRuntimePadBinding | None = None,
+    ) -> bool:
+        """Copy the optional original source over the target captured at this admission."""
         self._require_control_thread()
         if self._closing or not self._can_admit():
             return False
@@ -376,9 +389,17 @@ class PadArrangementController:
             return False
         try:
             self._ensure_config_writable()
-            source = self._audio.current_input_runtime_pad_binding(source_id)
+            source = (
+                source_binding
+                if source_binding is not None
+                else self._audio.current_input_runtime_pad_binding(source_id)
+            )
             target = self._audio.current_input_runtime_pad_binding(target_id)
-            if source is None or target is None:
+            if (
+                source is None
+                or target is None
+                or (source_binding is not None and source.metadata().get("pad_id") != source_id)
+            ):
                 return False
             return self._begin(source_id, target_id, source, target_binding=target)
         except (OSError, RuntimeError, TypeError, ValueError) as error:

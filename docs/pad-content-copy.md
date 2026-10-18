@@ -482,3 +482,64 @@ This synthetic FullMix software join supplies no recorded-music, acoustic,
 resource, realtime, device or Human acceptance. The earlier Python225 batch's two
 unexplained backend-entry failures remain open; unchanged prior wet/timing/refresh,
 Hold/Pair, custody and lifecycle results retain their original profiles.
+
+## Re-Arrange pad interface and original source admission
+
+The transient Re-Arrange control now owns a complete mouse press before ordinary
+pad trigger/stop handling. It starts OFF per UI context, changes no Project mode
+or MIDI switch, and exposes left Move/Swap and right stopped Copy/Copy-overwrite
+through the existing complete Pair/Copy controllers. Warning styling, short help
+and an explicit source/target/operation preview accompany actual target hover,
+including hover blocked only by the source button's active ImGui ID. Consumed
+release remains owned through the entire rendered frame, preventing bank or
+normal-pad actions even if mode changes mid-drag. Outside release, Esc, focus,
+settings and Close cancel without dispatch. Bank mutations remain the separate
+R4/R5 scope; active pad mode permits no bank navigation or drag-release action.
+Crossing START/STOP also consumes the original pad gesture before its held-button
+transport handlers, including after mode-off cancellation. Fresh independent
+START/STOP presses and middle-button mute retain their existing behavior.
+
+The gesture retains the exact Native source binding and durable source identity
+from press. A Python-only currentness check cannot close a race with asynchronous
+Cold adoption. Copy therefore forwards the original binding to its existing
+Native request-lock validation. Pair retains that same object across journal
+retries and validates original owner, source slot, current projection, generation
+and lifetime under the existing request lock before any reservation. Same PCM,
+digest or even generation cannot authorize a new lifetime. A bound source
+rejection follows actual durable cancellation rather than fresh recapture or
+unending stale retries. Legacy admissions retain their existing no-binding route
+through the same Native capture kernel. The matching stub and Portable preflight
+require the optional source-binding keyword without constructing an engine.
+
+Two actual global-mute regressions were reproduced before repair: volume edits
+could publish audible gain during middle-hold mute, and outside/focus/Close
+release depended on the local START/STOP handler even when Learn intercepted it.
+The existing volume controller now retains the latest clamped persisted intent
+while effective output stays muted. The existing global runtime tick restores
+that latest value once on middle-up/focus/Close before App polling, including
+hidden and Learn controls; still-held focused mute remains global. There is no
+new audio or scheduler path.
+
+The final optimized Native run passes three entries and eleven isolated profiles:
+all four rendered arrangement operations, same-path source replacement during
+drag, held A plus global mute and a continuing B, and the five existing lifecycle/
+retarget profiles. Actual Cold loading, original gesture binding, Pair/Copy workers,
+callback ACK, Config and finish remain connected throughout. The original source
+lane/PCM/processor/history survives Move/Swap; Copy creates its own stopped target.
+Middle-up restores the continuing peer at the latest persisted volume while A
+stays held; right-up releases exactly that original moved Hold. Five original-source
+guard tests and four adjacent complete Pair regressions also pass in Release.
+
+The fresh private Release passes eight bootstrap API checks and actual App/UI/BS
+imports without installation. Initial broad Python integration passes 2012 tests;
+its only failure was an older metadata renderer's incomplete UI double. After
+updating that double, affected UI/input integration passes 861 tests. The real
+START/STOP crossing regression first fails all four cases, then passes; after
+the final handler extraction, all 104 impacted bottom-bar/gesture/runtime/render
+tests pass. The independent middle-mute path remains covered. The initial mute
+regression's nine failures and all test-driver corrections are retained in the
+workspace test log. Headless render doubles remain separate from the actual
+Native effects proved above. These software results do not close musical,
+resource, realtime, device, listening, Human or full parent acceptance gates.
+The single independent final review is clear and accepts the separate R3 software
+closure for these pad gestures, original source admission and global mute/release.

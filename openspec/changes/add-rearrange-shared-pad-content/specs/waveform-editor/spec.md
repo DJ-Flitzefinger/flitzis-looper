@@ -308,6 +308,8 @@ and unbounded scans; all large preparation/cleanup SHALL stay off the callback.
 - **WHEN** pad drag hovers over a bank and releases, or a held content moves
 - **THEN** no normal pad trigger/stop or bank action leaks from that drag
 - **AND** global mute remains global and restores the latest intended volume on its own outside-release
+- **AND** changing intended master volume while the middle-hold mute is active SHALL keep effective output muted, and release SHALL restore the latest clamped intended value
+- **AND** the existing global control tick SHALL settle middle-button-up, focus cancellation and Close even when the START/STOP control is hidden or Learn intercepts its local handler
 - **AND** copied visual pressed state confers no action authority
 
 #### Scenario: HC-25 True last user includes accepted actions and native unload ACK

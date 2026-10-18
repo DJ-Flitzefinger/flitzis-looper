@@ -116,8 +116,18 @@ class _Context:
         self.ui = _Ui()
 
 
-class _Ui:
+class _Arrangement:
     __slots__ = ()
+
+    enabled = False
+    owns_pointer = False
+
+
+class _Ui:
+    __slots__ = ("arrangement",)
+
+    def __init__(self) -> None:
+        self.arrangement = _Arrangement()
 
     def store_pressed_pad_state(self, _pad_id: int, *, pressed: bool) -> None:
         assert not pressed

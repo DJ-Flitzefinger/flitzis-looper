@@ -4,6 +4,7 @@ import runpy
 from inspect import Parameter, signature
 from pathlib import Path
 from types import SimpleNamespace
+from typing import Never
 from unittest.mock import Mock
 
 import pytest
@@ -127,14 +128,25 @@ _PAIR_HOLD_METHODS = (
 )
 
 
-def _forbidden_native_work(*_arguments: object, **_keywords: object) -> None:
+def _forbidden_native_work(*_arguments: object, **_keywords: object) -> Never:
     pytest.fail("Preflight must reflect the Native class without executing Native work")
+
+
+def _capture_pad_pair(
+    self: object,
+    source_id: int,
+    target_id: int,
+    *,
+    source_binding: object | None = None,
+) -> object:
+    _forbidden_native_work()
 
 
 _CompatiblePairHoldEngine = type(
     "CompatiblePairHoldEngine",
     (_CompatibleCopyEngine,),
-    dict.fromkeys(_PAIR_HOLD_METHODS, _forbidden_native_work),
+    dict.fromkeys(_PAIR_HOLD_METHODS, _forbidden_native_work)
+    | {"_capture_pad_pair": _capture_pad_pair},
 )
 
 _CompatibleTimingEngine = type(
@@ -663,6 +675,38 @@ def test_complete_pair_hold_input_interface_is_reflected_without_native_work() -
     bootstrap = runpy.run_path(str(REPO / "scripts/portable/bootstrap.py"))
     for name in ("check_resident_api", "check_pad_copy_api", "check_pad_pair_hold_api"):
         bootstrap[name](_CompatiblePairHoldEngine)
+
+
+@pytest.mark.parametrize(
+    "incompatibility", ["absent", "positional-only", "required", "wrong-default"]
+)
+def test_incompatible_pair_original_source_keyword_cannot_activate(incompatibility: str) -> None:
+    complete = signature(_capture_pad_pair)
+    parameters = list(complete.parameters.values())
+    original = parameters.pop()
+    if incompatibility == "positional-only":
+        parameters = [parameter.replace(kind=Parameter.POSITIONAL_ONLY) for parameter in parameters]
+        parameters.append(original.replace(kind=Parameter.POSITIONAL_ONLY))
+    elif incompatibility == "required":
+        parameters.append(original.replace(default=Parameter.empty))
+    elif incompatibility == "wrong-default":
+        parameters.append(original.replace(default=False))
+    old_method = type(
+        "OldPairCaptureMethod",
+        (),
+        {
+            "__call__": _forbidden_native_work,
+            "__signature__": complete.replace(parameters=parameters),
+        },
+    )()
+    engine_type = type(
+        "OldPairCaptureSignature",
+        (_CompatiblePairHoldEngine,),
+        {"_capture_pad_pair": old_method},
+    )
+    check = runpy.run_path(str(REPO / "scripts/portable/bootstrap.py"))["check_pad_pair_hold_api"]
+    with pytest.raises(AssertionError, match="source_binding"):
+        check(engine_type)
 
 
 @pytest.mark.parametrize("method", _PAIR_HOLD_METHODS)

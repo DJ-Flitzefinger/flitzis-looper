@@ -364,7 +364,8 @@ class GlobalParametersController:
         """Set global volume."""
         ensure_finite(volume)
         clamped = min(max(volume, VOLUME_MIN), VOLUME_MAX)
-        self._audio.set_volume(clamped)
+        if not self._session.global_stop_momentary_mute_active:
+            self._audio.set_volume(clamped)
         self._project.volume = clamped
         self._transport._mark_project_changed()
 

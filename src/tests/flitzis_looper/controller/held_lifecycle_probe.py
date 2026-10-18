@@ -38,11 +38,13 @@ from flitzis_looper.input_mapping import InputMappingController
 from flitzis_looper.models import ProjectState, SessionState
 from flitzis_looper.ui import run as ui_run
 from flitzis_looper.ui.context import UiContext
+from flitzis_looper.ui.render import performance_view
 
 if TYPE_CHECKING:
     from collections.abc import Callable, Iterator
     from contextlib import AbstractContextManager
 
+    from flitzis_looper.controller.pad_arrangement import _Copy
     from flitzis_looper.controller.pair_arrangement import _Pair
     from flitzis_looper.controller.transport.waveform import _HoldOwner
     from flitzis_looper_audio import (
@@ -385,7 +387,199 @@ class _HeldLifecycleJoin:
         assert app.session.waveform_editor_pad_id == 1
 
 
-class HeldLifecycleProbe(AppController, _HeldLifecycleJoin):
+class _HeldRenderedArrangement:
+    """Real rendered pad input, with detached observations of its original owner."""
+
+    def _init_rendered_state(self, probe: HeldLifecycleProbe) -> None:
+        self._render_probe = probe
+        self.render_binding: InputRuntimePadBinding | None = None
+        self.render_owner: _Pair | _Copy | None = None
+        self.render_copy: _Copy | None = None
+        self.render_project: ProjectState | None = None
+        self.render_config: bytes | None = None
+        self._render_centres: dict[int, tuple[float, float]] = {}
+
+    def setup_arrangement_ui(self) -> None:
+        """Reuse the actual UI context and enable its transient arrangement owner."""
+        app = self._render_probe
+        app.setup_join_ui()
+        context = app.join_context
+        assert context is not None
+        assert not context.ui.arrangement.enabled
+        context.ui.arrangement.toggle()
+        assert context.ui.arrangement.enabled
+        self.render_arrangement_frame(-1)
+        app.save()
+        self.render_project = app.project.model_copy(deep=True)
+        self.render_config = app.saved_bytes
+
+    def render_arrangement_frame(
+        self, hover: int, *, left: bool = False, right: bool = False, middle: bool = False
+    ) -> None:
+        """Feed real IO, render production pad buttons, and run the global runtime tick."""
+        app = self._render_probe
+        context = app.join_context
+        assert context is not None
+        assert app._join_native is not None
+        with app._join_native():
+            io = imgui.get_io()
+            point = self._render_centres.get(hover, (-10_000.0, -10_000.0))
+            io.add_mouse_pos_event(*point)
+            io.add_mouse_button_event(imgui.MouseButton_.left, left)
+            io.add_mouse_button_event(imgui.MouseButton_.right, right)
+            io.add_mouse_button_event(imgui.MouseButton_.middle, middle)
+            imgui.new_frame()
+            try:
+                assert not io.app_focus_lost
+                assert imgui.is_mouse_down(imgui.MouseButton_.left) == left
+                assert imgui.is_mouse_down(imgui.MouseButton_.right) == right
+                assert imgui.is_mouse_down(imgui.MouseButton_.middle) == middle
+                imgui.set_next_window_pos((20.0, 20.0), imgui.Cond_.always)
+                imgui.set_next_window_size((850.0, 220.0), imgui.Cond_.always)
+                imgui.begin(
+                    "Owned rendered arrangement fixture",
+                    flags=(
+                        imgui.WindowFlags_.no_title_bar
+                        | imgui.WindowFlags_.no_resize
+                        | imgui.WindowFlags_.no_move
+                        | imgui.WindowFlags_.no_saved_settings
+                    ),
+                )
+                try:
+                    for slot in range(3):
+                        imgui.set_cursor_pos((30.0 + slot * 250.0, 40.0))
+                        corner = imgui.get_cursor_screen_pos()
+                        self._render_centres[slot] = (corner.x + 110.0, corner.y + 60.0)
+                        performance_view._pad_button(context, slot, (220.0, 120.0))
+                    self._retain_rendered_owner()
+                finally:
+                    imgui.end()
+                ui_run._poll_runtime_tick(context)
+            finally:
+                imgui.end_frame()
+
+    def press_arrangement_hold(self) -> HoldActionTicket:
+        """Start H over the rendered window so ImGui owns the held right press."""
+        app = self._render_probe
+        assert app._join_native is not None
+        with app._join_native():
+            imgui.get_io().add_mouse_pos_event(*self._render_centres[0])
+            return app.press_join()
+
+    def _retain_rendered_owner(self) -> None:
+        app = self._render_probe
+        assert app.join_context is not None
+        press = app.join_context.ui.arrangement._press
+        if self.render_binding is None and press is not None:
+            assert press.source == 0
+            assert press.binding.is_current()
+            self.render_binding = press.binding
+        owner = app.pairs._pair if app.pairs._pair is not None else app.arrangement._copy
+        if owner is not None:
+            if app.arrangement._copy is not None:
+                self.render_copy = app.arrangement._copy
+            assert self.render_binding is not None
+            assert owner.source_binding is self.render_binding
+            if self.render_owner is None:
+                self.render_owner = owner
+            assert self.render_owner is owner
+
+    def assert_arrangement_preview(self, target: int, operation: str) -> None:
+        """Read the production target feedback for the held rendered gesture."""
+        context = self._render_probe.join_context
+        assert context is not None
+        preview = context.ui.arrangement.preview(target)
+        assert preview is not None
+        assert preview.source == 0
+        assert preview.target == target
+        assert preview.operation == operation
+        assert preview.label == f"{operation}: PAD 1 → PAD {target + 1}"
+
+    def poll_arrangement_published(self) -> bool:
+        """Prepare/publish through actual App polling, without running the callback."""
+        app = self._render_probe
+        app.poll_runtime_events()
+        owner = self.render_owner
+        assert owner is not None
+        assert owner.source_binding is self.render_binding
+        assert app.pairs.error is None, app.pairs.error
+        assert app.arrangement.error is None, app.arrangement.error
+        assert owner.receipt is None
+        assert not owner.native_finished
+        assert not owner.writer_released
+        assert app.project == self.render_project
+        assert app.persistence.config_path.read_bytes() == self.render_config
+        pair = app.pairs._pair
+        if pair is not None:
+            assert owner is pair
+            assert pair.acknowledgement is None
+            if pair.ticket is not None:
+                assert pair.ticket.own_acknowledgement() is None
+        else:
+            copy = app.arrangement._copy
+            assert copy is not None
+            assert owner is copy
+            assert not copy.acknowledged
+        return owner.published
+
+    def poll_arrangement_finished(self) -> bool:
+        """Observe the original real owner through its own ACK, config and finish."""
+        app = self._render_probe
+        app.poll_runtime_events()
+        assert app.pairs.error is None, app.pairs.error
+        assert app.arrangement.error is None, app.arrangement.error
+        if app.pairs.active or app.arrangement.active:
+            return False
+        owner = self.render_owner
+        assert owner is not None
+        assert owner.source_binding is self.render_binding
+        assert owner.published
+        assert owner.native_finished
+        assert owner.writer_released
+        assert owner.ticket is not None
+        assert owner.ticket.publication_status() == "accepted"
+        saved = app.persistence.config_path.read_bytes()
+        assert ProjectState.model_validate(json.loads(saved)) == app.project
+        if owner.receipt is None:
+            # Empty Copy uses its existing atomic commit without retaining a receipt/journal.
+            copy = self.render_copy
+            assert copy is owner
+            assert copy is not None
+            assert copy.predecessor is None
+            assert copy.initial_journal is None
+            assert copy.journal is None
+            assert copy.config_committed
+            assert copy.model_committed
+            assert copy.assets_published
+            assert copy.committed_revision == app.persistence.revision
+            assert json.loads(saved)["config_revision"] == copy.committed_revision
+        else:
+            assert saved == owner.receipt.written_text.encode("utf-8")
+            assert app.project == owner.receipt.projected()
+            assert owner.journal is not None
+            assert owner.journal.journal is not None
+            assert owner.journal.journal.phase == "settled"
+        assert app.pairs.status == "completed" or app.arrangement.status == "completed"
+        app.save()
+        return True
+
+    def assert_cancelled_rendered_drop(self) -> None:
+        """A stale physical drag must not acquire a fresh source or transaction."""
+        app = self._render_probe
+        context = app.join_context
+        assert context is not None
+        assert self.render_binding is not None
+        assert not self.render_binding.is_current()
+        assert self.render_owner is None
+        assert not app.pairs.active
+        assert not app.arrangement.active
+        assert context.ui.arrangement.source_id is None
+        assert not context.ui.arrangement.owns_pointer
+        assert app.project.pad_content[2] is None
+        assert app.project.sample_paths[2] is None
+
+
+class HeldLifecycleProbe(AppController, _HeldLifecycleJoin, _HeldRenderedArrangement):
     """Inject a headless engine while retaining actual App component behavior."""
 
     def __init__(self, audio: AudioEngine, root: str, *, restore: bool = False) -> None:
@@ -393,6 +587,7 @@ class HeldLifecycleProbe(AppController, _HeldLifecycleJoin):
         self._closed = False
         self.app = self
         self._init_join_state(self)
+        self._init_rendered_state(self)
         self.hold: HoldActionTicket | None = None
         self.owner: _HoldOwner | None = None
         self.hold_slot: int | None = None

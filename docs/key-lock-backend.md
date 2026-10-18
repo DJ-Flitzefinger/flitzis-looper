@@ -1000,10 +1000,17 @@ not accepted musical timing or evidence that all mixture context is preserved.
 
 ### Product Decision And Acceptance Boundary
 
-On 2026-10-18 the Human chose "Kräftiger Anschlag auf der „1“": the main perceived attack
-belongs at T, allowing a quieter native lead when needed and causally available. The product
-direction is resolved; the accepted measured anchor and recorded-track/listening evidence
-remain open. This still needs an explicit insufficient-headroom rule: the current nearest
+On 2026-10-18 the Human subsequently requested both genuinely distinct global Settings
+policies for a listening comparison: "Erster Klang am Raster" preserves silence before T;
+"Anschlag am Raster" places the principal perceived attack at T with necessary quiet lead
+when causally available. The earlier attack preference is not an exclusive final selection.
+Both must be implemented in the existing single audio path after the currently begun R3
+block, retained for the comparison and persisted as one global choice. A change is permitted
+only with authoritative playback completely stopped, including paused/held resumable voices
+and pending playback. Settings otherwise shows "Zum Ändern Wiedergabe stoppen" and accepts
+no queued/next-start/live change. Attack alignment does not amplify sound or alter markers,
+BPM or pitch. Accepted measured anchoring and recorded-track/listening evidence remain open.
+This still needs an explicit insufficient-headroom rule: the current nearest
 target and phase catch-up can preserve available continuation while reporting unavailable
 content, but cannot promise complete transient retention for every press. The strict
 first-sound-at-T policy remains a comparison which exposes its separate pre-target crop;
@@ -1014,7 +1021,9 @@ Before live adoption, an accepted musical anchor must be justified on matched co
 recorded-track references and listening evidence, with click-safe entry and device/deadline
 checks. Continuous-native conformance can supply an additional no-extra-deformation check;
 it cannot retroactively turn the failed two-ms/peak/0.1%-energy gate into a pass. No new threshold,
-anchor, target delay, live scheduler policy or backend option is selected by this proof.
+anchor, target delay or live scheduler policy is selected by this proof. The later direct
+request authorizes actual implementation of both named policies; it supplies no advance
+musical, device, realtime or listening acceptance and does not erase failed predicates.
 
 ### First Original-Source Offline Stretcher Comparison — 2026-10-16
 

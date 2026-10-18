@@ -30,7 +30,12 @@ if TYPE_CHECKING:
     from flitzis_looper.controller.persistence import ConfigCommitReceipt
     from flitzis_looper.models import ProjectState
     from flitzis_looper.pair_snapshot import PairOperation, PairSnapshot
-    from flitzis_looper_audio import CapturedPadPair, PadPairAcknowledgement, PadPairTicket
+    from flitzis_looper_audio import (
+        CapturedPadPair,
+        InputRuntimePadBinding,
+        PadPairAcknowledgement,
+        PadPairTicket,
+    )
 
 
 @dataclass(frozen=True, slots=True)
@@ -46,6 +51,7 @@ class _Pair:
     snapshot: PairSnapshot
     retirement: AssetRetirementReservation
     initial: PairArrangementJournal
+    source_binding: InputRuntimePadBinding | None = None
     journal: PairJournalOwner | None = None
     captured: CapturedPadPair | None = None
     ticket: PadPairTicket | None = None
@@ -113,10 +119,21 @@ class PairArrangementController:
         message = "Key Lock inheritance is reserved by a pending Pair"
         raise RuntimeError(message)
 
-    def begin(self, source_id: int, target_id: int, *, operation: PairOperation) -> bool:
-        """Internal integration admission; public gestures require the full Hold gate."""
+    def begin(
+        self,
+        source_id: int,
+        target_id: int,
+        *,
+        operation: PairOperation,
+        source_binding: InputRuntimePadBinding | None = None,
+    ) -> bool:
+        """Admit one Pair, retaining an optional original gesture source through retries."""
         self._require_thread()
         if self.active or self._closing or self._app.arrangement.active:
+            return False
+        if source_binding is not None and (
+            source_binding.metadata().get("pad_id") != source_id or not source_binding.is_current()
+        ):
             return False
         persistence = self._app.persistence
         if persistence.load_error is not None:
@@ -149,12 +166,12 @@ class PairArrangementController:
             retirement.close()
             persistence.release_migration(owner)
             raise
-        self._pair = _Pair(owner, snapshot, retirement, initial)
+        self._pair = _Pair(owner, snapshot, retirement, initial, source_binding=source_binding)
         self._set_observer_fence(self.fenced_sample_ids)
         self.error = None
         self.status = "captured"
         self.poll()
-        return True
+        return self.status != "cancelled"
 
     def _set_observer_fence(self, sample_ids: frozenset[int]) -> None:
         for name in ("transport", "loader", "accepted_timing", "stems"):
@@ -262,7 +279,20 @@ class PairArrangementController:
         app = self._app
         if pair.captured is None:
             data = pair.snapshot.projected()
-            pair.captured = app._audio._capture_pad_pair(data.source_id, data.target_id)
+            try:
+                pair.captured = (
+                    app._audio._capture_pad_pair(
+                        data.source_id, data.target_id, source_binding=pair.source_binding
+                    )
+                    if pair.source_binding is not None
+                    else app._audio._capture_pad_pair(data.source_id, data.target_id)
+                )
+            except ValueError:
+                if pair.source_binding is None:
+                    raise
+                pair.cancel_requested = True
+                self._cancel(pair)
+                return
             captured, results, audio, owner = pair.captured, self._results, app._audio, pair.owner
             pair.worker_done = False
 

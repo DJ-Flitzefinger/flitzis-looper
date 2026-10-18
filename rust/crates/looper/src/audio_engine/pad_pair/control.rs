@@ -8,7 +8,7 @@ use crate::audio_engine::constant_timing::CurrentConstantTimingRecord;
 use crate::audio_engine::constants::NUM_SAMPLES;
 use crate::audio_engine::content_placement::{PlacementError, SlotSnapshot};
 use crate::audio_engine::input_mapping::CapturedPairRuntime;
-use crate::audio_engine::input_runtime_binding;
+use crate::audio_engine::input_runtime_binding::{self, InputRuntimePadBinding};
 use crate::audio_engine::resident_relocation::{ResidentStemCache, StemOwner};
 use crate::messages::{ControlMessage, SampleBuffer};
 use flitzis_looper_analysis::tempo_acceptance::TimingIntent;
@@ -17,6 +17,9 @@ use pyo3::prelude::*;
 use serde_json::json;
 use std::sync::atomic::{AtomicBool, AtomicU8, Ordering};
 use std::sync::{Arc, Mutex};
+#[cfg(test)]
+#[path = "source_binding_tests.rs"]
+mod source_binding_tests;
 #[cfg(test)]
 #[path = "control_tests.rs"]
 mod tests;
@@ -138,6 +141,16 @@ pub(crate) fn capture(
     source: usize,
     target: usize,
 ) -> PyResult<CapturedPadPair> {
+    capture_with_source_binding(engine, source, target, None)
+}
+
+/// Join an original gesture source to the current request-owned Pair before reserving either slot.
+pub(crate) fn capture_with_source_binding(
+    engine: &AudioEngine,
+    source: usize,
+    target: usize,
+    source_binding: Option<&InputRuntimePadBinding>,
+) -> PyResult<CapturedPadPair> {
     if source >= NUM_SAMPLES || target >= NUM_SAMPLES || source == target {
         return Err(PyValueError::new_err(
             "pair requires two distinct valid slots",
@@ -148,6 +161,13 @@ pub(crate) fn capture(
         .lock()
         .map_err(|_| PyRuntimeError::new_err("request lock poisoned"))?;
     let ownership = &engine.input_runtime_ownership;
+    if source_binding.is_some_and(|expected| {
+        expected.id != source || !Arc::ptr_eq(&expected.ownership, ownership) || !expected.current()
+    }) {
+        return Err(PyValueError::new_err(
+            "stale or foreign pair source binding",
+        ));
+    }
     let snapshots = [source, target].map(|slot| ownership.slot_snapshot(slot));
     let [Some(source_snapshot), Some(target_snapshot)] = snapshots else {
         return Err(PyRuntimeError::new_err("pair placement is pending"));
@@ -156,18 +176,29 @@ pub(crate) fn capture(
         return Err(PyValueError::new_err("pair source is empty"));
     }
     let snapshots = [source_snapshot, target_snapshot];
-    let runtime = engine
-        .input_runtime
-        .as_ref()
-        .map(|runtime| runtime.capture_pair_rows(snapshots))
-        .transpose()
-        .map_err(PyRuntimeError::new_err)?;
     // Public source bindings deliberately omit the MIDI runtime revision. Capture the actual
     // current value now, under the request owner shared by Native control writers.
     let bindings = [
         input_runtime_binding::capture_under_request_lock(engine, source)?,
         input_runtime_binding::capture_under_request_lock(engine, target)?,
     ];
+    if source_binding.is_some_and(|expected| {
+        bindings[0].as_ref().is_none_or(|current| {
+            !expected.current()
+                || !expected.binding.same_projection(&current.binding)
+                || expected.source_generation != current.source_generation
+        })
+    }) {
+        return Err(PyValueError::new_err(
+            "stale or foreign pair source binding",
+        ));
+    }
+    let runtime = engine
+        .input_runtime
+        .as_ref()
+        .map(|runtime| runtime.capture_pair_rows(snapshots))
+        .transpose()
+        .map_err(PyRuntimeError::new_err)?;
     let loading = engine
         .loading_sample_ids
         .lock()

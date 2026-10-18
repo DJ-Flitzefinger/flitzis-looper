@@ -50,3 +50,16 @@ The system SHALL provide a Re-Arrange toggle preferably bottom-left with clear w
 - **WHEN** mode enables, a drag cancels/self-drops/uses invalid or empty source, or releases over bank hover
 - **THEN** no normal pad click/bank action leaks and no no-op drop changes state
 - **AND** MIDI continues; restart returns modeOFF without altering musical assignments
+
+#### Scenario: Original source and global cancellation retain gesture ownership
+- **GIVEN** an arrangement press captured the original source content and Native binding
+- **WHEN** the source is replaced, cleared or becomes unavailable before a valid drop, or focus/Close/mode cancellation occurs
+- **THEN** the original gesture SHALL settle without dispatching a mutation or falling through to normal trigger/stop/bank actions
+- **AND** one valid release SHALL dispatch at most one operation through the existing Pair or Copy controller, with no new audio, scheduler or persistence path
+- **AND** Native admission SHALL validate that same original source binding under its existing source/request mutation lock before reservation; a later source replacement SHALL NOT be substituted by a fresh binding after a Python-only precheck
+
+#### Scenario: A pad drag crossing START/STOP cannot become a performance gesture
+- **GIVEN** an original pad arrangement gesture still owns a held mouse button, including after mode-off cancellation
+- **WHEN** that pointer passes over START/STOP or releases outside the pad grid
+- **THEN** START/STOP SHALL NOT trigger, restart or stop playback from that consumed gesture
+- **AND** a fresh independent START/STOP press and independent middle-button mute/release SHALL retain their normal behavior, including while Re-Arrange remains enabled

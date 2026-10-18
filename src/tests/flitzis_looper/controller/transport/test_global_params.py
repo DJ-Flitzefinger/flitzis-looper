@@ -85,6 +85,91 @@ def test_momentary_output_mute_repeated_calls_are_noops(
     audio_engine_mock.set_volume.assert_called_once_with(0.7)
 
 
+@pytest.mark.parametrize(
+    ("latest_request", "latest_intent"),
+    [(0.4, 0.4), (2.0, VOLUME_MAX), (-1.0, VOLUME_MIN)],
+)
+def test_volume_edits_during_momentary_mute_stay_silent_and_restore_latest_intent(
+    controller: AppController,
+    audio_engine_mock: Mock,
+    latest_request: float,
+    latest_intent: float,
+) -> None:
+    """Normal volume intent remains editable while effective output stays muted."""
+    controller.project.volume = 0.7
+    audio_engine_mock.reset_mock()
+    parameters = controller.transport.global_params
+    parameters.set_momentary_output_mute(enabled=True)
+    audio_engine_mock.set_volume.assert_called_with(VOLUME_MIN)
+
+    edits = (
+        (0.25, 0.25),
+        (2.0, VOLUME_MAX),
+        (-1.0, VOLUME_MIN),
+        (0.6, 0.6),
+        (latest_request, latest_intent),
+    )
+    for requested, intended in edits:
+        revision = controller.persistence.revision
+        parameters.set_volume(requested)
+
+        assert controller.project.volume == pytest.approx(intended)
+        assert controller.project.model_dump(mode="json")["volume"] == pytest.approx(intended)
+        assert controller.persistence.revision > revision
+        assert controller.persistence._dirty
+        assert controller.session.global_stop_momentary_mute_active
+        # Implementations may retain the existing zero or republish zero. No
+        # audible volume command may escape between mute activation and release.
+        assert all(
+            publication.args[0] == VOLUME_MIN
+            for publication in audio_engine_mock.set_volume.call_args_list
+        )
+        audio_engine_mock.set_volume.assert_called_with(VOLUME_MIN)
+
+    publications_before_release = audio_engine_mock.set_volume.call_count
+    revision = controller.persistence.revision
+    parameters.set_momentary_output_mute(enabled=False)
+
+    assert audio_engine_mock.set_volume.call_count == publications_before_release + 1
+    audio_engine_mock.set_volume.assert_called_with(latest_intent)
+    assert controller.project.volume == pytest.approx(latest_intent)
+    assert not controller.session.global_stop_momentary_mute_active
+    assert controller.persistence.revision == revision
+    assert controller.persistence._dirty
+
+    parameters.set_momentary_output_mute(enabled=False)
+    assert audio_engine_mock.set_volume.call_count == publications_before_release + 1
+
+
+@pytest.mark.parametrize("invalid_volume", [math.nan, math.inf, -math.inf])
+def test_invalid_volume_during_momentary_mute_preserves_intent_and_effective_mute(
+    controller: AppController, audio_engine_mock: Mock, invalid_volume: float
+) -> None:
+    """Rejected input cannot change the held mute or the volume restored on release."""
+    controller.project.volume = 0.7
+    audio_engine_mock.reset_mock()
+    parameters = controller.transport.global_params
+    parameters.set_momentary_output_mute(enabled=True)
+    project = controller.project.model_dump(mode="json")
+    revision = controller.persistence.revision
+    dirty = controller.persistence._dirty
+    publications = audio_engine_mock.set_volume.call_args_list.copy()
+
+    with pytest.raises(ValueError, match="value must be finite"):
+        parameters.set_volume(invalid_volume)
+
+    assert controller.project.model_dump(mode="json") == project
+    assert controller.persistence.revision == revision
+    assert controller.persistence._dirty == dirty
+    assert controller.session.global_stop_momentary_mute_active
+    assert audio_engine_mock.set_volume.call_args_list == publications
+    audio_engine_mock.set_volume.assert_called_with(VOLUME_MIN)
+
+    parameters.set_momentary_output_mute(enabled=False)
+    audio_engine_mock.set_volume.assert_called_with(0.7)
+    assert not controller.session.global_stop_momentary_mute_active
+
+
 def test_set_speed_normal(controller: AppController, audio_engine_mock: Mock) -> None:
     """Test setting speed within valid range."""
     speed = 1.5

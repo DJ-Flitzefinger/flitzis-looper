@@ -842,6 +842,15 @@ pub struct AudioEngine {
 }
 
 impl AudioEngine {
+    /// Existing Rust callers share the optional-binding capture kernel with Python.
+    pub fn _capture_pad_pair(
+        &self,
+        source_id: usize,
+        target_id: usize,
+    ) -> PyResult<CapturedPadPair> {
+        pad_pair::control::capture(self, source_id, target_id)
+    }
+
     /// Native background tasks occupy stable cells, independently of physical request ids.
     fn active_task_cell(&self, id: usize) -> Result<usize, String> {
         self.input_runtime_ownership
@@ -2731,12 +2740,14 @@ impl AudioEngine {
     }
 
     // Internal integration lane. UI admission stays fenced until the whole Pair/Hold path closes.
-    pub fn _capture_pad_pair(
+    #[pyo3(name = "_capture_pad_pair", signature = (source_id, target_id, *, source_binding=None))]
+    pub fn _capture_pad_pair_with_source_binding(
         &self,
         source_id: usize,
         target_id: usize,
+        source_binding: Option<&InputRuntimePadBinding>,
     ) -> PyResult<CapturedPadPair> {
-        pad_pair::control::capture(self, source_id, target_id)
+        pad_pair::control::capture_with_source_binding(self, source_id, target_id, source_binding)
     }
 
     pub fn _prepare_pad_pair(&self, captured: &CapturedPadPair) -> PyResult<PadPairTicket> {
@@ -3359,13 +3370,8 @@ impl AudioEngine {
             return Err(PyValueError::new_err("volume out of range"));
         }
 
-        let handle = self
-            .stream_handle
-            .as_ref()
-            .ok_or_else(|| PyRuntimeError::new_err("Audio engine not initialized"))?;
-
-        let mut producer_guard = handle
-            .parameter_producer
+        let mut producer_guard = self
+            .parameter_producer()?
             .lock()
             .map_err(|_| PyRuntimeError::new_err("Failed to acquire producer lock"))?;
 

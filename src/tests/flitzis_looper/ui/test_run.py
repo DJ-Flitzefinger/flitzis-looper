@@ -125,3 +125,63 @@ def test_global_runtime_tick_delivers_release_before_poll_even_without_toolbar(
     run._poll_runtime_tick(context, closing=cancellation == "close")
     assert order == [cancellation, "poll"]
     poll.assert_called_once()
+
+
+@pytest.mark.parametrize("boundary", ["button_up", "focus_cancel", "close"])
+@pytest.mark.parametrize("learn_active", [False, True])
+def test_global_tick_releases_output_mute_without_rendering_start_stop(
+    controller: AppController,
+    audio_engine_mock: Mock,
+    monkeypatch: pytest.MonkeyPatch,
+    boundary: str,
+    *,
+    learn_active: bool,
+) -> None:
+    """Release the actual global mute before polling, including hidden/Learn controls."""
+    controller.project.volume = 0.45
+    controller.session.settings_open = True
+    controller.session.input_learn_active = learn_active
+    controller.transport.global_params.set_momentary_output_mute(enabled=True)
+    context = UiContext(controller)
+    audio_engine_mock.reset_mock()
+    monkeypatch.setattr(
+        imgui, "get_io", lambda: SimpleNamespace(app_focus_lost=boundary == "focus_cancel")
+    )
+    monkeypatch.setattr(
+        imgui,
+        "is_mouse_down",
+        lambda button: button != imgui.MouseButton_.middle or boundary != "button_up",
+    )
+
+    def poll_after_release() -> None:
+        assert not controller.session.global_stop_momentary_mute_active
+        audio_engine_mock.set_volume.assert_called_once_with(0.45)
+
+    poll = Mock(side_effect=poll_after_release)
+    monkeypatch.setattr(context.audio.poll, "poll", poll)
+    run._poll_runtime_tick(context, closing=boundary == "close")
+    run._poll_runtime_tick(context, closing=boundary == "close")
+
+    assert poll.call_count == 2
+    assert controller.project.volume == pytest.approx(0.45)
+    audio_engine_mock.set_volume.assert_called_once_with(0.45)
+
+
+def test_global_tick_keeps_output_muted_while_middle_remains_held(
+    controller: AppController, audio_engine_mock: Mock, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A hidden control does not revoke a still-held, focused global mute."""
+    controller.project.volume = 0.45
+    controller.session.settings_open = True
+    controller.transport.global_params.set_momentary_output_mute(enabled=True)
+    context = UiContext(controller)
+    poll = Mock()
+    monkeypatch.setattr(context.audio.poll, "poll", poll)
+    audio_engine_mock.reset_mock()
+
+    run._poll_runtime_tick(context)
+
+    assert controller.session.global_stop_momentary_mute_active
+    assert controller.project.volume == pytest.approx(0.45)
+    audio_engine_mock.set_volume.assert_not_called()
+    poll.assert_called_once()

@@ -132,6 +132,19 @@ def check_pad_pair_hold_api(engine_type: type) -> None:
         assert callable(getattr(engine_type, method, None)), (
             f"Native Pair/Hold API missing: {method}"
         )
+    source_binding = inspect.signature(
+        inspect.getattr_static(engine_type, "_capture_pad_pair")
+    ).parameters.get("source_binding")
+    assert source_binding is not None, (
+        "Native Pair/Hold API missing keyword: _capture_pad_pair.source_binding"
+    )
+    assert source_binding.kind in {
+        inspect.Parameter.POSITIONAL_OR_KEYWORD,
+        inspect.Parameter.KEYWORD_ONLY,
+    }, "Native Pair/Hold API invalid keyword: _capture_pad_pair.source_binding"
+    assert source_binding.default is None, (
+        "Native Pair/Hold API invalid default: _capture_pad_pair.source_binding"
+    )
 
 
 def check_timing_completion_api(native_module: object) -> None:

@@ -76,6 +76,15 @@ def _poll_runtime_tick(context: UiContext, *, closing: bool = False) -> None:
         context.ui.waveform.pause_selected_pad_hold_on_release("editor_hidden")
     if closing:
         context.ui.waveform.pause_selected_pad_hold_on_release("close")
+    if context.state.session.global_stop_momentary_mute_active and (
+        io.app_focus_lost or closing or not imgui.is_mouse_down(imgui.MouseButton_.middle)
+    ):
+        context.audio.global_.set_momentary_output_mute(enabled=False)
+    context.ui.arrangement.poll(
+        left_down=imgui.is_mouse_down(imgui.MouseButton_.left),
+        right_down=imgui.is_mouse_down(imgui.MouseButton_.right),
+        cancelled=io.app_focus_lost or closing or context.state.session.settings_open,
+    )
     context.audio.poll.poll()
 
 

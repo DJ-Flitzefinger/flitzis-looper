@@ -224,6 +224,11 @@ def _pad_button_input(ctx: UiContext, pad_id: int, *, is_loaded: bool) -> None:
     if imgui.is_mouse_clicked(imgui.MouseButton_.middle):
         ctx.ui.select_pad(pad_id)
 
+    if ctx.ui.arrangement.enabled or ctx.ui.arrangement.owns_pointer:
+        _arrangement_pad_input(ctx, pad_id)
+        ctx.ui.store_pressed_pad_state(pad_id, pressed=False)
+        return
+
     if imgui.is_mouse_clicked(imgui.MouseButton_.left):
         if is_loaded:
             received_at_ns = ctx.input.capture_timestamp_ns()
@@ -236,6 +241,42 @@ def _pad_button_input(ctx: UiContext, pad_id: int, *, is_loaded: bool) -> None:
 
     if imgui.is_mouse_down(imgui.MouseButton_.right):
         ctx.audio.pads.stop_pad(pad_id)
+
+
+def _arrangement_pad_input(ctx: UiContext, pad_id: int) -> None:
+    """Consume the initial down edge and matching release before performance input."""
+    owner = ctx.ui.arrangement
+    if imgui.get_io().app_focus_lost:
+        owner.cancel()
+        return
+    if imgui.is_mouse_clicked(imgui.MouseButton_.left):
+        owner.press(pad_id, "left")
+    if imgui.is_mouse_clicked(imgui.MouseButton_.right):
+        owner.press(pad_id, "right")
+    if imgui.is_mouse_released(imgui.MouseButton_.left):
+        owner.release(pad_id, "left")
+    if imgui.is_mouse_released(imgui.MouseButton_.right):
+        owner.release(pad_id, "right")
+
+
+def _arrangement_preview(ctx: UiContext, pad_id: int) -> None:
+    """Show the exact drop operation even while the source button owns ImGui input."""
+    owner = ctx.ui.arrangement
+    if not owner.enabled:
+        return
+    hovered = imgui.is_item_hovered(imgui.HoveredFlags_.allow_when_blocked_by_active_item)
+    preview = owner.preview(pad_id) if hovered else None
+    if preview is None and owner.source_id != pad_id:
+        return
+    a, b = imgui.get_item_rect_min(), imgui.get_item_rect_max()
+    draw = imgui.get_window_draw_list()
+    draw.add_rect(a, b, imgui.get_color_u32(BANK_PRESSED_RGBA), thickness=3.0)
+    if preview is not None:
+        text = _fit_text_to_width(preview.operation, max(0.0, b.x - a.x - 12))
+        height = imgui.get_font_size() + 8
+        draw.add_rect_filled((a.x, b.y - height), b, imgui.get_color_u32(BANK_PRESSED_RGBA))
+        draw.add_text((a.x + 6, b.y - height + 4), imgui.get_color_u32(TEXT_ACTIVE_RGBA), text)
+        imgui.set_tooltip(preview.label)
 
 
 def _pad_button_overlays(ctx: UiContext, pad_id: int, *, is_active: bool, is_loaded: bool) -> None:
@@ -297,12 +338,18 @@ def _pad_button(ctx: UiContext, pad_id: int, size: imgui.ImVec2Like) -> None:
         if is_loading and loading_progress is not None:
             _pad_button_progress_overlay(loading_progress)
 
-        if imgui.is_item_hovered():
+        hovered = (
+            imgui.is_item_hovered(imgui.HoveredFlags_.allow_when_blocked_by_active_item)
+            if ctx.ui.arrangement.enabled or ctx.ui.arrangement.owns_pointer
+            else imgui.is_item_hovered()
+        )
+        if hovered:
             _pad_button_input(ctx, pad_id, is_loaded=is_loaded)
         else:
             ctx.ui.store_pressed_pad_state(pad_id, pressed=False)
 
     _pad_button_overlays(ctx, pad_id, is_active=is_active, is_loaded=is_loaded)
+    _arrangement_preview(ctx, pad_id)
 
 
 def _render_pad_grid(ctx: UiContext) -> None:
@@ -329,16 +376,44 @@ def _bank_button(ctx: UiContext, idx: int, width: float) -> None:
     style_name: ButtonStyleName = "bank-active" if is_selected else "bank"
 
     with button_style(style_name):
-        if imgui.button(f"Bank {idx + 1}", size=(width, -1)):
+        clicked = imgui.button(f"Bank {idx + 1}", size=(width, -1))
+        if clicked and not (ctx.ui.arrangement.enabled or ctx.ui.arrangement.owns_pointer):
             ctx.ui.select_bank(idx)
+
+
+def _rearrange_control(ctx: UiContext, width: float) -> None:
+    """Keep the transient mode and short gesture help beside the bank row."""
+    owner = ctx.ui.arrangement
+    style: ButtonStyleName = "arrange-on" if owner.enabled else "mode-off"
+    with button_style(style):
+        if imgui.button("Re-Arrange", (width, 0)):
+            owner.toggle()
+    if imgui.is_item_hovered():
+        message = (
+            "Drag pads: left Move / Swap; right Copy / Overwrite.\n"
+            "Release outside or press Esc to cancel. Turn off to select banks. MIDI stays active."
+        )
+        if owner.error is not None:
+            message = f"{message}\n{owner.error}"
+        imgui.set_tooltip(message)
 
 
 def _render_banks(ctx: UiContext) -> None:
     avail = imgui.get_content_region_avail()
+    mode_width = max(
+        104.0, imgui.calc_text_size("Re-Arrange").x + imgui.get_style().frame_padding.x * 2
+    )
     total_spacing = (NUM_BANKS - 1) * PAD_GRID_GAP
-    btn_width = (avail.x - total_spacing) / GRID_SIZE
+    btn_width = max(1.0, (avail.x - total_spacing) / NUM_BANKS)
 
     with style_var(imgui.StyleVar_.item_spacing, (0, 0)):
+        _rearrange_control(ctx, mode_width)
+        owner = ctx.ui.arrangement
+        if owner.enabled or owner.error is not None:
+            imgui.same_line(spacing=PAD_GRID_GAP)
+            text = owner.error or "Left: Move / Swap   Right: Copy / Overwrite"
+            imgui.text(_fit_text_to_width(text, max(0.0, avail.x - mode_width - PAD_GRID_GAP)))
+        imgui.dummy((0, 4))
         for idx in range(NUM_BANKS):
             if idx > 0:
                 imgui.same_line(spacing=PAD_GRID_GAP)
@@ -346,21 +421,24 @@ def _render_banks(ctx: UiContext) -> None:
 
 
 def performance_view(ctx: UiContext) -> None:
+    if ctx.ui.arrangement.owns_pointer and imgui.is_key_pressed(imgui.Key.escape, repeat=False):
+        ctx.ui.arrangement.cancel()
     avail = imgui.get_content_region_avail()
+    bank_height = max(BANK_BUTTONS_HEIGHT, imgui.get_frame_height()) + imgui.get_frame_height() + 4
 
     with style_var(imgui.StyleVar_.item_spacing, (0, SPACING)):
         piano_height = 0.0
         if ctx.state.pitch_menus.base_open:
-            piano_height = max(60.0, (avail.y - BANK_BUTTONS_HEIGHT - SPACING) / (GRID_SIZE + 1))
+            piano_height = max(60.0, (avail.y - bank_height - SPACING) / (GRID_SIZE + 1))
             _render_piano(ctx, piano_height)
-        grid_height = avail.y - BANK_BUTTONS_HEIGHT - SPACING
+        grid_height = avail.y - bank_height - SPACING
         if piano_height:
             grid_height -= piano_height + SPACING
         imgui.begin_child("pad_grid", (avail.x, max(1.0, grid_height)))
         _render_pad_grid(ctx)
         imgui.end_child()
 
-        imgui.begin_child("bank_buttons", (avail.x, BANK_BUTTONS_HEIGHT))
+        imgui.begin_child("bank_buttons", (avail.x, bank_height))
         _render_banks(ctx)
         imgui.end_child()
 

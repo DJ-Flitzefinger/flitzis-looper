@@ -28,6 +28,9 @@ const PROBE: &str = include_str!(concat!(
 #[path = "held_lifecycle_tests/retarget_tests.rs"]
 mod retarget_tests;
 
+#[path = "held_lifecycle_tests/arrangement_tests.rs"]
+mod arrangement_tests;
+
 fn write_input(root: &Path) -> PathBuf {
     let input = root.join("input");
     fs::create_dir(&input).unwrap();
