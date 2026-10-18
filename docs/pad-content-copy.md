@@ -309,9 +309,109 @@ The failure cause remains unknown; pre-backend identity/file verification and
 scheduling are possible delay locations, not established causes. This is no
 fresh whole-suite pass, and no timeout, verification or custody gate was relaxed.
 
-This closes the named controller-to-Native/durable seam only. Actual owned Hold
-removal under failed unload capacity, successful removal/refill or equal-byte
-reassignment with delayed old actions (HC-06/07/19), and live/awaiting-ACK Hold
-shutdown (HC-26) still require their separate software integration. Whole R2 and
-public Re-Arrange gestures remain gated. Full resource, realtime measurement,
-acoustic, musical, device and Human acceptance remain open.
+This closes the named controller-to-Native/durable seam only. The subsequent
+HC-06/07/19/26 public lifecycle integration is described below. Whole R2 and public
+Re-Arrange gestures remain gated. Full resource, realtime measurement, acoustic,
+musical, device and Human acceptance remain open.
+
+## Public Cold/Hold removal, replacement and Close — 2026-10-18
+
+`audio_stream/held_lifecycle_tests` (source file `held_lifecycle_tests.rs`) joins
+actual Python Loader, waveform/playback controllers, inherited App feedback and
+shutdown methods with a complete production callback image, genuine Cold workers
+and source receipts. The small App envelope injects the device-free engine and
+wires real components without calling `AppController.__init__` or `AudioEngine.run`.
+Four isolated child processes generate their own 4096-frame stereo PCM16 WAV at
+48 kHz and use only their owned files. Initial and replacement source digests must
+equal the SHA-256 of the actual original file. No synthetic publication, manual
+loader-event consumption or substitute mixer load establishes readiness.
+
+The unload/refill profile obtains a real caused pause and its controller ACK,
+fills the actual producer with Pings and calls public Loader unload. Queue-full
+rejection must preserve the Project, Session, Config bytes/revision, source
+identity/digest/current binding, original physical Hold/ticket and live assignment
+leases; the callback voice image also remains equal. The independent review found
+that these Python observations alone did not cover Native request counters. The
+final Native snapshot also requires unchanged physical/logical requests, prepared
+epoch, authority, cached PCM/digest, exact Cold assignment ID/retirement/path,
+Cold lease generation and loading state, acquired in production lock order.
+After draining capacity,
+actual unload removes the old callback source. Public loading of the same input
+creates fresh content, Native generation and lifetime with equal verified bytes.
+The successor starts and is independently paused through public playback control.
+
+The direct replacement profile instead leaves the original controller pause ACK
+unobserved while Native owns the caused pause. A real incoming same-file load must
+adopt its own new lifetime/generation/content before the successor starts running.
+Both profiles then deliver the old physical release and original captured feedback
+values. An unchanged clone of A's genuine START plus separately withheld actual A
+telemetry provide nonempty old status and telemetry evidence; they are replayed
+without reconstruction or retagging. Native lane/generation/pause/source position,
+PCM backing and Native processor address, plus the entire Session image around
+feedback replay, remain unchanged for the running or independently paused C.
+
+The two Close profiles retain the actual original Hold before its pause ACK or
+after observing its owned pause. Actual App preparation must remain pending until
+the original Native caused effect releases and its owner becomes terminal. Actual
+App shutdown flushes Config, enqueues the real Stop and releases assignment leases.
+The test drains that Stop and verifies inactive voices, then closes the complete
+callback owner through the production retirement worker. A trailing destruction
+witness reports only after every callback field was destroyed on that worker.
+Engine shutdown alone is never counted as callback destruction. A fresh engine
+then restores the actual saved Project through public Loader/Cold ACK, preserving
+durable content/path/bytes while acquiring fresh Native owner/lifetime and no old
+Hold/pause state. Its ordinary public start must produce finite nonzero output.
+This does not assert complete process-wide final-reader or resource acceptance.
+
+The first driver attempt rendered before ordinary captured-start preparation was
+polled and failed the nonzero-output assertion. It now polls the existing residency
+controller and waits for genuine callback adoption, preserving that assertion.
+The next baseline passed removal/replacement but failed actual App shutdown at
+`stop_all`'s stream-only producer lookup. `stop_all` now uses the existing
+`control_producer()` accessor with the same lock, capacity/error handling and
+`enqueue_stop_with_producer(None)` kernel. Production still obtains its actual
+stream producer; this change enables the headless integration seam and establishes
+no production-stream failure.
+
+The initial four lifecycle profiles pass Debug in 4.85 seconds; the stronger
+request oracle passes Debug in 4.80 seconds and its final lock-order version passes
+Release in 4.84 seconds. An adjacent 13-test feedback
+run initially had 12 passes and one failure; its unchanged isolated case also
+failed. The GLOBAL-start route now uses the ordinary atomic pitch executor, while
+that test's interleaving hook remained only on the older batch executor. A
+test-only hook now runs after the actual ordinary-global commit and before its
+captured feedback is published. The test helper also requires every requested
+interleaving to execute. Original receipt and stale-resolution assertions remain
+strict; all 13 feedback tests pass in 5.06 seconds. Callback-close two and launch
+publication nine regressions pass. No production feedback/DSP path was changed
+by the hook repair.
+
+Private Release compilation, eight existing API checks and real App/UI/backend
+imports pass without installation. Clippy passes with the same 95 existing
+lib-test warnings; no new test-module warning or changed-line warning is added.
+Python lint, formatting, typing and both affected strict OpenSpec validations pass.
+
+The first impacted Python run had 211 passes, two skips and one failure: an old
+Copy test refused any ALL STEMS request solely for missing registration. The
+existing residency specification instead permits fresh current-source capture
+and bounded verification while residency waits for its own accepted registration.
+The unchanged isolated case reproduced that stale expectation. Two replacement
+tests cover the actual boundaries: a copied disk pair may queue verification
+without registration/residency/publication/availability, and missing loaded source
+authority refuses with unchanged Project and zero Native calls. The first new
+positive fixture forgot to replace its deliberately absent preparation method
+with a Mock, failing its no-call assertion; that setup is now explicit. Existing
+preparation tests also retain pending-registration and own-ACK-before-residency
+coverage. No production stem guard changes.
+The final eight-file Python integration against the private Release passes 263
+tests in 17.09 seconds with two existing skips. These controller tests use their
+scripted Native facades; actual Cold/callback effects are established separately
+by the four Native profiles above. The single independent final review is clear
+after the request-oracle correction.
+
+This closes only the named HC-06/07/19/26 software joins. The earlier Python225
+batch's two unresolved backend-entry failures remain recorded above. Full R2
+requires its separate nonauthor closure; HC-13 runtime-tick/retarget composition
+and HC-15 rejected-Pair-with-owned-Hold evidence still need explicit assessment.
+Public R3 gestures and all resource, realtime, acoustic, musical, device and Human
+gates remain open.

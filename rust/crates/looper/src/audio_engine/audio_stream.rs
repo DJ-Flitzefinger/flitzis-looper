@@ -5633,5 +5633,14 @@ mod parameter_placement_tests;
 mod content_feedback_tests;
 
 #[cfg(test)]
+pub(super) fn after_pad_feedback_effect_for_test() {
+    content_feedback_tests::after_effect();
+}
+
+#[cfg(test)]
 #[path = "pair_saved_timing_tests.rs"]
 mod pair_saved_timing_tests;
+
+#[cfg(all(test, windows))]
+#[path = "held_lifecycle_tests.rs"]
+mod held_lifecycle_tests;

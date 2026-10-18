@@ -260,6 +260,8 @@ impl RtMixer {
                 },
             )
             .map_err(placement_rejection)?;
+        #[cfg(test)]
+        crate::audio_engine::audio_stream::after_pad_feedback_effect_for_test();
         for position in 0..count {
             audio_messages.push_captured_pad_feedback(
                 feedback[position].take(),

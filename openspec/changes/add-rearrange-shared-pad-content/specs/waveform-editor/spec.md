@@ -75,12 +75,14 @@ SHALL NOT reinterpret an old release using the removed slot's new occupant.
 - **AND** H's old outside-release is delivered
 - **THEN** the old claim settles as retired/no-effect
 - **AND** C is not resumed, paused, started, stopped or otherwise changed
+- **AND** the software proof SHALL compose the actual waveform controller, public Loader unload/refill, actual Native callback adoption and own completed source receipt before delivering the old release; manually retiring an action or replacing a mixer sample SHALL NOT certify this lifecycle boundary
 
 #### Scenario: HC-07 Reassign equal bytes with new lifetime
 - **GIVEN** H owns A's pause at s
 - **WHEN** a successful source reassignment replaces A with fresh C, even with identical bytes
 - **AND** a delayed old release or pause ACK arrives
 - **THEN** its old action/lifetime is fenced and cannot change C or restore H
+- **AND** the software proof SHALL obtain genuine initial and replacement Cold acknowledgements for the same file and verified bytes, then verify fresh content/lifetime authority and delayed original Hold observation rather than infer reassignment from a synthetic digest or copied slot metadata
 
 #### Scenario: Unrelated removal preserves the still-held content
 - **GIVEN** H owns A's caused pause while unrelated B is unloaded or replaced
@@ -207,6 +209,7 @@ conflicting input rather than invent a completed layout or rollback.
 - **THEN** A, H and all source/session ownership remain intact
 - **WHEN** a later successful removal occurs and old pause/release ACK arrives
 - **THEN** feedback cannot resurrect H or paused state at a replacement slot
+- **AND** the software proof SHALL saturate the actual public unload producer before admission and verify unchanged Native source/request/lease authority and controller ownership, then execute its genuine successful retry and replacement before delayed feedback is projected
 
 ### Requirement: Later accepted transport intent supersedes an old pause claim
 The system SHALL invalidate an old HoldRelease pause claim when a later accepted STOP, retrigger, explicit resume, intentional pause or cohort-replacing action supersedes that effect.
@@ -318,6 +321,8 @@ and unbounded scans; all large preparation/cleanup SHALL stay off the callback.
 - **THEN** no physical hold or historical ACK is restored as current authority
 - **AND** saved musical copies and immutable versions restore independently of deleted origins
 - **AND** late slot-only started/stopped/paused feedback cannot mutate a different lifetime
+- **AND** the software proof SHALL run actual controller close preparation with live and awaiting-ACK Holds, retain their original owners until terminal Native settlement, apply the actual queued Stop/retirement and close the virtual callback owner before fresh restore
+- **AND** calling engine shutdown without draining and closing a detached virtual callback, or replacing Stop with a no-op, SHALL NOT certify that retirement
 
 Every scenario remains a future OPEN requirement. Actual software tests must
 bind source/fixture/native EXE/installed PYD roles and record counts, exclusions,

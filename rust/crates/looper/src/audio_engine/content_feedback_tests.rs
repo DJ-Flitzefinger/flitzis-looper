@@ -29,7 +29,12 @@ fn with_after_effect<T>(hook: impl FnOnce() + 'static, action: impl FnOnce() -> 
         *slot.borrow_mut() = Some(Box::new(hook));
     });
     let _reset = Reset;
-    action()
+    let result = action();
+    assert!(
+        AFTER_EFFECT.with(|slot| slot.borrow().is_none()),
+        "requested feedback interleaving was never executed"
+    );
+    result
 }
 
 fn process(mixer: &mut RtMixer, message: ControlMessage, feedback: &mut impl AudioMessageSink) {

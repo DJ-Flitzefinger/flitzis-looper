@@ -476,11 +476,43 @@ def test_disk_only_copy_can_request_existing_residency_without_claiming_componen
     audio.set_stem_mix_mode.assert_not_called()
 
 
-def test_unavailable_pair_without_own_registration_cannot_request_residency(
+def test_unregistered_copy_waits_for_fresh_verification_before_residency(
+    controller: AppController,
+) -> None:
+    entry = _bind_copied_pair(controller)
+    controller.project.pad_stem_mix_mode[TARGET] = "full_mix"
+    jobs: list[Callable[[], None]] = []
+    controller.stems._pair_preparations._runner = jobs.append
+    audio = cast("Mock", controller._audio)
+    audio.prepare_stem_pair = Mock()
+    audio.publish_stem_pair = Mock()
+    audio.register_committed_stem_pair = Mock()
+    audio.request_committed_stem_residency = Mock()
+    audio.reset_mock()
+
+    assert controller.stems.set_stem_mix_mode(TARGET, "all_stems") is True
+
+    audio.capture_prepared_source.assert_called_once_with(TARGET, entry.source_version)
+    assert len(jobs) == 1
+    pending = controller.stems._pair_preparations.pending[TARGET]
+    assert pending.entry is entry
+    assert pending.ticket is audio.capture_prepared_source.return_value
+    assert controller.project.pad_stem_mix_mode[TARGET] == "all_stems"
+    assert entry.available is False
+    assert not controller.stems._committed_residency.contains(TARGET)
+    audio.prepare_stem_pair.assert_not_called()
+    audio.register_committed_stem_pair.assert_not_called()
+    audio.request_committed_stem_residency.assert_not_called()
+    audio.publish_stem_pair.assert_not_called()
+    audio.set_stem_mix_mode.assert_not_called()
+
+
+def test_unavailable_copy_without_loaded_source_cannot_request_residency(
     controller: AppController,
 ) -> None:
     _bind_copied_pair(controller)
     controller.project.pad_stem_mix_mode[TARGET] = "full_mix"
+    controller.project.sample_paths[TARGET] = None
     before = controller.project.model_dump()
     audio = cast("Mock", controller._audio)
     audio.register_committed_stem_pair = Mock()

@@ -53,6 +53,14 @@ Use canonical program/coverage, not a new parallel order. R0 is docs/spec-only.
   independently paused B. Eight stereo FullMix profiles preserve continuing PCM.
   This bounded seam does not close whole R2 or HC-06/07/19 removal and HC-26
   live/awaiting-ACK shutdown integration; no public R3 exposure follows.
+- [x] HC-06/07/19/26 public lifecycle seam: real initial and replacement Cold
+  receipts for the same verified file, public queue-full unload rejection and
+  successful unload/refill, delayed old Hold/feedback, actual App shutdown with
+  pending/observed Hold ACK, complete callback close and fresh persisted restore.
+  Preserve existing timing, resource, musical, device and full R2 acceptance gates.
+  Four isolated stereo FullMix profiles pass final Release. Native request/epoch
+  and exact Cold assignment snapshots cover rejected unload; actual callback close
+  precedes fresh restore. Impacted Python263 passes with two existing skips.
 - [ ] R3: modeOFF/warning/help/left-right gestures/target feedback; branch before
   trigger/stop, cancel/self/invalid/empty no-op, existing control tick outside release
   even after editor close/focus/selection; global mute/latest volume regression.
