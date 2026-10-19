@@ -31,6 +31,7 @@ from flitzis_looper.input_mapping.actions import (
     pitch_step_action,
 )
 from flitzis_looper.input_timing import validate_input_timestamp_ns
+from flitzis_looper.ui.pad_action import perform_pad_action
 from flitzis_looper.ui.pad_arrangement import PadArrangementGestures
 from flitzis_looper.ui.waveform_grid import waveform_view_start
 
@@ -369,11 +370,19 @@ class PadAudioActions:  # noqa: PLR0904 - pad action facade mirrors selected-pad
 
     def trigger_pad(self, pad_id: int, *, received_at_ns: int | None = None) -> None:
         """Trigger or learn a pad action, retaining its captured Rust input timestamp."""
+        received_at_ns = validate_input_timestamp_ns(received_at_ns)
+
+        def execute() -> None:
+            perform_pad_action(
+                self._controller,
+                pad_id,
+                lambda: self._controller.transport.playback.trigger_pad(
+                    pad_id, received_at_ns=received_at_ns
+                ),
+            )
+
         self._controller.input_mapping.perform_learnable_action(
-            LooperAction.trigger_pad(pad_id),
-            lambda: self._controller.transport.playback.trigger_pad(
-                pad_id, received_at_ns=received_at_ns
-            ),
+            LooperAction.trigger_pad(pad_id), execute
         )
 
     def stop_pad(self, pad_id: int) -> None:
@@ -383,22 +392,48 @@ class PadAudioActions:  # noqa: PLR0904 - pad action facade mirrors selected-pad
         )
 
     def set_pad_full_track_loop_region(self, pad_id: int) -> None:
-        self._controller.transport.loop.set_full_track_region(pad_id)
+        perform_pad_action(
+            self._controller,
+            pad_id,
+            lambda: self._controller.transport.loop.set_full_track_region(pad_id),
+        )
 
     def set_pad_loop_auto(self, pad_id: int, *, enabled: bool) -> None:
-        self._controller.transport.loop.set_auto(pad_id, enabled=enabled)
+        perform_pad_action(
+            self._controller,
+            pad_id,
+            lambda: self._controller.transport.loop.set_auto(pad_id, enabled=enabled),
+        )
 
     def set_pad_loop_bars(self, pad_id: int, *, bars: float) -> None:
-        self._controller.transport.loop.set_bars(pad_id, bars=bars)
+        perform_pad_action(
+            self._controller,
+            pad_id,
+            lambda: self._controller.transport.loop.set_bars(pad_id, bars=bars),
+        )
 
     def set_pad_loop_start(self, pad_id: int, start_s: float) -> None:
-        self._controller.transport.loop.set_start(pad_id, start_s)
+        perform_pad_action(
+            self._controller,
+            pad_id,
+            lambda: self._controller.transport.loop.set_start(pad_id, start_s),
+        )
 
     def set_pad_loop_end(self, pad_id: int, end_s: float | None) -> None:
-        self._controller.transport.loop.set_end(pad_id, end_s)
+        perform_pad_action(
+            self._controller,
+            pad_id,
+            lambda: self._controller.transport.loop.set_end(pad_id, end_s),
+        )
 
     def set_pad_grid_offset_samples(self, pad_id: int, grid_offset_samples: int) -> None:
-        self._controller.transport.loop.set_grid_offset_samples(pad_id, grid_offset_samples)
+        perform_pad_action(
+            self._controller,
+            pad_id,
+            lambda: self._controller.transport.loop.set_grid_offset_samples(
+                pad_id, grid_offset_samples
+            ),
+        )
 
     def load_sample_async(self, pad_id: int, path: str) -> None:
         self._controller.loader.load_sample_async(pad_id, path)
@@ -819,14 +854,16 @@ class WaveformEditorActions:
 
         loop_start_s, _ = self._controller.transport.loop.effective_region(pad_id)
 
-        # Update playhead immediately; audio messages will refine it.
-        self._controller.session.pad_playhead_s[pad_id] = loop_start_s
-
         # Trigger without stopping other pads (ignores multi_loop setting).
-        self._controller.transport.playback.trigger_pad_keep_others(
-            pad_id, received_at_ns=received_at_ns
-        )
-        self._controller.session.paused_sample_ids.discard(pad_id)
+        if perform_pad_action(
+            self._controller,
+            pad_id,
+            lambda: self._controller.transport.playback.trigger_pad_keep_others(
+                pad_id, received_at_ns=received_at_ns
+            ),
+        ):
+            self._controller.session.pad_playhead_s[pad_id] = loop_start_s
+            self._controller.session.paused_sample_ids.discard(pad_id)
 
     def pause_selected_pad_on_press(self) -> None:
         """Toggle pause/resume for the selected pad.
@@ -896,8 +933,12 @@ class WaveformEditorActions:
         if pad_id is None:
             return
 
-        self._controller.transport.loop.set_start(pad_id, start_s)
-        self.play_restart_selected_pad_on_press(received_at_ns=received_at_ns)
+        if perform_pad_action(
+            self._controller,
+            pad_id,
+            lambda: self._controller.transport.loop.set_start(pad_id, start_s),
+        ):
+            self.play_restart_selected_pad_on_press(received_at_ns=received_at_ns)
 
     def record_view_range(self, pad_id: int, start_s: float, end_s: float) -> None:
         """Record the plot's current visible X-range for a pad."""

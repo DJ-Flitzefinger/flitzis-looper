@@ -1601,7 +1601,11 @@ fn reconcile_claimed_resident_storage(
             && pending.state.control_published.load(Ordering::Acquire)
             && ownership.slot_snapshot_fields_current(native)
             && ownership.control_slot_for_cell(key.cell()) == id
-            && ownership.authority_current(id, binding)
+            // A later BPM/grid edit revokes launch/timing authority, not this
+            // receipt's already observed physical storage transfer. Requiring
+            // its old authority here can orphan the cache at the predecessor
+            // window forever. Exact content/source/window custody still fences
+            // both this preflight and the mirror's fixed publication claim.
             && ownership.binding_source_generation(id, binding)
                 == Some(pending.state.source_generation)
             && ownership.binding_window_current(id, binding)

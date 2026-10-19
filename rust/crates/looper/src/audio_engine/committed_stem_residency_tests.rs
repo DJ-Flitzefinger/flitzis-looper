@@ -32,6 +32,8 @@ mod offline_stem_productive_tests;
 mod p5b_resident_admission_tests;
 #[path = "public_key_lock_off_tests.rs"]
 mod public_key_lock_off_tests;
+#[path = "grid_origin_binding_tests.rs"]
+mod grid_origin_binding_tests;
 
 const LOOP_START: usize = 17;
 const LOOP_END: usize = 1517;
@@ -96,13 +98,17 @@ fn write_signal_set(path: &Path, frames: usize, version: &str, variation: usize)
 }
 
 fn long_harness() -> Harness {
+    long_harness_frames(4096)
+}
+
+fn long_harness_frames(frames: usize) -> Harness {
     let mut h = Harness::new();
     let original = h.root.join("committed-residency.wav");
     // The real complete-pair alignment compares the source with the sum of
     // vocals/melody/bass/drums. Supply actual matching mix content, rather than
     // an unrelated tone whose best correlation can move this finite loop into
     // aligned zero padding.
-    fs::write(&original, signal_sum_wav(4096, &[0, 1, 2, 3])).unwrap();
+    fs::write(&original, signal_sum_wav(frames, &[0, 1, 2, 3])).unwrap();
     let material = prepare_material(&h.root, &original, RATE, 2, &|| false).unwrap();
     let version = canonical_version(&material);
     let wav_reference = canonical_wav_reference(&material);

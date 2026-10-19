@@ -560,6 +560,8 @@ class PadLoopController:
         if self._transport._project.pad_loop_auto[sample_id]:
             start_s = self._snap_to_nearest_64th_grid(start_s, timing=timing)
 
+        previous_start = self._project.pad_loop_start_s[sample_id]
+        previous_end = self._project.pad_loop_end_s[sample_id]
         start_s = physical_source_marker_s(start_s, sample_rate_hz=sample_rate_hz)
         self._transport._project.pad_loop_start_s[sample_id] = start_s
 
@@ -571,10 +573,17 @@ class PadLoopController:
         if end_s is not None and end_s <= start_s:
             self._transport._project.pad_loop_end_s[sample_id] = start_s + one_sample_s
 
+        try:
+            self._apply_effective_pad_loop_region_to_audio(
+                sample_id, timing=timing, expected_source_generation=generation
+            )
+        except RuntimeError, ValueError:
+            # Synchronous rejection admitted no loop edit. Keep saved markers
+            # coherent; async resident requests retain their own rollback owner.
+            self._project.pad_loop_start_s[sample_id] = previous_start
+            self._project.pad_loop_end_s[sample_id] = previous_end
+            raise
         self._transport._mark_project_changed()
-        self._apply_effective_pad_loop_region_to_audio(
-            sample_id, timing=timing, expected_source_generation=generation
-        )
         self._transport.record_current_pad_edit(sample_id, generation, "loop")
 
     def set_end(self, sample_id: int, end_s: float | None) -> None:
