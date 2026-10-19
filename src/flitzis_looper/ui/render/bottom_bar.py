@@ -66,6 +66,7 @@ _MASTER_METER_FILL_RGBA = (1.0, 1.0, 1.0, 0.24)
 _MASTER_METER_GREEN_RGBA = (0.18, 0.74, 0.38, 0.35)
 _MASTER_METER_YELLOW_RGBA = (0.95, 0.75, 0.18, 0.45)
 _MASTER_METER_CLIP_RGBA = (1.0, 0.08, 0.08, 0.95)
+_TRANSPORT_ERROR_RGBA = (1.0, 0.25, 0.2, 1.0)
 
 
 @dataclass(frozen=True)
@@ -601,7 +602,7 @@ def _start_stop_transport_input(ctx: UiContext, *, hovered: bool) -> None:
             ctx.ui.store_global_start_stop_pressed(pressed=True)
     else:
         ctx.ui.store_global_start_stop_pressed(pressed=False)
-    if hovered and imgui.is_mouse_down(imgui.MouseButton_.right):
+    if hovered and imgui.is_mouse_clicked(imgui.MouseButton_.right):
         ctx.audio.global_.stop_start_stop()
 
 
@@ -635,8 +636,19 @@ def _start_stop_button(ctx: UiContext) -> None:
     ):
         ctx.audio.global_.set_momentary_output_mute(enabled=False)
 
+    error = ctx.audio.global_.playback_error
+    if isinstance(error, str) and error:
+        imgui.get_window_draw_list().add_rect(
+            imgui.get_item_rect_min(),
+            imgui.get_item_rect_max(),
+            imgui.get_color_u32(_TRANSPORT_ERROR_RGBA),
+            thickness=2.0,
+        )
     if hovered:
-        imgui.set_tooltip("Start/restart loops; right stop; hold mouse wheel for mute")
+        if isinstance(error, str) and error:
+            imgui.set_tooltip(f"Transportaktion abgelehnt: {error}")
+        else:
+            imgui.set_tooltip("Start/restart loops; right stop; hold mouse wheel for mute")
 
 
 def bottom_bar(ctx: UiContext) -> None:

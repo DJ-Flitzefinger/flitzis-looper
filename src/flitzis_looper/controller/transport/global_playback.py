@@ -236,6 +236,9 @@ class GlobalPlaybackController:
     def stop(self, *, remember: bool, received_at_ns: int | None = None) -> None:
         """Stop the complete active/paused set after all current permits agree."""
         received_at_ns = validate_input_timestamp_ns(received_at_ns)
+        # Failed native revocation admits no STOP. Retain original deferred owners
+        # until the whole cancellation fence succeeds; rendering can report failure.
+        admitted_ids = self._transport.residency.cancel_all_launches()
         deferred_ids = self._cancel_deferred()
         prior_start_ids = (
             (
@@ -243,7 +246,7 @@ class GlobalPlaybackController:
                 if self._pending is not None and self._pending.start
                 else frozenset()
             )
-            | self._transport.residency.cancel_all_launches()
+            | admitted_ids
             | deferred_ids
         )
         self.poll()

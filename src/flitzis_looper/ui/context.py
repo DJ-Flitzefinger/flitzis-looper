@@ -36,6 +36,8 @@ from flitzis_looper.ui.pad_arrangement import PadArrangementGestures
 from flitzis_looper.ui.waveform_grid import waveform_view_start
 
 if TYPE_CHECKING:
+    from collections.abc import Callable
+
     from imgui_bundle import imgui
 
     from flitzis_looper.controller import AppController
@@ -686,6 +688,15 @@ class StemAudioActions:
 class GlobalAudioActions:
     def __init__(self, controller: AppController):
         self._controller = controller
+        self.playback_error: str | None = None
+
+    def _perform_playback_action(self, execute: Callable[[], None]) -> None:
+        """Keep rejected transport admission visible without replaying the gesture."""
+        self.playback_error = None
+        try:
+            execute()
+        except (RuntimeError, ValueError) as error:
+            self.playback_error = str(error)
 
     def set_volume(self, volume: float) -> None:
         action = (
@@ -703,15 +714,19 @@ class GlobalAudioActions:
 
     def start_or_restart_start_stop(self, *, received_at_ns: int | None = None) -> None:
         """Restart loops with one captured Rust input timestamp shared by all pads."""
-        self._controller.input_mapping.perform_learnable_action(
-            start_stop_action(),
-            lambda: self._controller.transport.playback.start_or_restart_global_start_stop(
-                received_at_ns=received_at_ns
-            ),
-        )
+        received_at_ns = validate_input_timestamp_ns(received_at_ns)
+
+        def execute() -> None:
+            self._perform_playback_action(
+                lambda: self._controller.transport.playback.start_or_restart_global_start_stop(
+                    received_at_ns=received_at_ns
+                )
+            )
+
+        self._controller.input_mapping.perform_learnable_action(start_stop_action(), execute)
 
     def stop_start_stop(self) -> None:
-        self._controller.transport.playback.stop_global_start_stop()
+        self._perform_playback_action(self._controller.transport.playback.stop_global_start_stop)
 
     def set_speed(self, speed: float) -> None:
         action = (

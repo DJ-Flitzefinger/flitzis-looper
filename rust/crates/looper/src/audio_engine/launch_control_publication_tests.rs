@@ -2,6 +2,35 @@
 use super::super::content_placement::PlacementError;
 use super::super::resident_relocation::control_publication_tests::PendingWriter;
 use super::*;
+use std::cell::{Cell, RefCell};
+use std::rc::Rc;
+
+thread_local! {
+    static PENDING_OBSERVER: RefCell<Option<Box<dyn FnMut()>>> = RefCell::new(None);
+}
+
+pub(super) fn observe_pending() {
+    PENDING_OBSERVER.with(|slot| {
+        if let Some(observer) = slot.borrow_mut().as_mut() {
+            observer();
+        }
+    });
+}
+
+fn with_pending_observer<T>(observer: impl FnMut() + 'static, action: impl FnOnce() -> T) -> T {
+    struct Reset;
+    impl Drop for Reset {
+        fn drop(&mut self) {
+            PENDING_OBSERVER.with(|slot| *slot.borrow_mut() = None);
+        }
+    }
+    PENDING_OBSERVER.with(|slot| {
+        assert!(slot.borrow().is_none());
+        *slot.borrow_mut() = Some(Box::new(observer));
+    });
+    let _reset = Reset;
+    action()
+}
 
 fn loaded(owner: &Arc<InputRuntimeOwnership>, id: usize) -> (SampleBuffer, SourcePublication) {
     let sample = SampleBuffer {
@@ -64,7 +93,16 @@ fn bulk_cancel_pending_has_no_partial_scalars_or_successful_target_report() {
     let (_, first) = loaded(&owner, 1);
     owner.mark_launch_admitted(1);
     let held = PendingWriter::hold(owner.clone());
-    assert!(cancel_launches_with_producer(&owner, None, None).is_err());
+    let retries = Rc::new(Cell::new(0));
+    let observed_retries = retries.clone();
+    assert!(
+        with_pending_observer(
+            move || observed_retries.set(observed_retries.get() + 1),
+            || cancel_launches_with_producer(&owner, None, None),
+        )
+        .is_err()
+    );
+    assert_eq!(retries.get(), CONTROL_LAUNCH_PUBLICATION_ATTEMPTS - 1);
     assert_eq!(
         owner
             .launch_revision_for_cell(first.placement.cell())
@@ -82,6 +120,79 @@ fn bulk_cancel_pending_has_no_partial_scalars_or_successful_target_report() {
         vec![1]
     );
     assert_eq!(owner.launch_revision(1), 1);
+}
+
+#[test]
+fn bulk_cancel_retries_pending_publication_under_original_producer_exclusion() {
+    pyo3::Python::initialize();
+    let owner = Arc::new(InputRuntimeOwnership::tracked());
+    let (first_sample, first) = loaded(&owner, 1);
+    let (second_sample, second) = loaded(&owner, 2);
+    owner.set_timing_intent_for_cell(first.placement.cell(), TimingIntent::Manual);
+    owner.set_timing_intent_for_cell(second.placement.cell(), TimingIntent::Tap);
+    owner.mark_launch_admitted(1);
+    owner.mark_launch_admitted(2);
+    let first_binding = first.binding(&first_sample, 48_000);
+    let second_binding = second.binding(&second_sample, 48_000);
+    let revisions = (owner.launch_revision(1), owner.launch_revision(2));
+    assert!(owner.binding_launch_current(1, first_binding, revisions.0));
+    assert!(owner.binding_launch_current(2, second_binding, revisions.1));
+    let (producer, _consumer) = rtrb::RingBuffer::new(1);
+    let producer = Arc::new(Mutex::new(producer));
+    let same_producer = producer.clone();
+    let observed = Rc::new(Cell::new(0));
+    let observed_hook = observed.clone();
+    let observed_owner = owner.clone();
+    let mut held = Some(PendingWriter::hold(owner.clone()));
+    let targets = with_pending_observer(
+        move || {
+            observed_hook.set(observed_hook.get() + 1);
+            assert!(matches!(
+                same_producer.try_lock(),
+                Err(std::sync::TryLockError::WouldBlock)
+            ));
+            assert_eq!(
+                observed_owner
+                    .launch_revision_for_cell(first.placement.cell())
+                    .load(Ordering::Acquire),
+                revisions.0
+            );
+            assert_eq!(
+                observed_owner
+                    .launch_revision_for_cell(second.placement.cell())
+                    .load(Ordering::Acquire),
+                revisions.1
+            );
+            held.take().unwrap().complete();
+        },
+        || cancel_launches_with_producer(&owner, Some(&producer), None),
+    )
+    .unwrap();
+    assert_eq!(observed.get(), 1);
+    assert_eq!(targets, vec![1, 2]);
+    assert_eq!(owner.admitted_launch_ids(), targets);
+    assert!(!owner.binding_launch_current(1, first_binding, revisions.0));
+    assert!(!owner.binding_launch_current(2, second_binding, revisions.1));
+    assert!(owner.binding_launch_current(1, first_binding, revisions.0 + 1));
+    assert!(owner.binding_launch_current(2, second_binding, revisions.1 + 1));
+    assert!(first.current(&first_sample, 48_000));
+    assert!(second.current(&second_sample, 48_000));
+    assert_eq!(
+        (owner.runtime_revision(1), owner.runtime_revision(2)),
+        (0, 0)
+    );
+    assert_eq!(
+        (
+            owner.timing_intent[first.placement.cell().index()].load(Ordering::Acquire),
+            owner.timing_intent[second.placement.cell().index()].load(Ordering::Acquire),
+        ),
+        (2, 3)
+    );
+    assert_eq!(
+        (owner.cold_status(1, 7), owner.cold_status(2, 7)),
+        (Some(0), Some(0))
+    );
+    assert!(producer.try_lock().is_ok());
 }
 
 #[test]
@@ -109,6 +220,44 @@ fn changed_last_bulk_participant_rejects_every_earlier_write() {
             .all(|revision| revision.load(Ordering::Acquire) == 0)
     );
     assert_eq!(owner.launch_revision(NUM_SAMPLES - 1), 11);
+}
+
+#[test]
+fn control_retry_does_not_readmit_retired_or_changed_participants() {
+    for retire in [false, true] {
+        let owner = Arc::new(InputRuntimeOwnership::tracked());
+        let (_, first) = loaded(&owner, 1);
+        loaded(&owner, 2);
+        let prepared = owner
+            .prepare_control_launch_set(&[1, 2], LaunchWriteKind::Cancel)
+            .unwrap();
+        if retire {
+            loaded(&owner, 1);
+            assert!(!owner.content_key_current(first.key().unwrap()));
+        } else {
+            owner.launch_revisions[2].store(11, Ordering::Release);
+        }
+        let attempts = Cell::new(0);
+        let result = retry_control_launch_publication(|| {
+            attempts.set(attempts.get() + 1);
+            owner.commit_control_launch_set(
+                &prepared,
+                || true,
+                || panic!("terminal failure must not apply a partial cancellation"),
+            )
+        });
+        assert_eq!(attempts.get(), 1);
+        assert_eq!(
+            result,
+            Err(ControlLaunchSetError::Publication(if retire {
+                PlacementError::Retired
+            } else {
+                PlacementError::ClaimRejected
+            }))
+        );
+        assert_eq!(owner.launch_revision(1), 0);
+        assert_eq!(owner.launch_revision(2), if retire { 0 } else { 11 });
+    }
 }
 
 #[test]
@@ -143,6 +292,48 @@ fn ordered_stop_preflights_capacity_and_pending_then_publishes_captured_payload(
     }
     assert_eq!(owner.launch_revision(4), 1);
     assert!(!owner.launch_admitted(4));
+}
+
+#[test]
+fn ordered_stop_retries_pending_publication_without_releasing_producer() {
+    for all in [false, true] {
+        let owner = Arc::new(InputRuntimeOwnership::tracked());
+        let (sample, publication) = loaded(&owner, 4);
+        owner.mark_launch_admitted(4);
+        let binding = publication.binding(&sample, 48_000);
+        let revision = owner.launch_revision(4);
+        let (producer, mut consumer) = rtrb::RingBuffer::new(1);
+        let producer = Arc::new(Mutex::new(producer));
+        let same_producer = producer.clone();
+        let observed = Rc::new(Cell::new(0));
+        let observed_hook = observed.clone();
+        let mut held = Some(PendingWriter::hold(owner.clone()));
+        let mut guard = producer.lock().unwrap();
+        assert!(with_pending_observer(
+            move || {
+                observed_hook.set(observed_hook.get() + 1);
+                assert!(matches!(
+                    same_producer.try_lock(),
+                    Err(std::sync::TryLockError::WouldBlock)
+                ));
+                held.take().unwrap().complete();
+            },
+            || enqueue_stop_with_producer(&owner, &mut guard, if all { None } else { Some(4) }),
+        ));
+        assert_eq!(observed.get(), 1);
+        match consumer.pop().unwrap() {
+            crate::messages::ControlMessage::StopAll() if all => {}
+            crate::messages::ControlMessage::StopSampleForPlacement { placement } if !all => {
+                assert_eq!(placement.content_key(), publication.key());
+            }
+            _ => panic!("STOP must retain its original admitted scope"),
+        }
+        assert!(consumer.is_empty());
+        assert!(!owner.binding_launch_current(4, binding, revision));
+        assert!(!owner.launch_admitted(4));
+        assert!(publication.current(&sample, 48_000));
+        assert_eq!(owner.cold_status(4, 7), Some(0));
+    }
 }
 
 #[test]

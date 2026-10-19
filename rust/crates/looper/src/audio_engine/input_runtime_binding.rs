@@ -6,7 +6,8 @@ use super::constant_timing::{
 };
 use super::constants::NUM_SAMPLES;
 use super::content_placement::{
-    ContentCell, ContentKey, ContentPlacement, OwnerIdentity, PlacementObservation, SlotSnapshot,
+    ContentCell, ContentKey, ContentPlacement, OwnerIdentity, PlacementError, PlacementObservation,
+    SlotSnapshot,
 };
 use super::prepared_source::next_epoch;
 use crate::messages::SampleBuffer;
@@ -51,6 +52,40 @@ pub(crate) enum LaunchWriteKind {
     Admit,
     Cancel,
     Stop,
+}
+
+/// Control-only error context preserves existing diagnostics without parsing them for retries.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum ControlLaunchSetError {
+    InvalidParticipants,
+    EmptyParticipants,
+    SlotObservation(PlacementError),
+    Publication(PlacementError),
+}
+
+impl ControlLaunchSetError {
+    fn pending(self) -> bool {
+        matches!(
+            self,
+            Self::SlotObservation(PlacementError::Pending)
+                | Self::Publication(PlacementError::Pending)
+        )
+    }
+}
+
+impl std::fmt::Display for ControlLaunchSetError {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::InvalidParticipants => formatter.write_str("invalid launch participant set"),
+            Self::EmptyParticipants => formatter.write_str("empty launch participant set"),
+            Self::SlotObservation(PlacementError::Pending) => {
+                formatter.write_str("content placement is pending")
+            }
+            Self::SlotObservation(error) | Self::Publication(error) => {
+                std::fmt::Display::fmt(error, formatter)
+            }
+        }
+    }
 }
 
 /// Original participant fields for one complete launch-control publication.
@@ -954,6 +989,16 @@ impl InputRuntimeOwnership {
         if !self.slot_snapshot_current(placement) {
             return Err(PlacementError::Pending);
         }
+        self.prepare_launch_write_fields(placement, kind)
+    }
+
+    /// Captured fields grant no authority: the enclosing commit still checks the exact
+    /// original placement and every scalar under its marker before applying any write.
+    fn prepare_launch_write_fields(
+        &self,
+        placement: SlotSnapshot,
+        kind: LaunchWriteKind,
+    ) -> Result<PreparedLaunchWrite, PlacementError> {
         let cell = placement.cell().index();
         let previous_revision = self.launch_revisions[cell].load(Ordering::Acquire);
         let previous_admitted = self.admitted_launches[cell].load(Ordering::Acquire);
@@ -1036,20 +1081,52 @@ impl InputRuntimeOwnership {
         ids: &[usize],
         kind: LaunchWriteKind,
     ) -> Result<Vec<PreparedLaunchWrite>, String> {
+        self.prepare_control_launch_set(ids, kind)
+            .map_err(|error| error.to_string())
+    }
+
+    /// Control-side only: the typed error does not make this allocating Vec preflight RT-safe.
+    fn prepare_control_launch_set(
+        &self,
+        ids: &[usize],
+        kind: LaunchWriteKind,
+    ) -> Result<Vec<PreparedLaunchWrite>, ControlLaunchSetError> {
         if ids.is_empty() || ids.len() > NUM_SAMPLES {
-            return Err("invalid launch participant set".into());
+            return Err(ControlLaunchSetError::InvalidParticipants);
         }
         let mut seen = [false; NUM_SAMPLES];
         let mut prepared = Vec::with_capacity(ids.len());
         for &id in ids {
             if id >= NUM_SAMPLES || seen[id] {
-                return Err("invalid launch participant set".into());
+                return Err(ControlLaunchSetError::InvalidParticipants);
             }
             seen[id] = true;
-            let placement = self
-                .slot_snapshot(id)
-                .ok_or("content placement is pending")?;
-            prepared.push(self.prepare_launch_write(placement, kind)?);
+            let placement = match self.placement.capture_slot(
+                self.owner_identity(),
+                &self.content_lifetimes,
+                id,
+            ) {
+                PlacementObservation::Current(placement) => placement,
+                PlacementObservation::Pending => {
+                    return Err(ControlLaunchSetError::SlotObservation(
+                        PlacementError::Pending,
+                    ));
+                }
+                PlacementObservation::Stale => {
+                    return Err(ControlLaunchSetError::SlotObservation(
+                        PlacementError::Stale,
+                    ));
+                }
+                PlacementObservation::Retired => {
+                    return Err(ControlLaunchSetError::SlotObservation(
+                        PlacementError::Retired,
+                    ));
+                }
+            };
+            prepared.push(
+                self.prepare_launch_write_fields(placement, kind)
+                    .map_err(ControlLaunchSetError::Publication)?,
+            );
         }
         Ok(prepared)
     }
@@ -1062,12 +1139,25 @@ impl InputRuntimeOwnership {
         claim: impl FnOnce() -> bool,
         apply: impl FnOnce(),
     ) -> Result<(), String> {
+        self.commit_control_launch_set(prepared, claim, apply)
+            .map_err(|error| error.to_string())
+    }
+
+    /// Control-side whole-set claim, paired with the allocating preflight above.
+    fn commit_control_launch_set(
+        &self,
+        prepared: &[PreparedLaunchWrite],
+        claim: impl FnOnce() -> bool,
+        apply: impl FnOnce(),
+    ) -> Result<(), ControlLaunchSetError> {
         let anchor = prepared
             .first()
-            .ok_or("empty launch participant set")?
+            .ok_or(ControlLaunchSetError::EmptyParticipants)?
             .placement;
-        let write = self.prepare_slot_write(anchor, anchor.lifetime())?;
-        self.commit_slot_write(
+        let write = self
+            .prepare_slot_write_fixed(anchor, anchor.lifetime())
+            .map_err(ControlLaunchSetError::Publication)?;
+        self.commit_slot_write_fixed(
             &write,
             || {
                 prepared
@@ -1083,6 +1173,7 @@ impl InputRuntimeOwnership {
             },
         )
         .map(|_| ())
+        .map_err(ControlLaunchSetError::Publication)
     }
 
     pub(super) fn commit_migration_holds(
@@ -1868,6 +1959,26 @@ impl InputRuntimeOwnership {
     }
 }
 
+const CONTROL_LAUNCH_PUBLICATION_ATTEMPTS: usize = 64;
+
+/// Off-realtime only. The caller keeps its original producer guard across every fresh
+/// whole-set preflight/claim. Brief Pending contention yields; other failures never retry.
+fn retry_control_launch_publication<T>(
+    mut attempt: impl FnMut() -> Result<T, ControlLaunchSetError>,
+) -> Result<T, ControlLaunchSetError> {
+    let mut result = attempt();
+    for _ in 1..CONTROL_LAUNCH_PUBLICATION_ATTEMPTS {
+        if !result.as_ref().is_err_and(|error| error.pending()) {
+            return result;
+        }
+        #[cfg(test)]
+        launch_control_publication_tests::observe_pending();
+        std::thread::yield_now();
+        result = attempt();
+    }
+    result
+}
+
 /// Capture every earlier admitted target and revoke its old launch revision at one
 /// admission boundary. A live caller supplies the same producer mutex used by
 /// UI, MIDI and global starts. None is only for an engine without a stream.
@@ -1889,18 +2000,17 @@ pub(super) fn cancel_launches_with_producer(
         })
         .transpose()?;
     let ids: Vec<_> = id.map_or_else(|| (0..NUM_SAMPLES).collect(), |id| vec![id]);
-    let prepared = ownership
-        .prepare_launch_set(&ids, LaunchWriteKind::Cancel)
-        .map_err(PyRuntimeError::new_err)?;
-    let targets = prepared
-        .iter()
-        .filter(|entry| entry.previous_admitted)
-        .map(|entry| entry.placement.slot())
-        .collect();
-    ownership
-        .commit_launch_set(&prepared, || true, || {})
-        .map_err(PyRuntimeError::new_err)?;
-    Ok(targets)
+    retry_control_launch_publication(|| {
+        let prepared = ownership.prepare_control_launch_set(&ids, LaunchWriteKind::Cancel)?;
+        let targets = prepared
+            .iter()
+            .filter(|entry| entry.previous_admitted)
+            .map(|entry| entry.placement.slot())
+            .collect();
+        ownership.commit_control_launch_set(&prepared, || true, || {})?;
+        Ok(targets)
+    })
+    .map_err(|error| PyRuntimeError::new_err(error.to_string()))
 }
 
 /// Runtime admission is disabled before shutdown calls this control-only fence.
@@ -1955,19 +2065,17 @@ pub(super) fn enqueue_stop_with_producer(
         return false;
     }
     let ids: Vec<_> = id.map_or_else(|| (0..NUM_SAMPLES).collect(), |id| vec![id]);
-    let Ok(prepared) = ownership.prepare_launch_set(&ids, LaunchWriteKind::Stop) else {
-        return false;
-    };
-    let message = if id.is_some() {
-        crate::messages::ControlMessage::StopSampleForPlacement {
-            placement: prepared[0].placement,
-        }
-    } else {
-        crate::messages::ControlMessage::StopAll()
-    };
-    // The sole producer owns an available slot; the consumer can only free more.
-    ownership
-        .commit_launch_set(
+    retry_control_launch_publication(|| {
+        let prepared = ownership.prepare_control_launch_set(&ids, LaunchWriteKind::Stop)?;
+        let message = if id.is_some() {
+            crate::messages::ControlMessage::StopSampleForPlacement {
+                placement: prepared[0].placement,
+            }
+        } else {
+            crate::messages::ControlMessage::StopAll()
+        };
+        // The sole producer owns an available slot; the consumer can only free more.
+        ownership.commit_control_launch_set(
             &prepared,
             || true,
             || {
@@ -1976,7 +2084,8 @@ pub(super) fn enqueue_stop_with_producer(
                     .expect("reserved single-producer STOP capacity");
             },
         )
-        .is_ok()
+    })
+    .is_ok()
 }
 
 /// Fixed scheduler value. Pointer is compared only; monotonic authority fences
