@@ -68,7 +68,7 @@ fn captured_midi(fixture: &mut LaunchFixture) -> CapturedInputPadTrigger {
         panic!("original MIDI capture queues its transport target before residency");
     };
     assert!(target.same_owner(trigger.pad_start()));
-    target.capture_target(0).unwrap();
+    target.capture_target(0, 0).unwrap();
     fixture.engine.input_runtime = Some(runtime);
     trigger
 }
@@ -225,7 +225,7 @@ fn resident_launch_pending_after_payload_preserves_flags_then_retries() {
         panic!("original target");
     };
     assert_eq!(target.received_timestamp(), 43);
-    target.capture_target(0).unwrap();
+    target.capture_target(0, 0).unwrap();
     let ControlMessage::PreparedStart(publication) = fixture.consumer.pop().unwrap() else {
         panic!("prepared legacy start");
     };

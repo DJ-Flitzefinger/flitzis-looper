@@ -249,6 +249,7 @@ impl RtMixer {
                     voice_generation: voice.generation,
                     execution_frame: execution,
                     paused: snapshot.paused,
+                    actual_feed: snapshot.actual_feed,
                     source_feed_context: snapshot.source_feed_context,
                 },
             ) else {

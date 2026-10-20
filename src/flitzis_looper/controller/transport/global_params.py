@@ -282,37 +282,34 @@ class GlobalParametersController:
         if enabled:
             self._transport.ensure_pad_edit_allowed(self._project.selected_pad)
 
-        self._project.bpm_lock = enabled
-        self._transport._mark_project_changed()
-
+        anchor_pad_id = None
+        anchor_bpm = None
         if enabled:
             anchor_pad_id = self._project.selected_pad
             anchor_bpm = normalize_bpm(self._bpm.effective_bpm(anchor_pad_id))
-            self._session.bpm_lock_anchor_pad_id = anchor_pad_id
-            self._session.bpm_lock_anchor_bpm = anchor_bpm
             self._transport.loop.apply_grid_anchor_to_audio(anchor_pad_id)
-        else:
-            self._session.bpm_lock_anchor_pad_id = None
-            self._session.bpm_lock_anchor_bpm = None
 
         self._audio.set_bpm_lock(enabled=enabled)
+        self._project.bpm_lock = enabled
+        self._session.bpm_lock_anchor_pad_id = anchor_pad_id
+        self._session.bpm_lock_anchor_bpm = anchor_bpm
+        self._transport._mark_project_changed()
         self._bpm.recompute_master_bpm()
 
-    def _audio_trigger_quantization_mode(self) -> str:
-        if not self._project.trigger_quantization_enabled:
-            return "immediate"
-        return self._project.trigger_quantization_step
-
-    def _publish_trigger_quantization(self) -> None:
-        self._audio.set_trigger_quantization(self._audio_trigger_quantization_mode())
+    def _publish_trigger_quantization(
+        self, *, enabled: bool, step: TriggerQuantizationStep
+    ) -> None:
+        self._audio.set_trigger_quantization(step if enabled else "immediate")
 
     def set_trigger_quantization_enabled(self, *, enabled: bool) -> None:
         """Enable or disable global trigger quantization."""
         if enabled == self._project.trigger_quantization_enabled:
             return
 
+        self._publish_trigger_quantization(
+            enabled=enabled, step=self._project.trigger_quantization_step
+        )
         self._project.trigger_quantization_enabled = enabled
-        self._publish_trigger_quantization()
         self._transport._mark_project_changed()
 
     def toggle_trigger_quantization(self) -> None:
@@ -326,9 +323,9 @@ class GlobalParametersController:
         if step == self._project.trigger_quantization_step:
             return
 
-        self._project.trigger_quantization_step = step
         if self._project.trigger_quantization_enabled:
-            self._publish_trigger_quantization()
+            self._publish_trigger_quantization(enabled=True, step=step)
+        self._project.trigger_quantization_step = step
         self._transport._mark_project_changed()
 
     def set_trigger_quantization(self, mode: TriggerQuantizationMode | str) -> None:
@@ -355,9 +352,9 @@ class GlobalParametersController:
         if not changed:
             return
 
+        self._publish_trigger_quantization(enabled=True, step=step)
         self._project.trigger_quantization_step = step
         self._project.trigger_quantization_enabled = True
-        self._publish_trigger_quantization()
         self._transport._mark_project_changed()
 
     def set_volume(self, volume: float) -> None:

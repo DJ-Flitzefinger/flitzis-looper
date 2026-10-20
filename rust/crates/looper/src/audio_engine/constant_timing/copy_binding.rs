@@ -219,6 +219,7 @@ mod tests {
                 .input_runtime_ownership
                 .set_timing_intent(0, TimingIntent::Automatic);
             let (producer, mut consumer) = super::super::tests::queue(1);
+            let engine = super::super::tests::with_control_producer(engine, &producer);
             super::super::l3_constant_timing_fixture::publish_synthetic_loaded_timing(
                 &engine,
                 &producer,

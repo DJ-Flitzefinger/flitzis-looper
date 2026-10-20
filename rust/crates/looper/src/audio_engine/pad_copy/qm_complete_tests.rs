@@ -2,6 +2,9 @@
 //! The generated pulse fixture runs QM once before Copy; no CPAL/device or model inference.
 #![cfg(windows)]
 
+#[path = "qm_complete_tests/copied_loop_custody_tests.rs"]
+mod copied_loop_custody_tests;
+
 use crate::audio_engine::AudioEngine;
 use crate::audio_engine::audio_stream::{
     drain_control_messages, drain_parameter_messages, render_scheduled_audio,

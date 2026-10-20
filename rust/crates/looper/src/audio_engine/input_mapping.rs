@@ -7,7 +7,7 @@ use crate::audio_engine::timing::InputClock;
 use crate::messages::ControlMessage;
 use midir::{Ignore, MidiInput, MidiInputConnection};
 use rtrb::Producer;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::mpsc::{Receiver, RecvTimeoutError, SyncSender, TrySendError, sync_channel};
 use std::sync::{Arc, Mutex};
 use std::thread::{self, JoinHandle};
@@ -167,6 +167,8 @@ mod captured_trigger;
 pub use captured_trigger::CapturedInputPadTrigger;
 mod pitch;
 mod pitch_steps;
+#[cfg(test)]
+mod reserved_runtime_refresh_tests;
 pub(crate) use pitch::PitchPadProjection;
 use pitch::RuntimeSelectedContent;
 
@@ -209,6 +211,7 @@ pub(crate) struct InputRuntime {
     clock: InputClock,
     enabled: Arc<AtomicBool>,
     learn_capture_active: Arc<AtomicBool>,
+    stop_admission_revision: Arc<AtomicU64>,
     input_tx: SyncSender<NormalizedMidiEvent>,
     event_rx: Mutex<Receiver<InputRuntimeEvent>>,
     mappings: Arc<Mutex<Vec<InputMapping>>>,
@@ -234,6 +237,7 @@ impl InputRuntime {
     ) -> Self {
         let enabled = Arc::new(AtomicBool::new(false));
         let learn_capture_active = Arc::new(AtomicBool::new(false));
+        let stop_admission_revision = Arc::new(AtomicU64::new(0));
         let mappings = Arc::new(Mutex::new(Vec::new()));
         let runtime_state = Arc::new(Mutex::new(RuntimeState::default()));
         let running = Arc::new(AtomicBool::new(true));
@@ -251,6 +255,7 @@ impl InputRuntime {
                 audio_producer: audio_producer.clone(),
                 enabled: enabled.clone(),
                 learn_capture_active: learn_capture_active.clone(),
+                stop_admission_revision: stop_admission_revision.clone(),
                 running: running.clone(),
             };
             thread::spawn(move || dispatcher.run())
@@ -260,6 +265,7 @@ impl InputRuntime {
             clock,
             enabled,
             learn_capture_active,
+            stop_admission_revision,
             input_tx,
             event_rx: Mutex::new(event_rx),
             mappings,
@@ -274,28 +280,67 @@ impl InputRuntime {
     }
 
     pub fn set_enabled(&self, enabled: bool) {
-        if enabled && !self.enabled.load(Ordering::Acquire) {
-            self.reset_pitch_step_state();
-            self.enabled.store(true, Ordering::Release);
-        } else if !enabled && self.enabled.swap(false, Ordering::AcqRel) {
-            self.reset_pitch_step_state();
+        let Ok(mappings) = self.mappings.lock() else {
+            self.stop_admission_revision
+                .store(u64::MAX, Ordering::SeqCst);
+            self.enabled.store(enabled, Ordering::Release);
+            return;
+        };
+        if self.enabled.load(Ordering::Acquire) == enabled {
+            return;
         }
+        let next_revision = self.begin_stop_admission_update();
+        if enabled {
+            Self::reset_pitch_step_state(&mappings);
+            self.enabled.store(true, Ordering::Release);
+        } else {
+            self.enabled.store(false, Ordering::Release);
+            Self::reset_pitch_step_state(&mappings);
+        }
+        self.finish_stop_admission_update(next_revision);
     }
 
     pub fn set_learn_capture_active(&self, active: bool) {
-        if active && !self.learn_capture_active.swap(true, Ordering::AcqRel) {
-            self.reset_pitch_step_state();
-        } else if !active && self.learn_capture_active.load(Ordering::Acquire) {
-            self.reset_pitch_step_state();
+        let Ok(mappings) = self.mappings.lock() else {
+            self.stop_admission_revision
+                .store(u64::MAX, Ordering::SeqCst);
+            self.learn_capture_active.store(active, Ordering::Release);
+            return;
+        };
+        if self.learn_capture_active.load(Ordering::Acquire) == active {
+            return;
+        }
+        let next_revision = self.begin_stop_admission_update();
+        if active {
+            self.learn_capture_active.store(true, Ordering::Release);
+            Self::reset_pitch_step_state(&mappings);
+        } else {
+            Self::reset_pitch_step_state(&mappings);
             self.learn_capture_active.store(false, Ordering::Release);
+        }
+        self.finish_stop_admission_update(next_revision);
+    }
+
+    // The mappings mutex serializes every writer of STOP's input authority.
+    // Odd revisions prevent admission across partial flag/owner publication;
+    // exhaustion permanently fails STOP closed instead of reviving an old lookup.
+    fn begin_stop_admission_update(&self) -> Option<u64> {
+        let current = self.stop_admission_revision.load(Ordering::SeqCst);
+        let next = current.checked_add(2).filter(|_| current & 1 == 0);
+        self.stop_admission_revision
+            .store(next.map_or(u64::MAX, |_| current + 1), Ordering::SeqCst);
+        next
+    }
+
+    fn finish_stop_admission_update(&self, next_revision: Option<u64>) {
+        if let Some(next_revision) = next_revision {
+            self.stop_admission_revision
+                .store(next_revision, Ordering::SeqCst);
         }
     }
 
-    fn reset_pitch_step_state(&self) {
-        let Ok(mappings) = self.mappings.lock() else {
-            return;
-        };
-        for mapping in mappings.iter() {
+    fn reset_pitch_step_state(mappings: &[InputMapping]) {
+        for mapping in mappings {
             if let Ok(mut state) = mapping.pitch_step_state.lock() {
                 *state = pitch_steps::PitchStepState::default();
             }
@@ -304,6 +349,8 @@ impl InputRuntime {
 
     pub fn replace_mappings(&self, mappings: Vec<(String, String)>) {
         let Ok(mut guard) = self.mappings.lock() else {
+            self.stop_admission_revision
+                .store(u64::MAX, Ordering::SeqCst);
             return;
         };
         let parsed: Vec<_> = mappings
@@ -329,6 +376,7 @@ impl InputRuntime {
             })
             .collect();
 
+        let next_revision = self.begin_stop_admission_update();
         for previous in guard.iter() {
             if !parsed
                 .iter()
@@ -338,6 +386,7 @@ impl InputRuntime {
             }
         }
         *guard = parsed;
+        self.finish_stop_admission_update(next_revision);
     }
 
     pub fn set_runtime_state(
@@ -428,6 +477,11 @@ impl InputRuntime {
             }
         }
 
+        let mut guard = self
+            .runtime_state
+            .lock()
+            .map_err(|_| "input runtime lock poisoned")?;
+        let mut reservations = Vec::with_capacity(NUM_SAMPLES);
         let mut pads = Vec::with_capacity(NUM_SAMPLES);
         for idx in 0..NUM_SAMPLES {
             let start_s = loop_starts[idx];
@@ -437,6 +491,18 @@ impl InputRuntime {
             }
             if end_s.is_some_and(|value| !value.is_finite() || value < 0.0) {
                 return Err("loop end out of range".to_string());
+            }
+            let reservation = (
+                self.ownership.copy_reservation(idx),
+                self.ownership.pair_reservation(idx),
+            );
+            reservations.push(reservation);
+            if reservation != (0, 0) {
+                // The original row belongs to the arrangement through its ACK and
+                // control mirror. A periodic snapshot cannot replace it with an
+                // unavailable binding, stale Python pitch or an empty default.
+                pads.push(guard.pads[idx].clone());
+                continue;
             }
             let binding = if loaded[idx] {
                 let binding =
@@ -466,12 +532,11 @@ impl InputRuntime {
             });
         }
 
-        let mut guard = self
-            .runtime_state
-            .lock()
-            .map_err(|_| "input runtime lock poisoned")?;
         let mut pitch_shadow = guard.pitch_shadow.clone();
         for (idx, pad) in pads.iter_mut().enumerate() {
+            if reservations[idx] != (0, 0) {
+                continue;
+            }
             if pad
                 .binding
                 .and_then(|binding| binding.placement?.content_key())
@@ -494,7 +559,9 @@ impl InputRuntime {
         pitch_shadow.reconcile(&mut pads, &self.ownership);
         let mut revisions = Vec::with_capacity(NUM_SAMPLES);
         for (idx, pad) in pads.iter_mut().enumerate() {
-            if let Some(binding) = &mut pad.binding {
+            if reservations[idx] == (0, 0)
+                && let Some(binding) = &mut pad.binding
+            {
                 binding.runtime_revision = guard.pads[idx]
                     .binding
                     .map_or(0, |old| old.runtime_revision);
@@ -508,7 +575,9 @@ impl InputRuntime {
             let prepared = self
                 .ownership
                 .prepare_runtime_revision_write(placement, changed)?;
-            if let Some(binding) = &mut pad.binding {
+            if reservations[idx] == (0, 0)
+                && let Some(binding) = &mut pad.binding
+            {
                 binding.runtime_revision = prepared.revision();
             }
             revisions.push(prepared);
@@ -520,7 +589,10 @@ impl InputRuntime {
             .map_err(|error| error.to_string())?;
         // Validate the whole replacement before revoking any previous pad publication.
         for (idx, binding) in bindings.iter().enumerate() {
-            if loaded[idx] && binding.is_none_or(|binding| !binding.current()) {
+            if reservations[idx] == (0, 0)
+                && loaded[idx]
+                && binding.is_none_or(|binding| !binding.current())
+            {
                 return Err("MIDI binding changed during runtime publication".into());
             }
         }
@@ -543,11 +615,17 @@ impl InputRuntime {
                         .iter()
                         .all(|prepared| self.ownership.runtime_revision_write_current(*prepared))
                         && bindings.iter().enumerate().all(|(idx, binding)| {
-                            !loaded[idx]
-                                || binding.is_some_and(|binding| {
-                                    Arc::ptr_eq(&binding.ownership, &self.ownership)
-                                        && binding.runtime_publication_current()
-                                })
+                            reservations[idx]
+                                == (
+                                    self.ownership.copy_reservation(idx),
+                                    self.ownership.pair_reservation(idx),
+                                )
+                                && (reservations[idx] != (0, 0)
+                                    || !loaded[idx]
+                                    || binding.is_some_and(|binding| {
+                                        Arc::ptr_eq(&binding.ownership, &self.ownership)
+                                            && binding.runtime_publication_current()
+                                    }))
                         })
                 },
                 |_| {
@@ -676,6 +754,7 @@ impl InputRuntime {
         binding_key: &str,
         received_at_ns: u64,
     ) -> Option<impl FnOnce() -> bool + '_> {
+        let stop_admission_revision = self.stop_admission_revision.load(Ordering::SeqCst);
         if !self.enabled.load(Ordering::Acquire)
             || self.learn_capture_active.load(Ordering::Acquire)
         {
@@ -689,7 +768,13 @@ impl InputRuntime {
                 &self.runtime_state,
                 &self.ownership,
                 &self.audio_producer,
-                Some(self.enabled.as_ref()),
+                Some(MappedInputAdmission {
+                    mapping_owner: mapping.owner.as_ref(),
+                    enabled: self.enabled.as_ref(),
+                    learn_capture_active: self.learn_capture_active.as_ref(),
+                    stop_admission_revision: self.stop_admission_revision.as_ref(),
+                    captured_revision: stop_admission_revision,
+                }),
             )
             .dispatched
         })
@@ -788,6 +873,7 @@ struct InputDispatcher {
     audio_producer: Arc<Mutex<Producer<ControlMessage>>>,
     enabled: Arc<AtomicBool>,
     learn_capture_active: Arc<AtomicBool>,
+    stop_admission_revision: Arc<AtomicU64>,
     running: Arc<AtomicBool>,
 }
 
@@ -801,6 +887,7 @@ impl InputDispatcher {
             };
 
             let binding_key = event.binding.key();
+            let stop_admission_revision = self.stop_admission_revision.load(Ordering::SeqCst);
             let mapping = if self.enabled.load(Ordering::Acquire)
                 && !self.learn_capture_active.load(Ordering::Acquire)
             {
@@ -814,10 +901,46 @@ impl InputDispatcher {
             let mut captured_trigger = None;
             let mut captured_pitch = None;
             let mut pitch_rejection = None;
-            let mut selection_revision = None;
             let action_key = mapping.as_ref().map(|m| m.action_key.clone());
 
             if let Some(mapping) = mapping {
+                if let InputAction::SelectPad { id } = mapping.action {
+                    pitch::select_pad_with_delivery(
+                        id,
+                        &self.runtime_state,
+                        &self.ownership,
+                        |selection| {
+                            // Revalidate the original lookup while selection is excluded;
+                            // refused input must neither publish nor commit a new revision.
+                            let admitted = MappedInputAdmission {
+                                mapping_owner: mapping.owner.as_ref(),
+                                enabled: self.enabled.as_ref(),
+                                learn_capture_active: self.learn_capture_active.as_ref(),
+                                stop_admission_revision: self.stop_admission_revision.as_ref(),
+                                captured_revision: stop_admission_revision,
+                            }
+                            .current();
+                            let selection_revision = selection.ok().filter(|_| admitted);
+                            let delivered = self
+                                .event_tx
+                                .try_send(InputRuntimeEvent {
+                                    binding_key,
+                                    value: event.value,
+                                    received_at_ns: event.received_at_ns,
+                                    action_key,
+                                    dispatched: selection_revision.is_some(),
+                                    direct: false,
+                                    captured_trigger: None,
+                                    captured_pitch: None,
+                                    pitch_rejection: None,
+                                    selection_revision,
+                                })
+                                .is_ok();
+                            admitted && delivered
+                        },
+                    );
+                    continue;
+                }
                 if let InputAction::Pitch { spec } = mapping.action {
                     match pitch_steps::resolve(&mapping, &event, spec) {
                         Ok(Some(spec)) => match pitch::capture_selected(
@@ -850,14 +973,7 @@ impl InputDispatcher {
                         &self.audio_producer,
                     );
                 }
-                let result = if let InputAction::SelectPad { id } = mapping.action {
-                    let selected = pitch::select_pad(id, &self.runtime_state, &self.ownership);
-                    selection_revision = selected.as_ref().ok().copied();
-                    DispatchResult {
-                        dispatched: selected.is_ok(),
-                        direct: false,
-                    }
-                } else if matches!(
+                let result = if matches!(
                     mapping.action,
                     InputAction::Pitch { .. } | InputAction::InvalidPitch
                 ) {
@@ -884,7 +1000,13 @@ impl InputDispatcher {
                         &self.runtime_state,
                         &self.ownership,
                         &self.audio_producer,
-                        Some(self.enabled.as_ref()),
+                        Some(MappedInputAdmission {
+                            mapping_owner: mapping.owner.as_ref(),
+                            enabled: self.enabled.as_ref(),
+                            learn_capture_active: self.learn_capture_active.as_ref(),
+                            stop_admission_revision: self.stop_admission_revision.as_ref(),
+                            captured_revision: stop_admission_revision,
+                        }),
                     )
                 };
                 dispatched = result.dispatched;
@@ -902,7 +1024,7 @@ impl InputDispatcher {
                     captured_trigger,
                     captured_pitch,
                     pitch_rejection,
-                    selection_revision,
+                    selection_revision: None,
                 })
                 && let Some(action) = event.captured_pitch
             {
@@ -931,13 +1053,33 @@ struct DispatchResult {
     direct: bool,
 }
 
+#[derive(Clone, Copy)]
+struct MappedInputAdmission<'a> {
+    mapping_owner: &'a AtomicBool,
+    enabled: &'a AtomicBool,
+    learn_capture_active: &'a AtomicBool,
+    stop_admission_revision: &'a AtomicU64,
+    captured_revision: u64,
+}
+
+impl MappedInputAdmission<'_> {
+    fn current(self) -> bool {
+        self.captured_revision & 1 == 0
+            && self.stop_admission_revision.load(Ordering::SeqCst) == self.captured_revision
+            && self.mapping_owner.load(Ordering::Acquire)
+            && self.enabled.load(Ordering::Acquire)
+            && !self.learn_capture_active.load(Ordering::Acquire)
+            && self.stop_admission_revision.load(Ordering::SeqCst) == self.captured_revision
+    }
+}
+
 fn dispatch_action(
     action: &InputAction,
     received_at_ns: u64,
     runtime_state: &Arc<Mutex<RuntimeState>>,
     ownership: &Arc<InputRuntimeOwnership>,
     audio_producer: &Arc<Mutex<Producer<ControlMessage>>>,
-    admission_enabled: Option<&AtomicBool>,
+    admission: Option<MappedInputAdmission<'_>>,
 ) -> DispatchResult {
     match action {
         InputAction::TriggerPad { id } => dispatch_trigger_pad(
@@ -946,15 +1088,18 @@ fn dispatch_action(
             runtime_state,
             ownership,
             audio_producer,
-            admission_enabled,
+            admission.map(|guards| guards.enabled),
         ),
         InputAction::StopPad { id } => {
             let dispatched = audio_producer.try_lock().is_ok_and(|mut producer| {
-                super::input_runtime_binding::enqueue_stop_with_producer(
-                    ownership,
-                    &mut producer,
-                    Some(*id),
-                )
+                // This final stable snapshot admits the original lookup. A later
+                // control change cannot revoke an already admitted cancellation.
+                admission.is_none_or(MappedInputAdmission::current)
+                    && super::input_runtime_binding::enqueue_stop_with_producer(
+                        ownership,
+                        &mut producer,
+                        Some(*id),
+                    )
             });
             DispatchResult {
                 dispatched,
@@ -1759,7 +1904,7 @@ mod tests {
             panic!("original public trigger timing capture")
         };
         assert_eq!(target.received_timestamp(), 42);
-        target.capture_target(0).unwrap();
+        target.capture_target(0, 0).unwrap();
         let ControlMessage::PreparedStart(publication) = consumer.pop().unwrap() else {
             panic!("guarded trigger")
         };
@@ -1957,6 +2102,22 @@ mod tests {
 #[cfg(test)]
 #[path = "runtime_publication_tests.rs"]
 mod runtime_publication_tests;
+
+#[cfg(test)]
+#[path = "input_mapping_selection_delivery_tests.rs"]
+mod selection_delivery_tests;
+
+#[cfg(test)]
+#[path = "input_mapping_selected_authority_tests.rs"]
+mod selected_authority_tests;
+
+#[cfg(test)]
+#[path = "input_mapping_stop_admission_tests.rs"]
+mod stop_admission_tests;
+
+#[cfg(test)]
+#[path = "input_mapping_select_admission_tests.rs"]
+mod select_admission_tests;
 
 #[cfg(test)]
 #[path = "launch_admission_tests.rs"]

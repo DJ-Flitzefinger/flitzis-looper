@@ -215,8 +215,9 @@ the verified cache remains usable and unrelated generations remain protected.
 Close requests stop Copy admission and try genuine preclaim cancellation while
 keeping controller custody until the actual preparation worker returns. A claimed
 Copy completes its normal own-ACK/config/callback path before dependent controllers
-or audio owners shut down. The UI keeps close pending and displays settlement
-errors, polling without blocking the frame. The shell gates `app_shall_exit` in
+or audio owners shut down. The UI keeps close pending with compact, viewport-sized
+progress while the existing deduplicated console reports technical settlement
+errors. The close poll continues even without a rendered GUI frame. The shell gates `app_shall_exit` in
 `after_swap`, which the
 [pinned HelloImGui loop](https://github.com/pthom/hello_imgui/blob/902dd7d8229b0f396a7f5d4e0a61486825b69c4a/src/hello_imgui/internal/backend_impls/abstract_runner.cpp#L1162)
 runs before the next exit check. `before_exit` performs only permitted teardown.
@@ -543,3 +544,172 @@ Native effects proved above. These software results do not close musical,
 resource, realtime, device, listening, Human or full parent acceptance gates.
 The single independent final review is clear and accepts the separate R3 software
 closure for these pad gestures, original source admission and global mute/release.
+
+## Bank36 Native and durable foundations
+
+The current R4 foundation captures one complete source/target bank image, including
+Empty cells, and publishes one aggregate Native operation. All participant
+reservations share the existing ContentPlacement claim. A fresh occupied target
+is stopped with its own mutable state; an Empty source clears its corresponding
+target. The source and outside voices keep their actual history and Holds. Old
+target voices, Holds, samples and stem readers retire together off realtime. The
+aggregate reserves 133 retirement entries, rather than multiplying single-Copy
+capacity by 36. Reconciliation and finish require the same opaque parent ACK.
+
+Preclaim cancellation retains the parent reservations while an admitted child
+kernel still owns preparation. The existing ColdJobs lane now offers terminal
+owned delivery for Bank; ordinary callers keep their established early-return
+policy. Cancelled results are destroyed before terminal return. Poisoned queued
+owners retire outside the queue lock, including after cancellation was already
+latched. A claimed or accepted operation cannot report rollback; an uncooperative
+running kernel may still delay terminal cancellation.
+
+BankSnapshot seals exactly 36 ordered musical rows. The pad_bank/v1 journal keeps
+the original whole-project/Config binding, immutable source/before/fixed-after
+seals, all phase ordinals and actual same-revision Config text/digest. Historical
+recognition accepts the complete before or complete after bank and rejects a
+mixture of changed cells. Later compatible source/outside intent survives fixed-
+after projection. Occupied seals supply inputs to existing independent asset
+custody; Empty witnesses require scalar fences. Historical data supplies no saved
+Native authority. Native Portable recognition now validates this dedicated bank
+kind, including all history ordinals and exact current schema, while retaining
+historical Pair/Copy compatibility. Its complete 43-test Debug suite passes. Two
+independent-review findings have real regressions and are fixed: raw availability
+is checked before normalization, and fixtures provision their own owned roots.
+All eight final Bank entries also pass in Release; the remaining 35 Portable
+neighbors retain their compatible earlier Release evidence.
+
+Caller-original Native BankParticipants now retain the actual ordered occupied
+and Empty incarnations before confirmation and admission. The same original
+guards are checked under the existing complete reservation marker and retained
+through effect claim. Eight new callback tests cover real replacement/ABA, stale
+authority, Pending, unrelated publication and actual component availability.
+
+Normal controller and aggregate mirror foundations have bounded software proof:
+111 mirror/shared-neighbor tests and 19 controller tests pass, with one independent
+review clear. Those Python tests script the Native boundary. Three additional
+real callback/controller cases now pass in Debug and Release: mixed productive Native/FIFO/
+Hold continuity against an independently initialized full 16,384-frame PCM
+reference, full36 Copy followed by Clear with one actual parent ACK and Config
+receipt each, and same-PCM/generation replacement after original capture. They
+reuse the existing Copy fixture and productive controllers, journals, mirrors
+and asset owners. Initial global Key Lock and FullMix commands use the existing
+headless queue; this does not prove their stream-bound public setter admission.
+Bank startup routing and fresh aggregate recovery now have bounded implementation
+and software proof: eleven actual callback cases pass in Debug and Release,
+including genuine Cold and selected-stem restoration, Empty rows, same-owner
+retry after delayed Unload, queue pressure and independent subscriber retirement.
+The combined public Copy/Bank suite passes 52 Debug entries. The strict startup
+owner retains fixed images, all journal ordinals, source and target custody, and
+the existing Config writer; original-before recovery transfers a durable child
+into the same normal Bank controller. Its Python tests substitute the Native
+boundary. App now binds this owner before ordinary restore, composes mutual
+admission, gesture and observer fences, exact queued feedback and shutdown, and
+refreshes Material cleanup only after actual Copy/Pair/Bank inactivity. Explicit
+retry uses that same ownership guard even when disk history is already terminal.
+The affected 298 Python cases pass; independent review is clear after fixing that
+retry guard. The existing real callback/production-feedback neighbor also passes
+in Release; its partial App facade now represents the added idle Bank owner.
+Fresh-process Bank recovery now also passes a genuine three-process Debug
+profile: an actual pending producer exits, its normal durable recovery child
+receives a real Bank ACK, the actual Config replacement loses its return, and
+a third process obtains fresh all36 acceptance before its own current receipt
+and ancestor compaction. It preserves the fixed after identities and reuses
+the original/PCM/stem files. FullMix acceptance ignores its dormant component
+mask while preserving its durable intent; ALL STEMS still requires an exact
+effective mask. The separate positive and negative Native regressions pass.
+
+The receiver then retains a real Instrumental reader across normal Clear of
+every sharing bank. After that reader releases, all five original/source-PCM/
+stem-WAV/stem-PCM/descriptor paths actually disappear through existing retirement
+workers, with Config and independent sentinels preserved. The test exposed a
+completed startup coordinator retaining its verification owner; Copy, Pair and
+Bank now drop that reference only after all terminal cleanup succeeds. Three
+additional scripted-Native controller tests prove failed cleanup retains the
+same owner and successful retry allows collection while App/startup remain alive.
+
+Two further actual Bank/SharedStemJob Debug profiles cover a surviving original
+follower's own generated component ACK, and final-interest Clear with a physical
+backend reader retained until its stale result returns. Newly copied equal
+material inherits no job token. Only the declared nonneural output backend and
+headless shape routing are substituted. These first two profiles complete the backend
+after settlement; the third active-writer ordering is covered below.
+Combined controller/neighbor Debug checks pass seven entries; the three startup
+Python files pass 112 cases, with the three new custody tests passing separately.
+
+R4 now has a separate accepted nonauthor SOFTWARE closure for beginning Bank UI.
+Final Release checks include all36 Bank cases and three actual SharedStemJob cases.
+The third completes its same prepared pair while Bank owns the common writer:
+the existing queue retains its original reservation/readers, then its own disk
+selection and complete ALL acknowledgement settle after Bank. Ordinary-to-live
+selection preserves only an outstanding original attempt and latest desired state
+through the existing withdraw-or-settle protocol; settled historical intent is
+not replayed. The final targeted Python suites pass213 and120 cases respectively.
+Capacity133 is also tested at132 with the same retained queue head and no partial
+36-slot effects, and actual Clear/refill ignores three releases from an old Hold.
+The existing genuine three-process recovery and all-five physical final-reader
+retirement proofs remain compatible. Bank UI is now implemented through the existing
+six selectors and common confirmation owner: left-click another bank copies without
+navigation, occupied targets require exact OVERWRITE, and right-click any bank requires
+exact CLEAR BANK. Cancel/Escape/close retain no transaction; acceptance consumes the
+same original request once. A consumed PAD drag also disables the underlying Bank
+widget so a staggered second-button release cannot activate it later.
+
+Actual App testing exposed automatic MIDI refresh replacing reserved participants
+with unloaded runtime rows, invalidating their original Bank guards. Python now keeps
+the last successful fenced rows; Native retains its complete existing rows and pitch
+shadow under the same atomic runtime publication, rechecking original reservation
+owners, placements and revisions. Unrelated MIDI remains publishable. An explicit
+Multi Loop change retains its original all-row semantic revision and may supersede a
+pending Bank; no stale captured trigger is preserved. Post-settlement Clear/copy rows
+refresh normally. Unsolicited Native rejection has explicit console feedback without
+fabricating an error for deliberate cancellation. Five focused Native boundary cases,
+two genuine InputMapping/Bank/ACK/Config profiles and the actual rendered Bank join
+pass in Release. Final affected suites pass39 Bank,119 input-mapping,9 binding and20
+pitch-action cases, with1308 Python cases. These are separate profiles with their own
+inputs, not whole-product or hearing acceptance. Full R4/R5/HC acceptance remains open.
+P6/216/resource, neural, musical, device and Human acceptance remain separate.
+Pending target preparation and
+committed selection collectors currently reject admission before reservation,
+leaving their original owners reachable; arbitrary pending replacement is open.
+
+Fourteen actual Bank callback tests pass in Debug and Release; affected Pair,
+placement, binding and Copy mixer regressions pass. The combined public Copy/Bank
+suite passed 41 Debug entries before the eleven new recovery cases. The three new Bank cases, fresh-process Copy
+restore and both PitchFirst neighbors also pass the final optimized profile.
+Fresh A/C onset comparisons retain every emitted frame against an independent
+stereo C ABI/PCM reference; B contributes real audio before
+overwrite, and the earlier live wet-output guards remain. These are bounded
+software checks, not musical or listening acceptance. The durable foundation
+passes 40 focused tests. The shared projection update
+passes 283 combined journal/snapshot tests with its neighbors and 43 final
+snapshot/export cases.
+The full-bank validation workflow exposed repeated construction of a 216-slot
+project for each copied row. Bank now reuses the existing strict Copy-after
+projection directly, retaining all validation boundaries. The measured full-bank
+test falls from 69.73 to 8.19 seconds, and one profiled record revalidation from
+2.481 to 0.214 seconds. These are diagnostic measurements, not UI-latency
+acceptance. Full gate and negative-result accounting remains in the workspace
+test log. R4 and R5 retain their existing ordering and acceptance gates.
+
+## Pair settlement across a later Multi Loop change
+
+An explicit Multi Loop publication still advances the current content cells'
+runtime policy and revokes incompatible captured input actions. Before a Pair's
+Native claim, the existing original guards may therefore reject and cancel it.
+After its own Native acknowledgement, the Pair must finish that acknowledged
+mutation under the latest policy. Reserved old MIDI control rows retain their
+exact captured image until the control mirror; each mirrored successor receives
+the current runtime epoch of its acknowledged destination content cell.
+Source, lifetime, placement, own-ACK and original-control comparisons remain
+required. No stale row or changed source becomes admissible through this rule.
+
+The reported post-ACK row mismatch is reproduced with a real InputRuntime.
+Thirty-five focused Native cases pass, including four policy toggles and unequal
+participant epochs. Two actual App profiles also pass Swap and Move through
+Config/journal settlement, current selection and shutdown preparation. These
+bounded checks establish neither device acceptance nor the separately reported
+copied-loop reader failure. That exact failure remains unreproduced in four TAP
+finite-source/launch/controller profiles and one genuine acknowledged Automatic/QM
+profile. Seek-only adoption with differing voice/bank windows and Copy followed
+by Move/Swap, collection and loop edits remain useful uncovered compositions.

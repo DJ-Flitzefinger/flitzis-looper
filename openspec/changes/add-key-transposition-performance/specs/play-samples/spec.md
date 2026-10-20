@@ -56,6 +56,19 @@ The system SHALL allow equal original ordinary attacks to register distinct Nati
 - **THEN** its distinct member ticket SHALL resolve the same real WindowACK and actual mode request ID
 - **AND** the independently requested edit SHALL remain accepted when the start is cancelled
 
+#### Scenario: The original dependency commits after the ordinary target is captured
+- **GIVEN** an ordinary start retains an already admitted loop edit's exact native ticket and the callback captures its original target and source-control revision before that edit commits
+- **WHEN** that same edit performs its own successful callback loop commit and receives its genuine accepted acknowledgement
+- **THEN** the original start SHALL retain its immutable target and captured revision while accepting only that dependency's own proven before/after source-control revision transition
+- **AND** a prepared nonneutral start and an atomic global participant SHALL retain that same exact dependency association through admission, late preparation and the final effect claim
+- **AND** a deferred, failed, cancelled, rejected, foreign or storage-only publication SHALL NOT provide that permission
+
+#### Scenario: A separate edit cannot borrow a dependency's continuity receipt
+- **GIVEN** an original start retains an exact loop dependency's accepted callback acknowledgement
+- **WHEN** an unrelated source-control edit occurs before or after that dependency's own commit, including a change followed by restoration
+- **THEN** the original start SHALL reject its stale continuity proof without an attack or a partial global effect
+- **AND** matching numeric loop endpoints, current counters or another ticket's acknowledgement SHALL NOT replace the original dependency's commit provenance
+
 #### Scenario: A fresh member follows benign input projections
 - **GIVEN** an original attack is scheduled against its genuine accepted physical readiness
 - **WHEN** input routing projections change and a fresh attack captures the unchanged source, timing, window and loop

@@ -1,6 +1,68 @@
 //! Windows process counters for isolated hardware-free measurements only.
 use serde_json::{Value, json};
 use std::ffi::c_void;
+use std::time::{Instant, SystemTime, UNIX_EPOCH};
+
+#[path = "c3_process_metrics/host_tests.rs"]
+mod host_tests;
+
+#[repr(C)]
+#[derive(Default)]
+struct HostCounters {
+    length: u32,
+    load: u32,
+    total_physical: u64,
+    available_physical: u64,
+    commit_limit: u64,
+    available_commit: u64,
+    total_virtual: u64,
+    available_virtual: u64,
+    available_extended_virtual: u64,
+}
+
+#[repr(C)]
+#[derive(Default)]
+struct PerformanceInformation {
+    size: u32,
+    commit_total: usize,
+    commit_limit: usize,
+    commit_peak: usize,
+    physical_total: usize,
+    physical_available: usize,
+    system_cache: usize,
+    kernel_total: usize,
+    kernel_paged: usize,
+    kernel_nonpaged: usize,
+    page_size: usize,
+    handles: u32,
+    processes: u32,
+    threads: u32,
+}
+
+#[repr(C)]
+#[derive(Default)]
+struct JobBasicLimits {
+    process_user_time: i64,
+    job_user_time: i64,
+    flags: u32,
+    minimum_working_set: usize,
+    maximum_working_set: usize,
+    active_process_limit: u32,
+    affinity: usize,
+    priority_class: u32,
+    scheduling_class: u32,
+}
+
+#[repr(C)]
+#[derive(Default)]
+struct JobExtendedLimits {
+    basic: JobBasicLimits,
+    io: [u64; 6],
+    process_memory_limit: usize,
+    job_memory_limit: usize,
+    peak_process_memory: usize,
+    peak_job_memory: usize,
+}
 
 #[repr(C)]
 struct Memory {
@@ -31,6 +93,143 @@ unsafe extern "system" {
     fn GetProcessHandleCount(process: *mut c_void, handles: *mut u32) -> i32;
     fn GetModuleHandleW(name: *const u16) -> *mut c_void;
     fn GetModuleFileNameW(module: *mut c_void, filename: *mut u16, size: u32) -> u32;
+    fn GlobalMemoryStatusEx(status: *mut HostCounters) -> i32;
+    fn K32GetPerformanceInfo(information: *mut PerformanceInformation, size: u32) -> i32;
+    fn IsProcessInJob(process: *mut c_void, job: *mut c_void, in_job: *mut i32) -> i32;
+    fn QueryInformationJobObject(
+        job: *mut c_void,
+        class: i32,
+        information: *mut c_void,
+        size: u32,
+        returned: *mut u32,
+    ) -> i32;
+}
+
+fn query_succeeded(api: &str, result: i32) -> Result<(), String> {
+    if result == 0 {
+        Err(format!("{api}: {}", std::io::Error::last_os_error()))
+    } else {
+        Ok(())
+    }
+}
+
+fn commit_bytes(total: usize, limit: usize, page_size: usize) -> Result<(u64, u64, u64), String> {
+    if page_size == 0 || total > limit {
+        return Err("GetPerformanceInfo returned invalid commit geometry".into());
+    }
+    let bytes = |pages: usize| {
+        pages
+            .checked_mul(page_size)
+            .and_then(|value| u64::try_from(value).ok())
+            .ok_or_else(|| "GetPerformanceInfo commit byte extent overflow".to_string())
+    };
+    Ok((bytes(total)?, bytes(limit)?, bytes(limit - total)?))
+}
+
+fn host_snapshot_with(
+    query: impl FnOnce(&mut HostCounters, &mut PerformanceInformation) -> Result<(), String>,
+) -> Result<Value, String> {
+    let started = Instant::now();
+    let observed_at_unix_ns = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map_err(|error| format!("host observation clock: {error}"))?
+        .as_nanos();
+    let mut caller = HostCounters {
+        length: size_of::<HostCounters>() as u32,
+        ..HostCounters::default()
+    };
+    let mut system = PerformanceInformation {
+        size: size_of::<PerformanceInformation>() as u32,
+        ..PerformanceInformation::default()
+    };
+    query(&mut caller, &mut system)?;
+    let (total, limit, available) =
+        commit_bytes(system.commit_total, system.commit_limit, system.page_size)?;
+    Ok(json!({
+        "observed_at_unix_ns":u64::try_from(observed_at_unix_ns).map_err(|_| "host timestamp overflow")?,
+        "observation_span_ns":u64::try_from(started.elapsed().as_nanos()).map_err(|_| "host span overflow")?,
+        "total_physical":caller.total_physical,"available_physical":caller.available_physical,
+        "commit_limit":caller.commit_limit,"available_commit":caller.available_commit,
+        "system_commit_total_bytes":total,"system_commit_limit_bytes":limit,
+        "system_available_commit_bytes":available,
+        "scope":"sequential read-only queries of this caller and system; no atomic cross-API snapshot",
+        "caller_commit_scope":"GlobalMemoryStatusEx: caller committable headroom and smaller caller/system limit",
+        "system_commit_scope":"GetPerformanceInfo: (CommitLimit - CommitTotal) * PageSize"
+    }))
+}
+
+/// Observe caller headroom and true system commit without changing process counters.
+pub(super) fn host_snapshot() -> Result<Value, String> {
+    host_snapshot_with(|caller, system| {
+        // SAFETY: both structures have their documented size and valid writable
+        // storage. These synchronous queries open no process or Job handles.
+        unsafe {
+            query_succeeded("GlobalMemoryStatusEx", GlobalMemoryStatusEx(caller))?;
+            query_succeeded(
+                "K32GetPerformanceInfo",
+                K32GetPerformanceInfo(system, size_of::<PerformanceInformation>() as u32),
+            )
+        }
+    })
+}
+
+fn current_job_context_with(
+    membership: impl FnOnce() -> Result<bool, String>,
+    limits: impl FnOnce() -> Result<JobExtendedLimits, String>,
+) -> Value {
+    let scope = "this calling process and current Job only; enclosing Job restrictions are not enumerated; raw limits are not admission authority";
+    let in_job = match membership() {
+        Ok(value) => value,
+        Err(error) => return json!({"in_job":null,"status":"unknown","error":error,"scope":scope}),
+    };
+    if !in_job {
+        return json!({"in_job":false,"status":"not_in_job","error":null,"scope":scope});
+    }
+    match limits() {
+        Ok(value) => json!({"in_job":true,"status":"queried","error":null,
+            "limit_flags":value.basic.flags,"process_memory_limit_bytes":value.process_memory_limit,
+            "job_memory_limit_bytes":value.job_memory_limit,
+            "active_process_limit":value.basic.active_process_limit,
+            "minimum_working_set_bytes":value.basic.minimum_working_set,
+            "maximum_working_set_bytes":value.basic.maximum_working_set,"scope":scope}),
+        Err(error) => json!({"in_job":true,"status":"limits_unknown","error":error,"scope":scope}),
+    }
+}
+
+/// Baseline context only: use pseudo/NULL handles, never enumerate foreign Jobs.
+pub(super) fn current_job_context() -> Value {
+    current_job_context_with(
+        || {
+            let mut in_job = 0;
+            // SAFETY: the pseudo-handle names this caller; NULL asks membership
+            // in any Job. The output BOOL lives through the synchronous call.
+            unsafe {
+                query_succeeded(
+                    "IsProcessInJob(current)",
+                    IsProcessInJob(-1_isize as *mut c_void, std::ptr::null_mut(), &mut in_job),
+                )?;
+            }
+            Ok(in_job != 0)
+        },
+        || {
+            let mut limits = JobExtendedLimits::default();
+            // SAFETY: NULL observes the current Job only; class 9 is documented
+            // extended limit information. No handle is created or retained.
+            unsafe {
+                query_succeeded(
+                    "QueryInformationJobObject(current)",
+                    QueryInformationJobObject(
+                        std::ptr::null_mut(),
+                        9,
+                        (&mut limits as *mut JobExtendedLimits).cast(),
+                        size_of::<JobExtendedLimits>() as u32,
+                        std::ptr::null_mut(),
+                    ),
+                )?;
+            }
+            Ok(limits)
+        },
+    )
 }
 
 /// Bind only the running executable and the two already loaded probe runtimes.

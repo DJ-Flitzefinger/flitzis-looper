@@ -420,6 +420,7 @@ def test_known_native_capacity_codec_survives_admission_error_reporting(
     for _ in range(3):
         residency.helper.poll()
     assert residency.audio.request_committed_stem_residency.call_count == 1
+    assert residency.errors[-1] == (0, message)
     residency.audio.request_committed_stem_residency.side_effect = None
     assert residency.helper.request(0, "all_stems", 15)
     assert residency.audio.request_committed_stem_residency.call_count == 2

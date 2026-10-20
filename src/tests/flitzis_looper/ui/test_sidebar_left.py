@@ -25,6 +25,29 @@ if TYPE_CHECKING:
     from flitzis_looper.controller import AppController
 
 
+def test_stem_generation_diagnostics_do_not_render_in_sidebar(
+    controller: AppController, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    ctx = UiContext(controller)
+    diagnostic = r"Private stem artifact cleanup failed: D:\private\song.wav"
+    monkeypatch.setattr(ctx.state.stems, "stem_generation_diagnostic", lambda _pad: diagnostic)
+    labels: list[str] = []
+    original_text = imgui.text_colored
+
+    def record(color: imgui.ImVec4Like, text: str) -> None:
+        labels.append(text)
+        original_text(color, text)
+
+    monkeypatch.setattr(imgui, "text_colored", record)
+    with _imgui_context():
+        imgui.new_frame()
+        imgui.begin("Stem diagnostics", flags=imgui.WindowFlags_.no_saved_settings)
+        sidebar_left._render_generate_stems(ctx, 0)
+        imgui.end()
+        imgui.render()
+    assert all(diagnostic not in label for label in labels)
+
+
 class _Point:
     __slots__ = ("x", "y")
 
@@ -465,8 +488,8 @@ def test_pad_bpm_entry_baseline_tracks_pad_switches_and_inactive_metadata() -> N
         ("captured", "Audio: stem selection pending"),
         ("waiting", "Audio: ALL STEMS pending"),
         ("transitioning", "Audio: ALL STEMS pending"),
-        ("queue-failed", "Audio: stem switch rejected"),
-        ("native-failed", "Audio: stem switch rejected"),
+        ("queue-failed", "Audio mode unconfirmed"),
+        ("native-failed", "Audio mode unconfirmed"),
         ("own-effective", "Audio: ALL STEMS"),
         ("reopen", "Stems saved; audio mode unconfirmed"),
         ("full-mix", "Audio: FULL MIX"),

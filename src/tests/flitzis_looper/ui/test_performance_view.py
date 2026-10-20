@@ -143,7 +143,7 @@ def test_stem_grid_indicator_labels_are_compact() -> None:
     assert stem_grid_indicator_label("available") == "ST"
     assert stem_grid_indicator_label("generating") == "..."
     assert stem_grid_indicator_label("blocked") is None
-    assert stem_grid_indicator_label("error") == "!"
+    assert stem_grid_indicator_label("error") is None
 
 
 def test_pad_grid_stem_indicator_does_not_set_hover_tooltip(

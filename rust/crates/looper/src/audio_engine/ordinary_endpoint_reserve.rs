@@ -128,6 +128,10 @@ impl EndpointReserveWork {
             || candidate.is_some()
             || self.retired_request.is_some()
             || self.format != Some(render_format)
+            || self
+                .candidate
+                .as_ref()
+                .is_none_or(|state| !state.has_physical_birth_context())
         {
             return false;
         }
@@ -183,7 +187,8 @@ impl EndpointReserveWork {
             self.format = Some(format);
         }
         let candidate = self.candidate.as_mut().unwrap();
-        self.ready = candidate.prepare_source_at_endpoint(request).is_ok()
+        self.ready = candidate.prepare_source_at_physical_birth(request).is_ok()
+            && candidate.has_physical_birth_context()
             && candidate.source.as_ref().is_some_and(|source| {
                 source
                     .permit
@@ -333,3 +338,7 @@ impl OrdinaryEndpointReserve {
             .map_or(0, RubberBandLiveShifter::state_address)
     }
 }
+
+#[cfg(all(test, windows))]
+#[path = "ordinary_endpoint_reserve_context_tests.rs"]
+mod context_tests;

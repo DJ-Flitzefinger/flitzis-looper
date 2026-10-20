@@ -1073,3 +1073,6 @@ fn off_thread_cache_pruning_releases_last_dead_pcm_weak_without_dropping_file_le
         "durable file lease remains sealed"
     );
 }
+
+#[path = "sibling_subscription_regressions.rs"]
+mod sibling_subscription_regressions;

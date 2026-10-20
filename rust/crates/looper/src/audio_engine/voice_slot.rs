@@ -2,6 +2,7 @@ use crate::audio_engine::buffer_retirement::AudioBufferRetirement;
 use crate::audio_engine::constant_timing::AcceptedTimingProjection;
 use crate::audio_engine::key_lock_preparation::KeyLockPreparationLane;
 use crate::audio_engine::native_history_permit::NativeSourceAdmission;
+use crate::audio_engine::source_control_epoch::SourceControlEpoch;
 use crate::audio_engine::source_feed_history::SourceFeedHistory;
 use crate::audio_engine::source_grid::SourceGrid;
 use crate::audio_engine::source_playback::SourcePlayback;
@@ -96,6 +97,7 @@ pub struct VoiceSlot {
     pub(crate) generation: u64,
     pub(crate) history_lifetime: Arc<AtomicU64>,
     pub(crate) source_feed_history: SourceFeedHistory,
+    pub(crate) source_control_epoch: SourceControlEpoch,
     pub(crate) source_admission: Option<NativeSourceAdmission>,
     pub stretch: StretchProcessor,
     pub paused: bool,
@@ -120,6 +122,7 @@ impl VoiceSlot {
             generation: 0,
             history_lifetime: Arc::default(),
             source_feed_history: SourceFeedHistory::new(),
+            source_control_epoch: SourceControlEpoch::default(),
             source_admission: None,
             stretch: StretchProcessor::with_preparation_lane(channels, preparation),
             paused: false,
@@ -144,6 +147,7 @@ impl VoiceSlot {
     }
 
     fn start_inner(&mut self, config: VoiceStartConfig) {
+        self.source_control_epoch.reset();
         self.generation = self.generation.saturating_add(1);
         self.history_lifetime
             .store(self.generation, Ordering::Release);
@@ -195,6 +199,7 @@ impl VoiceSlot {
     }
 
     fn stop_inner(&mut self) {
+        self.source_control_epoch.reset();
         self.generation = self.generation.saturating_add(1);
         self.history_lifetime.store(0, Ordering::Release);
         self.source_admission = None;
@@ -228,6 +233,7 @@ impl VoiceSlot {
         retirement: &mut impl AudioBufferRetirement,
     ) {
         self.source_feed_history.reset();
+        self.source_control_epoch.reset();
         self.retire_frozen_stems(retirement);
         self.source_loop_region = None;
         self.generation = self.generation.saturating_add(1);
@@ -252,6 +258,7 @@ impl VoiceSlot {
         _output_frame: Option<u64>,
     ) {
         self.source_feed_history.reset();
+        self.source_control_epoch.reset();
         self.generation = self.generation.saturating_add(1);
         self.history_lifetime
             .store(self.generation, Ordering::Release);
@@ -270,6 +277,7 @@ impl VoiceSlot {
 
     /// Source controls fence captured future reads separately from DSP-only mode preparation.
     pub(crate) fn invalidate_source_preparation(&mut self) {
+        self.source_control_epoch.invalidate();
         self.source_feed_history.invalidate_captures();
         self.stretch.invalidate_prepared();
     }

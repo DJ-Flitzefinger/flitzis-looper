@@ -604,5 +604,7 @@ class CopyArrangementStartup:
         self._custody.release()
         self._retirement.close()
         self._app.persistence.release_migration(self._fence)
+        if self._after is not None:
+            self._after.acceptance = None
         self._completed = True
         self.status, self.error = "completed", None

@@ -129,7 +129,14 @@ fn import_and_ack(source: &Path, output_rate: u32, public_incoming: bool) -> Val
         engine
             .input_runtime_ownership
             .publish_test_source(0, &previous, output_rate, 7);
-        callback.mixer = RtMixer::new(2, output_rate as f32);
+        callback.mixer = crate::audio_engine::audio_stream::create_stream_mixer(
+            2,
+            output_rate,
+            engine.current_timing_acknowledgements.clone(),
+            engine.input_runtime_ownership.clone(),
+            engine.prepared_source_epochs.clone(),
+        )
+        .unwrap();
         callback
             .mixer
             .set_input_runtime_ownership(engine.input_runtime_ownership.clone());

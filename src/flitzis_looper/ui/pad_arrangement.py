@@ -100,6 +100,8 @@ class PadArrangementGestures:
                 self._press = _Press(source, button, content.instance_id, path, binding)
         except (OSError, RuntimeError, TypeError, ValueError) as error:
             self.error = str(error)
+            self._controller.diagnostics.begin_attempt("arrangement_gesture", source)
+            self._controller.diagnostics.observe("arrangement_gesture", self.error, pad_id=source)
 
     def _current(self, press: _Press) -> bool:
         app = self._controller
@@ -127,6 +129,7 @@ class PadArrangementGestures:
                 return None
         except (OSError, RuntimeError, TypeError, ValueError) as error:
             self.error = str(error)
+            app.diagnostics.observe("arrangement_gesture", self.error, pad_id=press.source)
             return None
         occupied = app.project.sample_paths[target] is not None
         if occupied != (app.project.pad_content[target] is not None):
@@ -148,6 +151,10 @@ class PadArrangementGestures:
         if preview is None:
             return False
         app = self._controller
+        operation = (
+            "pair_arrangement" if preview.operation in {"Move", "Swap"} else "copy_arrangement"
+        )
+        app.diagnostics.begin_attempt(operation)
         try:
             if preview.operation in {"Move", "Swap"}:
                 accepted = app.pairs.begin(
@@ -167,7 +174,9 @@ class PadArrangementGestures:
                 self.error = None if accepted else app.arrangement.error
         except (OSError, RuntimeError, TypeError, ValueError) as error:
             self.error = str(error)
+            app.diagnostics.observe(operation, self.error)
             return False
+        app.diagnostics.observe(operation, self.error)
         return accepted
 
     def poll(self, *, left_down: bool, right_down: bool, cancelled: bool = False) -> None:

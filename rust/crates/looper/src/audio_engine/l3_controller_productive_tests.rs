@@ -389,7 +389,7 @@ fn prepare_public_start_reference(mixer: &mut RtMixer, execution: u64) {
         Some(RubberBandLiveShifter::new(RATE, 2).unwrap()),
         2,
     ));
-    candidate.prepare_source_at_endpoint(request).unwrap();
+    candidate.prepare_source_at_physical_birth(request).unwrap();
     assert!(mixer.adopt_prepared_pitch_voice(
         index,
         &mut candidate,
@@ -403,41 +403,29 @@ fn prepare_public_start_reference(mixer: &mut RtMixer, execution: u64) {
 
 fn prepared_public_start_raw(playback: &ControllerPlayback) -> ControllerRawNative {
     let mut raw = ControllerRawNative::new(playback.ratio, true);
-    let history = crate::audio_engine::prepared_native_history::PREPARED_HISTORY_FRAMES;
-    let period = playback.loop_period;
-    let last = (period.ceil() as usize - 1).min(playback.loop_end - playback.loop_start - 1);
-    let feed = std::array::from_fn(|channel| {
-        (0..history)
-            .map(|offset| {
-                let phase = ((offset as f64 - history as f64) * playback.ratio).rem_euclid(period);
-                let (left, right, fraction) = if phase >= last as f64 {
-                    (
-                        playback.loop_start + last,
-                        playback.loop_start,
-                        (phase - last as f64) / (period - last as f64),
-                    )
-                } else {
-                    let left = playback.loop_start + phase.floor() as usize;
-                    (left, left + 1, phase.fract())
-                };
-                let sample = |frame| match playback.selection {
-                    None => playback.source.samples[frame * 2 + channel],
-                    Some(mask) => playback
-                        .components
-                        .iter()
-                        .enumerate()
-                        .filter(|(index, _)| mask & (1 << index) != 0)
-                        .map(|(_, component)| component.samples[frame * 2 + channel])
-                        .sum(),
-                };
-                let a = sample(left);
-                a + (sample(right) - a) * fraction as f32
-            })
-            .collect()
-    });
-    raw.render(&feed);
+    let history = ControllerRawNative::constant_history_frames(1.0 / playback.ratio);
+    // A fresh physical birth has no predecessor's loop-tail PCM. This independent
+    // raw Native keeps its own initial adapter FIFO and warms explicit silence;
+    // the complete first source sample is fed by ControllerPlayback::render at E.
+    let feed = std::array::from_fn(|_| vec![0.0; history]);
+    assert!(raw.render(&feed).iter().all(|sample| *sample == 0.0));
     assert!(raw.used);
     raw
+}
+
+fn render_physical_birth_prefix(playback: &mut ControllerPlayback) -> (Vec<f32>, Vec<f32>) {
+    let mut actual = Vec::new();
+    let mut counterfactual = Vec::new();
+    // Compare all 4096 output frames from E, including the original Native/FIFO
+    // lead. Unequal callback partitions neither crop silence nor move the onset.
+    for frames in [1, 31, 137, 257, 511, 777, 96, 257, 1021, 1008] {
+        let (output, full_mix) = playback.render(frames, true);
+        actual.extend(output);
+        counterfactual.extend(full_mix);
+    }
+    assert_eq!(actual.len(), 4096 * 2);
+    assert!(actual.iter().any(|sample| sample.abs() > 1.0e-6));
+    (actual, counterfactual)
 }
 
 #[path = "l4_disk_settlement_tests.rs"]
@@ -6092,6 +6080,7 @@ assert audio.worker_call_count() == source_worker_calls
     );
     let start = admit_original_public_start(&mut playback.callback, consumer, locals);
     let birth = start.execution_frame().unwrap();
+    let original_start = start.original_frame().unwrap();
     while playback.frame < birth {
         let frames = (birth - playback.frame).min(257) as usize;
         let mut output = vec![0.0; frames * 2];
@@ -6123,6 +6112,7 @@ assert audio.worker_call_count() == source_worker_calls
         "own stop and own new voice birth"
     );
     assert!(current.sample.as_ref().unwrap().same_window(&finite));
+    assert!(birth >= original_start);
     assert_eq!(current.source_playback.position().frame, LOOP_START);
     assert_eq!(
         current.source_playback.position().fraction.to_bits(),
@@ -6225,6 +6215,7 @@ assert audio.worker_call_count() == source_worker_calls
     playback.candidate = None;
     playback.filter = PerPadDspChain::new(0, RATE as f32, 2);
     playback.filter.reset();
+    playback.advance_expected_birth(original_start, birth);
     let native = voice(&playback.callback.mixer)
         .stretch
         .native_state_address();
@@ -6744,7 +6735,15 @@ b_entry = StemCacheEntry(source_version=b_version, cache_dir=b_cache,
     stems=expected_stem_files(b_cache), available=False)
 assert b_entry.pair is None
 assert controller._queue_stem_publication(0, b_entry, b_source)
+b_requested = controller._requested_preparations[0].spec
+assert b_requested.entry is b_entry and b_requested.previous_entry is None
+assert b_requested.ticket is b_source and b_requested.content_id == b_content.instance_id
+assert b_requested.binding.source_path == b_path and not b_requested.residency_only
+assert 0 not in controller._pair_preparations.pending
+controller.on_frame_render()
 b_request = controller._pair_preparations.pending[0]
+assert 0 not in controller._requested_preparations
+assert b_request.ticket is b_requested.ticket and b_request.entry is b_requested.entry
 assert b_request.entry is b_entry and b_request.previous_entry is None
 assert b_request.ticket is b_source and b_request.content_id == b_content.instance_id
 assert b_request.source_path == b_path and not b_request.residency_only
@@ -7372,7 +7371,15 @@ for _ in range(16):
 assert controller.set_stem_mix_mode(0, 'all_stems'), session.stem_generation_errors
 window_error = 'Stem residency admission failed: stale or foreign prepared source ticket'
 assert session.stem_generation_errors == {0: window_error}
+requested_window = controller._requested_preparations[0].spec
+assert requested_window.residency_only
+assert requested_window.ticket.same_preparation_context(fresh_window_source)
+assert requested_window.previous_entry is project.stem_cache[0]
+assert 0 not in controller._pair_preparations.pending
+controller.on_frame_render()
 request = controller._pair_preparations.pending[0]
+assert 0 not in controller._requested_preparations
+assert request.ticket is requested_window.ticket and request.entry is requested_window.entry
 assert request.residency_only and request.ticket.same_preparation_context(fresh_window_source)
 assert source_v2.same_source_request(request.ticket) and not source_v2.same_preparation_context(request.ticket)
 assert request.entry.pair == disk_v2
@@ -7424,7 +7431,7 @@ fn public_play_then_explicit_retry(
     consumer: &mut rtrb::Consumer<ControlMessage>,
     locals: &Py<PyDict>,
     key_lock: bool,
-) -> (u64, u64) {
+) -> (u64, u64, u64) {
     use crate::audio_engine::committed_stem_residency::CommittedStemRtWork;
     assert!(!playback.scheduled && playback.rate_ledger.is_none());
     synchronize_callback_frame(&mut playback.callback, playback.frame);
@@ -7644,6 +7651,7 @@ for _ in range(16):
     let start = admit_original_public_start(&mut playback.callback, consumer, locals);
     let birth = start.execution_frame().unwrap();
     playback.scheduled = true;
+    let original_start = start.original_frame().unwrap();
     while playback.frame < birth {
         let frames = (birth - playback.frame).min(257) as usize;
         let output = if key_lock {
@@ -7663,6 +7671,7 @@ for _ in range(16):
     let new_voice = voice(&playback.callback.mixer);
     let generation = new_voice.generation;
     assert_ne!(generation, old_generation);
+    assert!(birth >= original_start);
     assert_eq!(new_voice.source_playback.position().frame, LOOP_START);
     assert_eq!(
         new_voice.source_playback.position().fraction.to_bits(),
@@ -7673,8 +7682,8 @@ for _ in range(16):
             .source_playback
             .matches_exact(&other_clock)
     );
-    // The original PreparedStart effect starts all
-    // three independent new-voice clocks. Absolute callback time remains intact.
+    // The predecessor remains audible until actual E. Every independent new
+    // reference starts its complete selected beginning at that same birth.
     for reference in [&mut playback.reference, &mut playback.full_mix] {
         assert!(reference.play_sample_at_output_frame(0, 1.0, birth));
         if key_lock {
@@ -7688,13 +7697,13 @@ for _ in range(16):
     playback.raw = key_lock.then(|| prepared_public_start_raw(playback));
     playback.candidate = None;
     playback.filter = controller_filter();
+    playback.advance_expected_birth(original_start, birth);
     if key_lock {
         assert_eq!(
             voice(&playback.callback.mixer).stretch.adopted_request_id(),
             Some(start.sequence())
         );
-        let (actual, _) = playback.render(137, true);
-        assert!(actual.iter().any(|sample| sample.abs() > 0.001));
+        render_physical_birth_prefix(playback);
     } else {
         for frames in [1, 31, 137, 257, 511] {
             render_varispeed(playback, frames);
@@ -7722,7 +7731,7 @@ assert live.control is previous_control
 assert session.stem_generation_errors == {0: play_error}
 "#,
     );
-    (birth, generation)
+    (original_start, birth, generation)
 }
 
 fn supersede_queued_candidate_mask(
@@ -8684,7 +8693,8 @@ fn stopped_candidate_play(
     before_poll: bool,
     key_lock: bool,
     complete_partial: bool,
-) -> u64 {
+    ratio: f64,
+) -> (u64, u64) {
     let source = callback.mixer.bank_for_measurement()[0].clone().unwrap();
     let set = callback.mixer.stems_for_measurement()[0].clone().unwrap();
     Python::attach(|py| {
@@ -8833,6 +8843,8 @@ assert not session.stem_generation_errors, session.stem_generation_errors
     });
     let start = admit_original_public_start(callback, consumer, locals);
     let execution = start.execution_frame().unwrap();
+    let original = start.original_frame().unwrap();
+    assert!(execution >= original);
     while callback.transport.output_frame() < execution {
         let frame = callback.transport.output_frame();
         let frames = (execution - frame).min(257) as usize;
@@ -8865,7 +8877,8 @@ assert not session.stem_generation_errors, session.stem_generation_errors
                 .productive_history()
                 .unwrap()
                 .fed_output_frames,
-            crate::audio_engine::prepared_native_history::PREPARED_HISTORY_FRAMES as u64
+            // Declared default pitch, KeyLock ON and the independent physical rate.
+            ControllerRawNative::constant_history_frames(1.0 / ratio) as u64
         );
     }
     let started = callback.feedback.events.last().unwrap().clone();
@@ -8916,7 +8929,7 @@ assert audio.worker_call_count() == 1
             );
         }
     }
-    execution
+    (original, execution)
 }
 
 fn public_explicit_seek(
@@ -10278,13 +10291,14 @@ persistence.flush()
                 "controller.on_frame_render()\nassert stopped.is_current() and stopped.effective_mode_status() == 'waiting'\nassert not session.active_sample_ids\nassert controller.stem_residency_status(0).effective_stem_set_identity is None",
             );
         }
-        let birth = stopped_candidate_play(
+        let (original, birth) = stopped_candidate_play(
             &locals,
             &mut h.callback,
             &mut h.consumer,
             before_poll,
             key_lock,
             stopped_partial,
+            ratio,
         );
         let played_set = h.callback.mixer.stems_for_measurement()[0].clone().unwrap();
         assert!(Arc::ptr_eq(
@@ -10352,15 +10366,11 @@ persistence.flush()
             filter: controller_filter(),
         };
         playback.raw = key_lock.then(|| prepared_public_start_raw(&playback));
+        // E is the source birth for all independent references; their complete
+        // initial source/Native/EQ output remains unconsumed until emission.
+        playback.advance_expected_birth(original, birth);
         let (actual, counterfactual) = if key_lock {
-            let mut actual = Vec::new();
-            let mut counterfactual = Vec::new();
-            for frames in [13, 31, 137, 257, 511] {
-                let (output, full_mix) = playback.render(frames, true);
-                actual.extend(output);
-                counterfactual.extend(full_mix);
-            }
-            (actual, counterfactual)
+            render_physical_birth_prefix(&mut playback)
         } else {
             let mut actual = Vec::new();
             let mut counterfactual = Vec::new();
@@ -10909,9 +10919,9 @@ assert previous_control.ticket.is_current()
         ));
     }
     if retrigger {
-        let (birth, generation) =
+        let (original, execution, generation) =
             public_play_then_explicit_retry(&mut playback, &mut h.consumer, &locals, key_lock);
-        retriggered_at = Some(birth);
+        retriggered_at = Some((original, execution));
         adoption_generation = Some(generation);
     }
     if window_change {
@@ -11768,9 +11778,11 @@ else:
             playback.ratio.to_bits()
         );
     } else if window_change || retriggered_at.is_some() || full_track || explicit {
+        // The independent source counter starts with actual emitted birth E.
+        // Requested T remains separately retained by the original public owner.
         assert_eq!(
             playback.frame - playback.source_frame,
-            retriggered_at.unwrap_or(0)
+            retriggered_at.map_or(0, |(_original, execution)| execution)
         );
         let phase =
             (playback.frame as f64 * playback.ratio).rem_euclid((LOOP_END - LOOP_START) as f64);

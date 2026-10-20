@@ -15,10 +15,16 @@ static MOUSE_CONTEXT: Mutex<()> = Mutex::new(());
 mod fixed_offset_learn_tests;
 #[path = "hold_pitch_tests.rs"]
 mod hold_pitch_tests;
+#[path = "late_piano_eq_catchup_tests.rs"]
+mod late_piano_eq_catchup_tests;
+#[path = "past_piano_mouse_tests.rs"]
+mod past_piano_mouse_tests;
 #[path = "piano_rate_controller_tests.rs"]
 mod piano_rate_controller_tests;
 #[path = "productive_custody_workload_tests.rs"]
 mod productive_custody_workload_tests;
+#[path = "rapid_birth_history_tests.rs"]
+mod rapid_birth_history_tests;
 
 const PROBE: &str = r###"
 from contextlib import ExitStack

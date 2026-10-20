@@ -298,9 +298,95 @@ pub(crate) struct PerPadDspChain {
     parameters: [SmoothedNormalizedValue; DSP_PARAMETER_SLOTS],
     isolator_node: DjIsolatorNode,
     source_history: Option<ProductiveSourceHistory>,
+    input_revision: u64,
+    stable_input: Option<(crate::audio_engine::content_placement::ContentKey, u64, f32)>,
+    input_observed_through: Option<u64>,
 }
 
 impl PerPadDspChain {
+    pub(crate) fn invalidate_input_intent(&mut self) {
+        self.input_revision = self.input_revision.saturating_add(1);
+        self.stable_input = None;
+    }
+
+    pub(crate) fn observe_input_intent(
+        &mut self,
+        key: crate::audio_engine::content_placement::ContentKey,
+        frame: u64,
+        gain: Option<f32>,
+    ) {
+        // A callback observation never certifies an earlier, unobserved timeline.
+        if self
+            .input_observed_through
+            .is_some_and(|previous| frame < previous)
+        {
+            self.stable_input = None;
+            return;
+        }
+        self.input_observed_through = Some(frame);
+        let Some(gain) = gain.filter(|gain| gain.is_finite()) else {
+            self.stable_input = None;
+            return;
+        };
+        if self.input_revision == u64::MAX {
+            self.stable_input = None;
+            return;
+        }
+        if !self
+            .stable_input
+            .is_some_and(|(previous, since, previous_gain)| {
+                previous == key && since <= frame && previous_gain.to_bits() == gain.to_bits()
+            })
+        {
+            self.stable_input = Some((key, frame, gain));
+        }
+    }
+
+    pub(crate) fn late_start_intent(
+        &self,
+        key: crate::audio_engine::content_placement::ContentKey,
+        original: u64,
+    ) -> Option<crate::audio_engine::late_start_dsp::DspInputIntent> {
+        let (current, stable_since, gain) = self.stable_input?;
+        (current == key && stable_since <= original && self.input_revision != u64::MAX).then(|| {
+            crate::audio_engine::late_start_dsp::DspInputIntent {
+                key,
+                revision: self.input_revision,
+                stable_since,
+                targets: std::array::from_fn(|index| self.parameters[index].target),
+                gain,
+            }
+        })
+    }
+
+    pub(crate) fn matches_late_start_intent(
+        &self,
+        intent: crate::audio_engine::late_start_dsp::DspInputIntent,
+        original: u64,
+    ) -> bool {
+        self.late_start_intent(intent.key, original)
+            .is_some_and(|current| {
+                current.revision == intent.revision
+                    && current.gain.to_bits() == intent.gain.to_bits()
+                    && current
+                        .targets
+                        .iter()
+                        .zip(intent.targets)
+                        .all(|(a, b)| a.to_bits() == b.to_bits())
+            })
+    }
+
+    pub(crate) fn install_late_start_intent(
+        &mut self,
+        intent: crate::audio_engine::late_start_dsp::DspInputIntent,
+    ) {
+        for (parameter, target) in self.parameters.iter_mut().zip(intent.targets) {
+            parameter.set_target(target);
+        }
+        self.input_revision = intent.revision;
+        self.stable_input = Some((intent.key, intent.stable_since, intent.gain));
+        self.input_observed_through = Some(intent.stable_since);
+    }
     /// Change only the validated physical routing label during a claimed pair placement.
     /// Filter history, parameter ramps and source chronology remain owned by this chain.
     pub(crate) fn retarget_pad_id(&mut self, pad_id: u16) {
@@ -324,6 +410,9 @@ impl PerPadDspChain {
             parameters: [SmoothedNormalizedValue::default(); DSP_PARAMETER_SLOTS],
             isolator_node: DjIsolatorNode::new(sample_rate_hz),
             source_history: None,
+            input_revision: 0,
+            stable_input: None,
+            input_observed_through: None,
         }
     }
 
@@ -331,6 +420,7 @@ impl PerPadDspChain {
     /// Reserved for future audio-device hot-reconfiguration.
     #[allow(dead_code)]
     pub(crate) fn prepare(&mut self, sample_rate_hz: f32, channels: usize) {
+        self.invalidate_input_intent();
         self.channels = channels.clamp(DEFAULT_CHANNELS, DSP_MAX_CHANNELS);
         self.isolator_node
             .prepare(sanitize_sample_rate(sample_rate_hz));
@@ -342,7 +432,13 @@ impl PerPadDspChain {
             return false;
         }
 
-        self.parameters[id.parameter_slot.index()].set_target(normalized_target)
+        let index = id.parameter_slot.index();
+        let previous = self.parameters[index].target;
+        let accepted = self.parameters[index].set_target(normalized_target);
+        if accepted && self.parameters[index].target.to_bits() != previous.to_bits() {
+            self.invalidate_input_intent();
+        }
+        accepted
     }
 
     pub(crate) fn begin_frame(&mut self) {

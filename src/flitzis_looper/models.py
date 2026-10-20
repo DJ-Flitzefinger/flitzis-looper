@@ -50,6 +50,7 @@ from flitzis_looper.material_migration_model import (
     MaterialMigrationAlias,
     MigrationID,
 )
+from flitzis_looper.recording_options import RecordingOptions
 from flitzis_looper.stem_intent import PadStemIntent
 from flitzis_looper.stem_pair_selection import StemFingerprintSchema, StemPairSelection
 
@@ -72,6 +73,7 @@ type TriggerQuantizationStep = Literal[
     "1_32",
     "1_16",
 ]
+type KeyLockStartBehavior = Literal["first_sound_at_grid", "attack_at_grid"]
 type StemMixMode = Literal["full_mix", "all_stems"]
 type StemMaskDisplayMode = stem_intent.StemMaskDisplayMode
 
@@ -91,6 +93,14 @@ TRIGGER_QUANTIZATION_STEP_LABELS: dict[TriggerQuantizationStep, str] = {
     "1_16": "1/16",
 }
 DEFAULT_TRIGGER_QUANTIZATION_STEP: TriggerQuantizationStep = "1_32"
+KEY_LOCK_START_BEHAVIORS: tuple[KeyLockStartBehavior, ...] = (
+    "first_sound_at_grid",
+    "attack_at_grid",
+)
+KEY_LOCK_START_BEHAVIOR_LABELS: dict[KeyLockStartBehavior, str] = {
+    "first_sound_at_grid": "First sound at grid",
+    "attack_at_grid": "Attack at grid",
+}
 LEGACY_TRIGGER_QUANTIZATION_TO_STEP: dict[str, TriggerQuantizationStep] = {
     "next_beat": "1_16",
     "next-beat": "1_16",
@@ -483,7 +493,9 @@ class ProjectState(BaseModel):
 
         return data
 
-    sample_paths: list[str | None] = Field(default_factory=_default_sample_paths)
+    sample_paths: list[str | None] = Field(
+        default_factory=_default_sample_paths, min_length=NUM_SAMPLES, max_length=NUM_SAMPLES
+    )
     """Maps pad IDs to file paths."""
 
     pad_content: list[PadContentIdentity | None] = Field(
@@ -491,10 +503,14 @@ class ProjectState(BaseModel):
     )
     """Stable content identity, separate from its slot and any native runtime ticket."""
 
-    sample_durations: list[float | None] = Field(default_factory=_default_sample_durations)
+    sample_durations: list[float | None] = Field(
+        default_factory=_default_sample_durations, min_length=NUM_SAMPLES, max_length=NUM_SAMPLES
+    )
     """Maps pad IDs to sample durations (in seconds)."""
 
-    sample_analysis: list[SampleAnalysis | None] = Field(default_factory=_default_sample_analysis)
+    sample_analysis: list[SampleAnalysis | None] = Field(
+        default_factory=_default_sample_analysis, min_length=NUM_SAMPLES, max_length=NUM_SAMPLES
+    )
     """Per-pad audio analysis results (BPM/key/beat grid) or None when unknown."""
 
     stem_cache: list[StemCacheEntry | None] = Field(default_factory=_default_stem_cache)
@@ -536,7 +552,9 @@ class ProjectState(BaseModel):
             override = assignment_override
         return self.key_lock if override is None else override
 
-    manual_bpm: list[float | None] = Field(default_factory=_default_manual_bpm)
+    manual_bpm: list[float | None] = Field(
+        default_factory=_default_manual_bpm, min_length=NUM_SAMPLES, max_length=NUM_SAMPLES
+    )
     """Optional per-pad BPM override. When set, used for effective BPM display."""
 
     pad_timing_intent: list[TimingIntent] = Field(default_factory=_default_pad_timing_intent)
@@ -605,6 +623,8 @@ class ProjectState(BaseModel):
     """Allow to play multiple loops at the same time."""
     key_lock: bool = False
     """Key lock state."""
+    key_lock_start_behavior: KeyLockStartBehavior = "first_sound_at_grid"
+    """Global launch contract; edits require Native's completely stopped admission."""
     bpm_lock: bool = False
     """BPM lock state."""
     trigger_quantization_enabled: bool = False
@@ -613,6 +633,8 @@ class ProjectState(BaseModel):
     """Global pad trigger quantization grid step."""
     input_mapping_enabled: bool = True
     """Enable performer MIDI/keyboard input mappings."""
+    recording_options: RecordingOptions = Field(default_factory=RecordingOptions)
+    """Immutable format/quality defaults for future takes; no live capture authority."""
     stem_separator: StemSeparator = "demucs:htdemucs"
     """Separator/model used by future offline stem-generation requests."""
     preload_stem_loops_on_startup: bool = Field(default=False, strict=True)

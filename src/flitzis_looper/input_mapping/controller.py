@@ -120,6 +120,7 @@ class InputMappingController(BaseController):
         self._midi_cc_directions: dict[str, int] = {}
         self._last_input_runtime_state_signature: _InputRuntimeStateSignature | None = None
         self._last_input_runtime_state_error: str | None = None
+        self._input_action_error: tuple[str, str] | None = None
         app.transport.pitch.bind_runtime_refresh(self.refresh_pitch_runtime_state)
         self._on_frame_render_callbacks.append(self._sync_rust_runtime_state)
         self._on_frame_render_callbacks.append(self._poll_rust_input_events)
@@ -292,8 +293,46 @@ class InputMappingController(BaseController):
         action = self._keyboard_action_for(binding.key)
         if action is None:
             return False
-        self.execute_action(action, received_at_ns=received_at_ns)
+        received_at_ns = validate_input_timestamp_ns(received_at_ns)
+        self._execute_input_action_with_feedback(
+            action.key, lambda: self.execute_action(action, received_at_ns=received_at_ns)
+        )
         return True
+
+    def _execute_input_action_with_feedback(
+        self, action_key: str, execute: Callable[[], bool]
+    ) -> bool:
+        """Consume an expected refusal at the recognized performer-input boundary."""
+        diagnostics = getattr(self._app, "diagnostics", None)
+        if diagnostics is not None:
+            diagnostics.begin_attempt("input_mapping")
+        if (
+            self._input_action_error is not None
+            and self._input_action_error[1] != self._session.input_mapping_error
+        ):
+            self._input_action_error = None
+        try:
+            accepted = execute()
+        except (RuntimeError, ValueError, TypeError) as error:
+            self._record_input_action_error(action_key, error)
+            return True
+        if (
+            accepted
+            and self._input_action_error is not None
+            and self._input_action_error == (action_key, self._session.input_mapping_error)
+        ):
+            self._session.input_mapping_error = None
+            self._input_action_error = None
+        return accepted
+
+    def _record_input_action_error(self, action_key: str, error: Exception) -> None:
+        message = str(error)
+        self._session.input_mapping_error = message
+        self._input_action_error = (action_key, message)
+        diagnostics = getattr(self._app, "diagnostics", None)
+        if diagnostics is not None:
+            diagnostics.begin_attempt("input_mapping")
+            diagnostics.observe(action_key, message, channel="input_mapping")
 
     def execute_action(self, action: LooperAction, *, received_at_ns: int | None = None) -> bool:
         """Execute a mapped action through controller semantics.
@@ -438,7 +477,9 @@ class InputMappingController(BaseController):
         if action_key.startswith("pitch."):
             self._accept_captured_pitch_event(event)
             return
-        if event.get("direct") is True and event.get("dispatched") is True:
+        if self._consume_direct_stop_receipt(event, action_key) or (
+            event.get("direct") is True and event.get("dispatched") is True
+        ):
             if action_key.startswith("pad.trigger:"):
                 self._observe_dispatched_midi_trigger(event)
             return
@@ -447,14 +488,38 @@ class InputMappingController(BaseController):
             return
         if self._execute_bound_midi_playback(
             action_key, event.get("received_at_ns"), event.get("captured_trigger")
-        ) or self._execute_relative_midi_action(action_key, binding_key, _midi_event_value(event)):
+        ):
+            return
+        if _is_relative_action_key(action_key):
+            self._execute_input_action_with_feedback(
+                action_key,
+                lambda: self._execute_relative_midi_action(
+                    action_key, binding_key, _midi_event_value(event)
+                ),
+            )
             return
         try:
             received_at_ns = validate_input_timestamp_ns(event.get("received_at_ns"))
         except ValueError as err:
-            self._session.input_mapping_error = str(err)
-            received_at_ns = None
-        self.execute_action(LooperAction.from_key(action_key), received_at_ns=received_at_ns)
+            self._record_input_action_error(action_key, err)
+            return
+        self._execute_input_action_with_feedback(
+            action_key,
+            lambda: self.execute_action(
+                LooperAction.from_key(action_key), received_at_ns=received_at_ns
+            ),
+        )
+
+    def _consume_direct_stop_receipt(self, event: dict[str, object], action_key: str) -> bool:
+        if event.get("direct") is not True or not action_key.startswith("pad.stop:"):
+            return False
+        if event.get("dispatched") is True:
+            self._execute_input_action_with_feedback(action_key, lambda: True)
+        else:
+            self._record_input_action_error(
+                action_key, RuntimeError("MIDI stop was not accepted by Native")
+            )
+        return True
 
     def _observe_dispatched_midi_trigger(self, event: dict[str, object]) -> None:
         captured = event.get("captured_trigger")
@@ -478,15 +543,18 @@ class InputMappingController(BaseController):
         )
 
     def _accept_captured_pitch_event(self, event: dict[str, object]) -> None:
+        diagnostics = getattr(self._app, "diagnostics", None)
+        if diagnostics is not None:
+            diagnostics.begin_attempt("input_mapping")
         rejection = event.get("pitch_rejection")
         if isinstance(rejection, str) and rejection:
-            self._session.input_mapping_error = (
+            self._report_pitch_input_error(
                 f"Pitch choice not accepted: {describe_pitch_rejection(rejection)}"
             )
             return
         captured = event.get("captured_pitch")
         if captured is None:
-            self._session.input_mapping_error = (
+            self._report_pitch_input_error(
                 "Pitch choice not accepted: original selected content capture is unavailable"
             )
             return
@@ -494,12 +562,19 @@ class InputMappingController(BaseController):
         try:
             self._app.transport.pitch.accept_captured_event(cast("CapturedPitchAction", captured))
         except (RuntimeError, ValueError, TypeError) as err:
-            self._session.input_mapping_error = f"Pitch choice not accepted: {err}"
+            self._report_pitch_input_error(f"Pitch choice not accepted: {err}")
+
+    def _report_pitch_input_error(self, message: str) -> None:
+        """Retain each original event's refusal before a later event can clear the snapshot."""
+        self._session.input_mapping_error = message
+        diagnostics = getattr(self._app, "diagnostics", None)
+        if diagnostics is not None:
+            diagnostics.observe("pitch_input", message, channel="input_mapping")
 
     def _execute_pitch_action(self, key: str, *, received_at_ns: int | None = None) -> bool:
         action = parse_pitch_action(key)
         if action is None:
-            self._session.input_mapping_error = (
+            self._report_pitch_input_error(
                 f"Pitch choice not accepted: {describe_pitch_rejection('invalid_action')}"
             )
             return False
@@ -507,7 +582,7 @@ class InputMappingController(BaseController):
         try:
             self._app.transport.pitch.accept_selected_action(key, received_at_ns=received_at_ns)
         except (RuntimeError, ValueError, TypeError) as err:
-            self._session.input_mapping_error = f"Pitch choice not accepted: {err}"
+            self._report_pitch_input_error(f"Pitch choice not accepted: {err}")
             return False
         return True
 
@@ -515,6 +590,9 @@ class InputMappingController(BaseController):
         error = self._session.input_mapping_error
         if error is not None and error.startswith("Pitch choice"):
             self._session.input_mapping_error = None
+            diagnostics = getattr(self._app, "diagnostics", None)
+            if diagnostics is not None:
+                diagnostics.observe("input_mapping", None)
 
     def _execute_bound_midi_playback(
         self, action_key: str, timestamp: object, captured_trigger: object = None
@@ -526,9 +604,15 @@ class InputMappingController(BaseController):
             return False
         try:
             received_at_ns = validate_input_timestamp_ns(timestamp)
-            self.execute_action(LooperAction.from_key(action_key), received_at_ns=received_at_ns)
-        except (RuntimeError, ValueError, TypeError) as err:
-            self._session.input_mapping_error = str(err)
+        except ValueError as err:
+            self._record_input_action_error(action_key, err)
+            return True
+        self._execute_input_action_with_feedback(
+            action_key,
+            lambda: self.execute_action(
+                LooperAction.from_key(action_key), received_at_ns=received_at_ns
+            ),
+        )
         return True
 
     def _retry_guarded_midi_trigger(
@@ -568,14 +652,17 @@ class InputMappingController(BaseController):
         binding_key: str,
         value: int | None,
     ) -> bool:
-        if not _is_relative_action_key(action_key):
+        """Return whether this recognized relative event executes a controller edit."""
+        if (
+            not _is_relative_action_key(action_key)
+            or value is None
+            or not _is_relative_midi_binding_key(binding_key)
+        ):
             return False
-        if value is None or not _is_relative_midi_binding_key(binding_key):
-            return True
 
         direction = self._midi_cc_step_direction(binding_key, value)
         if direction is None:
-            return True
+            return False
 
         if action_key == "global.volume.delta":
             self._app.transport.global_params.set_volume(
@@ -584,11 +671,11 @@ class InputMappingController(BaseController):
         elif action_key == "global.speed.delta":
             self._app.transport.global_params.nudge_speed_by_bpm_step(direction)
         elif action_key.startswith("pad.gain.delta:"):
-            self._execute_relative_pad_gain(action_key, direction)
+            return self._execute_relative_pad_gain(action_key, direction)
         elif action_key.startswith("pad.eq.selected.delta:"):
-            self._execute_relative_selected_pad_eq(action_key, direction)
+            return self._execute_relative_selected_pad_eq(action_key, direction)
         else:
-            self._execute_relative_pad_eq(action_key, direction)
+            return self._execute_relative_pad_eq(action_key, direction)
         return True
 
     def _midi_cc_step_direction(self, binding_key: str, value: int) -> int | None:
@@ -615,7 +702,7 @@ class InputMappingController(BaseController):
 
     def _execute_relative_pad_gain(self, key: str, direction: int) -> bool:
         if (pad_id := _parse_prefixed_sample_id(key, "pad.gain.delta:")) is None:
-            return True
+            return False
         self._app.transport.pad.set_pad_gain(
             pad_id,
             self._project.pad_gain_db[pad_id] + MIDI_RELATIVE_GAIN_STEP_DB * direction,
@@ -625,15 +712,15 @@ class InputMappingController(BaseController):
     def _execute_relative_pad_eq(self, key: str, direction: int) -> bool:
         parts = key.split(":")
         if len(parts) != 3 or parts[0] != "pad.eq.delta":
-            return True
+            return False
         try:
             pad_id = int(parts[1])
             validate_sample_id(pad_id)
         except ValueError:
-            return True
+            return False
         band = parts[2]
         if band not in PAD_EQ_BANDS:
-            return True
+            return False
 
         if band == "low":
             current = float(self._project.pad_eq_low_db[pad_id])
@@ -652,7 +739,7 @@ class InputMappingController(BaseController):
     def _execute_relative_selected_pad_eq(self, key: str, direction: int) -> bool:
         raw_band = key.removeprefix("pad.eq.selected.delta:")
         if raw_band == key or raw_band not in PAD_EQ_BANDS:
-            return True
+            return False
 
         pad_id = self._project.selected_pad
         band = cast("PadEqBand", raw_band)
@@ -736,7 +823,18 @@ class InputMappingController(BaseController):
 
     def _input_runtime_state_signature(self) -> _InputRuntimeStateSignature:
         pad_signatures: list[_InputRuntimePadSignature] = []
+        deferred = self._app.transport._pair_deferred_sample_ids
+        previous = self._last_input_runtime_state_signature
         for sample_id, sample_path in enumerate(self._project.sample_paths):
+            if sample_id in deferred:
+                if previous is None:
+                    message = "Input runtime is waiting for reserved pad observers."
+                    raise RuntimeError(message)
+                # The arrangement owns these observers until its real ACK/mirror.
+                # Keep the last successfully published row, including an empty row;
+                # a fenced readiness lookup does not report removal of that content.
+                pad_signatures.append(previous[2][sample_id])
+                continue
             if sample_path is None:
                 pad_signatures.append(_InputRuntimePadSignature())
                 continue

@@ -118,6 +118,13 @@ require `uv` on `PATH` and the native build setup described below; `start.bat`
 uses the existing environment. Release still runs the Python source app; these
 files do not create the future standalone installer.
 
+The accompanying command window also receives timestamped control and worker
+diagnostics, with operation, pad number and available request identity. Technical
+failures are retained there rather than inside panels or dialogs; ordinary loading,
+preparation, confirmed audio state and retry controls remain in the app. Diagnostics
+run on the Python control thread and never add logging to the audio callback.
+Unchanged polling is deduplicated; a new failed user attempt is reported again.
+
 ## Native Rubber Band Dependency
 
 The Rubber Band Key Lock backend depends on the native Rubber Band C API. The
@@ -750,6 +757,66 @@ Actual author terminal and distinct native nonauthor final semantic/raw/canonica
 index/blob/tree review precede publication or J0/P1 dispatch. The extended program
 owns later complete serialized runtime validation; devices/hearing remain human.
 
-## Pending recording/local data contract
+## Recording and local data
 
-The [E11 plan](pre-rust-extension-20261011.md) adds bounded native exact-segment capture and a nonRT writer/encoder, with persistent WAV/FLAC/MP3 settings. Implementation must place output under repo-root record/ and add /record/ to .gitignore, with unique recoverable incomplete spools, stop/drain/finalize on shutdown and no overwrite. X11-PLAN creates no runtime output or product implementation; capture, format and control are separate delivery gates. Existing M-ID/legacy data remains supported until verified readable-root migration and fresh current native ACKs complete; documentation updates never move private runtime files.
+The [E11 plan](pre-rust-extension-20261011.md) separates capture, format and
+performer-control delivery gates. Native capture now provides bounded exact-segment
+float spooling and truthful terminal/recovery metadata. A spool is an unverified
+candidate, not a successfully published recording.
+
+Global recording defaults are immutable `RecordingOptions` values in `ProjectState`,
+edited through Settings and ordinary Config persistence: WAV float32, FLAC 24-bit
+at compression 8 and MP3 CBR 320 kbit/s by default. The Settings controller replaces
+the value for future takes without audio calls; the active take owner retains
+its original value. Missing or invalid recording fields recover only their own
+defaults, preserving valid sibling preferences and unrelated pad intent. The visible
+`recording_settings_warning` uses existing console deduplication and does not create
+or clear the separate unsafe-metadata `load_error` save fence.
+
+RECORD sits to the left of START/STOP. A right press starts capture of the current
+mix without changing pad playback. A left press retains the active or remembered
+global group at the original input timestamp, prepares the selected writer and
+codec, then attaches that same capture to the existing all-or-none Native group
+start. Either press stops an effective recording. Preparing and Finalizing retain
+the sole operation owner; failures require explicit acknowledgement after actual
+retirement. The ordinary START/STOP control remains independent.
+
+Each take uses a unique directory under `record/`, relative to the application's
+startup working directory, and `/record/` is ignored by Git. A custom Config path
+does not relocate this directory. Actual selected-codec preflight precedes start;
+the off-realtime worker independently checks complete encoded output before a
+non-replacing final link publishes it. WAV can use RF64 for long output. Startup
+discovery only reports owned incomplete candidates; it does not automatically
+repair, encode, publish or delete them.
+
+The App polls recording through the ordinary runtime tick, including Settings
+and closing. Its first close request fixes a 30-second deadline; later frames do
+not extend it or release audio/source ownership early. Original stream failure is
+observed independently of the capture's first error. Checked callback closure and
+retirement-worker join permit original orphan settlement, while actual recording
+worker return, live-spool custody release and file verification remain separate.
+A known stream failure immediately clears the effective recording indication,
+even if the last worker snapshot still describes an active capture.
+
+The bounded Native, codec, long-file and controller checks are recorded separately
+from complete App/device/listening acceptance in the existing change and test log.
+Existing M-ID/legacy data remains supported until verified readable-root migration
+and fresh current Native ACKs complete; documentation updates never move private
+runtime files.
+
+## Offline source-beatmap foundation
+
+`flitzis_looper_audio.SourceBeatmap` is the immutable Native control-side map
+validator/evaluator. It owns versioned source/provenance data and checked
+forward/inverse, local-BPM and supported-grid queries; heavy JSON parsing runs
+outside the GIL. `PersistedSourceBeatmap` in `flitzis_looper.source_beatmap`
+preserves its envelope with defensive serialization. Exact anchors, coverage,
+uncertainty and unsupported gaps remain explicit.
+
+This foundation does not grant a current source lease, content permission, Native
+timing acknowledgement or live trajectory. Source-bound loader/model/persistence/
+copy integration and the later editor/SYNC work remain open. Reuse the existing
+Cold custody, content identities and single audio timing authority for those
+steps. The schema and remaining integration contract are in
+`prepare-versioned-source-beatmaps`; synthetic query tests are bounded software
+evidence and do not replace model, musical, resource or Human acceptance.

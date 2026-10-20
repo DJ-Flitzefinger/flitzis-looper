@@ -61,6 +61,15 @@ SHALL hold it until its application process exits.
 - **AND** interruption SHALL recover either the previously accepted installation or the fully verified new installation, without merging partial runtime files
 - **AND** a running current or recognized legacy application, or an unqueryable relevant process owner, SHALL stop mutation with a clear close-and-rerun message and SHALL NOT be terminated
 
+#### Scenario: An enumerated Python process exits before its path can be read
+
+- **GIVEN** the owner check retains an original Python process object from its process snapshot
+- **WHEN** its executable-path query fails or returns no path
+- **THEN** the installer MAY ignore that object only after positively confirming that the same original process has exited
+- **AND** a live process or unqueryable termination state SHALL still block mutation
+- **AND** every enumerated process object SHALL be disposed on success or failure without terminating a process
+- **AND** installation locking and physical-root path checks SHALL remain unchanged
+
 #### Scenario: Corrupt or escaping bundle
 
 - **GIVEN** an accepted prior version and failed source acquisition/build, a tool download with a wrong hash or unsafe archive path/symlink, or failed preflight

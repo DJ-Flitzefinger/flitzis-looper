@@ -23,6 +23,7 @@ from typing import TYPE_CHECKING
 from pydantic import ValidationError
 
 from flitzis_looper.controller.key_metadata_persistence import recover_project_key_intent
+from flitzis_looper.controller.recording_settings_persistence import recover_recording_settings_json
 from flitzis_looper.controller.stem_intent_persistence import recover_project_stem_intent
 from flitzis_looper.controller.stem_pair_persistence import (
     is_pair_metadata_error,
@@ -89,11 +90,14 @@ class ProjectPersistence:
         self._migration_owner: str | None = None
         self._dirty = False
         self.load_error: str | None = None
+        self.recording_settings_warning: str | None = None
+        self.save_error: str | None = None
         self.invalid_stem_pair_ids: set[int] = set()
         self._last_write_monotonic = None
         self._audio: AudioEngine | None = None
         self._on_timing_error: Callable[[int, str], None] | None = None
         self._last_timing_rejection_monotonic: float | None = None
+        self._last_save_rejection_monotonic: float | None = None
 
     def bind_audio(
         self, audio: AudioEngine, on_timing_error: Callable[[int, str], None] | None = None
@@ -118,6 +122,11 @@ class ProjectPersistence:
     def config_reference(self) -> str:
         """Bind journal intent to the selected actual config, independently of its bytes."""
         return os.path.normcase(str(self.config_path.resolve()))
+
+    def stem_selection_write_blocked(self) -> bool:
+        """Observe temporary writer ownership; actual commits still verify every fence."""
+        with self._writer:
+            return self._migration_owner is not None
 
     def capture_migration(self, transaction_id: str) -> tuple[int, ProjectState, str | None]:
         """Fence all config writers before capturing rollback intent and file identity."""
@@ -267,6 +276,9 @@ class ProjectPersistence:
 
         now = monotonic() if now is None else now
         if (
+            self._last_save_rejection_monotonic is not None
+            and now - self._last_save_rejection_monotonic < self.debounce_seconds
+        ) or (
             self._last_timing_rejection_monotonic is not None
             and now - self._last_timing_rejection_monotonic < self.debounce_seconds
         ):
@@ -280,6 +292,9 @@ class ProjectPersistence:
             self.flush(now=now)
         except TimingPersistenceError, PersistenceFenceError:
             return False
+        except OSError as error:
+            self._defer_optional_save(error, now)
+            return False
         return True
 
     def flush_if_dirty(self, *, now: float | None = None) -> bool:
@@ -287,11 +302,19 @@ class ProjectPersistence:
         if not self._dirty or self._migration_owner is not None:
             return False
 
+        now = monotonic() if now is None else now
         try:
             self.flush(now=now)
         except TimingPersistenceError, PersistenceFenceError:
             return False
+        except OSError as error:
+            self._defer_optional_save(error, now)
+            return False
         return True
+
+    def _defer_optional_save(self, error: OSError, now: float) -> None:
+        self.save_error = f"Project save deferred: {error}"[:2048]
+        self._last_save_rejection_monotonic = now
 
     def flush(self, *, now: float | None = None) -> None:
         """Write config to disk (atomic)."""
@@ -353,6 +376,8 @@ class ProjectPersistence:
         self.project.config_revision = revision
         self._dirty = self._revision != revision
         self._last_timing_rejection_monotonic = None
+        self.save_error = None
+        self._last_save_rejection_monotonic = None
         self._last_write_monotonic = now
         return text
 
@@ -396,11 +421,13 @@ class ProjectPersistence:
         Returns:
             Loaded `ProjectState`, or defaults when missing/invalid.
         """
+        recording_warning: str | None = None
         try:
             raw = config_path.read_text(encoding="utf-8")
         except FileNotFoundError:
             state = ProjectState()
         else:
+            raw, recording_warning = recover_recording_settings_json(raw)
             try:
                 state = ProjectState.model_validate_json(raw)
             except json.JSONDecodeError:
@@ -408,6 +435,7 @@ class ProjectPersistence:
             except ValidationError as error:
                 state = ProjectPersistence._recover_metadata_fields(raw, error)
                 persistence = ProjectPersistence(state)
+                persistence.recording_settings_warning = recording_warning
                 if any(
                     item["loc"][0] in {"material_migrations", "config_revision"}
                     for item in error.errors()
@@ -432,7 +460,9 @@ class ProjectPersistence:
                     )
                 return persistence
 
-        return ProjectPersistence(state)
+        persistence = ProjectPersistence(state)
+        persistence.recording_settings_warning = recording_warning
+        return persistence
 
     @staticmethod
     def _recover_metadata_fields(raw: str, error: ValidationError) -> ProjectState:
@@ -468,7 +498,7 @@ class ProjectPersistence:
                         valid[key] = alias
             recovered["material_migrations"] = valid
             return ProjectState.model_validate(recovered)
-        except json.JSONDecodeError, ValidationError:
+        except ValueError, RecursionError:
             return ProjectState()
 
     @staticmethod

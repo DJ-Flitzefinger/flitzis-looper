@@ -570,7 +570,7 @@ mod tests {
             panic!("original ordinary target capture precedes launch publication");
         };
         assert!(target.same_owner(trigger.pad_start()));
-        target.capture_target(0).unwrap();
+        target.capture_target(0, 0).unwrap();
         assert_eq!(trigger.pad_start().target_frame(), Some(0));
         trigger
     }

@@ -63,9 +63,12 @@ impl CapturedGlobalStart {
     }
 
     /// The single callback performs the existing quantization once for the group.
-    pub(crate) fn capture_target(&self, target: u64) {
+    pub(super) fn capture_target(&self, target: u64, mixer: &super::mixer::RtMixer) {
         for member in &self.owner.members {
-            if let Err(reason) = member.start.capture_target(target) {
+            if let Err(reason) = mixer
+                .source_control_revision(member.start.content_key())
+                .and_then(|revision| member.start.capture_target(target, revision))
+            {
                 self.reject(reason);
                 return;
             }
@@ -285,13 +288,24 @@ pub(super) fn capture(
 pub(super) fn publish(
     engine: &AudioEngine,
     captured: &CapturedGlobalStart,
+    capture: Option<&super::mix_capture_api::MixCaptureTicket>,
 ) -> PyResult<Option<GlobalPlaybackBatchTicket>> {
     if !captured.belongs_to(&engine.input_runtime_ownership) {
         return Err(PyValueError::new_err(
             "global start belongs to another audio engine",
         ));
     }
-    global_playback_batch::enqueue_captured(engine, captured)
+    global_playback_batch::enqueue_captured(engine, captured, capture)
+}
+
+impl AudioEngine {
+    /// Rust callers share the same publication path with no capture attachment.
+    pub fn publish_captured_global_start(
+        &self,
+        captured: &CapturedGlobalStart,
+    ) -> PyResult<Option<GlobalPlaybackBatchTicket>> {
+        publish(self, captured, None)
+    }
 }
 
 #[cfg(test)]

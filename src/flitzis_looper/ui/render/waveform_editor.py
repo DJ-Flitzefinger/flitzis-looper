@@ -686,14 +686,14 @@ def _render_readiness_row(
     action_label: str | None = None,
     action: Callable[[], None] | None = None,
 ) -> None:
-    """Reserve one above-plot line, keeping its control visible beside long errors."""
+    """Reserve one above-plot line, keeping readiness and its control visible."""
     height = imgui.get_frame_height()
     imgui.begin_child(
         row_id,
         (-1, height),
         window_flags=imgui.WindowFlags_.no_scrollbar | imgui.WindowFlags_.no_scroll_with_mouse,
     )
-    if label is not None:
+    if label is not None or (action_label is not None and action is not None):
         position = imgui.get_cursor_screen_pos()
         available = imgui.get_content_region_avail().x
         action_width = (
@@ -703,20 +703,25 @@ def _render_readiness_row(
             else 0.0
         )
         text_width = max(0.0, available - action_width - SPACING)
-        draw_list = imgui.get_window_draw_list()
-        draw_list.push_clip_rect(
-            position,
-            (position.x + text_width, position.y + height),
-            intersect_with_current_clip_rect=True,
-        )
-        draw_list.add_text(
-            (position.x, position.y + imgui.get_style().frame_padding.y),
-            imgui.get_color_u32(TEXT_MUTED_RGBA),
-            label,
-        )
-        draw_list.pop_clip_rect()
+        if label is not None:
+            draw_list = imgui.get_window_draw_list()
+            draw_list.push_clip_rect(
+                position,
+                (position.x + text_width, position.y + height),
+                intersect_with_current_clip_rect=True,
+            )
+            draw_list.add_text(
+                (position.x, position.y + imgui.get_style().frame_padding.y),
+                imgui.get_color_u32(TEXT_MUTED_RGBA),
+                label,
+            )
+            draw_list.pop_clip_rect()
         imgui.dummy((text_width, height))
-        if imgui.is_item_hovered() and imgui.calc_text_size(label).x > text_width:
+        if (
+            label is not None
+            and imgui.is_item_hovered()
+            and imgui.calc_text_size(label).x > text_width
+        ):
             with imgui_ctx.begin_tooltip():
                 imgui.text_wrapped(label)
         if action_label is not None and action is not None:
@@ -729,24 +734,20 @@ def _render_readiness_row(
 def _render_context_readiness(ctx: UiContext, pad_id: int) -> None:
     # Readiness is updated by the view query below. Reserve both rows even on
     # ready/idle frames so that that one-frame delay cannot resize the plot.
-    status, error = ctx.ui.waveform.readiness(pad_id)
+    status, _error = ctx.ui.waveform.readiness(pad_id)
     waveform_label = None
     if status == "pending":
         waveform_label = "Preparing source waveform..."
-    elif status == "error":
-        waveform_label = f"Waveform unavailable: {error}"
     _render_readiness_row(
         f"waveform-readiness-{pad_id}",
         waveform_label,
         action_label=f"Retry##waveform-{pad_id}" if status == "error" else None,
         action=lambda: ctx.ui.waveform.retry(pad_id),
     )
-    control_status, control_error = ctx.audio.pads.residency_status(pad_id)
+    control_status, _control_error = ctx.audio.pads.residency_status(pad_id)
     control_label = None
     if control_status in {"preparing", "pending", "adopting"}:
         control_label = "Preparing playback context..."
-    elif control_error:
-        control_label = f"Playback context unavailable: {control_error}"
     _render_readiness_row(
         f"resident-readiness-{pad_id}",
         control_label,

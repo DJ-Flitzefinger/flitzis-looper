@@ -4,14 +4,21 @@
 mod first_wet_tests;
 
 use super::*;
+#[cfg(test)]
+#[path = "captured_global_start_tests/atomic_capture_tests.rs"]
+mod atomic_capture_tests;
 use crate::audio_engine::audio_stream::drain_control_messages;
 use crate::audio_engine::input_mapping::launch_admission_tests::RATE;
 use crate::audio_engine::pitch_intent::PitchIntent;
+use crate::audio_engine::pitch_runtime_tests::source_feed_tests::RawRubberBand;
 use crate::audio_engine::pitch_runtime_tests::{Fixture, LOOP_END, LOOP_START};
 use crate::messages::{ControlMessage, TriggerQuantization};
 use std::time::{Duration, Instant};
 
 const WAIT: Duration = Duration::from_secs(3);
+const GLOBAL_PCM_FRAMES: usize = 48_000;
+const SILENT_BIRTH_HISTORY: usize = 4096;
+const LATER_SPECTRAL_START: usize = 8192;
 
 fn public_capture(fixture: &Fixture) -> CapturedGlobalStart {
     Python::attach(|py| {
@@ -92,6 +99,48 @@ fn spectral_amplitude(pcm: &[f32], hz: f64) -> f64 {
     2.0 * sin.hypot(cos) / pcm.len() as f64
 }
 
+/// Independent raw mono Short/ChannelsTogether references for these two fixtures.
+/// Fixed physical origins and silent history never read the DUT's phase or FIFO.
+fn assert_complete_global_birth_pcm(pcm: &[f32], regions: [(usize, usize); 2]) {
+    assert_eq!(RATE, 48_000);
+    assert_eq!(pcm.len(), GLOBAL_PCM_FRAMES);
+    assert!(pcm.iter().all(|sample| sample.is_finite()));
+    let mut expected = vec![0.0_f32; GLOBAL_PCM_FRAMES];
+    for ((source_hz, shift), (start, end)) in [(160.0, 7), (320.0, -3)].into_iter().zip(regions) {
+        let pitch = 2.0_f64.powf(f64::from(shift) / 12.0);
+        assert!((0.5..=2.0).contains(&pitch));
+        assert!(start < end);
+        let mut raw = RawRubberBand::new(pitch);
+        assert_eq!(raw.fifo(), (0, 511));
+        for _ in 0..SILENT_BIRTH_HISTORY {
+            assert_eq!(raw.sample(0.0, pitch), 0.0);
+        }
+        assert_eq!(raw.fifo(), (0, 511));
+        for (frame, mixed) in expected.iter_mut().enumerate() {
+            let source_frame = start + frame % (end - start);
+            let source = (0.25
+                * (source_frame as f64 * source_hz * std::f64::consts::TAU / f64::from(RATE)).sin())
+                as f32;
+            *mixed += raw.sample(source, pitch);
+        }
+    }
+    let maximum = pcm
+        .iter()
+        .zip(&expected)
+        .map(|(actual, expected)| (*actual - *expected).abs())
+        .fold(0.0_f32, f32::max);
+    assert!(
+        maximum < 2.0e-6,
+        "complete independent global physical-birth PCM mismatch: {maximum}"
+    );
+    // Frequency/audibility has its own declared later window. The complete PCM
+    // comparison above includes every startup sample and discards no prefix.
+    for (source_hz, shift) in [(160.0, 7), (320.0, -3)] {
+        let hz = source_hz * 2.0_f64.powf(f64::from(shift) / 12.0);
+        assert!(spectral_amplitude(&pcm[LATER_SPECTRAL_START..], hz) > 0.02);
+    }
+}
+
 #[test]
 fn deferred_public_global_retains_one_original_grid_target_and_native_first_attacks() {
     let mut fixture = Fixture::new(true);
@@ -132,7 +181,7 @@ fn deferred_public_global_retains_one_original_grid_target_and_native_first_atta
             .all(|sample| *sample == 0.0)
     );
     let mut pcm = fixture.render(1);
-    pcm.extend(fixture.pcm(47_999));
+    pcm.extend(fixture.pcm(GLOBAL_PCM_FRAMES - 1));
     assert_eq!(ticket.publication_status(), "accepted");
     assert_eq!(captured.state(), "applied");
     assert_eq!((fixture.starts(0), fixture.starts(1)), (1, 1));
@@ -159,16 +208,7 @@ fn deferred_public_global_retains_one_original_grid_target_and_native_first_atta
         let expected = source * 2.0_f64.powf(f64::from(shift) / 12.0);
         assert!(spectral_amplitude(&pcm, expected) > 0.02);
     }
-    assert!(pcm.iter().all(|sample| sample.is_finite()));
-    let initial_energy = pcm[..2048]
-        .iter()
-        .map(|sample| f64::from(*sample).powi(2))
-        .sum::<f64>()
-        / 2048.0;
-    assert!(
-        initial_energy > 0.001,
-        "complete initial FIFO prefix must be audible"
-    );
+    assert_complete_global_birth_pcm(&pcm, [(LOOP_START, LOOP_END), (LOOP_START, LOOP_END)]);
 }
 
 #[test]
@@ -480,14 +520,28 @@ fn original_global_target_and_requested_loop_survive_exact_existing_resident_ack
             .iter()
             .all(|sample| *sample == 0.0)
     );
-    let pcm = fixture.render(2048);
+    let mut pcm = fixture.render(1);
+    pcm.extend(fixture.pcm(GLOBAL_PCM_FRAMES - 1));
     assert_eq!(ticket.publication_status(), "accepted");
+    assert_eq!(captured.state(), "applied");
     assert_eq!((fixture.starts(0), fixture.starts(1)), (1, 1));
     assert_eq!(
         fixture.voice(0).source_playback.position().frame,
-        72_000 + 2048
+        72_000 + GLOBAL_PCM_FRAMES
     );
-    assert!(pcm.iter().any(|sample| sample.abs() > 0.01));
+    for (id, member) in captured.owner.members.iter().enumerate() {
+        assert_eq!(member.start.original_frame(), Some(24_000));
+        assert_eq!(member.start.effective_frame(), Some(38_192));
+        let voice = fixture.voice(id);
+        assert_eq!(
+            voice.stretch.adopted_request_id(),
+            Some(member.start.sequence())
+        );
+        assert_ne!(voice.stretch.native_state_address(), 0);
+        assert_eq!(voice.source_playback.position().fraction, 0.0);
+        assert_eq!(voice.source_playback.tempo_ratio(), 1.0);
+    }
+    assert_complete_global_birth_pcm(&pcm, [(72_000, 132_000), (LOOP_START, LOOP_END)]);
     assert_eq!(
         captured.owner.members[0].start.loop_region(),
         (1.5, Some(2.75))

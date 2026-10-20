@@ -8,6 +8,7 @@ import imgui_bundle
 import pytest
 from imgui_bundle import imgui
 
+from flitzis_looper.controller.performance_confirmation import PerformanceConfirmation
 from flitzis_looper.models import PadContentIdentity
 from flitzis_looper.ui.constants import SPACING
 from flitzis_looper.ui.contextmanager import default_style
@@ -97,6 +98,7 @@ class _Observer:
 
     def install(self, monkeypatch: pytest.MonkeyPatch) -> None:
         original_button = imgui.button
+        original_invisible_button = imgui.invisible_button
         original_text = imgui.text
         original_colored = imgui.text_colored
         original_wrapped = imgui.text_wrapped
@@ -112,9 +114,15 @@ class _Observer:
                 "button",
                 visible_label,
                 _emitted_glyphs(draw_list, start, visible_label)
-                if visible_label in {"CLOSE LOOP EDITOR", "Adjust Loop"}
+                if visible_label
+                in {"CLOSE LOOP EDITOR", "Adjust Loop", "RECORD", "START/STOP", "MULTI LOOP", "ACK"}
                 else (),
             )
+            return result
+
+        def invisible_button(label: str, size: imgui.ImVec2Like, flags: int = 0) -> bool:
+            result = original_invisible_button(label, size, flags)
+            self._record("invisible_button", label)
             return result
 
         def text(value: str) -> None:
@@ -138,6 +146,7 @@ class _Observer:
             self._record("separator", "|")
 
         monkeypatch.setattr(imgui, "button", button)
+        monkeypatch.setattr(imgui, "invisible_button", invisible_button)
         monkeypatch.setattr(imgui, "text", text)
         monkeypatch.setattr(imgui, "text_colored", colored)
         monkeypatch.setattr(imgui, "text_wrapped", wrapped)
@@ -332,14 +341,12 @@ def test_native_sidebar_adjust_section_during_analysis_preserves_key_lock_rows(
     global_mode = ctx.state.global_.key_lock_status()
     assert pad_mode.effective is False
     assert global_mode.effective is False
-    expected_rows = (
-        ["Preparing ON…", "Preparing ON…"]
-        if status == "pending"
-        else ["Key Lock: fixture KEYLOCK failure", "Key Lock: 1 pad(s): fixture KEYLOCK failure"]
-    )
+    expected_rows = ["Preparing ON…"] if status == "pending" else []
     rows = [item for item in observer.items if item.label in expected_rows]
-    assert len(rows) == 2
+    assert len(rows) == len(expected_rows)
     assert [item.label for item in rows] == expected_rows
+    assert labels.count("Audio OFF") == 2
+    assert not any("fixture KEYLOCK failure" in label for label in labels)
     assert all(_contained(item.rectangle, item.clip) for item in rows), [
         (item.label, item.rectangle, item.clip) for item in rows
     ]
@@ -381,7 +388,7 @@ def test_actual_sidebar_click_opens_content_bound_warning_and_cancel_preserves_e
     label = "Unload Audio" if action == "unload" else "Analyze audio"
     _click_sidebar_item(ctx, observer, 220.0, label)
     intent = ctx.ui.confirmation.pending
-    assert intent is not None
+    assert isinstance(intent, PerformanceConfirmation)
     assert intent.action == action
     assert intent.pad_id == 0
     assert intent.path == "samples/renderer.wav"

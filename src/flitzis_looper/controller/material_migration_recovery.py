@@ -8,6 +8,10 @@ from pathlib import Path
 from pydantic import ValidationError
 
 import flitzis_looper_audio
+from flitzis_looper.controller.bank_arrangement_journal import (
+    BankArrangementJournal,
+    validated_bank_history,
+)
 from flitzis_looper.controller.copy_arrangement_journal import (
     CopyArrangementJournal,
     validated_copy_history,
@@ -32,9 +36,37 @@ class MigrationRecovery:
     copy_journals: list[CopyArrangementJournal] = field(default_factory=list)
     errors: list[str] = field(default_factory=list)
     intent: ProjectState | None = None
+    bank_journals: list[BankArrangementJournal] = field(default_factory=list)
+
+    @property
+    def unfinished_arrangement_kinds(self) -> tuple[str, ...]:
+        """Known owners requiring arrangement recovery, never Legacy alias cleanup."""
+        return tuple(
+            kind
+            for kind, unfinished in (
+                (
+                    "pad_pair",
+                    any(item.phase not in {"settled", "cancelled"} for item in self.pair_journals),
+                ),
+                (
+                    "pad_copy_overwrite",
+                    any(item.phase not in {"settled", "cancelled"} for item in self.copy_journals),
+                ),
+                (
+                    "pad_bank",
+                    any(item.phase not in {"settled", "cancelled"} for item in self.bank_journals),
+                ),
+            )
+            if unfinished
+        )
 
 
-type TransactionJournal = MaterialMigrationJournal | PairArrangementJournal | CopyArrangementJournal
+type TransactionJournal = (
+    MaterialMigrationJournal
+    | PairArrangementJournal
+    | CopyArrangementJournal
+    | BankArrangementJournal
+)
 
 
 def parse_transaction_journal(raw: str) -> TransactionJournal:
@@ -54,6 +86,12 @@ def parse_transaction_journal(raw: str) -> TransactionJournal:
         and data["schema_version"] == 1
     ):
         return CopyArrangementJournal.model_validate_json(raw, strict=True)
+    if (
+        data.get("kind") == "pad_bank"
+        and type(data.get("schema_version")) is int
+        and data["schema_version"] == 1
+    ):
+        return BankArrangementJournal.model_validate_json(raw, strict=True)
     message = "Unknown migration transaction kind or schema version retained unresolved"
     raise ValueError(message)
 
@@ -82,6 +120,8 @@ def validated_transaction_history(
         validated_pair_history(encoded, transaction_id)
     elif isinstance(first, CopyArrangementJournal):
         validated_copy_history(encoded, transaction_id)
+    elif isinstance(first, BankArrangementJournal):
+        validated_bank_history(encoded, transaction_id)
     return encoded, journals
 
 
@@ -203,6 +243,23 @@ def _include_legacy_journal(
             result.intent = intent
 
 
+def _include_transaction(
+    result: MigrationRecovery,
+    journal: TransactionJournal,
+    current: ProjectState | None,
+    digest: str | None,
+) -> None:
+    # Known arrangements never enter Legacy alias/artifact cleanup or its source router.
+    if isinstance(journal, PairArrangementJournal):
+        result.pair_journals.append(journal)
+    elif isinstance(journal, CopyArrangementJournal):
+        result.copy_journals.append(journal)
+    elif isinstance(journal, BankArrangementJournal):
+        result.bank_journals.append(journal)
+    else:
+        _include_legacy_journal(result, journal, current, digest)
+
+
 def inspect_migration_recovery(samples: Path, config: Path) -> MigrationRecovery:
     """Keep incomplete/unknown journal data visible and leave every artifact untouched."""
     result = MigrationRecovery()
@@ -229,23 +286,12 @@ def inspect_migration_recovery(samples: Path, config: Path) -> MigrationRecovery
                 result.errors.append(f"Unresolved migration journal: {record['transaction_id']}")
                 continue
             journal = _validated_record(record, samples)
-            if isinstance(journal, PairArrangementJournal):
-                # Pair evidence never enters Legacy alias/artifact cleanup or its source router.
-                result.pair_journals.append(journal)
-                continue
-            if isinstance(journal, CopyArrangementJournal):
-                result.copy_journals.append(journal)
-                continue
-            _include_legacy_journal(result, journal, current, digest)
+            _include_transaction(result, journal, current, digest)
         except (KeyError, OSError, RuntimeError, TypeError, ValueError, ValidationError) as error:
             result.errors.append(str(error))
-    unfinished_kinds = sum((
-        bool(result.pending),
-        any(item.phase not in {"settled", "cancelled"} for item in result.pair_journals),
-        any(item.phase not in {"settled", "cancelled"} for item in result.copy_journals),
-    ))
+    unfinished_kinds = int(bool(result.pending)) + len(result.unfinished_arrangement_kinds)
     if unfinished_kinds > 1:
         result.errors.append(
-            "Incompatible unfinished Material/Pair/Copy owners retain every history"
+            "Incompatible unfinished Material/Pair/Copy/Bank owners retain every history"
         )
     return result

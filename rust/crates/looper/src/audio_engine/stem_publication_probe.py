@@ -13,6 +13,7 @@ from typing import TYPE_CHECKING, Protocol, cast
 
 from imgui_bundle import imgui
 
+from flitzis_looper.control_diagnostics import ConsoleDiagnostics
 from flitzis_looper.controller import AppController
 from flitzis_looper.controller.loader import LoaderController
 from flitzis_looper.controller.persistence import ProjectPersistence
@@ -32,17 +33,20 @@ from flitzis_looper.ui.context import UiContext
 from flitzis_looper.ui.render import performance_view
 
 if TYPE_CHECKING:
+    from collections.abc import Callable
+
     from flitzis_looper.controller.stem_generation import (
         StemGenerationRequest,
         StemProgressCallback,
     )
     from flitzis_looper_audio import (
         AudioEngine,
+        CapturedPadStart,
         CommittedStemSetTicket,
         PreparedSourceTicket,
         PreparedStemPair,
-        ResidentWindowTicket,
         ResidentStemTicket,
+        ResidentWindowTicket,
     )
 
 
@@ -58,8 +62,11 @@ class NativeProducerBridge(Protocol):
     ) -> CommittedStemSetTicket: ...
 
     def request_committed_stem_residency(
-        self, selection_ticket: CommittedStemSetTicket, *,
-        mode: str = "all_stems", enabled_mask: int = 15
+        self,
+        selection_ticket: CommittedStemSetTicket,
+        *,
+        mode: str = "all_stems",
+        enabled_mask: int = 15,
     ) -> ResidentStemTicket: ...
 
     def prepare_stem_pair(
@@ -121,6 +128,7 @@ class Audio:
     def __init__(self, bridge: NativeProducerBridge) -> None:
         self.bridge = bridge
         self.timestamps: list[int] = []
+        self.captured_starts: dict[int, CapturedPadStart] = {}
 
     def __getattr__(self, name: str) -> object:
         return getattr(self.bridge.engine, name)
@@ -136,8 +144,11 @@ class Audio:
         return self.bridge.register_committed_stem_pair(prepared, source_ticket)
 
     def request_committed_stem_residency(
-        self, selection_ticket: CommittedStemSetTicket, *,
-        mode: str = "all_stems", enabled_mask: int = 15
+        self,
+        selection_ticket: CommittedStemSetTicket,
+        *,
+        mode: str = "all_stems",
+        enabled_mask: int = 15,
     ) -> ResidentStemTicket:
         return self.bridge.request_committed_stem_residency(
             selection_ticket, mode=mode, enabled_mask=enabled_mask
@@ -196,6 +207,31 @@ class Audio:
         timestamp = self.bridge.engine.capture_input_timestamp_ns()
         self.timestamps.append(timestamp)
         return timestamp
+
+    def capture_pad_start(
+        self,
+        sample_id: int,
+        start_s: float,
+        end_s: float | None = None,
+        volume: float = 1.0,
+        *,
+        exclusive: bool = False,
+        received_at_ns: int | None = None,
+        expected_source_generation: int | None = None,
+    ) -> CapturedPadStart:
+        assert received_at_ns is not None
+        start = self.bridge.engine.capture_pad_start(
+            sample_id,
+            start_s,
+            end_s,
+            volume,
+            exclusive=exclusive,
+            received_at_ns=received_at_ns,
+            expected_source_generation=expected_source_generation,
+        )
+        assert received_at_ns not in self.captured_starts
+        self.captured_starts[received_at_ns] = start
+        return start
 
     def prepare_resident_control(
         self,
@@ -323,27 +359,8 @@ def _publication_wait_state(controller: StemController, sample_id: int) -> dict[
     }
 
 
-def wait_for_pending(controller: StemController, sample_id: int) -> PreparedSourceTicket:
-    """Collect the real Pair worker result before checking its native queued ticket."""
-    deadline = time.monotonic() + 10
-    while sample_id not in controller._pending_stem_publications:
-        controller.on_frame_render()
-        assert not controller._session.stem_generation_errors, (
-            controller._session.stem_generation_errors
-        )
-        assert time.monotonic() < deadline, (
-            "actual Pair worker did not publish a pending ticket",
-            _publication_wait_state(controller, sample_id),
-        )
-        if sample_id not in controller._pending_stem_publications:
-            time.sleep(0.001)
-    ticket = controller._pending_stem_publications[sample_id].source_ticket
-    assert ticket.publication_status() == "pending"
-    return ticket
-
-
 def wait_for_committed_registration(
-    controller: StemController, sample_id: int
+    controller: StemController, sample_id: int, *, allow_accepted: bool = False
 ) -> CommittedStemSetTicket:
     """Generation selects disk truth before its own native reader registration ACK."""
     deadline = time.monotonic() + 10
@@ -359,10 +376,12 @@ def wait_for_committed_registration(
         if sample_id not in controller._committed_residency._selections:
             time.sleep(0.001)
     selection = controller._committed_residency._selections[sample_id]
-    assert selection.ticket.publication_status() == "pending"
+    status = selection.ticket.publication_status()
+    assert status in ({"pending", "accepted"} if allow_accepted else {"pending"})
     assert selection.ticket.is_current()
     assert selection.ticket.error() is None
-    assert selection.receipt is None
+    if status == "pending":
+        assert selection.receipt is None
     assert not controller._pending_stem_publications
     return selection.ticket
 
@@ -478,10 +497,25 @@ class Probe:
         self.app._audio = self.audio
         self.app._persistence = ProjectPersistence(self.project)
         self.app.transport = TransportController(self.project, self.session, self.audio)
+        self.app.diagnostics = ConsoleDiagnostics(
+            lambda: (
+                path
+                for path in (
+                    *self.project.sample_paths,
+                    *self.session.pending_sample_paths.values(),
+                )
+                if path is not None
+            )
+        )
+        self.app.transport.pitch.bind_diagnostics(self.app.diagnostics)
+        self.app.transport.residency._bind_diagnostics(self.app.diagnostics)
+        self.app.transport.waveform.bind_diagnostics(self.app.diagnostics)
         self.app.stems = self.controller
         self.app.loader = LoaderController(
             self.project, self.session, self.audio, lambda _pad: None
         )
+        self.app.loader._bind_diagnostics(self.app.diagnostics)
+        self.app.stems._bind_diagnostics(self.app.diagnostics)
         self.app.input_mapping = InputMappingController(self.app)
         self.project.pad_loop_auto[0] = False
         self.context = UiContext(self.app)
@@ -518,6 +552,20 @@ class Probe:
 
     def mouse_capture_count(self) -> int:
         return len(cast("Audio", self.audio).timestamps)
+
+    def mouse_original_start(self, timestamp: int) -> object:
+        return cast("Audio", self.audio).captured_starts[timestamp]
+
+    def mouse_start_window(self, timestamp: int) -> object:
+        start = cast("Audio", self.audio).captured_starts[timestamp]
+        windows = [
+            pending.ticket
+            for pending in self.app.transport.residency._captured_starts.values()
+            if pending.start.same_owner(start)
+        ]
+        assert len(windows) == 1
+        assert windows[0] is not None
+        return windows[0]
 
     def mouse_status(self) -> str:
         return repr(self.app.transport.residency.status(0))
@@ -597,19 +645,24 @@ class Probe:
         self.restored.restore_stem_cache_from_project_state()
         assert not self.restored.stems_available(0)
         assert self.restored.publish_restored_stem_cache_if_available(0)
-        self.restored_ticket = wait_for_pending(self.restored, 0)
+        self.restored_ticket = wait_for_committed_registration(
+            self.restored, 0, allow_accepted=True
+        )
         assert self.restored_ticket is not self.original_ticket
-        assert self.restored_ticket.publication_status() == "pending"
+        assert self.restored_ticket.publication_status() in {"pending", "accepted"}
         assert self.original_ticket.publication_status() == "accepted"
 
     def restored_accepted(self) -> None:
         assert self.restored_ticket.publication_status() == "accepted"
+        assert_committed_ack(self.restored, 0)
         self.restored.on_frame_render()
         assert self.restored.stems_available(0)
         entry = self.restored_project.stem_cache[0]
         assert entry is not None
         assert entry.cache_dir == self.saved_path
-        assert entry.available
+        # Restore preserves the saved descriptor; actual registration/residency
+        # receipts establish availability without rewriting its disk-only flag.
+        assert not entry.available
         assert_selected_pair(self.restored_project, 0)
 
     def reject_tampered_restore(self) -> None:
@@ -660,31 +713,46 @@ class Probe:
         assert_selected_pair(self.restored_project, 0)
 
     def begin_stale_restore(self) -> None:
+        self.stale_registration = self.restored._committed_residency._selections[0].ticket
+        assert self.stale_registration.publication_status() == "accepted"
+        self.stale_jobs: list[Callable[[], None]] = []
+        self.restored._pair_preparations._runner = self.stale_jobs.append
         self.restored.restore_stem_cache_from_project_state()
         assert self.restored.publish_restored_stem_cache_if_available(0)
-        self.stale_ticket = wait_for_pending(self.restored, 0)
-        assert self.stale_ticket.publication_status() == "pending"
+        self.restored._poll_residency_demands()
+        assert len(self.stale_jobs) == 1
+        self.stale_request = self.restored._pair_preparations.pending[0]
+        assert self.stale_request.verify_saved_selection
+        self.stale_ticket = self.stale_request.ticket
+        assert self.stale_ticket.publication_status() == "captured"
 
     def rejected(self) -> None:
-        assert self.stale_ticket.publication_status() == "rejected"
-        assert self.stale_ticket.rejection_reason() == "source-request-changed"
         selected = self.restored_project.stem_cache[0]
         assert selected is not None
         assert not selected.available
-        self.restored.on_frame_render()
-        assert not self.restored.stems_available(0)
+        assert self.restored._pair_preparations.pending[0] is self.stale_request
+        self.stale_jobs.pop()()
+        assert not self.stale_jobs
+        self.restored._poll_pair_preparations()
+        assert self.stale_request.prepared is None
+        assert self.stale_request.error == "stale or foreign prepared source ticket"
+        assert self.stale_ticket.publication_status() == "captured"
+        assert self.stale_ticket.rejection_reason() is None
+        assert self.stale_registration.publication_status() == "accepted"
+        assert self.stale_registration.is_current()
+        assert self.restored.stems_available(0)
         assert (
             self.restored_session.stem_generation_errors[0]
-            == "Stem publication cancelled because its source request changed"
+            == "Complete stem preparation failed: stale or foreign prepared source ticket"
         )
         assert self.restored_project.stem_cache[0] is selected
         assert_selected_pair(self.restored_project, 0)
         assert not self.restored._pending_stem_publications
         assert not self.restored._publication_retries.pending
         assert not self.restored._pair_preparations.pending
-        self.restored.on_frame_render()
-        assert self.stale_ticket.publication_status() == "rejected"
-        assert self.stale_ticket.rejection_reason() == "source-request-changed"
+        self.restored._poll_pair_preparations()
+        assert self.stale_ticket.publication_status() == "captured"
+        assert self.stale_ticket.rejection_reason() is None
         assert self.restored_project.stem_cache[0] is selected
         assert not self.restored._pending_stem_publications
         assert not self.restored._publication_retries.pending
@@ -714,11 +782,12 @@ class SavedMaterialProbe:
         self.controller.restore_stem_cache_from_project_state()
         assert not self.controller.stems_available(215)
         assert self.controller.publish_restored_stem_cache_if_available(215)
-        self.ticket = wait_for_pending(self.controller, 215)
+        self.ticket = wait_for_committed_registration(self.controller, 215)
         assert self.ticket.publication_status() == "pending"
 
     def accepted(self) -> None:
         assert self.ticket.publication_status() == "accepted"
+        assert_committed_ack(self.controller, 215)
         self.controller.on_frame_render()
         assert self.controller.stems_available(215)
         assert_selected_pair(self.project, 215)

@@ -94,6 +94,11 @@ struct Peer {
 
 impl Peer {
     fn new(playback: &ControllerPlayback, initial_prepare_frames: u64) -> Self {
+        let consumed_start = initial_prepare_frames + playback.source_frame;
+        assert!(
+            playback.frame >= consumed_start,
+            "the peer's preparation lead plus emitted frames cannot exceed callback time"
+        );
         let peer = complete::other(&playback.callback.mixer);
         Self {
             sample: peer.sample.clone().unwrap(),
@@ -102,9 +107,10 @@ impl Peer {
             fifo: peer.stretch.pending_fifo_frames(),
             demand: playback.callback.mixer.stem_demand_for_measurement(215),
             callback_start: playback.frame,
-            // The public peer started at original T=0 and continued during the tested
-            // pad's real Native preparation lead. Later common pauses consume neither.
-            consumed_start: playback.source_frame + initial_prepare_frames,
+            // The peer started at T=E=0 and consumed the primary's preparation
+            // lead before both voices emitted common active output. Later
+            // common pauses consume neither source counter.
+            consumed_start,
         }
     }
 

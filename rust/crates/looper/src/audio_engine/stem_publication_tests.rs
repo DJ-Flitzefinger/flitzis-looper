@@ -257,6 +257,26 @@ fn call(probe: &Py<PyAny>, method: &str) {
     });
 }
 
+fn bind_public_control_fixture(
+    engine: &Py<AudioEngine>,
+    producer: &Arc<Mutex<rtrb::Producer<ControlMessage>>>,
+    callback: &mut Callback,
+) {
+    // Public captures use the same sole producer and actual stereo callback format.
+    // This probe inspects actual callback feedback directly rather than receive_msg.
+    let (_unused_feedback, unused_feedback_rx) = rtrb::RingBuffer::new(1);
+    Python::attach(|py| {
+        let mut engine = engine.borrow_mut(py);
+        engine.test_control_channels =
+            Some((producer.clone(), Arc::new(Mutex::new(unused_feedback_rx))));
+        engine.test_output_format = Some((RATE, 2));
+    });
+    // Three accepted exclusive originals produce three births and two real stops.
+    let (feedback, feedback_rx) = rtrb::RingBuffer::new(16);
+    callback.feedback = feedback;
+    callback.feedback_rx = feedback_rx;
+}
+
 fn committed_probe_ack(
     engine: &Py<AudioEngine>,
     callback: &mut Callback,
@@ -296,6 +316,15 @@ fn committed_probe_ack(
         assert_eq!(registration.borrow(py).publication_status(), "accepted");
         assert!(registration.borrow(py).is_current());
         assert!(registration.borrow(py).error().is_none());
+        // Saved disk verification alone creates no component demand. This proof
+        // explicitly requests the components before requiring their own ACK.
+        assert!(
+            controller
+                .call_method1(py, "set_stem_mix_mode", (id, "all_stems"))
+                .unwrap()
+                .extract::<bool>(py)
+                .unwrap()
+        );
         controller.call_method0(py, "on_frame_render").unwrap();
     });
     let receipt = Python::attach(|py| {
@@ -469,6 +498,7 @@ fn run_publication_and_mouse_proof(test_name: &str, accepted_only: bool, shared:
     let (producer, mut consumer) = rtrb::RingBuffer::new(16);
     let producer = Arc::new(Mutex::new(producer));
     let mut callback = Python::attach(|py| Callback::new(&engine.borrow(py), RATE));
+    bind_public_control_fixture(&engine, &producer, &mut callback);
     let request = Python::attach(|py| {
         admit_for_format_selected(
             &engine.borrow(py),
@@ -637,9 +667,8 @@ fn run_publication_and_mouse_proof(test_name: &str, accepted_only: bool, shared:
     assert_eq!(callback.drain(&mut consumer), 2);
     render(&mut callback, VOCALS_AMPLITUDE);
     call(&probe, "restore");
-    assert_eq!(callback.drain(&mut consumer), 1);
-    call(&probe, "restored_accepted");
     committed_probe_ack(&engine, &mut callback, &mut consumer, &probe, "restored", 0);
+    call(&probe, "restored_accepted");
     render(&mut callback, VOCALS_AMPLITUDE);
     call(&probe, "reject_tampered_restore");
     assert_eq!(callback.drain(&mut consumer), 0);
@@ -653,9 +682,10 @@ fn run_publication_and_mouse_proof(test_name: &str, accepted_only: bool, shared:
         )
         .unwrap();
     });
-    assert_eq!(callback.drain(&mut consumer), 1);
+    assert_eq!(callback.drain(&mut consumer), 0);
     call(&probe, "rejected");
-    // Late rejection preserves the previously accepted native stem set.
+    assert_eq!(callback.drain(&mut consumer), 0);
+    // A refused pre-claim restore preserves the previously accepted native stem set.
     render(&mut callback, VOCALS_AMPLITUDE);
     Python::attach(|py| engine.borrow_mut(py).shut_down().unwrap());
 }
@@ -672,6 +702,7 @@ fn restore_saved_material(directory: &Path) {
     let (producer, mut consumer) = rtrb::RingBuffer::new(16);
     let producer = Arc::new(Mutex::new(producer));
     let mut callback = Python::attach(|py| Callback::new(&engine.borrow(py), RATE));
+    bind_public_control_fixture(&engine, &producer, &mut callback);
     let probe = Python::attach(|py| {
         py.import("sys")
             .unwrap()
@@ -727,8 +758,6 @@ fn restore_saved_material(directory: &Path) {
         &mut callback,
     );
     call(&probe, "begin");
-    assert_eq!(callback.drain(&mut consumer), 1);
-    call(&probe, "accepted");
     committed_probe_ack(
         &engine,
         &mut callback,
@@ -737,6 +766,7 @@ fn restore_saved_material(directory: &Path) {
         "controller",
         215,
     );
+    call(&probe, "accepted");
     Python::attach(|py| {
         probe
             .getattr(py, "controller")

@@ -52,6 +52,7 @@ pub(super) struct CopyRtGuard {
     pub(super) target_selection_fences:
         [Option<(Arc<AtomicU64>, u64)>; super::pad_pair::MAX_PAIR_SELECTION_FENCES],
     pub(super) reservation: u64,
+    pub(super) source_reservation: u64,
     pub(super) phase: Arc<AtomicU8>,
     pub(super) ownership: Arc<InputRuntimeOwnership>,
     pub(super) acknowledgements: Arc<CurrentTimingAcknowledgements>,
@@ -126,6 +127,7 @@ impl CopyRtGuard {
                     .iter()
                     .all(|(epoch, expected)| epoch.load(Ordering::Acquire) == *expected)
             })
+            && self.ownership.copy_reservation(self.source) == self.source_reservation
             && self.ownership.current(self.source, self.source_binding)
             && self
                 .ownership
@@ -168,9 +170,16 @@ impl CopyRtGuard {
                     .iter()
                     .all(|(epoch, expected)| epoch.load(Ordering::Acquire) == *expected)
             })
+            && self.ownership.copy_reservation(self.source) == self.source_reservation
+            && self.ownership.pair_reservation(self.source) == 0
+            && self
+                .source_binding
+                .placement
+                .is_none_or(|snapshot| self.ownership.slot_snapshot_current(snapshot))
+            && self.ownership.current(self.source, self.source_binding)
             && self
                 .ownership
-                .admission_current(self.source, self.source_binding)
+                .binding_source_current(self.source, self.source_binding)
             && self
                 .ownership
                 .binding_source_generation(self.source, self.source_binding)
@@ -259,6 +268,7 @@ impl PadCopyRtWork {
 }
 
 mod control;
+pub(crate) use control::bank;
 mod intent;
 pub(crate) mod recovery;
 pub use control::{CapturedPadCopy, PadCopyTicket};

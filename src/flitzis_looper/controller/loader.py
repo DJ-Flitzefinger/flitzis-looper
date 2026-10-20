@@ -36,6 +36,7 @@ from flitzis_looper_audio import ProjectAssetLease
 if TYPE_CHECKING:
     from collections.abc import Callable
 
+    from flitzis_looper.control_diagnostics import ConsoleDiagnostics
     from flitzis_looper_audio import AudioEngine, LoaderEventDelivery
 
 
@@ -135,6 +136,8 @@ class _RestoredLoadOptions(TypedDict):
     initial_base_shift: int
     initial_extra_shift: int
     initial_key_lock: bool
+    initial_gain_db: float
+    initial_eq_db: tuple[float, float, float]
     restore_automatic: NotRequired[bool]
     resident_loop_start_s: NotRequired[float]
     resident_loop_end_s: NotRequired[float]
@@ -475,10 +478,24 @@ class LoaderController(_IncomingIntentControl, _MaterialCreationOwnership):
         self._deferred_restores: dict[int, Path] = {}
         self._deferred_restore_content: dict[int, str | None] = {}
         self._analysis_request_ids: dict[int, int] = {}
+        self._diagnostics: ConsoleDiagnostics | None = None
         self._key_analysis = KeyMetadataAnalysis(project, audio)
         self._accepted_restore = AcceptedTimingRestore(
             project, session, audio, self._finish_accepted_restore
         )
+
+    def _bind_diagnostics(self, diagnostics: ConsoleDiagnostics) -> None:
+        """Bind control diagnostics before restoration and event dispatch."""
+        self._diagnostics = diagnostics
+
+    def _observe_pad_diagnostics(self, sample_id: int) -> None:
+        if self._diagnostics is not None:
+            for operation, messages in (
+                ("load", self._session.sample_load_errors),
+                ("analysis", self._session.sample_analysis_errors),
+                ("stem_generation", self._session.stem_generation_errors),
+            ):
+                self._diagnostics.observe(operation, messages.get(sample_id), pad_id=sample_id)
 
     def _finish_accepted_restore(self, sample_id: int) -> None:
         if self._on_accepted_timing_refresh is not None:
@@ -539,19 +556,14 @@ class LoaderController(_IncomingIntentControl, _MaterialCreationOwnership):
         """Revoke retired stem eligibility without deleting readers' artifacts."""
         self._on_stems_invalidated = callback
 
-    def restore_samples_from_project_state(self) -> None:
-        """Schedule async loads for cached samples referenced by `ProjectState`.
+    def _validate_restored_sample_paths(self) -> dict[int, Path]:
+        """Neutralize missing ordinary assignments before projecting saved controls.
 
-        Invalid/missing cached files are ignored by clearing the pad assignment.
-        Native queue saturation defers remaining restores to bounded UI polling.
+        Recovery-owned references retain their original intent and deferred owner.
+        The returned paths name only valid original candidates for this startup.
         """
-        output_sample_rate = self._output_sample_rate_hz()
-        if output_sample_rate is None:
-            return
-
+        valid: dict[int, Path] = {}
         changed = False
-        defer_remaining = False
-        admissions = 0
         for sample_id, path in enumerate(self._project.sample_paths):
             if path is None:
                 continue
@@ -563,7 +575,28 @@ class LoaderController(_IncomingIntentControl, _MaterialCreationOwnership):
                 self._clear_restored_pad(sample_id)
                 changed = True
                 continue
+            valid[sample_id] = rel
 
+        if changed:
+            self._mark_project_changed()
+        return valid
+
+    def restore_samples_from_project_state(
+        self, *, validated_paths: dict[int, Path] | None = None
+    ) -> None:
+        """Admit validated originals, deferring native queue pressure to UI polling.
+
+        Standalone restore callers retain the same path validation and cleanup.
+        App startup supplies its validation result after saved control projection.
+        """
+        if self._output_sample_rate_hz() is None:
+            return
+        paths = (
+            self._validate_restored_sample_paths() if validated_paths is None else validated_paths
+        )
+        defer_remaining = False
+        admissions = 0
+        for sample_id, rel in paths.items():
             if defer_remaining or admissions >= self._RESTORE_ADMISSIONS_PER_POLL:
                 self._defer_restored_load(sample_id, rel)
             else:
@@ -572,9 +605,6 @@ class LoaderController(_IncomingIntentControl, _MaterialCreationOwnership):
                     defer_remaining = sample_id in self._deferred_restores and (
                         sample_id not in self._session.sample_load_errors
                     )
-
-        if changed:
-            self._mark_project_changed()
 
     def _preserve_recovery_restore(self, sample_id: int, rel: Path | None) -> bool:
         if not self._restored_assignment_held(sample_id):
@@ -598,6 +628,8 @@ class LoaderController(_IncomingIntentControl, _MaterialCreationOwnership):
             path: Path to an audio file on disk.
         """
         validate_sample_id(sample_id)
+        if self._diagnostics is not None:
+            self._diagnostics.begin_attempt("load", sample_id)
         reservation = None
         try:
             reservation = self._assets.reserve()
@@ -607,6 +639,7 @@ class LoaderController(_IncomingIntentControl, _MaterialCreationOwnership):
             if reservation is not None:
                 reservation.close()
             self._session.sample_load_errors[sample_id] = str(error)
+            self._observe_pad_diagnostics(sample_id)
             return
 
         self._deferred_restores.pop(sample_id, None)
@@ -661,6 +694,8 @@ class LoaderController(_IncomingIntentControl, _MaterialCreationOwnership):
     def analyze_sample_async(self, sample_id: int) -> None:
         """Analyze a previously loaded sample asynchronously."""
         validate_sample_id(sample_id)
+        if self._diagnostics is not None:
+            self._diagnostics.begin_attempt("analysis", sample_id)
         if self.is_sample_loading(sample_id):
             return
 
@@ -778,6 +813,7 @@ class LoaderController(_IncomingIntentControl, _MaterialCreationOwnership):
         handler = handlers.get(event_type)
         if handler is not None:
             handler(sample_id, event)
+            self._observe_pad_diagnostics(sample_id)
 
     def _set_migration_event_handler(self, handler: Callable[[dict[str, object]], bool]) -> None:
         """Route only exact migration request events before ordinary assignment resets."""
@@ -1453,11 +1489,16 @@ class LoaderController(_IncomingIntentControl, _MaterialCreationOwnership):
                 self._mark_project_changed()
         except (RuntimeError, ValueError) as error:
             key_error = f"Analysis key metadata completion failed: {error}"
-        if event.get("timing_stale") is not True:
-            self._store_sample_analysis(sample_id, analysis)
+        control_error: str | None = None
+        try:
+            if event.get("timing_stale") is not True:
+                self._store_sample_analysis(sample_id, analysis)
+        except (RuntimeError, ValueError) as error:
+            control_error = f"Analysis control refresh failed: {error}"
         self._clear_analysis_task_state(sample_id)
-        if key_error is not None:
-            self._session.sample_analysis_errors[sample_id] = key_error
+        errors = [message for message in (key_error, control_error) if message is not None]
+        if errors:
+            self._session.sample_analysis_errors[sample_id] = "\n".join(errors)
 
     def _handle_stem_generation_success(self, sample_id: int) -> None:
         if sample_id not in self._session.stem_generating_sample_ids:
@@ -1525,8 +1566,8 @@ class LoaderController(_IncomingIntentControl, _MaterialCreationOwnership):
             if manual is not None
             else "legacy"
         )
-        self._on_pad_bpm_changed(sample_id)
         self._mark_project_changed()
+        self._on_pad_bpm_changed(sample_id)
         return parsed
 
     def _restore_legacy_timing_authority(
@@ -1591,6 +1632,12 @@ class LoaderController(_IncomingIntentControl, _MaterialCreationOwnership):
                 "initial_base_shift": key_intent.base_shift,
                 "initial_extra_shift": key_intent.extra_shift,
                 "initial_key_lock": self._project.resolve_pad_key_lock(sample_id),
+                "initial_gain_db": self._project.pad_gain_db[sample_id],
+                "initial_eq_db": (
+                    self._project.pad_eq_low_db[sample_id],
+                    self._project.pad_eq_mid_db[sample_id],
+                    self._project.pad_eq_high_db[sample_id],
+                ),
             }
             if self._wants_accepted_restore(sample_id):
                 options["restore_automatic"] = True

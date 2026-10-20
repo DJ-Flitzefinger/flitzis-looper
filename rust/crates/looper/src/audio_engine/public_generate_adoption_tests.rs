@@ -84,6 +84,10 @@ struct GenerateSourceAudio {
 
 #[pymethods]
 impl GenerateSourceAudio {
+    fn waveform_source_identity(&self, id: usize) -> PyResult<Option<(u64, String, usize, u32)>> {
+        self.engine.waveform_source_identity(id)
+    }
+
     fn loaded_source_digest(&self, id: usize) -> PyResult<Option<String>> {
         self.engine.loaded_source_digest(id)
     }
@@ -491,6 +495,39 @@ controller._stem_backend = SelectedStemGenerationBackend({
 assert isinstance(controller._stem_backend, SelectedStemGenerationBackend)
 assert controller._stem_worker_pool._executor._max_workers == 2
 assert controller.stem_generation_block_reason(0) is None
+
+def admitted_generate_job(separator):
+    # Public Generate captures the original logical caller before the ordinary
+    # fair-admission poll acquires its own Native source and physical pool job.
+    requested = controller._requested_generations[0]
+    assert requested.request.sample_id == requested.capture.pad_id == 0
+    assert requested.request.separator == separator
+    assert requested.request.source_path == generate_original
+    assert requested.request.source_version == generate_source_version
+    assert requested.capture.path == generate_path
+    assert requested.capture.content == generate_content
+    assert requested.capture.source_identity == generate_source_audio.waveform_source_identity(0)
+    assert requested.capture.processing_revision == project.stem_processing_revision
+    assert requested.capture.processing_signature[0] == separator
+    assert requested.intent.settings_revision == project.stem_processing_revision
+    assert requested.owner.current == frozenset({generate_module.DIRECT_STEM_INTEREST})
+    assert controller._requested_generation_current(requested)
+    assert not controller._jobs
+    controller.on_frame_render()
+    assert 0 not in controller._requested_generations
+    assert not session.stem_generation_errors, session.stem_generation_errors
+    job = controller._jobs[requested.request.cache_dir]
+    assert job.request is requested.request and job.intent is requested.intent
+    subscribers = job.subscribers()
+    assert len(subscribers) == 1
+    subscriber = subscribers[0]
+    assert subscriber.sample_id == 0 and subscriber.content_id == generate_content.instance_id
+    assert subscriber.request is requested.request
+    assert subscriber.interest_owner is requested.owner
+    assert subscriber.source is job.source
+    assert job.source.source_generation == requested.capture.source_identity[0]
+    assert controller._audio.offline_stem_source_is_current(0, job.source)
+    return job
 "#,
     );
     let release = ReleaseAdapters(Python::attach(|py| {
@@ -536,13 +573,13 @@ assert project.stem_processing_revision != old_processing_revision
 assert project.pad_stem_mix_mode[0] == 'all_stems'
 assert controller.stem_generation_block_reason(0) is None
 assert controller.generate_stems_async(0), session.stem_generation_errors
-generate_job2 = next(iter(controller._jobs.values()))
+generate_job2 = admitted_generate_job('bs-roformer:musdb18hq')
 assert generate_job2.request.separator == 'bs-roformer:musdb18hq'
 "#
         } else {
             r#"
 assert controller.generate_stems_async(0), session.stem_generation_errors
-generate_job1 = next(iter(controller._jobs.values()))
+generate_job1 = admitted_generate_job('demucs:htdemucs')
 assert generate_job1.request.separator == 'demucs:htdemucs'
 "#
         },
@@ -1092,6 +1129,7 @@ assert controller._verified_set_current(0)
 repeat1_before = len(generate_demucs.calls)
 assert controller.generate_stems_async(0)
 assert len(generate_demucs.calls) == repeat1_before and not controller._jobs
+assert not controller._requested_generations
 assert controller.stem_generation_diagnostic(0) == 'Stems for the current model are already present'
 "#,
     );
@@ -1169,6 +1207,7 @@ assert controller._verified_set_current(0)
 repeat2_before = len(generate_bs.calls)
 assert controller.generate_stems_async(0)
 assert len(generate_bs.calls) == repeat2_before and not controller._jobs
+assert not controller._requested_generations
 assert len(generate_demucs.calls) == len(generate_bs.calls) == 1
 assert project.sample_paths[0] == generate_path and project.pad_content[0] == generate_content
 assert session.active_sample_ids == {0, 215} and not session.paused_sample_ids

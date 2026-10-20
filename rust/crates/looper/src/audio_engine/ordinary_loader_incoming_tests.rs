@@ -1030,27 +1030,17 @@ struct RawNative {
     used: bool,
 }
 impl RawNative {
-    fn prepared_start(source: &SampleBuffer, start: usize, end: usize) -> Self {
+    fn prepared_start() -> Self {
         let mut raw = Self::new();
         let history = raw.native.source_history_frames(1.0 / RATIO).unwrap();
         assert_eq!(history, prepared_native_history::PREPARED_HISTORY_FRAMES);
-        let length = end - start;
-        let coordinate = (-(history as f64) * RATIO).rem_euclid(length as f64);
-        let feed = std::array::from_fn(|channel| {
-            (0..history)
-                .map(|offset| {
-                    let phase = (coordinate + offset as f64 * RATIO).rem_euclid(length as f64);
-                    let left = start + phase.floor() as usize;
-                    let right = if left + 1 == end { start } else { left + 1 };
-                    let a = source.samples[left * 2 + channel];
-                    a + (source.samples[right * 2 + channel] - a) * phase.fract() as f32
-                })
-                .collect()
-        });
+        // A fresh physical source supplies no PCM before its selected origin.
+        // Keep H and the exact Native/FIFO phase without borrowing its loop tail.
+        let feed = std::array::from_fn(|_| vec![0.0; history]);
         let _ = raw.render(&feed);
         assert!(
             raw.used,
-            "the first output owns real periodic Native history"
+            "the first output owns its independently prepared silent birth context"
         );
         raw
     }
@@ -1149,7 +1139,7 @@ fn prepare_reference_start(reference: &mut RtMixer, execution: u64) {
         Some(RubberBandLiveShifter::new(RATE, 2).unwrap()),
         2,
     ));
-    candidate.prepare_source_at_endpoint(request).unwrap();
+    candidate.prepare_source_at_physical_birth(request).unwrap();
     assert!(reference.adopt_prepared_pitch_voice(
         index,
         &mut candidate,
@@ -1228,8 +1218,10 @@ impl Playback {
                     .native_tap_observation()
                     .expect("the actual finite source must retain its prepared coverage proof");
                 assert_eq!(taps.missing_reads, 0);
-                assert!(taps.min_frame.is_some_and(|frame| frame >= start));
-                assert!(taps.max_frame.is_some_and(|frame| frame < end));
+                // The admitted finite window remains held, but warming the fresh
+                // owner reads only explicit silence before its physical origin.
+                assert_eq!(taps.min_frame, None);
+                assert_eq!(taps.max_frame, None);
             } else {
                 assert!(current.stretch.native_tap_observation().is_none());
             }
@@ -1243,9 +1235,7 @@ impl Playback {
         );
         Self {
             reference,
-            raw: defaults
-                .key_lock
-                .then(|| RawNative::prepared_start(&fixture.complete, start, end)),
+            raw: defaults.key_lock.then(RawNative::prepared_start),
             filter: filter(),
             start,
             end,

@@ -6,6 +6,9 @@ use crate::audio_engine::transport::TransportTimeline;
 use crate::messages::{AudioMessage, ResidentContext, TriggerQuantization};
 use rtrb::RingBuffer;
 
+#[path = "mirror_tests/runtime_refresh_tests.rs"]
+mod runtime_refresh_tests;
+
 fn fixture() -> LaunchFixture {
     let mut fixture = LaunchFixture::new(4);
     let (_, feedback) = RingBuffer::<AudioMessage>::new(8);

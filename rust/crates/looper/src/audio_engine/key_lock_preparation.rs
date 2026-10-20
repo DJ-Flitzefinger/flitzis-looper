@@ -6,7 +6,7 @@
 
 use super::prepared_native_history::{
     NativeAdapterState, NativeHistoryRequest, NativeSourcePreparationError,
-    PREPARED_HISTORY_FRAMES, PitchSourceSnapshot,
+    PREPARED_HISTORY_FRAMES, PitchSourceSnapshot, SourceReadCheckpoint,
 };
 use super::productive_source_history::ProductiveSourceBinding;
 use super::source_feed_history::{SourceFeedContext, SourceFeedHistory, SourceFeedSnapshot};
@@ -33,6 +33,7 @@ pub(crate) struct ProspectiveSourceHistory<'a> {
     pub(crate) voice_generation: u64,
     pub(crate) execution_frame: u64,
     pub(crate) paused: bool,
+    pub(crate) actual_feed: Option<SourceReadCheckpoint>,
     pub(crate) source_feed_context: SourceFeedContext,
 }
 
@@ -116,6 +117,18 @@ impl<T> PreparedStateLane<T> {
             self.pending_return = Some(old);
         }
         true
+    }
+
+    /// All participants were preflighted and the callback now owns their effect claim.
+    /// This sole consumer retains its ready owner; the worker only frees recycle capacity.
+    fn exchange_claimed(&mut self, current: &mut Option<T>) {
+        debug_assert!(self.pending_return.is_none());
+        let prepared = self.ready.pop().expect("preflighted warmed Native owner");
+        if let Some(old) = current.replace(prepared)
+            && let Err(PushError::Full(old)) = self.recycle.push(old)
+        {
+            self.pending_return = Some(old);
+        }
     }
 }
 
@@ -297,6 +310,7 @@ impl KeyLockPreparationLane {
             binding: ProductiveSourceBinding::new(feed.sample, feed.sample_rate_hz, feed.accepted),
             playback: *feed.playback,
             plan: feed.plan,
+            actual_feed: None,
             target_output_frame,
             request_id,
             epoch,
@@ -340,9 +354,13 @@ impl KeyLockPreparationLane {
             .take()
             .expect("preflighted reusable source-history owner");
         let request = if context.history.capture_into(&mut history.snapshot) {
+            let actual = context.actual_feed.unwrap_or(SourceReadCheckpoint {
+                playback: *feed.playback,
+                plan: feed.plan,
+            });
             history.future = Some((
-                *feed.playback,
-                feed.plan,
+                actual.playback,
+                actual.plan,
                 active_delta,
                 context.source_feed_context,
             ));
@@ -358,6 +376,7 @@ impl KeyLockPreparationLane {
                         paused: context.paused,
                         playback: *feed.playback,
                         plan: feed.plan,
+                        actual_feed: context.actual_feed,
                         source_feed_context: context.source_feed_context,
                     };
                     if !endpoint.project_output_frames(delta) {
@@ -451,7 +470,8 @@ impl KeyLockPreparationLane {
             && ready.active
             && ready.used
             && !ready.dirty
-            && source.matches_adoption(feed, epoch, expected_request_id);
+            && source.matches_adoption(feed, epoch, expected_request_id)
+            && ready.retained_start_feed(feed.playback, feed.plan).is_ok();
         let mut candidate = self
             .source_ready
             .pop()
@@ -492,7 +512,24 @@ impl KeyLockPreparationLane {
                         .source
                         .as_ref()
                         .is_some_and(|source| source.matches_adoption(feed, epoch, request_id))
+                    && candidate
+                        .retained_start_feed(feed.playback, feed.plan)
+                        .is_ok()
             })
+    }
+
+    pub(crate) fn source_rate_change_ready(
+        &mut self,
+        feed: &ProductiveSourceFeed<'_>,
+        epoch: u64,
+        request_id: u64,
+        target: f64,
+    ) -> bool {
+        self.source_matches(feed, epoch, request_id)
+            && self
+                .source_ready
+                .peek()
+                .is_ok_and(|candidate| candidate.can_retarget_retained_rate(target))
     }
 
     /// The callback has preflighted every participant and owns the enclosing effect claim.
@@ -531,6 +568,11 @@ impl KeyLockPreparationLane {
             return false;
         }
         self.state.exchange(current)
+    }
+
+    /// Commit the preflighted SPSC exchange without a second fallible worker-status read.
+    pub(crate) fn exchange_claimed(&mut self, current: &mut Option<RubberBandLiveShifter>) {
+        self.state.exchange_claimed(current);
     }
 }
 
@@ -1036,6 +1078,7 @@ mod tests {
             voice_generation: 1,
             execution_frame: 100 + delta,
             paused: false,
+            actual_feed: None,
             source_feed_context: SourceFeedContext::new(
                 ProductiveSourceBinding::new(feed.sample, feed.sample_rate_hz, feed.accepted),
                 feed.plan

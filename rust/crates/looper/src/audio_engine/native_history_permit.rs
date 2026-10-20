@@ -4,8 +4,9 @@
 //! belong to the worker request/bundle and retire there, never through a dropped callback ticket.
 
 use super::constant_timing::{AcceptedTimingProjection, CurrentTimingAcknowledgements};
+use super::content_placement::OwnerIdentity;
 use super::input_runtime_binding::{InputPadBinding, InputRuntimeOwnership};
-use super::source_feed_history::SourceFeedGuard;
+use super::source_feed_history::{SourceFeedGuard, SourceFeedGuardIdentity};
 use crate::messages::SampleBuffer;
 use std::sync::{
     Arc,
@@ -64,6 +65,34 @@ pub(crate) struct NativeHistoryPermit {
     expected_epoch: u64,
     authority: NativeHistoryAuthority,
     source_feed_guard: Option<SourceFeedGuard>,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum NativeHistoryAuthorityIdentity {
+    Current {
+        ownership: OwnerIdentity,
+        acknowledgements: OwnerIdentity,
+    },
+    ActionCurrent {
+        ownership: OwnerIdentity,
+        acknowledgements: OwnerIdentity,
+    },
+    RetainedVoice {
+        lifetime: OwnerIdentity,
+        generation: u64,
+    },
+}
+
+/// Comparison-only receipt. The request must still own and validate its actual permit.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub(crate) struct NativeHistoryPermitIdentity {
+    id: usize,
+    binding: InputPadBinding,
+    source_generation: u64,
+    preparation_epoch: OwnerIdentity,
+    expected_epoch: u64,
+    authority: NativeHistoryAuthorityIdentity,
+    source_feed_guard: Option<SourceFeedGuardIdentity>,
 }
 
 impl NativeHistoryContext<'_> {
@@ -263,6 +292,44 @@ impl NativeVoiceHistoryContext<'_> {
 }
 
 impl NativeHistoryPermit {
+    pub(crate) fn scalar_identity(&self) -> NativeHistoryPermitIdentity {
+        let authority = match &self.authority {
+            NativeHistoryAuthority::Current {
+                ownership,
+                acknowledgements,
+            } => NativeHistoryAuthorityIdentity::Current {
+                ownership: OwnerIdentity::of(ownership),
+                acknowledgements: OwnerIdentity::of(acknowledgements),
+            },
+            NativeHistoryAuthority::ActionCurrent {
+                ownership,
+                acknowledgements,
+            } => NativeHistoryAuthorityIdentity::ActionCurrent {
+                ownership: OwnerIdentity::of(ownership),
+                acknowledgements: OwnerIdentity::of(acknowledgements),
+            },
+            NativeHistoryAuthority::RetainedVoice {
+                lifetime,
+                generation,
+            } => NativeHistoryAuthorityIdentity::RetainedVoice {
+                lifetime: OwnerIdentity::of(lifetime),
+                generation: *generation,
+            },
+        };
+        NativeHistoryPermitIdentity {
+            id: self.id,
+            binding: self.binding,
+            source_generation: self.source_generation,
+            preparation_epoch: OwnerIdentity::of(&self.preparation_epoch),
+            expected_epoch: self.expected_epoch,
+            authority,
+            source_feed_guard: self
+                .source_feed_guard
+                .as_ref()
+                .map(SourceFeedGuard::scalar_identity),
+        }
+    }
+
     /// Narrow a freshly captured strong permit once with its genuine source-feed/voice fence.
     /// An existing guard is never replaced or refreshed. A repeated call must be worker/control
     /// work because its incoming duplicate drops here. The attached guard follows this permit's

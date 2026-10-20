@@ -244,6 +244,8 @@ def test_startup_captures_automatic_without_mutating_authority_before_cold_succe
         initial_base_shift=0,
         initial_extra_shift=0,
         initial_key_lock=False,
+        initial_gain_db=0.0,
+        initial_eq_db=(0.0, 0.0, 0.0),
     )
     audio.set_pad_timing_intent.assert_not_called()
     audio.poll_loader_events.side_effect = [
@@ -310,6 +312,8 @@ def test_actual_startup_audio_projection_waits_for_fresh_automatic_adoption(
         initial_base_shift=0,
         initial_extra_shift=0,
         initial_key_lock=False,
+        initial_gain_db=0.0,
+        initial_eq_db=(0.0, 0.0, 0.0),
     )
     audio.set_pad_bpm.assert_not_called()
     audio.set_pad_timing_metadata.assert_not_called()

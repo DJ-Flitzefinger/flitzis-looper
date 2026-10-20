@@ -110,7 +110,12 @@ impl PitchActionPreparation {
                         && output.slots() != 0
                         && let Ok(mut work) = input.pop()
                     {
-                        if let Err(reason) = work.prepare() {
+                        #[cfg(all(test, windows))]
+                        crate::audio_engine::ordinary_start_tests::preparation_deadline_tests::before_worker(&work);
+                        let result = work.prepare();
+                        #[cfg(all(test, windows))]
+                        crate::audio_engine::ordinary_start_tests::preparation_deadline_tests::after_worker(&work, result.as_ref().err().copied());
+                        if let Err(reason) = result {
                             work.reject(reason);
                         }
                         if let Err(PushError::Full(work)) = output.push(work) {

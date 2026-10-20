@@ -6,6 +6,7 @@
 use super::native_history_permit::NativeHistoryPermit;
 use super::native_source_coverage::{
     NormalLoopCoverage, complete_view_available, normal_loop_feed_available,
+    normal_loop_feed_available_with_readers,
 };
 use super::pitch_intent::PitchIntent;
 use super::productive_source_history::ProductiveSourceBinding;
@@ -19,9 +20,93 @@ use super::stretch_processor::{DEFAULT_BLOCK_SAMPLES, FixedFifo, ProductiveSourc
 use crate::messages::{PreparedStemSet, SampleBuffer};
 use std::sync::Arc;
 
+#[path = "retained_native_start.rs"]
+mod retained_start;
+use retained_start::RetainedNativeStartTimeline;
+
 pub(crate) const PREPARED_HISTORY_FRAMES: usize = 4096;
 // A near-unity request remains a real request. Only actual native p=1 permits dry bypass.
 pub(crate) const PITCH_SCALE_EPSILON: f64 = 0.0;
+
+/// Keep the original constant-rate Native origin when a launch executes after its target.
+/// The handle must already have its exact pitch/reset prepared. This is a preparation
+/// bound, never an acoustic-delay or principal-attack estimate.
+pub(crate) fn launch_history_output_frames(
+    native: &RubberBandLiveShifter,
+    request: &NativeHistoryRequest,
+    catchup_frames: u64,
+) -> Result<usize, RubberBandError> {
+    let pitch = request
+        .pitch_intent
+        .native_pitch_scale(request.playback.tempo_ratio(), request.key_lock)
+        .map_err(|_| RubberBandError::InvalidPitchScale)?;
+    let catchup =
+        usize::try_from(catchup_frames).map_err(|_| RubberBandError::UnavailableSourceHistory)?;
+    native
+        .source_history_frames(pitch)?
+        .checked_add(catchup)
+        .filter(|history| *history <= super::source_feed_history::SOURCE_FEED_HISTORY_MAX_FRAMES)
+        .ok_or(RubberBandError::UnavailableSourceHistory)
+}
+
+/// Preserve the canonical T epoch after the rewound preparation prefix. Algebraically
+/// equal fractional positions can address different f32 interpolation taps without it.
+pub(crate) fn launch_source_rebase(
+    request: &NativeHistoryRequest,
+    history_frames: usize,
+    catchup_frames: u64,
+) -> Result<Option<(usize, SourceReadCheckpoint)>, RubberBandError> {
+    if catchup_frames == 0 {
+        return Ok(None);
+    }
+    let unavailable = || RubberBandError::UnavailableSourceHistory;
+    let catchup = usize::try_from(catchup_frames).map_err(|_| unavailable())?;
+    let boundary = history_frames
+        .checked_sub(catchup)
+        .ok_or_else(unavailable)?;
+    let (playback, silence) = request
+        .playback
+        .history_before_constant(catchup)
+        .ok_or_else(unavailable)?;
+    if silence != 0 || boundary == 0 {
+        return Err(unavailable());
+    }
+    let position = playback.position();
+    let checkpoint = SourceReadCheckpoint {
+        playback,
+        plan: SourceReadPlan {
+            frame_pos: position.frame,
+            seek_mode: position.seek_mode,
+            ..request.plan
+        },
+    };
+    let mut projected = checkpoint;
+    if !checkpoint.is_consistent()
+        || !projected.project_output_frames(catchup_frames)
+        || !projected.matches_exact(SourceReadCheckpoint {
+            playback: request.playback,
+            plan: request.plan,
+        })
+    {
+        return Err(unavailable());
+    }
+    Ok(Some((boundary, checkpoint)))
+}
+
+/// Explicit raw stream coordinates; declaring these does not accept a musical anchor.
+#[derive(Clone, Copy, Debug)]
+pub(crate) struct RetainedNativeStartCut {
+    pub(crate) history_output_frames: usize,
+    pub(crate) discarded_raw_output_frames: usize,
+}
+
+/// A new physical birth has no previously played input. Genuine continuations
+/// retain the existing source-origin proof and must never use this silent context.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) enum NativeStartHistoryContext {
+    SourceHistory,
+    PhysicalBirth,
+}
 
 /// Source/history admission failures belong to one request. Adapter/backend faults still
 /// terminate the worker; in particular, its FIFO InvalidBlockSize is not a coverage rejection.
@@ -53,6 +138,59 @@ impl NativeSourcePreparationError {
     }
 }
 
+/// One source-read trajectory, independent of its logical or Native-input role.
+#[derive(Clone, Copy, Debug)]
+pub(crate) struct SourceReadCheckpoint {
+    pub(crate) playback: SourcePlayback,
+    pub(crate) plan: SourceReadPlan,
+}
+
+impl SourceReadCheckpoint {
+    pub(crate) fn matches_exact(self, other: Self) -> bool {
+        self.playback.matches_exact(&other.playback) && self.plan.matches_exact(other.plan)
+    }
+
+    pub(crate) fn is_consistent(self) -> bool {
+        let position = self.playback.position();
+        self.playback.matches_domain(self.plan.domain())
+            && self.plan.frame_pos == position.frame
+            && self.plan.seek_mode == position.seek_mode
+    }
+
+    /// Advance each finite smoothing interval at its own rate, then normalize the next read.
+    /// Work is bounded by the supported rate range, including a terminal constant interval.
+    /// Failure does not partially update this checkpoint.
+    pub(crate) fn project_output_frames(&mut self, output_frames: u64) -> bool {
+        let mut projected = *self;
+        let mut remaining = output_frames;
+        for _ in 0..SourcePlayback::MAX_PROJECTION_SEGMENTS {
+            if remaining == 0 {
+                break;
+            }
+            let max_frames = usize::try_from(remaining).unwrap_or(usize::MAX);
+            let (frames, ratio) = projected.playback.chunk(max_frames);
+            if frames == 0 {
+                return false;
+            }
+            projected.playback.advance(frames);
+            projected
+                .plan
+                .transition
+                .advance_output_frames(frames, ratio);
+            remaining -= frames as u64;
+        }
+        if remaining != 0 {
+            return false;
+        }
+        projected.playback.chunk(DEFAULT_BLOCK_SAMPLES);
+        let position = projected.playback.position();
+        projected.plan.frame_pos = position.frame;
+        projected.plan.seek_mode = position.seek_mode;
+        *self = projected;
+        true
+    }
+}
+
 /// Frozen source/render checkpoint owned by one accepted action, without mutable DSP state.
 pub(crate) struct PitchSourceSnapshot {
     pub(crate) sample: SampleBuffer,
@@ -62,10 +200,19 @@ pub(crate) struct PitchSourceSnapshot {
     pub(crate) paused: bool,
     pub(crate) playback: SourcePlayback,
     pub(crate) plan: SourceReadPlan,
+    /// None preserves the legacy identity between logical and actual input trajectories.
+    pub(crate) actual_feed: Option<SourceReadCheckpoint>,
     pub(crate) source_feed_context: SourceFeedContext,
 }
 
 impl PitchSourceSnapshot {
+    pub(crate) fn actual_feed_checkpoint(&self) -> SourceReadCheckpoint {
+        self.actual_feed.unwrap_or(SourceReadCheckpoint {
+            playback: self.playback,
+            plan: self.plan,
+        })
+    }
+
     /// Resolve the actual captured reader slots against the retained physical pin.
     pub(crate) fn readers(&self) -> Option<StemReadSets<'_>> {
         self.source_feed_context
@@ -79,33 +226,24 @@ impl PitchSourceSnapshot {
         if self.paused || output_frames == 0 {
             return true;
         }
-        let mut playback = self.playback;
-        let mut plan = self.plan;
-        let mut remaining = output_frames;
-        for _ in 0..SourcePlayback::MAX_PROJECTION_SEGMENTS {
-            if remaining == 0 {
-                break;
-            }
-            let max_frames = usize::try_from(remaining).unwrap_or(usize::MAX);
-            let (frames, ratio) = playback.chunk(max_frames);
-            if frames == 0 {
-                return false;
-            }
-            playback.advance(frames);
-            plan.transition.advance_output_frames(frames, ratio);
-            remaining -= frames as u64;
-        }
-        if remaining != 0 {
+        let mut logical = SourceReadCheckpoint {
+            playback: self.playback,
+            plan: self.plan,
+        };
+        let mut actual = self.actual_feed;
+        if !logical.project_output_frames(output_frames)
+            || actual
+                .as_mut()
+                .is_some_and(|actual| !actual.project_output_frames(output_frames))
+        {
             return false;
         }
-        // Adoption compares the same intended output coordinate just before its first feed.
-        playback.chunk(DEFAULT_BLOCK_SAMPLES);
-        let position = playback.position();
-        plan.frame_pos = position.frame;
-        plan.seek_mode = position.seek_mode;
-        self.playback = playback;
-        self.plan = plan;
-        self.source_feed_context = self.source_feed_context.for_plan(plan);
+        self.playback = logical.playback;
+        self.plan = logical.plan;
+        self.actual_feed = actual;
+        self.source_feed_context = self
+            .source_feed_context
+            .for_plan(self.actual_feed_checkpoint().plan);
         true
     }
 
@@ -143,6 +281,7 @@ impl PitchSourceSnapshot {
     ) -> Option<NativeHistoryRequest> {
         if !permit.current(&self.sample, self.sample_rate_hz)
             || !permit.matches_projection(self.accepted)
+            || !self.actual_feed_checkpoint().is_consistent()
             || pitch_intent
                 .native_pitch_scale(self.playback.tempo_ratio(), key_lock)
                 .is_err()
@@ -172,6 +311,7 @@ impl PitchSourceSnapshot {
             coverage,
             playback: self.playback,
             plan: self.plan,
+            actual_feed: self.actual_feed,
             target_output_frame,
             request_id,
             epoch,
@@ -189,12 +329,21 @@ pub(crate) struct NativeHistoryRequest {
     pub(crate) binding: ProductiveSourceBinding,
     pub(crate) playback: SourcePlayback,
     pub(crate) plan: SourceReadPlan,
+    /// Logical adoption remains authoritative; this names only the actual next Native input.
+    pub(crate) actual_feed: Option<SourceReadCheckpoint>,
     pub(crate) target_output_frame: u64,
     pub(crate) request_id: u64,
     pub(crate) epoch: u64,
 }
 
 impl NativeHistoryRequest {
+    pub(crate) fn actual_feed_checkpoint(&self) -> SourceReadCheckpoint {
+        self.actual_feed.unwrap_or(SourceReadCheckpoint {
+            playback: self.playback,
+            plan: self.plan,
+        })
+    }
+
     /// Endpoint DSP data excludes the absolute output target and action envelope.
     /// Both real source owners remain current; callers must capture a fresh action permit.
     pub(crate) fn matches_endpoint(
@@ -219,6 +368,9 @@ impl NativeHistoryRequest {
             key_lock: render.key_lock,
         };
         self.endpoint_data_matches(&feed)
+            && self
+                .actual_feed_checkpoint()
+                .matches_exact(snapshot.actual_feed_checkpoint())
     }
 
     pub(crate) fn same_endpoint_request(&self, other: &Self) -> bool {
@@ -236,6 +388,9 @@ impl NativeHistoryRequest {
             key_lock: other.key_lock,
         };
         self.endpoint_data_matches(&feed)
+            && self
+                .actual_feed_checkpoint()
+                .matches_exact(other.actual_feed_checkpoint())
             && other
                 .permit
                 .current(&other.sample, other.binding.sample_rate_hz)
@@ -401,6 +556,28 @@ impl NativeHistoryRequest {
             && (self.playback.matches_rate_target(feed.playback) || productive_continuity)
             && self.required_stems_match(feed, false)
     }
+
+    /// A claimed live selection may replace reader roles, never the original source authority.
+    fn matches_effective_stem_source(
+        &self,
+        feed: &ProductiveSourceFeed<'_>,
+        effective_key_lock: bool,
+    ) -> bool {
+        let binding = ProductiveSourceBinding::new(feed.sample, feed.sample_rate_hz, feed.accepted);
+        self.pitch_intent == feed.pitch_intent
+            && effective_key_lock == feed.key_lock
+            && self.binding.same_source(binding)
+            && self.binding.accepted == binding.accepted
+            && self
+                .permit
+                .current_effective_source(feed.sample, feed.sample_rate_hz)
+            && self.permit.matches_projection(feed.accepted)
+            && SourceReadPlan {
+                selection: feed.plan.selection,
+                ..self.plan
+            }
+            .matches_source_contract(feed.plan)
+    }
     pub(crate) fn matches_contract(&self, feed: &ProductiveSourceFeed<'_>, epoch: u64) -> bool {
         self.epoch == epoch
             && self.pitch_intent == feed.pitch_intent
@@ -456,6 +633,40 @@ fn same_stem_owners(left: Option<&PreparedStemSet>, right: Option<&PreparedStemS
     }
 }
 
+/// Scalar evidence for one already accepted live read context. PCM and publication owners
+/// remain in the mixer's current/outgoing or frozen reader slots and the original request.
+#[derive(Clone, Copy, Debug)]
+struct EffectiveStemReadContext {
+    plan: SourceReadPlan,
+    readers: SourceFeedContext,
+}
+
+impl EffectiveStemReadContext {
+    fn matches(self, feed: &ProductiveSourceFeed<'_>, transition: Option<StemTransition>) -> bool {
+        let readers = feed
+            .plan
+            .required_read_sets(StemReadSets::new(feed.stems, feed.outgoing_stems));
+        self.plan.matches_source_contract(feed.plan)
+            && transition.is_some_and(|expected| expected.matches_exact(feed.plan.transition))
+            && self.readers.binding.accepted == feed.accepted
+            && self
+                .readers
+                .for_plan(feed.plan)
+                .same_source(SourceFeedContext::new(
+                    ProductiveSourceBinding::new(feed.sample, feed.sample_rate_hz, feed.accepted),
+                    readers,
+                ))
+            && normal_loop_feed_available_with_readers(
+                feed.sample,
+                readers,
+                feed.sample_rate_hz,
+                feed.accepted,
+                feed.plan,
+                feed.playback,
+            )
+    }
+}
+
 pub(crate) struct NativeAdapterState {
     pub(crate) rubberband: Option<RubberBandLiveShifter>,
     pub(crate) block_size: usize,
@@ -471,9 +682,13 @@ pub(crate) struct NativeAdapterState {
     /// Effective scalar association after a claimed identical-pitch mode change.
     /// The originating request and its historical mode remain immutable.
     effective_mode: Option<bool>,
+    /// Only a same-source live selection claim may install this scalar reader association.
+    effective_stem_read_context: Option<EffectiveStemReadContext>,
     /// Only genuine active-E preparation seeds this. Some(inactive) fences later restarts.
     pub(crate) source_transition: Option<StemTransition>,
     pub(crate) primed_output_frames: usize,
+    input_history_context: Option<NativeStartHistoryContext>,
+    retained_start_timeline: Option<RetainedNativeStartTimeline>,
 }
 
 impl NativeAdapterState {
@@ -498,8 +713,11 @@ impl NativeAdapterState {
             used: false,
             source: None,
             effective_mode: None,
+            effective_stem_read_context: None,
             source_transition: None,
             primed_output_frames: 0,
+            input_history_context: None,
+            retained_start_timeline: None,
         }
     }
 
@@ -515,6 +733,18 @@ impl NativeAdapterState {
         self.primed_output_frames = 0;
         self.source_transition = None;
         self.effective_mode = None;
+        self.effective_stem_read_context = None;
+        self.input_history_context = None;
+        self.retained_start_timeline = None;
+    }
+
+    pub(crate) fn has_physical_birth_context(&self) -> bool {
+        self.input_history_context == Some(NativeStartHistoryContext::PhysicalBirth)
+    }
+
+    pub(super) fn record_input_history_context(&mut self, context: NativeStartHistoryContext) {
+        debug_assert!(self.source.is_some());
+        self.input_history_context = Some(context);
     }
 
     pub(crate) fn effective_key_lock(&self) -> Option<bool> {
@@ -526,6 +756,22 @@ impl NativeAdapterState {
     /// Called only inside the mixer's complete same-pitch/source claim.
     pub(crate) fn retain_effective_mode_claimed(&mut self, enabled: bool) {
         self.effective_mode = Some(enabled);
+    }
+
+    /// Called after the complete mixer selection claim and exact retained endpoint update.
+    pub(crate) fn retain_stem_read_context_claimed(&mut self, feed: &ProductiveSourceFeed<'_>) {
+        let readers = feed
+            .plan
+            .required_read_sets(StemReadSets::new(feed.stems, feed.outgoing_stems));
+        self.effective_stem_read_context = Some(EffectiveStemReadContext {
+            plan: feed.plan,
+            readers: SourceFeedContext::new(
+                ProductiveSourceBinding::new(feed.sample, feed.sample_rate_hz, feed.accepted),
+                readers,
+            ),
+        });
+        // Keep the completed transition as an exact fence against an unclaimed restart.
+        self.source_transition = Some(feed.plan.transition);
     }
 
     pub(crate) fn has_productive_continuity(
@@ -555,6 +801,16 @@ impl NativeAdapterState {
         if self.effective_mode.is_some() && !productive_continuity {
             return false;
         }
+        if let Some(context) = self.effective_stem_read_context {
+            return productive_continuity
+                && context.matches(feed, self.source_transition)
+                && self.source.as_ref().is_some_and(|source| {
+                    source.matches_effective_stem_source(
+                        feed,
+                        self.effective_mode.unwrap_or(source.key_lock),
+                    )
+                });
+        }
         self.source.as_ref().is_some_and(|source| {
             if self.source_transition.is_some() || productive_continuity {
                 source.matches_effective_contract_with_transition(
@@ -575,7 +831,7 @@ impl NativeAdapterState {
         &mut self,
         request: NativeHistoryRequest,
     ) -> Result<(), RubberBandError> {
-        self.prepare_source_with_silence(request, 0, PREPARED_HISTORY_FRAMES, false)
+        self.prepare_source_with_silence(request, 0, PREPARED_HISTORY_FRAMES, false, None, None)
             .map_err(NativeSourcePreparationError::into_backend)
     }
 
@@ -594,7 +850,14 @@ impl NativeAdapterState {
                 NativeSourcePreparationError::Unavailable(RubberBandError::InvalidPitchScale)
             })?;
         if (0.5..=2.0).contains(&pitch) {
-            return self.prepare_source_with_silence(request, 0, PREPARED_HISTORY_FRAMES, false);
+            return self.prepare_source_with_silence(
+                request,
+                0,
+                PREPARED_HISTORY_FRAMES,
+                false,
+                None,
+                None,
+            );
         }
         if request.playback.tempo_ratio().to_bits() != request.playback.rate_target().to_bits() {
             return Err(NativeSourcePreparationError::Unavailable(
@@ -620,45 +883,51 @@ impl NativeAdapterState {
             .map_err(NativeSourcePreparationError::into_backend)
     }
 
+    /// Warm one fresh physical source with silence before its selected origin.
+    /// Logical progress stays at that exact endpoint; all work remains off realtime.
+    pub(crate) fn prepare_source_at_physical_birth(
+        &mut self,
+        request: NativeHistoryRequest,
+    ) -> Result<(), RubberBandError> {
+        self.prepare_retained_source_start_context_checked(
+            request,
+            None,
+            0,
+            None,
+            NativeStartHistoryContext::PhysicalBirth,
+        )
+        .map_err(NativeSourcePreparationError::into_backend)
+    }
+
+    /// Worker-only: consume the original launch's missed suffix without a new reset origin.
+    pub(crate) fn prepare_source_at_endpoint_with_launch_catchup(
+        &mut self,
+        request: NativeHistoryRequest,
+        catchup_frames: u64,
+    ) -> Result<(), RubberBandError> {
+        self.prepare_source_at_endpoint_with_launch_catchup_and_dsp(request, catchup_frames, None)
+    }
+
+    pub(crate) fn prepare_source_at_endpoint_with_launch_catchup_and_dsp(
+        &mut self,
+        request: NativeHistoryRequest,
+        catchup_frames: u64,
+        dsp: Option<&mut super::late_start_dsp::LateStartDspWork>,
+    ) -> Result<(), RubberBandError> {
+        self.prepare_retained_source_start_with_catchup_and_dsp_checked(
+            request,
+            None,
+            catchup_frames,
+            dsp,
+        )
+        .map_err(NativeSourcePreparationError::into_backend)
+    }
+
     fn prepare_source_at_endpoint_checked(
         &mut self,
-        mut request: NativeHistoryRequest,
+        request: NativeHistoryRequest,
     ) -> Result<(), NativeSourcePreparationError> {
-        let endpoint = request.playback;
-        let endpoint_plan = request.plan;
-        let pitch = request
-            .pitch_intent
-            .native_pitch_scale(endpoint.tempo_ratio(), request.key_lock)
-            .map_err(|_| {
-                NativeSourcePreparationError::Unavailable(RubberBandError::InvalidPitchScale)
-            })?;
-        let native = self
-            .rubberband
-            .as_mut()
-            .ok_or(NativeSourcePreparationError::Backend(
-                RubberBandError::ConstructionFailed,
-            ))?;
-        native
-            .prepare_exact_pitch(pitch)
-            .map_err(NativeSourcePreparationError::Backend)?;
-        let history_frames = native
-            .source_history_frames(pitch)
-            .map_err(NativeSourcePreparationError::from_history)?;
-        let (history, silent_prefix) = endpoint.history_before_constant(history_frames).ok_or(
-            NativeSourcePreparationError::Unavailable(RubberBandError::UnavailableSourceHistory),
-        )?;
-        request.playback = history;
-        let position = history.position();
-        request.plan.frame_pos = position.frame;
-        request.plan.seek_mode = position.seek_mode;
-        self.prepare_source_with_silence(request, silent_prefix, history_frames, true)?;
-        let source = self
-            .source
-            .as_mut()
-            .expect("prepared endpoint retains its source owner");
-        source.playback = endpoint;
-        source.plan = endpoint_plan;
-        Ok(())
+        self.prepare_retained_source_start_checked(request, None)
     }
 
     fn prepare_source_with_silence(
@@ -667,7 +936,23 @@ impl NativeAdapterState {
         mut silent_prefix: usize,
         history_frames: usize,
         native_prepared: bool,
+        source_rebase: Option<(usize, SourceReadCheckpoint)>,
+        mut dsp: Option<(usize, &mut super::late_start_dsp::LateStartDspWork)>,
     ) -> Result<(), NativeSourcePreparationError> {
+        if !request
+            .actual_feed_checkpoint()
+            .matches_exact(SourceReadCheckpoint {
+                playback: request.playback,
+                plan: request.plan,
+            })
+        {
+            // This legacy forward path has no actual-history replay proof. A differing
+            // input trajectory must use genuine replay, never read the logical substitute.
+            return Err(NativeSourcePreparationError::Unavailable(
+                RubberBandError::UnavailableSourceHistory,
+            ));
+        }
+        request.actual_feed = None;
         if !complete_view_available(&request.sample)
             && !request.coverage.as_ref().is_some_and(|coverage| {
                 coverage.matches(
@@ -729,7 +1014,28 @@ impl NativeAdapterState {
         #[cfg(test)]
         super::source_reader::reset_tap_observation_for_test();
         while remaining > 0 {
-            let (frames, ratio) = request.playback.chunk(remaining.min(DEFAULT_BLOCK_SAMPLES));
+            let consumed = history_frames - remaining;
+            if let Some((boundary, checkpoint)) = source_rebase
+                && consumed == boundary
+            {
+                if silent_prefix != 0 {
+                    return Err(NativeSourcePreparationError::Unavailable(
+                        RubberBandError::UnavailableSourceHistory,
+                    ));
+                }
+                request.playback = checkpoint.playback;
+                request.plan = checkpoint.plan;
+            }
+            let until_rebase = source_rebase.map_or(remaining, |(boundary, _)| {
+                if boundary > consumed {
+                    boundary - consumed
+                } else {
+                    remaining
+                }
+            });
+            let (frames, ratio) = request
+                .playback
+                .chunk(remaining.min(DEFAULT_BLOCK_SAMPLES).min(until_rebase));
             let pitch = request
                 .pitch_intent
                 .native_pitch_scale(ratio, request.key_lock)
@@ -761,51 +1067,15 @@ impl NativeAdapterState {
                 remaining -= frames;
                 continue;
             }
-            if request.coverage.is_some() {
-                if !normal_loop_feed_available(
-                    &request.sample,
-                    request.stems.as_ref(),
-                    request.binding.sample_rate_hz,
-                    request.binding.accepted,
-                    request.plan,
-                    &request.playback,
-                ) {
-                    return Err(NativeSourcePreparationError::Unavailable(
-                        RubberBandError::InvalidBlockSize,
-                    ));
-                }
-                if feed.len() < request.plan.channels {
-                    return Err(NativeSourcePreparationError::Backend(
-                        RubberBandError::InvalidBlockSize,
-                    ));
-                }
-                request
-                    .plan
-                    .fill_fractional_buffers_checked(
-                        &request.sample,
-                        request.stems.as_ref(),
-                        &request.playback,
-                        &mut feed,
-                        frames,
-                    )
-                    .map_err(NativeSourcePreparationError::from_coverage)?;
-            } else if complete_view_available(&request.sample) {
-                request.plan.fill_fractional_buffers(
-                    &request.sample,
-                    request.stems.as_ref(),
-                    &request.playback,
-                    &mut feed,
-                    frames,
-                );
-            } else {
-                return Err(NativeSourcePreparationError::Unavailable(
-                    RubberBandError::InvalidBlockSize,
-                ));
-            }
             // A trajectory reaching unity still goes through native state during preparation;
             // adoption will reject a dry endpoint rather than changing dry playback semantics.
-            self.render(&feed, &mut output, frames, pitch)
-                .map_err(NativeSourcePreparationError::Backend)?;
+            self.render_source_history_chunk(&request, &mut feed, &mut output, frames, pitch)?;
+            if let Some((start, dsp)) = &mut dsp
+                && consumed >= *start
+            {
+                dsp.consume(&request, &output, frames)
+                    .map_err(NativeSourcePreparationError::from_history)?;
+            }
             request.playback.advance(frames);
             request.plan.transition.advance_output_frames(frames, ratio);
             let position = request.playback.position();
@@ -821,7 +1091,63 @@ impl NativeAdapterState {
         }
         self.source = Some(request);
         self.primed_output_frames = history_frames;
+        self.input_history_context = Some(NativeStartHistoryContext::SourceHistory);
         Ok(())
+    }
+
+    /// Existing source reader and adapter processing shared by cold priming and
+    /// continuation of the same original launch. Worker-only; never resets Native.
+    pub(super) fn render_source_history_chunk(
+        &mut self,
+        request: &NativeHistoryRequest,
+        feed: &mut [Vec<f32>],
+        output: &mut [Vec<f32>],
+        frames: usize,
+        pitch: f64,
+    ) -> Result<(), NativeSourcePreparationError> {
+        if request.coverage.is_some() {
+            if !normal_loop_feed_available(
+                &request.sample,
+                request.stems.as_ref(),
+                request.binding.sample_rate_hz,
+                request.binding.accepted,
+                request.plan,
+                &request.playback,
+            ) {
+                return Err(NativeSourcePreparationError::Unavailable(
+                    RubberBandError::InvalidBlockSize,
+                ));
+            }
+            if feed.len() < request.plan.channels {
+                return Err(NativeSourcePreparationError::Backend(
+                    RubberBandError::InvalidBlockSize,
+                ));
+            }
+            request
+                .plan
+                .fill_fractional_buffers_checked(
+                    &request.sample,
+                    request.stems.as_ref(),
+                    &request.playback,
+                    feed,
+                    frames,
+                )
+                .map_err(NativeSourcePreparationError::from_coverage)?;
+        } else if complete_view_available(&request.sample) {
+            request.plan.fill_fractional_buffers(
+                &request.sample,
+                request.stems.as_ref(),
+                &request.playback,
+                feed,
+                frames,
+            );
+        } else {
+            return Err(NativeSourcePreparationError::Unavailable(
+                RubberBandError::InvalidBlockSize,
+            ));
+        }
+        self.render(feed, output, frames, pitch)
+            .map_err(NativeSourcePreparationError::Backend)
     }
 
     /// One common adapter implementation for worker catch-up and bounded callback rendering.
@@ -989,6 +1315,7 @@ pub(super) mod tests {
             coverage: None,
             playback,
             plan,
+            actual_feed: None,
             target_output_frame: PREPARED_HISTORY_FRAMES as u64,
             request_id: 1,
             epoch: 3,

@@ -547,13 +547,61 @@ fn material_migration_hold_rejects_queued_starts_and_release_never_revalidates_o
     let engine = AudioEngine::new().unwrap();
     let previous = old(&engine);
     let mut callback = Callback::new(&engine, &previous);
+    let (producer, mut consumer) = rtrb::RingBuffer::new(8);
+    let producer = Arc::new(Mutex::new(producer));
+    // The control-only old() seam does not grant callback telemetry authority.
+    // Adopt this exact source through the productive guarded source transaction,
+    // so the later launch receipt has a genuine callback source ACK to name.
+    let ownership = &engine.input_runtime_ownership;
+    let source_placement = ownership.slot_snapshot(0).unwrap();
+    let write = ownership
+        .prepare_slot_write_fixed(source_placement, source_placement.lifetime())
+        .unwrap();
+    let publication = ownership
+        .publish_source_write(
+            &write,
+            &previous,
+            48_000,
+            7,
+            ownership.authority_revision(0),
+            None,
+            true,
+            || true,
+        )
+        .unwrap();
+    let adoption = Arc::new(AtomicU8::new(0));
+    producer
+        .lock()
+        .unwrap()
+        .push(ControlMessage::LoadColdSample {
+            initial_mix: None,
+            publication,
+            id: 0,
+            sample: previous.clone(),
+            source_generation: 7,
+            content_lifetime: source_placement.lifetime(),
+            adoption: adoption.clone(),
+            epoch: None,
+            captured_epoch: 0,
+            replace_assignment: false,
+            loop_region: None,
+            resident_cancelled: None,
+            incoming_defaults: None,
+            initial_pitch: crate::audio_engine::SourcePitchInitialization::FreshNeutral,
+        })
+        .unwrap();
+    assert_eq!(callback.drain(&mut consumer), 1);
+    assert_eq!(adoption.load(Ordering::Acquire), 2);
+    assert_eq!(ownership.cold_status(0, 7), Some(2));
+    callback.assert_old_voice(&previous);
+    assert!(callback.feedback.events.is_empty());
     callback.mixer.stop_sample(0);
     let binding = input_runtime_binding::capture(&engine, 0)
         .unwrap()
         .unwrap()
         .binding;
-    let (producer, mut consumer) = rtrb::RingBuffer::new(8);
-    let producer = Arc::new(Mutex::new(producer));
+    let original_key = binding.placement.unwrap().content_key().unwrap();
+    assert_eq!(ownership.callback_feedback_key(0), Some(original_key));
     let start = |revision| ControlMessage::TriggerInputPad {
         id: 0,
         start_s: 0.0,
@@ -565,7 +613,24 @@ fn material_migration_hold_rejects_queued_starts_and_release_never_revalidates_o
         launch_revision: revision,
     };
     let old_revision = engine.input_runtime_ownership.launch_revision(0);
-    producer.lock().unwrap().push(start(old_revision)).unwrap();
+    let enqueue_admitted = || {
+        let mut queue = producer.lock().unwrap();
+        assert!(!queue.is_full());
+        let placement = ownership.slot_snapshot(0).unwrap();
+        let prepared = ownership
+            .prepare_launch_write(placement, input_runtime_binding::LaunchWriteKind::Admit)
+            .unwrap();
+        let revision = prepared.previous_revision;
+        ownership
+            .commit_launch_write(
+                prepared,
+                || ownership.admission_fields_current(0, binding),
+                || queue.push(start(revision)).unwrap(),
+            )
+            .unwrap();
+        revision
+    };
+    assert_eq!(enqueue_admitted(), old_revision);
     let hold = control::hold_for_producer(&engine, vec![0, 215], &producer).unwrap();
     assert!(
         !engine
@@ -587,6 +652,7 @@ fn material_migration_hold_rejects_queued_starts_and_release_never_revalidates_o
     assert!(control::hold_for_producer(&engine, vec![215], &producer).is_err());
     assert_eq!(callback.drain(&mut consumer), 1);
     assert!(!callback.mixer.voices.iter().any(|voice| voice.active));
+    assert!(callback.feedback.events.is_empty());
     producer.lock().unwrap().push(start(held_revision)).unwrap();
     hold.release().unwrap();
     assert!(
@@ -601,16 +667,10 @@ fn material_migration_hold_rejects_queued_starts_and_release_never_revalidates_o
     );
     assert_eq!(callback.drain(&mut consumer), 1);
     assert!(!callback.mixer.voices.iter().any(|voice| voice.active));
-    assert!(
-        !callback
-            .feedback
-            .events
-            .iter()
-            .any(|event| matches!(event, AudioMessage::SampleStarted { .. }))
-    );
+    assert!(callback.feedback.events.is_empty());
     let fresh = engine.input_runtime_ownership.launch_revision(0);
     assert!(engine.input_runtime_ownership.launch_current(0, fresh));
-    producer.lock().unwrap().push(start(fresh)).unwrap();
+    assert_eq!(enqueue_admitted(), fresh);
     assert_eq!(callback.drain(&mut consumer), 1);
     assert!(
         callback
@@ -619,13 +679,18 @@ fn material_migration_hold_rejects_queued_starts_and_release_never_revalidates_o
             .iter()
             .any(|voice| voice.is_playing_sample(0))
     );
-    assert!(
-        callback
-            .feedback
-            .events
-            .iter()
-            .any(|event| matches!(event, AudioMessage::SampleStarted { id: 0 }))
-    );
+    assert_eq!(callback.feedback.events.len(), 1);
+    let started = &callback.feedback.events[0];
+    assert!(matches!(
+        started,
+        AudioMessage::ContentFeedback {
+            id: 0, owner, cell, lifetime, kind: 1, value, ..
+        } if *owner == engine.input_runtime_ownership.owner_identity().diagnostic()
+            && *cell == original_key.cell().index()
+            && *lifetime == original_key.lifetime()
+            && *value == 0.0
+    ));
+    assert_eq!(engine._resolve_pad_feedback(started).unwrap(), Some(0));
     assert!(hold.release().is_err());
 }
 
@@ -878,7 +943,14 @@ fn material_migration_journal_holds_directory_identity_and_rejects_replacement_u
 
 pub(super) fn migration_callback_8000(engine: &AudioEngine) -> Callback {
     let mut callback = Callback {
-        mixer: RtMixer::new(1, 8_000.0),
+        mixer: crate::audio_engine::audio_stream::create_stream_mixer(
+            1,
+            8_000,
+            engine.current_timing_acknowledgements.clone(),
+            engine.input_runtime_ownership.clone(),
+            engine.prepared_source_epochs.clone(),
+        )
+        .unwrap(),
         scheduler: FixedCapacityScheduler::new(),
         transport: TransportTimeline::new(8_000),
         quantization: TriggerQuantization::Immediate,
@@ -1367,7 +1439,12 @@ fn readable_migration_new_process(mid_layout: bool) {
     // All source tickets, registrations, permits and PCM Arcs die before the child
     // process starts. Only verified original/cache files, journal and evidence remain.
     {
-        let engine = Arc::new(AudioEngine::new().unwrap());
+        let (producer, mut consumer) = rtrb::RingBuffer::new(8);
+        let producer = Arc::new(Mutex::new(producer));
+        let engine = Arc::new(constant_timing::with_control_producer(
+            AudioEngine::new().unwrap(),
+            &producer,
+        ));
         let mut old_transaction = crate::audio_engine::cold_store::ColdTransaction::capture(
             &root,
             &legacy,
@@ -1467,8 +1544,7 @@ fn readable_migration_new_process(mid_layout: bool) {
                 .publish_test_source(id, &old_sample, 8_000, 7);
         }
         let preparation = control::prepared_for_test(&engine, material, &root).unwrap();
-        let (producer, mut consumer) = rtrb::RingBuffer::new(8);
-        let producer = Arc::new(Mutex::new(producer));
+
         let mut callback = migration_callback_8000(&engine);
         let source = control::adopt_for_format(
             &engine,
@@ -1782,6 +1858,7 @@ fn material_migration_new_process_child_reopens_journal_with_fresh_source_and_ti
     let mut callback = migration_callback_8000(&engine);
     let (producer, mut consumer) = rtrb::RingBuffer::new(8);
     let producer = Arc::new(Mutex::new(producer));
+    let engine = constant_timing::with_control_producer(engine, &producer);
     // Ordinary verified canonical restore, not migration preparation or a carried
     // parent subscriber. A new process allocates its own source/lease/permit.
     let admitted = admit_selected_material(
@@ -2195,8 +2272,11 @@ fn material_migration_seed_subscriber_reads_actual_finite_range_before_own_callb
     );
     assert_eq!(
         selected.residency.as_ref().unwrap().context,
-        crate::messages::ResidentContext::FiniteLoop
+        crate::messages::ResidentContext::KeyLockFiniteLoop
     );
+    // PreserveEffective prepares Native-capable geometry without enabling the
+    // effective bank's KEY LOCK mode.
+    assert!(!callback.mixer.key_lock_for_measurement(0));
     // This independently derives only the actual selected frames from the PCM16
     // original; no productive decoder, seed bytes or whole-track array is used.
     let expected: Vec<f32> = [-16_384_i16, 32_767, 0, -4_096]

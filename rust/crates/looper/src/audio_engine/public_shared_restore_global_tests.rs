@@ -631,29 +631,16 @@ fn start(voices: &mut GlobalVoices, id: usize, enabled: bool, eq: [f32; 3], gap:
     voices.harness.call0("poll");
     assert_eq!(original.effective_frame(), Some(execution));
     assert_eq!(original.received_timestamp(), original_timestamp);
-    let actual = voice(&voices.harness, id);
-    assert_eq!(actual.source_playback.position().frame, 0);
-    assert_eq!(actual.source_playback.position().fraction, 0.0);
-    voices.harness.target("finish_start", id);
+    let catchup = (execution - original_frame) as usize;
     let mut expected = ExpectedVoice::new_at_range(&voices.harness, id, enabled, 0, FRAMES);
+    expected.prepare_ordinary_start(catchup);
+    let (frame, fraction, explicit) = expected.clock.physical_position(0);
+    let actual = voice(&voices.harness, id);
+    assert_eq!(actual.source_playback.position().frame, frame);
+    assert!((actual.source_playback.position().fraction - fraction).abs() < 1e-8);
+    assert!(!explicit);
+    voices.harness.target("finish_start", id);
     if enabled {
-        // A Normal loop start owns periodic past at its physical endpoint. Feed
-        // the independent raw Native from the equivalent prior phase of this
-        // fixture's declared .73 rate (100 loops form an exact output cycle).
-        // No live clock, prepared request or Native output supplies these samples.
-        let mut history_clock = AlgebraicClock::physical(0, FRAMES, RATIO);
-        history_clock.advance(FRAMES * 100 - HISTORY);
-        expected.raw = RawChronology::new(RATIO, true);
-        expected
-            .raw
-            .render(&expected.source, &mut history_clock, HISTORY);
-        let (frame, fraction, explicit) = history_clock.physical_position(0);
-        assert_eq!(frame, 0);
-        assert!(fraction.abs() < 1e-8 && !explicit);
-        expected.warm = 0;
-        expected.raw_fed = HISTORY;
-        expected.candidate_needed = false;
-        expected.adoptions = 1;
         let actual = voice(&voices.harness, id);
         assert_eq!(
             actual.stretch.adopted_request_id(),
@@ -665,7 +652,7 @@ fn start(voices: &mut GlobalVoices, id: usize, enabled: bool, eq: [f32; 3], gap:
                 .productive_history()
                 .unwrap()
                 .fed_output_frames,
-            HISTORY as u64
+            (HISTORY + catchup) as u64
         );
     }
     Python::attach(|py| {

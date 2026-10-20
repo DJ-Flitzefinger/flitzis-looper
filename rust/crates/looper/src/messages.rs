@@ -279,6 +279,9 @@ impl PreparedStemSet {
 #[derive(Debug, Clone, Copy, Default)]
 pub(crate) struct ResidentControlIntent {
     pub(crate) loop_region: Option<(usize, Option<usize>)>,
+    // Only the original captured launch's readiness request carries its loop intent.
+    // Independent loop edits remain source controls even when storage is reused.
+    pub(crate) loop_is_launch_readiness: bool,
     pub(crate) seek_position_s: Option<f64>,
     pub(crate) key_lock: Option<bool>,
     pub(crate) key_lock_request_id: Option<u64>,
@@ -538,9 +541,50 @@ impl ControlParameterMessage {
     }
 }
 
+/// Unresolved capture placement intent; only the admitting callback supplies a clock.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum MixCaptureTarget {
+    At(u64),
+    NextAdmissible,
+}
+
+impl MixCaptureTarget {
+    pub(crate) fn explicit_frame(self) -> Option<u64> {
+        match self {
+            Self::At(frame) => Some(frame),
+            Self::NextAdmissible => None,
+        }
+    }
+
+    pub(crate) fn mode(self) -> &'static str {
+        match self {
+            Self::At(_) => "explicit",
+            Self::NextAdmissible => "next_admissible",
+        }
+    }
+
+    /// The first unrendered frame of this actual admitting callback, without +1.
+    pub(crate) fn resolve(self, callback_start_frame: u64) -> u64 {
+        match self {
+            Self::At(frame) => frame,
+            Self::NextAdmissible => callback_start_frame,
+        }
+    }
+}
+
 /// Message that is emitted from the Python side.
 #[derive(Debug, Clone)]
 pub enum ControlMessage {
+    /// The same control-prepared owner is claimed once on the output scheduler.
+    StartMixCapture {
+        publication: Arc<crate::audio_engine::mix_capture::publication::CapturePublication>,
+        target_frame: MixCaptureTarget,
+    },
+    /// Session-fenced capture stop; independent of ordinary playback StopAll.
+    StopMixCapture {
+        session_id: u64,
+        target_frame: MixCaptureTarget,
+    },
     /// One complete control-allocated pitch/optional attack owner.
     PitchAction(Arc<crate::audio_engine::pitch_publication::PitchActionPublication>),
     PreparedStart(Arc<crate::audio_engine::ordinary_start::OrdinaryStartPublication>),
@@ -687,10 +731,14 @@ pub enum ControlMessage {
         resident_cancelled: Option<Arc<std::sync::atomic::AtomicBool>>,
         incoming_defaults: Option<IncomingLoadDefaults>,
         initial_pitch: crate::audio_engine::SourcePitchInitialization,
+        initial_mix: Option<crate::audio_engine::SourceMixInitialization>,
     },
 
     /// Atomic complete content installation into one reserved empty target.
     PadCopy(Box<crate::audio_engine::pad_copy::PadCopyRtWork>),
+    BankMutation(Arc<crate::audio_engine::pad_copy::bank::BankMutationPublication>),
+    /// Read-only, nonce-bound fresh restored-bank verification on the same FIFO.
+    VerifyRecoveredBank(Box<crate::audio_engine::pad_copy::bank::recovery::RecoveredBankProbe>),
     PadPair(Box<crate::audio_engine::pad_pair::PadPairRtWork>),
     HoldAction(Box<crate::audio_engine::hold_action::HoldActionRtWork>),
     RelocateResident(Box<ResidentTransaction>),
@@ -826,6 +874,8 @@ impl ControlMessage {
         match self {
             ControlMessage::Ping() => ControlMessageClass::Test,
             ControlMessage::PlaySample { .. }
+            | ControlMessage::StartMixCapture { .. }
+            | ControlMessage::StopMixCapture { .. }
             | ControlMessage::PitchAction(_)
             | ControlMessage::PreparedStart(_)
             | ControlMessage::CapturePadStartTarget(_)
@@ -844,6 +894,8 @@ impl ControlMessage {
             ControlMessage::LoadSample { .. }
             | ControlMessage::LoadColdSample { .. }
             | ControlMessage::PadCopy(_)
+            | ControlMessage::BankMutation(_)
+            | ControlMessage::VerifyRecoveredBank(_)
             | ControlMessage::PadPair(_)
             | ControlMessage::RelocateResident(_)
             | ControlMessage::CaptureResidentSeek(_)

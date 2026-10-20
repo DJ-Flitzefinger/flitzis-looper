@@ -241,8 +241,8 @@ fn mixed_burst_profile(observe_each_executor: bool, oracle: &[f32], oracle_fifo:
     }
 
     // In the main profile this production render drains the entire mixed burst.
-    // Both profiles then compare all initial output with an independent ordinary
-    // Normal-start worker render, rather than a later settled-tone-only oracle.
+    // Both profiles compare every initial sample with the independently raw-bound
+    // on-time ordinary reference, including its explicit-silence cold beginning.
     let mut pcm = hit.render(1);
     assert!(actions.iter().all(CapturedPitchAction::effective));
     assert!(hit.scheduler.is_empty());
@@ -279,9 +279,20 @@ fn accepted_mixed_gui_midi_opposing_burst_keeps_originals_after_reserve_consumpt
     let (oracle, oracle_fifo) = {
         let mut reference = fixture();
         set_pitch(&mut reference, 7);
-        let expected = ordinary_miss(&mut reference);
-        let pcm = complete_pcm(&mut reference, 8192);
+        assert!(
+            reference
+                .render_to(TARGET)
+                .iter()
+                .all(|sample| *sample == 0.0)
+        );
+        let expected = ordinary_ready(&mut reference);
+        let pcm = complete_pcm(&mut reference, TARGET);
         assert_eq!(expected.state(), "applied");
+        let raw = physical_birth_tone_reference(48_000, SOURCE_HZ, 0, 7, 1.0, true);
+        assert_initial_pcm(&pcm, &raw);
+        // H=4096 is block aligned and 48000=93*512+384. The existing
+        // adapter therefore retains 384 input frames and 511-384 output frames.
+        assert_eq!(reference.voice(0).stretch.pending_fifo_frames(), (384, 127));
         (pcm, reference.voice(0).stretch.pending_fifo_frames())
     };
     for observe_each_executor in [false, true] {

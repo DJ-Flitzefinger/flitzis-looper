@@ -97,8 +97,27 @@ fn actual_finite_keylock_window_worker_ack_feeds_native_and_continues_full_pcm_o
     assert!(after.current() && after.available());
     assert_eq!(after.binding.resident, finite.resident_binding());
     assert!(loaded.callback.mixer.key_lock_for_measurement(0));
+    // This oracle covers live first-wet preparation after the frame-zero birth.
+    // A wet ordinary attack now owns a separately prepared T-to-E Native before
+    // it starts; keep this explicit OFF-to-ON chronology on both references.
+    loaded.callback.mixer.set_pad_key_lock(0, false);
     assert!(launch_with_producer(&loaded.engine, &ticket, false, 1, &loaded.producer).unwrap());
-    assert_eq!(loaded.callback.drain(&mut loaded.consumer), 1);
+    let start = match loaded.consumer.peek().unwrap() {
+        ControlMessage::CapturePadStartTarget(start) => start.clone(),
+        _ => panic!("ordinary launch must retain its original target before prepared work"),
+    };
+    assert_eq!(loaded.callback.drain(&mut loaded.consumer), 2);
+    assert_eq!(start.state(), "applied", "{:?}", start.reason());
+    assert_eq!(start.original_frame(), Some(0));
+    assert_eq!(start.execution_frame(), Some(0));
+    assert_eq!(start.effective_frame(), Some(0));
+    assert!(start.is_current() && ticket.is_current());
+    assert!(loaded.callback.scheduler.is_empty());
+    assert_eq!(
+        voice(&loaded.callback.mixer).stretch.pending_fifo_frames(),
+        (0, 0)
+    );
+    loaded.callback.mixer.set_pad_key_lock(0, true);
     let mut reference = full_oracle(&loaded, 24, 96);
     let mut peaks = [0.0; NUM_SAMPLES];
     let mut expected = vec![0.0; 26];

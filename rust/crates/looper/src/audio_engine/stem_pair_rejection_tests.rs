@@ -1268,7 +1268,17 @@ assert publication_entry is not project.stem_cache[1]
 assert publication_entry.pair == project.stem_cache[1].pair
 publication_source = controller._capture_source_ticket(1, publication_entry.source_version)
 assert controller._queue_stem_publication(1, publication_entry, publication_source)
+publication_requested = controller._requested_preparations[1].spec
+assert publication_requested.entry is publication_entry
+assert publication_requested.ticket is publication_source
+assert publication_requested.previous_entry is project.stem_cache[1]
+assert 1 not in controller._pair_preparations.pending
+controller.on_frame_render()
 publication_request = controller._pair_preparations.pending[1]
+assert 1 not in controller._requested_preparations
+assert publication_request.entry is publication_requested.entry
+assert publication_request.ticket is publication_requested.ticket
+assert publication_request.previous_entry is publication_requested.previous_entry
 assert publication_request.previous_entry is project.stem_cache[1]
 assert not publication_request.verify_saved_selection
 "#,

@@ -39,6 +39,23 @@ mod flitzis_looper_audio {
     use super::audio_engine::AudioEngine;
 
     #[pymodule_export]
+    use super::audio_engine::SourceBeatmap;
+
+    #[pymodule_export]
+    use super::audio_engine::MixCaptureTicket;
+
+    #[pymodule_export]
+    use super::audio_engine::inspect_mix_capture_spool;
+
+    #[pymodule_export]
+    use super::audio_engine::BankMutationAcknowledgement;
+    #[pymodule_export]
+    use super::audio_engine::BankMutationTicket;
+    #[pymodule_export]
+    use super::audio_engine::BankParticipants;
+    #[pymodule_export]
+    use super::audio_engine::CapturedBankMutation;
+    #[pymodule_export]
     use super::audio_engine::CapturedPadCopy;
     #[pymodule_export]
     use super::audio_engine::CapturedPadPair;
@@ -50,6 +67,8 @@ mod flitzis_looper_audio {
     use super::audio_engine::PadPairAcknowledgement;
     #[pymodule_export]
     use super::audio_engine::PadPairTicket;
+    #[pymodule_export]
+    use super::audio_engine::RecoveredBankAcceptance;
     #[pymodule_export]
     use super::audio_engine::RecoveredCopyAcceptance;
     #[pymodule_export]

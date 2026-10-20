@@ -30,16 +30,21 @@ def run_ui(
     runner_params.imgui_window_params.background_color = BG_RGBA
     runner_params.imgui_window_params.enable_viewports = True
     close_requested = False
+    frame_rendered = False
 
     def show_gui() -> None:
+        nonlocal frame_rendered
         render_ui(context)
+        frame_rendered = True
         if on_frame is not None:
             on_frame()
         if close_requested:
-            _show_close_pending(controller.pending_pad_error)
+            _show_close_pending(controller.pending_shutdown_error)
 
     def after_swap() -> None:
-        nonlocal close_requested
+        nonlocal close_requested, frame_rendered
+        deletion_polled = frame_rendered
+        frame_rendered = False
         live_params = hello_imgui.get_runner_params()
         _poll_runtime_tick(context, closing=close_requested or bool(live_params.app_shall_exit))
         if not close_requested and not live_params.app_shall_exit:
@@ -48,7 +53,10 @@ def run_ui(
         # Pinned HelloImGui 902dd7d runs AfterSwap after event/menu handling and
         # checks appShallExit between complete frames. Keep clearing a sticky OS
         # close until actual Copy settlement permits BeforeExit teardown.
-        live_params.app_shall_exit = controller.prepare_shutdown(holds_polled=True)
+        live_params.app_shall_exit = controller.prepare_shutdown(
+            holds_polled=True, deletion_polled=deletion_polled
+        )
+        controller.diagnostics.observe("shutdown", controller.pending_shutdown_error)
 
     runner_params.callbacks.show_gui = show_gui
     runner_params.callbacks.after_swap = after_swap
@@ -88,17 +96,27 @@ def _poll_runtime_tick(context: UiContext, *, closing: bool = False) -> None:
     context.audio.poll.poll()
 
 
-def _show_close_pending(error: str | None) -> None:
-    """Keep the pending close and any failed Copy settlement visible."""
-    label = "Finishing pad operation##close-pending"
+def _show_close_pending(_error: str | None) -> None:
+    """Show bounded closing progress; the close poll reports errors to the console."""
+    label = "Finishing pending work##close-pending"
     imgui.open_popup(label)
+    viewport = imgui.get_main_viewport()
+    style = imgui.get_style()
+    font_size = imgui.get_font_size()
+    title_width = (
+        imgui.calc_text_size("Finishing pending work").x
+        + 2 * style.frame_padding.x
+        + 2 * style.window_padding.x
+    )
+    available_width = max(1.0, viewport.work_size.x - 2 * style.window_padding.x)
+    width = min(max(26 * font_size, title_width), available_width)
+    imgui.set_next_window_pos(viewport.get_center(), imgui.Cond_.always, (0.5, 0.5))
+    imgui.set_next_window_size((width, 0), imgui.Cond_.always)
     visible, _ = imgui.begin_popup_modal(label, flags=imgui.WindowFlags_.always_auto_resize)
     if not visible:
         return
     try:
-        imgui.text_wrapped("Finishing pending pad changes and pause release before closing.")
-        if error is not None:
-            imgui.text_wrapped(f"Copy could not finish: {error}")
+        imgui.text_wrapped("Please wait while pending work finishes.")
     finally:
         imgui.end_popup()
 

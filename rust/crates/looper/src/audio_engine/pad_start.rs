@@ -9,6 +9,7 @@ use super::content_placement::{ContentKey, PlacementObservation};
 use super::input_runtime_binding::{
     InputPadBinding, InputRuntimeOwnership, InputRuntimePadBinding,
 };
+use super::key_lock_start_policy::{KeyLockStartBehavior, KeyLockStartLease};
 use super::ordinary_start::OrdinaryStartWork;
 use super::pitch_actions::PitchActionReject;
 use super::resident_relocation::{ResidentLaunchGuard, ResidentWindowTicket};
@@ -28,6 +29,7 @@ struct PublishedBinding {
 }
 
 struct PadStartOwner {
+    start_policy: KeyLockStartLease,
     key: ContentKey,
     binding: InputPadBinding,
     ownership: Arc<InputRuntimeOwnership>,
@@ -54,6 +56,7 @@ struct PadStartOwner {
     target_captured: AtomicBool,
     frames_state: AtomicU8,
     original_frame: AtomicU64,
+    source_control_revision: AtomicU64,
     execution_frame: AtomicU64,
 }
 
@@ -243,11 +246,15 @@ impl CapturedPadStart {
         let launch_cancel_revision = ownership
             .launch_revision_for_cell(key.cell())
             .load(Ordering::Acquire);
+        let start_policy = ownership
+            .register_key_lock_start_owner()
+            .map_err(PitchActionReject::from_start_policy_admission)?;
         let work = OrdinaryStartWork::new(render_format.0, render_format.1)
             .map_err(|_| PitchActionReject::PreparationFailed)?;
         let sequence = work.sequence();
         let start = Self {
             owner: Arc::new(PadStartOwner {
+                start_policy,
                 key,
                 binding,
                 ownership,
@@ -274,15 +281,27 @@ impl CapturedPadStart {
                 target_captured: AtomicBool::new(false),
                 frames_state: AtomicU8::new(0),
                 original_frame: AtomicU64::new(0),
+                source_control_revision: AtomicU64::new(u64::MAX),
                 execution_frame: AtomicU64::new(0),
             }),
         };
-        start.control_guard()?;
+        #[cfg(test)]
+        capture_pending_tests::after_owner();
+        // Capture already proved this original source/request/timing envelope.
+        // A later odd marker grants no publication authority, but must not erase
+        // the owner: the existing readiness path waits on its original key.
+        match start.control_guard() {
+            Ok(_) | Err(PitchActionReject::PlacementPending) => {}
+            Err(reason) => return Err(reason),
+        }
         Ok(start)
     }
 
     pub(crate) fn sequence(&self) -> u64 {
         self.owner.sequence
+    }
+    pub(crate) fn start_behavior(&self) -> KeyLockStartBehavior {
+        self.owner.start_policy.behavior()
     }
     pub(crate) fn ownership(&self) -> &Arc<InputRuntimeOwnership> {
         &self.owner.ownership
@@ -340,6 +359,12 @@ impl CapturedPadStart {
         let original = owner.binding;
         if owner.status.load(Ordering::Acquire) == REJECTED {
             return Err(PitchActionReject::StaleContent);
+        }
+        // A settled historical effect keeps its observation contract after a stopped edit.
+        if owner.status.load(Ordering::Acquire) != APPLIED
+            && self.start_behavior() != ownership.key_lock_start_behavior()
+        {
+            return Err(PitchActionReject::PreparedMismatch);
         }
         if !self.input_current() {
             return Err(PitchActionReject::InputDisabled);
@@ -411,6 +436,26 @@ impl CapturedPadStart {
         }
         binding.runtime_revision = runtime_revision;
         Ok(PadStartGuard { id, binding })
+    }
+
+    /// Validate the retained worker inputs through their original stable content cell.
+    /// The historical placement selects binding-aware scalars only; it grants no slot claim.
+    pub(crate) fn preparation_guard(&self) -> Result<(), PitchActionReject> {
+        let placement = self
+            .owner
+            .binding
+            .placement
+            .ok_or(PitchActionReject::StaleContent)?;
+        let publication = self.owner.publication.get();
+        let mut binding = publication.map_or(self.owner.binding, |value| value.binding);
+        binding.placement = Some(placement);
+        self.scalar_guard(
+            placement.slot(),
+            binding,
+            publication.is_some_and(|value| value.resident_guard.is_some()),
+            true,
+        )
+        .map(|_| ())
     }
 
     pub(crate) fn control_guard(&self) -> Result<PadStartGuard, PitchActionReject> {
@@ -658,14 +703,80 @@ impl CapturedPadStart {
         Ok(())
     }
 
+    /// The single callback may retain this same original for another real worker endpoint.
+    /// Only E changes: T, source/action ownership and cancellation guards stay untouched.
+    pub(crate) fn replan_execution_frame(
+        &self,
+        expected: u64,
+        execution: u64,
+    ) -> Result<(), PitchActionReject> {
+        self.preparation_guard()?;
+        if self.owner.frames_state.load(Ordering::Acquire) != 2
+            || self
+                .target_frame()
+                .is_none_or(|original| original > expected)
+            || self.owner.execution_frame.load(Ordering::Acquire) != expected
+            || execution <= expected
+        {
+            return Err(PitchActionReject::PreparedMismatch);
+        }
+        let status = self.owner.status.load(Ordering::Acquire);
+        if !matches!(status, PREPARING | PREPARED | SCHEDULED) {
+            return Err(PitchActionReject::StaleContent);
+        }
+        self.owner
+            .status
+            .compare_exchange(status, PREPARING, Ordering::AcqRel, Ordering::Acquire)
+            .map_err(|_| PitchActionReject::StaleContent)?;
+        self.owner
+            .execution_frame
+            .compare_exchange(expected, execution, Ordering::AcqRel, Ordering::Acquire)
+            .map_err(|_| PitchActionReject::PreparedMismatch)?;
+        Ok(())
+    }
+
     /// Called only by the single callback, before any own residency publication.
-    pub(crate) fn capture_target(&self, original: u64) -> Result<(), PitchActionReject> {
+    pub(crate) fn capture_target(
+        &self,
+        original: u64,
+        source_control_revision: u64,
+    ) -> Result<(), PitchActionReject> {
         if self.owner.target_captured.load(Ordering::Acquire) {
             return Err(PitchActionReject::PreparedMismatch);
         }
+        if source_control_revision == u64::MAX {
+            return Err(PitchActionReject::SequenceExhausted);
+        }
         self.owner.original_frame.store(original, Ordering::Relaxed);
+        self.owner
+            .source_control_revision
+            .store(source_control_revision, Ordering::Relaxed);
         self.owner.target_captured.store(true, Ordering::Release);
         Ok(())
+    }
+
+    pub(crate) fn source_control_revision(&self) -> Option<u64> {
+        self.owner
+            .target_captured
+            .load(Ordering::Acquire)
+            .then(|| self.owner.source_control_revision.load(Ordering::Relaxed))
+    }
+
+    /// Preserve T's immutable fence. Only its exact retained dependency may
+    /// account for the intervening successful loop commit; later edits still fail.
+    pub(crate) fn accepts_source_control_revision(&self, current: u64) -> bool {
+        let Some(original) = self.source_control_revision() else {
+            return false;
+        };
+        original != u64::MAX
+            && current != u64::MAX
+            && (original == current
+                || self
+                    .owner
+                    .publication
+                    .get()
+                    .and_then(|publication| publication.resident_guard.as_ref())
+                    .is_some_and(|guard| guard.owns_source_control_transition(original, current)))
     }
 
     pub(crate) fn target_frame(&self) -> Option<u64> {
@@ -678,12 +789,14 @@ impl CapturedPadStart {
     /// A group may undo its claims only before its atomic audio effect has begun.
     pub(crate) fn abort_claim(&self, reason: PitchActionReject) {
         self.owner.reason.store(reason as u8, Ordering::Release);
-        let _ = self.owner.status.compare_exchange(
-            APPLYING,
-            REJECTED,
-            Ordering::AcqRel,
-            Ordering::Acquire,
-        );
+        if self
+            .owner
+            .status
+            .compare_exchange(APPLYING, REJECTED, Ordering::AcqRel, Ordering::Acquire)
+            .is_ok()
+        {
+            self.owner.start_policy.finish();
+        }
     }
 
     pub(crate) fn mark_preparing(&self) -> bool {
@@ -731,10 +844,15 @@ impl CapturedPadStart {
             .effective_frame
             .store(output_frame, Ordering::Release);
         self.owner.reason.store(0, Ordering::Release);
-        self.owner
+        let applied = self
+            .owner
             .status
             .compare_exchange(APPLYING, APPLIED, Ordering::AcqRel, Ordering::Acquire)
-            .is_ok()
+            .is_ok();
+        if applied {
+            self.owner.start_policy.finish();
+        }
+        applied
     }
     pub(crate) fn reject(&self, reason: PitchActionReject) -> bool {
         let status = self.owner.status.load(Ordering::Acquire);
@@ -750,6 +868,7 @@ impl CapturedPadStart {
             return false;
         }
         self.owner.reason.store(reason as u8, Ordering::Release);
+        self.owner.start_policy.finish();
         true
     }
 }
@@ -852,6 +971,10 @@ impl CapturedPadStart {
         self.reject(PitchActionReject::LaunchCancelled)
     }
 }
+
+#[cfg(test)]
+#[path = "pad_start_capture_pending_tests.rs"]
+mod capture_pending_tests;
 
 #[cfg(test)]
 mod staging_tests {

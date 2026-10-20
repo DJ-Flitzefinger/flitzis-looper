@@ -168,7 +168,11 @@ impl HoldRoute {
         // Start through the existing real mouse route; its actual wet history and
         // physical source reads precede the later waveform Hold and new pitch.
         let initial = route.capture("click", Some(2));
+        let initial_t = Python::attach(|py| initial.borrow(py).original_due_frame());
         route.apply(&initial, 2, lock);
+        let initial_receipt = Python::attach(|py| Receipt::capture(&initial.borrow(py)));
+        assert_eq!(initial_receipt.original_t, initial_t);
+        assert_eq!(initial_receipt.preparation_delay(), 8_192);
         let mut result = Self { route, helper };
         result.start_phase_peer();
         result
@@ -404,6 +408,10 @@ impl Receipt {
         assert_eq!(action.original_due_frame(), self.original_t);
         assert_eq!(action.execution_target(), self.execution);
     }
+
+    fn preparation_delay(&self) -> u64 {
+        self.execution.checked_sub(self.original_t).unwrap()
+    }
 }
 
 fn active_clock(route: &HoldRoute, id: usize) -> (u64, u64) {
@@ -539,50 +547,62 @@ impl Peer {
 struct EndpointOracle {
     raw: RawRubberBand,
     source: SampleBuffer,
-    active: u64,
+    source_frames: u64,
     pitch: f64,
     maximum: f32,
     filter: Option<PerPadDspChain>,
 }
 
 impl EndpointOracle {
-    fn new(source: &SampleBuffer, active: u64, restart: bool) -> Self {
+    fn held_endpoint(source: &SampleBuffer, source_frames: u64) -> Self {
         let pitch = 2.0_f64.powf(f64::from(NOTE) / 12.0);
         let bound = RawRubberBand::history_bound(pitch) as u64;
         assert_eq!(bound, 4_096);
-        let origin = if restart {
-            -(bound as i64)
-        } else {
-            assert!(active > bound);
-            // This declared constant r=1 chronology retains exact endpoint
-            // priming: H samples ending at F, independent of global block phase.
-            // The active-feed lattice belongs to nonreconstructible trajectories.
-            (active - bound) as i64
-        };
-        Self::from_origin(source, if restart { 0 } else { active }, NOTE, origin)
+        assert!(source_frames > bound);
+        // SET retains exact endpoint priming: H samples ending at the held F,
+        // addressed only by the old voice's genuinely emitted source chronology.
+        Self::from_origin(source, source_frames, NOTE, (source_frames - bound) as i64)
+    }
+
+    fn restart(source: &SampleBuffer, receipt: &Receipt) -> Self {
+        let pitch = 2.0_f64.powf(f64::from(NOTE) / 12.0);
+        let bound = RawRubberBand::history_bound(pitch) as u64;
+        assert_eq!(bound, 4_096);
+        assert!(receipt.execution >= receipt.original_t);
+        // This independent new source begins at E with the existing H warmup.
+        // Its immutable requested T never consumes an unheard source suffix.
+        Self::from_origin(source, 0, NOTE, -(bound as i64))
     }
 
     /// Retain the original old +2 Native chronology, including its birth preroll.
     /// Reinitializing only a suffix at current F would certify a different owner.
-    fn continuous_old(source: &SampleBuffer, active: u64) -> Self {
+    fn continuous_old(source: &SampleBuffer, source_frames: u64) -> Self {
         let pitch = 2.0_f64.powf(2.0 / 12.0);
         let bound = RawRubberBand::history_bound(pitch);
         assert_eq!(bound, 4_096);
-        Self::from_origin(source, active, 2, -(bound as i64))
+        Self::from_origin(source, source_frames, 2, -(bound as i64))
     }
 
-    fn from_origin(source: &SampleBuffer, active: u64, note: i32, origin: i64) -> Self {
+    fn from_origin(source: &SampleBuffer, source_frames: u64, note: i32, origin: i64) -> Self {
         let pitch = 2.0_f64.powf(f64::from(note) / 12.0);
         let mut result = Self {
             raw: RawRubberBand::new(pitch),
             source: source.clone(),
-            active,
+            source_frames,
             pitch,
             maximum: 0.0,
             filter: None,
         };
-        for frame in origin..result.active as i64 {
-            result.raw.sample(result.source_sample(frame), pitch);
+        for frame in origin..result.source_frames as i64 {
+            // Both restart and the continuously retained original owner began
+            // physically: negative birth coordinates are silence. The held SET
+            // endpoint's strictly positive genuine history is unchanged.
+            let input = if frame < 0 {
+                0.0
+            } else {
+                result.source_sample(frame)
+            };
+            result.raw.sample(input, pitch);
         }
         result
     }
@@ -597,7 +617,7 @@ impl EndpointOracle {
         for sample in pcm {
             let native = self
                 .raw
-                .sample(self.source_sample(self.active as i64), self.pitch);
+                .sample(self.source_sample(self.source_frames as i64), self.pitch);
             let expected = match self.filter.as_mut() {
                 Some(chain) => {
                     chain.begin_frame();
@@ -609,16 +629,16 @@ impl EndpointOracle {
             self.maximum = self.maximum.max(error);
             assert!(
                 error < 2.0e-6,
-                "active={} actual={sample} independent_A_reset={expected} error={error}",
-                self.active
+                "source_frames={} actual={sample} independent_A_reset={expected} error={error}",
+                self.source_frames
             );
-            self.active += 1;
+            self.source_frames += 1;
         }
         let voice = route.voice(0);
         assert_source_phase(
             voice.source_playback.position(),
             LOOP_START as f64,
-            self.active,
+            self.source_frames,
             1.0,
         );
         assert_eq!(voice.source_playback.tempo_ratio(), 1.0);
@@ -668,13 +688,14 @@ fn real_waveform_hold_gui_set_adopts_prepared_pitch_and_matching_release_resumes
         let frozen = Frozen::capture(&route);
         let peer = Peer::capture(&route);
         assert_eq!(frozen.history.0, 0, "initial voice's active-feed origin");
+        let source_frames = frozen.history.1;
         assert_source_phase(
             route.voice(0).source_playback.position(),
             LOOP_START as f64,
-            frozen.history.1,
+            source_frames,
             1.0,
         );
-        let mut oracle = EndpointOracle::new(&frozen.sample, frozen.history.1, false);
+        let mut oracle = EndpointOracle::held_endpoint(&frozen.sample, source_frames);
         let captured = route.capture_set();
         let (action, receipt) = route.prepare(&captured);
         assert_eq!(action.variant(), PitchActionVariant::Set);
@@ -785,7 +806,7 @@ fn real_waveform_hold_midi_set_retrigger_supersedes_only_at_e_and_all_releases_l
         assert_eq!(hold_projection(&ticket), hold);
         receipt.assert_unchanged(&action);
         render_held_to(&mut route, &frozen, &ticket, hold, &action, &receipt, &peer);
-        let mut oracle = EndpointOracle::new(&frozen.sample, 0, true);
+        let mut oracle = EndpointOracle::restart(&frozen.sample, &receipt);
         let first = route.route.render(1);
         assert!(action.effective(), "{:?}", action.reason());
         oracle.compare(&route, &first);
@@ -883,18 +904,19 @@ fn real_waveform_release_before_e_resumes_old_pcm_and_fences_set_but_preserves_n
             let frozen = Frozen::capture(&route);
             let peer = Peer::capture(&route);
             assert_eq!(frozen.history.0, 0, "initial voice's active-feed origin");
+            let source_frames = frozen.history.1;
             assert_source_phase(
                 route.voice(0).source_playback.position(),
                 LOOP_START as f64,
-                frozen.history.1,
+                source_frames,
                 1.0,
             );
             let old_origin = route.voice(0).stretch.native_origin_tuple();
             assert_eq!(old_origin.unwrap().0, PitchIntent::new(2, 0).unwrap());
             assert_eq!(old_origin.unwrap().1, lock);
-            // The old owner has processed every actual active read since birth.
-            // Its independent reference must do the same, rather than reset at F.
-            let mut old = EndpointOracle::continuous_old(&frozen.sample, frozen.history.1);
+            // Retain the initial +2 physical birth at E and every genuinely
+            // emitted read since that birth, rather than resetting at held F.
+            let mut old = EndpointOracle::continuous_old(&frozen.sample, source_frames);
             assert_eq!(old.raw.fifo(), frozen.fifo);
             old.filter = Some(route.route.mixer.dsp_chain_snapshot_for_test(0).unwrap());
             let captured = if retrigger {
@@ -955,7 +977,7 @@ fn real_waveform_release_before_e_resumes_old_pcm_and_fences_set_but_preserves_n
             assert_tone(&before_pcm, 2, 0, 1.0, lock);
             // The scheduler now reaches the original E. SET's paused read
             // projection is stale; a Normal restart has no such read dependency.
-            let mut fresh = EndpointOracle::new(&frozen.sample, 0, true);
+            let mut fresh = EndpointOracle::restart(&frozen.sample, &receipt);
             let first = route.route.render(1);
             if retrigger {
                 assert!(action.effective(), "{:?}", action.reason());

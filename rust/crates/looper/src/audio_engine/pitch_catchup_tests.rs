@@ -378,6 +378,7 @@ fn missing_coverage_is_local_but_native_fifo_invalid_block_size_remains_fatal() 
         binding: ProductiveSourceBinding::new(&source.sample, RATE, None),
         playback: source.playback,
         plan: source.plan,
+        actual_feed: None,
         target_output_frame: CAPTURE_FRAME + 4096,
         request_id: 1,
         epoch: 0,

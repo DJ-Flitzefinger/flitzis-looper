@@ -31,6 +31,22 @@ const THREADING_NEVER: c_int = 0x0001_0000;
 const CHANNELS_TOGETHER: c_int = 0x1000_0000;
 const ENGINE_FINER: c_int = 0x2000_0000;
 
+#[derive(Clone, Copy)]
+struct OfflineKeyFrames {
+    from: [u32; 2],
+    to: [u32; 2],
+}
+
+#[derive(Clone, Copy)]
+struct OfflineConfiguration {
+    sample_rate_hz: u32,
+    engine: c_int,
+    options: c_int,
+    time_ratio: f64,
+    pitch_scale: f64,
+    keyframes: Option<OfflineKeyFrames>,
+}
+
 #[repr(C)]
 struct StretcherStateOpaque {
     _private: [u8; 0],
@@ -91,6 +107,7 @@ fn emit(record: serde_json::Value) {
 /// offline test thread; no callback, device, application installation or production path is used.
 struct OfflineStretcher {
     state: NonNull<StretcherStateOpaque>,
+    configuration: OfflineConfiguration,
     input_frames: usize,
     studied_frames: usize,
     processed_frames: usize,
@@ -104,37 +121,57 @@ struct OfflineStretcher {
 
 impl OfflineStretcher {
     fn new(
-        engine: c_int,
+        configuration: OfflineConfiguration,
         source_frames: usize,
-        source_target: usize,
         output_frames: usize,
     ) -> Self {
+        let OfflineConfiguration {
+            sample_rate_hz,
+            engine,
+            options,
+            time_ratio,
+            pitch_scale,
+            keyframes,
+        } = configuration;
         assert!(matches!(engine, 2 | 3));
+        assert!((8_000..=192_000).contains(&sample_rate_hz));
+        assert_eq!(
+            options & 1,
+            0,
+            "only offline processing belongs to this owner"
+        );
+        assert_ne!(options & THREADING_NEVER, 0);
+        assert_ne!(options & CHANNELS_TOGETHER, 0);
+        assert_eq!(options & ENGINE_FINER != 0, engine == 3);
         assert!((1..=MAX_INPUT_FRAMES).contains(&source_frames));
         assert!((1..=MAX_CAPTURE_FRAMES).contains(&output_frames));
-        assert!(source_target > 0 && source_target < source_frames);
-        assert!(PROBE_HISTORY > 0 && PROBE_HISTORY < output_frames);
-        assert!(OFFLINE_TIME_RATIO.is_finite() && OFFLINE_TIME_RATIO > 0.0);
-        assert!(OFFLINE_PITCH_SCALE.is_finite() && OFFLINE_PITCH_SCALE > 0.0);
+        assert!(time_ratio.is_finite() && time_ratio > 0.0);
+        assert!(pitch_scale.is_finite() && pitch_scale > 0.0);
+        assert_eq!(output_frames as f64 / source_frames as f64, time_ratio);
         let source_frames_c = u32::try_from(source_frames).unwrap();
         let max_process_c = u32::try_from(MAX_PROCESS_SIZE).unwrap();
         let channels_c = u32::try_from(PROBE_CHANNELS).unwrap();
-        let options =
-            THREADING_NEVER | CHANNELS_TOGETHER | if engine == 3 { ENGINE_FINER } else { 0 };
+        if let Some(map) = keyframes {
+            assert!(map.from[0] > 0 && map.from[0] < map.from[1]);
+            assert!(map.to[0] > 0 && map.to[0] < map.to[1]);
+            assert_eq!(map.from[1], source_frames_c);
+            assert_eq!(usize::try_from(map.to[1]).unwrap(), output_frames);
+            for index in 0..2 {
+                assert_eq!(
+                    f64::from(map.to[index]) / f64::from(map.from[index]),
+                    time_ratio
+                );
+            }
+        }
         // SAFETY: All scalar inputs have bounded, validated C representations. The constructor
         // returns a newly allocated opaque state; its sole owner below always calls delete.
         let raw = unsafe {
             rubberband_set_default_debug_level(0);
-            rubberband_new(
-                PROBE_RATE,
-                channels_c,
-                options,
-                OFFLINE_TIME_RATIO,
-                OFFLINE_PITCH_SCALE,
-            )
+            rubberband_new(sample_rate_hz, channels_c, options, time_ratio, pitch_scale)
         };
         let owner = Self {
             state: NonNull::new(raw).expect("offline Stretcher construction failed"),
+            configuration,
             input_frames: source_frames,
             studied_frames: 0,
             processed_frames: 0,
@@ -149,35 +186,29 @@ impl OfflineStretcher {
         // updateRatioFromMap divide its first output/input keyframe as 0/0 before processing.
         // Encode the same frozen geometry with positive native anchors only; no measured shift.
         // https://github.com/breakfastquay/rubberband/blob/v4.0.0/src/finer/R3Stretcher.cpp#L380-L394
-        let from_expected = [u32::try_from(source_target).unwrap(), source_frames_c];
-        let to_expected = [
-            u32::try_from(PROBE_HISTORY).unwrap(),
-            u32::try_from(output_frames).unwrap(),
-        ];
-        assert!(from_expected[0] > 0 && from_expected[0] < from_expected[1]);
-        assert!(to_expected[0] > 0 && to_expected[0] < to_expected[1]);
-        assert_eq!(
-            f64::from(to_expected[0]) / f64::from(from_expected[0]),
-            OFFLINE_TIME_RATIO
-        );
-        let mut from = from_expected;
-        let mut to = to_expected;
-        // SAFETY: The handle is live and exclusively owned. Configuration precedes study and
-        // process. The equal-length arrays remain valid throughout the synchronous map call,
-        // which copies their source/output frame pairs into the native map.
+        // SAFETY: The handle is live and exclusively owned. Bounded scalar configuration
+        // precedes study and process; no PCM or pointer array is retained here.
         unsafe {
             rubberband_set_debug_level(owner.state.as_ptr(), 0);
             rubberband_set_expected_input_duration(owner.state.as_ptr(), source_frames_c);
             rubberband_set_max_process_size(owner.state.as_ptr(), max_process_c);
-            rubberband_set_key_frame_map(
-                owner.state.as_ptr(),
-                u32::try_from(from.len()).unwrap(),
-                from.as_mut_ptr(),
-                to.as_mut_ptr(),
-            );
         }
-        assert_eq!(from, from_expected);
-        assert_eq!(to, to_expected);
+        if let Some(map) = keyframes {
+            let mut from = map.from;
+            let mut to = map.to;
+            // SAFETY: These two positive, monotonic, fixed geometry anchors were
+            // validated before Native construction. The synchronous API copies them.
+            unsafe {
+                rubberband_set_key_frame_map(
+                    owner.state.as_ptr(),
+                    u32::try_from(from.len()).unwrap(),
+                    from.as_mut_ptr(),
+                    to.as_mut_ptr(),
+                );
+            }
+            assert_eq!(from, map.from);
+            assert_eq!(to, map.to);
+        }
         let api = owner.api_profile(engine, options);
         emit(serde_json::json!({ "stage": "api_profile", "api": api }));
         owner
@@ -200,8 +231,8 @@ impl OfflineStretcher {
             "engine query is R2/R3, not library semver"
         );
         assert!(time_ratio.is_finite() && pitch_scale.is_finite());
-        assert_eq!(time_ratio, OFFLINE_TIME_RATIO);
-        assert_eq!(pitch_scale, OFFLINE_PITCH_SCALE);
+        assert_eq!(time_ratio, self.configuration.time_ratio);
+        assert_eq!(pitch_scale, self.configuration.pitch_scale);
         assert_eq!(channels, u32::try_from(PROBE_CHANNELS).unwrap());
         assert_eq!(
             preferred_pad, 0,
@@ -220,7 +251,7 @@ impl OfflineStretcher {
             "mode": "offline",
             "threading": "never",
             "channels_mode": "together",
-            "window": "default_standard",
+            "window": if options & 0x0010_0000 != 0 {"short"} else {"default_standard"},
             "time_ratio": time_ratio,
             "pitch_scale": pitch_scale,
             "channels": channels,
@@ -303,7 +334,7 @@ impl OfflineStretcher {
         self.process_blocks.push(frames);
         if self.process_calls == 1 {
             // Query after the first process call: R3 evaluates the native map there, after the
-            // constructor-time query. A semantic .5 profile must not silently reset to unity.
+            // constructor-time query. The declared profile must not silently reset to unity.
             let (time_ratio, pitch_scale) = unsafe {
                 (
                     rubberband_get_time_ratio(self.state.as_ptr()),
@@ -315,8 +346,8 @@ impl OfflineStretcher {
                 "time_ratio": time_ratio,
                 "pitch_scale": pitch_scale,
             }));
-            assert_eq!(time_ratio, OFFLINE_TIME_RATIO);
-            assert_eq!(pitch_scale, OFFLINE_PITCH_SCALE);
+            assert_eq!(time_ratio, self.configuration.time_ratio);
+            assert_eq!(pitch_scale, self.configuration.pitch_scale);
         }
     }
 
@@ -380,6 +411,45 @@ fn offline_capture(
     expected_frames: usize,
     canonical_native_blocks: bool,
 ) -> Vec<Vec<f32>> {
+    let source_frames = input[0].len();
+    assert!(source_target > 0 && source_target < source_frames);
+    assert!(PROBE_HISTORY > 0 && PROBE_HISTORY < expected_frames);
+    let configuration = OfflineConfiguration {
+        sample_rate_hz: PROBE_RATE,
+        engine,
+        options: THREADING_NEVER | CHANNELS_TOGETHER | if engine == 3 { ENGINE_FINER } else { 0 },
+        time_ratio: OFFLINE_TIME_RATIO,
+        pitch_scale: OFFLINE_PITCH_SCALE,
+        keyframes: Some(OfflineKeyFrames {
+            from: [
+                u32::try_from(source_target).unwrap(),
+                u32::try_from(source_frames).unwrap(),
+            ],
+            to: [
+                u32::try_from(PROBE_HISTORY).unwrap(),
+                u32::try_from(expected_frames).unwrap(),
+            ],
+        }),
+    };
+    offline_capture_configured(
+        input,
+        configuration,
+        pattern_name,
+        process_pattern,
+        expected_frames,
+        canonical_native_blocks,
+    )
+}
+
+fn offline_capture_configured(
+    input: &[Vec<f32>],
+    configuration: OfflineConfiguration,
+    pattern_name: &str,
+    process_pattern: &[usize],
+    expected_frames: usize,
+    canonical_native_blocks: bool,
+) -> Vec<Vec<f32>> {
+    let engine = configuration.engine;
     assert!(!process_pattern.is_empty());
     assert!(
         process_pattern
@@ -395,8 +465,7 @@ fn offline_capture(
         "process_pattern": pattern_name,
         "canonical_native_blocks": canonical_native_blocks,
     }));
-    let mut stretcher =
-        OfflineStretcher::new(engine, source_frames, source_target, expected_frames);
+    let mut stretcher = OfflineStretcher::new(configuration, source_frames, expected_frames);
     let construction_elapsed_ms = capture_started.elapsed().as_secs_f64() * 1000.0;
     let study_started = Instant::now();
     let mut offset = 0;
@@ -962,3 +1031,6 @@ fn original_source_offline_stretcher_r2_r3_first_mechanism_probe() {
         );
     }
 }
+
+#[path = "key_lock_stretcher_probe/hard_negative_tests.rs"]
+mod hard_negative_tests;

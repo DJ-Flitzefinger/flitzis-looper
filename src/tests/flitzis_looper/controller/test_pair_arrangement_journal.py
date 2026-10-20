@@ -270,7 +270,7 @@ def test_unfinished_legacy_and_pair_fence_without_cross_kind_cleanup(
     assert recovered.pending == [legacy]
     assert recovered.settled == []
     assert recovered.errors == [
-        "Incompatible unfinished Material/Pair/Copy owners retain every history"
+        "Incompatible unfinished Material/Pair/Copy/Bank owners retain every history"
     ]
     assert len(legacy_store.history()) == 1
     assert PairJournalOwner.open(tmp_path / "samples", _TRANSACTION).journal == journal

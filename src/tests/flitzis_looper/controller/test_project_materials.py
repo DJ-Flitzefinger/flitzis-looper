@@ -123,6 +123,8 @@ def test_durable_restore_preserves_content_identity_and_does_not_dirty_project(
         initial_base_shift=0,
         initial_extra_shift=0,
         initial_key_lock=False,
+        initial_gain_db=0.0,
+        initial_eq_db=(0.0, 0.0, 0.0),
     )
 
 

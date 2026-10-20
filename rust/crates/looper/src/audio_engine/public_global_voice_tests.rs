@@ -244,6 +244,41 @@ impl ExpectedVoice {
         }
     }
 
+    fn prepare_ordinary_start(&mut self, catchup_frames: usize) {
+        if self.enabled {
+            // Derive the periodic pre-T past from independent original PCM. The
+            // declared .73 rate returns to T after 100 physical loop periods.
+            let mut history_clock = AlgebraicClock::physical(self.start, self.end, RATIO);
+            history_clock.advance((self.end - self.start) * 100 - HISTORY);
+            self.raw = RawChronology::new(RATIO, true);
+            self.raw.render(&self.source, &mut history_clock, HISTORY);
+            let (frame, fraction, explicit) = history_clock.physical_position(0);
+            assert_eq!(frame, self.start);
+            assert!(fraction.abs() < 1e-8 && !explicit);
+            self.warm = 0;
+            self.raw_fed = HISTORY;
+            self.candidate_needed = false;
+            self.adoptions = 1;
+        }
+        // Keep the canonical T clock separate from the periodic prehistory clock.
+        // The missed suffix reaches E through the same independent Native/FIFO
+        // and EQ state; it contributes no claim about actually emitted energy.
+        let missed = if self.enabled {
+            self.raw_fed += catchup_frames;
+            self.raw
+                .render(&self.source, &mut self.clock, catchup_frames)
+        } else {
+            self.clock.dry(&self.source, catchup_frames)
+        };
+        for sample in missed {
+            self.filter.begin_frame();
+            for channel in 0..2 {
+                self.filter.process_sample(channel, sample);
+            }
+        }
+        self.consumed = catchup_frames;
+    }
+
     fn set_mode(&mut self, harness: &Harness, enabled: bool) {
         assert_ne!(self.enabled, enabled);
         self.enabled = enabled;
@@ -477,27 +512,15 @@ impl GlobalVoices {
             assert_eq!(original.original_frame(), Some(original_frame));
             assert_eq!(original.effective_frame(), Some(execution));
             assert_eq!(original.received_timestamp(), timestamp);
-            let actual = voice(&result.harness, id);
-            assert_eq!(actual.source_playback.position().frame, START);
-            assert_eq!(actual.source_playback.position().fraction, 0.0);
+            let catchup = (execution - original_frame) as usize;
             let mut expected = ExpectedVoice::new(&result.harness, id, enabled);
+            expected.prepare_ordinary_start(catchup);
+            let (frame, fraction, explicit) = expected.clock.physical_position(0);
+            let actual = voice(&result.harness, id);
+            assert_eq!(actual.source_playback.position().frame, frame);
+            assert!((actual.source_playback.position().fraction - fraction).abs() < 1e-8);
+            assert!(!explicit);
             if enabled {
-                // Normal loop START has a periodic physical past at its original
-                // endpoint. Build that past from original PCM and declared .73 rate;
-                // 100 output periods end at exactly 73 source-loop periods.
-                let mut history_clock = AlgebraicClock::physical(START, END, RATIO);
-                history_clock.advance((END - START) * 100 - HISTORY);
-                expected.raw = RawChronology::new(RATIO, true);
-                expected
-                    .raw
-                    .render(&expected.source, &mut history_clock, HISTORY);
-                let (frame, fraction, explicit) = history_clock.physical_position(0);
-                assert_eq!(frame, START);
-                assert!(fraction.abs() < 1e-8 && !explicit);
-                expected.warm = 0;
-                expected.raw_fed = HISTORY;
-                expected.candidate_needed = false;
-                expected.adoptions = 1;
                 let actual = voice(&result.harness, id);
                 assert_eq!(
                     actual.stretch.adopted_request_id(),
@@ -509,7 +532,7 @@ impl GlobalVoices {
                         .productive_history()
                         .unwrap()
                         .fed_output_frames,
-                    HISTORY as u64
+                    (HISTORY + catchup) as u64
                 );
             }
             // Actual typed parameter queue is fixture setup; public Mode/Transport routes

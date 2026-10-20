@@ -31,7 +31,7 @@ if TYPE_CHECKING:
     from flitzis_looper.controller.pair_stem_mirror import PreparedPairStemMirror
     from flitzis_looper.controller.stem_generation import StemGenerationResult, StemProgressCallback
     from flitzis_looper.controller.stem_intent import StemGenerationIntent
-    from flitzis_looper.controller.stem_job import StemSubscriber
+    from flitzis_looper.controller.stem_job import StemGenerationInterests, StemSubscriber
     from flitzis_looper_audio import (
         AudioEngine,
         OfflineStemSourceLease,
@@ -648,6 +648,7 @@ def _queue_reused_pair(rig: _ObserverRig, monkeypatch: pytest.MonkeyPatch) -> No
         generation_intent: StemGenerationIntent | None = None,
         own_source_version: str | None = None,
         artifact_source_version: str | None = None,
+        interest_owner: StemGenerationInterests | None = None,
     ) -> bool:
         accepted = publish(
             sample_id,
@@ -657,6 +658,7 @@ def _queue_reused_pair(rig: _ObserverRig, monkeypatch: pytest.MonkeyPatch) -> No
             generation_intent=generation_intent,
             own_source_version=own_source_version,
             artifact_source_version=artifact_source_version,
+            interest_owner=interest_owner,
         )
         if accepted:
             # This test's Native-publication substitute has accepted a real

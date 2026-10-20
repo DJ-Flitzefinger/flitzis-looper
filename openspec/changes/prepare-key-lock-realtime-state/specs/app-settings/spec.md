@@ -2,8 +2,8 @@
 
 ### Requirement: Global Key Lock Start Behavior Changes Only When Fully Stopped
 The system SHALL provide one coherent persisted app-wide Settings choice labelled
-"Key-Lock-Startverhalten" with understandable policies "Erster Klang am Raster"
-and "Anschlag am Raster". These SHALL control genuinely different start contracts
+"Key Lock start behavior" with understandable policies "First sound at grid"
+and "Attack at grid". These SHALL control genuinely different start contracts
 in the existing single authoritative audio path: no audible output before the
 selected grid target, or the perceived principal musical attack aligned to that
 target with only causally available necessary quiet lead permitted, respectively.
@@ -16,7 +16,7 @@ instantaneous output SHALL NOT establish the stopped condition. An intervening
 playback admission SHALL NOT race a policy change into active retained history.
 
 While the stopped condition is false the choice SHALL be disabled with the hint
-"Zum Ändern Wiedergabe stoppen". A refused change SHALL leave the effective and
+"Stop playback to change". A refused change SHALL leave the effective and
 persisted policy unchanged and SHALL NOT retain a queued or next-start choice.
 The system SHALL NOT implement live switching, deferred application or additional
 transition machinery for changing this setting. Both policies SHALL remain
@@ -34,6 +34,12 @@ removed based on the earlier attack preference.
 - **WHEN** the performer selects the other policy
 - **THEN** one global effective policy is accepted and persisted through the existing settings/control path
 - **AND** all pads use that accepted policy without changing markers, BPM, pitch or musical assignments
+
+#### Scenario: A captured start awaiting publication still owns its policy
+- **GIVEN** Native accepted an original ordinary start or pitch retrigger capture that is waiting for residency, preparation or queue admission
+- **WHEN** Settings attempts to change the global start policy before that same request applies or terminates
+- **THEN** the authoritative pending owner SHALL refuse the policy change even before the request reaches the callback queue or scheduler
+- **AND** the original request SHALL retain the policy accepted at its capture, while rejection, cancellation or final owner retirement SHALL release that pending ownership exactly once
 
 #### Scenario: No available lead or a late start remains explicit
 - **WHEN** the chosen policy lacks necessary causal lead or receives a late start

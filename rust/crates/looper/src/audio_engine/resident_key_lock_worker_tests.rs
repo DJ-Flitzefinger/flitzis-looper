@@ -199,6 +199,16 @@ impl ModeOracle {
         });
         loaded.adopt(&ready);
         loaded.callback.mixer.set_speed(ratio);
+        let original = if initial {
+            // This mode-continuation oracle starts with an independently prepared
+            // own Native at T=E. Admit ahead of a real future grid, rather than
+            // dropping the new ordinary birth's required original-T catchup.
+            loaded.callback.transport.advance_by_rendered_frames(1);
+            loaded.callback.quantization = TriggerQuantization::Grid { step_64ths: 16 };
+            24_000
+        } else {
+            0
+        };
         assert!(launch_with_producer(&loaded.engine, &ready, false, 1, &loaded.producer).unwrap());
         let ControlMessage::CapturePadStartTarget(start) = loaded.consumer.peek().unwrap() else {
             panic!("ordinary launch must retain its original target before PreparedStart");
@@ -207,9 +217,9 @@ impl ModeOracle {
         assert_eq!(loaded.callback.drain(&mut loaded.consumer), 2);
         assert!(loaded.consumer.is_empty());
         assert!(start.accepted(), "{:?}", start.reason());
-        assert_eq!(start.original_frame(), Some(0));
+        assert_eq!(start.original_frame(), Some(original));
         let execution = start.execution_frame().unwrap();
-        assert_eq!(execution > 0, initial && ratio != 1.0);
+        assert_eq!(execution, original);
         if execution > 0 {
             assert!(loaded.callback.feedback_rx.is_empty());
             assert!(
@@ -262,6 +272,7 @@ impl ModeOracle {
         assert_eq!(start.state(), "applied", "{:?}", start.reason());
         assert_eq!(start.effective_frame(), Some(execution));
         assert!(loaded.callback.scheduler.is_empty());
+        loaded.callback.quantization = TriggerQuantization::Immediate;
         assert_eq!(
             loaded
                 .callback

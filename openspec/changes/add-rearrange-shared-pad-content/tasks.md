@@ -82,8 +82,23 @@ Use canonical program/coverage, not a new parallel order. R0 is docs/spec-only.
   reservation/reforder/native/config/journal recovery/pre-claim no-op/post-claim fence;
   source holds survive/removed target holds fenced; execute all R4 HC native oracles
   and distinct closure beforeR5, never36 partial unload calls.
+- [x] Separate nonauthor R4 SOFTWARE closure: all ten assigned HC software profiles
+  satisfy the prerequisite for R5 using original witnesses, guarded all36 Native
+  effects, capacity133 no-op/retry, real own ACK/Config, three-process recovery,
+  final-reader retirement and shared-job writer/selection handoff. Final Bank36
+  Release, Shared3 Release, Python213 and App/IO120 pass; source reviews and the
+  separate nonauthor gate accept this bounded closure. Full R4/HC/P6/V0/resource/
+  RT/musical/device/Human/Full Goal gates remain OPEN.
 - [ ] R5: other banks pulse, occupied target OVERWRITE/CANCEL exact bank, source stays
   selected/no navigation/selfcopy; exact clicked CLEAR BANK/CANCEL inclcurrent; drag fences.
+- [x] Separate nonauthor R5 SOFTWARE closure: existing common confirmation owner,
+  exact original Bank request, source-selected copy, overwrite/cancel, current and
+  other Clear, drag/fresh-click fences; real Native UI/ACK/Config and periodic
+  InputMapping/outside-MIDI composition. Reserved participant preservation retains
+  original guards; explicit MultiLoop supersedes incompatible old epochs without
+  partial effects. Final Python1308/Release187/static/strict/review and exact
+  Release wheel/install/API/launcher pass; actual App operations all complete.
+  Full R5/HC/P6/V0/resource/RT/musical/device/Human/Full Goal gates remain OPEN.
 - [ ] P6/V0: complete216/unique+shared/disk/I/O/RSS/processpeaks/origin-bank-delete/
   newprocessrestore/lastreader/job/action/version/nativeACK and allHC integration;
   V0 repeats through new nonneutral pitch controls and accepted-event workload.
@@ -92,3 +107,13 @@ Use canonical program/coverage, not a new parallel order. R0 is docs/spec-only.
   nonauthor semantic/raw/canonical/index/blob/tree closure before serial publication.
 - [ ] H-LIVE and later H-FINAL/C-FINAL: genuine devices/hearing/final workflows and
   corrections remain OPEN. Allold56+9/B2/music/default/dependency/RustSTOP gates remain.
+
+Human regression follow-up: a real InputRuntime post-ACK Multi Loop change
+reproduced Pair control-mirror failure. Reserved old rows now stay exact while
+successors use their acknowledged content cells' current epochs. All source,
+lifetime, original-control and own-ACK guards remain. Focused Native35 and actual
+App2 (eight isolated child profiles) pass through durable settlement, selection
+and shutdown preparation. Console/layout152 pass with independent source review.
+The distinct copied-loop missing-assignment error remains unreproduced in four
+TAP profiles and one genuine accepted Automatic/QM profile; no parent or Human
+acceptance is closed by these bounded results.

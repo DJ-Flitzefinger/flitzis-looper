@@ -65,6 +65,7 @@ impl Fixture {
             0,
             self.sample.clone(),
             LoadedSourcePublication {
+                initial_mix: None,
                 placement: self
                     .engine
                     .input_runtime_ownership

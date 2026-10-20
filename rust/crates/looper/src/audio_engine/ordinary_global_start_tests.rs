@@ -3,7 +3,7 @@
 use super::global_playback_batch::GlobalPlaybackBatchTicket;
 use super::input_mapping::launch_admission_tests::RATE;
 use super::pitch_intent::PitchIntent;
-use super::pitch_runtime_tests::{Fixture, LOOP_END, LOOP_START};
+use super::pitch_runtime_tests::{Fixture, LOOP_END, LOOP_START, physical_birth_tone_reference};
 use pyo3::prelude::*;
 use std::time::{Duration, Instant};
 
@@ -139,18 +139,32 @@ fn public_global_nonzero_first_attacks_share_one_e_and_adopt_two_own_native_fifo
     assert_eq!(ticket.publication_status(), "pending");
     assert_eq!((fixture.starts(0), fixture.starts(1)), (0, 0));
 
-    // Separate existing pitch-input publications provide an independently owned
-    // Native/worker reference. Neither reference candidate belongs to the group.
-    let first = reference
+    // Genuine future-grid piano births supply complete independently owned
+    // Native beginnings. Piano's separate late-history contract must not crop
+    // an ordinary-group reference before its first actual emitted sample.
+    let mut rows = vec![super::input_mapping::PitchPadProjection::default(); super::NUM_SAMPLES];
+    for row in &mut rows[..2] {
+        row.key_lock = true;
+        row.source_root = Some(0);
+        row.source_mode = Some(super::pitch_actions::PitchKeyMode::Major);
+        row.quantize_step_64ths = Some(16);
+    }
+    reference
         .control
         .engine
-        .capture_pad_pitch_action(0, "pitch.extra:7:set_retrigger", None)
+        .input_runtime
+        .as_ref()
+        .unwrap()
+        .set_pitch_runtime_state(rows)
         .unwrap();
-    let second = reference
-        .control
-        .engine
-        .capture_pad_pitch_action(1, "pitch.extra:-3:set_retrigger", None)
-        .unwrap();
+    assert!(
+        reference
+            .render_to(17_000)
+            .iter()
+            .all(|value| *value == 0.0)
+    );
+    let first = reference.capture(0, "pitch.extra:7:set_retrigger");
+    let second = reference.capture(1, "pitch.extra:-3:set_retrigger");
     assert!(
         reference
             .control
@@ -168,10 +182,12 @@ fn public_global_nonzero_first_attacks_share_one_e_and_adopt_two_own_native_fifo
     reference.drain();
     wait_group(&mut fixture, &ticket);
     wait_reference(&mut reference, [first.sequence(), second.sequence()]);
-    assert_eq!(first.execution_target(), 8192);
-    assert_eq!(second.execution_target(), 8192);
+    assert_eq!(first.execution_target(), 24_000);
+    assert_eq!(second.execution_target(), 24_000);
+    assert_eq!(first.original_due_frame(), 24_000);
+    assert_eq!(second.original_due_frame(), 24_000);
     let pcm = full_initial_attack(&mut fixture, 8192);
-    let reference_pcm = full_initial_attack(&mut reference, 8192);
+    let reference_pcm = full_initial_attack(&mut reference, 24_000);
 
     assert_eq!(ticket.publication_status(), "accepted");
     assert_eq!((fixture.starts(0), fixture.starts(1)), (1, 1));
@@ -195,7 +211,11 @@ fn public_global_nonzero_first_attacks_share_one_e_and_adopt_two_own_native_fifo
             voice.sample.as_ref().unwrap().source_address()
         );
         let taps = voice.stretch.native_tap_observation().unwrap();
-        assert!(taps.left_reads > 0);
+        assert_eq!(
+            taps.left_reads, 0,
+            "negative physical-birth input must be silent"
+        );
+
         assert_eq!(taps.missing_reads, 0);
         assert_eq!(
             voice.source_playback.position().frame,
@@ -207,14 +227,24 @@ fn public_global_nonzero_first_attacks_share_one_e_and_adopt_two_own_native_fifo
     assert_ne!(native_handles[1], 0);
     assert_ne!(native_handles[0], native_handles[1]);
     assert_ne!(source_addresses[0], source_addresses[1]);
-    let initial_energy = pcm[..2048]
+    assert!(pcm.iter().all(|sample| sample.is_finite()));
+    let raw_references = SOURCE_HZ
+        .into_iter()
+        .zip(SHIFTS)
+        .map(|(source, shift)| {
+            physical_birth_tone_reference(PCM_FRAMES, source, 0, shift, 1.0, true)
+        })
+        .collect::<Vec<_>>();
+    let raw_error = pcm
         .iter()
-        .map(|sample| f64::from(*sample).powi(2))
-        .sum::<f64>()
-        / 2048.0;
+        .enumerate()
+        .map(|(frame, actual)| {
+            (*actual - (raw_references[0][frame] + raw_references[1][frame])).abs()
+        })
+        .fold(0.0_f32, f32::max);
     assert!(
-        initial_energy > 0.001,
-        "the group's complete initial Native/FIFO attack was silent"
+        raw_error < 4.0e-5,
+        "complete independent raw mixed birth differs: {raw_error}"
     );
     let maximum_error = pcm
         .iter()

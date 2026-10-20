@@ -103,6 +103,40 @@ pub(crate) struct PreparedLaunchWrite {
     kind: LaunchWriteKind,
 }
 
+/// Preserve actual placement failures for the original off-thread publisher's retry.
+#[derive(Debug)]
+pub(crate) enum SourcePublicationError {
+    Placement(PlacementError),
+    Rejected(String),
+}
+
+impl From<PlacementError> for SourcePublicationError {
+    fn from(error: PlacementError) -> Self {
+        Self::Placement(error)
+    }
+}
+
+impl From<String> for SourcePublicationError {
+    fn from(error: String) -> Self {
+        Self::Rejected(error)
+    }
+}
+
+impl From<&str> for SourcePublicationError {
+    fn from(error: &str) -> Self {
+        Self::Rejected(error.to_owned())
+    }
+}
+
+impl std::fmt::Display for SourcePublicationError {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Placement(error) => std::fmt::Display::fmt(error, formatter),
+            Self::Rejected(error) => formatter.write_str(error),
+        }
+    }
+}
+
 /// Actual source control publication. Retaining its Native owner is mandatory even when a
 /// foreign/stale message is rejected; the complete value retires through the existing worker.
 #[derive(Clone)]
@@ -197,6 +231,7 @@ impl Default for CurrentSourceFence {
 /// Control publishes revocation before queued callback work. Preparation requests
 /// deliberately do not change these source/authority epochs.
 pub(crate) struct InputRuntimeOwnership {
+    pub(super) key_lock_start_policy: Arc<super::key_lock_start_policy::KeyLockStartPolicy>,
     // One original control revocation fence, shared with the callback's rate capture.
     pub(crate) global_timing_revision: Arc<AtomicU64>,
     pub(crate) global_timing_publishing: AtomicBool,
@@ -234,6 +269,7 @@ pub(crate) struct InputRuntimeOwnership {
 impl Default for InputRuntimeOwnership {
     fn default() -> Self {
         Self {
+            key_lock_start_policy: Arc::default(),
             global_timing_revision: Arc::new(AtomicU64::new(1)),
             global_timing_publishing: AtomicBool::new(false),
             global_rate_status: super::global_rate_status::GlobalRateStatusSlot::default(),
@@ -266,6 +302,130 @@ impl Default for InputRuntimeOwnership {
 }
 
 impl InputRuntimeOwnership {
+    pub(crate) fn source_request_for_cell(&self, cell: ContentCell) -> u64 {
+        self.source_requests[cell.index()].load(Ordering::Acquire)
+    }
+
+    pub(crate) fn prepare_slot_set_write<const N: usize>(
+        &self,
+        captured: [SlotSnapshot; N],
+        lifetimes: [u64; N],
+    ) -> Result<
+        super::content_placement::PreparedSlotSetWrite<N>,
+        super::content_placement::PlacementError,
+    > {
+        self.placement.prepare_slot_set_write(
+            self.owner_identity(),
+            &self.content_lifetimes,
+            captured,
+            lifetimes,
+        )
+    }
+
+    pub(crate) fn commit_slot_set_write<const N: usize>(
+        &self,
+        prepared: &super::content_placement::PreparedSlotSetWrite<N>,
+        claim: impl FnOnce() -> bool,
+        apply: impl FnOnce(),
+    ) -> Result<[SlotSnapshot; N], super::content_placement::PlacementError> {
+        self.placement.commit_slot_set_write(
+            self.owner_identity(),
+            &self.content_lifetimes,
+            prepared,
+            claim,
+            || {
+                for write in prepared.writes() {
+                    if write.before().lifetime() != write.after().lifetime() {
+                        let cell = write.before().cell().index();
+                        self.launch_revisions[cell].store(0, Ordering::Release);
+                        self.admitted_launches[cell].store(false, Ordering::Release);
+                        self.resident_controls[cell].store(0, Ordering::Release);
+                        self.transport_intents[cell].store(0, Ordering::Release);
+                        self.parameter_intents[cell].store(0, Ordering::Release);
+                    }
+                }
+                apply();
+                self.key_lock_start_policy.invalidate_admission();
+            },
+        )
+    }
+
+    pub(crate) fn reserve_copy_set(
+        &self,
+        captured: &[SlotSnapshot],
+        owner: u64,
+        claim: impl FnOnce() -> bool,
+    ) -> Result<(), super::content_placement::PlacementError> {
+        use super::content_placement::PlacementError;
+        if captured.is_empty() || captured.len() > NUM_SAMPLES || owner == 0 {
+            return Err(PlacementError::ClaimRejected);
+        }
+        let mut seen = [false; NUM_SAMPLES];
+        for snapshot in captured {
+            if snapshot.slot() >= NUM_SAMPLES || seen[snapshot.slot()] {
+                return Err(PlacementError::InvalidSlot);
+            }
+            seen[snapshot.slot()] = true;
+        }
+        let write = self.prepare_slot_write_fixed(captured[0], captured[0].lifetime())?;
+        self.commit_slot_write_fixed(
+            &write,
+            || {
+                captured.iter().all(|snapshot| {
+                    self.slot_snapshot_fields_current(*snapshot)
+                        && self.copy_reservation(snapshot.slot()) == 0
+                        && self.pair_reservation(snapshot.slot()) == 0
+                }) && claim()
+            },
+            |_| {
+                for snapshot in captured {
+                    self.copy_reservations[snapshot.slot()].store(owner, Ordering::Release);
+                }
+            },
+        )
+        .map(|_| ())
+    }
+
+    pub(crate) fn release_copy_set(
+        &self,
+        captured: &[SlotSnapshot],
+        owner: u64,
+    ) -> Result<(), super::content_placement::PlacementError> {
+        use super::content_placement::PlacementError;
+        if captured.is_empty() || captured.len() > NUM_SAMPLES || owner == 0 {
+            return Err(PlacementError::ClaimRejected);
+        }
+        let anchor = self
+            .slot_snapshot(captured[0].slot())
+            .ok_or(PlacementError::Pending)?;
+        let write = self.prepare_slot_write_fixed(anchor, anchor.lifetime())?;
+        self.commit_slot_write_fixed(
+            &write,
+            || {
+                captured.iter().all(|snapshot| {
+                    snapshot.owner() == self.owner_identity()
+                        && self.copy_reservation(snapshot.slot()) == owner
+                })
+            },
+            |_| {
+                for snapshot in captured {
+                    self.copy_reservations[snapshot.slot()].store(0, Ordering::Release);
+                }
+            },
+        )
+        .map(|_| ())
+    }
+
+    pub(crate) fn apply_empty_source_for_cell(&self, cell: ContentCell, authority: u64) {
+        self.authority_for_cell(cell)
+            .store(authority, Ordering::Release);
+        self.sources[cell.index()]
+            .generation
+            .store(0, Ordering::SeqCst);
+        self.key_lock[cell.index()].clear();
+        self.timing_intent[cell.index()].store(0, Ordering::Release);
+        self.callback_source_lifetimes[cell.index()].store(0, Ordering::Release);
+    }
     /// Existing serialized selection writers publish preparation interest only.
     /// Zero marks an in-progress projection; the callback never waits for it.
     pub(crate) fn publish_endpoint_selection(&self, revision: u64, key: Option<ContentKey>) {
@@ -493,6 +653,9 @@ impl InputRuntimeOwnership {
     pub(crate) fn placement_read_token(&self) -> Option<u64> {
         self.placement.read_token()
     }
+    pub(crate) fn placement_read_token_result(&self) -> Result<u64, PlacementError> {
+        self.placement.read_token_result()
+    }
     pub(crate) fn callback_cell(&self, id: usize) -> Option<ContentCell> {
         self.placement.callback_cell(id)
     }
@@ -525,6 +688,8 @@ impl InputRuntimeOwnership {
             prepared,
             claim,
             |cell| {
+                let old_transport = self.transport_intents[cell.index()].load(Ordering::Acquire);
+                let old_admitted = self.admitted_launches[cell.index()].load(Ordering::Acquire);
                 // A source birth owns a fresh launch fence even when its reused cell's
                 // predecessor reached the terminal revision. Moves preserve the lifetime.
                 if prepared.before().lifetime() != prepared.after().lifetime() {
@@ -535,6 +700,11 @@ impl InputRuntimeOwnership {
                     self.parameter_intents[cell.index()].store(0, Ordering::Release);
                 }
                 apply(cell);
+                if self.transport_intents[cell.index()].load(Ordering::Acquire) != old_transport
+                    || self.admitted_launches[cell.index()].load(Ordering::Acquire) != old_admitted
+                {
+                    self.key_lock_start_policy.invalidate_admission();
+                }
             },
         )
     }
@@ -574,13 +744,30 @@ impl InputRuntimeOwnership {
         cold: bool,
         claim: impl FnOnce() -> bool,
     ) -> Result<SourcePublication, String> {
+        self.publish_source_write_fixed(
+            prepared, sample, rate, generation, authority, intent, cold, claim,
+        )
+        .map_err(|error| error.to_string())
+    }
+
+    pub(crate) fn publish_source_write_fixed(
+        self: &Arc<Self>,
+        prepared: &super::content_placement::PreparedSlotWrite,
+        sample: &SampleBuffer,
+        rate: u32,
+        generation: u64,
+        authority: u64,
+        intent: Option<TimingIntent>,
+        cold: bool,
+        claim: impl FnOnce() -> bool,
+    ) -> Result<SourcePublication, SourcePublicationError> {
         if generation == 0
             || prepared.after().lifetime() == 0
             || (cold && generation > u64::MAX / 4)
         {
             return Err("source publication identity is empty or exhausted".into());
         }
-        let placement = self.commit_slot_write(prepared, claim, |cell| {
+        let placement = self.commit_slot_write_fixed(prepared, claim, |cell| {
             self.authority_for_cell(cell)
                 .store(authority, Ordering::Release);
             if let Some(intent) = intent {
@@ -885,6 +1072,14 @@ impl InputRuntimeOwnership {
             ),
             PlacementObservation::Current(_)
         )
+    }
+
+    pub(crate) fn observe_slot_snapshot(
+        &self,
+        snapshot: SlotSnapshot,
+    ) -> PlacementObservation<SlotSnapshot> {
+        self.placement
+            .observe_snapshot(self.owner_identity(), &self.content_lifetimes, snapshot)
     }
 
     pub(crate) fn binding_placement(&self, id: usize) -> Option<SlotSnapshot> {

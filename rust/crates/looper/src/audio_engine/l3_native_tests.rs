@@ -8,7 +8,10 @@ fn reordered_mask(mask: u8) -> u8 {
     (mask & 0b0110) | ((mask & 0b0001) << 3) | ((mask & 0b1000) >> 3)
 }
 
-fn candidate(p: &mut Productive, serial: usize) -> (PreparedStemPair, CommittedStemSetTicket) {
+pub(super) fn candidate(
+    p: &mut Productive,
+    serial: usize,
+) -> (PreparedStemPair, CommittedStemSetTicket) {
     let generation = format!("{serial:032x}");
     let reference = p.h.wav_reference.replace(GENERATION, &generation);
     let path = p.h.root.parent().unwrap().join(&reference);
@@ -69,7 +72,7 @@ fn candidate(p: &mut Productive, serial: usize) -> (PreparedStemPair, CommittedS
     (pair, ticket)
 }
 
-fn request_candidate(
+pub(super) fn request_candidate(
     p: &mut Productive,
     ticket: &CommittedStemSetTicket,
     mask: u8,
@@ -1310,7 +1313,7 @@ fn full_track_paused_and_stopped_adoption_waits_for_own_consumption() {
                 assert_eq!(
                     receipt.residency_status(),
                     "accepted",
-                    "{:?}",
+                    "key_lock={key_lock} selected_v1={selected_v1} stopped={stopped}: {:?}",
                     receipt.error()
                 );
                 assert!(receipt.claimed() && selected.is_current());

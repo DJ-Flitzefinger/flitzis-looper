@@ -6,6 +6,7 @@
 
 use super::*;
 use crate::audio_engine::analysis_jobs::{OfflineAnalysisJob, OfflineRequestOwner};
+use crate::audio_engine::complete_context::{CompleteSourceGuard, NativeAnalysisOwner};
 use base64::{Engine as _, engine::general_purpose::STANDARD};
 use serde_json::{Value, json};
 
@@ -234,11 +235,18 @@ fn finish(job: &OfflineAnalysisJob, result: &Value) -> bool {
 }
 
 fn completed(engine: &AudioEngine) -> Vec<(u64, Value)> {
-    engine
-        .loader_rx
-        .lock()
-        .unwrap()
-        .try_iter()
+    completed_payloads(
+        engine
+            .loader_rx
+            .lock()
+            .unwrap()
+            .try_iter()
+            .map(LoaderEvent::into_test_payload),
+    )
+}
+
+fn completed_payloads(events: impl Iterator<Item = LoaderEvent>) -> Vec<(u64, Value)> {
+    events
         .filter_map(|event| match event {
             LoaderEvent::OfflineAnalysisCompleted {
                 request_id,
@@ -246,6 +254,46 @@ fn completed(engine: &AudioEngine) -> Vec<(u64, Value)> {
                 ..
             } => Some((request_id, serde_json::from_str(&result_json).unwrap())),
             _ => None,
+        })
+        .collect()
+}
+
+fn loader_events_for_owned_request(
+    engine: &AudioEngine,
+    request: u64,
+    original_owner: &NativeAnalysisOwner,
+) -> Vec<LoaderEvent> {
+    engine
+        .loader_rx
+        .lock()
+        .unwrap()
+        .try_iter()
+        .map(|event| {
+            let payload = match &event {
+                LoaderEvent::NativeOwned { event, .. } => event.as_ref(),
+                event => event,
+            };
+            let identity = match payload {
+                LoaderEvent::OfflineAnalysisCompleted { id, request_id, .. }
+                | LoaderEvent::TaskStarted { id, request_id, .. }
+                | LoaderEvent::TaskProgress { id, request_id, .. }
+                | LoaderEvent::TaskSuccess { id, request_id, .. }
+                | LoaderEvent::TaskError { id, request_id, .. } => Some((*id, *request_id)),
+                _ => None,
+            };
+            if let Some((id, request_id)) = identity
+                && request_id == request
+            {
+                assert_eq!(id, 0);
+                let LoaderEvent::NativeOwned { owner, .. } = &event else {
+                    panic!("actual analysis request lost its Native owner: {event:?}");
+                };
+                assert!(owner.belongs_to(&engine.input_runtime_ownership));
+                // Compare the original ContentKey/source and admitted epoch even
+                // when supersession deliberately makes this diagnostic stale.
+                assert!(owner.same_admission(original_owner));
+            }
+            event.into_test_payload()
         })
         .collect()
 }
@@ -393,6 +441,7 @@ fn c2b_productive_finite_offline_export_is_complete_and_lease_retires_after_read
         fixture.loaded.clone(),
     )
     .unwrap();
+    let original_source = reader.guard.clone().unwrap();
     let job = fixture
         .engine
         .offline_jobs
@@ -408,7 +457,12 @@ fn c2b_productive_finite_offline_export_is_complete_and_lease_retires_after_read
             fixture.engine.loader_tx.clone(),
         )
         .unwrap();
+    let original_owner = NativeAnalysisOwner::new(
+        original_source,
+        fixture.engine.prepared_source_epochs[0].clone(),
+    );
     let metadata = dictionary(&job, false);
+    let request = metadata["request_id"].as_u64().unwrap();
     assert_eq!(metadata["frame_count"], 128);
     assert_eq!(metadata["origin_seconds"], 0.0);
     let source = &fixture.loaded.residency.as_ref().unwrap().source;
@@ -444,7 +498,11 @@ fn c2b_productive_finite_offline_export_is_complete_and_lease_retires_after_read
     retire(&job);
     fs::remove_file(&path).unwrap();
     assert!(finish(&job, &envelope(&job, false)));
-    assert_eq!(completed(&fixture.engine).len(), 1);
+    let completions = completed_payloads(
+        loader_events_for_owned_request(&fixture.engine, request, &original_owner).into_iter(),
+    );
+    assert_eq!(completions.len(), 1);
+    assert_eq!(completions[0].0, request);
     fixture.assert_playback_owner();
     // Export released its complete file reader and only the finite bank/voice remains.
     let lease = fixture.engine.cold_leases.lock().unwrap()[0]
@@ -483,8 +541,14 @@ fn c2b_complete_reader_cancellation_keeps_sealed_ownership_through_actual_visito
     entered_rx
         .recv_timeout(std::time::Duration::from_secs(5))
         .unwrap();
-    fixture.engine.loaded_source_generations.lock().unwrap()[0] = (fixture.generation + 1, 48_000);
-    fixture.engine.cold_leases.lock().unwrap()[0].take();
+    unload_for_producer(&fixture.engine, 0, &fixture.producer).unwrap();
+    assert!(fixture.engine.cold_leases.lock().unwrap()[0].is_none());
+    assert!(
+        !fixture
+            .engine
+            .input_runtime_ownership
+            .source_current(0, &fixture.loaded, 48_000)
+    );
     drop(lease);
     assert!(fs::OpenOptions::new().write(true).open(&path).is_err());
     release_tx.send(()).unwrap();
@@ -536,8 +600,20 @@ fn c2b_productive_complete_analysis_admission_is_bounded_and_superseded_work_can
     for _ in 0..crate::audio_engine::cold_jobs::WORKERS {
         rx.recv_timeout(std::time::Duration::from_secs(5)).unwrap();
     }
+    let original_source = CompleteSourceGuard::capture(
+        &fixture.engine,
+        0,
+        &fixture.loaded,
+        fixture.generation,
+        48_000,
+    )
+    .unwrap();
     let analysis_request =
         crate::audio_engine::complete_context::start_analysis(&fixture.engine, 0).unwrap();
+    let original_owner = NativeAnalysisOwner::new(
+        original_source,
+        fixture.engine.prepared_source_epochs[0].clone(),
+    );
     crate::audio_engine::next_pad_request_id(
         &fixture.engine.pad_request_ids,
         0,
@@ -547,13 +623,8 @@ fn c2b_productive_complete_analysis_admission_is_bounded_and_superseded_work_can
     *gate.0.lock().unwrap() = true;
     gate.1.notify_all();
     wait_until(|| fixture.engine.active_tasks.lock().unwrap().is_empty());
-    let events: Vec<_> = fixture
-        .engine
-        .loader_rx
-        .lock()
-        .unwrap()
-        .try_iter()
-        .collect();
+    let events =
+        loader_events_for_owned_request(&fixture.engine, analysis_request, &original_owner);
     assert!(events.iter().any(|event| matches!(event, LoaderEvent::TaskError { request_id, error, .. } if *request_id == analysis_request && error.contains("superseded"))));
     assert!(
         !events
@@ -621,6 +692,7 @@ fn c2b_productive_default_analysis_reads_complete_source_without_expanding_effec
         fixture.loaded.clone(),
     )
     .unwrap();
+    let original_source = reader.guard.clone().unwrap();
     let full = reader
         .materialize(crate::audio_engine::cold_jobs::PCM_LIMIT_BYTES, &|| false)
         .unwrap();
@@ -634,8 +706,12 @@ fn c2b_productive_default_analysis_reads_complete_source_without_expanding_effec
     drop(reader);
     let request =
         crate::audio_engine::complete_context::start_analysis(&fixture.engine, 0).unwrap();
+    let original_owner = NativeAnalysisOwner::new(
+        original_source,
+        fixture.engine.prepared_source_epochs[0].clone(),
+    );
     wait_until(|| fixture.engine.active_tasks.lock().unwrap().is_empty());
-    let terminal = fixture.engine.loader_rx.lock().unwrap().try_iter().find(|event| matches!(event,
+    let terminal = loader_events_for_owned_request(&fixture.engine, request, &original_owner).into_iter().find(|event| matches!(event,
         LoaderEvent::TaskSuccess { request_id, .. } | LoaderEvent::TaskError { request_id, .. } if *request_id == request)).unwrap();
     assert!(
         matches!(

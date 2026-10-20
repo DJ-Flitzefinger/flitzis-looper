@@ -27,6 +27,8 @@ if TYPE_CHECKING:
     )
     from flitzis_looper.controller.stem_generation import StemGenerationRequest
     from flitzis_looper.controller.stem_intent import StemGenerationIntent
+    from flitzis_looper.controller.stem_job import StemGenerationInterests
+    from flitzis_looper.controller.stem_workers import StemWorkerReservation
     from flitzis_looper_audio import (
         AudioEngine,
         PreparedSourceTicket,
@@ -45,6 +47,23 @@ class StemPairIntentBinding:
     artifact_source_version: str | None = None
     source_path: str | None = None
     verify_saved_selection: bool = False
+    interest_owner: StemGenerationInterests | None = None
+
+
+@dataclass(frozen=True, slots=True)
+class StemPairPreparationSpec:
+    """Captured request metadata and own ticket, without new reader ownership."""
+
+    sample_id: int
+    entry: StemCacheEntry
+    ticket: PreparedSourceTicket
+    content_id: str | None
+    previous_entry: StemCacheEntry | None
+    components: bool
+    processing_request: StemGenerationRequest | None = None
+    regenerate_on_incompatible: bool = False
+    residency_only: bool = False
+    binding: StemPairIntentBinding | None = None
 
 
 @dataclass(slots=True)
@@ -70,6 +89,8 @@ class PairPreparation:
     own_source_version: str | None = None
     artifact_source_version: str | None = None
     source_path: str | None = None
+    interest_owner: StemGenerationInterests | None = None
+    started: Event = field(default_factory=Event, init=False, repr=False)
     _artifact_version_explicit: bool = field(init=False, repr=False)
 
     def __post_init__(self) -> None:
@@ -118,57 +139,106 @@ class StemPairPreparationQueue:
         binding: StemPairIntentBinding | None = None,
     ) -> None:
         """Reserve capacity and exact generation before the performer model changes."""
-        captured = StemPairIntentBinding() if binding is None else binding
-        if (
-            captured.own_source_version is not None
-            and captured.own_source_version != entry.source_version
-            and captured.artifact_source_version is None
-        ):
-            message = "Cross-root stem reuse requires an explicit artifact source version"
-            raise ValueError(message)
-        if sample_id in self.pending:
-            message = "Stem pair preparation already pending"
-            raise RuntimeError(message)
-        if any(owner == sample_id for owner, _ in self._discard_retries.values()):
-            message = "Stem pair cleanup admission is still pending"
-            raise RuntimeError(message)
-        retirement = self._assets.reserve_pending(16)
-        try:
-            lease = self._assets.acquire(Path(entry.cache_dir))
-        except OSError, RuntimeError, ValueError:
-            retirement.close()
-            raise
-        request = PairPreparation(
+        spec = StemPairPreparationSpec(
             sample_id,
             entry,
             ticket,
             content_id,
             previous_entry,
+            components,
+            processing_request,
+            regenerate_on_incompatible,
+            residency_only,
+            binding,
+        )
+        self._submit_spec(spec, self._runner)
+
+    def submit_reserved(
+        self, spec: StemPairPreparationSpec, reservation: StemWorkerReservation
+    ) -> None:
+        """Use already granted pool capacity before acquiring Pair reader ownership."""
+        with reservation:
+            self._submit_spec(spec, reservation.submit)
+
+    def admission_pending(self, sample_id: int) -> bool:
+        """Keep exact returned/discard owners ahead of another read for this slot."""
+        return sample_id in self.pending or any(
+            owner == sample_id for owner, _ in self._discard_retries.values()
+        )
+
+    def retained_preparation_count(self) -> int:
+        """Count actual pending or failed-discard owners independently of pool slots."""
+        pending = {id(request): request for request in self.pending.values()}
+        prepared = {
+            id(request.prepared) for request in pending.values() if request.prepared is not None
+        }
+        return len(pending) + sum(key not in prepared for key in self._discard_retries)
+
+    def _submit_spec(
+        self, spec: StemPairPreparationSpec, runner: Callable[[Callable[[], None]], None]
+    ) -> None:
+        captured = StemPairIntentBinding() if spec.binding is None else spec.binding
+        if captured.interest_owner is not None and not captured.interest_owner.allows_preparation:
+            message = "Stem preparation has no current generation interests"
+            raise RuntimeError(message)
+        if (
+            captured.own_source_version is not None
+            and captured.own_source_version != spec.entry.source_version
+            and captured.artifact_source_version is None
+        ):
+            message = "Cross-root stem reuse requires an explicit artifact source version"
+            raise ValueError(message)
+        if spec.sample_id in self.pending:
+            message = "Stem pair preparation already pending"
+            raise RuntimeError(message)
+        if any(owner == spec.sample_id for owner, _ in self._discard_retries.values()):
+            message = "Stem pair cleanup admission is still pending"
+            raise RuntimeError(message)
+        retirement = self._assets.reserve_pending(16)
+        try:
+            lease = self._assets.acquire(Path(spec.entry.cache_dir))
+        except OSError, RuntimeError, ValueError:
+            retirement.close()
+            raise
+        request = PairPreparation(
+            spec.sample_id,
+            spec.entry,
+            spec.ticket,
+            spec.content_id,
+            spec.previous_entry,
             retirement,
             lease,
             Event(),
-            processing_request,
-            regenerate_on_incompatible,
-            residency_only=residency_only,
+            spec.processing_request,
+            spec.regenerate_on_incompatible,
+            residency_only=spec.residency_only,
             verify_saved_selection=captured.verify_saved_selection,
             generation_intent=captured.generation_intent,
             own_source_version=captured.own_source_version,
             artifact_source_version=captured.artifact_source_version,
             source_path=captured.source_path,
+            interest_owner=captured.interest_owner,
         )
-        self.pending[sample_id] = request
+        self.pending[spec.sample_id] = request
         try:
-            self._runner(lambda: self._run(request, components=components))
+            runner(lambda: self._run(request, components=spec.components))
         except OSError, RuntimeError:
-            self.pending.pop(sample_id)
+            self.pending.pop(spec.sample_id)
             request.close()
             raise
 
     def _run(self, request: PairPreparation, *, components: bool) -> None:
+        request.started.set()
         processing = None
         artifact = None
         try:
-            if not request.cancelled.is_set():
+            eligible = request.interest_owner is None or request.interest_owner.allows_preparation
+            if not eligible:
+                # Cancellation is a control-owned, mirror-watched Event. The
+                # worker only returns its result; the unfenced collector closes
+                # empty-interest custody without a check-then-fence race here.
+                request.error = "Stem pair preparation cancelled"
+            if eligible and not request.cancelled.is_set():
                 if request.processing_request is not None:
                     request.compatibility_rejected = True
                     processing = capture_processing_files(request.processing_request)
@@ -268,15 +338,50 @@ class StemPairPreparationQueue:
         if delivery_id in deferred_sample_ids:
             self._held_results.append(request)
             return
+        if request.interest_owner is not None and not request.interest_owner.allows_preparation:
+            request.cancelled.set()
+            request.close()
         if self.pending.get(request.sample_id) is request:
             self.pending.pop(request.sample_id)
         ready.append(request)
 
     def cancel(self, sample_id: int) -> None:
-        """Withdraw interest without releasing a queued/running reader prematurely."""
+        """Withdraw obsolete content without releasing a queued/running reader early."""
         request = self.pending.get(sample_id)
         if request is not None:
+            if request.interest_owner is not None:
+                request.interest_owner.invalidate_all()
             request.cancelled.set()
+
+    def cancel_interest_owner(self, owner: StemGenerationInterests) -> None:
+        """Cancel exact final-owner requests after caller detachment, including moves.
+
+        The controller decides whether the final token was removed before commit.
+        This method changes no membership and never releases an actual reader.
+        """
+        for request in self.pending.values():
+            if request.interest_owner is owner:
+                request.cancelled.set()
+
+    def retain_returned(self, request: PairPreparation) -> bool:
+        """Retain a collected result and its reservation without replacing newer work.
+
+        Only the control collector may call this after the actual worker returns.
+        Normal collection rechecks this same request on the next control poll;
+        cancellation and placement continue to use the existing pending owner.
+        """
+        current = self.pending.get(request.sample_id)
+        if (
+            (current is not None and current is not request)
+            or request.cancelled.is_set()
+            or request.error is not None
+            or request.prepared is None
+        ):
+            return False
+        self.pending[request.sample_id] = request
+        if not any(held is request for held in self._held_results):
+            self._held_results.append(request)
+        return True
 
     def discard(self, sample_id: int, prepared: PreparedStemPair) -> str | None:
         """Keep failed native queue admission reachable without leaking reservations."""

@@ -2,8 +2,10 @@
 
 ## Status and delivery ownership
 
-L1 is delivered; L2 separates offline custody and durable disk selection from
-effective playback. L3/L4 and Bulk remain open. `X11-LIVE-STEMS` and `X11-BULK` are
+L1/L2 and bounded L3/L4 software domains are delivered as recorded in tasks.md
+and docs/prepared-stem-publication.md. Independent own-ACK publication, complete
+source/seek/one-shot and final-reader profiles retain their exact declared limits.
+Whole LIVE/resource/music/Human acceptance and Bulk remain open. `X11-LIVE-STEMS` and `X11-BULK` are
 additive delivery IDs in the maintained pre-Rust program. The old IDs/edges,
 completed subtasks, failed results and final Human gates retain their meanings.
 The central program defines topological order; these local stages are bounded
@@ -19,9 +21,11 @@ implementation units, not additional independently accepted program IDs.
   incremental batch feeding at this admission seam, not 216 submitted workers
   or a second executor. A bounded 216-entry inventory contains intent metadata,
   not retained complete PCM or a second 216-job executor queue.
-- L2 permits offline generation and complete disk-only preparation while active.
-  `mixer.rs::prepared_stem_rejection` still rejects new active component sets as
-  `PadPlaying`; that adoption guard remains until the independent L3 proof exists.
+- L2 permits immutable offline generation and complete disk-only preparation while
+  active. Delivered bounded L3 domains use fresh source/candidate preparation and
+  own guarded adoption ACK; unsupported contexts remain guarded. Bulk must reuse
+  these actual paths and domain limits, without reviving the old blanket
+  `PadPlaying` guard or interpreting finite proof as whole LIVE acceptance.
 - `ProjectAssetLifecycle` reserves retirement before intent mutation and
   acquires new assignment owners before releasing previous owners. Native
   shared readers, paired complete descriptors and off-thread retirement already
@@ -448,8 +452,14 @@ paused/musical/seek/resource216/Human and whole-parent gates remain required.
 
 ## B1: all-loaded generation and cooperative Cancel
 
-Confirmation captures bounded all-bank slot/content/material identities, selected
-effective fingerprint and affected counts. Cancel before admission changes
+Confirmation captures a metadata-only immutable all-216-slot inventory of exact
+loaded source/content/material/current-set identities, authoritative shape/path,
+requested effective processing settings and monotone Settings revision, plus
+affected counts. Any already verified set identity may be captured, but the
+warning does not attest a new effective fingerprint: actual full producer bytes
+are sealed only in the existing first bounded worker phase. Opening or dismissing
+the warning performs no hashing, source leasing, retirement reservation, job or
+private-directory creation. Cancel before admission changes
 nothing. Feed distinct required material jobs incrementally and fairly through
 the two/32 pool; existing direct jobs and later interactive requests retain fair
 admission. Skip unloaded or changed captured identities with a visible stale
@@ -457,12 +467,84 @@ result rather than targeting newly inserted content. Successful earlier items
 remain successful if later items fail or Cancel is requested.
 
 Batch interest identity must be distinct from pad/direct interest identity even
-when both refer to the same pad/job. Cancel detaches only the batch's subscribers
+when both refer to the same pad/job. The existing per-PAD publication subscriber
+remains the single source/request/intent/retirement owner; stable interest-holder
+identity under that row contains immutable token snapshots. Token-only joins or
+removals preserve the exact row and original Pair/Bank/held-delivery ownership.
+Pair relocation, intent resolution and canonical transfer carry the same holder.
+Whole obsolete-content detach removes every old token; a batch Cancel removes
+only its own token and cannot touch a newer occupant. A terminal participant image
+is never expanded merely to accept a late token without a valid outcome route. Cancel detaches only the batch's subscribers
 and pending inventory. Final-interest Cancel asks only that job's owned process
 to stop cooperatively, with bounded escalation/teardown; no foreign process or
-remaining subscriber is cancelled. Existing `subprocess.run` plus a boolean
-cannot prove prompt running-inference cancellation: use an owned cancellable
-process handle and retain leases until actual exit/read end.
+remaining subscriber is cancelled. The existing stem_process owned cancellable process scope already supplies
+cooperative abort, bounded escalation and actual exit/read settlement; reuse that
+mechanism and retain its leases until actual read end. A boolean around blocking
+subprocess.run would not replace this delivered lifecycle proof.
+
+The B1 operation owner now follows successful inference disposal into the existing
+Pair preparation/binding, reuse and incompatible-reuse regeneration paths, without
+keeping the inference job alive or adding another per-PAD job registry. Its
+immutable membership snapshots and monotone precommit-failure/committed/no-op
+outcomes are control metadata, not publication permits. Existing fresh source,
+intent, preparation and own Native ACK guards remain authoritative. A captured
+cancellation receipt retains exact removed final readers and pending Pair requests
+until actual settlement; foreign readers do not delay that receipt. Empty original
+holders are rechecked at queue admission, worker entry and final precommit
+eligibility, including the returned-request projection gap. Real config replacement
+wins later cancellation; normal committed settlement and adoption continue.
+Current verified already-present output remains an explicit no-op outcome, and
+unbound test controllers cannot fabricate durable persistence receipts.
+
+Equal resolved work must also discover complete artifacts retained between
+physical inference and the first durable selection. Existing live promotion,
+Pair-preparation and durable-settlement owners already retain their exact artifact
+leases. Compatibility discovery over those owners feeds the existing reuse
+admission, which acquires independent custody and keeps fresh full producer,
+artifact, own source and Native publication checks. Released leases and metadata
+alone cannot lend custody. This requires no second result registry, revived
+disposed job or expanded captured terminal subscriber image.
+
+Final-interest Cancel cannot mutate a captured Pair/Bank participant image while
+its existing Native ACK/control mirror fence is active. The original subscriber,
+generation maps and watched preparation-cancellation Event remain until normal
+unfenced control collection; the cancellation receipt retains those exact owners.
+An empty-interest queued worker returns zero Native work and a result without
+changing the watched Event. A legitimate new direct interest can keep uncancelled
+original work alive without extending the detached batch's receipt. Existing
+mirrors and publication guards remain authoritative.
+
+Production uses one control arbiter for direct/batch resolve, inference and Pair
+preparation, with FIFO readiness in each of six rotating lanes and at most six
+successful submissions per control poll. Scoped capacity reservations precede
+source/job/retirement/Pair ownership. Refusal retains exact requested metadata
+without an error; unused capacity returns during that attempt. The legacy callable
+contract remains available to injected/standalone runners. No new executor or
+task-closure queue is introduced.
+
+The initial distinct generation WIP limit is34, including terminal-held jobs;
+continuations remain eligible at that limit. A separate conservative34 preparation
+limit includes submitted and returned/writer-held requests, durable settlements,
+legacy pending publications and prepared Native results awaiting failed-discard
+retry. Those actual owners remain counted after the executor slot returns. Pending
+unadmitted metadata remains bounded by the216 project slots. Exact terminal/reuse
+subscribers stay in their existing delivery.remaining until a reserved Pair
+submission or terminal outcome; binding and promotion are not repeated. Late
+callers may join a still-retained original delivery, while generic consumed
+terminal jobs provide no promise of an outcome. Fresh post-reservation guards
+settle the original holder on staleness without assigning an error to replacement
+content. Native source/publication/ACK and final-reader guards remain unchanged.
+
+The real-pool controller fanout fixture proves216 independent retained subscriber
+rows and exactly two admitted preparations with214 still pending; its preterminal
+worker delivery is deterministic and its audio/separator fixtures are substitutes.
+This is distinct from genuine complete216 duplicate/distinct resource/process/
+adoption acceptance. The transient operation now retains the exact shared-warning
+inventory, offers at most eight original rows per App frame and projects original
+holder outcomes into Settings progress/partial results. It continues while
+Settings is closed and owns no executor, leases or durable state. Bounded
+controller/UI and actual Native-crossing proofs cover this integration; genuine
+complete216 resource/process/adoption profiles remain required B1 work.
 
 Gate B1 loads slot labels 1 and 216 plus all intermediate bank inventory, covers
 216 duplicate and 216 distinct materials and an actual supported RAM-budget
@@ -474,7 +556,8 @@ Cancel in queued/inference/commit/adoption phases and fresh partial results.
 ## B2: all-loaded deletion
 
 Confirmation snapshots all loaded assignments and exact current/retained set
-versions; shared material is counted once and affected pad labels are visible.
+versions; the warning reports occupied original PAD and unique exact set-version
+counts, counting each shared version once.
 Accept revokes only still-matching targeted stem selection and pending batch
 interests, then safely selects FullMix through the established native path.
 Old active selections/transitions/readers may finish their bounded handover; no
@@ -482,6 +565,58 @@ file is removed until true final ownership release. Changed/new source or set
 versions are skipped, not recursively removed. Original FullMix/source/PCM,
 unknown content, external files and other owners survive. Repeated delete is a
 truthful no-op. Cleanup/deferred errors remain visible without stopping playback.
+
+Deletion uses its own metadata inventory rather than generation's processing
+Settings predicate. It binds original PAD/path/content/loaded-source identity,
+the exact current durable set, normalized known retained sets and existing
+material/admission-sequence identifiers. No I/O or custody is acquired by a
+warning. Retained-owner ordering, worker phases, availability and unrelated model
+Settings changes do not create a new deletion target. New admissions or set/source
+identities do. Disappearing captured pending requests never authorize uncaptured
+outputs. Current durable identity remains strict: an already known retained set
+moving into durable selection may conservatively skip that original warning.
+Arrangement fences defer validation before an intermediate target image is read.
+
+The current bounded vertical implementation uses `StemDeleteInventory` for all
+216 original slot positions and one transient `StemDeleteController`, rather
+than a second scheduler, executor or retirement owner. Acceptance asks the
+existing batch owner to withdraw only exact captured still-unadmitted caller
+tokens and retains its actual withdrawal receipts. A token already gone before
+acceptance grants no Removed claim; a token actually withdrawn at acceptance can
+produce Removed even when the later per-PAD backend has no admitted work left.
+New operation tokens and admitted readers remain with their existing owners.
+Application frames offer at most eight original queued rows, rotating deferred
+items fairly; this advances outside Settings. Shutdown preparation continues
+logical settlement before dependent controllers are torn down, preserving the
+same per-frame offer bound. The desktop shell carries whether `show_gui` ran
+into `after_swap`; `prepare_shutdown(deletion_polled=...)` reuses that frame's
+normal poll or performs one when rendering was skipped, including minimized
+closing frames. Direct shutdown preparation retains its own bounded progress.
+
+`StemController.delete_captured_stems` validates the original metadata before
+reusing ordinary deletion admission, guarded FullMix selection and central
+assignment retirement. Its metadata-only Noop shortcut avoids project scanning
+and retirement reservation only when current stem metadata is absent, requested
+mode is already FullMix, the actual saved stem asset assignment is absent, and
+all pending-interest, retained-set and admitted-request control routes are empty.
+An empty project cache row alone cannot prove this: the existing
+`ProjectAssetLifecycle.has_stem_assignment` owner observation prevents skipping
+a still-saved assignment. Otherwise the ordinary reserved assignment
+reconciliation runs. Native refusal remains Failed rather than a successful
+logical withdrawal.
+
+The common confirmation renderer binds the original inventory. Settings retains
+a six-line original-item list of Removed/Noop/Skipped/Failed/Queued outcomes and
+allows explicit terminal dismissal. Removed is a logical outcome, not an audio
+ACK or physical-file receipt. Separate global cleanup feedback reads the actual
+Native status, including cold-cache retirement, plus central retirement errors;
+query failure remains unknown with an error. Those global counts cannot be
+attributed to one deletion or replaced by Native's cumulative deletion count.
+Cleanup errors remain visible after logical results are dismissed. Relevant
+validation sources are `test_stem_delete_inventory.py`, `test_stem_delete.py`,
+`test_stem_delete_backend.py`, `test_stem_delete_integration.py` and
+`test_stem_delete_render.py`; final result/review receipts remain in the existing
+validation log and do not close whole B2 or its parent gates by code presence.
 
 Gate B2 proves no-op Cancel, all-bank shared/different materials, concurrent new
 generation, stale dialog, active/paused old voices, Native/FIFO/history owners,
@@ -505,4 +640,5 @@ validation, independent nonauthor source/test review and genuine output/resource
 receipts. X11-PLAN checks specification structure, mapping and dependency
 coherence plus official strict validation only; it supplies no implementation
 acceptance. Bounded L1/L2 delivery evidence is maintained in
-`docs/prepared-stem-publication.md`; L3/L4/B1/B2 and final parent/Human gates remain open.
+`docs/prepared-stem-publication.md`; delivered bounded L3/L4 profiles remain valid
+within their exact domains, while whole LIVE/B1/B2 and parent/Human gates remain open.

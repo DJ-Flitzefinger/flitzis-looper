@@ -4,7 +4,7 @@ use super::input_mapping::CapturedInputPadTrigger;
 use super::input_mapping::launch_admission_tests::RATE;
 use super::pad_start::CapturedPadStart;
 use super::pitch_intent::PitchIntent;
-use super::pitch_runtime_tests::{Fixture, LOOP_END, LOOP_START, assert_tone};
+use super::pitch_runtime_tests::{Fixture, LOOP_END, LOOP_START, assert_physical_birth_tone};
 use crate::messages::ControlMessage;
 use std::time::{Duration, Instant};
 
@@ -100,7 +100,11 @@ fn assert_native_first_attack(fixture: &Fixture, owner: &CapturedPadStart, pitch
         voice.sample.as_ref().unwrap().resident_binding()
     );
     let taps = voice.stretch.native_tap_observation().unwrap();
-    assert!(taps.left_reads > 0);
+    assert_eq!(
+        taps.left_reads, 0,
+        "negative physical-birth input must be silent"
+    );
+
     assert_eq!(taps.missing_reads, 0);
     assert_eq!(
         voice.source_playback.position().frame,
@@ -181,15 +185,6 @@ fn actual_midi_direct_first_native_attack_retains_original_owner_and_full_initia
         assert_eq!(original.received_timestamp(), timestamp);
         assert_eq!(trigger.original_owner_status(), "admitted");
         assert_native_first_attack(&midi, &original, pitch);
-        let initial_energy = pcm[..2048]
-            .iter()
-            .map(|sample| f64::from(*sample).powi(2))
-            .sum::<f64>()
-            / 2048.0;
-        assert!(
-            initial_energy > 0.001,
-            "MIDI first Native/FIFO attack was silent"
-        );
         let maximum_error = pcm
             .iter()
             .zip(&reference_pcm)
@@ -199,9 +194,9 @@ fn actual_midi_direct_first_native_attack_retains_original_owner_and_full_initia
             maximum_error < 2.0e-5,
             "complete MIDI initial PCM differs: {maximum_error}"
         );
-        // Independent raw source frequency and integer shifts; include sample 0 and
-        // every startup/FIFO sample, rather than dropping an initial analysis slice.
-        assert_tone(&pcm, base, extra, 1.0, true);
+        // Compare every sample to the independent zero-prefix raw source oracle;
+        // stationary frequency has its own fixed analysis window.
+        assert_physical_birth_tone(&pcm, base, extra, 1.0, true, 1.0);
         assert_releases_create_no_attack(&mut midi);
     }
 }
@@ -307,6 +302,6 @@ fn actual_midi_pressure_fallback_keeps_original_target_through_own_ack_and_first
     let pcm = initial_pcm(&mut fixture, &original);
     assert_eq!(original.received_timestamp(), timestamp);
     assert_native_first_attack(&fixture, &original, pitch);
-    assert_tone(&pcm, 0, 7, 1.0, true);
+    assert_physical_birth_tone(&pcm, 0, 7, 1.0, true, 1.0);
     assert_releases_create_no_attack(&mut fixture);
 }

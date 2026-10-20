@@ -1283,10 +1283,15 @@ impl ProjectAssets {
             };
             match result {
                 Ok(()) => {
-                    let completion = (!target.pcm).then(|| target.protection.clone()).flatten();
+                    let deleted_here = !target.pcm;
+                    let completion = deleted_here.then(|| target.protection.clone()).flatten();
                     state.retiring.remove(&path);
                     retiring_paths.remove(&path);
-                    state.deleted += 1;
+                    // ColdStore counts a PCM generation after physical deletion;
+                    // this handoff is only pending work, not a second completion.
+                    if deleted_here {
+                        state.deleted += 1;
+                    }
                     if let Some(material) = super::material_paths::material_root(&path)
                         && !protected_paths.intersects(material)
                         && !retiring_paths.intersects(material)

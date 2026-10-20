@@ -2,6 +2,170 @@
 
 This document records the current Rubber Band based Key Lock implementation.
 
+The Human's 2026-10-20 full-onset revision supersedes historical original-T suffix
+recipes below for **new ordinary PAD and fresh Piano SET_RETRIGGER births**.
+Requested target T remains immutable,
+actual effect E remains explicit, and the selected physical beginning is first
+emitted at E without consuming E-T as unheard PCM or filter history. Source phase
+then counts actually emitted frames; a late full attack does not claim original-T
+phase alignment with peers. Atomic ordinary groups share their actual E. Existing
+source/control/DSP ABA, own-ACK, cancellation and bounded worker guards remain.
+Scalar SET/resume and genuine existing-source replay keep their separate history.
+Physical phase reset is independent from the actual accepted rate, target and
+remaining active-frame smoothing interval evaluated at E. A final target ratio
+or newly reset smoothing clock cannot replace that proved actual state. Existing
+scalar admission observations and source/control/ACK/ABA/Stop/cancellation guards
+remain mandatory; unproved past-T glides, paused pending glides and unsupported
+selection/read histories remain refusals. Immutable PCM may be shared, while
+each attack retains its own mutable source/Native/FIFO/filter ownership.
+The independent dry source regression establishes this onset chronology only;
+Native transient response, musical C, distinct policy emission and Human hearing
+remain separate open work. Full Piano onset and supported rate-clock integration
+now have bounded software evidence; older suffix passes below do not establish
+their acceptance. See `preserve-full-start-onset` in OpenSpec.
+
+The current independent analytic ordinary and Piano references compare the whole
+physical beginning, including the first emitted frame, without E-T slicing.
+Piano coverage includes stopped, running and stationary-paused births at .80,
+1 and 1.16 under both policies, with publication delays and peer-state checks.
+Actual accepted rate, target and smoothing-step remainder at E remain independent
+of the physical phase reset. Existing-source SET/replay and unsupported history
+refusals retain their separate chronology. A previously selected incomplete
+one-time master bootstrap may anchor from the canonical next-read source at E
+under `preserve-manual-grid-phase`; an established master is unchanged.
+
+Before the fresh Native-context reconciliation below, compatible focused
+runs covered 100 distinct Piano
+tests plus one existing diagnostic ignore, 58 ordinary tests, three genuine
+continuation tests and nine source-control epoch tests. These are combined
+selection results, not a freshly repeated whole-suite result. The exact Restore
+parent and production callback constructor also pass with the shared test owner
+using the production heap constructor. Release checks cover Restore, six whole
+onset tests and the 37-offset/both-lock matrix. Private Release origin/profile,
+nine API families, launcher preflight and 950 Python integration tests pass;
+the installed module is unchanged. Independent final review is clear.
+
+These results close the identified source-skipping and rate-clock software gap.
+They do not establish the Native principal-attack translation, click-safe entry,
+causal early lead, distinct audible start policies, device timing or Human hearing.
+
+The fresh-context reconciliation additionally distinguishes a new physical birth
+from genuine emitted source history. The public paired-source probe reproduces
+an unreachable remote loop tail changing the first Native output despite an
+identical complete positive-input horizon. New constant ordinary/group and Piano
+births now warm the existing Native/adapter with H silent input frames before the
+exact selected origin. Supported active-glide EndpointReset births preserve all
+real journal, seam, readers, historical pitch, own-generation and H fixed-point
+proofs while making only their derived pre-birth PCM silent. Genuine SET,
+resume and replay continue to supply their real source history.
+
+The prepared owner and selected reserve carry a birth-context marker, checked
+again at transfer and final action adoption. Attack observations use the same
+silent-prefix geometry and distinct typed receipts; unsupported trajectories
+remain truthfully unavailable. No musical anchor, Native profile or rate/time
+authority is changed. The final public comparison has 48 complete
+4096-frame captures (64 separately owned actual voices across ordinary, direct
+Piano and atomic two-PAD group routes), sample-exact against independent raw
+silence-then-source references. Both policies, .80/1.16, remote-tail A/B controls
+and unequal partitions pass; groups retain one common E and scheduler row.
+Measurement guards pass 13 tests; three cache/final-adoption refusal/recovery
+cases pass. A fresh full Piano run passes 100 tests with one existing diagnostic
+ignore. Eight source-feed and three genuine continuation tests pass; 128 distinct
+ordinary cases are covered across compatible runs, rather than a repeated single
+128-case run. Source-clock, history refusal, positive finite-window seam and
+first-sample/whole-prefix checks remain explicit.
+
+Release repeats all three public route tests and the unfinished rate-glide case.
+The current privately extracted Release module passes its exact origin/profile,
+nine API families, launcher preflight and 950 Python tests. Clippy all workspace
+targets, formatting, affected strict specs and independent final combined review
+pass. These checks close this physical-birth context software block. The installed
+module is unchanged; musical C, causal early lead, distinct policy emission,
+click/device/hearing and full-product gates remain open.
+
+An opt-in direct-C-ABI probe separately verifies the retained authored quarter-pulse
+WAV before inspecting wet output: exact source hash, mono PCM24/48 kHz/600 s,
+1200 identical complete quarters, and independently authored source event zero.
+Its decoded f32 identity is retained in the existing test log. It supplies explicit
+dual-mono input, physical silence before source zero, no interpolation access to
+the next pulse, and complete uncropped Native captures. Source/dry silent gaps
+and the unchanged final-20-ms tail bound establish isolation for all six captures.
+
+For current Short at .80 and 1.16, the common q10/q50 timing translation interval
+does not intersect the original peak/99.9%-energy retention interval. Their gaps
+are 248 and 77 frames respectively. With the first-emission gate fixed at the
+declared target/source-zero boundary, a translation cannot satisfy both existing
+criteria for these isolated pulses. An earlier audible lead is a separate causal
+case: the gaps are necessary lead bounds for this fixture, not a proof that the
+attack policy is impossible. The neutral case has an intersection.
+Test-only Medium has nonempty necessary intersections at all three rates. Every
+unshifted two-ms predicate still fails, and no musical C, delay compensation or
+production profile is selected. The independent source-feature candidates retain
+their roughly 2.3k-frame support widths; their high correlation is not sample
+precision or a perceived-attack certificate. The same limitations apply to the
+earlier unique 192-frame synthetic probe.
+
+Three neighboring declared analytic attacks add 18 isolated captures: an 8-ms
+900-Hz burst, an 80-ms decaying low-frequency kick and distinct stereo tonal/
+percussive content at the same three rates and two profiles. Short has no strict
+joint interval in any nonneutral case. For the kick at 1.16, q10/q50 errors differ
+by 302 frames, exceeding their combined 192-frame tolerance; the timing interval
+itself is empty. An earlier gate cannot cure that deformation by translation.
+Medium has a nonempty necessary joint interval in all nine local cases. These
+fixture-specific findings still do not establish a production profile or musical
+anchor across the supported rate, pitch, sample-rate and block-phase envelope.
+
+A fixed 324-case raw extension covers 44.1/48/96 kHz, source ratios .5/1/2,
+total semitones -23/0/+24, event phases 0/17/511, two declared source attacks and
+both profiles. It retains every full 196608-frame capture and unchanged criteria.
+Medium already has an empty timing interval for the 44.1-kHz kick at source .5,
+zero semitones and phase zero: q10/q50 errors are 3682/4164 frames. Thus the local
+candidate is not a general translation solution, even with earlier emission.
+
+This extension deliberately uses target-pitch cold reset in the raw C ABI. Its
+72 cases above pitch scale 2 do **not** reproduce the current product's initial
+setup contract: `prepare_exact_pitch` already finishes first processing with one
+silent unity block on the same handle before setting those exact larger pitches.
+The unmitigated raw p4/p8 cases emit 144 native ring-capacity/input-space warnings;
+finite output and complete tails do not resolve those raw faults. They are not
+new observed product errors or a reason to rebuild the existing preparation.
+The p2 counterexample above uses the current cold setup order and remains valid.
+
+The existing test-only offline Stretcher probe now also traverses that exact
+44.1-kHz/r=.5/h=1 kick, independently declaring original-source q=2,p=1.
+The original source SHA256 is
+c66b2a0d8fb02de4429afcce6185a000e6c61d171fe28883601bed19e769ea6d.
+Its 3528-frame support and 131074-frame finite source are frozen before wet
+processing. Source-zero and interior events produce complete 262148/393220-frame
+outputs; the interior dry prefix is exactly the earlier 196608-frame Live input.
+The independent dry reference has silent negative physical-event coordinates,
+including its interpolation boundary. The original-source offline output is
+never cropped, translated or normalized.
+
+Three fixed profiles are R2 Crisp/Percussive/Laminar Standard, the same R2 with
+Short window, and R3 Standard control. R3 receives no ineffective transient flags.
+Absent and fixed positive linear keyframe maps are separate cases; source zero
+uses a midpoint control anchor, not a measured attack anchor. The same exclusive
+C-ABI owner, two-pass processing, complete final drain and canonical512 ingress
+remain in use. All 12 origin/profile/map cases compare both caller partitions
+bitwise over complete PCM (24 captures). All exact duration, finite, final-drain
+and partition assertions pass. The legacy impulse body is byte-identical and
+retains its previous numerical results; the Live Medium control reproduces the
+empty timing interval [4076,3770].
+
+None of the 24 captures meets every unchanged strict criterion at its declared
+event. Seven of the 12 distinct cases have an empty q10/q50 timing interval even
+before retention is imposed. Only source-zero R2 Short has nonempty necessary
+joint intervals: [-105,-91] without a map and [-105,-87] with it. These are
+diagnostic scalar translation intervals, not selected musical C. Interior R2
+Standard without a map has timing [-1130,-998] but retention upper -1246, requiring
+at least 116 frames of earlier emission in that isolated case. Source-zero R3
+has timing [250,387] and retention upper4, requiring at least246 frames of earlier
+emission. A uniform translation cannot repair those captured raw q10/q50 intervals.
+Every full output has a zero final20ms energy fraction. R2/R3 therefore remain
+bounded mechanism evidence, without a production backend switch, pitch/glide
+qualification, general supported-domain result or principal-attack acceptance.
+
 Key Lock is one bounded part of the Rust audio/DSP foundation. It does not imply
 plugin hosting, a separate FX graph, or realtime stem generation.
 
@@ -1001,13 +1165,13 @@ not accepted musical timing or evidence that all mixture context is preserved.
 ### Product Decision And Acceptance Boundary
 
 On 2026-10-18 the Human subsequently requested both genuinely distinct global Settings
-policies for a listening comparison: "Erster Klang am Raster" preserves silence before T;
-"Anschlag am Raster" places the principal perceived attack at T with necessary quiet lead
+policies for a listening comparison: "First sound at grid" preserves silence before T;
+"Attack at grid" places the principal perceived attack at T with necessary quiet lead
 when causally available. The earlier attack preference is not an exclusive final selection.
 Both must be implemented in the existing single audio path after the currently begun R3
 block, retained for the comparison and persisted as one global choice. A change is permitted
 only with authoritative playback completely stopped, including paused/held resumable voices
-and pending playback. Settings otherwise shows "Zum Ändern Wiedergabe stoppen" and accepts
+and pending playback. Settings otherwise shows "Stop playback to change" and accepts
 no queued/next-start/live change. Attack alignment does not amplify sound or alter markers,
 BPM or pitch. Accepted measured anchoring and recorded-track/listening evidence remain open.
 This still needs an explicit insufficient-headroom rule: the current nearest
@@ -3644,6 +3808,13 @@ acceptance. Worker waits hold the virtual clock; no App or device is started.
 
 ### Piano retrigger preserves an unfinished actual rate glide — 2026-10-17
 
+The dated glide results in this and the following sections retain their original
+source/profile and former output-contract scope. Their rate-clock, source-reader,
+guard and ownership evidence remains relevant. Where an older fresh-birth oracle
+advanced new source or filters through T-to-E, the full-onset contract above now
+supersedes that suffix recipe; it does not remove genuine SET/resume/replay history
+or turn unsupported past/paused glides into supported cases.
+
 This section records checkpoint `d3b8b55`. Its whole-wet refusal and six-case
 profile are historical; the following section extends supported complete Normal
 sources with a separately declared reset-phase history.
@@ -4343,3 +4514,29 @@ source results; they were not rerun as new Source-audio evidence. Human App,
 held Native, settings and original audio remain unchanged. All acoustic timing,
 continuous-O/actual-rate/finite-transition, Native heap/logging, deadline/resource,
 device/listening and Human/parent acceptance gates remain open.
+
+## Confirmed recorded-source follow-up — 2026-10-20
+
+The Human identified the original stereo MP3 and moved the loop start to the
+previous default eight-bar end. After rebuilding Release, the Human could no
+longer reproduce the lost-kick failure and reported clean triggering with Key
+Lock and pitch active. This supports the implemented full-beginning corrections;
+the individual causal change and the complete policy/device matrix remain open.
+The reported decoder message alone is no VBR diagnosis: every inspected audio
+frame in this source has the same 320 kbit/s header bitrate. Symphonia 0.5.5 emits
+that duration-estimation message without Xing/Info or VBRI duration information.
+
+The opt-in Windows recorded-source geometry test reuses the existing complete-
+buffer decoder and playback-transform kernels. In Release it preserves both
+channels, hashes all 11,558,016 decoded frames at 44.1 kHz and all 12,580,154
+playback frames at 48 kHz, records zero decoder error-silence/skipped packets and
+one 560-frame resampler algorithmic-delay trim, and exports only its first
+32 seconds into owned private evidence. The independent FFmpeg decode has the
+same total frame count. Their unshifted first 32 seconds have RMS PCM difference
+3.81019e-6 and maximum difference 0.00639796; they are not bit-identical.
+
+These are source-geometry and provenance diagnostics. Activity thresholds and
+the ordinary initial-loop suggestion do not select musical C. They do not prove
+streamed Loader/Cold/Native/FIFO/App equality, the exact historical loop or
+analysis state, causal headroom, distinct policy emission or full listening
+acceptance. The original negative observations and all remaining gates remain.

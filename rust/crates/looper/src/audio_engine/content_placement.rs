@@ -235,6 +235,17 @@ pub(crate) struct PreparedSlotWrite {
     after: SlotSnapshot,
 }
 
+/// One fixed complete assignment image; every participant is checked before its sole claim.
+pub(crate) struct PreparedSlotSetWrite<const N: usize> {
+    writes: [PreparedSlotWrite; N],
+}
+
+impl<const N: usize> PreparedSlotSetWrite<N> {
+    pub(crate) fn writes(&self) -> &[PreparedSlotWrite; N] {
+        &self.writes
+    }
+}
+
 impl PreparedSlotWrite {
     pub(crate) fn before(&self) -> SlotSnapshot {
         self.before
@@ -263,6 +274,75 @@ impl Default for ContentPlacement {
 }
 
 impl ContentPlacement {
+    pub(crate) fn prepare_slot_set_write<const N: usize>(
+        &self,
+        owner: OwnerIdentity,
+        lifetimes: &[AtomicU64; NUM_SAMPLES],
+        captured: [SlotSnapshot; N],
+        next_lifetimes: [u64; N],
+    ) -> Result<PreparedSlotSetWrite<N>, PlacementError> {
+        if N == 0 || N > NUM_SAMPLES {
+            return Err(PlacementError::InvalidSlot);
+        }
+        let token = self.read_token().ok_or(PlacementError::Pending)?;
+        let mut seen = [false; NUM_SAMPLES];
+        let mut writes = Vec::with_capacity(N);
+        for (snapshot, lifetime) in captured.into_iter().zip(next_lifetimes) {
+            if snapshot.slot >= NUM_SAMPLES || seen[snapshot.slot] {
+                return Err(PlacementError::InvalidSlot);
+            }
+            seen[snapshot.slot] = true;
+            writes.push(self.prepare_slot_write(owner, lifetimes, snapshot, lifetime)?);
+        }
+        if self.read_token() != Some(token) {
+            return Err(PlacementError::Pending);
+        }
+        Ok(PreparedSlotSetWrite {
+            writes: writes.try_into().map_err(|_| PlacementError::InvalidSlot)?,
+        })
+    }
+
+    /// No allocation, nested marker or fallible operation follows the true whole-set claim.
+    pub(crate) fn commit_slot_set_write<const N: usize>(
+        &self,
+        owner: OwnerIdentity,
+        lifetimes: &[AtomicU64; NUM_SAMPLES],
+        prepared: &PreparedSlotSetWrite<N>,
+        claim: impl FnOnce() -> bool,
+        apply: impl FnOnce(),
+    ) -> Result<[SlotSnapshot; N], PlacementError> {
+        let revision = self.revision.load(Ordering::SeqCst);
+        if revision & 1 != 0 {
+            return Err(PlacementError::Pending);
+        }
+        if !prepared
+            .writes
+            .iter()
+            .all(|write| self.snapshot_fields_current(owner, lifetimes, write.before))
+        {
+            return Err(PlacementError::Stale);
+        }
+        let next_revision = self.enter_marker(revision)?;
+        if !prepared
+            .writes
+            .iter()
+            .all(|write| self.snapshot_fields_current(owner, lifetimes, write.before))
+            || !claim()
+        {
+            self.revision.store(revision, Ordering::SeqCst);
+            return Err(PlacementError::ClaimRejected);
+        }
+        apply();
+        for write in &prepared.writes {
+            lifetimes[write.before.cell.index()].store(write.after.lifetime, Ordering::SeqCst);
+            self.slot_epochs[write.before.slot].store(write.after.binding_epoch, Ordering::SeqCst);
+        }
+        self.revision.store(next_revision, Ordering::SeqCst);
+        Ok(std::array::from_fn(|index| SlotSnapshot {
+            layout_revision: next_revision,
+            ..prepared.writes[index].after
+        }))
+    }
     pub(crate) fn pending(&self) -> bool {
         self.revision.load(Ordering::SeqCst) & 1 != 0
     }
@@ -271,15 +351,26 @@ impl ContentPlacement {
     /// marker crossing changes this token even when its claim rolls back with
     /// unchanged layout, slot epochs and lifetimes. Reads are bounded and never retry.
     pub(crate) fn read_token(&self) -> Option<u64> {
+        self.read_token_result().ok()
+    }
+
+    /// Preserve permanent exhaustion when a control owner needs to defer only
+    /// actual publication contention. The optional read API retains its contract.
+    pub(crate) fn read_token_result(&self) -> Result<u64, PlacementError> {
         let revision = self.revision.load(Ordering::SeqCst);
         if revision & 1 != 0 {
-            return None;
+            return Err(PlacementError::Pending);
         }
         let generation = self.observation_generation.load(Ordering::SeqCst);
-        (generation != u64::MAX
-            && self.revision.load(Ordering::SeqCst) == revision
-            && self.observation_generation.load(Ordering::SeqCst) == generation)
-            .then_some(generation)
+        if generation == u64::MAX {
+            return Err(PlacementError::ObservationGenerationExhausted);
+        }
+        if self.revision.load(Ordering::SeqCst) != revision
+            || self.observation_generation.load(Ordering::SeqCst) != generation
+        {
+            return Err(PlacementError::Pending);
+        }
+        Ok(generation)
     }
 
     /// One nonblocking entry for all source and pair writers. Generation is

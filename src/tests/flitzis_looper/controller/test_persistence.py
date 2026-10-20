@@ -178,6 +178,8 @@ def test_restore_loads_valid_audio_files_without_reanalysis(
         initial_base_shift=0,
         initial_extra_shift=0,
         initial_key_lock=False,
+        initial_gain_db=0.0,
+        initial_eq_db=(0.0, 0.0, 0.0),
     )
     on_project_changed.assert_not_called()
 

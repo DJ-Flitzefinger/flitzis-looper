@@ -43,6 +43,7 @@ from flitzis_looper.stem_pair_selection import StemPairSelection
 from flitzis_looper_audio import MaterialMigrationJournalStore, ProjectAssetLease
 
 if TYPE_CHECKING:
+    from collections.abc import Callable
     from concurrent.futures import Future
 
     from flitzis_looper.controller.asset_lifecycle import (
@@ -51,6 +52,7 @@ if TYPE_CHECKING:
     )
     from flitzis_looper.controller.loader import LoaderController
     from flitzis_looper.controller.material_migration_cleanup import ArtifactCapture
+    from flitzis_looper.controller.material_migration_recovery import MigrationRecovery
     from flitzis_looper.controller.persistence import ProjectPersistence
     from flitzis_looper.controller.stems import StemTaskRunner
     from flitzis_looper.models import SessionState
@@ -128,6 +130,8 @@ class MaterialMigrationController:
         self._recovery_hold: MaterialMigrationHold | None = None
         self._recovery_pins: list[ProjectAssetLease] = []
         self._recovery_fence_id: str | None = None
+        self._arrangement_recovery_deferred = False
+        self._arrangement_recovery_allowed: Callable[[], bool] = lambda: True
         self.cleanup_error: str | None = None
         self._ledger_enabled: bool = (
             getattr(self._audio, "migration_artifact_ledger_supported", lambda: False)() is True
@@ -135,7 +139,7 @@ class MaterialMigrationController:
         self._init_material_custody()
         self._loader._set_migration_event_handler(self.handle_loader_event)
         self._recover_interrupted()
-        if self._ledger_enabled:
+        if self._ledger_enabled and not self._arrangement_recovery_deferred:
             try:
                 self._ensure_artifacts()
             except (OSError, RuntimeError, ValueError) as error:
@@ -168,7 +172,11 @@ class MaterialMigrationController:
         self._startup_scheduled = True
 
     def _poll_startup(self) -> None:
-        if not self._startup_scheduled or self.status not in {"idle", "config_committed"}:
+        if (
+            self._arrangement_recovery_deferred
+            or not self._startup_scheduled
+            or self.status not in {"idle", "config_committed"}
+        ):
             return
         if self._cleanup.preparing:
             return
@@ -193,12 +201,18 @@ class MaterialMigrationController:
                 return
         self._startup_scheduled = False
 
-    def _recover_interrupted(self) -> None:
-        recovery = inspect_migration_recovery(Path.cwd() / "samples", self._persistence.config_path)
+    def _recover_interrupted(self, recovery: MigrationRecovery | None = None) -> None:
+        if recovery is None:
+            recovery = inspect_migration_recovery(
+                Path.cwd() / "samples", self._persistence.config_path
+            )
         for item in recovery.settled:
             self._cleanup.add(item)
         if self._persistence.load_error is not None:
             recovery.errors.append(self._persistence.load_error)
+        if recovery.unfinished_arrangement_kinds:
+            self._defer_arrangement_recovery(recovery)
+            return
         if not recovery.pending and not recovery.errors:
             return
         owner = uuid4().hex
@@ -225,6 +239,59 @@ class MaterialMigrationController:
         for sample_id in ids:
             self._session.sample_load_errors[sample_id] = self.error
 
+    def _defer_arrangement_recovery(self, recovery: MigrationRecovery) -> None:
+        """Leave the arrangement writer and pins to its actual startup owner."""
+        self._arrangement_recovery_deferred = True
+        self._recovery_pending = recovery.pending
+        self._recovery_errors = list(recovery.errors)
+        self.error = "; ".join(recovery.errors) or (
+            "Arrangement recovery retains material migration and cleanup admission"
+        )
+
+    def bind_arrangement_recovery_guard(self, allowed: Callable[[], bool]) -> None:
+        """Use the App's actual arrangement owners for automatic and explicit retries."""
+        self._arrangement_recovery_allowed = allowed
+
+    def refresh_arrangement_recovery(self) -> bool:
+        """Rescan after ALL startup owners become inactive, before admitting Legacy work.
+
+        The App calls this at the actual startup active-to-inactive transition,
+        never on every frame. Saved material-birth restore remains independently
+        reachable while the arrangement startup owns its writer and source pins.
+
+        Returns:
+            Whether arrangement deferral cleared; Legacy recovery may still own its fence.
+        """
+        if not self._arrangement_recovery_allowed():
+            self._arrangement_recovery_deferred = True
+            self.error = "Arrangement recovery retains its actual owners and cleanup admission"
+            return False
+        recovery = inspect_migration_recovery(Path.cwd() / "samples", self._persistence.config_path)
+        if self._persistence.load_error is not None:
+            recovery.errors.append(self._persistence.load_error)
+        if recovery.unfinished_arrangement_kinds or recovery.errors:
+            self._defer_arrangement_recovery(recovery)
+            return False
+        if self._recovery_active is not None or self._fence_owner is not None:
+            message = "active material recovery retains its current writer and custody"
+            raise RuntimeError(message)
+        if self._recovery_owner is not None:
+            self._pin_recovery_references(recovery.pending)
+            self._recovery_pending = recovery.pending
+            for item in recovery.settled:
+                self._cleanup.add(item)
+            self._recovery_errors.clear()
+            self.error = None
+        else:
+            self._recover_interrupted(recovery)
+            if not recovery.pending:
+                self._recovery_errors.clear()
+                self.error = None
+        # A successful rescan and custody refresh, rather than a startup flag
+        # alone, grants admission. Failure above retains cached deferral.
+        self._arrangement_recovery_deferred = False
+        return True
+
     def _pin_recovery_references(self, journals: list[MaterialMigrationJournal]) -> None:
         references = {item.old_reference for journal in journals for item in journal.assignments}
         references.update(
@@ -237,13 +304,23 @@ class MaterialMigrationController:
 
     def retry_recovery(self) -> None:
         """Reinspect recognized journals while preserving current intent and existing fences."""
+        if self._arrangement_recovery_deferred:
+            if self.refresh_arrangement_recovery():
+                return
+            message = self.error or "Arrangement recovery retains material migration admission"
+            raise ValueError(message)
         if self._recovery_owner is None or self._recovery_active is not None:
             message = "there is no settled interrupted transaction to retry"
             raise ValueError(message)
         recovery = inspect_migration_recovery(Path.cwd() / "samples", self._persistence.config_path)
+        if recovery.unfinished_arrangement_kinds:
+            self._defer_arrangement_recovery(recovery)
+            message = self.error or "Arrangement recovery retains material migration admission"
+            raise ValueError(message)
         if recovery.errors:
             self._recovery_errors = recovery.errors
             message = "; ".join(recovery.errors)
+            self.error = message
             raise ValueError(message)
         self._pin_recovery_references(recovery.pending)
         self._recovery_pending = recovery.pending
@@ -252,7 +329,7 @@ class MaterialMigrationController:
 
     @property
     def status(self) -> str:
-        if self._recovery_owner is not None:
+        if self._arrangement_recovery_deferred or self._recovery_owner is not None:
             return "unresolved"
         if (
             self.error is not None
@@ -265,6 +342,9 @@ class MaterialMigrationController:
     def begin(self, sample_id: int) -> str:
         """Migrate one distinct existing original and its current subscribers in all banks."""
         validate_sample_id(sample_id)
+        if self._arrangement_recovery_deferred:
+            message = "arrangement recovery retains material migration and cleanup admission"
+            raise RuntimeError(message)
         if self._recovery_owner is not None:
             message = "interrupted journal retains the writer and launch fences for recovery"
             raise RuntimeError(message)
@@ -523,7 +603,8 @@ class MaterialMigrationController:
 
     def _poll_recovery(self) -> None:
         if (
-            self._recovery_owner is None
+            self._arrangement_recovery_deferred
+            or self._recovery_owner is None
             or self._recovery_errors
             or self._history_future is not None
         ):
@@ -1258,6 +1339,7 @@ class MaterialMigrationController:
                 instance_id=content.instance_id,
                 material_id=alias.material_id,
                 material_creation=alias.material_creation,
+                copied_from=content.copied_from,
             )
             self._candidate_stems(candidate, sample_id, subscriber)
         candidate.material_migrations = successor_aliases(candidate, alias, self._recovery_active)
@@ -1470,7 +1552,7 @@ class MaterialMigrationController:
         self._record("adoption_pending")
 
     def _poll_cleanup(self) -> None:
-        if not self._ledger_enabled:
+        if not self._ledger_enabled or self._arrangement_recovery_deferred or self._recovery_errors:
             return
         try:
             self._cleanup.poll(

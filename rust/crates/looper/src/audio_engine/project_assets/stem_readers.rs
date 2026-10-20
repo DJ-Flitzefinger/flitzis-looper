@@ -1030,6 +1030,8 @@ pub(super) fn check_pair_children(path: &Path, proof: &[VerifiedFile]) -> io::Re
 
 #[cfg(all(test, windows))]
 mod paired_owner_tests {
+    mod resource_plateau_tests;
+
     // Real original/WAV/PCM/common files and the ordinary native registry. This
     // suite establishes file ownership, not a source or timing callback ACK.
     use super::*;

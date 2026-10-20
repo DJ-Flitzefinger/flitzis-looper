@@ -621,13 +621,13 @@ pub fn cqt_complex(y: &[f64], config: &CqtConfig) -> (Matrix, Matrix) {
     // scale=False: C *= sqrt(lengths / n_fft) (per bin)
     if config.scale {
         let mut row_offset = 0usize;
-        for (resp_re, _, n_bins_oct, n_fft) in responses.iter().rev() {
+        for (_, _, n_bins_oct, n_fft) in responses.iter().rev() {
             let n_bins_oct = *n_bins_oct;
             let n_fft = *n_fft;
             let bins_to_copy = n_bins_oct.min(config.n_bins - row_offset);
             let scale = 1.0 / (n_fft as f64).sqrt();
             for b in 0..bins_to_copy {
-                for f in 0..resp_re.cols() {
+                for f in 0..out_re.cols() {
                     *out_re.get_mut(row_offset + b, f) *= scale;
                 }
             }
@@ -920,3 +920,6 @@ mod bounded_tests {
         assert!(default_cqt_working_bytes(usize::MAX).is_none());
     }
 }
+#[cfg(test)]
+#[path = "scaling_review_tests.rs"]
+mod scaling_review_tests;

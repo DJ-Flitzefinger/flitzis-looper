@@ -6,6 +6,8 @@ use super::constants::{MAX_VOICES, NUM_SAMPLES};
 use super::input_runtime_binding::{
     self, InputPadBinding, InputRuntimePadBinding, LaunchWriteKind,
 };
+use super::mix_capture::publication::CapturePublication;
+use super::mix_capture_api::{EngineCapture, MixCaptureTicket};
 use super::ordinary_start::OrdinaryStartWork;
 use super::pad_start::CapturedPadStart;
 use crate::messages::ControlMessage;
@@ -36,6 +38,7 @@ pub(crate) struct GlobalPlaybackBatch {
     pub(crate) start: bool,
     pub(crate) received_at_ns: Option<u64>,
     pub(crate) captured_start: Option<CapturedGlobalStart>,
+    pub(crate) capture_publication: Option<Arc<CapturePublication>>,
     status: Arc<AtomicU8>,
     prepared_claimed: AtomicBool,
     prepared_starts: UnsafeCell<Option<Box<[Option<Box<OrdinaryStartWork>>]>>>,
@@ -79,19 +82,31 @@ impl GlobalPlaybackBatch {
     }
 
     pub(crate) fn finish(&self, accepted: bool) {
-        self.status.store(
+        let _ = self.status.compare_exchange(
+            PENDING,
             if accepted { ACCEPTED } else { REJECTED },
-            Ordering::Release,
+            Ordering::AcqRel,
+            Ordering::Acquire,
         );
+    }
+
+    pub(crate) fn prepared_transferred(&self) -> bool {
+        self.prepared_claimed.load(Ordering::Acquire)
     }
 }
 
 impl Drop for GlobalPlaybackBatch {
     fn drop(&mut self) {
         // Stream/queue teardown happens off callback and rejects unexecuted transactions.
-        let _ =
-            self.status
-                .compare_exchange(PENDING, REJECTED, Ordering::AcqRel, Ordering::Acquire);
+        if self
+            .status
+            .compare_exchange(PENDING, REJECTED, Ordering::AcqRel, Ordering::Acquire)
+            .is_ok()
+            && self.capture_publication.is_some()
+            && let Some(captured) = &self.captured_start
+        {
+            captured.reject(super::pitch_actions::PitchActionReject::PreparationFailed);
+        }
     }
 }
 
@@ -251,6 +266,7 @@ fn enqueue_before_commit(
         start,
         received_at_ns,
         captured_start: None,
+        capture_publication: None,
         status: status.clone(),
         prepared_claimed: AtomicBool::new(false),
         prepared_starts: UnsafeCell::new(start.then(|| prepared_starts.into_boxed_slice())),
@@ -288,7 +304,52 @@ fn enqueue_before_commit(
 pub(super) fn enqueue_captured(
     engine: &AudioEngine,
     captured: &CapturedGlobalStart,
+    ticket: Option<&MixCaptureTicket>,
 ) -> PyResult<Option<GlobalPlaybackBatchTicket>> {
+    // Standalone capture already orders its locks owner -> producer. The combined
+    // transaction extends that same order with the existing request lock between.
+    let mut capture_slot = ticket.map(|_| engine.mix_capture_lock()).transpose()?;
+    let mut capture = match (ticket, capture_slot.as_mut()) {
+        (Some(ticket), Some(slot)) => {
+            let owner = slot
+                .as_mut()
+                .filter(|owner| owner.matches(ticket))
+                .ok_or_else(|| PyValueError::new_err("foreign or retired mix capture ticket"))?;
+            if owner.global_start_unqueued() && captured.state() == "rejected" {
+                owner.reject_unqueued_global();
+                return Err(PyValueError::new_err("original global start is rejected"));
+            }
+            match owner.global_start_ready(ticket, engine.mix_capture_stream_failed()) {
+                Ok(false) => return Ok(None),
+                Ok(true) => {}
+                Err(error) => {
+                    if owner.global_start_unqueued() {
+                        captured.reject(super::pitch_actions::PitchActionReject::PreparationFailed);
+                        owner.reject_unqueued_global();
+                    }
+                    return Err(error);
+                }
+            }
+            Some(owner)
+        }
+        _ => None,
+    };
+    let result = enqueue_captured_ready(engine, captured, capture.as_deref_mut());
+    if result.is_err()
+        && let Some(capture) = capture
+    {
+        captured.reject(super::pitch_actions::PitchActionReject::PreparationFailed);
+        capture.reject_unqueued_global();
+    }
+    result
+}
+
+fn enqueue_captured_ready(
+    engine: &AudioEngine,
+    captured: &CapturedGlobalStart,
+    capture: Option<&mut EngineCapture>,
+) -> PyResult<Option<GlobalPlaybackBatchTicket>> {
+    let attached_capture = capture.is_some();
     let _requests = engine
         .pad_request_ids
         .lock()
@@ -361,6 +422,7 @@ pub(super) fn enqueue_captured(
         start: true,
         received_at_ns: Some(captured.received_timestamp()),
         captured_start: Some(captured.clone()),
+        capture_publication: capture.as_ref().map(|capture| capture.global_publication()),
         status: status.clone(),
         prepared_claimed: AtomicBool::new(false),
         prepared_starts: UnsafeCell::new(Some(prepared_starts.into_boxed_slice())),
@@ -394,14 +456,19 @@ pub(super) fn enqueue_captured(
             }
         }
         reclaim.finish(false);
-        if matches!(
-            error,
-            super::content_placement::PlacementError::Pending
-                | super::content_placement::PlacementError::ClaimRejected
-        ) {
+        if matches!(error, super::content_placement::PlacementError::Pending)
+            || (!attached_capture
+                && matches!(
+                    error,
+                    super::content_placement::PlacementError::ClaimRejected
+                ))
+        {
             return Ok(None);
         }
         return Err(PyRuntimeError::new_err(error.to_string()));
+    }
+    if let Some(capture) = capture {
+        capture.mark_global_queued(captured.target_frame().expect("resolved original target"));
     }
     Ok(Some(GlobalPlaybackBatchTicket { status }))
 }

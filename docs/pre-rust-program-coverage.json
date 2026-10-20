@@ -5500,7 +5500,14 @@
       "future_proof_ids": [
         "TG1"
       ],
-      "status": "PLANNED_ONLY_NOT_IMPLEMENTED"
+      "status": "PLANNED_ONLY_NOT_IMPLEMENTED",
+      "r5_bounded_software_closure": {
+        "status": "ACCEPTED_NONAUTHOR_SOFTWARE_ONLY",
+        "date": "2026-10-20",
+        "evidence": "Common exact-request confirmation, actual rendered Native Bank/ACK/Config join, actual periodic InputMapping/outside-MIDI composition, successful actual-App repeated copy/overwrite/cancel/current-and-other Clear.",
+        "checks": "Final Python1308 and relevant Release187; scoped static/strict/diff; independent nonauthor final review CLEAR; exact wheel/install/API/launcher. Positive/negative chronology in workspace test-log.md.",
+        "remaining": "Full R5/HC/P6/V0/resource/RT/music/device/hearing/Human gates OPEN; parent statuses unchanged."
+      }
     },
     {
       "id": "G5.02",
@@ -5625,7 +5632,14 @@
         "TG1",
         "TG4"
       ],
-      "status": "PLANNED_ONLY_NOT_IMPLEMENTED"
+      "status": "PLANNED_ONLY_NOT_IMPLEMENTED",
+      "r5_bounded_software_closure": {
+        "status": "ACCEPTED_NONAUTHOR_SOFTWARE_ONLY",
+        "date": "2026-10-20",
+        "evidence": "Common exact-request confirmation, actual rendered Native Bank/ACK/Config join, actual periodic InputMapping/outside-MIDI composition, successful actual-App repeated copy/overwrite/cancel/current-and-other Clear.",
+        "checks": "Final Python1308 and relevant Release187; scoped static/strict/diff; independent nonauthor final review CLEAR; exact wheel/install/API/launcher. Positive/negative chronology in workspace test-log.md.",
+        "remaining": "Full R5/HC/P6/V0/resource/RT/music/device/hearing/Human gates OPEN; parent statuses unchanged."
+      }
     },
     {
       "id": "G5.05",
@@ -5667,7 +5681,14 @@
         "TG1",
         "TG4"
       ],
-      "status": "PLANNED_ONLY_NOT_IMPLEMENTED"
+      "status": "PLANNED_ONLY_NOT_IMPLEMENTED",
+      "r5_bounded_software_closure": {
+        "status": "ACCEPTED_NONAUTHOR_SOFTWARE_ONLY",
+        "date": "2026-10-20",
+        "evidence": "Common exact-request confirmation, actual rendered Native Bank/ACK/Config join, actual periodic InputMapping/outside-MIDI composition, successful actual-App repeated copy/overwrite/cancel/current-and-other Clear.",
+        "checks": "Final Python1308 and relevant Release187; scoped static/strict/diff; independent nonauthor final review CLEAR; exact wheel/install/API/launcher. Positive/negative chronology in workspace test-log.md.",
+        "remaining": "Full R5/HC/P6/V0/resource/RT/music/device/hearing/Human gates OPEN; parent statuses unchanged."
+      }
     },
     {
       "id": "G5.06",
@@ -5709,7 +5730,14 @@
         "TG1",
         "TG4"
       ],
-      "status": "PLANNED_ONLY_NOT_IMPLEMENTED"
+      "status": "PLANNED_ONLY_NOT_IMPLEMENTED",
+      "r5_bounded_software_closure": {
+        "status": "ACCEPTED_NONAUTHOR_SOFTWARE_ONLY",
+        "date": "2026-10-20",
+        "evidence": "Common exact-request confirmation, actual rendered Native Bank/ACK/Config join, actual periodic InputMapping/outside-MIDI composition, successful actual-App repeated copy/overwrite/cancel/current-and-other Clear.",
+        "checks": "Final Python1308 and relevant Release187; scoped static/strict/diff; independent nonauthor final review CLEAR; exact wheel/install/API/launcher. Positive/negative chronology in workspace test-log.md.",
+        "remaining": "Full R5/HC/P6/V0/resource/RT/music/device/hearing/Human gates OPEN; parent statuses unchanged."
+      }
     },
     {
       "id": "G5.07",
@@ -5752,7 +5780,14 @@
         "TG4",
         "TG6"
       ],
-      "status": "PLANNED_ONLY_NOT_IMPLEMENTED"
+      "status": "PLANNED_ONLY_NOT_IMPLEMENTED",
+      "r5_bounded_software_closure": {
+        "status": "ACCEPTED_NONAUTHOR_SOFTWARE_ONLY",
+        "date": "2026-10-20",
+        "evidence": "Common exact-request confirmation, actual rendered Native Bank/ACK/Config join, actual periodic InputMapping/outside-MIDI composition, successful actual-App repeated copy/overwrite/cancel/current-and-other Clear.",
+        "checks": "Final Python1308 and relevant Release187; scoped static/strict/diff; independent nonauthor final review CLEAR; exact wheel/install/API/launcher. Positive/negative chronology in workspace test-log.md.",
+        "remaining": "Full R5/HC/P6/V0/resource/RT/music/device/hearing/Human gates OPEN; parent statuses unchanged."
+      }
     },
     {
       "id": "G5.08",
@@ -5793,7 +5828,14 @@
       "future_proof_ids": [
         "TG1"
       ],
-      "status": "PLANNED_ONLY_NOT_IMPLEMENTED"
+      "status": "PLANNED_ONLY_NOT_IMPLEMENTED",
+      "r5_bounded_software_closure": {
+        "status": "ACCEPTED_NONAUTHOR_SOFTWARE_ONLY",
+        "date": "2026-10-20",
+        "evidence": "Common exact-request confirmation, actual rendered Native Bank/ACK/Config join, actual periodic InputMapping/outside-MIDI composition, successful actual-App repeated copy/overwrite/cancel/current-and-other Clear.",
+        "checks": "Final Python1308 and relevant Release187; scoped static/strict/diff; independent nonauthor final review CLEAR; exact wheel/install/API/launcher. Positive/negative chronology in workspace test-log.md.",
+        "remaining": "Full R5/HC/P6/V0/resource/RT/music/device/hearing/Human gates OPEN; parent statuses unchanged."
+      }
     },
     {
       "id": "G5.09",
@@ -5835,7 +5877,14 @@
         "TG1",
         "TG4"
       ],
-      "status": "PLANNED_ONLY_NOT_IMPLEMENTED"
+      "status": "PLANNED_ONLY_NOT_IMPLEMENTED",
+      "r5_bounded_software_closure": {
+        "status": "ACCEPTED_NONAUTHOR_SOFTWARE_ONLY",
+        "date": "2026-10-20",
+        "evidence": "Common exact-request confirmation, actual rendered Native Bank/ACK/Config join, actual periodic InputMapping/outside-MIDI composition, successful actual-App repeated copy/overwrite/cancel/current-and-other Clear.",
+        "checks": "Final Python1308 and relevant Release187; scoped static/strict/diff; independent nonauthor final review CLEAR; exact wheel/install/API/launcher. Positive/negative chronology in workspace test-log.md.",
+        "remaining": "Full R5/HC/P6/V0/resource/RT/music/device/hearing/Human gates OPEN; parent statuses unchanged."
+      }
     },
     {
       "id": "G5.10",
@@ -5877,7 +5926,14 @@
         "TG1",
         "TG4"
       ],
-      "status": "PLANNED_ONLY_NOT_IMPLEMENTED"
+      "status": "PLANNED_ONLY_NOT_IMPLEMENTED",
+      "r5_bounded_software_closure": {
+        "status": "ACCEPTED_NONAUTHOR_SOFTWARE_ONLY",
+        "date": "2026-10-20",
+        "evidence": "Common exact-request confirmation, actual rendered Native Bank/ACK/Config join, actual periodic InputMapping/outside-MIDI composition, successful actual-App repeated copy/overwrite/cancel/current-and-other Clear.",
+        "checks": "Final Python1308 and relevant Release187; scoped static/strict/diff; independent nonauthor final review CLEAR; exact wheel/install/API/launcher. Positive/negative chronology in workspace test-log.md.",
+        "remaining": "Full R5/HC/P6/V0/resource/RT/music/device/hearing/Human gates OPEN; parent statuses unchanged."
+      }
     },
     {
       "id": "G5.11",
@@ -5918,7 +5974,14 @@
       "future_proof_ids": [
         "TG4"
       ],
-      "status": "PLANNED_ONLY_NOT_IMPLEMENTED"
+      "status": "PLANNED_ONLY_NOT_IMPLEMENTED",
+      "r5_bounded_software_closure": {
+        "status": "ACCEPTED_NONAUTHOR_SOFTWARE_ONLY",
+        "date": "2026-10-20",
+        "evidence": "Common exact-request confirmation, actual rendered Native Bank/ACK/Config join, actual periodic InputMapping/outside-MIDI composition, successful actual-App repeated copy/overwrite/cancel/current-and-other Clear.",
+        "checks": "Final Python1308 and relevant Release187; scoped static/strict/diff; independent nonauthor final review CLEAR; exact wheel/install/API/launcher. Positive/negative chronology in workspace test-log.md.",
+        "remaining": "Full R5/HC/P6/V0/resource/RT/music/device/hearing/Human gates OPEN; parent statuses unchanged."
+      }
     },
     {
       "id": "G5.12",
@@ -6169,7 +6232,14 @@
       "future_proof_ids": [
         "TG1"
       ],
-      "status": "PLANNED_ONLY_NOT_IMPLEMENTED"
+      "status": "PLANNED_ONLY_NOT_IMPLEMENTED",
+      "r5_bounded_software_closure": {
+        "status": "ACCEPTED_NONAUTHOR_SOFTWARE_ONLY",
+        "date": "2026-10-20",
+        "evidence": "Common exact-request confirmation, actual rendered Native Bank/ACK/Config join, actual periodic InputMapping/outside-MIDI composition, successful actual-App repeated copy/overwrite/cancel/current-and-other Clear.",
+        "checks": "Final Python1308 and relevant Release187; scoped static/strict/diff; independent nonauthor final review CLEAR; exact wheel/install/API/launcher. Positive/negative chronology in workspace test-log.md.",
+        "remaining": "Full R5/HC/P6/V0/resource/RT/music/device/hearing/Human gates OPEN; parent statuses unchanged."
+      }
     },
     {
       "id": "G5.18",
@@ -6211,7 +6281,14 @@
       "future_proof_ids": [
         "TG1"
       ],
-      "status": "PLANNED_ONLY_NOT_IMPLEMENTED"
+      "status": "PLANNED_ONLY_NOT_IMPLEMENTED",
+      "r5_bounded_software_closure": {
+        "status": "ACCEPTED_NONAUTHOR_SOFTWARE_ONLY",
+        "date": "2026-10-20",
+        "evidence": "Common exact-request confirmation, actual rendered Native Bank/ACK/Config join, actual periodic InputMapping/outside-MIDI composition, successful actual-App repeated copy/overwrite/cancel/current-and-other Clear.",
+        "checks": "Final Python1308 and relevant Release187; scoped static/strict/diff; independent nonauthor final review CLEAR; exact wheel/install/API/launcher. Positive/negative chronology in workspace test-log.md.",
+        "remaining": "Full R5/HC/P6/V0/resource/RT/music/device/hearing/Human gates OPEN; parent statuses unchanged."
+      }
     },
     {
       "id": "G6.01",
@@ -10324,7 +10401,21 @@
         "oracle": "All36 target lifetimes retired together including empty correspondence; source unchanged",
         "required_proof_kind": "deterministic hardware-free native/controller/worker/drain/render source/runtime-bound case with exact ACK/effect/owner assertions; distinct nonauthor closure",
         "status": "OPEN_FUTURE_PROOF",
-        "actual_product_execution": false
+        "actual_product_execution": false,
+        "r4_bounded_software_closure": {
+          "status": "ACCEPTED_NONAUTHOR_SOFTWARE_ONLY",
+          "date": "2026-10-20",
+          "evidence": "Sparse complete BankCopy includes Empty-source removal, fresh stopped target lifetimes and unchanged outside/source contents.",
+          "checks": "Bank36 Release; final Shared3 Release; Python213; App/IO120; independent source and separate gate review; wheel/install/API/launcher. Existing compatible sources reused explicitly in workspace test-log.md.",
+          "remaining": "Full HC and required R5/P6/V0/resource/RT/music/device/Human integration remain OPEN; parent status is unchanged."
+        },
+        "r5_bounded_software_closure": {
+          "status": "ACCEPTED_NONAUTHOR_SOFTWARE_ONLY",
+          "date": "2026-10-20",
+          "evidence": "Common exact-request confirmation, actual rendered Native Bank/ACK/Config join, actual periodic InputMapping/outside-MIDI composition, successful actual-App repeated copy/overwrite/cancel/current-and-other Clear.",
+          "checks": "Final Python1308 and relevant Release187; scoped static/strict/diff; independent nonauthor final review CLEAR; exact wheel/install/API/launcher. Positive/negative chronology in workspace test-log.md.",
+          "remaining": "Full R5/HC/P6/V0/resource/RT/music/device/hearing/Human gates OPEN; parent statuses unchanged."
+        }
       },
       {
         "id": "HC-10",
@@ -10343,7 +10434,21 @@
         "oracle": "Exact clicked bank old actions retire; no refilled target changed",
         "required_proof_kind": "deterministic hardware-free native/controller/worker/drain/render source/runtime-bound case with exact ACK/effect/owner assertions; distinct nonauthor closure",
         "status": "OPEN_FUTURE_PROOF",
-        "actual_product_execution": false
+        "actual_product_execution": false,
+        "r4_bounded_software_closure": {
+          "status": "ACCEPTED_NONAUTHOR_SOFTWARE_ONLY",
+          "date": "2026-10-20",
+          "evidence": "Actual Clear/refill/START ignores three old-Hold releases; exact independent stereo PCM retained.",
+          "checks": "Bank36 Release; final Shared3 Release; Python213; App/IO120; independent source and separate gate review; wheel/install/API/launcher. Existing compatible sources reused explicitly in workspace test-log.md.",
+          "remaining": "Full HC and required R5/P6/V0/resource/RT/music/device/Human integration remain OPEN; parent status is unchanged."
+        },
+        "r5_bounded_software_closure": {
+          "status": "ACCEPTED_NONAUTHOR_SOFTWARE_ONLY",
+          "date": "2026-10-20",
+          "evidence": "Common exact-request confirmation, actual rendered Native Bank/ACK/Config join, actual periodic InputMapping/outside-MIDI composition, successful actual-App repeated copy/overwrite/cancel/current-and-other Clear.",
+          "checks": "Final Python1308 and relevant Release187; scoped static/strict/diff; independent nonauthor final review CLEAR; exact wheel/install/API/launcher. Positive/negative chronology in workspace test-log.md.",
+          "remaining": "Full R5/HC/P6/V0/resource/RT/music/device/hearing/Human gates OPEN; parent statuses unchanged."
+        }
       },
       {
         "id": "HC-11",
@@ -10363,7 +10468,21 @@
         "oracle": "A outside bank remains owned/playable and resumes; shared material survives",
         "required_proof_kind": "deterministic hardware-free native/controller/worker/drain/render source/runtime-bound case with exact ACK/effect/owner assertions; distinct nonauthor closure",
         "status": "OPEN_FUTURE_PROOF",
-        "actual_product_execution": false
+        "actual_product_execution": false,
+        "r4_bounded_software_closure": {
+          "status": "ACCEPTED_NONAUTHOR_SOFTWARE_ONLY",
+          "date": "2026-10-20",
+          "evidence": "Complete Clear preserves source/outside Hold and final shared reader retires only after return.",
+          "checks": "Bank36 Release; final Shared3 Release; Python213; App/IO120; independent source and separate gate review; wheel/install/API/launcher. Existing compatible sources reused explicitly in workspace test-log.md.",
+          "remaining": "Full HC and required R5/P6/V0/resource/RT/music/device/Human integration remain OPEN; parent status is unchanged."
+        },
+        "r5_bounded_software_closure": {
+          "status": "ACCEPTED_NONAUTHOR_SOFTWARE_ONLY",
+          "date": "2026-10-20",
+          "evidence": "Common exact-request confirmation, actual rendered Native Bank/ACK/Config join, actual periodic InputMapping/outside-MIDI composition, successful actual-App repeated copy/overwrite/cancel/current-and-other Clear.",
+          "checks": "Final Python1308 and relevant Release187; scoped static/strict/diff; independent nonauthor final review CLEAR; exact wheel/install/API/launcher. Positive/negative chronology in workspace test-log.md.",
+          "remaining": "Full R5/HC/P6/V0/resource/RT/music/device/hearing/Human gates OPEN; parent statuses unchanged."
+        }
       },
       {
         "id": "HC-12",
@@ -10382,7 +10501,14 @@
         "oracle": "C musical snapshot only/new stopped identity/no hold; release resumes A only",
         "required_proof_kind": "deterministic hardware-free native/controller/worker/drain/render source/runtime-bound case with exact ACK/effect/owner assertions; distinct nonauthor closure",
         "status": "OPEN_FUTURE_PROOF",
-        "actual_product_execution": false
+        "actual_product_execution": false,
+        "r4_bounded_software_closure": {
+          "status": "ACCEPTED_NONAUTHOR_SOFTWARE_ONLY",
+          "date": "2026-10-20",
+          "evidence": "Held source copies fresh stopped musical snapshot without inherited Hold or job token.",
+          "checks": "Bank36 Release; final Shared3 Release; Python213; App/IO120; independent source and separate gate review; wheel/install/API/launcher. Existing compatible sources reused explicitly in workspace test-log.md.",
+          "remaining": "Full HC and required R5/P6/V0/resource/RT/music/device/Human integration remain OPEN; parent status is unchanged."
+        }
       },
       {
         "id": "HC-13",
@@ -10439,7 +10565,21 @@
         "oracle": "Exact complete before-state preserved including hold/epochs/refs/selection; later A release valid",
         "required_proof_kind": "deterministic hardware-free native/controller/worker/drain/render source/runtime-bound case with exact ACK/effect/owner assertions; distinct nonauthor closure",
         "status": "OPEN_FUTURE_PROOF",
-        "actual_product_execution": false
+        "actual_product_execution": false,
+        "r4_bounded_software_closure": {
+          "status": "ACCEPTED_NONAUTHOR_SOFTWARE_ONLY",
+          "date": "2026-10-20",
+          "evidence": "Original participant stale/queue-full/cancel preserve complete before state; compatible rejected-action/release foundations reused. UI cancel belongs to R5.",
+          "checks": "Bank36 Release; final Shared3 Release; Python213; App/IO120; independent source and separate gate review; wheel/install/API/launcher. Existing compatible sources reused explicitly in workspace test-log.md.",
+          "remaining": "Full HC and required R5/P6/V0/resource/RT/music/device/Human integration remain OPEN; parent status is unchanged."
+        },
+        "r5_bounded_software_closure": {
+          "status": "ACCEPTED_NONAUTHOR_SOFTWARE_ONLY",
+          "date": "2026-10-20",
+          "evidence": "Common exact-request confirmation, actual rendered Native Bank/ACK/Config join, actual periodic InputMapping/outside-MIDI composition, successful actual-App repeated copy/overwrite/cancel/current-and-other Clear.",
+          "checks": "Final Python1308 and relevant Release187; scoped static/strict/diff; independent nonauthor final review CLEAR; exact wheel/install/API/launcher. Positive/negative chronology in workspace test-log.md.",
+          "remaining": "Full R5/HC/P6/V0/resource/RT/music/device/hearing/Human gates OPEN; parent statuses unchanged."
+        }
       },
       {
         "id": "HC-16",
@@ -10459,7 +10599,14 @@
         "oracle": "Same record records early release; ordered native pause/release or no-effect/retired terminal; no stranded pause",
         "required_proof_kind": "deterministic hardware-free native/controller/worker/drain/render source/runtime-bound case with exact ACK/effect/owner assertions; distinct nonauthor closure",
         "status": "OPEN_FUTURE_PROOF",
-        "actual_product_execution": false
+        "actual_product_execution": false,
+        "r4_bounded_software_closure": {
+          "status": "ACCEPTED_NONAUTHOR_SOFTWARE_ONLY",
+          "date": "2026-10-20",
+          "evidence": "Existing original-ticket early-release/missing-pause-ACK machinery reused with Bank reservation-safe source release and target retirement.",
+          "checks": "Bank36 Release; final Shared3 Release; Python213; App/IO120; independent source and separate gate review; wheel/install/API/launcher. Existing compatible sources reused explicitly in workspace test-log.md.",
+          "remaining": "Full HC and required R5/P6/V0/resource/RT/music/device/Human integration remain OPEN; parent status is unchanged."
+        }
       },
       {
         "id": "HC-17",
@@ -10479,7 +10626,14 @@
         "oracle": "Retain one bounded guarded release request/pins pending/error until full admission/ACK; no unrelated attack coalesce",
         "required_proof_kind": "deterministic hardware-free native/controller/worker/drain/render source/runtime-bound case with exact ACK/effect/owner assertions; distinct nonauthor closure",
         "status": "OPEN_FUTURE_PROOF",
-        "actual_product_execution": false
+        "actual_product_execution": false,
+        "r4_bounded_software_closure": {
+          "status": "ACCEPTED_NONAUTHOR_SOFTWARE_ONLY",
+          "date": "2026-10-20",
+          "evidence": "Actual capacity132 retains exact parent queue head with no partial effects;133 accepts once. Existing duplicate-release saturation reused.",
+          "checks": "Bank36 Release; final Shared3 Release; Python213; App/IO120; independent source and separate gate review; wheel/install/API/launcher. Existing compatible sources reused explicitly in workspace test-log.md.",
+          "remaining": "Full HC and required R5/P6/V0/resource/RT/music/device/Human integration remain OPEN; parent status is unchanged."
+        }
       },
       {
         "id": "HC-18",
@@ -10498,7 +10652,14 @@
         "oracle": "Both deterministic linearization orders same lifetime/fence; ambiguous claim retains old/new/action pins and conflicting-input fence",
         "required_proof_kind": "deterministic hardware-free native/controller/worker/drain/render source/runtime-bound case with exact ACK/effect/owner assertions; distinct nonauthor closure",
         "status": "OPEN_FUTURE_PROOF",
-        "actual_product_execution": false
+        "actual_product_execution": false,
+        "r4_bounded_software_closure": {
+          "status": "ACCEPTED_NONAUTHOR_SOFTWARE_ONLY",
+          "date": "2026-10-20",
+          "evidence": "Actual Bank release before/after commit, claim-without-ACK and accepted-before-client-ACK custody compose existing real Hold/Pair durable both-order proofs.",
+          "checks": "Bank36 Release; final Shared3 Release; Python213; App/IO120; independent source and separate gate review; wheel/install/API/launcher. Existing compatible sources reused explicitly in workspace test-log.md.",
+          "remaining": "Full HC and required R5/P6/V0/resource/RT/music/device/Human integration remain OPEN; parent status is unchanged."
+        }
       },
       {
         "id": "HC-19",
@@ -10517,7 +10678,14 @@
         "oracle": "Failed unload changes no state; successful removal fences late pause/release feedback",
         "required_proof_kind": "deterministic hardware-free native/controller/worker/drain/render source/runtime-bound case with exact ACK/effect/owner assertions; distinct nonauthor closure",
         "status": "OPEN_FUTURE_PROOF",
-        "actual_product_execution": false
+        "actual_product_execution": false,
+        "r4_bounded_software_closure": {
+          "status": "ACCEPTED_NONAUTHOR_SOFTWARE_ONLY",
+          "date": "2026-10-20",
+          "evidence": "Actual removal/reject/action retirement/fresh birth composes existing genuine unload rejection/refill/stale feedback lifecycle.",
+          "checks": "Bank36 Release; final Shared3 Release; Python213; App/IO120; independent source and separate gate review; wheel/install/API/launcher. Existing compatible sources reused explicitly in workspace test-log.md.",
+          "remaining": "Full HC and required R5/P6/V0/resource/RT/music/device/Human integration remain OPEN; parent status is unchanged."
+        }
       },
       {
         "id": "HC-20",
@@ -10615,7 +10783,14 @@
         "oracle": "No drag-to-bank or normal pad action leak; copied visual pressed false/no authority; global mute independent/latest volume on own release",
         "required_proof_kind": "deterministic hardware-free native/controller/worker/drain/render source/runtime-bound case with exact ACK/effect/owner assertions; distinct nonauthor closure",
         "status": "OPEN_FUTURE_PROOF",
-        "actual_product_execution": false
+        "actual_product_execution": false,
+        "r5_bounded_software_closure": {
+          "status": "ACCEPTED_NONAUTHOR_SOFTWARE_ONLY",
+          "date": "2026-10-20",
+          "evidence": "Common exact-request confirmation, actual rendered Native Bank/ACK/Config join, actual periodic InputMapping/outside-MIDI composition, successful actual-App repeated copy/overwrite/cancel/current-and-other Clear.",
+          "checks": "Final Python1308 and relevant Release187; scoped static/strict/diff; independent nonauthor final review CLEAR; exact wheel/install/API/launcher. Positive/negative chronology in workspace test-log.md.",
+          "remaining": "Full R5/HC/P6/V0/resource/RT/music/device/hearing/Human gates OPEN; parent statuses unchanged."
+        }
       },
       {
         "id": "HC-25",
@@ -10636,7 +10811,14 @@
         "oracle": "New refs before old; all-bank equal users plus readers/voices/jobs/actions/nativeACK pin until actual terminal; no external-file deletion",
         "required_proof_kind": "deterministic hardware-free native/controller/worker/drain/render source/runtime-bound case with exact ACK/effect/owner assertions; distinct nonauthor closure",
         "status": "OPEN_FUTURE_PROOF",
-        "actual_product_execution": false
+        "actual_product_execution": false,
+        "r4_bounded_software_closure": {
+          "status": "ACCEPTED_NONAUTHOR_SOFTWARE_ONLY",
+          "date": "2026-10-20",
+          "evidence": "Three actual SharedStemJob profiles include retained returned pair under common writer, original outside215 own V2 ALL ACK, genuine three-process recovery and all-five physical final-reader retirement.",
+          "checks": "Bank36 Release; final Shared3 Release; Python213; App/IO120; independent source and separate gate review; wheel/install/API/launcher. Existing compatible sources reused explicitly in workspace test-log.md.",
+          "remaining": "Full HC and required R5/P6/V0/resource/RT/music/device/Human integration remain OPEN; parent status is unchanged."
+        }
       },
       {
         "id": "HC-26",

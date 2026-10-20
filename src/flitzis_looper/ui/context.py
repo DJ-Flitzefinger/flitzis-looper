@@ -43,12 +43,16 @@ if TYPE_CHECKING:
     from flitzis_looper.controller import AppController
     from flitzis_looper.controller.committed_stem_residency import StemResidencyStatus
     from flitzis_looper.controller.current_timing import CurrentPadTiming
-    from flitzis_looper.controller.performance_confirmation import PerformanceConfirmation
+    from flitzis_looper.controller.performance_confirmation import PendingConfirmation
+    from flitzis_looper.controller.recording import RecordingStatus
+    from flitzis_looper.controller.stem_batch import StemBatchSummary
+    from flitzis_looper.controller.stem_delete import StemDeleteSummary
     from flitzis_looper.controller.stems import StemResidencySummary
     from flitzis_looper.controller.transport.global_params import GlobalRateStatus
     from flitzis_looper.controller.transport.key_lock_status import KeyLockStatus
     from flitzis_looper.key_intent import MusicalKey, PadKeyIntent
     from flitzis_looper.models import (
+        KeyLockStartBehavior,
         ProjectState,
         SampleAnalysis,
         SessionState,
@@ -59,6 +63,7 @@ if TYPE_CHECKING:
         TriggerQuantizationMode,
         TriggerQuantizationStep,
     )
+    from flitzis_looper.recording_options import RecordingOptions
     from flitzis_looper_audio import WaveFormRenderData
 
 T = TypeVar("T", bound=BaseModel)
@@ -88,6 +93,15 @@ class SourceKeyEditor:
     content_instance: str
     path: str
     source_identity: tuple[int, str, int, int]
+
+
+@dataclass(frozen=True)
+class StemCleanupStatus:
+    """Actual global retirement feedback, never a result for one deletion operation."""
+
+    pending_targets: int | None
+    retained_native_records: int | None
+    errors: tuple[str, ...]
 
 
 class ReadOnlyStateProxy[T]:
@@ -241,10 +255,16 @@ class StemSelectors:
         return self._controller.stems.stem_mix_mode(pad_id)
 
     def stem_residency_status(self, pad_id: int) -> StemResidencyStatus | None:
-        return self._controller.stems.stem_residency_status(pad_id)
+        status = self._controller.stems.stem_residency_status(pad_id)
+        self._controller.diagnostics.observe(
+            "stem_residency", status.demand_error if status is not None else None, pad_id=pad_id
+        )
+        return status
 
     def residency_summary(self) -> StemResidencySummary:
-        return self._controller.stems.residency_summary()
+        summary = self._controller.stems.residency_summary()
+        self._controller.diagnostics.observe("resident_pcm_accounting", summary.accounting_error)
+        return summary
 
     def stem_enabled_mask(self, pad_id: int) -> int:
         return self._controller.stems.stem_enabled_mask(pad_id)
@@ -381,16 +401,26 @@ class PadAudioActions:  # noqa: PLR0904 - pad action facade mirrors selected-pad
                 lambda: self._controller.transport.playback.trigger_pad(
                     pad_id, received_at_ns=received_at_ns
                 ),
+                operation="trigger_pad",
             )
 
         self._controller.input_mapping.perform_learnable_action(
             LooperAction.trigger_pad(pad_id), execute
         )
 
-    def stop_pad(self, pad_id: int) -> None:
+    def stop_pad(self, pad_id: int, *, continuous: bool = False) -> None:
+        def execute() -> None:
+            perform_pad_action(
+                self._controller,
+                pad_id,
+                lambda: self._controller.transport.playback.stop_pad(pad_id),
+                new_attempt=not continuous,
+                operation="stop_pad",
+            )
+
         self._controller.input_mapping.perform_learnable_action(
             LooperAction.stop_pad(pad_id),
-            lambda: self._controller.transport.playback.stop_pad(pad_id),
+            execute,
         )
 
     def set_pad_full_track_loop_region(self, pad_id: int) -> None:
@@ -398,6 +428,7 @@ class PadAudioActions:  # noqa: PLR0904 - pad action facade mirrors selected-pad
             self._controller,
             pad_id,
             lambda: self._controller.transport.loop.set_full_track_region(pad_id),
+            operation="set_pad_full_track_loop_region",
         )
 
     def set_pad_loop_auto(self, pad_id: int, *, enabled: bool) -> None:
@@ -405,6 +436,7 @@ class PadAudioActions:  # noqa: PLR0904 - pad action facade mirrors selected-pad
             self._controller,
             pad_id,
             lambda: self._controller.transport.loop.set_auto(pad_id, enabled=enabled),
+            operation="set_pad_loop_auto",
         )
 
     def set_pad_loop_bars(self, pad_id: int, *, bars: float) -> None:
@@ -412,6 +444,7 @@ class PadAudioActions:  # noqa: PLR0904 - pad action facade mirrors selected-pad
             self._controller,
             pad_id,
             lambda: self._controller.transport.loop.set_bars(pad_id, bars=bars),
+            operation="set_pad_loop_bars",
         )
 
     def set_pad_loop_start(self, pad_id: int, start_s: float) -> None:
@@ -419,6 +452,7 @@ class PadAudioActions:  # noqa: PLR0904 - pad action facade mirrors selected-pad
             self._controller,
             pad_id,
             lambda: self._controller.transport.loop.set_start(pad_id, start_s),
+            operation="set_pad_loop_start",
         )
 
     def set_pad_loop_end(self, pad_id: int, end_s: float | None) -> None:
@@ -426,6 +460,7 @@ class PadAudioActions:  # noqa: PLR0904 - pad action facade mirrors selected-pad
             self._controller,
             pad_id,
             lambda: self._controller.transport.loop.set_end(pad_id, end_s),
+            operation="set_pad_loop_end",
         )
 
     def set_pad_grid_offset_samples(self, pad_id: int, grid_offset_samples: int) -> None:
@@ -435,9 +470,11 @@ class PadAudioActions:  # noqa: PLR0904 - pad action facade mirrors selected-pad
             lambda: self._controller.transport.loop.set_grid_offset_samples(
                 pad_id, grid_offset_samples
             ),
+            operation="set_pad_grid_offset_samples",
         )
 
     def load_sample_async(self, pad_id: int, path: str) -> None:
+        self._controller.diagnostics.begin_attempt("load", pad_id)
         self._controller.loader.load_sample_async(pad_id, path)
 
     def unload_sample(self, pad_id: int) -> None:
@@ -453,17 +490,30 @@ class PadAudioActions:  # noqa: PLR0904 - pad action facade mirrors selected-pad
         )
 
     def set_manual_bpm(self, pad_id: int, bpm: float) -> None:
-        self._controller.transport.bpm.set_manual_bpm(pad_id, bpm)
+        perform_pad_action(
+            self._controller,
+            pad_id,
+            lambda: self._controller.transport.bpm.set_manual_bpm(pad_id, bpm),
+            operation="set_manual_bpm",
+        )
 
     def clear_manual_bpm(self, pad_id: int) -> None:
-        self._controller.transport.bpm.clear_manual_bpm(pad_id)
+        perform_pad_action(
+            self._controller,
+            pad_id,
+            lambda: self._controller.transport.bpm.clear_manual_bpm(pad_id),
+            operation="clear_manual_bpm",
+        )
 
     def tap_bpm(self, pad_id: int) -> float | None:
         bpm: float | None = None
 
-        def execute() -> None:
+        def apply() -> None:
             nonlocal bpm
             bpm = self._controller.transport.bpm.tap_bpm(pad_id)
+
+        def execute() -> None:
+            perform_pad_action(self._controller, pad_id, apply, operation="tap_bpm")
 
         self._controller.input_mapping.perform_learnable_action(
             selected_tap_bpm_action(),
@@ -592,13 +642,27 @@ class PadAudioActions:  # noqa: PLR0904 - pad action facade mirrors selected-pad
             if _midi_cc_learn_input_pending(self._controller)
             else pad_gain_action(pad_id, gain_db)
         )
+
+        def execute() -> None:
+            perform_pad_action(
+                self._controller,
+                pad_id,
+                lambda: self._controller.transport.pad.set_pad_gain(pad_id, gain_db),
+                operation="set_pad_gain",
+            )
+
         self._controller.input_mapping.perform_learnable_action(
             action,
-            lambda: self._controller.transport.pad.set_pad_gain(pad_id, gain_db),
+            execute,
         )
 
     def set_pad_eq(self, pad_id: int, low_db: float, mid_db: float, high_db: float) -> None:
-        self._controller.transport.pad.set_pad_eq(pad_id, low_db, mid_db, high_db)
+        perform_pad_action(
+            self._controller,
+            pad_id,
+            lambda: self._controller.transport.pad.set_pad_eq(pad_id, low_db, mid_db, high_db),
+            operation="set_pad_eq",
+        )
 
     def set_pad_eq_band(self, pad_id: int, band: PadEqBand, db: float) -> None:
         low_db = float(self._controller.project.pad_eq_low_db[pad_id])
@@ -617,14 +681,18 @@ class PadAudioActions:  # noqa: PLR0904 - pad action facade mirrors selected-pad
             if _midi_cc_learn_input_pending(self._controller)
             else pad_eq_action(pad_id, band, db)
         )
+
+        def execute() -> None:
+            perform_pad_action(
+                self._controller,
+                pad_id,
+                lambda: self._controller.transport.pad.set_pad_eq(pad_id, low_db, mid_db, high_db),
+                operation="set_pad_eq_band",
+            )
+
         self._controller.input_mapping.perform_learnable_action(
             action,
-            lambda: self._controller.transport.pad.set_pad_eq(
-                pad_id,
-                low_db,
-                mid_db,
-                high_db,
-            ),
+            execute,
         )
 
     def toggle_pad_key_lock(self, pad_id: int) -> None:
@@ -690,13 +758,17 @@ class GlobalAudioActions:
         self._controller = controller
         self.playback_error: str | None = None
 
-    def _perform_playback_action(self, execute: Callable[[], None]) -> None:
-        """Keep rejected transport admission visible without replaying the gesture."""
+    def _perform_playback_action(
+        self, execute: Callable[[], None], *, operation: str = "global_control"
+    ) -> None:
+        """Report rejected global admission without replaying the gesture."""
         self.playback_error = None
         try:
             execute()
         except (RuntimeError, ValueError) as error:
             self.playback_error = str(error)
+            self._controller.diagnostics.begin_attempt(operation)
+            self._controller.diagnostics.observe(operation, str(error))
 
     def set_volume(self, volume: float) -> None:
         action = (
@@ -706,11 +778,19 @@ class GlobalAudioActions:
         )
         self._controller.input_mapping.perform_learnable_action(
             action,
-            lambda: self._controller.transport.global_params.set_volume(volume),
+            lambda: self._perform_playback_action(
+                lambda: self._controller.transport.global_params.set_volume(volume),
+                operation="global_set_volume",
+            ),
         )
 
     def set_momentary_output_mute(self, *, enabled: bool) -> None:
-        self._controller.transport.global_params.set_momentary_output_mute(enabled=enabled)
+        self._perform_playback_action(
+            lambda: self._controller.transport.global_params.set_momentary_output_mute(
+                enabled=enabled
+            ),
+            operation="global_set_momentary_output_mute",
+        )
 
     def start_or_restart_start_stop(self, *, received_at_ns: int | None = None) -> None:
         """Restart loops with one captured Rust input timestamp shared by all pads."""
@@ -720,13 +800,17 @@ class GlobalAudioActions:
             self._perform_playback_action(
                 lambda: self._controller.transport.playback.start_or_restart_global_start_stop(
                     received_at_ns=received_at_ns
-                )
+                ),
+                operation="global_start_or_restart_start_stop",
             )
 
         self._controller.input_mapping.perform_learnable_action(start_stop_action(), execute)
 
     def stop_start_stop(self) -> None:
-        self._perform_playback_action(self._controller.transport.playback.stop_global_start_stop)
+        self._perform_playback_action(
+            self._controller.transport.playback.stop_global_start_stop,
+            operation="global_stop_start_stop",
+        )
 
     def set_speed(self, speed: float) -> None:
         action = (
@@ -736,67 +820,99 @@ class GlobalAudioActions:
         )
         self._controller.input_mapping.perform_learnable_action(
             action,
-            lambda: self._controller.transport.global_params.set_speed(speed),
+            lambda: self._perform_playback_action(
+                lambda: self._controller.transport.global_params.set_speed(speed),
+                operation="global_set_speed",
+            ),
         )
 
     def set_effective_bpm(self, bpm: float) -> None:
-        self._controller.transport.global_params.set_effective_display_bpm(bpm)
+        def execute() -> None:
+            self._controller.transport.global_params.set_effective_display_bpm(bpm)
+
+        self._perform_playback_action(execute, operation="global_set_effective_bpm")
 
     def nudge_speed_by_bpm_steps(self, steps: int) -> None:
-        self._controller.transport.global_params.nudge_speed_by_bpm_steps(steps)
+        self._perform_playback_action(
+            lambda: self._controller.transport.global_params.nudge_speed_by_bpm_steps(steps),
+            operation="global_nudge_speed_by_bpm_steps",
+        )
 
     def reset_speed(self) -> None:
         self._controller.input_mapping.perform_learnable_action(
             LooperAction.reset_speed(),
-            self._controller.transport.global_params.reset_speed,
+            lambda: self._perform_playback_action(
+                self._controller.transport.global_params.reset_speed, operation="global_reset_speed"
+            ),
         )
 
     def increase_speed(self) -> None:
         self._controller.input_mapping.perform_learnable_action(
             LooperAction.speed_delta("increase"),
-            lambda: self._controller.transport.global_params.nudge_speed_by_bpm_step(1),
+            lambda: self._perform_playback_action(
+                lambda: self._controller.transport.global_params.nudge_speed_by_bpm_step(1),
+                operation="global_increase_speed",
+            ),
         )
 
     def decrease_speed(self) -> None:
         self._controller.input_mapping.perform_learnable_action(
             LooperAction.speed_delta("decrease"),
-            lambda: self._controller.transport.global_params.nudge_speed_by_bpm_step(-1),
+            lambda: self._perform_playback_action(
+                lambda: self._controller.transport.global_params.nudge_speed_by_bpm_step(-1),
+                operation="global_decrease_speed",
+            ),
         )
 
     def toggle_multi_loop(self) -> None:
         self._controller.input_mapping.perform_learnable_action(
             LooperAction.toggle_multi_loop(),
-            lambda: self._controller.transport.global_params.set_multi_loop(
-                enabled=not self._controller.project.multi_loop
+            lambda: self._perform_playback_action(
+                lambda: self._controller.transport.global_params.set_multi_loop(
+                    enabled=not self._controller.project.multi_loop
+                ),
+                operation="global_toggle_multi_loop",
             ),
         )
 
     def toggle_key_lock(self) -> None:
         self._controller.input_mapping.perform_learnable_action(
             LooperAction.toggle_key_lock(),
-            lambda: self._controller.transport.global_params.set_key_lock(
-                enabled=not self._controller.project.key_lock
+            lambda: self._perform_playback_action(
+                lambda: self._controller.transport.global_params.set_key_lock(
+                    enabled=not self._controller.project.key_lock
+                ),
+                operation="global_toggle_key_lock",
             ),
         )
 
     def toggle_bpm_lock(self) -> None:
         self._controller.input_mapping.perform_learnable_action(
             LooperAction.toggle_bpm_lock(),
-            lambda: self._controller.transport.global_params.set_bpm_lock(
-                enabled=not self._controller.project.bpm_lock
+            lambda: self._perform_playback_action(
+                lambda: self._controller.transport.global_params.set_bpm_lock(
+                    enabled=not self._controller.project.bpm_lock
+                ),
+                operation="global_toggle_bpm_lock",
             ),
         )
 
     def set_trigger_quantization(self, mode: TriggerQuantizationMode) -> None:
         self._controller.input_mapping.perform_learnable_action(
             LooperAction.trigger_quantization(mode),
-            lambda: self._controller.transport.global_params.set_trigger_quantization(mode),
+            lambda: self._perform_playback_action(
+                lambda: self._controller.transport.global_params.set_trigger_quantization(mode),
+                operation="global_set_trigger_quantization",
+            ),
         )
 
     def toggle_trigger_quantization(self) -> None:
         self._controller.input_mapping.perform_learnable_action(
             LooperAction.toggle_trigger_quantization(),
-            self._controller.transport.global_params.toggle_trigger_quantization,
+            lambda: self._perform_playback_action(
+                self._controller.transport.global_params.toggle_trigger_quantization,
+                operation="global_toggle_trigger_quantization",
+            ),
         )
 
 
@@ -867,18 +983,15 @@ class WaveformEditorActions:
         if self._controller.project.sample_paths[pad_id] is None:
             return
 
-        loop_start_s, _ = self._controller.transport.loop.effective_region(pad_id)
-
         # Trigger without stopping other pads (ignores multi_loop setting).
-        if perform_pad_action(
+        perform_pad_action(
             self._controller,
             pad_id,
             lambda: self._controller.transport.playback.trigger_pad_keep_others(
                 pad_id, received_at_ns=received_at_ns
             ),
-        ):
-            self._controller.session.pad_playhead_s[pad_id] = loop_start_s
-            self._controller.session.paused_sample_ids.discard(pad_id)
+            operation="play_restart_selected_pad_on_press",
+        )
 
     def pause_selected_pad_on_press(self) -> None:
         """Toggle pause/resume for the selected pad.
@@ -894,9 +1007,19 @@ class WaveformEditorActions:
             return
 
         if pad_id in self._controller.session.paused_sample_ids:
-            self._controller.transport.playback.resume_pad(pad_id)
+            perform_pad_action(
+                self._controller,
+                pad_id,
+                lambda: self._controller.transport.playback.resume_pad(pad_id),
+                operation="pause_selected_pad_on_press",
+            )
         else:
-            self._controller.transport.playback.pause_pad(pad_id)
+            perform_pad_action(
+                self._controller,
+                pad_id,
+                lambda: self._controller.transport.playback.pause_pad(pad_id),
+                operation="pause_selected_pad_on_press",
+            )
 
     def pause_selected_pad_hold_on_press(self, *, received_at_ns: int | None = None) -> None:
         """Admit one Native caused-pause owner for this physical right-button press."""
@@ -919,7 +1042,12 @@ class WaveformEditorActions:
         if pad_id is None:
             return
 
-        self._controller.transport.playback.stop_pad(pad_id)
+        perform_pad_action(
+            self._controller,
+            pad_id,
+            lambda: self._controller.transport.playback.stop_pad(pad_id),
+            operation="stop_selected_pad_on_press",
+        )
 
     def stop_and_reset_selected_pad_on_press(self) -> None:
         """Stop playback and reset playhead to loop start (selected pad)."""
@@ -928,8 +1056,13 @@ class WaveformEditorActions:
             return
 
         loop_start_s, _ = self._controller.transport.loop.effective_region(pad_id)
-        self._controller.transport.playback.stop_pad(pad_id)
-        self._controller.session.pad_playhead_s[pad_id] = loop_start_s
+        if perform_pad_action(
+            self._controller,
+            pad_id,
+            lambda: self._controller.transport.playback.stop_pad(pad_id),
+            operation="stop_and_reset_selected_pad_on_press",
+        ):
+            self._controller.session.pad_playhead_s[pad_id] = loop_start_s
 
     def seek_selected_pad_to_position(self, position_s: float) -> None:
         """Seek the selected pad's active or paused voice to a source position."""
@@ -937,7 +1070,12 @@ class WaveformEditorActions:
         if pad_id is None:
             return
 
-        self._controller.transport.playback.seek_pad(pad_id, position_s)
+        perform_pad_action(
+            self._controller,
+            pad_id,
+            lambda: self._controller.transport.playback.seek_pad(pad_id, position_s),
+            operation="seek_selected_pad_to_position",
+        )
 
     def set_loop_start_and_play_selected_pad(
         self, start_s: float, *, received_at_ns: int | None = None
@@ -952,6 +1090,7 @@ class WaveformEditorActions:
             self._controller,
             pad_id,
             lambda: self._controller.transport.loop.set_start(pad_id, start_s),
+            operation="set_loop_start_and_play_selected_pad",
         ):
             self.play_restart_selected_pad_on_press(received_at_ns=received_at_ns)
 
@@ -1159,31 +1298,106 @@ class PerformanceConfirmationActions:
 
     def __init__(self, controller: AppController) -> None:
         self._controller = controller
-        self._presented: PerformanceConfirmation | None = None
+        self._presented: PendingConfirmation | None = None
 
     @property
-    def pending(self) -> PerformanceConfirmation | None:
+    def pending(self) -> PendingConfirmation | None:
         """Read the captured warning target without following current sidebar selection."""
         return self._controller.performance_confirmation.pending
 
-    def take_open_request(self, intent: PerformanceConfirmation) -> bool:
+    def request_bank_copy(self, source_bank: int, target_bank: int) -> None:
+        """Admit one captured complete-bank copy or request exact overwrite consent."""
+        self._controller.performance_confirmation.request_bank_copy(source_bank, target_bank)
+
+    def request_bank_clear(self, target_bank: int) -> None:
+        """Request deliberate clear consent for exactly the clicked bank."""
+        self._controller.performance_confirmation.request_bank_clear(target_bank)
+
+    def request_all_loaded_stems(self) -> None:
+        """Request the common warning for the original all-bank loaded inventory."""
+        self._controller.performance_confirmation.request_all_loaded_stems()
+
+    def request_all_loaded_stem_deletion(self) -> None:
+        """Request deletion consent for the exact original all-bank loaded inventory."""
+        self._controller.performance_confirmation.request_all_loaded_stem_deletion()
+
+    def take_open_request(self, intent: PendingConfirmation) -> bool:
         """Open a newly captured popup once so dismissing it cannot reopen it."""
         if self.pending is not intent or self._presented is intent:
             return False
         self._presented = intent
         return True
 
-    def is_current(self, intent: PerformanceConfirmation) -> bool:
+    def is_current(self, intent: PendingConfirmation) -> bool:
         """Read current content-bound action eligibility for the warning controls."""
         return self._controller.performance_confirmation.is_current(intent)
 
-    def accept(self, intent: PerformanceConfirmation) -> None:
+    def accept(self, intent: PendingConfirmation) -> None:
         """Pass an exact warning snapshot to the controller for one-time admission."""
         self._controller.performance_confirmation.accept(intent)
 
-    def dismiss(self, intent: PerformanceConfirmation) -> None:
+    def dismiss(self, intent: PendingConfirmation) -> None:
         """Dismiss the warning alone, without touching background audio work."""
         self._controller.performance_confirmation.dismiss(intent)
+
+
+class StemBatchActions:
+    """Expose detached batch feedback and actions without granting audio authority."""
+
+    def __init__(self, controller: AppController) -> None:
+        self._controller = controller
+
+    @property
+    def summary(self) -> StemBatchSummary | None:
+        """Read original-item progress independently of current PAD or bank selection."""
+        return self._controller.stem_batch.summary
+
+    def cancel(self) -> None:
+        """Detach this batch's interests through their existing control owner."""
+        self._controller.stem_batch.cancel()
+
+    def dismiss_result(self) -> None:
+        """Dismiss only settled batch feedback, leaving saved stems intact."""
+        self._controller.stem_batch.dismiss_result()
+
+
+class StemDeleteActions:
+    """Expose logical deletion results independently of global physical cleanup."""
+
+    def __init__(self, controller: AppController) -> None:
+        self._controller = controller
+
+    @property
+    def summary(self) -> StemDeleteSummary | None:
+        """Read retained original-item results without inspecting current PAD assignments."""
+        return self._controller.stem_delete.summary
+
+    @property
+    def cleanup_status(self) -> StemCleanupStatus:
+        """Read existing retirement owners, preserving unavailable status and real errors."""
+        pending: int | None
+        retained: int | None
+        try:
+            pending, retained, _deleted, errors = (
+                self._controller._audio.project_asset_cleanup_status()
+            )
+            native_errors = tuple(errors)
+        except (OSError, RuntimeError, TypeError, ValueError) as error:
+            pending = retained = None
+            native_errors = (f"Cleanup status unavailable: {error}",)
+        try:
+            control_errors = tuple(self._controller._assets.retirement_errors.values())
+        except RuntimeError as error:
+            control_errors = (f"Cleanup error status unavailable: {error}",)
+        return StemCleanupStatus(
+            pending,
+            retained,
+            (*native_errors, *control_errors),
+        )
+
+    def dismiss_result(self) -> None:
+        """Dismiss settled logical results without suppressing global cleanup feedback."""
+        self._controller.stem_delete.dismiss_result()
 
 
 class SourceKeyEditorActions:
@@ -1209,6 +1423,13 @@ class SourceKeyEditorActions:
             return None
         return SourceKeyEditor(pad_id, content.instance_id, path, identity)
 
+    def report_error(self, reason: str) -> None:
+        """Retain popup diagnostics and print this deliberate failed correction."""
+        self.error = reason
+        pad_id = self.pending.pad_id if self.pending is not None else None
+        self._controller.diagnostics.begin_attempt("source_key_correction", pad_id)
+        self._controller.diagnostics.observe("source_key_correction", reason, pad_id=pad_id)
+
     def open(self, pad_id: int) -> bool:
         """Capture this popup's source independently of later selection changes."""
         self.pending = self.capture(pad_id)
@@ -1229,6 +1450,8 @@ class UiActions:
     """UI-related actions."""
 
     settings: SettingsActions
+    stem_batch: StemBatchActions
+    stem_delete: StemDeleteActions
     waveform: WaveformEditorActions
 
     def __init__(self, controller: AppController, state: UiState | None = None):
@@ -1239,6 +1462,8 @@ class UiActions:
         self.settings = SettingsActions(controller)
         self.waveform = WaveformEditorActions(controller)
         self.confirmation = PerformanceConfirmationActions(controller)
+        self.stem_batch = StemBatchActions(controller)
+        self.stem_delete = StemDeleteActions(controller)
         self.arrangement = PadArrangementGestures(controller)
 
     def toggle_pitch_menu(self, menu: PitchMenu) -> None:
@@ -1343,6 +1568,18 @@ class SettingsActions:
     def set_demucs_quality(self, *, shifts: int, overlap: float) -> None:
         self._controller.settings.set_demucs_quality(shifts=shifts, overlap=overlap)
 
+    def set_recording_options(self, options: RecordingOptions) -> None:
+        """Replace future recording defaults through the persistent Settings owner."""
+        self._controller.settings.set_recording_options(options)
+
+    def can_change_key_lock_start_behavior(self) -> bool:
+        """Read the actual Native playback guard for the global Settings choice."""
+        return self._controller.settings.can_change_key_lock_start_behavior()
+
+    def set_key_lock_start_behavior(self, behavior: KeyLockStartBehavior) -> bool:
+        """Return whether Native accepted the immediate global policy edit."""
+        return self._controller.settings.set_key_lock_start_behavior(behavior)
+
     def set_stem_separator(self, separator: StemSeparator) -> None:
         self._controller.settings.set_stem_separator(separator)
 
@@ -1354,6 +1591,8 @@ class SettingsActions:
             self._controller.settings.set_resident_pcm_budget_mib(value)
         except (RuntimeError, ValueError) as error:
             self._controller.session.resident_pcm_settings_error = str(error)
+            self._controller.diagnostics.begin_attempt("resident_pcm_settings")
+            self._controller.diagnostics.observe("resident_pcm_settings", str(error))
             return False
         self._controller.session.resident_pcm_settings_error = None
         return True
@@ -1410,6 +1649,34 @@ class InputMappingActions:
         )
 
 
+class RecordingActions:
+    """Route recording gestures through the sole main-control recording owner."""
+
+    def __init__(self, controller: AppController) -> None:
+        self._controller = controller
+
+    @property
+    def status(self) -> RecordingStatus:
+        """Return metadata without granting capture or publication authority."""
+        return self._controller.recording.status()
+
+    def record_mix(self) -> None:
+        """Prepare or stop the mix without issuing a playback gesture."""
+        self._controller.recording.record_mix()
+
+    def record_group(self, *, received_at_ns: int | None = None) -> None:
+        """Capture the original press synchronously, only if recording can admit it."""
+        self._controller.recording.record_group(
+            lambda: self._controller.transport.playback.capture_recording_start(
+                received_at_ns=received_at_ns
+            )
+        )
+
+    def acknowledge_failure(self) -> bool:
+        """Acknowledge only a failure whose actual owner has retired."""
+        return self._controller.recording.acknowledge_failure()
+
+
 class UiContext:
     """The public interface for the UI layer."""
 
@@ -1417,6 +1684,7 @@ class UiContext:
     audio: AudioActions
     ui: UiActions
     input: InputMappingActions
+    recording: RecordingActions
 
     bold_font: imgui.ImFont
 
@@ -1426,6 +1694,7 @@ class UiContext:
         self.audio = AudioActions(controller)
         self.ui = UiActions(controller, self.state)
         self.input = InputMappingActions(controller)
+        self.recording = RecordingActions(controller)
         self.persistence = controller.persistence
 
     def on_frame_render(self) -> None:

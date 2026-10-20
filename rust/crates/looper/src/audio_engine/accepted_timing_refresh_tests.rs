@@ -45,6 +45,7 @@ impl Fixture {
         let mut mixer = acknowledged_mixer(&engine);
         mixer.set_input_runtime_ownership(engine.input_runtime_ownership.clone());
         let (producer, consumer) = queue(128);
+        let engine = with_control_producer(engine, &producer);
         let (parameter_producer, parameter_consumer) = rtrb::RingBuffer::new(128);
         let mut fixture = Self {
             engine,
@@ -435,10 +436,22 @@ fn accepted_refresh_coupled_master_preserves_completed_bootstrap_and_beat_epoch(
 
 #[test]
 fn accepted_refresh_old_parameter_backlog_rejects_whole_effect_then_fresh_retry_wins() {
+    use crate::audio_engine::global_rate_status::{RateError, RateState, RateTuple};
+
     let mut fixture = Fixture::new();
+    let before_revision = fixture
+        .engine
+        .global_timing_revision
+        .load(Ordering::Acquire);
     for _ in 0..65 {
         fixture.global_parameter(ControlParameterMessage::SetMasterPeriod(0.75));
     }
+    let final_request_revision = fixture
+        .engine
+        .input_runtime_ownership
+        .global_rate_status
+        .requested_revision();
+    assert_eq!(final_request_revision, before_revision + 65);
     let before_loop = fixture.mixer.loop_region_frames(0);
     let ticket = fixture.refresh(Some(PERIOD));
     fixture.process_next();
@@ -447,8 +460,40 @@ fn accepted_refresh_old_parameter_backlog_rejects_whole_effect_then_fresh_retry_
     fixture.render(2);
     assert_eq!(ticket.publication_status(), "rejected");
     assert_eq!(fixture.mixer.loop_region_frames(0), before_loop);
-    assert_eq!(fixture.transport.master_period_seconds(), Some(0.75));
+    assert_eq!(fixture.transport.master_period_seconds(), Some(0.5));
+    let prefix = fixture
+        .engine
+        .input_runtime_ownership
+        .global_rate_status
+        .read()
+        .unwrap();
+    assert_eq!(prefix.request_revision, final_request_revision);
+    assert!(prefix.effect.revision < final_request_revision);
+    assert_eq!(prefix.effect.state, RateState::Rejected);
+    assert_eq!(prefix.effect.error, RateError::Superseded);
+    // The final original stamp must apply before a fresh refresh can claim its fence.
     fixture.parameters();
+    assert!(fixture.parameter_consumer.is_empty());
+    assert_eq!(fixture.mixer.loop_region_frames(0), before_loop);
+    assert_eq!(fixture.transport.master_period_seconds(), Some(0.75));
+    let final_effect = fixture
+        .engine
+        .input_runtime_ownership
+        .global_rate_status
+        .read()
+        .unwrap();
+    let expected_rate = RateTuple {
+        speed: 1.0,
+        period: Some(0.75),
+    };
+    assert_eq!(final_effect.request_revision, final_request_revision);
+    assert_eq!(final_effect.effect.revision, final_request_revision);
+    assert_eq!(final_effect.requested, expected_rate);
+    assert_eq!(final_effect.effect.requested, expected_rate);
+    assert_eq!(final_effect.effect.effective, expected_rate);
+    assert_eq!(final_effect.effect.state, RateState::Applied);
+    assert_eq!(final_effect.effect.error, RateError::None);
+    assert_eq!(final_effect.effect.execution_frame, Some(2));
     let retry = fixture.refresh(Some(PERIOD));
     fixture.process_next();
     fixture.parameters();

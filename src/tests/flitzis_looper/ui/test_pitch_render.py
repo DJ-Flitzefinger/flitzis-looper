@@ -777,7 +777,7 @@ def test_closed_midi_note_repaints_the_shared_piano_without_recapture(
     audio_engine_mock.capture_selected_pitch_action.assert_not_called()
 
 
-def test_actual_note_refusal_keeps_previous_selection_and_displays_runtime_reason(
+def test_actual_note_refusal_keeps_previous_selection_and_error_outside_panel(
     pitch_render: _PitchRender, audio_engine_mock: Mock
 ) -> None:
     audio_engine_mock.capture_pad_pitch_action.side_effect = ValueError("unsupported_pitch")
@@ -788,7 +788,7 @@ def test_actual_note_refusal_keeps_previous_selection_and_displays_runtime_reaso
         assert frame.piano is not None
         frame.piano.assert_markers(0)
         assert pitch_render.controller.project.pad_key_intent[0].base_shift == 0
-        assert any("not supported" in text for text in frame.text)
+        assert not any("not supported" in text for text in frame.text)
     audio_engine_mock.capture_pad_pitch_action.assert_called_once_with(
         0, "pitch.note:23:set", received_at_ns=123
     )

@@ -7,10 +7,79 @@ use crate::audio_engine::input_runtime_binding::LaunchWriteKind;
 use crate::audio_engine::ordinary_start::OrdinaryStartWork;
 use crate::audio_engine::pad_start::PadStartGuard;
 use crate::audio_engine::pitch_actions::{FrozenPitchRender, PitchActionReject};
+use crate::audio_engine::prepared_native_history::SourceReadCheckpoint;
 use crate::messages::AudioMessage;
 use std::cell::RefCell;
 
 impl RtMixer {
+    pub(super) fn fresh_start_dsp_current(
+        &self,
+        intent: Option<super::super::late_start_dsp::DspInputIntent>,
+        original: u64,
+        id: usize,
+    ) -> bool {
+        intent.is_none_or(|intent| {
+            self.input_runtime_ownership.callback_key_slot(intent.key) == Some(id)
+                && self.pad_gain_smoothers[id]
+                    .constant()
+                    .is_some_and(|gain| gain.to_bits() == intent.gain.to_bits())
+                && self.pad_dsp_chains[id].matches_late_start_intent(intent, original)
+        })
+    }
+
+    pub(super) fn ordinary_start_dsp_current(&self, work: &OrdinaryStartWork, id: usize) -> bool {
+        work.dsp_intent.is_none_or(|intent| {
+            work.origin()
+                .target_frame()
+                .is_some_and(|original| self.fresh_start_dsp_current(Some(intent), original, id))
+        })
+    }
+
+    pub(super) fn capture_fresh_start_dsp_intent(
+        &mut self,
+        key: super::super::content_placement::ContentKey,
+        original: u64,
+        id: usize,
+        callback: u64,
+        previous: Option<super::super::late_start_dsp::DspInputIntent>,
+    ) -> Result<super::super::late_start_dsp::DspInputIntent, PitchActionReject> {
+        self.pad_dsp_chains[id].observe_input_intent(
+            key,
+            callback,
+            self.pad_gain_smoothers[id].constant(),
+        );
+        self.pad_dsp_chains[id]
+            .late_start_intent(key, original)
+            .filter(|_| self.fresh_start_dsp_current(previous, original, id))
+            .ok_or(PitchActionReject::PreparationFailed)
+    }
+
+    fn capture_ordinary_start_dsp_intent(
+        &mut self,
+        work: &OrdinaryStartWork,
+        id: usize,
+        callback: u64,
+    ) -> Result<super::super::late_start_dsp::DspInputIntent, PitchActionReject> {
+        self.capture_fresh_start_dsp_intent(
+            work.origin().content_key(),
+            work.origin()
+                .target_frame()
+                .ok_or(PitchActionReject::TimingUnavailable)?,
+            id,
+            callback,
+            work.dsp_intent,
+        )
+    }
+
+    pub(super) fn ordinary_start_continuity_current(&self, work: &OrdinaryStartWork) -> bool {
+        work.launch_delay_frames() == 0 || self.ordinary_start_source_controls_current(work)
+    }
+
+    fn ordinary_start_source_controls_current(&self, work: &OrdinaryStartWork) -> bool {
+        self.source_control_revision(work.origin().content_key())
+            .is_ok_and(|current| work.origin().accepts_source_control_revision(current))
+    }
+
     fn ordinary_loop_region(&self, work: &OrdinaryStartWork, id: usize) -> (f64, Option<f64>) {
         if work.inherits_loop() {
             let rate = f64::from(self.sample_rate_hz);
@@ -33,6 +102,9 @@ impl RtMixer {
         if !self.admitted_source_binding_current(guard.id, guard.binding) {
             return Err(PitchActionReject::SourceChanged);
         }
+        if !self.ordinary_start_continuity_current(work) {
+            return Err(PitchActionReject::TimingChanged);
+        }
         Ok(guard)
     }
 
@@ -49,7 +121,18 @@ impl RtMixer {
         id: usize,
     ) -> Result<PitchSourceSnapshot, PitchActionReject> {
         let (start_s, end_s) = self.ordinary_loop_region(work, id);
-        self.normal_start_snapshot(id, start_s, end_s)
+        let snapshot = self.normal_start_snapshot(id, start_s, end_s)?;
+        if let Some(origin) = work.late_reprepare_snapshot() {
+            if !origin.matches_exact(
+                super::super::prepared_native_history::SourceReadCheckpoint {
+                    playback: snapshot.playback,
+                    plan: snapshot.plan,
+                },
+            ) {
+                return Err(PitchActionReject::PreparedMismatch);
+            }
+        }
+        Ok(snapshot)
     }
 
     pub(super) fn normal_start_snapshot(
@@ -67,7 +150,7 @@ impl RtMixer {
         let region = effective_loop_region(start, end, sample.frame_count())
             .ok_or(PitchActionReject::InvalidAction)?;
         // Capture the existing source/stem/accepted timing owners once. An ordinary attack
-        // starts at its physical loop start at E; preparation time never advances its clock.
+        // declares a physical beginning. Unheard wall-clock delay never advances it.
         let mut snapshot = self
             .capture_pitch_start_snapshot(id, region.start)
             .ok_or(PitchActionReject::TimingUnavailable)?;
@@ -124,8 +207,9 @@ impl RtMixer {
     }
 
     pub(crate) fn capture_ordinary_start_request(
-        &self,
+        &mut self,
         work: &mut OrdinaryStartWork,
+        callback_frame: u64,
         execution_frame: u64,
     ) -> Result<(), PitchActionReject> {
         if execution_frame != work.execution_frame() || work.render.is_some() {
@@ -134,14 +218,22 @@ impl RtMixer {
         let guard = self.ordinary_start_guard(work)?;
         let render = self.ordinary_start_render(guard.id);
         work.freeze_loop(self.ordinary_loop_region(work, guard.id));
-        let snapshot = self.ordinary_start_snapshot(work, guard.id)?;
-        let native_pitch = render
+        let (start_s, end_s) = work.loop_region();
+        let snapshot = self.normal_start_snapshot(guard.id, start_s, end_s)?;
+        let launch_origin = super::super::prepared_native_history::SourceReadCheckpoint {
+            playback: snapshot.playback,
+            plan: snapshot.plan,
+        };
+        work.freeze_launch_origin(launch_origin)?;
+        if work.launch_delay_frames() != 0 {
+            work.dsp_intent =
+                Some(self.capture_ordinary_start_dsp_intent(work, guard.id, callback_frame)?);
+        }
+        render
             .pitch
             .native_pitch_scale(snapshot.playback.tempo_ratio(), render.key_lock)
             .map_err(|_| PitchActionReject::UnsupportedPitch)?;
-        let request = if native_pitch == 1.0 {
-            None
-        } else {
+        let request = {
             let permit = work
                 .capture_history_permit(&snapshot.sample, snapshot.sample_rate_hz)
                 .ok_or(PitchActionReject::SourceChanged)?;
@@ -161,6 +253,57 @@ impl RtMixer {
         work.capture(request, render)
     }
 
+    /// Validate the current source/control tuple without recapturing its preparation permit.
+    /// The new endpoint is projected only from this original's retained T clock.
+    pub(crate) fn prepare_ordinary_late_replan(
+        &mut self,
+        work: &mut OrdinaryStartWork,
+        execution: u64,
+        callback: u64,
+    ) -> Result<(), PitchActionReject> {
+        let (endpoint, intent) = self.plan_ordinary_late_reprepare(work, execution, callback)?;
+        work.plan_late_reprepare(endpoint, intent, execution)
+    }
+
+    /// Validate the retained physical beginning before changing any original E/status.
+    pub(crate) fn plan_ordinary_late_reprepare(
+        &mut self,
+        work: &OrdinaryStartWork,
+        execution: u64,
+        callback: u64,
+    ) -> Result<
+        (
+            SourceReadCheckpoint,
+            super::super::late_start_dsp::DspInputIntent,
+        ),
+        PitchActionReject,
+    > {
+        let guard = self.ordinary_start_guard(work)?;
+        if work.render != Some(self.ordinary_start_render(guard.id))
+            || execution <= work.execution_frame()
+        {
+            return Err(PitchActionReject::PreparedMismatch);
+        }
+        if !self.ordinary_start_source_controls_current(work) {
+            return Err(PitchActionReject::TimingChanged);
+        }
+        let origin = work
+            .late_reprepare_snapshot()
+            .ok_or(PitchActionReject::PreparedMismatch)?;
+        let (start_s, end_s) = work.loop_region();
+        let snapshot = self.normal_start_snapshot(guard.id, start_s, end_s)?;
+        if !origin.matches_exact(
+            super::super::prepared_native_history::SourceReadCheckpoint {
+                playback: snapshot.playback,
+                plan: snapshot.plan,
+            },
+        ) {
+            return Err(PitchActionReject::PreparedMismatch);
+        }
+        let intent = self.capture_ordinary_start_dsp_intent(work, guard.id, callback)?;
+        Ok((origin, intent))
+    }
+
     pub(super) fn ordinary_start_candidate_matches(
         &self,
         work: &OrdinaryStartWork,
@@ -168,6 +311,9 @@ impl RtMixer {
         index: usize,
         output_frame: u64,
     ) -> bool {
+        if !work.native_required() {
+            return work.dry_source_matches(snapshot);
+        }
         let Some(render) = work.render else {
             return false;
         };
@@ -208,6 +354,9 @@ impl RtMixer {
         let guard = self.ordinary_start_guard(work)?;
         work.rt_ready(output_frame)?;
         let id = guard.id;
+        if !self.ordinary_start_dsp_current(work, id) {
+            return Err(PitchActionReject::PreparedMismatch);
+        }
         let render = work.render.ok_or(PitchActionReject::PreparedMismatch)?;
         if self.ordinary_start_render(id) != render {
             return Err(PitchActionReject::PreparedMismatch);
@@ -308,7 +457,9 @@ impl RtMixer {
                     let work = work.borrow();
                     work.origin().claim_current(guard)
                         && mixer.admitted_source_binding_current(id, guard.binding)
+                        && mixer.ordinary_start_continuity_current(&work)
                         && mixer.ordinary_start_render(id) == render
+                        && mixer.ordinary_start_dsp_current(&work, id)
                         && ownership.launch_write_current(launch)
                         && mixer.admit_prepared_source_birth(
                             config.borrow_mut().as_mut().unwrap(),
@@ -328,6 +479,14 @@ impl RtMixer {
                     let mut mixer = mixer.borrow_mut();
                     let mut work = work.borrow_mut();
                     ownership.apply_launch_write(launch);
+                    let continued_controls = active_index.and_then(|previous_index| {
+                        mixer.continued_independent_birth_controls(
+                            previous_index,
+                            work.origin().content_key(),
+                            &snapshot,
+                            output_frame,
+                        )
+                    });
                     if exclusive {
                         for voice_index in 0..MAX_VOICES {
                             if mixer.voices[voice_index].active {
@@ -370,7 +529,10 @@ impl RtMixer {
                         voice.start_rt(config, retirement);
                     }
                     voice.source_playback = snapshot.playback;
-                    if work.preparation_required() {
+                    if let Some(continued_controls) = continued_controls {
+                        voice.source_control_epoch = continued_controls;
+                    }
+                    if work.native_required() {
                         let feed = ProductiveSourceFeed {
                             sample: &snapshot.sample,
                             stems: snapshot.stems.as_ref(),

@@ -108,15 +108,34 @@ function Open-PortableLock([string] $Root) {
     catch { throw 'Der Looper oder ein anderer Installer laeuft. Bitte den Looper schliessen und erneut starten; kein Prozess wird beendet.' }
 }
 
+function Test-PortableProcessExited($Process) {
+    try {
+        # Query this original Process object, never a new owner by recycled PID.
+        $exited = $Process.HasExited
+        return ($exited -is [bool] -and $exited)
+    } catch { return $false }
+}
+
 function Assert-NoPortableProcess([string] $Root) {
     $prefix = [IO.Path]::GetFullPath($Root).TrimEnd('\') + '\'
-    foreach ($process in @(Get-Process -Name python,pythonw -ErrorAction SilentlyContinue)) {
-        try { $executable = $process.Path }
-        catch { throw 'Ein Python-Prozessbesitzer kann nicht geprueft werden. Bitte den Looper schliessen und erneut ausfuehren.' }
-        if (-not $executable) { throw 'Ein Python-Prozessbesitzer kann nicht geprueft werden. Bitte den Looper schliessen und erneut ausfuehren.' }
-        if ((Resolve-PortablePhysicalPath $executable).StartsWith($prefix, [StringComparison]::OrdinalIgnoreCase)) {
-            throw 'Ein installierter Looper-Prozess laeuft noch. Bitte den Looper schliessen und den Installer erneut ausfuehren; kein Prozess wird beendet.'
+    $processes = @(Get-Process -Name python,pythonw -ErrorAction SilentlyContinue)
+    try {
+        foreach ($process in $processes) {
+            try { $executable = $process.Path }
+            catch {
+                if (Test-PortableProcessExited $process) { continue }
+                throw 'Ein Python-Prozessbesitzer kann nicht geprueft werden. Bitte den Looper schliessen und erneut ausfuehren.'
+            }
+            if (-not $executable) {
+                if (Test-PortableProcessExited $process) { continue }
+                throw 'Ein Python-Prozessbesitzer kann nicht geprueft werden. Bitte den Looper schliessen und erneut ausfuehren.'
+            }
+            if ((Resolve-PortablePhysicalPath $executable).StartsWith($prefix, [StringComparison]::OrdinalIgnoreCase)) {
+                throw 'Ein installierter Looper-Prozess laeuft noch. Bitte den Looper schliessen und den Installer erneut ausfuehren; kein Prozess wird beendet.'
+            }
         }
+    } finally {
+        foreach ($process in $processes) { $process.Dispose() }
     }
 }
 

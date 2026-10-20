@@ -19,20 +19,25 @@ from flitzis_looper.controller.pair_arrangement_journal import (
 from flitzis_looper.copy_snapshot import (
     CopySnapshot,
     CopySnapshotData,
-    canonical_snapshot_json,
     capture_copy_snapshot,
     musical_content_data,
     project_with_copy_snapshot,
 )
+from flitzis_looper.copy_snapshot import (
+    copy_after_snapshot as _copy_after_snapshot,
+)
 from flitzis_looper.material_migration_model import MigrationDigest, MigrationID
-from flitzis_looper.models import PadContentIdentity, ProjectState
 from flitzis_looper_audio import MaterialMigrationJournalStore
 
 if TYPE_CHECKING:
     from flitzis_looper.controller.persistence import ConfigCommitReceipt, ProjectPersistence
+    from flitzis_looper.models import PadContentIdentity, ProjectState
 
 _ID_PATTERN: str = TypeAdapter(MigrationID).json_schema()["pattern"]
 _DIGEST_PATTERN: str = TypeAdapter(MigrationDigest).json_schema()["pattern"]
+
+# Preserve the journal API while sharing the one strict Copy projection.
+copy_after_snapshot = _copy_after_snapshot
 
 type CopyJournalPhase = Literal[
     "captured",
@@ -42,27 +47,6 @@ type CopyJournalPhase = Literal[
     "settled",
     "cancelled",
 ]
-
-
-def copy_after_snapshot(source: CopySnapshot, identity: PadContentIdentity) -> CopySnapshot:
-    """Derive the fixed fresh C seal by changing only captured A's durable identity."""
-    captured = CopySnapshot.model_validate(source).projected()
-    target = PadContentIdentity.model_validate_json(
-        canonical_snapshot_json(identity.model_dump(mode="json", warnings="error")),
-        strict=True,
-    )
-    original = captured.source_identity
-    if (
-        target.instance_id == original.instance_id
-        or target.material_id != original.material_id
-        or target.material_creation != original.material_creation
-        or target.copied_from != original.instance_id
-    ):
-        message = "Copy successor must be fresh and retain captured material, birth and lineage"
-        raise ValueError(message)
-    data = captured.model_dump(mode="python", warnings="error")
-    data["source_identity"] = target
-    return CopySnapshot.from_data(CopySnapshotData.model_validate(data, strict=True))
 
 
 def written_copy_image_matches(project: ProjectState, after: CopySnapshot, target_id: int) -> bool:

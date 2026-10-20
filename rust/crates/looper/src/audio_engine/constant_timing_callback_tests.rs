@@ -59,6 +59,7 @@ fn productive_history_native_loaded_source_publication_fences_new_launch_during_
         0,
         old_source.clone(),
         LoadedSourcePublication {
+            initial_mix: None,
             placement: ownership.slot_snapshot(0).unwrap(),
             cold: false,
             cold_epoch: None,
@@ -106,6 +107,7 @@ fn productive_history_native_loaded_source_publication_fences_new_launch_during_
         1,
         other_source,
         LoadedSourcePublication {
+            initial_mix: None,
             placement: ownership.slot_snapshot(1).unwrap(),
             cold: false,
             cold_epoch: None,
@@ -187,6 +189,7 @@ fn productive_history_native_loaded_source_publication_fences_new_launch_during_
         0,
         new_source.clone(),
         LoadedSourcePublication {
+            initial_mix: None,
             placement: ownership.slot_snapshot(0).unwrap(),
             cold: false,
             cold_epoch: None,

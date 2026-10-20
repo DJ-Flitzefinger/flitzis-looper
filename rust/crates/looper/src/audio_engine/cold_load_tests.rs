@@ -513,6 +513,10 @@ impl Retirement {
             // This optional fixture uses the same bounded owner transfer as CPAL.
             // The original collecting fixture remains unchanged when absent.
             match value {
+                RetiredAudioBuffer::MixCapture(value) => actual.retire_mix_capture(value),
+                RetiredAudioBuffer::CapturePublication(value) => {
+                    actual.retire_capture_publication(value)
+                }
                 RetiredAudioBuffer::Sample(value) => actual.retire_sample(value),
                 RetiredAudioBuffer::SourcePublication(value) => {
                     actual.retire_source_publication(value)
@@ -539,6 +543,13 @@ impl Retirement {
                     actual.retire_committed_stem_work(value)
                 }
                 RetiredAudioBuffer::PadCopy(value) => actual.retire_pad_copy(value),
+                RetiredAudioBuffer::BankMutation(value) => actual.retire_bank_mutation(value),
+                RetiredAudioBuffer::BankMutationPublication(value) => {
+                    actual.retire_bank_publication(value)
+                }
+                RetiredAudioBuffer::RecoveredBankProbe(value) => {
+                    actual.retire_recovered_bank_probe(value)
+                }
                 RetiredAudioBuffer::PadPair(value) => actual.retire_pad_pair(value),
                 RetiredAudioBuffer::HoldAction(value) => actual.retire_hold_action(value),
                 RetiredAudioBuffer::PitchAction(value) => actual.retire_pitch_action(value),
@@ -626,7 +637,9 @@ impl AudioBufferRetirement for Retirement {
     }
 }
 struct Callback {
-    mixer: RtMixer,
+    // Match the production callback owner instead of copying fixed mixer storage
+    // through nested fixture-return frames on the default Windows test stack.
+    mixer: Box<RtMixer>,
     scheduler: FixedCapacityScheduler<8>,
     transport: TransportTimeline,
     quantization: TriggerQuantization,
@@ -636,7 +649,14 @@ struct Callback {
 impl Callback {
     fn new(engine: &AudioEngine, previous: &SampleBuffer) -> Self {
         let mut value = Self {
-            mixer: RtMixer::new(2, 48_000.0),
+            mixer: crate::audio_engine::audio_stream::create_stream_mixer(
+                2,
+                48_000,
+                engine.current_timing_acknowledgements.clone(),
+                engine.input_runtime_ownership.clone(),
+                engine.prepared_source_epochs.clone(),
+            )
+            .unwrap(),
             scheduler: FixedCapacityScheduler::new(),
             transport: TransportTimeline::new(48_000),
             quantization: TriggerQuantization::Immediate,

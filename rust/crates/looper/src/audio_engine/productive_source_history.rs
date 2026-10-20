@@ -44,6 +44,8 @@ impl ProductiveSourceBinding {
 
 /// This value belongs to the actual used native handle and its pending adapter FIFOs.
 /// A full timing refresh is coherent only when the next real feed continues the same source.
+/// Its next position follows the successful Native input receipt, independently of the voice's
+/// logical cursor. A dry source-read receipt alone must never establish this ownership.
 #[derive(Clone, Copy, Debug)]
 pub(crate) struct ProductiveSourceHistory {
     pub(crate) binding: ProductiveSourceBinding,

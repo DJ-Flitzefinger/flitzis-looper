@@ -45,12 +45,19 @@
 
 ## 7. Pending live audible preparation
 
+The 2026-10-20 full-onset revision governs ordinary and fresh Piano births:
+complete physical beginning at actual E, immutable T and an independently
+preserved accepted rate-step clock at E. Earlier T-born suffix results retain
+their former-contract source/profile scope. SET/resume/replay history, genuine
+negative guards and all musical/device gates remain.
+
 - [x] 7.1 Anchor explicit source history before the requested logical phase; sweep bounded discard/marker-phase/short-burst fixtures and define/report the musical timing criterion before choosing compensation.
 - [ ] 7.2 Resolve the failed nonneutral common-translation criterion using steady Key Lock and musical attack references without hiding transient spread or cut loss. Rejected varispeed/unity-source bridges, fixed causal E/T/C/U unavailable-content/crop/catch-up evidence and original timing/retention failures remain. Required lead can exceed a fine-grid future interval, and strict first-sound gating can fail retention despite unlimited preparation. After the currently begun R3 block, the immediate next product block SHALL implement both genuinely distinct global persisted start policies requested on 2026-10-18: first audible sound at/after T, and principal perceived attack at T with necessary causally available quiet lead. The earlier attack preference is not an exclusive choice; retain both for the Human comparison. Justify actual measured anchoring and explicit insufficient-headroom/late behavior; no artificial gain, silent target/content shift or acceptance by suffix equality. Musical/recorded-track/listening evidence remains pending.
-- [ ] 7.2a Integrate the global Settings choice and authoritative completely-stopped-only admission, including paused/held resumable voices and pending playback. Disable while unavailable with "Zum Ändern Wiedergabe stoppen"; reject without changing effective/persisted state. No deferred/next-start selection, live switch or additional switching transition logic.
+- [x] 7.2a Integrate the global Settings choice and authoritative completely-stopped-only admission, including paused/held resumable voices and pending playback. Disable while unavailable with "Stop playback to change"; reject without changing effective/persisted state. No deferred/next-start selection, live switch or additional switching transition logic. Current focused evidence: 11 genuine Native policy tests and 27 controller/real-widget persistence tests with explicit control doubles; distinct audible policy emission remains 7.2.
 - [ ] 7.3 Implement source/generation/loop/seek/stem/exact-ratio identity with fixed future handover frames and stale/late rejection.
 - [ ] 7.4 Adopt coherent native/FIFO/feed state at the accepted render frame and retire replaced or stale ownership off-thread.
 - [ ] 7.5 Verify source-aligned start/retrigger/seek, pause/resume and click-safe wet/dry/neutral/global/per-pad transitions, including queue/failure paths.
 - [ ] 7.6 Validate audible compensation and obtain release/device acceptance before synchronized Quantize activation.
+- [x] 7.7 Verify complete fresh Piano beginnings with the accepted rate/target/step clock at E, retain unsupported past/paused-glide refusals, and distinguish new physical births from unchanged SET/resume/replay history. The bounded software integration and private Release evidence are recorded in preserve-full-start-onset; musical/device acceptance remains open.
 
 Non-live preparation and reference equality alone do not certify audible synchronization.

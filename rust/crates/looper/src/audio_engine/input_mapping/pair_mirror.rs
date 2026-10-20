@@ -3,7 +3,7 @@
 use super::{InputRuntime, RuntimePadState, RuntimeState};
 use crate::audio_engine::content_placement::SlotSnapshot;
 use crate::messages::SampleBuffer;
-use std::sync::MutexGuard;
+use std::sync::{MutexGuard, atomic::Ordering};
 
 pub(in crate::audio_engine) struct CapturedPairRuntime {
     original: [SlotSnapshot; 2],
@@ -72,6 +72,14 @@ impl InputRuntime {
                 }
                 binding.placement = Some(destination);
                 binding.resident = sample.resident_binding();
+                // Reserved control rows remain frozen while a global publication
+                // advances the actual content epochs. Rebase only this successor
+                // to its acknowledged content cell; the parent's marker still
+                // checks the complete binding against current Native authority.
+                binding.runtime_revision = self
+                    .ownership
+                    .runtime_for_cell(destination.cell())
+                    .load(Ordering::Acquire);
             }
         }
         let prepared = PreparedPairRuntimeMirror {

@@ -12,6 +12,7 @@ use crate::audio_engine::pitch_actions::{
 };
 use crate::audio_engine::prepared_native_history::{NativeHistoryRequest, PREPARED_HISTORY_FRAMES};
 use crate::audio_engine::prepared_source_feed::EndpointResetHistory;
+use crate::audio_engine::source_control_epoch::{SourceControlBirth, SourceControlEpoch};
 use crate::messages::AudioMessage;
 use std::cell::RefCell;
 
@@ -71,6 +72,40 @@ pub(super) fn captured_feedback(
 }
 
 impl RtMixer {
+    /// Reprepare only the same proved constant independent birth; no live SET/glide replay.
+    pub(crate) fn prepare_pitch_late_replan(
+        &mut self,
+        work: &mut PitchActionWork,
+        execution: u64,
+        callback: u64,
+    ) -> Result<(), PitchActionReject> {
+        let guard = self.pitch_action_guard(work)?;
+        let origin = work
+            .late_reprepare_snapshot()
+            .ok_or(PitchActionReject::PreparationFailed)?;
+        let endpoint = origin;
+        // This current snapshot validates the retained data contract; it never supplies
+        // a new source, request, permit or reset origin to the original worker.
+        let (start, end) = work.action.loop_region();
+        let mut snapshot = self.normal_start_snapshot(guard.id, start, end)?;
+        if !snapshot.plan.matches_source_contract(origin.plan)
+            || snapshot.playback.tempo_ratio().to_bits() != origin.playback.tempo_ratio().to_bits()
+            || snapshot.playback.rate_target().to_bits() != origin.playback.rate_target().to_bits()
+        {
+            return Err(PitchActionReject::TimingChanged);
+        }
+        snapshot.playback = endpoint.playback;
+        snapshot.plan = endpoint.plan;
+        let dsp = self.capture_fresh_start_dsp_intent(
+            work.action.content_key(),
+            work.action.original_due_frame(),
+            guard.id,
+            callback,
+            work.dsp_intent,
+        )?;
+        work.plan_late_reprepare(endpoint, dsp, execution)
+    }
+
     /// Admission can keep an already usable scalar/dry/owned tuple on its original dueframe.
     pub(crate) fn requires_pitch_action_preparation(
         &self,
@@ -133,6 +168,11 @@ impl RtMixer {
         if !self.admitted_source_binding_current(guard.id, guard.binding) {
             return Err(PitchActionReject::SourceChanged);
         }
+        if work.source_control_revision.is_some_and(|revision| {
+            !self.source_control_revision_matches(work.action.content_key(), revision)
+        }) {
+            return Err(PitchActionReject::TimingChanged);
+        }
         Ok(guard)
     }
 
@@ -161,6 +201,50 @@ impl RtMixer {
             current = Some(index);
         }
         Ok(current)
+    }
+
+    /// A completed independent birth may continue its observed control program,
+    /// while every PCM/Native/source-feed lifetime still starts independently.
+    pub(super) fn continued_independent_birth_controls(
+        &self,
+        previous_index: usize,
+        key: super::super::content_placement::ContentKey,
+        next: &PitchSourceSnapshot,
+        output_frame: u64,
+    ) -> Option<SourceControlEpoch> {
+        let voice = &self.voices[previous_index];
+        if !voice.active || voice.paused || next.paused {
+            return None;
+        }
+        // Physical PCM identity alone cannot distinguish two content lifetimes
+        // using the same source. Retain this actual voice's admitted content key.
+        let previous_key = voice.source_admission.as_ref()?.content_key()?;
+        if previous_key != key {
+            return None;
+        }
+        let previous = self.capture_pitch_voice_snapshot(previous_index)?;
+        let revision = self.source_control_revision(key).ok()?;
+        voice.source_control_epoch.continue_independent_birth(
+            output_frame,
+            SourceControlBirth {
+                key: previous_key,
+                checkpoint: super::super::prepared_native_history::SourceReadCheckpoint {
+                    playback: previous.playback,
+                    plan: previous.plan,
+                },
+                context: previous.source_feed_context,
+                revision,
+            },
+            SourceControlBirth {
+                key,
+                checkpoint: super::super::prepared_native_history::SourceReadCheckpoint {
+                    playback: next.playback,
+                    plan: next.plan,
+                },
+                context: next.source_feed_context,
+                revision,
+            },
+        )
     }
 
     pub(super) fn pitch_action_start_snapshot(
@@ -197,11 +281,22 @@ impl RtMixer {
             snapshot.playback = playback;
             snapshot.plan.loop_period = playback.loop_period();
         }
+        if let Some(origin) = work.normal_launch_origin {
+            // A constant birth retains its physical start while the live clock
+            // validates the accepted rate. Lateness never consumes source PCM.
+            if !origin.playback.matches_exact(&snapshot.playback)
+                || !origin.plan.matches_source_contract(snapshot.plan)
+            {
+                return Err(PitchActionReject::PreparedMismatch);
+            }
+            snapshot.playback = origin.playback;
+            snapshot.plan = origin.plan;
+        }
         Ok(snapshot)
     }
 
     pub(crate) fn capture_pitch_action_request(
-        &self,
+        &mut self,
         work: &mut PitchActionWork,
         callback_frame: u64,
         execution_frame: u64,
@@ -239,9 +334,10 @@ impl RtMixer {
                         .checked_sub(callback_frame)
                         .ok_or(PitchActionReject::PreparedMismatch)?;
                     let active_delta = if snapshot.paused { 0 } else { delta };
+                    let actual = snapshot.actual_feed_checkpoint();
                     work.source_feed_future = Some((
-                        snapshot.playback,
-                        snapshot.plan,
+                        actual.playback,
+                        actual.plan,
                         active_delta,
                         snapshot.source_feed_context,
                     ));
@@ -268,22 +364,41 @@ impl RtMixer {
                 snapshot
             }
             PitchActionVariant::SetRetrigger => {
+                // This admission fence proves no intervening control changes. It does
+                // not reconstruct rate history preceding this callback.
+                work.source_control_revision =
+                    Some(self.source_control_revision(work.action.content_key())?);
                 if work.preparation_mode() != PitchActionPreparationMode::Endpoint {
                     return Err(PitchActionReject::PreparedMismatch);
                 }
                 let delta = execution_frame
                     .checked_sub(callback_frame)
                     .ok_or(PitchActionReject::PreparedMismatch)?;
-                let snapshot = self.pitch_action_start_snapshot(work, guard.id, delta)?;
                 let active = match self.pitch_action_voice(guard.id, guard.binding) {
                     Ok(active) => active,
                     // A different old source cannot supply this new source's clock/history.
                     Err(PitchActionReject::SourceChanged) => None,
                     Err(reason) => return Err(reason),
                 };
-                if retrigger_needs_native(render, &snapshot)?
-                    && let Some(index) = active
-                {
+                work.launch_delay_frames = execution_frame
+                    .checked_sub(work.action.original_due_frame())
+                    .ok_or(PitchActionReject::PreparedMismatch)?;
+                if active.is_none() {
+                    let (start, end) = work.action.loop_region();
+                    let original = self.normal_start_snapshot(guard.id, start, end)?;
+                    if original.playback.tempo_ratio().to_bits()
+                        == original.playback.rate_target().to_bits()
+                    {
+                        work.normal_launch_origin = Some(
+                            super::super::prepared_native_history::SourceReadCheckpoint {
+                                playback: original.playback,
+                                plan: original.plan,
+                            },
+                        );
+                    }
+                }
+                let snapshot = self.pitch_action_start_snapshot(work, guard.id, delta)?;
+                if let Some(index) = active {
                     let mut current = self
                         .capture_pitch_voice_snapshot(index)
                         .ok_or(PitchActionReject::TimingUnavailable)?;
@@ -291,7 +406,12 @@ impl RtMixer {
                         != current.playback.rate_target().to_bits()
                         || snapshot.playback.tempo_ratio().to_bits()
                             != snapshot.playback.rate_target().to_bits();
-                    if gliding {
+                    if gliding && work.action.original_due_frame() < callback_frame {
+                        // No retained proof for an unobserved past glide is invented
+                        // merely because this is a new physical source beginning.
+                        return Err(PitchActionReject::PreparationFailed);
+                    }
+                    if gliding && retrigger_needs_native(render, &snapshot)? {
                         if current.paused
                             || current.readers().is_none_or(|readers| {
                                 !super::super::native_source_coverage::reset_source_feed_available(
@@ -334,9 +454,10 @@ impl RtMixer {
                         {
                             return Err(PitchActionReject::PreparationFailed);
                         }
+                        let actual = current.actual_feed_checkpoint();
                         work.source_feed_future = Some((
-                            current.playback,
-                            current.plan,
+                            actual.playback,
+                            actual.plan,
                             delta,
                             current.source_feed_context,
                         ));
@@ -345,24 +466,76 @@ impl RtMixer {
                         if !current.project_output_frames(delta) {
                             return Err(PitchActionReject::PreparationFailed);
                         }
+                        // The journal proves the accepted rate clock at E. The
+                        // independent birth's physical phase is already reset at E.
+                        let actual = current.actual_feed_checkpoint();
                         work.endpoint_reset_history = Some(EndpointResetHistory {
-                            playback: current.playback,
-                            plan: current.plan,
+                            playback: actual.playback,
+                            plan: actual.plan,
                         });
+                    } else if !gliding {
+                        // This is a new physical Normal launch, not the old voice's PCM
+                        // history. Its Current action permit and content-control fence
+                        // survive independent accepted births, including another at E.
+                        if work.action.original_due_frame() < callback_frame {
+                            // An endpoint alone says nothing about controls preceding F.
+                            // Actual render or separately observed stationary paused controls
+                            // certify this past. Neither grants an old-voice lifetime fence.
+                            let revision = work
+                                .source_control_revision
+                                .ok_or(PitchActionReject::PreparationFailed)?;
+                            let epoch = &self.voices[index].source_control_epoch;
+                            let checkpoint =
+                                super::super::prepared_native_history::SourceReadCheckpoint {
+                                    playback: current.playback,
+                                    plan: current.plan,
+                                };
+                            let covered = if current.paused {
+                                epoch.covers_paused(
+                                    work.action.original_due_frame(),
+                                    callback_frame,
+                                    checkpoint,
+                                    current.source_feed_context,
+                                    revision,
+                                )
+                            } else {
+                                epoch.covers(
+                                    work.action.original_due_frame(),
+                                    callback_frame,
+                                    checkpoint,
+                                    current.source_feed_context,
+                                    revision,
+                                )
+                            };
+                            if !covered {
+                                return Err(PitchActionReject::PreparationFailed);
+                            }
+                        }
+                        work.normal_launch_origin = Some(
+                            super::super::prepared_native_history::SourceReadCheckpoint {
+                                playback: snapshot.playback,
+                                plan: snapshot.plan,
+                            },
+                        );
                     }
                 }
                 snapshot
             }
         };
-        let pitch = render
+        render
             .pitch
             .native_pitch_scale(snapshot.playback.tempo_ratio(), render.key_lock)
             .map_err(|_| PitchActionReject::UnsupportedPitch)?;
-        if pitch == 1.0
-            && work.action.variant() == PitchActionVariant::SetRetrigger
-            && !retrigger_needs_native(render, &snapshot)?
+        if work.action.variant() == PitchActionVariant::SetRetrigger
+            && execution_frame != work.action.original_due_frame()
         {
-            return Ok(None);
+            work.dsp_intent = Some(self.capture_fresh_start_dsp_intent(
+                work.action.content_key(),
+                work.action.original_due_frame(),
+                guard.id,
+                callback_frame,
+                work.dsp_intent,
+            )?);
         }
         // Permits use the admitted action's own epoch and current resolved storage window.
         let permit = work
@@ -398,6 +571,9 @@ impl RtMixer {
         index: usize,
         output_frame: u64,
     ) -> bool {
+        if !work.native_required() {
+            return work.dry_source_matches(snapshot);
+        }
         let render = work.action.render();
         let Some(readers) = snapshot.readers() else {
             return false;
@@ -473,6 +649,9 @@ impl RtMixer {
         let guard = self.pitch_action_guard(work)?;
         work.rt_ready(output_frame)?;
         let id = guard.id;
+        if !self.fresh_start_dsp_current(work.dsp_intent, work.action.original_due_frame(), id) {
+            return Err(PitchActionReject::PreparedMismatch);
+        }
         let render = work.action.render();
         let retrigger = work.action.variant() == PitchActionVariant::SetRetrigger;
         if retrigger
@@ -582,7 +761,19 @@ impl RtMixer {
         };
         let config = if retrigger {
             let snapshot = snapshot.as_ref().unwrap();
-            if self.voices[index.unwrap()].generation == u64::MAX {
+            let index = index.unwrap();
+            let exclusive = work.action.exclusive();
+            let selected_increments = 1 + u64::from(exclusive && self.voices[index].active);
+            if self.voices[index]
+                .generation
+                .checked_add(selected_increments)
+                .is_none()
+                || (exclusive
+                    && self
+                        .voices
+                        .iter()
+                        .any(|voice| voice.active && voice.generation == u64::MAX))
+            {
                 return Err(PitchActionReject::SequenceExhausted);
             }
             if !self.can_adopt_sample(id, retirement) {
@@ -615,7 +806,18 @@ impl RtMixer {
                     let work = work.borrow();
                     work.claim_current(guard)
                         && mixer.admitted_source_binding_current(id, guard.binding)
+                        && work.source_control_revision.is_none_or(|revision| {
+                            mixer.source_control_revision_matches(
+                                work.action.content_key(),
+                                revision,
+                            )
+                        })
                         && launch.is_none_or(|launch| ownership.launch_write_current(launch))
+                        && mixer.fresh_start_dsp_current(
+                            work.dsp_intent,
+                            work.action.original_due_frame(),
+                            id,
+                        )
                         && (!retrigger
                             || mixer.admit_prepared_source_birth(
                                 config.borrow_mut().as_mut().unwrap(),
@@ -640,6 +842,17 @@ impl RtMixer {
                         ownership.apply_launch_write(launch);
                     }
                     if retrigger {
+                        // Only the complete accepted effect can carry this scalar
+                        // proof. Missing/paused/changed source history keeps the
+                        // ordinary new-birth reset below, without a fallback guess.
+                        let continued_controls = active_index.and_then(|previous_index| {
+                            mixer.continued_independent_birth_controls(
+                                previous_index,
+                                work.action.content_key(),
+                                snapshot.as_ref().unwrap(),
+                                output_frame,
+                            )
+                        });
                         if work.action.exclusive() {
                             for voice_index in 0..MAX_VOICES {
                                 if mixer.voices[voice_index].active {
@@ -683,9 +896,12 @@ impl RtMixer {
                             voice.start_rt(config, retirement);
                         }
                         voice.source_playback = snapshot.playback;
+                        if let Some(continued_controls) = continued_controls {
+                            voice.source_control_epoch = continued_controls;
+                        }
                     }
                     if let (Some(index), Some(snapshot)) = (index, snapshot.as_ref())
-                        && work.preparation_required()
+                        && work.native_required()
                     {
                         mixer.pitch_action_adopt(&mut work, snapshot, index, output_frame);
                     }

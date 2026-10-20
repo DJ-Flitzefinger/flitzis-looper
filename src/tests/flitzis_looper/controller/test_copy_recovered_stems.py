@@ -202,7 +202,10 @@ def test_saved_pair_verifies_and_registers_under_real_copy_writer_without_config
     persistence.config_path = tmp_path / "samples" / "copy.config.json"
     persistence.flush()
     persistence.capture_migration("a" * 32)
-    fixture.controller.bind_disk_selection_commit(persistence.commit_stem_selection)
+    fixture.controller.bind_disk_selection_commit(
+        persistence.commit_stem_selection,
+        writer_blocked=persistence.stem_selection_write_blocked,
+    )
     before = persistence.config_path.read_bytes()
     original_entry = fixture.project.stem_cache[_TARGET]
     _prepare_restored(fixture)

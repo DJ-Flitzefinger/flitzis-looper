@@ -7,6 +7,8 @@
 //! and operates on [`SampleBuffer`](crate::messages::SampleBuffer) data loaded via
 //! [`decode_audio_file_to_sample_buffer`](crate::audio_engine::sample_loader::decode_audio_file_to_sample_buffer).
 
+mod bank_mutation;
+mod capture;
 mod endpoint_reserve;
 mod global_rate;
 #[path = "mixer/hold_action.rs"]
@@ -20,6 +22,7 @@ mod pad_copy;
 mod pad_pair;
 #[path = "mixer/pitch_action.rs"]
 mod pitch_action;
+mod retained_stems;
 
 use crate::audio_engine::buffer_retirement::AudioBufferRetirement;
 #[cfg(test)]
@@ -169,6 +172,9 @@ impl Default for SmoothedGain {
 }
 
 impl SmoothedGain {
+    fn constant(&self) -> Option<f32> {
+        (self.current.to_bits() == self.target.to_bits() && self.step == 0.0).then_some(self.target)
+    }
     fn set_target_db(&mut self, gain_db: f32, sample_rate_hz: f32, smooth: bool) {
         let target = gain_db_to_linear(gain_db);
         self.target = target;
@@ -241,7 +247,14 @@ pub struct RtMixer {
     global_commands_drained: bool,
     global_commands_revision: u64,
     global_parameters_revision: u64,
+    key_lock_start_drain_revision: Option<u64>,
+    key_lock_start_commands_drained: bool,
     global_rate: Option<Box<global_rate::GlobalRateCoordinator>>,
+    // One original prepared/pending/active/terminal owner, returned whole off RT.
+    mix_capture: Option<Box<super::mix_capture::CaptureRt>>,
+    mix_capture_pending_start: Option<u64>,
+    mix_capture_pending_group: Option<capture::PendingGroupCapture>,
+    mix_capture_scheduler_cleared: bool,
 
     /// Per-pad Key Lock state (preserve pitch when tempo changes).
     pad_key_lock_enabled: [bool; NUM_SAMPLES],
@@ -272,6 +285,9 @@ pub struct RtMixer {
     current_timing_acknowledgements: Arc<CurrentTimingAcknowledgements>,
     /// Native preparation requests and cancellation share the control owner's monotonic epoch.
     prepared_source_epochs: Vec<Arc<AtomicU64>>,
+    // Callback-owned source controls follow the stable content cell through Pad Move/Swap.
+    // They fence constant launch history even when that cell has no active voice.
+    source_control_revisions: [u64; NUM_SAMPLES],
     deferred_control: Option<crate::messages::ControlMessage>,
     // Stable content-cell custody; placement changes never exchange this registry.
     hold_actions: [Option<Box<super::hold_action::HoldActionRtWork>>; NUM_SAMPLES],
@@ -331,6 +347,102 @@ pub struct RtMixer {
 }
 
 impl RtMixer {
+    fn observe_dsp_inputs(&mut self, frame: u64) {
+        for id in 0..NUM_SAMPLES {
+            if let Some(key) = self
+                .input_runtime_ownership
+                .slot_snapshot(id)
+                .and_then(|slot| slot.content_key())
+            {
+                self.pad_dsp_chains[id].observe_input_intent(
+                    key,
+                    frame,
+                    self.pad_gain_smoothers[id].constant(),
+                );
+            }
+        }
+    }
+
+    pub(super) fn capture_late_start_dsp(
+        &mut self,
+        key: super::content_placement::ContentKey,
+        original: u64,
+        execution: u64,
+        callback: u64,
+        snapshot: &PitchSourceSnapshot,
+        origin: Option<super::prepared_native_history::SourceReadCheckpoint>,
+    ) -> Result<
+        Option<super::late_start_dsp::LateStartDspWork>,
+        super::pitch_actions::PitchActionReject,
+    > {
+        if execution == original {
+            return Ok(None);
+        }
+        let id = self
+            .input_runtime_ownership
+            .callback_key_slot(key)
+            .ok_or(super::pitch_actions::PitchActionReject::PlacementPending)?;
+        self.pad_dsp_chains[id].observe_input_intent(
+            key,
+            callback,
+            self.pad_gain_smoothers[id].constant(),
+        );
+        let intent = self.pad_dsp_chains[id]
+            .late_start_intent(key, original)
+            .ok_or(super::pitch_actions::PitchActionReject::PreparationFailed)?;
+        let frames = execution
+            .checked_sub(original)
+            .ok_or(super::pitch_actions::PitchActionReject::PreparedMismatch)?;
+        let endpoint = super::prepared_native_history::SourceReadCheckpoint {
+            playback: snapshot.playback,
+            plan: snapshot.plan,
+        };
+        origin
+            .map_or_else(
+                || super::late_start_dsp::LateStartDspWork::new(intent, original, endpoint, frames),
+                |origin| {
+                    super::late_start_dsp::LateStartDspWork::from_origin(
+                        intent, original, origin, endpoint, frames,
+                    )
+                },
+            )
+            .map(Some)
+            .ok_or(super::pitch_actions::PitchActionReject::PreparationFailed)
+    }
+
+    pub(crate) fn late_start_dsp_template(
+        &self,
+        key: super::content_placement::ContentKey,
+    ) -> Option<&PerPadDspChain> {
+        self.input_runtime_ownership
+            .callback_key_slot(key)
+            .map(|id| &self.pad_dsp_chains[id])
+    }
+    pub(crate) fn late_start_inline_cost(&self, frames: u64) -> Option<usize> {
+        let frames = usize::try_from(frames).ok()?;
+        (frames > 0 && frames <= super::late_start_dsp::INLINE_DSP_MAX_FRAMES && self.channels <= 8)
+            .then(|| frames.checked_mul(self.channels))
+            .flatten()
+    }
+
+    pub(super) fn late_start_dsp_current(
+        &self,
+        id: usize,
+        work: Option<&super::late_start_dsp::LateStartDspWork>,
+    ) -> bool {
+        work.is_none_or(|work| {
+            work.ready()
+                && self
+                    .input_runtime_ownership
+                    .callback_key_slot(work.intent.key)
+                    == Some(id)
+                && self.pad_gain_smoothers[id]
+                    .constant()
+                    .is_some_and(|gain| gain.to_bits() == work.intent.gain.to_bits())
+                && self.pad_dsp_chains[id]
+                    .matches_late_start_intent(work.intent, work.original_frame())
+        })
+    }
     pub(crate) fn pad_pitch_intent(&self, id: usize) -> Option<PitchIntent> {
         self.pad_pitch_intent.get(id).copied()
     }
@@ -497,6 +609,10 @@ impl RtMixer {
             paused: voice.paused,
             playback,
             plan,
+            actual_feed: voice
+                .stretch
+                .actual_source_checkpoint(&playback, plan)
+                .ok()?,
             source_feed_context,
         })
     }
@@ -543,6 +659,7 @@ impl RtMixer {
             paused: false,
             playback,
             plan,
+            actual_feed: None,
             source_feed_context: super::source_feed_history::SourceFeedContext::new(
                 super::productive_source_history::ProductiveSourceBinding::new(
                     sample,
@@ -773,7 +890,13 @@ impl RtMixer {
             global_commands_drained: true,
             global_commands_revision: 1,
             global_parameters_revision: 1,
+            key_lock_start_drain_revision: None,
+            key_lock_start_commands_drained: false,
             global_rate: Some(Box::new(global_rate::GlobalRateCoordinator::default())),
+            mix_capture: None,
+            mix_capture_pending_start: None,
+            mix_capture_pending_group: None,
+            mix_capture_scheduler_cleared: true,
             pad_key_lock_enabled: std::array::from_fn(|_| false),
             pad_pitch_intent: [PitchIntent::default(); NUM_SAMPLES],
             pad_key_lock_request_id: [0; NUM_SAMPLES],
@@ -791,6 +914,7 @@ impl RtMixer {
             input_runtime_ownership: Arc::default(),
             current_timing_acknowledgements: Arc::default(),
             prepared_source_epochs: (0..NUM_SAMPLES).map(|_| Arc::default()).collect(),
+            source_control_revisions: [0; NUM_SAMPLES],
             deferred_control: None,
             hold_actions: std::array::from_fn(|_| None),
             pad_gain_db: std::array::from_fn(|_| PAD_GAIN_DB_DEFAULT),
@@ -837,7 +961,36 @@ impl RtMixer {
         &mut self,
         ownership: Arc<super::input_runtime_binding::InputRuntimeOwnership>,
     ) {
+        ownership.key_lock_start_policy.invalidate_admission();
         self.input_runtime_ownership = ownership;
+    }
+
+    pub(crate) fn begin_key_lock_start_control_drain(&mut self) {
+        self.key_lock_start_drain_revision = self
+            .input_runtime_ownership
+            .key_lock_start_policy
+            .begin_callback_drain();
+        self.key_lock_start_commands_drained = false;
+    }
+
+    pub(crate) fn finish_key_lock_start_control_drain(&mut self, empty: bool) {
+        self.key_lock_start_commands_drained = empty;
+    }
+
+    /// Paused voices retain resumable source/DSP history, even when output is silent.
+    /// The fixed Native Hold registry also fences a pending caused-pause or release.
+    pub(crate) fn finish_key_lock_start_callback(&self, scheduler_empty: bool) {
+        let idle = self.key_lock_start_commands_drained
+            && scheduler_empty
+            && self.deferred_control.is_none()
+            && self.voices.iter().all(|voice| !voice.active)
+            && self.hold_actions.iter().all(|entry| {
+                entry
+                    .as_ref()
+                    .is_none_or(|work| work.action.state().terminal())
+            });
+        self.input_runtime_ownership
+            .finish_key_lock_start_callback(self.key_lock_start_drain_revision, idle);
     }
 
     pub(crate) fn input_ownership_for_effect(
@@ -1534,20 +1687,37 @@ impl RtMixer {
                     .is_some_and(|old| old.same_source(sample))
                 && self.loop_edit_cuts_voice(voice, region);
         }
-        if self.pad_pitch_processing_enabled(id) {
-            if self
+        if self.pad_pitch_processing_enabled(id)
+            && self
                 .voices
                 .iter()
                 .enumerate()
                 .any(|(index, voice)| cuts[index] && !voice.stretch.source_cut_available())
-            {
-                return false;
-            }
+        {
+            return false;
+        }
+        self.apply_source_cuts_claimed(id, cuts, self.pad_pitch_processing_enabled(id), true);
+        true
+    }
+
+    /// Every affected lane was checked before the enclosing effect was claimed. This sole
+    /// callback consumes their reserves, so applying one lane cannot make another fallible.
+    fn apply_source_cuts_claimed(
+        &mut self,
+        id: usize,
+        cuts: [bool; MAX_VOICES],
+        processing: bool,
+        reset: bool,
+    ) {
+        if processing {
             for (index, voice) in self.voices.iter_mut().enumerate() {
-                if cuts[index] && !voice.stretch.reserve_source_cut() {
-                    return false;
+                if cuts[index] {
+                    voice.stretch.reserve_source_cut_claimed();
                 }
             }
+        }
+        if !reset {
+            return;
         }
         for (index, voice) in self.voices.iter_mut().enumerate() {
             if cuts[index] {
@@ -1557,7 +1727,6 @@ impl RtMixer {
         if cuts.iter().any(|cut| *cut) {
             self.pad_dsp_chains[id].reset();
         }
-        true
     }
 
     /// Validate every live/paused pin against the exact source and effective projection.
@@ -2330,32 +2499,82 @@ impl RtMixer {
                                 != bank.residency.as_ref().map(|view| view.context))
                 });
             if !current || !expands_current_bank {
-                let accepted = current
-                    && publication.claim_resident()
-                    && publication.current()
-                    && self.admitted_source_binding_current(id, binding)
-                    && self.reserve_seek_cut(id);
-                if accepted {
-                    let voice = &mut self.voices[pin.voice_index];
-                    if let Some(old) = voice.sample.replace(sample.clone()) {
-                        retirement.retire_sample(old);
-                    }
-                    if let Some(view) = &mut voice.frozen_stems {
-                        if let Some(old) = view.set.take() {
-                            retirement.retire_prepared_stems(old);
-                        }
-                        view.set = stems.clone();
-                    }
-                    let did_seek = self.seek_sample_with_output_frame(
-                        id,
-                        intent.seek_position_s.expect("validated seek pin"),
-                        output_frame,
-                    );
-                    publication.record_resident_seek(
-                        did_seek.then(|| self.pad_playhead_seconds(id)).flatten(),
-                    );
-                    publication.mark_accepted_preserved_window();
+                let ownership = self.input_runtime_ownership.clone();
+                #[cfg(test)]
+                if current {
+                    resident_mixer_tests::claim_continuity_tests::before_cut();
+                }
+                let write = if current {
+                    ownership.slot_snapshot(id).map_or_else(
+                        || {
+                            Err(if ownership.placement_pending() {
+                                super::content_placement::PlacementError::Pending
+                            } else {
+                                super::content_placement::PlacementError::ClaimRejected
+                            })
+                        },
+                        |snapshot| {
+                            ownership.prepare_slot_write_fixed(snapshot, snapshot.lifetime())
+                        },
+                    )
                 } else {
+                    Err(super::content_placement::PlacementError::ClaimRejected)
+                };
+                let cuts = std::array::from_fn(|index| self.voices[index].is_playing_sample(id));
+                let processing = id < NUM_SAMPLES && self.pad_pitch_processing_enabled(id);
+                let committed = write.and_then(|write| {
+                    ownership.commit_slot_write_fixed(
+                        &write,
+                        || {
+                            publication.current()
+                                && ownership.authority_current(id, binding)
+                                && ownership.binding_source_current(id, binding)
+                                && publication.claim_resident()
+                                && publication.current()
+                        },
+                        |_| {
+                            self.apply_source_cuts_claimed(id, cuts, processing, false);
+                            let voice = &mut self.voices[pin.voice_index];
+                            if let Some(old) = voice.sample.replace(sample.clone()) {
+                                retirement.retire_sample(old);
+                            }
+                            if let Some(view) = &mut voice.frozen_stems {
+                                if let Some(old) = view.set.take() {
+                                    retirement.retire_prepared_stems(old);
+                                }
+                                view.set = stems.clone();
+                            }
+                            let target = self.source_frame_from_seconds(
+                                intent.seek_position_s.expect("validated seek pin"),
+                                sample.frame_count(),
+                            );
+                            self.apply_seek_sample_claimed(
+                                id,
+                                target,
+                                explicit_seek_mode_for_frame(
+                                    target,
+                                    pin.loop_region,
+                                    sample.frame_count(),
+                                ),
+                                output_frame,
+                            );
+                            publication.record_resident_seek(self.pad_playhead_seconds(id));
+                            publication.mark_accepted_preserved_window();
+                        },
+                    )
+                });
+                if matches!(
+                    committed,
+                    Err(super::content_placement::PlacementError::Pending
+                        | super::content_placement::PlacementError::Stale)
+                ) {
+                    self.defer_control(crate::messages::ControlMessage::RelocateResident(
+                        transaction,
+                    ));
+                    return false;
+                }
+                let accepted = committed.is_ok();
+                if !accepted {
                     publication.mark_rejected();
                 }
                 if id < NUM_SAMPLES {
@@ -2399,18 +2618,61 @@ impl RtMixer {
                     })
                 });
         if previous_pin_seek {
-            let adopted = publication.claim_resident()
-                && publication.current()
-                && self.admitted_source_binding_current(id, binding)
-                && self.seek_sample_with_output_frame(
-                    id,
-                    intent.seek_position_s.expect("validated seek"),
-                    output_frame,
-                );
-            if adopted {
-                publication.record_resident_seek(self.pad_playhead_seconds(id));
-                publication.mark_accepted_preserved_window();
-            } else {
+            let Some((target, mode)) = self
+                .seek_sample_target(id, intent.seek_position_s.expect("validated seek"))
+                .filter(|_| self.seek_cut_available(id))
+            else {
+                publication.mark_rejected();
+                self.input_runtime_ownership
+                    .finish_resident_control_for_binding(id, binding, publication.expected);
+                retirement.retire_resident_transaction(transaction);
+                return false;
+            };
+            #[cfg(test)]
+            resident_mixer_tests::claim_continuity_tests::before_cut();
+            let ownership = self.input_runtime_ownership.clone();
+            let write = ownership.slot_snapshot(id).map_or_else(
+                || {
+                    Err(if ownership.placement_pending() {
+                        super::content_placement::PlacementError::Pending
+                    } else {
+                        super::content_placement::PlacementError::ClaimRejected
+                    })
+                },
+                |snapshot| ownership.prepare_slot_write_fixed(snapshot, snapshot.lifetime()),
+            );
+            let cuts = std::array::from_fn(|index| self.voices[index].is_playing_sample(id));
+            let processing = self.pad_pitch_processing_enabled(id);
+            let committed = write.and_then(|write| {
+                ownership.commit_slot_write_fixed(
+                    &write,
+                    || {
+                        publication.current()
+                            && ownership.authority_current(id, binding)
+                            && ownership.binding_source_current(id, binding)
+                            && publication.claim_resident()
+                            && publication.current()
+                    },
+                    |_| {
+                        self.apply_source_cuts_claimed(id, cuts, processing, false);
+                        self.apply_seek_sample_claimed(id, target, mode, output_frame);
+                        publication.record_resident_seek(self.pad_playhead_seconds(id));
+                        publication.mark_accepted_preserved_window();
+                    },
+                )
+            });
+            if matches!(
+                committed,
+                Err(super::content_placement::PlacementError::Pending
+                    | super::content_placement::PlacementError::Stale)
+            ) {
+                self.defer_control(crate::messages::ControlMessage::RelocateResident(
+                    transaction,
+                ));
+                return false;
+            }
+            let adopted = committed.is_ok();
+            if !adopted {
                 publication.mark_rejected();
             }
             self.input_runtime_ownership
@@ -2608,12 +2870,14 @@ impl RtMixer {
                 });
         let needs_tuple = valid && self.key_lock_tuple_needs_preparation(id, key_lock);
         let prospective_tuple = needs_tuple && mode_only && intent.key_lock_request_id.is_some();
-        let native_admitted = valid
-            && (!needs_tuple || prospective_tuple)
-            && (prospective_tuple
-                || !key_lock
-                || self.pad_key_lock_enabled[id]
-                || self.reserve_key_lock_mode(id));
+        let mode_reservations =
+            if valid && !prospective_tuple && key_lock && !self.pad_key_lock_enabled[id] {
+                self.key_lock_mode_reservations(id)
+            } else {
+                Some([false; MAX_VOICES])
+            };
+        let native_admitted =
+            valid && (!needs_tuple || prospective_tuple) && mode_reservations.is_some();
         if !native_admitted {
             let own_mode_current = id < NUM_SAMPLES
                 && publication.current()
@@ -2640,13 +2904,24 @@ impl RtMixer {
             retirement.retire_resident_transaction(transaction);
             return false;
         }
-        let cut_admitted = if intent.seek_position_s.is_some() {
-            self.reserve_seek_cut(id)
-        } else if intent.loop_region.is_some() {
-            loop_region.is_some_and(|region| self.reserve_loop_cuts(id, sample, region))
-        } else {
-            true
-        };
+        let cut_voices = std::array::from_fn(|index| {
+            let voice = &self.voices[index];
+            voice.is_playing_sample(id)
+                && (intent.seek_position_s.is_some()
+                    || (intent.loop_region.is_some()
+                        && voice
+                            .sample
+                            .as_ref()
+                            .is_some_and(|old| old.same_source(sample))
+                        && loop_region
+                            .is_some_and(|region| self.loop_edit_cuts_voice(voice, region))))
+        });
+        let cut_processing = self.pad_pitch_processing_enabled(id) || key_lock;
+        let cut_admitted =
+            !cut_processing
+                || self.voices.iter().enumerate().all(|(index, voice)| {
+                    !cut_voices[index] || voice.stretch.source_cut_available()
+                });
         if !cut_admitted {
             publication.mark_rejected();
             self.input_runtime_ownership
@@ -2654,6 +2929,26 @@ impl RtMixer {
             retirement.retire_resident_transaction(transaction);
             return false;
         }
+        let seek_target = intent.seek_position_s.and_then(|position| {
+            self.voices
+                .iter()
+                .find(|voice| voice.is_playing_sample(id))
+                .map(|voice| {
+                    let region = if intent.loop_region.is_some() {
+                        loop_region
+                    } else {
+                        voice.source_loop_region.or(loop_region)
+                    }
+                    .expect("preflighted resident seek region");
+                    let target = self.source_frame_from_seconds(position, sample.frame_count());
+                    (
+                        target,
+                        explicit_seek_mode_for_frame(target, region, sample.frame_count()),
+                    )
+                })
+        });
+        #[cfg(test)]
+        resident_mixer_tests::claim_continuity_tests::before_cut();
         let ownership = self.input_runtime_ownership.clone();
         let snapshot = match ownership.slot_snapshot(id) {
             Some(snapshot) => snapshot,
@@ -2686,12 +2981,26 @@ impl RtMixer {
         let committed = ownership.commit_slot_write_fixed(
             &write,
             || {
-                publication.claim_resident()
-                    && publication.current()
+                publication.current()
                     && ownership.authority_current(id, binding)
                     && ownership.binding_source_current(id, binding)
+                    && intent.key_lock_request_id.is_none_or(|request| {
+                        ownership.callback_key_lock_request_current(id, request)
+                    })
+                    && publication.claim_resident()
+                    && publication.current()
             },
             |cell| {
+                let source_control_before = self.source_control_revisions[cell.index()];
+                self.reserve_key_lock_mode_claimed(
+                    mode_reservations.expect("preflighted resident mode lanes"),
+                );
+                self.apply_source_cuts_claimed(
+                    id,
+                    cut_voices,
+                    cut_processing,
+                    intent.seek_position_s.is_none() && intent.loop_region.is_some(),
+                );
                 for voice in &mut self.voices {
                     if voice.active
                         && voice.sample_id == id
@@ -2715,6 +3024,16 @@ impl RtMixer {
                 publication.mark_resident_storage_adopted();
                 if let Some((start, end)) = intent.loop_region {
                     let previous_region = self.effective_loop_region(id, sample.frame_count());
+                    if !intent.loop_is_launch_readiness
+                        && (self.pad_loop_start_frame[id] != start
+                            || self.pad_loop_end_frame[id] != end
+                            || self.voices.iter().any(|voice| {
+                                voice.is_playing_sample(id)
+                                    && voice.explicit_seek_mode != ExplicitSeekMode::Normal
+                            }))
+                    {
+                        self.advance_source_control_revision(id);
+                    }
                     self.pad_loop_start_frame[id] = start;
                     self.pad_loop_end_frame[id] = end;
                     for voice in &mut self.voices {
@@ -2749,10 +3068,20 @@ impl RtMixer {
                         self.publish_key_lock_status(id);
                     }
                 }
-                if let Some(position) = intent.seek_position_s {
-                    let did_seek = self.seek_sample_with_output_frame(id, position, output_frame);
+                if intent.seek_position_s.is_some() {
+                    if let Some((target, mode)) = seek_target {
+                        self.apply_seek_sample_claimed(id, target, mode, output_frame);
+                    }
                     publication.record_resident_seek(
-                        did_seek.then(|| self.pad_playhead_seconds(id)).flatten(),
+                        seek_target.and_then(|_| self.pad_playhead_seconds(id)),
+                    );
+                }
+                if intent.loop_region.is_some() && intent.seek_position_s.is_none() {
+                    // This exact root's completed physical mutation, still under
+                    // its original claim. Final accepted status remains separate.
+                    let _ = publication.note_resident_loop_transition(
+                        source_control_before,
+                        self.source_control_revisions[cell.index()],
                     );
                 }
             },
@@ -2989,12 +3318,14 @@ impl RtMixer {
         if !self.stem_selection_context_available(id, previous, next) {
             return false;
         }
+        self.retain_current_stem_selection_claimed(id, previous, next);
         match mode {
             StemMixMode::FullMix => {
                 self.stem_mix_mode[id] = StemMixMode::FullMix;
                 self.stem_mix_source_version_hash[id] = 0;
                 let next = self.stem_render_selection(id);
                 self.arm_stem_transition(id, previous, next);
+                self.withdraw_committed_stem_effect_for_ordinary_selection(id, previous != next);
                 true
             }
             StemMixMode::AllStems => {
@@ -3010,6 +3341,7 @@ impl RtMixer {
                 self.stem_mix_source_version_hash[id] = source_version_hash;
                 let next = self.stem_render_selection(id);
                 self.arm_stem_transition(id, previous, next);
+                self.withdraw_committed_stem_effect_for_ordinary_selection(id, previous != next);
                 true
             }
         }
@@ -3037,7 +3369,9 @@ impl RtMixer {
             let Some(view) = &mut voice.frozen_stems else {
                 continue;
             };
-            if view.outgoing.is_some() && !view.transition.is_active() {
+            if view.outgoing.as_ref().is_some_and(|stems| {
+                !view.transition.is_active() && !voice.stretch.retained_stem_reader_required(stems)
+            }) {
                 if retirement.available_retirement_slots() == 0 {
                     return;
                 }
@@ -3052,6 +3386,9 @@ impl RtMixer {
             }
             if self.outgoing_stems[id].is_some()
                 && !(self.sample_is_active(id) && self.stem_transitions[id].is_active())
+                && !self.outgoing_stems[id]
+                    .as_ref()
+                    .is_some_and(|stems| self.retained_pad_stem_reader_required(id, stems))
             {
                 if retirement.available_retirement_slots() == 0 {
                     return;
@@ -3063,6 +3400,9 @@ impl RtMixer {
             if !self.release_pair_components[id]
                 || self.stem_mix_mode[id] != StemMixMode::FullMix
                 || (self.sample_is_active(id) && self.stem_transitions[id].is_active())
+                || self.prepared_stems[id]
+                    .as_ref()
+                    .is_some_and(|stems| self.retained_pad_stem_reader_required(id, stems))
             {
                 continue;
             }
@@ -3074,7 +3414,13 @@ impl RtMixer {
             }
             // Keep the full-mix policy through an older window worker's return.
             // A new ordinary stem publication explicitly clears it above.
-            self.stem_transitions[id].clear();
+            // A retained clock also owns the completed ramp's exact scalar checkpoint.
+            // Removing its readers must not silently replace that checkpoint with a reset.
+            if !self.voices.iter().any(|voice| {
+                voice.active && voice.sample_id == id && voice.stretch.has_retained_source_input()
+            }) {
+                self.stem_transitions[id].clear();
+            }
         }
     }
 
@@ -3103,9 +3449,12 @@ impl RtMixer {
         if !self.stem_selection_context_available(id, previous, next) {
             return false;
         }
+        self.retain_current_stem_selection_claimed(id, previous, next);
+        let mask_changed = self.stem_enabled_mask[id] != enabled_stem_mask;
         self.stem_enabled_mask[id] = enabled_stem_mask;
         let next = self.stem_render_selection(id);
         self.arm_stem_transition(id, previous, next);
+        self.withdraw_committed_stem_effect_for_ordinary_selection(id, mask_changed);
         true
     }
 
@@ -3135,7 +3484,15 @@ impl RtMixer {
             return;
         }
 
-        self.invalidate_source_for_pad(id);
+        self.advance_source_control_revision(id);
+
+        for index in 0..self.voices.len() {
+            if self.voices[index].is_playing_sample(id)
+                && !self.voice_keeps_frozen_stem_source(&self.voices[index])
+            {
+                self.voices[index].invalidate_source_preparation();
+            }
+        }
 
         if self.sample_is_active(id) {
             self.stem_transitions[id] =
@@ -3208,18 +3565,30 @@ impl RtMixer {
         // A scalar command may retry afterwards; it cannot relabel or discard that reader.
         if previous != next
             && self.outgoing_stems[id].is_some()
-            && self.stem_transitions[id].is_active()
+            && (self.stem_transitions[id].is_active()
+                || self.outgoing_stems[id]
+                    .as_ref()
+                    .is_some_and(|stems| self.retained_pad_stem_reader_required(id, stems)))
         {
             return false;
         }
-        if previous == next || !self.pad_pitch_processing_enabled(id) {
+        if previous == next {
             return true;
         }
         let transition = StemTransition::start(previous, STEM_TRANSITION_RAMP_FRAMES);
+        if !self.retained_stem_selection_available(id, next, transition) {
+            return false;
+        }
+        if !self.pad_pitch_processing_enabled(id) {
+            return true;
+        }
         self.voices
             .iter()
             .filter(|voice| voice.active && voice.sample_id == id)
             .all(|voice| {
+                if self.voice_keeps_frozen_stem_source(voice) {
+                    return true;
+                }
                 voice.sample.as_ref().is_some_and(|sample| {
                     super::native_source_coverage::complete_view_available(sample)
                         || (!voice.paused
@@ -3751,23 +4120,44 @@ impl RtMixer {
     }
 
     fn reserve_key_lock_mode(&mut self, id: usize) -> bool {
+        let Some(reservations) = self.key_lock_mode_reservations(id) else {
+            return false;
+        };
+        self.reserve_key_lock_mode_claimed(reservations);
+        true
+    }
+
+    fn key_lock_mode_reservations(&self, id: usize) -> Option<[bool; MAX_VOICES]> {
+        let mut reservations = [false; MAX_VOICES];
         let mut saw_voice = false;
-        for voice in self
+        for (index, voice) in self
             .voices
-            .iter_mut()
-            .filter(|voice| voice.active && voice.sample_id == id)
+            .iter()
+            .enumerate()
+            .filter(|(_, voice)| voice.active && voice.sample_id == id)
         {
             saw_voice = true;
-            if !voice.stretch.reserve_wet_mode() {
-                return false;
+            if !voice.stretch.wet_mode_available() {
+                return None;
+            }
+            reservations[index] = true;
+        }
+        if !saw_voice {
+            let index = self
+                .voices
+                .iter()
+                .position(|voice| !voice.active && voice.stretch.wet_mode_available())?;
+            reservations[index] = true;
+        }
+        Some(reservations)
+    }
+
+    fn reserve_key_lock_mode_claimed(&mut self, reservations: [bool; MAX_VOICES]) {
+        for (index, voice) in self.voices.iter_mut().enumerate() {
+            if reservations[index] {
+                voice.stretch.reserve_wet_mode_claimed();
             }
         }
-        saw_voice
-            || self
-                .voices
-                .iter_mut()
-                .filter(|voice| !voice.active)
-                .any(|voice| voice.stretch.reserve_wet_mode())
     }
 
     fn cancel_pending_key_lock(&mut self, id: usize) {
@@ -4180,7 +4570,34 @@ impl RtMixer {
         }
     }
 
+    pub(super) fn source_control_revision(
+        &self,
+        key: super::content_placement::ContentKey,
+    ) -> Result<u64, super::pitch_actions::PitchActionReject> {
+        let revision = self.source_control_revisions[key.cell().index()];
+        if revision == u64::MAX {
+            return Err(super::pitch_actions::PitchActionReject::SequenceExhausted);
+        }
+        Ok(revision)
+    }
+
+    pub(super) fn source_control_revision_matches(
+        &self,
+        key: super::content_placement::ContentKey,
+        revision: u64,
+    ) -> bool {
+        self.source_control_revision(key) == Ok(revision)
+    }
+
+    fn advance_source_control_revision(&mut self, id: usize) {
+        if let Some(cell) = self.input_runtime_ownership.callback_cell(id) {
+            let revision = &mut self.source_control_revisions[cell.index()];
+            *revision = revision.saturating_add(1);
+        }
+    }
+
     fn invalidate_source_for_pad(&mut self, id: usize) {
+        self.advance_source_control_revision(id);
         for voice in &mut self.voices {
             if voice.is_playing_sample(id) {
                 voice.invalidate_source_preparation();
@@ -4189,6 +4606,9 @@ impl RtMixer {
     }
 
     fn invalidate_source_for_all(&mut self) {
+        for revision in &mut self.source_control_revisions {
+            *revision = revision.saturating_add(1);
+        }
         for voice in &mut self.voices {
             voice.invalidate_source_preparation();
         }
@@ -4319,9 +4739,19 @@ impl RtMixer {
             return;
         }
 
+        let previous = self.pad_gain_smoothers[id];
         self.pad_gain_db[id] = gain_db;
         let smooth = self.sample_is_active(id);
         self.pad_gain_smoothers[id].set_target_db(gain_db, self.sample_rate_hz, smooth);
+        let current = self.pad_gain_smoothers[id];
+        if current != previous
+            && !previous
+                .constant()
+                .zip(current.constant())
+                .is_some_and(|(a, b)| a.to_bits() == b.to_bits())
+        {
+            self.pad_dsp_chains[id].invalidate_input_intent();
+        }
     }
 
     pub fn set_pad_eq(&mut self, id: usize, low_db: f32, mid_db: f32, high_db: f32) {
@@ -4427,6 +4857,7 @@ impl RtMixer {
         let previous_region = self.sample_bank[id]
             .as_ref()
             .and_then(|sample| self.effective_loop_region(id, sample.frame_count()));
+        self.advance_source_control_revision(id);
         self.pad_loop_start_frame[id] = start_frame;
         self.pad_loop_end_frame[id] = end_frame;
 
@@ -4471,29 +4902,37 @@ impl RtMixer {
         position_s: f64,
         output_frame: Option<u64>,
     ) -> bool {
-        if id >= NUM_SAMPLES || !position_s.is_finite() || position_s < 0.0 || self.channels == 0 {
+        let Some((target_frame, seek_mode)) = self.seek_sample_target(id, position_s) else {
             return false;
+        };
+        if !self.reserve_seek_cut(id) {
+            return false;
+        }
+        self.apply_seek_sample_claimed(id, target_frame, seek_mode, output_frame);
+        true
+    }
+
+    /// Immutable source/reader admission, shared by direct and claimed resident seeks.
+    fn seek_sample_target(&self, id: usize, position_s: f64) -> Option<(usize, ExplicitSeekMode)> {
+        if id >= NUM_SAMPLES || !position_s.is_finite() || position_s < 0.0 || self.channels == 0 {
+            return None;
         }
 
         // A successfully replaced bank can coexist with a retained old voice until retrigger.
         // Seek addresses that voice's immutable source extent, never the future launch source.
-        let Some(voice) = self.voices.iter().find(|voice| voice.is_playing_sample(id)) else {
-            return false;
-        };
-        let Some(sample) = voice.sample.as_ref() else {
-            return false;
-        };
+        let voice = self
+            .voices
+            .iter()
+            .find(|voice| voice.is_playing_sample(id))?;
+        let sample = voice.sample.as_ref()?;
         let sample_frames = sample.frame_count();
         if sample_frames == 0 {
-            return false;
+            return None;
         }
 
-        let Some(loop_region) = voice
+        let loop_region = voice
             .source_loop_region
-            .or_else(|| self.effective_loop_region(id, sample_frames))
-        else {
-            return false;
-        };
+            .or_else(|| self.effective_loop_region(id, sample_frames))?;
         let target_frame = self.source_frame_from_seconds(position_s, sample_frames);
         let seek_mode = explicit_seek_mode_for_frame(target_frame, loop_region, sample_frames);
         if !resident_read_context_available(
@@ -4502,7 +4941,7 @@ impl RtMixer {
             seek_mode,
             self.pad_key_lock_enabled[id],
         ) {
-            return false;
+            return None;
         }
         let stems = if self.sample_bank[id]
             .as_ref()
@@ -4525,12 +4964,18 @@ impl RtMixer {
                 Some(target_frame),
             )
         {
-            return false;
+            return None;
         }
-        if !self.reserve_seek_cut(id) {
-            return false;
-        }
+        Some((target_frame, seek_mode))
+    }
 
+    fn apply_seek_sample_claimed(
+        &mut self,
+        id: usize,
+        target_frame: usize,
+        seek_mode: ExplicitSeekMode,
+        output_frame: Option<u64>,
+    ) {
         // Explicit seek is a discontinuity even if it names the same exact current phase.
         self.pad_dsp_chains[id].reset();
 
@@ -4543,10 +4988,9 @@ impl RtMixer {
         }
 
         if did_seek {
+            self.advance_source_control_revision(id);
             self.pad_playhead_frame[id] = Some(target_frame);
         }
-
-        did_seek
     }
 
     fn seek_cut_available(&self, id: usize) -> bool {
@@ -4562,17 +5006,8 @@ impl RtMixer {
         if !self.seek_cut_available(id) {
             return false;
         }
-        if self.pad_pitch_processing_enabled(id) {
-            for voice in self
-                .voices
-                .iter_mut()
-                .filter(|voice| voice.is_playing_sample(id))
-            {
-                if !voice.stretch.reserve_source_cut() {
-                    return false;
-                }
-            }
-        }
+        let cuts = std::array::from_fn(|index| self.voices[index].is_playing_sample(id));
+        self.apply_source_cuts_claimed(id, cuts, self.pad_pitch_processing_enabled(id), false);
         true
     }
 
@@ -4926,6 +5361,9 @@ impl RtMixer {
         pad_activity: &mut RtRenderPadActivity,
         retirement: &mut impl AudioBufferRetirement,
     ) {
+        if let Some(frame) = output_start_frame {
+            self.observe_dsp_inputs(frame);
+        }
         pad_peaks.fill(f32::EQUILIBRIUM);
         output.fill(Sample::EQUILIBRIUM);
         self.pad_playhead_frame.fill(None);
@@ -4965,6 +5403,9 @@ impl RtMixer {
             }
 
             rendered_frames += chunk_frames;
+        }
+        if let Some(frame) = output_start_frame.and_then(|frame| frame.checked_add(frames as u64)) {
+            self.observe_dsp_inputs(frame);
         }
     }
 
@@ -5017,6 +5458,7 @@ impl RtMixer {
         let ownership = &self.input_runtime_ownership;
         let acknowledgements = &self.current_timing_acknowledgements;
         let prepared_source_epochs = &self.prepared_source_epochs;
+        let source_control_revisions = &self.source_control_revisions;
 
         for (voice_index, voice) in self.voices.iter_mut().enumerate() {
             if !voice.active {
@@ -5137,6 +5579,11 @@ impl RtMixer {
                         selection: current_selection,
                         transition: source_transition,
                     };
+                    let chunk_frames = voice.stretch.retained_source_chunk_limit(
+                        &voice.source_playback,
+                        source_plan,
+                        chunk_frames,
+                    );
                     let next_position = voice.source_playback.position_at(chunk_frames);
                     let current_epoch_cell = ownership
                         .slot_snapshot(voice.sample_id)
@@ -5174,17 +5621,6 @@ impl RtMixer {
                         .map_or(outgoing_stem_slots[voice.sample_id].as_ref(), |view| {
                             view.outgoing.as_ref()
                         });
-                    let history_context = super::source_feed_history::SourceFeedContext::new(
-                        ProductiveSourceBinding::new(
-                            &sample,
-                            sample_rate_hz as u32,
-                            voice.source_timing.accepted,
-                        ),
-                        source_plan.required_read_sets(StemReadSets::new(
-                            prepared_stem_set,
-                            outgoing_stem_set,
-                        )),
-                    );
                     let source_read = voice.stretch.process_source(
                         ProductiveSourceFeed {
                             pitch_intent,
@@ -5202,14 +5638,34 @@ impl RtMixer {
                         chunk_frames,
                         key_lock,
                     );
-                    if source_read {
-                        voice.source_feed_history.record_success(
-                            voice.source_playback,
-                            source_plan,
-                            history_context,
-                            chunk_frames,
-                        );
+                    if let Some(receipt) = source_read {
+                        if let Some(cell) = ownership.callback_cell(voice.sample_id) {
+                            voice.source_control_epoch.record(
+                                output_frame,
+                                chunk_frames,
+                                super::prepared_native_history::SourceReadCheckpoint {
+                                    playback: voice.source_playback,
+                                    plan: source_plan,
+                                },
+                                super::source_feed_history::SourceFeedContext::new(
+                                    ProductiveSourceBinding::new(
+                                        &sample,
+                                        sample_rate_hz as u32,
+                                        voice.source_timing.accepted,
+                                    ),
+                                    source_plan.required_read_sets(StemReadSets::new(
+                                        prepared_stem_set,
+                                        outgoing_stem_set,
+                                    )),
+                                ),
+                                source_control_revisions[cell.index()],
+                            );
+                        } else {
+                            voice.source_control_epoch.gap(output_frame, chunk_frames);
+                        }
+                        voice.source_feed_history.record_read(receipt);
                     } else {
+                        voice.source_control_epoch.gap(output_frame, chunk_frames);
                         voice.source_feed_history.record_gap(chunk_frames);
                     }
                     if pad_key_lock_pending_on[voice.sample_id]
@@ -5278,6 +5734,93 @@ impl RtMixer {
                     let position = voice.source_playback.position();
                     voice.frame_pos = position.frame;
                     voice.explicit_seek_mode = position.seek_mode;
+                    // A paused callback observes controls without reading PCM. Keep
+                    // this stationary proof separate from successful render receipts.
+                    // A pending rate target cannot certify an invented paused glide.
+                    let frozen = voice.frozen_stems.as_ref().filter(|_| {
+                        !bank_sources[voice.sample_id]
+                            .as_ref()
+                            .is_some_and(|bank| bank.same_source(&sample))
+                    });
+                    let prepared_stem_set = prepared_stem_set_for_render(
+                        frozen.map_or_else(
+                            || prepared_stem_slots[voice.sample_id].as_ref(),
+                            |view| view.set.as_ref(),
+                        ),
+                        &sample,
+                        channels,
+                        sample_rate_hz,
+                        sample.frame_count(),
+                        voice.source_timing.accepted,
+                    );
+                    let selection = frozen.map_or_else(
+                        || {
+                            if stem_mix_mode[voice.sample_id] == StemMixMode::AllStems {
+                                prepared_stem_set.map_or_else(
+                                    StemRenderSelection::full_mix,
+                                    |set| {
+                                        StemRenderSelection::for_stems(
+                                            set,
+                                            stem_enabled_mask[voice.sample_id],
+                                        )
+                                    },
+                                )
+                            } else {
+                                StemRenderSelection::full_mix()
+                            }
+                        },
+                        |view| view.selection,
+                    );
+                    let source_plan = SourceReadPlan {
+                        channels,
+                        sample_frames: sample.frame_count(),
+                        frame_pos: position.frame,
+                        loop_region: region,
+                        loop_period: voice.source_playback.loop_period(),
+                        seek_mode: position.seek_mode,
+                        selection,
+                        transition: frozen
+                            .map_or(stem_transitions[voice.sample_id], |view| view.transition),
+                    };
+                    let outgoing_stem_set = frozen
+                        .map_or(outgoing_stem_slots[voice.sample_id].as_ref(), |view| {
+                            view.outgoing.as_ref()
+                        });
+                    let readers = StemReadSets::new(prepared_stem_set, outgoing_stem_set);
+                    if let Some(cell) = ownership.callback_cell(voice.sample_id)
+                        && voice.source_playback.tempo_ratio().to_bits()
+                            == tempo_ratios[voice_index].to_bits()
+                        && super::native_source_coverage::reset_source_feed_available(
+                            &sample,
+                            readers,
+                            sample_rate_hz as u32,
+                            voice.source_timing.accepted,
+                            source_plan,
+                            &voice.source_playback,
+                        )
+                    {
+                        voice.source_control_epoch.record_paused(
+                            output_start_frame,
+                            frames,
+                            super::prepared_native_history::SourceReadCheckpoint {
+                                playback: voice.source_playback,
+                                plan: source_plan,
+                            },
+                            super::source_feed_history::SourceFeedContext::new(
+                                ProductiveSourceBinding::new(
+                                    &sample,
+                                    sample_rate_hz as u32,
+                                    voice.source_timing.accepted,
+                                ),
+                                source_plan.required_read_sets(readers),
+                            ),
+                            source_control_revisions[cell.index()],
+                        );
+                    } else {
+                        voice.source_control_epoch.gap(output_start_frame, frames);
+                    }
+                } else {
+                    voice.source_control_epoch.gap(output_start_frame, frames);
                 }
             }
             pad_playhead_frame[voice.sample_id] = Some(voice.frame_pos);

@@ -1,7 +1,9 @@
 //! Immutable selected-pair capture and unpublished target ownership for Native Copy.
 //! Only the Copy callback grants selection/source authority; these helpers do no enqueueing.
 
-use super::{CommittedStemSetTicket, SelectedStemIdentity, SelectionOwner};
+use super::{
+    CommittedStemSetTicket, PendingResidency, SelectedStemIdentity, SelectionOwner, SelectionPermit,
+};
 use crate::audio_engine::AudioEngine;
 use crate::audio_engine::cold_store::CommittedColdLease;
 use crate::audio_engine::constant_timing::AcceptedTimingProjection;
@@ -64,6 +66,70 @@ pub(in crate::audio_engine) struct PreparedCopySelection {
     source_publication: PreparedSourcePermit,
 }
 
+/// Only an already accepted Native selection can provide fresh recovery custody.
+/// Registration-only FullMix retains the pair owner even when it owns no component PCM.
+#[derive(Clone)]
+pub(in crate::audio_engine) struct RecoveredSelectionCustody {
+    selection: Arc<SelectionOwner>,
+    components: Option<StemOwner>,
+    source_lease: CommittedColdLease,
+    binding: InputPadBinding,
+    source_epoch: Arc<AtomicU64>,
+    captured_source_epoch: u64,
+}
+
+impl RecoveredSelectionCustody {
+    /// The outer Bank guard owns placement, request and selection-domain fences.
+    /// Its own Copy reservation must not invalidate these retained source owners.
+    pub(in crate::audio_engine) fn current_reserved(&self) -> bool {
+        let owner = &self.selection;
+        owner.current()
+            && !self.source_lease.assignment_retired()
+            && !owner.pair.source_lease.assignment_retired()
+            && self.source_epoch.load(Ordering::Acquire) == self.captured_source_epoch
+            && owner.ownership.authority_current(owner.id, self.binding)
+            && owner
+                .ownership
+                .binding_window_current(owner.id, self.binding)
+            && owner
+                .ownership
+                .binding_source_generation(owner.id, self.binding)
+                == Some(owner.source_generation)
+            && self.components.as_ref().is_none_or(|components| {
+                components.set.publication.status() == "accepted"
+                    && components.set.publication.current()
+            })
+    }
+
+    pub(in crate::audio_engine) fn selected(&self) -> SelectedStemIdentity {
+        SelectedStemIdentity {
+            identity: *self.selection.identity,
+            source_generation: self.selection.source_generation,
+            epoch: self.selection.expected,
+        }
+    }
+
+    pub(in crate::audio_engine) fn permit(&self) -> SelectionPermit {
+        self.selection.rt_permit()
+    }
+
+    pub(in crate::audio_engine) fn components(&self) -> Option<PreparedStemSet> {
+        self.components.as_ref().map(|owner| owner.set.clone())
+    }
+
+    pub(in crate::audio_engine) fn source_version_hash(&self) -> u64 {
+        source_version_hash(&self.selection.source_version)
+    }
+}
+
+struct CapturedSelectionSource {
+    sample: SampleBuffer,
+    source_lease: CommittedColdLease,
+    source_version: String,
+    root: PathBuf,
+    generation: u64,
+}
+
 fn hex(bytes: &[u8; 32]) -> String {
     bytes.iter().map(|byte| format!("{byte:02x}")).collect()
 }
@@ -86,17 +152,10 @@ fn sample_matches_binding(sample: &SampleBuffer, binding: InputPadBinding) -> bo
 
 /// The caller holds the existing request gate. No request lock, publication,
 /// proposal, selection epoch or source-authority advancement is performed here.
-pub(in crate::audio_engine) fn capture_copy_selection(
+fn capture_selection_source(
     engine: &AudioEngine,
     binding: &InputRuntimePadBinding,
-    expected_descriptor: Option<&str>,
-) -> Result<Option<CapturedCopySelection>, String> {
-    let Some(expected_descriptor) = expected_descriptor else {
-        return Ok(None);
-    };
-    if expected_descriptor.is_empty() || expected_descriptor.len() > 4096 {
-        return Err("copy selected pair reference is invalid".into());
-    }
+) -> Result<CapturedSelectionSource, String> {
     let id = binding.id;
     if id >= NUM_SAMPLES
         || !Arc::ptr_eq(&binding.ownership, &engine.input_runtime_ownership)
@@ -152,6 +211,36 @@ pub(in crate::audio_engine) fn capture_copy_selection(
         relative.to_string_lossy().replace('\\', "/"),
         hex(digest),
     );
+    Ok(CapturedSelectionSource {
+        sample,
+        source_lease,
+        source_version,
+        root,
+        generation,
+    })
+}
+
+/// The caller holds the existing request gate. Copy keeps its historical worker
+/// fallback when a requested canonical pair has not yet been accepted by Native.
+pub(in crate::audio_engine) fn capture_copy_selection(
+    engine: &AudioEngine,
+    binding: &InputRuntimePadBinding,
+    expected_descriptor: Option<&str>,
+) -> Result<Option<CapturedCopySelection>, String> {
+    let Some(expected_descriptor) = expected_descriptor else {
+        return Ok(None);
+    };
+    if expected_descriptor.is_empty() || expected_descriptor.len() > 4096 {
+        return Err("copy selected pair reference is invalid".into());
+    }
+    let CapturedSelectionSource {
+        sample,
+        source_lease,
+        source_version,
+        root,
+        generation,
+    } = capture_selection_source(engine, binding)?;
+    let id = binding.id;
     let owners = engine
         .resident_stem_cache
         .lock()
@@ -204,6 +293,231 @@ pub(in crate::audio_engine) fn capture_copy_selection(
         identity,
         components,
     }))
+}
+
+fn recovered_residency_unsettled(pending: &PendingResidency) -> Result<bool, String> {
+    // A poisoned settlement gate cannot be interpreted as proof that it is idle.
+    let failed_settlement = pending
+        .status
+        .failed_settlement
+        .lock()
+        .map_err(|_| "recovered selected pair settlement lock poisoned")?;
+    Ok(matches!(
+        pending.status.publication.status(),
+        "captured" | "pending" | "adopting"
+    ) || (pending.status.publication.status() == "accepted"
+        && pending.status.effective.load(Ordering::Acquire) == 1)
+        || (pending.status.failure_pending.load(Ordering::Acquire)
+            && !pending.status.failure_settled.load(Ordering::Acquire))
+        || *failed_settlement)
+}
+
+fn ensure_recovered_selection_settled(cache: &ResidentStemCache) -> Result<(), String> {
+    if cache.ordinary_publication_pending() {
+        return Err("recovered selected pair has an ordinary publication pending".into());
+    }
+    let state = &cache.committed;
+    if let Some(registration) = &state.registration
+        && (matches!(
+            registration.publication.status(),
+            "captured" | "pending" | "adopting"
+        ) || (registration.publication.status() == "accepted"
+            && registration.owner.current()
+            && !state
+                .accepted
+                .as_ref()
+                .is_some_and(|owner| Arc::ptr_eq(owner, &registration.owner))))
+    {
+        return Err("recovered selected pair registration is unsettled".into());
+    }
+    for pending in [
+        state.proposal.as_ref(),
+        state.pending.as_ref(),
+        state.policy_proposal.as_ref(),
+        state.policy_pending.as_ref(),
+    ]
+    .into_iter()
+    .flatten()
+    {
+        if recovered_residency_unsettled(pending)? {
+            return Err("recovered selected pair residency is unsettled".into());
+        }
+    }
+    Ok(())
+}
+
+fn component_source_current(engine: &AudioEngine, id: usize, owner: &StemOwner) -> bool {
+    let reference = SampleBuffer {
+        channels: owner.set.channels,
+        samples: owner.set.reference_samples.clone(),
+        residency: owner.set.reference_residency.clone(),
+    };
+    engine
+        .input_runtime_ownership
+        .source_generation(id, &reference, owner.set.sample_rate_hz)
+        .is_some()
+        && owner.set.publication.current()
+}
+
+fn recovered_root_matches(root: &std::path::Path, held: &std::path::Path) -> bool {
+    // Prepared selections keep the caller's spelling; Cold custody retains its
+    // guarded canonical root (including Windows' extended prefix). Resolve only
+    // off realtime, preserving exact source, descriptor and reader ownership.
+    root == held || std::fs::canonicalize(root).is_ok_and(|canonical| canonical == held)
+}
+
+/// Read-only custody for an already restored source. The caller holds the request
+/// gate, reconciles ordinary owners first and captures the six selection fences.
+/// No missing or mismatched Native selection can fall back to disk preparation.
+pub(in crate::audio_engine) fn capture_recovered_selection(
+    engine: &AudioEngine,
+    binding: &InputRuntimePadBinding,
+    expected_descriptor: Option<&str>,
+    expected_source_version: Option<&str>,
+) -> Result<Option<RecoveredSelectionCustody>, String> {
+    if expected_descriptor
+        .is_some_and(|descriptor| descriptor.is_empty() || descriptor.len() > 4096)
+    {
+        return Err("recovered selected pair reference is invalid".into());
+    }
+    let source = capture_selection_source(engine, binding)?;
+    if expected_source_version.is_some_and(|expected| expected != source.source_version.as_str()) {
+        return Err("recovered selected pair source version differs".into());
+    }
+    let id = binding.id;
+    let owners = engine
+        .resident_stem_cache
+        .lock()
+        .map_err(|_| "recovered selected pair ownership lock poisoned")?;
+    let cache = &owners[id];
+    ensure_recovered_selection_settled(cache)?;
+    let selection = cache
+        .committed
+        .accepted
+        .as_ref()
+        .filter(|owner| owner.current());
+    let Some(expected_descriptor) = expected_descriptor else {
+        if selection.is_some()
+            || cache
+                .accepted
+                .as_ref()
+                .is_some_and(|components| component_source_current(engine, id, components))
+        {
+            return Err("recovered source unexpectedly retains a live selected pair".into());
+        }
+        if !binding.current() {
+            return Err("recovered source changed during selection capture".into());
+        }
+        return Ok(None);
+    };
+    let selection = selection
+        .filter(|selection| {
+            selection.id == id
+                && selection.source_generation == source.generation
+                && selection.source_version == source.source_version
+                && recovered_root_matches(&selection.pair.root, &source.root)
+                && selection.pair.descriptor_reference == expected_descriptor
+                && selection.pair.reader.descriptor_reference == expected_descriptor
+                && selection.pair.reader.descriptor.stem_set_identity == hex(&selection.identity)
+                && !selection.pair.source_lease.assignment_retired()
+                && selection.pair.source_lease.assignment_id()
+                    == source.source_lease.assignment_id()
+        })
+        .cloned()
+        .ok_or("recovered selected pair lacks its exact accepted Native custody")?;
+    let components = match cache.accepted.as_ref() {
+        Some(components) if component_source_current(engine, id, components) => {
+            if components.set.publication.status() != "accepted"
+                || components.source_version != source.source_version
+                || *components.set.complete_set_identity != *selection.identity
+                || components.set.source_version_hash != source_version_hash(&source.source_version)
+                || !crate::audio_engine::source_reader::prepared_stem_set_matches_sample(
+                    &components.set,
+                    &source.sample,
+                    source.sample.channels,
+                    binding.binding.sample_rate_hz as f32,
+                    source.sample.frame_count(),
+                )
+                || components.pair.as_ref().is_none_or(|pair| {
+                    !recovered_root_matches(&pair.root, &source.root)
+                        || pair.descriptor_reference != expected_descriptor
+                        || pair.reader.descriptor.stem_set_identity != hex(&selection.identity)
+                        || pair.source_lease.assignment_retired()
+                        || pair.source_lease.assignment_id() != source.source_lease.assignment_id()
+                })
+            {
+                return Err(
+                    "recovered selected components differ from accepted pair custody".into(),
+                );
+            }
+            Some(components.clone())
+        }
+        _ => None,
+    };
+    let source_epoch = engine
+        .prepared_source_epoch(id)
+        .map_err(|error| error.to_string())?
+        .clone();
+    let captured_source_epoch = source_epoch.load(Ordering::Acquire);
+    let custody = RecoveredSelectionCustody {
+        selection,
+        components,
+        source_lease: source.source_lease,
+        binding: binding.binding,
+        source_epoch,
+        captured_source_epoch,
+    };
+    if !binding.current() || !custody.current_reserved() {
+        return Err("recovered selected pair changed during custody capture".into());
+    }
+    Ok(Some(custody))
+}
+
+/// Empty recovery permits historical noncurrent pair bookkeeping after Unload.
+/// The caller separately fences ordinary WindowWork, source loading and proposals;
+/// this query checks the accessible committed and ordinary stem-publication owners.
+pub(in crate::audio_engine) fn capture_recovered_empty_selection(
+    engine: &AudioEngine,
+    id: usize,
+) -> Result<(), String> {
+    let snapshot = engine
+        .input_runtime_ownership
+        .slot_snapshot(id)
+        .filter(|snapshot| snapshot.lifetime() == 0)
+        .ok_or("recovered empty selected-pair placement is unavailable")?;
+    if !engine
+        .input_runtime_ownership
+        .source_cell_empty(snapshot.cell())
+    {
+        return Err("recovered empty selected-pair source is not retired".into());
+    }
+    let owners = engine
+        .resident_stem_cache
+        .lock()
+        .map_err(|_| "recovered empty selected-pair ownership lock poisoned")?;
+    let cache = owners
+        .get(id)
+        .ok_or("recovered empty selected-pair slot is invalid")?;
+    ensure_recovered_selection_settled(cache)?;
+    if cache
+        .committed
+        .accepted
+        .as_ref()
+        .is_some_and(|owner| owner.current())
+        || cache
+            .accepted
+            .as_ref()
+            .is_some_and(|owner| component_source_current(engine, id, owner))
+        || !engine
+            .input_runtime_ownership
+            .slot_snapshot_current(snapshot)
+        || !engine
+            .input_runtime_ownership
+            .source_cell_empty(snapshot.cell())
+    {
+        return Err("recovered empty slot retains live selected-pair custody".into());
+    }
+    Ok(())
 }
 
 /// Allocate a future token number only. The actual target atoms remain unchanged.

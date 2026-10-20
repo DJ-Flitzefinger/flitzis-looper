@@ -28,7 +28,6 @@ from flitzis_looper.constants import (
     PAD_GAIN_DB_DEFAULT,
     PAD_GAIN_FINE_STEP_DB,
 )
-from flitzis_looper.input_mapping.actions import PitchCcMode, describe_pitch_rejection
 from flitzis_looper.key_intent import MusicalKey
 from flitzis_looper.ui.constants import (
     CONTROL_ACTIVE_BORDER_RGBA,
@@ -52,6 +51,7 @@ from flitzis_looper.ui.render.pitch_keyboard import format_extra_shift
 if TYPE_CHECKING:
     from flitzis_looper.controller.committed_stem_residency import StemResidencyStatus
     from flitzis_looper.input_mapping import PadEqBand
+    from flitzis_looper.input_mapping.actions import PitchCcMode
     from flitzis_looper.key_intent import PadKeyIntent
     from flitzis_looper.models import StemMixMode
     from flitzis_looper.ui.context import SourceKeyEditor, UiContext
@@ -365,10 +365,6 @@ def _render_pad_header(ctx: UiContext, info: _SidebarPadInfo) -> None:
         filename = ctx.state.pads.label(info.pad_id) or "-"
         _labeled_wrapped_value_row("Filename", filename, avail_x=info.avail_x)
 
-    load_error = ctx.state.pads.load_error(info.pad_id)
-    if load_error:
-        imgui.text_wrapped(f"Load failed: {load_error}")
-
 
 def _render_bpm(ctx: UiContext, info: _SidebarPadInfo) -> None:
     effective_bpm = ctx.state.pads.effective_bpm(info.pad_id) if info.is_loaded else None
@@ -428,7 +424,7 @@ def _apply_source_key(ctx: UiContext, editor: SourceKeyEditor, key: str | None) 
             else:
                 ctx.audio.pads.set_manual_key(editor.pad_id, key)
         except (RuntimeError, ValueError) as error:
-            ctx.ui.source_key.error = str(error)
+            ctx.ui.source_key.report_error(str(error))
             return
     ctx.ui.source_key.close()
     imgui.close_current_popup()
@@ -436,8 +432,6 @@ def _apply_source_key(ctx: UiContext, editor: SourceKeyEditor, key: str | None) 
 
 def _render_source_key_choices(ctx: UiContext, editor: SourceKeyEditor) -> None:
     imgui.text("Source key metadata")
-    if ctx.ui.source_key.error is not None:
-        imgui.text_wrapped(f"Source correction unavailable: {ctx.ui.source_key.error}")
     imgui.text("Major / Minor")
     minor_column = imgui.get_cursor_pos_x() + imgui.calc_text_size("Major").x + 24
     for root in range(12):
@@ -512,17 +506,9 @@ def _render_key(ctx: UiContext, info: _SidebarPadInfo) -> None:
         imgui.text_colored(TEXT_MUTED_RGBA, "Nominal result")
         imgui.text_wrapped(f"{result.label} / {format_extra_shift(intent.extra_shift)} from base")
     imgui.text_wrapped("Notes refer to the key root. With Key Lock OFF, speed also changes pitch.")
-    phase, reason = ctx.state.pads.pitch_status(info.pad_id)
-    if reason:
-        imgui.text_wrapped(f"Pitch choice unavailable: {describe_pitch_rejection(reason)}")
-    elif phase in {"pending", "preparing", "waiting"}:
+    phase, _reason = ctx.state.pads.pitch_status(info.pad_id)
+    if phase in {"pending", "preparing", "waiting"}:
         imgui.text_colored(TEXT_MUTED_RGBA, "Preparing pitch choice…")
-    mapping_error = ctx.state.session.input_mapping_error
-    if mapping_error and mapping_error.startswith("Pitch choice"):
-        imgui.text_wrapped(mapping_error)
-    analysis_error = ctx.state.pads.analysis_error(info.pad_id)
-    if analysis_error:
-        imgui.text_wrapped(f"Analysis failed: {analysis_error}")
 
 
 def _render_transposition(ctx: UiContext, info: _SidebarPadInfo, intent: PadKeyIntent) -> None:
@@ -1104,12 +1090,6 @@ def _render_stem_status(ctx: UiContext, info: _SidebarPadInfo) -> None:
         )
         return
 
-    error = ctx.state.stems.stem_generation_error(info.pad_id)
-    if error:
-        _labeled_value_row("Stems", "Error", avail_x=info.avail_x)
-        imgui.text_wrapped(error)
-        return
-
     if ctx.state.stems.stems_available(info.pad_id):
         _labeled_value_row("Stems", "Available", avail_x=info.avail_x)
         return
@@ -1129,9 +1109,9 @@ def _pending_stem_audio_description(
     if status.demand == "deferred":
         return "Stems waiting for resident PCM allowance"
     if status.registration == "rejected" and not confirmed_full_mix:
-        return "Audio: stem selection rejected"
+        return "Audio mode unconfirmed"
     if status.attempt_failed or status.effective == "rejected" or status.residency == "rejected":
-        return "Audio: stem switch rejected"
+        return "Audio mode unconfirmed"
     if status.registration != "accepted" and not confirmed_full_mix:
         return "Audio: stem selection pending"
     return None
@@ -1195,8 +1175,6 @@ def _render_stem_mix_mode(ctx: UiContext, info: _SidebarPadInfo) -> None:
             imgui.text_colored(
                 TEXT_MUTED_RGBA, _stem_audio_description(status, previous_set=previous_set)
             )
-            if status.demand_error:
-                imgui.text_wrapped(status.demand_error)
         finally:
             imgui.pop_text_wrap_pos()
 
@@ -1223,9 +1201,6 @@ def _render_generate_stems(ctx: UiContext, pad_id: int) -> None:
 
     if blocker is not None and not is_running:
         imgui.text_colored(TEXT_MUTED_RGBA, blocker)
-    diagnostic = ctx.state.stems.stem_generation_diagnostic(pad_id)
-    if diagnostic is not None and diagnostic != blocker:
-        imgui.text_colored(TEXT_MUTED_RGBA, diagnostic)
 
 
 def _render_stem_controls(ctx: UiContext, info: _SidebarPadInfo) -> None:

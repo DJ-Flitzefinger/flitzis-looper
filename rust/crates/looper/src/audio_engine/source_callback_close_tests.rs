@@ -143,6 +143,7 @@ impl Fixture {
         };
         self.producer
             .push(ControlMessage::LoadColdSample {
+                initial_mix: None,
                 publication,
                 id: 0,
                 sample,

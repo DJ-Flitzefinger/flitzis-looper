@@ -78,7 +78,7 @@ if not "%APP_EXIT_CODE%"=="0" goto failed
 :verify_profile
 if not exist ".venv\Scripts\python.exe" goto missing_environment
 set "APP_STEP=checking the installed %APP_PROFILE% native build"
-call ".venv\Scripts\python.exe" -c "import sys; import flitzis_looper_audio as native; profile = getattr(native, 'native_build_profile', lambda: 'unknown')(); assert hasattr(getattr(native, 'CapturedPitchAction', None), 'resets_key_correction'), 'Native piano API requires a current build'; print('Native build profile: ' + profile); sys.exit(0 if profile == sys.argv[1] else 3)" "%APP_PROFILE_KEY%"
+call ".venv\Scripts\python.exe" -c "import sys; import flitzis_looper_audio as native; profile = getattr(native, 'native_build_profile', lambda: 'unknown')(); assert hasattr(getattr(native, 'CapturedPitchAction', None), 'resets_key_correction'), 'Native piano API requires a current build'; assert all(callable(getattr(getattr(native, 'AudioEngine', None), name, None)) for name in ('audio_stream_failed', 'quiesce_failed_audio_stream')), 'Native recording lifecycle API requires a current build'; print('Native build profile: ' + profile); sys.exit(0 if profile == sys.argv[1] else 3)" "%APP_PROFILE_KEY%"
 set "APP_EXIT_CODE=%errorlevel%"
 if not "%APP_EXIT_CODE%"=="0" goto profile_failed
 if defined APP_CHECK_ONLY (

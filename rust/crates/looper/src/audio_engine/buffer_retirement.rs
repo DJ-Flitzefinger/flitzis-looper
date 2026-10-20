@@ -17,6 +17,8 @@ const RETIRED_AUDIO_BUFFER_BACKLOG_CAPACITY: usize = 128;
 // ownership across the thread boundary.
 #[allow(dead_code)]
 pub(crate) enum RetiredAudioBuffer {
+    MixCapture(Box<super::mix_capture::CaptureRt>),
+    CapturePublication(Arc<super::mix_capture::publication::CapturePublication>),
     Sample(SampleBuffer),
     ColdAdoption(Arc<std::sync::atomic::AtomicU8>),
     PreparedStems(PreparedStemSet),
@@ -28,6 +30,9 @@ pub(crate) enum RetiredAudioBuffer {
     ResidentSeekCapture(Arc<super::resident_seek::ResidentSeekCapture>),
     CommittedStemWork(Box<super::committed_stem_residency::CommittedStemRtWork>),
     PadCopy(Box<super::pad_copy::PadCopyRtWork>),
+    BankMutation(Box<super::pad_copy::bank::BankMutationRtWork>),
+    BankMutationPublication(Arc<super::pad_copy::bank::BankMutationPublication>),
+    RecoveredBankProbe(Box<super::pad_copy::bank::recovery::RecoveredBankProbe>),
     PadPair(Box<super::pad_pair::PadPairRtWork>),
     HoldAction(Box<super::hold_action::HoldActionRtWork>),
     PitchAction(Box<super::pitch_actions::PitchActionWork>),
@@ -41,6 +46,36 @@ pub(crate) enum RetiredAudioBuffer {
 }
 
 pub(crate) trait AudioBufferRetirement {
+    #[cfg(test)]
+    fn retire_mix_capture(&mut self, work: Box<super::mix_capture::CaptureRt>) {
+        drop(work);
+    }
+    #[cfg(not(test))]
+    fn retire_mix_capture(&mut self, work: Box<super::mix_capture::CaptureRt>);
+    #[cfg(test)]
+    fn retire_capture_publication(
+        &mut self,
+        publication: Arc<super::mix_capture::publication::CapturePublication>,
+    ) {
+        drop(publication);
+    }
+    #[cfg(not(test))]
+    fn retire_capture_publication(
+        &mut self,
+        publication: Arc<super::mix_capture::publication::CapturePublication>,
+    );
+    #[cfg(test)]
+    fn retire_recovered_bank_probe(
+        &mut self,
+        work: Box<super::pad_copy::bank::recovery::RecoveredBankProbe>,
+    ) {
+        drop(work);
+    }
+    #[cfg(not(test))]
+    fn retire_recovered_bank_probe(
+        &mut self,
+        work: Box<super::pad_copy::bank::recovery::RecoveredBankProbe>,
+    );
     #[cfg(test)]
     fn retire_global_start_target(
         &mut self,
@@ -124,6 +159,24 @@ pub(crate) trait AudioBufferRetirement {
     fn retire_source_publication(
         &mut self,
         publication: super::input_runtime_binding::SourcePublication,
+    );
+    #[cfg(test)]
+    fn retire_bank_mutation(&mut self, work: Box<super::pad_copy::bank::BankMutationRtWork>) {
+        drop(work);
+    }
+    #[cfg(not(test))]
+    fn retire_bank_mutation(&mut self, work: Box<super::pad_copy::bank::BankMutationRtWork>);
+    #[cfg(test)]
+    fn retire_bank_publication(
+        &mut self,
+        work: Arc<super::pad_copy::bank::BankMutationPublication>,
+    ) {
+        drop(work);
+    }
+    #[cfg(not(test))]
+    fn retire_bank_publication(
+        &mut self,
+        work: Arc<super::pad_copy::bank::BankMutationPublication>,
     );
     #[cfg(test)]
     fn retire_pad_copy(&mut self, work: Box<super::pad_copy::PadCopyRtWork>) {
@@ -266,6 +319,21 @@ impl RtAudioBufferRetirement {
 }
 
 impl AudioBufferRetirement for RtAudioBufferRetirement {
+    fn retire_mix_capture(&mut self, work: Box<super::mix_capture::CaptureRt>) {
+        self.retire_buffer(RetiredAudioBuffer::MixCapture(work));
+    }
+    fn retire_capture_publication(
+        &mut self,
+        publication: Arc<super::mix_capture::publication::CapturePublication>,
+    ) {
+        self.retire_buffer(RetiredAudioBuffer::CapturePublication(publication));
+    }
+    fn retire_recovered_bank_probe(
+        &mut self,
+        work: Box<super::pad_copy::bank::recovery::RecoveredBankProbe>,
+    ) {
+        self.retire_buffer(RetiredAudioBuffer::RecoveredBankProbe(work));
+    }
     fn retire_global_start_target(
         &mut self,
         owner: super::captured_global_start::CapturedGlobalStart,
@@ -307,6 +375,15 @@ impl AudioBufferRetirement for RtAudioBufferRetirement {
         publication: super::input_runtime_binding::SourcePublication,
     ) {
         self.retire_buffer(RetiredAudioBuffer::SourcePublication(publication));
+    }
+    fn retire_bank_mutation(&mut self, work: Box<super::pad_copy::bank::BankMutationRtWork>) {
+        self.retire_buffer(RetiredAudioBuffer::BankMutation(work));
+    }
+    fn retire_bank_publication(
+        &mut self,
+        work: Arc<super::pad_copy::bank::BankMutationPublication>,
+    ) {
+        self.retire_buffer(RetiredAudioBuffer::BankMutationPublication(work));
     }
     fn retire_pad_copy(&mut self, work: Box<super::pad_copy::PadCopyRtWork>) {
         self.retire_buffer(RetiredAudioBuffer::PadCopy(work));
@@ -370,6 +447,24 @@ pub(crate) struct AudioBufferRetirementWorker {
 }
 
 impl AudioBufferRetirementWorker {
+    fn join(&mut self) -> std::io::Result<()> {
+        self.running.store(false, Ordering::Release);
+        let Some(join_handle) = self.join_handle.take() else {
+            return Ok(());
+        };
+        join_handle.join().map_err(|_| {
+            std::io::Error::other(
+                "audio retirement worker panicked; callback quiescence is unverified",
+            )
+        })
+    }
+
+    /// Only a successful join verifies the close queue and complete callback image.
+    /// The caller has already closed its actual stream/callback owner off realtime.
+    pub(crate) fn join_checked(mut self) -> std::io::Result<()> {
+        self.join()
+    }
+
     fn spawn<T: Send + 'static>(
         mut consumer: Consumer<RetiredAudioBuffer>,
         mut callback_close: Option<Consumer<Box<T>>>,
@@ -498,11 +593,19 @@ pub(super) fn create_audio_buffer_retirement_with_callback_paused<T: Send + 'sta
 
 impl Drop for AudioBufferRetirementWorker {
     fn drop(&mut self) {
-        self.running.store(false, Ordering::Release);
-        if let Some(join_handle) = self.join_handle.take() {
-            let _ = join_handle.join();
-        }
+        let _ = self.join();
     }
+}
+
+/// The productive stream and hardware-free callback owner use the same close barrier.
+/// Returning successfully verifies actual close handoff and off-RT image destruction;
+/// it does not join the independent capture file writer.
+pub(crate) fn close_callback_and_join<T>(
+    callback_owner: T,
+    worker: AudioBufferRetirementWorker,
+) -> std::io::Result<()> {
+    drop(callback_owner);
+    worker.join_checked()
 }
 
 #[cfg(test)]

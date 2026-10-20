@@ -192,6 +192,7 @@ fn completed_qm_during_unrelated_pending_returns_original_evidence_without_early
     assert_unpublished(&engine, &ticket, 0);
     let timing = assessment(&ticket);
     let (producer, mut consumer) = super::tests::queue(1);
+    let engine = super::tests::with_control_producer(engine, &producer);
     let error = publish_record(&engine, &producer, &ticket, timing.clone(), false).unwrap_err();
     Python::attach(|py| assert!(error.is_instance_of::<PyBlockingIOError>(py)));
     assert_unpublished(&engine, &ticket, 0);
@@ -244,6 +245,7 @@ fn pending_after_completed_assessment_before_claim_does_not_consume_original_ado
     let pending = held.clone();
     let ownership = engine.input_runtime_ownership.clone();
     let (producer, mut consumer) = super::tests::queue(1);
+    let engine = super::tests::with_control_producer(engine, &producer);
     let error = with_before_publication_claim(
         move || *pending.borrow_mut() = Some(PendingWriter::hold(ownership)),
         || publish_record(&engine, &producer, &ticket, timing.clone(), false),
@@ -449,6 +451,7 @@ fn stale_dispatched_publication_is_value_error_during_pending_and_never_retry_au
         .commit();
     let held = PendingWriter::hold(engine.input_runtime_ownership.clone());
     let (producer, mut consumer) = super::tests::queue(1);
+    let engine = super::tests::with_control_producer(engine, &producer);
     let error = publish_record(&engine, &producer, &ticket, timing, false).unwrap_err();
     Python::attach(|py| {
         assert!(error.is_instance_of::<PyValueError>(py));

@@ -19,10 +19,31 @@ pub(crate) fn decode_audio_snapshot_streamed(
     output_rate_hz: u32,
     maximum: usize,
     cancelled: &impl Fn() -> bool,
-    mut progress: impl FnMut(SampleLoadProgress),
+    progress: impl FnMut(SampleLoadProgress),
 ) -> Result<DecodedDiskAudio, SampleLoadError> {
     check_cancelled(cancelled)?;
-    let (mut format, params, mut descriptor) = probe_snapshot(file, hint_path)?;
+    decode_probed_audio_streamed(
+        probe_snapshot(file, hint_path)?,
+        decoder_path,
+        output_rate_hz,
+        maximum,
+        cancelled,
+        progress,
+    )
+}
+
+fn decode_probed_audio_streamed(
+    (mut format, params, mut descriptor): (
+        Box<dyn FormatReader>,
+        CodecParameters,
+        DecoderDescriptor,
+    ),
+    decoder_path: &Path,
+    output_rate_hz: u32,
+    maximum: usize,
+    cancelled: &impl Fn() -> bool,
+    mut progress: impl FnMut(SampleLoadProgress),
+) -> Result<DecodedDiskAudio, SampleLoadError> {
     let track_id = descriptor.default_track_id;
     let (max_packet_frames, max_packet_channels) = decoder_dimensions(&params)?;
     if max_packet_channels > MAX_CHANNELS {
@@ -60,11 +81,11 @@ pub(crate) fn decode_audio_snapshot_streamed(
             {
                 break;
             }
-            Err(DecoderError::DecodeError(_)) => {
+            Err(error @ DecoderError::DecodeError(_)) => {
                 packet_errors += 1;
                 descriptor.skipped_packets += 1;
                 if packet_errors > MAX_PACKET_ERRORS {
-                    break;
+                    return Err(SampleLoadError::Decode(error));
                 }
                 continue;
             }
@@ -422,3 +443,7 @@ pub(crate) fn prepare_playback_streamed(
 #[cfg(test)]
 #[path = "stream_tests.rs"]
 mod tests;
+
+#[cfg(test)]
+#[path = "stream_error_tests.rs"]
+mod error_tests;

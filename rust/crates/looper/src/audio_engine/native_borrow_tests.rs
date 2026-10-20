@@ -721,3 +721,6 @@ fn public_native_background_borrow_full_queue_preserves_unpublished_ticket() {
     });
     acknowledge(&engine, &mut callback, &ticket);
 }
+
+#[path = "constant_timing_shutdown_completion_tests.rs"]
+mod constant_timing_shutdown_completion_tests;

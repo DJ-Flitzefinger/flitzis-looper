@@ -45,6 +45,12 @@ pub(crate) struct PairControlProjection {
 }
 
 impl PairControlProjection {
+    pub(crate) fn authority_revision(self) -> u64 {
+        self.authority
+    }
+    pub(crate) fn runtime_revision(self) -> u64 {
+        self.runtime
+    }
     pub(crate) fn placement(self) -> SlotSnapshot {
         self.placement
     }

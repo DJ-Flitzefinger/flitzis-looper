@@ -321,7 +321,7 @@ fn action_identity(action: &CapturedPitchAction) -> ActionIdentity {
 }
 
 /// Independent V2 selected source: serialized 1010 is canonical components 1001.
-/// The explicit 4096-frame loop and r=1 provide the pre-Normal history at zero.
+/// The explicit 4096-frame loop and r=1 define all physical PCM at/after E.
 fn selected_v2_feed(components: &[SampleBuffer; 4], start: u64, frames: usize) -> [Vec<f32>; 2] {
     std::array::from_fn(|channel| {
         (start..start + frames as u64)
@@ -346,12 +346,21 @@ fn fresh_suffix(
 ) {
     let pitch = 2.0_f64.powf(7.0 / 12.0);
     let mut raw = ControllerRawNative::new_with_pitch(pitch, true);
-    raw.render(&selected_v2_feed(components, 0, 4096));
+    // This fresh piano attack owns no predecessor PCM before E. Warm the raw
+    // Native independently with silence, preserving its single adapter lead;
+    // compare every emitted sample from E rather than cropping to first sound.
+    let silent_history = std::array::from_fn(|_| vec![0.0; 4096]);
+    assert!(
+        raw.render(&silent_history)
+            .iter()
+            .all(|value| *value == 0.0)
+    );
     let mut filter = controller_filter();
     let start = playback.frame;
     assert_eq!(start, action.execution_target());
     let generation = voice(&playback.callback.mixer).generation;
     let mut consumed = 0_u64;
+    let mut audible = false;
     for frames in [1_usize, 31, 137, 511, 777, 96, 512, 1, 257, 4096] {
         let expected_raw = raw.render(&selected_v2_feed(components, consumed, frames));
         let mut output = vec![0.0; frames * 2];
@@ -368,6 +377,7 @@ fn fresh_suffix(
             &mut callback.retirement,
         );
         callback.transport.advance_by_rendered_frames(frames);
+        audible |= output.iter().any(|sample| sample.abs() > 1.0e-6);
         for (actual, raw) in output.chunks_exact(2).zip(expected_raw.chunks_exact(2)) {
             filter.begin_frame();
             for channel in 0..2 {
@@ -456,6 +466,10 @@ fn fresh_suffix(
     assert!(
         consumed > 4096,
         "productive suffix crosses its own complete selected loop"
+    );
+    assert!(
+        audible,
+        "the independently compared full attack must become audible"
     );
 }
 
@@ -586,6 +600,11 @@ fn history(
     controller_python(locals, "assert project.pad_key_intent[0].base_shift == 12");
     let old_attack = capture_attack(playback, consumer, locals, engine, &clock, "old_attack");
     let original = action_identity(&old_attack);
+    let original_source_revision = playback
+        .callback
+        .mixer
+        .source_control_revision(old_attack.content_key())
+        .unwrap();
     controller_python(
         locals,
         r#"
@@ -630,6 +649,16 @@ old_attack_snapshot = (old_attack.accepted_sequence, old_attack.received_at_ns,
         Some((engine, &old)),
     );
     assert_eq!(action_identity(&old_attack), original);
+    // The real V2 selection advanced the exact source-control fence captured
+    // by this V1 retrigger. That guard precedes candidate matching at E.
+    assert!(
+        playback
+            .callback
+            .mixer
+            .source_control_revision(old_attack.content_key())
+            .unwrap()
+            > original_source_revision
+    );
     assert!(
         playback.frame < original.execution,
         "V2 is genuinely settled before frozen E"
@@ -663,10 +692,14 @@ old_attack_snapshot = (old_attack.accepted_sequence, old_attack.received_at_ns,
     // The real scheduler owns terminal rejection, including the output-frame boundary.
     render(playback, &peer, 1);
     assert_eq!(old_attack.state(), "rejected");
-    assert!(matches!(
+    assert_eq!(
         old_attack.reason(),
-        Some("prepared_mismatch" | "source_changed")
-    ));
+        Some("timing_changed"),
+        "the frozen V1 source-control fence must reject before candidate matching; state={}, original T={}, frozen E={}",
+        old_attack.state(),
+        original.due,
+        original.execution
+    );
     assert!(!old_attack.effective());
     assert_eq!(action_identity(&old_attack), original);
     assert_eq!(

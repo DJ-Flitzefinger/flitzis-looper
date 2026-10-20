@@ -10,6 +10,7 @@ from flitzis_looper.controller.transport.key_lock_status import KeyLockStatus
 if TYPE_CHECKING:
     from collections.abc import Callable
 
+    from flitzis_looper.control_diagnostics import ConsoleDiagnostics
     from flitzis_looper.controller.transport import TransportController
     from flitzis_looper_audio import CapturedInputPadTrigger, CapturedPadStart, ResidentWindowTicket
 
@@ -97,7 +98,12 @@ class ResidencyController:
         self._closed = False
         self._captured_triggers: dict[int, _CapturedTrigger] = {}
         self._captured_starts: dict[int, _CapturedStart] = {}
+        self._diagnostics: ConsoleDiagnostics | None = None
         transport._on_frame_render_callbacks.append(self.poll)
+
+    def _bind_diagnostics(self, diagnostics: ConsoleDiagnostics) -> None:
+        """Bind optional reporting on this existing Python control owner."""
+        self._diagnostics = diagnostics
 
     def _intent(self, sample_id: int) -> _Intent:
         return _Intent(
@@ -207,6 +213,8 @@ class ResidencyController:
                     effective = confirmed[1]
             if isinstance(feedback_error, str) and feedback_error:
                 error = error or feedback_error
+        if self._diagnostics is not None:
+            self._diagnostics.observe("key_lock", error, pad_id=sample_id)
         return KeyLockStatus(
             self._project.resolve_pad_key_lock(sample_id),
             effective,
@@ -238,6 +246,13 @@ class ResidencyController:
             if pending is not None
             else self._error_source(sample_id)
         )
+        if self._diagnostics is not None:
+            self._diagnostics.observe(
+                "resident_preparation",
+                error,
+                pad_id=sample_id,
+                request=pending.scalar_request if pending is not None else None,
+            )
 
     def _current_error(self, sample_id: int) -> str | None:
         error = self._errors.get(sample_id)
@@ -269,12 +284,16 @@ class ResidencyController:
             return "pending" if status == "accepted" else status
         return None
 
-    def report_launch_error(self, sample_id: int, error: str | None) -> None:
-        """Retain a terminal shared launch error for the existing pad readiness UI."""
+    def report_launch_error(
+        self, sample_id: int, error: str | None, *, operation: str = "pad_start"
+    ) -> None:
+        """Retain control diagnostics without treating the old reason as admission authority."""
         if error is None:
             self._launch_errors.pop(sample_id, None)
         else:
             self._launch_errors[sample_id] = error
+        if self._diagnostics is not None:
+            self._diagnostics.observe(operation, error, pad_id=sample_id, channel="pad_control")
 
     def _global_start_dependency(
         self, sample_id: int
@@ -533,6 +552,8 @@ class ResidencyController:
         identity = id(start)
         if identity in self._captured_starts:
             return
+        if self._diagnostics is not None:
+            self._diagnostics.begin_attempt("pad_control", sample_id)
         if len(self._captured_starts) >= 256:
             start.cancel()
             message = "Captured pad start capacity exhausted"
@@ -570,6 +591,8 @@ class ResidencyController:
         """Observe an already-published original attack without preparing or publishing it."""
         if any(pending.start.same_owner(start) for pending in self._captured_starts.values()):
             return
+        if self._diagnostics is not None:
+            self._diagnostics.begin_attempt("pad_control", start.diagnostic_slot)
         if len(self._captured_starts) >= 256:
             start.cancel()
             message = "Captured pad start observation capacity exhausted"
@@ -689,7 +712,9 @@ class ResidencyController:
                 if pending.dependency is None
                 else self._audio.prepare_captured_pad_start(pending.start, pending.dependency)
             )
-            return False
+            # The exact ticket may already be accepted. Re-enter once with that
+            # ticket installed, preserving terminal, deadline and attempt guards.
+            return self._poll_captured_start(pending)
         ticket = pending.ticket
         if ticket is not None:
             status = ticket.publication_status()
@@ -766,6 +791,9 @@ class ResidencyController:
     ) -> None:
         if self._closed:
             return
+        if self._diagnostics is not None:
+            self._diagnostics.begin_attempt("resident_preparation", sample_id)
+            self._diagnostics.begin_attempt("key_lock", sample_id)
         previous = self._pending.get(sample_id)
         requested = self._intent(sample_id)
         baseline = previous.previous if previous else self._effective.get(sample_id, requested)
@@ -846,6 +874,8 @@ class ResidencyController:
         identity = id(trigger)
         if identity in self._captured_triggers:
             return
+        if self._diagnostics is not None:
+            self._diagnostics.begin_attempt("pad_control", trigger.diagnostic_slot)
         if len(self._captured_triggers) >= 256:
             message = "Captured MIDI trigger capacity exhausted"
             raise RuntimeError(message)

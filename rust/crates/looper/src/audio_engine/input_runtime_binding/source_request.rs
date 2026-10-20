@@ -1,6 +1,9 @@
 //! Stable request intent, independent of physical slot counters and resident windows.
 
-use super::{ContentKey, InputPadBinding, InputRuntimeOwnership};
+use super::{
+    ContentKey, InputPadBinding, InputRuntimeOwnership, PlacementError, PlacementObservation,
+    SlotSnapshot, SourcePublicationError,
+};
 use std::sync::atomic::{AtomicU64, Ordering};
 
 /// Prepared under the existing request mutex before any accepted intent is published.
@@ -17,10 +20,33 @@ impl LogicalSourceRequestAdvance<'_> {
 }
 
 impl InputRuntimeOwnership {
+    /// Retain the caller's original fixed-slot admission through publication contention.
+    pub(crate) fn prepare_source_request_advance_for_placement(
+        &self,
+        placement: SlotSnapshot,
+    ) -> Result<LogicalSourceRequestAdvance<'_>, SourcePublicationError> {
+        self.ensure_no_copy_reservation(placement.slot())
+            .map_err(|error| error.to_string())?;
+        match self.observe_slot_snapshot(placement) {
+            PlacementObservation::Current(_) => {}
+            PlacementObservation::Pending => return Err(PlacementError::Pending.into()),
+            PlacementObservation::Stale => return Err(PlacementError::Stale.into()),
+            PlacementObservation::Retired => return Err(PlacementError::Retired.into()),
+        }
+        let current = &self.source_requests[placement.cell().index()];
+        let next = current
+            .load(Ordering::Acquire)
+            .checked_add(1)
+            .ok_or("logical source request incarnation exhausted")?;
+        Ok(LogicalSourceRequestAdvance { current, next })
+    }
+
     pub(crate) fn prepare_source_request_advance(
         &self,
         id: usize,
     ) -> Result<LogicalSourceRequestAdvance<'_>, String> {
+        self.ensure_no_copy_reservation(id)
+            .map_err(|error| error.to_string())?;
         let placement = self
             .slot_snapshot(id)
             .ok_or("source request placement is pending or unavailable")?;

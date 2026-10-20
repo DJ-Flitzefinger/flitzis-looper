@@ -122,6 +122,7 @@ fn identical_source_and_ack_scalars_cannot_promote_another_contents_registry_rec
     let engine = super::tests::test_engine();
     let ticket = super::tests::synthetic_ticket(&engine);
     let (producer, mut consumer) = super::tests::queue(1);
+    let engine = super::tests::with_control_producer(engine, &producer);
     publish(
         &engine,
         &producer,

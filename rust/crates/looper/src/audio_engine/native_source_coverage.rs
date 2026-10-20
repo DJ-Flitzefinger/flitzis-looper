@@ -692,6 +692,7 @@ mod tests {
                 binding: ProductiveSourceBinding::new(&self.sample, RATE, accepted),
                 playback: self.playback,
                 plan: self.plan,
+                actual_feed: None,
                 target_output_frame: 4096,
                 request_id: 1,
                 epoch: 0,
@@ -1592,6 +1593,7 @@ mod tests {
                 paused: false,
                 playback: fixture.playback,
                 plan: fixture.plan,
+                actual_feed: None,
                 source_feed_context: SourceFeedContext::new(
                     ProductiveSourceBinding::new(&refreshed, RATE, Some(accepted)),
                     fixture

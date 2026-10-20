@@ -2,13 +2,14 @@
 
 from types import SimpleNamespace
 from typing import TYPE_CHECKING
-from unittest.mock import Mock
+from unittest.mock import Mock, call
 
 import pytest
 from imgui_bundle import hello_imgui, imgui, immapp
 
 from flitzis_looper.ui import run
 from flitzis_looper.ui.context import UiContext
+from tests.flitzis_looper.controller.test_stem_delete_backend import _loaded
 
 if TYPE_CHECKING:
     from imgui_bundle.hello_imgui import RunnerParams
@@ -87,7 +88,98 @@ def test_close_without_copy_can_exit_in_the_requested_frame(
     run.run_ui(controller)
 
 
-def test_pending_close_keeps_native_error_visible_and_balances_popup(
+def test_hidden_close_poll_logs_changed_errors_once_without_releasing_pending_owners(
+    controller: AppController,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    reasons = [
+        "own Copy acknowledgement pending",
+        "own Copy acknowledgement pending",
+        "config writer unavailable",
+        None,
+        "own Copy acknowledgement pending",
+    ]
+    runtime = Mock()
+    shutdown = Mock()
+    monkeypatch.setattr(run, "UiContext", Mock())
+    monkeypatch.setattr(run, "_poll_runtime_tick", runtime)
+    monkeypatch.setattr(controller, "shut_down", shutdown)
+
+    def prepare(*, holds_polled: bool, deletion_polled: bool) -> bool:
+        assert holds_polled
+        assert not deletion_polled  # ShowGui is omitted on every minimized frame.
+        controller.arrangement.error = reasons.pop(0)
+        return False
+
+    preparing = Mock(side_effect=prepare)
+    monkeypatch.setattr(controller, "prepare_shutdown", preparing)
+
+    def frames(params: RunnerParams, _addons: object) -> None:
+        monkeypatch.setattr(hello_imgui, "get_runner_params", lambda: params)
+        params.app_shall_exit = True
+        for expected in [
+            "own Copy acknowledgement pending",
+            None,
+            "config writer unavailable",
+            None,
+            "own Copy acknowledgement pending",
+        ]:
+            params.callbacks.after_swap()
+            output = capsys.readouterr().err
+            if expected is None:
+                assert "operation=shutdown" not in output
+            else:
+                assert output.count("operation=shutdown") == 1
+                assert f"reason={expected}" in output
+            assert not params.app_shall_exit
+            shutdown.assert_not_called()
+
+    monkeypatch.setattr(immapp, "run", frames)
+    run.run_ui(controller)
+    assert preparing.call_count == 5
+    assert runtime.call_count == 5
+
+
+def test_closing_frame_shares_delete_budget_and_minimized_frames_still_advance(
+    controller: AppController, audio_engine_mock: Mock, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _loaded(controller, audio_engine_mock, tuple(range(17)))
+    audio_engine_mock.poll_loader_events.return_value = None
+    controller.performance_confirmation.request_all_loaded_stem_deletion()
+    warning = controller.performance_confirmation.pending
+    assert warning is not None
+    controller.performance_confirmation.accept(warning)
+    monkeypatch.setattr(run, "render_ui", lambda _context: controller.on_frame_render())
+    monkeypatch.setattr(run, "_show_close_pending", Mock())
+
+    def settled() -> int:
+        summary = controller.stem_delete.summary
+        assert summary is not None
+        return summary.noop
+
+    def frames(params: RunnerParams, _addons: object) -> None:
+        monkeypatch.setattr(hello_imgui, "get_runner_params", lambda: params)
+        params.callbacks.show_gui()
+        assert settled() == 8
+        params.app_shall_exit = True
+        params.callbacks.after_swap()
+        assert settled() == 8
+        assert not params.app_shall_exit
+        # A minimized frame can omit ShowGui; close preparation must still progress.
+        params.callbacks.after_swap()
+        assert settled() == 16
+        assert not params.app_shall_exit
+        params.callbacks.show_gui()
+        params.callbacks.after_swap()
+        assert settled() == 17
+        assert params.app_shall_exit
+
+    monkeypatch.setattr(immapp, "run", frames)
+    run.run_ui(controller)
+
+
+def test_pending_close_shows_generic_progress_without_an_error_body(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     opened = Mock()
@@ -97,12 +189,29 @@ def test_pending_close_keeps_native_error_visible_and_balances_popup(
     monkeypatch.setattr(imgui, "begin_popup_modal", Mock(return_value=(True, None)))
     monkeypatch.setattr(imgui, "text_wrapped", text)
     monkeypatch.setattr(imgui, "end_popup", ended)
+    monkeypatch.setattr(
+        imgui,
+        "get_main_viewport",
+        lambda: SimpleNamespace(work_size=SimpleNamespace(x=1200), get_center=lambda: (600, 350)),
+    )
+    monkeypatch.setattr(imgui, "get_font_size", lambda: 16.0)
+    monkeypatch.setattr(
+        imgui,
+        "get_style",
+        lambda: SimpleNamespace(
+            frame_padding=SimpleNamespace(x=4), window_padding=SimpleNamespace(x=8)
+        ),
+    )
+    monkeypatch.setattr(imgui, "calc_text_size", lambda _text: SimpleNamespace(x=180))
+    monkeypatch.setattr(imgui, "set_next_window_pos", Mock())
+    monkeypatch.setattr(imgui, "set_next_window_size", Mock())
 
     run._show_close_pending("own Copy acknowledgement pending")
 
     opened.assert_called_once()
-    assert text.call_count == 2
-    assert "own Copy acknowledgement pending" in text.call_args.args[0]
+    assert text.call_args_list == [
+        call("Please wait while pending work finishes."),
+    ]
     ended.assert_called_once()
 
 

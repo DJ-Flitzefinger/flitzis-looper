@@ -273,6 +273,10 @@ class ProjectAssetLifecycle:
         finally:
             reservation.close()
 
+    def has_stem_assignment(self, sample_id: int) -> bool:
+        """Observe the actual saved owner even if its project row was already cleared."""
+        return ("stems", sample_id) in self._assignments
+
     def sync_assignments(self) -> None:
         """Acquire every current assignment before retiring removed assignments."""
         current = self._current_assignments()

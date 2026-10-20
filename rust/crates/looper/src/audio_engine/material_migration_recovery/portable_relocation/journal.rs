@@ -1,7 +1,11 @@
 //! Bounded installer recognition only. Journal data never supplies runtime authority.
 use super::*;
 
+mod bank;
 mod validators;
+
+#[cfg(test)]
+mod bank_tests;
 
 const PAIR_KEYS: &[&str] = &[
     "kind",
@@ -86,7 +90,7 @@ impl History {
         let kind = match first.get("kind") {
             None => None,
             Some(Value::String(kind))
-                if ["pad_pair", "pad_copy_overwrite"].contains(&kind.as_str()) =>
+                if ["pad_pair", "pad_copy_overwrite", "pad_bank"].contains(&kind.as_str()) =>
             {
                 Some(kind.clone())
             }
@@ -118,10 +122,10 @@ impl History {
                     }
                     if index != 0 {
                         let previous = &records[index - 1];
-                        let seals = if kind == "pad_pair" {
-                            &["before"][..]
-                        } else {
-                            COPY_SEALS
+                        let seals = match kind {
+                            "pad_pair" => &["before"][..],
+                            "pad_bank" => bank::SEALS,
+                            _ => COPY_SEALS,
                         };
                         if ORIGINAL_COMMON
                             .iter()
@@ -162,7 +166,8 @@ fn next_phase(kind: &str, previous: &str, current: &str) -> bool {
         "native_ack_observed" => ["native_ack_observed", "config_committed"].contains(&current),
         "config_committed" => {
             ["config_committed", "settled"].contains(&current)
-                || kind == "pad_copy_overwrite" && current == "native_ack_observed"
+                || ["pad_copy_overwrite", "pad_bank"].contains(&kind)
+                    && current == "native_ack_observed"
         }
         "settled" => current == "settled",
         "cancelled" => current == "cancelled",
@@ -173,10 +178,10 @@ fn next_phase(kind: &str, previous: &str, current: &str) -> bool {
 fn arrangement(samples: &Path, record: &Value, kind: &str) -> io::Result<()> {
     exact_keys(
         record,
-        if kind == "pad_pair" {
-            PAIR_KEYS
-        } else {
-            COPY_KEYS
+        match kind {
+            "pad_pair" => PAIR_KEYS,
+            "pad_bank" => bank::KEYS,
+            _ => COPY_KEYS,
         },
     )?;
     let captured = record["captured_revision"].as_u64();
@@ -235,10 +240,10 @@ fn arrangement(samples: &Path, record: &Value, kind: &str) -> io::Result<()> {
             "portable uncommitted image claims a receipt or newer revision; preserved",
         ));
     }
-    if kind == "pad_pair" {
-        pair(samples, record, &project, committed)
-    } else {
-        copy(samples, record, &project, committed)
+    match kind {
+        "pad_pair" => pair(samples, record, &project, committed),
+        "pad_bank" => bank::validate(samples, record, &project, committed),
+        _ => copy(samples, record, &project, committed),
     }
 }
 
@@ -377,6 +382,9 @@ fn copy(samples: &Path, record: &Value, project: &Value, committed: bool) -> io:
 }
 
 fn changed_commit(samples: &Path, previous: &Value, current: &Value) -> io::Result<bool> {
+    if current["kind"] == "pad_bank" {
+        return bank::changed_commit(samples, previous, current);
+    }
     if previous["committed_revision"].is_null() {
         return Ok(false);
     }
@@ -435,7 +443,16 @@ pub(super) fn validate_successors(
                         "portable successor changes original kind, Config or revision; preserved",
                     ));
                 }
-                if child.kind.as_deref() == Some("pad_copy_overwrite") {
+                if child.kind.as_deref() == Some("pad_bank") {
+                    if bank::SEALS
+                        .iter()
+                        .any(|key| child.first[*key] != parent.first[*key])
+                    {
+                        return Err(invalid(
+                            "portable Bank successor changes complete original seals; preserved",
+                        ));
+                    }
+                } else if child.kind.as_deref() == Some("pad_copy_overwrite") {
                     if COPY_SEALS
                         .iter()
                         .any(|key| child.first[*key] != parent.first[*key])

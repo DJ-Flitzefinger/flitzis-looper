@@ -13,6 +13,7 @@ from flitzis_looper.input_timing import validate_input_timestamp_ns
 from flitzis_looper.models import validate_sample_id
 
 if TYPE_CHECKING:
+    from flitzis_looper.control_diagnostics import ConsoleDiagnostics
     from flitzis_looper.controller.transport import TransportController
     from flitzis_looper_audio import HoldActionTicket, WaveFormRenderData
 
@@ -52,6 +53,11 @@ class WaveformController:
         self._physical_hold_press: int | None = None
         self._next_physical_press = 1
         self._hold_admission_error: str | None = None
+        self._diagnostics: ConsoleDiagnostics | None = None
+
+    def bind_diagnostics(self, diagnostics: ConsoleDiagnostics) -> None:
+        """Bind optional reporting without adding Native queries or callback work."""
+        self._diagnostics = diagnostics
 
     @property
     def has_pending_holds(self) -> bool:
@@ -223,6 +229,8 @@ class WaveformController:
         """Retry a failed editor read without seeking or changing timing."""
         self._audio.retry_waveform(pad_id)
         self._readiness[pad_id] = ("idle", None)
+        if self._diagnostics is not None:
+            self._diagnostics.begin_attempt("waveform_read", pad_id)
 
     def release_view(self, pad_id: int) -> None:
         """Invalidate editor work; its worker owns the reader until read return."""
@@ -262,6 +270,10 @@ class WaveformController:
             status = ("ready", None) if data is not None else self._audio.waveform_readiness(pad_id)
         except (RuntimeError, ValueError) as error:
             self._readiness[pad_id] = ("error", str(error))
+            if self._diagnostics is not None:
+                self._diagnostics.observe("waveform_read", str(error), pad_id=pad_id)
             return None
         self._readiness[pad_id] = status
+        if self._diagnostics is not None:
+            self._diagnostics.observe("waveform_read", status[1], pad_id=pad_id)
         return data

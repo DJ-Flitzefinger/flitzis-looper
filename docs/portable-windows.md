@@ -132,7 +132,9 @@ checks also require the complete Native pitch interface: immutable
 `CapturedPitchAction` receipts, native selection/projection, GUI and selected MIDI
 capture with original timestamps, publish/cancel, input polling and atomic
 `pitch_rows` runtime publication, plus the atomic source-restore keywords
-`initial_base_shift`, `initial_extra_shift` and `initial_key_lock`. Ordinary starts
+`initial_base_shift`, `initial_extra_shift`, `initial_key_lock`, `initial_gain_db`
+and `initial_eq_db`. The complete saved mixing tuple is installed inside the
+original restored source claim before acknowledgement. Ordinary starts
 also require the `CapturedPadStart` observations/cancellation methods and
 `capture_pad_start`, `prepare_captured_pad_start` and `publish_pad_start`, including
 optional original timestamp/source-generation/exclusive capture keywords and the
@@ -146,6 +148,40 @@ incompatible extension cannot activate the current Python controls. The source
 installer builds these APIs from the selected main checkout through its existing
 private-runtime pipeline. The installer BAT and dependency/toolchain inputs do not
 need a new installation stage for these control APIs.
+
+Mix Capture adds one reflected API family: the opaque `MixCaptureTicket` and its
+`session_id()` observation, `prepare_mix_capture` with bounded-pool defaults
+4096 frames / 32 blocks / 8388608 PCM bytes, explicit-ticket start/stop with
+`target_frame=None` for Native next-admissible timing (or an explicit frame),
+cancellation and status. GLOBAL publication must also expose the keyword-only
+`capture=None` parameter for attaching the original recording ticket to the
+original group. Cancellation reports whether it won before
+the writer's terminal decision; close, join and RT release remain separate.
+Preflight also requires the module-level
+`inspect_mix_capture_spool(path)` recovery-metadata inspector. It checks their
+callable signatures and defaults without constructing an engine, preparing a
+capture, inspecting a spool or writing files. An older binary missing this
+family cannot activate the current checkout.
+
+Recording preflight also reflects `audio_stream_failed()` and
+`quiesce_failed_audio_stream()` without invoking them. These keep the original
+stream failure separate from the first capture failure; positive quiescence
+requires actual checked callback-image retirement. Writer/file finalization and
+outer worker retirement remain separately required. Ordinary development starters
+also reject a Native binary missing these lifecycle methods before starting App.
+
+These interfaces capture an internal float spool. A closed successful spool is
+not an encoded or publicly published recording. The separate inspector reads
+bounded recovery metadata, always requiring verification and granting no publication
+authority even for a `sealed_candidate`; unknown or corrupt spools are rejected
+without modification. API compatibility supplies no RF64/codec, RECORD UI, device,
+listening or complete recording acceptance. The existing source-build pipeline
+provides the APIs; no additional installer or dependency stage is introduced.
+
+The ordinary installer always selects remote `main`. Local uncommitted changes
+are not included by double-clicking the BAT. A development test of such changes
+requires a separately labelled complete source snapshot and a matching fresh
+Native Release; its runtime and project data must remain separate from development.
 
 Native Samples relocation validates complete Legacy Material, Pair and occupied
 Copy journal histories with their distinct schemas before creating relocation

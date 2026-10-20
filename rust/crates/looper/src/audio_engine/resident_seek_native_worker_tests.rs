@@ -52,8 +52,34 @@ impl SeekOracle {
             ..Default::default()
         });
         loaded.adopt(&ticket);
+        // This cut/seek fixture starts with live OFF-to-ON preparation at frame zero.
+        loaded.callback.mixer.set_pad_key_lock(0, false);
+        assert!(!loaded.callback.mixer.key_lock_for_measurement(0));
         assert!(launch_with_producer(&loaded.engine, &ticket, false, 1, &loaded.producer).unwrap());
-        assert_eq!(loaded.callback.drain(&mut loaded.consumer), 1);
+        let start = match loaded.consumer.peek().unwrap() {
+            ControlMessage::CapturePadStartTarget(start) => start.clone(),
+            _ => panic!("resident launch must retain its original target before prepared work"),
+        };
+        assert_eq!(loaded.callback.drain(&mut loaded.consumer), 2);
+        assert_eq!(start.state(), "applied", "{:?}", start.reason());
+        assert_eq!(start.original_frame(), Some(0));
+        assert_eq!(start.execution_frame(), Some(0));
+        assert_eq!(start.effective_frame(), Some(0));
+        assert!(start.is_current() && ticket.is_current());
+        assert!(loaded.callback.scheduler.is_empty());
+        assert!(
+            voice(&loaded.callback.mixer)
+                .sample
+                .as_ref()
+                .unwrap()
+                .same_window(&loaded.sample())
+        );
+        assert_eq!(
+            voice(&loaded.callback.mixer).stretch.pending_fifo_frames(),
+            (0, 0)
+        );
+        loaded.callback.mixer.set_pad_key_lock(0, true);
+        assert!(loaded.callback.mixer.key_lock_for_measurement(0));
         // Both independent references originate in the original WAV integer vector.
         let source = SampleBuffer {
             channels: 1,
@@ -219,14 +245,33 @@ impl SeekOracle {
         raw.render(&self.source, &mut copied_clock, 4096);
         let capture_frame = self.frame;
         self.render(1);
-        wait_until(Duration::from_secs(5), || {
-            voice_mut(&mut self.loaded.callback.mixer)
+        let deadline = Instant::now() + Duration::from_secs(5);
+        loop {
+            let actual_ready = voice_mut(&mut self.loaded.callback.mixer)
                 .stretch
-                .source_preparation_ready()
-                && voice_mut(&mut self.complete)
-                    .stretch
-                    .source_preparation_ready()
-        });
+                .source_preparation_ready();
+            let reference_ready = voice_mut(&mut self.complete)
+                .stretch
+                .source_preparation_ready();
+            if actual_ready && reference_ready {
+                break;
+            }
+            let active = voice(&self.loaded.callback.mixer);
+            assert!(
+                Instant::now() < deadline,
+                "owned seek preparation missing: capture={capture_frame} output={} adoptions={} actual_ready={actual_ready} reference_ready={reference_ready} position={:?} ratio={} target={} paused={} source_range=({}, {}) history={:?}",
+                self.frame,
+                self.adoptions,
+                active.source_playback.position(),
+                active.source_playback.tempo_ratio(),
+                active.source_playback.rate_target(),
+                active.paused,
+                active.sample.as_ref().unwrap().resident_start(),
+                active.sample.as_ref().unwrap().resident_end(),
+                active.stretch.productive_history(),
+            );
+            std::thread::sleep(Duration::from_millis(1));
+        }
         let target = voice_mut(&mut self.loaded.callback.mixer)
             .stretch
             .prepared_target_output_frame()
@@ -287,6 +332,84 @@ impl SeekOracle {
                 [1, 127, 384, 96, 257, 512, 31][step % 7]
                     .min((target + 1777 - self.frame) as usize),
             );
+            step += 1;
+        }
+        assert!(self.wet_audible);
+    }
+
+    fn continue_owned_native(&mut self, frames: usize) {
+        assert!(self.candidate.is_none());
+        let initial_frame = self.frame;
+        let active = voice(&self.loaded.callback.mixer);
+        let native = active.stretch.native_state_address();
+        let request = active.stretch.adopted_request_id();
+        let generation = active.generation;
+        let history = active.stretch.productive_history().unwrap();
+        let primed = active.stretch.native_primed_output_frames();
+        let prepared_taps = active.stretch.native_tap_observation();
+        let reference = voice(&self.complete);
+        let reference_native = reference.stretch.native_state_address();
+        let reference_request = reference.stretch.adopted_request_id();
+        let adoptions = self.adoptions;
+        assert_ne!(native, 0);
+        assert!(request.is_some() && reference_request.is_some());
+        let mut step = 0;
+        while self.frame - initial_frame < frames as u64 {
+            let remaining = frames - (self.frame - initial_frame) as usize;
+            // render() retains the full independent complete-PCM and Raw Native/
+            // FIFO/EQ comparisons, including every physical interpolation tap.
+            self.render([1, 127, 384, 96, 257, 512, 31][step % 7].min(remaining));
+            let active = voice(&self.loaded.callback.mixer);
+            let current = active.stretch.productive_history().unwrap();
+            assert_eq!(active.stretch.native_state_address(), native);
+            assert_eq!(active.stretch.adopted_request_id(), request);
+            assert_eq!(active.generation, generation);
+            assert_eq!(active.stretch.native_primed_output_frames(), primed);
+            assert_eq!(active.stretch.native_tap_observation(), prepared_taps);
+            assert_eq!(current.binding, history.binding);
+            assert_eq!(
+                current.fed_output_frames,
+                history.fed_output_frames + self.frame - initial_frame
+            );
+            assert_eq!(
+                (
+                    current.next_position.frame,
+                    current.next_position.fraction.to_bits(),
+                    current.next_position.seek_mode
+                ),
+                (
+                    active.source_playback.position().frame,
+                    active.source_playback.position().fraction.to_bits(),
+                    active.source_playback.position().seek_mode
+                ),
+                "the same actual Native history must consume every continued source frame"
+            );
+            assert!(
+                !voice(&self.loaded.callback.mixer)
+                    .stretch
+                    .source_preparation_pending()
+            );
+            assert!(!voice(&self.complete).stretch.source_preparation_pending());
+            assert!(
+                !voice_mut(&mut self.loaded.callback.mixer)
+                    .stretch
+                    .source_preparation_ready()
+            );
+            assert!(
+                !voice_mut(&mut self.complete)
+                    .stretch
+                    .source_preparation_ready()
+            );
+            assert_eq!(
+                voice(&self.complete).stretch.native_state_address(),
+                reference_native
+            );
+            assert_eq!(
+                voice(&self.complete).stretch.adopted_request_id(),
+                reference_request
+            );
+            assert!(self.candidate.is_none());
+            assert_eq!(self.adoptions, adoptions);
             step += 1;
         }
         assert!(self.wet_audible);
@@ -444,6 +567,13 @@ impl SeekOracle {
         let fifo = voice(&self.loaded.callback.mixer)
             .stretch
             .pending_fifo_frames();
+        let request = voice(&self.loaded.callback.mixer)
+            .stretch
+            .adopted_request_id();
+        let history = voice(&self.loaded.callback.mixer)
+            .stretch
+            .productive_history()
+            .map(|history| (history.binding, history.fed_output_frames));
         for mixer in [&mut self.loaded.callback.mixer, self.complete.as_mut()] {
             mixer.pause_sample_at_output_frame(0, self.frame);
             let mut output = vec![0.0; frames * 2];
@@ -471,6 +601,20 @@ impl SeekOracle {
                 .stretch
                 .pending_fifo_frames(),
             fifo
+        );
+        assert_eq!(
+            voice(&self.loaded.callback.mixer)
+                .stretch
+                .adopted_request_id(),
+            request
+        );
+        assert_eq!(
+            voice(&self.loaded.callback.mixer)
+                .stretch
+                .productive_history()
+                .map(|history| (history.binding, history.fed_output_frames)),
+            history,
+            "paused output must feed no samples into the existing Native history"
         );
         self.frame += frames as u64;
         for mixer in [&mut self.loaded.callback.mixer, self.complete.as_mut()] {
@@ -656,23 +800,26 @@ pub(super) fn intro_tail_seek_matrix() {
             oracle.paused_gap(257);
             oracle.prepare_native();
             oracle.through_adoption();
-            oracle
-                .loaded
-                .callback
-                .mixer
-                .set_speed(if ratio < 1.0 { 1.97 } else { 0.73 });
-            oracle
-                .complete
-                .set_speed(if ratio < 1.0 { 1.97 } else { 0.73 });
-            oracle
-                .clock
-                .set_target(if ratio < 1.0 { 1.97 } else { 0.73 });
-            oracle.prepare_native();
-            oracle.through_adoption();
+            assert_eq!(oracle.adoptions, 2);
+            let next_ratio = if ratio < 1.0 { 1.97 } else { 0.73 };
+            oracle.loaded.callback.mixer.set_speed(next_ratio);
+            oracle.complete.set_speed(next_ratio);
+            oracle.clock.set_target(next_ratio);
+            // A rate target and a paused gap preserve the exact productive feed;
+            // neither is a new physical source cut requiring another worker.
+            // Derive the complete .05-per-512-frame glide from declared inputs.
+            let glide_frames = ((next_ratio - ratio).abs() / 0.05).ceil() as usize * 512;
+            oracle.continue_owned_native(glide_frames + 1777);
+            assert_eq!(oracle.clock.ratio_for_test(), next_ratio);
+            assert_eq!(
+                voice(&oracle.loaded.callback.mixer)
+                    .source_playback
+                    .tempo_ratio(),
+                next_ratio
+            );
             oracle.paused_gap(97);
-            oracle.prepare_native();
-            oracle.through_adoption();
-            assert_eq!(oracle.adoptions, 4);
+            oracle.continue_owned_native(1777);
+            assert_eq!(oracle.adoptions, 2);
         }
     }
 }
@@ -783,10 +930,65 @@ fn actual_worker_finite_physical_edits_all_exception_and_return_keep_or_cut_real
         assert!(oracle.loaded.sample().samples.len() < oracle.source.samples.len() * 2);
         oracle.prepare_native();
         oracle.through_adoption();
+        let native = voice(&oracle.loaded.callback.mixer)
+            .stretch
+            .native_state_address();
+        let origin = voice(&oracle.loaded.callback.mixer)
+            .stretch
+            .native_origin_tuple();
+        let request = voice(&oracle.loaded.callback.mixer)
+            .stretch
+            .adopted_request_id();
+        let fifo = voice(&oracle.loaded.callback.mixer)
+            .stretch
+            .pending_fifo_frames();
+        let playback = voice(&oracle.loaded.callback.mixer).source_playback;
+        let fed = voice(&oracle.loaded.callback.mixer)
+            .stretch
+            .productive_history()
+            .unwrap()
+            .fed_output_frames;
         oracle.paused_gap(97);
-        oracle.prepare_native();
-        oracle.through_adoption();
-        assert_eq!(oracle.adoptions, 6);
+        assert!(
+            voice(&oracle.loaded.callback.mixer)
+                .source_playback
+                .matches_exact(&playback)
+        );
+        assert_eq!(
+            voice(&oracle.loaded.callback.mixer)
+                .stretch
+                .pending_fifo_frames(),
+            fifo
+        );
+        // Productive pause/resume retains its chronological Native/FIFO owner.
+        // It fences unadopted work but must not manufacture a replacement candidate.
+        let resumed = oracle.frame;
+        let end = resumed + 4096 + 1777;
+        let mut partition = 0;
+        while oracle.frame < end {
+            oracle.render(
+                [1, 127, 384, 96, 257, 512, 31][partition % 7].min((end - oracle.frame) as usize),
+            );
+            partition += 1;
+            let active = voice(&oracle.loaded.callback.mixer);
+            assert_eq!(active.stretch.native_state_address(), native);
+            assert_eq!(active.stretch.native_origin_tuple(), origin);
+            assert_eq!(active.stretch.adopted_request_id(), request);
+            assert_eq!(
+                active
+                    .stretch
+                    .productive_history()
+                    .unwrap()
+                    .fed_output_frames,
+                fed + oracle.frame - resumed
+            );
+            for mixer in [&mut oracle.loaded.callback.mixer, oracle.complete.as_mut()] {
+                assert!(!voice(mixer).stretch.source_preparation_pending());
+                assert!(!voice_mut(mixer).stretch.source_preparation_ready());
+            }
+        }
+        assert!(oracle.wet_audible);
+        assert_eq!(oracle.adoptions, 5);
     }
 }
 

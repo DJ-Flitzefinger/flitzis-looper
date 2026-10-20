@@ -649,8 +649,8 @@ assert captured_pending.ticket is launch_ticket
             current.stretch.native_tap_observation().is_none(),
             "the real complete source needs no finite-window proof"
         );
-        // Every first-block output sample comes from independently prepared
-        // periodic history, including the first Native FIFO sample at E.
+        // Compare the entire first block, including the causal quiet lead from
+        // independently prepared silent birth context at the first FIFO sample.
         let block = playback.raw.as_ref().unwrap().native.block_size();
         assert!(block > 0);
         for frames in [1, 31, 137, 512, 777].into_iter().cycle() {
@@ -765,7 +765,7 @@ fn oracle_after_public_birth(
     }
     Playback {
         reference,
-        raw: key_lock.then(|| RawNative::prepared_start(&fixture.complete, 0, COMPLETE_FRAMES)),
+        raw: key_lock.then(RawNative::prepared_start),
         filter: filter(),
         start: 0,
         end: COMPLETE_FRAMES,

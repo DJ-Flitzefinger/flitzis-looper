@@ -1,4 +1,7 @@
 //! Real queued workers retain their original key across own Pair ACK and control custody.
+#[path = "committed_stem_placement_tests.rs"]
+mod placement_admission_tests;
+
 use super::*;
 use crate::audio_engine::buffer_retirement::ImmediateAudioBufferRetirement;
 use crate::audio_engine::input_mapping::launch_admission_tests::dispatch;

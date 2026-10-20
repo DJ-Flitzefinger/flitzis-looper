@@ -5,6 +5,7 @@ from unittest.mock import call
 
 import pytest
 
+from flitzis_looper.controller.performance_confirmation import PerformanceConfirmation
 from flitzis_looper.input_mapping import KeyboardBinding, LooperAction
 from flitzis_looper.models import PadContentIdentity
 from flitzis_looper.ui.context import UiContext
@@ -202,7 +203,7 @@ def test_performer_inputs_share_warning_and_learn_is_capture_only(
 
     deliver()
     intent = controller.performance_confirmation.pending
-    assert intent is not None
+    assert isinstance(intent, PerformanceConfirmation)
     assert (intent.action, intent.pad_id) == (action, 0)
     audio_engine_mock.unload_sample.assert_not_called()
     audio_engine_mock.analyze_sample_async.assert_not_called()

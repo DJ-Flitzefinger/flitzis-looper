@@ -88,7 +88,10 @@ def check_resident_api(engine_type: type) -> None:
             f"Native residency API missing: {method}"
         )
     assert (
-        "interest" in inspect.signature(engine_type.request_committed_stem_residency).parameters
+        "interest"
+        in inspect.signature(
+            inspect.getattr_static(engine_type, "request_committed_stem_residency")
+        ).parameters
     ), "Native residency API missing independent preload interest"
 
 
@@ -103,6 +106,62 @@ def check_pad_copy_api(engine_type: type) -> None:
         "cancel_pad_copy",
     ):
         assert callable(getattr(engine_type, method, None)), f"Native Copy API missing: {method}"
+
+
+def check_pad_bank_api(native_module: object) -> None:
+    """Require complete Bank mutation and fresh restart verification before activation."""
+    engine = getattr(native_module, "AudioEngine", None)
+    for method in (
+        "capture_bank_participants",
+        "capture_bank_mutation",
+        "prepare_bank_mutation",
+        "publish_bank_mutation",
+        "validate_bank_mutation",
+        "reconcile_bank_mutation",
+        "finish_bank_mutation",
+        "cancel_bank_mutation",
+        "capture_recovered_bank",
+        "validate_recovered_bank",
+        "retry_recovered_bank",
+        "release_recovered_bank",
+    ):
+        assert callable(inspect.getattr_static(engine, method, None)), (
+            f"Native Bank API missing: {method}"
+        )
+    for name, methods in (
+        ("BankParticipants", ()),
+        ("CapturedBankMutation", ("publication_status",)),
+        ("BankMutationAcknowledgement", ()),
+        (
+            "BankMutationTicket",
+            ("publication_status", "acknowledgement", "metadata_json", "committed_stem_tickets"),
+        ),
+        ("RecoveredBankAcceptance", ("metadata_json",)),
+    ):
+        native_type = getattr(native_module, name, None)
+        assert isinstance(native_type, type), f"Native Bank type missing: {name}"
+        for method in methods:
+            assert callable(inspect.getattr_static(native_type, method, None)), (
+                f"Native Bank API missing: {name}.{method}"
+            )
+    parameters = inspect.signature(
+        inspect.getattr_static(engine, "capture_bank_mutation")
+    ).parameters
+    assert list(parameters) == ["self", "source_bank", "target_bank", "intents", "participants"], (
+        "Native Bank API invalid signature: capture_bank_mutation"
+    )
+    participant = parameters["participants"]
+    assert participant.kind is inspect.Parameter.KEYWORD_ONLY, (
+        "Native Bank API invalid original participant keyword"
+    )
+    assert participant.default is None, "Native Bank API invalid original participant keyword"
+    assert list(
+        inspect.signature(inspect.getattr_static(engine, "capture_recovered_bank")).parameters
+    ) == [
+        "self",
+        "participants",
+        "intents",
+    ], "Native Bank API invalid signature: capture_recovered_bank"
 
 
 def check_pad_pair_hold_api(engine_type: type) -> None:
@@ -218,6 +277,8 @@ def check_pitch_action_api(native_module: object) -> None:
         ("load_sample_async", "initial_base_shift"),
         ("load_sample_async", "initial_extra_shift"),
         ("load_sample_async", "initial_key_lock"),
+        ("load_sample_async", "initial_gain_db"),
+        ("load_sample_async", "initial_eq_db"),
     ):
         parameter = inspect.signature(getattr(engine_type, method)).parameters.get(keyword)
         assert parameter is not None, (
@@ -241,13 +302,56 @@ def check_captured_global_start_api(native_module: object) -> None:
         assert callable(getattr(engine_type, method, None)), (
             f"Native GLOBAL capture API missing: AudioEngine.{method}"
         )
-    timestamp = inspect.signature(engine_type.capture_global_start).parameters.get("received_at_ns")
+    timestamp = inspect.signature(
+        inspect.getattr_static(engine_type, "capture_global_start")
+    ).parameters.get("received_at_ns")
     assert timestamp is not None, "Native GLOBAL capture API invalid keyword: received_at_ns"
     assert timestamp.default is None, "Native GLOBAL capture API invalid keyword: received_at_ns"
     assert timestamp.kind in {
         inspect.Parameter.POSITIONAL_OR_KEYWORD,
         inspect.Parameter.KEYWORD_ONLY,
     }, "Native GLOBAL capture API invalid keyword: received_at_ns"
+    publication = inspect.signature(
+        inspect.getattr_static(engine_type, "publish_captured_global_start")
+    ).parameters
+    assert list(publication) == ["self", "captured", "capture"], (
+        "Native GLOBAL capture API invalid arguments: publish_captured_global_start"
+    )
+    assert publication["captured"].kind == inspect.Parameter.POSITIONAL_OR_KEYWORD, (
+        "Native GLOBAL capture API invalid argument: captured"
+    )
+    assert publication["captured"].default is inspect.Parameter.empty, (
+        "Native GLOBAL capture API requires the original captured group"
+    )
+    assert publication["capture"].kind == inspect.Parameter.KEYWORD_ONLY, (
+        "Native GLOBAL capture API invalid keyword: capture"
+    )
+    assert publication["capture"].default is None, (
+        "Native GLOBAL capture API invalid default: capture"
+    )
+
+
+def check_key_lock_start_behavior_api(engine_type: type) -> None:
+    """Require stopped-only global policy controls without executing Native work."""
+    for method in (
+        "key_lock_start_behavior",
+        "can_change_key_lock_start_behavior",
+        "set_key_lock_start_behavior",
+    ):
+        assert callable(inspect.getattr_static(engine_type, method, None)), (
+            f"Native Key Lock start API missing: AudioEngine.{method}"
+        )
+    behavior = inspect.signature(
+        inspect.getattr_static(engine_type, "set_key_lock_start_behavior")
+    ).parameters.get("behavior")
+    assert behavior is not None, "Native Key Lock start API missing argument: behavior"
+    assert behavior.kind in {
+        inspect.Parameter.POSITIONAL_OR_KEYWORD,
+        inspect.Parameter.KEYWORD_ONLY,
+    }, "Native Key Lock start API invalid argument: behavior"
+    assert behavior.default is inspect.Parameter.empty, (
+        "Native Key Lock start API requires an explicit behavior"
+    )
 
 
 def check_ordinary_start_api(native_module: object) -> None:
@@ -305,6 +409,84 @@ def check_ordinary_start_api(native_module: object) -> None:
     )
 
 
+def _check_mix_capture_signature(
+    owner: object, method: str, label: str, arguments: tuple[tuple[str, object], ...]
+) -> None:
+    implementation = inspect.getattr_static(owner, method, None)
+    assert callable(implementation), f"Native mix capture API missing: {label}"
+    parameters = inspect.signature(implementation).parameters
+    assert list(parameters) == [name for name, _default in arguments], (
+        f"Native mix capture API invalid signature: {label}"
+    )
+    for name, default in arguments:
+        parameter = parameters[name]
+        kinds = (
+            {inspect.Parameter.POSITIONAL_ONLY, inspect.Parameter.POSITIONAL_OR_KEYWORD}
+            if name == "self"
+            else {inspect.Parameter.POSITIONAL_OR_KEYWORD}
+        )
+        assert parameter.kind in kinds, f"Native mix capture API invalid argument: {label}.{name}"
+        assert type(parameter.default) is type(default), (
+            f"Native mix capture API invalid default: {label}.{name}"
+        )
+        assert parameter.default == default, (
+            f"Native mix capture API invalid default: {label}.{name}"
+        )
+
+
+def check_mix_capture_api(native_module: object) -> None:
+    """Reflect internal spool/recovery APIs without opening devices or capture files."""
+    engine = getattr(native_module, "AudioEngine", None)
+    assert isinstance(engine, type), "Native mix capture API missing type: AudioEngine"
+    ticket = getattr(native_module, "MixCaptureTicket", None)
+    assert isinstance(ticket, type), "Native mix capture API missing type: MixCaptureTicket"
+    required = inspect.Parameter.empty
+    for owner, method, label, arguments in (
+        *(
+            (engine, method, f"AudioEngine.{method}", (("self", required),))
+            for method in ("audio_stream_failed", "quiesce_failed_audio_stream")
+        ),
+        (ticket, "session_id", "MixCaptureTicket.session_id", (("self", required),)),
+        (
+            engine,
+            "prepare_mix_capture",
+            "AudioEngine.prepare_mix_capture",
+            (
+                ("self", required),
+                ("spool_path", required),
+                ("block_frames", 4096),
+                ("block_count", 32),
+                ("max_pool_pcm_bytes", 8388608),
+            ),
+        ),
+        *(
+            (
+                engine,
+                method,
+                f"AudioEngine.{method}",
+                (("self", required), ("ticket", required), ("target_frame", None)),
+            )
+            for method in ("start_mix_capture", "stop_mix_capture")
+        ),
+        *(
+            (
+                engine,
+                method,
+                f"AudioEngine.{method}",
+                (("self", required), ("ticket", required)),
+            )
+            for method in ("cancel_mix_capture", "mix_capture_status")
+        ),
+        (
+            native_module,
+            "inspect_mix_capture_spool",
+            "inspect_mix_capture_spool",
+            (("path", required),),
+        ),
+    ):
+        _check_mix_capture_signature(owner, method, label, arguments)
+
+
 def check_runtime(root: Path, checkout: Path, runtime: Path) -> None:
     # Runtime imports must follow private-path/DLL setup, before any GUI/device opens.
     native_module = importlib.import_module("flitzis_looper_audio")
@@ -313,19 +495,24 @@ def check_runtime(root: Path, checkout: Path, runtime: Path) -> None:
     assert native_module.native_build_profile() == "release"
     check_resident_api(native_module.AudioEngine)
     check_pad_copy_api(native_module.AudioEngine)
+    check_pad_bank_api(native_module)
     check_pad_pair_hold_api(native_module.AudioEngine)
     check_timing_completion_api(native_module)
     check_pitch_action_api(native_module)
     check_ordinary_start_api(native_module)
     check_captured_global_start_api(native_module)
+    check_key_lock_start_behavior_api(native_module.AudioEngine)
     check_global_rate_api(native_module.AudioEngine)
+    check_mix_capture_api(native_module)
     assert physical_path(Path(sys.executable)).is_relative_to(physical_path(runtime / "python"))
     customization = importlib.import_module("sitecustomize")
+    assert customization.__file__ is not None, "Portable sitecustomize has no file origin"
     assert physical_path(Path(customization.__file__)).is_relative_to(
         physical_path(runtime / "python")
     )
     for name in ["imgui_bundle", "torch", "torchaudio", "torchcodec"]:
         module = importlib.import_module(name)
+        assert module.__file__ is not None, f"Portable dependency has no file origin: {name}"
         assert physical_path(Path(module.__file__)).is_relative_to(
             physical_path(runtime / "python")
         ), module
@@ -336,6 +523,7 @@ def check_runtime(root: Path, checkout: Path, runtime: Path) -> None:
     assert physical_path(Path.cwd()) == physical_path(checkout)
     assert (checkout / "assets/models/keynet.onnx").is_file()
     app_module = importlib.import_module("flitzis_looper")
+    assert app_module.__file__ is not None, "Portable application has no file origin"
     assert physical_path(Path(app_module.__file__)).is_relative_to(physical_path(checkout / "src"))
     dlls = private_dlls(runtime, checkout)
     child_env = os.environ | {"PYTHONPATH": str(checkout / "src"), "PYTHONDONTWRITEBYTECODE": "1"}

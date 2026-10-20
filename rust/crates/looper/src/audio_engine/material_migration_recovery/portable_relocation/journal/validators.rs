@@ -487,6 +487,11 @@ pub(super) fn project(text: &str) -> io::Result<Value> {
     if project.get("manual_key").is_some() {
         keys.push("manual_key");
     }
+    // Current project images persist this policy. Historical Pair/Copy images
+    // predate it and retain their established omission semantics.
+    if project.get("key_lock_start_behavior").is_some() {
+        keys.push("key_lock_start_behavior");
+    }
     exact_keys(&project, &keys)?;
     let mut instances = BTreeSet::new();
     for sample in 0..216 {
@@ -531,6 +536,9 @@ pub(super) fn project(text: &str) -> io::Result<Value> {
             !value
                 .as_array()
                 .is_some_and(|array| array.len() == 216 && array.iter().all(optional_text))
+        })
+        || project.get("key_lock_start_behavior").is_some_and(|value| {
+            !["first_sound_at_grid", "attack_at_grid"].contains(&value.as_str().unwrap_or(""))
         })
     {
         return Err(invalid("portable complete project settings invalid"));

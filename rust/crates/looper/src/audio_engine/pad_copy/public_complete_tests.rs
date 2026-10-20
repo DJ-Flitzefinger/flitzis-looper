@@ -385,7 +385,17 @@ fn assert_productive_native_source(voice: &crate::audio_engine::voice_slot::Voic
     ));
     assert_eq!(history.binding.resident, sample.resident_binding());
     if let Some(taps) = voice.stretch.native_tap_observation() {
-        assert!(taps.left_reads > 0);
+        if voice.stretch.native_has_physical_birth_context_for_test() {
+            // This is the frozen worker priming snapshot. PhysicalBirth primes
+            // Native with silent H; live callback reads have a separate observer.
+            assert!(voice.stretch.native_primed_output_frames() > 0);
+            assert_eq!(taps.left_reads, 0);
+            assert_eq!(taps.right_reads, 0);
+            assert_eq!(taps.min_frame, None);
+            assert_eq!(taps.max_frame, None);
+        } else {
+            assert!(taps.left_reads > 0);
+        }
         assert_eq!(taps.missing_reads, 0);
     } else {
         // Complete-source replay does not construct a bounded-window coverage
@@ -455,13 +465,23 @@ impl Fixture {
         key_lock: bool,
         timing: &'static str,
     ) -> Self {
+        Self::with_pair_registration_at(stems, registered, key_lock, timing, None)
+    }
+
+    fn with_pair_registration_at(
+        stems: bool,
+        registered: bool,
+        key_lock: bool,
+        timing: &'static str,
+        fixture_parent: Option<PathBuf>,
+    ) -> Self {
         Python::initialize();
         let workspace = Path::new(env!("CARGO_MANIFEST_DIR"))
             .ancestors()
             .nth(4)
             .unwrap();
-        let fixture_parent = std::env::var_os(PRODUCER_PARENT)
-            .map(PathBuf::from)
+        let fixture_parent = fixture_parent
+            .or_else(|| std::env::var_os(PRODUCER_PARENT).map(PathBuf::from))
             .unwrap_or_else(|| workspace.join("scratch"));
         let directory = tempfile::Builder::new()
             .prefix("native-copy-public-")
@@ -1255,6 +1275,74 @@ fn producer_process_has_exited(pid: u32) -> bool {
     queried && code != 259
 }
 
+fn assert_live_restored_source_reads(callback: &mut Callback) {
+    use crate::audio_engine::source_reader::{
+        reset_tap_observation_for_test, tap_observation_for_test,
+    };
+    let before = callback
+        .mixer
+        .voices
+        .iter()
+        .filter(|voice| voice.active || voice.paused)
+        .collect::<Vec<_>>();
+    assert_eq!(
+        before.len(),
+        1,
+        "callback TLS must name only restored voice36"
+    );
+    let voice = before[0];
+    assert_eq!(voice.sample_id, 36);
+    assert!(!voice.paused);
+    let native = voice.stretch.native_state_address();
+    assert_ne!(native, 0);
+    let history = voice.stretch.productive_history().unwrap();
+    let sample = voice.sample.as_ref().unwrap();
+    let bounds = (sample.resident_start(), sample.resident_end());
+    let frame = callback.frame;
+    reset_tap_observation_for_test();
+    let mut heard = false;
+    for _ in 0..32 {
+        let pcm = callback.render(512);
+        assert!(pcm.iter().all(|sample| sample.is_finite()));
+        heard |= pcm.iter().any(|sample| sample.abs() > 1e-8);
+    }
+    let taps = tap_observation_for_test();
+    assert_eq!(callback.frame, frame + 32 * 512);
+    assert!(
+        taps.left_reads > 0,
+        "actual callback source reads, not worker priming"
+    );
+    assert_eq!(taps.missing_reads, 0);
+    assert!(taps.min_frame.is_some_and(|frame| frame >= bounds.0));
+    assert!(taps.max_frame.is_some_and(|frame| frame < bounds.1));
+    let voice = callback
+        .mixer
+        .voices
+        .iter()
+        .find(|voice| voice.is_playing_sample(36))
+        .unwrap();
+    assert_eq!(voice.stretch.native_state_address(), native);
+    assert!(voice.stretch.wet_render_ready());
+    assert!(voice.stretch.wet_current_source_output_ready());
+    assert!(
+        voice
+            .stretch
+            .native_pitch_scale_observation()
+            .is_some_and(|pitch| pitch != 1.0)
+    );
+    let after = voice.stretch.productive_history().unwrap();
+    assert_eq!(after.binding, history.binding);
+    assert_eq!(
+        after.fed_output_frames,
+        history.fed_output_frames + 32 * 512
+    );
+    assert_productive_native_source(voice);
+    assert!(
+        heard,
+        "the effective audible mask must produce actual nonzero PCM"
+    );
+}
+
 fn restore_saved_in_new_process(root: &Path) {
     let parent: u32 = std::env::var(RESTORE_PARENT).unwrap().parse().unwrap();
     assert_ne!(parent, std::process::id());
@@ -1381,7 +1469,12 @@ fn restore_saved_in_new_process(root: &Path) {
         before,
         "restore changed a verified FileID/hash or duplicated a generated source/pair artifact"
     );
+    crate::audio_engine::source_reader::reset_tap_observation_for_test();
     Python::attach(|py| callback.start(&engine.borrow(py), 36));
+    let initial_taps = crate::audio_engine::source_reader::tap_observation_for_test();
+    assert_eq!(initial_taps.missing_reads, 0);
+    assert!(initial_taps.min_frame.is_none_or(|frame| frame >= START));
+    assert!(initial_taps.max_frame.is_none_or(|frame| frame < END));
     Python::attach(|py| probe.call_method0(py, "request_audible_mask").unwrap());
     wait_for(
         || {
@@ -1404,6 +1497,7 @@ fn restore_saved_in_new_process(root: &Path) {
         audio.iter().any(|sample| sample.abs() > 1e-8),
         "fresh-process restored Copy rendered no audio after its own mask ACK"
     );
+    assert_live_restored_source_reads(&mut callback);
     let voice = callback
         .mixer
         .voices
@@ -1715,3 +1809,12 @@ fn productive_shutdown_keeps_actual_worker_custody_and_settles_acknowledged_copy
         },
     );
 }
+
+#[path = "assignment_custody_regressions.rs"]
+mod assignment_custody_regressions;
+
+#[path = "public_complete_tests/copied_loop_custody_tests.rs"]
+mod copied_loop_custody_tests;
+
+#[path = "bank_public_tests.rs"]
+mod bank_public_tests;

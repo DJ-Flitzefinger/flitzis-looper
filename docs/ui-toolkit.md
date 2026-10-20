@@ -363,9 +363,10 @@ revision before cache reuse. `CLOSE LOOP EDITOR` follows Grid Offset through the
 same close authority; its full text and toolbar hit target wrap as needed at
 narrow/scaled widths. Closing changes no playback, loop or grid state.
 
-Waveform and Residency readiness/error rows reserve two fixed status/control
+Waveform and Residency readiness rows reserve two fixed status/control
 slots before ImPlot fills the remaining editor height. Idle/ready frames retain
-the same slot height as pending/error frames, including Retry/Cancel hit height.
+the same slot height as pending/unavailable frames, including Retry/Cancel hit height.
+Technical error details go to the command window; they do not occupy these rows.
 The pre-fix full-editor wheel regression demonstrated plot Y and upper glyph
 origins moving together when a late readiness change inserted/removed text above
 the plot. Keeping the rows above the plot and reserving their height stabilizes
@@ -478,8 +479,9 @@ narrow layouts. Compare meaningful scaled geometry instead of complete frames
 while the waveform view changes.
 
 The shared KEYLOCK renderer preserves effective button color separately from
-pending/error/mixed text; its muted status rows wrap within narrow/scaled sidebar
-widths. Keep those actual rows and Residency feedback in complete layout tests.
+pending/mixed status. Global status occupies a compact constant row with ordinary
+details in a tooltip. Technical failures go to the command window. Keep actual
+status and Residency controls in complete layout tests.
 
 At most one waveform representation and one visible number band is permitted.
 Require exactly one only for matching valid data and visible major/Loop-1 label
@@ -525,7 +527,7 @@ labels remain readable, a manual marker identifies corrections and the tooltip
 shows detected metadata. The popup retains its original content/path/Native source
 identity and closes after a different selection or replacement. Metadata analysis
 completion alone does not invalidate a conscious new correction. Existing edit
-reservations and exhausted metadata epochs display their refusal in the popup.
+reservations and exhausted metadata epochs report their refusal in the command window.
 
 Transposition's +1/Reset/-1 row supports the signed extra range -18..+18 with its
 own Retrigger. Reset clears only that offset, preserving the piano note/octave and
@@ -556,16 +558,19 @@ and original dueframe survive preparation; delayed fallback never resolves a new
 selection. The delivered stem-start coalescer's replacement semantics do not
 apply to distinct admitted pitch attacks; preparation work may share.
 
-Requested intent and Native effective feedback remain separate. The sidebar shows
-preparation and rejection reasons instead of treating the saved numeric choice
-as audio confirmation. This is an implemented engineering surface; variable-rate
+Requested intent and Native effective feedback remain separate. Normal preparation
+and confirmed audio state remain available without moving the Pitch fader during
+a drag. Technical rejection reasons go through the Python control-thread console
+sink, including operation, pad and available request identity. Unchanged polling
+does not repeat a line; another deliberate failed attempt does. The sink performs
+no audio-thread work. This is an implemented engineering surface; variable-rate
 SET past/history reconstruction, performer deadlines, full B5 quality/transition/
 latency, B6 and Human device/listening/visual acceptance remain open. It grants no
 whole-arrangement or full-216 acceptance. See [Key Lock backend](key-lock-backend.md#durable-key-intent-and-engineering-pitch-controls).
 
-## Pending Re-Arrange surface
+## Re-Arrange surface
 
-Re-Arrange prefers warning-colored bottom-left toggle/help, OFF on restart. Gesture
+Re-Arrange uses a warning-colored bottom-left toggle/help, OFF on restart. Its gesture
 owner branches before pad trigger/stop; MIDI stays alive. LeftMove/Swap, rightCopy/
 overwrite with clear preview/no single-pad dialog; cancel/self/invalid/empty no-op.
 Other-bank pulse/leftcopyall36incl empties keeps source selected/no navigation;
@@ -575,8 +580,78 @@ not disk/native truth. Selection/editor follows living content; waveform hold re
 is independent, delivered by existing input/control tick outside rendered controls.
 Current musical stem selections become independent durable CopySnapshot choices;
 physical presses/holds/voices/cursors/meters/progress/job tokens remain transient.
-This pending surface description does not establish whole-arrangement Native
-effects, full-216, quality or Human acceptance.
+Bank warnings share the existing performer confirmation owner. They retain the exact
+original BankRequest and opaque participants through acceptance, cancellation, Escape
+and close; later selection cannot redirect the action. Bank widgets are disabled
+while a PAD gesture owns the pointer, including staggered two-button releases.
+Ordinary MIDI refresh preserves the last successful reserved rows and Native's exact
+committed rows until actual settlement, while outside rows remain publishable. An
+explicit Multi Loop change retains its normal semantic supersession. Unsolicited
+Native rejection reports through the existing deduplicated console diagnostics.
+Bounded UI/controller/Native proofs do not establish full-216, resource, quality,
+musical, device or Human acceptance.
+
+## All-loaded stem generation
+
+Settings provides **Generate Stems of all loaded PADs** through the same audio
+confirmation owner used by performer and Bank actions. The warning retains the
+original loaded PADs across all six banks (216 slots), the requested separator /
+model and quality. Changed or unavailable originals are skipped; newly loaded
+contents are excluded. Cancel, Escape and close dismiss the warning without
+starting work. One confirmed operation continues outside Settings and keeps the
+current PAD and Bank selected.
+
+The bounded scrolling list shows original PAD numbers and exact Queued, Running,
+Done, Skipped, Failed, Cancelling and Cancelled counts. Done means stems saved;
+playback readiness is reported separately for each PAD. **Cancel batch** withdraws
+only this operation's interests, preserves completed items and waits for its own
+actual work to settle. Other callers sharing the work continue. Partial results
+remain visible until another batch starts or **Dismiss batch results** closes the
+terminal result. The surface owns no jobs, audio timing or persistence.
+
+Bounded controller, Native-crossing and actual desktop checks cover this surface.
+Full216 resource/process/adoption and Human musical/device/hearing acceptance
+remain separate.
+
+## All-loaded stem deletion
+
+Settings provides **Delete Stems of all loaded PADs** through the same central
+confirmation owner. Its immutable inventory retains all 216 original slot
+positions across six banks, exact loaded assignments, current and known retained
+set versions, admitted request identities and existing unadmitted caller tokens.
+The warning reports occupied original PADs and unique exact set versions; shared
+versions count once. Opening it acquires no source, reader or cleanup permission.
+Cancel, Escape and close dismiss only that warning. Changed originals are
+Skipped and newly loaded content is excluded.
+
+One accepted `StemDeleteController` operation withdraws only still-unadmitted
+captured batch tokens through their existing owner. Its returned withdrawal
+receipt distinguishes a pending-only Removed result from an already absent
+Noop. Admitted work still uses the existing guarded per-PAD deletion path and
+safe FullMix handover. `AppController` offers at most eight original items per
+desktop frame independently of Settings, deferring arrangement-fenced items
+before reading their intermediate image. Shutdown preparation also advances the
+logical operation before dependent owners are torn down. A closing frame reuses
+its normal render poll; if no GUI frame ran, shutdown preparation performs the
+bounded poll, so minimized frames still progress. Selection does not change.
+
+`ctx.ui.stem_delete` exposes detached logical feedback and deliberate result
+dismissal. The six-line scrolling list retains original PAD numbers and exact
+Removed, Noop, Skipped, Failed and Queued states. Removed means withdrawal of
+stem selection or pending work; it confirms neither effective audio nor physical
+file removal. Partial results remain until **Dismiss deletion results** or a new
+confirmed deletion replaces them. Generate and Delete are disabled while the
+deletion operation is active.
+
+The separate **Global file cleanup** row observes the existing Native cleanup
+status and `ProjectAssetLifecycle` retirement errors. Its pending/error counts
+explicitly cover global cleanup, including other operations. It does not
+attribute Native's cumulative deletion count to this action. A failed status
+query shows Pending unknown and its error. Global cleanup feedback remains
+visible after logical results are dismissed; actual readers retain files until
+their final release. Rendering performs no physical deletion or operation poll.
+Complete B2 reader/resource and Human all-loaded UI/device/hearing acceptance
+remain open.
 
 ## Direct extension2026-10-11 and remaining acceptance
 

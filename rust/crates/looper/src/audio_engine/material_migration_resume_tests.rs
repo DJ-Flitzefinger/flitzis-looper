@@ -340,7 +340,12 @@ fn material_migration_resume_pending_journal_in_new_process_requires_fresh_sourc
         let parent_engine;
         let parent_file_readers;
         {
-            let engine = Arc::new(AudioEngine::new().unwrap());
+            let (producer, mut consumer) = rtrb::RingBuffer::new(16);
+            let producer = Arc::new(Mutex::new(producer));
+            let engine = Arc::new(constant_timing::with_control_producer(
+                AudioEngine::new().unwrap(),
+                &producer,
+            ));
             parent_engine = Arc::downgrade(&engine);
             parent_loading = engine.cold_loading.clone();
             parent_leases = Arc::downgrade(&engine.cold_leases);
@@ -360,8 +365,6 @@ fn material_migration_resume_pending_journal_in_new_process_requires_fresh_sourc
                 parent_pcm = Arc::downgrade(&material.sample.samples);
                 parent_file_readers = material.lease.reader_lifetime_probe_for_test();
             }
-            let (producer, mut consumer) = rtrb::RingBuffer::new(16);
-            let producer = Arc::new(Mutex::new(producer));
             let mut callback = migration_callback_8000(&engine);
             let sources = [0, 215].map(|id| {
                 control::adopt_for_format(
@@ -578,7 +581,12 @@ fn material_migration_resume_new_process_child() {
     std::env::set_current_dir(&directory).unwrap();
     Python::initialize();
     let root = directory.join("samples");
-    let engine = Arc::new(AudioEngine::new().unwrap());
+    let (producer, mut consumer) = rtrb::RingBuffer::new(32);
+    let producer = Arc::new(Mutex::new(producer));
+    let engine = Arc::new(constant_timing::with_control_producer(
+        AudioEngine::new().unwrap(),
+        &producer,
+    ));
     for id in [0, 215] {
         assert!(engine.sample_cache.lock().unwrap()[id].is_none());
         assert!(engine.cold_leases.lock().unwrap()[id].is_none());
@@ -592,8 +600,6 @@ fn material_migration_resume_new_process_child() {
         );
         assert_eq!(engine.input_runtime_ownership.migration_hold(id), 0);
     }
-    let (producer, mut consumer) = rtrb::RingBuffer::new(32);
-    let producer = Arc::new(Mutex::new(producer));
     let mut callback = migration_callback_8000(&engine);
     // Normal saved-intent startup through the actual native parameter queue.
     constant_timing::set_intent(&engine, &producer, 0, TimingIntent::Automatic).unwrap();

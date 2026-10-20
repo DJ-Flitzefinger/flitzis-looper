@@ -1,10 +1,15 @@
 use super::constant_timing::AcceptedTimingProjection;
 use super::native_history_permit::NativeHistoryPermit;
 use super::pitch_intent::PitchIntent;
-use super::prepared_native_history::{NativeAdapterState, PITCH_SCALE_EPSILON};
+use super::prepared_native_history::{
+    NativeAdapterState, PITCH_SCALE_EPSILON, SourceReadCheckpoint,
+};
 use super::productive_source_history::{ProductiveSourceBinding, ProductiveSourceHistory};
+use super::source_feed_history::{SourceFeedContext, SourceReadDomain, SourceReadReceipt};
 use super::source_playback::SourcePlayback;
-use super::source_reader::{SourceReadPlan, StemReadSets};
+use super::source_reader::{
+    STEM_TRANSITION_RAMP_FRAMES, SourceReadPlan, StemReadSets, StemTransition,
+};
 #[cfg(test)]
 use crate::audio_engine::key_lock_preparation::create_key_lock_preparation;
 use crate::audio_engine::key_lock_preparation::{
@@ -19,6 +24,10 @@ use crate::messages::{PreparedStemSet, SampleBuffer};
 #[cfg(test)]
 #[path = "stretch_processor/coordinate_units_tests.rs"]
 mod coordinate_units_tests;
+
+#[cfg(test)]
+#[path = "stretch_processor/source_read_receipt_tests.rs"]
+mod source_read_receipt_tests;
 
 pub(crate) struct ProductiveSourceFeed<'a> {
     pub(crate) pitch_intent: PitchIntent,
@@ -69,6 +78,197 @@ pub struct StretchProcessor {
 unsafe impl Send for StretchProcessor {}
 
 impl StretchProcessor {
+    /// A missing mapping is the established identity; a refused mapping is never a fallback.
+    pub(crate) fn actual_source_checkpoint(
+        &self,
+        playback: &SourcePlayback,
+        plan: SourceReadPlan,
+    ) -> Result<Option<SourceReadCheckpoint>, super::rubberband_backend::RubberBandError> {
+        self.native
+            .retained_start_feed(playback, plan)
+            .map(|actual| actual.map(|(playback, plan)| SourceReadCheckpoint { playback, plan }))
+    }
+
+    pub(crate) fn retained_source_chunk_limit(
+        &self,
+        playback: &SourcePlayback,
+        plan: SourceReadPlan,
+        max_frames: usize,
+    ) -> usize {
+        // An invalid map still consumes a bounded ordinary chunk as an explicit gap.
+        // Its renderer refuses rather than quietly selecting logical source input.
+        self.native
+            .retained_start_feed_chunk_limit(playback, plan, max_frames)
+            .unwrap_or(max_frames)
+    }
+
+    pub(crate) fn has_retained_source_input(&self) -> bool {
+        self.native.has_retained_feed()
+    }
+
+    pub(crate) fn retained_rate_change_ready(
+        &self,
+        feed: &ProductiveSourceFeed<'_>,
+        target: f64,
+    ) -> bool {
+        let Ok(Some(actual)) = self.actual_source_checkpoint(feed.playback, feed.plan) else {
+            return !self.has_retained_source_input();
+        };
+        let actual_feed = ProductiveSourceFeed {
+            playback: &actual.playback,
+            plan: actual.plan,
+            ..*feed
+        };
+        !self.wet_mode_failed()
+            && self
+                .native
+                .has_productive_continuity(&actual_feed, self.productive_history)
+            && self.native.matches_effective_source(
+                &actual_feed,
+                self.preparation_epoch,
+                self.productive_history,
+            )
+            && self.native.can_retarget_retained_rate(target)
+    }
+
+    pub(crate) fn retarget_retained_rate_claimed(&mut self, target: f64) {
+        self.native.retarget_retained_rate_claimed(target);
+    }
+
+    /// All current-bank participants are checked before the mixer's first selection store.
+    pub(crate) fn retained_stem_change_ready(
+        &self,
+        previous: &ProductiveSourceFeed<'_>,
+        next: &ProductiveSourceFeed<'_>,
+    ) -> bool {
+        if !self.has_retained_source_input() {
+            return true;
+        }
+        let Ok(Some(actual)) = self.actual_source_checkpoint(previous.playback, previous.plan)
+        else {
+            return false;
+        };
+        let same_trajectory = previous.playback.matches_exact(next.playback)
+            && SourceReadPlan {
+                selection: next.plan.selection,
+                transition: next.plan.transition,
+                ..previous.plan
+            }
+            .matches_exact(next.plan);
+        let transition = if previous.plan.selection == next.plan.selection {
+            previous.plan.transition
+        } else {
+            StemTransition::start(previous.plan.selection, STEM_TRANSITION_RAMP_FRAMES)
+        };
+        if !same_trajectory
+            || previous.pitch_intent != next.pitch_intent
+            || previous.key_lock != next.key_lock
+            || previous.accepted != next.accepted
+            || ProductiveSourceBinding::new(
+                previous.sample,
+                previous.sample_rate_hz,
+                previous.accepted,
+            ) != ProductiveSourceBinding::new(next.sample, next.sample_rate_hz, next.accepted)
+            || !transition.matches_exact(next.plan.transition)
+        {
+            return false;
+        }
+        let previous_actual = ProductiveSourceFeed {
+            playback: &actual.playback,
+            plan: actual.plan,
+            ..*previous
+        };
+        let next_actual = ProductiveSourceFeed {
+            playback: &actual.playback,
+            plan: SourceReadPlan {
+                selection: next.plan.selection,
+                transition: if previous.plan.selection == next.plan.selection {
+                    actual.plan.transition
+                } else {
+                    next.plan.transition
+                },
+                ..actual.plan
+            },
+            ..*next
+        };
+        !self.wet_mode_failed()
+            && self
+                .native
+                .has_productive_continuity(&previous_actual, self.productive_history)
+            && self.native.matches_effective_source(
+                &previous_actual,
+                self.preparation_epoch,
+                self.productive_history,
+            )
+            && super::native_source_coverage::normal_loop_feed_available_with_readers(
+                next_actual.sample,
+                next_actual.plan.required_read_sets(StemReadSets::new(
+                    next_actual.stems,
+                    next_actual.outgoing_stems,
+                )),
+                next_actual.sample_rate_hz,
+                next_actual.accepted,
+                next_actual.plan,
+                next_actual.playback,
+            )
+    }
+
+    /// Recompute only callback-owned endpoints after every participant passed preflight.
+    pub(crate) fn retain_stem_change_claimed(
+        &mut self,
+        previous: &ProductiveSourceFeed<'_>,
+        next: &ProductiveSourceFeed<'_>,
+    ) {
+        if !self.has_retained_source_input() {
+            return;
+        }
+        let actual = self
+            .actual_source_checkpoint(previous.playback, previous.plan)
+            .expect("preflighted retained stem mapping")
+            .expect("preflighted retained stem endpoint");
+        let logical = SourceReadCheckpoint {
+            playback: *next.playback,
+            plan: next.plan,
+        };
+        let next_actual = SourceReadCheckpoint {
+            plan: SourceReadPlan {
+                selection: next.plan.selection,
+                transition: if previous.plan.selection == next.plan.selection {
+                    actual.plan.transition
+                } else {
+                    next.plan.transition
+                },
+                ..actual.plan
+            },
+            ..actual
+        };
+        self.native
+            .reconfigure_retained_feed_endpoint_claimed(
+                SourceReadCheckpoint {
+                    playback: *previous.playback,
+                    plan: previous.plan,
+                },
+                actual,
+                logical,
+                next_actual,
+            )
+            .expect("unchanged preflighted retained stem endpoints");
+        self.native
+            .retain_stem_read_context_claimed(&ProductiveSourceFeed {
+                playback: &next_actual.playback,
+                plan: next_actual.plan,
+                ..*next
+            });
+        self.wet_rendered = false;
+        self.wet_output_emitted = false;
+        self.wet_source_rendered = false;
+        self.wet_source_output_emitted = false;
+    }
+
+    pub(crate) fn retained_stem_reader_required(&self, stems: &PreparedStemSet) -> bool {
+        self.native.retained_stem_reader_required(stems)
+    }
+
     pub(crate) fn preparation_epoch(&self) -> u64 {
         self.preparation_epoch
     }
@@ -89,6 +289,9 @@ impl StretchProcessor {
                 .source
                 .as_ref()
                 .is_some_and(|source| source.matches_adoption(feed, epoch, request_id))
+            && candidate
+                .retained_start_feed(feed.playback, feed.plan)
+                .is_ok()
     }
 
     /// Transfer an accepted event's exact source/pitch/FIFO state without allocation or drops.
@@ -118,12 +321,7 @@ impl StretchProcessor {
         std::mem::swap(&mut self.native, candidate);
         self.request_pending = false;
         self.adopted_request_id = Some(request_id);
-        self.productive_history = Some(ProductiveSourceHistory {
-            binding: ProductiveSourceBinding::new(feed.sample, feed.sample_rate_hz, feed.accepted),
-            next_position: feed.playback.position(),
-            domain: Some(feed.plan.domain()),
-            fed_output_frames: self.native.primed_output_frames as u64,
-        });
+        self.productive_history = self.prepared_input_history(feed);
         self.wet_rendered = false;
         self.wet_render_failed = false;
         self.wet_output_emitted = false;
@@ -139,6 +337,24 @@ impl StretchProcessor {
                 source.pitch_intent == pitch_intent
                     && self.native.effective_key_lock() == Some(key_lock)
             })
+    }
+
+    /// Preparation may have consumed actual input ahead of the logical adoption endpoint.
+    fn prepared_input_history(
+        &self,
+        feed: &ProductiveSourceFeed<'_>,
+    ) -> Option<ProductiveSourceHistory> {
+        let (playback, plan) = self
+            .native
+            .retained_start_feed(feed.playback, feed.plan)
+            .ok()?
+            .unwrap_or((*feed.playback, feed.plan));
+        Some(ProductiveSourceHistory {
+            binding: ProductiveSourceBinding::new(feed.sample, feed.sample_rate_hz, feed.accepted),
+            next_position: playback.position(),
+            domain: Some(plan.domain()),
+            fed_output_frames: self.native.primed_output_frames as u64,
+        })
     }
 
     fn retain_aligned_unity_history(&self, pitch_intent: PitchIntent, key_lock: bool) -> bool {
@@ -169,12 +385,27 @@ impl StretchProcessor {
 
     /// Numeric equality alone cannot authorize keeping a source-specific DSP owner.
     pub(crate) fn can_retain_mode_at_unit_rate(&self, feed: &ProductiveSourceFeed<'_>) -> bool {
+        let Ok(actual) = self.actual_source_checkpoint(feed.playback, feed.plan) else {
+            return false;
+        };
+        let actual = actual.unwrap_or(SourceReadCheckpoint {
+            playback: *feed.playback,
+            plan: feed.plan,
+        });
+        let actual_feed = ProductiveSourceFeed {
+            playback: &actual.playback,
+            plan: actual.plan,
+            ..*feed
+        };
         !self.wet_mode_failed()
             && !self.source_lane_busy()
             && feed.pitch_intent.total_semitones() != 0
             && feed.playback.tempo_ratio().to_bits() == 1.0_f64.to_bits()
             && feed.playback.rate_target().to_bits() == 1.0_f64.to_bits()
+            && actual.playback.tempo_ratio().to_bits() == 1.0_f64.to_bits()
+            && actual.playback.rate_target().to_bits() == 1.0_f64.to_bits()
             && !feed.plan.transition.is_active()
+            && !actual.plan.transition.is_active()
             && feed.plan.selection == super::source_reader::StemRenderSelection::full_mix()
             && super::native_source_coverage::complete_view_available(feed.sample)
             && feed.permit.is_some_and(|permit| {
@@ -184,9 +415,9 @@ impl StretchProcessor {
             && self.native.pitch_scale.to_bits() == feed.pitch_intent.frequency_ratio().to_bits()
             && self
                 .native
-                .has_productive_continuity(feed, self.productive_history)
+                .has_productive_continuity(&actual_feed, self.productive_history)
             && self.native.matches_effective_source(
-                feed,
+                &actual_feed,
                 self.preparation_epoch,
                 self.productive_history,
             )
@@ -240,19 +471,29 @@ impl StretchProcessor {
     /// Claim the lane's already warmed handle before admitting a new mode. The exchange only
     /// moves unique owners through fixed queues; Native preparation remains worker-owned.
     pub(crate) fn reserve_wet_mode(&mut self) -> bool {
-        if self.wet_mode_failed() {
+        if !self.wet_mode_available() {
             return false;
         }
+        self.reserve_wet_mode_claimed();
+        true
+    }
+
+    pub(crate) fn wet_mode_available(&self) -> bool {
+        !self.wet_mode_failed()
+            && ((self.native.rubberband.is_some() && !self.native.dirty)
+                || self.preparation.warmed_reserve_available())
+    }
+
+    /// The callback's complete effect claim owns the previously checked reserve.
+    pub(crate) fn reserve_wet_mode_claimed(&mut self) {
         if self.native.rubberband.is_some() && !self.native.dirty {
-            return true;
+            return;
         }
-        if !self.preparation.exchange(&mut self.native.rubberband) {
-            return false;
-        }
+        self.preparation
+            .exchange_claimed(&mut self.native.rubberband);
         self.native.dirty = false;
         self.native.used = false;
         self.native.pitch_scale = 1.0;
-        true
     }
 
     /// Admission for an intentional source cut must precede clearing usable old history.
@@ -261,18 +502,16 @@ impl StretchProcessor {
             || self.preparation.warmed_reserve_available()
     }
 
-    /// Move a used handle to its existing off-thread recycle lane before the fixed reset.
-    pub(crate) fn reserve_source_cut(&mut self) -> bool {
+    /// Only the callback consumes this preflighted warmed owner and recycle capacity.
+    pub(crate) fn reserve_source_cut_claimed(&mut self) {
         if !self.native.used && !self.native.dirty && self.native.rubberband.is_some() {
-            return true;
+            return;
         }
-        if !self.preparation.exchange(&mut self.native.rubberband) {
-            return false;
-        }
+        self.preparation
+            .exchange_claimed(&mut self.native.rubberband);
         self.native.used = false;
         self.native.dirty = false;
         self.native.pitch_scale = 1.0;
-        true
     }
 
     /// A pending ON warms Native while the previously effective dry feed reaches the EQ.
@@ -447,6 +686,20 @@ impl StretchProcessor {
             && self.preparation.source_matches(feed, epoch, request_id)
     }
 
+    pub(crate) fn prospective_rate_change_ready(
+        &mut self,
+        feed: &ProductiveSourceFeed<'_>,
+        epoch: u64,
+        request_id: u64,
+        target: f64,
+    ) -> bool {
+        self.preparation_epoch == epoch
+            && self.prospective_request == Some(request_id)
+            && self
+                .preparation
+                .source_rate_change_ready(feed, epoch, request_id, target)
+    }
+
     #[cfg(test)]
     pub(crate) fn prospective_work_ready(&mut self) -> bool {
         self.preparation.prepared_state().is_some()
@@ -471,12 +724,7 @@ impl StretchProcessor {
         self.prospective_request = None;
         self.request_pending = false;
         self.adopted_request_id = Some(request_id);
-        self.productive_history = Some(ProductiveSourceHistory {
-            binding: ProductiveSourceBinding::new(feed.sample, feed.sample_rate_hz, feed.accepted),
-            next_position: feed.playback.position(),
-            domain: Some(feed.plan.domain()),
-            fed_output_frames: self.native.primed_output_frames as u64,
-        });
+        self.productive_history = self.prepared_input_history(feed);
         self.wet_render_failed = false;
         self.wet_rendered = false;
         self.wet_output_emitted = false;
@@ -505,35 +753,51 @@ impl StretchProcessor {
             .chunk_until_prepared_adoption(output_frame, max_frames)
     }
 
-    /// Read the owning voice's real canonical source before feeding live native/adapter state.
+    /// Read the actual feed coordinates before feeding live native/adapter state.
     /// Projection refreshes retain chronological history only across exact source continuity.
-    /// Return whether the canonical source read succeeded, including dry bypass. A refused
-    /// read must remain a gap even when the mixer's logical source clock advances.
+    /// A receipt describes only a successful reader and render pass, including dry bypass.
+    /// A refused read/render remains a gap even when the independent logical clock advances.
     pub(crate) fn process_source(
         &mut self,
-        mut feed: ProductiveSourceFeed<'_>,
+        feed: ProductiveSourceFeed<'_>,
         output_frames: usize,
         _preserve_pitch: bool,
-    ) -> bool {
-        let readers = feed
-            .plan
-            .required_read_sets(StemReadSets::new(feed.stems, feed.outgoing_stems));
-        feed.stems = readers.current;
-        feed.outgoing_stems = readers.outgoing;
+    ) -> Option<SourceReadReceipt> {
         self.wet_rendered = false;
         self.wet_source_rendered = false;
         self.wet_source_output_emitted = false;
         let frames = output_frames.min(DEFAULT_BLOCK_SAMPLES);
-        if frames == 0 {
-            return false;
+        if frames == 0 || self.channels == 0 {
+            return None;
         }
+        let retained_feed = match self.native.retained_start_feed(feed.playback, feed.plan) {
+            Ok(actual) => actual,
+            Err(_) => {
+                self.silence_output(frames);
+                self.wet_render_failed = true;
+                return None;
+            }
+        };
+        let feed = ProductiveSourceFeed {
+            playback: retained_feed
+                .as_ref()
+                .map_or(feed.playback, |(actual, _)| actual),
+            plan: retained_feed.as_ref().map_or(feed.plan, |(_, plan)| *plan),
+            ..feed
+        };
+        let readers = feed
+            .plan
+            .required_read_sets(StemReadSets::new(feed.stems, feed.outgoing_stems));
+        let feed = ProductiveSourceFeed {
+            stems: readers.current,
+            outgoing_stems: readers.outgoing,
+            ..feed
+        };
         if self
             .native
             .source_transition
             .is_some_and(|expected| !expected.matches_exact(feed.plan.transition))
         {
-            // A missed or changed ramp cannot become valid again when it later clears.
-            // The original active request now has no continuation proof until replacement.
             self.native.source_transition = None;
         }
         let Ok(pitch_scale) = feed
@@ -542,12 +806,24 @@ impl StretchProcessor {
         else {
             self.silence_output(frames);
             self.wet_render_failed = true;
-            return false;
+            return None;
         };
         let wet = self.wet_processing_required(pitch_scale, feed.pitch_intent, feed.key_lock);
+        if retained_feed.is_some()
+            && (!wet
+                || !self.native.matches_effective_source(
+                    &feed,
+                    self.preparation_epoch,
+                    self.productive_history,
+                ))
+        {
+            self.silence_output(frames);
+            self.wet_render_failed = true;
+            return None;
+        }
         let finite = !super::native_source_coverage::complete_view_available(feed.sample);
-        if finite {
-            if (wet
+        if finite
+            && ((wet
                 && !super::native_source_coverage::normal_loop_feed_available_with_readers(
                     feed.sample,
                     readers,
@@ -565,15 +841,14 @@ impl StretchProcessor {
                         self.resampled_buffers_mut(frames),
                         frames,
                     )
-                    .is_err()
-            {
-                // Never consume missing-tap zeros or touch productive native/FIFO/history state.
-                self.silence_output(frames);
-                self.wet_render_failed = wet;
-                return false;
-            }
+                    .is_err())
+        {
+            // Never consume missing-tap zeros or touch productive native/FIFO/history state.
+            self.silence_output(frames);
+            self.wet_render_failed = wet;
+            return None;
         }
-        if self.prospective_request.is_none() {
+        if self.prospective_request.is_none() && retained_feed.is_none() {
             if !wet && self.request_pending {
                 self.invalidate_prepared();
             }
@@ -589,16 +864,7 @@ impl StretchProcessor {
                 SourceExchange::Adopted(request_id) => {
                     self.request_pending = false;
                     self.adopted_request_id = Some(request_id);
-                    self.productive_history = Some(ProductiveSourceHistory {
-                        binding: ProductiveSourceBinding::new(
-                            feed.sample,
-                            feed.sample_rate_hz,
-                            feed.accepted,
-                        ),
-                        next_position: feed.playback.position(),
-                        domain: Some(feed.plan.domain()),
-                        fed_output_frames: self.native.primed_output_frames as u64,
-                    });
+                    self.productive_history = self.prepared_input_history(&feed);
                 }
                 SourceExchange::Rejected(_request_id) => self.request_pending = false,
                 SourceExchange::Pending => {}
@@ -648,6 +914,22 @@ impl StretchProcessor {
             feed.key_lock,
             feed.pitch_intent,
         );
+        if wet && !self.wet_rendered {
+            // The source reader may have completed, but reserve starvation or Native failure
+            // did not complete the render pass. Do not publish a successful history receipt.
+            return None;
+        }
+        let receipt = SourceReadReceipt {
+            playback: *feed.playback,
+            plan: feed.plan,
+            context: SourceFeedContext::new(binding, readers),
+            output_frames: frames,
+            domain: if wet {
+                SourceReadDomain::NativeInput
+            } else {
+                SourceReadDomain::DryOutput
+            },
+        };
         self.wet_source_rendered = self.wet_render_ready()
             && self.native.matches_effective_source(
                 &feed,
@@ -659,18 +941,20 @@ impl StretchProcessor {
         {
             expected.advance_output_frames(frames, feed.playback.tempo_ratio());
         }
-        if self.native.active {
+        if receipt.domain == SourceReadDomain::NativeInput {
             self.productive_history = Some(ProductiveSourceHistory {
-                binding,
-                next_position: feed.playback.position_at(frames),
-                domain: Some(feed.plan.domain()),
-                fed_output_frames: prior_frames.saturating_add(frames as u64),
+                binding: receipt.context.binding,
+                next_position: receipt.playback.position_at(receipt.output_frames),
+                domain: Some(receipt.plan.domain()),
+                fed_output_frames: prior_frames.saturating_add(receipt.output_frames as u64),
             });
+            self.native
+                .advance_retained_start_feed(receipt.output_frames);
         } else {
             // Dry bypass and failed reserve admission own no productive wet history.
             self.productive_history = None;
         }
-        true
+        Some(receipt)
     }
 
     /// Returns fixed feed storage whose first `output_frames` samples the source reader fills.
@@ -925,6 +1209,11 @@ impl StretchProcessor {
     }
 
     #[cfg(test)]
+    pub(crate) fn native_has_physical_birth_context_for_test(&self) -> bool {
+        self.native.has_physical_birth_context()
+    }
+
+    #[cfg(test)]
     pub(crate) fn native_tap_observation(
         &self,
     ) -> Option<super::source_reader::TapReadObservation> {
@@ -1109,6 +1398,7 @@ mod tests {
                         voice_generation: 2,
                         execution_frame: 8292,
                         paused: false,
+                        actual_feed: None,
                         source_feed_context:
                             super::super::source_feed_history::SourceFeedContext::new(
                                 ProductiveSourceBinding::new(
@@ -1144,6 +1434,7 @@ mod tests {
                     voice_generation: 1,
                     execution_frame: 8292,
                     paused: false,
+                    actual_feed: None,
                     source_feed_context: super::super::source_feed_history::SourceFeedContext::new(
                         ProductiveSourceBinding::new(
                             feed.sample,
@@ -1214,6 +1505,7 @@ mod tests {
                     voice_generation: 1,
                     execution_frame: 8292,
                     paused: true,
+                    actual_feed: None,
                     source_feed_context: super::super::source_feed_history::SourceFeedContext::new(
                         ProductiveSourceBinding::new(
                             feed.sample,
@@ -1269,6 +1561,7 @@ mod tests {
                     voice_generation: 1,
                     execution_frame: 12_388,
                     paused: true,
+                    actual_feed: None,
                     source_feed_context: super::super::source_feed_history::SourceFeedContext::new(
                         ProductiveSourceBinding::new(
                             feed.sample,

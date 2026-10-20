@@ -202,6 +202,7 @@ impl Callback {
     }
 }
 
+#[track_caller]
 fn wait_until(timeout: Duration, mut condition: impl FnMut() -> bool) {
     let deadline = Instant::now() + timeout;
     while !condition() {
@@ -1259,10 +1260,22 @@ fn finite_replacement_waits_for_actual_native_retirement_feedback_and_ack() {
         wait_until(Duration::from_secs(10), || {
             engine.cold_loading[0].load(Ordering::Acquire) == 0
         });
-        assert!(matches!(
-            callback.feedback_rx.pop().unwrap(),
-            AudioMessage::SampleStopped { id: 0 }
+        let stopped = callback.feedback_rx.pop().unwrap();
+        let key = engine
+            .input_runtime_ownership
+            .slot_snapshot(0)
+            .unwrap()
+            .content_key()
+            .unwrap();
+        assert!(matches!(&stopped,
+            AudioMessage::ContentFeedback { id: 0, owner, cell, lifetime, transport_revision, kind: 2, value }
+            if *owner == engine.input_runtime_ownership.owner_identity().diagnostic()
+                && *cell == key.cell().index() && *lifetime == key.lifetime()
+                && *transport_revision == engine.input_runtime_ownership.transport_intent_for_cell(key.cell()).load(Ordering::Acquire)
+                && value.to_bits() == 0.0_f64.to_bits()
         ));
+        assert_eq!(engine._resolve_pad_feedback(&stopped).unwrap(), Some(0));
+        assert!(callback.feedback_rx.is_empty());
         assert!(
             !callback
                 .mixer

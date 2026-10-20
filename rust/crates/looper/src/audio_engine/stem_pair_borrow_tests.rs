@@ -202,16 +202,45 @@ fn public_pair_worker_child_allows_receive_mutable_ping_and_pad1_render() {
         engine
             .input_runtime_ownership
             .publish_test_source(1, &sample, RATE, 19);
+        let ownership = &engine.input_runtime_ownership;
+        let placement = ownership.slot_snapshot(1).unwrap();
+        let key = placement.content_key().unwrap();
+        let write = ownership
+            .prepare_slot_write_fixed(placement, placement.lifetime())
+            .unwrap();
+        let publication = ownership
+            .publish_source_write(
+                &write,
+                &sample,
+                RATE,
+                19,
+                ownership.authority_revision(1),
+                None,
+                false,
+                || true,
+            )
+            .unwrap();
         producer
             .lock()
             .unwrap()
             .push(ControlMessage::LoadSample {
                 id: 1,
-                sample,
-                publication: None,
+                sample: sample.clone(),
+                publication: Some(publication),
             })
             .unwrap();
         assert_eq!(callback.drain(&mut consumer), 1);
+        assert_eq!(ownership.callback_feedback_key(1), Some(key));
+        assert_eq!(
+            ownership.callback_source_generation(1, &sample, RATE),
+            Some(19)
+        );
+        assert!(
+            callback.mixer.bank_for_measurement()[1]
+                .as_ref()
+                .unwrap()
+                .same_window(&sample)
+        );
     } else {
         let preparation = control::prepared_for_test(
             &engine,
@@ -439,7 +468,15 @@ fn public_pair_worker_child_allows_receive_mutable_ping_and_pad1_render() {
     let stems = queued_stems(&mut consumer);
     assert_eq!(stems.stems.len(), 4);
     assert_eq!(callback.drain(&mut consumer), 1);
-    Python::attach(|py| assert_eq!(ticket.borrow(py).publication_status(), "accepted"));
+    Python::attach(|py| {
+        let ticket = ticket.borrow(py);
+        assert_eq!(
+            ticket.publication_status(),
+            "accepted",
+            "publication_mode={publication_mode:?}, rejection_reason={:?}",
+            ticket.rejection_reason(),
+        );
+    });
     callback.assert_old_voice(&previous);
     fs::write(
         directory.join("public-borrow-verified.json"),

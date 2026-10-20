@@ -4,14 +4,13 @@ from typing import TYPE_CHECKING
 from imgui_bundle import imgui
 
 from flitzis_looper.ui.constants import (
-    BOTTOM_BAR_HEIGHT,
     SIDEBAR_COLLAPSED_PX,
     SIDEBAR_LEFT_PX,
     SIDEBAR_RIGHT_PX,
     SPACING,
 )
 from flitzis_looper.ui.contextmanager import default_style, style_var
-from flitzis_looper.ui.render.bottom_bar import bottom_bar
+from flitzis_looper.ui.render.bottom_bar import bottom_bar, bottom_bar_layout
 from flitzis_looper.ui.render.file_dialog import check_file_dialog, open_file_dialog
 from flitzis_looper.ui.render.performance_confirmation import performance_confirmation
 from flitzis_looper.ui.render.performance_view import performance_view
@@ -113,7 +112,8 @@ def _sidebar(
 
 def _center_area(ctx: UiContext) -> None:
     avail = imgui.get_content_region_avail()
-    surface_height = max(0.0, avail.y - BOTTOM_BAR_HEIGHT - SPACING)
+    bar_height = bottom_bar_layout(avail.x).height
+    surface_height = max(1.0, avail.y - bar_height - SPACING)
     waveform_open = ctx.state.session.waveform_editor_open and not ctx.state.session.settings_open
 
     with style_var(imgui.StyleVar_.item_spacing, (0.0, 0.0)):
@@ -133,7 +133,7 @@ def _center_area(ctx: UiContext) -> None:
 
         imgui.dummy((0.0, SPACING))
 
-        imgui.begin_child("bottom_bar", (-1, BOTTOM_BAR_HEIGHT))
+        imgui.begin_child("bottom_bar", (-1, bar_height))
         bottom_bar(ctx)
         imgui.end_child()
 

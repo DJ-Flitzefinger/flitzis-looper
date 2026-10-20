@@ -175,6 +175,17 @@ pub(super) fn queue(
     (Arc::new(Mutex::new(producer)), consumer)
 }
 
+/// Install the exact queue exercised by a device-free publication fixture.
+pub(in crate::audio_engine) fn with_control_producer(
+    mut engine: AudioEngine,
+    producer: &Arc<Mutex<Producer<ControlMessage>>>,
+) -> AudioEngine {
+    assert!(engine.stream_handle.is_none());
+    let (_, feedback) = rtrb::RingBuffer::<crate::messages::AudioMessage>::new(1);
+    engine.test_control_channels = Some((producer.clone(), Arc::new(Mutex::new(feedback))));
+    engine
+}
+
 pub(super) fn accept_message(mixer: &mut RtMixer, message: ControlMessage) -> bool {
     let ControlMessage::PublishConstantTiming { id, timing } = message else {
         panic!("timing publication");
@@ -243,6 +254,7 @@ fn current_resolver_follows_callback_revision_and_retains_old_acceptance_while_r
     let engine = test_engine();
     let first = synthetic_ticket(&engine);
     let (producer, mut consumer) = queue(2);
+    let engine = with_control_producer(engine, &producer);
     let mut mixer = acknowledged_mixer(&engine);
     publish(
         &engine,
@@ -331,6 +343,7 @@ fn current_resolver_never_promotes_rejected_replacement_or_matching_stale_source
         let engine = test_engine();
         let first = synthetic_ticket(&engine);
         let (producer, mut consumer) = queue(2);
+        let engine = with_control_producer(engine, &producer);
         let mut mixer = acknowledged_mixer(&engine);
         publish(
             &engine,
@@ -375,9 +388,10 @@ fn current_resolver_never_promotes_rejected_replacement_or_matching_stale_source
 
 #[test]
 fn current_registry_cannot_pin_unloaded_pcm_and_shutdown_retires_pending_record_metadata() {
-    let mut engine = test_engine();
+    let engine = test_engine();
     let first = synthetic_ticket(&engine);
     let (producer, mut consumer) = queue(2);
+    let mut engine = with_control_producer(engine, &producer);
     let mut mixer = acknowledged_mixer(&engine);
     publish(
         &engine,
@@ -437,6 +451,7 @@ fn current_resolver_preserves_failed_edit_and_never_revives_manual_tap_legacy_au
         let engine = test_engine();
         let first = synthetic_ticket(&engine);
         let (producer, mut consumer) = queue(2);
+        let engine = with_control_producer(engine, &producer);
         let mut mixer = acknowledged_mixer(&engine);
         publish(
             &engine,
@@ -473,6 +488,7 @@ fn current_resolver_preserves_failed_edit_and_never_revives_manual_tap_legacy_au
         let engine = test_engine();
         let first = synthetic_ticket(&engine);
         let (producer, mut consumer) = queue(2);
+        let engine = with_control_producer(engine, &producer);
         let mut mixer = acknowledged_mixer(&engine);
         publish(
             &engine,
@@ -542,6 +558,7 @@ fn real_native_qm_preparation_binds_complete_actual_loaded_pcm_and_request() {
         .collect();
     let explicit = json!([{"id":"independently-generated-fixture-quarter-association","provenance":"mapping to independently generated pulse/quarter coordinates, not ordinal detector inference","verification":"verified","quarter_note_denominator":1,"quarter_counts":counts}]).to_string();
     let (producer, mut consumer) = queue(1);
+    let engine = with_control_producer(engine, &producer);
     publish(&engine, &producer, &ticket, &explicit, origin(), decision()).unwrap();
     let mut mixer = acknowledged_mixer(&engine);
     assert!(accept_message(&mut mixer, consumer.pop().unwrap()));
@@ -553,6 +570,7 @@ fn actual_publication_uses_guard_acknowledgement_and_binary64_source_grid() {
     let engine = test_engine();
     let ticket = synthetic_ticket(&engine);
     let (producer, mut consumer) = queue(1);
+    let engine = with_control_producer(engine, &producer);
     publish(
         &engine,
         &producer,
@@ -605,6 +623,7 @@ fn current_owner_rejects_matching_stale_or_foreign_snapshots() {
             _ => engine.timing_intents.lock().unwrap()[0] = TimingIntent::Manual,
         }
         let (producer, mut consumer) = queue(1);
+        let engine = with_control_producer(engine, &producer);
         assert!(
             publish(
                 &engine,
@@ -624,6 +643,7 @@ fn current_owner_rejects_matching_stale_or_foreign_snapshots() {
     let other = test_engine();
     let ticket = synthetic_ticket(&first);
     let (producer, _) = queue(1);
+    let other = with_control_producer(other, &producer);
     assert!(
         publish(
             &other,
@@ -642,6 +662,7 @@ fn full_queue_and_exhaustion_preserve_ticket_guard_epoch_and_intent() {
     let engine = test_engine();
     let ticket = synthetic_ticket(&engine);
     let (producer, mut consumer) = queue(1);
+    let engine = with_control_producer(engine, &producer);
     producer
         .lock()
         .unwrap()
@@ -684,6 +705,7 @@ fn full_queue_and_exhaustion_preserve_ticket_guard_epoch_and_intent() {
     engine.prepared_source_epochs[0].store(u64::MAX, Ordering::Release);
     let ticket = synthetic_ticket(&engine);
     let (producer, mut consumer) = queue(2);
+    let engine = with_control_producer(engine, &producer);
     assert!(
         publish(
             &engine,
@@ -715,6 +737,7 @@ fn explicit_intent_roundtrip_equal_legacy_edits_and_actual_request_admission_rev
         let engine = test_engine();
         let ticket = synthetic_ticket(&engine);
         let (producer, mut consumer) = queue(2);
+        let engine = with_control_producer(engine, &producer);
         set_intent(&engine, &producer, 0, intent).unwrap();
         consumer.pop().unwrap();
         set_intent(&engine, &producer, 0, TimingIntent::Automatic).unwrap();
@@ -735,6 +758,7 @@ fn explicit_intent_roundtrip_equal_legacy_edits_and_actual_request_admission_rev
         let engine = test_engine();
         let ticket = synthetic_ticket(&engine);
         let (producer, _) = queue(2);
+        let engine = with_control_producer(engine, &producer);
         let (parameter, _) = rtrb::RingBuffer::new(1);
         if use_bpm {
             publish_legacy_bpm(&engine, &Arc::new(Mutex::new(parameter)), 0, Some(120.0)).unwrap();
@@ -774,6 +798,7 @@ fn explicit_intent_roundtrip_equal_legacy_edits_and_actual_request_admission_rev
         )
         .unwrap();
     let (producer, _) = queue(1);
+    let engine = with_control_producer(engine, &producer);
     assert!(
         publish(
             &engine,
@@ -794,6 +819,7 @@ fn callback_rejects_retired_intent_or_changed_source_and_preserves_previous_grid
         let engine = test_engine();
         let ticket = synthetic_ticket(&engine);
         let (producer, mut consumer) = queue(2);
+        let engine = with_control_producer(engine, &producer);
         publish(
             &engine,
             &producer,
@@ -824,6 +850,7 @@ fn old_cross_ring_clear_or_bpm_cannot_erase_newer_precise_adoption() {
     let engine = test_engine();
     let ticket = synthetic_ticket(&engine);
     let (producer, mut consumer) = queue(1);
+    let engine = with_control_producer(engine, &producer);
     publish(
         &engine,
         &producer,
@@ -856,6 +883,7 @@ fn unsupported_or_unverified_assertions_cannot_publish_or_consume_ticket() {
     let engine = test_engine();
     let ticket = synthetic_ticket(&engine);
     let (producer, mut consumer) = queue(1);
+    let engine = with_control_producer(engine, &producer);
     let unverified = hypotheses().replace("\"verified\"", "\"unverified\"");
     assert!(
         publish(
@@ -972,6 +1000,7 @@ fn constant_timing_normal_analysis_admission_rejects_pending_and_queued_and_chec
         let engine = test_engine();
         let ticket = synthetic_ticket(&engine);
         let (producer, mut consumer) = queue(1);
+        let engine = with_control_producer(engine, &producer);
         if queued {
             publish(
                 &engine,

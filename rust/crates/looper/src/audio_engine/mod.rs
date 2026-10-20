@@ -62,6 +62,7 @@ pub(crate) mod captured_global_start;
 mod dsp;
 mod errors;
 pub(crate) mod global_playback_batch;
+mod late_start_dsp;
 pub use captured_global_start::CapturedGlobalStart;
 pub(crate) mod hold_action;
 pub use global_playback_batch::GlobalPlaybackBatchTicket;
@@ -74,13 +75,34 @@ mod ordinary_loader_incoming_tests;
 mod transport_intent_control;
 pub use input_runtime_binding::InputRuntimePadBinding;
 pub(crate) mod global_rate_status;
+mod key_lock_attack_measurement;
+mod key_lock_attack_reference;
+#[cfg(all(test, windows))]
+mod key_lock_authored_onset_tests;
 mod key_lock_feedback;
+#[cfg(all(test, windows))]
+mod key_lock_native_envelope_tests;
+#[cfg(all(test, windows))]
+mod key_lock_physical_onset_tests;
 pub(crate) mod key_lock_preparation;
+#[cfg(all(test, windows))]
+mod key_lock_recorded_source_tests;
 #[cfg(test)]
 mod key_lock_source_preparation;
+pub(crate) mod key_lock_start_policy;
+#[cfg(test)]
+mod key_lock_start_policy_tests;
+#[cfg(all(test, windows))]
+mod key_lock_tonal_onset_tests;
 mod loader_events;
 mod loop_acceptance;
+pub(crate) mod mix_capture;
+mod mix_capture_api;
+mod source_beatmap;
+pub use source_beatmap::SourceBeatmap;
 mod mixer;
+pub use mix_capture_api::MixCaptureTicket;
+pub use mix_capture_api::inspect_mix_capture_spool;
 mod native_history_permit;
 mod native_owned_work;
 mod native_source_coverage;
@@ -115,6 +137,10 @@ pub use hold_action::HoldActionTicket;
 pub use input_mapping::CapturedInputPadTrigger;
 pub use loader_events::LoaderEventDelivery;
 pub use offline_stem_source::OfflineStemSourceLease;
+pub use pad_copy::bank::{
+    BankMutationAcknowledgement, BankMutationTicket, BankParticipants, CapturedBankMutation,
+    RecoveredBankAcceptance,
+};
 pub use pad_copy::recovery::RecoveredCopyAcceptance;
 pub use pad_copy::{CapturedPadCopy, PadCopyTicket};
 pub use pad_pair::recovery::RecoveredPairAcceptance;
@@ -158,6 +184,7 @@ pub(crate) use scalar_grid::ScalarSourceGrid;
 #[cfg(test)]
 mod l3_source_reader_tests;
 mod scheduler;
+mod source_control_epoch;
 mod source_feed_history;
 mod source_grid;
 mod source_playback;
@@ -510,7 +537,7 @@ fn resident_seek_available(sample: &SampleBuffer, position_s: f64, rate: u32) ->
     frame >= sample.resident_start() && frame < sample.resident_end()
 }
 
-pub(crate) use cold_load::SourcePitchInitialization;
+pub(crate) use cold_load::{SourceMixInitialization, SourcePitchInitialization};
 
 struct LoadedSourcePublication<'a> {
     ownership: &'a Arc<input_runtime_binding::InputRuntimeOwnership>,
@@ -528,6 +555,7 @@ struct LoadedSourcePublication<'a> {
     resident_cancelled: Option<Arc<AtomicBool>>,
     incoming_defaults: Option<crate::messages::IncomingLoadDefaults>,
     initial_pitch: cold_load::SourcePitchInitialization,
+    initial_mix: Option<cold_load::SourceMixInitialization>,
     intent: Option<(
         &'a mut analysis::tempo_acceptance::TimingIntent,
         analysis::tempo_acceptance::TimingIntent,
@@ -546,6 +574,7 @@ fn publish_loaded_sample(
         .map(|_| ())
 }
 
+#[cfg(test)]
 fn publish_loaded_sample_with_arm(
     producer: &Arc<Mutex<Producer<ControlMessage>>>,
     sample_cache: &Arc<Mutex<Vec<Option<SampleBuffer>>>>,
@@ -554,6 +583,19 @@ fn publish_loaded_sample_with_arm(
     publication: LoadedSourcePublication<'_>,
     arm: impl FnOnce() -> Result<(), String>,
 ) -> Result<input_runtime_binding::SourcePublication, String> {
+    try_publish_loaded_sample_with_arm(producer, sample_cache, id, sample, publication, arm)
+        .map_err(|error| error.to_string())
+}
+
+fn try_publish_loaded_sample_with_arm(
+    producer: &Arc<Mutex<Producer<ControlMessage>>>,
+    sample_cache: &Arc<Mutex<Vec<Option<SampleBuffer>>>>,
+    id: usize,
+    sample: SampleBuffer,
+    publication: LoadedSourcePublication<'_>,
+    arm: impl FnOnce() -> Result<(), String>,
+) -> Result<input_runtime_binding::SourcePublication, input_runtime_binding::SourcePublicationError>
+{
     let mut cache = sample_cache
         .lock()
         .map_err(|_| "sample cache lock poisoned")?;
@@ -584,14 +626,14 @@ fn publish_loaded_sample_with_arm(
     // resource/queue/scalar admission succeeds. The caller owns its request gate.
     let write = publication
         .ownership
-        .prepare_slot_write(publication.placement, content_lifetime)?;
+        .prepare_slot_write_fixed(publication.placement, content_lifetime)?;
     // Capacity is reserved under the only producer lock. Publish the source fence
     // before releasing the command so a fast callback never sees an old fence.
     let intent = publication.intent.as_ref().map(|(_, intent)| *intent);
     let mut arm_error = None;
     let published = publication
         .ownership
-        .publish_source_write(
+        .publish_source_write_fixed(
             &write,
             &sample,
             publication.rate,
@@ -607,7 +649,12 @@ fn publish_loaded_sample_with_arm(
                 }
             },
         )
-        .map_err(|error| arm_error.unwrap_or(error))?;
+        .map_err(|error| {
+            arm_error.map_or(
+                error,
+                input_runtime_binding::SourcePublicationError::Rejected,
+            )
+        })?;
     if let Some((slot, intent)) = publication.intent {
         *slot = intent;
     }
@@ -636,6 +683,7 @@ fn publish_loaded_sample_with_arm(
             resident_cancelled: publication.resident_cancelled,
             incoming_defaults: publication.incoming_defaults,
             initial_pitch: publication.initial_pitch,
+            initial_mix: publication.initial_mix,
         }
     } else {
         ControlMessage::LoadSample {
@@ -787,10 +835,26 @@ fn parse_constant_timing_pcm_limit(value: &Bound<'_, PyAny>) -> PyResult<usize> 
     constant_timing::validated_pcm_limit_bytes(limit_bytes).map_err(PyValueError::new_err)
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum StreamQuiescence {
+    Open,
+    Verified,
+    Uncertain,
+}
+
+/// Receipt for the last installed stream, sharing its actual callback failure bit.
+/// Absence of a stream handle alone never establishes verified quiescence.
+struct StreamLifecycle {
+    failed: Arc<AtomicBool>,
+    quiescence: StreamQuiescence,
+}
+
 /// AudioEngine provides audio output and non-realtime control through CPAL.
 #[pyclass]
 pub struct AudioEngine {
     stream_handle: Option<AudioStreamHandle>,
+    stream_lifecycle: Option<StreamLifecycle>,
+    mix_capture_owner: Mutex<Option<mix_capture_api::EngineCapture>>,
     #[cfg(test)]
     test_control_channels: Option<(
         Arc<Mutex<Producer<ControlMessage>>>,
@@ -831,6 +895,7 @@ pub struct AudioEngine {
     resident_restore_guards: Mutex<Vec<Option<Arc<cold_residency::ResidentLoadGuard>>>>,
     incoming_loads: Mutex<Vec<Option<Arc<incoming_load::IncomingLoad>>>>,
     pad_copies: Mutex<Vec<Option<Arc<pad_copy::PadCopyState>>>>,
+    bank_mutations: Mutex<Vec<Arc<pad_copy::bank::BankMutationState>>>,
     cold_lease_generations: Arc<Vec<AtomicU64>>,
     cold_pcm_history: Arc<project_assets::PcmHistory>,
     project_assets: Arc<project_assets::ProjectAssets>,
@@ -842,6 +907,107 @@ pub struct AudioEngine {
 }
 
 impl AudioEngine {
+    fn stream_quiescence_error() -> PyErr {
+        PyRuntimeError::new_err(
+            "audio callback quiescence is unverified; original ownership retained",
+        )
+    }
+
+    /// Shared control transaction; the productive caller closes its actual stream.
+    /// Tests supply the actual hardware-free callback owner and the same join barrier.
+    fn close_audio_stream_with(
+        &mut self,
+        close: impl FnOnce(&mut Self) -> std::io::Result<()>,
+    ) -> PyResult<()> {
+        match self.stream_lifecycle.as_ref().map(|state| state.quiescence) {
+            Some(StreamQuiescence::Uncertain) => return Err(Self::stream_quiescence_error()),
+            Some(StreamQuiescence::Open) => {
+                // Set before transferring the owner: neither a failed join nor an unwind
+                // may turn a missing handle into permission for orphan takeover/restart.
+                self.stream_lifecycle.as_mut().unwrap().quiescence = StreamQuiescence::Uncertain;
+                self.is_playing = false;
+                close(self).map_err(|error| PyRuntimeError::new_err(error.to_string()))?;
+                self.stream_lifecycle.as_mut().unwrap().quiescence = StreamQuiescence::Verified;
+            }
+            Some(StreamQuiescence::Verified) | None => {}
+        }
+        self.poll_mix_capture_shutdown_checked()
+    }
+
+    fn close_audio_stream_checked(&mut self) -> PyResult<()> {
+        self.close_audio_stream_with(|engine| {
+            let stream = engine.stream_handle.take().ok_or_else(|| {
+                std::io::Error::other(
+                    "original audio stream owner is unavailable for verified close",
+                )
+            })?;
+            stream.close_checked()
+        })
+    }
+
+    fn discard_uninstalled_stream(&mut self, stream: AudioStreamHandle, error: PyErr) -> PyErr {
+        let failure = stream.stream_failed.clone();
+        match stream.close_checked() {
+            Ok(()) => error,
+            Err(close_error) => {
+                // A failed explicit run must not erase the previous stream's sticky
+                // error. Even a first startup failure must fence a later restart if
+                // its newly built callback image could not be verified closed.
+                self.note_unverified_stream_close(failure);
+                PyRuntimeError::new_err(format!("{error}; {close_error}"))
+            }
+        }
+    }
+
+    fn note_unverified_stream_close(&mut self, failure: Arc<AtomicBool>) {
+        self.stream_lifecycle
+            .get_or_insert(StreamLifecycle {
+                failed: failure,
+                quiescence: StreamQuiescence::Uncertain,
+            })
+            .quiescence = StreamQuiescence::Uncertain;
+    }
+
+    fn note_stream_startup_error(&mut self, error: &(dyn std::error::Error + 'static)) {
+        if let Some(error) = error.downcast_ref::<audio_stream::UncertainStreamStartup>() {
+            self.note_unverified_stream_close(error.failure_signal());
+        }
+    }
+
+    fn quiesce_failed_stream_with(
+        &mut self,
+        close: impl FnOnce(&mut Self) -> std::io::Result<()>,
+    ) -> PyResult<bool> {
+        if self
+            .stream_lifecycle
+            .as_ref()
+            .is_some_and(|state| state.quiescence == StreamQuiescence::Uncertain)
+        {
+            return Err(Self::stream_quiescence_error());
+        }
+        if !self.audio_stream_failed() {
+            return Ok(false);
+        }
+        // Establish the actual stream failure before any ordinary cancellation.
+        // The capture's first reason and already closed successful writer survive.
+        self.poll_mix_capture_stream_failure()?;
+        if let Some(runtime) = self.input_runtime.as_ref() {
+            runtime.set_enabled(false);
+        }
+        self.close_audio_stream_with(close)?;
+        Ok(true)
+    }
+
+    /// Existing Rust callers share the optional original-participant Python kernel.
+    pub fn capture_bank_mutation(
+        &self,
+        source_bank: Option<usize>,
+        target_bank: usize,
+        intents: Vec<Option<String>>,
+    ) -> PyResult<CapturedBankMutation> {
+        pad_copy::bank::capture(self, source_bank, target_bank, intents)
+    }
+
     /// Existing Rust callers share the optional-binding capture kernel with Python.
     pub fn _capture_pad_pair(
         &self,
@@ -1157,6 +1323,89 @@ impl AudioEngine {
 
 #[pymethods]
 impl AudioEngine {
+    /// Prepare one internal float spool. Encoded recording publication is separate.
+    #[pyo3(signature = (spool_path, block_frames=4096, block_count=32, max_pool_pcm_bytes=8388608))]
+    pub fn prepare_mix_capture(
+        &self,
+        spool_path: &str,
+        block_frames: usize,
+        block_count: usize,
+        max_pool_pcm_bytes: usize,
+    ) -> PyResult<MixCaptureTicket> {
+        self.prepare_mix_capture_internal(spool_path, block_frames, block_count, max_pool_pcm_bytes)
+    }
+
+    /// Queue intent only; actual start and frame belong to the callback ACK.
+    #[pyo3(signature = (ticket, target_frame=None))]
+    pub fn start_mix_capture(
+        &self,
+        ticket: &MixCaptureTicket,
+        target_frame: Option<u64>,
+    ) -> PyResult<bool> {
+        match target_frame {
+            Some(frame) => self.start_mix_capture_internal(ticket, frame),
+            None => self.start_mix_capture_target_internal(
+                ticket,
+                crate::messages::MixCaptureTarget::NextAdmissible,
+            ),
+        }
+    }
+
+    /// Queue an exclusive endpoint using the existing scheduler's reserved stop.
+    #[pyo3(signature = (ticket, target_frame=None))]
+    pub fn stop_mix_capture(
+        &self,
+        ticket: &MixCaptureTicket,
+        target_frame: Option<u64>,
+    ) -> PyResult<bool> {
+        match target_frame {
+            Some(frame) => self.stop_mix_capture_internal(ticket, frame),
+            None => self.stop_mix_capture_target_internal(
+                ticket,
+                crate::messages::MixCaptureTarget::NextAdmissible,
+            ),
+        }
+    }
+
+    pub fn cancel_mix_capture(&self, ticket: &MixCaptureTicket) -> PyResult<bool> {
+        self.cancel_mix_capture_internal(ticket)
+    }
+
+    /// Poll actual worker/stream state without waiting for filesystem completion.
+    pub fn mix_capture_status(
+        &self,
+        py: Python<'_>,
+        ticket: &MixCaptureTicket,
+    ) -> PyResult<Py<PyDict>> {
+        self.mix_capture_status_internal(py, ticket)
+    }
+
+    /// Accepted global start contract; queue admission never changes this value.
+    pub fn key_lock_start_behavior(&self) -> &'static str {
+        self.input_runtime_ownership
+            .key_lock_start_behavior()
+            .as_str()
+    }
+
+    /// Callback-owned fully stopped observation, including paused and pending playback.
+    pub fn can_change_key_lock_start_behavior(&self) -> bool {
+        self.input_runtime_ownership
+            .can_change_key_lock_start_behavior()
+    }
+
+    /// Synchronously accept while stopped or reject without remembering a later choice.
+    pub fn set_key_lock_start_behavior(&self, behavior: &str) -> PyResult<bool> {
+        let behavior =
+            key_lock_start_policy::KeyLockStartBehavior::parse(behavior).ok_or_else(|| {
+                PyValueError::new_err(
+                    "Key Lock start behavior must be first_sound_at_grid or attack_at_grid",
+                )
+            })?;
+        Ok(self
+            .input_runtime_ownership
+            .set_key_lock_start_behavior(behavior))
+    }
+
     /// Device-free capability proof for scoped admission and residency interests.
     #[classattr]
     const RESIDENT_PCM_ADMISSION_VERSION: u32 = 1;
@@ -1256,6 +1505,8 @@ impl AudioEngine {
 
         Ok(AudioEngine {
             stream_handle: None,
+            stream_lifecycle: None,
+            mix_capture_owner: Mutex::new(None),
             #[cfg(test)]
             test_control_channels: None,
             #[cfg(test)]
@@ -1303,6 +1554,7 @@ impl AudioEngine {
             resident_restore_guards: Mutex::new((0..NUM_SAMPLES).map(|_| None).collect()),
             incoming_loads: Mutex::new((0..NUM_SAMPLES).map(|_| None).collect()),
             pad_copies: Mutex::new((0..NUM_SAMPLES).map(|_| None).collect()),
+            bank_mutations: Mutex::new(Vec::new()),
             cold_lease_generations: Arc::new((0..NUM_SAMPLES).map(|_| AtomicU64::new(0)).collect()),
             cold_pcm_history,
             project_assets,
@@ -1316,12 +1568,22 @@ impl AudioEngine {
 
     /// Initialize and run the audio engine.
     pub fn run(&mut self) -> PyResult<()> {
+        if self.stream_handle.is_some() {
+            return Err(PyRuntimeError::new_err("AudioEngine already running"));
+        }
+        if self
+            .stream_lifecycle
+            .as_ref()
+            .is_some_and(|state| state.quiescence != StreamQuiescence::Verified)
+        {
+            return Err(Self::stream_quiescence_error());
+        }
+        // A new stream must not reset source/timing truth over the old capture's
+        // still-live pool or writer. Its original ticket/control stay unchanged.
+        self.ensure_mix_capture_settled_before_run()?;
         if self.cold_cancelled.swap(false, Ordering::AcqRel) {
             self.cold_jobs = cold_jobs::ColdJobs::new()
                 .map_err(|error| PyRuntimeError::new_err(error.to_string()))?;
-        }
-        if self.stream_handle.is_some() {
-            return Err(PyRuntimeError::new_err("AudioEngine already running"));
         }
 
         self.current_timing_acknowledgements.clear_all();
@@ -1343,30 +1605,65 @@ impl AudioEngine {
             self.loop_acceptance.clone(),
         ) {
             Ok(handle) => {
-                start_stream(&handle.stream).map_err(|e| {
-                    PyRuntimeError::new_err(format!("Failed to start audio stream: {e}"))
-                })?;
-                self.input_runtime = Some(InputRuntime::new_with_ownership(
+                if let Err(error) = start_stream(&handle.stream) {
+                    let error =
+                        PyRuntimeError::new_err(format!("Failed to start audio stream: {error}"));
+                    return Err(self.discard_uninstalled_stream(handle, error));
+                }
+                let runtime = InputRuntime::new_with_ownership(
                     handle.producer.clone(),
                     self.input_clock,
                     self.input_runtime_ownership.clone(),
-                ));
-                if let Some(runtime) = &self.input_runtime {
-                    runtime
-                        .attach_pitch_clock(handle.output_clock.clone())
-                        .map_err(PyRuntimeError::new_err)?;
-                    runtime
-                        .set_render_format(handle.output_sample_rate, handle.output_channels)
-                        .map_err(PyRuntimeError::new_err)?;
+                );
+                if let Err(error) = runtime
+                    .attach_pitch_clock(handle.output_clock.clone())
+                    .and_then(|()| {
+                        runtime.set_render_format(handle.output_sample_rate, handle.output_channels)
+                    })
+                {
+                    drop(runtime);
+                    return Err(
+                        self.discard_uninstalled_stream(handle, PyRuntimeError::new_err(error))
+                    );
                 }
+                self.input_runtime = Some(runtime);
+                self.stream_lifecycle = Some(StreamLifecycle {
+                    failed: handle.stream_failed.clone(),
+                    quiescence: StreamQuiescence::Open,
+                });
                 self.stream_handle = Some(handle);
                 self.is_playing = true;
                 Ok(())
             }
-            Err(e) => Err(PyRuntimeError::new_err(format!(
-                "Failed to create audio stream: {e}"
-            ))),
+            Err(error) => {
+                self.note_stream_startup_error(error.as_ref());
+                Err(PyRuntimeError::new_err(format!(
+                    "Failed to create audio stream: {error}"
+                )))
+            }
         }
+    }
+
+    /// Observe the actual last installed stream's sticky error, even after close.
+    /// This is independent of the original capture's first failure reason.
+    pub fn audio_stream_failed(&self) -> bool {
+        self.stream_lifecycle
+            .as_ref()
+            .is_some_and(|state| state.failed.load(Ordering::Acquire))
+    }
+
+    /// Close an actually failed stream and verify callback-image retirement.
+    /// True is idempotent after that barrier, not a writer/finalization ACK.
+    /// Healthy/unstarted engines return false without changing playback.
+    pub fn quiesce_failed_audio_stream(&mut self) -> PyResult<bool> {
+        self.quiesce_failed_stream_with(|engine| {
+            let stream = engine.stream_handle.take().ok_or_else(|| {
+                std::io::Error::other(
+                    "original failed stream owner is unavailable for verified close",
+                )
+            })?;
+            stream.close_checked()
+        })
     }
 
     pub fn output_sample_rate(&self) -> PyResult<u32> {
@@ -1596,6 +1893,7 @@ impl AudioEngine {
 
     /// Shut down the audio engine.
     pub fn shut_down(&mut self) -> PyResult<()> {
+        self.close_mix_capture_admission();
         if let Some(runtime) = self.input_runtime.as_ref() {
             runtime.set_enabled(false);
         }
@@ -1612,7 +1910,7 @@ impl AudioEngine {
         self.cold_jobs.shutdown();
         self.offline_jobs.cancel(None);
         self.input_runtime = None;
-        self.stream_handle = None;
+        self.close_audio_stream_checked()?;
         // Pending metadata without a durable Python assignment becomes orphaned
         // at shutdown. Actual PCM readers and assignment/job tokens still protect
         // its bytes; the stopped engine object need not be destroyed to reconcile.
@@ -1859,7 +2157,7 @@ impl AudioEngine {
 
     /// Admit copy-first complete cold preparation in the fixed worker lane.
     #[allow(clippy::too_many_arguments)] // Fixed public source/load options preserve the existing API.
-    #[pyo3(name = "load_sample_async", signature = (id, path, run_analysis=None, restore_automatic=false, replace_assignment=false, resident_loop_start_s=None, resident_loop_end_s=None, resident_key_lock=false, source_intent="auto", initial_base_shift=None, initial_extra_shift=None, initial_key_lock=None))]
+    #[pyo3(name = "load_sample_async", signature = (id, path, run_analysis=None, restore_automatic=false, replace_assignment=false, resident_loop_start_s=None, resident_loop_end_s=None, resident_key_lock=false, source_intent="auto", initial_base_shift=None, initial_extra_shift=None, initial_key_lock=None, initial_gain_db=None, initial_eq_db=None))]
     pub fn load_sample_async_with_pitch(
         &self,
         id: usize,
@@ -1874,6 +2172,8 @@ impl AudioEngine {
         initial_base_shift: Option<&Bound<'_, PyAny>>,
         initial_extra_shift: Option<&Bound<'_, PyAny>>,
         initial_key_lock: Option<&Bound<'_, PyAny>>,
+        initial_gain_db: Option<&Bound<'_, PyAny>>,
+        initial_eq_db: Option<&Bound<'_, PyAny>>,
     ) -> PyResult<u64> {
         if id >= NUM_SAMPLES {
             return Err(PyValueError::new_err("id out of range"));
@@ -1884,6 +2184,8 @@ impl AudioEngine {
             initial_extra_shift,
             initial_key_lock,
         )?;
+        let initial_mix =
+            cold_load::parse_initial_mix(source_intent, initial_gain_db, initial_eq_db)?;
         cold_load::admit_with_initial_pitch(
             self,
             id,
@@ -1899,6 +2201,7 @@ impl AudioEngine {
             .map_err(PyValueError::new_err)?,
             source_intent,
             initial_pitch,
+            initial_mix,
         )
     }
 
@@ -2739,6 +3042,72 @@ impl AudioEngine {
         pad_copy::cancel(self, captured)
     }
 
+    #[pyo3(signature = (source_bank, target_bank))]
+    pub fn capture_bank_participants(
+        &self,
+        source_bank: Option<usize>,
+        target_bank: usize,
+    ) -> PyResult<BankParticipants> {
+        pad_copy::bank::capture_participants(self, source_bank, target_bank)
+    }
+
+    /// Native-only bank admission; durable/controller exposure is a separate settlement gate.
+    #[pyo3(name = "capture_bank_mutation", signature = (source_bank, target_bank, intents, *, participants=None))]
+    pub fn capture_bank_mutation_with_participants(
+        &self,
+        source_bank: Option<usize>,
+        target_bank: usize,
+        intents: Vec<Option<String>>,
+        participants: Option<&BankParticipants>,
+    ) -> PyResult<CapturedBankMutation> {
+        pad_copy::bank::capture_with_participants(
+            self,
+            source_bank,
+            target_bank,
+            intents,
+            participants,
+        )
+    }
+    pub fn prepare_bank_mutation(
+        slf: Py<Self>,
+        py: Python<'_>,
+        captured: &CapturedBankMutation,
+    ) -> PyResult<BankMutationTicket> {
+        let state = {
+            let engine = slf.try_borrow(py)?;
+            pad_copy::bank::prepare(&engine, captured)?
+        };
+        py.detach(move || pad_copy::bank::prepare_detached(state))
+            .map_err(PyRuntimeError::new_err)
+    }
+    pub fn publish_bank_mutation(&self, ticket: &BankMutationTicket) -> PyResult<()> {
+        pad_copy::bank::publish(self, ticket)
+    }
+    pub fn validate_bank_mutation(
+        &self,
+        ticket: &BankMutationTicket,
+        ack: &BankMutationAcknowledgement,
+    ) -> PyResult<bool> {
+        pad_copy::bank::validate(self, ticket, ack)
+    }
+    pub fn reconcile_bank_mutation(
+        &self,
+        ticket: &BankMutationTicket,
+        ack: &BankMutationAcknowledgement,
+    ) -> PyResult<bool> {
+        pad_copy::bank::reconcile(self, ticket, ack)
+    }
+    pub fn finish_bank_mutation(
+        &self,
+        ticket: &BankMutationTicket,
+        ack: &BankMutationAcknowledgement,
+    ) -> PyResult<()> {
+        pad_copy::bank::finish(self, ticket, ack)
+    }
+    pub fn cancel_bank_mutation(&self, captured: &CapturedBankMutation) -> PyResult<bool> {
+        pad_copy::bank::cancel(self, captured)
+    }
+
     // Internal integration lane. UI admission stays fenced until the whole Pair/Hold path closes.
     #[pyo3(name = "_capture_pad_pair", signature = (source_id, target_id, *, source_binding=None))]
     pub fn _capture_pad_pair_with_source_binding(
@@ -2791,6 +3160,26 @@ impl AudioEngine {
         target: &InputRuntimePadBinding,
     ) -> PyResult<RecoveredCopyAcceptance> {
         pad_copy::recovery::capture_recovered(self, target)
+    }
+
+    pub fn capture_recovered_bank(
+        &self,
+        participants: &BankParticipants,
+        intents: Vec<Option<String>>,
+    ) -> PyResult<RecoveredBankAcceptance> {
+        pad_copy::bank::recovery::capture(self, participants, intents)
+    }
+
+    pub fn validate_recovered_bank(&self, acceptance: &RecoveredBankAcceptance) -> PyResult<bool> {
+        pad_copy::bank::recovery::validate(self, acceptance)
+    }
+
+    pub fn retry_recovered_bank(&self, acceptance: &RecoveredBankAcceptance) -> PyResult<bool> {
+        pad_copy::bank::recovery::retry(self, acceptance)
+    }
+
+    pub fn release_recovered_bank(&self, acceptance: &RecoveredBankAcceptance) -> PyResult<bool> {
+        pad_copy::bank::recovery::release(self, acceptance)
     }
 
     pub fn validate_recovered_pad_copy(
@@ -3312,11 +3701,13 @@ impl AudioEngine {
     }
 
     /// Publish only the original retained group; None means genuine readiness is pending.
-    pub fn publish_captured_global_start(
+    #[pyo3(name = "publish_captured_global_start", signature = (captured, *, capture=None))]
+    pub fn publish_captured_global_start_py(
         &self,
         captured: &CapturedGlobalStart,
+        capture: Option<&MixCaptureTicket>,
     ) -> PyResult<Option<GlobalPlaybackBatchTicket>> {
-        captured_global_start::publish(self, captured)
+        captured_global_start::publish(self, captured, capture)
     }
 
     #[pyo3(signature = (entries, *, received_at_ns=None))]
@@ -4851,6 +5242,7 @@ mod tests {
             0,
             sample.clone(),
             LoadedSourcePublication {
+                initial_mix: None,
                 placement: ownership.slot_snapshot(0).unwrap(),
                 ownership: &ownership,
                 generation: 1,
@@ -4920,6 +5312,7 @@ mod tests {
 
 impl Drop for AudioEngine {
     fn drop(&mut self) {
+        self.close_mix_capture_admission();
         if let Some(runtime) = self.input_runtime.as_ref() {
             runtime.set_enabled(false);
         }
@@ -4932,5 +5325,9 @@ impl Drop for AudioEngine {
         self.waveform_requests.cancel_all();
         let _ = resident_relocation::cancel_all(self);
         self.cold_jobs.shutdown();
+        // CPAL quiescence transfers the complete callback image to its existing
+        // retirement owner before control's capture join owner can disappear.
+        self.input_runtime = None;
+        let _ = self.close_audio_stream_checked();
     }
 }

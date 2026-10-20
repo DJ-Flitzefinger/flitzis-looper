@@ -71,7 +71,7 @@ impl PairParticipantGuard {
         self.control.placement()
     }
 
-    fn current(
+    pub(crate) fn current(
         &self,
         ownership: &InputRuntimeOwnership,
         acknowledgements: &CurrentTimingAcknowledgements,

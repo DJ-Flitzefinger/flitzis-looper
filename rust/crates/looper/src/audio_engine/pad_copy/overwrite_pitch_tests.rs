@@ -8,6 +8,9 @@ use crate::audio_engine::pitch_actions::{CapturedPitchAction, PitchKeyMode};
 use crate::audio_engine::pitch_intent::PitchIntent;
 use crate::audio_engine::timing::{OutputClockSnapshot, SharedOutputClock};
 
+#[path = "overwrite_pitch_tests/physical_birth_reference.rs"]
+mod physical_birth_reference;
+
 const TARGET: usize = 36;
 // The existing nearest-grid policy chooses 48k from 42k, before the effect.
 const CAPTURE_FRAME: u64 = 42_000;
@@ -108,8 +111,36 @@ impl PitchFixture {
             fixture.wait_ready(&action);
             assert_eq!(action.execution_target(), due);
             fixture.render_to(due);
-            fixture.copy.callback.render(1);
+            let mut beginning = fixture.copy.callback.render(1);
             assert!(action.effective(), "{:?}", action.reason());
+            if retrigger {
+                // Observe the complete source birth from E, including its first
+                // silent Native/FIFO frames. Ordinary callback consumption, not
+                // a source/clock rewrite, carries both later fixtures forward.
+                let native = fixture.copy.source_voice().stretch.native_state_address();
+                for frames in [127, 257, 509, 1].into_iter().cycle() {
+                    let remaining = physical_birth_reference::PREFIX_FRAMES - beginning.len() / 2;
+                    if remaining == 0 {
+                        break;
+                    }
+                    beginning.extend(fixture.copy.callback.render(frames.min(remaining)));
+                    assert_eq!(
+                        fixture.copy.source_voice().stretch.native_state_address(),
+                        native
+                    );
+                    assert_eq!(
+                        fixture.copy.source_voice().stretch.adopted_request_id(),
+                        Some(action.sequence())
+                    );
+                }
+                assert_eq!(
+                    fixture.copy.callback.frame,
+                    due + physical_birth_reference::PREFIX_FRAMES as u64
+                );
+                physical_birth_reference::assert_source_prefix(&beginning);
+                assert_eq!(action.execution_target(), due);
+                assert!(action.effective());
+            }
         }
         assert_eq!(
             fixture.copy.callback.mixer.pad_pitch_intent(0),
@@ -430,8 +461,20 @@ fn assert_selected_view(
                 .output_buffers()
                 .iter()
                 .flatten()
+                .all(|value| value.is_finite())
+        );
+        // All live callers have now consumed and checked their complete bounded
+        // beginning. Keep the original later nonzero-current-output coverage too.
+        assert!(
+            voice
+                .stretch
+                .output_buffers()
+                .iter()
+                .flatten()
                 .any(|value| value.abs() > 0.0001)
         );
+        // Current-source wet ownership includes legitimate silent birth/FIFO
+        // output. Complete A/C prefixes below prove eventual sound and PCM.
     }
 }
 
@@ -514,6 +557,62 @@ fn run_case_with_cancellation(order: Order, lock: bool, selected: bool, cancel_o
             );
             std::thread::sleep(Duration::from_millis(1));
         }
+        // B is a real selected live target before removal. Its complete bounded
+        // contribution must become audible; current-wet flags and finite silence
+        // alone cannot certify that the displaced target actually rendered.
+        let b_native = actual
+            .copy
+            .callback
+            .mixer
+            .voices
+            .iter()
+            .find(|voice| voice.is_playing_sample(TARGET))
+            .unwrap()
+            .stretch
+            .native_state_address();
+        let mut b_audible = false;
+        let mut b_frames = 0;
+        for frames in [1, 127, 257, 509].into_iter().cycle() {
+            let remaining = physical_birth_reference::PREFIX_FRAMES - b_frames;
+            if remaining == 0 {
+                break;
+            }
+            let count = frames.min(remaining);
+            let mixed = actual.copy.callback.render(count);
+            let source_only = reference.copy.callback.render(count);
+            assert!(
+                mixed
+                    .iter()
+                    .chain(&source_only)
+                    .all(|sample| sample.is_finite())
+            );
+            b_audible |= mixed
+                .iter()
+                .zip(&source_only)
+                .any(|(mixed, source)| (mixed - source).abs() > 0.0001);
+            assert_source_chronology(&actual, &reference);
+            assert_eq!(mode.effective_mode_status(), "effective");
+            assert!(selection.is_current());
+            assert_eq!(
+                actual
+                    .copy
+                    .callback
+                    .mixer
+                    .voices
+                    .iter()
+                    .find(|voice| voice.is_playing_sample(TARGET))
+                    .unwrap()
+                    .stretch
+                    .native_state_address(),
+                b_native
+            );
+            b_frames += count;
+        }
+        assert_eq!(b_frames, physical_birth_reference::PREFIX_FRAMES);
+        assert!(
+            b_audible,
+            "old selected target B must actually contribute before overwrite"
+        );
         assert_selected_view(&actual, TARGET, selection, 5, true);
         assert_ne!(
             actual.copy.source_voice().stretch.native_state_address(),
@@ -610,10 +709,16 @@ fn run_case_with_cancellation(order: Order, lock: bool, selected: bool, cancel_o
     let source_sample = actual.copy.source_voice().sample.as_ref().unwrap().clone();
     let starts_before = actual.copy.callback.feedback.starts;
     let replacement = actual.copy_to_target(true);
+    if matches!(order, Order::PitchFirst) {
+        // Copy already reserves B here. Complete the original immutable worker
+        // before replacing B so this case proves the later stale-content claim,
+        // independently of host scheduling. Prepared waits before Copy capture.
+        actual.publish(&action);
+        actual.wait_ready(&action);
+        assert_eq!(actual.copy.callback.frame, capture_frame);
+        assert_eq!(action.execution_target(), original_e);
+    }
     actual.copy.with_engine(|engine| {
-        if matches!(order, Order::PitchFirst) {
-            assert!(engine.publish_pitch_action(&action).unwrap());
-        }
         engine.publish_pad_copy(&replacement).unwrap();
         if matches!(order, Order::CopyFirst) {
             assert!(engine.publish_pitch_action(&action).unwrap());
@@ -958,8 +1063,8 @@ fn run_case_with_cancellation(order: Order, lock: bool, selected: bool, cancel_o
             reference.copy.callback.render(frames)
         );
     }
-    actual.copy.callback.render(1);
-    reference.copy.callback.render(1);
+    let mut mixed = actual.copy.callback.render(1);
+    let mut source_only = reference.copy.callback.render(1);
     assert!(fresh.effective(), "{:?}", fresh.reason());
     assert_eq!(
         actual.copy.callback.feedback.starts[TARGET],
@@ -990,14 +1095,24 @@ fn run_case_with_cancellation(order: Order, lock: bool, selected: bool, cancel_o
         actual.copy.callback.mixer.pad_pitch_intent(TARGET),
         Some(fresh.render().pitch)
     );
-    let mixed = actual.copy.callback.render(512);
-    let source_only = reference.copy.callback.render(512);
-    assert!(
-        mixed
-            .iter()
-            .zip(&source_only)
-            .any(|(a, b)| (a - b).abs() > 0.0001)
+    mixed.extend(actual.copy.callback.render(512));
+    source_only.extend(reference.copy.callback.render(512));
+    assert_source_chronology(&actual, &reference);
+    for frames in [1, 127, 257, 509].into_iter().cycle() {
+        let remaining = physical_birth_reference::PREFIX_FRAMES - mixed.len() / 2;
+        if remaining == 0 {
+            break;
+        }
+        let frames = frames.min(remaining);
+        mixed.extend(actual.copy.callback.render(frames));
+        source_only.extend(reference.copy.callback.render(frames));
+        assert_source_chronology(&actual, &reference);
+    }
+    assert_eq!(
+        actual.copy.callback.frame,
+        fresh.execution_target() + physical_birth_reference::PREFIX_FRAMES as u64
     );
+    physical_birth_reference::assert_target_prefix(&mixed, &source_only, selected);
     assert_source_chronology(&actual, &reference);
     if let Some(selection) = &new_selection {
         // Admit advances transport intent but preserves the cancellation revision.

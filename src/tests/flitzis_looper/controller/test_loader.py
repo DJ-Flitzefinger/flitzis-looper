@@ -445,6 +445,8 @@ def test_restored_admission_failure_retains_assignment_and_timing_authority(
         initial_base_shift=0,
         initial_extra_shift=0,
         initial_key_lock=False,
+        initial_gain_db=0.0,
+        initial_eq_db=(0.0, 0.0, 0.0),
     )
     audio_engine_mock.set_pad_timing_intent.assert_not_called()
     audio_engine_mock.set_pad_bpm.assert_not_called()

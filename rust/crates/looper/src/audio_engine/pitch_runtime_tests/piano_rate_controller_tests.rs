@@ -179,7 +179,7 @@ def settle(probe, capture, rejected):
         assert capture.state == "rejected" and not capture.effective
         assert probe.transport.pitch.status(0) == (
             "error",
-            "Audio changed during pitch preparation; try again.",
+            "Loop timing changed before this pitch choice could be applied.",
         )
     else:
         assert capture.state == "applied" and capture.effective
@@ -381,7 +381,7 @@ impl Reference {
     }
 
     fn birth_with_bound(
-        source: &SampleBuffer,
+        _source: &SampleBuffer,
         id: usize,
         contract: PitchIntent,
         rate: f64,
@@ -398,12 +398,11 @@ impl Reference {
         } else {
             let bound = history_bound(pitch);
             let mut raw = RawRubberBand::new(pitch);
-            // Negative Normal-loop prefeed primes this separate Raw owner. It
-            // never contributes to the DUT's genuine post-birth feed journal.
-            for age in -(bound as i64)..0 {
-                let phase = LOOP_START as f64
-                    + (age as f64 * rate).rem_euclid((ENDS[id] - LOOP_START) as f64);
-                raw.sample(scalar_pcm(source, phase, ENDS[id]), pitch);
+            // This separate fresh owner receives silence before physical birth.
+            // H and exact pitch/reset/FIFO chronology remain preparation, never
+            // actual source reads in the DUT's genuine post-birth feed journal.
+            for _ in 0..bound {
+                raw.sample(0.0, pitch);
             }
             Some(raw)
         };
@@ -713,9 +712,31 @@ impl RateRoute {
                 (self.route.transport.beat_position_at_frame(frame).unwrap()
                     - master.beat_at(frame))
                 .abs()
-                    < 1e-9
+                    < 1e-9,
+                "master clock: frame={frame} actual_beat={:?} expected_beat={} master_frame={} master_beat={} master_period={} active_source_clocks={:?}",
+                self.route.transport.beat_position_at_frame(frame),
+                master.beat_at(frame),
+                master.frame,
+                master.beat,
+                master.period,
+                self.route
+                    .mixer
+                    .voices
+                    .iter()
+                    .filter(|voice| voice.active)
+                    .map(|voice| (
+                        voice.sample_id,
+                        voice.source_playback.position(),
+                        voice.source_playback.tempo_ratio(),
+                        voice.source_playback.rate_target()
+                    ))
+                    .collect::<Vec<_>>()
             );
         }
+        self.check_source_voices();
+    }
+
+    fn check_source_voices(&self) {
         for (id, reference) in self.references.iter().enumerate() {
             let Some(reference) = reference else {
                 continue;
@@ -899,7 +920,9 @@ impl RateRoute {
         }
         let native = voice.stretch.native_state_address();
         let generation = voice.generation;
-        let rate = PERIODS[original.id] / self.route.transport.master_period_seconds().unwrap();
+        let period = self.master.as_ref().map_or(0.25, |master| master.period);
+        assert_eq!(self.route.transport.master_period_seconds(), Some(period));
+        let rate = PERIODS[original.id] / period;
         assert_eq!(voice.source_playback.tempo_ratio(), rate);
         let index = self
             .route
@@ -923,20 +946,36 @@ impl RateRoute {
         );
         if original.id == 0 && self.master.is_none() {
             self.master = Some(MasterClock {
+                // Only the already selected pending one-time bootstrap may
+                // anchor its canonical physical source beginning at actual E.
+                // Established master epochs remain unchanged by retriggers.
                 frame: original.e,
                 beat: (0.1 - self.origin) / PERIODS[0],
                 period: 0.25,
             });
         }
-        self.references[original.id] = Some(Reference::birth(
-            &self.sources[original.id],
+        let reference = Reference::birth(
+            &self.reference_sources[original.id],
             original.id,
             original.note,
             rate,
             self.lock,
             native,
             generation,
-        ));
+        );
+        // Native prehistory remains preparation. The complete physical source
+        // and fresh filter first emit at E without unheard T-to-E consumption.
+        // The first selected bootstrap uses E; later births preserve that master epoch.
+        let primed = reference.raw.as_ref().map_or(0, |_| HISTORY);
+        let fifo = reference.raw.as_ref().map_or((0, 0), |raw| raw.fifo());
+        assert_eq!(
+            self.voice(original.id)
+                .stretch
+                .native_primed_output_frames(),
+            primed
+        );
+        assert_eq!(self.voice(original.id).stretch.pending_fifo_frames(), fifo);
+        self.references[original.id] = Some(reference);
         let attacks = self.take_attacks();
         assert_eq!(
             attacks,
@@ -973,8 +1012,33 @@ impl RateRoute {
             "{:?}",
             original.action.reason()
         );
+        let first_bootstrap = self.master.is_none();
         self.install_birth_reference(&original);
+        if first_bootstrap {
+            assert_eq!(original.id, 0);
+            assert_eq!(self.route.transport.bootstrap_reference(), Some(0));
+            // Zero-frame adoption has not entered the positive render segment
+            // that consumes the pending source bootstrap. The initial global
+            // period update at frame zero preserves the declared zero beat.
+            assert_eq!(self.route.transport.master_period_seconds(), Some(0.25));
+            let expected = original.e as f64 / (f64::from(RATE) * 0.25);
+            assert!(
+                (self
+                    .route
+                    .transport
+                    .beat_position_at_frame(original.e)
+                    .unwrap()
+                    - expected)
+                    .abs()
+                    < 1e-9
+            );
+            self.check_source_voices();
+        } else {
+            self.check_voices();
+        }
         self.callback(1);
+        assert_eq!(self.last_callback_first.unwrap().0, original.e);
+        assert_eq!(self.route.transport.bootstrap_reference(), None);
         self.assert_no_attacks();
         self.settle(&original, false);
         original
@@ -1090,10 +1154,21 @@ fn history(lock: bool, midi: bool) {
         assert!(route.voice(0).stretch.productive_history().is_none());
         assert_eq!(route.voice(0).stretch.native_primed_output_frames(), 0);
     }
+    let original_control_revision = route
+        .route
+        .mixer
+        .source_control_revision(first.content)
+        .unwrap();
     let mut old = route.admit(0, 7, midi);
+    assert_eq!(old.content, first.content);
     route.assert_no_attacks();
     assert_eq!(old.e, old.t + 8192);
     route.wait_action(&mut old);
+    let original_guard = old.action.callback_guard(None).unwrap();
+    assert_eq!(
+        route.route.mixer.source_control_revision(old.content),
+        Ok(original_control_revision)
+    );
     let old_prepared = old.prepared_native.unwrap();
     let peer_native = route.voice(1).stretch.native_state_address();
     let peer_generation = route.voice(1).generation;
@@ -1124,6 +1199,10 @@ fn history(lock: bool, midi: bool) {
         assert_eq!(request.effective_speed, 2.0);
         assert_eq!(request.effective_period, Some(0.25));
         assert_eq!(rate_e, frame + HISTORY as u64);
+        assert_eq!(
+            route.route.mixer.source_control_revision(old.content),
+            Ok(original_control_revision)
+        );
         let prepared_address = route.wait_rate(rate_e);
         assert_ne!(prepared_address, old_prepared);
         // A-reset native history starts at original RateF, with actual old r2.
@@ -1139,6 +1218,10 @@ fn history(lock: bool, midi: bool) {
         prepared_raw = Some((raw, prepared_address));
         route.render_to(rate_e);
         assert_eq!(route.rate().state, "preparing");
+        assert_eq!(
+            route.route.mixer.source_control_revision(old.content),
+            Ok(original_control_revision)
+        );
         route.callback(0);
         route.assert_no_attacks();
     } else {
@@ -1153,6 +1236,23 @@ fn history(lock: bool, midi: bool) {
     assert_eq!(applied.effective_speed, NEW_SPEED);
     assert_eq!(applied.effective_period, Some(PERIODS[0] / NEW_SPEED));
     assert!(applied.error.is_none());
+    let committed_control_revision = route
+        .route
+        .mixer
+        .source_control_revision(old.content)
+        .unwrap();
+    assert_eq!(
+        committed_control_revision,
+        original_control_revision.checked_add(1).unwrap()
+    );
+    // The real rate commit changes the source-control trajectory, while the
+    // original input/source/window and accepted timing authority remain current.
+    let committed_guard = old.action.callback_guard(None).unwrap();
+    assert_eq!(committed_guard.id, original_guard.id);
+    assert_eq!(
+        committed_guard.binding.accepted,
+        original_guard.binding.accepted
+    );
     if let Some((raw, address)) = prepared_raw {
         assert_eq!(route.voice(0).stretch.native_state_address(), address);
         let reference = route.references[0].as_mut().unwrap();
@@ -1185,7 +1285,12 @@ fn history(lock: bool, midi: bool) {
     old.unchanged();
     assert_eq!(old.action.state(), "rejected");
     assert!(!old.action.effective());
-    assert_eq!(old.action.reason(), Some("prepared_mismatch"));
+    // The captured source-control revision is checked before endpoint readiness.
+    assert_eq!(old.action.reason(), Some("timing_changed"));
+    assert_eq!(
+        route.route.mixer.source_control_revision(old.content),
+        Ok(committed_control_revision)
+    );
     assert_eq!(route.voice(0).generation, original_generation);
     assert_eq!(
         route.route.mixer.pad_pitch_intent(0),
@@ -1226,7 +1331,7 @@ fn history(lock: bool, midi: bool) {
     }
     route.observe_rate();
     eprintln!(
-        "piano_global_rate lock={lock} origin={} old_sequence={} old_T={} old_E={} old_refusal={:?} rate_request={} rate_E={rate_e} period_before=.25 period_after={:?} source_rates={:?} fresh_sequence={} fresh_T={} fresh_E={} raw_pcm_max={} compared_frames={} starts={:?}; complete-resident declared synthetic timing; A-reset/constant-history software only; no device/deadline/continuous-O/acoustic/P6 acceptance",
+        "piano_global_rate lock={lock} origin={} old_sequence={} old_T={} old_E={} old_refusal={:?} source_control_revision={original_control_revision}->{committed_control_revision} rate_request={} rate_E={rate_e} period_before=.25 period_after={:?} source_rates={:?} fresh_sequence={} fresh_T={} fresh_E={} raw_pcm_max={} compared_frames={} starts={:?}; complete-resident declared synthetic timing; A-reset/constant-history software only; no device/deadline/continuous-O/acoustic/P6 acceptance",
         if midi { "raw_midi" } else { "actual_gui" },
         old.sequence,
         old.t,

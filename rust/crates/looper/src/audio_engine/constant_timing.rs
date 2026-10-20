@@ -1511,6 +1511,14 @@ pub(super) fn publish_record(
     timing: AcceptedConstantTiming,
     source_verified_restore: bool,
 ) -> PyResult<()> {
+    // Detached work retains its original stream queue. A current Engine borrow
+    // excludes shutdown/restart after this check; equal source fields cannot
+    // authorize publishing into a retired queue or a replacement stream.
+    if !Arc::ptr_eq(engine.control_producer()?, producer) {
+        return Err(PyRuntimeError::new_err(
+            "Audio stream changed during detached timing preparation",
+        ));
+    }
     let requests = engine
         .pad_request_ids
         .lock()
@@ -1863,6 +1871,8 @@ pub(super) fn copy_records_share_accepted_for_test(
 #[cfg(test)]
 #[path = "constant_timing_tests.rs"]
 mod tests;
+#[cfg(test)]
+pub(super) use tests::with_control_producer;
 
 #[cfg(test)]
 #[path = "constant_timing/content_ack_tests.rs"]

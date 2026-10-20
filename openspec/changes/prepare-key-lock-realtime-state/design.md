@@ -12,8 +12,10 @@ Strict first-sound gating uses S=max(E,T). It deletes pre-target content even if
 would have been possible; when C>U, more preparation cannot make that gate retain the attack.
 The hypothetical earlier-content gate uses S=max(E,T-L). For C>U it can satisfy the isolated
 retention bound only with E<=T-L, and it changes the audible-start contract. Insufficient
-headroom and late targets preserve the chosen T in the proof, report unavailable content and
-advance canonical source phase. Moving to a later boundary would be a separate contract change.
+headroom and late targets preserve the chosen T in this former-contract offline continuation
+proof, report unavailable content and advance canonical source phase. This test model does not
+authorize prefix loss in current fresh physical births. Moving to a later target boundary
+would be a separate contract change.
 
 The fixed cases are E=T-40ms, E=T-15.625ms, E=T, E=T+5ms; no translation search, source bridge
 or threshold fit is added. Independent continuous native references verify exact suffixes
@@ -24,17 +26,18 @@ counting. Retained suffix equality proves only no extra post-cut deformation, no
 musical anchoring or device alignment. Detailed coordinate/policy tables are in the backend doc.
 
 On 2026-10-18 the Human subsequently requested both real global Settings policies for a
-listening comparison: "Erster Klang am Raster" (silence before T) and "Anschlag am Raster"
+listening comparison: "First sound at grid" (silence before T) and "Attack at grid"
 (principal perceived attack at T, with necessary causally available quiet lead). The earlier
 attack preference is not an exclusive final choice. Neither is artificial gain. Both remain
 available; implementation follows the currently begun R3 block as the immediate next product
 block, using one authoritative audio path and persisted global control. Changes are allowed
 only when authoritative playback is completely stopped, including held/paused resumable
 history and admitted pending playback. Otherwise Settings is disabled with
-"Zum Ändern Wiedergabe stoppen"; there is no queued/next-start/live policy change.
+"Stop playback to change"; there is no queued/next-start/live policy change.
 This authorization does not select a measured compensation anchor or certify sound.
 Insufficient headroom cannot be promised away. The recorded
-nearest/catch-up contract still preserves T and exposes unavailable content. The preference
+former nearest/catch-up evidence still preserves T and exposes unavailable content; current
+ordinary/Piano fresh births instead retain their full beginning at truthful E. The preference
 does not accept on-time cropping, a target delay or unconditional early emission. Keep task7.2
 pending until recorded-track musical/listening evidence and explicit insufficient-headroom
 behavior justify the measured anchor/content criterion. Existing dry q10/q50,
@@ -42,6 +45,163 @@ peak and 0.1%-energy failures remain unchanged. The offline proof alone authoriz
 adoption or Quantize activation; the new direct request authorizes actual implementation of
 both policies while preserving remaining quality, realtime and Human acceptance gates.
 Heavy allocation, DSP preparation and measurements remain outside realtime rendering.
+
+### Source-event correspondence proposals
+
+The existing start/retrigger worker may capture a bounded, independent uncropped Native
+reference from its genuine admitted source reader. The exact source selection, rate, pitch,
+history origin, reset order and block phase remain bound to that request. A captured endpoint
+is a source-event candidate coordinate; it is not an independently labelled perceived attack.
+The source reference and feature support are declared before inspecting wet output.
+
+Per-channel Complex Spectral Difference features are pooled without mono cancellation.
+The complete declared local pattern is matched on the actual integer one-ms feature hop.
+The forward Hann window, two preceding phase windows, competing correlation lobes and broad
+lag support remain explicit. Fixed engineering distinguishability thresholds provide
+SupportedCandidate, Ambiguous, Absent or Unavailable outcomes; they are not new musical
+timing, retention or perceptual acceptance thresholds. No ambiguity becomes nominal or zero
+compensation. Work and capture bounds are checked before allocation/processing.
+
+The prepared work carries only a scalar source/render-bound receipt after worker buffers and
+the independent analysis Native have retired off realtime. A cached neutral endpoint cannot
+stand in for the original action's own measurement. Callback validation checks the scalar
+contract and original authority without FFT, allocation or PCM scans. Measurement alone does
+not change emission, adopt C, promote a captured endpoint into principal-attack truth, or
+activate synchronized Quantize. Distinct S/T phases, click-safe entry, source-event/listening
+references and causal headroom outcomes remain required.
+
+The receipt seals the original permit's atomic-owner identities, authority variant, source
+generation, binding, preparation epoch and any narrowed source-feed/publication fence. Equal
+current counters from another permit do not transfer a measurement. These Copy markers grant
+no authority; the request still owns its original permit and separately validates currentness.
+The bounded endpoint proposal currently searches [0,H]. Its broad analysis support can make
+every otherwise non-absent match Ambiguous at 96 kHz with H=4096, and higher-rate endpoint
+geometry can be Unavailable. Those profiles remain unresolved; geometry metadata alone is
+not evidence of a usable or musically accepted attack at every supported sample rate.
+
+### Full physical birth and independent rate chronology
+
+The 2026-10-20 Human revision gives ordinary and fresh Piano SET_RETRIGGER births
+their complete selected physical beginning at actual E. Original T remains immutable and
+lateness remains explicit. Neither source nor fresh filter consumes E-T as unheard new output.
+Physical source progress counts actually emitted frames. The old voice remains intact until
+the complete effect, and a late full birth does not claim the source phase of an on-time T birth.
+
+Hbase is queried only after the handle's exact pitch/reset preparation, since the expanded
+pitch resampler changes its nominal preparation delay. Native prehistory, reset/block phase,
+adapter lookahead and source-event measurement remain distinct from first emitted source
+content; they grant no unheard E-T crop. The worker binds its own prepared Native/FIFOs to the
+physical beginning and actual E. A missed endpoint may use the existing bounded reprepare
+path with that same original physical origin and current valid render/rate authority. Native
+construction/reset, heavy work and final-owner destruction remain off realtime.
+
+The constant launch proof uses a fixed callback-owned source-control revision per stable
+content cell. Ordinary target capture records it before any resident-window acknowledgement;
+retrigger admission records its own current revision. Rate and real loop/source-control edits
+advance it even without an active voice, with saturation rejecting further preparation rather
+than wrapping. The original revision is checked before preparation capture and again before
+each effect claim, including every participant before any global member claim. Placement
+changes preserve the cell; pitch intents and voice births do not advance the source revision.
+This detects rate/loop ABA without inventing the missing trajectory. A retrigger admission
+revision alone remains insufficient evidence for rate controls preceding that admission.
+Resident loop-edit provenance is explicit: a separate accepted loop/reset control advances
+the revision even when immutable PCM and the resident window are reused. Original ordinary
+launch readiness is identified at preparation and does not invalidate its own target fence.
+Window revision alone cannot distinguish these paths, since captured subloop A can be
+reconstructed by its original work after a separate edit B within the unchanged physical view.
+
+The former constant launch recipe extended Hbase to Htotal=Hbase+(E-T), restored a
+canonical T source epoch and compared emitted output with an independent T-born suffix.
+Its original source/profile passes remain reusable adapter/ownership evidence for that
+former contract and genuine continuation. They do not prove the required new complete onset.
+Separate S/T phases, causal earlier emission, principal-attack references and acoustic gates
+remain required; a full late birth does not sound retroactively at T.
+
+### Fresh retrigger rate clock and supported history
+
+For a supported fresh retrigger, physical phase reset is independent from the accepted rate
+clock. The action uses the actual ratio, target and remaining active-output-frame interval
+before the next smoothing step evaluated at E. It must not restart smoothing at T/E or use
+the final target as the still changing actual ratio. Genuine retained history or a supported
+forward trajectory must prove this E state; a matching later endpoint cannot invent it.
+Its own admitted Current permit and stable content-cell control revision retain the
+original contract. The old voice's phase, Native FIFO and lifecycle are not replayed; requiring
+that old generation after an independently accepted same-E birth would incorrectly cancel
+the second original attack. Old-voice pause/resume, matching Hold release and gaps do not
+alter the independent constant new-launch authority or its fixed source permit. The original
+source-feed and voice fences still reject stale SET/replayed history. Rate/loop/source edits
+retain their existing content revision checks; ordinary rendering, pitch preparation and
+accepted births do not advance them. Initially paused constant sources can start a new active launch without inventing
+paused history. Unproved past-T glides, paused pending glides, active unsupported transitions
+and missing source reads retain their actual refusal gates. T<F scalar admission and genuine
+changing-rate/past replay still require their historical controls and original voice/source-feed
+guards. A full source beginning supplies none of that evidence. This scoped new-launch proof does not relax
+those replay guards or certify principal-attack, omitted-content or device acceptance.
+
+### Prepared raw suffix and actual input chronology
+
+These adapter/feed coordinate rules remain applicable to declared raw suffixes and genuine
+continuation. They do not replace the full physical-birth source origin required above.
+
+The production adapter's output begins with B-1 frames before raw Native frame0. A declared
+raw discard D therefore requires P=D+B-1 input/adapter-output frames in worker preparation.
+Its remaining Native/input/output FIFOs continue at raw frame D, without a second silence
+prefix. Relative to H declared input-history frames, the actual next feed is P-H output-domain
+frames ahead of the unchanged logical adoption endpoint. The previous endpoint path has
+D=H-(B-1), P=H and zero feed offset; it retains its original output contract.
+
+The retained owner keeps the history origin, declared cut, silent physical-prefix extent,
+logical and actual-feed clocks, and emitted-frame progress. A fixed successful-read receipt
+supplies actual playback/plan/physical reader context/count to the callback journal. Dry reads
+remain source evidence, while only successful Native/FIFO input updates productive Native
+history. Reader or DSP failure leaves a journal gap. The voice alone advances logical telemetry.
+
+Before worker replay appends frozen future input, its original capture coordinate must continue
+the final actual read at that capture boundary. Use the existing physical-source/phase proof,
+including accepted-period representation equivalence; matching logical endpoints and frame labels
+alone cannot erase an actual feed offset. Check before Native pitch preparation or FIFO mutation.
+This constrains only the actual-to-planned seam, not legitimate earlier recorded seeks. An empty
+journal supplies no endpoint proof: existing interval coverage and lifecycle-lattice checks still
+distinguish fresh-origin priming, missing required input and a sufficient real post-gap suffix.
+Endpoint-reset preparation checks the unshifted future before deriving its separate new-start
+source phases; the deliberate later seek cannot authorize a jump at the capture boundary.
+
+Snapshots and history requests retain their logical playback/plan and optionally carry an
+actual SourceReadCheckpoint. None denotes the established identity mapping, never a fallback
+after failed mapping validation. Projection advances both clocks independently through bounded
+rate intervals. SET, prospective mode and rate captures append the actual frozen future;
+replay compares actual E, installs both endpoints and keeps logical E as adoption authority.
+A differing pair cannot use the constant logical-endpoint shortcut. Native rendering validates
+logical mapping first, then the actual physical contract and productive history; segments respect
+both rate-step boundaries. Each clock advances its own rate and source-selection transition.
+
+Raw-cut provenance remains distinct from replay provenance. A later accepted rate edit retains
+its original raw receipt while establishing a new continuation epoch. The existing productive
+global-rate fastpath validates every retained participant before any mutation, rechecks the
+current rate request, then applies only callback-owned clock changes before normal invalidation
+and effective tuple stores. The application pass has no fresh source or permit lookup and cannot
+partially refuse. Prepared global-rate adoption likewise preflights each proposed rate before
+claim. Both paths preserve Native and FIFO samples while setting the same authorized target on
+the separate source clocks; no new rate event or source authority is introduced.
+
+A live stem claim preflights every participating retained owner before any effective pad store.
+It retains both source phases, rates, pitch and Native/FIFO samples, and installs the sanctioned
+selection ramp at the logical and actual input checkpoints. A same-selection reader refresh
+preserves each checkpoint's own ramp progress. The original Native request and its owner pins
+remain immutable. A fixed scalar effective read context records the admitted physical current/
+outgoing reader identities and sealed publication generation; productive reads still prove the
+original source permit, accepted timing, geometry, pitch, exact actual transition and coverage.
+Reader filtering follows actual-coordinate substitution. A missing or stale actual contract
+refuses the whole claim. Reader retirement requires that neither the logical ramp nor an actual
+retained plan needs that owner, including paused histories and independent frozen old sources.
+Releasing a reader does not reset a retained completed ramp checkpoint. These are chronology
+and ownership rules; they do not select an audible attack anchor or certify a listening result.
+
+These coordinates permit an event-owned prepared start but do not choose C or accept a musical
+attack reference. Changed logical/rate/source/selection/pitch contracts cannot relabel already
+processed future input. Full live control/replay integration, a genuine anchor producer,
+different policy emission, causal headroom outcomes and musical/listening evidence remain
+required; the raw-suffix mechanism does not close task7.2.
 
 ### Fixed unity-source attack experiment
 

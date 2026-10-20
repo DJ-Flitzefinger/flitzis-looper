@@ -23,6 +23,7 @@ const PAIR_LIMIT: usize = 256;
 #[derive(Clone, Debug, Default)]
 pub(super) struct PairReadObservation {
     pub read_bytes: [u64; 5],
+    pub allocation_attempts: [usize; 5],
     pub byte_ranges: [Option<(usize, usize)>; 5],
     pub allocated_bytes: usize,
     pub fresh_opens: usize,
@@ -31,6 +32,11 @@ pub(super) struct PairReadObservation {
 #[cfg(test)]
 thread_local! {
     static RANGE_OBSERVATION: std::cell::RefCell<PairReadObservation> = std::cell::RefCell::new(PairReadObservation::default());
+    static RANGE_READ_OBSERVER: std::cell::RefCell<Option<Box<dyn Fn(usize, usize, usize)>>> = const { std::cell::RefCell::new(None) };
+}
+#[cfg(test)]
+pub(super) fn set_range_read_observer_for_test(observer: Option<Box<dyn Fn(usize, usize, usize)>>) {
+    RANGE_READ_OBSERVER.with(|slot| *slot.borrow_mut() = observer);
 }
 #[cfg(test)]
 pub(super) fn reset_range_observation_for_test() {
@@ -47,6 +53,11 @@ fn observe_range_read(index: usize, start: usize, bytes: usize) {
         value.read_bytes[index] += bytes as u64;
         let begin = value.byte_ranges[index].map_or(start, |range| range.0);
         value.byte_ranges[index] = Some((begin, start + bytes));
+    });
+    RANGE_READ_OBSERVER.with(|slot| {
+        if let Some(observer) = slot.borrow().as_ref() {
+            observer(index, start, bytes);
+        }
     });
 }
 #[cfg(test)]
@@ -339,6 +350,8 @@ impl VerifiedStemPair {
             .ok_or("stem window origin overflow")?;
         // Construct the one final Arc directly. A bounded encoded chunk is the
         // only transient PCM, and positioned reads never share a seek cursor.
+        #[cfg(test)]
+        RANGE_OBSERVATION.with(|value| value.borrow_mut().allocation_attempts[index] += 1);
         let mut samples = Arc::<[f32]>::new_uninit_slice(length / 4);
         let values = Arc::get_mut(&mut samples).ok_or("private stem allocation is shared")?;
         let mut encoded = [0_u8; 64 * 1024];
@@ -397,6 +410,7 @@ impl VerifiedStemPair {
         })
     }
     /// Read four actual component ranges, never the instrumental live layer.
+    #[cfg(test)]
     pub(super) fn prepare_component_views(
         &self,
         current: &SampleBuffer,

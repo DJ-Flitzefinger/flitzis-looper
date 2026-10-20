@@ -197,6 +197,7 @@ struct Cut {
 
 struct Effect {
     frame: u64,
+    original_t: u64,
     id: usize,
     note: i32,
     native: usize,
@@ -608,6 +609,7 @@ impl Workload {
         }
         self.effects.push(Effect {
             frame: original.execution,
+            original_t: original.original_t,
             id: original.slot,
             note: original.note,
             native: original.prepared_native,
@@ -670,6 +672,7 @@ impl Workload {
 struct Oracle {
     raw: RawRubberBand,
     filter: PerPadDspChain,
+    born_at: u64,
     age: u64,
     pitch: f64,
     native: usize,
@@ -695,14 +698,23 @@ fn verify_after_measurement(workload: &Workload) -> f32 {
             let effect = &workload.effects[next_effect];
             let pitch = 2.0_f64.powf(f64::from(effect.note) / 12.0);
             assert!((0.5..=2.0).contains(&pitch));
-            assert_eq!(RawRubberBand::history_bound(pitch), 4096);
+            let history = RawRubberBand::history_bound(pitch);
+            assert_eq!(history, 4096);
             let mut raw = RawRubberBand::new(pitch);
-            for age in -4096..0 {
-                raw.sample(source_sample(&workload.sources[effect.id], age), pitch);
+            // Each new physical owner has zero input before its birth. Keep the
+            // independently declared H, native pitch and one adapter chronology.
+            for _ in 0..history {
+                assert_eq!(raw.sample(0.0, pitch), 0.0);
             }
+            // Immutable T retains its real preparation lead. Physical source
+            // age begins at actual E; only H primes the independent Raw Native,
+            // and the fresh neutral filter has consumed no unheard PCM.
+            assert_eq!(effect.frame.checked_sub(effect.original_t), Some(8192));
+            let filter = PerPadDspChain::new(effect.id, RATE as f32, 1);
             oracles[effect.id] = Some(Oracle {
                 raw,
-                filter: PerPadDspChain::new(effect.id, RATE as f32, 1),
+                filter,
+                born_at: effect.frame,
                 age: 0,
                 pitch,
                 native: effect.native,
@@ -757,6 +769,13 @@ fn verify_after_measurement(workload: &Workload) -> f32 {
         }
         for voice in &cut.voices {
             let oracle = oracles[voice.id].as_ref().unwrap();
+            assert_eq!(
+                oracle.age,
+                (cut.start + cut.frames as u64)
+                    .checked_sub(oracle.born_at)
+                    .unwrap(),
+                "source age counts only actual emitted frames since this independent birth E"
+            );
             assert_eq!(voice.native, oracle.native);
             assert_eq!(voice.generation, oracle.generation);
             assert_eq!(voice.source, workload.sources[voice.id].source_address());

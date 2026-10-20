@@ -6,6 +6,7 @@ use crate::audio_engine::content_placement::{ContentKey, SlotSnapshot};
 
 const ARRANGEMENT_ROOT: &str = "FLITZI_R3_ARRANGEMENT_ROOT";
 const ARRANGEMENT_PROFILE: &str = "FLITZI_R3_ARRANGEMENT_PROFILE";
+const PAIR_APP_PROFILE: &str = "FLITZI_REARRANGE_PAIR_APP_PROFILE";
 
 #[derive(Debug, PartialEq)]
 struct ArrangementLane {
@@ -113,6 +114,10 @@ impl Fixture {
             "one actual rendered gesture must publish one complete Native command"
         );
         self.script("owner = probe.render_owner\nassert owner.ticket.publication_status() == 'accepted'\nassert owner.receipt is None\nassert not owner.native_finished\nassert probe.project == probe.render_project\nassert probe.persistence.config_path.read_bytes() == probe.render_config\nif probe.pairs._pair is not None:\n    assert owner.ticket.own_acknowledgement() is not None\n    assert owner.acknowledgement is None\nelse:\n    assert not owner.acknowledged");
+        self.arrangement_finish();
+    }
+
+    fn arrangement_finish(&mut self) {
         let deadline = Instant::now() + Duration::from_secs(10);
         loop {
             let finished = Python::attach(|py| {
@@ -218,6 +223,67 @@ fn operation_profile(root: &Path, operation: &str, target: usize) {
     let output = fixture.render(96);
     assert!(output.iter().all(|sample| sample.is_finite()));
     assert!(output.iter().any(|sample| sample.abs() > 1e-6));
+    fixture.close_callback();
+    fixture.call("close");
+}
+
+fn pair_app_multi_loop_after_ack_profile(root: &Path, target: usize) {
+    let (mut fixture, _) = arrangement_fixture(root);
+    fixture.script("probe.transport.playback.pause_pad(1)");
+    fixture.drain();
+    fixture.call("setup_arrangement_ui");
+    fixture.drain();
+    let a = ArrangementLane::capture(&mut fixture, 0);
+    let b = ArrangementLane::capture(&mut fixture, 1);
+    fixture.arrangement_press(false, false);
+    fixture.arrangement_drop(target, if target == 1 { "Swap" } else { "Move" }, false);
+    fixture.arrangement_publish();
+    assert_eq!(
+        fixture.drain(),
+        1,
+        "Pair must reach its actual callback ACK first"
+    );
+
+    let after = fixture.arrangement_slots();
+    let revisions = Python::attach(|py| {
+        let engine = fixture.engine.borrow(py);
+        assert!(engine.input_runtime.is_some());
+        [0, target].map(|slot| {
+            assert_ne!(engine.input_runtime_ownership.pair_reservation(slot), 0);
+            engine
+                .input_runtime_ownership
+                .runtime_for_cell(after[slot].cell())
+                .load(Ordering::Acquire)
+        })
+    });
+    // The real UiContext action and InputMapping frame callback run before App
+    // observes the ACK, while Python still owns its original reserved rows.
+    fixture.call("toggle_multi_loop_after_pair_ack");
+    Python::attach(|py| {
+        let engine = fixture.engine.borrow(py);
+        for (slot, revision) in [0, target].into_iter().zip(revisions) {
+            assert_eq!(
+                engine
+                    .input_runtime_ownership
+                    .runtime_for_cell(after[slot].cell())
+                    .load(Ordering::Acquire),
+                revision + 1,
+                "the actual global runtime publication must advance each content cell"
+            );
+            assert_ne!(engine.input_runtime_ownership.pair_reservation(slot), 0);
+        }
+    });
+
+    fixture.arrangement_finish();
+    a.assert_at(&mut fixture, target);
+    b.assert_at(&mut fixture, if target == 1 { 0 } else { 1 });
+    Python::attach(|py| {
+        let engine = fixture.engine.borrow(py);
+        for slot in [0, target] {
+            assert_eq!(engine.input_runtime_ownership.pair_reservation(slot), 0);
+        }
+    });
+    fixture.call("assert_pair_app_close_ready");
     fixture.close_callback();
     fixture.call("close");
 }
@@ -364,6 +430,69 @@ fn mute_hold_profile(root: &Path) {
     );
     fixture.close_callback();
     fixture.call("close");
+}
+
+#[test]
+fn real_pair_ack_multi_loop_settles_config_selection_and_app_close() {
+    if let Some(profile) = std::env::var_os(PAIR_APP_PROFILE) {
+        let target: usize = profile.to_str().unwrap().parse().unwrap();
+        assert!([1, 2].contains(&target));
+        let root = PathBuf::from(std::env::var_os(ARRANGEMENT_ROOT).unwrap());
+        pair_app_multi_loop_after_ack_profile(&root, target);
+        eprintln!(
+            "Pair App after-ACK Multi Loop child target={target} PID={}",
+            std::process::id()
+        );
+        return;
+    }
+    let parent = std::env::var_os(ARRANGEMENT_ROOT).map(PathBuf::from).unwrap_or_else(|| {
+        let temporary = std::env::temp_dir().join("codex");
+        fs::create_dir_all(&temporary).unwrap();
+        let owned = tempfile::Builder::new()
+            .prefix("rearrange-pair-app-")
+            .tempdir_in(temporary)
+            .unwrap()
+            .keep();
+        fs::write(
+            owned.join("OWNER.md"),
+            "Owner: device-free real Pair ACK/Multi Loop/Config/App-close proof. Reproducible synthetic outputs; preserve results before cleanup.\n",
+        )
+        .unwrap();
+        owned
+    });
+    assert!(parent.is_dir() && parent.join("OWNER.md").is_file());
+    let (_, module) = module_path!().split_once("::").unwrap();
+    let test = format!("{module}::real_pair_ack_multi_loop_settles_config_selection_and_app_close");
+    for target in [1, 2] {
+        let root = tempfile::Builder::new()
+            .prefix(&format!("pair-app-target-{target}-"))
+            .tempdir_in(&parent)
+            .unwrap()
+            .keep();
+        fs::write(
+            root.join("OWNER.md"),
+            "Owner: isolated real Pair/App child; synthetic input, no device or Human data.\n",
+        )
+        .unwrap();
+        let output = std::process::Command::new(std::env::current_exe().unwrap())
+            .args(["--exact", &test, "--nocapture", "--test-threads=1"])
+            .env(PAIR_APP_PROFILE, target.to_string())
+            .env(ARRANGEMENT_ROOT, &root)
+            .current_dir(&root)
+            .output()
+            .unwrap();
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        eprint!("{stderr}");
+        assert!(
+            output.status.success(),
+            "Pair App target={target} failed:\n{stdout}\n{stderr}"
+        );
+        assert!(stdout.contains("1 passed; 0 failed"));
+        assert!(stderr.contains(&format!(
+            "Pair App after-ACK Multi Loop child target={target} PID="
+        )));
+    }
 }
 
 #[test]

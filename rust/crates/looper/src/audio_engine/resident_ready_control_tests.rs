@@ -10,6 +10,60 @@ use crate::messages::{PreparedStemSet, StemMixMode};
 use pyo3::{PyResult, Python};
 use std::sync::{Condvar, mpsc};
 
+fn current_content(loaded: &Loaded) -> crate::audio_engine::content_placement::ContentKey {
+    loaded
+        .engine
+        .input_runtime_ownership
+        .slot_snapshot(0)
+        .unwrap()
+        .content_key()
+        .unwrap()
+}
+
+fn captured_start(
+    loaded: &Loaded,
+    timestamp: u64,
+) -> crate::audio_engine::pad_start::CapturedPadStart {
+    let Ok(ControlMessage::CapturePadStartTarget(start)) = loaded.consumer.peek() else {
+        panic!("resident launch must retain its actual original target capture");
+    };
+    assert_eq!(start.received_timestamp(), timestamp);
+    assert_eq!(start.content_key(), current_content(loaded));
+    assert!(start.belongs_to(&loaded.engine.input_runtime_ownership));
+    assert!(start.is_published());
+    start.clone()
+}
+
+fn drain_current(loaded: &mut Loaded) -> usize {
+    crate::audio_engine::audio_stream::drain_control_messages(
+        &mut loaded.consumer,
+        &mut loaded.callback.scheduler,
+        loaded.callback.transport.output_frame(),
+        &mut loaded.callback.quantization,
+        &mut loaded.callback.transport,
+        &mut loaded.callback.mixer,
+        &mut loaded.callback.feedback,
+        &mut loaded.callback.retirement,
+    )
+}
+
+fn render_current(loaded: &mut Loaded, frames: usize) -> Vec<f32> {
+    let mut output = vec![0.0; frames * 2];
+    crate::audio_engine::audio_stream::render_scheduled_audio(
+        &mut loaded.callback.mixer,
+        &mut loaded.callback.scheduler,
+        &mut output,
+        &mut [0.0; NUM_SAMPLES],
+        loaded.callback.transport.output_frame(),
+        2,
+        &mut loaded.callback.transport,
+        &mut loaded.callback.feedback,
+        &mut loaded.callback.retirement,
+    );
+    loaded.callback.transport.advance_by_rendered_frames(frames);
+    output
+}
+
 /// Actual workers hold a deterministic gate; all 32 remaining jobs are queued.
 /// Release on unwind too, so a failed pre-fix assertion cannot hang engine Drop.
 struct ColdLaneGate(Arc<(Mutex<bool>, Condvar)>);
@@ -137,23 +191,19 @@ fn accepted_stems(loaded: &mut Loaded) -> PreparedStemSet {
 }
 
 fn launch_and_render(loaded: &mut Loaded, ticket: &ResidentWindowTicket, stem_value: Option<f32>) {
-    // A completed prior STOP is observed by the normal control tick before the next gesture.
-    if let Ok(previous) = loaded.callback.feedback_rx.pop() {
-        assert!(matches!(previous, AudioMessage::SampleStopped { id: 0 }));
-    }
     assert!(loaded.callback.feedback_rx.is_empty());
     let timestamp = loaded.engine.input_clock.capture_ns();
     assert!(
         launch_with_producer(&loaded.engine, ticket, false, timestamp, &loaded.producer).unwrap()
     );
-    assert!(
-        matches!(loaded.consumer.peek(), Ok(ControlMessage::TriggerInputPad {
-        received_at_ns,
-        resident_control: Some(_),
-        ..
-    }) if *received_at_ns == timestamp)
+    let original = captured_start(loaded, timestamp);
+    assert_eq!(drain_current(loaded), 2);
+    assert_eq!(
+        original.original_frame(),
+        Some(loaded.callback.transport.output_frame())
     );
-    assert_eq!(loaded.callback.drain(&mut loaded.consumer), 1);
+    assert_eq!(original.effective_frame(), original.original_frame());
+    assert_eq!(original.state(), "applied");
     assert!(
         loaded
             .callback
@@ -162,23 +212,15 @@ fn launch_and_render(loaded: &mut Loaded, ticket: &ResidentWindowTicket, stem_va
             .iter()
             .any(|voice| voice.is_playing_sample(0))
     );
-    let mut output = vec![0.0; 300 * 2];
-    loaded.callback.mixer.render_rt_at_output_frame(
-        &mut output,
-        &mut [0.0; NUM_SAMPLES],
-        0,
-        &mut loaded.callback.retirement,
-    );
+    let output = render_current(loaded, 300);
     for (frame, stereo) in output.chunks_exact(2).enumerate().skip(128) {
         let expected = stem_value.unwrap_or(loaded.mono[32 + frame % 32]);
         for value in stereo {
             assert_eq!(value.to_bits(), expected.to_bits(), "frame={frame}");
         }
     }
-    assert!(matches!(
-        loaded.callback.feedback_rx.pop(),
-        Ok(AudioMessage::SampleStarted { id: 0 })
-    ));
+    let started = loaded.callback.feedback_rx.pop().unwrap();
+    ExpectedPadFeedback::capture(&loaded.engine, 0, 1).assert_current(&loaded.engine, &started);
     assert!(loaded.callback.feedback_rx.is_empty());
 }
 
@@ -263,7 +305,10 @@ fn ready_retrigger_stop_mode_mask_and_new_context_keep_native_guards() {
         &mut loaded.producer.lock().unwrap(),
         Some(0)
     ));
-    assert_eq!(loaded.callback.drain(&mut loaded.consumer), 1);
+    let stopped = ExpectedPadFeedback::capture(&loaded.engine, 0, 2);
+    assert_eq!(drain_current(&mut loaded), 1);
+    stopped.assert_current(&loaded.engine, &loaded.callback.feedback_rx.pop().unwrap());
+    assert!(loaded.callback.feedback_rx.is_empty());
     assert!(ready.is_current(), "STOP must retain ACK readiness");
     assert!(
         !loaded
@@ -415,7 +460,8 @@ fn ready_queue_pressure_and_scheduled_stop_preserve_ack_and_quantization() {
     assert!(
         launch_with_producer(&loaded.engine, &ready, false, timestamp, &loaded.producer).unwrap()
     );
-    assert_eq!(loaded.callback.drain(&mut loaded.consumer), 1);
+    let original = captured_start(&loaded, timestamp);
+    assert_eq!(drain_current(&mut loaded), 2);
     assert_eq!(loaded.callback.scheduler.len(), 1);
     assert!(
         !loaded
@@ -430,7 +476,10 @@ fn ready_queue_pressure_and_scheduled_stop_preserve_ack_and_quantization() {
         &mut loaded.producer.lock().unwrap(),
         Some(0)
     ));
-    assert_eq!(loaded.callback.drain(&mut loaded.consumer), 1);
+    let stopped = ExpectedPadFeedback::capture(&loaded.engine, 0, 2);
+    assert_eq!(drain_current(&mut loaded), 1);
+    stopped.assert_current(&loaded.engine, &loaded.callback.feedback_rx.pop().unwrap());
+    assert!(loaded.callback.feedback_rx.is_empty());
     assert!(ready.is_current());
     let target = loaded.callback.scheduler.peek_next_target_frame().unwrap();
     let event = loaded
@@ -438,10 +487,14 @@ fn ready_queue_pressure_and_scheduled_stop_preserve_ack_and_quantization() {
         .scheduler
         .pop_due_at_callback_start(target)
         .unwrap();
-    assert!(
-        matches!(&event.command, crate::audio_engine::scheduler::ScheduledCommand::TriggerInputPad { received_at_ns, .. } if *received_at_ns == timestamp)
-    );
-    crate::audio_engine::audio_stream::execute_scheduled_command(
+    assert_eq!(original.original_frame(), Some(target));
+    assert_eq!(original.received_timestamp(), timestamp);
+    assert_eq!(original.content_key(), current_content(&loaded));
+    assert!(matches!(&event.command,
+        crate::audio_engine::scheduler::ScheduledCommand::PitchAction { action_sequence, .. }
+        if *action_sequence == original.sequence()
+    ));
+    let result = crate::audio_engine::audio_stream::execute_scheduled_command(
         &mut loaded.callback.mixer,
         &mut loaded.callback.transport,
         event.execution_frame,
@@ -449,6 +502,15 @@ fn ready_queue_pressure_and_scheduled_stop_preserve_ack_and_quantization() {
         &mut loaded.callback.feedback,
         &mut loaded.callback.retirement,
     );
+    assert!(matches!(
+        result,
+        crate::audio_engine::audio_stream::ScheduledExecution::Complete
+    ));
+    assert_eq!(original.state(), "rejected");
+    assert_eq!(original.reason(), Some("launch_cancelled"));
+    assert_eq!(original.effective_frame(), None);
+    assert!(loaded.callback.scheduler.is_empty());
+    assert!(loaded.callback.feedback_rx.is_empty());
     assert!(
         !loaded
             .callback
@@ -470,29 +532,28 @@ fn ready_full_feedback_retains_start_until_real_poll_and_next_callback_with_one_
     let _blocked = ColdLaneGate::occupy(&loaded.engine);
     let ready = loaded.prepare(same_request());
     loaded.adopt(&ready);
-    let key = loaded
-        .engine
-        .input_runtime_ownership
-        .slot_snapshot(0)
-        .unwrap()
-        .content_key()
-        .unwrap();
+    let key = current_content(&loaded);
     // A completed real STOP fills the unchanged one-slot feedback ring.
     assert!(enqueue_stop_with_producer(
         &loaded.engine.input_runtime_ownership,
         &mut loaded.producer.lock().unwrap(),
         Some(0)
     ));
-    assert_eq!(loaded.callback.drain(&mut loaded.consumer), 1);
-    assert!(matches!(
-        loaded.callback.feedback_rx.peek(),
-        Ok(AudioMessage::SampleStopped { id: 0 })
-    ));
+    let stopped = ExpectedPadFeedback::capture(&loaded.engine, 0, 2);
+    assert_eq!(drain_current(&mut loaded), 1);
+    stopped.assert_current(&loaded.engine, loaded.callback.feedback_rx.peek().unwrap());
     let timestamp = loaded.engine.input_clock.capture_ns();
     assert!(
         launch_with_producer(&loaded.engine, &ready, false, timestamp, &loaded.producer).unwrap()
     );
-    assert_eq!(loaded.callback.drain(&mut loaded.consumer), 1);
+    let original = captured_start(&loaded, timestamp);
+    let sequence = original.sequence();
+    assert_eq!(drain_current(&mut loaded), 2);
+    assert!(loaded.consumer.is_empty());
+    assert_eq!(original.original_frame(), Some(0));
+    assert_eq!(original.execution_frame(), Some(0));
+    assert_eq!(original.effective_frame(), None);
+    assert_eq!(original.reason(), None);
     assert!(ready.is_current());
     assert_eq!(ready.publication_status(), "accepted");
     assert!(
@@ -505,19 +566,25 @@ fn ready_full_feedback_retains_start_until_real_poll_and_next_callback_with_one_
     );
     let pending = loaded.callback.scheduler.deferred_due().unwrap();
     assert_eq!(pending.target_frame, 0);
-    assert!(
-        matches!(&pending.command, crate::audio_engine::scheduler::ScheduledCommand::TriggerInputPad {
-        received_at_ns, binding, ..
-    } if *received_at_ns == timestamp && binding.placement.unwrap().content_key() == Some(key))
-    );
+    assert_eq!(pending.execution_frame, 0);
     assert!(matches!(
-        loaded.callback.feedback_rx.pop(),
-        Ok(AudioMessage::SampleStopped { id: 0 })
+        &pending.command,
+        crate::audio_engine::scheduler::ScheduledCommand::PitchAction { action_sequence, .. }
+            if *action_sequence == sequence
     ));
+    assert_eq!(original.content_key(), key);
+    assert_eq!(original.received_timestamp(), timestamp);
+    let previous_stop = loaded.callback.feedback_rx.pop().unwrap();
+    stopped.assert_message(&previous_stop);
+    assert_eq!(
+        loaded.engine._resolve_pad_feedback(&previous_stop).unwrap(),
+        None
+    );
     assert!(loaded.callback.feedback_rx.is_empty());
     // Free capacity does not cause a same-callback spin or a second admission.
-    assert_eq!(loaded.callback.drain(&mut loaded.consumer), 0);
+    assert_eq!(drain_current(&mut loaded), 0);
     assert!(loaded.callback.scheduler.deferred_due().is_some());
+    assert_eq!(original.execution_frame(), Some(0));
     assert!(
         !loaded
             .callback
@@ -526,21 +593,63 @@ fn ready_full_feedback_retains_start_until_real_poll_and_next_callback_with_one_
             .iter()
             .any(|voice| voice.is_playing_sample(0))
     );
-    loaded.callback.transport.advance_by_rendered_frames(1);
-    assert_eq!(
-        crate::audio_engine::audio_stream::drain_control_messages(
-            &mut loaded.consumer,
-            &mut loaded.callback.scheduler,
-            1,
-            &mut loaded.callback.quantization,
-            &mut loaded.callback.transport,
-            &mut loaded.callback.mixer,
-            &mut loaded.callback.feedback,
-            &mut loaded.callback.retirement
-        ),
-        0
+    assert!(
+        render_current(&mut loaded, 1)
+            .iter()
+            .all(|value| *value == 0.0)
     );
+    assert_eq!(loaded.callback.transport.output_frame(), 1);
+    assert_eq!(drain_current(&mut loaded), 0);
+    let execution = 8_193;
+    assert_eq!(original.original_frame(), Some(0));
+    assert_eq!(original.execution_frame(), Some(execution));
+    assert_eq!(original.effective_frame(), None);
+    assert_eq!(
+        loaded.callback.scheduler.peek_next_target_frame(),
+        Some(execution)
+    );
+    assert!(loaded.callback.scheduler.deferred_due().is_none());
+    // Host waiting never advances the product clock or admits a replacement gesture.
+    wait_until(Duration::from_secs(5), || {
+        assert_ne!(original.state(), "rejected", "{:?}", original.reason());
+        let runtime = loaded.callback.mixer.pitch_runtime.as_mut().unwrap();
+        runtime.poll();
+        runtime.has_ready_action(sequence)
+    });
+    assert_eq!(loaded.callback.transport.output_frame(), 1);
+    assert_eq!(original.original_frame(), Some(0));
+    assert_eq!(original.execution_frame(), Some(execution));
+    assert_eq!(original.effective_frame(), None);
+    assert_eq!(original.content_key(), key);
+    assert_eq!(original.received_timestamp(), timestamp);
+    assert_eq!(original.sequence(), sequence);
+    assert!(original.belongs_to(&loaded.engine.input_runtime_ownership));
+    assert!(loaded.consumer.is_empty());
+    assert!(
+        !loaded
+            .callback
+            .mixer
+            .voices
+            .iter()
+            .any(|voice| voice.is_playing_sample(0))
+    );
+    assert!(
+        render_current(&mut loaded, (execution - 1) as usize)
+            .iter()
+            .all(|value| *value == 0.0)
+    );
+    assert_eq!(loaded.callback.transport.output_frame(), execution);
+    assert_eq!(original.effective_frame(), None);
+    let output = render_current(&mut loaded, 300);
     assert!(loaded.callback.scheduler.is_empty());
+    assert_eq!(original.state(), "applied");
+    assert_eq!(original.reason(), None);
+    assert_eq!(original.original_frame(), Some(0));
+    assert_eq!(original.execution_frame(), Some(execution));
+    assert_eq!(original.effective_frame(), Some(execution));
+    assert_eq!(original.sequence(), sequence);
+    assert_eq!(original.content_key(), key);
+    assert_eq!(original.received_timestamp(), timestamp);
     let voices: Vec<_> = loaded
         .callback
         .mixer
@@ -557,12 +666,33 @@ fn ready_full_feedback_retains_start_until_real_poll_and_next_callback_with_one_
             .content_key_for_test(),
         Some(key)
     );
-    assert!(matches!(
-        loaded.callback.feedback_rx.pop(),
-        Ok(AudioMessage::SampleStarted { id: 0 })
-    ));
+    for (relative_frame, stereo) in output.chunks_exact(2).enumerate().skip(128) {
+        let expected = loaded.mono[32 + (execution as usize + relative_frame) % 32];
+        for value in stereo {
+            assert_eq!(
+                value.to_bits(),
+                expected.to_bits(),
+                "frame={relative_frame}"
+            );
+        }
+    }
+    loaded.assert_feedback(1);
+    assert_eq!(drain_current(&mut loaded), 0);
+    assert!(loaded.consumer.is_empty());
+    assert!(loaded.callback.scheduler.is_empty());
     assert!(loaded.callback.feedback_rx.is_empty());
+    assert_eq!(
+        loaded
+            .callback
+            .mixer
+            .voices
+            .iter()
+            .filter(|voice| voice.is_playing_sample(0))
+            .count(),
+        1
+    );
     assert!(ready.is_current());
+    assert_eq!(ready.publication_status(), "accepted");
 }
 
 #[test]
@@ -612,11 +742,9 @@ fn ready_transaction_cannot_ack_a_control_cache_source_before_actual_cold_bank_a
         &mut loaded.producer.lock().unwrap(),
         Some(0)
     ));
+    let stopped = ExpectedPadFeedback::capture(&loaded.engine, 0, 2);
     assert_eq!(loaded.callback.drain(&mut loaded.consumer), 1);
-    assert!(matches!(
-        loaded.callback.feedback_rx.peek(),
-        Ok(AudioMessage::SampleStopped { id: 0 })
-    ));
+    stopped.assert_current(&loaded.engine, loaded.callback.feedback_rx.peek().unwrap());
     let (request, mut source_commands) = selected_load(
         &loaded.engine,
         &loaded.directory.path().join("control.wav"),
@@ -639,6 +767,12 @@ fn ready_transaction_cannot_ack_a_control_cache_source_before_actual_cold_bank_a
     assert!(
         binding.current(),
         "control-source metadata alone is not a native readiness ACK"
+    );
+    assert!(
+        !loaded
+            .callback
+            .mixer
+            .admitted_source_binding_current(0, binding.binding)
     );
     let ticket = loaded.prepare(same_request());
     loaded.pending(&ticket);
@@ -675,10 +809,26 @@ fn ready_transaction_cannot_ack_a_control_cache_source_before_actual_cold_bank_a
         request
     );
     assert!(!source_commands.is_empty());
-    assert!(matches!(
-        loaded.callback.feedback_rx.pop(),
-        Ok(AudioMessage::SampleStopped { id: 0 })
-    ));
+    assert!(
+        !loaded
+            .callback
+            .mixer
+            .admitted_source_binding_current(0, binding.binding)
+    );
+    assert!(
+        !loaded
+            .callback
+            .mixer
+            .voices
+            .iter()
+            .any(|voice| voice.is_playing_sample(0))
+    );
+    let previous_stop = loaded.callback.feedback_rx.pop().unwrap();
+    stopped.assert_message(&previous_stop);
+    assert_eq!(
+        loaded.engine._resolve_pad_feedback(&previous_stop).unwrap(),
+        None
+    );
     assert!(loaded.callback.feedback_rx.is_empty());
     assert_eq!(loaded.callback.drain(&mut source_commands), 1);
     assert!(matches!(
@@ -688,6 +838,17 @@ fn ready_transaction_cannot_ack_a_control_cache_source_before_actual_cold_bank_a
     wait_until(Duration::from_secs(10), || {
         loaded.engine.cold_loading[0].load(Ordering::Acquire) == 0
     });
+    loaded.assert_feedback(2);
+    let adopted_binding = crate::audio_engine::input_runtime_binding::capture(&loaded.engine, 0)
+        .unwrap()
+        .unwrap();
+    assert!(adopted_binding.current());
+    assert!(
+        loaded
+            .callback
+            .mixer
+            .admitted_source_binding_current(0, adopted_binding.binding)
+    );
     let fresh = loaded.prepare(same_request());
     loaded.adopt(&fresh);
     launch_and_render(&mut loaded, &fresh, None);

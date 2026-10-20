@@ -186,9 +186,32 @@ non-replacing frozen-A restore proof remains separate.
 
 ## 5. X11-BULK: all-bank generation and Cancel (B1)
 
+- [x] B1 bounded SOFTWARE foundation only: exact metadata-only216 inventory,
+  independent same-PAD interest owners through existing job/Pair/reuse/fallback/
+  durable commit, original-reader cancellation receipts, correct late Cancel and
+  retained failure/no-op outcomes, same-pool atomic capacity primitives. Fresh
+  Python395/Native shared3Release/static/spec/preflight and independent review
+  pass. Later bounded admission/operation receipts build on this foundation;
+  complete tasks5.1-5.3 and all parent gates remain OPEN.
 - [ ] 5.1 Add shared Settings warning-confirmed Generate Stems of all loaded PADs,
   bounded immutable 216-slot/all-bank inventory and content/model dedup; keep
   original per-pad authoritative request path and own identities.
+- [x] B1 bounded SOFTWARE admission only: one six-lane FIFO rotating arbiter
+  reserves the existing2/32 pool before ownership; metadata-only requested PADs,
+  physical generation WIP34 and preparation/returned/discard custody34, exact
+  retained terminal/reuse216-row delivery, one promotion and post-grant stale
+  outcomes. Final786 Python/scoped static/strict/import checks and independent
+  final review pass. This receipt does not close operation/UI or actual all216
+  process/resource/adoption; later receipts cover their own bounded scope.
+- [x] B1 bounded SOFTWARE operation/common-modal/Settings only: exact original
+  warning inventory, at most8 offers per App frame outside Settings, retained
+  per-item/aggregate outcomes, actual Config-based Done and own-reader Cancel.
+  Final cancellation respects captured Pair/Bank ACK/control-mirror fences,
+  zero-read queued workers and surviving/new DIRECT interests. Fresh2306 Python,
+  actual Native final-batch Bank crossing/shared5, static/strict/import/launcher,
+  actual desktop UI checks and independent final review pass. Complete216
+  duplicate/distinct resource/process/adoption, tasks5.1-5.3 and parents remain
+  OPEN; the declared backend in Native proofs is not actual neural inference.
 - [ ] 5.2 Feed the existing two-worker/32-queue pool incrementally and fairly;
   test 216 shared/distinct material cases, interactive subscribers/admissions,
   supported budgets, worker/queue/intent peaks and no starvation. Show per-item
@@ -199,6 +222,28 @@ non-replacing frozen-A restore proof remains separate.
   files, loses prior successful items or reports running work prematurely ended.
 
 ## 6. X11-BULK: all-bank deletion and cleanup (B2)
+
+Current bounded vertical implementation is integrated: frozen all216 original
+inventory, common Settings warning, exact unadmitted caller-token withdrawal
+receipts, at most8 original offers per desktop frame including closing frames,
+progress outside Settings and during shutdown preparation, guarded FullMix/
+assignment retirement, and retained
+logical outcomes with separately observed global cleanup. The Noop shortcut
+avoids project scan/reservation only with no actual saved stem asset assignment
+and no retained, pending or admitted control work. See
+[B2 design](design.md#b2-all-loaded-deletion) and
+[UI ownership](../../../docs/ui-toolkit.md#all-loaded-stem-deletion).
+Full B2/tasks6.1-6.3, generation tasks5.1-5.3, complete real-voice/resource and
+Human/parent gates remain OPEN.
+
+- [x] B2 bounded vertical SOFTWARE: final341 Python checks, actual Native shared/
+  stale occupied-Copy/FullMix/retained-history/physical-last-reader profile and
+  real queue refusal2PASS, desktop two-bank warning/Cancel/Removed/result
+  retention/repeated Noop/persistence, affected static/strict/import/launcher/
+  Clippy/diff checks and one independent nonauthor final review CLEAR.
+  No-op observes actual saved assignment ownership; rendered and minimized
+  closing frames share the existing eight-original offer bound. This receipt
+  preserves all full-domain, voice/resource and Human acceptance above.
 
 - [ ] 6.1 Add shared Settings Delete Stems of all loaded PADs warning with exact
   material/version/affected-pad scope; Cancel is a no-op, stale/new targets are

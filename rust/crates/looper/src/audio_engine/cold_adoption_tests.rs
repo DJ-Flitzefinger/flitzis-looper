@@ -360,6 +360,13 @@ fn retirement_backpressure_keeps_cold_pending_and_pinned_adoption_needs_no_feedb
 #[cfg(windows)]
 fn explicit_assignment_replacement_stops_old_voice_only_after_real_callback_ack() {
     let mut fixture = Fixture::new();
+    let previous_key = fixture
+        .engine
+        .input_runtime_ownership
+        .slot_snapshot(0)
+        .unwrap()
+        .content_key()
+        .unwrap();
     let request = fixture.admit_replacing(0, false, true);
     fixture.pending(0, request);
     fixture.callback.assert_old_voice(&fixture.previous);
@@ -368,11 +375,13 @@ fn explicit_assignment_replacement_stops_old_voice_only_after_real_callback_ack(
     assert_eq!(fixture.callback.drain(&mut fixture.consumer), 0);
     fixture.callback.assert_old_voice(&fixture.previous);
     fixture.assert_no_terminal();
+    assert!(fixture.callback.feedback.events.is_empty());
     fixture.callback.retirement.slots = 3 * MAX_VOICES + 6;
     fixture.callback.feedback.slots = 0;
     assert_eq!(fixture.callback.drain(&mut fixture.consumer), 0);
     fixture.callback.assert_old_voice(&fixture.previous);
     fixture.assert_no_terminal();
+    assert!(fixture.callback.feedback.events.is_empty());
     fixture.callback.feedback.slots = 1;
     assert_eq!(fixture.callback.drain(&mut fixture.consumer), 1);
     assert!(matches!(
@@ -388,10 +397,28 @@ fn explicit_assignment_replacement_stops_old_voice_only_after_real_callback_ack(
             .any(|voice| voice.is_playing_sample(0))
     );
     assert_eq!(fixture.callback.feedback.events.len(), 1);
+    let current_key = fixture
+        .engine
+        .input_runtime_ownership
+        .slot_snapshot(0)
+        .unwrap()
+        .content_key()
+        .unwrap();
+    assert_ne!(current_key, previous_key);
+    let stopped = &fixture.callback.feedback.events[0];
     assert!(matches!(
-        fixture.callback.feedback.events[0],
-        AudioMessage::SampleStopped { id: 0 }
+        stopped,
+        AudioMessage::ContentFeedback {
+            id: 0, owner, cell, lifetime, kind: 2, value, ..
+        } if *owner == fixture.engine.input_runtime_ownership.owner_identity().diagnostic()
+            && *cell == current_key.cell().index()
+            && *lifetime == current_key.lifetime()
+            && *value == 0.0
     ));
+    assert_eq!(
+        fixture.engine._resolve_pad_feedback(stopped).unwrap(),
+        Some(0)
+    );
     assert!(fixture.callback.mixer.play_sample(0, 1.0));
     let new_source = fixture.engine.sample_cache.lock().unwrap()[0]
         .clone()

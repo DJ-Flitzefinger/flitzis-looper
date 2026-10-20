@@ -150,7 +150,9 @@ fn fixture() -> &'static Fixture {
         let ticket=prepare(&engine,0,TimingBound { halfwidth_seconds:0.05,provenance:"independent fixture matching tolerance".into() }).unwrap();
         let counts:Vec<Option<i64>>=ticket.evidence.beat_seconds().iter().map(|t|Some((t/PERIOD).round() as i64)).collect();
         let hypotheses=json!([{"id":"independent-pulse-quarters","provenance":"generated test quarter times; association by known period","verification":"verified","quarter_note_denominator":1,"quarter_counts":counts}]).to_string();
-        let (producer,mut consumer)=queue(1); let mut mixer=acknowledged_mixer(&engine);
+        let (producer,mut consumer)=queue(1);
+        let engine = super::tests::with_control_producer(engine, &producer);
+        let mut mixer=acknowledged_mixer(&engine);
         publish(&engine,&producer,&ticket,&hypotheses,origin(),decision()).unwrap();
         assert!(export_current(&engine,0,path.to_string_lossy().into()).unwrap().is_none());
         assert!(accept_message(&mut mixer,consumer.pop().unwrap()));
@@ -180,6 +182,7 @@ fn saved_timing_productive_native_qm_file_decode_export_fresh_adoption_roundtrip
     let f = fixture();
     let engine = fresh_engine();
     let (producer, mut consumer) = queue(2);
+    let engine = super::tests::with_control_producer(engine, &producer);
     let mut mixer = acknowledged_mixer(&engine);
     let saved = capture_saved(&engine, 0, &f.envelope, f.path.clone()).unwrap();
     assert_eq!(saved.pcm_budget, PcmBudget::default());
@@ -230,12 +233,13 @@ fn saved_finite_resident_timing_uses_complete_evidence_without_complete_ticket_p
 
     let f = fixture();
     let directory = temp_directory();
-    let mut engine = AudioEngine::new().unwrap();
+    let engine = AudioEngine::new().unwrap();
     engine.timing_intents.lock().unwrap()[0] = TimingIntent::Automatic;
     engine
         .input_runtime_ownership
         .set_timing_intent(0, TimingIntent::Automatic);
     let (producer, mut consumer) = queue(8);
+    let mut engine = super::tests::with_control_producer(engine, &producer);
     let request = admit_for_format_selected(
         &engine,
         0,
@@ -529,6 +533,7 @@ fn current_export_keeps_admitted_runtime_budget_without_encoding_or_restoring_it
     }])
     .to_string();
     let (producer, mut consumer) = queue(1);
+    let engine = super::tests::with_control_producer(engine, &producer);
     let mut mixer = acknowledged_mixer(&engine);
     publish(
         &engine,
@@ -573,8 +578,11 @@ fn current_export_keeps_admitted_runtime_budget_without_encoding_or_restoring_it
 #[test]
 fn saved_timing_actual_project_atomic_save_load_to_fresh_native_callback_adoption() {
     let f = fixture();
-    let engine = Arc::new(fresh_engine());
     let (producer, mut consumer) = queue(1);
+    let engine = Arc::new(super::tests::with_control_producer(
+        fresh_engine(),
+        &producer,
+    ));
     let mut mixer = acknowledged_mixer(&engine);
     let saved = capture_saved(&engine, 0, &f.envelope, f.path.clone()).unwrap();
     let first = restore_saved(&engine, &producer, &saved).unwrap();
@@ -587,7 +595,7 @@ fn saved_timing_actual_project_atomic_save_load_to_fresh_native_callback_adoptio
         serde_json::from_str::<Value>(&from_disk).unwrap(),
         serde_json::from_str::<Value>(&f.envelope).unwrap()
     );
-    let fresh = fresh_engine();
+    let fresh = super::tests::with_control_producer(fresh_engine(), &producer);
     let decoded = decode_audio_file_to_sample_buffer(Path::new(&f.path), 1, RATE, |_| {}).unwrap();
     install(&fresh, decoded, f.digest.clone(), 101, 122);
     let saved = capture_saved(&fresh, 0, &from_disk, f.path.clone()).unwrap();
@@ -612,8 +620,11 @@ fn c1b_actual_native_export_and_project_save_integrity_cost() {
     let output = std::env::var("FLITZI_C1B_SAVE_EVIDENCE")
         .expect("FLITZI_C1B_SAVE_EVIDENCE must name a workspace evidence file");
     let f = fixture();
-    let engine = Arc::new(fresh_engine());
     let (producer, mut consumer) = queue(1);
+    let engine = Arc::new(super::tests::with_control_producer(
+        fresh_engine(),
+        &producer,
+    ));
     let mut mixer = acknowledged_mixer(&engine);
     let saved = capture_saved(&engine, 0, &f.envelope, f.path.clone()).unwrap();
     let ticket = restore_saved(&engine, &producer, &saved).unwrap();
@@ -738,6 +749,7 @@ fn saved_timing_pending_failed_and_rejected_replacement_preserve_previous_curren
     let f = fixture();
     let engine = fresh_engine();
     let (producer, mut consumer) = queue(1);
+    let engine = super::tests::with_control_producer(engine, &producer);
     let mut mixer = acknowledged_mixer(&engine);
     let saved = capture_saved(&engine, 0, &f.envelope, f.path.clone()).unwrap();
     let first = restore_saved(&engine, &producer, &saved).unwrap();
@@ -841,6 +853,7 @@ fn saved_timing_rejects_changed_content_rate_extent_zero_schema_and_incomplete_e
             }
         }
         let (producer, mut consumer) = queue(1);
+        let engine = super::tests::with_control_producer(engine, &producer);
         if let Ok(saved) = capture_saved(&engine, 0, &envelope.to_string(), f.path.clone()) {
             assert!(
                 restore_saved(&engine, &producer, &saved).is_err(),
@@ -860,6 +873,7 @@ fn saved_timing_rejects_changed_content_rate_extent_zero_schema_and_incomplete_e
     bytes[48] ^= 1;
     std::fs::write(&path, bytes).unwrap();
     let (producer, mut consumer) = queue(1);
+    let engine = super::tests::with_control_producer(engine, &producer);
     assert!(restore_saved(&engine, &producer, &saved).is_err());
     assert!(consumer.pop().is_err());
     std::fs::copy(&f.path, &path).unwrap();
@@ -882,6 +896,7 @@ fn saved_timing_fresh_capture_stale_authority_source_failure_and_callback_reject
         let engine = fresh_engine();
         let saved = capture_saved(&engine, 0, &f.envelope, f.path.clone()).unwrap();
         let (producer, mut consumer) = queue(2);
+        let engine = super::tests::with_control_producer(engine, &producer);
         match mutation {
             0 => engine.pad_request_ids.lock().unwrap()[0] += 1,
             1 => {
@@ -909,6 +924,7 @@ fn saved_timing_fresh_capture_stale_authority_source_failure_and_callback_reject
     let engine = fresh_engine();
     let saved = capture_saved(&engine, 0, &f.envelope, f.path.clone()).unwrap();
     let (producer, mut consumer) = queue(1);
+    let engine = super::tests::with_control_producer(engine, &producer);
     producer
         .lock()
         .unwrap()
@@ -935,6 +951,7 @@ fn saved_timing_signed_zero_roundtrip_and_nonaccepted_unsupported_export() {
     let engine = test_engine();
     let ticket = crate::audio_engine::constant_timing::tests::synthetic_ticket(&engine);
     let (producer, mut consumer) = queue(1);
+    let engine = super::tests::with_control_producer(engine, &producer);
     let mut mixer = acknowledged_mixer(&engine);
     publish(
         &engine,

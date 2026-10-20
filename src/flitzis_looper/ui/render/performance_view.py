@@ -1,3 +1,4 @@
+from math import sin, tau
 from typing import TYPE_CHECKING, cast
 
 from imgui_bundle import imgui
@@ -6,13 +7,11 @@ from flitzis_looper.constants import GRID_SIZE, NUM_BANKS, NUM_PADS
 from flitzis_looper.ui.constants import (
     BANK_BUTTONS_HEIGHT,
     BANK_PRESSED_RGBA,
-    MODE_OFF_RGBA,
     MODE_ON_RGBA,
     PAD_GRID_GAP,
     SPACING,
     TEXT_ACTIVE_RGBA,
     TEXT_MUTED_RGBA,
-    TEXT_RGBA,
 )
 from flitzis_looper.ui.contextmanager import button_style, style_var
 from flitzis_looper.ui.render.pitch_keyboard import render_piano_keyboard
@@ -25,7 +24,6 @@ if TYPE_CHECKING:
 STEM_GRID_INDICATORS: dict[str, tuple[str, imgui.ImVec4Like, imgui.ImVec4Like]] = {
     "available": ("ST", MODE_ON_RGBA, TEXT_ACTIVE_RGBA),
     "generating": ("...", BANK_PRESSED_RGBA, TEXT_ACTIVE_RGBA),
-    "error": ("!", MODE_OFF_RGBA, TEXT_RGBA),
 }
 PAD_TITLE_MAX_LINES = 3
 PAD_TITLE_PADDING_SAMPLE = "M"
@@ -240,7 +238,9 @@ def _pad_button_input(ctx: UiContext, pad_id: int, *, is_loaded: bool) -> None:
         ctx.ui.select_pad(pad_id)
 
     if imgui.is_mouse_down(imgui.MouseButton_.right):
-        ctx.audio.pads.stop_pad(pad_id)
+        ctx.audio.pads.stop_pad(
+            pad_id, continuous=not imgui.is_mouse_clicked(imgui.MouseButton_.right)
+        )
 
 
 def _arrangement_pad_input(ctx: UiContext, pad_id: int) -> None:
@@ -374,11 +374,49 @@ def _render_pad_grid(ctx: UiContext) -> None:
 def _bank_button(ctx: UiContext, idx: int, width: float) -> None:
     is_selected = ctx.state.banks.is_selected(idx)
     style_name: ButtonStyleName = "bank-active" if is_selected else "bank"
+    owner = ctx.ui.arrangement
 
     with button_style(style_name):
+        # Do not let a second button arm an ImGui click beyond the pad owner's lifetime.
+        imgui.begin_disabled(owner.owns_pointer)
         clicked = imgui.button(f"Bank {idx + 1}", size=(width, -1))
-        if clicked and not (ctx.ui.arrangement.enabled or ctx.ui.arrangement.owns_pointer):
-            ctx.ui.select_bank(idx)
+        imgui.end_disabled()
+        if owner.enabled and not is_selected:
+            _bank_copy_target_marker()
+
+        # A pad press owns its entire release frame, including this later bank row.
+        if owner.owns_pointer:
+            return
+        if not owner.enabled:
+            if clicked:
+                ctx.ui.select_bank(idx)
+            return
+
+        hovered = imgui.is_item_hovered()
+        if hovered and imgui.is_mouse_clicked(imgui.MouseButton_.right):
+            ctx.ui.confirmation.request_bank_clear(idx)
+        elif clicked and not is_selected:
+            ctx.ui.confirmation.request_bank_copy(ctx.state.project.selected_bank, idx)
+        if hovered:
+            help_text = f"Right-click: clear Bank {idx + 1}."
+            if not is_selected:
+                help_text = (
+                    f"Left-click: copy Bank {ctx.state.project.selected_bank + 1} "
+                    f"to Bank {idx + 1}.\n{help_text}"
+                )
+            imgui.set_tooltip(help_text)
+
+
+def _bank_copy_target_marker() -> None:
+    """Mark other-bank copy targets with a gentle three-second palette pulse."""
+    alpha = 0.65 + 0.2 * sin(imgui.get_time() * tau / 3.0)
+    color = (BANK_PRESSED_RGBA.x, BANK_PRESSED_RGBA.y, BANK_PRESSED_RGBA.z, alpha)
+    imgui.get_window_draw_list().add_rect(
+        imgui.get_item_rect_min(),
+        imgui.get_item_rect_max(),
+        imgui.get_color_u32(color),
+        thickness=2.0,
+    )
 
 
 def _rearrange_control(ctx: UiContext, width: float) -> None:
@@ -391,10 +429,9 @@ def _rearrange_control(ctx: UiContext, width: float) -> None:
     if imgui.is_item_hovered():
         message = (
             "Drag pads: left Move / Swap; right Copy / Overwrite.\n"
+            "Banks: left-click another bank to copy; right-click any bank to clear.\n"
             "Release outside or press Esc to cancel. Turn off to select banks. MIDI stays active."
         )
-        if owner.error is not None:
-            message = f"{message}\n{owner.error}"
         imgui.set_tooltip(message)
 
 
@@ -409,9 +446,9 @@ def _render_banks(ctx: UiContext) -> None:
     with style_var(imgui.StyleVar_.item_spacing, (0, 0)):
         _rearrange_control(ctx, mode_width)
         owner = ctx.ui.arrangement
-        if owner.enabled or owner.error is not None:
+        if owner.enabled:
             imgui.same_line(spacing=PAD_GRID_GAP)
-            text = owner.error or "Left: Move / Swap   Right: Copy / Overwrite"
+            text = "Left: Move / Swap   Right: Copy / Overwrite"
             imgui.text(_fit_text_to_width(text, max(0.0, avail.x - mode_width - PAD_GRID_GAP)))
         imgui.dummy((0, 4))
         for idx in range(NUM_BANKS):
@@ -449,8 +486,12 @@ def _render_piano(ctx: UiContext, height: float) -> None:
     intent = ctx.state.pads.key_intent(pad_id)
     original = intent.source.recognized if intent.source is not None else None
     source = intent.source_key
-    phase, reason = ctx.state.pads.pitch_status(pad_id)
-    status = reason or phase or "Nominal note; Key Lock OFF also follows speed"
+    phase, _reason = ctx.state.pads.pitch_status(pad_id)
+    status = (
+        phase
+        if phase in {"pending", "preparing", "waiting"}
+        else "Nominal note; Key Lock OFF also follows speed"
+    )
     if ctx.state.session.input_learn_active:
         status = "LEARN: this choice learns a binding instead of playing"
     imgui.text(

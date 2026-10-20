@@ -9,6 +9,9 @@ from unittest.mock import Mock
 
 import pytest
 
+from tests.test_portable_bank_api import bank_native_module
+from tests.test_portable_mix_capture_api import mix_capture_native_module
+
 REPO = Path(__file__).resolve().parents[2]
 
 
@@ -217,6 +220,8 @@ def _pitch_restore_source(
     initial_base_shift: object = None,
     initial_extra_shift: object = None,
     initial_key_lock: object = None,
+    initial_gain_db: object = None,
+    initial_eq_db: object = None,
 ) -> None:
     _forbidden_native_work(
         self,
@@ -224,6 +229,8 @@ def _pitch_restore_source(
         initial_base_shift=initial_base_shift,
         initial_extra_shift=initial_extra_shift,
         initial_key_lock=initial_key_lock,
+        initial_gain_db=initial_gain_db,
+        initial_eq_db=initial_eq_db,
     )
 
 
@@ -288,6 +295,8 @@ def test_incomplete_pitch_receipt_cannot_activate(attribute: str) -> None:
         ("load_sample_async", "initial_base_shift"),
         ("load_sample_async", "initial_extra_shift"),
         ("load_sample_async", "initial_key_lock"),
+        ("load_sample_async", "initial_gain_db"),
+        ("load_sample_async", "initial_eq_db"),
     ],
 )
 def test_old_pitch_projection_or_fresh_timestamp_only_capture_cannot_activate(
@@ -388,8 +397,21 @@ def _capture_global_start(
     _forbidden_native_work(self, entries, received_at_ns=received_at_ns)
 
 
-def _publish_captured_global_start(self: object, captured: object) -> None:
+def _publish_captured_global_start(
+    self: object, captured: object, *, capture: object | None = None
+) -> None:
     _forbidden_native_work(self, captured)
+
+
+def _set_key_lock_start_behavior(self: object, behavior: str) -> bool:
+    _forbidden_native_work(self, behavior)
+
+
+_KEY_START_IMPLEMENTATIONS: dict[str, object] = {
+    "key_lock_start_behavior": _forbidden_native_work,
+    "can_change_key_lock_start_behavior": _forbidden_native_work,
+    "set_key_lock_start_behavior": _set_key_lock_start_behavior,
+}
 
 
 _ORDINARY_START_IMPLEMENTATIONS: dict[str, object] = {
@@ -402,8 +424,50 @@ _ORDINARY_START_IMPLEMENTATIONS: dict[str, object] = {
 _CompatibleOrdinaryEngine = type(
     "CompatibleOrdinaryEngine",
     (_CompatiblePitchEngine,),
-    _ORDINARY_START_IMPLEMENTATIONS | {"global_rate_status": _forbidden_native_work},
+    _ORDINARY_START_IMPLEMENTATIONS
+    | _KEY_START_IMPLEMENTATIONS
+    | {"global_rate_status": _forbidden_native_work},
 )
+
+
+def test_global_start_policy_interface_is_reflected_without_native_work() -> None:
+    check = runpy.run_path(str(REPO / "scripts/portable/bootstrap.py"))[
+        "check_key_lock_start_behavior_api"
+    ]
+    check(_CompatibleOrdinaryEngine)
+
+
+@pytest.mark.parametrize("method", tuple(_KEY_START_IMPLEMENTATIONS))
+@pytest.mark.parametrize("missing", [False, True], ids=["not-callable", "absent"])
+def test_missing_global_start_policy_interface_cannot_activate(
+    method: str, *, missing: bool
+) -> None:
+    methods = dict(_KEY_START_IMPLEMENTATIONS)
+    if missing:
+        del methods[method]
+    else:
+        methods[method] = None
+    old_engine = type("MissingKeyLockStartPolicyEngine", (), methods)
+    check = runpy.run_path(str(REPO / "scripts/portable/bootstrap.py"))[
+        "check_key_lock_start_behavior_api"
+    ]
+    with pytest.raises(AssertionError, match=method):
+        check(old_engine)
+
+
+def test_policy_setter_requires_explicit_behavior_without_native_execution() -> None:
+    old_engine = type(
+        "MissingExplicitKeyLockBehavior",
+        (_CompatibleOrdinaryEngine,),
+        {"set_key_lock_start_behavior": _forbidden_native_work},
+    )
+    check = runpy.run_path(str(REPO / "scripts/portable/bootstrap.py"))[
+        "check_key_lock_start_behavior_api"
+    ]
+    with pytest.raises(AssertionError, match="behavior"):
+        check(old_engine)
+
+
 _ORDINARY_CAPTURE_IMPLEMENTATIONS = dict.fromkeys(
     _ORDINARY_CAPTURE_METHODS, _forbidden_native_work
 ) | {
@@ -501,6 +565,40 @@ def test_global_capture_timestamp_contract_cannot_activate_when_incompatible(
         "check_captured_global_start_api"
     ]
     with pytest.raises(AssertionError, match="received_at_ns"):
+        check(SimpleNamespace(AudioEngine=engine, CapturedGlobalStart=_CompatibleGlobalCapture))
+
+
+@pytest.mark.parametrize("incompatibility", ["absent", "required", "wrong-default", "positional"])
+def test_global_publication_requires_optional_keyword_capture(
+    incompatibility: str,
+) -> None:
+    complete = signature(_publish_captured_global_start)
+    parameters = list(complete.parameters.values())
+    if incompatibility == "absent":
+        parameters.pop()
+    elif incompatibility == "positional":
+        parameters[-1] = parameters[-1].replace(kind=Parameter.POSITIONAL_OR_KEYWORD)
+    else:
+        parameters[-1] = parameters[-1].replace(
+            default=Parameter.empty if incompatibility == "required" else False
+        )
+    method = type(
+        "OldGlobalPublicationMethod",
+        (),
+        {
+            "__call__": _forbidden_native_work,
+            "__signature__": complete.replace(parameters=parameters),
+        },
+    )()
+    engine = type(
+        "OldGlobalPublicationEngine",
+        (_CompatibleOrdinaryEngine,),
+        {"publish_captured_global_start": method},
+    )
+    check = runpy.run_path(str(REPO / "scripts/portable/bootstrap.py"))[
+        "check_captured_global_start_api"
+    ]
+    with pytest.raises(AssertionError, match="capture"):
         check(SimpleNamespace(AudioEngine=engine, CapturedGlobalStart=_CompatibleGlobalCapture))
 
 
@@ -741,7 +839,7 @@ def test_old_native_is_rejected_before_any_app_or_device_activation(
             __file__=str(checkout / "src/flitzis_looper_audio/native.pyd")
         ),
         native_build_profile=lambda: "release",
-        AudioEngine=_CompatibleCopyEngine,
+        **vars(bank_native_module(_CompatibleCopyEngine)),
     )
     imported = Mock(return_value=native)
     monkeypatch.setattr(bootstrap["importlib"], "import_module", imported)
@@ -760,7 +858,7 @@ def test_runtime_rejects_native_without_ordinary_start_before_app_imports(
             __file__=str(checkout / "src/flitzis_looper_audio/native.pyd")
         ),
         native_build_profile=lambda: "release",
-        AudioEngine=_CompatibleOrdinaryEngine,
+        **vars(bank_native_module(_CompatibleOrdinaryEngine)),
         CapturedPitchAction=_CompatiblePitchCapture,
         ConstantTimingTicket=_CompatibleTimingTicket,
         AcceptedTimingRefreshTicket=_CompatibleTimingTicket,
@@ -782,12 +880,14 @@ def test_runtime_preflight_accepts_complete_reflected_native_before_activation(
     (checkout / "assets/models/keynet.onnx").write_bytes(b"preflight path fixture")
     monkeypatch.chdir(checkout)
     monkeypatch.setattr(bootstrap["sys"], "executable", str(runtime / "python/python.exe"))
+    complete_native = bank_native_module(_CompatibleOrdinaryEngine)
+    vars(complete_native).update(vars(mix_capture_native_module(complete_native.AudioEngine)))
     native = SimpleNamespace(
         flitzis_looper_audio=SimpleNamespace(
             __file__=str(checkout / "src/flitzis_looper_audio/native.pyd")
         ),
         native_build_profile=lambda: "release",
-        AudioEngine=_CompatibleOrdinaryEngine,
+        **vars(complete_native),
         CapturedPitchAction=_CompatiblePitchCapture,
         CapturedPadStart=_CompatibleOrdinaryCapture,
         CapturedInputPadTrigger=_CompatibleOrdinaryTrigger,
@@ -829,7 +929,7 @@ def test_runtime_rejects_missing_rate_confirmation_before_app_imports(
             __file__=str(checkout / "src/flitzis_looper_audio/native.pyd")
         ),
         native_build_profile=lambda: "release",
-        AudioEngine=old_engine,
+        **vars(bank_native_module(old_engine)),
         CapturedPitchAction=_CompatiblePitchCapture,
         CapturedPadStart=_CompatibleOrdinaryCapture,
         CapturedInputPadTrigger=_CompatibleOrdinaryTrigger,

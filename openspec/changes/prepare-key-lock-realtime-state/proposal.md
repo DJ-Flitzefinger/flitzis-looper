@@ -6,6 +6,17 @@ operations from the audio callback. The wrapper's empty output FIFO also inserts
 delay for different callback partitions. These are concrete prerequisites to resolve before
 source pre-roll and synchronized audible launches can be enabled.
 
+## Current full-onset contract
+
+The Human's 2026-10-20 revision supersedes the former T-born suffix recipe for
+ordinary and fresh GUI/MIDI Piano SET_RETRIGGER births. Their complete selected
+physical beginning emits at truthful E while original T stays immutable. Source
+phase reset preserves the actual accepted rate/target/step clock evaluated at E
+independently. Existing-source SET, resume and real replay retain their history
+and lifetime contracts; unsupported past/paused glides and original negative
+guards remain. Earlier suffix measurements remain former-contract evidence, not
+complete-onset, Native acoustic, distinct-policy or Human acceptance.
+
 ## What Changes
 
 - Prepare and warm a fixed pair of unique Rubber Band handles per voice outside the callback.

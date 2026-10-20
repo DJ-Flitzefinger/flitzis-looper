@@ -60,6 +60,7 @@ _RESIDENCY_CONTAINERS = (
     "_pending",
     "_launched",
     "_effective",
+    "_acknowledged_geometry",
     "_errors",
     "_error_sources",
     "_launch_errors",

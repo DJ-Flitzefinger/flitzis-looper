@@ -84,6 +84,7 @@ fn source_adoption(
     let adoption = Arc::new(AtomicU8::new(0));
     (
         ControlMessage::LoadColdSample {
+            initial_mix: None,
             publication,
             id: slot,
             sample,
@@ -553,6 +554,7 @@ fn actual_tracked_copy_adoption_grants_its_distinct_target_feedback_without_a_co
         phase: phase.clone(),
         ownership: ownership.clone(),
         acknowledgements: fixture.engine.current_timing_acknowledgements.clone(),
+        source_reservation: 0,
     };
     let work = Box::new(PadCopyRtWork {
         content_key: key,

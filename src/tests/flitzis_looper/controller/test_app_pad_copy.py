@@ -106,6 +106,7 @@ def test_runtime_poll_settles_pairs_and_copy_before_observers_and_frame_controll
     events: list[str] = []
     monkeypatch.setattr(controller.transport.waveform, "poll_holds", lambda: events.append("hold"))
     monkeypatch.setattr(controller.pairs, "poll", lambda: events.append("pair"))
+    monkeypatch.setattr(controller.banks, "poll", lambda: events.append("bank"))
     monkeypatch.setattr(controller.loader, "poll_loader_events", lambda: events.append("loader"))
     monkeypatch.setattr(controller.material_migration, "poll", lambda: events.append("migration"))
     monkeypatch.setattr(controller, "_poll_audio_messages", lambda: events.append("audio"))
@@ -118,12 +119,14 @@ def test_runtime_poll_settles_pairs_and_copy_before_observers_and_frame_controll
     assert events == [
         "hold",
         "pair",
+        "bank",
         "copy",
         "loader",
         "migration",
         "audio",
         "timing",
         "residency",
+        "bank",
         "copy",
     ]
     events.clear()
@@ -132,7 +135,7 @@ def test_runtime_poll_settles_pairs_and_copy_before_observers_and_frame_controll
 
     controller.on_frame_render()
 
-    assert events == ["pair", "copy", "frame", "frame", "frame", "frame", "frame"]
+    assert events == ["pair", "bank", "copy", "frame", "frame", "frame", "frame", "frame"]
 
 
 @pytest.mark.parametrize("action", ["gain", "eq", "mask", "mode", "delete", "generate"])
@@ -182,7 +185,7 @@ def test_target_guard_precedes_current_source_generation_capture(
     audio_engine_mock.current_input_runtime_pad_binding.assert_not_called()
 
 
-@pytest.mark.parametrize("reservation", ["arrangement", "pairs"])
+@pytest.mark.parametrize("reservation", ["arrangement", "pairs", "banks"])
 def test_global_key_lock_guard_precedes_generation_capture_and_project_change(
     controller: AppController,
     audio_engine_mock: Mock,
@@ -711,7 +714,7 @@ def test_shutdown_retains_every_owner_until_copy_settles_then_tears_down_once(
     session = controller.session.model_dump()
 
     assert controller.prepare_shutdown() is False
-    with pytest.raises(RuntimeError, match="waiting for complete Copy settlement"):
+    with pytest.raises(RuntimeError, match="waiting for recording or arrangement settlement"):
         controller.shut_down()
 
     assert observed.mock_calls == [

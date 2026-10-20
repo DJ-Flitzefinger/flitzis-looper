@@ -10,10 +10,13 @@ from unittest.mock import DEFAULT, Mock, patch
 
 import pytest
 
-from flitzis_looper.controller import AppController
+from flitzis_looper.controller import AppController, stem_provenance
 from flitzis_looper.controller.stem_generation import (
     StemGenerationRequest,
     StemGenerationResult,
+)
+from flitzis_looper.controller.stem_provenance import (
+    processing_paths as _default_processing_paths,
 )
 from flitzis_looper.models import STEM_KINDS
 
@@ -602,6 +605,13 @@ def stem_backend() -> FakeStemGenerationBackend:
     return FakeStemGenerationBackend()
 
 
+def _configure_recording_control_mock(audio: Mock) -> None:
+    """Set routing-only format/lifecycle defaults without claiming quiescence."""
+    audio.output_sample_rate.return_value = 44_100
+    audio.audio_stream_failed = Mock(return_value=False)
+    audio.quiesce_failed_audio_stream = Mock(return_value=False)
+
+
 @pytest.fixture
 def audio_engine_mock() -> Iterator[Mock]:
     with patch("flitzis_looper.controller.app.AudioEngine", autospec=True) as audio_engine:
@@ -634,7 +644,9 @@ def audio_engine_mock() -> Iterator[Mock]:
         audio_engine.return_value.capture_prepared_stem_source = Mock(
             side_effect=capture_stem_ticket
         )
-        audio_engine.return_value.output_sample_rate.return_value = 44_100
+        # Routing-only defaults, also for an older loaded Native autospec.
+        # Neither absence of failure nor False grants callback quiescence.
+        _configure_recording_control_mock(audio_engine.return_value)
         # Controller-only accounting double; this does not claim actual Native PCM/RSS.
         audio_engine.return_value.set_resident_pcm_budget_mib = Mock()
         audio_engine.return_value.get_resident_pcm_budget_status = Mock(
@@ -657,6 +669,10 @@ def audio_engine_mock() -> Iterator[Mock]:
         audio_engine.return_value.cancel_pad_launches = Mock(return_value=False)
         audio_engine.return_value.cancel_all_launches = Mock(return_value=[])
         audio_engine.return_value.admitted_launch_ids = Mock(return_value=[])
+        # Control-flow doubles only; real stopped/held/pending truth is Native-owned.
+        audio_engine.return_value.key_lock_start_behavior = Mock(return_value="first_sound_at_grid")
+        audio_engine.return_value.can_change_key_lock_start_behavior = Mock(return_value=True)
+        audio_engine.return_value.set_key_lock_start_behavior = Mock(return_value=True)
         _install_captured_start_fakes(audio_engine.return_value)
         _install_captured_global_start_fakes(audio_engine.return_value)
 
@@ -710,7 +726,26 @@ def controller(
 ) -> AppController:
     monkeypatch.chdir(tmp_path)
 
-    return AppController(stem_backend=stem_backend, stem_task_runner=lambda target: target())
+    app = AppController(stem_backend=stem_backend, stem_task_runner=lambda target: target())
+    configured_paths = stem_provenance.processing_paths
+    if configured_paths is _default_processing_paths:
+        # This backend writes tiny synthetic WAVs and executes no installed model.
+        # Keep actual Native file sealing/hashing while owning its small inputs.
+        # Explicit provenance fixtures and replacement real backends retain their
+        # independently configured inventory and full producer checks.
+        producer = tmp_path / "owned-fake-stem-producer"
+        producer.mkdir()
+        inputs = tuple(producer / name for name in ("checkpoint.bin", "recipe.json", "backend.py"))
+        for index, path in enumerate(inputs):
+            path.write_bytes(f"unattested fake separator input role {index}\n".encode())
+
+        def processing_paths(request: StemGenerationRequest) -> tuple[Path, ...]:
+            if app.stems._stem_backend is stem_backend and request.cache_dir in app.stems._jobs:
+                return inputs
+            return configured_paths(request)
+
+        monkeypatch.setattr(stem_provenance, "processing_paths", processing_paths)
+    return app
 
 
 @pytest.fixture

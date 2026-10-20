@@ -98,8 +98,51 @@ pub(super) struct StoreState {
     pub(super) originals: HashMap<PathBuf, Weak<OriginalReader>>,
     pub(super) deleting: VecDeque<DeleteTask>,
     materials: HashMap<PathBuf, MaterialCreation>,
+    /// Routing only: every pending birth appears once; its receipt remains the authority.
+    pending_materials: VecDeque<PathBuf>,
     deleted: u64,
     errors: Vec<String>,
+}
+
+impl StoreState {
+    fn set_material_pending(&mut self, root: &Path, pending: bool) {
+        self.materials
+            .get_mut(root)
+            .expect("retained material creation")
+            .pending = pending;
+        if pending {
+            // Repeated admission must not move an older pending birth behind
+            // fresh arrivals. Existing cleanup slots bound this index to 4096.
+            if !self.pending_materials.iter().any(|queued| queued == root) {
+                self.pending_materials.push_back(root.to_owned());
+            }
+        } else {
+            self.pending_materials.retain(|queued| queued != root);
+        }
+    }
+
+    fn pending_material_prunes(&mut self) -> Vec<PathBuf> {
+        let count = self.pending_materials.len().min(CLEANUP_PER_POLL);
+        let mut paths = Vec::with_capacity(count);
+        for _ in 0..count {
+            let root = self
+                .pending_materials
+                .pop_front()
+                .expect("bounded pending material count");
+            let Some(creation) = self
+                .materials
+                .get(&root)
+                .filter(|creation| creation.pending)
+            else {
+                continue;
+            };
+            paths.push(root.join(&creation.original_leaf));
+            // A ProjectAssets owner can decline the prune before reaching the
+            // store. Keep that birth queued, but rotate it past other work.
+            self.pending_materials.push_back(root);
+        }
+        paths
+    }
 }
 
 pub(super) struct Store {
@@ -182,13 +225,13 @@ pub(super) fn store() -> &'static Arc<Store> {
                     // registered PCM/original readers.
                     prunes.extend(
                         state
-                            .materials
-                            .values()
-                            .filter(|value| value.pending)
-                            .take(CLEANUP_PER_POLL)
-                            .map(|value| (value.root.join(&value.original_leaf), None)),
+                            .pending_material_prunes()
+                            .into_iter()
+                            .map(|path| (path, None)),
                     );
                     drop(state);
+                    #[cfg(all(test, windows))]
+                    material_retirement_fairness_tests::before_prunes_for_test(&prunes);
                     for (path, protection) in prunes {
                         super::super::project_assets::ProjectAssets::shared()
                             .prune_material_if_unowned(&path);
@@ -196,6 +239,8 @@ pub(super) fn store() -> &'static Arc<Store> {
                             protection.outcome.finish(Ok(()));
                         }
                     }
+                    #[cfg(all(test, windows))]
+                    material_retirement_fairness_tests::after_prunes_for_test();
                     std::thread::sleep(Duration::from_millis(25));
                 }
             })
@@ -208,7 +253,14 @@ pub(super) fn retain_material_creation_under_gate(
     state: &mut StoreState,
     creation: MaterialCreation,
 ) {
-    if let Some(previous) = state.materials.insert(creation.root.clone(), creation)
+    let root = creation.root.clone();
+    let pending = creation.pending;
+    // A new retained receipt replaces the old routing position along with its
+    // ownership record. A dormant replacement must leave no stale queue entry.
+    state.pending_materials.retain(|queued| queued != &root);
+    let previous = state.materials.insert(root.clone(), creation);
+    state.set_material_pending(&root, pending);
+    if let Some(previous) = previous
         && let Some(protection) = previous.protection
     {
         protection.outcome.finish(Err(
@@ -259,14 +311,16 @@ pub(super) fn restore_verified_material_creation(
             return Ok(Some(protection.outcome.clone()));
         }
         previous.protection = creation.protection.take();
-        previous.pending = previous.protection.is_some();
-        if previous.pending {
-            store().changed.notify_one();
-        }
-        return Ok(previous
+        let outcome = previous
             .protection
             .as_ref()
-            .map(|protection| protection.outcome.clone()));
+            .map(|protection| protection.outcome.clone());
+        let pending = outcome.is_some();
+        state.set_material_pending(&creation.root, pending);
+        if pending {
+            store().changed.notify_one();
+        }
+        return Ok(outcome);
     }
     let outcome = creation
         .protection
@@ -313,7 +367,7 @@ pub(super) fn prepare_retained_material_retirement(
     }
     let outcome = protection.outcome.clone();
     previous.protection = Some(protection);
-    previous.pending = false;
+    state.set_material_pending(root, false);
     Ok((outcome, true))
 }
 
@@ -339,14 +393,15 @@ pub(super) fn finish_retained_material_retirement(
             "prepared material retirement was cancelled by a new owner; preserved",
         ));
     }
-    previous.pending = commit;
-    if commit {
-        store().changed.notify_one();
-    } else {
+    if !commit {
         previous.protection.take();
         outcome.finish(Err(
             "original retirement was not admitted; material root preserved".into(),
         ));
+    }
+    state.set_material_pending(root, commit);
+    if commit {
+        store().changed.notify_one();
     }
     Ok(())
 }
@@ -408,11 +463,7 @@ fn prune_created_material_at(root: &Path, checkpoint: &impl Fn(&File) -> io::Res
         || state.opening.iter().any(|path| intersects(path))
         || state.preparing.iter().any(|key| intersects(&key.root))
         || state.deleting.iter().any(|task| intersects(&task.path));
-    state
-        .materials
-        .get_mut(root)
-        .expect("captured creation")
-        .pending = false;
+    state.set_material_pending(root, false);
     if occupied {
         return true;
     }
@@ -516,11 +567,7 @@ fn prune_created_material_at(root: &Path, checkpoint: &impl Fn(&File) -> io::Res
             if error.kind() == io::ErrorKind::PermissionDenied
                 || matches!(error.raw_os_error(), Some(32 | 33)) =>
         {
-            state
-                .materials
-                .get_mut(root)
-                .expect("retained creation")
-                .pending = true;
+            state.set_material_pending(root, true);
             shared.changed.notify_one();
         }
         Err(error) => {
@@ -598,7 +645,7 @@ pub(in crate::audio_engine) fn admit_original_owner(path: &Path) -> io::Result<(
         && let Some(creation) = state.materials.get_mut(root)
         && let Some(protection) = creation.protection.take()
     {
-        creation.pending = false;
+        state.set_material_pending(root, false);
         protection.outcome.finish(Err(
             "new original owner cancels material retirement; preserved".into(),
         ));
@@ -1083,8 +1130,9 @@ impl CommittedColdLease {
             .durable_assignments
             .lock()
             .map_err(|_| invalid("subscriber original ownership poisoned"))?;
+        // Shared retirement requests cleanup after the last durable owner leaves.
+        // It does not revoke this independently registered assignment's authority.
         if self.assignment_retired()
-            || self.cache.retired.load(Ordering::Acquire)
             || !cache_owners.contains(&self.assignment.id)
             || !original_owners.contains(&self.assignment.id)
             || state
@@ -1574,3 +1622,7 @@ mod tests {
         assert_eq!(pool.used.load(Ordering::Acquire), 0);
     }
 }
+
+#[cfg(all(test, windows))]
+#[path = "material_retirement_fairness_tests.rs"]
+mod material_retirement_fairness_tests;

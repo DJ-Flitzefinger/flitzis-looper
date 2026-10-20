@@ -49,6 +49,7 @@ fn accept(
 fn prepared_capture_uses_complete_current_revision_and_exact_signed_projection() {
     let engine = test_engine();
     let (producer, mut consumer) = queue(8);
+    let engine = with_control_producer(engine, &producer);
     let mut mixer = acknowledged_mixer(&engine);
     accept(&engine, &producer, &mut consumer, &mut mixer, decision());
     let first = engine.capture_prepared_source(0, version()).unwrap();
@@ -81,6 +82,7 @@ fn prepared_capture_uses_complete_current_revision_and_exact_signed_projection()
 fn prepared_capture_rejects_unavailable_automatic_but_preserves_manual_tap_legacy_intent() {
     let engine = test_engine();
     let (producer, mut consumer) = queue(8);
+    let engine = with_control_producer(engine, &producer);
     assert!(engine.capture_prepared_source(0, version()).is_err());
     let mut mixer = acknowledged_mixer(&engine);
     accept(&engine, &producer, &mut consumer, &mut mixer, decision());
@@ -125,6 +127,7 @@ fn prepared_capture_rejects_unavailable_automatic_but_preserves_manual_tap_legac
 fn pending_replacement_capture_stays_current_after_rejection_and_uses_previous_record() {
     let engine = test_engine();
     let (producer, mut consumer) = queue(8);
+    let engine = with_control_producer(engine, &producer);
     let mut mixer = acknowledged_mixer(&engine);
     accept(&engine, &producer, &mut consumer, &mut mixer, decision());
     let previous = input_runtime_binding::capture(&engine, 0)
@@ -172,6 +175,7 @@ fn pending_replacement_capture_stays_current_after_rejection_and_uses_previous_r
 fn queued_prepared_stems_reject_accepted_replacement_without_a_new_preparation_epoch() {
     let engine = test_engine();
     let (producer, mut consumer) = queue(8);
+    let engine = with_control_producer(engine, &producer);
     let mut mixer = acknowledged_mixer(&engine);
     accept(&engine, &producer, &mut consumer, &mut mixer, decision());
     let mut changed = decision();
@@ -215,6 +219,7 @@ fn queued_prepared_stems_reject_accepted_replacement_without_a_new_preparation_e
 fn prepared_enqueue_rejects_changed_acknowledgement_before_consuming_the_ticket() {
     let engine = test_engine();
     let (producer, mut consumer) = queue(8);
+    let engine = with_control_producer(engine, &producer);
     let mut mixer = acknowledged_mixer(&engine);
     accept(&engine, &producer, &mut consumer, &mut mixer, decision());
     publish(
@@ -246,6 +251,7 @@ fn prepared_enqueue_rejects_changed_acknowledgement_before_consuming_the_ticket(
 fn same_legacy_authority_edit_retires_preparation_without_promoting_accepted_evidence() {
     let engine = test_engine();
     let (producer, mut consumer) = queue(8);
+    let engine = with_control_producer(engine, &producer);
     set_intent(&engine, &producer, 0, TimingIntent::Legacy).unwrap();
     consumer.pop().unwrap();
     let captured = engine.capture_prepared_source(0, version()).unwrap();
@@ -274,6 +280,7 @@ fn accepted_preparation_revalidates_loaded_generation_digest_rate_and_immutable_
     for changed in 0..4 {
         let engine = test_engine();
         let (producer, mut consumer) = queue(8);
+        let engine = with_control_producer(engine, &producer);
         let mut mixer = acknowledged_mixer(&engine);
         accept(&engine, &producer, &mut consumer, &mut mixer, decision());
         // Independently vary loader-retained source facts while leaving sample
@@ -295,6 +302,7 @@ fn queued_prepared_stems_reject_source_revocation_before_old_callback_bank_chang
     for replacement in [false, true] {
         let engine = test_engine();
         let (producer, mut consumer) = queue(8);
+        let engine = with_control_producer(engine, &producer);
         let mut mixer = acknowledged_mixer(&engine);
         accept(&engine, &producer, &mut consumer, &mut mixer, decision());
         let captured = engine.capture_prepared_source(0, version()).unwrap();
@@ -335,6 +343,7 @@ fn queued_prepared_stems_reject_source_revocation_before_old_callback_bank_chang
 fn legacy_parameter_lane_gap_rejects_fresh_preparation_and_keeps_previous_stem_audio() {
     let engine = test_engine();
     let (producer, mut consumer) = queue(8);
+    let engine = with_control_producer(engine, &producer);
     let mut mixer = acknowledged_mixer(&engine);
     accept(&engine, &producer, &mut consumer, &mut mixer, decision());
     let admitted = engine.capture_prepared_source(0, version()).unwrap();

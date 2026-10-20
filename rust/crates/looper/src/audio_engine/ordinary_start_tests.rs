@@ -6,7 +6,7 @@ use super::audio_stream::process_control_message;
 use super::input_mapping::launch_admission_tests::RATE;
 use super::pad_start::CapturedPadStart;
 use super::pitch_intent::PitchIntent;
-use super::pitch_runtime_tests::{Fixture, LOOP_END, LOOP_START, assert_tone};
+use super::pitch_runtime_tests::{Fixture, LOOP_END, LOOP_START, assert_physical_birth_tone};
 #[cfg(windows)]
 use super::pitch_runtime_tests::{SOURCE_HZ, publish_tone};
 #[cfg(windows)]
@@ -16,6 +16,39 @@ use std::time::{Duration, Instant};
 
 const PCM_FRAMES: usize = 48_000;
 const WORKER_WAIT: Duration = Duration::from_secs(2);
+
+#[cfg(windows)]
+#[path = "ordinary_start_tests/active_catchup_tests.rs"]
+mod active_catchup_tests;
+#[path = "ordinary_start_tests/attack_measurement_tests.rs"]
+mod attack_measurement_tests;
+#[cfg(windows)]
+#[path = "ordinary_start_tests/control_continuity_tests.rs"]
+mod control_continuity_tests;
+#[cfg(windows)]
+#[path = "ordinary_start_tests/full_onset_tests.rs"]
+mod full_onset_tests;
+#[cfg(windows)]
+#[path = "ordinary_start_tests/late_catchup_tests.rs"]
+mod late_catchup_tests;
+#[cfg(windows)]
+#[path = "ordinary_start_tests/late_dry_inline_tests.rs"]
+mod late_dry_inline_tests;
+#[cfg(windows)]
+#[path = "ordinary_start_tests/late_eq_catchup_tests.rs"]
+mod late_eq_catchup_tests;
+#[cfg(windows)]
+#[path = "ordinary_start_tests/mixed_source_attack_policy_tests.rs"]
+mod mixed_source_attack_policy_tests;
+#[cfg(windows)]
+#[path = "ordinary_start_tests/past_active_catchup_tests.rs"]
+mod past_active_catchup_tests;
+#[cfg(windows)]
+#[path = "ordinary_start_tests/physical_birth_history_tests.rs"]
+mod physical_birth_history_tests;
+#[cfg(windows)]
+#[path = "ordinary_start_tests/preparation_deadline_tests.rs"]
+pub(crate) mod preparation_deadline_tests;
 
 fn capture(fixture: &Fixture, volume: f32) -> CapturedPadStart {
     fixture
@@ -78,6 +111,30 @@ fn complete_attack(fixture: &mut Fixture, execution: u64) -> Vec<f32> {
     pcm
 }
 
+/// Independent piano route with ample real future-grid preparation headroom.
+/// Piano's separate late-history contract must not crop an ordinary-birth reference.
+fn capture_future_pitch_reference(
+    fixture: &mut Fixture,
+    key: &str,
+) -> super::pitch_actions::CapturedPitchAction {
+    fixture.rows(super::input_mapping::PitchPadProjection {
+        key_lock: true,
+        source_root: Some(0),
+        source_mode: Some(super::pitch_actions::PitchKeyMode::Major),
+        quantize_step_64ths: Some(16),
+        ..super::input_mapping::PitchPadProjection::default()
+    });
+    assert!(
+        fixture
+            .render_to(17_000)
+            .iter()
+            .all(|sample| *sample == 0.0)
+    );
+    let action = fixture.capture(0, key);
+    assert_eq!(action.original_due_frame(), 24_000);
+    action
+}
+
 #[test]
 fn first_ordinary_gui_attack_uses_actual_nonzero_bank_and_complete_native_initial_pcm() {
     let mut ordinary = Fixture::new(true);
@@ -109,11 +166,7 @@ fn first_ordinary_gui_attack_uses_actual_nonzero_bank_and_complete_native_initia
 
     // Independent existing input origin prepares the same physical attack. It owns
     // a different Native candidate, publication and worker request.
-    let expected = reference
-        .control
-        .engine
-        .capture_pad_pitch_action(0, "pitch.extra:7:set_retrigger", None)
-        .unwrap();
+    let expected = capture_future_pitch_reference(&mut reference, "pitch.extra:7:set_retrigger");
     assert!(
         reference
             .control
@@ -126,7 +179,7 @@ fn first_ordinary_gui_attack_uses_actual_nonzero_bank_and_complete_native_initia
     wait_ready(&mut reference, &[expected.sequence()]);
     let execution = original.execution_frame().unwrap();
     assert_eq!(original.original_frame(), Some(0));
-    assert_eq!(execution, expected.execution_target());
+    assert_eq!(expected.execution_target(), expected.original_due_frame());
     let pcm = complete_attack(&mut ordinary, execution);
     let expected_pcm = complete_attack(&mut reference, expected.execution_target());
 
@@ -149,21 +202,15 @@ fn first_ordinary_gui_attack_uses_actual_nonzero_bank_and_complete_native_initia
     let history = voice.stretch.productive_history().unwrap();
     assert!(history.fed_output_frames >= 4096);
     let taps = voice.stretch.native_tap_observation().unwrap();
-    assert!(taps.left_reads > 0);
+    assert_eq!(
+        taps.left_reads, 0,
+        "negative physical-birth input must be silent"
+    );
+
     assert_eq!(taps.missing_reads, 0);
     let position = voice.source_playback.position();
     assert_eq!(position.frame, LOOP_START + PCM_FRAMES);
     assert!(position.fraction.abs() < 1.0e-9);
-
-    let initial_energy = pcm[..2048]
-        .iter()
-        .map(|sample| f64::from(*sample).powi(2))
-        .sum::<f64>()
-        / 2048.0;
-    assert!(
-        initial_energy > 0.001,
-        "first Native/FIFO attack was silent"
-    );
     let maximum_error = pcm
         .iter()
         .zip(&expected_pcm)
@@ -173,9 +220,9 @@ fn first_ordinary_gui_attack_uses_actual_nonzero_bank_and_complete_native_initia
         maximum_error < 2.0e-5,
         "complete initial PCM differs: {maximum_error}"
     );
-    // Integer +7 and 160 Hz are an external frequency oracle; every initial sample
-    // participates, including Native's first FIFO output and startup history.
-    assert_tone(&pcm, 0, 7, 1.0, true);
+    // The independent raw oracle compares every startup/FIFO sample; stationary
+    // frequency is checked separately after a fixed cold-start window.
+    assert_physical_birth_tone(&pcm, 0, 7, 1.0, true, 1.0);
 }
 
 #[test]
@@ -451,5 +498,8 @@ fn original_gui_grid_target_precedes_own_real_window_ack_and_is_never_requantize
     let pcm = complete_attack(&mut fixture, 38_192);
     assert_eq!(original.effective_frame(), Some(38_192));
     assert_eq!(fixture.starts(0), 1);
-    assert_tone(&pcm, 0, 7, 1.0, true);
+    assert_physical_birth_tone(&pcm, 0, 7, 1.0, true, 1.0);
 }
+#[cfg(windows)]
+#[path = "ordinary_start_tests/attack_mode_matrix_tests.rs"]
+mod attack_mode_matrix_tests;

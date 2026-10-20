@@ -100,6 +100,8 @@ class PairArrangementStartup:
         self.status = "idle"
         self._fence: str | None = None
         self._retirement: AssetRetirementReservation | None = None
+        self._initialization_pending = False
+        self._recovered_intent: str | None = None
         self._original: PairJournalOwner | None = None
         self._cancelled_tip: PairJournalOwner | None = None
         self._after: _AfterRecovery | None = None
@@ -173,6 +175,7 @@ class PairArrangementStartup:
             self.status = "unresolved"
             return
         if self._open_selected_lineage(recovery.pair_journals):
+            self._initialization_pending = True
             self._initialize_tip()
 
     def _open_selected_lineage(self, records: list[PairArrangementJournal]) -> bool:
@@ -197,7 +200,8 @@ class PairArrangementStartup:
         persistence = self._app.persistence
         root = self.histories[0]
         assert root.journal is not None
-        self._capture_writer(root.journal.transaction_id)
+        if self._fence is None:
+            self._capture_writer(root.journal.transaction_id)
         selected = self.histories[-1]
         assert selected.journal is not None
         actual_reference = resolve_config_reference(self.samples, persistence.config_reference)
@@ -208,13 +212,16 @@ class PairArrangementStartup:
         if decision.disposition == "conflict":
             self.error, self.status = decision.error, "conflict"
             return
-        self._retirement = self._app._assets.reserve(64)
+        if self._retirement is None:
+            self._retirement = self._app._assets.reserve(64)
         assert self._fence is not None
         if self._fence != selected.journal.transaction_id:
             persistence.transfer_migration(self._fence, selected.journal.transaction_id)
             self._fence = selected.journal.transaction_id
         if decision.disposition in {"original_pending", "cancelled"}:
             self._restore_before_intent(selected, cancelled=decision.disposition == "cancelled")
+            if self.status == "conflict":
+                return
         elif decision.disposition == "recognized_after":
             self._after = _AfterRecovery(selected, decision, tuple(self.histories[:-1]))
             self.status = "restore_after"
@@ -223,6 +230,8 @@ class PairArrangementStartup:
                 selected, decision, tuple(self.histories[:-1]), terminal=True
             )
             self.status = "restore_after"
+        self._initialization_pending = False
+        self.error = None
 
     def _capture_writer(self, owner: str) -> None:
         # A Legacy/unknown recovery may already own the writer. Never steal or open
@@ -350,9 +359,14 @@ class PairArrangementStartup:
         assert self._retirement is not None
         current = self._config_bytes()
         disk = ProjectState.model_validate_json(current) if current is not None else ProjectState()
+        expected = (
+            validated_project_image(self._recovered_intent)
+            if self._recovered_intent is not None
+            else disk
+        )
         if persistence.revision != self._app.project.config_revision or written_project_intent(
             self._app.project
-        ) != written_project_intent(disk):
+        ) != written_project_intent(expected):
             self.error = (
                 "Newer unsaved current intent remains untouched; Pair recovery stays fenced"
             )
@@ -360,13 +374,15 @@ class PairArrangementStartup:
             return
         intent = validated_project_image(record.project_image_json)
         intent.config_revision = max(intent.config_revision, record.intent_revision)
+        if self._recovered_intent is None:
+            persistence.recover_migration_intent(self._fence, intent)
+            self._recovered_intent = intent.model_dump_json()
+        with self._retirement.activate():
+            self._app._assets.sync_assignments()
         if cancelled:
             self._cancelled_tip = selected
         else:
             self._original = selected
-        persistence.recover_migration_intent(self._fence, intent)
-        with self._retirement.activate():
-            self._app._assets.sync_assignments()
         self.status = "restore_cancelled" if cancelled else "restore_original"
 
     def _restore_pending(self) -> bool:
@@ -380,6 +396,10 @@ class PairArrangementStartup:
         if not self.active or self._unknown or self.status in {"conflict", "unresolved"}:
             return None
         try:
+            if self._initialization_pending:
+                self._initialize_tip()
+            if self._initialization_pending:
+                return None
             if self._fence is None or self._retirement is None or self._restore_pending():
                 return None
             if self._original is not None:
@@ -636,6 +656,8 @@ class PairArrangementStartup:
         assert self._retirement is not None
         self._app.persistence.release_migration(self._fence)
         self._retirement.close()
+        if self._after is not None:
+            self._after.acceptance = None
         self._completed = True
         self.status, self.error = "completed", None
 

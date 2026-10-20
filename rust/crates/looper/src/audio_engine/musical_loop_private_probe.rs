@@ -172,6 +172,7 @@ fn publish_actual_acceptance(
         0,
         sample.clone(),
         LoadedSourcePublication {
+            initial_mix: None,
             placement: engine.input_runtime_ownership.slot_snapshot(0).unwrap(),
             cold: false,
             cold_epoch: None,
@@ -696,6 +697,7 @@ fn private_actual_wav_pcm_budget_capture_prepare_publish_export() {
         0,
         sample.clone(),
         LoadedSourcePublication {
+            initial_mix: None,
             placement: engine.input_runtime_ownership.slot_snapshot(0).unwrap(),
             cold: false,
             cold_epoch: None,

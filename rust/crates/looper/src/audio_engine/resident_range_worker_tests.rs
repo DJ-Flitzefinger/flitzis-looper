@@ -34,6 +34,39 @@ fn range_voice_mut(mixer: &mut RtMixer) -> &mut crate::audio_engine::voice_slot:
         .unwrap()
 }
 
+fn launch_range_off_then_on(h: &mut Harness, ticket: &ResidentWindowTicket) {
+    // OrdinaryStartWork captures the actual stereo callback format.
+    h.engine.test_output_format = Some((RATE, 2));
+    // These chronology fixtures begin with live OFF-to-ON preparation at frame zero.
+    h.callback.mixer.set_pad_key_lock(0, false);
+    assert!(!h.callback.mixer.key_lock_for_measurement(0));
+    assert!(launch_with_producer(&h.engine, ticket, false, 1, &h.producer).unwrap());
+    let start = match h.consumer.peek().unwrap() {
+        ControlMessage::CapturePadStartTarget(start) => start.clone(),
+        _ => panic!("resident launch must retain its original target before prepared work"),
+    };
+    assert_eq!(h.callback.drain(&mut h.consumer), 2);
+    assert_eq!(start.state(), "applied", "{:?}", start.reason());
+    assert_eq!(start.original_frame(), Some(0));
+    assert_eq!(start.execution_frame(), Some(0));
+    assert_eq!(start.effective_frame(), Some(0));
+    assert!(start.is_current() && ticket.is_current());
+    assert!(h.callback.scheduler.is_empty());
+    assert!(
+        range_voice(&h.callback.mixer)
+            .sample
+            .as_ref()
+            .unwrap()
+            .same_window(h.engine.sample_cache.lock().unwrap()[0].as_ref().unwrap(),)
+    );
+    assert_eq!(
+        range_voice(&h.callback.mixer).stretch.pending_fifo_frames(),
+        (0, 0)
+    );
+    h.callback.mixer.set_pad_key_lock(0, true);
+    assert!(h.callback.mixer.key_lock_for_measurement(0));
+}
+
 fn paired_range_render(
     h: &mut Harness,
     reference: &mut RtMixer,
@@ -230,8 +263,7 @@ fn actual_finite_selection_commands_keep_native_ramps_then_retire_from_job_and_h
     assert!(job.stems.iter().all(|stem| stem.samples.len() == 10));
     assert!(h.callback.mixer.key_lock_for_measurement(0));
     h.callback.mixer.set_pad_eq(0, -12.0, -3.0, 4.0);
-    assert!(launch_with_producer(&h.engine, &ticket, false, 1, &h.producer).unwrap());
-    assert_eq!(h.callback.drain(&mut h.consumer), 1);
+    launch_range_off_then_on(&mut h, &ticket);
     drop(published);
     drop(pair);
     h.callback.retirement.retired.clear();
@@ -274,7 +306,9 @@ fn actual_finite_selection_commands_keep_native_ramps_then_retire_from_job_and_h
         }),
     };
     let mut reference = RtMixer::new(2, RATE as f32);
-    let ownership = Arc::new(InputRuntimeOwnership::tracked());
+    // This immutable complete-file PCM reference has no AudioEngine producer.
+    // Its unrestricted stem permit belongs to the standalone renderer.
+    let ownership = Arc::new(InputRuntimeOwnership::default());
     ownership.publish_test_source(0, &full, RATE, 1);
     reference.set_input_runtime_ownership(ownership);
     reference.load_sample(0, full);
@@ -684,15 +718,16 @@ fn actual_finite_pair_keylock_window_ack_reads_four_components_then_preserves_na
             .all(|stem| stem.samples.len() == 10 && stem.same_window(&finite))
     );
     assert!(h.callback.mixer.key_lock_for_measurement(0));
-    assert!(launch_with_producer(&h.engine, &ticket, false, 1, &h.producer).unwrap());
-    assert_eq!(h.callback.drain(&mut h.consumer), 1);
+    launch_range_off_then_on(&mut h, &ticket);
 
     // The independently retained complete FullMix/four-PCM set supplies the control.
     // The finite native worker receives only the ACKed crops above.
     let full = h.material.sample.clone();
     let mut reference = RtMixer::new(2, RATE as f32);
+    // The independent complete-file renderer has no AudioEngine publication
+    // owner; its unrestricted permit must not impersonate a tracked source.
     let ownership =
-        Arc::new(crate::audio_engine::input_runtime_binding::InputRuntimeOwnership::tracked());
+        Arc::new(crate::audio_engine::input_runtime_binding::InputRuntimeOwnership::default());
     ownership.publish_test_source(0, &full, RATE, 1);
     reference.set_input_runtime_ownership(ownership);
     reference.load_sample(0, full);
@@ -1219,7 +1254,33 @@ fn assert_preserved(h: &Harness, id: usize, before: &PadSnapshot) {
         );
         assert_eq!(before.stem_bits[component], after.stem_bits[component]);
     }
-    assert_eq!(before.binding, after.binding, "pad {id}");
+    // Another pad's publication may advance the global layout counter only.
+    assert!(before.binding.same_projection(&after.binding), "pad {id}");
+    let before_placement = before.binding.placement.unwrap();
+    let after_placement = after.binding.placement.unwrap();
+    assert_eq!(
+        before_placement.content_key(),
+        after_placement.content_key(),
+        "pad {id}"
+    );
+    assert_eq!(
+        before_placement.binding_epoch(),
+        after_placement.binding_epoch(),
+        "pad {id}"
+    );
+    let ownership = &h.engine.input_runtime_ownership;
+    assert!(
+        ownership.current(id, before.binding),
+        "old authority for pad {id}"
+    );
+    assert!(
+        ownership.current(id, after.binding),
+        "current authority for pad {id}"
+    );
+    assert!(
+        ownership.binding_source_current(id, before.binding),
+        "source for pad {id}"
+    );
     assert_eq!(before.source_generation, after.source_generation);
     assert_eq!(before.request, after.request);
     assert_eq!(before.loaded_generation, after.loaded_generation);
@@ -1320,8 +1381,20 @@ fn render_usable(h: &mut Harness, id: usize, ticket: &ResidentWindowTicket, befo
     assert_preserved(h, id, before);
     assert!(ticket.is_current());
     assert!(h.callback.mixer.voices.iter().all(|voice| !voice.active));
+    // Retain the original target and prepare work for this actual stereo callback.
+    h.engine.test_output_format = Some((RATE, 2));
+    let original = h.callback.transport.output_frame();
     assert!(launch_with_producer(&h.engine, ticket, false, 1, &h.producer).unwrap());
-    assert_eq!(h.callback.drain(&mut h.consumer), 1);
+    let start = match h.consumer.peek().unwrap() {
+        ControlMessage::CapturePadStartTarget(start) => start.clone(),
+        _ => panic!("pad {id}: expected its actual original target before prepared work"),
+    };
+    assert_eq!(start.control_guard().unwrap().id, id);
+    assert_eq!(h.callback.drain(&mut h.consumer), 2);
+    assert_eq!(start.state(), "applied", "pad {id}: {:?}", start.reason());
+    assert_eq!(start.original_frame(), Some(original));
+    assert_eq!(start.execution_frame(), Some(original));
+    assert_eq!(start.effective_frame(), Some(original));
     let voice = h
         .callback
         .mixer

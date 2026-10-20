@@ -6,6 +6,16 @@
 
 ## Implementation
 
+Bounded foundation checkpoint: registered immutable Rust `SourceBeatmap` and its
+schema/provenance validation, forward/inverse/local-BPM/snap queries are implemented.
+Nineteen synthetic/manual geometry tests and fifteen Python envelope tests pass;
+the independent review includes the reproduced and corrected final-anchor snap
+failure. Native typing is present, and Python serialization returns defensive
+copies. This completes those standalone components, not the full checklist items
+that also require verified source identity, stale completion, legacy migration,
+Project persistence/restore and current-content adoption. Reuse these components;
+do not rebuild a second evaluator from the unchecked integration tasks below.
+
 - [ ] Define additive schema/provenance and legacy scalar migration with source identity checks.
 - [ ] Implement one focused Rust offline map validator/evaluator and checked inverse.
 - [ ] Expose versioned control-side evaluation and persist raw analysis plus manual edit lineage.

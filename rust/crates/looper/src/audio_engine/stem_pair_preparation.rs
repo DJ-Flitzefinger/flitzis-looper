@@ -505,7 +505,7 @@ impl StemPairPreparationWork {
                     channels: sample.channels,
                     frame_count: sample.frame_count(),
                     available_mask: 0b1111,
-                    stems: pair.prepare_component_views(&sample)?,
+                    stems: pair.prepare_component_views_cancellable(&sample, &cancelled)?,
                 },
             };
             let mut views = vec![&sample];

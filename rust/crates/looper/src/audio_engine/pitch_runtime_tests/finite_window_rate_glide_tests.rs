@@ -272,6 +272,7 @@ impl FiniteWindow {
     }
 }
 
+// All callers inspect a fresh birth's preparation, not existing-source replay.
 fn assert_prepared_finite_taps(
     route: &RateRoute,
 ) -> crate::audio_engine::source_reader::TapReadObservation {
@@ -280,10 +281,11 @@ fn assert_prepared_finite_taps(
         .stretch
         .native_tap_observation()
         .expect("finite request must retain NormalLoopCoverage");
-    assert!(taps.left_reads > 0);
+    assert_eq!(taps.left_reads, 0);
+    assert_eq!(taps.right_reads, 0);
     assert_eq!(taps.missing_reads, 0);
-    assert!(taps.min_frame.unwrap() >= LOOP_START);
-    assert!(taps.max_frame.unwrap() < ENDS[0]);
+    assert_eq!(taps.min_frame, None);
+    assert_eq!(taps.max_frame, None);
     eprintln!(
         "finite_piano_glide_prepared_taps {}",
         json!({
@@ -329,6 +331,7 @@ fn initialize_finite(
     route.wait_claims();
     route.callback(733);
     route.assert_no_attacks();
+    ensure_positive_pre_t_history(route, &originals[0], INITIAL_SPEED, &[7, 12]);
     window.current(route);
     (originals, stems)
 }
@@ -362,7 +365,7 @@ fn finite_attack(lock: bool, selected: bool) {
         None,
     );
     window.current(&route);
-    assert!(assert_prepared_finite_taps(&route).right_reads > 0);
+    assert_eq!(assert_prepared_finite_taps(&route).right_reads, 0);
     if let Some(stems) = &stems {
         assert_selected(&route, stems);
     }
@@ -389,7 +392,7 @@ fn finite_attack(lock: bool, selected: bool) {
     assert_eq!(taps.min_frame, Some(LOOP_START));
     assert_eq!(taps.max_frame, Some(ENDS[0] - 1));
     window.current(&route);
-    assert!(assert_prepared_finite_taps(&route).right_reads > 0);
+    assert_eq!(assert_prepared_finite_taps(&route).right_reads, 0);
     if let Some(stems) = &stems {
         assert_selected(&route, stems);
     }
@@ -426,8 +429,9 @@ fn finite_selected_expanded_history() {
     window.current(&route);
     assert_selected(&route, &stems);
     // This existing oracle case requires cold p>2, H>endpoint-H, several actual
-    // p profiles and a new E-lattice origin distinct from the previous birth.
-    // All source reads here are the actual acknowledged finite selected views.
+    // p profiles across silent warm-up and genuine continuation, and a new E-lattice
+    // origin distinct from the previous callback birth.
+    // Positive-time source reads use the actual acknowledged finite selected views.
     apply_wet_attack(
         &mut route,
         &originals,
@@ -439,7 +443,7 @@ fn finite_selected_expanded_history() {
     );
     window.current(&route);
     assert_selected(&route, &stems);
-    assert!(assert_prepared_finite_taps(&route).right_reads > 0);
+    assert_eq!(assert_prepared_finite_taps(&route).right_reads, 0);
     assert!(route.voice(0).stretch.native_primed_output_frames() > HISTORY);
     assert_eq!(route.starts, [2, 1]);
     assert_rate_receipt(&route, &accepted);
@@ -612,6 +616,30 @@ fn finite_actual_window_change_refuses_original_then_fresh_retry() {
         &refused,
         &accepted,
     );
+    let retry_t = route.route.transport.output_frame();
+    let retry_e = retry_t + 8192;
+    let retry_timeline = original_timeline(
+        &originals[0],
+        INITIAL_SPEED,
+        accepted.execution.unwrap(),
+        retry_t,
+    );
+    let (_, retry_h_t, _) = reset_bound(&retry_timeline, 7, route.lock)
+        .expect("settled fresh retry has genuine pre-T callback history");
+    assert_eq!(retry_h_t, HISTORY);
+    assert_eq!(retry_timeline.last().unwrap().rate, GLIDE_SPEED);
+    let retry_timeline_e = original_timeline(
+        &originals[0],
+        INITIAL_SPEED,
+        accepted.execution.unwrap(),
+        retry_e,
+    );
+    let (_, retry_h_e, _) = reset_bound(&retry_timeline_e, 7, route.lock)
+        .expect("fresh retry proves its accepted rate endpoint at E");
+    assert_eq!(retry_h_e, HISTORY);
+    let retry_prefeed_frames = retry_h_e.div_ceil(512) * 512;
+    // The shared helper retains exact T/E, primes independent silent Native input
+    // ending at E and emits the complete physical beginning with fresh EQ.
     apply_wet_attack(
         &mut route,
         &originals,
@@ -622,11 +650,15 @@ fn finite_actual_window_change_refuses_original_then_fresh_retry() {
         None,
     );
     expanded.current(&route);
-    // This fresh reset is at settled r=2 with integer source positions. Its
-    // independently checked 4096 real reads need no fractional right tap; the
-    // unchanged coverage contract still proves that both seam taps are held.
+    // The E-anchored Native prefix reads no source PCM, including at settled r=2.
+    // No unheard T-to-E beginning is consumed. The unchanged coverage contract
+    // still proves that both positive-time seam taps are held.
     let taps = assert_prepared_finite_taps(&route);
-    assert_eq!(taps.left_reads, HISTORY);
+    assert_eq!(
+        route.voice(0).stretch.native_primed_output_frames(),
+        retry_prefeed_frames
+    );
+    assert_eq!(taps.left_reads, 0);
     assert_eq!(taps.right_reads, 0);
     assert_eq!(route.starts, [starts[0] + 1, starts[1]]);
     assert_eq!(
@@ -646,6 +678,9 @@ fn finite_actual_window_change_refuses_original_then_fresh_retry() {
         json!({
             "case":"actual-storage-WindowACK-after-READY-old-refusal-fresh-retry",
             "old_T":refused.t,"old_E":refused.e,"old_reason":refused.action.reason(),
+            "fresh_T":retry_t,"fresh_E":retry_e,"fresh_H_T":retry_h_t,"fresh_H_E":retry_h_e,
+            "fresh_prefeed_frames":retry_prefeed_frames,"fresh_unheard_advance_frames":0,
+            "fresh_left_reads":taps.left_reads,"fresh_right_reads":taps.right_reads,
         "first_old_E_sample":first,"refusal_observed_frame":refused.e + 1,
             "old_window_revision":window.sample.window_revision(),"new_window_revision":expanded.sample.window_revision(),
             "new_window_start":expanded.sample.resident_start(),"new_window_end":expanded.sample.resident_end(),

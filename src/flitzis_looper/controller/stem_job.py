@@ -1,6 +1,6 @@
 import os
 import threading
-from dataclasses import dataclass, replace
+from dataclasses import dataclass, field, replace
 from typing import TYPE_CHECKING, Literal
 
 from flitzis_looper.constants import NUM_SAMPLES
@@ -22,6 +22,101 @@ if TYPE_CHECKING:
 type StemJobPhase = Literal["queued", "resolving", "resolved", "running", "settled", "disposed"]
 
 
+@dataclass(eq=False, frozen=True, slots=True)
+class StemGenerationInterest:
+    """One caller's identity, independent of its optional diagnostic owner label."""
+
+    owner: str | None = None
+
+
+DIRECT_STEM_INTEREST = StemGenerationInterest("direct")
+
+
+@dataclass(eq=False, slots=True)
+class StemGenerationInterests:
+    """Stable caller ownership through worker, preparation and durable settlement.
+
+    Membership and outcome metadata grant no source or publication permission.
+    The holder owns no readers; actual job and preparation owners settle those.
+    """
+
+    _current: frozenset[StemGenerationInterest] = frozenset({DIRECT_STEM_INTEREST})
+    _committed: bool = field(default=False, init=False, repr=False)
+    _already_present: bool = field(default=False, init=False, repr=False)
+    _failure: str | None = field(default=None, init=False, repr=False)
+    _lock: threading.Lock = field(default_factory=threading.Lock, init=False, repr=False)
+
+    @property
+    def current(self) -> frozenset[StemGenerationInterest]:
+        """Return an immutable membership snapshot without exposing mutable state."""
+        with self._lock:
+            return self._current
+
+    @property
+    def committed(self) -> bool:
+        """Report the durable result independently of later cancellation or adoption."""
+        with self._lock:
+            return self._committed
+
+    @property
+    def allows_preparation(self) -> bool:
+        """Keep unfinished callers or an already committed result's normal continuation."""
+        with self._lock:
+            return bool(self._current) or self._committed
+
+    @property
+    def failure(self) -> str | None:
+        """Return the first precommit failure, never an adoption or settlement error."""
+        with self._lock:
+            return self._failure
+
+    @property
+    def already_present(self) -> bool:
+        """Report a current verified selection without inventing a new durable commit."""
+        with self._lock:
+            return self._already_present
+
+    def mark_already_present(self) -> None:
+        """Latch the authoritative existing-set no-op independently of publication."""
+        with self._lock:
+            self._already_present = True
+
+    def attach(self, interest: StemGenerationInterest) -> bool:
+        """Attach one caller after its existing controller route has admitted it."""
+        with self._lock:
+            if interest in self._current:
+                return False
+            self._current |= {interest}
+            return True
+
+    def detach(
+        self, interest: StemGenerationInterest
+    ) -> Literal["absent", "remaining", "detached"]:
+        """Remove only one caller; the controller handles final-owner cancellation."""
+        with self._lock:
+            if interest not in self._current:
+                return "absent"
+            self._current -= {interest}
+            return "remaining" if self._current else "detached"
+
+    def invalidate_all(self) -> None:
+        """Withdraw obsolete content's callers without changing its durable outcome."""
+        with self._lock:
+            self._current = frozenset()
+
+    def mark_committed(self) -> None:
+        """Latch successful durable replacement before any later owner settlement."""
+        with self._lock:
+            self._committed = True
+            self._failure = None
+
+    def mark_failed(self, message: str) -> None:
+        """Record the first precommit failure without undoing a committed result."""
+        with self._lock:
+            if not self._committed and not self._already_present and self._failure is None:
+                self._failure = message
+
+
 @dataclass(frozen=True, slots=True)
 class StemSubscriber:
     """One independently admitted content, never a copied native permit."""
@@ -33,9 +128,26 @@ class StemSubscriber:
     request: StemGenerationRequest | None = None
     intent: StemGenerationIntent | None = None
     source_lease: ProjectAssetLease | None = None
+    _interests: StemGenerationInterests = field(
+        default_factory=StemGenerationInterests, repr=False, compare=False
+    )
+
+    @property
+    def interests(self) -> frozenset[StemGenerationInterest]:
+        """Immutable caller snapshot without changing this PAD's publication row."""
+        return self._interests.current
+
+    @property
+    def interest_owner(self) -> StemGenerationInterests:
+        """Retain the same caller identity when actual publication custody changes."""
+        return self._interests
+
+    def same_interest_owner(self, other: StemSubscriber) -> bool:
+        """Match local cancellation ownership, never publication or Native permission."""
+        return self._interests is other._interests
 
     def close(self) -> None:
-        """Release only this interest's source custody and reserved publication capacity."""
+        """Release this PAD row's source custody and reserved publication capacity."""
         if self.source_lease is not None:
             self.source_lease.release()
         self.retirement.close()
@@ -74,6 +186,57 @@ class _PreparedStemSubscribers:
         return merged
 
 
+@dataclass(slots=True)
+class PreparedStemSubscriberDetach:
+    """Exact removed interests, retained until their own cleanup completes.
+
+    The enclosing aggregate mirror owns Native ACK validation and holds the job
+    lock while validating and exchanging the returned subscriber image. This
+    object neither publishes that image nor grants runtime permission.
+    """
+
+    job: StemGenerationJob
+    before: tuple[tuple[int, StemSubscriber | None], ...]
+    closed: int = 0
+    settled: bool = False
+
+    def merged_locked(self, *, allow_own_after: bool = False) -> dict[int, StemSubscriber]:
+        """Prepare removal under the actual job lock, preserving every other reader."""
+        current = self.job._subscribers
+        original = all(current.get(slot) is row for slot, row in self.before)
+        own_after = allow_own_after and all(slot not in current for slot, _ in self.before)
+        if not original and not own_after:
+            message = "Bank stem subscriber changed outside its original removal plan"
+            raise RuntimeError(message)
+        if original and (self.job._cancelled or self.job._disposed):
+            message = "Bank stem job retired before its original interests were detached"
+            raise RuntimeError(message)
+        targets = {slot for slot, _ in self.before}
+        return {slot: row for slot, row in current.items() if slot not in targets}
+
+    def settle(self) -> bool:
+        """Close detached interests once; running physical readers keep their own leases."""
+        if self.settled:
+            return True
+        with self.job._lock:
+            if any(slot in self.job._subscribers for slot, _ in self.before):
+                message = "Bank stem cleanup cannot release a current subscriber"
+                raise RuntimeError(message)
+            while self.closed < len(self.before):
+                subscriber = self.before[self.closed][1]
+                if subscriber is not None:
+                    subscriber.interest_owner.invalidate_all()
+                    subscriber.close()
+                self.closed += 1
+            if not self.job._subscribers:
+                self.job._cancelled = True
+                self.job.cancel_event.set()
+                if not self.job._running:
+                    self.job._dispose_locked()
+            self.settled = True
+        return True
+
+
 class StemGenerationJob:
     """Keep original and private-generation owners through actual backend reads.
 
@@ -89,11 +252,18 @@ class StemGenerationJob:
         content_id: str | None = None,
         *,
         intent: StemGenerationIntent | None = None,
+        interest: StemGenerationInterest = DIRECT_STEM_INTEREST,
+        interest_owner: StemGenerationInterests | None = None,
     ) -> None:
+        if interest_owner is not None and not interest_owner.current:
+            message = "Stem generation requires a nonempty interest owner"
+            raise RuntimeError(message)
         self.request = request
         self.source: OfflineStemSourceLease | None = source
         self.intent = intent
         self.resolved_request: StemGenerationRequest | None = None
+        # Control-only FIFO readiness; never callback timing or worker authority.
+        self.admission_ready_sequence = 0
         self._assets = assets
         self.retirement = assets.reserve(18)
         try:
@@ -120,7 +290,13 @@ class StemGenerationJob:
         self._subscribers: dict[int, StemSubscriber] = {}
         try:
             self.add_subscriber(
-                request.sample_id, source, content_id, request=request, intent=intent
+                request.sample_id,
+                source,
+                content_id,
+                request=request,
+                intent=intent,
+                interest=interest,
+                interest_owner=interest_owner,
             )
         except OSError, RuntimeError, ValueError:
             self.cancel()
@@ -162,12 +338,22 @@ class StemGenerationJob:
         *,
         request: StemGenerationRequest | None = None,
         intent: StemGenerationIntent | None = None,
+        interest: StemGenerationInterest = DIRECT_STEM_INTEREST,
+        interest_owner: StemGenerationInterests | None = None,
     ) -> None:
         """Reserve independent publication/source custody before joining existing work."""
         own_request = request or replace(self.request, sample_id=sample_id)
         if own_request.sample_id != sample_id:
             message = "Stem subscriber request must belong to its own pad"
             raise ValueError(message)
+        holder = (
+            StemGenerationInterests(frozenset({interest}))
+            if interest_owner is None
+            else interest_owner
+        )
+        if not holder.current:
+            message = "Stem subscriber requires a nonempty interest owner"
+            raise RuntimeError(message)
         retirement = self._assets.reserve(16)
         try:
             source_lease = self._assets.acquire(own_request.source_path)
@@ -180,9 +366,67 @@ class StemGenerationJob:
                 retirement.close()
                 message = "Stem subscriber is cancelled or already registered"
                 raise RuntimeError(message)
-            self._subscribers[sample_id] = StemSubscriber(
-                sample_id, source, content_id, retirement, own_request, intent, source_lease
-            )
+            with holder._lock:
+                if not holder._current:
+                    source_lease.release()
+                    retirement.close()
+                    message = "Stem subscriber interest owner was withdrawn before admission"
+                    raise RuntimeError(message)
+                self._subscribers[sample_id] = StemSubscriber(
+                    sample_id,
+                    source,
+                    content_id,
+                    retirement,
+                    own_request,
+                    intent,
+                    source_lease,
+                    holder,
+                )
+
+    def add_interest(self, expected: StemSubscriber, interest: StemGenerationInterest) -> bool:
+        """Join an exact live PAD row; return whether this caller was newly attached.
+
+        A stale placement, resolved-intent row or terminal job cannot admit new
+        callers. Token-only joins preserve Pair/Bank plans and held deliveries.
+        """
+        with self._lock:
+            if (
+                self._cancelled
+                or self._disposed
+                or self._phase not in {"queued", "resolving", "resolved", "running"}
+                or self._subscribers.get(expected.sample_id) is not expected
+            ):
+                message = "Stem interest requires an exact live subscriber before settlement"
+                raise RuntimeError(message)
+            return expected.interest_owner.attach(interest)
+
+    def remove_interest(
+        self, expected: StemSubscriber, interest: StemGenerationInterest
+    ) -> Literal["absent", "remaining", "detached"]:
+        """Detach only this original caller, closing its PAD row only on the final token.
+
+        Original holder identity follows surviving placements; an absent token
+        cannot cancel a replacement row even when its content and source match.
+        Running physical readers retain their existing leases until backend return.
+        """
+        with self._lock:
+            subscriber = self._interest_subscriber_locked(expected)
+            if subscriber is None:
+                return "absent"
+            result = subscriber.interest_owner.detach(interest)
+            if result == "detached":
+                self._remove_subscriber_locked(subscriber.sample_id)
+            return result
+
+    def _interest_subscriber_locked(self, expected: StemSubscriber) -> StemSubscriber | None:
+        return next(
+            (
+                subscriber
+                for subscriber in self._subscribers.values()
+                if subscriber.same_interest_owner(expected)
+            ),
+            None,
+        )
 
     def update_intent(self, sample_id: int, intent: StemGenerationIntent) -> None:
         """Install one subscriber's resolved revision without changing captured job context."""
@@ -249,6 +493,30 @@ class StemGenerationJob:
                 replace(target, sample_id=source_id) if target is not None else None,
             )
 
+    def prepare_subscriber_detach(
+        self, targets: tuple[tuple[int, str | None], ...]
+    ) -> PreparedStemSubscriberDetach:
+        """Capture exact target interests without cancelling a shared physical job."""
+        slots = tuple(slot for slot, _ in targets)
+        if len(set(slots)) != len(slots) or any(
+            type(slot) is not int or not 0 <= slot < NUM_SAMPLES for slot in slots
+        ):
+            message = "Bank subscriber removal requires distinct strict target slots"
+            raise ValueError(message)
+        with self._lock:
+            before = tuple((slot, self._subscribers.get(slot)) for slot in slots)
+            for (slot, content_id), (_, subscriber) in zip(targets, before, strict=True):
+                if subscriber is not None and (
+                    content_id is None
+                    or subscriber.content_id != content_id
+                    or subscriber.sample_id != slot
+                ):
+                    message = "Bank subscriber belongs to another original target content"
+                    raise RuntimeError(message)
+            plan = PreparedStemSubscriberDetach(self, before)
+            plan.merged_locked()
+            return plan
+
     def transfer_subscribers_to(
         self, target: StemGenerationJob, *, require_active: bool = False
     ) -> tuple[StemSubscriber, ...]:
@@ -307,22 +575,26 @@ class StemGenerationJob:
             return self._phase
 
     def subscribers(self) -> tuple[StemSubscriber, ...]:
-        """Snapshot registered interests without borrowing mutable worker state."""
+        """Snapshot registered PAD rows without borrowing mutable worker state."""
         with self._lock:
             return tuple(self._subscribers.values())
 
     def remove_subscriber(self, sample_id: int) -> bool:
-        """Detach one interest; only the final interest cancels physical work."""
+        """Detach all callers of one PAD; only the final PAD cancels physical work."""
         with self._lock:
-            subscriber = self._subscribers.pop(sample_id, None)
-            if subscriber is not None:
-                subscriber.close()
-            if not self._subscribers:
-                self._cancelled = True
-                self.cancel_event.set()
-                if not self._running:
-                    self._dispose_locked()
-            return bool(self._subscribers)
+            return self._remove_subscriber_locked(sample_id)
+
+    def _remove_subscriber_locked(self, sample_id: int) -> bool:
+        subscriber = self._subscribers.pop(sample_id, None)
+        if subscriber is not None:
+            subscriber.interest_owner.invalidate_all()
+            subscriber.close()
+        if not self._subscribers:
+            self._cancelled = True
+            self.cancel_event.set()
+            if not self._running:
+                self._dispose_locked()
+        return bool(self._subscribers)
 
     def begin_resolution(self) -> OfflineStemSourceLease | None:
         """Claim byte resolution once while preserving the job source through the phase gap."""
@@ -370,6 +642,7 @@ class StemGenerationJob:
             self._cancelled = True
             self.cancel_event.set()
             for subscriber in self._subscribers.values():
+                subscriber.interest_owner.invalidate_all()
                 subscriber.close()
             self._subscribers.clear()
             if not self._running:

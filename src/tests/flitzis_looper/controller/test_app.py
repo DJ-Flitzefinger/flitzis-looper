@@ -112,12 +112,22 @@ def test_controller_validates_restored_samples_before_projecting_audio(
     )
     audio_engine_mock.run.side_effect = lambda: order.append("run")
 
+    def validate_restored_paths(_loader: LoaderController) -> dict[int, Path]:
+        order.append("validate")
+        return {}
+
     with (
+        patch.object(
+            LoaderController,
+            "_validate_restored_sample_paths",
+            autospec=True,
+            side_effect=validate_restored_paths,
+        ),
         patch.object(
             LoaderController,
             "restore_samples_from_project_state",
             autospec=True,
-            side_effect=lambda _self: order.append("loader"),
+            side_effect=lambda _self, **_options: order.append("loader"),
         ),
         patch.object(
             StemController,
@@ -129,7 +139,7 @@ def test_controller_validates_restored_samples_before_projecting_audio(
             TransportController,
             "apply_project_state_to_audio",
             autospec=True,
-            side_effect=lambda _self: order.append("transport"),
+            side_effect=lambda _self, **_options: order.append("transport"),
         ),
         patch.object(
             InputMappingController,
@@ -141,7 +151,15 @@ def test_controller_validates_restored_samples_before_projecting_audio(
         controller = app_module.AppController()
 
     assert controller._audio is audio_engine_mock
-    assert order == ["budget:512", "run", "loader", "stems", "transport", "input"]
+    assert order == [
+        "budget:512",
+        "run",
+        "validate",
+        "transport",
+        "loader",
+        "stems",
+        "input",
+    ]
 
 
 def test_controller_clears_missing_restored_sample_before_audio_projection(
@@ -155,6 +173,7 @@ def test_controller_clears_missing_restored_sample_before_audio_projection(
     project = ProjectState()
     project.sample_paths[0] = "samples/missing.wav"
     project.manual_bpm[0] = 123.0
+    project.bpm_lock = True
     project.pad_gain_db[0] = -9.0
     project.pad_eq_low_db[0] = -3.0
     project.pad_eq_high_db[0] = 3.0
@@ -178,6 +197,66 @@ def test_controller_clears_missing_restored_sample_before_audio_projection(
         defaults.pad_eq_high_db[0],
     )
     audio_engine_mock.set_pad_bpm.assert_any_call(0, None)
+    assert call(0, 123.0) not in audio_engine_mock.set_pad_bpm.call_args_list
+    audio_engine_mock.set_master_bpm.assert_not_called()
+    audio_engine_mock.set_master_period.assert_not_called()
+    audio_engine_mock.bootstrap_transport_from_pad.assert_not_called()
+
+
+def test_recovery_held_missing_assignment_is_retained_without_startup_control_or_master_projection(
+    audio_engine_mock: Mock,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.chdir(tmp_path)
+    samples = tmp_path / "samples"
+    samples.mkdir()
+    write_mono_pcm16_wav(samples / "valid.wav", 48_000)
+    project = ProjectState(bpm_lock=True, selected_pad=0)
+    project.sample_paths[0] = "samples/recovery-missing.wav"
+    project.manual_bpm[0] = 123.0
+    project.pad_gain_db[0] = -9.0
+    project.pad_eq_low_db[0] = -3.0
+    project.pad_loop_start_s[0] = 5.0
+    project.pad_loop_end_s[0] = 9.0
+    project.pad_loop_auto[0] = False
+    project.sample_paths[1] = "samples/valid.wav"
+    project.manual_bpm[1] = 101.0
+    project.pad_gain_db[1] = -6.0
+    persistence = ProjectPersistence(project)
+    monkeypatch.setattr(
+        app_module.AppController,
+        "_restored_assignment_held",
+        lambda _self, sample_id: sample_id == 0,
+    )
+    with patch.object(ProjectPersistence, "from_config_path", return_value=persistence):
+        app = app_module.AppController()
+
+    assert project.sample_paths[0] == "samples/recovery-missing.wav"
+    assert project.manual_bpm[0] == 123.0
+    assert project.pad_gain_db[0] == -9.0
+    assert project.pad_eq_low_db[0] == -3.0
+    assert project.pad_loop_start_s[0] == 5.0
+    assert project.pad_loop_end_s[0] == 9.0
+    assert app.session.loading_sample_ids == {0, 1}
+    assert 0 in app.loader._deferred_restores
+    assert "Recovery retains saved assignment" in app.session.sample_load_errors[0]
+    for method in (
+        "set_pad_gain",
+        "set_pad_eq",
+        "set_pad_bpm",
+        "set_pad_timing_metadata",
+        "set_pad_timing_intent",
+        "set_pad_loop_region",
+        "set_pad_key_lock",
+    ):
+        assert all(item.args[0] != 0 for item in getattr(audio_engine_mock, method).call_args_list)
+    audio_engine_mock.set_pad_gain.assert_called_once_with(1, -6.0)
+    assert audio_engine_mock.load_sample_async.call_args.args == (1, "samples/valid.wav")
+    assert app.session.bpm_lock_anchor_pad_id is None
+    audio_engine_mock.set_master_bpm.assert_not_called()
+    audio_engine_mock.set_master_period.assert_not_called()
+    audio_engine_mock.bootstrap_transport_from_pad.assert_not_called()
 
 
 @pytest.mark.parametrize(

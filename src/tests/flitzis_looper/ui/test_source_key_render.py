@@ -358,7 +358,7 @@ def test_source_edit_guard_failure_retains_popup_and_state_then_allows_fresh_ret
         pitch_render.click(frame.controls["pitch_source_key_F#m"])
         pitch_render.frame()
         frame = pitch_render.frame()
-        assert f"Source correction unavailable: {reason}" in frame.text
+        assert not any(reason in text for text in frame.text)
         assert pitch_render.ctx.ui.source_key.error == reason
         assert pitch_render.ctx.ui.source_key.pending is not None
         assert {

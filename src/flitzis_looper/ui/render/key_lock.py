@@ -14,13 +14,33 @@ if TYPE_CHECKING:
     from flitzis_looper.ui.styles import ButtonStyleName
 
 
-def render_key_lock_button(status: KeyLockStatus, suffix: str, toggle: Callable[[], None]) -> None:
+def render_key_lock_button(
+    status: KeyLockStatus,
+    suffix: str,
+    toggle: Callable[[], None],
+    *,
+    compact_status: bool = False,
+) -> None:
     """Draw the global default and retain toggles while a change is preparing."""
     style = _intent_style(value=status.requested)
     with button_style(style):
         if imgui.button(f"KEY LOCK##{suffix}", (-1, 0)):
             toggle()
-    render_key_lock_status(status)
+    if compact_status:
+        if imgui.is_item_hovered():
+            effective = _effective_description(status)
+            details = [f"Requested {'ON' if status.requested else 'OFF'}", f"Audio {effective}"]
+            if status.unconfirmed:
+                details.append("Change unconfirmed")
+            elif status.pending:
+                details.append(f"Preparing {'ON' if status.requested else 'OFF'}…")
+            if status.mixed:
+                details.append("Mixed pads")
+            imgui.set_tooltip("\n".join(details))
+        effective = "?" if status.effective is None else "ON" if status.effective else "OFF"
+        imgui.text_colored(TEXT_MUTED_RGBA, f"Audio {effective}")
+    else:
+        render_key_lock_status(status)
 
 
 def render_pad_key_lock_buttons(
@@ -52,11 +72,8 @@ def _intent_style(*, value: bool | None) -> ButtonStyleName:
 
 
 def render_key_lock_status(status: KeyLockStatus) -> None:
-    """Keep preparation, failure and confirmed audio independent of intent colors."""
-    effective = "unconfirmed" if status.effective is None else "ON" if status.effective else "OFF"
-    imgui.text_colored(TEXT_MUTED_RGBA, f"Audio {effective}")
-    if status.error:
-        imgui.text_wrapped(f"Key Lock: {status.error}")
+    """Keep preparation and confirmed audio independent of intent colors."""
+    imgui.text_colored(TEXT_MUTED_RGBA, f"Audio {_effective_description(status)}")
     imgui.push_text_wrap_pos(0.0)
     try:
         if status.unconfirmed:
@@ -69,3 +86,7 @@ def render_key_lock_status(status: KeyLockStatus) -> None:
             imgui.text_colored(TEXT_MUTED_RGBA, "Mode unconfirmed")
     finally:
         imgui.pop_text_wrap_pos()
+
+
+def _effective_description(status: KeyLockStatus) -> str:
+    return "unconfirmed" if status.effective is None else "ON" if status.effective else "OFF"

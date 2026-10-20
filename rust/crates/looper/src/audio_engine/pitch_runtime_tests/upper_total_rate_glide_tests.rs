@@ -24,8 +24,9 @@ fn upper_total(lock: bool, midi: bool) {
         },
     );
     assert_eq!(history.h, 4.0);
-    // These are from the actual included independent first completed block and
-    // original E timeline, never inferred from the worker's selected profile.
+    // Cold profile and warm H come from the independent pre-T first completed
+    // block. E pitch and total profile count include the accepted rate clock through E;
+    // none is inferred from the worker's selected profile.
     assert_eq!(history.cold_pitch, if lock { 8.0 } else { 4.0 });
     assert!(history.endpoint_pitch > 2.0);
     if lock {

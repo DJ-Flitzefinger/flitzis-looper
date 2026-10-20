@@ -10,7 +10,7 @@ use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
 use cpal::{BufferSize, Stream, StreamConfig};
 use env_logger::{Builder, Env};
 use rtrb::{Consumer, Producer, RingBuffer};
-use std::sync::atomic::Ordering;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 
 use crate::audio_engine::buffer_retirement::{
@@ -46,8 +46,72 @@ pub struct AudioStreamHandle {
     pub consumer: Arc<Mutex<Consumer<AudioMessage>>>,
     pub output_channels: usize,
     pub output_sample_rate: u32,
+    /// Sticky stream-lifecycle failure; control can observe it without another callback.
+    pub(crate) stream_failed: Arc<AtomicBool>,
     pub(crate) output_clock: Arc<SharedOutputClock>,
     pub(crate) device_descriptor: OutputDeviceDescriptor,
+}
+
+impl AudioStreamHandle {
+    /// Close the real CPAL stream before joining its existing retirement worker.
+    /// No capture owner may be taken over on the strength of an unsuccessful join.
+    pub(super) fn close_checked(self) -> std::io::Result<()> {
+        let Self {
+            stream,
+            _retirement_worker: retirement_worker,
+            ..
+        } = self;
+        super::buffer_retirement::close_callback_and_join(stream, retirement_worker)
+    }
+}
+
+/// The device builder failed after owning a callback, and its actual close
+/// retirement could not be verified. This typed cause survives the pre-handle
+/// startup boundary without inventing a CPAL failure bit or parsing messages.
+#[derive(Debug)]
+pub(super) struct UncertainStreamStartup {
+    failed: Arc<AtomicBool>,
+    build: Box<dyn std::error::Error>,
+    cleanup: std::io::Error,
+}
+
+impl UncertainStreamStartup {
+    pub(super) fn failure_signal(&self) -> Arc<AtomicBool> {
+        self.failed.clone()
+    }
+}
+
+impl std::fmt::Display for UncertainStreamStartup {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(formatter, "{}; {}", self.build, self.cleanup)
+    }
+}
+
+impl std::error::Error for UncertainStreamStartup {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        Some(self.build.as_ref())
+    }
+}
+
+/// The builder took ownership of the supplied callback closure. On failure,
+/// verify its actual disposal through the original checked close lane before
+/// returning an ordinary startup error. Headless proofs reuse this exact seam.
+fn finish_stream_build<T>(
+    result: Result<T, Box<dyn std::error::Error>>,
+    retirement_worker: AudioBufferRetirementWorker,
+    failed: Arc<AtomicBool>,
+) -> Result<(T, AudioBufferRetirementWorker), Box<dyn std::error::Error>> {
+    match result {
+        Ok(stream) => Ok((stream, retirement_worker)),
+        Err(build) => match retirement_worker.join_checked() {
+            Ok(()) => Err(build),
+            Err(cleanup) => Err(Box::new(UncertainStreamStartup {
+                failed,
+                build,
+                cleanup,
+            })),
+        },
+    }
 }
 
 /// Strings are acquired before callback construction and never enter realtime work.
@@ -492,6 +556,10 @@ fn drain_scheduler_due_at_callback_start<
 pub(super) enum ScheduledExecution {
     Complete,
     Pending(ScheduledCommand),
+    Replanned {
+        command: ScheduledCommand,
+        frame: u64,
+    },
 }
 
 enum CallbackEffectResult {
@@ -563,7 +631,7 @@ fn execute_due_event<const CAPACITY: usize, S: AudioMessageSink, R: AudioBufferR
     audio_messages: &mut S,
     retirement: &mut R,
 ) -> bool {
-    match execute_scheduled_command(
+    let complete = match execute_scheduled_command(
         mixer,
         transport,
         event.execution_frame,
@@ -576,7 +644,22 @@ fn execute_due_event<const CAPACITY: usize, S: AudioMessageSink, R: AudioBufferR
             scheduler.defer_due(DueEvent { command, ..event }, callback_frame);
             false
         }
+        ScheduledExecution::Replanned { command, frame } => {
+            // The same original action retains its slot and sequence. Popping its
+            // previous event reserved this bounded reinsertion capacity.
+            let scheduled = scheduler.schedule(frame, command);
+            debug_assert!(scheduled.is_ok());
+            true
+        }
+    };
+    if !complete {
+        // A completed earlier event at S must leave the rest of that same-frame
+        // ordering intact. Only Pending has prevented this due pass from reaching
+        // the still-uncommitted group's own start/stop pair.
+        mixer.settle_group_capture_stop_through(event.execution_frame);
     }
+    mixer.service_mix_capture(scheduler, retirement);
+    complete
 }
 
 fn execute_admitted_trigger<S: AudioMessageSink, R: AudioBufferRetirement>(
@@ -785,6 +868,12 @@ pub(super) fn execute_scheduled_command<S: AudioMessageSink, R: AudioBufferRetir
     retirement: &mut R,
 ) -> ScheduledExecution {
     match command {
+        ScheduledCommand::CaptureStart { session_id } => {
+            mixer.execute_mix_capture_start(session_id, output_frame);
+        }
+        ScheduledCommand::CaptureStop { session_id } => {
+            mixer.execute_mix_capture_stop(session_id, output_frame);
+        }
         ScheduledCommand::PitchAction {
             slot,
             action_sequence,
@@ -1214,6 +1303,7 @@ fn render_scheduled_audio_tracking_pads<
     pad_peaks.fill(0.0);
     pad_activity.clear();
 
+    mixer.service_mix_capture(scheduler, retirement);
     super::pitch_runtime::service_endpoint_reserve(mixer);
 
     drain_scheduler_due_at_callback_start(
@@ -1224,6 +1314,8 @@ fn render_scheduled_audio_tracking_pads<
         audio_messages,
         retirement,
     );
+    mixer.settle_group_capture_stop_through(callback_start_frame);
+    mixer.service_mix_capture(scheduler, retirement);
 
     if scheduler.deferred_due().is_none() {
         mixer.service_global_rate(callback_start_frame, transport, retirement);
@@ -1262,6 +1354,7 @@ fn render_scheduled_audio_tracking_pads<
                 channels,
                 retirement,
             );
+            mixer.service_mix_capture(scheduler, retirement);
             break;
         }
 
@@ -1278,6 +1371,7 @@ fn render_scheduled_audio_tracking_pads<
                 channels,
                 retirement,
             );
+            mixer.service_mix_capture(scheduler, retirement);
             rendered_until_frame = next_target_frame;
         }
 
@@ -1309,10 +1403,18 @@ fn render_scheduled_audio_tracking_pads<
                 channels,
                 retirement,
             );
+            // The rendered interval is half-open. A boundary at the next
+            // callback remains eligible for that callback's ordinary due pass.
+            mixer.settle_group_capture_stop_through(callback_end_frame - 1);
+            mixer.service_mix_capture(scheduler, retirement);
             break;
         }
         mixer.service_global_rate(rendered_until_frame, transport, retirement);
     }
+    mixer.finish_key_lock_start_callback(
+        scheduler.peek_next_target_frame().is_none() && scheduler.deferred_due().is_none(),
+    );
+    mixer.service_mix_capture(scheduler, retirement);
 }
 
 // Keep segment frame bounds and realtime state explicit for in-buffer scheduling tests.
@@ -1345,6 +1447,7 @@ fn render_mixer_segment<R: AudioBufferRetirement>(
         pad_activity,
         retirement,
     );
+    mixer.append_mix_capture(segment_start_frame, &output[start..end]);
 
     for id in pad_activity.iter() {
         pad_peaks[id] = pad_peaks[id].max(segment_peaks[id]);
@@ -1419,11 +1522,16 @@ fn publish_pad_telemetry<S: AudioMessageSink>(
 
 fn control_message_retirement_slots_needed(message: &ControlMessage) -> usize {
     match message {
-        ControlMessage::GlobalPlaybackBatch(_) => 3 * MAX_VOICES + 1,
+        ControlMessage::StartMixCapture { .. } => 2,
+        ControlMessage::GlobalPlaybackBatch(batch) => {
+            3 * MAX_VOICES + 1 + usize::from(batch.capture_publication.is_some())
+        }
         ControlMessage::RelocateResident(_) => 3 * MAX_VOICES + 3,
         ControlMessage::CaptureResidentSeek(_) => 3,
         ControlMessage::CommittedStemWork(_) => 3,
         ControlMessage::PadCopy(work) => work.retirement_slots_needed(),
+        ControlMessage::BankMutation(_) => 3 * MAX_VOICES + super::constants::NUM_PADS + 1,
+        ControlMessage::VerifyRecoveredBank(_) => 1,
         ControlMessage::PadPair(_) => 1,
         ControlMessage::HoldAction(_) => 2,
         ControlMessage::PitchAction(_) => 2,
@@ -1641,7 +1749,9 @@ pub(super) fn drain_control_messages<
     audio_messages: &mut S,
     retirement: &mut R,
 ) -> usize {
+    mixer.service_mix_capture(scheduler, retirement);
     let drain_revision = mixer.begin_global_timing_drain();
+    mixer.begin_key_lock_start_control_drain();
     mixer.set_global_commands_drained(false);
     let mut processed = 0;
 
@@ -1730,6 +1840,11 @@ pub(super) fn drain_control_messages<
 
     mixer.finish_global_control_drain(
         drain_revision,
+        consumer.is_empty()
+            && mixer.deferred_control().is_none()
+            && scheduler.deferred_due().is_none(),
+    );
+    mixer.finish_key_lock_start_control_drain(
         consumer.is_empty()
             && mixer.deferred_control().is_none()
             && scheduler.deferred_due().is_none(),
@@ -2154,6 +2269,29 @@ pub(super) fn process_control_message<
         return;
     }
     match message {
+        ControlMessage::StartMixCapture {
+            publication,
+            target_frame,
+        } => {
+            mixer.accept_mix_capture(
+                publication,
+                target_frame,
+                callback_start_frame,
+                scheduler,
+                retirement,
+            );
+        }
+        ControlMessage::StopMixCapture {
+            session_id,
+            target_frame,
+        } => {
+            mixer.schedule_mix_capture_stop(
+                session_id,
+                target_frame,
+                callback_start_frame,
+                scheduler,
+            );
+        }
         ControlMessage::RefreshAcceptedTiming(refresh) => {
             // The next frame is after this callback's bounded parameter drain. Existing
             // immediate commands may drain frame-zero events, so frame zero cannot be used.
@@ -2171,6 +2309,25 @@ pub(super) fn process_control_message<
             }
         }
         ControlMessage::GlobalPlaybackBatch(batch) => {
+            let needed = if batch.capture_publication.is_some() && !batch.prepared_transferred() {
+                2
+            } else {
+                1
+            };
+            // Only the attached capture introduces a second possible heavy
+            // retirement owner here. Ordinary groups retain their established
+            // scalar admission/deferred-due behavior at zero retirement space.
+            if batch.capture_publication.is_some()
+                && retirement.available_retirement_slots() < needed
+            {
+                mixer.defer_control(ControlMessage::GlobalPlaybackBatch(batch));
+                return;
+            }
+            if batch.prepared_transferred() {
+                // This Arc no longer owns Work, capture or receipt authority.
+                retirement.retire_global_playback_batch(batch);
+                return;
+            }
             // Admission and execution both check current actual source/authority/projection.
             if scheduler.is_full()
                 || !batch
@@ -2179,12 +2336,14 @@ pub(super) fn process_control_message<
                     .all(|entry| global_playback_entry_slot(mixer, entry, batch.start).is_some())
             {
                 batch.finish(false);
+                mixer.reject_unadmitted_group_capture(&batch, retirement);
                 retirement.retire_global_playback_batch(batch);
                 return;
             }
             let target = if let Some(captured) = batch.captured_start.as_ref() {
                 let Some(target) = captured.target_frame() else {
                     batch.finish(false);
+                    mixer.reject_unadmitted_group_capture(&batch, retirement);
                     retirement.retire_global_playback_batch(batch);
                     return;
                 };
@@ -2197,6 +2356,7 @@ pub(super) fn process_control_message<
                             .filter(|target| *target < u64::MAX)
                         else {
                             batch.finish(false);
+                            mixer.reject_unadmitted_group_capture(&batch, retirement);
                             retirement.retire_global_playback_batch(batch);
                             return;
                         };
@@ -2326,6 +2486,7 @@ pub(super) fn process_control_message<
             resident_cancelled,
             incoming_defaults,
             initial_pitch,
+            initial_mix,
         } => {
             let ownership = publication.ownership.clone();
             let snapshot = match ownership.observe_source_publication(&publication) {
@@ -2347,6 +2508,7 @@ pub(super) fn process_control_message<
                         resident_cancelled,
                         incoming_defaults,
                         initial_pitch,
+                        initial_mix,
                     });
                     return;
                 }
@@ -2386,6 +2548,7 @@ pub(super) fn process_control_message<
                         resident_cancelled,
                         incoming_defaults,
                         initial_pitch,
+                        initial_mix,
                     });
                     return;
                 }
@@ -2455,6 +2618,10 @@ pub(super) fn process_control_message<
                             initial_pitch,
                             retirement,
                         );
+                        if let Some(mixing) = initial_mix {
+                            mixer.set_pad_gain(id, mixing.gain_db);
+                            mixer.set_pad_eq(id, mixing.eq_db[0], mixing.eq_db[1], mixing.eq_db[2]);
+                        }
                         if let Some((start, end)) = loop_region {
                             mixer.set_loop_region_frames(id, start, Some(end));
                         }
@@ -2487,6 +2654,7 @@ pub(super) fn process_control_message<
                     resident_cancelled,
                     incoming_defaults,
                     initial_pitch,
+                    initial_mix,
                 });
                 return;
             }
@@ -2524,6 +2692,7 @@ pub(super) fn process_control_message<
                         resident_cancelled,
                         incoming_defaults,
                         initial_pitch,
+                        initial_mix,
                     });
                     return;
                 }
@@ -2557,6 +2726,17 @@ pub(super) fn process_control_message<
         ControlMessage::CaptureResidentSeek(capture) => {
             mixer.capture_resident_seek_rt(capture, retirement, callback_start_frame);
         }
+        ControlMessage::BankMutation(publication) => {
+            if let Some(mut work) = publication.take() {
+                work.publication = Some(publication);
+                mixer.mutate_bank_rt(work, callback_start_frame, retirement);
+            } else {
+                retirement.retire_bank_publication(publication);
+            }
+        }
+        ControlMessage::VerifyRecoveredBank(probe) => {
+            mixer.verify_recovered_bank_rt(probe, callback_start_frame, retirement);
+        }
         ControlMessage::PadCopy(work) => {
             mixer.copy_pad_at_output_frame_rt(work, callback_start_frame, retirement);
         }
@@ -2581,7 +2761,10 @@ pub(super) fn process_control_message<
         ControlMessage::CapturePadStartTarget(owner) => {
             let original = quantized_target_frame(transport, *trigger_quantization)
                 .unwrap_or(callback_start_frame);
-            if let Err(reason) = owner.capture_target(original) {
+            if let Err(reason) = mixer
+                .source_control_revision(owner.content_key())
+                .and_then(|revision| owner.capture_target(original, revision))
+            {
                 owner.reject(reason);
             }
             retirement.retire_pad_start_target(owner);
@@ -2589,7 +2772,7 @@ pub(super) fn process_control_message<
         ControlMessage::CaptureGlobalStartTarget(owner) => {
             let original = quantized_target_frame(transport, *trigger_quantization)
                 .unwrap_or(callback_start_frame);
-            owner.capture_target(original);
+            owner.capture_target(original, mixer);
             retirement.retire_global_start_target(owner);
         }
         ControlMessage::PreparedStart(publication) => {
@@ -2931,6 +3114,7 @@ pub(super) fn process_control_message<
         }
     }
     mixer.settle_invalid_hold_actions_rt(callback_start_frame, retirement);
+    mixer.service_mix_capture(scheduler, retirement);
 }
 
 #[cfg(test)]
@@ -3129,6 +3313,9 @@ pub fn create_audio_stream(
     )?;
     let output_clock = Arc::new(SharedOutputClock::new());
     let callback_clock = output_clock.clone();
+    let stream_failed = Arc::new(AtomicBool::new(false));
+    let callback_stream_failed = stream_failed.clone();
+    let error_stream_failed = stream_failed.clone();
 
     let emit_interval_frames: u64 = (sample_rate_hz as u64 / 10).max(1);
     let (mut callback_owner, retirement_worker) = create_stream_callback_owner(
@@ -3149,111 +3336,125 @@ pub fn create_audio_stream(
     };
 
     // Create audio stream with callback
-    let stream = device.build_output_stream(
-        &stream_config,
-        move |data: &mut [f32], info: &cpal::OutputCallbackInfo| {
-            let state = callback_owner.state_mut();
-            let observed_at_ns = input_clock.capture_ns();
-            let buffer_start_frame = state.transport.output_frame();
+    let stream = device
+        .build_output_stream(
+            &stream_config,
+            move |data: &mut [f32], info: &cpal::OutputCallbackInfo| {
+                let state = callback_owner.state_mut();
+                let observed_at_ns = input_clock.capture_ns();
+                let buffer_start_frame = state.transport.output_frame();
+                if callback_stream_failed.load(Ordering::Acquire) {
+                    state.mixer.fail_mix_capture_stream();
+                }
 
-            let snapshot = state.clock_mapper.observe_callback(
-                info,
-                OutputClockSnapshot {
-                    valid: true,
-                    observed_at_ns,
-                    audible_at_ns: observed_at_ns,
-                    output_frame: buffer_start_frame,
-                    sample_rate_hz,
+                let snapshot = state.clock_mapper.observe_callback(
+                    info,
+                    OutputClockSnapshot {
+                        valid: true,
+                        observed_at_ns,
+                        audible_at_ns: observed_at_ns,
+                        output_frame: buffer_start_frame,
+                        sample_rate_hz,
+                        master_period_seconds: state.transport.master_period_seconds(),
+                        downbeat_frame: state.transport.downbeat_frame(),
+                        master_beat: state
+                            .transport
+                            .beat_position_at_frame(buffer_start_frame)
+                            .unwrap_or(0.0),
+                        freshness_ns: 0,
+                    },
+                    data.len() / channels as usize,
+                );
+
+                drain_control_messages(
+                    &mut state.consumer_in,
+                    &mut state.scheduler,
+                    buffer_start_frame,
+                    &mut state.trigger_quantization,
+                    &mut state.transport,
+                    &mut state.mixer,
+                    &mut state.producer_out,
+                    &mut state.retired_buffers,
+                );
+                if callback_stream_failed.load(Ordering::Acquire) {
+                    state.mixer.fail_mix_capture_stream();
+                    state
+                        .mixer
+                        .service_mix_capture(&mut state.scheduler, &mut state.retired_buffers);
+                }
+
+                drain_parameter_messages(
+                    &mut state.parameter_consumer_in,
+                    &mut state.mixer,
+                    &mut state.transport,
+                );
+
+                try_bootstrap_transport_from_reference(
+                    &state.mixer,
+                    &mut state.transport,
+                    buffer_start_frame,
+                );
+
+                // Publish the same clock estimate with the accepted current grid.
+                state.callback_clock.publish(OutputClockSnapshot {
                     master_period_seconds: state.transport.master_period_seconds(),
                     downbeat_frame: state.transport.downbeat_frame(),
                     master_beat: state
                         .transport
                         .beat_position_at_frame(buffer_start_frame)
                         .unwrap_or(0.0),
-                    freshness_ns: 0,
-                },
-                data.len() / channels as usize,
-            );
+                    ..snapshot
+                });
 
-            drain_control_messages(
-                &mut state.consumer_in,
-                &mut state.scheduler,
-                buffer_start_frame,
-                &mut state.trigger_quantization,
-                &mut state.transport,
-                &mut state.mixer,
-                &mut state.producer_out,
-                &mut state.retired_buffers,
-            );
+                // Render audio + compute per-pad peaks.
+                render_scheduled_audio_tracking_pads(
+                    &mut state.mixer,
+                    &mut state.scheduler,
+                    data,
+                    &mut state.pad_peaks,
+                    &mut state.pad_activity,
+                    buffer_start_frame,
+                    channels as usize,
+                    &mut state.transport,
+                    &mut state.producer_out,
+                    &mut state.retired_buffers,
+                );
+                let master_peak = master_output_peak(data);
 
-            drain_parameter_messages(
-                &mut state.parameter_consumer_in,
-                &mut state.mixer,
-                &mut state.transport,
-            );
+                let frames = data.len() / channels as usize;
+                state.transport.advance_by_rendered_frames(frames);
+                let frame_clock = state.transport.output_frame();
+                state
+                    .loop_acceptance
+                    .observe(&state.mixer, observed_at_ns, frame_clock, frames);
 
-            try_bootstrap_transport_from_reference(
-                &state.mixer,
-                &mut state.transport,
-                buffer_start_frame,
-            );
+                publish_pad_telemetry(
+                    &mut state.producer_out,
+                    &state.mixer,
+                    &state.pad_peaks,
+                    &state.pad_activity,
+                    frame_clock,
+                    emit_interval_frames,
+                    &mut state.last_pad_emit_frame,
+                );
 
-            // Publish the same clock estimate with the accepted current grid.
-            state.callback_clock.publish(OutputClockSnapshot {
-                master_period_seconds: state.transport.master_period_seconds(),
-                downbeat_frame: state.transport.downbeat_frame(),
-                master_beat: state
-                    .transport
-                    .beat_position_at_frame(buffer_start_frame)
-                    .unwrap_or(0.0),
-                ..snapshot
-            });
-
-            // Render audio + compute per-pad peaks.
-            render_scheduled_audio_tracking_pads(
-                &mut state.mixer,
-                &mut state.scheduler,
-                data,
-                &mut state.pad_peaks,
-                &mut state.pad_activity,
-                buffer_start_frame,
-                channels as usize,
-                &mut state.transport,
-                &mut state.producer_out,
-                &mut state.retired_buffers,
-            );
-            let master_peak = master_output_peak(data);
-
-            let frames = data.len() / channels as usize;
-            state.transport.advance_by_rendered_frames(frames);
-            let frame_clock = state.transport.output_frame();
-            state
-                .loop_acceptance
-                .observe(&state.mixer, observed_at_ns, frame_clock, frames);
-
-            publish_pad_telemetry(
-                &mut state.producer_out,
-                &state.mixer,
-                &state.pad_peaks,
-                &state.pad_activity,
-                frame_clock,
-                emit_interval_frames,
-                &mut state.last_pad_emit_frame,
-            );
-
-            publish_master_peak_telemetry(
-                &mut state.producer_out,
-                master_peak,
-                frame_clock,
-                emit_interval_frames,
-                &mut state.last_master_emit_frame,
-            );
-        },
-        |err| {
-            log::error!("Audio stream error: {}", err);
-        },
-        None,
-    )?;
+                publish_master_peak_telemetry(
+                    &mut state.producer_out,
+                    master_peak,
+                    frame_clock,
+                    emit_interval_frames,
+                    &mut state.last_master_emit_frame,
+                );
+            },
+            move |err| {
+                error_stream_failed.store(true, Ordering::Release);
+                log::error!("Audio stream error: {}", err);
+            },
+            None,
+        )
+        .map_err(|error| Box::new(error) as Box<dyn std::error::Error>);
+    let (stream, retirement_worker) =
+        finish_stream_build(stream, retirement_worker, stream_failed.clone())?;
 
     Ok(AudioStreamHandle {
         stream,
@@ -3263,6 +3464,7 @@ pub fn create_audio_stream(
         consumer: Arc::new(Mutex::new(consumer_out)),
         output_channels: channels as usize,
         output_sample_rate: sample_rate_hz,
+        stream_failed,
         output_clock,
         device_descriptor,
     })
@@ -3980,6 +4182,7 @@ mod tests {
         let (mut producer, mut consumer) = RingBuffer::new(2);
         producer
             .push(ControlMessage::LoadColdSample {
+                initial_mix: None,
                 publication: publication.clone(),
                 id: 0,
                 sample: sample.clone(),
@@ -5644,3 +5847,7 @@ mod pair_saved_timing_tests;
 #[cfg(all(test, windows))]
 #[path = "held_lifecycle_tests.rs"]
 mod held_lifecycle_tests;
+
+#[cfg(all(test, windows))]
+#[path = "failed_stream_tests.rs"]
+mod failed_stream_tests;

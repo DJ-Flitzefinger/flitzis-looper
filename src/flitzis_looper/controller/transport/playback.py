@@ -8,6 +8,7 @@ from flitzis_looper.models import validate_sample_id
 if TYPE_CHECKING:
     from collections.abc import Callable
 
+    from flitzis_looper.controller.recording import RecordingGroupGate
     from flitzis_looper.controller.transport import TransportController
     from flitzis_looper_audio import AudioMessage
 
@@ -33,6 +34,12 @@ class PadPlaybackController:
     def set_global_playback_feedback_poll(self, callback: Callable[[], None]) -> None:
         """Drain native playback feedback before a subsequent global target capture."""
         self._global_playback.set_feedback_poll(callback)
+
+    def capture_recording_start(
+        self, *, received_at_ns: int | None = None
+    ) -> RecordingGroupGate | None:
+        """Retain this original left press through the existing global-start owner."""
+        return self._global_playback.capture_recording_start(received_at_ns=received_at_ns)
 
     def trigger_pad(self, sample_id: int, *, received_at_ns: int | None = None) -> None:
         """Trigger or retrigger a pad's loop.

@@ -462,7 +462,7 @@ pub(super) fn verify_file(
 
 /// serde_json's default Map is sorted; explicit recursion also protects that rule
 /// if its preserve_order feature is enabled by another crate later.
-fn canonical(value: &Value) -> Value {
+pub(super) fn canonical(value: &Value) -> Value {
     match value {
         Value::Object(fields) => {
             let mut keys: Vec<_> = fields.keys().collect();
@@ -478,7 +478,7 @@ fn canonical(value: &Value) -> Value {
     }
 }
 
-fn descriptor_digest(value: &Value) -> io::Result<String> {
+pub(super) fn descriptor_digest(value: &Value) -> io::Result<String> {
     let bytes = serde_json::to_vec(&canonical(value)).map_err(io::Error::other)?;
     Ok(format!("{:x}", Sha256::digest(bytes)))
 }

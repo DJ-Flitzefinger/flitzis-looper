@@ -39,12 +39,45 @@ struct CopyCapture {
     future_authority: u64,
     lifetime: u64,
     resident: ResidentReadContext,
+    engine_asset_owner: Arc<()>,
     lane: ColdJobsHandle,
+}
+
+/// Only a rejected Copy may release its fresh subscriber. The actual callback
+/// phase and cleanup-epoch owner remain retained through uncertain adoption.
+struct CopySubscription {
+    lease: CommittedColdLease,
+    guard: CopyRtGuard,
+    assets: Arc<crate::audio_engine::project_assets::ProjectAssets>,
+    _engine_asset_owner: Arc<()>,
+    transferred: bool,
+}
+
+impl CopySubscription {
+    fn transfer_to_target(&mut self) {
+        self.transferred = true;
+    }
+}
+
+impl Drop for CopySubscription {
+    fn drop(&mut self) {
+        if self.transferred {
+            return;
+        }
+        // Reject an unpublished/unclaimed payload before revoking its exact ID.
+        // Phase 1 or 2 may already own effective audio and cannot be rolled back.
+        self.guard.reject();
+        if self.guard.phase.load(Ordering::Acquire) == 3 {
+            self.assets.orphan_cold(&self.lease);
+            self.lease.rollback_unadopted_cache();
+        }
+    }
 }
 
 struct PreparedCopyOwners {
     sample: SampleBuffer,
     lease: CommittedColdLease,
+    subscription: CopySubscription,
     timing: Option<CurrentConstantTimingRecord>,
     selection: Option<PreparedCopySelection>,
     selection_ticket: Option<CommittedStemSetTicket>,
@@ -142,16 +175,60 @@ pub(in crate::audio_engine) fn capture(
     intent_json: &str,
     target_binding: Option<&InputRuntimePadBinding>,
 ) -> PyResult<CapturedPadCopy> {
+    let requests = engine
+        .pad_request_ids
+        .lock()
+        .map_err(|_| PyRuntimeError::new_err("request lock poisoned"))?;
+    let state = capture_image(
+        engine,
+        binding,
+        target,
+        intent_json,
+        target_binding,
+        &requests,
+        None,
+    )?;
+    let lifetime = state.capture.lifetime;
+    let target_placement = state.guard.target_placement;
+    let mut states = engine
+        .pad_copies
+        .lock()
+        .map_err(|_| PyRuntimeError::new_err("copy ownership lock poisoned"))?;
+    if states[target].is_some() {
+        return Err(PyRuntimeError::new_err(
+            "copy target already has a transaction",
+        ));
+    }
+    engine
+        .input_runtime_ownership
+        .reserve_copy_target(target_placement, lifetime)?;
+    if !state.guard.current() {
+        engine
+            .input_runtime_ownership
+            .release_copy(target, lifetime)?;
+        return Err(PyValueError::new_err(
+            "copy participants changed before reservation",
+        ));
+    }
+    states[target] = Some(state.clone());
+    Ok(CapturedPadCopy { state })
+}
+
+fn capture_image(
+    engine: &AudioEngine,
+    binding: &InputRuntimePadBinding,
+    target: usize,
+    intent_json: &str,
+    target_binding: Option<&InputRuntimePadBinding>,
+    requests: &[u64],
+    parent: Option<(u64, Arc<AtomicU8>)>,
+) -> PyResult<Arc<PadCopyState>> {
     if target >= NUM_SAMPLES || binding.id >= NUM_SAMPLES || target == binding.id {
         return Err(PyValueError::new_err(
             "copy requires distinct valid source and target",
         ));
     }
     let intent = CopyIntent::parse(intent_json).map_err(PyValueError::new_err)?;
-    let requests = engine
-        .pad_request_ids
-        .lock()
-        .map_err(|_| PyRuntimeError::new_err("request lock poisoned"))?;
     engine
         .input_runtime_ownership
         .ensure_no_copy_reservation(target)?;
@@ -333,8 +410,9 @@ pub(in crate::audio_engine) fn capture(
             .as_ref()
             .map_or(0, |binding| binding.source_generation),
         target_selection_fences,
-        reservation: lifetime,
-        phase: Arc::new(AtomicU8::new(0)),
+        reservation: parent.as_ref().map_or(lifetime, |(owner, _)| *owner),
+        source_reservation: parent.as_ref().map_or(0, |(owner, _)| *owner),
+        phase: parent.map_or_else(|| Arc::new(AtomicU8::new(0)), |(_, phase)| phase),
         ownership: engine.input_runtime_ownership.clone(),
         acknowledgements: engine.current_timing_acknowledgements.clone(),
     };
@@ -361,6 +439,7 @@ pub(in crate::audio_engine) fn capture(
                 engine.resident_account.clone(),
             )
             .with_history(engine.cold_pcm_history.clone(), target),
+            engine_asset_owner: engine.project_asset_engine_owner.clone(),
             lane: engine.cold_jobs.handle(),
         },
         prepared: Mutex::new(None),
@@ -368,28 +447,7 @@ pub(in crate::audio_engine) fn capture(
         mirrored: AtomicBool::new(false),
         error: Mutex::new(None),
     });
-    let mut states = engine
-        .pad_copies
-        .lock()
-        .map_err(|_| PyRuntimeError::new_err("copy ownership lock poisoned"))?;
-    if states[target].is_some() {
-        return Err(PyRuntimeError::new_err(
-            "copy target already has a transaction",
-        ));
-    }
-    engine
-        .input_runtime_ownership
-        .reserve_copy_target(target_placement, lifetime)?;
-    if !state.guard.current() {
-        engine
-            .input_runtime_ownership
-            .release_copy(target, lifetime)?;
-        return Err(PyValueError::new_err(
-            "copy participants changed before reservation",
-        ));
-    }
-    states[target] = Some(state.clone());
-    Ok(CapturedPadCopy { state })
+    Ok(state)
 }
 
 pub(in crate::audio_engine) fn prepare(
@@ -462,6 +520,13 @@ fn prepare_owned(state: &Arc<PadCopyState>) -> Result<PreparedCopyOwners, String
         .lease
         .subscribe_verified()
         .map_err(|error| error.to_string())?;
+    let subscription = CopySubscription {
+        lease: lease.clone(),
+        guard: state.guard.clone(),
+        assets: capture.resident.assets.clone(),
+        _engine_asset_owner: capture.engine_asset_owner.clone(),
+        transferred: false,
+    };
     let sample = lease
         .read_window_resident(
             &capture.source,
@@ -477,6 +542,19 @@ fn prepare_owned(state: &Arc<PadCopyState>) -> Result<PreparedCopyOwners, String
             crate::audio_engine::cold_jobs::PCM_LIMIT_BYTES,
             &cancelled,
             Some(&capture.resident),
+        )
+        .map_err(|error| error.to_string())?;
+    // Consume this source read's own reserved reader slot before timing or stem
+    // preparation can append other registrations to the same resident context.
+    let mut registration = capture.resident.take_registration()?;
+    capture
+        .resident
+        .assets
+        .retain_cold_reserved(
+            lease.clone(),
+            &sample,
+            Arc::downgrade(&capture.engine_asset_owner),
+            &mut registration,
         )
         .map_err(|error| error.to_string())?;
     let publication =
@@ -591,6 +669,7 @@ fn prepare_owned(state: &Arc<PadCopyState>) -> Result<PreparedCopyOwners, String
     Ok(PreparedCopyOwners {
         sample,
         lease,
+        subscription,
         timing: timing.map(|(record, _)| record),
         selection,
         selection_ticket: None,
@@ -762,6 +841,7 @@ pub(in crate::audio_engine) fn reconcile(
     engine.cold_lease_generations[target].store(capture.request, Ordering::Release);
     intents[target] = capture.intent.timing_intent;
     records[target] = owners.timing.iter().cloned().collect();
+    owners.subscription.transfer_to_target();
     state.mirrored.store(true, Ordering::Release);
     Ok(true)
 }
@@ -823,3 +903,5 @@ fn settle(engine: &AudioEngine, state: &Arc<PadCopyState>) -> PyResult<()> {
         "copy settlement no longer owns its target reservation",
     ))
 }
+
+pub(crate) mod bank;

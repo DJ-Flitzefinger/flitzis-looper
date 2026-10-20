@@ -34,6 +34,40 @@ class PadLoopController:
         self._project = transport._project
         self._audio = transport._audio
 
+    def _loop_intent(self, sample_id: int) -> tuple[float, float | None, bool, float]:
+        return (
+            self._project.pad_loop_start_s[sample_id],
+            self._project.pad_loop_end_s[sample_id],
+            self._project.pad_loop_auto[sample_id],
+            self._project.pad_loop_bars[sample_id],
+        )
+
+    def _publish_loop_edit(
+        self,
+        sample_id: int,
+        previous: tuple[float, float | None, bool, float],
+        *,
+        timing: CurrentPadTiming | None,
+        expected_source_generation: int | None,
+        changed: bool = True,
+    ) -> None:
+        """Commit saved markers after admission; resident ACKs retain their own owner."""
+        try:
+            self._apply_effective_pad_loop_region_to_audio(
+                sample_id, timing=timing, expected_source_generation=expected_source_generation
+            )
+        except RuntimeError, ValueError:
+            (
+                self._project.pad_loop_start_s[sample_id],
+                self._project.pad_loop_end_s[sample_id],
+                self._project.pad_loop_auto[sample_id],
+                self._project.pad_loop_bars[sample_id],
+            ) = previous
+            raise
+        if changed:
+            self._transport._mark_project_changed()
+        self._transport.record_current_pad_edit(sample_id, expected_source_generation, "loop")
+
     def reset(self, sample_id: int) -> None:
         """Set a pad's loop region to the full loaded track.
 
@@ -137,16 +171,17 @@ class PadLoopController:
             or self._project.pad_loop_auto[sample_id]
         )
 
+        previous = self._loop_intent(sample_id)
         self._project.pad_loop_start_s[sample_id] = start_s
         self._project.pad_loop_end_s[sample_id] = end_s
         self._project.pad_loop_auto[sample_id] = False
-        if changed:
-            self._transport._mark_project_changed()
-
-        self._apply_effective_pad_loop_region_to_audio(
-            sample_id, timing=timing, expected_source_generation=generation
+        self._publish_loop_edit(
+            sample_id,
+            previous,
+            timing=timing,
+            expected_source_generation=generation,
+            changed=changed,
         )
-        self._transport.record_current_pad_edit(sample_id, generation, "loop")
 
     def _resolve_timing(
         self, sample_id: int, timing: CurrentPadTiming | UnresolvedTiming | None
@@ -195,6 +230,7 @@ class PadLoopController:
             self._legacy_grid_anchor_sec(sample_id),
             **self._transport.source_generation_options(expected_source_generation),
         )
+        self._bpm.project_legacy_timing_admission(sample_id)
 
     def _grid_offset_samples(self, sample_id: int) -> int:
         return int(self._project.pad_grid_offset_samples[sample_id])
@@ -512,6 +548,7 @@ class PadLoopController:
             return
 
         timing = self._bpm.current_timing(sample_id)
+        previous = self._loop_intent(sample_id)
         self._transport._project.pad_loop_auto[sample_id] = enabled
         if enabled:
             start_s = float(self._transport._project.pad_loop_start_s[sample_id])
@@ -521,11 +558,9 @@ class PadLoopController:
             )
             self._transport._project.pad_loop_start_s[sample_id] = start_s
 
-        self._transport._mark_project_changed()
-        self._apply_effective_pad_loop_region_to_audio(
-            sample_id, timing=timing, expected_source_generation=generation
+        self._publish_loop_edit(
+            sample_id, previous, timing=timing, expected_source_generation=generation
         )
-        self._transport.record_current_pad_edit(sample_id, generation, "loop")
 
     def set_bars(self, sample_id: int, *, bars: float) -> None:
         validate_sample_id(sample_id)
@@ -541,12 +576,11 @@ class PadLoopController:
         if bars == self._transport._project.pad_loop_bars[sample_id]:
             return
 
+        previous = self._loop_intent(sample_id)
         self._transport._project.pad_loop_bars[sample_id] = bars
-        self._transport._mark_project_changed()
-        self._apply_effective_pad_loop_region_to_audio(
-            sample_id, timing=timing, expected_source_generation=generation
+        self._publish_loop_edit(
+            sample_id, previous, timing=timing, expected_source_generation=generation
         )
-        self._transport.record_current_pad_edit(sample_id, generation, "loop")
 
     def set_start(self, sample_id: int, start_s: float) -> None:
         validate_sample_id(sample_id)
@@ -560,8 +594,7 @@ class PadLoopController:
         if self._transport._project.pad_loop_auto[sample_id]:
             start_s = self._snap_to_nearest_64th_grid(start_s, timing=timing)
 
-        previous_start = self._project.pad_loop_start_s[sample_id]
-        previous_end = self._project.pad_loop_end_s[sample_id]
+        previous = self._loop_intent(sample_id)
         start_s = physical_source_marker_s(start_s, sample_rate_hz=sample_rate_hz)
         self._transport._project.pad_loop_start_s[sample_id] = start_s
 
@@ -573,18 +606,9 @@ class PadLoopController:
         if end_s is not None and end_s <= start_s:
             self._transport._project.pad_loop_end_s[sample_id] = start_s + one_sample_s
 
-        try:
-            self._apply_effective_pad_loop_region_to_audio(
-                sample_id, timing=timing, expected_source_generation=generation
-            )
-        except RuntimeError, ValueError:
-            # Synchronous rejection admitted no loop edit. Keep saved markers
-            # coherent; async resident requests retain their own rollback owner.
-            self._project.pad_loop_start_s[sample_id] = previous_start
-            self._project.pad_loop_end_s[sample_id] = previous_end
-            raise
-        self._transport._mark_project_changed()
-        self._transport.record_current_pad_edit(sample_id, generation, "loop")
+        self._publish_loop_edit(
+            sample_id, previous, timing=timing, expected_source_generation=generation
+        )
 
     def set_end(self, sample_id: int, end_s: float | None) -> None:
         validate_sample_id(sample_id)
@@ -613,9 +637,8 @@ class PadLoopController:
             if end_s <= start_s:
                 end_s = start_s + one_sample_s
 
+        previous = self._loop_intent(sample_id)
         self._transport._project.pad_loop_end_s[sample_id] = end_s
-        self._transport._mark_project_changed()
-        self._apply_effective_pad_loop_region_to_audio(
-            sample_id, timing=timing, expected_source_generation=generation
+        self._publish_loop_edit(
+            sample_id, previous, timing=timing, expected_source_generation=generation
         )
-        self._transport.record_current_pad_edit(sample_id, generation, "loop")

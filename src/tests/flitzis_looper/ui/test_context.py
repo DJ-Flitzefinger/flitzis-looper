@@ -54,6 +54,15 @@ def _record_original_starts(audio: Mock) -> list[FakeCapturedPadStart]:
     return originals
 
 
+def _apply_restart_audio_feedback(controller: AppController, position_s: float) -> None:
+    """Project synthetic audio observations after the control admission assertions."""
+    message = Mock()
+    message.sample_id.return_value = 0
+    controller.transport.playback.handle_sample_started_message(message)
+    message.pad_playhead.return_value = position_s
+    controller.metering.handle_pad_playhead_message(message)
+
+
 class TestReadOnlyStateProxy:
     """Test the read-only state proxy behavior."""
 
@@ -924,6 +933,9 @@ class TestWaveformEditorTransportControls:
         audio_engine_mock.set_pad_loop_region.assert_not_called()
         audio_engine_mock.play_sample.assert_not_called()
         audio_engine_mock.play_sample_exclusive.assert_not_called()
+        assert controller.session.pad_playhead_s[0] == pytest.approx(4.2)
+        assert 0 in controller.session.paused_sample_ids
+        _apply_restart_audio_feedback(controller, 2.0)
         assert controller.session.pad_playhead_s[0] == pytest.approx(2.0)
         assert 0 not in controller.session.paused_sample_ids
 
@@ -982,6 +994,8 @@ class TestWaveformEditorTransportControls:
         ) < audio_engine_mock.method_calls.index(capture_call)
         audio_engine_mock.play_sample.assert_not_called()
         audio_engine_mock.play_sample_exclusive.assert_not_called()
+        assert controller.session.pad_playhead_s[0] == pytest.approx(7.5)
+        _apply_restart_audio_feedback(controller, 4.25)
         assert controller.session.pad_playhead_s[0] == pytest.approx(4.25)
         assert controller.session.pad_playhead_s[1] == pytest.approx(1.5)
 

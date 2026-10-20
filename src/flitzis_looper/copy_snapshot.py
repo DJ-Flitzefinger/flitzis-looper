@@ -23,6 +23,7 @@ from flitzis_looper.models import (
     ProjectState,
     SampleAnalysis,
     StemCacheEntry,
+    StemFileSet,
     StemMixMode,
     TimingIntent,
     validate_sample_id,
@@ -140,6 +141,12 @@ class MusicalSnapshotData(BaseModel):
     def _validate_stem_metadata(cls, value: object) -> object:
         data = _model_data(value)
         _reject_unknown_model_fields(data, StemCacheEntry)
+        if isinstance(data, dict):
+            data = dict(data)
+            stems = _model_data(data.get("stems"))
+            _reject_unknown_model_fields(stems, StemFileSet)
+            if "stems" in data:
+                data["stems"] = stems
         if isinstance(data, dict) and data.get("available", False) is not False:
             message = "Copy stem metadata cannot claim target playback availability"
             raise ValueError(message)
@@ -187,6 +194,27 @@ class CopySnapshot(BaseModel):
         return cls(
             payload_json=canonical_snapshot_json(data.model_dump(mode="json", warnings="error"))
         )
+
+
+def copy_after_snapshot(source: CopySnapshot, identity: PadContentIdentity) -> CopySnapshot:
+    """Derive the fixed fresh C seal by changing only captured A's durable identity."""
+    captured = CopySnapshot.model_validate(source).projected()
+    target = PadContentIdentity.model_validate_json(
+        canonical_snapshot_json(identity.model_dump(mode="json", warnings="error")),
+        strict=True,
+    )
+    original = captured.source_identity
+    if (
+        target.instance_id == original.instance_id
+        or target.material_id != original.material_id
+        or target.material_creation != original.material_creation
+        or target.copied_from != original.instance_id
+    ):
+        message = "Copy successor must be fresh and retain captured material, birth and lineage"
+        raise ValueError(message)
+    data = captured.model_dump(mode="python", warnings="error")
+    data["source_identity"] = target
+    return CopySnapshot.from_data(CopySnapshotData.model_validate(data, strict=True))
 
 
 def strict_snapshot_sample_id(sample_id: int) -> int:

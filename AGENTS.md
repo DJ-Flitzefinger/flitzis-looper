@@ -1,4 +1,93 @@
+## Direkte Humanregel 2026-10-21: Commit und Push bei ALLEN geplanten Goals
+
+Diese Regel gilt für alle bereits geplanten und künftig gemeinsam geplanten
+Goals. Der Human verlangt nach jedem erfolgreich implementierten und passend
+geprüften zusammenhängenden Feature-/Bugfix-Schritt einen kohärenten Commit und
+normalen Push auf das bestehende `main`, OHNE einzelne Commit-, Nachrichten- oder
+Push-Absegnung. Gegenteilige Freigaberegeln in `commit.md`, importiertem
+`git-commit.md` oder älteren Goal-/Projekttexten sind dafür ausdrücklich aufgehoben.
+Abwesenheit des Humans ist kein Grund, veröffentlichungsfähige Arbeit zu sammeln.
+
+Vor dem nächsten unabhängigen Feature-/Bugfix-Schritt: tatsächlichen Diff und
+passende Checks/Review abschließen, eigene kohärente Änderungen committen, seriell
+nach `main` integrieren und normal pushen; sauberen Arbeitsbaum sowie HEAD,
+Tracking und tatsächlich abgefragtes Remote-main auf Gleichheit prüfen. Nicht
+mehrere bereits fertige Funktionen über Tage uncommittet halten. Kein leeres
+Timestamp-Commit und kein Vermischen fremder/unbekannter Änderungen. Echte
+fehlgeschlagene Prüfungen zuerst beheben oder den konkreten Blocker ehrlich nennen;
+keine Freigabefrage anstelle bereits erteilter Autorisierung.
+
+Bestehende Worktree-/Integrationsregeln bleiben. Keine Force-/Reset-/Discard-/
+Remoteeinrichtungs-/Credential-/GlobalGitconfig-/PR-Rechte entstehen dadurch.
+Diese ausdrückliche Commit/Push-Pflicht in jedes geplante Goal und jede Übergabe
+übernehmen. Außerhalb geplanter Goals sowie bei späterem ausdrücklichem Widerruf
+gelten die dortigen normalen Absprachen weiter.
+
+## Neuester direkter Humanauftrag — vollständige neue Goal-Übergabe 2026-10-21
+
+Der bisherige Chat schließt nur seinen aktuellen kohärenten Lieferblock inklusive
+geprüftem Commit, normalem Push und sauberem Arbeitsbaum/Remote-Gleichheit ab und
+stoppt danach. Der Human öffnet selbst einen NEUEN LOOPER-Chat und schreibt `weiter`.
+Dann MUSS der Nachfolger tatsächlich get_goal/create_goal mit dem vollständigen
+../codex-meta/goal-next-activation.txt verwenden, ohne token_budget; ein schon aktives
+passendes FULL Goal wiederverwenden, andernfalls EIN NEUES vollständiges Goal
+anlegen und das Tool-Ergebnis prüfen. Nicht bloß ohne Goal im Chat weiterarbeiten.
+Setup/Öffnen allein wartet; keine weitere Startbestätigung und keine alten Chats
+anschreiben/resumieren. Aktuelle vollständige Zusammenführung und erster Auftrag:
+../codex-meta/handoff/pre-rust-successor-20261021.md und ../codex-meta/goal-next-plan.md.
+Jetzige reale Followups zuerst, danach ALLE alten tatsächlichen Restpflichten;
+48IDs/78Kanten/189Zeilen und sämtliche Original-/Erweiterungs-/Human-/Finalgates
+bleiben. Architektur/Implementierung/kompatible Belege wiederverwenden, alte OPEN-
+Rezepte nicht blind neu bauen; STOP vor Rust-Port/Slice8. Diese neueste Anweisung
+ersetzt ältere aktuelle/warte/Start-/Prioritäts-/Chat-ID-Texte, nicht den Vollumfang.
+
 # Agent Guidelines
+
+## Project-Wide Systems And Quality Standard
+
+This direct Human instruction applies to ALL project work, including future
+Goals, bug fixes, planning, refactoring, UI, tests, documentation and maintenance.
+It remains binding in managed worktrees and after the current pre-Rust Goal.
+
+- Reconcile each task with the actual working tree, including uncommitted work,
+  current architecture, latest applicable Human decisions, normative specs and
+  actual evidence. Historical plans/OPEN checkboxes do not prove missing code;
+  current code does not override the desired product behavior.
+- Understand the affected end-to-end path before changing it: UI/MIDI intent,
+  persistence, source/material/content identity, preparation, scheduler/time/rate/
+  pitch, renderer/DSP, feedback, retirement and recovery as applicable. Identify
+  neighboring functions sharing these paths and the relevant concurrency/lifetimes.
+- Keep a brief impact note in the existing plan/log for each coherent change:
+  intended behavior, authoritative path/reusable components, affected invariants
+  and functions, exact remaining gap, appropriate verification and real limits.
+  Refresh the note when scope or architectural assumptions change.
+- Reuse established components and authority. Separate missing implementation,
+  integration, bounded proof and final acceptance. Do not rebuild delivered
+  foundations, restore superseded recipes, duplicate state/schedulers/pipelines,
+  or weaken guards/tests/acceptance criteria for a local fix.
+- Preserve one audio/time/rate authority, independent mutable PAD/voice state,
+  coherent source/content/lifetime/ACK ownership, atomic due-frame effects,
+  asynchronous publication/last-reader safety, truthful requested/pending/effective
+  state, persistence/restore and realtime boundaries. Verify every invariant touched,
+  including relevant failure/cancel/stale paths and effects on other functions.
+- Resolve actual architecture/contract conflicts explicitly. Latest Human decisions
+  and valid later normative revisions define the target; synchronize affected
+  official specs/docs/tasks before or alongside behavior changes. Prefer the
+  smallest coherent solution meeting the full intent; justified broader changes
+  remain allowed within the authorized scope.
+- Review the actual final diff and verify combined behavior with meaningful
+  impacted regressions. Use integrated checks and independent review at coherent
+  boundaries under the existing workflow; reuse only source-compatible evidence.
+  Isolated passes/logs/API-profile checks do not establish whole-system, musical,
+  device or hearing acceptance.
+- Carry this standard and the authoritative original workspace instructions into
+  every handoff/worktree assignment before writing starts, even when the target
+  checkout has an older AGENTS.md. Preserve it across chat, Goal and branch changes.
+- Scale the review to the impact: docs-only work requires consistency/reference/
+  diff checks; small fixes do not require repeating all past audits or builds.
+  Preserve required final gates, Human data and running App. Continue ordinary
+  authorized work autonomously; this rule adds no approval ceremony and does not
+  activate a waiting Goal.
 
 ## Continued Local Goals And Validation
 

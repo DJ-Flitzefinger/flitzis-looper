@@ -250,6 +250,7 @@ fn accepted_mixer(case: Case) -> (AudioEngine, ConstantTimingTicket, RtMixer) {
     }])
     .to_string();
     let (producer, mut consumer) = queue(2);
+    let engine = with_control_producer(engine, &producer);
     let mut mixer = RtMixer::new(1, case.sample_rate as f32);
     mixer.set_current_timing_acknowledgements(engine.current_timing_acknowledgements.clone());
     mixer.set_input_runtime_ownership(engine.input_runtime_ownership.clone());

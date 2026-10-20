@@ -774,3 +774,6 @@ fn project_guard_process_child() {
 
 #[path = "material_migration_retirement_tests.rs"]
 mod retirement_tests;
+
+#[path = "project_asset_cleanup_accounting_tests.rs"]
+mod project_asset_cleanup_accounting_tests;

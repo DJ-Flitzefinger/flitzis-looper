@@ -22,10 +22,16 @@ if os.environ['LAUNCHER_NATIVE_MODE'] == 'import-error':
 if os.environ['LAUNCHER_NATIVE_MODE'] != 'older':
     def native_build_profile():
         mode = os.environ['LAUNCHER_NATIVE_MODE']
-        return 'release' if mode == 'old-piano' else mode
+        return 'release' if mode in {'old-piano', 'old-recording'} else mode
 class CapturedPitchAction:
     if os.environ['LAUNCHER_NATIVE_MODE'] != 'old-piano':
         resets_key_correction = property(lambda self: False)
+class AudioEngine:
+    if os.environ['LAUNCHER_NATIVE_MODE'] != 'old-recording':
+        def audio_stream_failed(self):
+            raise AssertionError('launcher must only reflect stream lifecycle')
+        def quiesce_failed_audio_stream(self):
+            raise AssertionError('launcher must never close a stream')
 """
 _APP_STUB = """
 import json
@@ -269,6 +275,20 @@ def test_build_success_must_match_actual_installed_profile(
     assert "A usable Release native build is required." in result.stdout
     assert f"failed (exit code {exit_code})." in result.stdout
     assert (launchers.pause_prompt in result.stdout) is (starter == "build-release.bat")
+
+
+@pytest.mark.parametrize("starter", ["start.bat", "start-release.bat"])
+def test_recording_lifecycle_requires_current_native_before_application(
+    launchers: _Launchers, starter: str
+) -> None:
+    launchers.environment["LAUNCHER_NATIVE_MODE"] = "old-recording"
+    result = launchers.run(starter)
+    assert result.returncode != 0
+    assert (
+        "Native recording lifecycle API requires a current build" in result.stdout + result.stderr
+    )
+    assert not launchers.app_log.exists()
+    assert launchers.profile_log.exists()
 
 
 @pytest.mark.parametrize("starter", ["start.bat", "start-release.bat"])

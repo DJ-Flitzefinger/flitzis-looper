@@ -1,10 +1,14 @@
 import json
 from collections import deque
 from contextlib import suppress
+from pathlib import Path
+from time import monotonic
 from typing import TYPE_CHECKING
 
+from flitzis_looper.control_diagnostics import ConsoleDiagnostics, poll_control_diagnostics
 from flitzis_looper.controller.accepted_publication import AcceptedTimingController
 from flitzis_looper.controller.asset_lifecycle import ProjectAssetLifecycle
+from flitzis_looper.controller.bank_arrangement import BankArrangementController
 from flitzis_looper.controller.loader import LoaderController
 from flitzis_looper.controller.material_migration import MaterialMigrationController
 from flitzis_looper.controller.metering import MeteringController
@@ -13,16 +17,18 @@ from flitzis_looper.controller.pad_selection import record_pad_selection
 from flitzis_looper.controller.pair_arrangement import PairArrangementController
 from flitzis_looper.controller.performance_confirmation import PerformanceConfirmationController
 from flitzis_looper.controller.persistence import ProjectPersistence
+from flitzis_looper.controller.recording import RecordingController
 from flitzis_looper.controller.settings import SettingsController
+from flitzis_looper.controller.stem_batch import StemBatchController
+from flitzis_looper.controller.stem_delete import StemDeleteController
 from flitzis_looper.controller.stems import StemController, StemTaskRunner
 from flitzis_looper.controller.transport import TransportController
 from flitzis_looper.input_mapping import InputMappingController
 from flitzis_looper.models import ProjectState, SessionState, validate_sample_id
+from flitzis_looper.recording_paths import hold_live_recording_spool
 from flitzis_looper_audio import AudioEngine, AudioMessage
 
 if TYPE_CHECKING:
-    from pathlib import Path
-
     from flitzis_looper.controller.base import BaseController
     from flitzis_looper.controller.stem_generation import StemGenerationBackend
     from flitzis_looper.copy_snapshot import CopySnapshot
@@ -86,6 +92,9 @@ class AppController:
 
         self._audio = AudioEngine()
         self._audio.set_resident_pcm_budget_mib(self._project.resident_pcm_budget_mib)
+        if not self._audio.set_key_lock_start_behavior(self._project.key_lock_start_behavior):
+            message = "Key Lock start behavior could not be restored before audio startup"
+            raise RuntimeError(message)
         self._audio.run()
         self._assets = ProjectAssetLifecycle(self._project, self._audio)
         self._assets.sync_assignments()
@@ -103,21 +112,10 @@ class AppController:
             self._audio,
             on_project_changed=self._persistence.mark_dirty,
         )
+        self._init_recording_control()
         self.accepted_timing = AcceptedTimingController(self.transport)
         self.transport.bpm.set_accepted_refresh_callback(self.accepted_timing.refresh_current)
-        self.stems = StemController(
-            self._project,
-            self._session,
-            self._audio,
-            on_project_changed=self._persistence.mark_dirty,
-            stem_backend=stem_backend,
-            stem_task_runner=stem_task_runner,
-            asset_lifecycle=self._assets,
-        )
-        self.stems.fence_pair_metadata(self._persistence.invalid_stem_pair_ids)
-        self.stems.bind_disk_selection_commit(
-            self._persistence.commit_stem_selection, self._persistence.flush
-        )
+        self._init_stem_control(stem_backend, stem_task_runner)
         self.arrangement = PadArrangementController(
             self._persistence,
             self._session,
@@ -126,7 +124,7 @@ class AppController:
             stem_task_runner=self.stems._stem_task_runner,
             on_copy_committed=self._on_copy_committed,
             on_target_removed=self._on_copy_target_removed,
-            can_admit=lambda: not self.pairs.active,
+            can_admit=lambda: not (self.pairs.active or self.banks.active),
         )
         self.transport.bind_pad_edit_guard(self.ensure_not_copy_target)
         self.stems.bind_pad_edit_guard(self.ensure_not_copy_target)
@@ -185,25 +183,116 @@ class AppController:
         self.transport.playback.set_global_playback_feedback_poll(self._poll_audio_messages)
 
         self._restore_initial_runtime_state()
+        self._discover_recordings()
+
+    def _init_recording_control(self) -> None:
+        """Bind one original Engine and project namespace before restore and UI work."""
+        self._recording_shutdown_deadline: float | None = None
+        self._record_root = Path.cwd().absolute() / "record"
+        self.recording = RecordingController(
+            self._project,
+            self._audio,
+            self._record_root,
+            live_spool_witness=hold_live_recording_spool,
+            stream_failed=self._audio.audio_stream_failed,
+            quiesce_failed_stream=self._audio.quiesce_failed_audio_stream,
+        )
+
+    def _discover_recordings(self) -> None:
+        """Observe an existing recording namespace without creating one at startup."""
+        try:
+            self._record_root.lstat()
+        except FileNotFoundError:
+            return
+        self.recording.discover_recovery()
+
+    def _init_stem_control(
+        self, stem_backend: StemGenerationBackend | None, stem_task_runner: StemTaskRunner | None
+    ) -> None:
+        self.stems = StemController(
+            self._project,
+            self._session,
+            self._audio,
+            on_project_changed=self._persistence.mark_dirty,
+            stem_backend=stem_backend,
+            stem_task_runner=stem_task_runner,
+            asset_lifecycle=self._assets,
+        )
+        self.stems.fence_pair_metadata(self._persistence.invalid_stem_pair_ids)
+        self.stem_batch = StemBatchController(self.stems)
+        self.stems.bind_delete_logical_interests(self.stem_batch.capture_unadmitted_interests)
+        self.stem_delete = StemDeleteController(
+            self.stems, withdraw_unadmitted=self.stem_batch.withdraw_unadmitted_interests
+        )
+        self.stems.bind_disk_selection_commit(
+            self._persistence.commit_stem_selection,
+            self._persistence.flush,
+            writer_blocked=self._persistence.stem_selection_write_blocked,
+        )
 
     def _restore_initial_runtime_state(self) -> None:
         """Restore source/control state in order, then initialize one configured GUI selection."""
-        self.loader.restore_samples_from_project_state()
+        self.diagnostics = ConsoleDiagnostics(
+            lambda: (
+                path
+                for path in (
+                    *self._project.sample_paths,
+                    *self._session.pending_sample_paths.values(),
+                )
+                if path is not None
+            )
+        )
+        self.transport.pitch.bind_diagnostics(self.diagnostics)
+        self.transport.residency._bind_diagnostics(self.diagnostics)
+        self.transport.waveform.bind_diagnostics(self.diagnostics)
+        self.loader._bind_diagnostics(self.diagnostics)
+        self.stems._bind_diagnostics(self.diagnostics)
+        restored_paths = self.loader._validate_restored_sample_paths()
+        # Initial timing/loop edits must finish before Cold captures their epoch
+        # and residency guards. Mixing also travels with that original source ACK.
+        self.transport.apply_project_state_to_audio(restored_sample_ids=frozenset(restored_paths))
+        self.loader.restore_samples_from_project_state(validated_paths=restored_paths)
         self.stems.restore_stem_cache_from_project_state()
         self.material_migration.schedule_after_restore()
-        self.transport.apply_project_state_to_audio()
         self.input_mapping.apply_project_state_to_input_runtime()
         self._initialize_native_gui_selection()
 
     def _prepare_arrangement_recovery(self) -> None:
-        """Acquire Copy/Pair startup ownership before ordinary Loader restoration."""
+        """Acquire complete arrangement ownership before ordinary Loader restoration."""
+        self.banks = BankArrangementController(self)
         self.arrangement.bind_startup(self)
-        self.pairs = PairArrangementController(self)
+        self.pairs = PairArrangementController(self, can_admit=lambda: not self.banks.active)
+        self.banks.bind_startup()
+        self._arrangement_recovery_pending = (
+            self.arrangement.active or self.pairs.active or self.banks.active
+        )
+        self.material_migration.bind_arrangement_recovery_guard(
+            lambda: not (self.arrangement.active or self.pairs.active or self.banks.active)
+        )
         self.loader._bind_restored_assignment_guard(self._restored_assignment_held)
         self.stems.bind_restored_assignment_guard(self._restored_assignment_held)
+        self._sync_arrangement_observers()
 
     def _restored_assignment_held(self, sample_id: int) -> bool:
-        return sample_id in self.arrangement.fenced_sample_ids | self.pairs.fenced_sample_ids
+        return sample_id in (
+            self.arrangement.fenced_sample_ids
+            | self.pairs.fenced_sample_ids
+            | self.banks.fenced_sample_ids
+        )
+
+    def _finish_arrangement_recovery(self) -> None:
+        """Refresh cleanup admission once all original startup owners actually settle."""
+        if not self._arrangement_recovery_pending or (
+            self.arrangement.active or self.pairs.active or self.banks.active
+        ):
+            return
+        self._arrangement_recovery_pending = False
+        try:
+            self.material_migration.refresh_arrangement_recovery()
+        except (OSError, RuntimeError, TypeError, ValueError) as error:
+            self.material_migration.error = (
+                f"Arrangement recovery cleanup remains deferred: {error}"
+            )[:2048]
 
     def select_pad(
         self,
@@ -299,8 +388,10 @@ class AppController:
             return
         self.select_pad(sample_id)
 
-    def prepare_shutdown(self, *, holds_polled: bool = False) -> bool:
-        """Settle complete Copy ownership while its workers and callback remain alive."""
+    def prepare_shutdown(
+        self, *, holds_polled: bool = False, deletion_polled: bool = False
+    ) -> bool:
+        """Settle recording and arrangement while their callback ownership remains alive."""
         if self._shutdown_complete:
             return True
         if self._shutdown_preparing:
@@ -308,22 +399,33 @@ class AppController:
             raise RuntimeError(message)
         self._shutdown_preparing = True
         try:
+            if self._recording_shutdown_deadline is None:
+                self._recording_shutdown_deadline = monotonic() + 30.0
+            recording_ready = self.recording.prepare_shutdown(
+                deadline=self._recording_shutdown_deadline
+            )
             self.transport.waveform.request_hold_release("close")
             if not holds_polled:
                 self.transport.waveform.poll_holds()
             if not self._close_requested:
                 self._audio.set_input_mapping_enabled(False)
                 self._close_requested = True
-            return (
-                self.pairs.prepare_shutdown()
+                self.stem_batch.cancel()
+            if not deletion_polled:
+                self.stem_delete.poll()
+            other_owners_ready = (
+                self.banks.prepare_shutdown()
+                and self.pairs.prepare_shutdown()
                 and self.arrangement.prepare_shutdown()
                 and not self.transport.waveform.has_pending_holds
+                and not self.stem_delete.active
             )
+            return other_owners_ready and recording_ready
         finally:
             self._shutdown_preparing = False
 
     def shut_down(self) -> None:
-        """Release dependent owners only after actual Copy settlement permits exit."""
+        """Release dependent owners only after actual arrangement settlement permits exit."""
         if self._shutdown_complete:
             return
         if self._shutdown_running:
@@ -332,8 +434,9 @@ class AppController:
         self._shutdown_running = True
         try:
             if not self.prepare_shutdown():
-                message = "Application close is waiting for complete Copy settlement"
+                message = "Application close is waiting for recording or arrangement settlement"
                 raise RuntimeError(message)
+            self.recording.shut_down()
             self.material_migration.shut_down()
             self.transport.pitch.shut_down()
             self.transport.residency.shut_down()
@@ -356,15 +459,26 @@ class AppController:
     def on_frame_render(self) -> None:
         self.pairs.poll()
         self._sync_arrangement_observers()
+        self.banks.poll()
+        self._sync_arrangement_observers()
         self.arrangement.poll()
         self._sync_arrangement_observers()
         for controller in self._controllers:
             controller.on_frame_render()
+        # The controllers are a set. Offer original batch metadata explicitly
+        # after their observations, independent of Settings or iteration order.
+        self.stem_delete.poll()
+        self.stem_batch.poll()
+        poll_control_diagnostics(self)
 
     def poll_runtime_events(self) -> None:
         """Poll runtime event sources and update controller-owned state projections."""
+        self.recording.poll()
+        self.diagnostics.observe("recording", self.recording.status().error)
         self.transport.waveform.poll_holds()
         self.pairs.poll()
+        self._sync_arrangement_observers()
+        self.banks.poll()
         self._sync_arrangement_observers()
         self.arrangement.poll()
         self._sync_arrangement_observers()
@@ -375,27 +489,39 @@ class AppController:
         self.accepted_timing.poll()
         self.transport.residency.poll()
         self.transport.pitch.poll()
+        self.banks.poll()
+        self._sync_arrangement_observers()
         self.arrangement.poll()
         self._sync_arrangement_observers()
 
+        poll_control_diagnostics(self)
+
     def _sync_arrangement_observers(self) -> None:
         deferred = (
-            self.pairs.observer_fenced_sample_ids | self.arrangement.observer_fenced_sample_ids
+            self.pairs.observer_fenced_sample_ids
+            | self.arrangement.observer_fenced_sample_ids
+            | self.banks.observer_fenced_sample_ids
         )
         for component in (self.transport, self.loader, self.accepted_timing, self.stems):
             component._pair_deferred_sample_ids = deferred
+        self._finish_arrangement_recovery()
 
     def ensure_not_copy_target(self, sample_id: int) -> None:
         """Reject participant gestures while a complete arrangement owns the slot."""
         validate_sample_id(sample_id)
-        if sample_id in self.arrangement.fenced_sample_ids | self.pairs.fenced_sample_ids:
-            kind = "Copy target" if sample_id in self.arrangement.fenced_sample_ids else "Pair"
+        if self._restored_assignment_held(sample_id):
+            kind = "Bank"
+            if sample_id in self.arrangement.fenced_sample_ids:
+                kind = "Copy target"
+            elif sample_id in self.pairs.fenced_sample_ids:
+                kind = "Pair"
             message = f"Complete {kind} receipt is pending; current-pad gesture rejected"
             raise ValueError(message)
 
     def _ensure_global_key_lock_edit_allowed(self) -> None:
         self.arrangement.ensure_global_key_lock_edit_allowed()
         self.pairs.ensure_global_key_lock_edit_allowed()
+        self.banks.ensure_global_key_lock_edit_allowed()
 
     def _on_copy_target_removed(self, sample_id: int, predecessor: CopySnapshot) -> None:
         """Retire original target control owners only after its complete own Native ACK."""
@@ -509,7 +635,11 @@ class AppController:
             return True
         if sample_id is None:
             return True
-        if sample_id in self.pairs.observer_fenced_sample_ids | self.arrangement.fenced_sample_ids:
+        if sample_id in (
+            self.pairs.observer_fenced_sample_ids
+            | self.arrangement.fenced_sample_ids
+            | self.banks.observer_fenced_sample_ids
+        ):
             self._retain_content_feedback(msg)
             return True
         handlers = {
@@ -534,8 +664,18 @@ class AppController:
     def pending_pad_error(self) -> str | None:
         """Expose the existing owning settlement error while Close waits."""
         return (
-            self.pairs.error or self.transport.waveform.hold_status()[1] or self.arrangement.error
+            self.banks.error
+            or self.pairs.error
+            or self.transport.waveform.hold_status()[1]
+            or self.arrangement.error
+            or self.material_migration.error
         )
+
+    @property
+    def pending_shutdown_error(self) -> str | None:
+        """Expose recording and existing settlement diagnostics while Close waits."""
+        errors = (self.recording.status().error, self.pending_pad_error)
+        return "\n".join(dict.fromkeys(error for error in errors if error)) or None
 
     @property
     def session(self) -> SessionState:

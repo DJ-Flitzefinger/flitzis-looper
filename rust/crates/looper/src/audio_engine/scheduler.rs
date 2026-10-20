@@ -35,6 +35,12 @@ pub(crate) type TransportScheduler = FixedCapacityScheduler<MAX_SCHEDULED_EVENTS
 // to the generic variant-size heuristic, with fixed storage and bounded copies.
 #[allow(clippy::large_enum_variant)]
 pub(crate) enum ScheduledCommand {
+    CaptureStart {
+        session_id: u64,
+    },
+    CaptureStop {
+        session_id: u64,
+    },
     PitchAction {
         slot: usize,
         action_sequence: u64,
@@ -104,6 +110,9 @@ pub(crate) struct FixedCapacityScheduler<const CAPACITY: usize> {
     // small on the Windows stack. RT only moves the already popped event into it.
     deferred_due: Box<Option<DueEvent>>,
     deferred_at_callback: u64,
+    // Capacity for this live session's later stop, without a fictitious event.
+    // It never contributes to event length, ordering or the scheduler-idle view.
+    capture_stop_owner: Option<u64>,
 }
 
 impl<const CAPACITY: usize> FixedCapacityScheduler<CAPACITY> {
@@ -114,6 +123,7 @@ impl<const CAPACITY: usize> FixedCapacityScheduler<CAPACITY> {
             next_sequence: 0,
             deferred_due: Box::new(None),
             deferred_at_callback: 0,
+            capture_stop_owner: None,
         }
     }
 
@@ -133,7 +143,10 @@ impl<const CAPACITY: usize> FixedCapacityScheduler<CAPACITY> {
     }
 
     pub(crate) fn is_full(&self) -> bool {
-        self.len == CAPACITY || self.deferred_due.is_some()
+        self.len
+            .saturating_add(usize::from(self.capture_stop_owner.is_some()))
+            >= CAPACITY
+            || self.deferred_due.is_some()
     }
 
     pub(crate) fn deferred_due(&self) -> Option<&DueEvent> {
@@ -151,10 +164,194 @@ impl<const CAPACITY: usize> FixedCapacityScheduler<CAPACITY> {
         target_frame: u64,
         command: ScheduledCommand,
     ) -> Result<ScheduledEvent, ScheduleError> {
+        match command {
+            ScheduledCommand::CaptureStart { session_id } => {
+                return self.schedule_capture_start(session_id, target_frame);
+            }
+            ScheduledCommand::CaptureStop { session_id } => {
+                return self.schedule_capture_stop(session_id, target_frame);
+            }
+            _ => {}
+        }
         if self.is_full() {
             return Err(ScheduleError::Full);
         }
 
+        self.insert_event(target_frame, command, reserve_input_order)
+    }
+
+    /// Admit one real start and reserve its same-session stop atomically.
+    /// The reservation alone never makes an otherwise empty scheduler non-idle.
+    pub(crate) fn schedule_capture_start(
+        &mut self,
+        session_id: u64,
+        target_frame: u64,
+    ) -> Result<ScheduledEvent, ScheduleError> {
+        self.schedule_capture_start_with_order(session_id, target_frame, reserve_input_order)
+    }
+
+    /// Admit the existing group action and reserve its same-session stop atomically.
+    /// The action retains its original input order, including after a later replan.
+    pub(crate) fn schedule_capture_group_start(
+        &mut self,
+        session_id: u64,
+        target_frame: u64,
+        slot: usize,
+        action_sequence: u64,
+    ) -> Result<ScheduledEvent, ScheduleError> {
+        self.schedule_reserved_capture_start(
+            session_id,
+            target_frame,
+            ScheduledCommand::PitchAction {
+                slot,
+                action_sequence,
+            },
+            reserve_input_order,
+        )
+    }
+
+    fn schedule_capture_start_with_order(
+        &mut self,
+        session_id: u64,
+        target_frame: u64,
+        reserve_order: impl FnOnce() -> Option<u64>,
+    ) -> Result<ScheduledEvent, ScheduleError> {
+        self.schedule_reserved_capture_start(
+            session_id,
+            target_frame,
+            ScheduledCommand::CaptureStart { session_id },
+            reserve_order,
+        )
+    }
+
+    fn schedule_reserved_capture_start(
+        &mut self,
+        session_id: u64,
+        target_frame: u64,
+        command: ScheduledCommand,
+        reserve_order: impl FnOnce() -> Option<u64>,
+    ) -> Result<ScheduledEvent, ScheduleError> {
+        if session_id == 0
+            || self.capture_stop_owner.is_some()
+            || self.deferred_due.is_some()
+            || CAPACITY.saturating_sub(self.len) < 2
+            || self.events[..self.len]
+                .iter()
+                .flatten()
+                .any(|event| capture_session(&event.command).is_some())
+        {
+            return Err(ScheduleError::Full);
+        }
+        let event = self.insert_event(target_frame, command, reserve_order)?;
+        self.capture_stop_owner = Some(session_id);
+        Ok(event)
+    }
+
+    /// Consume only this session's reserved physical slot after insertion succeeds.
+    /// An identical queued stop retains its original order/sequence and endpoint.
+    pub(crate) fn schedule_capture_stop(
+        &mut self,
+        session_id: u64,
+        target_frame: u64,
+    ) -> Result<ScheduledEvent, ScheduleError> {
+        self.schedule_capture_stop_with_order(session_id, target_frame, reserve_input_order)
+    }
+
+    /// Observe only an actually admitted stop, never its logical reservation.
+    pub(crate) fn capture_stop_target_frame(&self, session_id: u64) -> Option<u64> {
+        if session_id == 0 {
+            return None;
+        }
+        if let Some(event) = self.deferred_due()
+            && matches!(&event.command, ScheduledCommand::CaptureStop { session_id: owner } if *owner == session_id)
+        {
+            return Some(event.target_frame);
+        }
+        self.events[..self.len].iter().flatten().find_map(|event| {
+            matches!(&event.command, ScheduledCommand::CaptureStop { session_id: owner } if *owner == session_id)
+                .then_some(event.target_frame)
+        })
+    }
+
+    fn schedule_capture_stop_with_order(
+        &mut self,
+        session_id: u64,
+        target_frame: u64,
+        reserve_order: impl FnOnce() -> Option<u64>,
+    ) -> Result<ScheduledEvent, ScheduleError> {
+        if session_id == 0 {
+            return Err(ScheduleError::Full);
+        }
+        if let Some(event) = self.events[..self.len].iter().flatten().find(|event| {
+            matches!(&event.command, ScheduledCommand::CaptureStop { session_id: owner } if *owner == session_id)
+        }) {
+            return if event.target_frame == target_frame {
+                Ok(event.clone())
+            } else {
+                Err(ScheduleError::Full)
+            };
+        }
+        if self.capture_stop_owner != Some(session_id)
+            || self.deferred_due.is_some()
+            || self.len >= CAPACITY
+            || self.events[..self.len].iter().flatten().any(|event| {
+                matches!(&event.command, ScheduledCommand::CaptureStart { session_id: owner } if *owner == session_id)
+                    && target_frame < event.target_frame
+            })
+        {
+            return Err(ScheduleError::Full);
+        }
+        let event = self.insert_event(
+            target_frame,
+            ScheduledCommand::CaptureStop { session_id },
+            reserve_order,
+        )?;
+        self.capture_stop_owner = None;
+        Ok(event)
+    }
+
+    /// Remove only this session's scalar capture commands and logical reservation.
+    /// Returns removed queued/deferred event count; an active reservation may be
+    /// released even when no event remains. Other payloads are moved, never dropped.
+    pub(crate) fn cancel_capture_session(&mut self, session_id: u64) -> usize {
+        if session_id == 0 {
+            return 0;
+        }
+        let mut removed = 0;
+        let mut kept = 0;
+        for index in 0..self.len {
+            let event = self.events[index]
+                .take()
+                .expect("scheduled storage is dense");
+            if capture_session(&event.command) == Some(session_id) {
+                removed += 1;
+            } else {
+                self.events[kept] = Some(event);
+                kept += 1;
+            }
+        }
+        self.len = kept;
+        if self
+            .deferred_due()
+            .is_some_and(|event| capture_session(&event.command) == Some(session_id))
+        {
+            drop(self.deferred_due.take());
+            self.deferred_at_callback = 0;
+            removed += 1;
+        }
+        if self.capture_stop_owner == Some(session_id) {
+            self.capture_stop_owner = None;
+        }
+        removed
+    }
+
+    fn insert_event(
+        &mut self,
+        target_frame: u64,
+        command: ScheduledCommand,
+        reserve_order: impl FnOnce() -> Option<u64>,
+    ) -> Result<ScheduledEvent, ScheduleError> {
+        debug_assert!(self.len < CAPACITY);
         let event = ScheduledEvent {
             target_frame,
             sequence: self.next_sequence,
@@ -162,7 +359,7 @@ impl<const CAPACITY: usize> FixedCapacityScheduler<CAPACITY> {
                 ScheduledCommand::PitchAction {
                     action_sequence, ..
                 } => *action_sequence,
-                _ => reserve_input_order().ok_or(ScheduleError::Full)?,
+                _ => reserve_order().ok_or(ScheduleError::Full)?,
             },
             command,
         };
@@ -262,10 +459,25 @@ impl<const CAPACITY: usize> FixedCapacityScheduler<CAPACITY> {
     }
 }
 
+fn capture_session(command: &ScheduledCommand) -> Option<u64> {
+    match command {
+        ScheduledCommand::CaptureStart { session_id }
+        | ScheduledCommand::CaptureStop { session_id } => Some(*session_id),
+        _ => None,
+    }
+}
+
 fn event_sorts_before(left: &ScheduledEvent, right: &ScheduledEvent) -> bool {
     left.target_frame < right.target_frame
         || (left.target_frame == right.target_frame && left.order_sequence < right.order_sequence)
 }
+
+#[cfg(test)]
+#[path = "scheduler/atomic_capture_group_tests.rs"]
+mod atomic_capture_group_tests;
+#[cfg(test)]
+#[path = "scheduler/capture_tests.rs"]
+mod capture_tests;
 
 #[cfg(test)]
 mod tests {

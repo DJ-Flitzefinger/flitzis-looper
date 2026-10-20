@@ -908,7 +908,7 @@ def test_interrupted_activation_recovers_old_or_verified_new(
     paths = _simulate_activation_interrupt(installation, seam, second)
     result = installation.run()
     expected = second if seam == "accepted" else first
-    assert installation.pointer()["git_commit"] == expected
+    assert installation.pointer()["git_commit"] == expected, result.stdout + result.stderr
     assert (paths.runtime / "python/python.exe").read_text() == (
         "immutable-runtime-second" if seam == "accepted" else "immutable-runtime-first"
     )

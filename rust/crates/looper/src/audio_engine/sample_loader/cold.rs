@@ -562,11 +562,11 @@ pub(crate) fn decode_audio_snapshot(
             {
                 break;
             }
-            Err(DecoderError::DecodeError(_)) => {
+            Err(error @ DecoderError::DecodeError(_)) => {
                 packet_errors += 1;
                 descriptor.skipped_packets += 1;
                 if packet_errors > MAX_PACKET_ERRORS {
-                    break;
+                    return Err(SampleLoadError::Decode(error));
                 }
                 continue;
             }

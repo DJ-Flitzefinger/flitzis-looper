@@ -14,11 +14,13 @@ from flitzis_looper.models import (
     StemMaskDisplayMode,
 )
 from flitzis_looper.ui.constants import (
+    BOTTOM_BAR_HEIGHT,
     CONTROL_BORDER_RGBA,
     CONTROL_HOVERED_RGBA,
     CONTROL_PRESSED_RGBA,
     CONTROL_RGBA,
     SPACING,
+    TEXT_BPM_RGBA,
     TEXT_MUTED_RGBA,
     TEXT_RGBA,
 )
@@ -30,6 +32,7 @@ from flitzis_looper.ui.render.settings import (
 )
 
 if TYPE_CHECKING:
+    from flitzis_looper.controller.recording import RecordingStatus
     from flitzis_looper.ui.context import UiContext
     from flitzis_looper.ui.styles import ButtonStyleName
 
@@ -43,6 +46,8 @@ STEM_BUTTON_SIZE = 32.0
 START_STOP_BUTTON_WIDTH = 92.0
 START_STOP_BUTTON_HEIGHT = SETTINGS_TOGGLE_BUTTON_SIZE
 START_STOP_BUTTON_LABEL = "START/STOP##global_start_stop"
+RECORD_BUTTON_LABEL = "RECORD##record_mix"
+RECORD_BUTTON_WIDTH = 92.0
 MODE_BUTTON_GAP = SPACING * 0.75
 CONTROL_GROUP_GAP = SPACING * 1.75
 STEM_BUTTON_GAP = SPACING * 0.5
@@ -66,7 +71,6 @@ _MASTER_METER_FILL_RGBA = (1.0, 1.0, 1.0, 0.24)
 _MASTER_METER_GREEN_RGBA = (0.18, 0.74, 0.38, 0.35)
 _MASTER_METER_YELLOW_RGBA = (0.95, 0.75, 0.18, 0.45)
 _MASTER_METER_CLIP_RGBA = (1.0, 0.08, 0.08, 0.95)
-_TRANSPORT_ERROR_RGBA = (1.0, 0.25, 0.2, 1.0)
 
 
 @dataclass(frozen=True)
@@ -77,6 +81,86 @@ class MasterMeterGeometry:
     meter_width: float
     clip_min_x: float
     clip_max_x: float
+
+
+@dataclass(frozen=True)
+class BottomBarGroup:
+    """One intact control group in the shared responsive bottom-bar layout."""
+
+    name: str
+    x: float
+    y: float
+    width: float
+    height: float
+
+
+@dataclass(frozen=True)
+class BottomBarLayout:
+    """Geometry shared by center-area reservation and actual control placement."""
+
+    groups: tuple[BottomBarGroup, ...]
+    status_y: float
+    height: float
+
+
+def _button_width(label: str, minimum: float) -> float:
+    return max(minimum, imgui.calc_text_size(label).x + 2 * imgui.get_style().frame_padding.x)
+
+
+def _button_height(minimum: float) -> float:
+    return max(minimum, imgui.get_frame_height())
+
+
+def _mode_group_width() -> float:
+    return (
+        _button_width("MULTI LOOP", MULTI_LOOP_BUTTON_WIDTH)
+        + 2 * MODE_BUTTON_GAP
+        + _button_width("L", MODE_BUTTON_WIDTH)
+        + _button_width("Q", MODE_BUTTON_WIDTH)
+    )
+
+
+def _stem_group_width() -> float:
+    return 6 * _button_height(STEM_BUTTON_SIZE) + 4 * STEM_BUTTON_GAP + STEM_PRESET_GAP
+
+
+def _transport_group_width() -> float:
+    return (
+        _button_width("RECORD", RECORD_BUTTON_WIDTH)
+        + CONTROL_GROUP_GAP
+        + _button_width("START/STOP", START_STOP_BUTTON_WIDTH)
+        + START_STOP_BUTTON_GAP
+        + SETTINGS_TOGGLE_BUTTON_SIZE
+    )
+
+
+def bottom_bar_layout(available_width: float) -> BottomBarLayout:
+    """Wrap complete control groups without reducing the Master Volume fader."""
+    master_height = (
+        imgui.get_text_line_height() + SPACING / 2 + _button_height(MASTER_VOLUME_FADER_HEIGHT)
+    )
+    sizes = (
+        ("master", MASTER_VOLUME_WIDTH, master_height),
+        ("modes", _mode_group_width(), _button_height(MODE_BUTTON_HEIGHT)),
+        ("stems", _stem_group_width(), _button_height(STEM_BUTTON_SIZE)),
+        ("transport", _transport_group_width(), _button_height(START_STOP_BUTTON_HEIGHT)),
+    )
+    groups: list[BottomBarGroup] = []
+    x = y = row_height = 0.0
+    for name, width, height in sizes:
+        if x > 0.0 and x + width > available_width:
+            y += row_height + SPACING
+            x = row_height = 0.0
+        group_x = max(x, available_width - width) if name == "transport" else x
+        groups.append(BottomBarGroup(name, group_x, y, width, height))
+        x += width + CONTROL_GROUP_GAP
+        row_height = max(row_height, height)
+    status_y = y + row_height + SPACING
+    return BottomBarLayout(
+        groups=tuple(groups),
+        status_y=status_y,
+        height=max(BOTTOM_BAR_HEIGHT, status_y + _button_height(MODE_BUTTON_HEIGHT)),
+    )
 
 
 def master_volume_wheel_delta(wheel_steps: int) -> float:
@@ -327,7 +411,7 @@ def _set_volume_from_master_fader_drag(
 def _master_volume_fader(ctx: UiContext, value: int) -> None:
     imgui.invisible_button(
         "##master_volume",
-        (MASTER_VOLUME_WIDTH, MASTER_VOLUME_FADER_HEIGHT),
+        (MASTER_VOLUME_WIDTH, _button_height(MASTER_VOLUME_FADER_HEIGHT)),
     )
     pos_min = imgui.get_item_rect_min()
     pos_max = imgui.get_item_rect_max()
@@ -397,11 +481,12 @@ def _trigger_quantization_toggle(ctx: UiContext, center_y: float) -> None:
     style = trigger_quantization_button_style(
         enabled=ctx.state.project.trigger_quantization_enabled
     )
-    _set_cursor_y_for_button(center_y=center_y, height=MODE_BUTTON_HEIGHT)
+    height = _button_height(MODE_BUTTON_HEIGHT)
+    _set_cursor_y_for_button(center_y=center_y, height=height)
     with button_style(style):
         if imgui.button(
             "Q##trigger_quantization_toggle",
-            (MODE_BUTTON_WIDTH, MODE_BUTTON_HEIGHT),
+            (_button_width("Q", MODE_BUTTON_WIDTH), height),
         ):
             ctx.audio.global_.toggle_trigger_quantization()
 
@@ -415,10 +500,11 @@ def _learn_control(ctx: UiContext, center_y: float) -> None:
     pending = ctx.state.session.input_learn_pending_binding_key is not None
     style: ButtonStyleName = "mode-on" if active or pending else "mode-off"
 
-    _set_cursor_y_for_button(center_y=center_y, height=MODE_BUTTON_HEIGHT)
+    height = _button_height(MODE_BUTTON_HEIGHT)
+    _set_cursor_y_for_button(center_y=center_y, height=height)
     imgui.begin_disabled(disabled=not enabled)
     with button_style(style):
-        if imgui.button("L##input_mapping_learn", (MODE_BUTTON_WIDTH, MODE_BUTTON_HEIGHT)):
+        if imgui.button("L##input_mapping_learn", (_button_width("L", MODE_BUTTON_WIDTH), height)):
             ctx.input.toggle_learn()
     imgui.end_disabled()
 
@@ -493,7 +579,7 @@ def _stem_mask_button(
     with button_style(style):
         clicked = imgui.button(
             f"{label}##stem_mask_{label}",
-            (STEM_BUTTON_SIZE, STEM_BUTTON_SIZE),
+            (_button_height(STEM_BUTTON_SIZE), _button_height(STEM_BUTTON_SIZE)),
         )
         right_clicked = (
             target_display_mode == "custom"
@@ -528,7 +614,7 @@ def _stem_mask_controls(ctx: UiContext, center_y: float) -> None:
     enabled = ctx.state.stems.stem_mask_controls_enabled(pad_id)
     learn_pending = _has_pending_learn_input(ctx)
 
-    _set_cursor_y_for_button(center_y=center_y, height=STEM_BUTTON_SIZE)
+    _set_cursor_y_for_button(center_y=center_y, height=_button_height(STEM_BUTTON_SIZE))
     imgui.begin_disabled(
         disabled=not stem_controls_accept_input(
             enabled=enabled,
@@ -572,22 +658,21 @@ def _stem_mask_controls(ctx: UiContext, center_y: float) -> None:
     imgui.end_disabled()
 
 
-def _bottom_bar_controls(ctx: UiContext, center_y: float) -> None:
-    _master_volume(ctx)
-    imgui.same_line(spacing=CONTROL_GROUP_GAP)
-    _set_cursor_y_for_button(center_y=center_y, height=MODE_BUTTON_HEIGHT)
+def _mode_controls(ctx: UiContext, center_y: float) -> None:
+    height = _button_height(MODE_BUTTON_HEIGHT)
+    _set_cursor_y_for_button(center_y=center_y, height=height)
     style: ButtonStyleName = "mode-on" if ctx.state.project.multi_loop else "mode-off"
 
     with button_style(style):
-        if imgui.button("MULTI LOOP", (MULTI_LOOP_BUTTON_WIDTH, MODE_BUTTON_HEIGHT)):
+        if imgui.button(
+            "MULTI LOOP", (_button_width("MULTI LOOP", MULTI_LOOP_BUTTON_WIDTH), height)
+        ):
             ctx.audio.global_.toggle_multi_loop()
 
     imgui.same_line(spacing=MODE_BUTTON_GAP)
     _learn_control(ctx, center_y)
     imgui.same_line(spacing=MODE_BUTTON_GAP)
     _trigger_quantization_toggle(ctx, center_y)
-    imgui.same_line(spacing=CONTROL_GROUP_GAP)
-    _stem_mask_controls(ctx, center_y)
 
 
 def _start_stop_transport_input(ctx: UiContext, *, hovered: bool) -> None:
@@ -606,11 +691,11 @@ def _start_stop_transport_input(ctx: UiContext, *, hovered: bool) -> None:
         ctx.audio.global_.stop_start_stop()
 
 
-def _start_stop_button(ctx: UiContext) -> None:
+def _start_stop_button(ctx: UiContext, *, size: tuple[float, float] | None = None) -> None:
     with button_style(start_stop_button_style(stopped=ctx.state.session.global_stop_engaged)):
         imgui.button(
             START_STOP_BUTTON_LABEL,
-            (START_STOP_BUTTON_WIDTH, START_STOP_BUTTON_HEIGHT),
+            size or (START_STOP_BUTTON_WIDTH, START_STOP_BUTTON_HEIGHT),
         )
 
     hovered = imgui.is_item_hovered()
@@ -636,43 +721,167 @@ def _start_stop_button(ctx: UiContext) -> None:
     ):
         ctx.audio.global_.set_momentary_output_mute(enabled=False)
 
-    error = ctx.audio.global_.playback_error
-    if isinstance(error, str) and error:
-        imgui.get_window_draw_list().add_rect(
-            imgui.get_item_rect_min(),
-            imgui.get_item_rect_max(),
-            imgui.get_color_u32(_TRANSPORT_ERROR_RGBA),
-            thickness=2.0,
-        )
     if hovered:
-        if isinstance(error, str) and error:
-            imgui.set_tooltip(f"Transportaktion abgelehnt: {error}")
+        imgui.set_tooltip("Start/restart loops; right stop; hold mouse wheel for mute")
+
+
+def recording_button_style(status: RecordingStatus) -> ButtonStyleName:
+    """Only an effective Native capture earns the active recording color."""
+    return "active" if status.effective_recording else "regular"
+
+
+def recording_status_tooltip(status: RecordingStatus) -> str:
+    """Project recording metadata without granting admission or retirement authority."""
+    lines = [
+        f"Recording: {status.phase}",
+        f"Capture active: {'Yes' if status.effective_recording else 'No'}",
+        "Left: record/restart current group; right: record mix only; either stops capture",
+        "START/STOP controls playback independently",
+    ]
+    details = (
+        ("Pending", status.pending),
+        ("Notice", status.notice),
+        ("Incomplete take", status.incomplete_directory),
+    )
+    lines.extend(f"{label}: {value}" for label, value in details if value is not None)
+    if status.busy:
+        lines.append("Recording owner is busy; another take cannot start")
+    if status.retirement_uncertain:
+        lines.append("Cleanup remains uncertain; acknowledgement cannot release this owner")
+    elif status.phase == "Failed" and not status.retired:
+        lines.append("Waiting for actual capture/worker cleanup before acknowledgement")
+    if status.last_completion is not None:
+        completion = status.last_completion
+        lines.append(f"Last saved: {completion.path}")
+        if completion.warning is not None:
+            lines.append(f"Warning: {completion.warning}")
+    if status.recovery_observed_count:
+        lines.append(f"Incomplete recovery candidates observed: {status.recovery_observed_count}")
+    return "\n".join(lines)
+
+
+def _record_button(ctx: UiContext, status: RecordingStatus) -> None:
+    with button_style(recording_button_style(status)):
+        imgui.button(
+            RECORD_BUTTON_LABEL,
+            (
+                _button_width("RECORD", RECORD_BUTTON_WIDTH),
+                _button_height(START_STOP_BUTTON_HEIGHT),
+            ),
+        )
+    if not imgui.is_item_hovered():
+        return
+    if not ctx.ui.arrangement.owns_pointer and status.phase != "Failed":
+        if imgui.is_mouse_clicked(imgui.MouseButton_.right):
+            ctx.recording.record_mix()
+        elif imgui.is_mouse_clicked(imgui.MouseButton_.left):
+            received_at_ns = ctx.input.capture_timestamp_ns()
+            ctx.recording.record_group(received_at_ns=received_at_ns)
+    imgui.set_tooltip(recording_status_tooltip(status))
+
+
+def _recording_status_label(status: RecordingStatus) -> str:
+    if status.error is not None:
+        return f"Recording: {status.phase}"
+    if status.retirement_uncertain:
+        return f"Recording {status.phase}: cleanup uncertain"
+    if status.notice is not None:
+        return f"Recording {status.phase}: {status.notice}"
+    if status.phase == "Idle" and status.last_completion is not None:
+        warning = " (warning)" if status.last_completion.warning else ""
+        return f"Saved{warning}: {status.last_completion.path.name}"
+    pending = f" ({status.pending} pending)" if status.pending is not None else ""
+    effective = (
+        " (inactive)" if status.phase == "Recording" and not status.effective_recording else ""
+    )
+    return f"Recording: {status.phase}{pending}{effective}"
+
+
+def _fit_status_label(label: str, width: float) -> str:
+    label = " ".join(label.splitlines())
+    if imgui.calc_text_size(label).x <= width:
+        return label
+    low, high = 0, len(label)
+    while low < high:
+        middle = (low + high + 1) // 2
+        if imgui.calc_text_size(f"{label[:middle]}…").x <= width:
+            low = middle
         else:
-            imgui.set_tooltip("Start/restart loops; right stop; hold mouse wheel for mute")
+            high = middle - 1
+    return f"{label[:low]}…"
+
+
+def _recording_status(ctx: UiContext, status: RecordingStatus, width: float) -> None:
+    cursor = imgui.get_cursor_pos()
+    row_x, row_y = cursor.x, cursor.y
+    height = _button_height(MODE_BUTTON_HEIGHT)
+    acknowledge_width = _button_width("ACK", MODE_BUTTON_WIDTH) if status.phase == "Failed" else 0.0
+    text_width = width - acknowledge_width - (SPACING if acknowledge_width else 0.0)
+    _set_cursor_y_for_button(center_y=row_y + height / 2, height=imgui.get_text_line_height())
+    color = TEXT_BPM_RGBA if status.phase == "Failed" else TEXT_MUTED_RGBA
+    imgui.text_colored(color, _fit_status_label(_recording_status_label(status), text_width))
+    if imgui.is_item_hovered():
+        imgui.set_tooltip(recording_status_tooltip(status))
+    if status.phase != "Failed":
+        return
+    _recording_failure_ack(ctx, status, x=row_x + max(0.0, width - acknowledge_width), y=row_y)
+
+
+def _recording_failure_ack(ctx: UiContext, status: RecordingStatus, *, x: float, y: float) -> None:
+    imgui.set_cursor_pos((x, y))
+    can_acknowledge = (
+        status.retired
+        and not status.busy
+        and not status.retirement_uncertain
+        and not ctx.ui.arrangement.owns_pointer
+    )
+    imgui.begin_disabled(disabled=not can_acknowledge)
+    with button_style("regular"):
+        if imgui.button(
+            "ACK##recording_failure",
+            (_button_width("ACK", MODE_BUTTON_WIDTH), _button_height(MODE_BUTTON_HEIGHT)),
+        ):
+            ctx.recording.acknowledge_failure()
+    imgui.end_disabled()
+    if imgui.is_item_hovered(imgui.HoveredFlags_.allow_when_disabled):
+        tooltip = "Recording cleanup has not safely retired; acknowledgement remains unavailable"
+        if can_acknowledge:
+            tooltip = "Acknowledge recording failure; the next RECORD press may prepare a new take"
+        elif ctx.ui.arrangement.owns_pointer:
+            tooltip = "Finish the pad gesture before acknowledging the recording failure"
+        imgui.set_tooltip(tooltip)
+
+
+def _transport_controls(ctx: UiContext, status: RecordingStatus) -> None:
+    cursor = imgui.get_cursor_pos()
+    x, y = cursor.x, cursor.y
+    height = _button_height(START_STOP_BUTTON_HEIGHT)
+    _record_button(ctx, status)
+    x += _button_width("RECORD", RECORD_BUTTON_WIDTH) + CONTROL_GROUP_GAP
+    imgui.set_cursor_pos((x, y))
+    _start_stop_button(ctx, size=(_button_width("START/STOP", START_STOP_BUTTON_WIDTH), height))
+    x += _button_width("START/STOP", START_STOP_BUTTON_WIDTH) + START_STOP_BUTTON_GAP
+    imgui.set_cursor_pos((x, y + (height - SETTINGS_TOGGLE_BUTTON_SIZE) / 2))
+    settings_toggle_button(ctx)
 
 
 def bottom_bar(ctx: UiContext) -> None:
+    """Render intact responsive groups and the authoritative recording projection."""
     avail = imgui.get_content_region_avail()
-    start_pos = imgui.get_cursor_pos()
-    center_y = start_pos.y + max(0.0, avail.y / 2.0)
-
-    _bottom_bar_controls(ctx, center_y)
-
-    start_stop_pos = start_stop_button_local_pos(
-        cursor_x=start_pos.x,
-        cursor_y=start_pos.y,
-        available_width=avail.x,
-        available_height=avail.y,
-    )
-    settings_pos = settings_button_local_pos(
-        cursor_x=start_pos.x,
-        cursor_y=start_pos.y,
-        available_width=avail.x,
-        available_height=avail.y,
-    )
-
-    imgui.set_cursor_pos(start_stop_pos)
-    _start_stop_button(ctx)
-
-    imgui.set_cursor_pos(settings_pos)
-    settings_toggle_button(ctx)
+    cursor = imgui.get_cursor_pos()
+    start_x, start_y = cursor.x, cursor.y
+    layout = bottom_bar_layout(avail.x)
+    status = ctx.recording.status
+    for group in layout.groups:
+        imgui.set_cursor_pos((start_x + group.x, start_y + group.y))
+        center_y = start_y + group.y + group.height / 2
+        if group.name == "master":
+            _master_volume(ctx)
+        elif group.name == "modes":
+            _mode_controls(ctx, center_y)
+        elif group.name == "stems":
+            _stem_mask_controls(ctx, center_y)
+        else:
+            _transport_controls(ctx, status)
+    imgui.set_cursor_pos((start_x, start_y + layout.status_y))
+    _recording_status(ctx, status, avail.x)

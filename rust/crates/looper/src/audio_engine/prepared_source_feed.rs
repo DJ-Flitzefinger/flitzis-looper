@@ -6,7 +6,10 @@
 use super::native_source_coverage::{
     normal_loop_feed_available_with_readers, reset_source_feed_available,
 };
-use super::prepared_native_history::{NativeAdapterState, NativeHistoryRequest};
+use super::prepared_native_history::{
+    NativeAdapterState, NativeHistoryRequest, NativeStartHistoryContext, SourceReadCheckpoint,
+};
+use super::productive_source_history::ProductiveSourceHistory;
 use super::rubberband_backend::RubberBandError;
 use super::source_feed_history::{
     SOURCE_FEED_HISTORY_MAX_FRAMES, SourceFeedContext, SourceFeedSnapshot, SourceFeedSpan,
@@ -122,6 +125,30 @@ fn constant_chronology_matches(
     next == end
 }
 
+fn future_continues_actual_history(
+    history: &SourceFeedSnapshot,
+    future: (SourcePlayback, SourceReadPlan, u64, SourceFeedContext),
+) -> bool {
+    // Only the capture seam joins actual reads to planned input. Earlier recorded
+    // seeks are real chronology; do not rewrite or reject them as discontinuities.
+    // An empty journal has no endpoint proof: the replay coverage checks below
+    // still distinguish a new lifecycle origin from missing required input.
+    history.spans().next_back().is_none_or(|last| {
+        last.active_end() == history.active_frames()
+            && ProductiveSourceHistory {
+                binding: last.context.binding,
+                next_position: last.playback.position_at(last.frames),
+                domain: Some(last.plan.domain()),
+                fed_output_frames: last.frames as u64,
+            }
+            .continues(
+                future.3.binding,
+                future.0.position(),
+                Some(future.1.domain()),
+            )
+    })
+}
+
 impl NativeAdapterState {
     /// Keep the established exact constant endpoint path. A non-reconstructible
     /// moving endpoint instead needs the original read spans plus frozen F-to-E.
@@ -134,8 +161,9 @@ impl NativeAdapterState {
         self.prepare_source_feed_history(request, history, future, None)
     }
 
-    /// Prepare a new Normal endpoint from actual rate epochs and explicitly shifted
-    /// source phases. This does not certify actual old-voice PCM or continuous history.
+    /// Prepare a fresh Normal birth from proven actual rate epochs. Its pre-origin
+    /// PCM is silence; shifted source phases still validate the existing coverage
+    /// and endpoint proof without pretending that predecessor PCM was played by it.
     pub(crate) fn prepare_source_with_endpoint_reset_history(
         &mut self,
         request: NativeHistoryRequest,
@@ -144,6 +172,85 @@ impl NativeAdapterState {
         endpoint: EndpointResetHistory,
     ) -> Result<(), RubberBandError> {
         self.prepare_source_feed_history(request, history, future, Some(endpoint))
+    }
+
+    /// Continue the already prepared original-T owner. Pre-T Native warm-up is
+    /// excluded from the fresh filter; every real T-to-E output feeds that filter.
+    pub(crate) fn continue_prepared_launch(
+        &mut self,
+        endpoint: SourceReadCheckpoint,
+        frames: u64,
+        dsp: &mut super::late_start_dsp::LateStartDspWork,
+    ) -> Result<(), RubberBandError> {
+        let count = usize::try_from(frames).map_err(|_| unavailable())?;
+        let primed = self
+            .primed_output_frames
+            .checked_add(count)
+            .filter(|frames| *frames <= SOURCE_FEED_HISTORY_MAX_FRAMES)
+            .ok_or_else(unavailable)?;
+        let mut request = self.source.take().ok_or_else(unavailable)?;
+        let mut checkpoint = SourceReadCheckpoint {
+            playback: request.playback,
+            plan: request.plan,
+        };
+        let mut projected = checkpoint;
+        if !projected.project_output_frames(frames)
+            || !projected.matches_exact(endpoint)
+            || self
+                .retained_start_feed(&request.playback, request.plan)?
+                .is_some()
+        {
+            return Err(unavailable());
+        }
+        let mut feed = vec![vec![0.0; DEFAULT_BLOCK_SAMPLES]; request.plan.channels];
+        let mut output = vec![vec![0.0; DEFAULT_BLOCK_SAMPLES]; request.plan.channels];
+        let mut remaining = frames;
+        while remaining > 0 {
+            if !request
+                .permit
+                .current(&request.sample, request.binding.sample_rate_hz)
+            {
+                return Err(unavailable());
+            }
+            let (count, ratio) = request
+                .playback
+                .chunk(remaining.min(DEFAULT_BLOCK_SAMPLES as u64) as usize);
+            if count == 0 {
+                return Err(unavailable());
+            }
+            let pitch = request
+                .pitch_intent
+                .native_pitch_scale(ratio, request.key_lock)
+                .map_err(|_| unavailable())?;
+            self.render_source_history_chunk(&request, &mut feed, &mut output, count, pitch)
+                .map_err(|_| unavailable())?;
+            dsp.consume(&request, &output, count)?;
+            checkpoint = SourceReadCheckpoint {
+                playback: request.playback,
+                plan: request.plan,
+            };
+            if !checkpoint.project_output_frames(count as u64) {
+                return Err(unavailable());
+            }
+            request.playback = checkpoint.playback;
+            request.plan = checkpoint.plan;
+            remaining -= count as u64;
+        }
+        if !checkpoint.matches_exact(endpoint)
+            || !dsp.ready()
+            || !request
+                .permit
+                .current(&request.sample, request.binding.sample_rate_hz)
+        {
+            return Err(unavailable());
+        }
+        #[cfg(test)]
+        if let Some(coverage) = &mut request.coverage {
+            coverage.prepared_taps = super::source_reader::tap_observation_for_test();
+        }
+        self.primed_output_frames = primed;
+        self.source = Some(request);
+        self.install_replayed_feed_endpoint(endpoint, endpoint)
     }
 
     fn prepare_source_feed_history(
@@ -157,6 +264,7 @@ impl NativeAdapterState {
             || !request
                 .permit
                 .current(&request.sample, request.binding.sample_rate_hz)
+            || !future_continues_actual_history(history, future)
         {
             return Err(unavailable());
         }
@@ -208,9 +316,10 @@ impl NativeAdapterState {
         let position = playback.position();
         plan.frame_pos = position.frame;
         plan.seek_mode = position.seek_mode;
+        let expected = request.actual_feed_checkpoint();
         let (expected_playback, expected_plan) = endpoint_reset
             .map(|endpoint| (endpoint.playback, endpoint.plan))
-            .unwrap_or((request.playback, request.plan));
+            .unwrap_or((expected.playback, expected.plan));
         if remaining != 0
             || !playback.matches_exact(&expected_playback)
             || !plan.matches_exact(expected_plan)
@@ -218,6 +327,10 @@ impl NativeAdapterState {
             return Err(unavailable());
         }
         if endpoint_reset.is_none()
+            && expected.matches_exact(SourceReadCheckpoint {
+                playback: request.playback,
+                plan: request.plan,
+            })
             && request
                 .playback
                 .history_before_constant(bound as usize)
@@ -407,13 +520,22 @@ impl NativeAdapterState {
                 } else {
                     (part.playback, part.plan)
                 };
-                read_plan.fill_fractional_buffers_checked_with_readers(
-                    &request.sample,
-                    readers,
-                    &read_playback,
-                    &mut feed,
-                    frames,
-                )?;
+                if endpoint_reset.is_some() {
+                    // Keep every real journal/seam/reader/rate/pitch proof above.
+                    // This new physical source has no PCM before its birth, while
+                    // the unchanged spans still advance the historical pitch clock.
+                    for channel in &mut feed {
+                        channel[..frames].fill(0.0);
+                    }
+                } else {
+                    read_plan.fill_fractional_buffers_checked_with_readers(
+                        &request.sample,
+                        readers,
+                        &read_playback,
+                        &mut feed,
+                        frames,
+                    )?;
+                }
                 let pitch = request
                     .pitch_intent
                     .native_pitch_scale(part.playback.tempo_ratio(), request.key_lock)
@@ -450,12 +572,18 @@ impl NativeAdapterState {
         // not accumulate to that representation. Adoption remains strictly exact.
         // The frozen request retains exact E. Callback consumption owns subsequent
         // scalar progress, including a genuine continuation's retained transition.
-        self.source_transition = request
-            .plan
-            .transition
-            .is_active()
-            .then_some(request.plan.transition);
+        let logical = SourceReadCheckpoint {
+            playback: request.playback,
+            plan: request.plan,
+        };
+        let actual = request.actual_feed_checkpoint();
         self.source = Some(request);
+        self.install_replayed_feed_endpoint(logical, actual)?;
+        self.record_input_history_context(if endpoint_reset.is_some() {
+            NativeStartHistoryContext::PhysicalBirth
+        } else {
+            NativeStartHistoryContext::SourceHistory
+        });
         Ok(())
     }
 }
@@ -632,6 +760,7 @@ mod tests {
                 paused: false,
                 playback: self.playback,
                 plan: self.plan,
+                actual_feed: None,
                 source_feed_context: self.feed_context(),
             };
             assert!(endpoint.project_output_frames(FUTURE));
@@ -687,6 +816,290 @@ mod tests {
             request.plan.transition.clear();
             (request, endpoint)
         }
+    }
+
+    #[test]
+    fn planned_future_cannot_relabel_the_actual_historical_endpoint_and_same_owner_retries() {
+        let mut candidate =
+            NativeAdapterState::new(Some(RubberBandLiveShifter::new(RATE, 1).unwrap()), 1);
+        let address = candidate.rubberband.as_ref().unwrap().state_address();
+        for (moving, reset) in [(false, false), (true, false), (false, true), (true, true)] {
+            let valid = Fixture::with_controls(false, false, moving);
+            candidate
+                .prepare_source_with_feed_history(
+                    valid.request(30),
+                    &valid.snapshot(),
+                    (valid.playback, valid.plan, FUTURE, valid.feed_context()),
+                )
+                .unwrap();
+            let before = (
+                candidate.rubberband.as_ref().unwrap().pitch_scale(),
+                candidate.primed_output_frames,
+                candidate.input_fifo[0].len(),
+                candidate.output_fifo[0].len(),
+            );
+            let mut displaced = Fixture::with_controls(false, false, moving);
+            // Same PCM, frame labels and tuple, but future begins at a different source
+            // position. This models actual ahead-of-logical input joined to logical future.
+            displaced.playback.advance(17);
+            let position = displaced.playback.position();
+            displaced.plan.frame_pos = position.frame;
+            displaced.plan.seek_mode = position.seek_mode;
+            let future = (
+                displaced.playback,
+                displaced.plan,
+                FUTURE,
+                displaced.feed_context(),
+            );
+            let prepared = if reset {
+                let (mut request, endpoint) = displaced.reset_request(31);
+                request.pitch_intent = PitchIntent::default();
+                candidate.prepare_source_with_endpoint_reset_history(
+                    request,
+                    &displaced.snapshot(),
+                    future,
+                    endpoint,
+                )
+            } else {
+                let mut request = displaced.request(31);
+                request.pitch_intent = PitchIntent::default();
+                candidate.prepare_source_with_feed_history(request, &displaced.snapshot(), future)
+            };
+            assert!(
+                matches!(prepared, Err(RubberBandError::UnavailableSourceHistory)),
+                "unproved historical-to-future position jump accepted: moving={moving} reset={reset}"
+            );
+            assert_eq!(
+                candidate.rubberband.as_ref().unwrap().state_address(),
+                address
+            );
+            assert_eq!(candidate.source.as_ref().unwrap().request_id, 30);
+            assert_eq!(
+                (
+                    candidate.rubberband.as_ref().unwrap().pitch_scale(),
+                    candidate.primed_output_frames,
+                    candidate.input_fifo[0].len(),
+                    candidate.output_fifo[0].len(),
+                ),
+                before,
+                "refusal changed prepared Native/FIFO state"
+            );
+            candidate
+                .prepare_source_with_feed_history(
+                    valid.request(32),
+                    &valid.snapshot(),
+                    (valid.playback, valid.plan, FUTURE, valid.feed_context()),
+                )
+                .unwrap();
+            assert_eq!(candidate.source.as_ref().unwrap().request_id, 32);
+            assert_eq!(
+                candidate.rubberband.as_ref().unwrap().state_address(),
+                address
+            );
+        }
+    }
+
+    #[test]
+    fn capture_seam_accepts_recorded_seeks_but_not_an_unread_future_jump() {
+        let fixture = Fixture::with_controls(false, false, false);
+        let mut history = SourceFeedHistory::new();
+        let mut playback = fixture.playback;
+        let mut plan = fixture.plan;
+        let mut buffers = vec![vec![0.0; 17]];
+        for frame in [317, 1703] {
+            playback.seek(frame, ExplicitSeekMode::Normal);
+            playback.configure_domain(plan.domain());
+            plan.frame_pos = frame;
+            plan.seek_mode = ExplicitSeekMode::Normal;
+            plan.fill_fractional_buffers_checked(
+                &fixture.sample,
+                None,
+                &playback,
+                &mut buffers,
+                17,
+            )
+            .unwrap();
+            history.record_success(playback, plan, fixture.feed_context(), 17);
+            playback.advance(17);
+        }
+        let position = playback.position();
+        plan.frame_pos = position.frame;
+        let mut snapshot = SourceFeedSnapshot::new();
+        assert!(history.capture_into(&mut snapshot));
+        assert_eq!(snapshot.spans().len(), 2);
+        assert!(future_continues_actual_history(
+            &snapshot,
+            (playback, plan, 0, fixture.feed_context())
+        ));
+        playback.advance(1);
+        plan.frame_pos = playback.position().frame;
+        assert!(!future_continues_actual_history(
+            &snapshot,
+            (playback, plan, 0, fixture.feed_context())
+        ));
+    }
+
+    #[test]
+    fn capture_seam_preserves_accepted_period_alias_without_authorizing_a_seek() {
+        use crate::audio_engine::constant_timing::AcceptedTimingProjection;
+        use crate::audio_engine::source_playback::FractionalSourcePosition;
+        use crate::audio_engine::source_reader::SourceLoopDomain;
+
+        let fixture = Fixture::with_controls(false, false, false);
+        let region = FrameRange {
+            start: 19,
+            end: 1519,
+        };
+        let prior_domain = SourceLoopDomain::musical(12_000, region, 1500.25).unwrap();
+        let next_domain = SourceLoopDomain::musical(12_000, region, 1499.75).unwrap();
+        let accepted = AcceptedTimingProjection {
+            revision: [1; 32],
+            period_seconds: 0.500_083_333_333_333_4,
+            origin_seconds: -0.0,
+            sample_rate_hz: RATE,
+            publication_epoch: 2,
+        };
+        let mut prior_context = fixture.feed_context();
+        prior_context.binding.accepted = Some(accepted);
+        let mut plan = fixture.plan;
+        plan.loop_region = region;
+        plan.loop_period = prior_domain.musical_period;
+        plan.frame_pos = 1518;
+        let mut playback = SourcePlayback::new(1518, ExplicitSeekMode::Normal, 1.125);
+        playback.configure_domain(prior_domain);
+        let mut buffers = vec![vec![0.0; 1]];
+        plan.fill_fractional_buffers_checked(&fixture.sample, None, &playback, &mut buffers, 1)
+            .unwrap();
+        let mut history = SourceFeedHistory::new();
+        history.record_success(playback, plan, prior_context, 1);
+        let mut snapshot = SourceFeedSnapshot::new();
+        assert!(history.capture_into(&mut snapshot));
+        assert_eq!(
+            snapshot
+                .spans()
+                .next_back()
+                .unwrap()
+                .playback
+                .position_at(1),
+            FractionalSourcePosition {
+                frame: 1519,
+                fraction: 0.125,
+                seek_mode: ExplicitSeekMode::Normal,
+            }
+        );
+        let mut future = SourcePlayback::new(18, ExplicitSeekMode::Normal, 1.375);
+        future.advance(1);
+        future.configure_domain(next_domain);
+        assert_eq!(
+            future.position(),
+            FractionalSourcePosition {
+                frame: 19,
+                fraction: 0.375,
+                seek_mode: ExplicitSeekMode::Normal,
+            }
+        );
+        let mut future_plan = plan;
+        future_plan.frame_pos = future.position().frame;
+        future_plan.loop_period = next_domain.musical_period;
+        let mut next_context = prior_context;
+        next_context.binding.accepted = Some(AcceptedTimingProjection {
+            revision: [2; 32],
+            period_seconds: 0.499_916_666_666_666_7,
+            publication_epoch: 3,
+            ..accepted
+        });
+        assert!(future_continues_actual_history(
+            &snapshot,
+            (future, future_plan, 0, next_context)
+        ));
+        assert!(!future_continues_actual_history(
+            &snapshot,
+            (future, future_plan, 0, prior_context)
+        ));
+    }
+
+    #[test]
+    fn lifecycle_origin_and_real_post_gap_suffix_keep_their_existing_preparation_paths() {
+        let mut candidate =
+            NativeAdapterState::new(Some(RubberBandLiveShifter::new(RATE, 1).unwrap()), 1);
+        let mut fresh = Fixture::with_controls(false, false, false);
+        fresh.history.reset();
+        let snapshot = fresh.snapshot();
+        assert_eq!(snapshot.spans().len(), 0);
+        assert_eq!(snapshot.active_origin(), CAPTURE as u64);
+        assert_eq!(snapshot.active_frames(), CAPTURE as u64);
+        candidate
+            .prepare_source_with_feed_history(
+                fresh.request(40),
+                &snapshot,
+                (fresh.playback, fresh.plan, FUTURE, fresh.feed_context()),
+            )
+            .unwrap();
+
+        for reset in [false, true] {
+            let mut fixture = Fixture::new(false, false);
+            let original = fixture.snapshot();
+            let mut history = SourceFeedHistory::new();
+            history.record_gap(73);
+            if reset {
+                history.reset();
+            }
+            for span in original.spans() {
+                let mut buffers = vec![vec![0.0; span.frames]];
+                span.plan
+                    .fill_fractional_buffers_checked(
+                        &fixture.sample,
+                        None,
+                        &span.playback,
+                        &mut buffers,
+                        span.frames,
+                    )
+                    .unwrap();
+                history.record_success(span.playback, span.plan, span.context, span.frames);
+            }
+            fixture.history = history;
+            let snapshot = fixture.snapshot();
+            assert_eq!(snapshot.active_origin(), if reset { 73 } else { 0 });
+            assert_eq!(snapshot.active_frames(), CAPTURE as u64 + 73);
+            candidate
+                .prepare_source_with_feed_history(
+                    fixture.request(41),
+                    &snapshot,
+                    (
+                        fixture.playback,
+                        fixture.plan,
+                        FUTURE,
+                        fixture.feed_context(),
+                    ),
+                )
+                .unwrap();
+            assert_eq!(candidate.source.as_ref().unwrap().request_id, 41);
+        }
+    }
+
+    #[test]
+    fn empty_post_gap_journal_does_not_invent_a_required_historical_prefix() {
+        let mut fixture = Fixture::new(false, false);
+        fixture.history.record_gap(37);
+        fixture.playback.advance(37);
+        fixture.playback.chunk(DEFAULT_BLOCK_SAMPLES);
+        let position = fixture.playback.position();
+        fixture.plan.frame_pos = position.frame;
+        fixture.plan.seek_mode = position.seek_mode;
+        let snapshot = fixture.snapshot();
+        assert_eq!(snapshot.spans().len(), 0);
+        assert_eq!(snapshot.active_origin(), 0);
+        let future = (fixture.playback, fixture.plan, 0, fixture.feed_context());
+        assert!(future_continues_actual_history(&snapshot, future));
+        let mut request = fixture.request(42);
+        request.playback = fixture.playback;
+        request.plan = fixture.plan;
+        let mut candidate =
+            NativeAdapterState::new(Some(RubberBandLiveShifter::new(RATE, 1).unwrap()), 1);
+        assert!(matches!(
+            candidate.prepare_source_with_feed_history(request, &snapshot, future),
+            Err(RubberBandError::UnavailableSourceHistory)
+        ));
     }
 
     #[test]

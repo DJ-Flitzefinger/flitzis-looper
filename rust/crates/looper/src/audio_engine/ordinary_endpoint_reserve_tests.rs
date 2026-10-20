@@ -8,7 +8,10 @@ use super::input_mapping::launch_admission_tests::RATE;
 use super::ordinary_start::OrdinaryStartWork;
 use super::pad_start::CapturedPadStart;
 use super::pitch_intent::PitchIntent;
-use super::pitch_runtime_tests::{Fixture, LOOP_END, LOOP_START, assert_tone};
+use super::pitch_runtime_tests::{
+    Fixture, LOOP_END, LOOP_START, SOURCE_HZ, assert_physical_birth_tone,
+    physical_birth_tone_reference,
+};
 use super::rubberband_backend::RubberBandError;
 use crate::messages::{ControlMessage, TriggerQuantization};
 use std::time::{Duration, Instant};
@@ -255,7 +258,8 @@ fn wait_real_window(
 
 #[cfg(windows)]
 #[test]
-fn original_prepared_window_start_reuses_same_physical_cache_with_its_real_own_ack() {
+fn original_prepared_window_ack_reuses_ontime_cache_but_prepares_own_late_history() {
+    let mut ontime_pcm: Vec<f32> = Vec::new();
     for late in [false, true] {
         let mut fixture = fixture();
         let _files = super::ordinary_start_tests::install_synthetic_complete_lease(&mut fixture);
@@ -335,33 +339,16 @@ fn original_prepared_window_start_reuses_same_physical_cache_with_its_real_own_a
         );
         fixture.drain();
         assert!(original.accepted(), "reason={:?}", original.reason());
-        let execution = if late { 30_000 } else { 24_000 };
+        let execution = if late { 38_192 } else { 24_000 };
         assert_eq!(original.original_frame(), Some(24_000));
         assert_eq!(original.execution_frame(), Some(execution));
         if late {
-            // E is already due at this drain's F. It performs the complete effect
-            // immediately, while rendering has not consumed the first PCM frame.
-            assert_eq!(
-                original.state(),
-                "applied",
-                "reason={:?}",
-                original.reason()
-            );
-            assert_eq!(original.effective_frame(), Some(execution));
-            assert_eq!(fixture.starts(0), 1);
-            assert_eq!(
-                fixture.voice(0).stretch.native_state_address(),
-                cached_native
-            );
-            assert_eq!(
-                fixture.voice(0).stretch.adopted_request_id(),
-                Some(original.sequence())
-            );
-            assert_eq!(
-                fixture.voice(0).source_playback.position().frame,
-                LOOP_START
-            );
-            assert_eq!(fixture.voice(0).source_playback.position().fraction, 0.0);
+            // A past-target original retains its own worker admission. Its new
+            // physical beginning must remain complete despite the late effect.
+            assert_eq!(original.effective_frame(), None);
+            assert_eq!(fixture.starts(0), 0);
+            assert!(!fixture.mixer.voices.iter().any(|voice| voice.active));
+            wait_action(&mut fixture, &original);
         } else {
             assert!(
                 fixture
@@ -387,10 +374,19 @@ fn original_prepared_window_start_reuses_same_physical_cache_with_its_real_own_a
             original.reason()
         );
         assert_eq!(original.effective_frame(), Some(execution));
-        assert_eq!(
-            fixture.voice(0).stretch.native_state_address(),
-            cached_native
-        );
+        if late {
+            assert_ne!(
+                fixture.voice(0).stretch.native_state_address(),
+                cached_native,
+                "the late original owns its worker's complete Native history"
+            );
+        } else {
+            assert_eq!(
+                fixture.voice(0).stretch.native_state_address(),
+                cached_native,
+                "the ontime original retains the eligible cached Native owner"
+            );
+        }
         assert_eq!(
             fixture.voice(0).stretch.adopted_request_id(),
             Some(original.sequence())
@@ -399,16 +395,28 @@ fn original_prepared_window_start_reuses_same_physical_cache_with_its_real_own_a
             fixture.voice(0).source_playback.position().frame,
             LOOP_START + pcm.len()
         );
-        assert!(fixture.voice(0).source_playback.position().fraction.abs() < 1.0e-9);
-        assert!(
-            pcm[..2048]
-                .iter()
-                .map(|sample| f64::from(*sample).powi(2))
-                .sum::<f64>()
-                / 2048.0
-                > 0.001
+        assert_eq!(
+            fixture.transport.output_frame(),
+            execution + pcm.len() as u64
         );
-        assert_tone(&pcm, 0, 7, 1.0, true);
+        assert!(fixture.voice(0).source_playback.position().fraction.abs() < 1.0e-9);
+        // Compare every onset sample with explicit-silence/raw Native. Frequency
+        // uses the helper's separately declared fixed settled window.
+        assert_physical_birth_tone(&pcm, 0, 7, 1.0, true, 1.0);
+        if late {
+            assert_eq!(ontime_pcm.len(), pcm.len());
+            let maximum = pcm
+                .iter()
+                .zip(&ontime_pcm)
+                .map(|(actual, expected)| (actual - expected).abs())
+                .fold(0.0_f32, f32::max);
+            assert!(
+                maximum < 2.0e-5,
+                "complete late same-window beginning PCM mismatch: {maximum}"
+            );
+        } else {
+            ontime_pcm = pcm;
+        }
     }
 }
 
@@ -472,7 +480,12 @@ fn genuinely_changed_prepared_window_does_not_borrow_old_endpoint_native() {
         fixture.voice(0).source_playback.position().frame,
         72_000 + pcm.len()
     );
-    assert_tone(&pcm, 0, 7, 1.0, true);
+    assert_eq!(fixture.transport.output_frame(), 8192 + pcm.len() as u64);
+    // The 160Hz fixture has exactly 300 source frames per period. These starts
+    // differ by 224 complete periods, and neither capture reaches its loop end.
+    assert_eq!((72_000 - LOOP_START) % 300, 0);
+    assert!(72_000 + pcm.len() < 132_000);
+    assert_physical_birth_tone(&pcm, 0, 7, 1.0, true, 1.0);
 }
 
 #[test]
@@ -520,6 +533,14 @@ fn selected_stopped_ready_hit_uses_original_t_fresh_action_and_complete_initial_
     let pcm = complete_pcm(&mut hit, 0);
     let rendered_taps = super::source_reader::tap_observation_for_test();
     let oracle = complete_pcm(&mut reference, 8192);
+    // Ready and uncached births emit the same complete physical beginning at
+    // their distinct E values. No unheard source or filter prefix is consumed.
+    assert_eq!(hit.transport.output_frame(), pcm.len() as u64);
+    assert_eq!(
+        reference.transport.output_frame(),
+        expected.execution_frame().unwrap() + oracle.len() as u64
+    );
+    assert_eq!(expected.effective_frame(), expected.execution_frame());
     assert_eq!(
         original.state(),
         "applied",
@@ -561,25 +582,89 @@ fn selected_stopped_ready_hit_uses_original_t_fresh_action_and_complete_initial_
             .fed_output_frames,
         (primed_frames + pcm.len()) as u64
     );
-    assert!(rendered_taps.left_reads >= pcm.len());
+    assert_eq!(
+        voice
+            .stretch
+            .productive_history()
+            .unwrap()
+            .fed_output_frames,
+        reference
+            .voice(0)
+            .stretch
+            .productive_history()
+            .unwrap()
+            .fed_output_frames
+    );
+    assert!(rendered_taps.left_reads >= oracle.len());
     assert_eq!(rendered_taps.missing_reads, 0);
     assert!(rendered_taps.min_frame.unwrap() >= LOOP_START);
     assert!(rendered_taps.max_frame.unwrap() < LOOP_END);
+    assert_eq!(pcm.len(), oracle.len());
+    assert!(oracle.iter().all(|sample| sample.is_finite()));
     let maximum = pcm
         .iter()
         .zip(&oracle)
         .map(|(actual, expected)| (actual - expected).abs())
         .fold(0.0_f32, f32::max);
-    assert!(maximum < 2.0e-5, "complete initial PCM mismatch: {maximum}");
     assert!(
-        pcm[..2048]
-            .iter()
-            .map(|sample| f64::from(*sample).powi(2))
-            .sum::<f64>()
-            / 2048.0
-            > 0.001
+        maximum < 2.0e-5,
+        "complete beginning PCM mismatch: {maximum}"
     );
-    assert_tone(&pcm, 0, 7, 1.0, true);
+    assert_physical_birth_tone(&pcm, 0, 7, 1.0, true, 1.0);
+}
+
+#[test]
+fn attack_policy_with_ready_selected_cache_prepares_original_own_worker_history() {
+    let mut fixture = fixture();
+    fixture.drain();
+    assert!(fixture.render(1).iter().all(|sample| *sample == 0.0));
+    assert!(fixture.control.engine.can_change_key_lock_start_behavior());
+    assert!(
+        fixture
+            .control
+            .engine
+            .set_key_lock_start_behavior("attack_at_grid")
+            .unwrap()
+    );
+    set_pitch(&mut fixture, 7);
+    let cached_native = select_and_wait(&mut fixture);
+    let original = capture(&fixture, LOOP_START, LOOP_END, 1.0);
+    assert_eq!(
+        original.start_behavior(),
+        super::key_lock_start_policy::KeyLockStartBehavior::AttackAtGrid
+    );
+    fixture.drain();
+    publish(&mut fixture, &original);
+    assert_eq!(original.original_frame(), Some(1));
+    assert_eq!(original.execution_frame(), Some(8193));
+    assert_eq!(original.effective_frame(), None);
+    assert_eq!(fixture.starts(0), 0);
+    wait_action(&mut fixture, &original);
+    // Strict execution checks this original worker's current exact measurement;
+    // the neutral cached endpoint cannot substitute for source-event evidence.
+    let pcm = complete_pcm(&mut fixture, 8193);
+    assert_eq!(
+        original.state(),
+        "applied",
+        "reason={:?}",
+        original.reason()
+    );
+    assert_eq!(original.effective_frame(), Some(8193));
+    assert_eq!(fixture.starts(0), 1);
+    assert_ne!(
+        fixture.voice(0).stretch.native_state_address(),
+        cached_native
+    );
+    assert_eq!(
+        fixture.voice(0).stretch.adopted_request_id(),
+        Some(original.sequence())
+    );
+    assert_eq!(
+        fixture.voice(0).source_playback.position().frame,
+        LOOP_START + pcm.len()
+    );
+    assert_eq!(fixture.transport.output_frame(), 8193 + pcm.len() as u64);
+    assert_physical_birth_tone(&pcm, 0, 7, 1.0, true, 1.0);
 }
 
 #[test]
@@ -620,6 +705,8 @@ fn selected_endpoint_has_one_consumable_native_and_equal_attacks_remain_distinct
 
 #[test]
 fn selected_playing_repeat_prepares_independent_normal_history_and_adopts_at_original_t() {
+    // Include the cold response rather than comparing only a possibly silent 2k prefix.
+    const PREFIX_FRAMES: usize = 4096;
     let mut fixture = fixture();
     set_pitch(&mut fixture, 7);
     let first_native = select_and_wait(&mut fixture);
@@ -627,7 +714,8 @@ fn selected_playing_repeat_prepares_independent_normal_history_and_adopts_at_ori
     fixture.drain();
     publish(&mut fixture, &first);
     let mut initial = fixture.render(1);
-    initial.extend(fixture.pcm(2047));
+    initial.extend(fixture.pcm(PREFIX_FRAMES - 1));
+    assert_eq!(fixture.voice(0).stretch.pending_fifo_frames(), (0, 511));
     assert_eq!(first.state(), "applied");
     let before = fixture.voice(0).source_playback;
     let generation = fixture.voice(0).generation;
@@ -648,7 +736,7 @@ fn selected_playing_repeat_prepares_independent_normal_history_and_adopts_at_ori
     drain_control_messages(
         &mut fixture.control.consumer,
         &mut fixture.scheduler,
-        2048,
+        PREFIX_FRAMES as u64,
         &mut TriggerQuantization::Grid { step_64ths: 16 },
         &mut fixture.transport,
         &mut fixture.mixer,
@@ -674,7 +762,8 @@ fn selected_playing_repeat_prepares_independent_normal_history_and_adopts_at_ori
         LOOP_START + 24_000
     );
     let mut repeated = fixture.render(1);
-    repeated.extend(fixture.pcm(2047));
+    repeated.extend(fixture.pcm(PREFIX_FRAMES - 1));
+    assert_eq!(fixture.voice(0).stretch.pending_fifo_frames(), (0, 511));
     assert_eq!(repeat.state(), "applied", "reason={:?}", repeat.reason());
     assert_eq!(repeat.effective_frame(), Some(24_000));
     assert_eq!(fixture.starts(0), 2);
@@ -685,8 +774,10 @@ fn selected_playing_repeat_prepares_independent_normal_history_and_adopts_at_ori
     );
     assert_eq!(
         fixture.voice(0).source_playback.position().frame,
-        LOOP_START + 2048
+        LOOP_START + PREFIX_FRAMES
     );
+    assert!(initial.iter().all(|sample| sample.is_finite()));
+    assert!(repeated.iter().all(|sample| sample.is_finite()));
     let maximum = initial
         .iter()
         .zip(&repeated)
@@ -696,6 +787,19 @@ fn selected_playing_repeat_prepares_independent_normal_history_and_adopts_at_ori
         maximum < 2.0e-5,
         "fresh complete repeat PCM differs: {maximum}"
     );
+    let raw = physical_birth_tone_reference(PREFIX_FRAMES, SOURCE_HZ, 0, 7, 1.0, true);
+    assert!(raw.iter().any(|sample| sample.abs() > 0.01));
+    for (label, actual) in [("initial", &initial), ("repeat", &repeated)] {
+        let maximum = actual
+            .iter()
+            .zip(&raw)
+            .map(|(actual, expected)| (actual - expected).abs())
+            .fold(0.0_f32, f32::max);
+        assert!(
+            maximum < 2.0e-5,
+            "complete independent {label} PCM differs: {maximum}"
+        );
+    }
 }
 
 #[test]
@@ -782,7 +886,7 @@ fn future_ready_hit_survives_later_selection_and_cache_epoch_revocation() {
         fixture.voice(0).stretch.adopted_request_id(),
         Some(original.sequence())
     );
-    assert_tone(&pcm, 0, 7, 1.0, true);
+    assert_physical_birth_tone(&pcm, 0, 7, 1.0, true, 1.0);
 }
 
 #[test]

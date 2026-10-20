@@ -119,7 +119,6 @@ impl RtMixer {
             }
         };
         let target = work.target;
-        let intent = work.intent;
         let committed = ownership.commit_slot_write_fixed(
             &write,
             || guard.claim_stable(),
@@ -133,62 +132,7 @@ impl RtMixer {
                     );
                     self.stop_sample_rt(target, retirement);
                 }
-                ownership.apply_source_for_cell(
-                    cell,
-                    &work.sample,
-                    self.sample_rate_hz as u32,
-                    work.source_generation,
-                    work.authority_revision,
-                    intent.timing_intent,
-                );
-                work.guard
-                    .target_epoch
-                    .store(work.prepared_epoch, Ordering::Release);
-                ownership.publish_copy_parameter_epoch_for_cell(cell, work.prepared_epoch);
-                work.retired_sample = self.sample_bank[target].replace(work.sample.clone());
-                work.retired_stems =
-                    std::mem::replace(&mut self.prepared_stems[target], work.stems.clone());
-                work.retired_outgoing = self.outgoing_stems[target].take();
-                work.retired_receipt = self.committed_stem_receipts[target].take();
-                self.committed_stem_selection[target] = work.selection;
-                if let Some(fences) = &work.selection_fences {
-                    fences.selection.store(fences.expected, Ordering::Release);
-                    fences
-                        .registration
-                        .store(fences.expected, Ordering::Release);
-                    fences.publication.mark_accepted();
-                }
-                self.release_pair_components[target] = false;
-                self.pad_loop_start_frame[target] = intent.loop_start_frame;
-                self.pad_loop_end_frame[target] = intent.loop_end_frame;
-                self.pad_period_seconds[target] = intent.period_seconds;
-                self.pad_phase_anchor_frame[target] = intent.origin_frame;
-                self.pad_accepted_timing[target] = work.projection;
-                self.stem_mix_mode[target] = intent.stem_mix_mode;
-                self.stem_mix_source_version_hash[target] = intent.source_version_hash;
-                self.stem_enabled_mask[target] = intent.enabled_mask;
-                self.stem_transitions[target].clear();
-                self.pad_playhead_frame[target] = None;
-                self.pad_key_lock_enabled[target] = intent.key_lock;
-                self.pad_pitch_intent[target] = intent.pitch_intent;
-                self.pad_key_lock_request_id[target] = 0;
-                self.pad_key_lock_rejected[target] = false;
-                self.pad_key_lock_pending_on[target] = false;
-                self.pad_key_lock_ack_source[target] =
-                    Some((work.source_generation, work.sample.source_address()));
-                self.pad_key_lock_status[target] = None;
-
-                // Both smoothing and filter history belong to this stopped target. Reserved future
-                // parameters return to their neutral value rather than retaining the previous content.
-                self.set_pad_dsp_parameter(target, DspParameterSlot::Slot3, 0.5);
-                self.set_pad_gain(target, intent.gain_db);
-                self.set_pad_eq(
-                    target,
-                    intent.eq_low_db,
-                    intent.eq_mid_db,
-                    intent.eq_high_db,
-                );
-                self.pad_dsp_chains[target].reset();
+                self.install_copy_image_claimed(work.as_mut(), cell);
             },
         );
         match committed {
@@ -224,7 +168,73 @@ impl RtMixer {
         true
     }
 
-    fn copy_pad_preflight(&self, work: &PadCopyRtWork) -> bool {
+    pub(super) fn install_copy_image_claimed(
+        &mut self,
+        work: &mut PadCopyRtWork,
+        cell: crate::audio_engine::content_placement::ContentCell,
+    ) {
+        let ownership = self.input_runtime_ownership.clone();
+        let target = work.target;
+        let intent = work.intent;
+        ownership.apply_source_for_cell(
+            cell,
+            &work.sample,
+            self.sample_rate_hz as u32,
+            work.source_generation,
+            work.authority_revision,
+            intent.timing_intent,
+        );
+        work.guard
+            .target_epoch
+            .store(work.prepared_epoch, Ordering::Release);
+        ownership.publish_copy_parameter_epoch_for_cell(cell, work.prepared_epoch);
+        work.retired_sample = self.sample_bank[target].replace(work.sample.clone());
+        work.retired_stems =
+            std::mem::replace(&mut self.prepared_stems[target], work.stems.clone());
+        work.retired_outgoing = self.outgoing_stems[target].take();
+        work.retired_receipt = self.committed_stem_receipts[target].take();
+        self.committed_stem_selection[target] = work.selection;
+        if let Some(fences) = &work.selection_fences {
+            fences.selection.store(fences.expected, Ordering::Release);
+            fences
+                .registration
+                .store(fences.expected, Ordering::Release);
+            fences.publication.mark_accepted();
+        }
+        self.release_pair_components[target] = false;
+        self.pad_loop_start_frame[target] = intent.loop_start_frame;
+        self.pad_loop_end_frame[target] = intent.loop_end_frame;
+        self.pad_period_seconds[target] = intent.period_seconds;
+        self.pad_phase_anchor_frame[target] = intent.origin_frame;
+        self.pad_accepted_timing[target] = work.projection;
+        self.stem_mix_mode[target] = intent.stem_mix_mode;
+        self.stem_mix_source_version_hash[target] = intent.source_version_hash;
+        self.stem_enabled_mask[target] = intent.enabled_mask;
+        self.stem_transitions[target].clear();
+        self.pad_playhead_frame[target] = None;
+        self.pad_key_lock_enabled[target] = intent.key_lock;
+        self.pad_pitch_intent[target] = intent.pitch_intent;
+        self.pad_key_lock_request_id[target] = 0;
+        self.pad_key_lock_rejected[target] = false;
+        self.pad_key_lock_pending_on[target] = false;
+        self.pad_key_lock_ack_source[target] =
+            Some((work.source_generation, work.sample.source_address()));
+        self.pad_key_lock_status[target] = None;
+
+        // Both smoothing and filter history belong to this stopped target. Reserved future
+        // parameters return to their neutral value rather than retaining the previous content.
+        self.set_pad_dsp_parameter(target, DspParameterSlot::Slot3, 0.5);
+        self.set_pad_gain(target, intent.gain_db);
+        self.set_pad_eq(
+            target,
+            intent.eq_low_db,
+            intent.eq_mid_db,
+            intent.eq_high_db,
+        );
+        self.pad_dsp_chains[target].reset();
+    }
+
+    pub(super) fn copy_pad_preflight(&self, work: &PadCopyRtWork) -> bool {
         let guard = &work.guard;
         let target = work.target;
         let source = guard.source;
@@ -267,7 +277,11 @@ impl RtMixer {
             || !Arc::ptr_eq(&work.publication.epoch, &guard.target_epoch)
             || work.publication.expected != work.prepared_epoch
             || !guard.current()
-            || !self.source_binding_current(source, guard.source_binding)
+            || !(if guard.source_reservation == 0 {
+                self.source_binding_current(source, guard.source_binding)
+            } else {
+                self.admitted_source_binding_current(source, guard.source_binding)
+            })
         {
             return false;
         }

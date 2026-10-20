@@ -34,6 +34,12 @@ class BpmController:
         """Connect productive accepted updates to acknowledged atomic derived refresh."""
         self._on_accepted_refresh = callback
 
+    def project_legacy_timing_admission(self, sample_id: int) -> None:
+        """Mirror an actually admitted Native scalar BPM or origin publication."""
+        if self._project.pad_timing_intent[sample_id] != "legacy":
+            self._project.pad_timing_intent[sample_id] = "legacy"
+            self._transport._mark_project_changed()
+
     def set_manual_bpm(self, sample_id: int, bpm: float) -> None:
         """Set a pad's manual BPM override."""
         validate_sample_id(sample_id)
@@ -47,6 +53,8 @@ class BpmController:
             sample_id, float(bpm), **self._transport.source_generation_options(generation)
         )
         self._project.manual_bpm[sample_id] = float(bpm)
+        self._project.pad_timing_intent[sample_id] = "legacy"
+        self._transport._mark_project_changed()
         self._transport.record_current_pad_edit(sample_id, generation, "timing")
         self.on_pad_bpm_changed(
             sample_id,
@@ -54,7 +62,6 @@ class BpmController:
             timing_intent="manual",
             expected_source_generation=generation,
         )
-        self._transport._mark_project_changed()
 
     def clear_manual_bpm(self, sample_id: int) -> None:
         """Clear a pad's manual BPM override."""
@@ -68,9 +75,9 @@ class BpmController:
         )
         self._project.manual_bpm[sample_id] = None
         self._project.pad_timing_intent[sample_id] = "legacy"
+        self._transport._mark_project_changed()
         self._transport.record_current_pad_edit(sample_id, generation, "timing")
         self.on_pad_bpm_changed(sample_id, publish_bpm=False, expected_source_generation=generation)
-        self._transport._mark_project_changed()
 
     def tap_bpm(self, sample_id: int) -> float | None:
         """Register a Tap BPM event and update manual BPM."""
@@ -107,6 +114,8 @@ class BpmController:
             sample_id, bpm, **self._transport.source_generation_options(generation)
         )
         self._project.manual_bpm[sample_id] = bpm
+        self._project.pad_timing_intent[sample_id] = "legacy"
+        self._transport._mark_project_changed()
         self._transport.record_current_pad_edit(sample_id, generation, "timing")
         self.on_pad_bpm_changed(
             sample_id,
@@ -114,7 +123,6 @@ class BpmController:
             timing_intent="tap",
             expected_source_generation=generation,
         )
-        self._transport._mark_project_changed()
         return bpm
 
     def effective_bpm(self, sample_id: int) -> float | None:
@@ -236,6 +244,17 @@ class BpmController:
         expected_source_generation: int | None = None,
     ) -> None:
         """Refresh derived controls without replaying legacy values over accepted timing."""
+        if (
+            timing_intent is None
+            and publish_bpm
+            and (
+                self._project.manual_bpm[sample_id] is not None
+                or self._project.pad_timing_intent[sample_id] in {"manual", "tap"}
+            )
+        ):
+            timing_intent = (
+                "tap" if self._project.pad_timing_intent[sample_id] == "tap" else "manual"
+            )
         timing = self.current_timing(sample_id)
         if (
             timing is not None
@@ -261,6 +280,7 @@ class BpmController:
                 bpm,
                 **self._transport.source_generation_options(expected_source_generation),
             )
+            self.project_legacy_timing_admission(sample_id)
 
         # Scalar timing changes revoke older preparation. Publish the one coupled
         # resident request only after the edit's final Native authority is declared.
@@ -273,24 +293,15 @@ class BpmController:
         self._transport.loop.apply_grid_anchor_to_audio(
             sample_id, timing=timing, expected_source_generation=expected_source_generation
         )
-        if (
-            timing_intent is None
-            and publish_bpm
-            and (
-                self._project.manual_bpm[sample_id] is not None
-                or self._project.pad_timing_intent[sample_id] in {"manual", "tap"}
-            )
-        ):
-            timing_intent = (
-                "tap" if self._project.pad_timing_intent[sample_id] == "tap" else "manual"
-            )
         if timing_intent is not None:
             self._audio.set_pad_timing_intent(
                 sample_id,
                 timing_intent,
                 **self._transport.source_generation_options(expected_source_generation),
             )
-            self._project.pad_timing_intent[sample_id] = timing_intent
+            if self._project.pad_timing_intent[sample_id] != timing_intent:
+                self._project.pad_timing_intent[sample_id] = timing_intent
+                self._transport._mark_project_changed()
         self._transport.loop._apply_effective_pad_loop_region_to_audio(
             sample_id, timing=timing, expected_source_generation=expected_source_generation
         )

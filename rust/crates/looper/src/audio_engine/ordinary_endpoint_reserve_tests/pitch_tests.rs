@@ -150,6 +150,23 @@ fn ordinary_miss(fixture: &mut Fixture) -> CapturedPadStart {
     start
 }
 
+fn ordinary_ready(fixture: &mut Fixture) -> CapturedPadStart {
+    let frame = fixture.transport.output_frame();
+    select_and_wait(fixture);
+    fixture.refresh_clock();
+    let start = capture(fixture, LOOP_START, LOOP_END, 1.0);
+    fixture.drain();
+    publish(fixture, &start);
+    assert_eq!(start.original_frame(), Some(frame));
+    assert_eq!(start.execution_frame(), Some(frame));
+    // A current-frame cache hit can already have completed its genuine effect
+    // during the control drain; no ready worker slot remains after retirement.
+    if start.state() != "applied" {
+        wait_action(fixture, &start);
+    }
+    start
+}
+
 fn start_ordinary_and_progress(fixture: &mut Fixture) -> CapturedPadStart {
     let start = ordinary_miss(fixture);
     assert!(fixture.render_to(8192).iter().all(|sample| *sample == 0.0));
@@ -158,9 +175,11 @@ fn start_ordinary_and_progress(fixture: &mut Fixture) -> CapturedPadStart {
     assert!(pcm.iter().any(|sample| sample.abs() > 0.01));
     assert_eq!(start.state(), "applied");
     assert_eq!(fixture.starts(0), 1);
+    let emitted_frames = fixture.transport.output_frame() - start.effective_frame().unwrap();
+    assert_eq!(emitted_frames, pcm.len() as u64);
     assert_eq!(
         fixture.voice(0).source_playback.position().frame,
-        LOOP_START + 8808
+        LOOP_START + emitted_frames as usize
     );
     assert_eq!(
         fixture.voice(0).stretch.adopted_request_id(),
@@ -172,22 +191,30 @@ fn start_ordinary_and_progress(fixture: &mut Fixture) -> CapturedPadStart {
 fn assert_initial_pcm(actual: &[f32], expected: &[f32]) {
     assert_eq!(actual.len(), 48_000);
     assert_eq!(actual.len(), expected.len());
+    assert!(actual.iter().all(|sample| sample.is_finite()));
+    assert!(expected.iter().all(|sample| sample.is_finite()));
     let maximum = actual
         .iter()
         .zip(expected)
         .map(|(actual, expected)| (actual - expected).abs())
         .fold(0.0_f32, f32::max);
     assert!(maximum < 2.0e-5, "complete initial PCM mismatch: {maximum}");
-    let energy = actual[..2048]
-        .iter()
-        .map(|sample| f64::from(*sample).powi(2))
-        .sum::<f64>()
-        / 2048.0;
-    assert!(
-        energy > 0.001,
-        "first 2048 frames must already carry Native PCM"
+    // The full cold beginning must equal explicit-silence/raw Native; startup
+    // frequency transients have their own independently fixed settled window.
+    assert_physical_birth_tone(actual, 0, 7, 1.0, true, 1.0);
+}
+
+fn assert_one_emitted_birth(fixture: &Fixture) {
+    let voice = fixture.voice(0);
+    assert_eq!(voice.source_playback.position().frame, LOOP_START + 1);
+    assert_eq!(voice.source_playback.position().fraction, 0.0);
+    assert_eq!(
+        voice.source_playback.position().seek_mode,
+        ExplicitSeekMode::Normal
     );
-    assert_tone(actual, 0, 7, 1.0, true);
+    // Explicit mono/48k/Short geometry: H=4096 is block aligned, then one
+    // physical sample enters the one 511-frame adapter, independently of E-T.
+    assert_eq!(voice.stretch.pending_fifo_frames(), (1, 510));
 }
 
 fn assert_native_attack(
@@ -217,6 +244,12 @@ fn assert_native_attack(
     );
     let primed = voice.stretch.native_primed_output_frames();
     assert!(primed >= super::super::prepared_native_history::PREPARED_HISTORY_FRAMES);
+    assert_eq!(primed % 512, 0);
+    let pending_input = frames % 512;
+    assert_eq!(
+        voice.stretch.pending_fifo_frames(),
+        (pending_input, 511 - pending_input)
+    );
     assert_eq!(
         voice
             .stretch
@@ -302,8 +335,14 @@ fn ready_hit_profile(origin: Origin, playing: bool) {
             .unwrap()
             .selected_endpoint_ready()
     );
-    let expected = ordinary_miss(&mut reference);
-    let oracle = complete_pcm(&mut reference, 8192);
+    assert!(
+        reference
+            .render_to(action.original_due_frame())
+            .iter()
+            .all(|sample| *sample == 0.0)
+    );
+    let expected = ordinary_ready(&mut reference);
+    let oracle = complete_pcm(&mut reference, action.original_due_frame());
     assert_eq!(expected.state(), "applied");
     let mut pcm = hit.render(1);
     pcm.extend(hit.pcm(47_999));
@@ -326,6 +365,83 @@ fn ready_hit_profile(origin: Origin, playing: bool) {
         original
     );
     assert_initial_pcm(&pcm, &oracle);
+
+    // An ordinary worker miss preserves original T and emits its complete new
+    // beginning at its own E. Compare every emitted sample with the independent
+    // ready beginning above, without matching different absolute output times.
+    let mut uncached = fixture();
+    set_pitch(&mut uncached, 7);
+    assert!(
+        uncached
+            .render_to(action.original_due_frame())
+            .iter()
+            .all(|sample| *sample == 0.0)
+    );
+    uncached.refresh_clock();
+    let miss = capture(&uncached, LOOP_START, LOOP_END, 1.0);
+    uncached.drain();
+    publish(&mut uncached, &miss);
+    assert_eq!(miss.original_frame(), Some(action.original_due_frame()));
+    assert_eq!(
+        miss.execution_frame(),
+        Some(action.original_due_frame() + 8192)
+    );
+    wait_action(&mut uncached, &miss);
+    let uncached_pcm = complete_pcm(&mut uncached, miss.execution_frame().unwrap());
+    assert_eq!(
+        reference.transport.output_frame(),
+        action.original_due_frame() + oracle.len() as u64
+    );
+    assert_eq!(
+        uncached.transport.output_frame(),
+        miss.execution_frame().unwrap() + uncached_pcm.len() as u64
+    );
+    assert_eq!(miss.state(), "applied");
+    assert_eq!(miss.original_frame(), Some(action.original_due_frame()));
+    assert_eq!(
+        miss.execution_frame(),
+        Some(action.original_due_frame() + 8192)
+    );
+    assert_eq!(
+        uncached.voice(0).source_playback.position().frame,
+        LOOP_START + uncached_pcm.len()
+    );
+    assert_eq!(
+        uncached.voice(0).stretch.adopted_request_id(),
+        Some(miss.sequence())
+    );
+    assert_eq!(
+        uncached.voice(0).stretch.pending_fifo_frames(),
+        reference.voice(0).stretch.pending_fifo_frames()
+    );
+    assert_ne!(
+        uncached.voice(0).stretch.native_state_address(),
+        reference.voice(0).stretch.native_state_address()
+    );
+    let primed = uncached.voice(0).stretch.native_primed_output_frames();
+    assert_eq!(
+        primed,
+        reference.voice(0).stretch.native_primed_output_frames()
+    );
+    assert_eq!(
+        uncached
+            .voice(0)
+            .stretch
+            .productive_history()
+            .unwrap()
+            .fed_output_frames,
+        (primed + uncached_pcm.len()) as u64
+    );
+    assert_eq!(
+        uncached
+            .voice(0)
+            .stretch
+            .native_tap_observation()
+            .unwrap()
+            .missing_reads,
+        0
+    );
+    assert_initial_pcm(&uncached_pcm, &oracle);
 }
 
 #[test]
@@ -450,10 +566,7 @@ fn equal_ready_pitch_attacks_consume_one_endpoint_and_preserve_both_originals() 
         fixture.voice(0).stretch.adopted_request_id(),
         Some(second.sequence())
     );
-    assert_eq!(
-        fixture.voice(0).source_playback.position().frame,
-        LOOP_START + 1
-    );
+    assert_one_emitted_birth(&fixture);
     assert_eq!(
         [
             (
@@ -497,10 +610,7 @@ fn rapid_unselected_pitch_misses_keep_every_equal_t_attack_while_workers_prepare
         fixture.voice(0).stretch.adopted_request_id(),
         Some(actions[3].sequence())
     );
-    assert_eq!(
-        fixture.voice(0).source_playback.position().frame,
-        LOOP_START + 1
-    );
+    assert_one_emitted_birth(&fixture);
 }
 
 fn ordinary_pitch_competition(pitch_first: bool) {
@@ -555,10 +665,16 @@ fn ordinary_pitch_competition(pitch_first: bool) {
             pitch.sequence()
         })
     );
-    assert_eq!(
-        fixture.voice(0).source_playback.position().frame,
-        LOOP_START + 1
-    );
+    // Both are fresh births. Original T=0 and own E=8192 remain distinct, while
+    // neither ordinary nor SET_RETRIGGER consumes the un-emitted E-T interval.
+    if pitch_first {
+        assert_eq!(ordinary.original_frame(), Some(0));
+        assert_eq!(ordinary.execution_frame(), Some(8192));
+    } else {
+        assert_eq!(pitch.original_due_frame(), 0);
+        assert_eq!(pitch.execution_target(), 8192);
+    }
+    assert_one_emitted_birth(&fixture);
 }
 
 #[test]
@@ -680,7 +796,7 @@ fn selection_epoch_revoked_before_pitch_admission_cannot_lend_its_old_endpoint()
             .stretch
             .owns_pitch_contract(action.render().pitch, true)
     );
-    assert_eq!(voice.source_playback.position().frame, LOOP_START + 1);
+    assert_one_emitted_birth(&fixture);
     assert_eq!(
         fixture.voice(0).stretch.adopted_request_id(),
         Some(action.sequence())

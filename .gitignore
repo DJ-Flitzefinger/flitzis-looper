@@ -73,3 +73,6 @@ docs/_build/
 
 # Pyenv
 .python-version
+
+# Recorder-owned takes and incomplete recovery evidence
+/record/

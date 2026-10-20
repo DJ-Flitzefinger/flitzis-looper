@@ -1,9 +1,12 @@
 //! Genuine shared physical window ACK with separate original Native attacks.
+#[path = "ordinary_start_tests/dependency_fulfillment_tests.rs"]
+mod dependency_fulfillment_tests;
+
 use super::super::*;
 use crate::audio_engine::input_mapping::launch_admission_tests::RATE;
 use crate::audio_engine::ordinary_start_tests::install_synthetic_complete_lease;
 use crate::audio_engine::pitch_intent::PitchIntent;
-use crate::audio_engine::pitch_runtime_tests::{Fixture, assert_tone};
+use crate::audio_engine::pitch_runtime_tests::{Fixture, assert_physical_birth_tone};
 use std::sync::{Condvar, mpsc};
 
 const WAIT: Duration = Duration::from_secs(3);
@@ -187,7 +190,7 @@ fn equal_original_gui_starts_share_one_real_window_but_keep_two_native_effects()
             .missing_reads,
         0
     );
-    assert_tone(&pcm, 0, 7, 1.0, true);
+    assert_physical_birth_tone(&pcm, 0, 7, 1.0, true, 0.75);
 }
 
 #[test]
@@ -327,7 +330,7 @@ fn fresh_member_after_real_runtime_projections_reuses_readiness_without_revoking
     );
     assert_eq!(fixture.starts(0), 2);
     assert_eq!(fixture.voice(0).volume, 0.75);
-    assert_tone(&pcm, 0, 7, 1.0, true);
+    assert_physical_birth_tone(&pcm, 0, 7, 1.0, true, 0.75);
 }
 
 #[test]

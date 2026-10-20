@@ -49,11 +49,178 @@ validation is accepted.
 - **AND** attack alignment SHALL NOT mean artificial gain, and neither policy SHALL change source identity, loop markers, BPM, pitch, existing timing/retention limits or silently move T or source content when headroom is insufficient
 - **AND** implementation authorization SHALL NOT select the API delay, raw peak or an energy quantile as an accepted anchor or certify musical/device/listening acceptance without its required evidence
 
-#### Scenario: Late catch-up preserves the selected target
-- **GIVEN** the earliest controllable frame E is after the captured-input-selected target T
+#### Scenario: Existing-source late continuation preserves the selected target
+- **GIVEN** genuine existing-source continuation has an earliest controllable frame E after the captured-input-selected target T
 - **WHEN** the offline continuation begins at E
 - **THEN** source phase includes progression from T to E and the retained suffix matches its reference
 - **AND** unavailable content in [T,E) is reported separately without changing T or hiding earlier crop
+
+### Requirement: Late Ordinary Starts Preserve Their Original Source And Native Timeline
+An ordinary launch with a constant admitted source rate SHALL retain its captured target T
+when preparation or its own resident-window acknowledgement makes execution E later than T.
+Its complete selected physical beginning SHALL remain available for actual emission at E;
+it SHALL NOT consume E-T as unheard source or filter output. This latest full-onset contract
+supersedes the earlier ordinary original-T suffix recipe following the direct Human revision
+of 2026-10-20. Requested T and actual E SHALL remain distinct, and a late full attack SHALL
+NOT be described as having retained the phase of an on-time T launch. Worker preparation
+SHALL retain exact physical source/render authority and actual Native/FIFO ownership.
+Preparation work SHALL remain bounded, with unavailable required material an explicit refusal.
+Genuine existing-source SET, resume and replay retain their own separately specified
+chronology. Fresh Piano retriggers SHALL follow the full-onset and independent rate-clock
+contract in preserve-full-start-onset; an active changing-rate history SHALL NOT be fabricated.
+Constant-history preparation SHALL retain a callback-owned source-control continuity fence
+through its complete effect claim. An ordinary late launch SHALL retain that fence from its
+original target capture, including its own resident-window wait. A retrigger SHALL retain its
+admission fence without treating it as proof of controls preceding admission. A changed source
+rate or loop contract SHALL invalidate the constant-history proof even if its scalar values
+return to their captured values before effect. The fence SHALL follow the original content
+cell through placement changes and SHALL NOT invalidate independent pitch intents or births.
+
+This chronology SHALL preserve source identity, loop markers, rate, pitch and the original
+target. First emission starts the new source phase at E; unchanged source controls do not
+silently move the master clock, markers or explicit SYNC authority. Complete ordinary onset
+SHALL NOT certify independent Native attack alignment or device/listening acceptance.
+
+#### Scenario: A real late window acknowledgement keeps the complete beginning
+- **GIVEN** two independently admitted ordinary launches have the same original target T and constant source/render contract
+- **AND** one launch is ready at T while the other receives its own actual resident-window acknowledgement after T
+- **WHEN** the late launch prepares and adopts at E
+- **THEN** its complete emitted beginning SHALL match the independently prepared earlier launch's complete beginning under unequal callback partitions without slicing either output
+- **AND** source progress SHALL count actually emitted frames, its effective frame SHALL remain E and its original target SHALL remain T
+- **AND** no original-T phase alignment or finished attack-policy acceptance SHALL be inferred
+
+#### Scenario: A physical cached endpoint does not supply musical attack evidence
+- **GIVEN** a cached physical launch endpoint is ready but the original target T has passed before admission
+- **WHEN** that endpoint is considered for a new full ordinary birth
+- **THEN** it SHALL still require the exact original source/render/action authority and truthful execution E
+- **AND** no E-T continuation SHALL be discarded merely to compensate publication lateness
+- **AND** an on-time first-sound cache hit eligible for the exact silent fresh-birth context SHALL retain its existing Native/FIFO identity and action guards
+- **AND** the attack policy SHALL obtain the original action's own source-bound measurement rather than claim an unmeasured cached endpoint as its evidence
+
+#### Scenario: Returning to the old rate cannot fabricate a constant late history
+- **GIVEN** an ordinary late launch or fresh-source retrigger has captured a constant source contract
+- **WHEN** the effective source rate changes and returns to the captured value before the prepared effect
+- **THEN** the original action SHALL reject the stale constant-history proof without starting, retuning or silently choosing another target
+- **AND** an ordinary launch SHALL detect that change even when it occurs during its original target's resident-window wait before admission
+- **AND** a real loop edit followed by restoration SHALL likewise invalidate the captured proof
+- **AND** controls on another content cell and independent accepted pitch attacks SHALL retain their own eligibility
+- **AND** bounded scalar callback checks SHALL precede every individual or global effect claim without allocation, replay or a new scheduler path
+
+#### Scenario: A separate loop edit reusing the resident window remains a real control change
+- **GIVEN** a prepared original launch captured subloop A inside an already resident physical window
+- **WHEN** a separate accepted loop edit selects B while reusing that same immutable PCM and window revision
+- **THEN** the original launch SHALL reject its stale source-control proof and SHALL NOT overwrite B with captured A at its effect
+- **AND** the original launch's own resident readiness SHALL retain its original fence rather than count as a separate loop edit
+
+### Requirement: Constant Active Retriggers Preserve Their Original Target And Complete Beginning
+The system SHALL prepare a supported constant active-source retrigger as a fresh Normal physical birth at actual E with immutable original T. When its actual admitted rate equals its target at callback F and F <= T <= E, it SHALL retain the complete selected beginning without consuming E-T as unheard source or filter output. The fresh birth SHALL retain its own source/content/timing/window/action permit and captured content-cell control revision through effect claim. Its source phase SHALL progress from actually emitted content at E, while its actual accepted ratio, rate target and remaining active-frame smoothing interval evaluated at E SHALL remain independent of resetting physical phase. A final constant endpoint SHALL NOT certify unsupported controls preceding F.
+
+The new launch SHALL NOT depend on the predecessor voice's phase, Native FIFO or generation.
+Independent accepted births, including two attacks at the same E, SHALL remain distinct
+and SHALL NOT invalidate each other merely by restarting that predecessor. Genuine replay
+of past or changing-rate history SHALL retain its existing original-voice lifetime and
+source-feed guards. Pausing/resuming or releasing a Hold of the old voice SHALL NOT by
+itself cancel an independent constant-rate new launch. These controls and source-read gaps
+SHALL retain their existing fences for work that actually replays or continues that old voice.
+Supported changing-rate fresh births SHALL preserve the same independently proved E rate-clock
+state under preserve-full-start-onset. Unproved past-T glides, paused pending glides and
+unsupported source/selection histories SHALL retain their explicit whole-action refusals.
+
+#### Scenario: A constant active late retrigger keeps its complete physical beginning
+- **GIVEN** two independent active-source retriggers have the same constant source contract and original T
+- **AND** one is prepared for T while the other is admitted at F=T and prepared for E>T
+- **WHEN** their actual Native output is emitted under unequal callback partitions
+- **THEN** the complete emitted late beginning SHALL match the independent complete beginning without slicing either output
+- **AND** the old voice SHALL remain effective until each original execution, with source/rate/pitch/loop/target preserved
+- **AND** the late birth SHALL NOT claim original-T source-phase alignment; Native principal-attack, distinct-policy and listening acceptance SHALL remain separate gates
+
+#### Scenario: Active equal-target attacks retain independent effects
+- **GIVEN** two distinct original retriggers are accepted for the same active content and E
+- **WHEN** their own prepared new-launch effects execute in original capture order
+- **THEN** both SHALL retain their original targets, lifecycles and effects without one predecessor restart cancelling the other
+
+#### Scenario: Releasing the old voice preserves the independent constant new launch
+- **GIVEN** a constant-rate new retrigger at original T has its own valid prepared launch
+- **WHEN** the old voice is paused/resumed or its matching Hold is released before E
+- **THEN** its independent new launch SHALL retain its effect at E and original T
+- **AND** an old-voice SET or replay SHALL still reject a stale original source-feed/lifetime fence
+
+### Requirement: Source And Native Attack Correspondence Has Explicit Evidence
+The preparation worker SHALL obtain any measured attack-correspondence proposal from the
+actual admitted source read plan, selection, rate, pitch, reset order and uncropped Native
+output. It SHALL freeze the source-event reference before inspecting that Native output.
+Feature analysis and matching SHALL be bounded and run outside realtime. Channel evidence
+SHALL be pooled without cancelling audible opposite-phase channels.
+
+A proposal SHALL preserve the source-event displacement, feature support, lag uncertainty,
+competing-match evidence and exact source/render identity. Absent, repeated, boundary-censored,
+invalid or indistinguishable references SHALL remain explicit unresolved outcomes rather than
+become a zero-delay or nominal-delay success. A spectral correspondence candidate SHALL NOT
+certify a principal perceived attack, satisfy the existing musical timing/retention criteria,
+or activate earlier emission without the separate start-policy and acceptance contract.
+
+For a fresh physical birth under preserve-full-start-onset, the proposal geometry and receipt
+SHALL bind the declared silent pre-origin context, physical source origin, actual admitted
+rate/pitch/reset sequence and native block phase used by that birth. Wrapped or shifted
+pre-origin source PCM SHALL NOT substitute for that context. Unsupported geometry or a receipt
+from another context SHALL leave the proposal unavailable for adoption rather than supply an
+accepted C. Cache/reserve hits and worker misses SHALL retain the same context requirement.
+
+#### Scenario: Measured correspondence remains separate from perceived-attack acceptance
+- **GIVEN** an admitted source request has a declared event reference and bounded Native capture
+- **WHEN** the worker matches its source novelty pattern to the uncropped Native pattern
+- **THEN** the result SHALL retain actual feature-window and lag support plus the original source/render identity
+- **AND** a unique candidate SHALL remain a measured proposal with musical/listening acceptance pending
+- **AND** an ambiguous or absent match SHALL NOT silently supply C=0, API delay, raw peak or an energy quantile
+
+### Requirement: Prepared Starts Preserve Actual Feed And Logical Coordinates Separately
+Source preparation SHALL preserve the logical source endpoint separately from the actual
+source frames read into the owning Native processor and its input FIFO. Each successful
+render-side source read SHALL return a bounded scalar receipt containing its actual source
+cursor, read plan, physical reader context, output-domain extent and dry/native-input role.
+The callback history journal SHALL consume that receipt rather than infer actual reads from
+the logical voice playhead. Refused reads, unavailable Native ownership and failed Native
+rendering SHALL leave an explicit history gap; a dry read SHALL NOT certify Native history.
+
+A worker retaining a declared raw Native suffix SHALL account for the existing adapter lead
+separately, preserve the exact Native/input/output FIFO owner and retain the original logical
+endpoint. Preparation and discard work SHALL be bounded and run outside realtime. A declared
+discard index SHALL NOT by itself be an accepted musical anchor. Existing endpoint preparation
+with no feed offset SHALL preserve its previous output and source progression.
+
+#### Scenario: Future feed does not become logical playback
+- **GIVEN** a prepared start has read future source frames into its own Native/FIFO state
+- **WHEN** the callback renders its continuation
+- **THEN** source history records the actual feed coordinates and logical telemetry follows the original musical source clock
+- **AND** neither chronology grants authority to replay different rate, pitch, stem or source controls over already processed material
+
+#### Scenario: Declared raw suffix retains the existing adapter chronology
+- **GIVEN** a worker has a declared history origin and raw Native discard index
+- **WHEN** it prepares that suffix and callbacks use unequal segment sizes
+- **THEN** the retained output matches an independently initialized Native reference with identical source and block phase
+- **AND** no new adapter-silence prefix is inserted and no musical anchoring or listening acceptance is inferred
+
+#### Scenario: Planned future feed cannot erase an actual input offset
+- **GIVEN** a worker combines retained actual source history with a frozen future trajectory
+- **WHEN** that future does not continue the last actual input endpoint at the capture boundary
+- **THEN** preparation SHALL refuse before replacing the candidate's Native/FIFO owner
+- **AND** equal source identity, contiguous output-frame labels or a matching logical adoption endpoint SHALL NOT authorize that source-position jump
+- **AND** existing accepted-period representation equivalence SHALL remain available, while legitimate earlier recorded seeks and loop changes SHALL remain actual history
+
+#### Scenario: A captured pitch change preserves both prepared source coordinates
+- **GIVEN** a productive prepared owner reads source input ahead of its separate logical playhead
+- **WHEN** an existing captured pitch or mode change prepares genuine history for its original execution frame
+- **THEN** capture SHALL freeze and independently project the logical adoption checkpoint and actual future-input checkpoint through the same elapsed active output frames
+- **AND** replay SHALL verify its consumed endpoint against the actual input checkpoint and install both coordinates with the unique prepared Native/FIFO owner
+- **AND** adoption SHALL retain the exact logical target, source clock and action identity instead of substituting the ahead input coordinate
+- **AND** pause SHALL freeze both coordinates and an invalid or stale actual-input contract SHALL refuse before changing the effective tuple
+
+#### Scenario: An accepted global rate change continues a prepared input offset
+- **GIVEN** a prepared owner has distinct logical and actual-input trajectories
+- **WHEN** the existing complete global-rate claim accepts a new speed or musical period
+- **THEN** it SHALL configure both trajectories with the accepted rate and domain while preserving their respective current source phases
+- **AND** future reads SHALL follow the accepted source-rate smoothing and existing Native/FIFO history without silently dropping the input offset or reinterpreting already processed samples
+- **AND** preparation or claim failure SHALL retain the previous effective rate and productive ownership
 
 ### Requirement: Rubber Band Cold State Is Prepared Outside The Callback
 The system SHALL construct, reset and silence-warm reusable Rubber Band LiveShifter state outside
@@ -110,6 +277,15 @@ source-domain stem-selection crossfade at a common source address.
 - **WHEN** an accepted stem mask or full-mix selection changes
 - **THEN** the same voice processor consumes the crossfaded source without fresh cold state
 - **AND** source position, transport phase and loop ownership remain unchanged
+
+#### Scenario: A live stem change keeps prepared input ahead of the logical playhead
+- **GIVEN** productive Native input runs ahead of the separate logical source checkpoint
+- **WHEN** an existing scalar or committed stem command accepts a selection or mask change
+- **THEN** it SHALL validate the actual future-input coordinates and required admitted readers before changing any effective selection
+- **AND** it SHALL authorize the new source-selection ramp at both respective checkpoints without changing their source phases, rates, pitch tuple, Native or FIFO samples
+- **AND** subsequent reads SHALL match the exact admitted physical reader identities and advancing actual ramp while retaining original source and timing authority
+- **AND** readers SHALL remain owned until neither the logical nor actual source plan still requires their role, including paused voices
+- **AND** a stale, incomplete or invalid actual-input contract SHALL reject the whole command before selection stores or an effective-output receipt
 
 ### Requirement: Fractional Source Rendering Is Independent Of Callback Partitions
 The system SHALL generate dry varispeed samples and Rubber Band input from one canonical
@@ -232,6 +408,27 @@ D SHALL remain separate coordinates; retained output SHALL equal the independent
 suffix at D, and its effective source-relative translation SHALL be D-H. Zero history SHALL
 preserve the existing proof. Bounds SHALL be checked before native pitch/reset/source processing.
 
+Fresh ordinary launches, atomic ordinary-group members and fresh GUI/MIDI Piano SET_RETRIGGER
+births under preserve-full-start-onset SHALL have one explicit exception to this earlier-source-
+origin rule: Native input before their declared physical birth origin SHALL be zero PCM in every
+channel, without wrapped Normal-loop tails or translated predecessor PCM. This silence SHALL be
+declared physical birth context, never recorded or certified as actual previously heard/read
+source history. Their logical checkpoint SHALL remain at the selected physical beginning until
+emission E, with immutable requested T. Only the existing held prepared-feed/Native/FIFO owner
+MAY retain separate positive-time actual-input lookahead; no unheard E-T progression is allowed.
+H, raw discard D and adapter lead SHALL retain their bounded explicit accounting without
+conferring musical C. Eligible cache/reserve and worker paths SHALL use the same birth context,
+and measurement geometry/receipts SHALL match it or remain unavailable.
+
+For supported active-glide EndpointReset births, silent pre-origin PCM SHALL NOT remove any
+genuine journal/frozen-future proof: contiguous coverage, exact actual-input seam, physical
+reader/source/selection contracts, current permit and own voice generation, historical pitch/
+reset order and the bounded monotonic H fixed point SHALL remain required. The exact accepted
+E ratio, target and active-frame smoothing-step remainder SHALL remain independently proved.
+Zero PCM SHALL NOT repair unsupported past/paused/young/missing/gapped/stale/cancelled history.
+Genuine existing-source SET, resume, replay and history-mode preparation SHALL retain the
+unmodified explicit forward-origin contract above; their PCM history SHALL NOT be zeroed.
+
 #### Scenario: Earlier intro or tail history reaches a looping logical phase
 - **GIVEN** an explicit origin in the intro or tail and a bounded history at an exact ratio
 - **WHEN** that origin advances into the loop before the requested logical phase
@@ -242,6 +439,25 @@ preserve the existing proof. Bounds SHALL be checked before native pitch/reset/s
 - **WHEN** declared history does not reach the requested fractional phase or nonzero history contains an active stem transition
 - **THEN** the proof returns an explicit error before processing native source content
 - **AND** it does not infer a backward loop, intro, tail or transition path from the logical phase
+
+#### Scenario: A fresh Normal birth has no previously played loop tail
+- **GIVEN** a new ordinary/group or Piano SET_RETRIGGER birth declares its complete physical beginning and supported E rate state
+- **WHEN** its unique Native owner receives bounded pre-origin input
+- **THEN** that input SHALL be silent with explicit birth-context provenance rather than a virtual wrapped/shifted source history
+- **AND** sources with identical admitted positive-time content and differing unreachable remote tails SHALL emit the same complete beginning under unequal partitions
+- **AND** the independent reference SHALL use the same silence-then-source context without cropping either emitted beginning
+
+#### Scenario: A silent EndpointReset birth still needs genuine rate history
+- **GIVEN** a supported changing-rate birth uses EndpointReset and zero pre-origin PCM
+- **WHEN** its actual journal or frozen future fails the existing seam, reader, generation, pitch-profile H fixed-point or exact E rate-clock proof
+- **THEN** preparation SHALL remain refused before replacing the candidate Native/FIFO owner
+- **AND** silence SHALL NOT create actual source history, relax cancellation or change old/peer audio
+
+#### Scenario: Existing-source forward history retains its original PCM
+- **GIVEN** a genuine SET, resume, replay or history-mode request declares a valid earlier source origin
+- **WHEN** that history reaches the requested fractional source endpoint under the existing guards
+- **THEN** preparation SHALL retain its actual declared loop/intro/tail PCM and original logical/actual-feed coordinates
+- **AND** the fresh-birth silent exception SHALL NOT restart or rewrite that chronology
 
 ### Requirement: Musical Timing Candidates Use Uncropped Content Evidence
 The system SHALL evaluate source-history discard candidates with uncropped impulse, short-tone

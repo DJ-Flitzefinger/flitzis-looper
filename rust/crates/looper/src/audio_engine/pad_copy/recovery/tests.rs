@@ -51,6 +51,7 @@ fn source_adoption(fixture: &LaunchFixture, slot: usize) -> (ControlMessage, Arc
     let adoption = Arc::new(AtomicU8::new(0));
     (
         ControlMessage::LoadColdSample {
+            initial_mix: None,
             publication,
             id: slot,
             sample,

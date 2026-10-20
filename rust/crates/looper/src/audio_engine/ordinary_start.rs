@@ -1,9 +1,15 @@
 //! One prepared ordinary attack. The mixer freezes its actual applied tuple at admission.
 
+use super::key_lock_attack_measurement::{
+    PreparedAttackMeasurement, measure_attack_reference_for_birth,
+};
+use super::key_lock_start_policy::KeyLockStartBehavior;
 use super::native_history_permit::{NativeHistoryContext, NativeHistoryPermit};
 use super::pad_start::CapturedPadStart;
 use super::pitch_actions::{FrozenPitchRender, PitchActionReject};
-use super::prepared_native_history::{NativeAdapterState, NativeHistoryRequest};
+use super::prepared_native_history::{
+    NativeAdapterState, NativeHistoryRequest, SourceReadCheckpoint,
+};
 use super::rubberband_backend::{RubberBandError, RubberBandLiveShifter};
 use crate::messages::SampleBuffer;
 use std::cell::UnsafeCell;
@@ -12,17 +18,27 @@ use std::sync::{
     atomic::{AtomicBool, AtomicU64, Ordering},
 };
 
+struct PendingLateReprepare {
+    endpoint: SourceReadCheckpoint,
+    previous_execution: u64,
+}
+
 pub(crate) struct OrdinaryStartWork {
     origin: Option<CapturedPadStart>,
     sequence: u64,
     pub(crate) candidate: Option<Box<NativeAdapterState>>,
     render_format: (u32, usize),
     request: Option<NativeHistoryRequest>,
+    pub(crate) attack_measurement: Option<PreparedAttackMeasurement>,
     rejected_request: Option<NativeHistoryRequest>,
     pub(crate) render: Option<FrozenPitchRender>,
     pub(crate) epoch: Arc<AtomicU64>,
     frames: Option<(u64, u64)>,
     preparation_required: bool,
+    native_required: bool,
+    pub(crate) dsp_intent: Option<super::late_start_dsp::DspInputIntent>,
+    launch_origin: Option<SourceReadCheckpoint>,
+    pending_late_reprepare: Option<PendingLateReprepare>,
     inherit_loop: bool,
     captured_loop: Option<(f64, Option<f64>)>,
 }
@@ -48,11 +64,16 @@ impl OrdinaryStartWork {
             candidate: None,
             render_format: (rate, channels),
             request: None,
+            attack_measurement: None,
             rejected_request: None,
             render: None,
             epoch: Arc::new(AtomicU64::new(1)),
             frames: None,
             preparation_required: true,
+            native_required: false,
+            dsp_intent: None,
+            launch_origin: None,
+            pending_late_reprepare: None,
             inherit_loop: false,
             captured_loop: None,
         }))
@@ -135,18 +156,119 @@ impl OrdinaryStartWork {
     pub(crate) fn execution_frame(&self) -> u64 {
         self.frames.expect("ordinary target frozen").1
     }
+    pub(crate) fn freeze_launch_origin(
+        &mut self,
+        origin: SourceReadCheckpoint,
+    ) -> Result<(), PitchActionReject> {
+        if self.launch_origin.is_some()
+            || !origin.is_consistent()
+            || origin.plan.seek_mode != super::source_reader::ExplicitSeekMode::Normal
+            || origin.plan.transition.is_active()
+            || origin.playback.tempo_ratio().to_bits() != origin.playback.rate_target().to_bits()
+        {
+            return Err(PitchActionReject::PreparedMismatch);
+        }
+        self.launch_origin = Some(origin);
+        Ok(())
+    }
+    /// Copy this original's physical beginning, never a later mutable bank phase.
+    pub(crate) fn late_reprepare_snapshot(&self) -> Option<SourceReadCheckpoint> {
+        self.launch_origin
+    }
+    /// Callback-only scalar planning. Existing Native, source pins and DSP retire on the worker.
+    pub(crate) fn plan_late_reprepare(
+        &mut self,
+        endpoint: SourceReadCheckpoint,
+        dsp_intent: super::late_start_dsp::DspInputIntent,
+        execution: u64,
+    ) -> Result<(), PitchActionReject> {
+        let (original, previous_execution) =
+            self.frames.ok_or(PitchActionReject::PreparedMismatch)?;
+        let origin = self
+            .launch_origin
+            .ok_or(PitchActionReject::PreparedMismatch)?;
+        let source = self
+            .request
+            .as_ref()
+            .or_else(|| {
+                self.candidate
+                    .as_ref()
+                    .and_then(|candidate| candidate.source.as_ref())
+            })
+            .ok_or(PitchActionReject::PreparedMismatch)?;
+        if self.pending_late_reprepare.is_some()
+            || execution <= previous_execution
+            || execution - original
+                > super::source_feed_history::SOURCE_FEED_HISTORY_MAX_FRAMES as u64
+            || !origin.matches_exact(endpoint)
+            || source.request_id != self.sequence
+            || source.epoch != self.epoch()
+            || source.target_output_frame != previous_execution
+            || self.render.is_none_or(|render| {
+                source.pitch_intent != render.pitch || source.key_lock != render.key_lock
+            })
+            || !source
+                .permit
+                .current(&source.sample, source.binding.sample_rate_hz)
+            || !source.permit.matches_action_owner(
+                self.origin().ownership(),
+                self.origin().acknowledgements(),
+                self.origin().content_key(),
+                &self.epoch,
+            )
+        {
+            return Err(PitchActionReject::PreparedMismatch);
+        }
+        self.origin()
+            .replan_execution_frame(previous_execution, execution)?;
+        self.dsp_intent = Some(dsp_intent);
+        self.pending_late_reprepare = Some(PendingLateReprepare {
+            endpoint,
+            previous_execution,
+        });
+        self.frames = Some((original, execution));
+        self.preparation_required = true;
+        Ok(())
+    }
+    /// Elapsed wall-clock delay remains relevant to source/control fences, not source skipping.
+    pub(crate) fn launch_delay_frames(&self) -> u64 {
+        self.frames
+            .map_or(0, |(original, execution)| execution - original)
+    }
     pub(crate) fn preparation_required(&self) -> bool {
         self.preparation_required
+    }
+    pub(crate) fn native_required(&self) -> bool {
+        self.native_required
+    }
+    pub(crate) fn dry_source_matches(
+        &self,
+        snapshot: &super::prepared_native_history::PitchSourceSnapshot,
+    ) -> bool {
+        !self.native_required
+            && self
+                .request
+                .as_ref()
+                .zip(self.render)
+                .is_some_and(|(request, render)| {
+                    request.matches_endpoint(snapshot, render)
+                        && request
+                            .permit
+                            .current(&request.sample, request.binding.sample_rate_hz)
+                })
     }
     pub(crate) fn epoch(&self) -> u64 {
         self.epoch.load(Ordering::Acquire)
     }
     pub(crate) fn is_ready(&self) -> bool {
-        !self.preparation_required
-            || self
-                .candidate
-                .as_ref()
-                .is_some_and(|candidate| candidate.source.is_some())
+        self.render.is_some()
+            && self.pending_late_reprepare.is_none()
+            && (!self.preparation_required
+                || !self.native_required
+                || self
+                    .candidate
+                    .as_ref()
+                    .is_some_and(|candidate| candidate.source.is_some()))
     }
     pub(crate) fn validates_render_format(&self, rate: u32, channels: usize) -> bool {
         self.render_format == (rate, channels)
@@ -158,6 +280,11 @@ impl OrdinaryStartWork {
         &mut self,
         reserve: &mut super::ordinary_endpoint_reserve::EndpointReserveWork,
     ) -> bool {
+        // A neutral cached endpoint has no source-event measurement for this action.
+        // The original worker retains custody and produces its own proposal instead.
+        if self.origin().start_behavior() == KeyLockStartBehavior::AttackAtGrid {
+            return false;
+        }
         let Some(request) = self.request.as_ref() else {
             return false;
         };
@@ -221,7 +348,13 @@ impl OrdinaryStartWork {
         }
         self.request = request;
         self.render = Some(render);
-        self.preparation_required = self.request.is_some();
+        self.native_required = self.request.as_ref().is_some_and(|request| {
+            render
+                .pitch
+                .native_pitch_scale(request.playback.tempo_ratio(), render.key_lock)
+                .is_ok_and(|scale| scale != 1.0)
+        });
+        self.preparation_required = self.request.is_some() && self.native_required;
         self.origin().callback_guard()?;
         let valid = self.request.as_ref().is_none_or(|request| {
             request.request_id == self.sequence
@@ -251,9 +384,31 @@ impl OrdinaryStartWork {
     }
 
     pub(crate) fn prepare(&mut self) -> Result<(), PitchActionReject> {
-        self.origin().callback_guard()?;
+        self.origin().preparation_guard()?;
         if !self.preparation_required {
             return Ok(());
+        }
+        if let Some(pending) = self.pending_late_reprepare.take() {
+            let mut request = self
+                .request
+                .take()
+                .or_else(|| {
+                    self.candidate
+                        .as_mut()
+                        .and_then(|candidate| candidate.source.take())
+                })
+                .ok_or(PitchActionReject::PreparedMismatch)?;
+            if request.target_output_frame != pending.previous_execution
+                || !request.plan.matches_source_contract(pending.endpoint.plan)
+            {
+                return Err(PitchActionReject::PreparedMismatch);
+            }
+            request.target_output_frame = self.execution_frame();
+            request.playback = pending.endpoint.playback;
+            request.plan = pending.endpoint.plan;
+            request.actual_feed = None;
+            self.request = Some(request);
+            self.attack_measurement = None;
         }
         let request = self
             .request
@@ -272,18 +427,30 @@ impl OrdinaryStartWork {
         {
             return Err(PitchActionReject::SourceChanged);
         }
-        if self.candidate.is_none() {
+        if self.native_required && self.candidate.is_none() {
             let (rate, channels) = self.render_format;
             let native = RubberBandLiveShifter::new(rate, channels)
                 .map_err(|_| PitchActionReject::PreparationFailed)?;
             self.candidate = Some(Box::new(NativeAdapterState::new(Some(native), channels)));
         }
-        self.candidate
-            .as_mut()
-            .unwrap()
-            .prepare_source_at_endpoint(request)
-            .map_err(|_| PitchActionReject::PreparationFailed)?;
-        self.origin().callback_guard()?;
+        if self.native_required
+            && self.origin().start_behavior() == KeyLockStartBehavior::AttackAtGrid
+        {
+            self.attack_measurement = Some(measure_attack_reference_for_birth(&request));
+            self.origin().preparation_guard()?;
+        }
+        if self.native_required {
+            self.candidate
+                .as_mut()
+                .unwrap()
+                .prepare_source_at_physical_birth(request)
+                .map_err(|_| PitchActionReject::PreparationFailed)?;
+        } else {
+            // The dry worker retains the original source pins and permit for strict
+            // adoption and off-callback retirement, without constructing Native.
+            self.request = Some(request);
+        }
+        self.origin().preparation_guard()?;
         if !self.origin().mark_prepared() {
             return Err(PitchActionReject::StaleContent);
         }
@@ -295,18 +462,35 @@ impl OrdinaryStartWork {
         if frame != self.execution_frame() || !self.is_ready() {
             return Err(PitchActionReject::PreparedMismatch);
         }
-        if self.preparation_required {
-            let source = self
+        if self.native_required
+            && self
                 .candidate
                 .as_ref()
-                .and_then(|candidate| candidate.source.as_ref())
-                .ok_or(PitchActionReject::PreparedMismatch)?;
+                .is_none_or(|candidate| !candidate.has_physical_birth_context())
+        {
+            return Err(PitchActionReject::PreparedMismatch);
+        }
+        if self.preparation_required {
+            let source = if self.native_required {
+                self.candidate
+                    .as_ref()
+                    .and_then(|candidate| candidate.source.as_ref())
+            } else {
+                self.request.as_ref()
+            }
+            .ok_or(PitchActionReject::PreparedMismatch)?;
             let render = self.render.ok_or(PitchActionReject::PreparedMismatch)?;
             if source.request_id != self.sequence
                 || source.epoch != self.epoch()
                 || source.target_output_frame != frame
                 || source.pitch_intent != render.pitch
                 || source.key_lock != render.key_lock
+                || (self.native_required
+                    && self.origin().start_behavior() == KeyLockStartBehavior::AttackAtGrid
+                    && self
+                        .attack_measurement
+                        .as_ref()
+                        .is_none_or(|measurement| !measurement.matches_birth_request(source)))
                 || !source.permit.matches_action_owner(
                     self.origin().ownership(),
                     self.origin().acknowledgements(),
@@ -325,6 +509,12 @@ impl OrdinaryStartWork {
 }
 
 /// The original control-allocated group container also retires off the callback.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct OrdinaryGroupKey {
+    pub(crate) slot: usize,
+    pub(crate) action_sequence: u64,
+}
+
 pub(crate) struct OrdinaryStartGroup {
     pub(crate) batch: Arc<super::global_playback_batch::GlobalPlaybackBatch>,
     pub(crate) work: Box<[Option<Box<OrdinaryStartWork>>]>,

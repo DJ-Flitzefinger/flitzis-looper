@@ -56,7 +56,7 @@ SHALL NOT alone produce new original/PCM/stem files or full-source pitch PCM.
 - **THEN** new Copy admission SHALL close and an unclaimed Native transaction MAY be cancelled immediately
 - **AND** controller assignment images, config writer and retirement reservations SHALL remain owned until the actual preparation worker has returned
 - **AND** a claimed transaction SHALL settle through its own complete ACK and normal durable commit before dependent controllers, assignment custody or the audio engine shut down
-- **AND** an unobserved ACK or failed durable commit SHALL keep close pending with a visible error rather than imply cancellation or successful completion
+- **AND** an unobserved ACK or failed durable commit SHALL keep close pending with compact progress and the actual deduplicated console diagnostic rather than imply cancellation or successful completion
 
 ### Requirement: Physical waveform holds retain an always reachable release owner
 The waveform Controller SHALL own bounded opaque Native Hold tickets and the physical press latch. Native SHALL decide whether a pause caused an effect independently of Session flags. Release SHALL consume the same ticket without a slot, fresh timestamp, revision or permit. True release admission MUST retain the owner until Native reports a terminal outcome; is_current False MUST NOT be treated as cleanup proof.
@@ -71,6 +71,20 @@ The waveform Controller SHALL own bounded opaque Native Hold tickets and the phy
 
 ### Requirement: Pair mutation preserves living playback and selection
 The system SHALL apply Move to empty or Swap to occupied target as one guarded native/content/project transaction preserving both surviving lifetimes, voices, cursor, DSP/history/FIFO/filter/ramps and selected content without restart.
+
+#### Scenario: A global runtime change follows an acknowledged Pair
+- **GIVEN** Move or Swap has its own complete Native acknowledgement while control mirroring is still pending
+- **WHEN** an explicitly authorized global Multi Loop change advances current runtime revisions
+- **THEN** control settlement SHALL preserve that latest global intent and the acknowledged content placement through the existing Native runtime authority
+- **AND** obsolete captured runtime revision numbers alone SHALL NOT permanently prevent the same owning Pair from mirroring and finishing
+- **AND** the mirror SHALL still require the exact surviving content/lifetime, immutable source, selection and transaction owners, rejecting actual stale or foreign ownership
+- **AND** normal completion SHALL release only its own participant fences and permit subsequent selection, arrangement and close
+
+#### Scenario: Periodic input publication overlaps a Pair
+- **GIVEN** the real input runtime is installed and a Pair owns its captured participants
+- **WHEN** ordinary unchanged runtime and pitch projections are published before or after its Native acknowledgement
+- **THEN** those refreshes SHALL preserve the owning participant rows through genuine acknowledgement, mirroring and finish
+- **AND** unrelated global layout revision progress SHALL NOT be mistaken for a content/lifetime replacement
 
 #### Scenario: Occupied Copy requires the exact original target and one stopped successor
 - **GIVEN** independent loaded contents A and B and their exact current Native bindings
@@ -250,6 +264,22 @@ The system SHALL apply Move to empty or Swap to occupied target as one guarded n
 - **AND** a successful claim SHALL publish only the prepared revisions into their captured cells and exchange the complete runtime state without a later numeric-slot lookup
 - **AND** unchanged entries SHALL preserve their existing runtime revisions and admitted permissions
 - **AND** semantic comparison of an unchanged binding SHALL ignore an unrelated global publication revision while retaining its exact Native owner, slot, cell, lifetime, binding epoch and complete source, window, timing and authority projection
+
+#### Scenario: Automatic MIDI refresh preserves reserved arrangement participants
+- **GIVEN** an existing Copy, Pair or whole-bank owner reserves its original participants while the ordinary App refreshes the complete MIDI runtime projection
+- **WHEN** unchanged-global refresh or an unrelated PAD update encounters those temporarily fenced participants
+- **THEN** Python SHALL retain their exact last successfully published rows instead of publishing unloaded placeholders or caching a projection Native did not publish
+- **AND** Native SHALL retain their exact existing complete runtime rows, pitch shadow, request sequence and acknowledgement references under the existing single runtime publication claim, without granting a new input permission through the reservation
+- **AND** the claim SHALL revalidate each original captured placement, lifetime, runtime revision and reservation owner before any revision or table changes; an intervening release, replacement or stale participant SHALL fail atomically without advancing Python's success cache
+- **AND** unrelated rows and their MIDI actions SHALL remain independently publishable; the entire runtime publisher SHALL NOT be frozen for the transaction
+- **AND** a missing prior successful Python projection SHALL fail closed without synthesizing historical rows
+- **AND** after actual terminal settlement the normal current projection SHALL refresh copied, cleared or replaced lifetimes, with no stale unloaded-cache equality suppressing cleanup
+
+#### Scenario: Explicit Multi Loop supersedes captured runtime policy
+- **WHEN** an explicit Multi Loop change publishes while an arrangement owns original participants
+- **THEN** the existing complete semantic runtime revision change SHALL remain effective for every row, including reserved participants, so old captured input actions cannot retain their previous exclusive or multi-loop policy
+- **AND** that incompatible newer policy MAY reject the original arrangement before acceptance with its complete before-state preserved and truthful failure feedback
+- **AND** the system SHALL NOT defer the policy silently, preserve stale action permission or relax the original arrangement guards to force acceptance
 - **AND** the old runtime state SHALL be retired outside the publication marker
 
 #### Scenario: KeyLock intent and resident arming publish one captured content image
@@ -444,6 +474,132 @@ The system SHALL copy or clear exactly36 target slots including empty source slo
 - **WHEN** claim becomes irreversible without observedACK
 - **THEN** old/new/action pins remain and conflicts are fenced until genuine terminal recovery
 - **AND** no guessed success/rollback, early release or36 partial unloads is reported
+
+#### Scenario: The final participant becomes stale before whole-bank claim
+- **GIVEN** all36 targets and their corresponding nonempty or empty source slots were captured and prepared as one complete bank image
+- **WHEN** the last participant changes its captured source, content lifetime, binding, runtime, selection or request authority before the genuine Native claim
+- **THEN** the entire bank attempt SHALL remain unapplied with all36 targets, source and outside playback, Holds, epochs and custody unchanged
+- **AND** no earlier participant SHALL become visible or release an old reference
+- **AND** cancellation SHALL settle only that attempt's reservations through its existing ownership path
+
+#### Scenario: Bank admission retains the caller's original complete participants
+- **GIVEN** a controller has captured the actual Native source and target participants before sealing its complete bank intent
+- **WHEN** it admits that intent for one whole-bank mutation
+- **THEN** Native SHALL validate the same engine, ordered banks, original content and Empty incarnations, bindings, runtime, source-request, timing and selection authority under its existing complete admission boundary before reserving or preparing the transaction
+- **AND** completed same-file replacement or Empty-to-occupied-to-Empty replacement SHALL reject the whole attempt even when paths, PCM or the final occupancy compare equal
+- **AND** the same original participant guards SHALL survive through the aggregate reservation and Native effect claim; diagnostic metadata or freshly recaptured replacement participants SHALL NOT reconstruct this authority
+- **AND** unrelated placement changes MAY preserve admission when every original participant projection and its applicable guards remain current
+
+#### Scenario: A fully occupied bank copies stopped content without starting36 voices
+- **GIVEN** all36 source slots contain independently captured musical content
+- **WHEN** one prepared bank copy claims its other36 target slots
+- **THEN** every new target SHALL be a fresh stopped instance with independent mutable state and no inherited Hold
+- **AND** existing playback capacity SHALL NOT treat these stopped copies as a request to start36 voices
+- **AND** one aggregate claim, complete image and parent acknowledgement SHALL identify the operation
+
+#### Scenario: A nested unknown stem field cannot be silently sealed away
+- **GIVEN** a captured source, target-before or target-after musical image contains an unsupported nested stem-file schema field
+- **WHEN** the complete bank image is validated or reopened
+- **THEN** the entire image SHALL be rejected before projection or Native claim
+- **AND** canonical serialization SHALL NOT discard the unknown evidence and turn it into an accepted image
+
+#### Scenario: Cancellation waits for an admitted preparation worker
+- **GIVEN** a whole-bank preparation worker has been admitted and has not returned its terminal result
+- **WHEN** cancellation wins before the Native effect claim
+- **THEN** the attempt SHALL report cancellation pending and retain all of its participant reservations and preparation custody until that worker becomes terminal
+- **AND** a late worker result SHALL NOT publish a prepared image after cancellation wins the same preparation-publication boundary
+- **AND** an unstarted attempt MAY settle immediately while an irreversible claimed or accepted attempt SHALL retain its existing no-rollback recovery fence
+
+#### Scenario: Bank mirrors validate every target before their first store
+- **GIVEN** one accepted whole-bank Native owner retains its own parent acknowledgement and all predecessor and successor custody
+- **WHEN** the controller prepares its complete target projection
+- **THEN** it SHALL acquire the applicable existing job locks and validate all target owners, registrations and actual component eligibility before changing any project, control or subscriber table
+- **AND** failure on the final target SHALL preserve every earlier table and retain the same owner for retry
+- **AND** an interrupted own projection SHALL resume only its retained before and recognized own-after images; unrelated source and outside jobs, subscribers, Holds and navigation SHALL survive
+- **AND** an original pending target preparation or committed selection settlement SHALL retain its actual collector and readers until terminal, or reject admission before Native reservation without blocking that original collector
+
+#### Scenario: An outside shared result waits for the bank Config writer
+- **GIVEN** one actual shared stem job serves an original bank participant and a surviving outside content instance
+- **AND** the bank owns the common Config writer while its publication still awaits its own Native acknowledgement
+- **WHEN** that same physical job returns its complete verified result and the outside follower's complete Pair worker returns
+- **THEN** the outside follower SHALL retain that exact current returned Pair, original readers and retirement reservation until the existing writer becomes available
+- **AND** this temporary writer pressure SHALL NOT discard the result, report preparation failure, release an unreturned reader, bypass the writer fence or require another Generate action
+- **AND** unrelated observers and component work that do not require a Config selection commit SHALL remain reachable
+- **AND** normal source, content, intent, cancellation, previous-selection and original-ticket checks SHALL remain authoritative on retry; stale or superseded work SHALL be disposed through its existing collector
+- **AND** after the bank's own acknowledgement and current durable receipt release its writer, the same original outside follower MAY commit that result and acquire its own component acknowledgement
+- **AND** fresh bank Copy instances SHALL NOT inherit the removed instance's pending job or result
+- **AND** if the outside follower requests ALL while its previous selection still owns an outstanding admission, moving that follower to the live disk-candidate path SHALL preserve the previous operation and latest mode/mask intent
+- **AND** a successor SHALL use the existing predecessor-withdrawal-before-claim or genuine settlement protocol before competing adoption; it SHALL NOT lose the original attempt, borrow its acknowledgement or require another performer gesture
+- **AND** only an outstanding predecessor attempt SHALL transfer this desired intent; already completed control observations SHALL retain existing preference handling by their caller and SHALL NOT replay a historical admission solely because a new disk candidate was registered
+
+#### Scenario: Whole-bank recovery keeps the fixed image and later surviving intent
+- **GIVEN** one bank transaction retains its complete original source, target-before and fixed target-after seals and its Config binding
+- **WHEN** durable reconciliation or restart examines a later project image
+- **THEN** all36 targets SHALL match the complete before image or the complete after image; a mixture of changed before and after cells SHALL remain an unresolved conflict
+- **AND** projection SHALL use the sealed fixed after image while preserving compatible newer source, outside-slot and unrelated intent instead of recopying the current source
+- **AND** durable evidence SHALL NOT grant a Native acknowledgement or replace fresh aggregate runtime acceptance, including Empty targets
+
+#### Scenario: Fresh recovered-bank acceptance observes the actual callback image
+- **GIVEN** the restored target bank has a complete fixed stopped after image and current original Native witnesses
+- **AND** an Empty control row may still have an earlier owned Unload command awaiting actual callback delivery
+- **WHEN** startup requests fresh aggregate runtime acceptance
+- **THEN** acceptance SHALL verify all36 actual callback cells, source/window/timing and selected-component ownership, resolved renderer controls and stopped voice state before reporting the restored bank accepted
+- **AND** occupied renderer controls SHALL mean the callback-installed musical control targets; verification SHALL preserve legitimate current smoother, filter and Native/FIFO history rather than require newly constructed internal state
+- **AND** an Empty row SHALL have no callback sample or active or paused target voice; control-cache absence alone SHALL NOT prove this
+- **AND** Empty SHALL have no eligible current source or component permission; inert settings or retained bookkeeping from a provably noncurrent removed lifetime SHALL NOT certify an occupant or require a replacement image
+- **AND** a runtime mismatch SHALL retain the original recovery owner and custody while allowing the required existing restore commands to progress before a fresh owned retry
+- **AND** verification SHALL NOT reinstall content, change lifetimes, start or stop voices, manufacture the mutation's ACK or reserve source and outside slots
+
+#### Scenario: FullMix recovery preserves dormant component intent
+- **GIVEN** the fixed restored image selects FullMix and retains a saved component mask independently of current component eligibility
+- **WHEN** fresh Bank acceptance verifies the actual stopped FullMix callback image
+- **THEN** an inert callback component mask SHALL NOT block acceptance or require rewriting the callback default or the durable saved mask
+- **AND** the current source, FullMix renderer mode, timing, pitch, gain, EQ, stopped voices and any actual selected disk-owner witnesses SHALL still require their own current acceptance
+- **AND** ALL STEMS recovery SHALL require the exact saved component mask and current component ownership; a mismatch SHALL await real restoration under the same original owner
+- **AND** later activation of ALL STEMS SHALL submit the saved mask through the existing owned component-selection path before claiming its effective state
+
+#### Scenario: Terminal recovery relinquishes its process-local verification custody
+- **GIVEN** Copy, Pair or Bank startup retains an opaque fresh acceptance and its independent source or component readers
+- **WHEN** the actual current Config receipt, terminal journal, required ancestor compaction and reader, retirement-reservation and writer cleanup have all completed
+- **THEN** the completed coordinator SHALL relinquish its opaque verification reference even while the App and coordinator remain alive
+- **AND** a cleanup failure SHALL retain that same verification owner until the real cleanup retry succeeds
+- **AND** releasing a verification reservation alone SHALL NOT revoke custody still held by an acceptance object or by independent live assignments, saved owners or physical readers
+- **AND** after the actual last such owner releases, existing retirement workers SHALL collect the retired original, source PCM and selected stem artefacts without a manual cleanup request
+
+#### Scenario: Startup retains known Bank ownership before ordinary cleanup
+- **GIVEN** the selected Config has a complete unfinished Bank history or an unfinished ancestor with a terminal recovery descendant
+- **WHEN** startup routes durable transaction evidence before ordinary source restoration
+- **THEN** the shared router SHALL recognize and validate every Bank ordinal before selecting one unambiguous recovery lineage and retaining its original, predecessor and successor readers
+- **AND** ordinary Material migration admission and artifact cleanup SHALL remain deferred until actual arrangement settlement and a strict fresh history inspection prove that no unfinished arrangement or unresolved evidence remains
+- **AND** required existing material-birth, Loader, timing and stem restore observers SHALL remain reachable while recovery awaits their genuine completion
+- **AND** incompatible unfinished Material, Pair, Copy or Bank owners, unknown kinds, missing required ancestors, cycles or forked descendants SHALL retain their evidence and visible fences without transferring another owner's writer
+- **AND** an original-before retry SHALL retain its fixed complete Bank image and after identities, append its recovery child durably and transfer the existing Config writer before the normal Bank controller can reserve or prepare it
+- **AND** a terminal descendant SHALL require its actual unchanged written Config receipt and fresh aggregate target acceptance; compatible newer unsaved source or outside intent SHALL remain owned by ordinary persistence after recovery releases its writer rather than require changing a terminal journal
+
+#### Scenario: App composes Bank recovery with existing observers and close ownership
+- **GIVEN** a Bank startup or live transaction retains complete arrangement ownership
+- **WHEN** the App admits gestures, restores assignments, polls runtime observers or prepares shutdown
+- **THEN** Copy, Pair and Bank SHALL share mutually exclusive arrangement admission before Native capture or reservation
+- **AND** participant edits and inherited global Key Lock changes SHALL retain their existing guards while required fresh Loader, timing and stem restoration remains reachable until the recovery probe owns its observer fence
+- **AND** queued content feedback SHALL retain its exact message until the owning complete projection permits current Native resolution; unrelated content SHALL continue through the existing feedback handlers
+- **AND** Bank polling SHALL precede dependent observers, and shutdown SHALL retain their workers and Native callback until every actual arrangement owner settles
+- **AND** the transition from startup ownership to no active arrangement SHALL trigger one strict Material recovery refresh; an unsuccessful refresh SHALL remain visibly deferred and explicitly retriable without per-frame history inspection
+
+#### Scenario: Whole-bank journal ordinals retain exact complete evidence
+- **GIVEN** a bounded bank journal contains complete versioned original seals, project images and Config revision/digest evidence
+- **WHEN** a history is reopened, an uncertain append is retried or Portable relocation validates it
+- **THEN** every ordinal, immutable bank seal and allowed phase transition SHALL be validated before any selected tail is accepted
+- **AND** an uncertain append SHALL adopt only the exact complete intended bytes; malformed, partial, changed or oversized evidence SHALL retain custody and remain unresolved
+- **AND** each occupied source, predecessor and successor SHALL retain its independent original/stem custody until actual Native and durable terminal settlement; Empty slots SHALL retain their scalar fences without fabricated asset leases
+
+#### Scenario: Portable distinguishes current Bank evidence from historical Pair and Copy schemas
+- **GIVEN** a current pad_bank/v1 journal seals complete musical and project images
+- **WHEN** Native Portable recognition validates that history
+- **THEN** every current key-intent image SHALL retain its independent extra_retrigger field and every complete project image SHALL retain the global Key Lock start behavior
+- **AND** the start behavior SHALL be exactly first_sound_at_grid or attack_at_grid
+- **AND** recognized historical Pair and Copy images MAY retain their established omission of later schema fields; a present start-behavior field SHALL still satisfy that exact enum
+- **AND** a present raw stem-cache availability field SHALL be Boolean and required by the current Bank schema before transient save normalization; normalization SHALL NOT repair missing or malformed evidence
+- **AND** this compatibility SHALL NOT admit unknown fields, silently discard evidence or grant runtime acceptance
 
 ### Requirement: Arrangement failures and no-op gestures preserve state
 The system SHALL treat cancelled/self/invalid/empty-source drops and failed pre-claim mutations as complete no-ops and SHALL reject unsafe contained paths or exhausted native/action/feedback/retirement capacity without partial mutation.

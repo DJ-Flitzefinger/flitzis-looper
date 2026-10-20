@@ -1,0 +1,7 @@
+# Design
+
+The shared cache retirement flag requests eventual physical cleanup when no durable owners remain. It does not revoke another independently registered assignment. Subscription still requires the current assignment in both ownership sets, no exact queued deletion, sealed FileIDs and matching typed source, cache and manifest bindings, with bounded capacity.
+
+Copy preparation owns the newly registered subscriber immediately across all fallible work. Before successful callback claim, a terminal error or cancellation releases only that preparation assignment. Phase-one claimed custody remains retained until callback settlement proves its result. Successful target ownership transfers the exact subscriber without retiring it. Cleanup and final disk reader destruction remain off realtime.
+
+The copied source uses its own existing ProjectAssets reader registration and the exact resident reservation allocated for that view. Register immediately after the source read, before independent stem preparation can supply other registration tokens. Capturing the existing strong engine cleanup-epoch token keeps pending callback custody valid across shutdown rotation; it retains no Python borrow or engine reference. A rejected subscriber orphans only its own pending registry row and retires only its own assignment. Successful control mirroring disarms preparation rollback after the target lease is installed. Saved ownership and final weak-PCM collection retain their existing authority and physical deletion rules.

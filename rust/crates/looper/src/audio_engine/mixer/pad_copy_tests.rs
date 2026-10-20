@@ -144,6 +144,7 @@ pub(super) fn fixture() -> (Box<RtMixer>, Box<PadCopyRtWork>, HoldingRetirement)
         phase: Arc::new(AtomicU8::new(0)),
         ownership,
         acknowledgements: mixer.current_timing_acknowledgements.clone(),
+        source_reservation: 0,
     };
     let content_lifetime = crate::audio_engine::content_lifetime::reserve().unwrap();
     let work = Box::new(PadCopyRtWork {

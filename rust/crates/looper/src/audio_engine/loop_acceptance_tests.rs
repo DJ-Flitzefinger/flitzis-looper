@@ -5,8 +5,19 @@ use super::*;
 use crate::audio_engine::loop_acceptance;
 
 fn fixture() -> (AudioEngine, Box<RtMixer>) {
+    let (engine, mixer, _, _) = fixture_with_control();
+    (engine, mixer)
+}
+
+fn fixture_with_control() -> (
+    AudioEngine,
+    Box<RtMixer>,
+    Arc<Mutex<Producer<ControlMessage>>>,
+    rtrb::Consumer<ControlMessage>,
+) {
     let engine = test_engine();
     let (producer, mut consumer) = queue(2);
+    let engine = with_control_producer(engine, &producer);
     let mut mixer = acknowledged_mixer(&engine);
     mixer.set_input_runtime_ownership(engine.input_runtime_ownership.clone());
     publish(
@@ -25,7 +36,7 @@ fn fixture() -> (AudioEngine, Box<RtMixer>) {
     let mut output = [0.0; 512];
     let mut peaks = [0.0; NUM_SAMPLES];
     mixer.render_at_output_frame(0, &mut output, &mut peaks);
-    (engine, mixer)
+    (engine, mixer, producer, consumer)
 }
 
 fn observe(engine: &AudioEngine, mixer: &RtMixer) -> u64 {
@@ -177,9 +188,8 @@ fn effective_snapshot_rechecks_fence_generation_even_at_identical_pointer_shape_
 
 #[test]
 fn effective_snapshot_rejects_new_full_revision_even_when_period_is_unchanged() {
-    let (engine, mut mixer) = fixture();
+    let (engine, mut mixer, producer, mut consumer) = fixture_with_control();
     let old_request = observe(&engine, &mixer);
-    let (producer, mut consumer) = queue(2);
     let mut changed = decision();
     changed
         .provenance

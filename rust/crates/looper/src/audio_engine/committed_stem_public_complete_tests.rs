@@ -199,9 +199,10 @@ fn reference_with_ownership(
     // mixer receives its tuple through the production PitchController below.
     mixer.set_pad_pitch_intent(0, pitch).unwrap();
     mixer.set_pad_eq(0, -12.0, -3.0, 4.0);
-    assert!(mixer.play_sample_at_output_frame(0, 1.0, 0));
+    assert!(mixer.play_sample_at_output_frame(0, 1.0, execution));
     if pitch.native_pitch_scale(ratio, key_lock).unwrap() != 1.0 {
-        // The public ordinary attack owns prepared endpoint PCM before its first sample.
+        // The public ordinary attack owns prepared physical-birth context before
+        // its first sample.
         // Give this independent full-file reference its own source/Native owner at that
         // same physical launch endpoint; the raw oracle below independently checks PCM.
         let acknowledgements: Arc<
@@ -233,7 +234,7 @@ fn reference_with_ownership(
                 2,
             ),
         );
-        candidate.prepare_source_at_endpoint(request).unwrap();
+        candidate.prepare_source_at_physical_birth(request).unwrap();
         let mut snapshot = mixer.capture_pitch_voice_snapshot(index).unwrap();
         snapshot.stems = None;
         let feed = crate::audio_engine::stretch_processor::ProductiveSourceFeed {
@@ -259,28 +260,17 @@ fn reference_with_ownership(
 }
 
 fn initial_raw_native(
-    full: &SampleBuffer,
     ratio: f64,
     pitch: crate::audio_engine::pitch_intent::PitchIntent,
     key_lock: bool,
 ) -> ControllerRawNative {
-    let mut raw = ControllerRawNative::new_with_pitch(
-        pitch.native_pitch_scale(ratio, key_lock).unwrap(),
-        true,
-    );
-    // Independently address the real loop history before physical launch zero.
+    let scale = pitch.native_pitch_scale(ratio, key_lock).unwrap();
+    let mut raw = ControllerRawNative::new_with_pitch(scale, true);
+    let history_frames = ControllerRawNative::constant_history_frames(scale);
+    // The fresh birth has zero input before its physical origin. Independently
+    // retain the exact H and Native/FIFO chronology without wrapping a future tail.
     // No production playback clock, reader or preparation helper supplies this feed.
-    let history = std::array::from_fn(|channel| {
-        (0..4096)
-            .map(|frame| {
-                let phase = ((frame as f64 - 4096.0) * ratio).rem_euclid(full.frame_count() as f64);
-                let left = phase.floor() as usize;
-                let right = (left + 1) % full.frame_count();
-                let a = full.samples[left * 2 + channel];
-                a + (full.samples[right * 2 + channel] - a) * phase.fract() as f32
-            })
-            .collect()
-    });
+    let history = std::array::from_fn(|_| vec![0.0; history_frames]);
     raw.render(&history);
     raw
 }
@@ -981,6 +971,7 @@ class PublicFeedbackRoute:
         self.transport = SimpleNamespace(playback=ObservedFeedbackPlayback())
         self.metering = MeteringController(project, session, feedback_audio)
         self.pairs = SimpleNamespace(observer_fenced_sample_ids=set())
+        self.banks = SimpleNamespace(observer_fenced_sample_ids=set())
         self.arrangement = SimpleNamespace(fenced_sample_ids=set())
         self._pending_content_feedback = deque()
 feedback_route = PublicFeedbackRoute()
@@ -1158,6 +1149,15 @@ assert captured_start_calls == [(ordinary_birth, original_timestamp)]
             .unwrap()
     });
     assert_eq!(ordinary_birth.received_timestamp(), original_timestamp);
+    eprintln!(
+        "public seed before dependency ACK: raw_loop={:?} current_revision={:?} captured_revision={:?} guard={:?}",
+        h.callback.mixer.loop_region_frames(0),
+        h.callback
+            .mixer
+            .source_control_revision(ordinary_birth.content_key()),
+        ordinary_birth.source_control_revision(),
+        ordinary_birth.control_guard().map(|_| ()),
+    );
     // CaptureTarget is already queued, so peek alone cannot prove the original
     // edit has published. Retain that exact ticket through its full transaction.
     wait_until(|| {
@@ -1186,6 +1186,15 @@ assert captured_start_calls == [(ordinary_birth, original_timestamp)]
     );
     assert_eq!(ordinary_birth.original_frame(), Some(0));
     assert_eq!(ordinary_birth.received_timestamp(), original_timestamp);
+    eprintln!(
+        "public seed after dependency ACK: raw_loop={:?} current_revision={:?} captured_revision={:?} guard={:?}",
+        h.callback.mixer.loop_region_frames(0),
+        h.callback
+            .mixer
+            .source_control_revision(ordinary_birth.content_key()),
+        ordinary_birth.source_control_revision(),
+        ordinary_birth.control_guard().map(|_| ()),
+    );
     assert!(
         h.callback
             .mixer
@@ -1324,6 +1333,8 @@ assert captured_start_calls == [(ordinary_birth, original_timestamp)]
     }
     assert_eq!(ordinary_birth.effective_frame(), Some(execution));
     assert!(h.callback.scheduler.is_empty());
+    let original = ordinary_birth.original_frame().unwrap();
+    assert!(execution >= original);
     if needs_native {
         assert_eq!(
             voice(&h.callback.mixer).stretch.adopted_request_id(),
@@ -1335,7 +1346,9 @@ assert captured_start_calls == [(ordinary_birth, original_timestamp)]
                 .productive_history()
                 .unwrap()
                 .fed_output_frames,
-            4096
+            ControllerRawNative::constant_history_frames(
+                pitch.native_pitch_scale(ratio, key_lock).unwrap()
+            ) as u64
         );
     }
     Python::attach(|py| {
@@ -1345,6 +1358,14 @@ assert captured_start_calls == [(ordinary_birth, original_timestamp)]
             .unwrap()
     });
     assert_eq!(voice(&h.callback.mixer).source_playback.position().frame, 0);
+    assert_eq!(
+        voice(&h.callback.mixer)
+            .source_playback
+            .position()
+            .fraction
+            .to_bits(),
+        0.0_f64.to_bits()
+    );
     assert_eq!(
         h.callback.mixer.loop_region_frames(0),
         (0, Some(full.frame_count()))
@@ -1386,7 +1407,7 @@ assert captured_start_calls == [(ordinary_birth, original_timestamp)]
         selection: None,
         previous: None,
         ramp_start: 0,
-        raw: needs_native.then(|| initial_raw_native(&full, ratio, pitch, key_lock)),
+        raw: needs_native.then(|| initial_raw_native(ratio, pitch, key_lock)),
         candidate: None,
         filter: controller_filter(),
     };
@@ -1600,8 +1621,11 @@ assert audio.worker_call_count() == 1 and audio.prepared_only_on_pool_threads()
         playback.callback.mixer.stem_demand_for_measurement(215),
         other_demand
     );
-    let phase =
-        ((playback.source_frame + execution) as f64 * ratio).rem_euclid(full.frame_count() as f64);
+    // The peer starts at output zero and actually renders the preparation lead.
+    // The primary source counter contains only its post-E active frames; the
+    // shared pause advances neither source counter.
+    let other_rendered_frames = execution + playback.source_frame;
+    let phase = (other_rendered_frames as f64 * ratio).rem_euclid(full.frame_count() as f64);
     assert_eq!(
         other(&playback.callback.mixer)
             .source_playback

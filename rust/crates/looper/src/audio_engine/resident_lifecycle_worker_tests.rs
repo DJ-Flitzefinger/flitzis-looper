@@ -1,10 +1,12 @@
 //! Genuine WindowWork/own ACK, paused storage and future bank custody through native retirement.
 use super::*;
-use crate::audio_engine::input_runtime_binding::capture;
+use crate::audio_engine::input_runtime_binding::{LaunchWriteKind, capture};
 use crate::audio_engine::mixer::prepared_native_mixer_tests::finite_lifecycle_tests::{
     AlgebraicClock, RawChronology, lifecycle_filter_after_cut,
 };
 use crate::audio_engine::resident_relocation::launch_with_producer;
+use crate::audio_engine::scheduler::ScheduledCommand;
+use crate::audio_engine::transport::QuantizeGrid;
 
 fn voice(mixer: &RtMixer) -> &crate::audio_engine::voice_slot::VoiceSlot {
     mixer
@@ -146,6 +148,98 @@ fn through_adoption(
         audible,
         "later genuine finite Native continuation is silent"
     );
+}
+
+fn continue_prepared_native(
+    loaded: &mut Loaded,
+    reference: &mut RtMixer,
+    acknowledged_reader: &SampleBuffer,
+    frame: &mut u64,
+    frames: usize,
+) {
+    let initial_frame = *frame;
+    let active = voice(&loaded.callback.mixer);
+    let native = active.stretch.native_state_address();
+    let request = active.stretch.adopted_request_id();
+    let generation = active.generation;
+    let history = active.stretch.productive_history().unwrap();
+    let expected_binding =
+        crate::audio_engine::productive_source_history::ProductiveSourceBinding::new(
+            acknowledged_reader,
+            48_000,
+            None,
+        );
+    assert!(history.binding.same_source(expected_binding));
+    assert_eq!(history.binding.accepted, expected_binding.accepted);
+    let primed = active.stretch.native_primed_output_frames();
+    let prepared_taps = active.stretch.native_tap_observation();
+    let reference_native = voice(reference).stretch.native_state_address();
+    let reference_request = voice(reference).stretch.adopted_request_id();
+    assert_ne!(native, 0);
+    assert!(request.is_some() && reference_request.is_some());
+    let mut step = 0;
+    let mut audible = false;
+    while *frame - initial_frame < frames as u64 {
+        let remaining = frames - (*frame - initial_frame) as usize;
+        audible |= render(
+            loaded,
+            reference,
+            frame,
+            [1, 127, 384, 96, 257, 512, 31][step % 7].min(remaining),
+        )
+        .iter()
+        .any(|sample| sample.abs() > 0.001);
+        let active = voice(&loaded.callback.mixer);
+        let current = active.stretch.productive_history().unwrap();
+        assert_eq!(active.stretch.native_state_address(), native);
+        assert_eq!(active.stretch.adopted_request_id(), request);
+        assert_eq!(active.generation, generation);
+        assert_eq!(active.stretch.native_primed_output_frames(), primed);
+        assert_eq!(active.stretch.native_tap_observation(), prepared_taps);
+        // A real storage-only ACK can replace the same-source reader. The
+        // successful NativeInput receipt names that exact acknowledged view,
+        // while the original source, Native/FIFO owner and chronology persist.
+        assert_eq!(current.binding, expected_binding);
+        assert_eq!(current.domain, history.domain);
+        assert_eq!(
+            current.fed_output_frames,
+            history.fed_output_frames + *frame - initial_frame
+        );
+        assert_eq!(
+            (
+                current.next_position.frame,
+                current.next_position.fraction.to_bits(),
+                current.next_position.seek_mode
+            ),
+            (
+                active.source_playback.position().frame,
+                active.source_playback.position().fraction.to_bits(),
+                active.source_playback.position().seek_mode
+            )
+        );
+        assert!(
+            !voice(&loaded.callback.mixer)
+                .stretch
+                .source_preparation_pending()
+        );
+        assert!(!voice(reference).stretch.source_preparation_pending());
+        assert!(
+            !voice_mut(&mut loaded.callback.mixer)
+                .stretch
+                .source_preparation_ready()
+        );
+        assert!(!voice_mut(reference).stretch.source_preparation_ready());
+        assert_eq!(
+            voice(reference).stretch.native_state_address(),
+            reference_native
+        );
+        assert_eq!(
+            voice(reference).stretch.adopted_request_id(),
+            reference_request
+        );
+        step += 1;
+    }
+    assert!(audible, "the retained own Native continuation is silent");
 }
 
 /// Independent original B knots, Raw Native and continuous EQ for the acknowledged retrigger.
@@ -306,8 +400,26 @@ fn start_finite(loaded: &mut Loaded) -> ResidentWindowTicket {
         ..WindowRequest::default()
     });
     loaded.adopt(&ready);
+    // The lifecycle reference deliberately starts dry at T=E=0, then warms
+    // its live ON Native. A wet ordinary attack has its own prepared endpoint.
+    loaded.callback.mixer.set_pad_key_lock(0, false);
     assert!(launch_with_producer(&loaded.engine, &ready, false, 1, &loaded.producer).unwrap());
-    assert_eq!(loaded.callback.drain(&mut loaded.consumer), 1);
+    let start = match loaded.consumer.peek().unwrap() {
+        ControlMessage::CapturePadStartTarget(start) => start.clone(),
+        _ => panic!("ordinary launch must retain its original target before prepared work"),
+    };
+    assert_eq!(loaded.callback.drain(&mut loaded.consumer), 2);
+    assert_eq!(start.state(), "applied", "{:?}", start.reason());
+    assert_eq!(start.original_frame(), Some(0));
+    assert_eq!(start.execution_frame(), Some(0));
+    assert_eq!(start.effective_frame(), Some(0));
+    assert!(start.is_current() && ready.is_current());
+    assert!(loaded.callback.scheduler.is_empty());
+    assert_eq!(
+        voice(&loaded.callback.mixer).stretch.pending_fifo_frames(),
+        (0, 0)
+    );
+    loaded.callback.mixer.set_pad_key_lock(0, true);
     while loaded.callback.feedback_rx.pop().is_ok() {}
     ready
 }
@@ -375,26 +487,58 @@ fn actual_paused_storage_ack_fences_pending_work_and_preserves_adopted_native_re
             .mixer
             .resume_sample_at_output_frame(0, frame);
         reference.resume_sample_at_output_frame(0, frame);
-        render(&mut loaded, &mut reference, &mut frame, 1);
-        let (new_target, new_native) = wait_prepared(&mut loaded.callback.mixer, &mut reference);
-        assert_eq!(
-            voice(&loaded.callback.mixer).stretch.native_state_address(),
-            native
-        );
-        through_adoption(
-            &mut loaded,
-            &mut reference,
-            &mut frame,
-            new_target,
-            new_native,
-        );
-        assert!(
-            voice(&loaded.callback.mixer)
-                .stretch
-                .adopted_request_id()
-                .unwrap()
-                >= 2
-        );
+        if adopted_before_pause {
+            // The real ACK installed this same-source reader; it keeps the
+            // already used Native and cannot require another worker candidate.
+            let acknowledged_reader = loaded.sample();
+            assert_eq!(
+                (
+                    acknowledged_reader.resident_start(),
+                    acknowledged_reader.resident_end()
+                ),
+                (20, 100)
+            );
+            assert!(acknowledged_reader.same_source(&original));
+            assert_eq!(
+                acknowledged_reader.window_revision(),
+                original.window_revision() + 1
+            );
+            continue_prepared_native(
+                &mut loaded,
+                &mut reference,
+                &acknowledged_reader,
+                &mut frame,
+                4096 + 1777,
+            );
+            assert_eq!(
+                voice(&loaded.callback.mixer).stretch.native_state_address(),
+                native
+            );
+        } else {
+            // The unadopted old-window candidate was genuinely cancelled. Its
+            // actual replacement still requires its own worker and exact E.
+            render(&mut loaded, &mut reference, &mut frame, 1);
+            let (new_target, new_native) =
+                wait_prepared(&mut loaded.callback.mixer, &mut reference);
+            assert_eq!(
+                voice(&loaded.callback.mixer).stretch.native_state_address(),
+                native
+            );
+            through_adoption(
+                &mut loaded,
+                &mut reference,
+                &mut frame,
+                new_target,
+                new_native,
+            );
+            assert!(
+                voice(&loaded.callback.mixer)
+                    .stretch
+                    .adopted_request_id()
+                    .unwrap()
+                    >= 2
+            );
+        }
         drop(original);
         let lease = loaded
             .engine
@@ -469,8 +613,7 @@ fn replace_with_actual_full_bank(loaded: &mut Loaded) -> SampleBuffer {
 }
 
 #[test]
-fn actual_future_bank_window_ack_keeps_old_voice_then_reserved_retrigger_cuts_and_releases_history()
-{
+fn actual_future_bank_window_ack_keeps_old_voice_then_guarded_legacy_retrigger_cuts_history() {
     for paused in [false, true] {
         for fault in [
             None,
@@ -486,8 +629,41 @@ fn actual_future_bank_window_ack_keeps_old_voice_then_reserved_retrigger_cuts_an
             render(&mut loaded, &mut reference, &mut frame, 13);
             let (target, prepared) = wait_prepared(&mut loaded.callback.mixer, &mut reference);
             through_adoption(&mut loaded, &mut reference, &mut frame, target, prepared);
-            let old_generation = voice(&loaded.callback.mixer).generation;
             let old = loaded.sample();
+            // Exercise the full declared rate trajectory while A still owns the
+            // current bank permit. A later real B publication revokes that permit
+            // and can legitimately queue new retained-A preparation.
+            loaded.callback.mixer.set_speed(1.97);
+            reference.set_speed(1.97);
+            let glide_frames = ((1.97_f64 - 0.73) / 0.05).ceil() as usize * 512;
+            continue_prepared_native(
+                &mut loaded,
+                &mut reference,
+                &old,
+                &mut frame,
+                glide_frames + 1777,
+            );
+            assert_eq!(
+                voice(&loaded.callback.mixer).source_playback.tempo_ratio(),
+                1.97
+            );
+            // Plan a real future grid using the existing transport. Render A to
+            // just before it while its bank is still current; offline B work
+            // advances no virtual clock. The paused case also retains its real
+            // 257-frame silent ACK interval before the same 128-frame prefix.
+            let margin = 128 + if paused { 257 } else { 0 };
+            let mut future_clock = loaded.callback.transport;
+            future_clock.advance_by_rendered_frames(
+                (frame + margin + 1 - future_clock.output_frame()) as usize,
+            );
+            let planned_effect = future_clock
+                .next_grid_frame(QuantizeGrid::from_step_64ths(16).unwrap())
+                .unwrap();
+            let before_publication = planned_effect - margin;
+            let align_frames = (before_publication - frame) as usize;
+            continue_prepared_native(&mut loaded, &mut reference, &old, &mut frame, align_frames);
+            assert_eq!(frame, before_publication);
+            let old_generation = voice(&loaded.callback.mixer).generation;
             let old_reader = Arc::downgrade(&old.samples);
             let old_position = voice(&loaded.callback.mixer).source_playback.position();
             let old_region = loaded.callback.mixer.loop_region_frames(0);
@@ -496,6 +672,7 @@ fn actual_future_bank_window_ack_keeps_old_voice_then_reserved_retrigger_cuts_an
                 reference.pause_sample_at_output_frame(0, frame);
             }
             let before = capture(&loaded.engine, 0).unwrap().unwrap();
+            let old_content = before.binding.placement.unwrap().content_key().unwrap();
             let new_full = replace_with_actual_full_bank(&mut loaded);
             assert!(!before.current());
             assert!(!new_full.same_source(&old));
@@ -562,18 +739,10 @@ fn actual_future_bank_window_ack_keeps_old_voice_then_reserved_retrigger_cuts_an
                     .resume_sample_at_output_frame(0, frame);
                 reference.resume_sample_at_output_frame(0, frame);
             }
-            // An actual rate intent forces fresh old-A work; B's own ACK is not A history authority.
-            loaded.callback.mixer.set_speed(1.97);
-            reference.set_speed(1.97);
-            render(&mut loaded, &mut reference, &mut frame, 1);
-            let (old_target, old_prepared) =
-                wait_prepared(&mut loaded.callback.mixer, &mut reference);
-            through_adoption(
-                &mut loaded,
-                &mut reference,
-                &mut frame,
-                old_target,
-                old_prepared,
+            assert_eq!(frame, planned_effect - 128);
+            assert_eq!(
+                voice(&loaded.callback.mixer).source_playback.tempo_ratio(),
+                1.97
             );
             assert_eq!(
                 voice(&loaded.callback.mixer)
@@ -590,6 +759,9 @@ fn actual_future_bank_window_ack_keeps_old_voice_then_reserved_retrigger_cuts_an
                 .unwrap();
             let native = voice(&loaded.callback.mixer).stretch.native_state_address();
             let fifo = voice(&loaded.callback.mixer).stretch.pending_fifo_frames();
+            let native_request = voice(&loaded.callback.mixer).stretch.adopted_request_id();
+            let native_origin = voice(&loaded.callback.mixer).stretch.native_origin_tuple();
+            let retained_epoch = voice(&loaded.callback.mixer).stretch.preparation_epoch();
             let position = voice(&loaded.callback.mixer).source_playback.position();
             let parameters = loaded.callback.mixer.loop_region_frames(0);
             while loaded.callback.feedback_rx.pop().is_ok() {}
@@ -598,9 +770,50 @@ fn actual_future_bank_window_ack_keeps_old_voice_then_reserved_retrigger_cuts_an
                 (frame - loaded.callback.transport.output_frame()) as usize,
             );
             loaded.callback.quantization = TriggerQuantization::Grid { step_64ths: 16 };
+            // This fault matrix deliberately starts B through the existing guarded
+            // legacy live-ON input path. A current Ordinary launch owns its Native
+            // endpoint before E and cannot stand for unprepared live-ON failures.
+            // Keep the actual captured B source/lifetime and producer Admit; never
+            // substitute the unbound PlaySample shortcut or ticket launch metadata.
+            let ownership = loaded.engine.input_runtime_ownership.clone();
+            let binding = after.binding;
+            let source_generation = ownership.binding_source_generation(0, binding).unwrap();
+            let original_timestamp = 2;
+            let mut producer = loaded.producer.lock().unwrap();
+            assert!(!producer.is_full());
+            assert!(future.is_current() && after.current() && after.available());
+            let prepared = ownership
+                .prepare_launch_write(binding.placement.unwrap(), LaunchWriteKind::Admit)
+                .unwrap();
+            let launch_revision = prepared.previous_revision;
+            ownership
+                .commit_launch_write(
+                    prepared,
+                    || ownership.admission_fields_current(0, binding),
+                    || {
+                        producer
+                            .push(ControlMessage::TriggerInputPad {
+                                id: 0,
+                                start_s: 100.0 / 48_000.0,
+                                end_s: Some(300.0 / 48_000.0),
+                                exclusive: false,
+                                binding,
+                                received_at_ns: original_timestamp,
+                                resident_control: None,
+                                launch_revision,
+                            })
+                            .unwrap();
+                    },
+                )
+                .unwrap();
+            drop(producer);
             assert!(
-                launch_with_producer(&loaded.engine, &future, false, 2, &loaded.producer).unwrap()
+                loaded
+                    .callback
+                    .mixer
+                    .admitted_input_binding_current(0, binding)
             );
+            assert!(ownership.binding_launch_current(0, binding, launch_revision));
             loaded.callback.retirement.capacity = 0;
             assert_eq!(drain_at_output_frame(&mut loaded, frame), 0);
             assert_eq!(
@@ -635,11 +848,111 @@ fn actual_future_bank_window_ack_keeps_old_voice_then_reserved_retrigger_cuts_an
                     .same_window(&old)
             );
             let target = loaded.callback.scheduler.peek_next_target_frame().unwrap();
-            assert!(target >= frame);
+            assert_eq!(target, planned_effect);
+            let retained_capture_frame = frame;
+            let retained_target = retained_capture_frame + 4096;
+            assert!(target < retained_target);
             while frame < target {
                 let frames = 127.min((target - frame) as usize);
                 render(&mut loaded, &mut reference, &mut frame, frames);
+                let active = voice(&loaded.callback.mixer);
+                assert_eq!(active.generation, old_generation);
+                assert!(active.sample.as_ref().unwrap().same_window(&old));
+                assert_eq!(active.stretch.native_state_address(), native);
+                assert_eq!(active.stretch.adopted_request_id(), native_request);
+                assert_eq!(active.stretch.native_origin_tuple(), native_origin);
+                assert_eq!(active.stretch.preparation_epoch(), retained_epoch);
+                let current = active.stretch.productive_history().unwrap();
+                assert_eq!(current.binding, history.binding);
+                assert_eq!(
+                    current.fed_output_frames,
+                    history.fed_output_frames + frame - retained_capture_frame
+                );
+                let admission = active.source_admission.as_ref().unwrap();
+                assert_eq!(admission.content_key_for_test(), Some(old_content));
+                let retained =
+                    crate::audio_engine::native_history_permit::NativeVoiceHistoryContext {
+                        admission,
+                        lifetime: &active.history_lifetime,
+                        generation: active.generation,
+                        preparation_epoch: active.stretch.source_epoch_owner(),
+                        accepted: active.source_timing.accepted,
+                    };
+                let permit = retained.capture(&old, 48_000).unwrap();
+                assert!(permit.current(&old, 48_000));
+                assert!(retained.capture(&loaded.sample(), 48_000).is_none());
+                // B revoked the old Current permit. This genuine retained-A
+                // request may finish, but its own F+4096 lies strictly after B's
+                // cut. No alternate Native can acquire this pre-cut history.
+                assert!(active.stretch.source_preparation_pending());
+                assert!(!voice(&reference).stretch.source_preparation_pending());
+                if voice_mut(&mut loaded.callback.mixer)
+                    .stretch
+                    .source_preparation_ready()
+                {
+                    assert_eq!(
+                        voice_mut(&mut loaded.callback.mixer)
+                            .stretch
+                            .prepared_target_output_frame(),
+                        Some(retained_target)
+                    );
+                    let taps = voice_mut(&mut loaded.callback.mixer)
+                        .stretch
+                        .prepared_tap_observation()
+                        .unwrap();
+                    assert_eq!(taps.missing_reads, 0);
+                    assert_eq!(taps.left_reads, 4096 * 2);
+                }
             }
+            // The fault hook is shared by this worker. Finish A's genuine own
+            // retained-source preparation at this fixed virtual F before B can
+            // cut it and before any B-only failure/exhaustion injection. Its
+            // prepared endpoint is still in the future and owns no played frame.
+            let before_wait_position = voice(&loaded.callback.mixer).source_playback;
+            let before_wait_fifo = voice(&loaded.callback.mixer).stretch.pending_fifo_frames();
+            let before_wait_history = voice(&loaded.callback.mixer)
+                .stretch
+                .productive_history()
+                .unwrap();
+            wait_until(Duration::from_secs(5), || {
+                voice_mut(&mut loaded.callback.mixer)
+                    .stretch
+                    .source_preparation_ready()
+            });
+            assert_eq!(frame, planned_effect);
+            assert_eq!(
+                voice_mut(&mut loaded.callback.mixer)
+                    .stretch
+                    .prepared_target_output_frame(),
+                Some(retained_target)
+            );
+            assert!(retained_target > frame);
+            let retained_native = voice_mut(&mut loaded.callback.mixer)
+                .stretch
+                .prepared_native_address();
+            assert_ne!(retained_native, 0);
+            assert_ne!(retained_native, native);
+            let retained_taps = voice_mut(&mut loaded.callback.mixer)
+                .stretch
+                .prepared_tap_observation()
+                .unwrap();
+            assert_eq!(retained_taps.missing_reads, 0);
+            assert_eq!(retained_taps.left_reads, 4096 * 2);
+            let active = voice(&loaded.callback.mixer);
+            assert!(active.source_playback.matches_exact(&before_wait_position));
+            assert_eq!(active.stretch.native_state_address(), native);
+            assert_eq!(active.stretch.adopted_request_id(), native_request);
+            assert_eq!(active.stretch.native_origin_tuple(), native_origin);
+            assert_eq!(active.stretch.pending_fifo_frames(), before_wait_fifo);
+            assert_eq!(
+                active
+                    .stretch
+                    .productive_history()
+                    .unwrap()
+                    .fed_output_frames,
+                before_wait_history.fed_output_frames
+            );
+            assert!(old_reader.upgrade().is_some());
             loaded.callback.transport.advance_by_rendered_frames(
                 (frame - loaded.callback.transport.output_frame()) as usize,
             );
@@ -650,6 +963,34 @@ fn actual_future_bank_window_ack_keeps_old_voice_then_reserved_retrigger_cuts_an
                 .unwrap();
             assert_eq!(event.execution_frame, frame);
             assert!(!event.was_late);
+            match &event.command {
+                ScheduledCommand::TriggerInputPad {
+                    id,
+                    binding: scheduled_binding,
+                    received_at_ns,
+                    resident_control,
+                    launch_revision: scheduled_revision,
+                    ..
+                } => {
+                    assert_eq!(*id, 0);
+                    assert_eq!(*scheduled_binding, binding);
+                    assert_eq!(*received_at_ns, original_timestamp);
+                    assert_eq!(*scheduled_revision, launch_revision);
+                    assert!(resident_control.is_none());
+                }
+                _ => panic!("fault fixture must retain the admitted legacy input command"),
+            }
+            assert_eq!(
+                ownership.binding_source_generation(0, binding),
+                Some(source_generation)
+            );
+            assert!(ownership.binding_launch_current(0, binding, launch_revision));
+            assert!(
+                loaded
+                    .callback
+                    .mixer
+                    .admitted_input_binding_current(0, binding)
+            );
             let execution_position = voice(&loaded.callback.mixer).source_playback.position();
             let execution_native = voice(&loaded.callback.mixer).stretch.native_state_address();
             let execution_fifo = voice(&loaded.callback.mixer).stretch.pending_fifo_frames();
@@ -658,7 +999,7 @@ fn actual_future_bank_window_ack_keeps_old_voice_then_reserved_retrigger_cuts_an
                 .productive_history()
                 .unwrap();
             loaded.callback.retirement.capacity = 0;
-            crate::audio_engine::audio_stream::execute_scheduled_command(
+            let blocked = crate::audio_engine::audio_stream::execute_scheduled_command(
                 &mut loaded.callback.mixer,
                 &mut loaded.callback.transport,
                 event.execution_frame,
@@ -666,6 +1007,12 @@ fn actual_future_bank_window_ack_keeps_old_voice_then_reserved_retrigger_cuts_an
                 &mut loaded.callback.feedback,
                 &mut loaded.callback.retirement,
             );
+            assert!(matches!(
+                blocked,
+                crate::audio_engine::audio_stream::ScheduledExecution::Pending(
+                    ScheduledCommand::TriggerInputPad { .. }
+                )
+            ));
             assert!(
                 voice(&loaded.callback.mixer)
                     .sample
@@ -704,13 +1051,23 @@ fn actual_future_bank_window_ack_keeps_old_voice_then_reserved_retrigger_cuts_an
             assert_eq!(loaded.callback.mixer.loop_region_frames(0), parameters);
             assert!(old_reader.upgrade().is_some());
             loaded.callback.retirement.capacity = usize::MAX;
-            crate::audio_engine::audio_stream::execute_scheduled_command(
+            let completed = crate::audio_engine::audio_stream::execute_scheduled_command(
                 &mut loaded.callback.mixer,
                 &mut loaded.callback.transport,
                 event.execution_frame,
                 event.command,
                 &mut loaded.callback.feedback,
                 &mut loaded.callback.retirement,
+            );
+            assert!(matches!(
+                completed,
+                crate::audio_engine::audio_stream::ScheduledExecution::Complete
+            ));
+            assert!(
+                !voice_mut(&mut loaded.callback.mixer)
+                    .stretch
+                    .source_preparation_ready(),
+                "B's generation cut must retire A's ready retained-source candidate"
             );
             assert!(
                 voice(&loaded.callback.mixer)

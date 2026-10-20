@@ -3168,3 +3168,95 @@ not fresh results. No Native installation, App/device/listening acceptance, actu
 neural execution, full musical/resource216 matrix or whole E11/program/Goal
 closure is claimed. P5b/R1/R2 and all remaining full-parent/Human gates stay open;
 STOP before full Rust-port planning/implementation or Slice8.
+
+
+## B1 software foundation: independent interests and original outcomes
+
+The all-loaded work now has a metadata-only immutable216-slot confirmation
+inventory and independent direct/batch interests under each existing PAD
+publication subscriber. The same holder follows intent resolution, acknowledged
+Pair relocation, canonical transfer, successful inference disposal and existing
+Pair preparation/reuse/fallback/durable selection settlement. It grants no source,
+timing or Native ACK authority. Cancel detaches only its token; exact removed
+reader/returned-result references keep cancellation pending through actual read
+end, while foreign work proceeds. Final membership is rechecked across returned
+Pair projection, queue admission, worker entry and the existing before-replace
+guard. A successful config replacement remains committed through later Cancel
+and deferred owner settlement; verified already-present is a distinct no-op.
+Promotion/integrity failures remain attached to original immediate and moved
+subscribers instead of disappearing with transient slot errors.
+
+The same two-worker/32-queue pool exposes atomic capacity reservation and
+nonterminal try-submit without changing its existing callable contract. This
+foundation passed395 impacted Python cases, three actual Bank/shared-job Native
+Release profiles, scoped static/strict/preflight checks and one independent final
+review. Source, input boundaries, negative results and precise profiles are in
+the workspace test-log.md and owned b1-stem-batch-20261020 logs. Production Native
+source/ABI/dependencies are unchanged; exact installed f176...2247 Release/API10
+and R5 wheel evidence are reused. These are bounded software results.
+
+The next bounded software block delivers one FIFO six-lane direct/batch by phase
+arbiter over the same pool. Requested metadata owns no source/retirement/job until
+capacity is reserved. Generation WIP34 retains terminal jobs; a separate bound34
+includes Pair workers, returned/writer-held results, durable settlement and failed
+Native discard custody after executor return. Original terminal/reuse subscribers
+remain in their existing delivery until actually submitted or settled, with one
+binding/promotion and no early closing of deferred rows. Fresh stale checks give
+the original caller an outcome without assigning an error to replacement content.
+The saturated real-pool controller fixture retains216 actual subscriber rows and
+admits exactly two on two returned permits; preterminal delivery and audio/neural
+fixtures are explicit substitutes. Final786 impacted Python/static/strict/import
+checks and one independent final review pass; the installed Native is unchanged.
+
+## B1 confirmed operation and cancellation ownership
+
+Settings now captures one immutable all-bank inventory in the shared confirmation
+owner. The transient batch controller offers at most eight original rows per App
+frame to the existing stem controller; it has no executor, source leases, durable
+state or audio authority. Polling continues when Settings is closed. Stale or
+unavailable originals become Skipped, and later contents are not substituted.
+Each original row retains its own token and outcome through the existing source,
+shared job, Pair preparation and actual Config replacement path. Done means the
+stems were saved; each PAD's audio preparation and adoption remain separate.
+
+Cancel removes only batch interests. Original reader receipts keep Cancelling
+visible until the removed work settles; surviving direct or foreign interests
+continue. If a Pair or Bank transaction owns the participant image, cancellation
+retains its captured rows, generation maps and watched Event until the real Native
+ACK and control mirror settle. An empty-interest queued Pair worker performs no
+Native read and returns its result without changing that Event. Unfenced control
+collection closes its custody. A new direct caller can take over the original
+uncancelled work without becoming part of the detached batch's wait. No guard,
+ACK or audio-thread contract is relaxed.
+
+The Settings surface retains exact per-item and aggregate Queued, Running, Done,
+Skipped, Failed, Cancelling and Cancelled results. Actual desktop checks covered
+warning Escape/Cancel without admission, confirmed two-PAD start, own-reader
+Cancelling, retained terminal results after Settings reopen, result dismissal and
+unchanged selection. A real Native Bank-copy crossing additionally covers its
+pending ACK, exact control mirror and an independent shared reader's completion.
+These are bounded software/UI results. The complete216 duplicate/distinct
+resource and process/adoption cases and full B1/parent/Human acceptance remain
+open. No complete LIVE, Bulk, P6/V0, musical/device/hearing or Rust-port acceptance
+follows. Exact checks, negative attempts and input limits are in the workspace
+test log and owned b1-stem-batch-20261020 logs.
+
+The final source passes2306 impacted Python cases and five actual Native
+shared-job cases including the new final-batch crossing, scoped static/strict/import/launcher
+checks and one independent final review. The first broad1995-pass profile
+preceded the final-Cancel fence correction and is not substituted for this
+final-source result. Production Native/ABI/dependencies remain unchanged; exact
+R5 f176 Release build/wheel evidence is reused.
+
+
+Committed admission also preserves actual Native placement contention as the
+declared `[resident_stem_placement_pending]` protocol. Only stable read preflights
+are bracketed by the existing monotone placement observation token; new proposal
+mutation occurs after these checks. Stable stale/missing/foreign/exhausted
+failures remain terminal. Known admission codecs remain unwrapped in control
+feedback. The existing explicit demand owns bounded retry; helper submission
+failures still clear/block implicit desire, preserving completed withdrawal.
+Readiness and ACK counts reuse the existing exact selected-entry, mask and own
+current receipt predicate, so an old accepted ALL mask cannot satisfy a new mask.
+Software regression evidence is bounded; model/process/music acceptance remains
+separate from Native PCM-budget and declared-output216 composition.

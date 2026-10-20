@@ -65,8 +65,12 @@ class TransportController(BaseController):
         self.pitch = PitchController(self)
         self.waveform = WaveformController(self)
 
-    def apply_project_state_to_audio(self) -> None:
-        ApplyProjectState(self).apply_project_state_to_audio()
+    def apply_project_state_to_audio(
+        self, *, restored_sample_ids: frozenset[int] | None = None
+    ) -> None:
+        ApplyProjectState(
+            self, restored_sample_ids=restored_sample_ids
+        ).apply_project_state_to_audio()
 
     def bind_incoming_global_key_lock(self, callback: Callable[[], None]) -> None:
         """Publish the new global default to pending incoming assignments immediately."""
@@ -127,6 +131,9 @@ class TransportController(BaseController):
             message = (
                 "Ordinary incoming assignment receipt is pending; current-source gesture rejected"
             )
+            raise ValueError(message)
+        if sample_id in self._session.loading_sample_ids:
+            message = "Source assignment receipt is pending; current-source gesture rejected"
             raise ValueError(message)
 
     @staticmethod

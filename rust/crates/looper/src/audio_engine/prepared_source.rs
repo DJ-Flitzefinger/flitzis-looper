@@ -3,7 +3,7 @@
 use super::AudioEngine;
 use super::constant_timing::{AcceptedTimingProjection, CurrentTimingAcknowledgements};
 use super::constants::NUM_SAMPLES;
-use super::content_placement::{ContentKey, PlacementObservation, SlotSnapshot};
+use super::content_placement::{ContentKey, OwnerIdentity, PlacementObservation, SlotSnapshot};
 use super::input_runtime_binding::{self, InputPadBinding, InputRuntimeOwnership};
 use crate::messages::ControlMessage;
 use crate::messages::SampleBuffer;
@@ -104,7 +104,25 @@ impl PreparedStemRejection {
     }
 }
 
+/// Non-owning observation of the same publication checked by `same_publication`.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) struct PreparedSourcePublicationIdentity {
+    status: OwnerIdentity,
+    epoch: OwnerIdentity,
+    expected: u64,
+    content_key: Option<ContentKey>,
+}
+
 impl PreparedSourcePermit {
+    pub(crate) fn scalar_identity(&self) -> PreparedSourcePublicationIdentity {
+        PreparedSourcePublicationIdentity {
+            status: OwnerIdentity::of(&self.status),
+            epoch: OwnerIdentity::of(&self.epoch),
+            expected: self.expected,
+            content_key: self.content_key(),
+        }
+    }
+
     pub(super) fn same_publication(&self, other: &Self) -> bool {
         Arc::ptr_eq(&self.status, &other.status)
             && Arc::ptr_eq(&self.epoch, &other.epoch)
@@ -135,9 +153,19 @@ pub(crate) struct PreparedSourcePermit {
     status: Arc<AtomicU8>,
     rejection: Arc<AtomicU8>,
     resident_seek_bits: Arc<AtomicU64>,
-    resident_storage_adopted: Arc<AtomicBool>,
+    resident_adoption: Arc<ResidentAdoptionReceipt>,
     source_epoch: Option<(Arc<AtomicU64>, u64)>,
     timing: Option<PreparedTimingPermit>,
+}
+
+/// The original resident publication's fixed callback receipt. Storage adoption
+/// remains distinct from final mode/launch acceptance. Revisions describe only
+/// this root's eligible physical loop commit, never a later matching request.
+#[derive(Debug)]
+struct ResidentAdoptionReceipt {
+    storage_adopted: AtomicBool,
+    loop_revision_before: AtomicU64,
+    loop_revision_after: AtomicU64,
 }
 
 /// Inline resident-launch snapshot of the existing scalar publication guards.
@@ -149,6 +177,7 @@ pub(crate) struct ResidentLaunchPermit {
     pub(super) expected: u64,
     status: Arc<AtomicU8>,
     source_epoch: Option<(Arc<AtomicU64>, u64)>,
+    resident_adoption: Arc<ResidentAdoptionReceipt>,
 }
 
 fn publication_epochs_current(
@@ -166,6 +195,35 @@ impl ResidentLaunchPermit {
     pub(crate) fn current_accepted(&self) -> bool {
         matches!(self.status.load(Ordering::Acquire), 2 | 5)
             && publication_epochs_current(&self.epoch, self.expected, &self.source_epoch)
+    }
+
+    /// Exact root-commit provenance supplements an original continuity fence;
+    /// it never replaces that fence with the latest observed revision.
+    pub(super) fn owns_source_control_transition(&self, original: u64, current: u64) -> bool {
+        if original == u64::MAX
+            || current == u64::MAX
+            || self.status.load(Ordering::Acquire) != 2
+            || !publication_epochs_current(&self.epoch, self.expected, &self.source_epoch)
+            || !self
+                .resident_adoption
+                .storage_adopted
+                .load(Ordering::Acquire)
+        {
+            return false;
+        }
+        // The callback records after with Release only once it has completed
+        // this exact root's physical control mutation, before final acceptance.
+        let after = self
+            .resident_adoption
+            .loop_revision_after
+            .load(Ordering::Acquire);
+        after != u64::MAX
+            && after == current
+            && self
+                .resident_adoption
+                .loop_revision_before
+                .load(Ordering::Relaxed)
+                == original
     }
 }
 
@@ -258,7 +316,11 @@ impl PreparedSourcePermit {
             status: Arc::new(AtomicU8::new(0)),
             rejection: Arc::new(AtomicU8::new(0)),
             resident_seek_bits: Arc::new(AtomicU64::new(f64::NAN.to_bits())),
-            resident_storage_adopted: Arc::new(AtomicBool::new(false)),
+            resident_adoption: Arc::new(ResidentAdoptionReceipt {
+                storage_adopted: AtomicBool::new(false),
+                loop_revision_before: AtomicU64::new(u64::MAX),
+                loop_revision_after: AtomicU64::new(u64::MAX),
+            }),
             source_epoch: None,
             timing: None,
         }
@@ -278,11 +340,43 @@ impl PreparedSourcePermit {
     /// Observation of this original transaction's actual successful storage claim.
     /// It grants no mode or launch acceptance and survives a later mode-only refusal.
     pub(crate) fn mark_resident_storage_adopted(&self) {
-        self.resident_storage_adopted.store(true, Ordering::Release);
+        self.resident_adoption
+            .storage_adopted
+            .store(true, Ordering::Release);
     }
 
     pub(crate) fn resident_storage_adopted(&self) -> bool {
-        self.resident_storage_adopted.load(Ordering::Acquire)
+        self.resident_adoption
+            .storage_adopted
+            .load(Ordering::Acquire)
+    }
+
+    /// Sole callback writer, inside this root's successful resident mutation
+    /// claim, after its actual eligible loop commit (loop intent, no seek).
+    /// This records no ACK and changes no adoption or publication status.
+    pub(crate) fn note_resident_loop_transition(&self, before: u64, after: u64) -> bool {
+        if before == u64::MAX
+            || after == u64::MAX
+            || !(after == before || before.checked_add(1) == Some(after))
+            || self.timing.is_some()
+            || self.status.load(Ordering::Acquire) != 4
+            || !self.current()
+            || !self.resident_storage_adopted()
+        {
+            return false;
+        }
+        if self
+            .resident_adoption
+            .loop_revision_before
+            .compare_exchange(u64::MAX, before, Ordering::Relaxed, Ordering::Relaxed)
+            .is_err()
+        {
+            return false;
+        }
+        self.resident_adoption
+            .loop_revision_after
+            .store(after, Ordering::Release);
+        true
     }
 
     /// A guarded seek of a previous-source pin changes no current bank storage.
@@ -351,6 +445,7 @@ impl PreparedSourcePermit {
             expected: self.expected,
             status: self.status.clone(),
             source_epoch: self.source_epoch.clone(),
+            resident_adoption: self.resident_adoption.clone(),
         })
     }
 

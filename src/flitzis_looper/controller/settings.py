@@ -8,17 +8,23 @@ from flitzis_looper.constants import (
     MIN_DEMUCS_SHIFTS,
 )
 from flitzis_looper.controller.base import BaseController
-from flitzis_looper.models import STEM_SEPARATORS
+from flitzis_looper.models import KEY_LOCK_START_BEHAVIORS, STEM_SEPARATORS
+from flitzis_looper.recording_options import RecordingOptions
 
 if TYPE_CHECKING:
     from collections.abc import Callable
 
-    from flitzis_looper.models import ProjectState, SessionState, StemSeparator
+    from flitzis_looper.models import (
+        KeyLockStartBehavior,
+        ProjectState,
+        SessionState,
+        StemSeparator,
+    )
     from flitzis_looper_audio import AudioEngine
 
 
 class SettingsController(BaseController):
-    """Manage persistent non-audio settings."""
+    """Manage persistent global preferences through their authoritative control paths."""
 
     def __init__(
         self,
@@ -30,9 +36,35 @@ class SettingsController(BaseController):
         super().__init__(project, session, audio, on_project_changed)
         self._on_residency_policy_changed: Callable[[], None] | None = None
 
+    def can_change_key_lock_start_behavior(self) -> bool:
+        """Read Native's admission condition, including retained and pending playback."""
+        return self._audio.can_change_key_lock_start_behavior()
+
+    def set_key_lock_start_behavior(self, behavior: KeyLockStartBehavior) -> bool:
+        """Persist a launch policy only after Native atomically accepts it while stopped."""
+        if behavior not in KEY_LOCK_START_BEHAVIORS:
+            message = "Key Lock start behavior must be a supported launch policy"
+            raise ValueError(message)
+        # This call is the authoritative admission, even after a permissive UI read.
+        # A refusal retains neither persistent intent nor a future-start request.
+        if not self._audio.set_key_lock_start_behavior(behavior):
+            return False
+        if behavior != self._project.key_lock_start_behavior:
+            self._project.key_lock_start_behavior = behavior
+            self._mark_project_changed()
+        return True
+
     def bind_residency_policy(self, callback: Callable[[], None]) -> None:
         """Refresh background interests after a validated persistent policy edit."""
         self._on_residency_policy_changed = callback
+
+    def set_recording_options(self, options: RecordingOptions) -> None:
+        """Replace validated future-take defaults without changing an existing take."""
+        validated = RecordingOptions.model_validate(options)
+        if validated == self._project.recording_options:
+            return
+        self._project.recording_options = validated
+        self._mark_project_changed()
 
     def set_preload_stem_loops_on_startup(self, *, enabled: bool) -> None:
         """Set deliberate component preload without changing any pad's mix preference."""

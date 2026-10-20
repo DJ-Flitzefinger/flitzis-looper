@@ -149,6 +149,25 @@ fn encode(timing: &AcceptedConstantTiming) -> Result<Value, String> {
     }}))
 }
 
+impl CurrentConstantTimingRecord {
+    /// Compare fixed saved evidence with this already verified, callback-accepted
+    /// record. This grants no adoption permission and performs no PCM work.
+    pub(in crate::audio_engine) fn recovered_image_matches_saved(
+        &self,
+        saved: &Value,
+    ) -> Result<bool, String> {
+        Ok(self.publication.status() == "accepted"
+            && self.publication.expected == self.publication_epoch
+            && self.projection
+                == projection(
+                    &self.accepted,
+                    self.binding.sample_rate_hz,
+                    self.publication_epoch,
+                )?
+            && encode(&self.accepted)? == *saved)
+    }
+}
+
 fn parse_binding(value: &Value) -> Result<PcmBindingMetadata, String> {
     object(
         value,

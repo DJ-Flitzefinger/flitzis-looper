@@ -88,10 +88,16 @@ impl OriginalFeedback {
 
 impl Fixture {
     fn new() -> Self {
-        let engine = test_engine();
+        Self::with_control_capacity(8)
+    }
+
+    fn with_control_capacity(capacity: usize) -> Self {
+        let mut engine = test_engine();
+        engine.test_output_format = Some((RATE, 1));
         let mut mixer = acknowledged_mixer(&engine);
         mixer.set_input_runtime_ownership(engine.input_runtime_ownership.clone());
-        let (producer, consumer) = queue(8);
+        let (producer, consumer) = queue(capacity);
+        let engine = with_control_producer(engine, &producer);
         let mut fixture = Self {
             engine,
             producer,
@@ -359,7 +365,7 @@ fn global_batch_claimed_start_tail_is_followed_by_ordered_stop_before_ui_feedbac
 
 #[test]
 fn global_batch_stop_admits_all_216_pending_targets_beyond_start_voice_capacity() {
-    let mut fixture = Fixture::new();
+    let mut fixture = Fixture::with_control_capacity(2 * NUM_SAMPLES + 1);
     for id in 2..NUM_SAMPLES {
         fixture.load(id);
     }
@@ -375,6 +381,7 @@ fn global_batch_stop_admits_all_216_pending_targets_beyond_start_voice_capacity(
         crate::audio_engine::timing::InputClock::new(),
         fixture.engine.input_runtime_ownership.clone(),
     );
+    midi.set_render_format(RATE, 1).unwrap();
     midi.set_runtime_state(
         true,
         vec![true; NUM_SAMPLES],
@@ -401,28 +408,34 @@ fn global_batch_stop_admits_all_216_pending_targets_beyond_start_voice_capacity(
             .is_err()
     );
     assert!(fixture.engine.admitted_launch_ids().is_empty());
-    // Admit and schedule every actual native MIDI start. None has executed or
-    // published active feedback, although their fixed admitted IDs are visible.
+    // Each genuine MIDI gesture queues its original target capture and prepared
+    // start. All 216 admitted IDs must remain STOP targets, including the queued
+    // tail that has not acquired one of the bounded ordinary runtime slots.
     let mut scheduler = FixedCapacityScheduler::<{ NUM_SAMPLES + 1 }>::new();
     fixture.transport.advance_by_rendered_frames(1);
     fixture.mode = TriggerQuantization::Grid { step_64ths: 16 };
     for id in 0..NUM_SAMPLES {
         assert!(midi.trigger_pad(id, 42));
-        assert_eq!(
-            drain_control_messages(
-                &mut fixture.consumer,
-                &mut scheduler,
-                0,
-                &mut fixture.mode,
-                &mut fixture.transport,
-                &mut fixture.mixer,
-                &mut fixture.messages,
-                &mut ImmediateAudioBufferRetirement,
-            ),
-            1
-        );
     }
-    assert_eq!(scheduler.len(), NUM_SAMPLES);
+    assert_eq!(fixture.engine.admitted_launch_ids().len(), NUM_SAMPLES);
+    let first_drain = drain_control_messages(
+        &mut fixture.consumer,
+        &mut scheduler,
+        0,
+        &mut fixture.mode,
+        &mut fixture.transport,
+        &mut fixture.mixer,
+        &mut fixture.messages,
+        &mut ImmediateAudioBufferRetirement,
+    );
+    assert_eq!(
+        first_drain,
+        crate::audio_engine::audio_stream::MAX_CONTROL_MESSAGES_PER_CALLBACK
+    );
+    assert_eq!(scheduler.len(), first_drain / 2);
+    assert!(scheduler.len() > 0);
+    assert!(scheduler.len() < crate::audio_engine::pitch_runtime::MAX_PITCH_ACTIONS);
+    assert!(!fixture.consumer.is_empty());
     assert!(fixture.messages.is_empty());
     assert_eq!(fixture.engine.admitted_launch_ids().len(), NUM_SAMPLES);
     fixture.engine.cancel_all_launches().unwrap();
@@ -431,12 +444,10 @@ fn global_batch_stop_admits_all_216_pending_targets_beyond_start_voice_capacity(
         global_playback_batch::enqueue(&fixture.engine, &fixture.producer, entries(), false, None)
             .unwrap();
     assert!(fixture.engine.admitted_launch_ids().is_empty());
-    assert!(
-        matches!(fixture.consumer.peek(), Ok(ControlMessage::GlobalPlaybackBatch(batch))
-        if !batch.start && batch.entries.len() == NUM_SAMPLES)
-    );
-    assert_eq!(
-        drain_control_messages(
+    assert_eq!(stop.publication_status(), "pending");
+    let mut remaining_drained = 0;
+    while !fixture.consumer.is_empty() {
+        let processed = drain_control_messages(
             &mut fixture.consumer,
             &mut scheduler,
             0,
@@ -445,9 +456,16 @@ fn global_batch_stop_admits_all_216_pending_targets_beyond_start_voice_capacity(
             &mut fixture.mixer,
             &mut fixture.messages,
             &mut ImmediateAudioBufferRetirement,
-        ),
-        1
-    );
+        );
+        assert!(
+            processed > 0,
+            "the original queued MIDI tail and STOP must drain"
+        );
+        remaining_drained += processed;
+        assert!(!fixture.mixer.voices.iter().any(|voice| voice.active));
+        assert!(fixture.messages.is_empty());
+    }
+    assert_eq!(first_drain + remaining_drained, 2 * NUM_SAMPLES + 1);
     assert_eq!(stop.publication_status(), "accepted");
     assert!(!fixture.mixer.voices.iter().any(|voice| voice.active));
     while let Some(event) = scheduler.pop_due_through(0, u64::MAX) {
@@ -818,7 +836,116 @@ fn global_batch_queue_teardown_rejects_without_effects() {
 }
 
 #[test]
-fn global_batch_without_payload_retirement_capacity_retains_exact_event_then_executes_once() {
+fn global_batch_queued_zero_retirement_recovers_at_original_e_then_executes_once() {
+    let mut fixture = Fixture::new();
+    let ticket = fixture.enqueue(&[0, 1], true);
+    let weak = match fixture.consumer.peek().unwrap() {
+        ControlMessage::GlobalPlaybackBatch(batch) => Arc::downgrade(batch),
+        _ => unreachable!(),
+    };
+    let mut retirement = RetainedBatchRetirement {
+        slots: 0,
+        batches: Vec::new(),
+        samples: Vec::new(),
+        revoke: None,
+        calls: 0,
+    };
+    assert_eq!(
+        drain_control_messages(
+            &mut fixture.consumer,
+            &mut fixture.scheduler,
+            0,
+            &mut fixture.mode,
+            &mut fixture.transport,
+            &mut fixture.mixer,
+            &mut fixture.messages,
+            &mut retirement,
+        ),
+        0
+    );
+    assert_eq!(ticket.publication_status(), "pending");
+    assert_eq!(fixture.transport.output_frame(), 0);
+    assert!(fixture.scheduler.is_empty());
+    assert!(fixture.mixer.voices.iter().all(|voice| !voice.active));
+    assert!(fixture.messages.is_empty() && retirement.batches.is_empty());
+    assert!(matches!(fixture.consumer.peek().unwrap(),
+        ControlMessage::GlobalPlaybackBatch(batch) if Arc::ptr_eq(batch, &weak.upgrade().unwrap())));
+
+    // The real command drain can now admit the SAME queued group while E=0
+    // remains current. No output frame, capture or requested E is replaced.
+    retirement.slots = 3 * MAX_VOICES + 1;
+    assert_eq!(
+        drain_control_messages(
+            &mut fixture.consumer,
+            &mut fixture.scheduler,
+            0,
+            &mut fixture.mode,
+            &mut fixture.transport,
+            &mut fixture.mixer,
+            &mut fixture.messages,
+            &mut retirement,
+        ),
+        1
+    );
+    // Complete the real callback at the same E=0. The drain admits this group;
+    // render performs its due effects and returns custody to this exact sink.
+    crate::audio_engine::audio_stream::render_scheduled_audio(
+        &mut fixture.mixer,
+        &mut fixture.scheduler,
+        &mut [],
+        &mut [0.0; crate::audio_engine::constants::NUM_SAMPLES],
+        0,
+        1,
+        &mut fixture.transport,
+        &mut fixture.messages,
+        &mut retirement,
+    );
+    assert_eq!(ticket.publication_status(), "accepted");
+    assert_eq!(fixture.transport.output_frame(), 0);
+    assert!(fixture.consumer.is_empty() && fixture.scheduler.is_empty());
+    assert_eq!(
+        fixture
+            .mixer
+            .voices
+            .iter()
+            .filter(|voice| voice.active)
+            .count(),
+        2
+    );
+    // The standalone Vec sink explicitly publishes the supplied diagnostic instead
+    // of captured ContentFeedback. Require each actual start once, in batch order.
+    assert_eq!(fixture.messages.len(), 2);
+    assert_eq!(
+        fixture
+            .messages
+            .iter()
+            .filter_map(|message| match message {
+                AudioMessage::SampleStarted { id } => Some(*id),
+                _ => None,
+            })
+            .collect::<Vec<_>>(),
+        vec![0, 1]
+    );
+    assert_eq!(retirement.batches.len(), 1);
+    assert!(Arc::ptr_eq(
+        retirement.batches[0].batch(),
+        &weak.upgrade().unwrap()
+    ));
+    let RetainedBatchOwner::Group(group) = &retirement.batches[0] else {
+        panic!("the complete prepared group must retire together");
+    };
+    assert_eq!(group.len, 2);
+    assert_eq!(group.work.iter().flatten().count(), 2);
+    for work in group.work.iter().flatten() {
+        assert_eq!(work.origin().original_frame(), Some(0));
+        assert_eq!(work.execution_frame(), 0);
+    }
+    retirement.batches.clear();
+    assert!(weak.upgrade().is_none());
+}
+
+#[test]
+fn global_batch_zero_retirement_retains_original_group_but_late_callback_refuses_expired_e() {
     let mut fixture = Fixture::new();
     let ticket = fixture.enqueue(&[0, 1], true);
     let message = fixture.consumer.pop().unwrap();
@@ -838,13 +965,19 @@ fn global_batch_without_payload_retirement_capacity_retains_exact_event_then_exe
     assert!(fixture.mixer.voices.iter().all(|voice| !voice.active));
     assert!(retirement.batches.is_empty());
     let event = fixture.scheduler.pop_due_at_callback_start(1).unwrap();
-    match &event.command {
-        ScheduledCommand::GlobalPlaybackBatch(batch) => {
-            assert!(Arc::ptr_eq(batch, &weak.upgrade().unwrap()))
-        }
-        _ => panic!("original batch must remain owned by the deferred event"),
-    }
+    assert!(matches!(
+        &event.command,
+        ScheduledCommand::PitchAction { action_sequence, .. } if *action_sequence > 0
+    ));
+    assert!(
+        weak.upgrade().is_some(),
+        "the deferred action retains its original group"
+    );
     assert_eq!(event.target_frame, 0);
+    assert_eq!(
+        event.execution_frame, 1,
+        "the original E=0 has actually expired"
+    );
     retirement.slots = 3 * MAX_VOICES + 1;
     assert!(matches!(
         execute_scheduled_command(
@@ -857,7 +990,7 @@ fn global_batch_without_payload_retirement_capacity_retains_exact_event_then_exe
         ),
         crate::audio_engine::audio_stream::ScheduledExecution::Complete
     ));
-    assert_eq!(ticket.publication_status(), "accepted");
+    assert_eq!(ticket.publication_status(), "rejected");
     assert_eq!(
         fixture
             .mixer
@@ -865,9 +998,17 @@ fn global_batch_without_payload_retirement_capacity_retains_exact_event_then_exe
             .iter()
             .filter(|voice| voice.active)
             .count(),
-        2
+        0
+    );
+    assert!(
+        fixture.messages.is_empty(),
+        "late recovery must not produce an attack"
     );
     assert_eq!(retirement.batches.len(), 1);
+    assert!(Arc::ptr_eq(
+        retirement.batches[0].batch(),
+        &weak.upgrade().unwrap()
+    ));
     assert!(fixture.scheduler.pop_due_at_callback_start(2).is_none());
     retirement.batches.clear();
     assert!(weak.upgrade().is_none());
@@ -881,13 +1022,18 @@ fn stale_global_batch_without_payload_retirement_capacity_retains_owner_until_re
     fixture.transport.set_master_period(PERIOD);
     fixture.transport.advance_by_rendered_frames(1);
     let ticket = fixture.enqueue(&[0, 1], true);
+    let weak = match fixture.consumer.peek().unwrap() {
+        ControlMessage::GlobalPlaybackBatch(batch) => Arc::downgrade(batch),
+        _ => unreachable!(),
+    };
     fixture.drain();
     fixture.engine.input_runtime_ownership.revoke(1, 2);
     let event = fixture.scheduler.pop_due_through(0, u64::MAX).unwrap();
-    let weak = match &event.command {
-        ScheduledCommand::GlobalPlaybackBatch(batch) => Arc::downgrade(batch),
-        _ => unreachable!(),
-    };
+    assert!(matches!(
+        &event.command,
+        ScheduledCommand::PitchAction { action_sequence, .. } if *action_sequence > 0
+    ));
+    let original_command = event.command.clone();
     let mut retirement = RetainedBatchRetirement {
         slots: 0,
         batches: Vec::new(),
@@ -909,12 +1055,11 @@ fn stale_global_batch_without_payload_retirement_capacity_retains_owner_until_re
     };
     assert_eq!(ticket.publication_status(), "pending");
     assert!(retirement.batches.is_empty());
-    let batch = weak.upgrade().unwrap();
-    match &command {
-        ScheduledCommand::GlobalPlaybackBatch(original) => assert!(Arc::ptr_eq(original, &batch)),
-        _ => unreachable!(),
-    }
-    drop(batch);
+    assert_eq!(command, original_command);
+    assert!(
+        weak.upgrade().is_some(),
+        "the original group survives zero retirement capacity"
+    );
     retirement.slots = 1;
     assert!(matches!(
         execute_scheduled_command(
@@ -929,13 +1074,18 @@ fn stale_global_batch_without_payload_retirement_capacity_retains_owner_until_re
     ));
     assert_eq!(ticket.publication_status(), "rejected");
     assert_eq!(retirement.batches.len(), 1);
+    assert!(Arc::ptr_eq(
+        retirement.batches[0].batch(),
+        &weak.upgrade().unwrap()
+    ));
     assert!(fixture.mixer.voices.iter().all(|voice| !voice.active));
     retirement.batches.clear();
     assert!(weak.upgrade().is_none());
 }
 
 #[test]
-fn global_batch_quantized_unavailable_target_rejects_and_scheduler_teardown_settles_ticket() {
+fn global_batch_quantized_unavailable_target_rejects_and_complete_callback_teardown_settles_ticket()
+{
     let mut fixture = Fixture::new();
     fixture.mode = TriggerQuantization::Grid { step_64ths: 0 };
     fixture.mixer.set_pad_loop_region(0, 0.25, Some(4.0));
@@ -956,13 +1106,26 @@ fn global_batch_quantized_unavailable_target_rejects_and_scheduler_teardown_sett
     fixture.transport.set_master_period(PERIOD);
     fixture.transport.advance_by_rendered_frames(1);
     let pending = fixture.enqueue(&[0, 1], true);
+    let weak = match fixture.consumer.peek().unwrap() {
+        ControlMessage::GlobalPlaybackBatch(batch) => Arc::downgrade(batch),
+        _ => unreachable!(),
+    };
     fixture.drain();
     assert_eq!(pending.publication_status(), "pending");
     drop(std::mem::replace(
         &mut fixture.scheduler,
         FixedCapacityScheduler::new(),
     ));
+    // START now schedules a scalar PitchAction: its actual original group is
+    // owned by the live mixer runtime. Real callback teardown drops both owners;
+    // dropping the scalar scheduler in isolation cannot finally destroy work.
+    assert_eq!(pending.publication_status(), "pending");
+    assert!(weak.upgrade().is_some());
+    assert!(fixture.messages.is_empty());
+    assert!(fixture.mixer.voices.iter().all(|voice| !voice.active));
+    drop(fixture);
     assert_eq!(pending.publication_status(), "rejected");
+    assert!(weak.upgrade().is_none());
 }
 
 #[test]
@@ -994,9 +1157,23 @@ fn global_batch_full_projection_checks_exact_signed_origin_and_period_bits() {
     assert!(fixture.mixer.source_binding_current(0, binding.binding));
 }
 
+enum RetainedBatchOwner {
+    Batch(Arc<global_playback_batch::GlobalPlaybackBatch>),
+    Group(crate::audio_engine::ordinary_start::OrdinaryStartGroup),
+}
+
+impl RetainedBatchOwner {
+    fn batch(&self) -> &Arc<global_playback_batch::GlobalPlaybackBatch> {
+        match self {
+            Self::Batch(batch) => batch,
+            Self::Group(group) => &group.batch,
+        }
+    }
+}
+
 struct RetainedBatchRetirement {
     slots: usize,
-    batches: Vec<Arc<crate::audio_engine::global_playback_batch::GlobalPlaybackBatch>>,
+    batches: Vec<RetainedBatchOwner>,
     samples: Vec<SampleBuffer>,
     revoke: Option<(Arc<input_runtime_binding::InputRuntimeOwnership>, usize)>,
     calls: usize,
@@ -1029,7 +1206,13 @@ impl crate::audio_engine::buffer_retirement::AudioBufferRetirement for RetainedB
         &mut self,
         batch: Arc<crate::audio_engine::global_playback_batch::GlobalPlaybackBatch>,
     ) {
-        self.batches.push(batch);
+        self.batches.push(RetainedBatchOwner::Batch(batch));
+    }
+    fn retire_ordinary_start_group(
+        &mut self,
+        group: crate::audio_engine::ordinary_start::OrdinaryStartGroup,
+    ) {
+        self.batches.push(RetainedBatchOwner::Group(group));
     }
     fn available_retirement_slots(&mut self) -> usize {
         self.calls += 1;
@@ -1133,6 +1316,10 @@ fn global_batch_execution_failures_retire_payload_and_preserve_history_before_co
         }
         assert_eq!(retirement.batches.len(), 1);
         assert!(weak.upgrade().is_some());
+        assert!(Arc::ptr_eq(
+            retirement.batches[0].batch(),
+            &weak.upgrade().unwrap()
+        ));
         retirement.batches.clear(); // Simulated non-RT consumer performs the final payload drop.
         assert!(weak.upgrade().is_none());
     }

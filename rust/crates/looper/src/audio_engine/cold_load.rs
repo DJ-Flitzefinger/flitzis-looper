@@ -3,19 +3,21 @@
 use super::cold_jobs::PCM_LIMIT_BYTES;
 use super::cold_residency::{self, ResidentLoadGuard, ResidentLoadHint};
 use super::cold_store::{ColdTransaction, CommittedColdLease};
-use super::content_placement::{PlacementObservation, SlotSnapshot};
-use super::input_runtime_binding::{InputRuntimeOwnership, SourcePublication};
+use super::content_placement::{PlacementError, PlacementObservation, SlotSnapshot};
+use super::input_runtime_binding::{
+    InputRuntimeOwnership, SourcePublication, SourcePublicationError,
+};
 use super::progress::{LoadProgressStage, ProgressReporter};
 use super::sample_loader::{SampleLoadProgress, SampleLoadSubtask};
 use super::{
     AudioEngine, LoadedSourcePublication, PadRequestAdvance, analyze_sample, pad_request_matches,
-    publish_loaded_sample_with_arm,
+    try_publish_loaded_sample_with_arm,
 };
 use crate::messages::{ControlMessage, LoaderEvent, SampleBuffer};
 use flitzis_looper_analysis::tempo_acceptance::TimingIntent;
 use pyo3::exceptions::{PyRuntimeError, PyValueError};
 use pyo3::prelude::*;
-use pyo3::types::{PyBool, PyInt};
+use pyo3::types::{PyBool, PyFloat, PyInt, PyTuple};
 use rtrb::Producer;
 use std::collections::HashSet;
 use std::path::{Component, PathBuf};
@@ -34,6 +36,64 @@ type PreparedColdSample = (
     Option<crate::messages::IncomingLoadDefaults>,
     Option<Arc<AtomicBool>>,
 );
+
+/// Complete saved mixing belongs to the original source claim, never an empty-slot replay.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub(crate) struct SourceMixInitialization {
+    pub(crate) gain_db: f32,
+    pub(crate) eq_db: [f32; 3],
+}
+
+pub(super) fn parse_initial_mix(
+    source_intent: &str,
+    gain: Option<&Bound<'_, PyAny>>,
+    eq: Option<&Bound<'_, PyAny>>,
+) -> PyResult<Option<SourceMixInitialization>> {
+    let gain = gain.filter(|value| !value.is_none());
+    let eq = eq.filter(|value| !value.is_none());
+    if gain.is_none() && eq.is_none() {
+        return Ok(None);
+    }
+    if source_intent != "restore" {
+        return Err(PyValueError::new_err(
+            "initial mixing settings require explicit restore",
+        ));
+    }
+    let (Some(gain), Some(eq)) = (gain, eq) else {
+        return Err(PyValueError::new_err(
+            "initial mixing requires gain and a complete three-band EQ tuple",
+        ));
+    };
+    let number = |value: &Bound<'_, PyAny>, low: f32, high: f32| -> PyResult<f32> {
+        if value.is_instance_of::<PyBool>()
+            || !(value.is_instance_of::<PyInt>() || value.is_instance_of::<PyFloat>())
+        {
+            return Err(PyValueError::new_err("initial mixing must be numeric"));
+        }
+        let value = value
+            .extract::<f64>()
+            .map_err(|_| PyValueError::new_err("initial mixing is outside its numeric domain"))?;
+        if !value.is_finite() || !(f64::from(low)..=f64::from(high)).contains(&value) {
+            return Err(PyValueError::new_err("initial mixing out of range"));
+        }
+        Ok(value as f32)
+    };
+    let eq = eq.cast::<PyTuple>().map_err(|_| {
+        PyValueError::new_err("initial mixing requires a complete three-band EQ tuple")
+    })?;
+    if eq.len() != 3 {
+        return Err(PyValueError::new_err(
+            "initial mixing requires a complete three-band EQ tuple",
+        ));
+    }
+    use super::constants::{PAD_EQ_DB_MAX, PAD_EQ_DB_MIN, PAD_GAIN_DB_MAX, PAD_GAIN_DB_MIN};
+    let gain_db = number(gain, PAD_GAIN_DB_MIN, PAD_GAIN_DB_MAX)?;
+    let mut eq_db = [0.0; 3];
+    for (target, value) in eq_db.iter_mut().zip(eq.iter()) {
+        *target = number(&value, PAD_EQ_DB_MIN, PAD_EQ_DB_MAX)?;
+    }
+    Ok(Some(SourceMixInitialization { gain_db, eq_db }))
+}
 
 /// Initial bank settings are source-owned scalars, never a performer attack.
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
@@ -282,10 +342,15 @@ struct ColdLoad {
     metadata_superseded: AtomicBool,
     #[cfg(test)]
     adoption_wait_gate: Option<Arc<AdoptionWaitGate>>,
+    #[cfg(all(test, windows))]
+    before_prepare: Option<pending_cancellation_tests::BeforePrepareProbe>,
+    #[cfg(all(test, windows))]
+    before_publication: Mutex<Option<pending_cancellation_tests::BeforePrepareProbe>>,
     prepared_material: Option<Arc<super::material_migration::PreparedMigrationMaterial>>,
     path: PathBuf,
     restore: bool,
     initial_pitch: SourcePitchInitialization,
+    initial_mix: Option<SourceMixInitialization>,
     samples_root: PathBuf,
     output_channels: usize,
     output_rate: u32,
@@ -335,6 +400,7 @@ pub(super) fn admit(
         resident_hint,
         source_intent,
         SourcePitchInitialization::FreshNeutral,
+        None,
     )
 }
 
@@ -349,6 +415,7 @@ pub(super) fn admit_with_initial_pitch(
     resident_hint: Option<ResidentLoadHint>,
     source_intent: &str,
     initial_pitch: SourcePitchInitialization,
+    initial_mix: Option<SourceMixInitialization>,
 ) -> PyResult<u64> {
     // The saved source tuple owns the actual mode. The residency hint still
     // describes the same range, and its cancellation guard tracks that mode.
@@ -383,6 +450,7 @@ pub(super) fn admit_with_initial_pitch(
             ),
             source_intent,
             initial_pitch,
+            initial_mix,
         );
     }
     let handle = engine
@@ -409,6 +477,7 @@ pub(super) fn admit_with_initial_pitch(
         ),
         source_intent,
         initial_pitch,
+        initial_mix,
     )
 }
 
@@ -469,6 +538,7 @@ fn admit_for_format_selected_intent(
         output,
         source_intent,
         SourcePitchInitialization::FreshNeutral,
+        None,
     )
 }
 
@@ -482,6 +552,7 @@ fn admit_for_format_selected_intent_with_pitch(
     output: (usize, u32, PathBuf),
     source_intent: &str,
     initial_pitch: SourcePitchInitialization,
+    initial_mix: Option<SourceMixInitialization>,
 ) -> PyResult<u64> {
     admit_selected_material_incoming(
         engine,
@@ -494,6 +565,7 @@ fn admit_for_format_selected_intent_with_pitch(
         None,
         None,
         initial_pitch,
+        initial_mix,
     )
     .map(|admitted| admitted.request_id)
 }
@@ -565,6 +637,7 @@ pub(super) fn admit_selected_material(
         prepared_material,
         None,
         initial_pitch,
+        None,
     )
 }
 
@@ -607,6 +680,7 @@ pub(super) fn admit_incoming(
         None,
         Some(super::incoming_load::IncomingIntent::initial(key_lock)),
         SourcePitchInitialization::FreshNeutral,
+        None,
     )
     .map(|admitted| admitted.request_id)
 }
@@ -623,6 +697,7 @@ fn admit_selected_material_incoming(
     prepared_material: Option<Arc<super::material_migration::PreparedMigrationMaterial>>,
     incoming_intent: Option<super::incoming_load::IncomingIntent>,
     initial_pitch: SourcePitchInitialization,
+    initial_mix: Option<SourceMixInitialization>,
 ) -> PyResult<AdmittedMaterial> {
     let (output_channels, output_rate, samples_root) = output;
     let (run_analysis, restore_automatic, replace_assignment, resident_hint) = selection;
@@ -832,10 +907,15 @@ fn admit_selected_material_incoming(
         metadata_superseded: AtomicBool::new(false),
         #[cfg(test)]
         adoption_wait_gate: ADOPTION_WAIT_GATE.with(|gate| gate.borrow_mut().take()),
+        #[cfg(all(test, windows))]
+        before_prepare: pending_cancellation_tests::take_before_prepare_probe(),
+        #[cfg(all(test, windows))]
+        before_publication: Mutex::new(pending_cancellation_tests::take_before_publication_probe()),
         prepared_material,
         path: source_path,
         restore,
         initial_pitch,
+        initial_mix,
         samples_root,
         output_channels,
         output_rate,
@@ -1098,7 +1178,11 @@ impl ColdLoad {
     fn flags_cancelled(&self) -> bool {
         self.cancelled.load(Ordering::Acquire)
             || self.adoption.load(Ordering::Acquire) == 3
-            || (!self.proposal.armed() && !self.ownership.slot_snapshot_current(self.placement))
+            || (!self.proposal.armed()
+                && matches!(
+                    self.ownership.observe_slot_snapshot(self.placement),
+                    PlacementObservation::Stale | PlacementObservation::Retired
+                ))
             || !self.proposal.current()
             || self
                 .resident_guard
@@ -1469,36 +1553,46 @@ impl ColdLoad {
     }
 
     fn run(self, producer: Arc<Mutex<Producer<ControlMessage>>>) {
-        let _ = self.events.send(LoaderEvent::Started {
-            id: self.id,
-            request_id: self.request_id,
+        #[cfg(all(test, windows))]
+        let work = {
+            let mut work = self;
+            if let Some(probe) = work.before_prepare.take() {
+                probe(&work);
+            }
+            work
+        };
+        #[cfg(not(all(test, windows)))]
+        let work = self;
+        let _ = work.events.send(LoaderEvent::Started {
+            id: work.id,
+            request_id: work.request_id,
         });
-        let result = self.publish(&producer);
+        let result = work.publish(&producer);
         if let Err(error) = result {
-            let cleanup = self.publication_cleanup();
+            let cleanup = work.publication_cleanup();
             let rejected = cleanup.cancel_unclaimed();
             if rejected {
                 cleanup.rollback_rejected_artifacts();
             }
-            let metadata_superseded = self.adoption.load(Ordering::Acquire) == 2
-                && self.metadata_superseded.load(Ordering::Acquire);
+            let metadata_superseded = work.adoption.load(Ordering::Acquire) == 2
+                && work.metadata_superseded.load(Ordering::Acquire);
             let event = if rejected || metadata_superseded {
                 LoaderEvent::Error {
-                    id: self.id,
-                    request_id: self.request_id,
+                    id: work.id,
+                    request_id: work.request_id,
                     error,
                 }
             } else {
                 LoaderEvent::Progress {
-                    id: self.id,
-                    request_id: self.request_id,
+                    id: work.id,
+                    request_id: work.request_id,
                     percent: 0.0,
                     stage: format!(
                         "{error}; native permission unresolved or adopted; artifacts retained"
                     ),
                 }
             };
-            let _ = self.events.send(event);
+            let _ = work.events.send(event);
         }
     }
 
@@ -1620,6 +1714,117 @@ impl ColdLoad {
         Ok(())
     }
 
+    /// One attempt owns every control lock only until it either commits or defers.
+    /// Retrying this helper never recaptures the original source or preparation.
+    fn enqueue_prepared_source(
+        &self,
+        producer: &Arc<Mutex<Producer<ControlMessage>>>,
+        sample: &SampleBuffer,
+        source_digest: &str,
+        loop_region: Option<(usize, usize)>,
+        incoming_defaults: Option<crate::messages::IncomingLoadDefaults>,
+        incoming_cancelled: &Option<Arc<AtomicBool>>,
+    ) -> Result<(SourcePublication, PreviousSourceState), SourcePublicationError> {
+        let mut requests = self.requests.lock().map_err(|_| "request lock poisoned")?;
+        let mut captured_publication = self
+            .publication
+            .lock()
+            .map_err(|_| "cold publication lock poisoned")?;
+        if self.flags_cancelled()
+            || incoming_cancelled
+                .as_ref()
+                .is_some_and(|cancelled| cancelled.load(Ordering::Acquire))
+            || requests[self.id] != self.base_request
+            || self.epoch.load(Ordering::Acquire) != self.base_epoch
+        {
+            return Err("cold request became stale".into());
+        }
+        match self.ownership.observe_slot_snapshot(self.placement) {
+            PlacementObservation::Current(_) => {}
+            PlacementObservation::Pending => return Err(PlacementError::Pending.into()),
+            PlacementObservation::Stale => return Err(PlacementError::Stale.into()),
+            PlacementObservation::Retired => return Err(PlacementError::Retired.into()),
+        }
+        {
+            let cache = self
+                .cache
+                .lock()
+                .map_err(|_| "sample cache lock poisoned")?;
+            if !same_source(cache[self.id].as_ref(), self.initial_source.as_ref()) {
+                return Err("cold source changed".into());
+            }
+        }
+        let mut intents = self
+            .intents
+            .lock()
+            .map_err(|_| "timing intent lock poisoned")?;
+        let mut generations = self
+            .generations
+            .lock()
+            .map_err(|_| "source generation lock poisoned")?;
+        let mut digests = self
+            .digests
+            .lock()
+            .map_err(|_| "source digest lock poisoned")?;
+        let previous = PreviousSourceState {
+            generation: generations[self.id],
+            digest: digests[self.id].clone(),
+            intent: intents[self.id],
+        };
+        let advance = PadRequestAdvance::prepare(&mut requests[self.id], &self.epoch)?;
+        let logical_advance = self
+            .ownership
+            .prepare_source_request_advance_for_placement(self.placement)?;
+        if advance.next_request > self.request_id || advance.next_epoch != self.expected_epoch {
+            return Err("cold proposal current authority changed before arming".into());
+        }
+        let arm_rejected = "cold source proposal arm rejected".to_owned();
+        let source_publication = try_publish_loaded_sample_with_arm(
+            producer,
+            &self.cache,
+            self.id,
+            sample.clone(),
+            LoadedSourcePublication {
+                placement: self.placement,
+                ownership: &self.ownership,
+                generation: self.request_id,
+                rate: self.output_rate,
+                generation_slot: &mut generations[self.id],
+                digest_slot: &mut digests[self.id],
+                digest: source_digest.to_owned(),
+                cold: true,
+                cold_epoch: self.guard_epoch.then(|| self.epoch.clone()),
+                cold_adoption: Some(self.adoption.clone()),
+                replace_assignment: self.replace_assignment,
+                loop_region,
+                incoming_defaults,
+                initial_pitch: self.initial_pitch,
+                initial_mix: self.initial_mix,
+                resident_cancelled: incoming_cancelled.clone().or_else(|| {
+                    self.resident_guard
+                        .as_ref()
+                        .map(|guard| guard.cancelled.clone())
+                }),
+                intent: if incoming_defaults.is_some() {
+                    Some((&mut intents[self.id], TimingIntent::Legacy))
+                } else {
+                    self.restore_automatic
+                        .then_some((&mut intents[self.id], TimingIntent::Automatic))
+                },
+            },
+            || {
+                if self.adoption.load(Ordering::Acquire) != 0 || !self.proposal.try_arm() {
+                    return Err(arm_rejected);
+                }
+                logical_advance.commit();
+                advance.commit_reserved_prechecked(self.request_id);
+                Ok(())
+            },
+        )?;
+        *captured_publication = Some(source_publication.clone());
+        Ok((source_publication, previous))
+    }
+
     fn publish(&self, producer: &Arc<Mutex<Producer<ControlMessage>>>) -> Result<(), String> {
         let (
             lease,
@@ -1665,46 +1870,13 @@ impl ColdLoad {
                 &mut resident_registration,
             )
             .map_err(|error| error.to_string())?;
-        let mut requests = self.requests.lock().map_err(|_| "request lock poisoned")?;
-        let mut captured_publication = self
-            .publication
-            .lock()
-            .map_err(|_| "cold publication lock poisoned")?;
-        if self.flags_cancelled()
-            || incoming_cancelled
-                .as_ref()
-                .is_some_and(|cancelled| cancelled.load(Ordering::Acquire))
-            || requests[self.id] != self.base_request
-            || self.epoch.load(Ordering::Acquire) != self.base_epoch
+        #[cfg(all(test, windows))]
         {
-            return Err("cold request became stale".into());
-        }
-        {
-            let cache = self
-                .cache
-                .lock()
-                .map_err(|_| "sample cache lock poisoned")?;
-            if !same_source(cache[self.id].as_ref(), self.initial_source.as_ref()) {
-                return Err("cold source changed".into());
+            let probe = self.before_publication.lock().unwrap().take();
+            if let Some(probe) = probe {
+                probe(self);
             }
         }
-        let mut intents = self
-            .intents
-            .lock()
-            .map_err(|_| "timing intent lock poisoned")?;
-        let mut generations = self
-            .generations
-            .lock()
-            .map_err(|_| "source generation lock poisoned")?;
-        let mut digests = self
-            .digests
-            .lock()
-            .map_err(|_| "source digest lock poisoned")?;
-        let previous = PreviousSourceState {
-            generation: generations[self.id],
-            digest: digests[self.id].clone(),
-            intent: intents[self.id],
-        };
         // Successful arming advances this exact epoch. Every post-enqueue
         // metadata/rollback comparison must use the admitted epoch, rather
         // than the predecessor snapshot retained for preparation validation.
@@ -1724,59 +1896,33 @@ impl ColdLoad {
             .map(|hint| hint.region(self.output_rate, sample.frame_count()))
             .transpose()?
             .map(|region| (region.start, region.end));
-        let advance = PadRequestAdvance::prepare(&mut requests[self.id], &self.epoch)?;
-        let logical_advance = self.ownership.prepare_source_request_advance(self.id)?;
-        if advance.next_request > self.request_id || advance.next_epoch != self.expected_epoch {
-            return Err("cold proposal current authority changed before arming".into());
-        }
-        let arm_rejected = "cold source proposal arm rejected".to_owned();
-        let source_publication = publish_loaded_sample_with_arm(
-            producer,
-            &self.cache,
-            self.id,
-            sample.clone(),
-            LoadedSourcePublication {
-                placement: self.placement,
-                ownership: &self.ownership,
-                generation: self.request_id,
-                rate: self.output_rate,
-                generation_slot: &mut generations[self.id],
-                digest_slot: &mut digests[self.id],
-                digest: source_digest,
-                cold: true,
-                cold_epoch: self.guard_epoch.then(|| self.epoch.clone()),
-                cold_adoption: Some(self.adoption.clone()),
-                replace_assignment: self.replace_assignment,
+        let publication_deadline = std::time::Instant::now() + std::time::Duration::from_secs(30);
+        let (source_publication, previous) = loop {
+            match self.enqueue_prepared_source(
+                producer,
+                &sample,
+                &source_digest,
                 loop_region,
                 incoming_defaults,
-                initial_pitch: self.initial_pitch,
-                resident_cancelled: incoming_cancelled.or_else(|| {
-                    self.resident_guard
-                        .as_ref()
-                        .map(|guard| guard.cancelled.clone())
-                }),
-                intent: if incoming_defaults.is_some() {
-                    Some((&mut intents[self.id], TimingIntent::Legacy))
-                } else {
-                    self.restore_automatic
-                        .then_some((&mut intents[self.id], TimingIntent::Automatic))
-                },
-            },
-            || {
-                if self.adoption.load(Ordering::Acquire) != 0 || !self.proposal.try_arm() {
-                    return Err(arm_rejected);
+                &incoming_cancelled,
+            ) {
+                Ok(published) => break published,
+                Err(SourcePublicationError::Placement(
+                    PlacementError::Pending | PlacementError::Stale,
+                )) if !self.proposal.armed() => {
+                    // Only publication contention retries. The next attempt must
+                    // prove this exact original slot Current before arming it.
+                    if self.is_cancelled() {
+                        return Err("cold request became stale".into());
+                    }
+                    if std::time::Instant::now() >= publication_deadline {
+                        return Err("cold source publication remains pending".into());
+                    }
+                    std::thread::sleep(std::time::Duration::from_millis(1));
                 }
-                logical_advance.commit();
-                advance.commit_reserved_prechecked(self.request_id);
-                Ok(())
-            },
-        )?;
-        *captured_publication = Some(source_publication.clone());
-        drop(digests);
-        drop(generations);
-        drop(intents);
-        drop(captured_publication);
-        drop(requests);
+                Err(error) => return Err(error.to_string()),
+            }
+        };
         if let Err((error, may_be_adopted)) = self.await_adoption() {
             if may_be_adopted {
                 publication.adopted = true;
@@ -1893,6 +2039,14 @@ pub(in crate::audio_engine) mod tests;
 #[path = "cold_cancellation_publication_tests.rs"]
 mod cancellation_publication_tests;
 
+#[cfg(all(test, windows))]
+#[path = "cold_load_pending_cancellation_tests.rs"]
+mod pending_cancellation_tests;
+
+#[cfg(all(test, windows))]
+#[path = "cold_restore_initialization_tests.rs"]
+mod restore_initialization_tests;
+
 #[cfg(test)]
 mod source_pitch_initialization_tests {
     use super::*;
@@ -1966,6 +2120,8 @@ mod source_pitch_initialization_tests {
                         Some(&base),
                         Some(&extra),
                         Some(&lock),
+                        None,
+                        None,
                     )
                     .unwrap_err();
                 assert!(error.is_instance_of::<PyValueError>(py));

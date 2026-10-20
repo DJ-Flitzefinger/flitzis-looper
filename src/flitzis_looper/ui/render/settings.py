@@ -9,16 +9,21 @@ from flitzis_looper.constants import (
     MIN_DEMUCS_SHIFTS,
 )
 from flitzis_looper.models import (
+    KEY_LOCK_START_BEHAVIOR_LABELS,
+    KEY_LOCK_START_BEHAVIORS,
     STEM_SEPARATOR_LABELS,
     STEM_SEPARATORS,
     TRIGGER_QUANTIZATION_STEP_LABELS,
     TRIGGER_QUANTIZATION_STEPS,
 )
+from flitzis_looper.recording_options import RecordingOptions
 from flitzis_looper.ui.constants import SPACING, TEXT_MUTED_RGBA
 from flitzis_looper.ui.contextmanager import button_style, item_width, style_var
 
 if TYPE_CHECKING:
-    from flitzis_looper.ui.context import UiContext
+    from flitzis_looper.controller.stem_batch import StemBatchSummary
+    from flitzis_looper.controller.stem_delete import StemDeleteSummary
+    from flitzis_looper.ui.context import StemCleanupStatus, UiContext
 
 SETTINGS_TOGGLE_BUTTON_SIZE = 36.0
 
@@ -63,11 +68,139 @@ def settings_overlay(ctx: UiContext) -> None:
         imgui.text_colored(TEXT_MUTED_RGBA, "Trigger Quantize")
         _trigger_quantization_controls(ctx)
         imgui.separator()
+        _key_lock_start_behavior_controls(ctx)
+        imgui.separator()
+        imgui.text_colored(TEXT_MUTED_RGBA, "Recording")
+        _recording_controls(ctx)
+        imgui.separator()
         imgui.text_colored(TEXT_MUTED_RGBA, "Stem Generation")
         _stem_generation_controls(ctx)
+        _stem_batch_controls(ctx)
+        _stem_delete_controls(ctx)
         imgui.separator()
         imgui.text_colored(TEXT_MUTED_RGBA, "Resident Audio RAM")
         _resident_pcm_controls(ctx)
+
+
+def _recording_choice(
+    ctx: UiContext,
+    label: str,
+    field: str,
+    current: str | int,
+    choices: tuple[tuple[str | int, str], ...],
+) -> None:
+    labels = dict(choices)
+    with item_width(240):
+        if not imgui.begin_combo(label, labels[current]):
+            return
+        for value, text in choices:
+            selected = value == current
+            if imgui.selectable(f"{text}##recording_{field}_{value}", selected)[0]:
+                options = RecordingOptions.model_validate(
+                    ctx.state.project.recording_options.model_dump() | {field: value}
+                )
+                ctx.ui.settings.set_recording_options(options)
+                ctx.persistence.flush_if_dirty()
+            if selected:
+                imgui.set_item_default_focus()
+        imgui.end_combo()
+
+
+def _recording_controls(ctx: UiContext) -> None:
+    """Edit future take defaults without touching an audio or preparation owner."""
+    options = ctx.state.project.recording_options
+    _recording_choice(
+        ctx,
+        "Recording format",
+        "format",
+        options.format,
+        (("wav", "WAV"), ("flac", "FLAC"), ("mp3", "MP3")),
+    )
+    options = ctx.state.project.recording_options
+    if options.format == "wav":
+        _recording_choice(
+            ctx,
+            "WAV precision",
+            "wav_encoding",
+            options.wav_encoding,
+            (("float32", "32-bit float"), ("pcm24", "24-bit PCM"), ("pcm16", "16-bit PCM")),
+        )
+    elif options.format == "flac":
+        _recording_choice(
+            ctx,
+            "FLAC precision",
+            "flac_bit_depth",
+            options.flac_bit_depth,
+            ((24, "24-bit"), (16, "16-bit")),
+        )
+        options = ctx.state.project.recording_options
+        with item_width(240):
+            changed, compression = imgui.slider_int(
+                "FLAC compression", options.flac_compression, 0, 8
+            )
+        if changed:
+            ctx.ui.settings.set_recording_options(
+                RecordingOptions.model_validate(
+                    options.model_dump() | {"flac_compression": compression}
+                )
+            )
+        _flush_settings_edit_if_completed(ctx)
+        imgui.text_wrapped(
+            "Compression changes file size and encoding time. Audio remains lossless."
+        )
+    else:
+        _recording_choice(
+            ctx,
+            "MP3 bitrate",
+            "mp3_bitrate_kbps",
+            options.mp3_bitrate_kbps,
+            (
+                (320, "320 kbit/s CBR"),
+                (256, "256 kbit/s CBR"),
+                (192, "192 kbit/s CBR"),
+                (128, "128 kbit/s CBR"),
+            ),
+        )
+    imgui.text_wrapped(
+        "These defaults apply to future takes. A prepared take keeps its selected settings."
+    )
+    if ctx.persistence.recording_settings_warning:
+        imgui.text_wrapped(ctx.persistence.recording_settings_warning)
+
+
+def _key_lock_start_behavior_controls(ctx: UiContext) -> None:
+    behavior = ctx.state.project.key_lock_start_behavior
+    can_change = ctx.ui.settings.can_change_key_lock_start_behavior()
+    imgui.begin_disabled(not can_change)
+    try:
+        with item_width(240):
+            if imgui.begin_combo(
+                "Key Lock start behavior", KEY_LOCK_START_BEHAVIOR_LABELS[behavior]
+            ):
+                for option in KEY_LOCK_START_BEHAVIORS:
+                    selected = option == behavior
+                    label = KEY_LOCK_START_BEHAVIOR_LABELS[option]
+                    if imgui.selectable(f"{label}##key_lock_start_behavior_{option}", selected)[
+                        0
+                    ] and ctx.ui.settings.set_key_lock_start_behavior(option):
+                        ctx.persistence.flush_if_dirty()
+                    if selected:
+                        imgui.set_item_default_focus()
+                imgui.end_combo()
+    finally:
+        imgui.end_disabled()
+    if ctx.state.project.key_lock_start_behavior == "attack_at_grid":
+        imgui.text_wrapped(
+            "The main attack aligns with the grid. "
+            "Any required quiet lead-in may be audible before it."
+        )
+    else:
+        imgui.text_wrapped(
+            "Playback stays silent before the grid. If the sound has a quiet lead-in, "
+            "the main attack follows correspondingly later."
+        )
+    if not can_change:
+        imgui.text_wrapped("Stop playback to change")
 
 
 def _resident_pcm_controls(ctx: UiContext) -> None:
@@ -87,8 +220,6 @@ def _resident_pcm_controls(ctx: UiContext) -> None:
     if changed:
         ctx.ui.settings.set_resident_pcm_budget_mib(int(budget_value))
     _flush_settings_edit_if_completed(ctx)
-    if ctx.state.session.resident_pcm_settings_error:
-        imgui.text_wrapped(str(ctx.state.session.resident_pcm_settings_error))
     summary = ctx.state.stems.residency_summary()
     imgui.text_wrapped(
         f"Conservative all-pad FullMix + eligible components: "
@@ -104,7 +235,7 @@ def _resident_pcm_controls(ctx: UiContext) -> None:
         f"unconfirmed in the current context {summary.unconfirmed}."
     )
     if summary.accounting_error:
-        imgui.text_wrapped(f"Resident accounting unavailable: {summary.accounting_error}")
+        imgui.text_wrapped("Resident accounting unavailable")
         return
     native = summary.native
     imgui.text_wrapped(
@@ -140,9 +271,6 @@ def _input_mapping_controls(ctx: UiContext) -> None:
         if imgui.button("Delete all MIDI Mappings", (-1, 0)):
             ctx.ui.settings.delete_all_midi_mappings()
 
-    if ctx.state.session.input_mapping_error:
-        imgui.text_wrapped(ctx.state.session.input_mapping_error)
-
 
 def _trigger_quantization_controls(ctx: UiContext) -> None:
     step = ctx.state.project.trigger_quantization_step
@@ -177,6 +305,95 @@ def _stem_generation_controls(ctx: UiContext) -> None:
     imgui.text_colored(TEXT_MUTED_RGBA, "Applies to new stem generations.")
     if ctx.state.project.stem_separator == "demucs:htdemucs":
         _demucs_quality_controls(ctx)
+
+
+def _stem_batch_controls(ctx: UiContext) -> None:
+    summary = ctx.ui.stem_batch.summary
+    deletion = ctx.ui.stem_delete.summary
+    imgui.begin_disabled(
+        (summary is not None and summary.active) or (deletion is not None and deletion.active)
+    )
+    if imgui.button("Generate Stems of all loaded PADs", (-1, 0)):
+        ctx.ui.confirmation.request_all_loaded_stems()
+    imgui.end_disabled()
+    if summary is not None:
+        _stem_batch_progress(ctx, summary)
+
+
+def _stem_batch_progress(ctx: UiContext, summary: StemBatchSummary) -> None:
+    settled = summary.done + summary.skipped + summary.failed + summary.cancelled
+    imgui.text_wrapped(f"Settled {settled} of {summary.total} loaded PADs.")
+    imgui.text_wrapped(
+        f"Queued {summary.queued}; Running {summary.running}; Done {summary.done}; "
+        f"Skipped {summary.skipped}; Failed {summary.failed}; "
+        f"Cancelling {summary.cancelling}; Cancelled {summary.cancelled}."
+    )
+    imgui.text_wrapped(
+        "Done means stems saved. Playback readiness is reported separately for each PAD; "
+        "saved stems may still need audio preparation and adoption."
+    )
+    height = imgui.get_text_line_height_with_spacing() * 6
+    imgui.begin_child("stem_batch_items", (-1, height), imgui.ChildFlags_.borders)
+    try:
+        for item in summary.items:
+            label = "Done - stems saved" if item.state == "done" else item.state.capitalize()
+            detail = (
+                f" - {item.detail}"
+                if item.state != "failed" and item.detail and item.detail != "Stems saved"
+                else ""
+            )
+            imgui.text_wrapped(f"PAD {item.pad_id + 1}: {label}{detail}")
+    finally:
+        imgui.end_child()
+    if summary.cancelling:
+        imgui.text_wrapped("Cancellation is waiting for this batch's owned work to settle.")
+    if summary.active:
+        if imgui.button("Cancel batch", (-1, 0)):
+            ctx.ui.stem_batch.cancel()
+    elif imgui.button("Dismiss batch results", (-1, 0)):
+        ctx.ui.stem_batch.dismiss_result()
+
+
+def _stem_delete_controls(ctx: UiContext) -> None:
+    summary = ctx.ui.stem_delete.summary
+    imgui.begin_disabled(summary is not None and summary.active)
+    if imgui.button("Delete Stems of all loaded PADs", (-1, 0)):
+        ctx.ui.confirmation.request_all_loaded_stem_deletion()
+    imgui.end_disabled()
+    if summary is not None:
+        _stem_delete_progress(ctx, summary)
+    _stem_cleanup_progress(ctx.ui.stem_delete.cleanup_status)
+
+
+def _stem_delete_progress(ctx: UiContext, summary: StemDeleteSummary) -> None:
+    settled = summary.removed + summary.noop + summary.skipped + summary.failed
+    imgui.text_wrapped(f"Deletion settled {settled} of {summary.total} loaded PADs.")
+    imgui.text_wrapped(
+        f"Removed {summary.removed}; Noop {summary.noop}; Skipped {summary.skipped}; "
+        f"Failed {summary.failed}; Queued {summary.queued}."
+    )
+    imgui.text_wrapped(
+        "Removed means stem choices and pending work were withdrawn. "
+        "File cleanup is separate and waits for actual readers."
+    )
+    height = imgui.get_text_line_height_with_spacing() * 6
+    imgui.begin_child("stem_delete_items", (-1, height), imgui.ChildFlags_.borders)
+    try:
+        for item in summary.items:
+            detail = f" - {item.detail}" if item.state != "failed" and item.detail else ""
+            imgui.text_wrapped(f"PAD {item.pad_id + 1}: {item.state.capitalize()}{detail}")
+    finally:
+        imgui.end_child()
+    if not summary.active and imgui.button("Dismiss deletion results", (-1, 0)):
+        ctx.ui.stem_delete.dismiss_result()
+
+
+def _stem_cleanup_progress(status: StemCleanupStatus) -> None:
+    pending = str(status.pending_targets) if status.pending_targets is not None else "unknown"
+    imgui.text_wrapped(
+        f"Global file cleanup: Pending {pending}; Errors {len(status.errors)}. "
+        "These counts include other cleanup, not just this deletion."
+    )
 
 
 def _demucs_quality_controls(ctx: UiContext) -> None:

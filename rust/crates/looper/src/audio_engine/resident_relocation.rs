@@ -28,6 +28,9 @@ use std::time::{Duration, Instant};
 
 const ADOPTION_DEADLINE: Duration = Duration::from_secs(30);
 
+#[cfg(test)]
+mod resident_loop_transition_tests;
+
 /// Preparation owns its result through a control mirror gap. This off-thread
 /// clock excludes only time waiting on the original key's Pending placement.
 #[derive(Default)]
@@ -303,6 +306,11 @@ impl ResidentStemCache {
     }
     pub(super) fn ordinary_publication_pending(&self) -> bool {
         self.pending.is_some()
+    }
+    /// Fresh recovery must not fence an original window collector before its
+    /// actual control settlement. Call after the existing reconcile path.
+    pub(super) fn recovered_custody_settled(&self) -> bool {
+        self.pending.is_none() && self.relocation.is_none() && self.proposal.is_none()
     }
     fn remember(&mut self, owner: &StemOwner) -> PyResult<()> {
         self.history
@@ -599,6 +607,15 @@ impl ResidentLaunchGuard {
                 .as_ref()
                 .is_none_or(|member| !member.load(Ordering::Acquire))
             && self.publication.current_accepted()
+    }
+
+    /// Only this retained member/root's actual accepted loop commit may bridge
+    /// its original target revision. Later source-control changes still refuse.
+    pub(crate) fn owns_source_control_transition(&self, original: u64, current: u64) -> bool {
+        self.current()
+            && self
+                .publication
+                .owns_source_control_transition(original, current)
     }
 }
 
@@ -2897,6 +2914,7 @@ fn prepare_window_with_producer_and_trigger(
                 .map(|end| ((end * f64::from(rate)).round() as usize).max(start.saturating_add(1)));
             (start, end)
         }),
+        loop_is_launch_readiness: pad_start.is_some(),
         seek_position_s: request.seek_position_s,
         key_lock: request.key_lock,
         key_lock_request_id: None,

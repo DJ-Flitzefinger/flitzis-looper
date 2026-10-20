@@ -124,3 +124,28 @@ def test_shared_piano_routes_signed_octave_target_and_selected_pad_intent(
     assert ctx.state.pitch_menus.base_open
     assert controller.project.pad_key_intent[1] == intent
     assert format_extra_shift(-12) != format_extra_shift(0) != format_extra_shift(12)
+
+
+@pytest.mark.parametrize("phase", ["rejected", "failed", "preparing"])
+def test_shared_piano_keeps_technical_errors_out_of_its_status_line(
+    controller: AppController, monkeypatch: pytest.MonkeyPatch, phase: str
+) -> None:
+    ctx = UiContext(controller)
+    reason = "Playback context unavailable: prepared_mismatch"
+    monkeypatch.setattr(controller.transport.pitch, "status", lambda _pad: (phase, reason))
+    monkeypatch.setattr(performance_view, "render_piano_keyboard", lambda *_args, **_kwargs: None)
+    labels: list[str] = []
+    monkeypatch.setattr(imgui, "text", labels.append)
+    with _imgui_context():
+        imgui.new_frame()
+        imgui.begin("Piano diagnostics", flags=imgui.WindowFlags_.no_saved_settings)
+        performance_view._render_piano(ctx, 120.0)
+        imgui.end()
+        imgui.render()
+    assert len(labels) == 1
+    assert reason not in labels[0]
+    if phase == "preparing":
+        assert phase in labels[0]
+    else:
+        assert phase not in labels[0]
+        assert "Nominal note" in labels[0]

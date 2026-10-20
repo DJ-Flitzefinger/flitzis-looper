@@ -3,6 +3,8 @@
 from typing import TYPE_CHECKING, cast
 from unittest.mock import Mock, call
 
+import pytest
+
 if TYPE_CHECKING:
     from flitzis_looper.controller import AppController
     from flitzis_looper_audio import ResidentWindowTicket
@@ -226,6 +228,116 @@ def test_gui_capture_precedes_readiness_and_publishes_only_original_owner(
     original.status = "applied"
     residency.poll()
     assert not residency._captured_starts
+
+
+def test_gui_accepted_window_publishes_during_original_trigger(
+    controller: AppController, audio_engine_mock: Mock
+) -> None:
+    audio = audio_engine_mock
+    _ready(controller, audio, resident=True)
+    original, window = _Start(), _Window()
+    window.status = "accepted"
+    audio.capture_pad_start.return_value = original
+    audio.prepare_captured_pad_start.return_value = window
+
+    controller.transport.playback.trigger_pad(0, received_at_ns=777)
+
+    audio.capture_pad_start.assert_called_once()
+    audio.prepare_captured_pad_start.assert_called_once_with(original)
+    audio.publish_pad_start.assert_called_once_with(original, window)
+    (pending,) = controller.transport.residency._captured_starts.values()
+    assert cast("object", pending.start) is original
+    assert pending.ticket is window.native_ticket
+    assert pending.published is True
+    assert original.cancelled is False
+    assert controller.transport.residency.status(0) == ("pending", None)
+
+
+@pytest.mark.parametrize("status", ["preparing", "pending", "adopting"])
+def test_gui_unaccepted_window_waits_for_actual_ack(
+    controller: AppController, audio_engine_mock: Mock, status: str
+) -> None:
+    audio = audio_engine_mock
+    _ready(controller, audio, resident=True)
+    original, window = _Start(), _Window()
+    window.status = status
+    audio.capture_pad_start.return_value = original
+    audio.prepare_captured_pad_start.return_value = window
+
+    controller.transport.playback.trigger_pad(0, received_at_ns=777)
+    controller.transport.residency.poll()
+
+    audio.publish_pad_start.assert_not_called()
+    window.status = "accepted"
+    controller.transport.residency.poll()
+
+    audio.capture_pad_start.assert_called_once()
+    audio.prepare_captured_pad_start.assert_called_once_with(original)
+    audio.publish_pad_start.assert_called_once_with(original, window)
+    assert original.cancelled is False
+
+
+def test_gui_ready_fallthrough_rechecks_deadline_after_preparation(
+    controller: AppController, audio_engine_mock: Mock, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    audio = audio_engine_mock
+    _ready(controller, audio, resident=True)
+    original, window = _Start(), _Window()
+    window.status = "accepted"
+    audio.capture_pad_start.return_value = original
+    clock = Mock(return_value=0.0)
+    monkeypatch.setattr("flitzis_looper.controller.transport.residency.time.monotonic", clock)
+
+    def prepare(_start: _Start) -> _Window:
+        clock.return_value = 31.0
+        return window
+
+    audio.prepare_captured_pad_start.side_effect = prepare
+
+    controller.transport.playback.trigger_pad(0, received_at_ns=777)
+
+    audio.capture_pad_start.assert_called_once()
+    audio.prepare_captured_pad_start.assert_called_once_with(original)
+    audio.publish_pad_start.assert_not_called()
+    assert not controller.transport.residency._captured_starts
+    assert original.cancelled is True
+    assert window.launch_cancelled is True
+    assert "deadline expired" in controller.transport.residency._launch_errors[0]
+
+
+@pytest.mark.parametrize(("failures", "published"), [(6, True), (7, False)])
+def test_gui_ready_fallthrough_preserves_total_eight_attempt_limit(
+    controller: AppController, audio_engine_mock: Mock, failures: int, *, published: bool
+) -> None:
+    audio = audio_engine_mock
+    _ready(controller, audio, resident=True)
+    original, window = _Start(), _Window()
+    window.status = "accepted"
+    audio.capture_pad_start.return_value = original
+    audio.prepare_captured_pad_start.side_effect = [
+        *[RuntimeError("resident command queue is full") for _ in range(failures)],
+        window,
+    ]
+    residency = controller.transport.residency
+
+    controller.transport.playback.trigger_pad(0, received_at_ns=777)
+    for _ in range(failures):
+        residency.poll()
+
+    audio.capture_pad_start.assert_called_once()
+    assert audio.prepare_captured_pad_start.call_count == failures + 1
+    if published:
+        audio.publish_pad_start.assert_called_once_with(original, window)
+        (pending,) = residency._captured_starts.values()
+        assert pending.attempts == 8
+        assert pending.published is True
+        assert original.cancelled is False
+    else:
+        audio.publish_pad_start.assert_not_called()
+        assert not residency._captured_starts
+        assert original.cancelled is True
+        assert window.launch_cancelled is True
+        assert "retry limit" in residency._launch_errors[0]
 
 
 def test_equal_timestamp_gui_attacks_retain_each_exact_own_window(

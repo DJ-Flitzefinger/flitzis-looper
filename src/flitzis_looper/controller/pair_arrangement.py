@@ -18,6 +18,8 @@ from flitzis_looper.controller.pair_stem_mirror import prepare_pair_stem_mirror
 from flitzis_looper.pair_snapshot import capture_pair_snapshot
 
 if TYPE_CHECKING:
+    from collections.abc import Callable
+
     from flitzis_looper.controller.app import AppController
     from flitzis_looper.controller.asset_lifecycle import (
         AssetRetirementReservation,
@@ -77,12 +79,13 @@ class _Pair:
 class PairArrangementController:
     """Retain original participants and exact retry images until every lane settles."""
 
-    def __init__(self, app: AppController) -> None:
+    def __init__(self, app: AppController, *, can_admit: Callable[[], bool] | None = None) -> None:
         self._app = app
         self._thread = threading.get_ident()
         self._pair: _Pair | None = None
         self._results: SimpleQueue[_Prepared] = SimpleQueue()
         self._closing = False
+        self._can_admit = can_admit or (lambda: True)
         self.status = "idle"
         self.error: str | None = None
         self._startup = PairArrangementStartup(app)
@@ -129,7 +132,7 @@ class PairArrangementController:
     ) -> bool:
         """Admit one Pair, retaining an optional original gesture source through retries."""
         self._require_thread()
-        if self.active or self._closing or self._app.arrangement.active:
+        if self.active or self._closing or self._app.arrangement.active or not self._can_admit():
             return False
         if source_binding is not None and (
             source_binding.metadata().get("pad_id") != source_id or not source_binding.is_current()

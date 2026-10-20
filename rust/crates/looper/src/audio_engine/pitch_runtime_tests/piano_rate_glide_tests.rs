@@ -4,8 +4,10 @@
 //! and the sole scheduler are retained. The parent's independent ScalarClock and
 //! separately owned Raw-Native PCM reference cover the original voices through E
 //! and each successful attack afterwards. The reset owner has independently
-//! declared, phase-translated genuine rate epochs and an E-anchored bounded
-//! history. Unavailable young history still refuses the whole action. This does
+//! declared genuine rate epochs and E-anchored silent Native pre-origin input,
+//! then emits its complete physical beginning at E with a fresh filter. Original
+//! T and the accepted rate clock remain independent. Unavailable young history
+//! still refuses the whole action. This does
 //! not establish device deadlines, acoustic, finite-window, continuous-O, or
 //! parent acceptance.
 
@@ -17,6 +19,8 @@ use crate::audio_engine::source_playback::SourcePlayback;
 mod finite_window_rate_glide_tests;
 #[path = "lower_total_rate_glide_tests.rs"]
 mod lower_total_rate_glide_tests;
+#[path = "piano_glide_original_target_tests.rs"]
+mod piano_glide_original_target_tests;
 #[path = "selected_stem_rate_glide_tests.rs"]
 mod selected_stem_rate_glide_tests;
 #[path = "upper_total_rate_glide_tests.rs"]
@@ -89,8 +93,27 @@ fn initial_birth_admitted_with_reference(
     route: &mut RateRoute,
     id: usize,
     speed: f64,
-    mut original: Original,
+    original: Original,
     birth_reference: BirthReference,
+) -> Original {
+    let master_anchor_frame = original.e;
+    initial_birth_admitted_with_reference_at_anchor(
+        route,
+        id,
+        speed,
+        original,
+        birth_reference,
+        master_anchor_frame,
+    )
+}
+
+fn initial_birth_admitted_with_reference_at_anchor(
+    route: &mut RateRoute,
+    id: usize,
+    speed: f64,
+    mut original: Original,
+    birth_reference: impl FnOnce(&SampleBuffer, usize, PitchIntent, f64, bool, usize, u64) -> Reference,
+    master_anchor_frame: u64,
 ) -> Original {
     assert_eq!(original.id, id);
     route.assert_no_attacks();
@@ -114,10 +137,13 @@ fn initial_birth_admitted_with_reference(
     );
     let native = voice.stretch.native_state_address();
     let generation = voice.generation;
-    if route.master.is_none() {
+    let first_bootstrap = route.master.is_none();
+    if first_bootstrap {
         assert_eq!(id, 0);
+        assert_eq!(route.route.transport.bootstrap_reference(), Some(id));
+        assert_eq!(master_anchor_frame, original.e);
         route.master = Some(MasterClock {
-            frame: original.e,
+            frame: master_anchor_frame,
             beat: (0.1 - route.origin) / PERIODS[0],
             period,
         });
@@ -143,6 +169,9 @@ fn initial_birth_admitted_with_reference(
     );
     original.unchanged();
     route.callback(1);
+    if first_bootstrap {
+        assert_eq!(route.route.transport.bootstrap_reference(), None);
+    }
     route.assert_no_attacks();
     route.settle(&original, false);
     original
@@ -165,7 +194,31 @@ fn start_route(lock: bool, speed: f64) -> (RateRoute, [Original; 2]) {
     route.wait_claims();
     route.callback(733);
     route.assert_no_attacks();
+    ensure_positive_pre_t_history(&mut route, &originals[0], speed, &[0, 2, 7, 12]);
     (route, originals)
+}
+
+fn ensure_positive_pre_t_history(
+    route: &mut RateRoute,
+    birth: &Original,
+    initial_speed: f64,
+    totals: &[i32],
+) {
+    let required = totals
+        .iter()
+        .map(|total| {
+            RawRubberBand::history_bound(scalar_pitch(*total, route.lock, initial_speed))
+                .div_ceil(512)
+                * 512
+        })
+        .max()
+        .expect("a positive fixture declares its cold profiles");
+    let age = route.route.transport.output_frame() - birth.e;
+    if age < required as u64 {
+        route.callback((required as u64 - age) as usize);
+        route.assert_no_attacks();
+    }
+    assert!(route.route.transport.output_frame() - birth.e >= required as u64);
 }
 
 fn begin_glide(route: &mut RateRoute) -> RateReceipt {
@@ -284,11 +337,18 @@ fn scalar_pitch(note: i32, lock: bool, rate: f64) -> f64 {
 /// Derive every original epoch from its public birth and the one accepted rate
 /// event. Neither the live clock, source journal, captured plan nor worker result
 /// supplies a reference phase/rate. The final entry is the frozen old E clock.
-fn original_timeline(birth: u64, initial_speed: f64, rate_f: u64, e: u64) -> Vec<ScalarClock> {
-    assert!(birth <= rate_f && rate_f < e);
+fn original_timeline(
+    birth: &Original,
+    initial_speed: f64,
+    rate_f: u64,
+    e: u64,
+) -> Vec<ScalarClock> {
+    assert!(birth.t <= birth.e && birth.e <= rate_f && rate_f < e);
     let mut clock = ScalarClock::new(0, initial_speed.clamp(SPEED_MIN, SPEED_MAX));
-    let mut timeline = Vec::with_capacity((e - birth) as usize + 1);
-    for frame in birth..e {
+    // Physical source phase starts at the actual initial birth E. Its requested
+    // T remains the independent master anchor, not an unheard source prefix.
+    let mut timeline = Vec::with_capacity((e - birth.e) as usize + 1);
+    for frame in birth.e..e {
         if frame == rate_f {
             clock.target(GLIDE_SPEED);
         }
@@ -301,7 +361,9 @@ fn original_timeline(birth: u64, initial_speed: f64, rate_f: u64, e: u64) -> Vec
 }
 
 /// H expands over actual included p values until no earlier epoch increases it.
-/// This reset owner is anchored at E, independently of the old owner's lattice.
+/// An admission probe may end at T; actual fresh Native prehistory ends at E.
+/// Each reset lattice is independent of the old callback birth E. A caller may
+/// not borrow history beyond its declared endpoint.
 fn reset_bound(timeline: &[ScalarClock], note: i32, lock: bool) -> Option<(usize, usize, usize)> {
     let end = timeline.len() - 1;
     let pitch = scalar_pitch(note, lock, timeline[end].rate);
@@ -339,7 +401,7 @@ struct ResetOracle {
 
 impl ResetOracle {
     fn new(
-        source: &SampleBuffer,
+        _source: &SampleBuffer,
         timeline: &[ScalarClock],
         contract: PitchIntent,
         lock: bool,
@@ -357,14 +419,11 @@ impl ResetOracle {
         // A mixed-rate first block's final sample selects its cold Native profile.
         let cold_pitch = scalar_pitch(note, lock, timeline[origin + 511].rate);
         let mut raw = RawRubberBand::new(cold_pitch);
-        let phase_shift = old_endpoint.phase() - LOOP_START as f64;
-        let period = (ENDS[0] - LOOP_START) as f64;
+        // Preserve every independently derived historical pitch/rate epoch, but
+        // supply zero PCM before this fresh source's physical birth at E.
         for epoch in &timeline[origin..end] {
-            let mut reset = epoch.clone();
-            reset.origin = LOOP_START as f64
-                + (epoch.origin - LOOP_START as f64 - phase_shift).rem_euclid(period);
-            let pitch = scalar_pitch(note, lock, reset.rate);
-            raw.sample(scalar_pcm(source, reset.phase(), ENDS[0]), pitch);
+            let pitch = scalar_pitch(note, lock, epoch.rate);
+            raw.sample(0.0, pitch);
         }
         assert_eq!(raw.fifo(), (0, 511));
         let mut reset_endpoint = old_endpoint.clone();
@@ -377,7 +436,7 @@ impl ResetOracle {
             reference: Reference {
                 clock: reset_endpoint,
                 raw: Some(raw),
-                // Ordinary retrigger clears the pad filter independently of prefeed.
+                // A fresh physical birth starts its filter independently of prefeed.
                 filter: PerPadDspChain::new(0, RATE as f32, 1),
                 note,
                 contract,
@@ -553,6 +612,18 @@ fn apply_wet_attack_from(
     let peer = VoiceWitness::capture(route, 1);
     let starts = route.starts;
     let frame = route.route.transport.output_frame();
+    let timeline = original_timeline(
+        &originals[0],
+        initial_speed,
+        accepted.execution.unwrap(),
+        frame + 8192,
+    );
+    let t_index = usize::try_from(frame - originals[0].e).unwrap();
+    let target_timeline = &timeline[..=t_index];
+    let endpoint_pitch_t = scalar_pitch(note, route.lock, target_timeline.last().unwrap().rate);
+    let (_, required_t_history, _) = reset_bound(target_timeline, note, route.lock)
+        .expect("positive fixture must earn genuine pre-T callback history");
+    assert!(frame - originals[0].e >= (required_t_history.div_ceil(512) * 512) as u64);
     let mut attack = admit(route);
     assert_eq!(
         (attack.note, attack.extra),
@@ -571,12 +642,9 @@ fn apply_wet_attack_from(
     assert_ne!(native, old.native);
     assert_ne!(native, peer.native);
     assert_ne!(Some(native), cached);
-    let timeline = original_timeline(
-        originals[0].e,
-        initial_speed,
-        accepted.execution.unwrap(),
-        attack.e,
-    );
+    let expected_e_clock = timeline.last().unwrap().clone();
+    let endpoint_pitch_e = scalar_pitch(note, route.lock, expected_e_clock.rate);
+    let endpoint_bound_e = RawRubberBand::history_bound(endpoint_pitch_e);
     let oracle = ResetOracle::new(
         &route.reference_sources[0],
         &timeline,
@@ -585,20 +653,30 @@ fn apply_wet_attack_from(
         native,
         old.generation + 1,
     );
+    let trajectory_profiles = timeline[oracle.active_origin..timeline.len() - 1]
+        .iter()
+        .map(|clock| scalar_pitch(note, route.lock, clock.rate).to_bits())
+        .collect::<std::collections::BTreeSet<_>>()
+        .len();
+    // Genuine rate epochs drive this separate Native through silent pre-origin
+    // input. Physical source and fresh EQ begin at E; no T-to-E output is consumed.
+    assert_eq!(oracle.endpoint_pitch, endpoint_pitch_e);
+    assert_eq!(oracle.endpoint_bound, endpoint_bound_e);
     if case == "wet-on-plus12-cold-above2" {
         assert!(oracle.cold_pitch > 2.0);
-        assert!(oracle.endpoint_pitch <= 2.0);
-        assert!(oracle.bound > oracle.endpoint_bound);
-        assert!(oracle.queried_pitches > 2);
+        assert!(endpoint_pitch_e <= 2.0);
+        assert!(oracle.bound > endpoint_bound_e);
+        assert!(trajectory_profiles > 2);
         assert_ne!(
             oracle.active_origin % 512,
             0,
-            "new E lattice differs from the old birth lattice"
+            "new E prehistory lattice differs from the old callback birth lattice"
         );
     }
     if case == "wet-on-momentary-unity" {
         assert_eq!(old.playback.tempo_ratio(), 1.0);
-        assert_ne!(oracle.endpoint_pitch, 1.0);
+        assert_eq!(endpoint_pitch_t, 1.0);
+        assert_ne!(endpoint_pitch_e, 1.0);
     }
     // The unchanged old source and independently running peer remain audible
     // through the entire original F-to-E window before the zero-frame claim.
@@ -608,7 +686,7 @@ fn apply_wet_attack_from(
     assert_eq!(route.voice(0).stretch.native_state_address(), old.native);
     assert_eq!(route.voice(0).generation, old.generation);
     assert_ready_cache(route, cached);
-    let expected = &oracle.old_endpoint;
+    let expected = &expected_e_clock;
     assert_rate_clock(route, &attack, expected);
     let live_phase = route.references[0].as_ref().unwrap().clock.phase();
     assert!((live_phase - expected.phase()).abs() < 2e-7);
@@ -618,8 +696,9 @@ fn apply_wet_attack_from(
     assert_eq!(attack.action.state(), "applied");
     assert_rate_clock(route, &attack, expected);
     let voice = route.voice(0);
-    assert_eq!(voice.source_playback.position().frame, LOOP_START);
-    assert_eq!(voice.source_playback.position().fraction, 0.0);
+    let expected_phase = oracle.reference.clock.phase();
+    let position = voice.source_playback.position();
+    assert!((position.frame as f64 + position.fraction - expected_phase).abs() < 2e-7);
     assert_eq!(voice.generation, old.generation + 1);
     assert_eq!(voice.stretch.native_state_address(), native);
     assert_eq!(voice.stretch.adopted_request_id(), Some(attack.sequence));
@@ -656,16 +735,16 @@ fn apply_wet_attack_from(
     });
     let history_evidence = serde_json::json!({
         "case":case,"base":pitch.base_shift(),"extra":pitch.extra_shift(),"total":note,
-        "original_birth":originals[0].e,"original_T":attack.t,"original_E":attack.e,
-        "A_active":oracle.active_origin,"E_active":oracle.active_end,"H":oracle.bound,
-        "endpoint_H":oracle.endpoint_bound,"cold_p":oracle.cold_pitch,"endpoint_p":oracle.endpoint_pitch,
+        "original_birth_T":originals[0].t,"original_birth_E":originals[0].e,"original_T":attack.t,"original_E":attack.e,
+        "A_active":oracle.active_origin,"T_active":t_index,"E_active":oracle.active_end,"H_T":required_t_history,"H_E":oracle.bound,
+        "endpoint_H":endpoint_bound_e,"cold_p":oracle.cold_pitch,"T_p":endpoint_pitch_t,"endpoint_p":endpoint_pitch_e,
         "first_prefeed_p":scalar_pitch(note, route.lock, timeline[oracle.active_origin].rate),
         "old_birth_lattice_residue":oracle.active_origin%512,"E_lattice_residue":oracle.active_end%512,
-        "queried_pitches":oracle.queried_pitches,"prefeed_samples":oracle.active_end-oracle.active_origin,
-        "old_E_phase":oracle.old_endpoint.phase(),"E_rate":expected.rate,"E_target":expected.target,
+        "queried_E_pitches":oracle.queried_pitches,"trajectory_pitches":trajectory_profiles,"prefeed_samples":oracle.active_end-oracle.active_origin,
+        "old_T_phase":target_timeline.last().unwrap().phase(),"old_E_phase":oracle.old_endpoint.phase(),"new_E_phase":expected_phase,"E_rate":expected.rate,"E_target":expected.target,
         "E_until_step":expected.until_step,"cache_native":cached,"new_native":native,
         "fifo_at_E":fifo_at_e,
-        "scope":"independent public-birth rate epochs, common origin-phase shift, E-anchored H fixed point, pinned direct C-ABI owner; no live plan/journal/PCM reference input"
+        "scope":"independent accepted rate epochs and E prehistory fixed point, complete physical beginning and fresh EQ at E, pinned direct C-ABI owner; no live plan/journal/PCM reference input"
     });
     route.references[0] = Some(oracle.reference);
     route.settle(&attack, false);
@@ -742,8 +821,9 @@ fn unavailable_young_history() {
     let refused = route.admit(0, 12, false);
     assert_eq!(refused.t, rate_f + 73);
     assert_eq!(refused.e, refused.t + 8192);
-    let timeline = original_timeline(young.e, INITIAL_SPEED, rate_f, refused.e);
-    assert!(reset_bound(&timeline, 12, true).is_none());
+    let timeline = original_timeline(&young, INITIAL_SPEED, rate_f, refused.e);
+    let t_index = usize::try_from(refused.t - young.e).unwrap();
+    assert!(reset_bound(&timeline[..=t_index], 12, true).is_none());
     let starts = route.starts;
     wait_refusal(&mut route, &refused);
     old.unchanged(&route, 0);

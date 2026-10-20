@@ -177,6 +177,7 @@ impl Harness {
         let mut callback = Box::new(Callback::new(&engine, &previous));
         let (producer, mut consumer) = rtrb::RingBuffer::new(8);
         let producer = Arc::new(Mutex::new(producer));
+        let engine = crate::audio_engine::constant_timing::with_control_producer(engine, &producer);
         let preparation = control::prepared_for_test(
             &engine,
             PreparedMigrationMaterial::from_current(
@@ -205,7 +206,78 @@ impl Harness {
         )
         .unwrap();
         assert_ne!(first.request_id(), last.request_id());
-        wait_until(|| consumer.slots() >= 2);
+        let initial_sources = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            wait_until(|| consumer.slots() >= 2);
+        }));
+        if let Err(failure) = initial_sources {
+            // Observe only a failed setup. Keep the existing timeout, success path,
+            // and panic; all diagnostic lock attempts and event reads are bounded.
+            eprintln!(
+                "Harness::new initial source queue timeout: test={:?} queued={} tickets=[{}, {}] cold_loading=[{}, {}] epochs=[{}, {}]",
+                std::thread::current().name(),
+                consumer.slots(),
+                first.request_id(),
+                last.request_id(),
+                engine.cold_loading[0].load(Ordering::Acquire),
+                engine.cold_loading[215].load(Ordering::Acquire),
+                engine.prepared_source_epochs[0].load(Ordering::Acquire),
+                engine.prepared_source_epochs[215].load(Ordering::Acquire),
+            );
+            match engine.pad_request_ids.try_lock() {
+                Ok(requests) => eprintln!(
+                    "initial source current requests=[{}, {}]",
+                    requests[0], requests[215]
+                ),
+                Err(_) => eprintln!("initial source request mutex unavailable to diagnostic"),
+            }
+            // No receiver is consumed on a successful setup. Do not call ticket
+            // phase/preparation APIs here: they acquire blocking mutexes.
+            let events: Vec<_> = match engine.loader_rx.try_lock() {
+                Ok(receiver) => receiver.try_iter().take(16).collect(),
+                Err(_) => {
+                    eprintln!("initial source receiver mutex unavailable to diagnostic");
+                    Vec::new()
+                }
+            };
+            for event in &events {
+                let mut payload = event;
+                for _ in 0..4 {
+                    if let LoaderEvent::NativeOwned { event, .. } = payload {
+                        payload = event;
+                    } else {
+                        break;
+                    }
+                }
+                match payload {
+                    LoaderEvent::Started { id, request_id } => {
+                        eprintln!("initial source event: started id={id} request={request_id}")
+                    }
+                    LoaderEvent::Progress {
+                        id,
+                        request_id,
+                        percent,
+                        stage,
+                    } => eprintln!(
+                        "initial source event: progress id={id} request={request_id} percent={percent} stage={stage}"
+                    ),
+                    LoaderEvent::Error {
+                        id,
+                        request_id,
+                        error,
+                    } => eprintln!(
+                        "initial source event: ERROR id={id} request={request_id} error={error}"
+                    ),
+                    LoaderEvent::Success { id, request_id, .. } => {
+                        eprintln!("initial source event: success id={id} request={request_id}")
+                    }
+                    _ => eprintln!("initial source event: unexpected task or nested envelope"),
+                }
+            }
+            if events.len() == 16 {
+                eprintln!("initial source diagnostic reached the 16-event cap");
+            }
+            std::panic::resume_unwind(failure);
+        }
         assert_eq!(first.phase().unwrap(), "pending");
         assert_eq!(last.phase().unwrap(), "pending");
         assert_eq!(callback.drain(&mut consumer), 2);
@@ -434,21 +506,154 @@ fn stale_source_and_other_pad_ticket_cannot_publish_an_existing_complete_pair() 
     let _saved = harness.save(&pair);
     let selected = selection(&pair);
     let foreign = harness.ticket(215);
-    // Equal source bytes do not turn another subscriber's permit into this pad's.
+    let ids = [0, 215];
+    let bindings = ids.map(|id| {
+        crate::audio_engine::input_runtime_binding::capture(&harness.engine, id)
+            .unwrap()
+            .unwrap()
+    });
+    let samples = ids.map(|id| {
+        harness.engine.sample_cache.lock().unwrap()[id]
+            .clone()
+            .unwrap()
+    });
+    let bank = ids.map(|id| {
+        harness.callback.mixer.bank_for_measurement()[id]
+            .clone()
+            .unwrap()
+    });
+    let leases = ids.map(|id| {
+        harness.engine.cold_leases.lock().unwrap()[id]
+            .clone()
+            .unwrap()
+    });
+    let epochs = ids.map(|id| harness.engine.prepared_source_epochs[id].load(Ordering::Acquire));
+    let requests = ids.map(|id| harness.engine.pad_request_ids.lock().unwrap()[id]);
+    let ticket_identities = [
+        ticket.publication.scalar_identity(),
+        foreign.publication.scalar_identity(),
+    ];
+    let content_keys = bindings
+        .each_ref()
+        .map(|binding| binding.binding.placement.unwrap().content_key().unwrap());
+    assert_ne!(content_keys[0], content_keys[1]);
+    assert_ne!(leases[0].assignment_id(), leases[1].assignment_id());
+    assert!(harness.consumer.peek().is_err());
     assert!(
         harness
-            .engine
-            .prepare_stem_pair_at_root(
-                &harness.root,
-                0,
-                &harness.version,
-                &harness.wav_reference,
-                &foreign,
-                true,
-                None
-            )
-            .is_err()
+            .callback
+            .mixer
+            .voices
+            .iter()
+            .all(|voice| !voice.active)
     );
+    for id in ids {
+        assert!(harness.callback.mixer.stems_for_measurement()[id].is_none());
+    }
+    // The numeric id is diagnostic: immutable staging follows the ticket's own
+    // surviving content, without admitting audio or granting a different pad an ACK.
+    let staged = harness
+        .engine
+        .prepare_stem_pair_at_root(
+            &harness.root,
+            0,
+            &harness.version,
+            &harness.wav_reference,
+            &foreign,
+            true,
+            None,
+        )
+        .unwrap();
+    assert_eq!(foreign.publication.content_key(), Some(content_keys[1]));
+    assert_eq!(
+        foreign
+            .publication
+            .control_placement(&harness.engine)
+            .unwrap(),
+        crate::audio_engine::content_placement::PlacementObservation::Current(
+            bindings[1].binding.placement.unwrap()
+        )
+    );
+    assert_eq!(
+        staged.source_lease.assignment_id(),
+        leases[1].assignment_id()
+    );
+    assert_ne!(
+        staged.source_lease.assignment_id(),
+        leases[0].assignment_id()
+    );
+    staged
+        .source_lease
+        .verify_reference(&foreign.sample)
+        .unwrap();
+    assert!(staged.reference.same_window(&foreign.sample));
+    assert!(Arc::ptr_eq(
+        &staged.reference.samples,
+        &foreign.sample.samples
+    ));
+    assert_eq!(staged.source_version, foreign.source_version);
+    assert_eq!(
+        staged.pair_reader.descriptor.stem_set_identity,
+        selected["stem_set_identity"].as_str().unwrap()
+    );
+    assert_complete_selection(&harness.root, &selection(&staged));
+    assert_eq!(
+        (ticket.publication_status(), foreign.publication_status()),
+        ("captured", "captured")
+    );
+    assert_eq!(
+        [
+            ticket.publication.scalar_identity(),
+            foreign.publication.scalar_identity()
+        ],
+        ticket_identities
+    );
+    assert!(harness.consumer.peek().is_err());
+    assert!(
+        harness
+            .callback
+            .mixer
+            .voices
+            .iter()
+            .all(|voice| !voice.active)
+    );
+    for (position, id) in ids.into_iter().enumerate() {
+        let current = crate::audio_engine::input_runtime_binding::capture(&harness.engine, id)
+            .unwrap()
+            .unwrap();
+        assert!(current.current());
+        assert_eq!(current.binding, bindings[position].binding);
+        assert_eq!(
+            current.binding.placement.unwrap().content_key(),
+            Some(content_keys[position])
+        );
+        assert_eq!(
+            harness.engine.prepared_source_epochs[id].load(Ordering::Acquire),
+            epochs[position]
+        );
+        assert_eq!(
+            harness.engine.pad_request_ids.lock().unwrap()[id],
+            requests[position]
+        );
+        let cached = harness.engine.sample_cache.lock().unwrap()[id]
+            .clone()
+            .unwrap();
+        assert!(cached.same_window(&samples[position]));
+        assert!(Arc::ptr_eq(&cached.samples, &samples[position].samples));
+        assert_eq!(
+            harness.engine.cold_leases.lock().unwrap()[id]
+                .as_ref()
+                .unwrap()
+                .assignment_id(),
+            leases[position].assignment_id()
+        );
+        let current_bank = harness.callback.mixer.bank_for_measurement()[id]
+            .as_ref()
+            .unwrap();
+        assert!(current_bank.same_window(&bank[position]));
+        assert!(Arc::ptr_eq(&current_bank.samples, &bank[position].samples));
+        assert!(harness.callback.mixer.stems_for_measurement()[id].is_none());
+    }
     harness.engine.input_runtime_ownership.revoke_source(0);
     assert!(
         harness
@@ -1102,6 +1307,7 @@ fn ordinary_pair_new_process_reopens_durable_selection_with_fresh_source_timing_
         let preparation = control::prepared_for_test(&engine, material, &root).unwrap();
         let (producer, mut consumer) = rtrb::RingBuffer::new(8);
         let producer = Arc::new(Mutex::new(producer));
+        let engine = constant_timing::with_control_producer(engine, &producer);
         let mut callback = migration_callback_8000(&engine);
         let source = control::adopt_for_format(
             &engine,
@@ -1277,6 +1483,7 @@ fn ordinary_pair_new_process_child_reopens_selection_with_own_source_timing_and_
     let preparation = control::prepared_for_test(&engine, material, &root).unwrap();
     let (producer, mut consumer) = rtrb::RingBuffer::new(8);
     let producer = Arc::new(Mutex::new(producer));
+    let engine = constant_timing::with_control_producer(engine, &producer);
     let mut callback = migration_callback_8000(&engine);
     let source = control::adopt_for_format(
         &engine,
@@ -2151,7 +2358,20 @@ assert not controller.stems_available(0)
         worker_python(
             py,
             locals.bind(py),
-            "assert controller._publish_restored_stem_cache(0)\nassert 0 in controller._pair_preparations.pending",
+            r#"
+assert controller._publish_restored_stem_cache(0)
+restore_requested = controller._requested_preparations[0].spec
+assert restore_requested.entry is project.stem_cache[0]
+assert restore_requested.previous_entry is project.stem_cache[0]
+assert 0 not in controller._pair_preparations.pending
+controller.on_frame_render()
+restore_request = controller._pair_preparations.pending[0]
+assert 0 not in controller._requested_preparations
+assert restore_request.entry is restore_requested.entry
+assert restore_request.ticket is restore_requested.ticket
+assert restore_request.previous_entry is restore_requested.previous_entry
+del restore_request, restore_requested  # The real PairQueue owns later preparation/retirement.
+"#,
         )
     });
     wait_until(|| {
@@ -2483,3 +2703,5 @@ fn accepted_pair_reprepares_finite_window_and_relocation_with_own_callback_acks(
     reconcile(&harness.engine).unwrap();
     assert_complete_selection(&harness.root, &selected);
 }
+#[path = "stem_pair_component_cancellation_tests.rs"]
+mod stem_pair_component_cancellation_tests;

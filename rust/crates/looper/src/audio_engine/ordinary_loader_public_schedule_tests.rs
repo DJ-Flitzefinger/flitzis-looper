@@ -709,7 +709,7 @@ fn current_authority_due_history(key_lock: bool, exclusive: bool) {
     assert_eq!(fixture.callback.mixer.key_lock_for_measurement(0), key_lock);
 
     // Independent complete PCM creates its own reference after the public birth.
-    // ON owns the same independently prepared periodic endpoint at its first sample.
+    // ON owns independently prepared silent context before its physical first sample.
     let mut reference = Box::new(RtMixer::new(2, RATE as f32));
     let ownership = Arc::new(input_runtime_binding::InputRuntimeOwnership::tracked());
     ownership.publish_test_source(0, &fixture.complete, RATE, 1);
@@ -724,7 +724,11 @@ fn current_authority_due_history(key_lock: bool, exclusive: bool) {
     }
     let mut expected = vec![0.0; 8 * 2];
     reference.render(&mut expected, &mut [0.0; NUM_SAMPLES]);
-    assert!(expected.iter().any(|sample| sample.abs() > 0.01));
+    if key_lock {
+        assert!(expected.iter().all(|sample| *sample == 0.0));
+    } else {
+        assert!(expected.iter().any(|sample| sample.abs() > 0.01));
+    }
     assert_eq!(
         output, expected,
         "actual due birth begins at independent complete frame zero"
@@ -742,8 +746,8 @@ fn current_authority_due_history(key_lock: bool, exclusive: bool) {
             .source_playback
             .matches_exact(&voice(&reference, 0).source_playback)
     );
-    if key_lock {
-        let mut raw = RawNative::prepared_start(&fixture.complete, 0, COMPLETE_FRAMES);
+    let mut raw = key_lock.then(RawNative::prepared_start);
+    if let Some(raw) = &mut raw {
         assert!(raw.native.block_size() > 8);
         let feed = std::array::from_fn(|channel| {
             (0..8)
@@ -827,6 +831,107 @@ fn current_authority_due_history(key_lock: bool, exclusive: bool) {
     );
     assert!(fixture.callback.consumer.is_empty());
     assert!(fixture.callback.parameters.is_empty());
+    if let Some(raw) = &mut raw {
+        // Retain the first eight samples and compare the whole bounded beginning,
+        // including Native's causal quiet lead. Productivity remains required at
+        // the same amplitude threshold, without requiring sound inside that lead.
+        let native = voice(&fixture.callback.mixer, 0)
+            .stretch
+            .native_state_address();
+        let generation = voice(&fixture.callback.mixer, 0).generation;
+        let mut actual_beginning = output;
+        let mut expected_beginning = expected;
+        let mut consumed = 8_usize;
+        let total = raw.native.block_size() * 8;
+        for count in [1_usize, 31, 137, 512, 777].into_iter().cycle() {
+            let count = count.min(total - consumed);
+            let feed = std::array::from_fn(|channel| {
+                (0..count)
+                    .map(|offset| {
+                        let phase =
+                            ((consumed + offset) as f64 * RATIO).rem_euclid(COMPLETE_FRAMES as f64);
+                        let left = phase.floor() as usize;
+                        let right = (left + 1) % COMPLETE_FRAMES;
+                        let a = fixture.complete.samples[left * 2 + channel];
+                        a + (fixture.complete.samples[right * 2 + channel] - a)
+                            * phase.fract() as f32
+                    })
+                    .collect::<Vec<_>>()
+            });
+            let callback = &mut fixture.callback;
+            assert_eq!(callback.transport.output_frame(), callback.frame);
+            let frame = callback.frame;
+            let mut actual = vec![0.0; count * 2];
+            reset_tap_observation_for_test();
+            render_scheduled_audio(
+                &mut callback.mixer,
+                &mut callback.scheduler,
+                &mut actual,
+                &mut [0.0; NUM_SAMPLES],
+                frame,
+                2,
+                &mut callback.transport,
+                &mut callback.feedback,
+                &mut callback.retirement,
+            );
+            callback.transport.advance_by_rendered_frames(count);
+            callback.frame = callback.transport.output_frame();
+            if !exclusive {
+                callback.other_consumed += count as u64;
+            }
+            assert_eq!(tap_observation_for_test().missing_reads, 0);
+            let mut expected = vec![0.0; count * 2];
+            reference.render_at_output_frame(frame, &mut expected, &mut [0.0; NUM_SAMPLES]);
+            assert_eq!(
+                actual, expected,
+                "complete scheduled Native beginning at {frame}"
+            );
+            assert_eq!(
+                actual,
+                raw.render(&feed),
+                "independent raw Native at {frame}"
+            );
+            consumed += count;
+            let current = voice(&fixture.callback.mixer, 0);
+            assert_eq!(current.generation, generation);
+            assert_eq!(current.stretch.native_state_address(), native);
+            assert_eq!(
+                current.stretch.adopted_request_id(),
+                Some(captured.original.sequence())
+            );
+            assert_eq!(
+                current.stretch.pending_fifo_frames(),
+                (raw.input[0].len(), raw.output[0].len())
+            );
+            let phase = (consumed as f64 * RATIO).rem_euclid(COMPLETE_FRAMES as f64);
+            assert_eq!(
+                current.source_playback.position().frame,
+                phase.floor() as usize
+            );
+            assert_eq!(
+                current.source_playback.position().fraction.to_bits(),
+                phase.fract().to_bits()
+            );
+            assert!(
+                current
+                    .source_playback
+                    .matches_exact(&voice(&reference, 0).source_playback)
+            );
+            assert!(fixture.callback.scheduler.is_empty());
+            if !exclusive {
+                peer.assert_unchanged(&fixture);
+            }
+            actual_beginning.extend(actual);
+            expected_beginning.extend(expected);
+            if consumed == total {
+                break;
+            }
+        }
+        assert_eq!(actual_beginning, expected_beginning);
+        assert!(actual_beginning.iter().any(|sample| sample.abs() > 0.01));
+        assert!(fixture.callback.consumer.is_empty());
+        assert!(fixture.callback.parameters.is_empty());
+    }
     fixture.assert_disk(false);
 }
 

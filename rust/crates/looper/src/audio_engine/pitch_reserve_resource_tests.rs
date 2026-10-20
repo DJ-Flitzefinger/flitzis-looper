@@ -169,6 +169,7 @@ fn request(
             selection: StemRenderSelection::full_mix(),
             transition: StemTransition::default(),
         },
+        actual_feed: None,
         target_output_frame: 0,
         request_id,
         epoch: 1,

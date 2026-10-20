@@ -4,7 +4,8 @@
 //! comparison markers, never dereferenced owners or fresh source/timing authority. A request
 //! must separately pin and admit every historical physical context it intends to replay.
 
-use super::prepared_source::PreparedSourcePermit;
+use super::content_placement::OwnerIdentity;
+use super::prepared_source::{PreparedSourcePermit, PreparedSourcePublicationIdentity};
 use super::productive_source_history::ProductiveSourceBinding;
 use super::source_playback::SourcePlayback;
 use super::source_reader::{SourceReadPlan, StemReadSets};
@@ -18,6 +19,26 @@ use std::sync::{
 pub(crate) const SOURCE_FEED_HISTORY_MAX_SPANS: usize = 1024;
 pub(crate) const SOURCE_FEED_HISTORY_MAX_FRAMES: usize = 262_144;
 const STEM_OWNER_MARKER_COUNT: usize = STEM_BUFFER_COUNT + 2;
+
+/// The consumer of a successful output-domain source read. Dry reads are real source history,
+/// but never evidence that Native consumed or retained their samples.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum SourceReadDomain {
+    DryOutput,
+    NativeInput,
+}
+
+/// Fixed scalar receipt from the source reader and its successful render pass.
+/// These are the coordinates actually read, independent of the voice's logical playhead.
+/// Physical markers retain no PCM owners or admission authority.
+#[derive(Clone, Copy, Debug)]
+pub(crate) struct SourceReadReceipt {
+    pub(crate) playback: SourcePlayback,
+    pub(crate) plan: SourceReadPlan,
+    pub(crate) context: SourceFeedContext,
+    pub(crate) output_frames: usize,
+    pub(crate) domain: SourceReadDomain,
+}
 
 #[derive(Clone, Copy, Debug, PartialEq)]
 struct StemFeedIdentity {
@@ -267,6 +288,18 @@ impl SourceFeedHistory {
         self.fence_continuity();
     }
 
+    /// Journal the successful reader's own coordinates, never the caller's logical playhead.
+    /// Both domains retain actual source history; neither journal entry alone proves Native
+    /// ownership, which separately belongs to the processor's productive history.
+    pub(crate) fn record_read(&mut self, receipt: SourceReadReceipt) {
+        self.record_success(
+            receipt.playback,
+            receipt.plan,
+            receipt.context,
+            receipt.output_frames,
+        );
+    }
+
     /// Record only a completely accepted actual read, including a successful dry read.
     /// A chunk longer than retention keeps its exact real suffix, never an invented prefix.
     pub(crate) fn record_success(
@@ -436,7 +469,30 @@ pub(crate) struct SourceFeedGuard {
     stem_publication: Option<PreparedSourcePermit>,
 }
 
+/// A receipt may compare the original guard without retaining its atomic owners.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) struct SourceFeedGuardIdentity {
+    continuity_owner: OwnerIdentity,
+    captured_epoch: u64,
+    lifetime: OwnerIdentity,
+    generation: u64,
+    stem_publication: Option<PreparedSourcePublicationIdentity>,
+}
+
 impl SourceFeedGuard {
+    pub(crate) fn scalar_identity(&self) -> SourceFeedGuardIdentity {
+        SourceFeedGuardIdentity {
+            continuity_owner: OwnerIdentity::of(&self.continuity_owner),
+            captured_epoch: self.captured_epoch,
+            lifetime: OwnerIdentity::of(&self.lifetime),
+            generation: self.generation,
+            stem_publication: self
+                .stem_publication
+                .as_ref()
+                .map(PreparedSourcePermit::scalar_identity),
+        }
+    }
+
     pub(crate) fn is_current(&self) -> bool {
         self.captured_epoch != 0
             && self.generation != 0

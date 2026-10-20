@@ -3,6 +3,9 @@
 //! source is admitted. It never supplies publication authority to the real pad.
 
 use super::*;
+
+#[path = "committed_stem_ordinary_receipt_tests.rs"]
+mod committed_stem_ordinary_receipt_tests;
 use crate::audio_engine::committed_stem_residency::{CommittedStemSetTicket, ResidentStemTicket};
 use crate::audio_engine::constants::NUM_SAMPLES;
 use crate::audio_engine::dsp::{DspNodeSlot, DspParameterId, DspParameterSlot, PerPadDspChain};
@@ -22,6 +25,8 @@ use std::collections::VecDeque;
 
 #[path = "committed_stem_public_complete_tests.rs"]
 mod committed_stem_public_complete_tests;
+#[path = "grid_origin_binding_tests.rs"]
+mod grid_origin_binding_tests;
 #[path = "l3_controller_productive_tests.rs"]
 mod l3_controller_productive_tests;
 #[path = "l3_native_tests.rs"]
@@ -32,8 +37,8 @@ mod offline_stem_productive_tests;
 mod p5b_resident_admission_tests;
 #[path = "public_key_lock_off_tests.rs"]
 mod public_key_lock_off_tests;
-#[path = "grid_origin_binding_tests.rs"]
-mod grid_origin_binding_tests;
+#[path = "retained_committed_stem_tests.rs"]
+mod retained_committed_stem_tests;
 
 const LOOP_START: usize = 17;
 const LOOP_END: usize = 1517;
@@ -2623,6 +2628,19 @@ fn controller_filter_with_reset(reset: bool) -> PerPadDspChain {
 }
 
 impl ControllerPlayback {
+    /// The legacy helper name now validates an unconsumed ordinary birth at E.
+    /// Existing-source continuation must use its separately counted live history.
+    fn advance_expected_birth(&mut self, original: u64, execution: u64) {
+        assert!(execution >= original);
+        assert_eq!(self.frame, execution);
+        assert_eq!(self.source_frame, 0);
+        for mixer in [&self.reference, &self.full_mix] {
+            let position = voice(mixer).source_playback.position();
+            assert_eq!(position.frame, self.loop_start);
+            assert_eq!(position.fraction, 0.0);
+        }
+    }
+
     fn seek_position(
         &self,
         output_frame: u64,
@@ -3302,7 +3320,7 @@ fn controller_stopped_prepare_then_play(
     locals: &Py<PyDict>,
     callback: &mut Callback,
     consumer: &mut rtrb::Consumer<ControlMessage>,
-) -> u64 {
+) -> (u64, u64) {
     let source = callback.mixer.bank_for_measurement()[0].clone().unwrap();
     assert!(!callback.mixer.voices.iter().any(|voice| voice.active));
     controller_python(
@@ -3496,7 +3514,7 @@ assert audio.worker_call_count() == 1
         consumer.is_empty(),
         "observing a withdrawn receipt must not launch an automatic residency retry"
     );
-    execution
+    (capture_frame, execution)
 }
 
 fn controller_stopped_fresh_all(
@@ -3626,7 +3644,7 @@ fn prepare_ordinary_controller_reference(mixer: &mut RtMixer, execution: u64) {
         Some(RubberBandLiveShifter::new(RATE, 2).unwrap()),
         2,
     ));
-    candidate.prepare_source_at_endpoint(request).unwrap();
+    candidate.prepare_source_at_physical_birth(request).unwrap();
     assert!(mixer.adopt_prepared_pitch_voice(
         index,
         &mut candidate,
@@ -3640,33 +3658,11 @@ fn prepare_ordinary_controller_reference(mixer: &mut RtMixer, execution: u64) {
 
 fn prepared_ordinary_controller_raw(playback: &ControllerPlayback) -> ControllerRawNative {
     let mut raw = ControllerRawNative::new(playback.ratio, true);
-    let history = crate::audio_engine::prepared_native_history::PREPARED_HISTORY_FRAMES;
-    let start = playback.loop_start;
-    let end = playback.loop_end;
-    let period = (end - start) as f64;
-    // Independently replay the real periodic selected components before launch.
+    let history = ControllerRawNative::constant_history_frames(1.0 / playback.ratio);
+    // This new physical birth has no earlier source input. Independently warm its
+    // exact Native/FIFO profile with H silent frames; positive input starts at E.
     // No live read plan, cursor or prepared request supplies this expected feed.
-    let feed = std::array::from_fn(|channel| {
-        (0..history)
-            .map(|offset| {
-                let phase = ((offset as f64 - history as f64) * playback.ratio).rem_euclid(period);
-                let left = start + phase.floor() as usize;
-                let right = if left + 1 == end { start } else { left + 1 };
-                let sample = |frame| match playback.selection {
-                    None => playback.source.samples[frame * 2 + channel],
-                    Some(mask) => playback
-                        .components
-                        .iter()
-                        .enumerate()
-                        .filter(|(index, _)| mask & (1 << index) != 0)
-                        .map(|(_, component)| component.samples[frame * 2 + channel])
-                        .sum(),
-                };
-                let a = sample(left);
-                a + (sample(right) - a) * phase.fract() as f32
-            })
-            .collect()
-    });
+    let feed = std::array::from_fn(|_| vec![0.0; history]);
     raw.render(&feed);
     assert!(raw.used);
     raw
@@ -3928,12 +3924,13 @@ assert audio.worker_call_count() == 1 and audio.prepared_only_on_pool_threads()
     };
     h.callback.mixer.set_speed(ratio);
     h.callback.mixer.set_pad_eq(0, -12.0, -3.0, 4.0);
-    let execution = if stopped_start {
+    let (original, execution) = if stopped_start {
         controller_stopped_prepare_then_play(&engine, &locals, &mut h.callback, &mut h.consumer)
     } else {
         assert!(h.callback.mixer.play_sample_at_output_frame(0, 1.0, 0));
-        0
+        (0, 0)
     };
+    assert!(execution >= original);
     let mut playback = ControllerPlayback {
         callback: h.callback,
         reference: make_reference(stopped_start, execution),
@@ -3962,13 +3959,21 @@ assert audio.worker_call_count() == 1 and audio.prepared_only_on_pool_threads()
     if stopped_start {
         playback.raw = Some(prepared_ordinary_controller_raw(&playback));
     }
-    playback.render(13, true);
+    let first_output = playback.render(13, true).0;
     let initial_output = if stopped_start {
         let native = voice(&playback.callback.mixer)
             .stretch
             .native_state_address();
-        let mut output = Vec::new();
-        for frames in [1, 31, 137, 512, 777, 257] {
+        // Retain sample zero and the causal quiet lead. Exact reference/raw/EQ
+        // comparisons continue through the complete bounded physical beginning.
+        let capture_frames = voice(&playback.callback.mixer)
+            .stretch
+            .rubberband_block_size()
+            * 8;
+        let mut output = first_output;
+        let mut remaining = capture_frames - 13;
+        for frames in [1_usize, 31, 137, 512, 777, 257].into_iter().cycle() {
+            let frames = frames.min(remaining);
             output.extend(playback.render(frames, true).0);
             assert_eq!(
                 voice(&playback.callback.mixer)
@@ -3976,7 +3981,12 @@ assert audio.worker_call_count() == 1 and audio.prepared_only_on_pool_threads()
                     .native_state_address(),
                 native
             );
+            remaining -= frames;
+            if remaining == 0 {
+                break;
+            }
         }
+        assert_eq!(output.len(), capture_frames * 2);
         output
     } else {
         playback.adopt_native(true).0

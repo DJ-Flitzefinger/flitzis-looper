@@ -149,13 +149,18 @@ struct IndependentPeer {
 
 impl IndependentPeer {
     fn new(playback: &ControllerPlayback, initial_prepare_frames: u64) -> Self {
+        let consumed = initial_prepare_frames + playback.source_frame;
+        assert!(
+            playback.frame >= consumed,
+            "the peer's preparation lead plus emitted frames cannot exceed callback time"
+        );
         let peer = complete::other(&playback.callback.mixer);
         Self {
             at: playback.frame,
-            // The peer's public T=E=0 precedes the main birth. Its consumption
-            // is the declared initial preparation plus independently counted
-            // main-source output; their shared paused frames consume neither.
-            consumed: initial_prepare_frames + playback.source_frame,
+            // The peer's public T=E=0 precedes the main birth. It consumes that
+            // preparation lead plus their shared active output; common paused
+            // frames consume neither source counter.
+            consumed,
             sample: peer.sample.clone().unwrap(),
             generation: peer.generation,
             native: peer.stretch.native_state_address(),
@@ -498,6 +503,8 @@ impl BOracle {
             playback.ramp_start,
         );
         let mut raw = ControllerRawNative::new(0.75, true);
+        // Genuine live history begins at the actual B birth. Keep the same
+        // bounded observed interval, mapped to its emitted source coordinate.
         raw.render(&self.feed(playback, warm_start - self.birth, 4096));
         playback.candidate = Some((target, raw));
         let mut partitions = [1_usize, 127, 777, 96, 257, 512, 31].into_iter().cycle();
@@ -1134,6 +1141,7 @@ assert 0 not in session.active_sample_ids
     let start = admit_original_public_start(&mut playback.callback, consumer, locals);
     assert_eq!(start.original_frame(), Some(original_target));
     let birth = start.execution_frame().unwrap();
+    assert!(birth >= original_target);
     while playback.frame < birth {
         let frames = (birth - playback.frame).min(257) as usize;
         let mut output = vec![0.0; frames * 2];
@@ -1168,13 +1176,11 @@ assert 0 not in session.active_sample_ids
     peer.assert_current(playback);
     let generation = voice(&playback.callback.mixer).generation;
     assert_eq!(generation, a_generation + 2);
-    assert_eq!(
-        voice(&playback.callback.mixer)
-            .source_playback
-            .position()
-            .frame,
-        LOOP_START
-    );
+    // The original B Play survives its held finite-window ACK and retains the
+    // complete physical beginning until its actual E.
+    let initial_position = voice(&playback.callback.mixer).source_playback.position();
+    assert_eq!(initial_position.frame, LOOP_START);
+    assert_eq!(initial_position.fraction.to_bits(), 0.0_f64.to_bits());
     assert_eq!(
         voice(&playback.callback.mixer).stretch.adopted_request_id(),
         a_adoption
@@ -1238,6 +1244,8 @@ assert 0 not in session.active_sample_ids
     playback.candidate = None;
     playback.filter = PerPadDspChain::new(0, RATE as f32, 2);
     playback.filter.reset();
+    // Independent B bytes and neutral EQ remain unconsumed until actual E.
+    playback.advance_expected_birth(original_target, birth);
     let oracle = BOracle {
         peer,
         birth,
@@ -1249,7 +1257,10 @@ assert 0 not in session.active_sample_ids
         let (actual, full) = oracle.render(playback, frames);
         assert_eq!(actual, full, "B own OFF FullMix after A ON");
     }
-    assert!(playback.source_frame as f64 * 0.75 > 1500.0);
+    assert!(
+        playback.source_frame as f64 * 0.75 > 1500.0,
+        "actual emitted B output crosses a complete loop"
+    );
     controller_python(locals, "transport.pad.set_pad_eq(0, -12.0, -3.0, 4.0)");
     crate::audio_engine::audio_stream::drain_parameter_messages(
         &mut parameters,
@@ -1689,7 +1700,17 @@ b_entry = StemCacheEntry(source_version=b_version, cache_dir=b_cache,
     stems=expected_stem_files(b_cache), available=False)
 assert 0 not in controller._fenced_pair_ids
 assert controller._prepare_pair(0, b_entry, b_pair_source, components=False)
+b_requested = controller._requested_preparations[0].spec
+assert b_requested.entry is b_entry and b_requested.ticket is b_pair_source
+assert b_requested.content_id == b_content.instance_id
+assert b_requested.binding.source_path == b_path and not b_requested.components
+assert b_requested.previous_entry is project.stem_cache[0]
+assert 0 not in controller._pair_preparations.pending
+controller.on_frame_render()
 b_preparation = controller._pair_preparations.pending[0]
+assert 0 not in controller._requested_preparations
+assert b_preparation.ticket is b_requested.ticket and b_preparation.entry is b_requested.entry
+assert b_preparation.previous_entry is b_requested.previous_entry
 assert b_preparation.entry is b_entry and b_preparation.ticket is b_pair_source
 assert b_preparation.content_id == b_content.instance_id and b_preparation.source_path == b_path
 assert not b_preparation.residency_only

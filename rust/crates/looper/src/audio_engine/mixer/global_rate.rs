@@ -160,15 +160,14 @@ impl RtMixer {
             match self.global_rate_needs_history(pending.requested) {
                 Ok(false) => {
                     let frame = transport.output_frame();
-                    if self.apply_global_rate_tuple(pending.requested, transport, frame) {
-                        self.publish_global_rate_effect(
+                    match self.apply_global_rate_tuple(&pending, transport, frame) {
+                        Ok(()) => self.publish_global_rate_effect(
                             &pending,
                             RateState::Applied,
                             RateError::None,
                             Some(frame),
-                        );
-                    } else {
-                        self.finish_global_rate(pending, RateError::InvalidTransport);
+                        ),
+                        Err(error) => self.finish_global_rate(pending, error),
                     }
                 }
                 Ok(true) => {
@@ -395,6 +394,7 @@ impl RtMixer {
                     voice_generation: voice.generation,
                     execution_frame: execution,
                     paused: snapshot.paused,
+                    actual_feed: snapshot.actual_feed,
                     source_feed_context: snapshot.source_feed_context,
                 },
             ) else {
@@ -516,11 +516,30 @@ impl RtMixer {
             }
             if let Some(work) = expected.work {
                 let prospective = feed(&snapshot, expected.pitch, expected.key_lock, frame, None);
-                if !self.voices[index].stretch.prospective_tuple_matches(
+                let target = self.tempo_ratio_for_source_period_with_rate(
+                    self.timing_for_voice(&self.voices[index]).period_seconds(),
+                    pending.requested.speed,
+                    pending.requested.period,
+                );
+                if !self.voices[index].stretch.prospective_rate_change_ready(
                     &prospective,
                     work.epoch,
                     work.request_id,
+                    target,
                 ) {
+                    return false;
+                }
+            } else if self.voices[index].stretch.has_retained_source_input() {
+                let prospective = feed(&snapshot, expected.pitch, expected.key_lock, frame, None);
+                let target = self.tempo_ratio_for_source_period_with_rate(
+                    self.timing_for_voice(&self.voices[index]).period_seconds(),
+                    pending.requested.speed,
+                    pending.requested.period,
+                );
+                if !self.voices[index]
+                    .stretch
+                    .retained_rate_change_ready(&prospective, target)
+                {
                     return false;
                 }
             }
@@ -530,15 +549,50 @@ impl RtMixer {
 
     fn apply_global_rate_tuple(
         &mut self,
-        tuple: RateTuple,
+        pending: &PendingRate,
         transport: &mut TransportTimeline,
         frame: u64,
-    ) -> bool {
+    ) -> Result<(), RateError> {
+        let tuple = pending.requested;
         let mut candidate = *transport;
         if let Some(period) = tuple.period
             && !candidate.set_master_period_preserving_beat_position_at_frame(period, frame)
         {
-            return false;
+            return Err(RateError::InvalidTransport);
+        }
+        let mut targets = [None; MAX_VOICES];
+        for (index, target) in targets.iter_mut().enumerate() {
+            let voice = &self.voices[index];
+            if !voice.active || !voice.stretch.has_retained_source_input() {
+                continue;
+            }
+            let snapshot = self
+                .capture_pitch_voice_snapshot(index)
+                .ok_or(RateError::SourceChanged)?;
+            let requested = self.tempo_ratio_for_source_period_with_rate(
+                self.timing_for_voice(voice).period_seconds(),
+                tuple.speed,
+                tuple.period,
+            );
+            let (pitch, key_lock) = self.effective_rate_voice_tuple(index);
+            let current = feed(&snapshot, pitch, key_lock, frame, None);
+            if !voice
+                .stretch
+                .retained_rate_change_ready(&current, requested)
+            {
+                return Err(RateError::HistoryUnavailable);
+            }
+            *target = Some(requested);
+        }
+        self.global_rate_current(pending)?;
+        // Every fallible lookup and participant validation precedes the first store.
+        // Only unchanged callback-owned clocks are touched after this boundary.
+        for (index, target) in targets.into_iter().enumerate() {
+            if let Some(target) = target {
+                self.voices[index]
+                    .stretch
+                    .retarget_retained_rate_claimed(target);
+            }
         }
         if self.effective_global_rate() != tuple {
             self.invalidate_source_for_all();
@@ -546,7 +600,7 @@ impl RtMixer {
         self.speed = tuple.speed;
         self.master_period_seconds = tuple.period;
         *transport = candidate;
-        true
+        Ok(())
     }
 
     fn commit_global_rate(
@@ -598,6 +652,20 @@ impl RtMixer {
                         mixer.voices[index]
                             .stretch
                             .adopt_prospective_tuple_claimed(&prospective, work.request_id);
+                    }
+                    for index in 0..MAX_VOICES {
+                        let voice = &mixer.voices[index];
+                        if !voice.active || !voice.stretch.has_retained_source_input() {
+                            continue;
+                        }
+                        let target = mixer.tempo_ratio_for_source_period_with_rate(
+                            mixer.timing_for_voice(voice).period_seconds(),
+                            pending.requested.speed,
+                            pending.requested.period,
+                        );
+                        mixer.voices[index]
+                            .stretch
+                            .retarget_retained_rate_claimed(target);
                     }
                     // Actual source controls change only after every endangered owner is adopted.
                     // Invalidation cannot revoke those now-productive Native/FIFO trajectories.

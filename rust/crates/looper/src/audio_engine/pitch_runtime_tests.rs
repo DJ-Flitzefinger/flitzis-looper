@@ -22,6 +22,13 @@ mod piano_mouse_tests;
 #[path = "pitch_runtime_tests/allocation_tests.rs"]
 mod allocation_tests;
 
+#[path = "pitch_runtime_tests/exclusive_generation_tests.rs"]
+mod exclusive_generation_tests;
+
+#[cfg(windows)]
+#[path = "pitch_runtime_tests/full_onset_tests.rs"]
+mod full_onset_tests;
+
 #[cfg(windows)]
 #[path = "pitch_runtime_tests/native_identity_tests.rs"]
 pub(in crate::audio_engine) mod native_identity_tests;
@@ -36,7 +43,7 @@ use crate::audio_engine::buffer_retirement::{
 use crate::audio_engine::input_mapping::launch_admission_tests::{LaunchFixture, RATE};
 use crate::audio_engine::input_mapping::{InputRuntime, PitchPadProjection};
 use crate::audio_engine::mixer::RtMixer;
-use crate::audio_engine::pitch_actions::PitchKeyMode;
+use crate::audio_engine::pitch_actions::{PitchActionVariant, PitchKeyMode};
 use crate::audio_engine::pitch_intent::PitchIntent;
 use crate::audio_engine::scheduler::FixedCapacityScheduler;
 use crate::audio_engine::source_playback::FractionalSourcePosition;
@@ -514,6 +521,67 @@ fn assert_tone_for_source(
     cents
 }
 
+/// Independent mono fixture oracle: every physical-birth sample, including Native startup.
+/// The fixed 8192-frame frequency window below is separate from this full PCM proof.
+pub(super) fn physical_birth_tone_reference(
+    frames: usize,
+    source_hz: f64,
+    base: i32,
+    extra: i32,
+    rate: f64,
+    lock: bool,
+) -> Vec<f32> {
+    let pitch = 2.0_f64.powf(f64::from(base + extra) / 12.0) / if lock { rate } else { 1.0 };
+    let mut raw = source_feed_tests::RawRubberBand::new(pitch);
+    for _ in 0..source_feed_tests::RawRubberBand::history_bound(pitch) {
+        assert_eq!(raw.sample(0.0, pitch), 0.0);
+    }
+    let pcm = (0..frames)
+        .map(|frame| {
+            let distance = frame as f64 * rate;
+            let offset = distance.floor() as usize;
+            let length = LOOP_END - LOOP_START;
+            let left = LOOP_START + offset % length;
+            let right = LOOP_START + (offset + 1) % length;
+            let knot = |source_frame: usize| {
+                (0.25
+                    * (source_frame as f64 * source_hz * std::f64::consts::TAU / f64::from(RATE))
+                        .sin()) as f32
+            };
+            let a = knot(left);
+            let input = a + (knot(right) - a) * distance.fract() as f32;
+            raw.sample(input, pitch)
+        })
+        .collect::<Vec<_>>();
+    assert!(pcm.iter().all(|sample| sample.is_finite()));
+    pcm
+}
+
+pub(super) fn assert_physical_birth_tone(
+    pcm: &[f32],
+    base: i32,
+    extra: i32,
+    rate: f64,
+    lock: bool,
+    volume: f32,
+) {
+    assert!(pcm.len() >= 16_384);
+    assert!(pcm.iter().all(|sample| sample.is_finite()));
+    let reference = physical_birth_tone_reference(pcm.len(), SOURCE_HZ, base, extra, rate, lock);
+    let maximum = pcm
+        .iter()
+        .zip(reference)
+        .map(|(actual, expected)| (*actual - expected * volume).abs())
+        .fold(0.0_f32, f32::max);
+    assert!(
+        maximum < 2.0e-5,
+        "complete independent physical-birth PCM mismatch: {maximum}"
+    );
+    // No onset samples are removed from the exact comparison above. Cold attack
+    // transients are not a stationary sinusoid; frequency has its own fixed window.
+    assert_tone(&pcm[8_192..], base, extra, rate, lock);
+}
+
 fn assert_native_source(fixture: &Fixture, id: usize, action: &CapturedPitchAction) {
     let voice = fixture.voice(id);
     assert_eq!(voice.stretch.adopted_request_id(), Some(action.sequence()));
@@ -533,10 +601,20 @@ fn assert_native_source(fixture: &Fixture, id: usize, action: &CapturedPitchActi
     assert_eq!(history.binding.accepted, voice.source_timing.accepted);
     assert!(history.fed_output_frames >= 4096);
     let taps = voice.stretch.native_tap_observation().unwrap();
-    assert!(taps.left_reads > 0);
     assert_eq!(taps.missing_reads, 0);
-    assert!(taps.min_frame.unwrap() >= LOOP_START);
-    assert!(taps.max_frame.unwrap() < LOOP_END);
+    if action.variant() == PitchActionVariant::SetRetrigger {
+        // The held finite source is still authoritative, but a new physical
+        // owner consumes only explicit silence before its selected origin.
+        assert_eq!(taps.left_reads, 0);
+        assert_eq!(taps.right_reads, 0);
+        assert_eq!(taps.min_frame, None);
+        assert_eq!(taps.max_frame, None);
+    } else {
+        // Genuine existing-source SET replay must retain actual source reads.
+        assert!(taps.left_reads > 0);
+        assert!(taps.min_frame.unwrap() >= LOOP_START);
+        assert!(taps.max_frame.unwrap() < LOOP_END);
+    }
 }
 
 #[test]

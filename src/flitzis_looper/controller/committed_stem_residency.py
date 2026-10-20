@@ -35,7 +35,11 @@ def resident_stem_capacity_pressure(message: object) -> bool:
 
 def resident_stem_admission_pressure(message: object) -> bool:
     """Keep recoverable admission separate from stale/data/history/terminal failures."""
-    return resident_pcm_budget_pressure(message) or resident_stem_capacity_pressure(message)
+    return (
+        resident_pcm_budget_pressure(message)
+        or resident_stem_capacity_pressure(message)
+        or (isinstance(message, str) and message.startswith("[resident_stem_placement_pending]"))
+    )
 
 
 @dataclass(frozen=True, slots=True)
@@ -252,6 +256,36 @@ class CommittedStemResidency:
             return
         self._selections[sample_id] = _CommittedSelection(entry, content_id, source_path, ticket)
 
+    @staticmethod
+    def prepare_copied_selection(
+        entry: StemCacheEntry,
+        content_id: str | None,
+        source_path: str | None,
+        ticket: CommittedStemSetTicket,
+    ) -> _CommittedSelection:
+        """Prepare a fresh copied row without consulting or writing a live slot.
+
+        The aggregate owner separately validates its opaque Native ACK, complete
+        target image and the ticket obtained from that parent's ordered receipt.
+        Registration does not establish resident component availability.
+        """
+        row = _CommittedSelection(entry, content_id, source_path, ticket)
+        CommittedStemResidency.validate_copied_selection(row)
+        return row
+
+    @staticmethod
+    def validate_copied_selection(row: _CommittedSelection) -> None:
+        """Recheck the exact accepted registration before an aggregate mirror store."""
+        if (
+            row.entry.pair is None
+            or not row.content_id
+            or not row.source_path
+            or row.ticket.publication_status() != "accepted"
+            or row.ticket.is_current() is not True
+        ):
+            message = "Copied stem selection has no current accepted target registration"
+            raise RuntimeError(message)
+
     def requires_current_preparation(
         self, sample_id: int, source_ticket: PreparedSourceTicket
     ) -> bool:
@@ -337,13 +371,7 @@ class CommittedStemResidency:
                 selection.receipt_intent = None
             return self._submit(selection)
         except (RuntimeError, TypeError, ValueError) as error:
-            selection.desired = None
-            self._report_error(
-                sample_id,
-                str(error)
-                if resident_stem_admission_pressure(str(error))
-                else f"Stem residency admission failed: {error}",
-            )
+            self._selection_admission_error(sample_id, selection, error, context="admission")
             return False
 
     def request_preload(self, sample_id: int, *, enabled: bool) -> bool:
@@ -453,9 +481,25 @@ class CommittedStemResidency:
                 elif receipt is not None and receipt.effective_mode_status() == "effective":
                     self._report_error(sample_id, None)
             except (RuntimeError, TypeError, ValueError) as error:
-                selection.desired = None
-                self._report_error(sample_id, f"Stem residency status failed: {error}")
+                self._selection_admission_error(sample_id, selection, error, context="status")
         return tuple(withdrawn)
+
+    def _selection_admission_error(
+        self,
+        sample_id: int,
+        selection: _CommittedSelection,
+        error: RuntimeError | TypeError | ValueError,
+        *,
+        context: str,
+    ) -> None:
+        message = str(error)
+        selection.desired = None
+        self._report_error(
+            sample_id,
+            message
+            if resident_stem_admission_pressure(message)
+            else f"Stem residency {context} failed: {message}",
+        )
 
     def status(self, sample_id: int) -> StemResidencyStatus | None:
         """Return actual registration/residency/effective status without inferring ACK."""
@@ -516,8 +560,22 @@ class CommittedStemResidency:
             previous, live = None, None
         if live is None:
             self._selections.pop(sample_id, None)
+            attempt = (
+                previous
+                if (
+                    previous is not None
+                    and previous.receipt is not None
+                    and not self._failed(previous.receipt)
+                    and (previous.receipt.residency_status() != "accepted" or self._busy(previous))
+                )
+                else None
+            )
             live = _LiveSelection(
-                disk, previous, self._effective_identity(previous) if previous else None
+                disk,
+                previous,
+                self._effective_identity(previous) if previous else None,
+                attempt=attempt,
+                desired=attempt.desired if attempt is not None else None,
             )
             self._live_selections[sample_id] = live
         else:
@@ -575,16 +633,8 @@ class CommittedStemResidency:
             live.blocked = False
             self._reset_failed_attempt(live)
             self._reset_failed_candidate(live)
-            attempt = live.attempt
-            if attempt is not None and self._superseded_attempt(live, attempt, intent):
-                if not self._withdraw(attempt):
-                    return True
-                live.attempt = None
-                if attempt.candidate:
-                    attempt.ticket.cancel()
-                    if live.disk.selection is attempt:
-                        live.disk.selection = None
-                        live.disk.registration = "withdrawn"
+            if not self._withdraw_superseded_attempt(live, intent):
+                return True
             return self._submit_live(sample_id, live)
         except (RuntimeError, TypeError, ValueError) as error:
             live.blocked = True
@@ -604,6 +654,23 @@ class CommittedStemResidency:
     ) -> bool:
         target = live.disk.selection if intent[0] == "all_stems" else live.control
         return attempt.receipt_intent != intent or attempt is not target
+
+    def _withdraw_superseded_attempt(
+        self, live: _LiveSelection, intent: tuple[StemMixMode, int]
+    ) -> bool:
+        """Yield only this unclaimed operation; claimed readers stay with their receipt."""
+        attempt = live.attempt
+        if attempt is None or not self._superseded_attempt(live, attempt, intent):
+            return True
+        if not self._withdraw(attempt):
+            return False
+        live.attempt = None
+        if attempt.candidate:
+            attempt.ticket.cancel()
+            if live.disk.selection is attempt:
+                live.disk.selection = None
+                live.disk.registration = "withdrawn"
+        return True
 
     @staticmethod
     def _reset_failed_attempt(live: _LiveSelection) -> None:
@@ -662,7 +729,12 @@ class CommittedStemResidency:
                 self._submit_live(sample_id, live)
             except (RuntimeError, TypeError, ValueError) as error:
                 live.blocked = True
-                self._report_error(sample_id, f"Stem residency status failed: {error}")
+                self._report_error(
+                    sample_id,
+                    str(error)
+                    if resident_stem_admission_pressure(str(error))
+                    else f"Stem residency status failed: {error}",
+                )
 
     def _observe_live(
         self,
@@ -760,7 +832,15 @@ class CommittedStemResidency:
         )
 
     def _submit_live(self, sample_id: int, live: _LiveSelection) -> bool:
-        if live.blocked or live.desired is None or self._busy(live.attempt):
+        # A first live registration can inherit an ordinary pending request.
+        # Polling its carried desire must use the same own withdrawal boundary
+        # as a later explicit gesture before admitting a superseding operation.
+        if (
+            live.blocked
+            or live.desired is None
+            or self._busy(live.attempt)
+            or not self._withdraw_superseded_attempt(live, live.desired)
+        ):
             return True
         mode, enabled_mask = live.desired
         if mode == "full_mix":

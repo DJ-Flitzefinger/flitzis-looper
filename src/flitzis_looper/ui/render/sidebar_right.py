@@ -10,9 +10,8 @@ from flitzis_looper.ui.constants import (
     DARK_RGBA,
     SPACING,
     TEXT_BPM_RGBA,
-    TEXT_MUTED_RGBA,
 )
-from flitzis_looper.ui.contextmanager import button_style, style_color, style_var
+from flitzis_looper.ui.contextmanager import button_style, style_var
 from flitzis_looper.ui.render.bpm_entry import (
     filtered_bpm_entry_char,
     format_bpm_entry_value,
@@ -32,6 +31,8 @@ if TYPE_CHECKING:
     from flitzis_looper.ui.styles import ButtonStyleName
 
 PITCH_SLIDER_GRAB_MIN_SIZE = 20.0
+PITCH_SLIDER_MAX_HEIGHT = 400.0
+BPM_DISPLAY_HEIGHT = 40.0
 
 
 def _has_pending_learn_input(ctx: UiContext) -> bool:
@@ -148,7 +149,7 @@ def _bpm_display(ctx: UiContext) -> None:
     local_pos = imgui.get_cursor_pos()
     avail = imgui.get_content_region_avail()
     draw_list = imgui.get_window_draw_list()
-    bpm_height = 40
+    bpm_height = BPM_DISPLAY_HEIGHT
     draw_list.add_rect_filled(
         pos, (pos.x + avail.x, pos.y + bpm_height), imgui.get_color_u32(DARK_RGBA)
     )
@@ -165,11 +166,8 @@ def _bpm_display(ctx: UiContext) -> None:
     ):
         ctx.ui.start_global_bpm_edit(format_bpm_entry_value(bpm))
 
-    if bpm is not None and imgui.is_item_hovered():
-        imgui.set_tooltip(
-            f"Requested BPM: {format_bpm_entry_value(bpm)}\n"
-            "Display rounded to two decimals. Double-click to edit full precision."
-        )
+    if imgui.is_item_hovered():
+        _global_rate_tooltip(ctx, bpm)
 
     imgui.push_font(None, 38)
     text_size = imgui.calc_text_size(bpm_text)
@@ -183,10 +181,9 @@ def _speed_controls(ctx: UiContext) -> None:
     avail = imgui.get_content_region_avail()
 
     _bpm_display(ctx)
-    _render_global_rate_status(ctx)
 
     slider_width = 42
-    slider_height = 400
+    slider_height = _pitch_slider_height(avail.y)
     x = (avail.x - slider_width) / 2
     imgui.set_cursor_pos_x(x)
     reference_bpm = ctx.state.global_.speed_reference_bpm()
@@ -225,27 +222,44 @@ def _speed_controls(ctx: UiContext) -> None:
             ctx.audio.global_.nudge_speed_by_bpm_steps(-minus_steps)
 
 
-def _render_global_rate_status(ctx: UiContext) -> None:
-    """Keep requested rate controls separate from callback-confirmed audio and refusal."""
+def _pitch_slider_height(available_height: float) -> float:
+    """Reserve fixed control rows, independent of receipts, pointer and scrollbars."""
+    # Three step/reset buttons, two lock buttons and one confirmed-audio caption.
+    # Spacing includes the BPM display, fader, spacer and compact button groups.
+    reserved = (
+        BPM_DISPLAY_HEIGHT
+        + 5 * imgui.get_frame_height()
+        + imgui.get_text_line_height()
+        + 6 * SPACING
+        + 6 * (SPACING / 4)
+    )
+    return min(
+        PITCH_SLIDER_MAX_HEIGHT,
+        max(PITCH_SLIDER_GRAB_MIN_SIZE + 4.0, available_height - reserved),
+    )
+
+
+def _global_rate_tooltip(ctx: UiContext, bpm: float | None) -> None:
+    """Explain intent and confirmed audio without inserting rows in the drag layout."""
     status = ctx.state.global_.global_rate_status()
     effective = (
         "unconfirmed" if status.effective_speed is None else f"{status.effective_speed:.2f}x"
     )
-    with style_color(imgui.Col_.text, TEXT_MUTED_RGBA):
-        imgui.text_wrapped(f"Requested {ctx.state.project.speed:.2f}x")
-        imgui.text_wrapped(f"Audio {effective}")
-        if status.effective_master_period is not None:
-            imgui.text_wrapped(f"{60.0 / status.effective_master_period:.2f} BPM")
-    if status.error:
-        imgui.text_wrapped(f"Rate change: {status.error}")
+    lines = [f"Requested speed: {ctx.state.project.speed:.2f}x", f"Audio speed: {effective}"]
+    if bpm is not None:
+        lines.extend((
+            f"Requested BPM: {format_bpm_entry_value(bpm)}",
+            "Display rounded to two decimals. Double-click to edit full precision.",
+        ))
+    if status.effective_master_period is not None:
+        lines.append(f"Audio BPM: {60.0 / status.effective_master_period:.2f}")
     if status.state == "queued":
-        imgui.text_wrapped("Rate change queued")
+        lines.append("Rate change queued")
     elif status.state == "preparing":
-        imgui.text_wrapped("Preparing rate change…")
-    elif status.state == "rejected":
-        imgui.text_wrapped("Rate change rejected")
+        lines.append("Preparing rate change…")
     elif status.state == "applied":
-        imgui.text_wrapped("Rate applied")
+        lines.append("Rate applied")
+    imgui.set_tooltip("\n".join(lines))
 
 
 def _speed_slider_with_bpm_reference(
@@ -359,5 +373,8 @@ def sidebar_right(ctx: UiContext) -> None:
 
 def _render_global_key_lock(ctx: UiContext) -> None:
     render_key_lock_button(
-        ctx.state.global_.key_lock_status(), "key_lock", ctx.audio.global_.toggle_key_lock
+        ctx.state.global_.key_lock_status(),
+        "key_lock",
+        ctx.audio.global_.toggle_key_lock,
+        compact_status=True,
     )

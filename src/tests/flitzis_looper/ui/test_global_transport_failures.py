@@ -1,7 +1,7 @@
 """GLOBAL START/STOP keeps failed native admission inside the GUI boundary."""
 
 from contextlib import contextmanager
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, cast
 from unittest.mock import call
 
 import pytest
@@ -97,7 +97,7 @@ def test_global_stop_pending_placement_preserves_state_owners_and_next_gesture(
     assert ctx.audio.global_.playback_error == PENDING_PLACEMENT
     assert controller.session.model_dump() == before_session
     assert controller.project.model_dump() == before_project
-    assert controller.transport.residency._launched[0] is launched
+    assert cast("object", controller.transport.residency._launched[0]) is launched
     assert not launched.launch_cancelled
     audio_engine_mock.cancel_all_launches.assert_called_once_with()
     audio_engine_mock.stop_global_playback_batch.assert_not_called()
@@ -301,7 +301,7 @@ def _button_frame(ctx: UiContext) -> tuple[tuple[int, ...], tuple[float, float]]
     return colors, midpoint
 
 
-def test_global_start_stop_draws_failed_native_admission_and_explains_it_on_hover(
+def test_global_start_stop_keeps_failed_native_admission_outside_control_and_hover(
     controller: AppController, audio_engine_mock: Mock, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     ctx, _ = _context(controller, audio_engine_mock)
@@ -320,8 +320,9 @@ def test_global_start_stop_draws_failed_native_admission_and_explains_it_on_hove
         imgui.get_io().add_mouse_pos_event(*midpoint)
         colors, _ = _button_frame(ctx)
 
-        assert imgui.color_convert_float4_to_u32(bottom_bar._TRANSPORT_ERROR_RGBA) in colors
-        assert any(PENDING_PLACEMENT in text for text in tooltips)
+        assert imgui.color_convert_float4_to_u32((1.0, 0.25, 0.2, 1.0)) not in colors
+        assert not any(PENDING_PLACEMENT in text for text in tooltips)
+        assert "Start/restart loops; right stop; hold mouse wheel for mute" in tooltips
     audio_engine_mock.cancel_all_launches.assert_called_once_with()
     audio_engine_mock.stop_global_playback_batch.assert_not_called()
 

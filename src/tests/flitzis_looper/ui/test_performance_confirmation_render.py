@@ -6,6 +6,7 @@ from typing import TYPE_CHECKING
 import pytest
 from imgui_bundle import imgui
 
+from flitzis_looper.controller.performance_confirmation import PerformanceConfirmation
 from flitzis_looper.input_mapping import KeyboardBinding, LooperAction
 from flitzis_looper.ui.render import render
 from flitzis_looper.ui.render.performance_confirmation import performance_confirmation
@@ -110,7 +111,7 @@ def test_actual_warning_visible_and_cancel_preserves_bound_editor_and_audio(
     observed = _observe(monkeypatch)
     controller.performance_confirmation.request(action, 0)
     intent = ctx.ui.confirmation.pending
-    assert intent is not None
+    assert isinstance(intent, PerformanceConfirmation)
     # Current sidebar selection and settings visibility cannot hide or retarget this popup.
     controller.project.selected_pad = 1
     controller.session.settings_open = True
@@ -191,7 +192,7 @@ def test_actual_escape_dismisses_warning_and_owns_mapped_escape(
     _frame(ctx)
 
 
-def test_actual_failed_admission_shows_error_without_closing_editor_or_retrying(
+def test_actual_failed_admission_keeps_error_outside_popup_without_closing_editor_or_retrying(
     controller: AppController,
     audio_engine_mock: Mock,
     monkeypatch: pytest.MonkeyPatch,
@@ -205,7 +206,7 @@ def test_actual_failed_admission_shows_error_without_closing_editor_or_retrying(
     _frame(ctx)
     _click(ctx, observed, "UNLOAD AUDIO")
     _frame(ctx)
-    assert "Action failed: native admission full" in observed.texts
+    assert not any("native admission full" in text for text in observed.texts)
     assert controller.session.waveform_editor_open
     assert controller.session.waveform_editor_pad_id == 0
     assert controller.project.sample_paths[0] == "samples/shared.wav"

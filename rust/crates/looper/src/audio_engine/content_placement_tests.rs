@@ -301,6 +301,10 @@ fn exhausted_observation_generation_rejects_both_writers_without_callbacks_or_co
         .store(u64::MAX, Ordering::SeqCst);
     assert_eq!(fixture.placement.read_token(), None);
     assert_eq!(
+        fixture.placement.read_token_result(),
+        Err(PlacementError::ObservationGenerationExhausted)
+    );
+    assert_eq!(
         fixture.placement.commit_with(
             fixture.identity(),
             &fixture.lifetimes,

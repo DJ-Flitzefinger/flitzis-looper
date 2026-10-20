@@ -414,11 +414,26 @@ pub(super) fn total_glide(lock: bool, midi: bool, case: TotalGlideCase) -> Total
     route.callback(73);
     route.assert_no_attacks();
     let frame = route.route.transport.output_frame();
-    let timeline = original_timeline(originals[0].e, INITIAL_SPEED, before_f, frame + 8192);
-    let (origin, bound, queried_pitches) = reset_bound(&timeline, case.total, lock).unwrap();
+    let timeline = original_timeline(&originals[0], INITIAL_SPEED, before_f, frame + 8192);
+    let target_index = usize::try_from(frame - originals[0].e).unwrap();
+    let (origin, bound, warm_queried_pitches) =
+        reset_bound(&timeline[..=target_index], case.total, lock).unwrap();
     assert!(bound <= maximum_bound);
-    assert!(bound > HISTORY);
     assert!(actual_active >= bound as u64);
+    // Expanded profiles belong to the complete T-owned trajectory. A lower
+    // pitch may enter its expanded profile during continuation after T, rather
+    // than pretending that E's cold bound was the T warm-up bound.
+    let trajectory_bounds = timeline[origin..timeline.len() - 1]
+        .iter()
+        .map(|clock| {
+            let pitch = scalar_pitch(case.total, lock, clock.rate);
+            (pitch.to_bits(), RawRubberBand::history_bound(pitch))
+        })
+        .collect::<std::collections::BTreeMap<_, _>>();
+    let queried_pitches = trajectory_bounds.len();
+    let trajectory_bound = *trajectory_bounds.values().max().unwrap();
+    assert!(trajectory_bound > HISTORY);
+    assert!(trajectory_bound <= maximum_bound);
     let endpoint = timeline.last().unwrap();
     assert!(endpoint.rate > INITIAL_SPEED && endpoint.rate < GLIDE_SPEED);
     assert_eq!(endpoint.target, GLIDE_SPEED);
@@ -426,7 +441,7 @@ pub(super) fn total_glide(lock: bool, midi: bool, case: TotalGlideCase) -> Total
     let cold_pitch = scalar_pitch(case.total, lock, timeline[origin + 511].rate);
     let endpoint_bound =
         RawRubberBand::history_bound(scalar_pitch(case.total, lock, endpoint.rate));
-    assert!(bound >= endpoint_bound);
+    assert!(trajectory_bound >= endpoint_bound);
     assert_eq!(
         scalar_pitch(case.total, lock, endpoint.rate),
         if lock { h / endpoint.rate } else { h }
@@ -436,16 +451,16 @@ pub(super) fn total_glide(lock: bool, midi: bool, case: TotalGlideCase) -> Total
         case.name,
         serde_json::json!({
             "key_lock":lock,"midi":midi,"birth_base":birth_note,"birth_extra":case.extra,
-            "birth_total":birth_note+case.extra,"original_birth":originals[0].e,
-            "independent_birth_p":birth_pitch,"independent_birth_H":birth_bound,
+            "birth_total":birth_note+case.extra,"original_birth_T":originals[0].t,"original_birth_E":originals[0].e,
+            "independent_birth_p":birth_pitch,"independent_birth_H":birth_bound,"birth_preparation_delay":originals[0].e-originals[0].t,
             "public_rate_E":before_f,"actual_history_before_rate_E":actual_active,
-            "independent_max_public_H":maximum_bound,"independent_reset_H":bound,
+            "independent_max_public_H":maximum_bound,"independent_T_warm_H":bound,"independent_trajectory_max_H":trajectory_bound,
             "independent_endpoint_H":endpoint_bound,"independent_first_block_cold_p":cold_pitch,
-            "independent_reset_profiles":queried_pitches,"independent_A_active":origin,
+            "independent_T_warm_profiles":warm_queried_pitches,"independent_trajectory_profiles":queried_pitches,"independent_A_active":origin,
             "captured_base":case.note,"captured_extra":case.extra,"independent_total":case.total,
             "h":h,"original_T":frame,"original_E":frame+8192,"independent_E_rate":endpoint.rate,
             "independent_E_p":if lock {h/endpoint.rate} else {h},
-            "scope":"Complete FullMix 48k, actual stopped offset SET/receipts, distinct wet birth, genuine callback history; journal observed only as coverage evidence, never oracle input"
+            "scope":"Complete FullMix 48k, actual stopped offset SET/receipts, distinct original-T wet birth and same independent Native through E, genuine E-onward callback history; journal observed only as coverage evidence, never oracle input"
         })
     );
     let case_name = format!(

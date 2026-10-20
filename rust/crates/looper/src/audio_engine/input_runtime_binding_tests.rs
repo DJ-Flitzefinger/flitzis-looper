@@ -100,6 +100,7 @@ impl RuntimeFixture {
     fn new() -> Self {
         let engine = test_engine();
         let (producer, consumer) = queue(8);
+        let engine = with_control_producer(engine, &producer);
         let runtime = InputRuntime::new_with_ownership(
             producer.clone(),
             InputClock::new(),

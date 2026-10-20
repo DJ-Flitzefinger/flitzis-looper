@@ -50,6 +50,33 @@ fn committed_stem_mode_available(
             }))
 }
 
+/// The physical slots after claim, including FullMix's still-held current ramp reader.
+/// Semantic selection roles alone must not relabel that current slot as outgoing.
+fn committed_post_stem_readers<'a>(
+    transaction: &'a StemResidencyTransaction,
+    active: bool,
+    previous: StemRenderSelection,
+    current: Option<&'a PreparedStemSet>,
+    outgoing: Option<&'a PreparedStemSet>,
+) -> StemReadSets<'a> {
+    if transaction.target == StemMixMode::AllStems {
+        StemReadSets::new(
+            transaction.stems.as_ref(),
+            if !transaction.policy_only
+                && transaction.candidate.is_some()
+                && active
+                && previous.required_stem_hash().is_some()
+            {
+                current
+            } else {
+                outgoing
+            },
+        )
+    } else {
+        StemReadSets::new(current, outgoing)
+    }
+}
+
 impl RtMixer {
     fn committed_selection_matches(&self, id: usize, selection: &SelectionPermit) -> bool {
         id < NUM_SAMPLES
@@ -286,6 +313,21 @@ impl RtMixer {
         } else {
             StemTransition::start(pin.plan.selection, STEM_TRANSITION_RAMP_FRAMES)
         };
+        if target != pin.plan.selection
+            && self.outgoing_stems[id].as_ref().is_some_and(|stems| {
+                self.stem_transitions[id].is_active()
+                    || self.retained_pad_stem_reader_required(id, stems)
+            })
+        {
+            return false;
+        }
+        let post_readers = committed_post_stem_readers(
+            transaction,
+            self.sample_is_active(id),
+            pin.plan.selection,
+            self.prepared_stems[id].as_ref(),
+            self.outgoing_stems[id].as_ref(),
+        );
         if transaction.target == StemMixMode::AllStems
             && !transaction.stems.as_ref().is_some_and(|stems| {
                 *stems.complete_set_identity == transaction.selection.identity
@@ -308,14 +350,16 @@ impl RtMixer {
             .filter(|(_, voice)| voice.active && voice.sample_id == id);
         match (pin.voice_index, active.next()) {
             (None, None) => {
-                let plan = SourceReadPlan {
+                let mut plan = SourceReadPlan {
                     selection: target,
-                    transition: ramp,
                     ..pin.plan
                 };
+                // The stopped effect clears its ramp instead of retaining an
+                // outgoing V1 reader. Preflight must validate that same target.
+                plan.transition.clear();
                 normal_loop_feed_available_with_readers(
                     &pin.sample,
-                    StemReadSets::new(transaction.stems.as_ref(), pin.stems.as_ref()),
+                    post_readers,
                     self.sample_rate_hz as u32,
                     pin.accepted,
                     plan,
@@ -372,7 +416,7 @@ impl RtMixer {
                     )
                     && normal_loop_feed_available_with_readers(
                         &pin.sample,
-                        StemReadSets::new(transaction.stems.as_ref(), pin.stems.as_ref()),
+                        post_readers,
                         self.sample_rate_hz as u32,
                         pin.accepted,
                         SourceReadPlan {
@@ -382,9 +426,63 @@ impl RtMixer {
                         },
                         &playback,
                     )
+                    && (!voice.stretch.has_retained_source_input()
+                        || self
+                            .retained_stem_voice_change(index, target, ramp)
+                            .is_some_and(|change| {
+                                change.available(
+                                    voice,
+                                    StemReadSets::new(
+                                        self.prepared_stems[id].as_ref(),
+                                        self.outgoing_stems[id].as_ref(),
+                                    ),
+                                    post_readers,
+                                )
+                            }))
             }
             _ => false,
         }
+    }
+
+    fn retain_committed_stem_change_claimed(&mut self, transaction: &StemResidencyTransaction) {
+        let Some(index) = transaction.pin.voice_index else {
+            return;
+        };
+        if !self.voices[index].stretch.has_retained_source_input() {
+            return;
+        }
+        let id = transaction.id;
+        let previous = self.stem_render_selection(id);
+        let target = if transaction.policy_only {
+            previous
+        } else if transaction.target == StemMixMode::AllStems {
+            StemRenderSelection::for_stems(
+                transaction.stems.as_ref().expect("preflighted stems"),
+                transaction.mask,
+            )
+        } else {
+            StemRenderSelection::full_mix()
+        };
+        let ramp = if target == previous {
+            self.stem_transitions[id]
+        } else {
+            StemTransition::start(previous, STEM_TRANSITION_RAMP_FRAMES)
+        };
+        let change = self
+            .retained_stem_voice_change(index, target, ramp)
+            .expect("preflighted committed retained trajectory");
+        let previous_readers = StemReadSets::new(
+            self.prepared_stems[id].as_ref(),
+            self.outgoing_stems[id].as_ref(),
+        );
+        let next_readers = committed_post_stem_readers(
+            transaction,
+            true,
+            previous,
+            previous_readers.current,
+            previous_readers.outgoing,
+        );
+        change.apply_claimed(&mut self.voices[index], previous_readers, next_readers);
     }
 
     pub(crate) fn apply_committed_stem_work(
@@ -565,6 +663,7 @@ impl RtMixer {
                     && transaction.status.publication.claim_resident()
                     && self.committed_stem_adoption_current(transaction);
                 if valid {
+                    self.retain_committed_stem_change_claimed(transaction);
                     if transaction.policy_only {
                         if transaction.target == StemMixMode::AllStems {
                             transaction.retired_stems = self.prepared_stems[id].take();
@@ -574,7 +673,11 @@ impl RtMixer {
                             && self.stem_mix_mode[id] == StemMixMode::FullMix
                         {
                             self.release_pair_components[id] = true;
-                            if !self.stem_transitions[id].is_active() {
+                            if !self.stem_transitions[id].is_active()
+                                && !self.prepared_stems[id].as_ref().is_some_and(|stems| {
+                                    self.retained_pad_stem_reader_required(id, stems)
+                                })
+                            {
                                 transaction.retired_stems = self.prepared_stems[id].take();
                             }
                         }
@@ -659,6 +762,9 @@ impl RtMixer {
                     if transaction.target == StemMixMode::FullMix
                         && !transaction.retain_components
                         && !self.stem_transitions[id].is_active()
+                        && !self.prepared_stems[id]
+                            .as_ref()
+                            .is_some_and(|stems| self.retained_pad_stem_reader_required(id, stems))
                     {
                         transaction.retired_stems = self.prepared_stems[id].take();
                     }
@@ -670,6 +776,24 @@ impl RtMixer {
             CommittedStemRtWork::RetiredPin { .. } => {}
         }
         retirement.retire_committed_stem_work(work);
+    }
+
+    /// Only an accepted ordinary selection change withdraws the earlier operation.
+    /// Leave its historical residency and all readers owned by their existing lanes.
+    /// This terminal scalar cannot be restored by a later control ABA in the drain.
+    pub(super) fn withdraw_committed_stem_effect_for_ordinary_selection(
+        &self,
+        id: usize,
+        changed: bool,
+    ) {
+        if changed
+            && let Some(receipt) = self
+                .committed_stem_receipts
+                .get(id)
+                .and_then(Option::as_ref)
+        {
+            receipt.status.effective.store(3, Ordering::Release);
+        }
     }
 
     pub(crate) fn finish_committed_stem_mode(&mut self, id: usize) {

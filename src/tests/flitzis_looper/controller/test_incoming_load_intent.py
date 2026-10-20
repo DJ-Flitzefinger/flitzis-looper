@@ -745,7 +745,7 @@ def test_generic_bpm_carries_one_source_capture_to_every_native_derived_publicat
         )
 
 
-def test_saved_pending_without_ordinary_incoming_cell_keeps_legacy_maintenance_calls(
+def test_saved_pending_refuses_current_gesture_but_retains_legacy_startup_maintenance(
     controller: AppController, audio_engine_mock: Mock
 ) -> None:
     controller.project.sample_paths[0] = "samples/restored.wav"
@@ -753,7 +753,15 @@ def test_saved_pending_without_ordinary_incoming_cell_keeps_legacy_maintenance_c
     audio_engine_mock.current_input_runtime_pad_binding.side_effect = None
     audio_engine_mock.current_input_runtime_pad_binding.return_value = None
 
-    controller.transport.bpm.set_manual_bpm(0, 90.0)
+    with pytest.raises(ValueError, match="Source assignment receipt is pending"):
+        controller.transport.bpm.set_manual_bpm(0, 90.0)
+    assert controller.project.manual_bpm[0] is None
+    audio_engine_mock.set_pad_bpm.assert_not_called()
+
+    # Saved startup projection is an internal maintenance action before admission,
+    # rather than permission to apply a performer gesture to an unprojected source.
+    controller.project.manual_bpm[0] = 90.0
+    controller.transport.bpm.on_pad_bpm_changed(0)
 
     assert controller.loader.incoming_load_request_id(0) is None
     audio_engine_mock.set_pad_bpm.assert_called_once_with(0, 90.0)

@@ -63,6 +63,7 @@ fn install_source(
     process(
         mixer,
         ControlMessage::LoadColdSample {
+            initial_mix: None,
             publication,
             id: slot,
             sample,

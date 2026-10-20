@@ -239,16 +239,16 @@ def _imgui_context() -> Iterator[None]:
         ("queued", 1, "Rate change queued", None),
         ("preparing", 2, "Preparing rate change…", None),
         ("applied", 2, "Rate applied", None),
-        ("rejected", 2, "Rate change rejected", "participant changed"),
+        ("rejected", 2, None, "participant changed"),
     ],
 )
-def test_actual_rate_status_draw_distinguishes_requested_from_confirmed_audio(
+def test_actual_rate_hover_distinguishes_requested_from_confirmed_audio_without_error_details(
     controller: AppController,
     audio_engine_mock: Mock,
     monkeypatch: pytest.MonkeyPatch,
     state: str,
     effect: int,
-    message: str,
+    message: str | None,
     error: str | None,
 ) -> None:
     controller.project.speed = 1.8
@@ -256,36 +256,40 @@ def test_actual_rate_status_draw_distinguishes_requested_from_confirmed_audio(
         return_value=_feedback(state=state, effect=effect, error=error)
     )
     controller.transport.global_params._poll_global_rate_status()
+    ctx = UiContext(controller)
+    monkeypatch.setattr(ctx.state.global_, "effective_bpm", lambda: 240.0)
     descriptions: list[str] = []
-    original_colored = imgui.text_colored
-    original_wrapped = imgui.text_wrapped
+    original_tooltip = imgui.set_tooltip
 
-    def colored(color: imgui.ImVec4Like, value: str) -> None:
+    def tooltip(value: str) -> None:
         descriptions.append(value)
-        original_colored(color, value)
+        original_tooltip(value)
 
-    def wrapped(value: str) -> None:
-        descriptions.append(value)
-        start = imgui.get_cursor_screen_pos()
-        available = imgui.get_content_region_avail().x
-        original_wrapped(value)
-        assert imgui.get_item_rect_max().x <= start.x + available + 1.0
-
-    monkeypatch.setattr(imgui, "text_colored", colored)
-    monkeypatch.setattr(imgui, "text_wrapped", wrapped)
+    monkeypatch.setattr(imgui, "set_tooltip", tooltip)
     with _imgui_context():
-        for _ in range(2):
+        for frame in range(4):
             imgui.new_frame()
             imgui.set_next_window_pos((0, 0))
             imgui.set_next_window_size((SIDEBAR_RIGHT_PX, 400))
             imgui.begin("Global rate confirmation", flags=imgui.WindowFlags_.no_saved_settings)
-            sidebar_right._render_global_rate_status(UiContext(controller))
+            sidebar_right._bpm_display(ctx)
+            minimum, maximum = imgui.get_item_rect_min(), imgui.get_item_rect_max()
+            midpoint = ((minimum.x + maximum.x) / 2, (minimum.y + maximum.y) / 2)
             imgui.end()
             imgui.render()
+            if frame == 1:
+                assert not descriptions
+                imgui.get_io().add_mouse_pos_event(*midpoint)
         assert imgui.get_draw_data().total_vtx_count > 0
-    assert "Requested 1.80x" in descriptions
-    assert "Audio 2.00x" in descriptions
-    assert "120.00 BPM" in descriptions
-    assert message in descriptions
+    assert descriptions
+    lines = descriptions[-1].splitlines()
+    assert "Requested speed: 1.80x" in lines
+    assert "Audio speed: 2.00x" in lines
+    assert "Requested BPM: 240.0" in lines
+    assert "Audio BPM: 120.00" in lines
+    if message is not None:
+        assert message in lines
+    else:
+        assert not any("rejected" in text.lower() for text in descriptions)
     if error is not None:
-        assert f"Rate change: {error}" in descriptions
+        assert not any(error in text for text in descriptions)

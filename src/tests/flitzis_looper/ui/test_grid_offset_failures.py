@@ -1,6 +1,6 @@
 """UI gestures report native admission failures without losing the next gesture."""
 
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, cast
 
 import pytest
 
@@ -93,7 +93,7 @@ def test_grid_offset_queue_failure_preserves_intent_and_next_gesture_succeeds(
     ctx.audio.pads.set_pad_grid_offset_samples(0, -240)
 
     assert project.pad_grid_offset_samples[0] == -240
-    assert project.pad_timing_intent[0] == "legacy"
+    assert cast("str", project.pad_timing_intent[0]) == "legacy"
     assert _loop_intent(controller) == before_loop
     assert ctx.audio.pads.residency_status(0) == (None, None)
     audio_engine_mock.set_pad_loop_region.assert_called_once()

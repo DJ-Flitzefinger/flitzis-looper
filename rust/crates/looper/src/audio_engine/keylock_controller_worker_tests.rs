@@ -337,14 +337,124 @@ impl Harness {
         })
     }
 
+    fn settle_diagnostics(&mut self, ids: &[usize]) -> String {
+        let control = Python::attach(|py| {
+            let residency = self
+                .probe
+                .bind(py)
+                .getattr("transport")
+                .unwrap()
+                .getattr("residency")
+                .unwrap();
+            ids.iter()
+                .map(|&id| {
+                    let state = residency
+                        .call_method1("key_lock_status", (id,))
+                        .unwrap()
+                        .repr()
+                        .unwrap();
+                    let pending = residency
+                        .getattr("_pending")
+                        .unwrap()
+                        .call_method1("get", (id,))
+                        .unwrap();
+                    let mut fields = Vec::new();
+                    if !pending.is_none() {
+                        for name in [
+                            "attempts",
+                            "expected_source_generation",
+                            "unconfirmed",
+                            "scalar",
+                            "scalar_submitted",
+                            "scalar_request",
+                        ] {
+                            fields.push(format!(
+                                "{name}={}",
+                                pending.getattr(name).unwrap().repr().unwrap()
+                            ));
+                        }
+                        for name in ["ticket", "waiting_ticket"] {
+                            let ticket = pending.getattr(name).unwrap();
+                            if ticket.is_none() {
+                                fields.push(format!("{name}=None"));
+                            } else {
+                                fields.push(format!(
+                                    "{name}=(status={}, current={}, request={})",
+                                    ticket.call_method0("publication_status").unwrap(),
+                                    ticket.call_method0("is_current").unwrap(),
+                                    ticket.getattr("key_lock_request_id").unwrap(),
+                                ));
+                            }
+                        }
+                    }
+                    let feedback = self.engine.borrow(py).pad_key_lock_status(py, id).unwrap();
+                    let feedback = feedback
+                        .as_ref()
+                        .map(|feedback| feedback.bind(py).repr().unwrap().to_string());
+                    format!("pad={id} controller={state} pending={fields:?} native={feedback:?}")
+                })
+                .collect::<Vec<_>>()
+        });
+        let voices = self
+            .callback
+            .mixer
+            .voices
+            .iter_mut()
+            .filter(|voice| voice.active && ids.contains(&voice.sample_id))
+            .map(|voice| {
+                let target = voice.stretch.prepared_target_output_frame();
+                format!(
+                    "pad={} generation={} paused={} source={:?} native={} adopted={:?} \
+                     fifo={:?} history={:?} wet_failed={} wet_armed={} wet_render={} \
+                     wet_output={} current_wet={} prepared_target={target:?}",
+                    voice.sample_id,
+                    voice.generation,
+                    voice.paused,
+                    voice.source_playback,
+                    voice.stretch.native_state_address(),
+                    voice.stretch.adopted_request_id(),
+                    voice.stretch.pending_fifo_frames(),
+                    voice
+                        .stretch
+                        .productive_history()
+                        .map(|history| (history.fed_output_frames, history.next_position)),
+                    voice.stretch.wet_mode_failed(),
+                    voice.stretch.wet_mode_armed(),
+                    voice.stretch.wet_render_ready(),
+                    voice.stretch.wet_output_ready(),
+                    voice.stretch.wet_current_source_output_ready(),
+                )
+            })
+            .collect::<Vec<_>>();
+        format!(
+            "control={control:?}; voices={voices:?}; next_scheduled={:?}",
+            self.callback.scheduler.peek_next_target_frame()
+        )
+    }
+
+    #[track_caller]
     fn settle(&mut self, ids: &[usize], enabled: bool, playing: bool) {
         let deadline = Instant::now() + Duration::from_secs(10);
+        let caller = std::panic::Location::caller();
+        let initial_frame = self.frame;
+        let mut polls = 0;
         while !ids.iter().all(|&id| self.settled(id, enabled)) {
             self.drain();
             // A device callback continues while stopped or paused. Its silent
             // render observes returned warm handles without advancing a voice.
             self.render(128, playing);
-            assert!(Instant::now() < deadline, "controller mode did not settle");
+            polls += 1;
+            if Instant::now() >= deadline {
+                let diagnostics = self.settle_diagnostics(ids);
+                panic!(
+                    "controller mode did not settle: caller={caller}, target={enabled}, \
+                     playing={playing}, polls={polls}, initial_frame={initial_frame}, \
+                     frame={}, active_frames={}, launch_delay={}; {diagnostics}",
+                    self.frame,
+                    self.active_frames,
+                    self.launch_delay_frames(),
+                );
+            }
             std::thread::sleep(Duration::from_millis(1));
         }
     }
@@ -363,6 +473,12 @@ impl Harness {
                 [value; 2]
             })
             .collect()
+    }
+
+    fn launch_delay_frames(&self) -> u64 {
+        self.last_start.as_ref().map_or(0, |start| {
+            start.execution_frame().unwrap() - start.original_frame().unwrap()
+        })
     }
 
     fn assert_phase(&self, generation: u64) {
@@ -437,9 +553,10 @@ impl Harness {
                 Some(execution)
             );
         }
-        // Prepared ordinary START now owns Native history before E. This fixture
-        // consumes its genuine silent lead, never the former live-ON dry warming
-        // samples. First-wet tests can act at E before any active source frame.
+        // Prepared ordinary START owns its independent Native history before E.
+        // The genuine silent wall-clock lead consumes none of the new birth's
+        // source or filter output; its complete beginning remains available at E.
+        // First-wet tests can act at E before any live output sample.
         while self.frame < execution {
             assert!(!self.callback.mixer.voices.iter().any(|voice| voice.active));
             let frames = (execution - self.frame).min(257) as usize;
@@ -1504,6 +1621,7 @@ fn actual_python_pending_unload_reload_inherits_default_and_rejects_previous_sou
         .find(|voice| voice.is_playing_sample(0))
         .unwrap()
         .generation;
+    harness.last_start = Some(start.clone());
     harness.assert_phase(generation);
     wait_until(Duration::from_secs(10), || {
         harness.render(257, true);
@@ -1661,6 +1779,7 @@ impl Harness {
                 0,
                 sample,
                 super::super::LoadedSourcePublication {
+                    initial_mix: None,
                     placement: engine.input_runtime_ownership.slot_snapshot(0).unwrap(),
                     ownership: &engine.input_runtime_ownership,
                     generation,

@@ -10,13 +10,21 @@ if TYPE_CHECKING:
 class ApplyProjectState:
     """Apply project state to audio engine and session state."""
 
-    def __init__(self, transport: TransportController) -> None:
+    def __init__(
+        self, transport: TransportController, *, restored_sample_ids: frozenset[int] | None = None
+    ) -> None:
         self._transport = transport
         self._project = transport._project
         self._session = transport._session
         self._bpm = transport.bpm
         self._global_modes = transport.global_params
         self._audio = transport._audio
+        self._restored_sample_ids = restored_sample_ids
+
+    def _has_assignment(self, sample_id: int) -> bool:
+        return self._project.sample_paths[sample_id] is not None and (
+            self._restored_sample_ids is None or sample_id in self._restored_sample_ids
+        )
 
     def apply_project_state_to_audio(self) -> None:
         defaults = ProjectState()
@@ -49,7 +57,7 @@ class ApplyProjectState:
 
     def _apply_key_lock_settings(self, defaults: ProjectState) -> None:
         for sample_id in range(len(self._project.pad_key_lock)):
-            if self._project.sample_paths[sample_id] is None:
+            if not self._has_assignment(sample_id):
                 continue
 
             enabled = self._project.resolve_pad_key_lock(sample_id)
@@ -58,14 +66,14 @@ class ApplyProjectState:
 
     def _apply_per_pad_mixing(self, defaults: ProjectState) -> None:
         for sample_id, gain_db in enumerate(self._project.pad_gain_db):
-            if self._project.sample_paths[sample_id] is None:
+            if not self._has_assignment(sample_id):
                 continue
 
             if gain_db != defaults.pad_gain_db[sample_id]:
                 self._audio.set_pad_gain(sample_id, gain_db)
 
         for sample_id, low_db in enumerate(self._project.pad_eq_low_db):
-            if self._project.sample_paths[sample_id] is None:
+            if not self._has_assignment(sample_id):
                 continue
 
             mid_db = self._project.pad_eq_mid_db[sample_id]
@@ -82,7 +90,7 @@ class ApplyProjectState:
 
     def _apply_pad_loop_regions(self, defaults: ProjectState) -> None:
         for sample_id in range(len(self._project.sample_paths)):
-            if self._project.sample_paths[sample_id] is None:
+            if not self._has_assignment(sample_id):
                 continue
 
             start_s = self._project.pad_loop_start_s[sample_id]
@@ -105,7 +113,7 @@ class ApplyProjectState:
 
     def _apply_pad_bpm_settings(self) -> None:
         for sample_id in range(len(self._project.sample_paths)):
-            if self._project.sample_paths[sample_id] is None:
+            if not self._has_assignment(sample_id):
                 continue
 
             if (
@@ -119,7 +127,10 @@ class ApplyProjectState:
             self._bpm.on_pad_bpm_changed(sample_id)
 
     def _apply_bpm_lock_settings(self) -> None:
-        if self._project.bpm_lock:
+        if self._project.bpm_lock and (
+            self._restored_sample_ids is None
+            or self._project.selected_pad in self._restored_sample_ids
+        ):
             anchor_pad_id = self._project.selected_pad
             anchor_bpm = normalize_bpm(self._bpm.effective_bpm(anchor_pad_id))
             self._session.bpm_lock_anchor_pad_id = anchor_pad_id

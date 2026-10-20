@@ -5,7 +5,7 @@ use super::*;
 use crate::audio_engine::native_history_permit::NativeHistoryContext;
 use crate::audio_engine::pad_start::CapturedPadStart;
 use crate::audio_engine::pitch_intent::PitchIntent;
-use crate::audio_engine::prepared_native_history::{NativeAdapterState, PREPARED_HISTORY_FRAMES};
+use crate::audio_engine::prepared_native_history::NativeAdapterState;
 
 /// The real Engine owns public loading, assets, source ACK and resident Play.
 /// Only stream-bound scalar kernels are forwarded to the headless queues.
@@ -348,7 +348,7 @@ fn reference(
     reference.set_pad_eq(0, -12.0, -3.0, 4.0);
     assert!(reference.play_sample_at_output_frame(0, 1.0, execution));
     // This complete-PCM comparison mixer has independent source authority. It
-    // must begin with the same prepared endpoint rather than a cold dry prefix.
+    // must begin at the same fresh physical origin with silent pre-origin history.
     let index = reference
         .voices
         .iter()
@@ -371,7 +371,7 @@ fn reference(
         Some(RubberBandLiveShifter::new(RATE, 2).unwrap()),
         2,
     ));
-    candidate.prepare_source_at_endpoint(request).unwrap();
+    candidate.prepare_source_at_physical_birth(request).unwrap();
     assert!(reference.adopt_prepared_pitch_voice(
         index,
         &mut candidate,
@@ -384,10 +384,11 @@ fn reference(
     reference
 }
 
-fn prepared_raw_start(source: &SampleBuffer, ratio: f64, extra: i32) -> ControllerRawNative {
+fn prepared_raw_start(ratio: f64, extra: i32) -> ControllerRawNative {
     // Numeric semitones and the declared physical source rate are this oracle's
     // only pitch inputs; no live bank value or production pitch helper is read.
     let scale = 2.0_f64.powf(f64::from(extra) / 12.0) / ratio;
+    let history_frames = ControllerRawNative::constant_history_frames(scale);
     let mut native = RubberBandLiveShifter::new(RATE, 2).unwrap();
     native.prepare_exact_pitch(scale).unwrap();
     let block = native.block_size();
@@ -398,33 +399,11 @@ fn prepared_raw_start(source: &SampleBuffer, ratio: f64, extra: i32) -> Controll
         used: false,
         pitch: scale,
     };
-    // Independently reconstruct the real periodic source before the ordinary
-    // loop-start endpoint. No live request, read plan or playback cursor supplies
-    // expected PCM, and no Intro/prefix is invented for this Normal launch.
-    let period = (LOOP_END - LOOP_START) as f64;
-    let coordinate =
-        LOOP_START as f64 + (-(PREPARED_HISTORY_FRAMES as f64) * ratio).rem_euclid(period);
-    let origin = coordinate.floor() as usize;
-    let fraction = coordinate - origin as f64;
-    let feed = std::array::from_fn(|channel| {
-        (0..PREPARED_HISTORY_FRAMES)
-            .map(|offset| {
-                let distance = fraction + offset as f64 * ratio;
-                let whole = distance.floor() as usize;
-                let left = LOOP_START + (origin - LOOP_START + whole) % (LOOP_END - LOOP_START);
-                let right = if left + 1 == LOOP_END {
-                    LOOP_START
-                } else {
-                    left + 1
-                };
-                let left_value = source.samples[left * 2 + channel];
-                left_value
-                    + (source.samples[right * 2 + channel] - left_value)
-                        * (distance - whole as f64) as f32
-            })
-            .collect()
-    });
-    raw.render(&feed);
+    // Independently declare silence before this new physical source's birth.
+    // Keep the raw adapter's single initial FIFO lead; no remote loop tail or
+    // second silence prefix may stand in for the complete first source content.
+    let feed = std::array::from_fn(|_| vec![0.0; history_frames]);
+    assert!(raw.render(&feed).iter().all(|sample| *sample == 0.0));
     assert!(raw.used);
     raw
 }
@@ -529,7 +508,14 @@ fn history(explicit: bool, bpm_target: bool, extra: i32) {
     std::env::set_current_dir(&project_cwd).unwrap();
     let mut engine = AudioEngine::new().unwrap();
     let mut callback = Box::new(Callback {
-        mixer: RtMixer::new(2, RATE as f32),
+        mixer: crate::audio_engine::audio_stream::create_stream_mixer(
+            2,
+            RATE,
+            engine.current_timing_acknowledgements.clone(),
+            engine.input_runtime_ownership.clone(),
+            engine.prepared_source_epochs.clone(),
+        )
+        .unwrap(),
         scheduler: FixedCapacityScheduler::new(),
         transport: TransportTimeline::new(RATE),
         quantization: TriggerQuantization::Immediate,
@@ -924,28 +910,27 @@ assert ordinary_start.effective_frame() is None
         voice(&callback.mixer).stretch.adopted_request_id(),
         Some(ordinary_start.sequence())
     );
+    // Numeric source/display BPM values and saved semitones independently
+    // define the Native preparation history and the unconsumed source birth at E.
+    let ratio: f64 = (60.0 / 120.0) * (87.6 / 60.0);
+    assert_eq!(ratio, 0.73);
+    let history_frames =
+        ControllerRawNative::constant_history_frames(2.0_f64.powf(f64::from(extra) / 12.0) / ratio);
+    assert!(execution >= capture_frame);
     let initial_history = voice(&callback.mixer).stretch.productive_history().unwrap();
-    assert_eq!(
-        initial_history.fed_output_frames,
-        PREPARED_HISTORY_FRAMES as u64
-    );
+    assert_eq!(initial_history.fed_output_frames, history_frames as u64);
     assert_eq!(initial_history.next_position.frame, LOOP_START);
-    assert_eq!(initial_history.next_position.fraction, 0.0);
+    assert_eq!(
+        initial_history.next_position.fraction.to_bits(),
+        0.0_f64.to_bits()
+    );
     let prepared_taps = voice(&callback.mixer)
         .stretch
         .native_tap_observation()
-        .expect("actual finite prepared source history");
+        .expect("actual finite physical-birth preparation observation");
     assert_eq!(prepared_taps.missing_reads, 0);
-    assert!(
-        prepared_taps
-            .min_frame
-            .is_some_and(|frame| frame >= LOOP_START)
-    );
-    assert!(
-        prepared_taps
-            .max_frame
-            .is_some_and(|frame| frame < LOOP_END)
-    );
+    assert_eq!(prepared_taps.min_frame, None);
+    assert_eq!(prepared_taps.max_frame, None);
     assert!(Arc::ptr_eq(
         &finite.samples,
         &voice(&callback.mixer).sample.as_ref().unwrap().samples
@@ -1019,10 +1004,7 @@ assert ordinary_start.effective_frame() is None
         &locals,
         "assert session.active_sample_ids == {0, 215}, playback_state()",
     );
-    // Both public histories request the same physical SPEED; derive its oracle
-    // independently from the manual source and display BPM values.
-    let ratio: f64 = (60.0 / 120.0) * (87.6 / 60.0);
-    assert_eq!(ratio, 0.73);
+    // Both public histories request the independently declared physical SPEED.
     let published_intent = Python::attach(|py| {
         locals
             .bind(py)
@@ -1035,12 +1017,7 @@ assert ordinary_start.effective_frame() is None
             .unwrap()
     });
     assert_eq!(published_intent.to_bits(), ratio.to_bits());
-    let raw = prepared_raw_start(&complete, ratio, extra);
-    assert_eq!(
-        voice(&callback.mixer).stretch.pending_fifo_frames(),
-        (raw.input[0].len(), raw.output[0].len()),
-        "ordinary endpoint retains its fully prepared Native/FIFO owner"
-    );
+    let raw = prepared_raw_start(ratio, extra);
     let mut playback = ControllerPlayback {
         callback,
         reference: reference(&complete, ratio, execution, pitch),
@@ -1066,25 +1043,33 @@ assert ordinary_start.effective_frame() is None
         candidate: None,
         filter: controller_filter(),
     };
+    // Validate independent fresh references at E without consuming their first
+    // source/Native/EQ output during the publication and preparation lead.
+    playback.advance_expected_birth(capture_frame, execution);
+    let raw = playback.raw.as_ref().unwrap();
+    assert_eq!(
+        voice(&playback.callback.mixer)
+            .stretch
+            .pending_fifo_frames(),
+        (raw.input[0].len(), raw.output[0].len()),
+        "ordinary endpoint retains its fully prepared Native/FIFO owner"
+    );
     let generation = voice(&playback.callback.mixer).generation;
     let block = voice(&playback.callback.mixer)
         .stretch
         .rubberband_block_size();
-    let (first_block, _) = playback.render(block, true);
-    assert!(
-        first_block.iter().any(|sample| sample.abs() > 1.0e-6),
-        "the first accepted block must use audible prepared source output"
-    );
+    playback.render(block, true);
     assert_eq!(
         voice(&playback.callback.mixer)
             .stretch
             .productive_history()
             .unwrap()
             .fed_output_frames,
-        PREPARED_HISTORY_FRAMES as u64 + block as u64
+        history_frames as u64 + block as u64
     );
-    for count in [1, 31, 137, 512, 777, 96, 257] {
-        playback.render(count, false);
+    let mut initial_prefix = Vec::new();
+    for count in [1, 31, 137, 512, 777, 96, 257, 1021, 1008, 256] {
+        initial_prefix.extend(playback.render(count, false).0);
         assert_eq!(
             voice(&playback.callback.mixer)
                 .stretch
@@ -1092,6 +1077,10 @@ assert ordinary_start.effective_frame() is None
             initial_native
         );
     }
+    assert!(
+        initial_prefix.iter().any(|sample| sample.abs() > 1.0e-6),
+        "the complete independently compared physical prefix must become audible"
+    );
     let before_poll = native_status_diagnostic(&playback.callback);
     let current = voice(&playback.callback.mixer);
     assert_eq!(
@@ -1221,8 +1210,17 @@ assert project.pad_key_intent[0].retrigger is True
     let other_actual = other_voice(&playback.callback.mixer)
         .source_playback
         .position();
-    assert_eq!(other_actual.frame, actual.frame);
-    assert_eq!(other_actual.fraction.to_bits(), actual.fraction.to_bits());
+    // Both public voices actually start at E and pause together later.
+    let other_frames = playback.source_frame;
+    let other_phase = (other_frames as f64 * ratio).rem_euclid((LOOP_END - LOOP_START) as f64);
+    assert_eq!(
+        other_actual.frame,
+        LOOP_START + other_phase.floor() as usize
+    );
+    assert_eq!(
+        other_actual.fraction.to_bits(),
+        other_phase.fract().to_bits()
+    );
     Python::attach(|py| {
         let engine = engine.borrow(py);
         for id in [0, 215] {

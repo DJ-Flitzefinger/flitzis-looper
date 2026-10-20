@@ -88,14 +88,20 @@ def test_actual_buttons_use_intent_colors_and_draw_separate_confirmed_descriptio
         colors = _frame(UiContext(controller), scope)
         expected = MODE_OFF_RGBA if effective else MODE_ON_RGBA
         assert imgui.color_convert_float4_to_u32(expected) in colors
-        actual = "unconfirmed" if effective is None else "ON" if effective else "OFF"
+        actual = (
+            ("?" if scope == "global" else "unconfirmed")
+            if effective is None
+            else "ON"
+            if effective
+            else "OFF"
+        )
         assert f"Audio {actual}" in descriptions
-        assert f"Preparing {'OFF' if effective else 'ON'}…" in descriptions
+        assert (f"Preparing {'OFF' if effective else 'ON'}…" in descriptions) == (scope == "pad")
         assert not controller.transport.residency._pending[0].unconfirmed
 
 
 @pytest.mark.parametrize("scope", ["global", "pad"])
-def test_actual_draw_exposes_error_and_claimed_unconfirmed_state(
+def test_actual_draw_keeps_errors_outside_panels_and_retains_audio_state(
     controller: AppController,
     audio_engine_mock: Mock,
     monkeypatch: pytest.MonkeyPatch,
@@ -127,8 +133,8 @@ def test_actual_draw_exposes_error_and_claimed_unconfirmed_state(
         expected = MODE_OFF_RGBA if scope == "global" else MODE_ON_RGBA
         assert imgui.color_convert_float4_to_u32(expected) in colors
         assert "Audio OFF" in descriptions
-        assert "Change unconfirmed" in descriptions
-        assert any("resident native adoption is unconfirmed" in text for text in descriptions)
+        assert ("Change unconfirmed" in descriptions) == (scope == "pad")
+        assert not any("resident native adoption is unconfirmed" in text for text in descriptions)
 
 
 @pytest.mark.parametrize("scope", ["global", "pad"])
@@ -159,7 +165,7 @@ def test_actual_armed_start_draws_native_dry_readiness_without_controller_pendin
         colors = _frame(UiContext(controller), scope)
         assert imgui.color_convert_float4_to_u32(MODE_ON_RGBA) in colors
         assert "Audio OFF" in descriptions
-        assert "Preparing ON…" in descriptions
+        assert ("Preparing ON…" in descriptions) == (scope == "pad")
     assert not controller.transport.residency._pending
     assert controller.project.pad_key_lock[0]
 
@@ -185,7 +191,8 @@ def test_actual_global_button_draws_default_and_separate_mixed_feedback(
         _frame(UiContext(controller), "global")
         colors = _frame(UiContext(controller), "global")
         assert imgui.color_convert_float4_to_u32(MODE_OFF_RGBA) in colors
-        assert "Mixed pads" in descriptions
+        assert "Audio ?" in descriptions
+        assert "Mixed pads" not in descriptions
 
 
 @pytest.mark.parametrize(("scope", "mouse_button"), [("global", 0), ("pad", 0), ("pad", 1)])

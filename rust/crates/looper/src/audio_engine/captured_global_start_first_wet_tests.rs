@@ -13,6 +13,8 @@ use std::sync::{Arc, Mutex};
 
 const RATIO: f64 = 0.75;
 const HISTORY: usize = 4096;
+const EMITTED_PREFIX: usize = 16_384;
+const LATER_ENERGY_START: usize = 8192;
 
 fn mode_status(fixture: &Fixture, id: usize, request: u64) -> KeyLockStatus {
     let status = fixture
@@ -179,14 +181,22 @@ fn stopped_confirmed_wet_global_birth_rearms_each_receipt_before_first_output_an
         });
 
         let sources = [complete_tone(160.0), complete_tone(320.0)];
+        let silence = SampleBuffer {
+            channels: 1,
+            residency: None,
+            samples: Arc::from(vec![0.0_f32; 144_000]),
+        };
         let mut clocks = std::array::from_fn::<_, 2, _>(|_| {
             AlgebraicClock::physical(LOOP_START, LOOP_END, RATIO)
         });
         let mut raw = [0, 1].map(|id| {
             let mut raw = RawChronology::new(RATIO, true);
-            // H=4096 at 3/4 speed reaches E's loop start from 3072 source frames back.
-            clocks[id].seek_physical(LOOP_END - HISTORY * 3 / 4, 144_000);
-            raw.render(&sources[id], &mut clocks[id], HISTORY);
+            // A stopped predecessor grants no PCM history to this fresh birth.
+            // Prime the independent Native/adapter with an explicit zero source;
+            // keep the productive clock untouched at the selected physical start.
+            let mut history_clock = AlgebraicClock::physical(LOOP_START, LOOP_END, RATIO);
+            let prefix = raw.render(&silence, &mut history_clock, HISTORY);
+            assert!(prefix.iter().all(|sample| *sample == 0.0));
             assert_eq!(clocks[id].physical_position(0), (LOOP_START, 0.0, false));
             assert_eq!(
                 fixture.voice(id).stretch.pending_fifo_frames(),
@@ -213,8 +223,15 @@ fn stopped_confirmed_wet_global_birth_rearms_each_receipt_before_first_output_an
         }
         let mut difference_from_dry = 0.0_f32;
         let mut consumed = 0;
-        for frames in [1, 127, 384, 513] {
+        let partitions = [1, 127, 384, 513];
+        let mut partition = 0;
+        let mut later_energy = [0.0_f64; 3];
+        let mut later_frames = 0;
+        while consumed < EMITTED_PREFIX {
+            let frames = partitions[partition % partitions.len()].min(EMITTED_PREFIX - consumed);
+            partition += 1;
             let actual = fixture.render(frames);
+            assert!(actual.iter().all(|sample| sample.is_finite()));
             let dry = dry_clock.dry(&sources[0], frames);
             let first = raw[0].render(&sources[0], &mut clocks[0], frames);
             let peer = raw[1].render(&sources[1], &mut clocks[1], frames);
@@ -241,6 +258,15 @@ fn stopped_confirmed_wet_global_birth_rearms_each_receipt_before_first_output_an
                     consumed + frame,
                     actual[frame]
                 );
+                if consumed + frame >= LATER_ENERGY_START {
+                    for (id, sample) in [first[frame], peer[frame], actual[frame]]
+                        .into_iter()
+                        .enumerate()
+                    {
+                        later_energy[id] += f64::from(sample).powi(2);
+                    }
+                    later_frames += 1;
+                }
             }
             consumed += frames;
             for id in [0, 1] {
@@ -277,6 +303,14 @@ fn stopped_confirmed_wet_global_birth_rearms_each_receipt_before_first_output_an
             difference_from_dry > 0.01,
             "raw Native oracle must distinguish dry fallback"
         );
+        assert_eq!(consumed, EMITTED_PREFIX);
+        assert_eq!(later_frames, EMITTED_PREFIX - LATER_ENERGY_START);
+        for energy in later_energy {
+            assert!(
+                energy / later_frames as f64 > 0.001,
+                "each independent wet lane and the actual mixed output must become audible"
+            );
+        }
         assert_eq!((fixture.starts(0), fixture.starts(1)), (2, 2));
         assert_eq!(captured.original_frame(), Some(original));
     }

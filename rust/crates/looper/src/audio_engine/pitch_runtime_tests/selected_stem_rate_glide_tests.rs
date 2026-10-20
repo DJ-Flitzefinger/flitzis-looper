@@ -199,6 +199,7 @@ fn selected_start(lock: bool) -> (RateRoute, [Original; 2], PreparedStemSet) {
     route.wait_claims();
     route.callback(733);
     route.assert_no_attacks();
+    ensure_positive_pre_t_history(&mut route, &originals[0], INITIAL_SPEED, &[7, 12]);
     assert_selected(&route, &stems);
     (route, originals, stems)
 }
@@ -300,8 +301,9 @@ fn selected_young_history_refusal_then_fresh_retry() {
     let refused = route.admit(0, 12, false);
     assert_eq!(refused.t, rate_f + 73);
     assert_eq!(refused.e, refused.t + 8192);
-    let timeline = original_timeline(young.e, INITIAL_SPEED, rate_f, refused.e);
-    assert!(reset_bound(&timeline, 12, true).is_none());
+    let timeline = original_timeline(&young, INITIAL_SPEED, rate_f, refused.e);
+    let t_index = usize::try_from(refused.t - young.e).unwrap();
+    assert!(reset_bound(&timeline[..=t_index], 12, true).is_none());
     wait_refusal(&mut route, &refused);
     old.unchanged(&route, 0);
     peer.unchanged(&route, 1);

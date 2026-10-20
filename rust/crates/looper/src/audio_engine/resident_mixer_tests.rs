@@ -1,5 +1,8 @@
 //! Actual callback publication and rendering of complete authority/finite storage.
 use super::*;
+
+#[path = "resident_claim_continuity_tests.rs"]
+pub(super) mod claim_continuity_tests;
 use crate::audio_engine::audio_stream::process_control_message;
 use crate::audio_engine::input_runtime_binding::{InputPadBinding, InputRuntimeOwnership};
 use crate::audio_engine::prepared_source::PreparedSourcePermit;

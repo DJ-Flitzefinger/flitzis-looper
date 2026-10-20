@@ -2,10 +2,10 @@
 //! Component I/O and every final PCM/file-owner drop use existing workers.
 mod copy_binding;
 pub(super) use copy_binding::{
-    CapturedCopySelection, CopySelectionTarget, PreparedCopySelection, capture_copy_selection,
-    capture_copy_selection_fences, capture_copy_source_selection_fences,
-    capture_pair_selection_fences, prepare_copy_replacement, prepare_copy_selection,
-    reconcile_copy_selection,
+    CapturedCopySelection, CopySelectionTarget, PreparedCopySelection, RecoveredSelectionCustody,
+    capture_copy_selection, capture_copy_selection_fences, capture_copy_source_selection_fences,
+    capture_pair_selection_fences, capture_recovered_empty_selection, capture_recovered_selection,
+    prepare_copy_replacement, prepare_copy_selection, reconcile_copy_selection,
 };
 
 use super::AudioEngine;
@@ -38,6 +38,40 @@ use std::sync::{
 use std::time::{Duration, Instant};
 
 const DEADLINE: Duration = Duration::from_secs(30);
+
+fn placement_admission_error(error: PlacementError) -> PyErr {
+    if error == PlacementError::Pending {
+        PyRuntimeError::new_err(
+            "[resident_stem_placement_pending] content placement publication is in progress",
+        )
+    } else {
+        PyRuntimeError::new_err(error.to_string())
+    }
+}
+
+impl AudioEngine {
+    /// Bracket only preflight observation, including existing idempotent cache
+    /// maintenance. Never wrap proposal mutation, admission or queue publication:
+    /// an already admitted operation must return its own original receipt.
+    pub(super) fn stable_committed_placement_read<T>(
+        &self,
+        read: impl FnOnce() -> PyResult<T>,
+    ) -> PyResult<T> {
+        let before = self
+            .input_runtime_ownership
+            .placement_read_token_result()
+            .map_err(placement_admission_error)?;
+        let result = read();
+        let after = self
+            .input_runtime_ownership
+            .placement_read_token_result()
+            .map_err(placement_admission_error)?;
+        if after != before {
+            return Err(placement_admission_error(PlacementError::Pending));
+        }
+        result
+    }
+}
 
 pub(super) struct SelectionOwner {
     pub(super) id: usize,
@@ -1191,9 +1225,7 @@ impl AudioEngine {
         {
             PlacementObservation::Current(resolved) => resolved.slot(),
             PlacementObservation::Pending => {
-                return Err(PyRuntimeError::new_err(
-                    "committed control mirror is pending",
-                ));
+                return Err(placement_admission_error(PlacementError::Pending));
             }
             _ => {
                 return Err(PyValueError::new_err(
@@ -1201,9 +1233,11 @@ impl AudioEngine {
                 ));
             }
         };
-        let binding = input_runtime_binding::capture(self, id)?
-            .filter(|binding| binding.current() && binding.available())
-            .ok_or_else(|| PyValueError::new_err("current source/timing unavailable"))?;
+        let binding = self.stable_committed_placement_read(|| {
+            input_runtime_binding::capture(self, id)?
+                .filter(|binding| binding.current() && binding.available())
+                .ok_or_else(|| PyValueError::new_err("current source/timing unavailable"))
+        })?;
         if binding.source_generation != selection.owner.source_generation
             || binding
                 .binding
@@ -1220,9 +1254,10 @@ impl AudioEngine {
             .map_err(|_| PyRuntimeError::new_err("request lock poisoned"))?;
         self.input_runtime_ownership
             .ensure_no_copy_reservation(id)?;
-        let source_epoch = self
-            .prepared_source_epoch(id)
-            .map_err(PyRuntimeError::new_err)?;
+        let source_epoch = self.stable_committed_placement_read(|| {
+            self.prepared_source_epoch(id)
+                .map_err(PyRuntimeError::new_err)
+        })?;
         let mut producer_guard = producer
             .lock()
             .map_err(|_| PyRuntimeError::new_err("producer lock poisoned"))?;
@@ -1252,6 +1287,30 @@ impl AudioEngine {
             .unwrap_or(super::cold_jobs::PCM_LIMIT_BYTES)
             .min(super::cold_jobs::PCM_LIMIT_BYTES);
         let base_intent = owner.intent_epoch.load(Ordering::Acquire);
+        let (epoch, expected) = if policy_only {
+            let expected = next_epoch(&owner.committed.policy_operation_epoch)
+                .map_err(PyRuntimeError::new_err)?;
+            (owner.committed.policy_operation_epoch.clone(), expected)
+        } else if candidate.is_some() {
+            // An independent permit is essential: a candidate number is not an
+            // ordinary resident-control token and cannot invalidate V1 history.
+            (Arc::new(AtomicU64::new(1)), 1)
+        } else {
+            let expected = next_epoch(&owner.intent_epoch).map_err(PyRuntimeError::new_err)?;
+            (owner.intent_epoch.clone(), expected)
+        };
+        let publication = PreparedSourcePermit::new(epoch, expected)
+            .with_source_epoch(source_epoch.clone(), source_epoch.load(Ordering::Acquire));
+        let control = self.stable_committed_placement_read(|| {
+            CommittedControlWrite::capture(
+                &binding,
+                base_intent,
+                (candidate.is_none() && !policy_only).then_some(expected),
+            )
+            .map_err(PyRuntimeError::new_err)
+        })?;
+        // Every Pending-returning preflight precedes proposal epoch mutation.
+        // A deferred request cannot supersede a still-current prior proposal.
         let proposal = if policy_only {
             self.resident_proposals.begin_policy_for_cell(
                 binding
@@ -1271,26 +1330,6 @@ impl AudioEngine {
         }
         .map_err(PyRuntimeError::new_err)?
         .with_source_epoch(source_epoch.clone(), source_epoch.load(Ordering::Acquire));
-        let (epoch, expected) = if policy_only {
-            let expected = next_epoch(&owner.committed.policy_operation_epoch)
-                .map_err(PyRuntimeError::new_err)?;
-            (owner.committed.policy_operation_epoch.clone(), expected)
-        } else if candidate.is_some() {
-            // An independent permit is essential: a candidate number is not an
-            // ordinary resident-control token and cannot invalidate V1 history.
-            (Arc::new(AtomicU64::new(1)), 1)
-        } else {
-            let expected = next_epoch(&owner.intent_epoch).map_err(PyRuntimeError::new_err)?;
-            (owner.intent_epoch.clone(), expected)
-        };
-        let publication = PreparedSourcePermit::new(epoch, expected)
-            .with_source_epoch(source_epoch.clone(), source_epoch.load(Ordering::Acquire));
-        let control = CommittedControlWrite::capture(
-            &binding,
-            base_intent,
-            (candidate.is_none() && !policy_only).then_some(expected),
-        )
-        .map_err(PyRuntimeError::new_err)?;
         let status = Arc::new(ResidencyStatus {
             publication: publication.clone(),
             effective: AtomicU8::new(0),

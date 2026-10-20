@@ -902,7 +902,7 @@ def test_unavailable_restored_pair_retries_after_public_full_mix_registration_re
     assert len(jobs) == 3
     pending = controller.stems._pair_preparations.pending[0]
     assert pending.entry is saved
-    assert pending.ticket is source_ticket
+    assert cast("object", pending.ticket) is source_ticket
     assert pending.residency_only
     assert controller.project.pad_stem_mix_mode[0] == "all_stems"
     assert not controller.stems.stems_available(0)

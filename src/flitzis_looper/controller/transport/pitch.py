@@ -18,6 +18,7 @@ from flitzis_looper.models import validate_sample_id
 if TYPE_CHECKING:
     from collections.abc import Callable
 
+    from flitzis_looper.control_diagnostics import ConsoleDiagnostics
     from flitzis_looper.controller.transport import TransportController
     from flitzis_looper_audio import CapturedPitchAction
 
@@ -58,11 +59,30 @@ class PitchController:
         self._projections: dict[str, _PitchProjection] = {}
         self._closed = False
         self._refresh_runtime: Callable[[], bool] | None = None
+        self._diagnostics: ConsoleDiagnostics | None = None
         transport._on_frame_render_callbacks.append(self.poll)
 
     def bind_runtime_refresh(self, refresh: Callable[[], bool]) -> None:
         """Bind control-row synchronization without coupling Transport to its App owner."""
         self._refresh_runtime = refresh
+
+    def bind_diagnostics(self, diagnostics: ConsoleDiagnostics) -> None:
+        """Bind optional control-thread reporting without a global logging dependency."""
+        self._diagnostics = diagnostics
+
+    def _begin_diagnostic_attempt(self, sample_id: int | None) -> None:
+        if self._diagnostics is not None:
+            self._diagnostics.begin_attempt("pitch", sample_id)
+            self._diagnostics.begin_attempt("input_mapping")
+
+    def _observe_diagnostic(self, sample_id: int, reason: str | None) -> None:
+        if self._diagnostics is not None:
+            self._diagnostics.observe(
+                "pitch",
+                reason,
+                pad_id=sample_id,
+                sequence=self.projection_sequence(sample_id),
+            )
 
     def _ensure_thread(self) -> None:
         if threading.get_ident() != self._thread:
@@ -92,6 +112,7 @@ class PitchController:
         """Capture explicit GUI content after its incoming source receipt is projected."""
         self._ensure_thread()
         validate_sample_id(sample_id)
+        self._begin_diagnostic_attempt(sample_id)
         timestamp = validate_input_timestamp_ns(received_at_ns)
         if parse_pitch_action(action_key) is None:
             message = "invalid_action"
@@ -297,6 +318,9 @@ class PitchController:
                 )
             elif projection.error is None:
                 projection.phase = "applied" if state == "applied" else "preparing"
+            slot = owner.capture.current_control_slot
+            if type(slot) is int and 0 <= slot < len(self._project.pad_content):
+                self._observe_diagnostic(slot, projection.error)
         return state in {"applied", "rejected"}
 
     def _report_owner_error(self, owner: _PitchOwner, error: str) -> None:
@@ -306,6 +330,9 @@ class PitchController:
         if owner.sequence == projection.observed_sequence:
             projection.phase = "error"
             projection.error = describe_pitch_rejection(error)
+            slot = owner.capture.current_control_slot
+            if type(slot) is int and 0 <= slot < len(self._project.pad_content):
+                self._observe_diagnostic(slot, projection.error)
 
     def _report_error(self, sample_id: int, error: str) -> None:
         content = self._project.pad_content[sample_id]
@@ -316,6 +343,7 @@ class PitchController:
         self._session.input_mapping_error = (
             f"Pitch choice not accepted: {describe_pitch_rejection(error)}"
         )
+        self._observe_diagnostic(sample_id, describe_pitch_rejection(error))
 
     def _clear_mapping_error(self) -> None:
         error = self._session.input_mapping_error

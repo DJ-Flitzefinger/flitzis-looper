@@ -55,24 +55,12 @@ impl TempoTrackV2 {
         let start_i = -(WINLEN as isize / 2);
         let end_i = df_len as isize - WINLEN as isize / 2;
         for i in (start_i..end_i).step_by(HOPSIZE) {
-            let mut k = 0;
-            let mut l = WINLEN;
-
-            if i < 0 {
-                k = (-i) as usize;
-                dfframe[..k].fill(0.0);
-            }
-
-            // i + k is always >= 0, so safe to cast
-            let i_usize = (i + k as isize) as usize;
-            if i_usize + l > df_len {
-                l = df_len.saturating_sub(i_usize);
-                dfframe[l..WINLEN].fill(0.0);
-            }
-
-            let copy_len = l.saturating_sub(k);
-            let src_start = i_usize;
-            dfframe[k..k + copy_len].copy_from_slice(&df[src_start..src_start + copy_len]);
+            dfframe.fill(0.0);
+            let destination_start = if i < 0 { (-i) as usize } else { 0 };
+            let source_start = i.max(0) as usize;
+            let copy_len = (WINLEN - destination_start).min(df_len - source_start);
+            dfframe[destination_start..destination_start + copy_len]
+                .copy_from_slice(&df[source_start..source_start + copy_len]);
 
             // Apply RCF bank
             self.get_rcf(&dfframe, &wv, &mut rcf);
@@ -90,6 +78,8 @@ impl TempoTrackV2 {
         const EPS: f64 = 0.0000008;
         const NUM_ELEM: usize = 4;
 
+        // Each window supplies a fresh observation; Viterbi owns temporal history.
+        rcf.fill(0.0);
         let mut dfframe = dfframe_in.to_vec();
         adaptive_threshold(&mut dfframe);
 
@@ -392,3 +382,6 @@ mod tests {
         assert!(beat_period.is_empty());
     }
 }
+#[cfg(test)]
+#[path = "tempotrack_window_review_tests.rs"]
+mod tempotrack_window_review_tests;

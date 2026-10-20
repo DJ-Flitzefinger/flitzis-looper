@@ -606,8 +606,16 @@ fn actual_worker_native_midi_stop_dispatch_revokes_scheduled_launch_without_chan
     });
     let event = event.unwrap();
     assert!(event.dispatched && event.direct);
+    let start = match loaded.consumer.peek().unwrap() {
+        ControlMessage::CapturePadStartTarget(start) => start.clone(),
+        _ => panic!("native MIDI retains its captured target before the prepared publication"),
+    };
+    assert_eq!(start.received_timestamp(), event.received_at_ns);
     assert_eq!(loaded.engine.admitted_launch_ids(), vec![0]);
-    assert_eq!(loaded.callback.drain(&mut loaded.consumer), 1);
+    assert_eq!(loaded.callback.drain(&mut loaded.consumer), 2);
+    assert_eq!(start.original_frame(), Some(24_000));
+    assert_eq!(start.execution_frame(), Some(24_000));
+    assert_ne!(start.state(), "applied");
     assert_eq!(loaded.callback.scheduler.len(), 1);
     let original_stop_placement = loaded
         .engine
@@ -645,6 +653,7 @@ fn actual_worker_native_midi_stop_dispatch_revokes_scheduled_launch_without_chan
         &mut loaded.callback.feedback,
         &mut loaded.callback.retirement,
     );
+    assert_eq!(start.state(), "rejected", "{:?}", start.reason());
     assert!(
         !loaded
             .callback
@@ -1976,6 +1985,12 @@ fn actual_worker_cancel_capture_covers_admission_after_empty_scan_and_claimed_ta
                         .unwrap()
                 );
             }
+            let original = match loaded.consumer.peek().unwrap() {
+                ControlMessage::CapturePadStartTarget(start) => start.clone(),
+                _ => {
+                    panic!("both real input origins retain the target before prepared publication")
+                }
+            };
             let mut feedback = StopAfterClaim {
                 engine: &loaded.engine,
                 producer: &loaded.producer,
@@ -1995,8 +2010,11 @@ fn actual_worker_cancel_capture_covers_admission_after_empty_scan_and_claimed_ta
                     &mut feedback,
                     &mut loaded.callback.retirement,
                 ),
-                if native_midi { 2 } else { 3 }
+                3 // CapturePadStartTarget, PreparedStart, then the in-claim STOP.
             );
+            assert_eq!(original.state(), "applied", "{:?}", original.reason());
+            assert_eq!(original.original_frame(), Some(0));
+            assert_eq!(original.effective_frame(), Some(0));
             assert_eq!(feedback.captured, Some(vec![0]));
             assert_eq!(feedback.messages.len(), 2);
             feedback

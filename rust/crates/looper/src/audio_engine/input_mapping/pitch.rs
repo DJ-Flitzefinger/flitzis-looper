@@ -284,6 +284,18 @@ impl RequestedPitchJournal {
             let Some(record) = &self.records[index] else {
                 continue;
             };
+            // A reserved content row must retain its exact requested chain until
+            // the arrangement has reconciled its ACK and control mirror. Match
+            // the held row before resolving the key: Clear may already have
+            // retired it while that original row still belongs to the fence.
+            if pads.iter().enumerate().any(|(id, row)| {
+                row.binding
+                    .and_then(|binding| binding.placement?.content_key())
+                    == Some(record.key)
+                    && (ownership.copy_reservation(id) != 0 || ownership.pair_reservation(id) != 0)
+            }) {
+                continue;
+            }
             let placement = match ownership.observe_control_key(record.key) {
                 PlacementObservation::Current(placement) => Some(placement),
                 PlacementObservation::Pending => continue,
@@ -412,6 +424,73 @@ fn grid_for_step(step: u32) -> Option<QuantizeGrid> {
 pub(super) struct RuntimeSelectedContent {
     key: ContentKey,
     binding: InputPadBinding,
+    source_generation: u64,
+    source_request_incarnation: u64,
+}
+
+impl RuntimeSelectedContent {
+    fn capture(
+        id: usize,
+        binding: InputPadBinding,
+        ownership: &InputRuntimeOwnership,
+    ) -> Result<Self, PitchActionReject> {
+        let key = binding
+            .placement
+            .and_then(|placement| placement.content_key())
+            .ok_or(PitchActionReject::StaleContent)?;
+        let selected = Self {
+            key,
+            binding,
+            source_generation: ownership
+                .binding_source_generation(id, binding)
+                .ok_or(PitchActionReject::StaleContent)?,
+            source_request_incarnation: ownership
+                .key_source_request_incarnation(key)
+                .ok_or(PitchActionReject::StaleContent)?,
+        };
+        selected
+            .matches_current_source(id, binding, ownership)
+            .then_some(selected)
+            .ok_or(PitchActionReject::StaleContent)
+    }
+
+    fn matches_current_source(
+        self,
+        id: usize,
+        binding: InputPadBinding,
+        ownership: &InputRuntimeOwnership,
+    ) -> bool {
+        let request_current = || {
+            ownership.binding_source_generation(id, binding) == Some(self.source_generation)
+                && ownership.key_source_request_incarnation(self.key)
+                    == Some(self.source_request_incarnation)
+        };
+        binding
+            .placement
+            .and_then(|placement| placement.content_key())
+            == Some(self.key)
+            && binding.source_address == self.binding.source_address
+            && binding.sample_count == self.binding.sample_count
+            && binding.channels == self.binding.channels
+            && binding.sample_rate_hz == self.binding.sample_rate_hz
+            && request_current()
+            && ownership.admission_current(id, binding)
+            && request_current()
+    }
+}
+
+fn selection_for_pad(
+    id: usize,
+    state: &RuntimeState,
+    ownership: &Arc<InputRuntimeOwnership>,
+) -> Result<Option<RuntimeSelectedContent>, PitchActionReject> {
+    let pad = state.pads.get(id).ok_or(PitchActionReject::InvalidAction)?;
+    if !pad.loaded {
+        // Empty selection is a valid UI operation. It removes audio selection authority.
+        return Ok(None);
+    }
+    let binding = pad.binding.ok_or(PitchActionReject::StaleContent)?;
+    RuntimeSelectedContent::capture(id, binding, ownership).map(Some)
 }
 
 pub(super) fn select_pad(
@@ -430,34 +509,48 @@ pub(super) fn select_pad(
         .checked_add(1)
         .ok_or(PitchActionReject::SequenceExhausted)?;
     state.selection_revision = revision;
-    let pad = state.pads.get(id).ok_or(PitchActionReject::InvalidAction)?;
-    if !pad.loaded {
-        // Empty selection is a valid UI operation. It removes audio selection authority.
-        state.selected = None;
-        ownership.publish_endpoint_selection(revision, None);
-        return Ok(revision);
-    }
-    let Some(binding) = pad.binding else {
-        state.selected = None;
-        ownership.publish_endpoint_selection(revision, None);
-        return Err(PitchActionReject::StaleContent);
+    let (selected, result) = match selection_for_pad(id, &state, ownership) {
+        Ok(selected) => (selected, Ok(revision)),
+        Err(reason) => (None, Err(reason)),
     };
-    if !ownership.admission_current(id, binding) {
-        state.selected = None;
-        ownership.publish_endpoint_selection(revision, None);
-        return Err(PitchActionReject::StaleContent);
-    }
-    let Some(key) = binding
-        .placement
-        .and_then(|placement| placement.content_key())
-    else {
-        state.selected = None;
-        ownership.publish_endpoint_selection(revision, None);
-        return Err(PitchActionReject::StaleContent);
+    state.selected = selected;
+    ownership.publish_endpoint_selection(revision, selected.map(|selected| selected.key));
+    result
+}
+
+/// The dispatcher delivers only its original receipt here. Its nonblocking channel
+/// admission shares the runtime mutex with selected_projection and pitch capture.
+pub(super) fn select_pad_with_delivery(
+    id: usize,
+    runtime: &Arc<Mutex<RuntimeState>>,
+    ownership: &Arc<InputRuntimeOwnership>,
+    deliver: impl FnOnce(Result<u64, PitchActionReject>) -> bool,
+) {
+    let mut state = match runtime.lock() {
+        Ok(state) => state,
+        Err(_) => {
+            deliver(Err(PitchActionReject::PlacementPending));
+            return;
+        }
     };
-    state.selected = Some(RuntimeSelectedContent { key, binding });
-    ownership.publish_endpoint_selection(revision, Some(key));
-    Ok(revision)
+    let selected = match selection_for_pad(id, &state, ownership) {
+        Ok(selected) => selected,
+        Err(reason) => {
+            deliver(Err(reason));
+            return;
+        }
+    };
+    let Some(revision) = state.selection_revision.checked_add(1) else {
+        deliver(Err(PitchActionReject::SequenceExhausted));
+        return;
+    };
+    if deliver(Ok(revision)) {
+        // Everything after accepted delivery is an infallible scalar publication.
+        // A receipt consumer cannot validate it until this mutex is released.
+        state.selected = selected;
+        state.selection_revision = revision;
+        ownership.publish_endpoint_selection(revision, selected.map(|selected| selected.key));
+    }
 }
 
 fn selected_row(
@@ -474,20 +567,10 @@ fn selected_row(
     };
     let pad = &state.pads[placement.slot()];
     let binding = pad.binding.ok_or(PitchActionReject::StaleContent)?;
-    // Selection follows identity through placement, but never grants the replacement
-    // source the old source's pitch authority after a remove/refill or source overwrite.
-    if !pad.loaded
-        || binding
-            .placement
-            .and_then(|placement| placement.content_key())
-            != Some(selected.key)
-        || binding.source_address != selected.binding.source_address
-        || binding.sample_count != selected.binding.sample_count
-        || binding.channels != selected.binding.channels
-        || binding.sample_rate_hz != selected.binding.sample_rate_hz
-        || binding.authority_revision != selected.binding.authority_revision
-        || !ownership.admission_current(placement.slot(), binding)
-    {
+    // A new gesture uses this row's current control authority for the same original
+    // source request. Previously captured actions keep their own immutable authority.
+    // Source replacement, including reused PCM in a new request, still requires selection.
+    if !pad.loaded || !selected.matches_current_source(placement.slot(), binding, ownership) {
         return Err(PitchActionReject::StaleContent);
     }
     Ok(placement.slot())
@@ -631,7 +714,7 @@ pub(super) fn capture_selected(
         .lock()
         .map_err(|_| PitchActionReject::PlacementPending)?;
     let id = selected_row(&state, ownership)?;
-    capture_row(
+    let action = capture_row(
         spec,
         received_at_ns,
         now_ns,
@@ -639,7 +722,18 @@ pub(super) fn capture_selected(
         id,
         ownership,
         input_owners,
-    )
+    )?;
+    // A logical source request can advance without taking the runtime mutex.
+    // Never return a fresh action that crossed into such a replacement request.
+    if let Err(reason) = selected_row(&state, ownership) {
+        action.reject(reason);
+        let RuntimeState {
+            pitch_shadow, pads, ..
+        } = &mut *state;
+        pitch_shadow.reconcile(pads, ownership);
+        return Err(reason);
+    }
+    Ok(action)
 }
 
 impl InputRuntime {
@@ -727,13 +821,11 @@ impl InputRuntime {
             .selection_revision
             .checked_add(1)
             .ok_or(PitchActionReject::SequenceExhausted)?;
-        state.selected = Some(RuntimeSelectedContent {
-            key: current
-                .placement
-                .and_then(|p| p.content_key())
-                .ok_or(PitchActionReject::StaleContent)?,
-            binding: current,
-        });
+        state.selected = Some(RuntimeSelectedContent::capture(
+            binding.id,
+            current,
+            &self.ownership,
+        )?);
         state.selection_revision = revision;
         self.ownership
             .publish_endpoint_selection(revision, state.selected.map(|selected| selected.key));

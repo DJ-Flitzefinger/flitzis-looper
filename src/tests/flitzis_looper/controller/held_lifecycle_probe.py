@@ -16,6 +16,7 @@ from typing import TYPE_CHECKING
 import pytest
 from imgui_bundle import imgui
 
+from flitzis_looper.control_diagnostics import ConsoleDiagnostics
 from flitzis_looper.controller.accepted_publication import AcceptedTimingController
 from flitzis_looper.controller.app import AppController
 from flitzis_looper.controller.asset_lifecycle import ProjectAssetLifecycle
@@ -32,7 +33,6 @@ from flitzis_looper.controller.pair_arrangement_recovery import inspect_pair_rec
 from flitzis_looper.controller.performance_confirmation import PerformanceConfirmationController
 from flitzis_looper.controller.persistence import ProjectPersistence
 from flitzis_looper.controller.settings import SettingsController
-from flitzis_looper.controller.stems import StemController
 from flitzis_looper.controller.transport import TransportController
 from flitzis_looper.input_mapping import InputMappingController
 from flitzis_looper.models import ProjectState, SessionState
@@ -563,6 +563,127 @@ class _HeldRenderedArrangement:
         app.save()
         return True
 
+    def toggle_multi_loop_after_pair_ack(self) -> None:
+        """Publish the real global runtime change before Python observes Pair's own ACK."""
+        app = self._render_probe
+        context = app.join_context
+        pair = app.pairs._pair
+        assert context is not None
+        assert pair is not None
+        assert pair is self.render_owner
+        assert pair.source_binding is self.render_binding
+        assert pair.ticket is not None
+        assert pair.ticket.publication_status() == "accepted"
+        assert pair.ticket.own_acknowledgement() is not None
+        assert pair.acknowledgement is None
+        assert pair.receipt is None
+        assert not pair.native_finished
+        assert not pair.writer_released
+        assert app.project == self.render_project
+        assert app.persistence.config_path.read_bytes() == self.render_config
+        app.join_pair = pair
+        data = pair.snapshot.projected()
+        participants = (data.source_id, data.target_id)
+        before = app.input_mapping._last_input_runtime_state_signature
+        assert before is not None
+        assert before[0] is True
+        assert set(participants) <= app.transport._pair_deferred_sample_ids
+        revision = app.persistence.revision
+
+        context.audio.global_.toggle_multi_loop()
+        assert context.audio.global_.playback_error is None
+        assert app.project.multi_loop is False
+        assert app.persistence.revision == revision + 1
+        # App.on_frame_render polls Pair first. Use the actual InputMapping frame
+        # callback here so its global publication precedes that first ACK poll.
+        app.input_mapping.on_frame_render()
+        assert app.input_mapping._last_input_runtime_state_error is None
+        after = app.input_mapping._last_input_runtime_state_signature
+        assert after is not None
+        assert after[0] is False
+        for slot in participants:
+            assert after[2][slot] is before[2][slot]
+        assert app.pairs._pair is pair
+        assert pair.acknowledgement is None
+        assert pair.receipt is None
+        assert not pair.native_finished
+        assert not pair.writer_released
+        assert app.persistence.config_path.read_bytes() == self.render_config
+
+    def _assert_pair_app_durable(self) -> _Pair:
+        """Verify that the original own ACK owns both mirrors and the durable receipt."""
+        app = self._render_probe
+        pair = app.join_pair
+        assert pair is not None
+        assert pair is self.render_owner
+        assert pair.source_binding is self.render_binding
+        assert pair.acknowledgement is not None
+        assert pair.mirror is not None
+        assert pair.mirror.applied
+        assert pair.mirror._acknowledgement is pair.acknowledgement
+        assert pair.stems is not None
+        assert pair.stems.applied
+        assert pair.stems._acknowledgement is pair.acknowledgement
+        assert pair.native_finished
+        assert pair.writer_released
+        assert pair.assignment_publication is not None
+        assert pair.assignment_publication.settled
+        assert pair.retirement.remaining == 0
+        assert app.persistence._migration_owner is None
+        assert not app.pairs.active
+        assert app.pairs.status == "completed"
+        assert app.pairs.error is None
+        assert pair.receipt is not None
+        saved = app.persistence.config_path.read_bytes()
+        assert saved == pair.receipt.written_text.encode("utf-8")
+        assert hashlib.sha256(saved).hexdigest() == pair.receipt.sha256
+        assert pair.receipt.revision == app.persistence.revision
+        assert pair.receipt.projected() == app.project
+        assert not app.project.multi_loop
+        history = PairJournalOwner.open(Path.cwd() / "samples", pair.owner)
+        records = validated_pair_history(history.encoded, pair.owner)
+        assert records[-1].phase == "settled"
+        assert records[-1].committed_revision == pair.receipt.revision
+        assert records[-1].committed_config_sha256 == pair.receipt.sha256
+        return pair
+
+    def assert_pair_app_close_ready(self) -> None:
+        """Verify durable Pair custody, fresh participant selection and actual App Close."""
+        app = self._render_probe
+        context = app.join_context
+        assert context is not None
+        pair = self._assert_pair_app_durable()
+        app.input_mapping.on_frame_render()
+        assert app.input_mapping._last_input_runtime_state_error is None
+        signature = app.input_mapping._last_input_runtime_state_signature
+        assert signature is not None
+        data = pair.snapshot.projected()
+        for slot in (data.source_id, data.target_id):
+            for component in (app.transport, app.loader, app.accepted_timing, app.stems):
+                assert slot not in component._pair_deferred_sample_ids
+            loaded = app.project.sample_paths[slot] is not None
+            assert signature[2][slot].ready is loaded
+            if loaded:
+                binding = app._audio.current_input_runtime_pad_binding(slot)
+                assert binding is not None
+                assert binding.is_current()
+                before_selection = app._audio.input_selected_projection()[0]
+                context.ui.select_pad(slot)
+                selection = app._audio.input_selected_projection()
+                assert selection == (before_selection + 1, slot)
+                assert app.project.selected_pad == slot
+            else:
+                assert signature[2][slot].binding is None
+                assert app._audio.current_input_runtime_pad_binding(slot) is None
+        assert app.project.selected_pad == data.target_id
+        assert app._audio.input_selected_projection()[1] == data.target_id
+        app.save()
+        assert app.prepare_close()
+        assert app.pending_shutdown_error is None
+        assert app._close_requested
+        assert not app._shutdown_preparing
+        assert not app._shutdown_running
+
     def assert_cancelled_rendered_drop(self) -> None:
         """A stale physical drag must not acquire a fresh source or transaction."""
         app = self._render_probe
@@ -643,19 +764,10 @@ class HeldLifecycleProbe(AppController, _HeldLifecycleJoin, _HeldRenderedArrange
         self.transport = TransportController(
             self.project, self.session, self._audio, self.persistence.mark_dirty
         )
+        self._init_recording_control()
         self.accepted_timing = AcceptedTimingController(self.transport)
         self.transport.bpm.set_accepted_refresh_callback(self.accepted_timing.refresh_current)
-        self.stems = StemController(
-            self.project,
-            self.session,
-            self._audio,
-            on_project_changed=self.persistence.mark_dirty,
-            asset_lifecycle=self._assets,
-        )
-        self.stems.fence_pair_metadata(self.persistence.invalid_stem_pair_ids)
-        self.stems.bind_disk_selection_commit(
-            self.persistence.commit_stem_selection, self.persistence.flush
-        )
+        self._init_stem_control(None, None)
         self.arrangement = PadArrangementController(
             self.persistence,
             self.session,
@@ -664,7 +776,7 @@ class HeldLifecycleProbe(AppController, _HeldLifecycleJoin, _HeldRenderedArrange
             stem_task_runner=self.stems._stem_task_runner,
             on_copy_committed=self._on_copy_committed,
             on_target_removed=self._on_copy_target_removed,
-            can_admit=lambda: not self.pairs.active,
+            can_admit=lambda: not (self.pairs.active or self.banks.active),
         )
         self.transport.bind_pad_edit_guard(self.ensure_not_copy_target)
         self.stems.bind_pad_edit_guard(self.ensure_not_copy_target)
@@ -717,6 +829,21 @@ class HeldLifecycleProbe(AppController, _HeldLifecycleJoin, _HeldRenderedArrange
             self.input_mapping,
         }
         self.transport.playback.set_global_playback_feedback_poll(self._poll_audio_messages)
+        self.diagnostics = ConsoleDiagnostics(
+            lambda: (
+                path
+                for path in (
+                    *self._project.sample_paths,
+                    *self._session.pending_sample_paths.values(),
+                )
+                if path is not None
+            )
+        )
+        self.transport.pitch.bind_diagnostics(self.diagnostics)
+        self.transport.residency._bind_diagnostics(self.diagnostics)
+        self.transport.waveform.bind_diagnostics(self.diagnostics)
+        self.loader._bind_diagnostics(self.diagnostics)
+        self.stems._bind_diagnostics(self.diagnostics)
 
     def load(self, slot: int, path: str) -> int:
         """Admit one ordinary import through the real public Loader."""
