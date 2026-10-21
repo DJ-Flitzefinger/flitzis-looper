@@ -350,6 +350,35 @@ impl CompleteSourceReader {
     }
 
     /// Worker-only actual original verification under the same captured assignment.
+    pub(super) fn manual_source_beatmap(
+        &self,
+        origin: f64,
+        period: f64,
+        expected_generation: Option<u64>,
+        cancelled: &impl Fn() -> bool,
+    ) -> Result<super::source_beatmap::SourceBeatmap, String> {
+        self.require_map_custody()?;
+        if expected_generation.is_some_and(|expected| {
+            self.guard
+                .as_ref()
+                .is_none_or(|guard| guard.generation != expected)
+        }) {
+            return Err("manual source beatmap captured source generation is stale".into());
+        }
+        let lease = self
+            .lease
+            .as_ref()
+            .ok_or("source beatmap cold lease unavailable")?;
+        let map = super::source_beatmap::SourceBeatmap::manual(
+            lease.manifest.descriptor["decoder"].clone(),
+            origin,
+            period,
+        )?;
+        self.verify_source_beatmap(&map, cancelled)?;
+        Ok(map)
+    }
+
+    /// Worker-only actual original verification under the same captured assignment.
     pub(super) fn verify_source_beatmap(
         &self,
         map: &super::source_beatmap::SourceBeatmap,

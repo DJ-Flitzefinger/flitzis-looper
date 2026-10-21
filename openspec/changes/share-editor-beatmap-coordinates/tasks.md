@@ -1,7 +1,8 @@
 ## Prerequisites
 
-- [ ] Complete the offline source-beatmap foundation and measured map-quality gate.
-- [ ] Confirm the proposed editor scope and correction UX before implementation.
+- [x] Complete the offline source-qualified source-beatmap foundation and durable selection.
+- [ ] Complete the measured automatic map-quality gate before automatic/default acceptance.
+- [x] Reconcile the current Human-authorized manual editor scope/UX in `edit-manual-source-beatmaps` without claiming automatic quality or full B4 acceptance.
 
 ## Implementation
 

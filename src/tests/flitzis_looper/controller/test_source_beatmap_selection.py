@@ -1,5 +1,6 @@
 """Productive controller/config/assignment fault routing; actual Native proof is separate."""
 
+import json
 from typing import TYPE_CHECKING
 from unittest.mock import Mock
 
@@ -385,3 +386,131 @@ def test_waveform_cache_changes_do_not_replace_native_job_currentness(
     maps.poll(frozenset())
     job.cancel.assert_not_called()
     assert maps.status(0) == "pending"
+
+
+def test_manual_creation_captures_source_generation_without_scalar_or_marker_mutation(
+    controller: AppController, audio_engine_mock: Mock
+) -> None:
+    _assigned(controller, audio_engine_mock)
+    maps = controller.loader.source_beatmaps
+    maps._source_generation = Mock(return_value=71)
+    job = _job(audio_engine_mock)
+    audio_engine_mock.begin_source_beatmap_create_async = Mock(return_value=job)
+    controller.project.manual_bpm[0] = 137.25
+    controller.project.pad_loop_start_s[0] = 0.23
+    controller.project.pad_loop_end_s[0] = 4.1
+    maps.create_manual(0, -0.12, 60.0 / 137.25)
+    audio_engine_mock.begin_source_beatmap_create_async.assert_called_once_with(
+        0, -0.12, 60.0 / 137.25, expected_source_generation=71
+    )
+    assert maps.is_selected(0)
+    assert maps.status(0) == "pending"
+    assert controller.project.pad_source_beatmap_intent[0].selected is None
+    assert controller.project.manual_bpm[0] == 137.25
+    assert controller.project.pad_loop_start_s[0] == 0.23
+    assert controller.project.pad_loop_end_s[0] == 4.1
+    assert controller.project.sample_analysis[0] is None
+    maps.completed(0, _event(job))
+    assert maps.status(0) == "effective"
+    assert controller.project.pad_loop_end_s[0] == 4.1
+
+
+def test_manual_creation_refusal_preserves_previous_intent_and_reservation(
+    controller: AppController, audio_engine_mock: Mock
+) -> None:
+    _assigned(controller, audio_engine_mock)
+    maps = controller.loader.source_beatmaps
+    maps._source_generation = Mock(return_value=71)
+    previous = next_source_beatmap_intent(None, reference())
+    controller.project.pad_source_beatmap_intent[0] = previous
+    audio_engine_mock.begin_source_beatmap_create_async = Mock(
+        side_effect=RuntimeError("cold queue full")
+    )
+    with pytest.raises(RuntimeError, match="cold queue full"):
+        maps.create_manual(0, 0.0, 0.5)
+    assert controller.project.pad_source_beatmap_intent[0] is previous
+    assert not maps._pending
+    assert controller._assets._reserved == 0
+
+
+@pytest.mark.parametrize("generation", [None, 0, False, -1, 1 << 64])
+def test_manual_creation_requires_actual_current_native_generation(
+    controller: AppController, audio_engine_mock: Mock, generation: object
+) -> None:
+    _assigned(controller, audio_engine_mock)
+    maps = controller.loader.source_beatmaps
+    maps._source_generation = Mock(return_value=generation)
+    audio_engine_mock.begin_source_beatmap_create_async = Mock()
+    with pytest.raises(ValueError, match="current Native source generation"):
+        maps.create_manual(0, 0.0, 0.5)
+    audio_engine_mock.begin_source_beatmap_create_async.assert_not_called()
+    assert controller.project.pad_source_beatmap_intent[0] is None
+    assert controller._assets._reserved == 0
+
+
+def test_manual_creation_refuses_predecessor_while_new_assignment_is_pending(
+    controller: AppController, audio_engine_mock: Mock
+) -> None:
+    _assigned(controller, audio_engine_mock)
+    audio_engine_mock.begin_source_beatmap_create_async = Mock()
+    controller.session.loading_sample_ids.add(0)
+    with pytest.raises(ValueError, match="assignment receipt is pending"):
+        controller.loader.source_beatmaps.create_manual(0, 0.0, 0.5)
+    audio_engine_mock.begin_source_beatmap_create_async.assert_not_called()
+    assert controller.project.pad_source_beatmap_intent[0] is None
+    assert controller._assets._reserved == 0
+
+
+def test_correction_uses_exact_current_receipt_and_keeps_old_geometry_while_pending(
+    controller: AppController, audio_engine_mock: Mock
+) -> None:
+    _assigned(controller, audio_engine_mock)
+    maps = controller.loader.source_beatmaps
+    first = _job(audio_engine_mock)
+    maps.select(0, "record")
+    event = _event(first)
+    geometry = first.resolve_source_beatmap_artifact_completion.return_value.map.return_value
+    geometry.revision.return_value = reference().map_revision
+    maps.completed(0, event)
+    previous = maps.effective(0)
+    correction = {
+        "schema_version": 1,
+        "operation": "translate",
+        "sample_offset": -1,
+        "sample_rate_hz": 48000,
+    }
+    second = Mock()
+    second.is_cancelled.return_value = False
+    audio_engine_mock.begin_source_beatmap_edit_async = Mock(return_value=second)
+    with pytest.raises(ValueError, match="no longer current"):
+        maps.edit(0, correction, expected_revision="not-current")
+    audio_engine_mock.begin_source_beatmap_edit_async.assert_not_called()
+    maps.edit(0, correction, expected_revision=reference().map_revision)
+    call = audio_engine_mock.begin_source_beatmap_edit_async.call_args
+    assert call.args[0] == 0
+    assert json.loads(call.args[1]) == reference().model_dump(mode="json")
+    assert json.loads(call.args[2]) == correction
+    assert maps.effective(0) is previous
+    assert maps.status(0) == "pending"
+    assert controller.project.pad_source_beatmap_intent[0].revision == 2
+
+
+def test_large_or_nonfinite_correction_never_admits_or_changes_selected_intent(
+    controller: AppController, audio_engine_mock: Mock
+) -> None:
+    _assigned(controller, audio_engine_mock)
+    maps = controller.loader.source_beatmaps
+    first = _job(audio_engine_mock)
+    maps.select(0, "record")
+    event = _event(first)
+    geometry = first.resolve_source_beatmap_artifact_completion.return_value.map.return_value
+    geometry.revision.return_value = reference().map_revision
+    maps.completed(0, event)
+    previous = controller.project.pad_source_beatmap_intent[0]
+    audio_engine_mock.begin_source_beatmap_edit_async = Mock()
+    for operation in ({"evidence": "a" * 8192}, {"beat": float("nan")}):
+        with pytest.raises(ValueError, match=r"8 KiB|Out of range float"):
+            maps.edit(0, operation, expected_revision=reference().map_revision)
+    audio_engine_mock.begin_source_beatmap_edit_async.assert_not_called()
+    assert controller.project.pad_source_beatmap_intent[0] is previous
+    assert controller._assets._reserved == 0

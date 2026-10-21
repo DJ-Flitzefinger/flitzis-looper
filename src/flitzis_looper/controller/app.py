@@ -194,7 +194,9 @@ class AppController:
                 or self._persistence.load_error is not None
             ),
             edit_guard=self.ensure_not_copy_target,
+            source_generation=self.transport.capture_current_pad_edit_generation,
         )
+        self.transport.loop.bind_source_maps(self.loader.source_beatmaps)
 
     def _init_recording_control(self) -> None:
         """Bind one original Engine and project namespace before restore and UI work."""

@@ -16,6 +16,15 @@ pub(super) enum MapInput<'a> {
     Validate(&'a str),
     Store(&'a str),
     Restore(&'a str),
+    Create {
+        origin: f64,
+        period: f64,
+        expected_generation: Option<u64>,
+    },
+    Edit {
+        receipt: &'a str,
+        operation: &'a str,
+    },
 }
 
 impl JobState {
@@ -106,6 +115,39 @@ impl JobState {
                 let map = artifact.map();
                 reader.verify_source_beatmap(&map, &cancelled)?;
                 (map, Some(artifact))
+            }
+            MapInput::Create {
+                origin,
+                period,
+                expected_generation,
+            } => {
+                let map = reader.manual_source_beatmap(
+                    origin,
+                    period,
+                    expected_generation,
+                    &cancelled,
+                )?;
+                let (root, original) = reader.map_artifact_paths()?;
+                let artifact =
+                    SourceBeatmapArtifact::store(root, original, map, &cancelled, observe)?;
+                reader.require_map_custody()?;
+                (artifact.map(), Some(artifact))
+            }
+            MapInput::Edit { receipt, operation } => {
+                let (root, original) = reader.map_artifact_paths()?;
+                let base = SourceBeatmapArtifact::restore(root, receipt, &cancelled)?;
+                let map = base.map();
+                // The base receipt supplies exact revision/content bytes; actual
+                // held source verification hashes the original only once.
+                reader.verify_source_beatmap(&map, &cancelled)?;
+                let edited = map.edited(operation)?;
+                if cancelled() {
+                    return Err("source beatmap edit cancelled".into());
+                }
+                let artifact =
+                    SourceBeatmapArtifact::store(root, original, edited, &cancelled, observe)?;
+                reader.require_map_custody()?;
+                (artifact.map(), Some(artifact))
             }
         };
         // Tests block this exact admitted request while all real readers and the

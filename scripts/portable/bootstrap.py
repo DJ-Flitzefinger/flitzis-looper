@@ -487,6 +487,101 @@ def check_mix_capture_api(native_module: object) -> None:
         _check_mix_capture_signature(owner, method, label, arguments)
 
 
+def check_source_beatmap_editor_api(native_module: object) -> None:
+    """Reflect the source-qualified editor contract without starting Native work."""
+    engine = getattr(native_module, "AudioEngine", None)
+    beatmap = getattr(native_module, "SourceBeatmap", None)
+    assert isinstance(engine, type), "Native source beatmap editor API missing type: AudioEngine"
+    assert isinstance(beatmap, type), "Native source beatmap editor API missing type: SourceBeatmap"
+    for method in (
+        "revision",
+        "source_identity",
+        "evaluate_source",
+        "evaluate_beat",
+        "local_tempo_at_source",
+        "nearest_grid_source",
+    ):
+        assert callable(inspect.getattr_static(beatmap, method, None)), (
+            f"Native source beatmap editor API missing: SourceBeatmap.{method}"
+        )
+    required = inspect.Parameter.empty
+    for owner, method, arguments, keyword_only in (
+        (
+            engine,
+            "begin_source_beatmap_create_async",
+            (
+                ("self", required),
+                ("sample_id", required),
+                ("origin_seconds", required),
+                ("period_seconds", required),
+                ("expected_source_generation", None),
+            ),
+            {"expected_source_generation"},
+        ),
+        (
+            engine,
+            "begin_source_beatmap_edit_async",
+            (
+                ("self", required),
+                ("sample_id", required),
+                ("receipt_json", required),
+                ("operation_json", required),
+            ),
+            set(),
+        ),
+        (beatmap, "editor_info", (("self", required),), set()),
+        (
+            beatmap,
+            "editor_view",
+            (
+                ("self", required),
+                ("start_s", required),
+                ("end_s", required),
+                ("loop_start_s", required),
+                ("px_per_s", required),
+                ("max_points", 2048),
+            ),
+            set(),
+        ),
+        (
+            beatmap,
+            "source_after_beats",
+            (
+                ("self", required),
+                ("source_seconds", required),
+                ("beats", required),
+                ("require_four_four", True),
+            ),
+            set(),
+        ),
+    ):
+        label = f"{owner.__name__}.{method}"
+        implementation = inspect.getattr_static(owner, method, None)
+        assert callable(implementation), f"Native source beatmap editor API missing: {label}"
+        parameters = inspect.signature(implementation).parameters
+        assert list(parameters) == [name for name, _default in arguments], (
+            f"Native source beatmap editor API invalid signature: {label}"
+        )
+        for name, default in arguments:
+            parameter = parameters[name]
+            kinds = (
+                {inspect.Parameter.POSITIONAL_ONLY, inspect.Parameter.POSITIONAL_OR_KEYWORD}
+                if name == "self"
+                else {inspect.Parameter.KEYWORD_ONLY}
+                if name in keyword_only
+                else {inspect.Parameter.POSITIONAL_OR_KEYWORD}
+            )
+            assert parameter.kind in kinds, (
+                f"Native source beatmap editor API invalid argument: {label}.{name}"
+            )
+            assert type(parameter.default) is type(default), (
+                f"Native source beatmap editor API invalid default: {label}.{name}"
+            )
+            assert parameter.default == default, (
+                f"Native source beatmap editor API invalid default: {label}.{name}"
+            )
+
+
 def check_runtime(root: Path, checkout: Path, runtime: Path) -> None:
     # Runtime imports must follow private-path/DLL setup, before any GUI/device opens.
     native_module = importlib.import_module("flitzis_looper_audio")
@@ -504,6 +599,7 @@ def check_runtime(root: Path, checkout: Path, runtime: Path) -> None:
     check_key_lock_start_behavior_api(native_module.AudioEngine)
     check_global_rate_api(native_module.AudioEngine)
     check_mix_capture_api(native_module)
+    check_source_beatmap_editor_api(native_module)
     assert physical_path(Path(sys.executable)).is_relative_to(physical_path(runtime / "python"))
     customization = importlib.import_module("sitecustomize")
     assert customization.__file__ is not None, "Portable sitecustomize has no file origin"

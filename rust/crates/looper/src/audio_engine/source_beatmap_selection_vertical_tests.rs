@@ -205,8 +205,20 @@ fn fresh_config_selected_copy_child() {
 
 #[test]
 fn productive_map_select_copy_origin_unload_config_and_fresh_process_restore() {
-    let name =
-        child_name("productive_map_select_copy_origin_unload_config_and_fresh_process_restore");
+    run_selection_vertical(false);
+}
+
+#[test]
+fn productive_manual_map_copy_correction_and_fresh_process_restore() {
+    run_selection_vertical(true);
+}
+
+fn run_selection_vertical(manual: bool) {
+    let name = child_name(if manual {
+        "productive_manual_map_copy_correction_and_fresh_process_restore"
+    } else {
+        "productive_map_select_copy_origin_unload_config_and_fresh_process_restore"
+    });
     if std::env::var_os(PRODUCER).is_none() {
         let output = std::process::Command::new(std::env::current_exe().unwrap())
             .args(["--exact", &name, "--nocapture", "--test-threads=1"])
@@ -227,7 +239,7 @@ fn productive_map_select_copy_origin_unload_config_and_fresh_process_restore() {
     }
     let fixture = ColdCustody::new_selected(None);
     assert!(maps(&fixture).is_empty());
-    let expected = record(&fixture, 0);
+    let mut expected = record(&fixture, 0);
     let original = original_path(&fixture, 0);
     let root = fixture.directory.path().to_owned();
     fs::write(root.join("OWNER.md"), b"Owned synthetic source-map selection/Copy/Config/fresh-process test. No Human originals, App or device. Root owns execution and cleanup.\n").unwrap();
@@ -258,9 +270,13 @@ fn productive_map_select_copy_origin_unload_config_and_fresh_process_restore() {
     let probe = probe(&engine, Some(input));
     drain(&mut consumer, &mut parameter_consumer, &mut mixer);
     Python::attach(|py| {
-        probe
-            .call_method1(py, "select", (expected.to_string(),))
-            .unwrap()
+        if manual {
+            probe.call_method0(py, "create_manual").unwrap()
+        } else {
+            probe
+                .call_method1(py, "select", (expected.to_string(),))
+                .unwrap()
+        }
     });
     wait_probe(
         &probe,
@@ -277,6 +293,25 @@ fn productive_map_select_copy_origin_unload_config_and_fresh_process_restore() {
         &mut parameter_consumer,
         &mut mixer,
     );
+    if manual {
+        Python::attach(|py| probe.call_method0(py, "correct_copied_beat").unwrap());
+        wait_probe(
+            &probe,
+            "corrected_copy",
+            &mut consumer,
+            &mut parameter_consumer,
+            &mut mixer,
+        );
+        let corrected: String = Python::attach(|py| {
+            probe
+                .call_method0(py, "current_copied_record")
+                .unwrap()
+                .extract(py)
+                .unwrap()
+        });
+        expected = serde_json::from_str(&corrected).unwrap();
+        fs::write(root.join("expected-map.json"), expected.to_string()).unwrap();
+    }
     Python::attach(|py| {
         probe.call_method0(py, "unload_origin").unwrap();
         // The source-custody fixture initially loads a second independent source

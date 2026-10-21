@@ -1,5 +1,10 @@
 //! Independent coordinate expectations; no source/audio authority is constructed.
 
+mod editor_tests {
+    use super::*;
+    include!("editor_tests.rs");
+}
+
 use super::super::cold_store::descriptor_digest;
 use super::*;
 use serde_json::{Value, json};

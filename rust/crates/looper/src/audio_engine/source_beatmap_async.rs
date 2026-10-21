@@ -23,6 +23,15 @@ enum AsyncMapInput {
     Validate(String),
     Store(String),
     Restore(String),
+    Create {
+        origin: f64,
+        period: f64,
+        expected_generation: Option<u64>,
+    },
+    Edit {
+        receipt: String,
+        operation: String,
+    },
 }
 
 impl AsyncMapInput {
@@ -31,6 +40,16 @@ impl AsyncMapInput {
             Self::Validate(encoded) => MapInput::Validate(encoded),
             Self::Store(encoded) => MapInput::Store(encoded),
             Self::Restore(receipt) => MapInput::Restore(receipt),
+            Self::Create {
+                origin,
+                period,
+                expected_generation,
+            } => MapInput::Create {
+                origin: *origin,
+                period: *period,
+                expected_generation: *expected_generation,
+            },
+            Self::Edit { receipt, operation } => MapInput::Edit { receipt, operation },
         }
     }
 
@@ -38,6 +57,14 @@ impl AsyncMapInput {
         match self {
             Self::Validate(encoded) | Self::Store(encoded) => encoded.len() <= MAX_RECORD_BYTES,
             Self::Restore(receipt) => receipt.len() <= MAX_RECEIPT_BYTES,
+            Self::Create { origin, period, .. } => {
+                origin.is_finite() && period.is_finite() && *period > 0.0
+            }
+            Self::Edit { receipt, operation } => {
+                receipt.len() <= MAX_RECEIPT_BYTES
+                    && operation.len()
+                        <= crate::audio_engine::source_beatmap::editor::MAX_EDIT_BYTES
+            }
         }
     }
 }
@@ -250,6 +277,43 @@ impl Drop for AsyncMapRetirement {
 }
 
 impl AudioEngine {
+    pub(in crate::audio_engine) fn begin_source_beatmap_create_async_with(
+        &self,
+        sample_id: usize,
+        origin: f64,
+        period: f64,
+        expected_generation: Option<u64>,
+        after_verify: impl FnOnce() + Send + 'static,
+    ) -> PyResult<OfflineAnalysisJob> {
+        self.queue_source_beatmap_input(
+            sample_id,
+            AsyncMapInput::Create {
+                origin,
+                period,
+                expected_generation,
+            },
+            after_verify,
+            |_, _| Ok(()),
+        )
+    }
+
+    pub(in crate::audio_engine) fn begin_source_beatmap_edit_async_with(
+        &self,
+        sample_id: usize,
+        receipt: String,
+        operation: String,
+        after_verify: impl FnOnce() + Send + 'static,
+    ) -> PyResult<OfflineAnalysisJob> {
+        crate::audio_engine::source_beatmap::editor::validate_intent(&operation)
+            .map_err(PyValueError::new_err)?;
+        self.queue_source_beatmap_input(
+            sample_id,
+            AsyncMapInput::Edit { receipt, operation },
+            after_verify,
+            |_, _| Ok(()),
+        )
+    }
+
     /// Same production admission/queue path with one local verification barrier.
     /// Production passes an empty closure; tests never bypass source verification.
     pub(in crate::audio_engine) fn begin_source_beatmap_async_with(

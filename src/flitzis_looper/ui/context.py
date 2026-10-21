@@ -45,6 +45,7 @@ if TYPE_CHECKING:
     from flitzis_looper.controller.current_timing import CurrentPadTiming
     from flitzis_looper.controller.performance_confirmation import PendingConfirmation
     from flitzis_looper.controller.recording import RecordingStatus
+    from flitzis_looper.controller.source_beatmap_selection import SourceBeatmapSelection
     from flitzis_looper.controller.stem_batch import StemBatchSummary
     from flitzis_looper.controller.stem_delete import StemDeleteSummary
     from flitzis_looper.controller.stems import StemResidencySummary
@@ -453,6 +454,24 @@ class PadAudioActions:  # noqa: PLR0904 - pad action facade mirrors selected-pad
             pad_id,
             lambda: self._controller.transport.loop.set_start(pad_id, start_s),
             operation="set_pad_loop_start",
+        )
+
+    def apply_source_map_bars(self, pad_id: int) -> None:
+        """Materialize one explicit supported map bar interval as physical markers."""
+        perform_pad_action(
+            self._controller,
+            pad_id,
+            lambda: self._controller.transport.loop.apply_source_map_bars(pad_id),
+            operation="apply_source_map_bars",
+        )
+
+    def snap_source_map_markers(self, pad_id: int) -> None:
+        """Explicitly snap both physical markers through the selected map revision."""
+        perform_pad_action(
+            self._controller,
+            pad_id,
+            lambda: self._controller.transport.loop.snap_source_map_markers(pad_id),
+            operation="snap_source_map_markers",
         )
 
     def set_pad_loop_end(self, pad_id: int, end_s: float | None) -> None:
@@ -937,6 +956,32 @@ class AudioActions:
         self.stems = StemAudioActions(controller)
         self.global_ = GlobalAudioActions(controller)
         self.poll = PollActions(controller)
+
+
+class SourceMapEditorActions:
+    """Use the existing map owner with actual transient source identity fencing."""
+
+    def __init__(self, controller: AppController) -> None:
+        self._controller = controller
+
+    @property
+    def selection(self) -> SourceBeatmapSelection:
+        """Return the Loader's original source-qualified map selection owner."""
+        return self._controller.loader.source_beatmaps
+
+    def identity(self, pad_id: int) -> object:
+        """Capture actual content/source generation for transient editor inputs."""
+        content = self._controller.project.pad_content[pad_id]
+        if content is None:
+            return None
+        try:
+            generation = self._controller.transport.capture_current_pad_edit_generation(pad_id)
+            source = self._controller._audio.waveform_source_identity(pad_id)
+        except RuntimeError, ValueError:
+            return None
+        if generation is None or source is None:
+            return None
+        return content.instance_id, generation, source
 
 
 class WaveformEditorActions:
@@ -1453,6 +1498,7 @@ class UiActions:
     stem_batch: StemBatchActions
     stem_delete: StemDeleteActions
     waveform: WaveformEditorActions
+    source_map: SourceMapEditorActions
 
     def __init__(self, controller: AppController, state: UiState | None = None):
         self._controller = controller
@@ -1461,6 +1507,7 @@ class UiActions:
         self.source_key = SourceKeyEditorActions(controller)
         self.settings = SettingsActions(controller)
         self.waveform = WaveformEditorActions(controller)
+        self.source_map = SourceMapEditorActions(controller)
         self.confirmation = PerformanceConfirmationActions(controller)
         self.stem_batch = StemBatchActions(controller)
         self.stem_delete = StemDeleteActions(controller)

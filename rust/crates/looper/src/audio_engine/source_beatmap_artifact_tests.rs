@@ -1,5 +1,10 @@
 // Actual source-qualified durable artifacts; bounded software proof, not musical acceptance.
 
+mod editor_async_tests {
+    use super::*;
+    include!("source_beatmap_editor_async_tests.rs");
+}
+
 use super::*;
 use crate::audio_engine::SourceBeatmapArtifact;
 use crate::audio_engine::source_beatmap_artifact::StorePoint;

@@ -1,0 +1,329 @@
+"""Loop-owner integration with real Native geometry and a selection-boundary double.
+
+The double grants no source/custody acceptance. Native job, Config and source
+qualification are separately tested; these cases exercise physical loop editing.
+"""
+
+import hashlib
+import json
+import struct
+from typing import TYPE_CHECKING, cast
+from unittest.mock import Mock
+
+import pytest
+
+from flitzis_looper.source_beatmap_intent import PadSourceBeatmapIntent
+from flitzis_looper_audio import SourceBeatmap
+
+if TYPE_CHECKING:
+    from flitzis_looper.controller import AppController
+    from flitzis_looper.controller.source_beatmap_selection import SourceBeatmapSelection
+
+
+def _digest(value: object) -> str:
+    encoded = json.dumps(value, sort_keys=True, separators=(",", ":"), ensure_ascii=False)
+    return hashlib.sha256(encoded.encode()).hexdigest()
+
+
+def _bits(value: float) -> str:
+    return struct.pack(">d", value).hex()
+
+
+def _geometry(
+    *, middle_coverage: str = "trusted", meter: str = "quarter_note_4_4_verified"
+) -> SourceBeatmap:
+    descriptor = {
+        "schema_version": 1,
+        "original": {"sha256": "a" * 64, "bytes": 1000},
+        "pcm": {
+            "format": "f32-le-interleaved-v1",
+            "channel_layout": "interleaved-channel-index-order-v1",
+            "rate_hz": 48000,
+            "channels": 2,
+            "full_frames": 480000,
+            "full_bytes": 3840000,
+            "interleaved_sha256": "b" * 64,
+            "mono_sha256": "c" * 64,
+            "mono_revision": "test-mono-v1",
+            "source_zero_bits": _bits(0.0),
+            "provenance": {"test_only": True},
+        },
+    }
+    raw = {
+        "detector": {
+            "detector_id": "manual",
+            "code_revision": "loop-fixture-v1",
+            "configuration": {},
+            "model": None,
+            "preprocessing": {},
+        },
+        "analysis_input": None,
+        "timestamp_resolution_seconds_bits": None,
+        "beat_seconds_bits": [],
+        "downbeat_seconds_bits": [],
+        "uncertainty": "Exact geometry fixture, without source or musical acceptance",
+    }
+    raw["raw_revision"] = _digest(raw)
+    accepted = {
+        "parent_revision": None,
+        "beat_unit": "quarter_note",
+        "interpolation_policy": "pwa-source-seconds-quarter-v1",
+        "boundary_policy": "right-interior-left-final-gap-unavailable-v1",
+        "snap_policy": "nearest-quarter-subdivision-later-tie-v1",
+        "anchors": [
+            {
+                "id": f"anchor-{index}",
+                "source_seconds_bits": _bits(seconds),
+                "beat_bits": _bits(beat),
+                "raw_beat_index": None,
+                "review": "reviewed",
+                "sample_edit": None,
+            }
+            for index, (seconds, beat) in enumerate([
+                (0.0, 0.0),
+                (2.0, 4.0),
+                (5.0, 8.0),
+                (10.0, 12.0),
+            ])
+        ],
+        "intervals": [
+            {
+                "coverage": coverage,
+                "meter": {"status": meter, "downbeat_label": None, "evidence": "synthetic"},
+            }
+            for coverage in ["trusted", middle_coverage, "trusted"]
+        ],
+        "lineage": [],
+    }
+    record = {
+        "source": {"decoder_identity": _digest(descriptor), "decoder_descriptor": descriptor},
+        "raw": raw,
+        "accepted": accepted,
+    }
+    accepted["map_revision"] = _digest(record)
+    return SourceBeatmap.from_json(
+        json.dumps({"schema_version": 1, "encoding": "source-beatmap-pwa-v1", "record": record})
+    )
+
+
+def _bind_map(controller: AppController, geometry: SourceBeatmap | None) -> Mock:
+    selection = Mock()
+    selection.is_selected.return_value = True
+    selection.effective.return_value = geometry
+    controller.transport.loop.bind_source_maps(cast("SourceBeatmapSelection", selection))
+    return selection
+
+
+@pytest.fixture
+def mapped_loop(controller: AppController, audio_engine_mock: Mock) -> Mock:
+    audio_engine_mock.output_sample_rate.return_value = 48_000
+    controller.project.sample_paths[0] = "samples/manual-map.wav"
+    controller.project.sample_durations[0] = 10.0
+    controller.project.manual_bpm[0] = 120.0
+    controller.project.pad_loop_start_s[0] = 1.0
+    controller.project.pad_loop_end_s[0] = None
+    controller.project.pad_loop_bars[0] = 1.0
+    controller.project.pad_loop_auto[0] = True
+    return _bind_map(controller, _geometry())
+
+
+def _intent(controller: AppController) -> tuple[float, float | None, bool, float]:
+    project = controller.project
+    return (
+        project.pad_loop_start_s[0],
+        project.pad_loop_end_s[0],
+        project.pad_loop_auto[0],
+        project.pad_loop_bars[0],
+    )
+
+
+def test_selection_preserves_existing_scalar_auto_region_until_explicit_map_bars(
+    controller: AppController, audio_engine_mock: Mock, mapped_loop: Mock
+) -> None:
+    assert controller.transport.loop.requested_region(0) == (1.0, 3.0)
+    assert _intent(controller) == (1.0, None, True, 1.0)
+    audio_engine_mock.set_pad_loop_region.assert_not_called()
+
+    controller.transport.loop.set_bars(0, bars=1.0)
+
+    assert _intent(controller) == (1.0, 3.5, False, 1.0)
+    audio_engine_mock.set_pad_loop_region.assert_called_once_with(
+        0, 1.0, 3.5, expected_source_generation=1
+    )
+    mapped_loop.effective.assert_called_once_with(0)
+    audio_engine_mock.set_pad_bpm.assert_not_called()
+    audio_engine_mock.set_pad_timing_metadata.assert_not_called()
+
+
+def test_explicit_map_markers_keep_materialized_region_when_map_is_cleared(
+    controller: AppController, mapped_loop: Mock
+) -> None:
+    controller.transport.loop.apply_source_map_bars(0)
+    mapped_loop.effective.return_value = None
+    mapped_loop.is_selected.return_value = False
+
+    assert controller.transport.loop.requested_region(0) == (1.0, 3.5)
+    assert _intent(controller) == (1.0, 3.5, False, 1.0)
+
+
+def test_explicit_snap_uses_variable_later_ties_and_materializes_both_markers(
+    controller: AppController, audio_engine_mock: Mock, mapped_loop: Mock
+) -> None:
+    controller.project.pad_loop_auto[0] = False
+    controller.project.pad_loop_start_s[0] = 2.0234375
+    controller.project.pad_loop_end_s[0] = 5.0390625
+
+    controller.transport.loop.snap_source_map_markers(0)
+
+    expected = (round(2.046875 * 48_000) / 48_000, 5.078125)
+    assert _intent(controller) == (*expected, False, 1.0)
+    audio_engine_mock.set_pad_loop_region.assert_called_once_with(
+        0, *expected, expected_source_generation=1
+    )
+    mapped_loop.effective.assert_called_once_with(0)
+
+
+def test_map_auto_start_edit_snaps_and_uses_variable_bar_endpoint(
+    controller: AppController, audio_engine_mock: Mock, mapped_loop: Mock
+) -> None:
+    controller.transport.loop.set_start(0, 2.0234375)
+
+    start = round(2.046875 * 48_000) / 48_000
+    # Beat 8+1/16 lies in the slower third segment, at this independent fixture coordinate.
+    end = 5.078125
+    assert _intent(controller) == (start, end, False, 1.0)
+    audio_engine_mock.set_pad_loop_region.assert_called_once_with(
+        0, start, end, expected_source_generation=1
+    )
+    mapped_loop.effective.assert_called_once_with(0)
+
+
+def test_map_auto_end_edit_keeps_physical_start_and_uses_native_snap(
+    controller: AppController, mapped_loop: Mock
+) -> None:
+    controller.transport.loop.set_end(0, 5.0390625)
+
+    assert _intent(controller) == (1.0, 5.078125, False, 1.0)
+    mapped_loop.effective.assert_called_once_with(0)
+
+
+def test_map_physical_edits_do_not_snap_when_auto_is_disabled(
+    controller: AppController, mapped_loop: Mock
+) -> None:
+    controller.project.pad_loop_auto[0] = False
+    controller.project.pad_loop_end_s[0] = 4.0
+
+    controller.transport.loop.set_start(0, 2.0234375)
+    controller.transport.loop.set_end(0, 5.0390625)
+
+    assert controller.project.pad_loop_start_s[0] == round(2.0234375 * 48_000) / 48_000
+    assert controller.project.pad_loop_end_s[0] == round(5.0390625 * 48_000) / 48_000
+    mapped_loop.effective.assert_not_called()
+
+
+@pytest.mark.parametrize("operation", ["bars", "snap", "start", "end"])
+def test_selected_but_unavailable_map_refuses_without_scalar_fallback(
+    controller: AppController, audio_engine_mock: Mock, mapped_loop: Mock, operation: str
+) -> None:
+    previous = _intent(controller)
+    mapped_loop.effective.return_value = None
+    actions = {
+        "bars": lambda: controller.transport.loop.set_bars(0, bars=1.0),
+        "snap": lambda: controller.transport.loop.snap_source_map_markers(0),
+        "start": lambda: controller.transport.loop.set_start(0, 2.0),
+        "end": lambda: controller.transport.loop.set_end(0, 5.0),
+    }
+
+    with pytest.raises(ValueError, match=r"unavailable|preparing"):
+        actions[operation]()
+
+    assert _intent(controller) == previous
+    audio_engine_mock.set_pad_loop_region.assert_not_called()
+
+
+@pytest.mark.parametrize("coverage", ["uncertain", "gap_unknown_count"])
+def test_map_bar_interval_and_snap_refuse_an_intervening_gap_atomically(
+    controller: AppController, audio_engine_mock: Mock, mapped_loop: Mock, coverage: str
+) -> None:
+    mapped_loop.effective.return_value = _geometry(middle_coverage=coverage)
+    previous = _intent(controller)
+
+    with pytest.raises(ValueError, match="supported"):
+        controller.transport.loop.apply_source_map_bars(0, 2.0)
+
+    assert _intent(controller) == previous
+    controller.project.pad_loop_auto[0] = False
+    controller.project.pad_loop_end_s[0] = 7.0
+    previous = _intent(controller)
+    with pytest.raises(ValueError, match="supported"):
+        controller.transport.loop.snap_source_map_markers(0)
+
+    assert _intent(controller) == previous
+    audio_engine_mock.set_pad_loop_region.assert_not_called()
+
+
+def test_bar_operation_requires_full_four_four_and_actual_source_extent(
+    controller: AppController, audio_engine_mock: Mock, mapped_loop: Mock
+) -> None:
+    previous = _intent(controller)
+    mapped_loop.effective.return_value = _geometry(meter="unknown")
+    assert controller.transport.loop.max_auto_loop_bars(0) is None
+    with pytest.raises(ValueError, match="supported"):
+        controller.transport.loop.apply_source_map_bars(0, 1.0)
+    assert _intent(controller) == previous
+
+    mapped_loop.effective.return_value = _geometry()
+    controller.project.sample_durations[0] = 999.0
+    assert controller.transport.loop.max_auto_loop_bars(0) == 2.5
+    with pytest.raises(ValueError, match="supported"):
+        controller.transport.loop.apply_source_map_bars(0, 3.0)
+    assert _intent(controller) == previous
+    audio_engine_mock.set_pad_loop_region.assert_not_called()
+
+
+def test_native_loop_publication_failure_rolls_back_all_materialized_intent(
+    controller: AppController, audio_engine_mock: Mock, mapped_loop: Mock
+) -> None:
+    previous = _intent(controller)
+    audio_engine_mock.set_pad_loop_region.side_effect = ValueError("stale source generation")
+
+    with pytest.raises(ValueError, match="stale source"):
+        controller.transport.loop.apply_source_map_bars(0, 2.0)
+
+    assert _intent(controller) == previous
+    mapped_loop.effective.assert_called_once_with(0)
+
+
+def test_newer_map_intent_during_query_cannot_publish_old_geometry(
+    controller: AppController, audio_engine_mock: Mock, mapped_loop: Mock
+) -> None:
+    geometry = _geometry()
+    previous = _intent(controller)
+
+    def replace_intent(_sample_id: int) -> SourceBeatmap:
+        controller.project.pad_source_beatmap_intent[0] = PadSourceBeatmapIntent(
+            schema_version=1, revision=1, selected=None
+        )
+        return geometry
+
+    mapped_loop.effective.side_effect = replace_intent
+    with pytest.raises(ValueError, match="superseded"):
+        controller.transport.loop.apply_source_map_bars(0)
+
+    assert _intent(controller) == previous
+    audio_engine_mock.set_pad_loop_region.assert_not_called()
+
+
+def test_map_actions_require_current_generation_before_mutating_markers(
+    controller: AppController, audio_engine_mock: Mock, mapped_loop: Mock
+) -> None:
+    previous = _intent(controller)
+    audio_engine_mock.current_input_runtime_pad_binding.return_value = None
+    audio_engine_mock.current_input_runtime_pad_binding.side_effect = None
+
+    with pytest.raises(ValueError, match="current source generation"):
+        controller.transport.loop.apply_source_map_bars(0)
+
+    assert _intent(controller) == previous
+    mapped_loop.effective.assert_not_called()
+    audio_engine_mock.set_pad_loop_region.assert_not_called()

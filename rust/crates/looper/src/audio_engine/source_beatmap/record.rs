@@ -197,6 +197,7 @@ pub(super) struct Anchor {
 pub(super) struct Segment {
     pub(super) coverage: Coverage,
     pub(super) bpm: f64,
+    pub(super) four_four: bool,
 }
 
 pub(super) struct ValidatedMap {
@@ -204,10 +205,15 @@ pub(super) struct ValidatedMap {
     pub(super) revision: String,
     pub(super) source_identity: String,
     pub(super) source_duration: f64,
+    pub(super) sample_rate_hz: u32,
+    pub(super) source_frames: u64,
+    pub(super) can_undo: bool,
     pub(super) anchors: Box<[Anchor]>,
     pub(super) segments: Box<[Segment]>,
     /// Derived immutable coverage index, not another map or timing authority.
     pub(super) unsupported_prefix: Box<[u32]>,
+    pub(super) meter_prefix: Box<[u32]>,
+    pub(super) gap_prefix: Box<[u32]>,
 }
 
 /// Bound arrays during typed deserialization, not after collecting arbitrary input.
@@ -255,21 +261,41 @@ pub(super) fn parse(encoded: &str) -> Result<ValidatedMap, String> {
     validate_raw(&record.raw, source_duration)?;
     let (anchors, segments) = geometry(&record.accepted, record.raw.beat_seconds_bits.len())?;
     let mut unsupported_prefix = Vec::new();
+    let mut meter_prefix = Vec::new();
+    let mut gap_prefix = Vec::new();
     unsupported_prefix
         .try_reserve_exact(segments.len() + 1)
         .map_err(|error| error.to_string())?;
     unsupported_prefix.push(0_u32);
+    meter_prefix.push(0_u32);
+    gap_prefix.push(0_u32);
     for segment in &segments {
         let count = unsupported_prefix.last().copied().unwrap_or(0);
         unsupported_prefix.push(count + u32::from(segment.coverage != Coverage::Trusted));
+        meter_prefix
+            .push(meter_prefix.last().copied().unwrap_or(0) + u32::from(!segment.four_four));
+        gap_prefix.push(
+            gap_prefix.last().copied().unwrap_or(0)
+                + u32::from(segment.coverage == Coverage::GapUnknownCount),
+        );
     }
     let revision = record.accepted.map_revision.clone();
     let source_identity = record.source.decoder_identity.clone();
+    let sample_rate_hz = record.source.decoder_descriptor["pcm"]["rate_hz"]
+        .as_u64()
+        .ok_or("decoder_rate_missing")? as u32;
+    let source_frames = record.source.decoder_descriptor["pcm"]["full_frames"]
+        .as_u64()
+        .ok_or("decoder_extent_missing")?;
+    let raw_count = record.raw.beat_seconds_bits.len();
 
     // Move the typed payload into one JSON tree after preparing small geometry.
     // Existing canonical/digest helpers remain the only hash authority. These
     // bounded operations are off realtime; peak RAM still requires measurement.
     let mut value = serde_json::to_value(envelope.record).map_err(|error| error.to_string())?;
+    let can_undo =
+        super::editor::undo_operation(&value["accepted"], sample_rate_hz, source_frames, raw_count)
+            .is_some();
     verify_revision(&mut value["raw"], "raw_revision")?;
     let declared = value["accepted"]
         .as_object_mut()
@@ -293,9 +319,14 @@ pub(super) fn parse(encoded: &str) -> Result<ValidatedMap, String> {
         revision,
         source_identity,
         source_duration,
+        sample_rate_hz,
+        source_frames,
+        can_undo,
         anchors: anchors.into_boxed_slice(),
         segments: segments.into_boxed_slice(),
         unsupported_prefix: unsupported_prefix.into_boxed_slice(),
+        meter_prefix: meter_prefix.into_boxed_slice(),
+        gap_prefix: gap_prefix.into_boxed_slice(),
     })
 }
 
@@ -484,6 +515,7 @@ fn geometry(accepted: &Accepted, raw_count: usize) -> Result<(Vec<Anchor>, Vec<S
         segments.push(Segment {
             coverage: interval.coverage,
             bpm,
+            four_four: matches!(interval.meter.status, MeterStatus::QuarterNote4_4Verified),
         });
     }
     let mut operations = HashSet::new();
@@ -497,6 +529,14 @@ fn geometry(accepted: &Accepted, raw_count: usize) -> Result<(Vec<Anchor>, Vec<S
         }
     }
     Ok((anchors, segments))
+}
+
+/// Reuse the actual record geometry validator for a cold editor inverse preview.
+/// Historical generic lineage remains accepted data, never executable permission.
+pub(super) fn validate_editor_geometry(value: &Value, raw_count: usize) -> Result<(), String> {
+    let accepted: Accepted =
+        serde_json::from_value(value.clone()).map_err(|error| error.to_string())?;
+    geometry(&accepted, raw_count).map(|_| ())
 }
 
 fn checked_difference(left: f64, right: f64) -> Result<f64, String> {

@@ -402,3 +402,46 @@ B2 independent full T01-T05/six balanced paired T03-T05/absolute caps/20% operat
 AND active human time/zero baseline/music/default/remediation remain unchanged.
 H-LIVE precedes live Slice7; H-FINAL follows all later changes. Real device/final
 hearing gates remain human, and every failed acoustic/causal evidence remains.
+
+## Manual Source Map Loop Editor — 2026-10-21
+
+The Loop Editor's **Source Map** controls explicitly create a manual quarter-note
+4/4 map from the current source grid. This labels a performer choice, not an automatic
+beat/downbeat result. Creation retains actual decoder custody on the existing Native
+worker and selects the immutable artifact only after compact Config commitment.
+The map status identifies the editor revision and **Audio: scalar**: selecting or
+correcting it does not activate variable-map DSP, change master time, move another
+PAD, change pitch, or move existing physical source markers. A failed or stale edit
+keeps the predecessor. Detector defaults, SYNC/live-map and musical/Human gates remain
+separate.
+
+Variable grid lines and the **Source BPM** value at the live or retained source
+playhead come from that same source-qualified Rust map. Source BPM can differ from
+the master target and from a track summary. Gaps, uncertain coverage, unknown meter
+and bounded-projection refusal are explicit; the editor never substitutes average
+BPM or a scalar grid for an unavailable selected map. Display labels remain
+`1 + B(source) - B(loop start)` on the source-time waveform.
+
+**Move beat** accepts an absolute source-map quarter-note beat coordinate and an exact source sample at
+the loaded rate. It creates a local accepted anchor without rewriting raw detections.
+**Translate map** applies a separate signed sample alignment to all anchors, retaining
+musical intervals. **Undo map edit** applies the preceding supported editor correction's
+captured inverse as another immutable revision. These operations preserve raw
+uncertainty and parent-linked lineage; they do not repair beat count/downbeat labels
+or perform automatic onset refinement. Those remain distinct B4 work.
+
+**Snap markers** explicitly uses the map's later-tie 1/16-beat snap followed by final
+loaded-frame rounding. **Apply bars** computes `S(B(start) + 4*bars)` only across
+supported, explicitly interpreted 4/4 coverage. Both publish physical markers through
+the existing guarded loop owner and disable scalar automatic-length recomputation.
+Later map changes or clearing therefore retain those markers. Ordinary free physical
+editing remains available; existing scalar projects retain their original nearest-even
+snap and automatic-loop behavior.
+
+UI inputs and mouse activation are fenced by content, actual Native source generation
+and revision. Heavy construction, source verification, correction and immutable file
+publication use the original bounded Native jobs. Python draws bounded projections,
+never reconstructing the map or parsing full geometry during a frame. Corrected maps
+retain the delivered independent Copy/Move/Swap/Pair/Bank, historical custody and
+fresh source-qualified model-free restore semantics. These engineering paths alone
+prove no musical accuracy, device/hearing result or whole-project RAM/I/O/P6 budget.

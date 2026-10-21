@@ -12,6 +12,7 @@ pub(super) struct Evaluation {
     pub(super) interval_status: &'static str,
     pub(super) segment_index: Option<usize>,
     pub(super) physical_domain: &'static str,
+    pub(super) meter_status: &'static str,
 }
 
 impl Evaluation {
@@ -24,10 +25,11 @@ impl Evaluation {
             interval_status: "unavailable",
             segment_index: None,
             physical_domain: "unavailable",
+            meter_status: "unavailable",
         }
     }
 
-    fn supported(self) -> bool {
+    pub(super) fn supported(self) -> bool {
         matches!(self.coordinate_status, "supported" | "anchor")
             && self.interval_status == "trusted"
     }
@@ -108,6 +110,7 @@ impl ValidatedMap {
             interval_status: coverage.label(),
             segment_index: Some(segment_index),
             physical_domain: self.physical_domain(anchor.seconds),
+            meter_status: self.meter_status(segment_index),
         }
     }
 
@@ -131,6 +134,7 @@ impl ValidatedMap {
             );
             missing.interval_status = segment.coverage.label();
             missing.segment_index = Some(index);
+            missing.meter_status = self.meter_status(index);
             return missing;
         }
         let left = self.anchors[index];
@@ -166,6 +170,7 @@ impl ValidatedMap {
             },
             segment_index: Some(index),
             physical_domain: self.physical_domain(source),
+            meter_status: self.meter_status(index),
         }
     }
 
@@ -190,6 +195,70 @@ impl ValidatedMap {
         } else {
             "after_source"
         }
+    }
+
+    fn meter_status(&self, index: usize) -> &'static str {
+        if self.segments[index].four_four {
+            "quarter_note_4_4_verified"
+        } else {
+            "unknown"
+        }
+    }
+
+    pub(super) fn source_after_beats(
+        &self,
+        source: f64,
+        beats: f64,
+        four_four: bool,
+    ) -> Evaluation {
+        if !beats.is_finite() {
+            return Evaluation::unavailable("invalid");
+        }
+        let start = self.at_source(source);
+        if !matches!(start.coordinate_status, "supported" | "anchor") {
+            return start;
+        }
+        let mut end = self.at_beat(start.beat.unwrap() + beats);
+        if !matches!(end.coordinate_status, "supported" | "anchor") {
+            return end;
+        }
+        if !matches!(
+            start.physical_domain,
+            "within_source" | "exclusive_source_end"
+        ) || !matches!(
+            end.physical_domain,
+            "within_source" | "exclusive_source_end"
+        ) {
+            return Evaluation::unavailable("outside_physical_source");
+        }
+        let (low, high) = if source <= end.source_seconds.unwrap() {
+            (source, end.source_seconds.unwrap())
+        } else {
+            (end.source_seconds.unwrap(), source)
+        };
+        // Interval-open endpoints: an adjacent gap outside this exact interval
+        // cannot contaminate an otherwise supported bar endpoint.
+        let first = self
+            .anchors
+            .partition_point(|anchor| anchor.seconds <= low)
+            .saturating_sub(1)
+            .min(self.segments.len() - 1);
+        let after = self
+            .anchors
+            .partition_point(|anchor| anchor.seconds < high)
+            .max(first + 1)
+            .min(self.segments.len());
+        if self.unsupported_prefix[first] != self.unsupported_prefix[after] {
+            return Evaluation::unavailable("unsupported_crossing");
+        }
+        if four_four && self.meter_prefix[first] != self.meter_prefix[after] {
+            return Evaluation::unavailable("unsupported_meter");
+        }
+        let endpoint_segment = if beats >= 0.0 { after - 1 } else { first };
+        end.interval_status = "trusted";
+        end.meter_status = self.meter_status(endpoint_segment);
+        end.local_bpm = Some(self.segments[endpoint_segment].bpm);
+        end
     }
 
     /// Versioned later musical ties; scalar nearest-even behavior is untouched.

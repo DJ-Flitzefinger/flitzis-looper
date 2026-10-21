@@ -22,7 +22,7 @@ if os.environ['LAUNCHER_NATIVE_MODE'] == 'import-error':
 if os.environ['LAUNCHER_NATIVE_MODE'] != 'older':
     def native_build_profile():
         mode = os.environ['LAUNCHER_NATIVE_MODE']
-        return 'release' if mode in {'old-piano', 'old-recording'} else mode
+        return 'release' if mode in {'old-piano', 'old-recording', 'old-editor'} else mode
 class CapturedPitchAction:
     if os.environ['LAUNCHER_NATIVE_MODE'] != 'old-piano':
         resets_key_correction = property(lambda self: False)
@@ -32,6 +32,26 @@ class AudioEngine:
             raise AssertionError('launcher must only reflect stream lifecycle')
         def quiesce_failed_audio_stream(self):
             raise AssertionError('launcher must never close a stream')
+    if os.environ['LAUNCHER_NATIVE_MODE'] != 'old-editor':
+        def begin_source_beatmap_create_async(
+            self, sample_id, origin_seconds, period_seconds, *, expected_source_generation=None,
+        ):
+            raise AssertionError('launcher must never create a source beatmap')
+        def begin_source_beatmap_edit_async(self, sample_id, receipt_json, operation_json):
+            raise AssertionError('launcher must never edit a source beatmap')
+class SourceBeatmap:
+    def editor_info(self):
+        raise AssertionError('launcher must only reflect map capabilities')
+    def editor_view(self, start_s, end_s, loop_start_s, px_per_s, max_points=2048):
+        raise AssertionError('launcher must never query source geometry')
+    def source_after_beats(self, source_seconds, beats, require_four_four=True):
+        raise AssertionError('launcher must never query source geometry')
+    revision = editor_info
+    source_identity = editor_info
+    evaluate_source = editor_info
+    evaluate_beat = editor_info
+    local_tempo_at_source = editor_info
+    nearest_grid_source = editor_info
 """
 _APP_STUB = """
 import json
@@ -286,6 +306,20 @@ def test_recording_lifecycle_requires_current_native_before_application(
     assert result.returncode != 0
     assert (
         "Native recording lifecycle API requires a current build" in result.stdout + result.stderr
+    )
+    assert not launchers.app_log.exists()
+    assert launchers.profile_log.exists()
+
+
+@pytest.mark.parametrize("starter", ["start.bat", "start-release.bat"])
+def test_source_beatmap_editor_requires_current_native_before_application(
+    launchers: _Launchers, starter: str
+) -> None:
+    launchers.environment["LAUNCHER_NATIVE_MODE"] = "old-editor"
+    result = launchers.run(starter)
+    assert result.returncode != 0
+    assert "Native source beatmap editor API requires a current build" in (
+        result.stdout + result.stderr
     )
     assert not launchers.app_log.exists()
     assert launchers.profile_log.exists()

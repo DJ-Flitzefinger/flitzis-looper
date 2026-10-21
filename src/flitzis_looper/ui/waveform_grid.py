@@ -7,12 +7,13 @@ from typing import TYPE_CHECKING
 from flitzis_looper.controller.scalar_grid import beat_duration_s, scalar_source_grid
 
 if TYPE_CHECKING:
-    from flitzis_looper_audio import ScalarSourceGrid
+    from flitzis_looper_audio import ScalarSourceGrid, SourceBeatmapEditorLine
 
 __all__ = [
     "WaveformGridLine",
     "beat_duration_s",
     "loop_beat_label",
+    "source_map_grid_lines",
     "visible_grid_lines",
     "waveform_view_start",
 ]
@@ -50,6 +51,29 @@ def loop_beat_label(beat: float) -> str:
     label = f"{beat:.4f}".rstrip("0").rstrip(".")
     # Sample-rounding or a tiny manual offset must not masquerade as an exact beat.
     return f"~{label}" if "." not in label else label
+
+
+def source_map_grid_lines(
+    lines: list[SourceBeatmapEditorLine],
+) -> tuple[WaveformGridLine, ...]:
+    """Render Native-projected coordinates without reconstructing a source transform."""
+    projected = []
+    for line in lines:
+        source = line["source_seconds"]
+        beat = line["loop_beat"]
+        if not isinstance(source, (float, int)) or not isinstance(beat, (float, int)):
+            continue
+        if not math.isfinite(source) or not math.isfinite(beat) or beat == 0.0:
+            continue
+        projected.append(
+            WaveformGridLine(
+                source_s=float(source),
+                loop_beat=float(beat),
+                major=line["major"] is True,
+                reference=line["reference"] is True,
+            )
+        )
+    return tuple(projected)
 
 
 def _minor_step_beats(beat_s: float, px_per_s: float) -> float:

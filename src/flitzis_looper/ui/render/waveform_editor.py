@@ -19,9 +19,15 @@ from flitzis_looper.ui.constants import (
     TEXT_RGBA,
 )
 from flitzis_looper.ui.contextmanager import implot_style_color, implot_style_var
+from flitzis_looper.ui.render.source_beatmap_editor import (
+    SourceMapEditorFrame,
+    capture_source_map,
+    render_source_map_editor,
+)
 from flitzis_looper.ui.waveform_grid import (
     WaveformGridLine,
     loop_beat_label,
+    source_map_grid_lines,
     visible_grid_lines,
 )
 
@@ -272,18 +278,68 @@ def _render_auto_loop(ctx: UiContext, pad_id: int, height: float) -> None:
         ctx.audio.pads.set_pad_loop_auto(pad_id, enabled=new_auto)
 
 
-def _render_loop_controls(ctx: UiContext, pad_id: int, height: float) -> None:
+def _render_source_map_loop_actions(
+    ctx: UiContext, pad_id: int, height: float, *, unavailable: bool
+) -> None:
+    imgui.begin_disabled(unavailable)
+    _toolbar_next_item(_text_button_width("Apply bars", height))
+    if _render_text_button("Apply bars##source-map-bars", height):
+        ctx.audio.pads.apply_source_map_bars(pad_id)
+    _toolbar_next_item(_text_button_width("Snap markers", height))
+    if _render_text_button("Snap markers##source-map-snap", height):
+        ctx.audio.pads.snap_source_map_markers(pad_id)
+    imgui.end_disabled()
+
+
+def _render_loop_controls(
+    ctx: UiContext,
+    pad_id: int,
+    height: float,
+    *,
+    source_map: SourceMapEditorFrame | None = None,
+) -> None:
+    if source_map is None or not source_map.selected:
+        _render_loop_controls_body(ctx, pad_id, height, source_map=source_map)
+        return
+    # A release over the same pixels cannot transfer an old map gesture to a
+    # replacement source or newly accepted revision between UI frames.
+    imgui.push_id(repr((pad_id, source_map.identity, source_map.revision)))
+    try:
+        _render_loop_controls_body(ctx, pad_id, height, source_map=source_map)
+    finally:
+        imgui.pop_id()
+
+
+def _render_loop_controls_body(
+    ctx: UiContext,
+    pad_id: int,
+    height: float,
+    *,
+    source_map: SourceMapEditorFrame | None,
+) -> None:
     _toolbar_next_item(_text_button_width("ALL", height))
     if _render_text_button("ALL##wf_loop_all", height):
         ctx.audio.pads.set_pad_full_track_loop_region(pad_id)
 
-    _render_auto_loop(ctx, pad_id, height)
+    map_mode = source_map is not None and source_map.selected
+    map_unavailable = (
+        source_map is not None
+        and source_map.selected
+        and (
+            source_map.geometry is None or source_map.status in {"pending", "restoring", "settling"}
+        )
+    )
+    if map_mode:
+        _render_source_map_loop_actions(ctx, pad_id, height, unavailable=map_unavailable)
+    else:
+        _render_auto_loop(ctx, pad_id, height)
 
     bars = ctx.state.project.pad_loop_bars[pad_id]
     bpm = ctx.state.pads.effective_bpm(pad_id)
     max_bars = ctx.state.pads.max_auto_loop_bars(pad_id)
 
-    if bpm is None:
+    imgui.begin_disabled(map_unavailable)
+    if bpm is None and not map_mode:
         label = f"Bars: {format_loop_bars(bars)} (BPM unavailable)"
         _toolbar_next_item(imgui.calc_text_size(label).x)
         _aligned_toolbar_text(label, height, TEXT_MUTED_RGBA)
@@ -343,8 +399,10 @@ def _render_loop_controls(ctx: UiContext, pad_id: int, height: float) -> None:
                 max_bars=max_bars,
             )
 
-    _toolbar_next_item(_grid_offset_close_width(ctx, pad_id, height))
-    _render_grid_offset_control(ctx, pad_id, height)
+    imgui.end_disabled()
+    if not map_mode:
+        _toolbar_next_item(_grid_offset_close_width(ctx, pad_id, height))
+        _render_grid_offset_control(ctx, pad_id, height)
 
 
 def _grid_offset_close_width(ctx: UiContext, pad_id: int, height: float) -> float:
@@ -581,7 +639,13 @@ def _plot_musical_grid(
     end_s: float,
     *,
     timing: CurrentPadTiming | UnresolvedTiming | None = UNRESOLVED_TIMING,
+    source_map: SourceMapEditorFrame | None = None,
 ) -> None:
+    if source_map is None:
+        source_map = capture_source_map(ctx, pad_id)
+    if source_map.selected:
+        _plot_source_map_grid(ctx, source_map, draw_list, start_s, end_s, timing=timing)
+        return
     if isinstance(timing, UnresolvedTiming):
         timing = ctx.state.pads.current_timing(pad_id)
     if timing is None:
@@ -604,6 +668,39 @@ def _plot_musical_grid(
     _draw_musical_grid_labels(
         draw_list, lines, loop_start_s=loop_start_s, start_s=start_s, end_s=end_s
     )
+
+
+def _plot_source_map_grid(
+    ctx: UiContext,
+    source_map: SourceMapEditorFrame,
+    draw_list: imgui.ImDrawList,
+    start_s: float,
+    end_s: float,
+    *,
+    timing: CurrentPadTiming | UnresolvedTiming | None,
+) -> None:
+    geometry = source_map.geometry
+    if geometry is None:
+        return
+    px_per_sec = _plot_px_per_sec(start_s=start_s, end_s=end_s)
+    if px_per_sec is None:
+        return
+    loop_start_s, _ = ctx.state.pads.effective_loop_region(source_map.pad_id, timing=timing)
+    view = geometry.editor_view(start_s, end_s, loop_start_s, px_per_sec, 2048)
+    if view["map_revision"] != source_map.revision:
+        return
+    lines = source_map_grid_lines(view["lines"])
+    _draw_musical_grid_lines(draw_list, lines)
+    _draw_musical_grid_labels(
+        draw_list, lines, loop_start_s=loop_start_s, start_s=start_s, end_s=end_s
+    )
+    if view["status"] != "complete":
+        position = implot.plot_to_pixels(start_s, -1.0)
+        draw_list.add_text(
+            (position.x + 4.0, position.y - imgui.get_text_line_height() - 4.0),
+            imgui.get_color_u32(TEXT_MUTED_RGBA),
+            f"Map coverage: {view['status']}",
+        )
 
 
 def _handle_clicks(ctx: UiContext, pad_id: int, sample_duration_s: float) -> None:
@@ -760,7 +857,9 @@ def _render_context_readiness(ctx: UiContext, pad_id: int) -> None:
     )
 
 
-def _render_plot(ctx: UiContext, pad_id: int) -> None:
+def _render_plot(
+    ctx: UiContext, pad_id: int, *, source_map: SourceMapEditorFrame | None = None
+) -> None:
     timing = ctx.state.pads.current_timing(pad_id)
     sample_duration_s = ctx.state.project.sample_durations[pad_id]
     if timing is not None and timing.source_duration_seconds is not None:
@@ -778,7 +877,10 @@ def _render_plot(ctx: UiContext, pad_id: int) -> None:
     # next frame's plot by four pixels even when its view did not change.
     padding = implot.get_style().annotation_padding
     with implot_style_var(implot.StyleVar_.annotation_padding, (padding.x, 0.0)):
-        _render_waveform_plot(ctx, pad_id, timing, sample_duration_s)
+        if source_map is None:
+            _render_waveform_plot(ctx, pad_id, timing, sample_duration_s)
+        else:
+            _render_waveform_plot(ctx, pad_id, timing, sample_duration_s, source_map=source_map)
 
 
 def _render_waveform_plot(
@@ -786,6 +888,8 @@ def _render_waveform_plot(
     pad_id: int,
     timing: CurrentPadTiming | None,
     sample_duration_s: float,
+    *,
+    source_map: SourceMapEditorFrame | None = None,
 ) -> None:
 
     if not implot.begin_plot(
@@ -825,7 +929,12 @@ def _render_waveform_plot(
         ctx, pad_id, start_s, end_s, draw_list, sample_duration_s, timing=timing
     )
     _handle_clicks(ctx, pad_id, sample_duration_s)
-    _plot_musical_grid(ctx, pad_id, draw_list, start_s, end_s, timing=timing)
+    if source_map is None:
+        _plot_musical_grid(ctx, pad_id, draw_list, start_s, end_s, timing=timing)
+    else:
+        _plot_musical_grid(
+            ctx, pad_id, draw_list, start_s, end_s, timing=timing, source_map=source_map
+        )
 
     _draw_zero_line(draw_list, start_s, end_s)
 
@@ -834,6 +943,7 @@ def _render_waveform_plot(
 
 def _render_editor_body(ctx: UiContext, pad_id: int) -> None:
     timing = ctx.state.pads.current_timing(pad_id)
+    source_map = capture_source_map(ctx, pad_id)
     if ctx.ui.waveform.consume_source_view_reset(pad_id, timing=timing):
         limits = ctx.ui.waveform.view_limits(pad_id, timing=timing)
         if limits is not None:
@@ -848,12 +958,13 @@ def _render_editor_body(ctx: UiContext, pad_id: int) -> None:
         _render_zoom_buttons(ctx, pad_id, toolbar_height)
         _render_view_jump_buttons(ctx, toolbar_height)
         _separator(ctx, "Loop", toolbar_height)
-        _render_loop_controls(ctx, pad_id, toolbar_height)
+        _render_loop_controls(ctx, pad_id, toolbar_height, source_map=source_map)
         _render_close_button(ctx, toolbar_height)
 
     if not ctx.state.session.waveform_editor_open:
         return
-    _render_plot(ctx, pad_id)
+    render_source_map_editor(ctx, source_map, timing)
+    _render_plot(ctx, pad_id, source_map=source_map)
 
 
 def waveform_editor(ctx: UiContext) -> None:

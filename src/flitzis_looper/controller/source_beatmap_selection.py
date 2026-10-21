@@ -1,5 +1,6 @@
 """Loader-owned compact map selection through the existing Native job and asset paths."""
 
+import json
 from dataclasses import dataclass
 from time import monotonic
 from typing import TYPE_CHECKING, Literal, cast
@@ -81,6 +82,7 @@ class SourceBeatmapSelection:
         self._commit: SelectionCommit | None = None
         self._blocked: Callable[[], bool] = lambda: False
         self._edit_guard: Callable[[int], None] = lambda _sample_id: None
+        self._source_generation: Callable[[int], int | None] = lambda _sample_id: None
         self._pending: dict[str, _MapJob] = {}
         self._effective: dict[str, _EffectiveMap] = {}
         self._publications: list[_Publication] = []
@@ -103,10 +105,13 @@ class SourceBeatmapSelection:
         *,
         blocked: Callable[[], bool],
         edit_guard: Callable[[int], None],
+        source_generation: Callable[[int], int | None] | None = None,
     ) -> None:
         self._commit = commit
         self._blocked = blocked
         self._edit_guard = edit_guard
+        if source_generation is not None:
+            self._source_generation = source_generation
 
     def _content(self, sample_id: int) -> str | None:
         content = self.project.pad_content[sample_id]
@@ -137,6 +142,58 @@ class SourceBeatmapSelection:
     def select(self, sample_id: int, record_json: str) -> None:
         """Admit one real source-qualified record, preserving the previous selection."""
         content = self._guard(sample_id)
+        self._admit(
+            sample_id,
+            content,
+            lambda: self.audio.begin_source_beatmap_store_async(sample_id, record_json),
+        )
+
+    def create_manual(self, sample_id: int, origin_seconds: float, period_seconds: float) -> None:
+        """Explicitly construct manual 4/4 geometry on the original source worker."""
+        content = self._guard(sample_id)
+        generation = self._source_generation(sample_id)
+        if type(generation) is not int or not 0 < generation < 1 << 64:
+            message = "manual source beatmap requires a current Native source generation"
+            raise ValueError(message)
+        self._admit(
+            sample_id,
+            content,
+            lambda: self.audio.begin_source_beatmap_create_async(
+                sample_id,
+                origin_seconds,
+                period_seconds,
+                expected_source_generation=generation,
+            ),
+        )
+
+    def edit(self, sample_id: int, operation: dict[str, object], *, expected_revision: str) -> None:
+        """Send small explicit correction intent against one current qualified revision."""
+        content = self._guard(sample_id)
+        geometry = self.effective(sample_id)
+        intent = self.project.pad_source_beatmap_intent[sample_id]
+        if (
+            geometry is None
+            or geometry.revision() != expected_revision
+            or intent is None
+            or intent.selected is None
+        ):
+            message = "source beatmap correction target is no longer current"
+            raise ValueError(message)
+        encoded = json.dumps(operation, ensure_ascii=False, allow_nan=False, separators=(",", ":"))
+        if len(encoded.encode("utf-8")) > 8192:
+            message = "source beatmap correction intent exceeds the 8 KiB limit"
+            raise ValueError(message)
+        reference = intent.selected
+        self._admit(
+            sample_id,
+            content,
+            lambda: self.audio.begin_source_beatmap_edit_async(
+                sample_id, reference.model_dump_json(), encoded
+            ),
+        )
+
+    def _admit(self, sample_id: int, content: str, begin: Callable[[], OfflineAnalysisJob]) -> None:
+        """Retain the same selection/publication owner for every map preparation purpose."""
         if content in self._pending:
             message = "source beatmap preparation is already pending for this content"
             raise RuntimeError(message)
@@ -147,7 +204,7 @@ class SourceBeatmapSelection:
         context = self._source_context(sample_id)
         reservation = self.assets.reserve(8)
         try:
-            job = self.audio.begin_source_beatmap_store_async(sample_id, record_json)
+            job = begin()
         except BaseException:
             reservation.close()
             raise
@@ -162,6 +219,14 @@ class SourceBeatmapSelection:
         )
         self._errors.pop(content, None)
         self.changed()
+
+    def is_selected(self, sample_id: int) -> bool:
+        """Identify selected or explicitly requested map mode without granting geometry."""
+        validate_sample_id(sample_id)
+        intent = self.project.pad_source_beatmap_intent[sample_id]
+        return (intent is not None and intent.selected is not None) or (
+            self._content(sample_id) in self._pending
+        )
 
     def clear(self, sample_id: int) -> None:
         """Durably clear only map intent, leaving source and timing controls intact."""

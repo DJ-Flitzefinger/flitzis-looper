@@ -1,5 +1,5 @@
 import math
-from dataclasses import replace
+from dataclasses import dataclass, replace
 from typing import TYPE_CHECKING
 
 from flitzis_looper.constants import (
@@ -22,7 +22,22 @@ from flitzis_looper.controller.validation import ensure_finite
 from flitzis_looper.models import validate_sample_id
 
 if TYPE_CHECKING:
+    from flitzis_looper.controller.source_beatmap_selection import SourceBeatmapSelection
     from flitzis_looper.controller.transport import TransportController
+    from flitzis_looper.models import PadContentIdentity
+    from flitzis_looper.source_beatmap_intent import PadSourceBeatmapIntent
+    from flitzis_looper_audio import SourceBeatmap, SourceBeatmapEvaluation
+
+
+@dataclass(frozen=True, slots=True)
+class _SourceMapLoopEdit:
+    geometry: SourceBeatmap
+    rate: int
+    duration: float
+    generation: int
+    timing: CurrentPadTiming | None
+    content: PadContentIdentity | None
+    intent: PadSourceBeatmapIntent | None
 
 
 class PadLoopController:
@@ -33,6 +48,191 @@ class PadLoopController:
         self._bpm = transport.bpm
         self._project = transport._project
         self._audio = transport._audio
+        self._source_maps: SourceBeatmapSelection | None = None
+
+    def bind_source_maps(self, source_maps: SourceBeatmapSelection) -> None:
+        """Use the Loader's existing source-qualified editor selection owner."""
+        self._source_maps = source_maps
+
+    def _source_map_selected(self, sample_id: int) -> bool:
+        return self._source_maps is not None and self._source_maps.is_selected(sample_id)
+
+    def _source_map_snapshot(self, sample_id: int) -> tuple[SourceBeatmap, int, float]:
+        geometry = None if self._source_maps is None else self._source_maps.effective(sample_id)
+        if geometry is None:
+            message = "The selected source map is unavailable or still preparing"
+            raise ValueError(message)
+        info = geometry.editor_info()
+        rate = info["sample_rate_hz"]
+        duration = info["source_duration_seconds"]
+        if (
+            not isinstance(rate, int)
+            or isinstance(rate, bool)
+            or rate <= 0
+            or not math.isfinite(duration)
+            or duration <= 0.0
+        ):
+            message = "The selected source map has no valid physical source extent"
+            raise ValueError(message)
+        return geometry, rate, duration
+
+    @staticmethod
+    def _source_map_marker(
+        geometry: SourceBeatmap, result: SourceBeatmapEvaluation, sample_rate_hz: int
+    ) -> float:
+        value = result["source_seconds"]
+        if (
+            result["map_revision"] != geometry.revision()
+            or result["coordinate_status"] not in {"supported", "anchor"}
+            or result["physical_domain"] not in {"within_source", "exclusive_source_end"}
+            or value is None
+            or not math.isfinite(value)
+        ):
+            message = "Source map operation is outside supported physical coverage"
+            raise ValueError(message)
+        return physical_source_marker_s(value, sample_rate_hz=sample_rate_hz)
+
+    def _capture_source_map_edit(self, sample_id: int) -> _SourceMapLoopEdit:
+        generation = self._transport.capture_current_pad_edit_generation(sample_id)
+        if generation is None:
+            message = "Source map loop editing requires the current source generation"
+            raise ValueError(message)
+        content = self._project.pad_content[sample_id]
+        intent = self._project.pad_source_beatmap_intent[sample_id]
+        self._transport.residency.remember(sample_id)
+        geometry, rate, duration = self._source_map_snapshot(sample_id)
+        return _SourceMapLoopEdit(
+            geometry,
+            rate,
+            duration,
+            generation,
+            self._bpm.current_timing(sample_id),
+            content,
+            intent,
+        )
+
+    def _publish_source_map_region(
+        self,
+        sample_id: int,
+        edit: _SourceMapLoopEdit,
+        start: float,
+        end: float,
+        *,
+        bars: float | None = None,
+    ) -> None:
+        if (
+            self._project.pad_content[sample_id] is not edit.content
+            or self._project.pad_source_beatmap_intent[sample_id] is not edit.intent
+            or not self._source_map_selected(sample_id)
+        ):
+            message = "Source map loop edit was superseded by newer content or map intent"
+            raise ValueError(message)
+        if not (
+            math.isfinite(start) and math.isfinite(end) and 0.0 <= start < end <= edit.duration
+        ):
+            message = "Source map loop markers must remain inside the physical source"
+            raise ValueError(message)
+        previous = self._loop_intent(sample_id)
+        self._project.pad_loop_start_s[sample_id] = start
+        self._project.pad_loop_end_s[sample_id] = end
+        self._project.pad_loop_auto[sample_id] = False
+        if bars is not None:
+            self._project.pad_loop_bars[sample_id] = bars
+        self._publish_loop_edit(
+            sample_id,
+            previous,
+            timing=edit.timing,
+            expected_source_generation=edit.generation,
+            changed=self._loop_intent(sample_id) != previous,
+            physical_region=(start, end),
+        )
+
+    def _source_map_bar_end(self, edit: _SourceMapLoopEdit, start: float, bars: float) -> float:
+        result = edit.geometry.source_after_beats(start, bars * 4.0, require_four_four=True)
+        return self._source_map_marker(edit.geometry, result, edit.rate)
+
+    def _source_map_interval(
+        self,
+        edit: _SourceMapLoopEdit,
+        start: SourceBeatmapEvaluation,
+        end: SourceBeatmapEvaluation,
+    ) -> tuple[float, float]:
+        markers = (
+            self._source_map_marker(edit.geometry, start, edit.rate),
+            self._source_map_marker(edit.geometry, end, edit.rate),
+        )
+        start_s, start_beat, end_beat = start["source_seconds"], start["beat"], end["beat"]
+        if start_s is None or start_beat is None or end_beat is None:
+            message = "Source map loop interval has no supported musical coordinates"
+            raise ValueError(message)
+        interval = edit.geometry.source_after_beats(
+            start_s, end_beat - start_beat, require_four_four=False
+        )
+        self._source_map_marker(edit.geometry, interval, edit.rate)
+        return markers
+
+    def apply_source_map_bars(self, sample_id: int, bars: float | None = None) -> None:
+        """Materialize an explicit supported map interval without enabling mapped audio."""
+        validate_sample_id(sample_id)
+        bars = self._normalize_requested_bars(
+            self._stored_bars(sample_id) if bars is None else bars
+        )
+        edit = self._capture_source_map_edit(sample_id)
+        start, _ = self.requested_region(sample_id, timing=edit.timing)
+        start = physical_source_marker_s(start, sample_rate_hz=edit.rate)
+        end = self._source_map_bar_end(edit, start, bars)
+        self._publish_source_map_region(sample_id, edit, start, end, bars=bars)
+
+    def snap_source_map_markers(self, sample_id: int) -> None:
+        """Snap both requested physical markers through one current Native map snapshot."""
+        validate_sample_id(sample_id)
+        edit = self._capture_source_map_edit(sample_id)
+        start, end = self.requested_region(sample_id, timing=edit.timing)
+        start, end = self._source_map_interval(
+            edit,
+            edit.geometry.nearest_grid_source(start, 1.0 / 16.0),
+            edit.geometry.nearest_grid_source(edit.duration if end is None else end, 1.0 / 16.0),
+        )
+        self._publish_source_map_region(sample_id, edit, start, end)
+
+    def _set_source_map_start(self, sample_id: int, start: float) -> None:
+        edit = self._capture_source_map_edit(sample_id)
+        start = self._source_map_marker(
+            edit.geometry, edit.geometry.nearest_grid_source(start, 1.0 / 16.0), edit.rate
+        )
+        end = self._source_map_bar_end(edit, start, self._stored_bars(sample_id))
+        self._publish_source_map_region(sample_id, edit, start, end)
+
+    def _set_source_map_end(self, sample_id: int, end: float | None) -> None:
+        edit = self._capture_source_map_edit(sample_id)
+        start, _ = self.requested_region(sample_id, timing=edit.timing)
+        start, end = self._source_map_interval(
+            edit,
+            edit.geometry.evaluate_source(start),
+            edit.geometry.evaluate_source(edit.duration)
+            if end is None
+            else edit.geometry.nearest_grid_source(end, 1.0 / 16.0),
+        )
+        self._publish_source_map_region(sample_id, edit, start, end)
+
+    def _max_source_map_bars(
+        self, sample_id: int, *, timing: CurrentPadTiming | None
+    ) -> float | None:
+        try:
+            geometry, rate, duration = self._source_map_snapshot(sample_id)
+            start, _ = self.requested_region(sample_id, timing=timing)
+            start = physical_source_marker_s(start, sample_rate_hz=rate)
+            first, last = geometry.evaluate_source(start), geometry.evaluate_source(duration)
+            self._source_map_marker(geometry, first, rate)
+            self._source_map_marker(geometry, last, rate)
+            if first["beat"] is None or last["beat"] is None:
+                return None
+            beats = last["beat"] - first["beat"]
+            result = geometry.source_after_beats(start, beats, require_four_four=True)
+            self._source_map_marker(geometry, result, rate)
+        except RuntimeError, ValueError:
+            return None
+        return beats / 4.0 if math.isfinite(beats) and beats >= 0.0 else None
 
     def _loop_intent(self, sample_id: int) -> tuple[float, float | None, bool, float]:
         return (
@@ -50,12 +250,20 @@ class PadLoopController:
         timing: CurrentPadTiming | None,
         expected_source_generation: int | None,
         changed: bool = True,
+        physical_region: tuple[float, float] | None = None,
     ) -> None:
         """Commit saved markers after admission; resident ACKs retain their own owner."""
         try:
-            self._apply_effective_pad_loop_region_to_audio(
-                sample_id, timing=timing, expected_source_generation=expected_source_generation
-            )
+            if physical_region is None:
+                self._apply_effective_pad_loop_region_to_audio(
+                    sample_id, timing=timing, expected_source_generation=expected_source_generation
+                )
+            else:
+                self._transport.residency.publish_loop(
+                    sample_id,
+                    *physical_region,
+                    expected_source_generation=expected_source_generation,
+                )
         except RuntimeError, ValueError:
             (
                 self._project.pad_loop_start_s[sample_id],
@@ -429,6 +637,8 @@ class PadLoopController:
         validate_sample_id(sample_id)
 
         timing = self._resolve_timing(sample_id, timing)
+        if self._source_map_selected(sample_id):
+            return self._max_source_map_bars(sample_id, timing=timing)
         if timing is None:
             return None
 
@@ -564,6 +774,9 @@ class PadLoopController:
 
     def set_bars(self, sample_id: int, *, bars: float) -> None:
         validate_sample_id(sample_id)
+        if self._source_map_selected(sample_id):
+            self.apply_source_map_bars(sample_id, bars)
+            return
         generation = self._transport.capture_current_pad_edit_generation(sample_id)
         self._transport.residency.remember(sample_id)
 
@@ -584,9 +797,12 @@ class PadLoopController:
 
     def set_start(self, sample_id: int, start_s: float) -> None:
         validate_sample_id(sample_id)
+        ensure_finite(start_s)
+        if self._source_map_selected(sample_id) and self._project.pad_loop_auto[sample_id]:
+            self._set_source_map_start(sample_id, start_s)
+            return
         generation = self._transport.capture_current_pad_edit_generation(sample_id)
         self._transport.residency.remember(sample_id)
-        ensure_finite(start_s)
 
         timing = self._bpm.current_timing(sample_id)
         sample_rate_hz = self._timing_sample_rate_hz(timing)
@@ -612,6 +828,11 @@ class PadLoopController:
 
     def set_end(self, sample_id: int, end_s: float | None) -> None:
         validate_sample_id(sample_id)
+        if end_s is not None:
+            ensure_finite(end_s)
+        if self._source_map_selected(sample_id) and self._project.pad_loop_auto[sample_id]:
+            self._set_source_map_end(sample_id, end_s)
+            return
         generation = self._transport.capture_current_pad_edit_generation(sample_id)
         self._transport.residency.remember(sample_id)
 

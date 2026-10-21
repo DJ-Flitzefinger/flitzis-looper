@@ -2672,6 +2672,34 @@ impl AudioEngine {
     }
 
     /// Restore a compact historical receipt under newly captured source custody.
+    #[pyo3(signature=(sample_id,origin_seconds,period_seconds,*,expected_source_generation=None))]
+    pub fn begin_source_beatmap_create_async(
+        &self,
+        sample_id: usize,
+        origin_seconds: f64,
+        period_seconds: f64,
+        expected_source_generation: Option<u64>,
+    ) -> PyResult<OfflineAnalysisJob> {
+        self.begin_source_beatmap_create_async_with(
+            sample_id,
+            origin_seconds,
+            period_seconds,
+            expected_source_generation,
+            || {},
+        )
+    }
+
+    /// Correct one exact receipt under the original source-bound worker job.
+    pub fn begin_source_beatmap_edit_async(
+        &self,
+        sample_id: usize,
+        receipt_json: String,
+        operation_json: String,
+    ) -> PyResult<OfflineAnalysisJob> {
+        self.begin_source_beatmap_edit_async_with(sample_id, receipt_json, operation_json, || {})
+    }
+
+    /// Restore a compact historical receipt under newly captured source custody.
     pub fn begin_source_beatmap_restore_async(
         &self,
         sample_id: usize,

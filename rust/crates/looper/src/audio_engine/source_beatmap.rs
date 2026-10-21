@@ -11,6 +11,7 @@ use pyo3::exceptions::PyValueError;
 use pyo3::prelude::*;
 use pyo3::types::{PyDict, PyList};
 
+pub(super) mod editor;
 mod query;
 mod record;
 
@@ -72,6 +73,73 @@ impl SourceBeatmap {
 
     fn revision(&self) -> &str {
         &self.inner.revision
+    }
+
+    fn editor_info(&self, py: Python<'_>) -> PyResult<Py<PyDict>> {
+        let result = PyDict::new(py);
+        result.set_item("map_revision", &self.inner.revision)?;
+        result.set_item("sample_rate_hz", self.inner.sample_rate_hz)?;
+        result.set_item("source_duration_seconds", self.inner.source_duration)?;
+        result.set_item("anchor_count", self.inner.anchors.len())?;
+        result.set_item("can_undo", self.inner.can_undo)?;
+        Ok(result.unbind())
+    }
+
+    #[pyo3(signature=(start_s,end_s,loop_start_s,px_per_s,max_points=2048))]
+    fn editor_view(
+        &self,
+        py: Python<'_>,
+        start_s: f64,
+        end_s: f64,
+        loop_start_s: f64,
+        px_per_s: f64,
+        max_points: usize,
+    ) -> PyResult<Py<PyDict>> {
+        let view = self.viewport(start_s, end_s, loop_start_s, px_per_s, max_points);
+        let result = PyDict::new(py);
+        result.set_item("map_revision", &self.inner.revision)?;
+        result.set_item("status", view.status)?;
+        result.set_item("step_beats", view.step)?;
+        let lines = PyList::empty(py);
+        for line in view.lines {
+            let row = PyDict::new(py);
+            row.set_item("source_seconds", line.seconds)?;
+            row.set_item("loop_beat", line.loop_beat)?;
+            row.set_item("major", line.major)?;
+            row.set_item("reference", line.reference)?;
+            row.set_item("meter_status", line.meter)?;
+            lines.append(row)?;
+        }
+        result.set_item("lines", lines)?;
+        let anchors = PyList::empty(py);
+        for (seconds, beat) in view.anchors {
+            let row = PyDict::new(py);
+            row.set_item("source_seconds", seconds)?;
+            row.set_item("beat", beat)?;
+            let sample = seconds * f64::from(self.inner.sample_rate_hz);
+            let sample_index = (sample >= 0.0 && sample < self.inner.source_frames as f64)
+                .then(|| sample.round() as u64);
+            row.set_item("sample_index", sample_index)?;
+            anchors.append(row)?;
+        }
+        result.set_item("anchors", anchors)?;
+        Ok(result.unbind())
+    }
+
+    #[pyo3(signature=(source_seconds,beats,require_four_four=true))]
+    fn source_after_beats(
+        &self,
+        py: Python<'_>,
+        source_seconds: f64,
+        beats: f64,
+        require_four_four: bool,
+    ) -> PyResult<Py<PyDict>> {
+        evaluation_dict(
+            py,
+            &self.inner,
+            self.inner
+                .source_after_beats(source_seconds, beats, require_four_four),
+        )
     }
 
     pub(super) fn source_identity(&self) -> &str {
@@ -148,6 +216,7 @@ fn evaluation_dict(py: Python<'_>, map: &ValidatedMap, value: Evaluation) -> PyR
     result.set_item("interval_status", value.interval_status)?;
     result.set_item("segment_index", value.segment_index)?;
     result.set_item("physical_domain", value.physical_domain)?;
+    result.set_item("meter_status", value.meter_status)?;
     // No field in this DTO represents actual source custody or audible adoption.
     Ok(result.unbind())
 }

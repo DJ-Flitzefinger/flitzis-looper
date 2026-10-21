@@ -12,8 +12,11 @@ snapping and diagnostic phase. Otherwise a correct analysis can still disagree w
 - Show current local source BPM from the map at the pad playhead, distinct from master
   target BPM and an optional whole-track summary (user clarification, 2026-10-05).
 
-Status: proposed only; depends on `prepare-versioned-source-beatmaps` and accepted map-quality
-evidence. Rendering/SYNC activation remains a later change. See the research report in docs.
+Status: full B4 acceptance remains open. The source-qualified foundation and persisted
+selection are delivered. `edit-manual-source-beatmaps` implements the explicit
+manual/exact-fixture editor subset under the current full Human objective; measured
+automatic detector/map quality is still required for automatic/default acceptance.
+Audible map rendering/SYNC activation remains a later change. See the research report in docs.
 
 ## Non-goals
 

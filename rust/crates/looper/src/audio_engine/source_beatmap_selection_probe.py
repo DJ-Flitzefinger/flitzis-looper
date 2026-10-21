@@ -77,6 +77,7 @@ class Probe:
             self.persistence.commit_source_beatmap_selection,
             blocked=lambda: False,
             edit_guard=lambda _sample_id: None,
+            source_generation=self._source_generation,
         )
         self.loader.set_restored_sample_loaded_callback(self._restored)
         self.arrangement = PadArrangementController(
@@ -89,6 +90,12 @@ class Probe:
         if input_json is not None:
             self.persistence.mark_dirty()
             self.persistence.flush()
+
+    def _source_generation(self, sample_id):
+        binding = self.audio.current_input_runtime_pad_binding(sample_id)
+        assert binding is not None
+        assert binding.is_current()
+        return binding.metadata()["source_generation"]
 
     def _restored(self, sample_id):
         self.audio.set_pad_bpm(sample_id, self.project.manual_bpm[sample_id])
@@ -105,6 +112,61 @@ class Probe:
     def select(self, record_json):
         self.loader.source_beatmaps.select(0, record_json)
         assert self.loader.source_beatmaps.status(0) == "pending"
+
+    def create_manual(self):
+        self.loader.source_beatmaps.create_manual(0, 0.0, 60.0 / self.project.manual_bpm[0])
+        assert self.loader.source_beatmaps.status(0) == "pending"
+
+    def correct_copied_beat(self):
+        maps = self.loader.source_beatmaps
+        self.original_record = maps.effective(0).record_json()
+        self.original_intent = self.project.pad_source_beatmap_intent[0]
+        self.original_markers = (
+            list(self.project.pad_loop_start_s),
+            list(self.project.pad_loop_end_s),
+        )
+        geometry = maps.effective(36)
+        self.raw_before = json.loads(geometry.record_json())["record"]["raw"]
+        maps.edit(
+            36,
+            {
+                "schema_version": 1,
+                "operation": "move_beat",
+                "beat": 0.0,
+                "sample_index": 1,
+                "sample_rate_hz": 48000,
+            },
+            expected_revision=geometry.revision(),
+        )
+        assert maps.status(36) == "pending"
+
+    def corrected_copy(self):
+        self.poll()
+        maps = self.loader.source_beatmaps
+        if maps.status(36) != "effective":
+            return False
+        assert maps.effective(0).record_json() == self.original_record
+        assert self.project.pad_source_beatmap_intent[0] is self.original_intent
+        assert self.original_markers == (
+            list(self.project.pad_loop_start_s),
+            list(self.project.pad_loop_end_s),
+        )
+        geometry = maps.effective(36)
+        record = json.loads(geometry.record_json())["record"]
+        assert record["raw"] == self.raw_before
+        assert record["raw"]["beat_seconds_bits"] == []
+        assert geometry.evaluate_beat(0.0)["source_seconds"] == 1 / 48000
+        assert geometry.revision() != maps.effective(0).revision()
+        assert self.project.pad_source_beatmap_intent[36].selected != self.original_intent.selected
+        saved = ProjectPersistence.from_config_path(self.path)
+        assert (
+            saved.project.pad_source_beatmap_intent[36]
+            == (self.project.pad_source_beatmap_intent[36])
+        )
+        return True
+
+    def current_copied_record(self):
+        return self.loader.source_beatmaps.effective(36).record_json()
 
     def selected(self):
         self.poll()

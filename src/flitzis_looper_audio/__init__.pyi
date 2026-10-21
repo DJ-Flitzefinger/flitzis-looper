@@ -36,6 +36,33 @@ class SourceBeatmapEvaluation(TypedDict):
     interval_status: str
     segment_index: int | None
     physical_domain: str
+    meter_status: str
+
+class SourceBeatmapEditorInfo(TypedDict):
+    map_revision: str
+    sample_rate_hz: int
+    source_duration_seconds: float
+    anchor_count: int
+    can_undo: bool
+
+class SourceBeatmapEditorLine(TypedDict):
+    source_seconds: float
+    loop_beat: float
+    major: bool
+    reference: bool
+    meter_status: str
+
+class SourceBeatmapEditorAnchor(TypedDict):
+    source_seconds: float
+    beat: float
+    sample_index: int | None
+
+class SourceBeatmapEditorView(TypedDict):
+    map_revision: str
+    status: str
+    step_beats: float
+    lines: list[SourceBeatmapEditorLine]
+    anchors: list[SourceBeatmapEditorAnchor]
 
 class SourceBeatmapProjection(TypedDict):
     map_revision: str
@@ -49,6 +76,21 @@ class SourceBeatmap:
     def record_json(self) -> str: ...
     def revision(self) -> str: ...
     def source_identity(self) -> str: ...
+    def editor_info(self) -> SourceBeatmapEditorInfo: ...
+    def editor_view(
+        self,
+        start_s: float,
+        end_s: float,
+        loop_start_s: float,
+        px_per_s: float,
+        max_points: int = 2048,
+    ) -> SourceBeatmapEditorView: ...
+    def source_after_beats(
+        self,
+        source_seconds: float,
+        beats: float,
+        require_four_four: bool = True,
+    ) -> SourceBeatmapEvaluation: ...
     def evaluate_source(self, source_seconds: float) -> SourceBeatmapEvaluation: ...
     def evaluate_beat(self, beat: float) -> SourceBeatmapEvaluation: ...
     def local_tempo_at_source(self, source_seconds: float) -> SourceBeatmapEvaluation: ...
@@ -763,6 +805,20 @@ class AudioEngine:
     ) -> OfflineAnalysisJob: ...
     def begin_source_beatmap_restore_async(
         self, sample_id: int, receipt_json: str
+    ) -> OfflineAnalysisJob: ...
+    def begin_source_beatmap_create_async(
+        self,
+        sample_id: int,
+        origin_seconds: float,
+        period_seconds: float,
+        *,
+        expected_source_generation: int | None = None,
+    ) -> OfflineAnalysisJob: ...
+    def begin_source_beatmap_edit_async(
+        self,
+        sample_id: int,
+        receipt_json: str,
+        operation_json: str,
     ) -> OfflineAnalysisJob: ...
     def set_pad_timing_intent(
         self,
