@@ -28,6 +28,9 @@ if TYPE_CHECKING:
         OfflineAnalysisJob,
         SourceBeatmap,
         SourceBeatmapArtifact,
+        SourceBeatmapRawCandidate,
+        SourceBeatmapRawInfo,
+        SourceBeatmapRawInspection,
     )
 
     type SelectionCommit = Callable[
@@ -60,6 +63,31 @@ class _Publication:
     reservation: AssetRetirementReservation
 
 
+@dataclass(frozen=True, slots=True)
+class RawSourceBeatmapState:
+    """Display-only state for the single transient, unverified review attempt."""
+
+    attempt: int
+    status: Literal["none", "queued", "running", "cancel_retiring", "failed", "unreviewed"]
+    occupied: bool
+    revision: str | None = None
+    info: SourceBeatmapRawInfo | None = None
+    error: str | None = None
+
+
+@dataclass(slots=True)
+class _RawReview:
+    content: str
+    source_generation: int
+    attempt: int
+    job: OfflineAnalysisJob
+    status: Literal["queued", "running", "cancel_retiring", "failed", "unreviewed"] = "queued"
+    candidate: SourceBeatmapRawCandidate | None = None
+    delivery: LoaderEventDelivery | None = None
+    revision: str | None = None
+    failure: str | None = None
+
+
 class SourceBeatmapSelection:
     """Control intent only; genuine Native completions qualify every effective map.
 
@@ -89,6 +117,184 @@ class SourceBeatmapSelection:
         self._failed: dict[str, tuple[PadSourceBeatmapIntent, object]] = {}
         self._retry_after: dict[str, float] = {}
         self._errors: dict[str, str] = {}
+        self._raw: _RawReview | None = None
+        self._raw_attempt = 0
+
+    def analyze_original(self, sample_id: int, *, expected_attempt: int) -> None:
+        """Acquire complete original detections without entering accepted-map admission."""
+        content = self._guard(sample_id)
+        if type(expected_attempt) is not int or expected_attempt != self._raw_attempt:
+            message = "The raw analysis attempt changed. Reopen Source Map before analyzing."
+            raise ValueError(message)
+        if content in self._pending:
+            message = "Accepted source map preparation is pending for this content."
+            raise RuntimeError(message)
+        if self._raw is not None and self._raw.status != "failed":
+            message = "The transient raw review slot is occupied or retiring."
+            raise RuntimeError(message)
+        generation = self._source_generation(sample_id)
+        if type(generation) is not int or not 0 < generation < 1 << 64:
+            message = "Raw analysis requires a current Native source generation."
+            raise ValueError(message)
+        job = self.audio.begin_source_beatmap_raw_async(
+            sample_id, expected_source_generation=generation
+        )
+        self._raw_attempt += 1
+        self._raw = _RawReview(content, generation, self._raw_attempt, job)
+
+    def raw_state(self, sample_id: int) -> RawSourceBeatmapState:
+        """Read raw readiness separately from accepted selection and playback authority."""
+        validate_sample_id(sample_id)
+        raw = self._raw
+        if raw is None or self._content(sample_id) != raw.content:
+            return RawSourceBeatmapState(
+                self._raw_attempt, "none", raw is not None and raw.status != "failed"
+            )
+        info = self._raw_info(raw)
+        return RawSourceBeatmapState(
+            raw.attempt, raw.status, raw.status != "failed", raw.revision, info, raw.failure
+        )
+
+    def _raw_info(self, raw: _RawReview) -> SourceBeatmapRawInfo | None:
+        if raw.candidate is None:
+            return None
+        try:
+            info = raw.candidate.info()
+        except (OSError, RuntimeError, ValueError) as error:
+            self._cancel_raw(str(error))
+            return None
+        if info["status"] in {"stale", "cancelled"}:
+            self._cancel_raw("The original source for raw analysis is no longer current.")
+            return None
+        if info["status"] == "ready":
+            raw.revision = info["raw_revision"]
+        return info
+
+    def _raw_target(
+        self, sample_id: int, expected_attempt: int, expected_revision: str | None
+    ) -> _RawReview:
+        validate_sample_id(sample_id)
+        self._edit_guard(sample_id)
+        raw = self._raw
+        if raw is None:
+            message = "The raw analysis source or attempt changed. Reopen Source Map."
+            raise ValueError(message)
+        if (
+            type(expected_attempt) is not int
+            or raw.attempt != expected_attempt
+            or self._content(sample_id) != raw.content
+            or self._source_generation(sample_id) != raw.source_generation
+            or raw.revision != expected_revision
+        ):
+            message = "The raw analysis source or attempt changed. Reopen Source Map."
+            raise ValueError(message)
+        if raw.job.is_cancelled():
+            self._cancel_raw()
+            message = "The original Native raw analysis was cancelled."
+            raise ValueError(message)
+        return raw
+
+    def inspect_raw(
+        self,
+        sample_id: int,
+        *,
+        expected_attempt: int,
+        expected_revision: str,
+        start_index: int,
+        max_events: int = 128,
+    ) -> SourceBeatmapRawInspection:
+        """Borrow one bounded current Native page, never musical map geometry."""
+        raw = self._raw_target(sample_id, expected_attempt, expected_revision)
+        info = self._raw_info(raw)
+        if raw.candidate is None or info is None or raw.status != "unreviewed":
+            message = "The unreviewed raw candidate is unavailable."
+            raise ValueError(message)
+        result = raw.candidate.inspect(start_index, max_events)
+        self._raw_target(sample_id, expected_attempt, expected_revision)
+        if result["status"] in {"stale", "cancelled"}:
+            self._cancel_raw("The original source for raw analysis is no longer current.")
+        return result
+
+    def discard_raw(
+        self, sample_id: int, *, expected_attempt: int, expected_revision: str | None
+    ) -> None:
+        """Cancel only this original attempt and retain its actual retirement receipt."""
+        raw = self._raw_target(sample_id, expected_attempt, expected_revision)
+        if raw.candidate is not None:
+            self._raw_info(raw)
+        self._cancel_raw()
+
+    def raw_completed(self, sample_id: int, event: dict[str, object]) -> None:
+        """Resolve raw evidence only through this job's original private Native delivery."""
+        raw, delivery = self._raw, event.get("_native_event_owner")
+        if (
+            raw is None
+            or raw.status in {"cancel_retiring", "failed"}
+            or self._content(sample_id) != raw.content
+            or delivery is None
+        ):
+            return
+        candidate = raw.job.resolve_source_beatmap_raw_completion(
+            cast("LoaderEventDelivery", delivery)
+        )
+        if candidate is None:
+            return
+        generation = self._source_generation(sample_id)
+        if generation is None:
+            # A current-pad capture may be unreadable during a global placement
+            # publication. Absence alone does not prove a different source.
+            message = "loader event content placement pending"
+            raise RuntimeError(message)
+        if generation != raw.source_generation:
+            self._cancel_raw("The original source for raw analysis is no longer current.")
+            return
+        raw.candidate, raw.delivery = candidate, cast("LoaderEventDelivery", delivery)
+        raw.status = "unreviewed"
+        self._raw_info(raw)
+
+    def _cancel_raw(self, failure: str | None = None) -> None:
+        raw = self._raw
+        if raw is None:
+            return
+        raw.candidate, raw.delivery = None, None
+        raw.failure = failure
+        if raw.status != "cancel_retiring":
+            raw.status = "cancel_retiring"
+            raw.job.cancel()
+
+    def _poll_raw(self, deferred: frozenset[int]) -> None:
+        raw = self._raw
+        if raw is None or raw.status == "failed":
+            return
+        sample_id = self._slot(raw.content)
+        if sample_id in deferred:
+            return
+        if sample_id is None or raw.job.is_cancelled():
+            self._cancel_raw(raw.failure)
+        status = raw.job.source_beatmap_async_status()
+        if status is None:
+            return
+        if self._settle_raw_status(raw, status, sample_id):
+            return
+        if raw.status != "unreviewed":
+            raw.status = "queued" if status.get("stage") == "queued" else "running"
+        elif raw.candidate is not None:
+            self._raw_info(raw)
+
+    def _settle_raw_status(
+        self, raw: _RawReview, status: dict[str, object], sample_id: int | None
+    ) -> bool:
+        if status.get("stage") in {"failed", "cancelled"} and raw.status != "cancel_retiring":
+            detail = str(status.get("detail") or status["stage"])
+            self._cancel_raw(detail if status["stage"] == "failed" else None)
+        if raw.status == "cancel_retiring":
+            if status.get("terminal") is True and status.get("raw_review_retired") is True:
+                if raw.failure is not None and sample_id is not None:
+                    raw.status = "failed"
+                else:
+                    self._raw = None
+            return True
+        return False
 
     @property
     def errors(self) -> dict[int, str]:
@@ -425,6 +631,7 @@ class SourceBeatmapSelection:
         )
 
     def poll(self, deferred: frozenset[int], *, admit_restore: bool = True) -> None:
+        self._poll_raw(deferred)
         self._settle_publications()
         self._poll_jobs(deferred)
         if admit_restore and not self._blocked():
@@ -504,6 +711,7 @@ class SourceBeatmapSelection:
 
     def shut_down(self) -> None:
         """Release control polling; Native retains its own bounded retirement owners."""
+        self._cancel_raw()
         for content in list(self._pending):
             self._cancel(content)
         self._settle_publications()

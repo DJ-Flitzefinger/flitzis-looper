@@ -102,6 +102,10 @@ mod source_beatmap;
 pub use source_beatmap::SourceBeatmap;
 mod source_beatmap_artifact;
 pub use source_beatmap_artifact::SourceBeatmapArtifact;
+pub(crate) use source_beatmap_artifact::SourceBeatmapRawArtifact;
+mod source_beatmap_raw;
+mod source_beatmap_raw_data;
+pub use source_beatmap_raw::SourceBeatmapRawCandidate;
 mod mixer;
 pub use mix_capture_api::MixCaptureTicket;
 pub use mix_capture_api::inspect_mix_capture_spool;
@@ -2627,57 +2631,17 @@ impl AudioEngine {
     /// Validate map data against an original loaded source without PCM export.
     /// The existing offline reservation owns request freshness and actual retirement.
     pub fn begin_source_beatmap(&self, sample_id: usize) -> PyResult<OfflineAnalysisJob> {
-        let id = sample_id;
-        if id >= NUM_SAMPLES {
-            return Err(PyValueError::new_err("id out of range"));
-        }
-        if self
-            .loading_sample_ids
-            .lock()
-            .map_err(|_| PyRuntimeError::new_err("loading lock poisoned"))?
-            .contains(&id)
-            || self.cold_loading[id].load(Ordering::Acquire) != 0
-        {
-            return Err(PyValueError::new_err("sample is currently loading"));
-        }
-        if has_active_task_for_id(
-            &*self
-                .active_tasks
-                .lock()
-                .map_err(|_| PyRuntimeError::new_err("task lock poisoned"))?,
-            self.active_task_cell(id).map_err(PyRuntimeError::new_err)?,
-        ) {
-            return Err(PyValueError::new_err("sample task already running"));
-        }
-        let sample = self
-            .sample_cache
-            .lock()
-            .map_err(|_| PyRuntimeError::new_err("sample cache lock poisoned"))?
-            .get(id)
-            .and_then(Clone::clone)
-            .ok_or_else(|| PyValueError::new_err("sample is not loaded"))?;
-        let reader = complete_context::CompleteSourceReader::capture(self, id, sample)
-            .map_err(PyRuntimeError::new_err)?;
-        let (generation, loaded_rate) = self
-            .loaded_source_generations
-            .lock()
-            .map_err(|_| PyRuntimeError::new_err("source generation lock poisoned"))?[id];
-        self.offline_jobs
-            .begin_source_beatmap(
-                id,
-                reader,
-                loaded_rate,
-                generation,
-                analysis_jobs::OfflineRequestOwner {
-                    request_ids: self.pad_request_ids.clone(),
-                    prepared_epoch: self
-                        .prepared_source_epoch(id)
-                        .map_err(PyRuntimeError::new_err)?
-                        .clone(),
-                },
-                self.loader_tx.clone(),
-            )
-            .map_err(PyRuntimeError::new_err)
+        self.begin_source_beatmap_admitted(sample_id, None)
+    }
+
+    /// Acquire only unverified complete-original legacy QM observations.
+    #[pyo3(signature=(sample_id,*,expected_source_generation))]
+    pub fn begin_source_beatmap_raw_async(
+        &self,
+        sample_id: usize,
+        expected_source_generation: u64,
+    ) -> PyResult<OfflineAnalysisJob> {
+        self.begin_source_beatmap_raw_async_with(sample_id, expected_source_generation, || {})
     }
 
     /// Queue source-bound map verification on the existing bounded cold worker lane.

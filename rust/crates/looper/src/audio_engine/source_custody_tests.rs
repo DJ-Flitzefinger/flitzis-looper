@@ -140,11 +140,16 @@ mod cold {
         }
 
         fn new_selected_with_pcm(hint: Option<ResidentLoadHint>, pcm: [i16; 128]) -> Self {
+            Self::new_selected_with_signal(hint, &pcm)
+        }
+
+        fn new_selected_with_signal(hint: Option<ResidentLoadHint>, pcm: &[i16]) -> Self {
             pyo3::Python::initialize();
             let directory = tempfile::tempdir().unwrap();
             let mut bytes = Vec::new();
             bytes.extend_from_slice(b"RIFF");
-            bytes.extend_from_slice(&(36 + 128 * 2_u32).to_le_bytes());
+            let pcm_bytes = u32::try_from(pcm.len().checked_mul(2).unwrap()).unwrap();
+            bytes.extend_from_slice(&(36 + pcm_bytes).to_le_bytes());
             bytes.extend_from_slice(b"WAVEfmt ");
             bytes.extend_from_slice(&16_u32.to_le_bytes());
             bytes.extend_from_slice(&1_u16.to_le_bytes());
@@ -154,7 +159,7 @@ mod cold {
             bytes.extend_from_slice(&2_u16.to_le_bytes());
             bytes.extend_from_slice(&16_u16.to_le_bytes());
             bytes.extend_from_slice(b"data");
-            bytes.extend_from_slice(&(128 * 2_u32).to_le_bytes());
+            bytes.extend_from_slice(&pcm_bytes.to_le_bytes());
             for sample in pcm {
                 bytes.extend_from_slice(&sample.to_le_bytes());
             }
@@ -178,12 +183,21 @@ mod cold {
                 consumer,
                 mixer,
             };
-            fixture.load_and_ack_selected(0, hint);
-            fixture.load_and_ack_selected(1, hint);
+            fixture.load_and_ack_selected_with_frames(0, hint, pcm.len());
+            fixture.load_and_ack_selected_with_frames(1, hint, pcm.len());
             fixture
         }
 
         fn load_and_ack_selected(&mut self, id: usize, hint: Option<ResidentLoadHint>) {
+            self.load_and_ack_selected_with_frames(id, hint, 128);
+        }
+
+        fn load_and_ack_selected_with_frames(
+            &mut self,
+            id: usize,
+            hint: Option<ResidentLoadHint>,
+            original_frames: usize,
+        ) {
             let request = crate::audio_engine::cold_load::admit_for_format_selected(
                 &self.engine,
                 id,
@@ -210,10 +224,16 @@ mod cold {
             let sample = self.engine.sample_cache.lock().unwrap()[id]
                 .clone()
                 .unwrap();
-            assert_eq!(sample.frame_count(), 128);
-            assert_eq!(sample.resident_start(), if hint.is_some() { 32 } else { 0 });
-            assert_eq!(sample.resident_end(), if hint.is_some() { 64 } else { 128 });
-            assert_eq!(sample.samples.len(), if hint.is_some() { 64 } else { 256 });
+            let (start, end) = hint.map_or((0, original_frames), |hint| {
+                (
+                    (hint.start_s * 48_000.0).floor() as usize,
+                    (hint.end_s * 48_000.0).ceil() as usize,
+                )
+            });
+            assert_eq!(sample.frame_count(), original_frames);
+            assert_eq!(sample.resident_start(), start);
+            assert_eq!(sample.resident_end(), end);
+            assert_eq!(sample.samples.len(), (end - start) * 2);
             assert_eq!(
                 self.engine.loaded_source_generations.lock().unwrap()[id],
                 (request, 48_000)

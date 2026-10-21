@@ -416,13 +416,50 @@ AND active human time/zero baseline/music/default/remediation remain unchanged.
 H-LIVE precedes live Slice7; H-FINAL follows all later changes. Real device/final
 hearing gates remain human, and every failed acoustic/causal evidence remains.
 
+## Original full-mix raw acquisition — 2026-10-21
+
+The Source Map panel's **Analyze original full mix** acquires the complete admitted
+original, including silence and tail outside a finite resident window. Selecting
+only a vocal or drum stem does not change this input. Acquisition uses the existing
+Native map job, complete-source reader, cold lane and immutable artifact owner.
+
+The result is **Unreviewed detections**. It retains original binary64 QM detector
+frames and downbeat-index observations, actual input hashes, source extent and
+conversion provenance. The executed streamed mono rule is f64 channel averaging
+followed by f32 storage, then the existing 44,100-Hz conversion and f64 analyzer
+input. This need not be bit-identical to normal legacy f32 channel arithmetic.
+The actual ODF hop describes resolution, not calibrated timing uncertainty.
+This unverified legacy-QM path does not change the gated Beat This default plan.
+
+The inspector pages through at most 128 original events. Event indices and
+detected-downbeat flags remain detector observations; they do not assign quarter
+notes, bars, meter, musical coverage or exact sample anchors. Events outside the
+physical source remain retained and classified. No raw candidate changes grids,
+snapping, Apply bars, accepted selection, persistence, timing, SYNC or playback.
+Musical interpretation and accepted-map promotion remain separate work.
+
+One transient review slot retains the original content/source admission and an
+attempt token. Move follows that content; Copy, Bank and restart do not inherit
+the raw review. **Discard candidate** and **Analyze again** respect actual
+cancellation and retirement. A cancelled job's terminal state proves temporary
+source/lane cleanup; the separate raw-review receipt proves final reader release.
+Exact artifact-birth disk cleanup may finish later. A matching data digest alone
+cannot redirect an old gesture to a new attempt.
+
+Raw acquisition preflights a 512-MiB simultaneous job peak, 16-MiB raw encoding and
+250,000-entry arrays. Oversize input refuses without cropping. Complete signal
+reads, conversion, inference and final artifact retirement stay off realtime.
+Accepted maps and edits keep their existing authority throughout raw work. See
+`../openspec/changes/acquire-original-raw-detections/` for this bounded contract;
+durable raw references and full SYNC/music/device/Human gates remain open.
+
 ## Manual Source Map Loop Editor — 2026-10-21
 
 The Loop Editor's **Source Map** controls explicitly create a manual quarter-note
 4/4 map from the current source grid. This labels a performer choice, not an automatic
 beat/downbeat result. Creation retains actual decoder custody on the existing Native
 worker and selects the immutable artifact only after compact Config commitment.
-The map status identifies the editor revision and **Audio: scalar**: selecting or
+The map status identifies the editor revision separately from actual audio mode: selecting or
 correcting it does not activate variable-map DSP, change master time, move another
 PAD, change pitch, or move existing physical source markers. A failed or stale edit
 keeps the predecessor. Detector defaults, SYNC/live-map and musical/Human gates remain

@@ -20,6 +20,9 @@ const FAILED: u8 = 4;
 const CANCELLED: u8 = 5;
 
 enum AsyncMapInput {
+    AcquireRaw {
+        expected_generation: u64,
+    },
     Validate(String),
     Store(String),
     Restore(String),
@@ -37,6 +40,11 @@ enum AsyncMapInput {
 impl AsyncMapInput {
     fn borrowed(&self) -> MapInput<'_> {
         match self {
+            Self::AcquireRaw {
+                expected_generation,
+            } => MapInput::AcquireRaw {
+                expected_generation: *expected_generation,
+            },
             Self::Validate(encoded) => MapInput::Validate(encoded),
             Self::Store(encoded) => MapInput::Store(encoded),
             Self::Restore(receipt) => MapInput::Restore(receipt),
@@ -55,6 +63,9 @@ impl AsyncMapInput {
 
     fn bounded(&self) -> bool {
         match self {
+            Self::AcquireRaw {
+                expected_generation,
+            } => *expected_generation > 0,
             Self::Validate(encoded) | Self::Store(encoded) => encoded.len() <= MAX_RECORD_BYTES,
             Self::Restore(receipt) => receipt.len() <= MAX_RECEIPT_BYTES,
             Self::Create { origin, period, .. } => {
@@ -80,6 +91,9 @@ pub(super) struct AsyncMapStatus {
 }
 
 impl AsyncMapStatus {
+    pub(super) fn shutdown_token(&self) -> Arc<AtomicBool> {
+        self.shutdown.clone()
+    }
     pub(super) fn shutdown_requested(&self) -> bool {
         self.shutdown.load(Ordering::Acquire)
     }
@@ -277,6 +291,123 @@ impl Drop for AsyncMapRetirement {
 }
 
 impl AudioEngine {
+    pub(in crate::audio_engine) fn begin_source_beatmap_admitted(
+        &self,
+        id: usize,
+        raw_review: Option<crate::audio_engine::source_beatmap_raw::RawReviewLease>,
+    ) -> PyResult<OfflineAnalysisJob> {
+        use crate::audio_engine::{NUM_SAMPLES, complete_context, has_active_task_for_id};
+        if id >= NUM_SAMPLES {
+            return Err(PyValueError::new_err("id out of range"));
+        }
+        if self
+            .loading_sample_ids
+            .lock()
+            .map_err(|_| PyRuntimeError::new_err("loading lock poisoned"))?
+            .contains(&id)
+            || self.cold_loading[id].load(Ordering::Acquire) != 0
+        {
+            return Err(PyValueError::new_err("sample is currently loading"));
+        }
+        if has_active_task_for_id(
+            &*self
+                .active_tasks
+                .lock()
+                .map_err(|_| PyRuntimeError::new_err("task lock poisoned"))?,
+            self.active_task_cell(id).map_err(PyRuntimeError::new_err)?,
+        ) {
+            return Err(PyValueError::new_err("sample task already running"));
+        }
+        let sample = self
+            .sample_cache
+            .lock()
+            .map_err(|_| PyRuntimeError::new_err("sample cache lock poisoned"))?
+            .get(id)
+            .and_then(Clone::clone)
+            .ok_or_else(|| PyValueError::new_err("sample is not loaded"))?;
+        let reader = complete_context::CompleteSourceReader::capture(self, id, sample)
+            .map_err(PyRuntimeError::new_err)?;
+        let (generation, rate) = self
+            .loaded_source_generations
+            .lock()
+            .map_err(|_| PyRuntimeError::new_err("source generation lock poisoned"))?[id];
+        self.offline_jobs
+            .begin_source_beatmap(
+                id,
+                reader,
+                (generation, rate),
+                super::OfflineRequestOwner {
+                    request_ids: self.pad_request_ids.clone(),
+                    prepared_epoch: self
+                        .prepared_source_epoch(id)
+                        .map_err(PyRuntimeError::new_err)?
+                        .clone(),
+                },
+                self.loader_tx.clone(),
+                raw_review,
+            )
+            .map_err(PyRuntimeError::new_err)
+    }
+
+    pub(in crate::audio_engine) fn begin_source_beatmap_raw_async_with(
+        &self,
+        sample_id: usize,
+        expected_generation: u64,
+        after_verify: impl FnOnce() + Send + 'static,
+    ) -> PyResult<OfflineAnalysisJob> {
+        self.queue_source_beatmap_input(
+            sample_id,
+            AsyncMapInput::AcquireRaw {
+                expected_generation,
+            },
+            after_verify,
+            |_, _| Ok(()),
+        )
+    }
+
+    #[cfg(test)]
+    pub(in crate::audio_engine) fn begin_source_beatmap_raw_async_with_hooks(
+        &self,
+        sample_id: usize,
+        expected_generation: u64,
+        after_verify: impl FnOnce() + Send + 'static,
+        observe: impl FnMut(StorePoint, &Path) -> Result<(), String> + Send + 'static,
+    ) -> PyResult<OfflineAnalysisJob> {
+        self.queue_source_beatmap_input(
+            sample_id,
+            AsyncMapInput::AcquireRaw {
+                expected_generation,
+            },
+            after_verify,
+            observe,
+        )
+    }
+
+    #[cfg(test)]
+    pub(in crate::audio_engine) fn begin_source_beatmap_raw_admission_fault_for_test(
+        &self,
+        sample_id: usize,
+        expected_generation: u64,
+        after_arm: bool,
+    ) -> PyResult<OfflineAnalysisJob> {
+        self.queue_source_beatmap_input_with_admission_hook(
+            sample_id,
+            AsyncMapInput::AcquireRaw {
+                expected_generation,
+            },
+            || {},
+            |_, _| Ok(()),
+            move |engine, job, armed| {
+                if armed == after_arm {
+                    if after_arm {
+                        engine.cold_jobs.close_admission();
+                    } else {
+                        job.state().preparing.store(true, Ordering::Release);
+                    }
+                }
+            },
+        )
+    }
     pub(in crate::audio_engine) fn begin_source_beatmap_create_async_with(
         &self,
         sample_id: usize,
@@ -381,6 +512,25 @@ impl AudioEngine {
         after_verify: impl FnOnce() + Send + 'static,
         observe: impl FnMut(StorePoint, &Path) -> Result<(), String> + Send + 'static,
     ) -> PyResult<OfflineAnalysisJob> {
+        self.queue_source_beatmap_input_with_admission_hook(
+            sample_id,
+            input,
+            after_verify,
+            observe,
+            |_, _, _| {},
+        )
+    }
+
+    /// Production has a monomorphized no-op; tests fault the exact original
+    /// capture/arm/submit path without manufacturing a second source admission.
+    fn queue_source_beatmap_input_with_admission_hook(
+        &self,
+        sample_id: usize,
+        input: AsyncMapInput,
+        after_verify: impl FnOnce() + Send + 'static,
+        observe: impl FnMut(StorePoint, &Path) -> Result<(), String> + Send + 'static,
+        admission: impl Fn(&Self, &OfflineAnalysisJob, bool),
+    ) -> PyResult<OfflineAnalysisJob> {
         if !input.bounded() {
             return Err(PyValueError::new_err(
                 "source beatmap input exceeds byte limit",
@@ -388,10 +538,20 @@ impl AudioEngine {
         }
         // Reserve the existing lane BEFORE offline/source admission. Refusal
         // therefore changes neither source counters nor the offline busy slot.
+        let raw_review = if matches!(input, AsyncMapInput::AcquireRaw { .. }) {
+            Some(
+                crate::audio_engine::source_beatmap_raw::RawReviewLease::reserve()
+                    .map_err(PyRuntimeError::new_err)?,
+            )
+        } else {
+            None
+        };
         let reservation = self.cold_jobs.reserve().map_err(PyRuntimeError::new_err)?;
-        let job = self.begin_source_beatmap(sample_id)?;
+        let job = self.begin_source_beatmap_admitted(sample_id, raw_review)?;
+        admission(self, &job, false);
         let work = AsyncMapWork::arm(&job, input, &reservation, self.cold_cancelled.clone())
             .map_err(PyRuntimeError::new_err)?;
+        admission(self, &job, true);
         self.cold_jobs
             .submit(reservation, move || work.run(after_verify, observe))
             .map_err(PyRuntimeError::new_err)?;

@@ -14,8 +14,13 @@ if TYPE_CHECKING:
     from collections.abc import Callable
 
     from flitzis_looper.controller.current_timing import CurrentPadTiming
+    from flitzis_looper.controller.source_beatmap_selection import RawSourceBeatmapState
     from flitzis_looper.ui.context import UiContext, WaveformEditorActions
-    from flitzis_looper_audio import SourceBeatmap, SourceBeatmapEditorSpan
+    from flitzis_looper_audio import (
+        SourceBeatmap,
+        SourceBeatmapEditorSpan,
+        SourceBeatmapRawInspection,
+    )
 
 
 @dataclass(frozen=True, slots=True)
@@ -31,6 +36,7 @@ class SourceMapEditorFrame:
     rate: int | None
     anchor_count: int
     can_undo: bool
+    raw: RawSourceBeatmapState
 
 
 @dataclass(slots=True)
@@ -49,7 +55,15 @@ class _EditorInputs:
     error: str | None = None
 
 
+@dataclass(slots=True)
+class _RawInputs:
+    key: tuple[int, object, int, str | None]
+    start_index: int = 0
+    inspecting: bool = False
+
+
 _INPUTS: WeakKeyDictionary[WaveformEditorActions, _EditorInputs] = WeakKeyDictionary()
+_RAW_INPUTS: WeakKeyDictionary[WaveformEditorActions, _RawInputs] = WeakKeyDictionary()
 _BUSY = frozenset({"pending", "restoring", "settling"})
 
 
@@ -68,6 +82,7 @@ def capture_source_map(ctx: UiContext, pad_id: int) -> SourceMapEditorFrame:
         rate=None if info is None else info["sample_rate_hz"],
         anchor_count=0 if info is None else info["anchor_count"],
         can_undo=False if info is None else info["can_undo"],
+        raw=maps.raw_state(pad_id),
     )
 
 
@@ -471,6 +486,165 @@ def _interval_fields(ctx: UiContext, frame: SourceMapEditorFrame, state: _Editor
         imgui.pop_id()
 
 
+def _raw_inputs(ctx: UiContext, frame: SourceMapEditorFrame) -> _RawInputs:
+    key = frame.pad_id, frame.identity, frame.raw.attempt, frame.raw.revision
+    state = _RAW_INPUTS.get(ctx.ui.waveform)
+    if state is None or state.key != key:
+        state = _RawInputs(key)
+        _RAW_INPUTS[ctx.ui.waveform] = state
+    return state
+
+
+def _run_raw(ctx: UiContext, frame: SourceMapEditorFrame, action: Callable[[], object]) -> None:
+    if frame.identity is None or ctx.ui.source_map.identity(frame.pad_id) != frame.identity:
+        ctx.ui.source_map.report_raw_error(frame.pad_id, "The original source changed.")
+        return
+    try:
+        action()
+    except (OSError, RuntimeError, ValueError) as error:
+        ctx.ui.source_map.report_raw_error(frame.pad_id, str(error))
+    else:
+        ctx.ui.source_map.report_raw_error(frame.pad_id, None)
+
+
+def _read_raw_page(
+    ctx: UiContext, frame: SourceMapEditorFrame, start_index: int
+) -> SourceBeatmapRawInspection:
+    assert frame.raw.revision is not None
+    return ctx.ui.source_map.selection.inspect_raw(
+        frame.pad_id,
+        expected_attempt=frame.raw.attempt,
+        expected_revision=frame.raw.revision,
+        start_index=start_index,
+        max_events=128,
+    )
+
+
+def _show_raw_page(ctx: UiContext, frame: SourceMapEditorFrame, state: _RawInputs) -> None:
+    page = _read_raw_page(ctx, frame, state.start_index)
+    if page["status"] != "ready" or page["raw_revision"] != frame.raw.revision:
+        imgui.text_colored(
+            TEXT_MUTED_RGBA, "Original source placement is pending; no current rows."
+        )
+        return
+    if imgui.button("Previous detections##source-raw-previous") and state.start_index > 0:
+        _read_raw_page(ctx, frame, max(0, state.start_index - 128))
+        state.start_index = max(0, state.start_index - 128)
+    imgui.same_line(spacing=SPACING)
+    imgui.begin_disabled(not page["has_more"])
+    if imgui.button("Next detections##source-raw-next"):
+        next_index = page["start_index"] + page["returned_count"]
+        _read_raw_page(ctx, frame, next_index)
+        state.start_index = next_index
+    imgui.end_disabled()
+    imgui.text_colored(
+        TEXT_MUTED_RGBA,
+        f"Detections {page['start_index']} to {page['start_index'] + page['returned_count']} "
+        f"(exclusive) / {page['total_event_count']}",
+    )
+    imgui.begin_child("raw-detection-page", (-1, imgui.get_text_line_height_with_spacing() * 7))
+    try:
+        for event in page["events"]:
+            downbeat = "yes" if event["detected_downbeat"] else "no"
+            imgui.text_unformatted(
+                f"#{event['raw_index']} | ODF frame {event['odf_frame']:.17g} | "
+                f"source {event['source_seconds']:.17g} s | "
+                f"detected downbeat: {downbeat} | {event['physical_domain']}"
+            )
+    finally:
+        imgui.end_child()
+
+
+def _raw_review(ctx: UiContext, frame: SourceMapEditorFrame) -> None:
+    raw = frame.raw
+    label = raw.status.replace("_", "-")
+    if raw.status == "none" and raw.occupied:
+        label = "review slot occupied by another original source"
+    elif raw.info is not None and raw.info["status"] == "placement_pending":
+        label = "original source placement pending"
+    imgui.text_colored(TEXT_MUTED_RGBA, f"Raw analysis: {label}")
+    _raw_actions(ctx, frame)
+    if raw.status == "failed":
+        imgui.text_colored(TEXT_MUTED_RGBA, "Raw analysis failed; see console diagnostics.")
+    if raw.status != "unreviewed" or raw.info is None:
+        return
+    imgui.text_wrapped(
+        "Unreviewed detector observations. Quarter-note count and meter are unverified; "
+        "timing uncertainty is unknown. Detected downbeats are observations."
+    )
+    if raw.info["status"] != "ready":
+        return
+    _raw_provenance(frame)
+    state = _raw_inputs(ctx, frame)
+    if imgui.button("Inspect detections##source-raw-inspect"):
+        state.inspecting = True
+    if state.inspecting:
+        _run_raw(ctx, frame, lambda: _show_raw_page(ctx, frame, state))
+
+
+def _raw_actions(ctx: UiContext, frame: SourceMapEditorFrame) -> None:
+    raw = frame.raw
+    imgui.begin_disabled(raw.occupied or frame.status in _BUSY or frame.identity is None)
+    action = "Analyze again" if raw.status == "failed" else "Analyze original full mix"
+    if imgui.button(f"{action}##source-raw-analyze"):
+        _run_raw(
+            ctx,
+            frame,
+            lambda: ctx.ui.source_map.selection.analyze_original(
+                frame.pad_id, expected_attempt=raw.attempt
+            ),
+        )
+    imgui.end_disabled()
+    if raw.status in {"queued", "running", "unreviewed"}:
+        imgui.same_line(spacing=SPACING)
+        if imgui.button("Discard candidate##source-raw-discard"):
+            _run_raw(
+                ctx,
+                frame,
+                lambda: ctx.ui.source_map.selection.discard_raw(
+                    frame.pad_id, expected_attempt=raw.attempt, expected_revision=raw.revision
+                ),
+            )
+
+
+def _raw_provenance(frame: SourceMapEditorFrame) -> None:
+    raw = frame.raw
+    assert raw.info is not None
+    duration = raw.info["source_frame_count"] / raw.info["source_sample_rate_hz"]
+    imgui.text_colored(
+        TEXT_MUTED_RGBA,
+        f"Original full mix: {raw.info['source_frame_count']} frames at "
+        f"{raw.info['source_sample_rate_hz']} Hz, {duration:.17g} s, "
+        f"frame zero {raw.info['source_zero_frame']} | {raw.info['event_count']} detections",
+    )
+    if imgui.tree_node("Input provenance##source-raw-provenance"):
+        try:
+            imgui.text_wrapped(
+                f"Decoder: {raw.info['decoder_identity']} | Mono rule: {raw.info['mono_rule']}\n"
+                f"Mono SHA-256: {raw.info['mono_sha256']}\n"
+                f"Analyzer: {raw.info['analyzer_frame_count']} frames at "
+                f"{raw.info['analyzer_sample_rate_hz']} Hz | "
+                f"Conversion: {raw.info['conversion_revision']}\n"
+                f"Analyzer SHA-256: {raw.info['analyzer_sha256']}\n"
+                f"Raw revision: {raw.revision} | "
+                f"Detected downbeats: {raw.info['detected_downbeat_count']} | "
+                f"Outside source: {raw.info['outside_source_event_count']}\n"
+                f"Detector: {raw.info['detector_id']} | Hop: {raw.info['odf_hop_samples']} | "
+                f"Code: {raw.info['code_revision']} | Settings: {raw.info['configuration']}"
+            )
+        finally:
+            imgui.tree_pop()
+
+
+def _render_raw_review(ctx: UiContext, frame: SourceMapEditorFrame) -> None:
+    # Independent attempt identity prevents an equal-digest reanalysis accepting an old release.
+    imgui.push_id(repr((frame.pad_id, frame.identity, frame.raw.attempt, frame.raw.revision)))
+    try:
+        _raw_review(ctx, frame)
+    finally:
+        imgui.pop_id()
+
+
 def render_source_map_editor(
     ctx: UiContext,
     frame: SourceMapEditorFrame,
@@ -544,3 +718,4 @@ def _render_source_map_controls(
             _interval_fields(ctx, frame, state)
         imgui.end_disabled()
     imgui.end_disabled()
+    _render_raw_review(ctx, frame)

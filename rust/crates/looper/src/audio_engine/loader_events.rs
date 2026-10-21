@@ -20,9 +20,35 @@ pub struct LoaderEventDelivery {
     timing_epoch: Option<u64>,
     source_beatmap: Option<super::source_beatmap::SourceBeatmap>,
     source_beatmap_artifact: Option<super::source_beatmap_artifact::SourceBeatmapArtifact>,
+    source_beatmap_raw: Option<super::source_beatmap_artifact::SourceBeatmapRawArtifact>,
 }
 
 impl LoaderEventDelivery {
+    pub(super) fn source_beatmap_raw_for(
+        &self,
+        owner: &super::complete_context::NativeAnalysisOwner,
+        shutdown: std::sync::Arc<std::sync::atomic::AtomicBool>,
+    ) -> PyResult<Option<super::source_beatmap_raw::SourceBeatmapRawCandidate>> {
+        if !owner.same_admission(&self.owner) || !owner.current() {
+            return Ok(None);
+        }
+        let Some(artifact) = self.source_beatmap_raw.as_ref() else {
+            return Ok(None);
+        };
+        match self.owner.observe_control() {
+            PlacementObservation::Current(_) if owner.current() => Ok(Some(
+                super::source_beatmap_raw::SourceBeatmapRawCandidate::new(
+                    artifact.clone(),
+                    owner.clone(),
+                    shutdown,
+                ),
+            )),
+            PlacementObservation::Pending => Err(PyRuntimeError::new_err(
+                "loader event content placement pending",
+            )),
+            _ => Ok(None),
+        }
+    }
     pub(super) fn source_map_binding_current(
         &self,
         ownership: &std::sync::Arc<super::input_runtime_binding::InputRuntimeOwnership>,
@@ -178,7 +204,8 @@ fn identity(event: &LoaderEvent) -> (usize, u64) {
         | LoaderEvent::TaskSuccess { id, request_id, .. }
         | LoaderEvent::TaskError { id, request_id, .. }
         | LoaderEvent::OfflineAnalysisCompleted { id, request_id, .. }
-        | LoaderEvent::SourceBeatmapCompleted { id, request_id, .. } => (*id, *request_id),
+        | LoaderEvent::SourceBeatmapCompleted { id, request_id, .. }
+        | LoaderEvent::SourceBeatmapRawCompleted { id, request_id, .. } => (*id, *request_id),
     }
 }
 
@@ -200,7 +227,8 @@ fn project_slot(event: &mut LoaderEvent, slot: usize) {
         | LoaderEvent::TaskSuccess { id, .. }
         | LoaderEvent::TaskError { id, .. }
         | LoaderEvent::OfflineAnalysisCompleted { id, .. }
-        | LoaderEvent::SourceBeatmapCompleted { id, .. } => *id = slot,
+        | LoaderEvent::SourceBeatmapCompleted { id, .. }
+        | LoaderEvent::SourceBeatmapRawCompleted { id, .. } => *id = slot,
         LoaderEvent::NativeOwned { .. } => unreachable!("payload is unwrapped"),
     }
 }
@@ -246,6 +274,7 @@ pub(super) fn poll(
             && matches!(
                 payload(&mut event),
                 LoaderEvent::SourceBeatmapCompleted { .. }
+                    | LoaderEvent::SourceBeatmapRawCompleted { .. }
             )
         {
             // A data-shaped payload cannot manufacture the original request's
@@ -387,6 +416,10 @@ pub(super) fn poll(
             LoaderEvent::SourceBeatmapCompleted { artifact, .. } => artifact.clone(),
             _ => None,
         };
+        let source_beatmap_raw = match &event {
+            LoaderEvent::SourceBeatmapRawCompleted { artifact, .. } => Some(artifact.clone()),
+            _ => None,
+        };
         dict.set_item(
             "_native_event_owner",
             Py::new(
@@ -396,6 +429,7 @@ pub(super) fn poll(
                     timing_epoch,
                     source_beatmap,
                     source_beatmap_artifact,
+                    source_beatmap_raw,
                 },
             )?,
         )?;
@@ -416,6 +450,11 @@ pub(super) fn poll(
             dict.set_item("id", id)?;
             dict.set_item("request_id", request_id)?;
             dict.set_item("result_json", result_json)?;
+        }
+        LoaderEvent::SourceBeatmapRawCompleted { id, request_id, .. } => {
+            dict.set_item("type", "source_beatmap_raw_completed")?;
+            dict.set_item("id", id)?;
+            dict.set_item("request_id", request_id)?;
         }
         LoaderEvent::SourceBeatmapCompleted {
             id,

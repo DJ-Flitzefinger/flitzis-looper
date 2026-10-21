@@ -140,6 +140,51 @@ class SourceBeatmapArtifact:
     def reference(self) -> str: ...
     def map(self) -> SourceBeatmap: ...
 
+class SourceBeatmapRawInfo(TypedDict):
+    status: Literal["ready", "placement_pending", "stale", "cancelled"]
+    raw_revision: str
+    decoder_identity: str
+    source_sample_rate_hz: int
+    source_frame_count: int
+    source_zero_frame: int
+    mono_sha256: str
+    mono_rule: str
+    analyzer_sha256: str
+    analyzer_sample_rate_hz: int
+    analyzer_frame_count: int
+    conversion_revision: str
+    odf_hop_samples: int
+    detector_id: str
+    code_revision: str
+    configuration: dict[str, object]
+    event_count: int
+    detected_downbeat_count: int
+    outside_source_event_count: int
+    interpretation: Literal["unverified"]
+    timing_uncertainty: Literal["unknown"]
+
+class SourceBeatmapRawEvent(TypedDict):
+    raw_index: int
+    odf_frame: float
+    source_seconds: float
+    detected_downbeat: bool
+    physical_domain: Literal["inside", "exclusive_end", "outside"]
+
+class SourceBeatmapRawInspection(TypedDict):
+    status: Literal["ready", "placement_pending", "stale", "cancelled"]
+    raw_revision: str
+    start_index: int
+    returned_count: int
+    total_event_count: int
+    has_more: bool
+    events: list[SourceBeatmapRawEvent]
+
+class SourceBeatmapRawCandidate:
+    # Nonconstructible unverified original evidence; no map/receipt/ACK API.
+    RAW_REVIEW_API_VERSION: ClassVar[int]
+    def info(self) -> SourceBeatmapRawInfo: ...
+    def inspect(self, start_index: int, max_events: int = 128) -> SourceBeatmapRawInspection: ...
+
 class AudioMessage:
     def sample_id(self) -> int | None: ...
     def pad_peak(self) -> float | None: ...
@@ -188,6 +233,9 @@ class OfflineAnalysisJob:
     def resolve_source_beatmap_artifact_completion(
         self, delivery: LoaderEventDelivery
     ) -> SourceBeatmapArtifact | None: ...
+    def resolve_source_beatmap_raw_completion(
+        self, delivery: LoaderEventDelivery
+    ) -> SourceBeatmapRawCandidate | None: ...
     def metadata(self) -> dict[str, object]: ...
     def staging_stats(self) -> dict[str, int]: ...
     def prepare_export(self, path: str) -> None: ...
@@ -834,6 +882,9 @@ class AudioEngine:
     def analyze_sample_async(self, sample_id: int) -> int: ...
     def begin_offline_analysis(self, sample_id: int) -> OfflineAnalysisJob: ...
     def begin_source_beatmap(self, sample_id: int) -> OfflineAnalysisJob: ...
+    def begin_source_beatmap_raw_async(
+        self, sample_id: int, *, expected_source_generation: int
+    ) -> OfflineAnalysisJob: ...
     def begin_source_beatmap_async(
         self, sample_id: int, record_json: str
     ) -> OfflineAnalysisJob: ...
@@ -1028,7 +1079,10 @@ class AudioEngine:
         expected_source_generation: int | None = None,
     ) -> int: ...
     def pad_key_lock_status(self, sample_id: int) -> dict[str, object] | None: ...
-    def pad_source_sync_status(self, id: int) -> SourceSyncStatus | None: ...
+    def pad_source_sync_status(
+        self,
+        id: int,  # noqa: A002 - Match the existing Native keyword signature.
+    ) -> SourceSyncStatus | None: ...
     def set_master_bpm(self, bpm: float) -> None: ...
     def set_master_period(self, period_seconds: float) -> None: ...
     def set_speed_and_master_period(self, speed: float, period_seconds: float) -> None: ...

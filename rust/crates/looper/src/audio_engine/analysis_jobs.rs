@@ -121,6 +121,7 @@ impl OfflineJobs {
             tx,
             None,
             OfflinePurpose::Analysis,
+            None,
         )
     }
 
@@ -147,6 +148,7 @@ impl OfflineJobs {
             tx,
             Some(reader),
             OfflinePurpose::Analysis,
+            None,
         )
     }
 
@@ -154,11 +156,12 @@ impl OfflineJobs {
         &self,
         id: usize,
         reader: CompleteSourceReader,
-        rate: u32,
-        source_generation: u64,
+        loaded_source: (u64, u32),
         owner: OfflineRequestOwner,
         tx: Sender<LoaderEvent>,
+        raw_review: Option<super::source_beatmap_raw::RawReviewLease>,
     ) -> Result<OfflineAnalysisJob, String> {
+        let (source_generation, rate) = loaded_source;
         if reader.guard.as_ref().is_none_or(|guard| {
             !guard.current() || guard.generation != source_generation || guard.rate != rate
         }) {
@@ -174,6 +177,7 @@ impl OfflineJobs {
             tx,
             Some(reader),
             OfflinePurpose::SourceBeatmap,
+            raw_review,
         )
     }
 
@@ -188,6 +192,7 @@ impl OfflineJobs {
         tx: Sender<LoaderEvent>,
         reader: Option<CompleteSourceReader>,
         purpose: OfflinePurpose,
+        raw_review: Option<super::source_beatmap_raw::RawReviewLease>,
     ) -> Result<OfflineAnalysisJob, String> {
         let OfflineRequestOwner {
             request_ids,
@@ -275,6 +280,8 @@ impl OfflineJobs {
             ..identity
         };
         let state = Arc::new(JobState {
+            raw_review_receipt: raw_review.as_ref().map(|lease| lease.receipt()),
+            raw_review: Mutex::new(raw_review),
             purpose,
             identity,
             rate,
@@ -379,6 +386,8 @@ impl OfflineInput {
 }
 
 struct JobState {
+    raw_review: Mutex<Option<super::source_beatmap_raw::RawReviewLease>>,
+    raw_review_receipt: Option<Arc<super::source_beatmap_raw::RawReviewReceipt>>,
     purpose: OfflinePurpose,
     identity: PcmIdentity,
     rate: u32,
@@ -770,6 +779,12 @@ impl JobState {
             .unwrap_or_else(std::sync::PoisonError::into_inner)
             .take();
         self.retained_source_bytes.store(0, Ordering::Release);
+        // Arm/submit failure and last Python handle release use this same
+        // actual cleanup. Long-lived status handles retain only the receipt.
+        self.raw_review
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .take();
     }
 
     /// Close native PCM owners before filesystem cleanup, retaining admission.
@@ -1081,11 +1096,45 @@ impl OfflineAnalysisJob {
 
     /// Observe bounded lifecycle scalars; cancellation alone is never retirement.
     pub fn source_beatmap_async_status(&self, py: Python<'_>) -> PyResult<Option<Py<PyDict>>> {
-        self.state()
+        let result = self
+            .state()
             .async_map
             .get()
             .map(|status| status.dictionary(py, self.state().cancelled.load(Ordering::Acquire)))
-            .transpose()
+            .transpose()?;
+        if let Some(result) = result.as_ref()
+            && let Some(receipt) = self.state().raw_review_receipt.as_ref()
+        {
+            result
+                .bind(py)
+                .set_item("raw_review_retired", receipt.retired())?;
+        }
+        Ok(result)
+    }
+
+    /// Raw evidence resolves only through this original map admission, with no export ACK.
+    pub fn resolve_source_beatmap_raw_completion(
+        &self,
+        delivery: &super::loader_events::LoaderEventDelivery,
+    ) -> PyResult<Option<super::source_beatmap_raw::SourceBeatmapRawCandidate>> {
+        let state = self.state();
+        state
+            .require_purpose(OfflinePurpose::SourceBeatmap)
+            .map_err(PyRuntimeError::new_err)?;
+        let _requests = state
+            .request_ids
+            .lock()
+            .map_err(|_| PyRuntimeError::new_err("request lock poisoned"))?;
+        if state.raw_review_receipt.is_none() || state.cancelled() {
+            return Ok(None);
+        }
+        let Some(owner) = state.native_owner.as_ref() else {
+            return Ok(None);
+        };
+        let Some(status) = state.async_map.get() else {
+            return Ok(None);
+        };
+        delivery.source_beatmap_raw_for(owner, status.shutdown_token())
     }
 
     /// Return only this original job's privately retained genuine map payload.

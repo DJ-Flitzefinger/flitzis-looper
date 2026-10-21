@@ -31,6 +31,18 @@ def _edit(self: object, sample_id: int, receipt_json: str, operation_json: str) 
     _forbidden()
 
 
+def _raw(self: object, sample_id: int, *, expected_source_generation: int) -> Never:
+    _forbidden()
+
+
+def _raw_completion(self: object, delivery: object) -> Never:
+    _forbidden()
+
+
+def _raw_inspect(self: object, start_index: int, max_events: int = 128) -> Never:
+    _forbidden()
+
+
 def _info(self: object) -> Never:
     _forbidden()
 
@@ -80,8 +92,23 @@ def source_beatmap_editor_native_module(engine_base: type = object) -> SimpleNam
                 "__init__": _forbidden,
                 "begin_source_beatmap_create_async": _create,
                 "begin_source_beatmap_edit_async": _edit,
+                "begin_source_beatmap_raw_async": _raw,
                 "pad_source_sync_status": _SyncStatus(),
             },
+        ),
+        OfflineAnalysisJob=type(
+            "OfflineAnalysisJob",
+            (),
+            {
+                "__init__": _forbidden,
+                "resolve_source_beatmap_raw_completion": _raw_completion,
+                "source_beatmap_async_status": _info,
+            },
+        ),
+        SourceBeatmapRawCandidate=type(
+            "SourceBeatmapRawCandidate",
+            (),
+            {"__init__": _forbidden, "info": _info, "inspect": _raw_inspect},
         ),
         SourceBeatmap=type(
             "SourceBeatmap",
@@ -144,6 +171,11 @@ def test_class_attribute_descriptor_can_expose_the_native_integer_capability() -
         ("AudioEngine", "begin_source_beatmap_create_async"),
         ("AudioEngine", "begin_source_beatmap_edit_async"),
         ("AudioEngine", "pad_source_sync_status"),
+        ("AudioEngine", "begin_source_beatmap_raw_async"),
+        ("OfflineAnalysisJob", "resolve_source_beatmap_raw_completion"),
+        ("OfflineAnalysisJob", "source_beatmap_async_status"),
+        ("SourceBeatmapRawCandidate", "info"),
+        ("SourceBeatmapRawCandidate", "inspect"),
         ("SourceBeatmap", "editor_info"),
         ("SourceBeatmap", "editor_span"),
         ("SourceBeatmap", "editor_view"),
@@ -271,4 +303,45 @@ def test_sync_feedback_requires_a_current_pad_query_without_executing_it(invalid
         native.AudioEngine, "pad_source_sync_status", complete.replace(parameters=parameters)
     )
     with pytest.raises(AssertionError, match="pad_source_sync_status"):
+        _check(native)
+
+
+@pytest.mark.parametrize("owner", ["SourceBeatmapRawCandidate", "OfflineAnalysisJob"])
+def test_raw_review_requires_opaque_native_result_and_original_job_types(owner: str) -> None:
+    native = source_beatmap_editor_native_module()
+    delattr(native, owner)
+    with pytest.raises(AssertionError, match=owner):
+        _check(native)
+
+
+@pytest.mark.parametrize("invalid", ["missing-generation", "optional-generation", "positional"])
+def test_raw_acquisition_requires_exact_current_source_fence(invalid: str) -> None:
+    native = source_beatmap_editor_native_module()
+    complete = signature(native.AudioEngine.begin_source_beatmap_raw_async)
+    parameters = list(complete.parameters.values())
+    if invalid == "missing-generation":
+        parameters.pop()
+    elif invalid == "optional-generation":
+        parameters[-1] = parameters[-1].replace(default=None)
+    else:
+        parameters[-1] = parameters[-1].replace(kind=Parameter.POSITIONAL_OR_KEYWORD)
+    _replace_signature(
+        native.AudioEngine,
+        "begin_source_beatmap_raw_async",
+        complete.replace(parameters=parameters),
+    )
+    with pytest.raises(AssertionError, match="begin_source_beatmap_raw_async"):
+        _check(native)
+
+
+@pytest.mark.parametrize("default", [127, 129, 128.0, None, Parameter.empty])
+def test_raw_inspection_requires_the_bounded_native_page_default(default: object) -> None:
+    native = source_beatmap_editor_native_module()
+    complete = signature(native.SourceBeatmapRawCandidate.inspect)
+    parameters = list(complete.parameters.values())
+    parameters[-1] = parameters[-1].replace(default=default)
+    _replace_signature(
+        native.SourceBeatmapRawCandidate, "inspect", complete.replace(parameters=parameters)
+    )
+    with pytest.raises(AssertionError, match="max_events"):
         _check(native)

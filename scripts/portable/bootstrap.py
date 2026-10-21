@@ -492,8 +492,16 @@ def check_source_beatmap_editor_api(native_module: object) -> None:
     """Reflect the source-qualified editor contract without starting Native work."""
     engine = getattr(native_module, "AudioEngine", None)
     beatmap = getattr(native_module, "SourceBeatmap", None)
+    raw_candidate = getattr(native_module, "SourceBeatmapRawCandidate", None)
+    job = getattr(native_module, "OfflineAnalysisJob", None)
     assert isinstance(engine, type), "Native source beatmap editor API missing type: AudioEngine"
     assert isinstance(beatmap, type), "Native source beatmap editor API missing type: SourceBeatmap"
+    assert isinstance(raw_candidate, type), (
+        "Native source beatmap editor API missing type: SourceBeatmapRawCandidate"
+    )
+    assert isinstance(job, type), (
+        "Native source beatmap editor API missing type: OfflineAnalysisJob"
+    )
     correction_version = getattr(beatmap, "EDITOR_CORRECTION_API_VERSION", None)
     assert type(correction_version) is int, (
         "Native source beatmap editor API requires EDITOR_CORRECTION_API_VERSION=2"
@@ -514,6 +522,30 @@ def check_source_beatmap_editor_api(native_module: object) -> None:
         )
     required = inspect.Parameter.empty
     for owner, method, arguments, keyword_only in (
+        (
+            engine,
+            "begin_source_beatmap_raw_async",
+            (
+                ("self", required),
+                ("sample_id", required),
+                ("expected_source_generation", required),
+            ),
+            {"expected_source_generation"},
+        ),
+        (
+            job,
+            "resolve_source_beatmap_raw_completion",
+            (("self", required), ("delivery", required)),
+            set(),
+        ),
+        (job, "source_beatmap_async_status", (("self", required),), set()),
+        (raw_candidate, "info", (("self", required),), set()),
+        (
+            raw_candidate,
+            "inspect",
+            (("self", required), ("start_index", required), ("max_events", 128)),
+            set(),
+        ),
         (
             engine,
             "pad_source_sync_status",

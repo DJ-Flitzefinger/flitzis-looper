@@ -504,6 +504,11 @@ class LoaderController(_IncomingIntentControl, _MaterialCreationOwnership):
             self._diagnostics.observe(
                 "source_beatmap", self.source_beatmaps.errors.get(sample_id), pad_id=sample_id
             )
+            self._diagnostics.observe(
+                "source_map_analysis",
+                self.source_beatmaps.raw_state(sample_id).error,
+                pad_id=sample_id,
+            )
 
     def _finish_accepted_restore(self, sample_id: int) -> None:
         if self._on_accepted_timing_refresh is not None:
@@ -750,6 +755,7 @@ class LoaderController(_IncomingIntentControl, _MaterialCreationOwnership):
             "task_success": self._handle_task_success,
             "task_error": self._handle_task_error,
             "source_beatmap_completed": self.source_beatmaps.completed,
+            "source_beatmap_raw_completed": self.source_beatmaps.raw_completed,
         }
 
         held, self._pair_held_loader_events = self._pair_held_loader_events, []
@@ -827,7 +833,18 @@ class LoaderController(_IncomingIntentControl, _MaterialCreationOwnership):
             return
         handler = handlers.get(event_type)
         if handler is not None:
-            handler(sample_id, event)
+            try:
+                handler(sample_id, event)
+            except RuntimeError as error:
+                if (
+                    event_type != "source_beatmap_raw_completed"
+                    or str(error) != "loader event content placement pending"
+                ):
+                    raise
+                # A global placement publication may start after the first
+                # lookup. Keep the original delivery for the next bounded poll.
+                self._retain_loader_event(event)
+                return
             self._observe_pad_diagnostics(sample_id)
 
     def _set_migration_event_handler(self, handler: Callable[[dict[str, object]], bool]) -> None:

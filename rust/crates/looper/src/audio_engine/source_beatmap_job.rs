@@ -7,12 +7,18 @@ use crate::messages::LoaderEvent;
 use std::path::Path;
 use std::sync::atomic::Ordering;
 
-pub(super) struct PreparedMap {
-    map: SourceBeatmap,
-    artifact: Option<SourceBeatmapArtifact>,
+pub(super) enum PreparedMap {
+    Accepted {
+        map: SourceBeatmap,
+        artifact: Option<SourceBeatmapArtifact>,
+    },
+    Raw(crate::audio_engine::source_beatmap_artifact::SourceBeatmapRawArtifact),
 }
 
 pub(super) enum MapInput<'a> {
+    AcquireRaw {
+        expected_generation: u64,
+    },
     Validate(&'a str),
     Store(&'a str),
     Restore(&'a str),
@@ -92,7 +98,39 @@ impl JobState {
         };
         reader.require_map_custody()?;
         let cancelled = || self.cancelled();
+        if let MapInput::AcquireRaw {
+            expected_generation,
+        } = input
+        {
+            let lease = self
+                .raw_review
+                .lock()
+                .map_err(|_| "raw review admission lock poisoned")?
+                .as_ref()
+                .cloned()
+                .ok_or("raw acquisition requires its original review admission")?;
+            let raw = crate::audio_engine::source_beatmap_raw_data::RawData::acquire(
+                reader,
+                expected_generation,
+                &cancelled,
+            )?;
+            let (root, original) = reader.map_artifact_paths()?;
+            let artifact =
+                crate::audio_engine::source_beatmap_artifact::SourceBeatmapRawArtifact::store(
+                    root, original, raw, lease, &cancelled, observe,
+                )?;
+            reader.require_map_custody()?;
+            after_verify();
+            if self.cancelled() {
+                return Err("raw source acquisition superseded or cancelled".into());
+            }
+            *prepared = Some(PreparedMap::Raw(artifact));
+            return Ok(());
+        }
         let (map, artifact) = match input {
+            MapInput::AcquireRaw { .. } => {
+                unreachable!("raw preparation returned through its typed branch")
+            }
             MapInput::Validate(encoded) => {
                 let map = SourceBeatmap::parse(encoded)?;
                 reader.verify_source_beatmap(&map, &cancelled)?;
@@ -156,7 +194,7 @@ impl JobState {
         if self.cancelled() {
             return Err("source beatmap preparation superseded or cancelled".into());
         }
-        *prepared = Some(PreparedMap { map, artifact });
+        *prepared = Some(PreparedMap::Accepted { map, artifact });
         Ok(())
     }
 
@@ -208,14 +246,20 @@ impl JobState {
                 .as_ref()
                 .is_some_and(|owner| owner.current());
         let queued = if accepted {
-            self.tx
-                .send(self.owned_event(LoaderEvent::SourceBeatmapCompleted {
+            let event = match prepared {
+                PreparedMap::Accepted { map, artifact } => LoaderEvent::SourceBeatmapCompleted {
                     id: self.identity.pad_id,
                     request_id: self.identity.request_id,
-                    map: prepared.map,
-                    artifact: prepared.artifact,
-                }))
-                .is_ok()
+                    map,
+                    artifact,
+                },
+                PreparedMap::Raw(artifact) => LoaderEvent::SourceBeatmapRawCompleted {
+                    id: self.identity.pad_id,
+                    request_id: self.identity.request_id,
+                    artifact,
+                },
+            };
+            self.tx.send(self.owned_event(event)).is_ok()
         } else {
             // Retire a rejected potentially large map on this worker before the
             // shared reservation admits subsequent work.

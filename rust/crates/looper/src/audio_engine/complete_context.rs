@@ -120,6 +120,12 @@ impl NativeAnalysisOwner {
             && self.request_current()
     }
 
+    pub(super) fn cancellation_requested(&self) -> bool {
+        self.cancellation
+            .as_ref()
+            .is_some_and(|flag| flag.load(Ordering::Acquire))
+    }
+
     fn request_current(&self) -> bool {
         self.source.current()
             && self
@@ -379,6 +385,38 @@ impl CompleteSourceReader {
             .as_ref()
             .ok_or("source beatmap cold lease unavailable")?;
         Ok((lease.samples_root(), &lease.original_path))
+    }
+
+    /// Worker-only actual original verification under the same captured assignment.
+    pub(super) fn raw_source_descriptor(
+        &self,
+        expected_generation: u64,
+        cancelled: &impl Fn() -> bool,
+    ) -> Result<(serde_json::Value, String), String> {
+        self.require_map_custody()?;
+        if self
+            .guard
+            .as_ref()
+            .is_none_or(|guard| guard.generation != expected_generation)
+        {
+            return Err("raw source generation changed before acquisition".into());
+        }
+        let lease = self
+            .lease
+            .as_ref()
+            .ok_or("raw original cold lease unavailable")?;
+        super::source_beatmap_raw_data::validate_source_descriptor(
+            &lease.manifest.descriptor["decoder"],
+            &lease.manifest.decoder_identity,
+        )?;
+        lease
+            .verify_original_for_offline_cancellable(cancelled)
+            .map_err(|error| error.to_string())?;
+        self.require_map_custody()?;
+        Ok((
+            lease.manifest.descriptor["decoder"].clone(),
+            lease.manifest.decoder_identity.clone(),
+        ))
     }
 
     /// Worker-only actual original verification under the same captured assignment.

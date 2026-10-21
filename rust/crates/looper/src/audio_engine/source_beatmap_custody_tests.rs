@@ -911,6 +911,10 @@ fn map_only_work_preserves_already_pending_ordinary_and_piano_playback() {
 mod source_beatmap_async_tests {
     include!("source_beatmap_async_tests.rs");
 
+    mod source_beatmap_raw_tests {
+        include!("source_beatmap_raw_tests.rs");
+    }
+
     mod source_beatmap_artifact_tests {
         include!("source_beatmap_artifact_tests.rs");
 

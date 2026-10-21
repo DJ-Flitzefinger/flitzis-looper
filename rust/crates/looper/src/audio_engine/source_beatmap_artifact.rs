@@ -4,6 +4,8 @@ use super::cold_store::sealed_reader;
 use super::material_paths::{self, AssetKind};
 use super::project_assets::{self, FileIdentity, ProjectAssetLease, ProjectAssets, VerifiedFile};
 use super::source_beatmap::{MAX_RECORD_BYTES, SourceBeatmap};
+use super::source_beatmap_raw::RawReviewLease;
+use super::source_beatmap_raw_data::{MAX_RAW_BYTES, RawData};
 use pyo3::prelude::*;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
@@ -150,6 +152,7 @@ impl Drop for Birth {
 
 struct Resources {
     map: Option<SourceBeatmap>,
+    raw: Option<Arc<RawData>>,
     file: Option<File>,
     guards: Vec<File>,
     pin: Option<ProjectAssetLease>,
@@ -160,17 +163,26 @@ struct Resources {
         PathBuf,
         FileIdentity,
     )>,
+    raw_review: Option<RawReviewLease>,
 }
 
 impl Drop for Resources {
     fn drop(&mut self) {
-        let readers = project_assets::DeferredMapReaders {
+        let mut readers = project_assets::DeferredMapReaders {
             _map: self.map.take(),
+            _raw: self.raw.take(),
             _file: self.file.take(),
             _guards: std::mem::take(&mut self.guards),
             _pin: self.pin.take(),
+            _birth_guards: Vec::new(),
+            _birth_pin: None,
+            _raw_review: self.raw_review.take(),
         };
         if let Some(mut birth) = self.birth.take() {
+            // The birth's duplicate sealed handles/pin must also retire before
+            // the shared raw lease. Never let queue processing race their Drop.
+            readers._birth_guards = std::mem::take(&mut birth.guards);
+            readers._birth_pin = birth.pin.take();
             let slot = birth
                 .slot
                 .take()
@@ -313,6 +325,7 @@ impl SourceBeatmapArtifact {
             receipt,
             Resources {
                 map: Some(map),
+                raw: None,
                 file: Some(file),
                 guards,
                 pin: Some(pin),
@@ -323,6 +336,7 @@ impl SourceBeatmapArtifact {
                     directory.to_owned(),
                     directory_identity,
                 )),
+                raw_review: None,
             },
         )
     }
@@ -334,125 +348,294 @@ impl SourceBeatmapArtifact {
         cancelled: &impl Fn() -> bool,
         observe: &mut impl FnMut(StorePoint, &Path) -> Result<(), String>,
     ) -> Result<Self, String> {
-        check_cancelled(cancelled)?;
-        let root = fs::canonicalize(root).map_err(error)?;
-        let root = root.as_path();
-        // Capacity belongs to the existing asset queue before any generation birth.
-        let slot = ProjectAssets::shared()
-            .reserve_map_retirement()
-            .map_err(error)?;
-        let material = material_paths::material_root_for_original(root, original).map_err(error)?;
-        let mut guards = project_assets::directory_guards(&material).map_err(error)?;
-        let mut base = material;
-        for name in [".pcm-cache", "source-beatmaps", "v1"] {
-            base.push(name);
-            match fs::create_dir(&base) {
-                Ok(()) => (),
-                Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => (),
-                Err(value) => return Err(error(value)),
-            }
-            guards.extend(project_assets::directory_guards(&base).map_err(error)?);
-        }
-        let generation = generation_id()?;
-        let staging = base.join(format!(".generation-{generation}"));
-        let ready = base.join(format!(".ready-{generation}"));
-        fs::create_dir(&staging).map_err(error)?;
-        let staging_guards = project_assets::directory_guards(&staging).map_err(error)?;
-        let identity =
-            project_assets::file_identity(staging_guards.first().ok_or("map birth guard missing")?)
-                .map_err(error)?;
-        let mut birth = Birth {
-            root: root.to_owned(),
-            path: staging.clone(),
-            identity,
-            file_identity: None,
-            proof: None,
-            guards: staging_guards,
-            durable: false,
-            pin: None,
-            slot: Some(slot),
-        };
-        observe(StorePoint::AfterBirth, &staging)?;
-        let canonical = map.canonical_record().as_bytes();
-        let receipt = Receipt {
-            schema_version: 1,
-            kind: "source-beatmap-v1".into(),
-            reference: reference(root, &ready.join("map.json"))?,
-            bytes: canonical.len() as u64,
-            sha256: format!("{:x}", Sha256::digest(canonical)),
-            map_revision: map.map_revision().into(),
-            decoder_identity: map.source_identity().into(),
-        };
-        let leaf = staging.join("map.json");
-        let mut writer = OpenOptions::new()
-            .write(true)
-            .create_new(true)
-            .open(&leaf)
-            .map_err(error)?;
-        let file_identity = project_assets::file_identity(&writer).map_err(error)?;
-        birth.file_identity = Some(file_identity.clone());
-        for chunk in canonical.chunks(64 * 1024) {
-            check_cancelled(cancelled)?;
-            writer.write_all(chunk).map_err(error)?;
-        }
-        writer.sync_all().map_err(error)?;
-        drop(writer);
-        birth.proof = Some(VerifiedFile {
-            name: "map.json".into(),
-            identity: file_identity.clone(),
-            bytes: receipt.bytes,
-            sha256: receipt.sha256.clone(),
-        });
-        observe(StorePoint::AfterWrite, &staging)?;
-        {
-            require_only_map(&staging)?;
-            let mut reader = sealed_reader(&leaf).map_err(error)?;
-            if project_assets::file_identity(&reader).map_err(error)? != file_identity {
-                return Err("source beatmap staging leaf identity changed".into());
-            }
-            drop(read_map(&mut reader, &receipt, cancelled)?);
-        }
-        observe(StorePoint::BeforeRename, &staging)?;
-        check_cancelled(cancelled)?;
-        birth.guards.clear();
-        // Generation collision is never overwritten or reused.
-        if ready.exists() {
-            return Err("source beatmap ready collision; preserved".into());
-        }
-        fs::rename(&staging, &ready).map_err(error)?;
-        birth.path = ready.clone();
-        birth.guards = project_assets::directory_guards(&ready).map_err(error)?;
-        if project_assets::file_identity(birth.guards.first().ok_or("ready map guard missing")?)
-            .map_err(error)?
-            != birth.identity
-        {
-            return Err("source beatmap ready directory identity changed".into());
-        }
-        observe(StorePoint::AfterRename, &ready)?;
-        require_only_map(&ready)?;
-        let path = ready.join("map.json");
-        let mut file = sealed_reader(&path).map_err(error)?;
-        if project_assets::file_identity(&file).map_err(error)? != file_identity {
-            return Err("source beatmap ready leaf identity changed".into());
-        }
-        // Reopen/hash/parse qualifies the artifact, not a second original scan.
-        let reopened = read_map(&mut file, &receipt, cancelled)?;
-        let pin = ProjectAssets::shared()
-            .acquire_verified_pin(root, &path, &file_identity)
-            .map_err(error)?;
-        birth.pin = Some(pin.clone());
-        Self::from_parts(
-            receipt,
-            Resources {
-                map: Some(reopened),
-                file: Some(file),
-                guards,
-                pin: Some(pin),
-                birth: Some(birth),
-                release: None,
-            },
-        )
+        let (receipt, resources) = store_payload(
+            root,
+            original,
+            ArtifactPayload::Accepted(map),
+            None,
+            cancelled,
+            observe,
+        )?;
+        Self::from_parts(receipt, resources)
     }
+}
+
+/// A raw birth never acquires durable/export acknowledgement. Its final reader
+/// uses precisely the accepted artifact's pre-reserved off-UI retirement owner.
+struct RawArtifactInner {
+    resources: Resources,
+}
+
+#[derive(Clone)]
+pub(crate) struct SourceBeatmapRawArtifact {
+    inner: Arc<RawArtifactInner>,
+}
+
+impl std::fmt::Debug for SourceBeatmapRawArtifact {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("SourceBeatmapRawArtifact")
+            .field("raw_revision", &self.raw().raw_revision)
+            .finish_non_exhaustive()
+    }
+}
+
+impl SourceBeatmapRawArtifact {
+    pub(super) fn raw(&self) -> &RawData {
+        self.inner
+            .resources
+            .raw
+            .as_ref()
+            .expect("raw artifact owns its immutable capture")
+    }
+
+    pub(super) fn store(
+        root: &Path,
+        original: &Path,
+        raw: RawData,
+        lease: RawReviewLease,
+        cancelled: &impl Fn() -> bool,
+        observe: &mut impl FnMut(StorePoint, &Path) -> Result<(), String>,
+    ) -> Result<Self, String> {
+        let (_, resources) = store_payload(
+            root,
+            original,
+            ArtifactPayload::Raw(Arc::new(raw)),
+            Some(lease),
+            cancelled,
+            observe,
+        )?;
+        Ok(Self {
+            inner: Arc::new(RawArtifactInner { resources }),
+        })
+    }
+}
+
+enum ArtifactPayload {
+    Accepted(SourceBeatmap),
+    Raw(Arc<RawData>),
+}
+
+impl ArtifactPayload {
+    fn encoded(&self) -> Result<std::borrow::Cow<'_, [u8]>, String> {
+        match self {
+            Self::Accepted(map) => Ok(std::borrow::Cow::Borrowed(
+                map.canonical_record().as_bytes(),
+            )),
+            Self::Raw(raw) => raw.encode().map(std::borrow::Cow::Owned),
+        }
+    }
+
+    fn read(
+        &self,
+        file: &mut File,
+        receipt: &Receipt,
+        cancelled: &impl Fn() -> bool,
+    ) -> Result<Self, String> {
+        match self {
+            Self::Accepted(_) => read_map(file, receipt, cancelled).map(Self::Accepted),
+            Self::Raw(raw) => {
+                if receipt.kind != "source-beatmap-raw-qm-v1"
+                    || receipt.bytes > MAX_RAW_BYTES as u64
+                {
+                    return Err("unsupported raw artifact encoding or extent".into());
+                }
+                let bytes = read_verified_bytes(file, receipt.bytes, &receipt.sha256, cancelled)?;
+                let reopened = RawData::decode(&bytes)?;
+                if reopened.raw_revision != raw.raw_revision
+                    || reopened.decoder_identity != raw.decoder_identity
+                {
+                    return Err(
+                        "raw artifact revision or decoder differs from actual capture".into(),
+                    );
+                }
+                Ok(Self::Raw(Arc::new(reopened)))
+            }
+        }
+    }
+}
+
+fn store_payload(
+    root: &Path,
+    original: &Path,
+    payload: ArtifactPayload,
+    raw_review: Option<RawReviewLease>,
+    cancelled: &impl Fn() -> bool,
+    observe: &mut impl FnMut(StorePoint, &Path) -> Result<(), String>,
+) -> Result<(Receipt, Resources), String> {
+    check_cancelled(cancelled)?;
+    let root = fs::canonicalize(root).map_err(error)?;
+    let root = root.as_path();
+    // Capacity belongs to the existing asset queue before any generation birth.
+    let slot = ProjectAssets::shared()
+        .reserve_map_retirement()
+        .map_err(error)?;
+    let material = material_paths::material_root_for_original(root, original).map_err(error)?;
+    let mut guards = project_assets::directory_guards(&material).map_err(error)?;
+    let mut base = material;
+    for name in [".pcm-cache", "source-beatmaps", "v1"] {
+        base.push(name);
+        match fs::create_dir(&base) {
+            Ok(()) => (),
+            Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => (),
+            Err(value) => return Err(error(value)),
+        }
+        guards.extend(project_assets::directory_guards(&base).map_err(error)?);
+    }
+    let generation = generation_id()?;
+    let staging = base.join(format!(".generation-{generation}"));
+    let ready = base.join(format!(".ready-{generation}"));
+    fs::create_dir(&staging).map_err(error)?;
+    let staging_guards = project_assets::directory_guards(&staging).map_err(error)?;
+    let identity =
+        project_assets::file_identity(staging_guards.first().ok_or("map birth guard missing")?)
+            .map_err(error)?;
+    let mut birth = Birth {
+        root: root.to_owned(),
+        path: staging.clone(),
+        identity,
+        file_identity: None,
+        proof: None,
+        guards: staging_guards,
+        durable: false,
+        pin: None,
+        slot: Some(slot),
+    };
+    observe(StorePoint::AfterBirth, &staging)?;
+    let canonical = payload.encoded()?;
+    let (kind, revision, decoder_identity) = match &payload {
+        ArtifactPayload::Accepted(map) => (
+            "source-beatmap-v1",
+            map.map_revision(),
+            map.source_identity(),
+        ),
+        ArtifactPayload::Raw(raw) => (
+            "source-beatmap-raw-qm-v1",
+            raw.raw_revision.as_str(),
+            raw.decoder_identity.as_str(),
+        ),
+    };
+    let receipt = Receipt {
+        schema_version: 1,
+        kind: kind.into(),
+        reference: reference(root, &ready.join("map.json"))?,
+        bytes: canonical.len() as u64,
+        sha256: format!("{:x}", Sha256::digest(canonical.as_ref())),
+        // This struct stays private for Raw and is never accepted by
+        // Receipt::parse/validate or exposed as an accepted map receipt.
+        map_revision: revision.into(),
+        decoder_identity: decoder_identity.into(),
+    };
+    let leaf = staging.join("map.json");
+    let mut writer = OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(&leaf)
+        .map_err(error)?;
+    let file_identity = project_assets::file_identity(&writer).map_err(error)?;
+    birth.file_identity = Some(file_identity.clone());
+    for chunk in canonical.chunks(64 * 1024) {
+        check_cancelled(cancelled)?;
+        writer.write_all(chunk).map_err(error)?;
+    }
+    writer.sync_all().map_err(error)?;
+    drop(writer);
+    birth.proof = Some(VerifiedFile {
+        name: "map.json".into(),
+        identity: file_identity.clone(),
+        bytes: receipt.bytes,
+        sha256: receipt.sha256.clone(),
+    });
+    observe(StorePoint::AfterWrite, &staging)?;
+    {
+        require_only_map(&staging)?;
+        let mut reader = sealed_reader(&leaf).map_err(error)?;
+        if project_assets::file_identity(&reader).map_err(error)? != file_identity {
+            return Err("source beatmap staging leaf identity changed".into());
+        }
+        drop(payload.read(&mut reader, &receipt, cancelled)?);
+    }
+    observe(StorePoint::BeforeRename, &staging)?;
+    check_cancelled(cancelled)?;
+    birth.guards.clear();
+    // Generation collision is never overwritten or reused.
+    if ready.exists() {
+        return Err("source beatmap ready collision; preserved".into());
+    }
+    fs::rename(&staging, &ready).map_err(error)?;
+    birth.path = ready.clone();
+    birth.guards = project_assets::directory_guards(&ready).map_err(error)?;
+    if project_assets::file_identity(birth.guards.first().ok_or("ready map guard missing")?)
+        .map_err(error)?
+        != birth.identity
+    {
+        return Err("source beatmap ready directory identity changed".into());
+    }
+    observe(StorePoint::AfterRename, &ready)?;
+    require_only_map(&ready)?;
+    let path = ready.join("map.json");
+    let mut file = sealed_reader(&path).map_err(error)?;
+    if project_assets::file_identity(&file).map_err(error)? != file_identity {
+        return Err("source beatmap ready leaf identity changed".into());
+    }
+    // Reopen/hash/parse qualifies the artifact, not a second original scan.
+    let reopened = payload.read(&mut file, &receipt, cancelled)?;
+    let pin = ProjectAssets::shared()
+        .acquire_verified_pin(root, &path, &file_identity)
+        .map_err(error)?;
+    birth.pin = Some(pin.clone());
+    let (map, raw) = match reopened {
+        ArtifactPayload::Accepted(map) => (Some(map), None),
+        ArtifactPayload::Raw(raw) => (None, Some(raw)),
+    };
+    Ok((
+        receipt,
+        Resources {
+            map,
+            raw,
+            file: Some(file),
+            guards,
+            pin: Some(pin),
+            birth: Some(birth),
+            release: None,
+            raw_review,
+        },
+    ))
+}
+
+fn read_verified_bytes(
+    file: &mut File,
+    bytes: u64,
+    sha256: &str,
+    cancelled: &impl Fn() -> bool,
+) -> Result<Vec<u8>, String> {
+    if file.metadata().map_err(error)?.len() != bytes || bytes > MAX_RAW_BYTES as u64 {
+        return Err("raw artifact extent differs from its private capture".into());
+    }
+    let mut encoded = Vec::new();
+    encoded.try_reserve_exact(bytes as usize).map_err(error)?;
+    let mut digest = Sha256::new();
+    let mut buffer = [0_u8; 64 * 1024];
+    loop {
+        check_cancelled(cancelled)?;
+        let count = file.read(&mut buffer).map_err(error)?;
+        if count == 0 {
+            break;
+        }
+        if encoded
+            .len()
+            .checked_add(count)
+            .is_none_or(|length| length > bytes as usize)
+        {
+            return Err("raw artifact exceeds private extent".into());
+        }
+        encoded.extend_from_slice(&buffer[..count]);
+        digest.update(&buffer[..count]);
+    }
+    if encoded.len() as u64 != bytes || format!("{:x}", digest.finalize()) != sha256 {
+        return Err("raw artifact bytes differ from actual producer".into());
+    }
+    Ok(encoded)
 }
 
 fn check_cancelled(cancelled: &impl Fn() -> bool) -> Result<(), String> {

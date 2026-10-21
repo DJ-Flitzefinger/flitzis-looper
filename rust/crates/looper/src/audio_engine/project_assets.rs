@@ -256,9 +256,15 @@ struct MapRetirement {
 
 pub(super) struct DeferredMapReaders {
     pub _map: Option<super::source_beatmap::SourceBeatmap>,
+    pub _raw: Option<Arc<super::source_beatmap_raw_data::RawData>>,
     pub _file: Option<fs::File>,
     pub _guards: Vec<fs::File>,
     pub _pin: Option<ProjectAssetLease>,
+    pub _birth_guards: Vec<fs::File>,
+    pub _birth_pin: Option<ProjectAssetLease>,
+    // Rust drops fields in declaration order: the shared raw-review admission
+    // must follow actual data, sealed file, ancestor and pin destruction.
+    pub _raw_review: Option<super::source_beatmap_raw::RawReviewLease>,
 }
 
 /// A birth/output reserves capacity in the SAME queue before file acquisition.
@@ -400,6 +406,7 @@ pub(super) struct State {
 /// It owns no PCM and performs all file/lease retirement outside realtime code.
 pub(super) struct ProjectAssets {
     pub(super) state: Mutex<State>,
+    pub(super) raw_review_busy: AtomicBool,
 }
 
 impl ProjectAssets {
@@ -503,6 +510,7 @@ impl ProjectAssets {
     pub(super) fn isolated() -> Arc<Self> {
         Arc::new(Self {
             state: Mutex::default(),
+            raw_review_busy: AtomicBool::new(false),
         })
     }
     pub(super) fn prune_material_if_unowned(&self, path: &Path) {
@@ -579,6 +587,7 @@ impl ProjectAssets {
             .get_or_init(|| {
                 let service = Arc::new(Self {
                     state: Mutex::default(),
+                    raw_review_busy: AtomicBool::new(false),
                 });
                 let worker = service.clone();
                 thread::Builder::new()
@@ -2479,6 +2488,7 @@ mod tests {
     fn service() -> ProjectAssets {
         ProjectAssets {
             state: Mutex::default(),
+            raw_review_busy: AtomicBool::new(false),
         }
     }
 

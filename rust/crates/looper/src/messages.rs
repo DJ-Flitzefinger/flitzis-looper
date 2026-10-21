@@ -978,6 +978,12 @@ pub enum LoaderEvent {
         map: crate::audio_engine::SourceBeatmap,
         artifact: Option<crate::audio_engine::SourceBeatmapArtifact>,
     },
+    /// Unverified original observations, never accepted geometry or durable selection.
+    SourceBeatmapRawCompleted {
+        id: usize,
+        request_id: u64,
+        artifact: crate::audio_engine::SourceBeatmapRawArtifact,
+    },
     /// Loading started for the given sample slot id.
     Started { id: usize, request_id: u64 },
 
