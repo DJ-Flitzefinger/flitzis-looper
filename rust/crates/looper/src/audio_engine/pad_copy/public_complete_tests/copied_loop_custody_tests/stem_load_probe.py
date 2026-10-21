@@ -12,7 +12,7 @@ import json
 from pathlib import Path
 
 from flitzis_looper.controller.loader import LoaderController
-from flitzis_looper.project_materials import original_asset
+from flitzis_looper.project_materials import original_asset, resolve_asset
 from flitzis_looper.ui.context import PadSelectors
 
 
@@ -45,6 +45,8 @@ class StemLoadProbe:
         self.request = None
         self.before = None
         self.input_path = None
+        self.input_bytes = None
+        self.managed = False
         self.copied_identity = None
         self.completed = None
 
@@ -57,12 +59,24 @@ class StemLoadProbe:
 
     def begin_load(self, target, path):
         """Request an external stem WAV without clearing its copied predecessor."""
+        return self._begin_load(target, path, managed=False)
+
+    def begin_managed_load(self, target, path):
+        """Import a declared project WAV into an independent source assignment."""
+        return self._begin_load(target, path, managed=True)
+
+    def _begin_load(self, target, path, *, managed):
         self.target = target
         self.input_path = Path(path)
         assert self.input_path.is_file()
-        assert not self.input_path.is_relative_to(Path.cwd() / "samples")
+        self.input_bytes = self.input_path.read_bytes()
+        self.managed = managed
+        assert self.input_path.is_relative_to(Path.cwd() / "samples") is managed
+        if managed:
+            assert resolve_asset(self.input_path).kind == "stem_artifact"
         self.before = self.project.model_dump(mode="json")
-        self.copied_identity = self.project.pad_content[target].instance_id
+        content = self.project.pad_content[target]
+        self.copied_identity = content.instance_id if content is not None else None
         self.loader.load_sample_async(target, str(self.input_path))
         assert target not in self.session.sample_load_errors, self.session.sample_load_errors
         self.request = self.loader.incoming_load_request_id(target)
@@ -71,10 +85,31 @@ class StemLoadProbe:
         assert target in self.session.loading_sample_ids
         assert self.session.pending_sample_paths[target] == str(self.input_path)
         assert self.project.model_dump(mode="json") == self.before
-        assert self.selectors.is_loaded(target)
+        previous = self.before["sample_paths"][target]
+        assert self.selectors.is_loaded(target) is (previous is not None)
         assert self.selectors.is_loading(target)
-        assert self.selectors.label(target) == Path(self.before["sample_paths"][target]).name
+        assert self.selectors.label(target) == (
+            Path(previous).name if previous is not None else self.input_path.name
+        )
         return self.request
+
+    def assert_admission_rejected(self, target, path, intent):
+        """Exercise the public Native API without modifying control or source state."""
+        before = self.project.model_dump(mode="json")
+        binding = self.audio.current_input_runtime_pad_binding(target)
+        before_binding = binding.metadata() if binding is not None else None
+        try:
+            self.audio.load_sample_async(target, path, run_analysis=False, source_intent=intent)
+        except (RuntimeError, ValueError) as error:
+            failure = str(error)
+        else:
+            message = f"Non-importable managed source was admitted: {intent}: {path}"
+            raise AssertionError(message)
+        assert "typed original" in failure, failure
+        assert self.project.model_dump(mode="json") == before
+        current = self.audio.current_input_runtime_pad_binding(target)
+        assert (current.metadata() if current is not None else None) == before_binding
+        assert self.loader.incoming_load_request_id(target) is None
 
     def poll_failure(self):
         """Observe a genuine decode error while retaining the complete copied row."""
@@ -115,14 +150,17 @@ class StemLoadProbe:
         assert self.loader.incoming_load_request_id(target) is None
         assert self.selectors.is_loaded(target)
         assert not self.selectors.is_loading(target)
-        assert self.selectors.label(target) == "drums.wav"
+        assert self.selectors.label(target) == self.input_path.name
         reference = self.project.sample_paths[target]
         assert reference is not None
         assert reference != self.before["sample_paths"][target]
         asset = original_asset(reference)
         assert asset.layout == "readable"
-        assert asset.path.name == "drums.wav"
-        assert asset.path.read_bytes() == self.input_path.read_bytes()
+        assert asset.path.name == self.input_path.name
+        assert asset.path.read_bytes() == self.input_bytes
+        if self.managed:
+            assert asset.path != self.input_path
+            assert not asset.path.is_relative_to(self.input_path.parent)
         content = self.project.pad_content[target]
         assert content.instance_id != self.copied_identity
         assert content.copied_from is None
@@ -130,10 +168,8 @@ class StemLoadProbe:
         identity = self.audio.waveform_source_identity(target)
         assert identity is not None
         assert identity[0] == self.request
-        assert (
-            self.audio.loaded_source_digest(target)
-            == hashlib.sha256(self.input_path.read_bytes()).hexdigest()
-        )
+        expected_digest = hashlib.sha256(self.input_bytes).hexdigest()
+        assert self.audio.loaded_source_digest(target) == expected_digest
         binding = self.audio.current_input_runtime_pad_binding(target)
         assert binding is not None
         assert binding.is_current()
@@ -170,6 +206,41 @@ class StemLoadProbe:
         assert not self.assets.retirement_errors, self.assets.retirement_errors
         _pending, _retained, _deleted, errors = self.audio.project_asset_cleanup_status()
         assert not errors, errors
+
+    def retire_input_source(self):
+        """Unload the actual old source after both independent imports have settled."""
+        self.retained_imports = [
+            (
+                target,
+                self.project.sample_paths[target],
+                self.project.pad_content[target].instance_id,
+            )
+            for target in (1, 2)
+        ]
+        self.loader.unload_sample(0)
+        self.persistence.flush()
+        assert self.project.sample_paths[0] is None
+        assert self.project.stem_cache[0] is None
+
+    def assert_imports_retained(self):
+        """Input generation retirement cannot revoke its already captured originals."""
+        self.loader.poll_loader_events()
+        assert not self.session.sample_load_errors, self.session.sample_load_errors
+        for target, reference, instance in self.retained_imports:
+            assert self.project.sample_paths[target] == reference
+            assert self.project.pad_content[target].instance_id == instance
+            assert self.selectors.is_loaded(target)
+            assert self.selectors.label(target) == "drums.wav"
+            assert original_asset(reference).path.read_bytes() == self.input_bytes
+            binding = self.audio.current_input_runtime_pad_binding(target)
+            assert binding is not None
+            assert binding.is_current()
+        self.persistence.flush()
+        saved = json.loads(self.persistence.config_path.read_text())
+        for target, reference, instance in self.retained_imports:
+            assert saved["sample_paths"][target] == reference
+            assert saved["pad_content"][target]["instance_id"] == instance
+        self.assert_cleanup()
 
     def diagnostics(self):
         return json.dumps({

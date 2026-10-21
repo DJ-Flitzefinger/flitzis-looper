@@ -717,11 +717,24 @@ fn admit_selected_material_incoming(
     } else {
         None
     };
+    // A selected generated WAV is input to an ordinary immutable import, never
+    // an original assignment or a restore alias into its retiring stem set.
+    let declared_stem_import = source_intent == "import"
+        && managed.as_ref().is_some_and(|asset| {
+            matches!(asset.kind, super::material_paths::AssetKind::StemArtifact)
+                && asset
+                    .path
+                    .file_name()
+                    .and_then(|name| name.to_str())
+                    .and_then(|name| name.strip_suffix(".wav"))
+                    .is_some_and(|name| super::stem_cache::STEM_FILE_NAMES.contains(&name))
+        });
     if managed.as_ref().is_some_and(|asset| {
-        !matches!(
-            asset.kind,
-            super::material_paths::AssetKind::Original { .. }
-        )
+        !declared_stem_import
+            && !matches!(
+                asset.kind,
+                super::material_paths::AssetKind::Original { .. }
+            )
     }) || (managed.is_none()
         && samples_root.exists()
         && super::project_assets::owned_path(&samples_root, &requested_path).is_ok())

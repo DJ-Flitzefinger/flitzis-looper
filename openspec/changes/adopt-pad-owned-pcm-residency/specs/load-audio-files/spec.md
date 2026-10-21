@@ -57,9 +57,10 @@ failure SHALL leave previous assignment state intact.
 - **AND** the attempt still receives fresh native adoption authority
 
 #### Scenario: Invalid namespace cannot become an import
-- **WHEN** a managed source reference contains lexical traversal, a reparse ancestor, a Windows leaf alias, an invalid material/slot ID or a non-original artifact kind
+- **WHEN** a managed source reference contains lexical traversal, a reparse ancestor, a Windows leaf alias, an invalid material/slot ID or a non-original artifact kind other than an explicitly imported declared stem WAV
 - **THEN** the shared native resolver rejects it before normalization, filesystem writes or assignment mutation
 - **AND** external bytes and previous assignment state remain intact
+- **AND** the declared stem WAV import exception captures a separate canonical original through the existing pinned transaction; restore and auto intent still require a typed original
 
 #### Scenario: Owner admission fails after productive preparation
 - **WHEN** original owner capacity is exhausted before a prepared source can be enqueued

@@ -748,3 +748,20 @@ collection and persistence, while a genuine decode error preserves its copied
 predecessor. This is a standalone Loader composition without whole-App stem-reuse
 callbacks. The reported disappearing PAD has not been separately reproduced;
 the cleanup message alone does not clear a source assignment.
+
+Load Audio also accepts a declared project stem WAV as an explicit new import.
+The existing managed-input pin protects its source while the cold transaction
+captures a canonical original; byte-identical material may reuse its verified
+original. The PAD receives its own content and acknowledged source assignment,
+so its saved original never points into the input stem generation. Restore and
+automatic intent still require an original. Complete markers, PCM, unknown leaves
+and unsafe paths retain their existing rejection rules.
+
+The productive regression imports the same managed stem onto a copied PAD and
+an empty PAD, observes their own Native acknowledgements, then unloads the input
+source and releases its final prepared stem reader. The input generation is
+physically collected while both imported PADs retain their independent source
+assignments, visible labels and persisted originals. A genuine managed WAV decode
+error preserves the copied predecessor. This remains a bounded Loader composition;
+it does not reproduce every step of the reported transient disappearance or
+provoke concurrent input retirement during capture.
