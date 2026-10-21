@@ -379,8 +379,12 @@ Freeze expected coordinates and original acoustic gates before running candidate
 The active planned changes are `adopt-beat-this-analysis`, `prepare-versioned-source-beatmaps`,
 `share-editor-beatmap-coordinates`, `evaluate-variable-tempo-rendering`, and
 `prepare-independent-pitch-timing`. B1a/B1b in the analysis change implement the diagnostic path;
-all other implementation tasks remain pending. Later live
-ownership and Quantize/SYNC activation need their own focused deltas after B5 measurements;
+the shared B3 map, source custody, persisted selection and B4 manual/interval editor
+are now implemented at their documented software scope. The isolated
+`compare-accepted-map-renderers` change binds the next B5 comparison to this actual
+evaluator instead of the earlier collinear-keyframe mechanism. Full render-quality
+and resource acceptance remains open. Later live ownership and Quantize/SYNC
+activation need their own focused deltas after the required B5 evidence;
 R0's `add-key-transposition-performance` and `add-rearrange-shared-pad-content`
 provide pending user-facing deltas and share the revised material/hold contracts. Current runtime docs remain accurate until an
 implementation slice changes behavior, at which point that slice updates them too.
@@ -390,6 +394,11 @@ No new live render strategy has been activated. B1a/B1b supply the diagnostic of
 and optional real worker; the normal analyzer and playback behavior remain
 unchanged. The selected design is deliberately testable before any claim of perfect
 musical grids or audibly sample-exact independent transposition is made.
+
+The first [accepted-map renderer comparison](accepted-map-render-comparison.md)
+now records actual nonuniform inverse-map, Native/FIFO and offline-keyframe results.
+It preserves acoustic failures, insufficient tonal evidence and explicit unsupported
+combinations; it does not select a live renderer or change scalar playback.
 
 ## R0 extended compatibility and preserved gates
 

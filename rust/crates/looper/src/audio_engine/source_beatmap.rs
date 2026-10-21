@@ -328,3 +328,6 @@ fn projection_dict(py: Python<'_>, map: &ValidatedMap, value: Projection) -> PyR
 
 #[cfg(test)]
 mod tests;
+
+#[cfg(test)]
+pub(crate) mod render_comparison_tests;

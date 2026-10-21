@@ -31,6 +31,9 @@ const THREADING_NEVER: c_int = 0x0001_0000;
 const CHANNELS_TOGETHER: c_int = 0x1000_0000;
 const ENGINE_FINER: c_int = 0x2000_0000;
 
+#[path = "key_lock_stretcher_probe/accepted_map_comparison.rs"]
+mod accepted_map_comparison;
+
 #[derive(Clone, Copy)]
 struct OfflineKeyFrames {
     from: [u32; 2],
@@ -108,6 +111,7 @@ fn emit(record: serde_json::Value) {
 struct OfflineStretcher {
     state: NonNull<StretcherStateOpaque>,
     configuration: OfflineConfiguration,
+    variable_keyframes: bool,
     input_frames: usize,
     studied_frames: usize,
     processed_frames: usize,
@@ -124,6 +128,16 @@ impl OfflineStretcher {
         configuration: OfflineConfiguration,
         source_frames: usize,
         output_frames: usize,
+    ) -> Self {
+        Self::new_with_variable_map(configuration, source_frames, output_frames, None)
+    }
+
+    /// Additional test-only map path; legacy affine keyframes retain every old assertion.
+    fn new_with_variable_map(
+        configuration: OfflineConfiguration,
+        source_frames: usize,
+        output_frames: usize,
+        variable_map: Option<&[(u32, u32)]>,
     ) -> Self {
         let OfflineConfiguration {
             sample_rate_hz,
@@ -151,6 +165,17 @@ impl OfflineStretcher {
         let source_frames_c = u32::try_from(source_frames).unwrap();
         let max_process_c = u32::try_from(MAX_PROCESS_SIZE).unwrap();
         let channels_c = u32::try_from(PROBE_CHANNELS).unwrap();
+        if let Some(map) = variable_map {
+            assert!(configuration.keyframes.is_none());
+            assert!((4..=2048).contains(&map.len()));
+            let mut previous = (0, 0);
+            for &(from, to) in map {
+                assert!(from > previous.0 && to > previous.1);
+                assert!(from <= source_frames_c && to as usize <= output_frames);
+                previous = (from, to);
+            }
+            assert_eq!(previous, (source_frames_c, output_frames as u32));
+        }
         if let Some(map) = keyframes {
             assert!(map.from[0] > 0 && map.from[0] < map.from[1]);
             assert!(map.to[0] > 0 && map.to[0] < map.to[1]);
@@ -172,6 +197,7 @@ impl OfflineStretcher {
         let owner = Self {
             state: NonNull::new(raw).expect("offline Stretcher construction failed"),
             configuration,
+            variable_keyframes: variable_map.is_some(),
             input_frames: source_frames,
             studied_frames: 0,
             processed_frames: 0,
@@ -208,6 +234,21 @@ impl OfflineStretcher {
             }
             assert_eq!(from, map.from);
             assert_eq!(to, map.to);
+        }
+        if let Some(map) = variable_map {
+            let mut from = map.iter().map(|point| point.0).collect::<Vec<_>>();
+            let mut to = map.iter().map(|point| point.1).collect::<Vec<_>>();
+            // SAFETY: bounded positive monotonic C-uint arrays are synchronous inputs;
+            // the existing exclusive offline owner and lifecycle are unchanged.
+            unsafe {
+                rubberband_set_key_frame_map(
+                    owner.state.as_ptr(),
+                    from.len() as u32,
+                    from.as_mut_ptr(),
+                    to.as_mut_ptr(),
+                );
+            }
+            assert!(from.iter().zip(&to).eq(map.iter().map(|(a, b)| (a, b))));
         }
         let api = owner.api_profile(engine, options);
         emit(serde_json::json!({ "stage": "api_profile", "api": api }));
@@ -346,7 +387,12 @@ impl OfflineStretcher {
                 "time_ratio": time_ratio,
                 "pitch_scale": pitch_scale,
             }));
-            assert_eq!(time_ratio, self.configuration.time_ratio);
+            if self.variable_keyframes {
+                assert!(time_ratio.is_finite() && time_ratio > 0.0);
+                // The map may change R3's current ratio; no affine-total claim is made.
+            } else {
+                assert_eq!(time_ratio, self.configuration.time_ratio);
+            }
             assert_eq!(pitch_scale, self.configuration.pitch_scale);
         }
     }
@@ -449,6 +495,26 @@ fn offline_capture_configured(
     expected_frames: usize,
     canonical_native_blocks: bool,
 ) -> Vec<Vec<f32>> {
+    offline_capture_with_map(
+        input,
+        configuration,
+        pattern_name,
+        process_pattern,
+        expected_frames,
+        canonical_native_blocks,
+        None,
+    )
+}
+
+fn offline_capture_with_map(
+    input: &[Vec<f32>],
+    configuration: OfflineConfiguration,
+    pattern_name: &str,
+    process_pattern: &[usize],
+    expected_frames: usize,
+    canonical_native_blocks: bool,
+    variable_map: Option<&[(u32, u32)]>,
+) -> Vec<Vec<f32>> {
     let engine = configuration.engine;
     assert!(!process_pattern.is_empty());
     assert!(
@@ -465,7 +531,16 @@ fn offline_capture_configured(
         "process_pattern": pattern_name,
         "canonical_native_blocks": canonical_native_blocks,
     }));
-    let mut stretcher = OfflineStretcher::new(configuration, source_frames, expected_frames);
+    let mut stretcher = if variable_map.is_some() {
+        OfflineStretcher::new_with_variable_map(
+            configuration,
+            source_frames,
+            expected_frames,
+            variable_map,
+        )
+    } else {
+        OfflineStretcher::new(configuration, source_frames, expected_frames)
+    };
     let construction_elapsed_ms = capture_started.elapsed().as_secs_f64() * 1000.0;
     let study_started = Instant::now();
     let mut offset = 0;

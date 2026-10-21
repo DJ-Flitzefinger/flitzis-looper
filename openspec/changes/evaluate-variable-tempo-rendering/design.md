@@ -1,7 +1,10 @@
 ## Experiment boundary
 
-Draft only. Start with exact synthetic maps so detector error cannot be confused with rendering
-error. Compare (A) mapped source reads plus pitch-only LiveShifter and (B) a separate offline
+The affine mechanism and first canonical-map comparison are implemented as isolated
+test diagnostics; measured limits are in `../../../docs/accepted-map-render-comparison.md`.
+The wider experiment and production recommendation remain open. Use exact synthetic
+maps so detector error cannot be confused with rendering error. Compare (A) mapped
+source reads plus pitch-only LiveShifter and (B) a separate offline
 RubberBandStretcher adapter using source-to-output keyframes and total output/input duration.
 Do not feed already warped audio through the same tempo change a second time.
 Use the contract in prepare-independent-pitch-timing: h=2^(k/12), current varispeed pitch h/r

@@ -34,6 +34,28 @@ pub(crate) struct SourcePlayback {
 }
 
 impl SourcePlayback {
+    /// Isolated map diagnostics start an exact affine epoch, without the live scalar glide.
+    /// This constructs no source, timing, preparation or continuation permission.
+    #[cfg(test)]
+    pub(crate) fn diagnostic_affine_epoch(
+        coordinate: f64,
+        ratio: f64,
+        domain: SourceLoopDomain,
+    ) -> Option<Self> {
+        if !coordinate.is_finite()
+            || coordinate < domain.region.start as f64
+            || coordinate >= domain.region.end as f64
+            || !ratio.is_finite()
+            || !(SPEED_MIN..=SPEED_MAX).contains(&ratio)
+        {
+            return None;
+        }
+        let mut playback = Self::new(coordinate.floor() as usize, ExplicitSeekMode::Normal, ratio);
+        playback.origin.fraction = coordinate - coordinate.floor();
+        playback.domain = Some(domain);
+        Some(playback)
+    }
+
     // At most one .05 source-rate step per segment, plus the terminal constant segment.
     // The extra two segments cover binary64 accumulation at an inclusive endpoint.
     pub(crate) const MAX_PROJECTION_SEGMENTS: usize =

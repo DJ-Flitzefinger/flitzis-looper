@@ -13,8 +13,11 @@ repeatable offline experiment must compare render paths before a SYNC control ca
 - Include independent semitone trajectories now so a later per-pad KEY control cannot require
   redesigning source timing, map identity or master synchronization.
 
-Status: experiment proposal only, not implemented or selected for production. Depends on accepted
-map semantics or exact synthetic maps. See `../../../docs/beatmap-sync-research.md`.
+Status: the initial affine mechanism and the bounded canonical-map comparison are
+implemented as isolated test diagnostics. The wider experiment matrix, measured
+production recommendation and live adoption remain open. See
+`../../../docs/accepted-map-render-comparison.md` for actual evidence and limits,
+and `../../../docs/beatmap-sync-research.md` for the original experiment scope.
 
 ## Non-goals
 
