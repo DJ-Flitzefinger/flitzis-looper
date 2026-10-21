@@ -37,6 +37,7 @@ from flitzis_looper.copy_snapshot import (
     CONTENT_FIELDS,
     canonical_snapshot_json,
     musical_content_data,
+    musical_snapshot_projection,
 )
 from flitzis_looper.models import ProjectState, SessionState
 
@@ -413,8 +414,8 @@ class PreparedBankMirror:
         current_rows = tuple(
             musical_content_data(self._app._project, row.target_id) for row in self._bank.slots
         )
-        before_rows = tuple(row.before.model_dump(mode="python") for row in self._bank.slots)
-        after_rows = tuple(row.after.model_dump(mode="python") for row in self._bank.slots)
+        before_rows = tuple(musical_snapshot_projection(row.before) for row in self._bank.slots)
+        after_rows = tuple(musical_snapshot_projection(row.after) for row in self._bank.slots)
         for name, _ in CONTENT_FIELDS:
             current = tuple(row[name] for row in current_rows)
             if current != tuple(row[name] for row in before_rows) and not (

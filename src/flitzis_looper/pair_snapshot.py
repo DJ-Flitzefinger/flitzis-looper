@@ -10,6 +10,7 @@ from flitzis_looper.copy_snapshot import (
     MusicalSnapshotData,
     canonical_snapshot_json,
     musical_content_data,
+    musical_snapshot_projection,
     strict_snapshot_sample_id,
 )
 from flitzis_looper.models import PadContentIdentity, ProjectState
@@ -168,7 +169,7 @@ def project_with_pair_snapshot(project: ProjectState, snapshot: PairSnapshot) ->
         project.selected_pad, selected.instance_id if selected is not None else None, captured
     )
     for sample_id, image in images:
-        projection = image.model_dump(mode="python", warnings="error")
+        projection = musical_snapshot_projection(image)
         for name, project_field in CONTENT_FIELDS:
             data[project_field][sample_id] = projection[name]
     projected = ProjectState.model_validate_json(canonical_snapshot_json(data), strict=True)

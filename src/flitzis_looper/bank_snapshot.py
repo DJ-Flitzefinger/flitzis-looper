@@ -13,6 +13,7 @@ from flitzis_looper.copy_snapshot import (
     canonical_snapshot_json,
     copy_after_snapshot,
     musical_content_data,
+    musical_snapshot_projection,
 )
 from flitzis_looper.models import PadContentIdentity, ProjectState
 from flitzis_looper.pair_snapshot import PairSlotData
@@ -261,7 +262,7 @@ def project_with_bank_snapshot(project: ProjectState, snapshot: BankSnapshot) ->
     captured = validate_current_bank_snapshot(project, snapshot)
     data = project.model_dump(mode="python", exclude_computed_fields=True, warnings="error")
     for row in captured.slots:
-        image = row.after.model_dump(mode="python", warnings="error")
+        image = musical_snapshot_projection(row.after)
         for name, project_field in CONTENT_FIELDS:
             data[project_field][row.target_id] = image[name]
     candidate = ProjectState.model_validate_json(canonical_snapshot_json(data), strict=True)

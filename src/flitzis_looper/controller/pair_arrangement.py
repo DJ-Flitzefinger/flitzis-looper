@@ -7,6 +7,10 @@ from queue import Empty, SimpleQueue
 from typing import TYPE_CHECKING, cast
 from uuid import uuid4
 
+from flitzis_looper.controller.copy_arrangement_custody import (
+    CopyJournalCustody,
+    journal_project_images,
+)
 from flitzis_looper.controller.pair_arrangement_journal import (
     PairArrangementAfterImage,
     PairArrangementJournal,
@@ -74,6 +78,7 @@ class _Pair:
     candidate_revision: int | None = None
     assignment_publication: AssignmentPublicationPlan | None = None
     recovery_handoff: OriginalPairRecoveryHandoff | None = None
+    custody: CopyJournalCustody = field(default_factory=CopyJournalCustody)
 
 
 class PairArrangementController:
@@ -206,6 +211,7 @@ class PairArrangementController:
                 handoff.initial,
                 journal=handoff.journal,
                 recovery_handoff=handoff,
+                custody=handoff.custody,
             )
             self._pair = pair
             self._set_observer_fence(self.observer_fenced_sample_ids)
@@ -232,6 +238,12 @@ class PairArrangementController:
                 pair.cancel_requested = True
 
     def _before_record(self, pair: _Pair, phase: str) -> PairArrangementJournal:
+        pair.custody.acquire(
+            self._app._assets,
+            Path.cwd(),
+            (),
+            project_images=(self._app.project.model_dump_json(),),
+        )
         return pair.initial.changed(
             phase=phase,
             intent_revision=self._app.persistence.revision,
@@ -267,6 +279,15 @@ class PairArrangementController:
         self._commit(pair)
 
     def _ensure_journal(self, pair: _Pair) -> PairJournalOwner:
+        pair.custody.acquire(
+            self._app._assets,
+            Path.cwd(),
+            (),
+            project_images=(
+                pair.initial.project_image_json,
+                *journal_project_images(pair.journal.encoded if pair.journal else ()),
+            ),
+        )
         if pair.journal is None:
             pair.journal = PairJournalOwner(Path.cwd() / "samples", pair.initial)
         journal = pair.journal
@@ -425,6 +446,7 @@ class PairArrangementController:
         # Keep the exact failed candidate until a newer intent prepares its successor.
         assets = self._app._assets
         candidate = self._candidate(pair)
+        pair.custody.acquire(assets, Path.cwd(), (), project_images=(candidate.model_dump_json(),))
         image = assets.prepare_assignment_image(candidate)
         try:
             publication = assets.prepare_assignment_publication(image)
@@ -469,6 +491,7 @@ class PairArrangementController:
             self._app.persistence.release_migration(pair.owner)
             pair.writer_released = True
         pair.retirement.close()
+        pair.custody.release()
         self._pair = None
         self._set_observer_fence(frozenset())
         self.status = status

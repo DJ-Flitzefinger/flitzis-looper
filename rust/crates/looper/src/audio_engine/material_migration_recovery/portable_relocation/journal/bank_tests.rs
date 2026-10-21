@@ -207,6 +207,17 @@ fn place(project: &mut Value, id: usize, image: &Value) {
     for (name, field) in validators::CONTENT {
         project[*field][id] = image[*name].clone();
     }
+    if project.get("pad_source_beatmap_intent").is_some()
+        || image.get("source_beatmap_intent").is_some()
+    {
+        if project.get("pad_source_beatmap_intent").is_none() {
+            project["pad_source_beatmap_intent"] = json!(vec![Value::Null; 216]);
+        }
+        project["pad_source_beatmap_intent"][id] = image
+            .get("source_beatmap_intent")
+            .cloned()
+            .unwrap_or(Value::Null);
+    }
 }
 
 fn sealed(value: &Value) -> Value {
@@ -294,6 +305,41 @@ fn snapshot(root: &Path) -> Snapshot {
         }
     }
     result
+}
+
+#[test]
+fn native_portable_bank_carries_compact_map_selection_and_keeps_neutral_empty_legacy_shape() {
+    let fixture = Fixture::new();
+    let mut initial = fixture.initial("mixed");
+    let intent = json!({"schema_version":1,"revision":9,"selected":{
+        "schema_version":1,"kind":"source-beatmap-v1",
+        "reference":"samples/BankSource/.pcm-cache/source-beatmaps/v1/.ready-0123456789abcdef0123456789abcdef/map.json",
+        "bytes":1024,"sha256":"a".repeat(64),"map_revision":"b".repeat(64),"decoder_identity":"c".repeat(64)}});
+    let mut bank = bank(&initial);
+    bank["slots"][0]["source"]["source_beatmap_intent"] = intent.clone();
+    bank["slots"][0]["after"]["source_beatmap_intent"] = intent.clone();
+    initial["bank"] = sealed(&bank);
+    let mut captured = image(&initial);
+    captured["pad_source_beatmap_intent"] = json!(vec![Value::Null; 216]);
+    captured["pad_source_beatmap_intent"][0] = intent;
+    set_image(&mut initial, captured);
+    initial["captured_project_image_json"] = initial["project_image_json"].clone();
+    initial["captured_config_sha256"] = json!(format!(
+        "{:x}",
+        Sha256::digest(initial["project_image_json"].as_str().unwrap().as_bytes())
+    ));
+    let records = history(&initial, "settled");
+    assert!(validate(&fixture.source, TRANSACTION, &records).is_ok());
+    fixture.append(TRANSACTION, &records);
+    let before = snapshot(&fixture.source);
+    fixture.act("capture").unwrap();
+    fixture.act("move").unwrap();
+    let mut moved = snapshot(&fixture.target);
+    moved.remove(".portable-location-v1.json");
+    assert_eq!(moved, before);
+    fixture.act("recover").unwrap();
+    fixture.act("rollback").unwrap();
+    assert_eq!(snapshot(&fixture.source), before);
 }
 
 #[test]

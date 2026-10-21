@@ -4,6 +4,10 @@ use super::*;
 mod bank;
 mod validators;
 
+pub(super) fn metadata_json(text: &str, limit: usize) -> io::Result<Value> {
+    validators::json(text, limit)
+}
+
 #[cfg(test)]
 mod bank_tests;
 

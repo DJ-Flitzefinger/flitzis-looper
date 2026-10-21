@@ -10,8 +10,8 @@ use sha2::{Digest, Sha256};
 use std::fs::{self, File, OpenOptions};
 use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
-use std::sync::{Arc, Mutex};
 
 pub(super) const MAX_RECEIPT_BYTES: usize = 8 * 1024;
 
@@ -73,6 +73,43 @@ impl Receipt {
     }
 }
 
+/// Compact historical metadata only. Current source qualification stays on the worker.
+pub(super) fn validate_intent_value(value: &serde_json::Value) -> Result<(), String> {
+    #[derive(Deserialize)]
+    #[serde(deny_unknown_fields)]
+    struct Intent {
+        schema_version: u32,
+        revision: u64,
+        selected: Option<Receipt>,
+    }
+    let object = value
+        .as_object()
+        .ok_or("source beatmap intent must be an object")?;
+    if object.len() != 3
+        || !["schema_version", "revision", "selected"]
+            .iter()
+            .all(|key| object.contains_key(*key))
+    {
+        return Err("source beatmap intent must contain its exact complete schema".into());
+    }
+    let intent: Intent = serde_json::from_value(value.clone()).map_err(error)?;
+    if intent.schema_version != 1 {
+        return Err("unsupported source beatmap intent version".into());
+    }
+    let _ = intent.revision;
+    if let Some(receipt) = intent.selected {
+        let encoded = serde_json::to_string(&receipt).map_err(error)?;
+        Receipt::parse(&encoded)?;
+    }
+    Ok(())
+}
+
+pub(super) fn receipt_evidence(encoded: &str) -> Result<(String, u64, String, String), String> {
+    let receipt = Receipt::parse(encoded)?;
+    let canonical = serde_json::to_string(&receipt).map_err(error)?;
+    Ok((receipt.reference, receipt.bytes, receipt.sha256, canonical))
+}
+
 /// Per-call observation/failure seam; production uses the same path with a no-op.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(super) enum StorePoint {
@@ -92,64 +129,22 @@ struct Birth {
     guards: Vec<File>,
     durable: bool,
     pin: Option<ProjectAssetLease>,
+    slot: Option<project_assets::MapRetirementSlot>,
 }
 
 impl Drop for Birth {
     fn drop(&mut self) {
         self.guards.clear();
-        if self.durable {
-            return;
+        if let Some(slot) = self.slot.take() {
+            slot.queue(
+                self.root.clone(),
+                self.path.clone(),
+                self.identity.clone(),
+                (self.file_identity.clone(), self.proof.clone()),
+                !self.durable,
+                Vec::new(),
+            );
         }
-        // Cleanup is conservative and exact: never recursively remove an unknown
-        // child, replacement, changed published leaf or reparse target.
-        let _ = ProjectAssets::shared().retire_source_beatmap_birth(
-            &self.root,
-            &self.path,
-            self.pin.as_ref(),
-            || {
-                let _parents = project_assets::directory_guards(
-                    self.path
-                        .parent()
-                        .ok_or_else(|| std::io::Error::other("map birth parent missing"))?,
-                )?;
-                let guards = project_assets::directory_guards(&self.path)?;
-                if guards
-                    .first()
-                    .map(project_assets::file_identity)
-                    .transpose()?
-                    .as_ref()
-                    != Some(&self.identity)
-                {
-                    return Err(std::io::Error::other("map birth replaced; preserved"));
-                }
-                let entries = fs::read_dir(&self.path)?
-                    .take(2)
-                    .collect::<std::io::Result<Vec<_>>>()?;
-                if entries.iter().any(|entry| {
-                    entry.file_name() != "map.json"
-                        || !entry.file_type().is_ok_and(|kind| kind.is_file())
-                }) || entries.len() > 1
-                {
-                    return Err(std::io::Error::other(
-                        "map birth contains unknown children; preserved",
-                    ));
-                }
-                if !entries.is_empty() {
-                    let path = self.path.join("map.json");
-                    match (&self.proof, &self.file_identity) {
-                        (Some(proof), _) => project_assets::remove_verified_file(&path, proof)?,
-                        (_, Some(identity)) => {
-                            project_assets::remove_owned_file(&path, Some(identity))?
-                        }
-                        _ => {
-                            return Err(std::io::Error::other("map birth leaf unowned; preserved"));
-                        }
-                    }
-                }
-                drop(guards);
-                project_assets::remove_empty_directory(&self.path, &self.identity)
-            },
-        );
     }
 }
 
@@ -159,17 +154,38 @@ struct Resources {
     guards: Vec<File>,
     pin: Option<ProjectAssetLease>,
     birth: Option<Birth>,
+    release: Option<(
+        project_assets::MapRetirementSlot,
+        PathBuf,
+        PathBuf,
+        FileIdentity,
+    )>,
 }
 
 impl Drop for Resources {
     fn drop(&mut self) {
-        // Release actual readers before exact rollback can acquire DELETE access.
-        drop(self.file.take());
-        self.guards.clear();
-        drop(self.map.take());
-        drop(self.birth.take());
-        // The existing owner remains observable until actual cleanup finishes.
-        drop(self.pin.take());
+        let readers = project_assets::DeferredMapReaders {
+            _map: self.map.take(),
+            _file: self.file.take(),
+            _guards: std::mem::take(&mut self.guards),
+            _pin: self.pin.take(),
+        };
+        if let Some(mut birth) = self.birth.take() {
+            let slot = birth
+                .slot
+                .take()
+                .expect("map birth reserved cleanup before creation");
+            slot.queue(
+                birth.root.clone(),
+                birth.path.clone(),
+                birth.identity.clone(),
+                (birth.file_identity.clone(), birth.proof.clone()),
+                !birth.durable,
+                vec![readers],
+            );
+        } else if let Some((slot, root, path, identity)) = self.release.take() {
+            slot.queue(root, path, identity, (None, None), false, vec![readers]);
+        }
     }
 }
 
@@ -188,31 +204,9 @@ impl Drop for ArtifactInner {
         if let Some(birth) = resources.birth.as_mut() {
             birth.durable = self.acknowledged.load(Ordering::Acquire);
         }
-        if super::cold_jobs::is_worker_thread() {
-            // Failure/panic cleanup stays on the same running worker before its
-            // original reservation retires. Output owns no lane admission.
-            drop(resources);
-        } else {
-            // The accepted output may outlive its worker and engine. Final UI
-            // release transfers its actual readers and rollback work off UI.
-            let retained = Arc::new(Mutex::new(Some(resources)));
-            let work = retained.clone();
-            if std::thread::Builder::new()
-                .name("source-map-artifact-retirement".into())
-                .spawn(move || {
-                    drop(
-                        work.lock()
-                            .unwrap_or_else(std::sync::PoisonError::into_inner)
-                            .take(),
-                    )
-                })
-                .is_err()
-            {
-                // If the OS cannot create a retirement thread, preserve the
-                // bounded owner rather than perform file/hash work on the UI.
-                std::mem::forget(retained);
-            }
-        }
+        // The same pre-reserved asset queue releases actual readers/geometry and
+        // retries exact rollback off UI, including after worker/engine shutdown.
+        drop(resources);
     }
 }
 
@@ -234,6 +228,19 @@ impl std::fmt::Debug for SourceBeatmapArtifact {
 
 #[pymethods]
 impl SourceBeatmapArtifact {
+    /// Return an unselected new export to its original pre-reserved cleanup owner.
+    /// Restored artifacts have no birth deletion rights and remain unchanged.
+    pub fn retire_unselected(&self) {
+        if self
+            .inner
+            .resources
+            .as_ref()
+            .is_some_and(|resources| resources.birth.is_some())
+        {
+            self.inner.acknowledged.store(false, Ordering::Release);
+        }
+    }
+
     pub fn receipt_json(&self) -> &str {
         &self.inner.encoded_receipt
     }
@@ -276,7 +283,12 @@ impl SourceBeatmapArtifact {
         cancelled: &impl Fn() -> bool,
     ) -> Result<Self, String> {
         check_cancelled(cancelled)?;
+        let root = fs::canonicalize(root).map_err(error)?;
+        let root = root.as_path();
         let receipt = Receipt::parse(encoded_receipt)?;
+        let release_slot = ProjectAssets::shared()
+            .reserve_map_retirement()
+            .map_err(error)?;
         let checked =
             material_paths::resolve(root, Path::new(&receipt.reference)).map_err(error)?;
         if !matches!(checked.kind, AssetKind::SourceBeatmapArtifact { .. }) {
@@ -287,6 +299,9 @@ impl SourceBeatmapArtifact {
             .parent()
             .ok_or("source beatmap directory missing")?;
         let guards = project_assets::directory_guards(directory).map_err(error)?;
+        let directory_identity =
+            project_assets::file_identity(guards.first().ok_or("map directory guard missing")?)
+                .map_err(error)?;
         require_only_map(directory)?;
         let mut file = sealed_reader(&checked.path).map_err(error)?;
         let identity = project_assets::file_identity(&file).map_err(error)?;
@@ -302,6 +317,12 @@ impl SourceBeatmapArtifact {
                 guards,
                 pin: Some(pin),
                 birth: None,
+                release: Some((
+                    release_slot,
+                    root.to_owned(),
+                    directory.to_owned(),
+                    directory_identity,
+                )),
             },
         )
     }
@@ -314,6 +335,12 @@ impl SourceBeatmapArtifact {
         observe: &mut impl FnMut(StorePoint, &Path) -> Result<(), String>,
     ) -> Result<Self, String> {
         check_cancelled(cancelled)?;
+        let root = fs::canonicalize(root).map_err(error)?;
+        let root = root.as_path();
+        // Capacity belongs to the existing asset queue before any generation birth.
+        let slot = ProjectAssets::shared()
+            .reserve_map_retirement()
+            .map_err(error)?;
         let material = material_paths::material_root_for_original(root, original).map_err(error)?;
         let mut guards = project_assets::directory_guards(&material).map_err(error)?;
         let mut base = material;
@@ -343,6 +370,7 @@ impl SourceBeatmapArtifact {
             guards: staging_guards,
             durable: false,
             pin: None,
+            slot: Some(slot),
         };
         observe(StorePoint::AfterBirth, &staging)?;
         let canonical = map.canonical_record().as_bytes();
@@ -421,6 +449,7 @@ impl SourceBeatmapArtifact {
                 guards,
                 pin: Some(pin),
                 birth: Some(birth),
+                release: None,
             },
         )
     }

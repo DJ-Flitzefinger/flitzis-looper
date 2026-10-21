@@ -18,6 +18,7 @@ from flitzis_looper.copy_snapshot import (
     capture_copy_snapshot,
     copy_after_snapshot,
     musical_content_data,
+    musical_snapshot_projection,
     project_with_copy_snapshot,
 )
 from flitzis_looper.models import PadContentIdentity, ProjectState
@@ -148,7 +149,7 @@ def test_full_bank_after_rows_equal_existing_individual_copy_projection_of_compl
             project, row.target_id, source, target_identity=identity
         )
         expected = musical_content_data(independent, row.target_id)
-        assert row.after.model_dump(mode="python", warnings="error") == expected
+        assert musical_snapshot_projection(row.after) == expected
         assert musical_content_data(aggregate, row.target_id) == expected
         assert identity.copied_from == source.projected().source_identity.instance_id
         assert row.after.analysis is not None
@@ -243,7 +244,9 @@ def test_latest_outside_globals_selection_and_input_setting_survive_projection()
     # Their genuine ownership is verified by the separate Native/controller composition.
     payload = json.loads(snapshot.payload_json)
     for row in payload["slots"]:
-        assert set(row["before"]) == {name for name, _ in CONTENT_FIELDS}
+        assert set(row["before"]) == {
+            name for name, _ in CONTENT_FIELDS if name != "source_beatmap_intent"
+        }
         assert not any("midi" in name or "binding" in name for name in row["after"])
     assert project.model_dump(mode="json", exclude_computed_fields=True) == before
 

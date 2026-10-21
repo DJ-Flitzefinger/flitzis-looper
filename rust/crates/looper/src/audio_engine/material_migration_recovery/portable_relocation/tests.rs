@@ -1222,7 +1222,83 @@ fn project_with_slots(source: &Value, target: &Value, revision: u64) -> Value {
         array[1] = target[*name].clone();
         project[*field] = json!(array);
     }
+    if source.get("source_beatmap_intent").is_some()
+        || target.get("source_beatmap_intent").is_some()
+    {
+        let mut maps = vec![Value::Null; 216];
+        maps[0] = source
+            .get("source_beatmap_intent")
+            .cloned()
+            .unwrap_or(Value::Null);
+        maps[1] = target
+            .get("source_beatmap_intent")
+            .cloned()
+            .unwrap_or(Value::Null);
+        project["pad_source_beatmap_intent"] = json!(maps);
+    }
     project
+}
+
+#[test]
+fn compact_selected_map_copy_pair_histories_keep_exact_written_bytes_through_portable_roundtrip() {
+    for kind in ["pad_pair", "pad_copy_overwrite"] {
+        let fixture = Fixture::new(true);
+        let relative =
+            ".pcm-cache/source-beatmaps/v1/.ready-0123456789abcdef0123456789abcdef/map.json";
+        let map_path = fixture.source.join(relative);
+        fs::create_dir_all(map_path.parent().unwrap()).unwrap();
+        let bytes = b"opaque immutable map fixture; installer never parses geometry";
+        fs::write(&map_path, bytes).unwrap();
+        let intent = json!({"schema_version":1,"revision":9,"selected":{
+            "schema_version":1,"kind":"source-beatmap-v1","reference":format!("samples/{relative}"),
+            "bytes":bytes.len(),"sha256":format!("{:x}",Sha256::digest(bytes)),
+            "map_revision":"a".repeat(64),"decoder_identity":"b".repeat(64)}});
+        let mut initial = arrangement(&fixture, kind, COPY_TRANSACTION);
+        let projected = |value: &Value| {
+            serde_json::from_str::<Value>(value["payload_json"].as_str().unwrap()).unwrap()
+        };
+        let (mut source, target) = if kind == "pad_pair" {
+            let before = projected(&initial["before"]);
+            (before["source"].clone(), before["target"].clone())
+        } else {
+            (
+                projected(&initial["source"]),
+                projected(&initial["predecessor"]),
+            )
+        };
+        source["source_beatmap_intent"] = intent;
+        if kind == "pad_pair" {
+            initial["before"] = sealed(
+                &json!({"operation":"swap","source_id":0,"target_id":1,"source":source,"target":target}),
+            );
+            initial["after"] =
+                sealed(&json!({"source_id":0,"target_id":1,"source":target,"target":source}));
+        } else {
+            let mut after = projected(&initial["after"]);
+            after["source_beatmap_intent"] = source["source_beatmap_intent"].clone();
+            initial["source"] = sealed(&source);
+            initial["after"] = sealed(&after);
+        }
+        let project = project_with_slots(&source, &target, 1).to_string();
+        initial["project_image_json"] = json!(project);
+        if kind != "pad_pair" {
+            initial["captured_project_image_json"] = json!(project);
+        }
+        initial["captured_config_sha256"] =
+            json!(format!("{:x}", Sha256::digest(project.as_bytes())));
+        append_records(
+            &fixture,
+            COPY_TRANSACTION,
+            &through_phase(&initial, "settled"),
+        );
+        let before = snapshot(&fixture.source, false);
+        fixture.move_samples();
+        assert_eq!(snapshot(&fixture.target, false), before);
+        assert_eq!(phase(fixture.act("recover").unwrap()), "moved");
+        assert_eq!(snapshot(&fixture.target, false), before);
+        assert_eq!(phase(fixture.act("rollback").unwrap()), "rolled_back");
+        assert_eq!(snapshot(&fixture.source, false), before);
+    }
 }
 
 fn sealed(value: &Value) -> Value {

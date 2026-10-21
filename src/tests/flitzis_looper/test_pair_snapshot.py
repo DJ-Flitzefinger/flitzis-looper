@@ -65,7 +65,7 @@ def _two_contents() -> ProjectState:
 def test_pair_slots_derive_the_exact_existing_complete_copy_schema() -> None:
     assert set(PairSlotData.model_fields) == set(CopySnapshotData.model_fields)
     assert set(PairSlotData.model_fields) == {name for name, _ in CONTENT_FIELDS}
-    assert len(CONTENT_FIELDS) == 21
+    assert len(CONTENT_FIELDS) == 22
 
 
 def test_move_preserves_complete_content_identity_and_resets_independent_empty_defaults() -> None:

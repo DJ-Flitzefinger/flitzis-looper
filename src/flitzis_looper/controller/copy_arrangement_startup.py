@@ -8,7 +8,11 @@ from pathlib import Path
 from typing import TYPE_CHECKING
 from uuid import uuid4
 
-from flitzis_looper.controller.copy_arrangement_custody import CopyJournalCustody
+from flitzis_looper.controller.copy_arrangement_custody import (
+    CopyJournalCustody,
+    journal_project_images,
+    prepare_recovery_map_publication,
+)
 from flitzis_looper.controller.copy_arrangement_journal import (
     CopyArrangementJournal,
     CopyJournalOwner,
@@ -34,6 +38,7 @@ from flitzis_looper.models import ProjectState
 if TYPE_CHECKING:
     from flitzis_looper.controller.app import AppController
     from flitzis_looper.controller.asset_lifecycle import AssetRetirementReservation
+    from flitzis_looper.controller.copy_arrangement_custody import MapRecoveryPublication
     from flitzis_looper.controller.persistence import ConfigCommitReceipt
     from flitzis_looper_audio import InputRuntimePadBinding, RecoveredCopyAcceptance
 
@@ -61,6 +66,7 @@ class _RestoredAfter:
     acceptance: RecoveredCopyAcceptance | None = None
     receipt: ConfigCommitReceipt | None = None
     released: bool = False
+    map_publication: MapRecoveryPublication | None = None
 
 
 class CopyArrangementStartup:
@@ -190,6 +196,9 @@ class CopyArrangementStartup:
             self._app._assets,
             self.samples.parent,
             (record.source, record.predecessor, record.after),
+            project_images=journal_project_images(
+                text for owner in self.histories for text in owner.encoded
+            ),
         )
         if decision.disposition == "conflict":
             self.error, self.status = decision.error, "conflict"
@@ -517,11 +526,23 @@ class CopyArrangementStartup:
             raise PersistenceFenceError(message)
         if not recovery.terminal:
             if recovery.receipt is None or recovery.receipt.revision != app.persistence.revision:
+                self._custody.acquire(
+                    app._assets,
+                    self.samples.parent,
+                    (),
+                    project_images=(app.project.model_dump_json(),),
+                )
                 if record.phase == "native_ack_observed" or (
                     record.phase == "config_committed"
                     and app.persistence.revision > record.intent_revision
                 ):
                     before = copy_before_project(app.project, record)
+                    self._custody.acquire(
+                        app._assets,
+                        self.samples.parent,
+                        (),
+                        project_images=(before.model_dump_json(),),
+                    )
                     recovery.owner.append(
                         record.changed(
                             phase="native_ack_observed",
@@ -534,12 +555,21 @@ class CopyArrangementStartup:
                     )
                 else:
                     recovery.owner.append(record)
+                assert self._retirement is not None
+                with self._retirement.activate():
+                    recovery.map_publication = prepare_recovery_map_publication(
+                        app._assets, app.project, recovery.map_publication
+                    )
                 recovery.receipt = app.persistence.commit_migration_receipt(
                     self._fence, app.persistence.revision, app.project.model_copy(deep=True)
                 )
             recovery.owner.append(record.committed(recovery.receipt))
             if app.persistence.revision != recovery.receipt.revision:
                 return False
+            if recovery.map_publication is not None:
+                assert self._retirement is not None
+                with self._retirement.activate():
+                    recovery.map_publication[1].apply()
         if not audio.validate_recovered_pad_copy(recovery.acceptance):
             message = "Fresh Copy C acceptance changed after Config commit"
             raise PersistenceFenceError(message)

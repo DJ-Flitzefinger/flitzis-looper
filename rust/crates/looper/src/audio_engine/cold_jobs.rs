@@ -11,11 +11,6 @@ use std::time::Duration;
 
 thread_local! { static ON_WORKER: Cell<usize> = const { Cell::new(0) }; }
 
-/// Retirement observation only; this grants neither admission nor worker ownership.
-pub(super) fn is_worker_thread() -> bool {
-    ON_WORKER.with(|worker| worker.get() != 0)
-}
-
 pub(super) const WORKERS: usize = 2;
 pub(super) const QUEUED_JOBS: usize = 32;
 pub(super) const PCM_LIMIT_BYTES: usize = 1024 * 1024 * 1024;

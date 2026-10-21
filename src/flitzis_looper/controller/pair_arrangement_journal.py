@@ -69,11 +69,14 @@ def validated_project_image(text: str) -> ProjectState:
     data = strict_json_object(text)
     fields = set(ProjectState.model_fields)
     computed = set(ProjectState.model_computed_fields)
-    if not fields <= data.keys() or data.keys() - fields - computed:
+    missing = fields - data.keys()
+    if missing not in (set(), {"pad_source_beatmap_intent"}) or data.keys() - fields - computed:
         message = "Pair project image is incomplete or contains unknown fields"
         raise ValueError(message)
     project = ProjectState.model_validate_json(text, strict=True)
     expected = project.model_dump(mode="json", exclude_computed_fields=True, warnings="error")
+    if missing:
+        expected.pop("pad_source_beatmap_intent")
     if {key: value for key, value in data.items() if key not in computed} != expected:
         message = "Pair project image contains unrecognized or inconsistent nested metadata"
         raise ValueError(message)

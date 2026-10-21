@@ -761,7 +761,10 @@ impl MigrationArtifactLease {
             Read::by_ref(&mut known_reader)
                 .take(16 * 1024 * 1024 + 1)
                 .read_to_end(&mut known_bytes)?;
-            let image: Value = serde_json::from_slice(&known_bytes).map_err(io::Error::other)?;
+            let image = metadata_json(
+                std::str::from_utf8(&known_bytes).map_err(io::Error::other)?,
+                16 * 1024 * 1024,
+            )?;
             for reference in image["sample_paths"]
                 .as_array()
                 .ok_or_else(|| invalid("known source intent missing"))?
@@ -796,6 +799,14 @@ impl MigrationArtifactLease {
                     {
                         return Err(invalid("saved stems still protect retired material root"));
                     }
+                }
+            }
+            for reference in source_map_references(&image)? {
+                if material_paths::resolve(&root, Path::new(reference))?
+                    .path
+                    .starts_with(material_root)
+                {
+                    return Err(invalid("saved map still protects retired material root"));
                 }
             }
             config_guards.push(known_reader);
@@ -1089,6 +1100,81 @@ fn fresh_id() -> io::Result<String> {
             "project inventory requires Windows share-mode locking",
         ))
     }
+}
+
+pub(super) fn metadata_json(text: &str, limit: usize) -> io::Result<Value> {
+    portable_relocation::metadata_json(text, limit)
+}
+
+pub(super) fn source_map_references(image: &Value) -> io::Result<Vec<&str>> {
+    let Some(rows) = image.get("pad_source_beatmap_intent") else {
+        return Ok(Vec::new());
+    };
+    let rows = rows
+        .as_array()
+        .filter(|rows| rows.len() == 216)
+        .ok_or_else(|| invalid("known config source map table is incomplete; preserved"))?;
+    let mut references = Vec::new();
+    for intent in rows.iter().filter(|row| !row.is_null()) {
+        super::source_beatmap_artifact::validate_intent_value(intent).map_err(io::Error::other)?;
+        if let Some(reference) = intent["selected"]["reference"].as_str() {
+            references.push(reference);
+        }
+    }
+    Ok(references)
+}
+
+/// Holds the established registration gate AND immutable Config readers through
+/// map deletion. Callers acquire this before the asset gate, never in reverse.
+pub(super) struct MapConfigGuard {
+    _inventory: MigrationInventoryLease,
+    _readers: Vec<File>,
+}
+
+pub(super) fn map_config_guard(root: &Path, map: &Path) -> io::Result<Option<MapConfigGuard>> {
+    let inventory = inventory_gate(root)?;
+    let mut readers = Vec::new();
+    for record in inventory.records_native()? {
+        let record = metadata_json(&record, 16 * 1024 * 1024)?;
+        if !record["error"].is_null() {
+            return Err(invalid("unknown registered config protects map; preserved"));
+        }
+        let reference = record["config_reference"]
+            .as_str()
+            .ok_or_else(|| invalid("known config reference missing"))?;
+        let config = ordinary_config(root, Path::new(reference))?;
+        readers.extend(project_assets::directory_guards(
+            config
+                .parent()
+                .ok_or_else(|| invalid("known config parent missing"))?,
+        )?);
+        let mut reader = sealed_reader(&config)?;
+        if reader.metadata()?.len() > 16 * 1024 * 1024 {
+            return Err(invalid("known config exceeds map retirement bound"));
+        }
+        let mut bytes = Vec::new();
+        Read::by_ref(&mut reader)
+            .take(16 * 1024 * 1024 + 1)
+            .read_to_end(&mut bytes)?;
+        let image = metadata_json(
+            std::str::from_utf8(&bytes).map_err(io::Error::other)?,
+            16 * 1024 * 1024,
+        )?;
+        for reference in source_map_references(&image)? {
+            if material_paths::resolve(root, Path::new(reference))?
+                .path
+                .parent()
+                == Some(map)
+            {
+                return Ok(None);
+            }
+        }
+        readers.push(reader);
+    }
+    Ok(Some(MapConfigGuard {
+        _inventory: inventory,
+        _readers: readers,
+    }))
 }
 
 fn inventory_gate(root: &Path) -> io::Result<MigrationInventoryLease> {

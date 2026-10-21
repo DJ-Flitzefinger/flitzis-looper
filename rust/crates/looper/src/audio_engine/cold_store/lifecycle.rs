@@ -487,6 +487,8 @@ fn prune_created_material_at(root: &Path, checkpoint: &impl Fn(&File) -> io::Res
             root.join(".pcm-cache/stems/v1/.pairs"),
             root.join(".pcm-cache/stems/v1"),
             root.join(".pcm-cache/stems"),
+            root.join(".pcm-cache/source-beatmaps/v1"),
+            root.join(".pcm-cache/source-beatmaps"),
             root.join(".pcm-cache/v1"),
             root.join(".pcm-cache"),
         ] {

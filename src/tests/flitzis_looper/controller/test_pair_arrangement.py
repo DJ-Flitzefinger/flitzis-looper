@@ -16,7 +16,7 @@ from flitzis_looper.controller.pair_arrangement import PairArrangementController
 from flitzis_looper.controller.pair_arrangement_journal import PairArrangementAfterImage
 from flitzis_looper.controller.pair_arrangement_recovery import inspect_pair_recovery
 from flitzis_looper.controller.persistence import ProjectPersistence
-from flitzis_looper.copy_snapshot import CONTENT_FIELDS
+from flitzis_looper.copy_snapshot import CONTENT_FIELDS, musical_snapshot_projection
 from flitzis_looper.models import PadContentIdentity, ProjectState, SessionState
 from flitzis_looper_audio import MaterialMigrationJournalStore
 
@@ -194,7 +194,7 @@ class _Mirror:
         current = self.app.project.model_dump(mode="python", exclude_computed_fields=True)
         data = self.after.projected()
         for sample_id, slot in ((data.source_id, data.source), (data.target_id, data.target)):
-            projection = slot.model_dump(mode="python")
+            projection = musical_snapshot_projection(slot)
             for name, field in CONTENT_FIELDS:
                 current[field][sample_id] = projection[name]
         current["selected_pad"] = self.selection.projected_pad()

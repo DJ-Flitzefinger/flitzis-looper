@@ -12,6 +12,10 @@ const RECORD_BYTES: u64 = 16 * 1024 * 1024;
 
 mod journal;
 
+pub(super) fn metadata_json(text: &str, limit: usize) -> io::Result<Value> {
+    journal::metadata_json(text, limit)
+}
+
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 struct Entry {

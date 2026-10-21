@@ -913,5 +913,9 @@ mod source_beatmap_async_tests {
 
     mod source_beatmap_artifact_tests {
         include!("source_beatmap_artifact_tests.rs");
+
+        mod selection_vertical {
+            include!("source_beatmap_selection_vertical_tests.rs");
+        }
     }
 }

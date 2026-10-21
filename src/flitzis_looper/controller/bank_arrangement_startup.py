@@ -20,7 +20,11 @@ from flitzis_looper.controller.bank_arrangement_journal import (
     written_bank_image_matches,
 )
 from flitzis_looper.controller.bank_arrangement_recovery import inspect_bank_recovery
-from flitzis_looper.controller.copy_arrangement_custody import CopyJournalCustody
+from flitzis_looper.controller.copy_arrangement_custody import (
+    CopyJournalCustody,
+    journal_project_images,
+    prepare_recovery_map_publication,
+)
 from flitzis_looper.controller.material_migration_recovery import (
     config_reference_matches,
     inspect_migration_recovery,
@@ -38,6 +42,7 @@ from flitzis_looper.models import ProjectState
 if TYPE_CHECKING:
     from flitzis_looper.controller.app import AppController
     from flitzis_looper.controller.asset_lifecycle import AssetRetirementReservation
+    from flitzis_looper.controller.copy_arrangement_custody import MapRecoveryPublication
     from flitzis_looper.controller.persistence import ConfigCommitReceipt
     from flitzis_looper_audio import BankParticipants, RecoveredBankAcceptance
 
@@ -65,6 +70,7 @@ class _RestoredBank:
     receipt: ConfigCommitReceipt | None = None
     native_owner: int | None = None
     released: bool = False
+    map_publication: MapRecoveryPublication | None = None
 
 
 class BankArrangementStartup:
@@ -291,9 +297,14 @@ class BankArrangementStartup:
         decision = inspect_bank_recovery(record, self._bytes(), history=selected.encoded)
         self._before_recovery = decision.disposition in {"original_pending", "cancelled"}
         if self._retirement is None:
-            self._retirement = self._app._assets.reserve(9 * NUM_PADS)
+            self._retirement = self._app._assets.reserve(11 * NUM_PADS)
         self._custody.acquire(
-            self._app._assets, self.samples.parent, bank_journal_snapshots(record)
+            self._app._assets,
+            self.samples.parent,
+            bank_journal_snapshots(record),
+            project_images=journal_project_images(
+                text for owner in self.histories for text in owner.encoded
+            ),
         )
         if decision.disposition == "conflict":
             self.error, self.status = decision.error, "conflict"
@@ -620,11 +631,23 @@ class BankArrangementStartup:
             raise PersistenceFenceError(message)
         if not recovery.terminal:
             if recovery.receipt is None or recovery.receipt.revision != app.persistence.revision:
+                self._custody.acquire(
+                    app._assets,
+                    self.samples.parent,
+                    (),
+                    project_images=(app.project.model_dump_json(),),
+                )
                 if record.phase == "native_ack_observed" or (
                     record.phase == "config_committed"
                     and app.persistence.revision > record.intent_revision
                 ):
                     before = bank_before_project(app.project, record)
+                    self._custody.acquire(
+                        app._assets,
+                        self.samples.parent,
+                        (),
+                        project_images=(before.model_dump_json(),),
+                    )
                     record = recovery.owner.append(
                         record.changed(
                             phase="native_ack_observed",
@@ -641,12 +664,21 @@ class BankArrangementStartup:
                 if not audio.validate_recovered_bank(recovery.acceptance):
                     message = "Fresh Bank acceptance changed across recorded Config intent"
                     raise PersistenceFenceError(message)
+                assert self._retirement is not None
+                with self._retirement.activate():
+                    recovery.map_publication = prepare_recovery_map_publication(
+                        app._assets, app.project, recovery.map_publication
+                    )
                 recovery.receipt = app.persistence.commit_migration_receipt(
                     self._fence, app.persistence.revision, app.project.model_copy(deep=True)
                 )
             recovery.owner.append(record.committed(recovery.receipt))
             if app.persistence.revision != recovery.receipt.revision:
                 return False
+            if recovery.map_publication is not None:
+                assert self._retirement is not None
+                with self._retirement.activate():
+                    recovery.map_publication[1].apply()
         current = recovery.owner.journal
         assert current is not None
         self._validate_current_after(current, terminal=True)

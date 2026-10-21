@@ -18,6 +18,7 @@ from flitzis_looper.controller.base import BaseController
 from flitzis_looper.controller.committed_stem_residency import resident_pcm_budget_pressure
 from flitzis_looper.controller.key_metadata import KeyMetadataAnalysis
 from flitzis_looper.controller.saved_residency import saved_resident_loop
+from flitzis_looper.controller.source_beatmap_selection import SourceBeatmapSelection
 from flitzis_looper.controller.validation import normalize_bpm
 from flitzis_looper.key_intent import PadKeyIntent
 from flitzis_looper.material_migration_model import MaterialCreationReceipt
@@ -483,6 +484,9 @@ class LoaderController(_IncomingIntentControl, _MaterialCreationOwnership):
         self._accepted_restore = AcceptedTimingRestore(
             project, session, audio, self._finish_accepted_restore
         )
+        self.source_beatmaps = SourceBeatmapSelection(
+            project, audio, self._assets, self._mark_project_changed
+        )
 
     def _bind_diagnostics(self, diagnostics: ConsoleDiagnostics) -> None:
         """Bind control diagnostics before restoration and event dispatch."""
@@ -496,6 +500,9 @@ class LoaderController(_IncomingIntentControl, _MaterialCreationOwnership):
                 ("stem_generation", self._session.stem_generation_errors),
             ):
                 self._diagnostics.observe(operation, messages.get(sample_id), pad_id=sample_id)
+            self._diagnostics.observe(
+                "source_beatmap", self.source_beatmaps.errors.get(sample_id), pad_id=sample_id
+            )
 
     def _finish_accepted_restore(self, sample_id: int) -> None:
         if self._on_accepted_timing_refresh is not None:
@@ -519,6 +526,7 @@ class LoaderController(_IncomingIntentControl, _MaterialCreationOwnership):
         for sample_id in list(self._deferred_restores):
             self._cancel_deferred_restore(sample_id)
         self._accepted_restore.shut_down()
+        self.source_beatmaps.shut_down()
         for reservation in self._load_retirements.values():
             reservation.close()
         self._load_retirements.clear()
@@ -539,6 +547,7 @@ class LoaderController(_IncomingIntentControl, _MaterialCreationOwnership):
     def bind_asset_lifecycle(self, lifecycle: ProjectAssetLifecycle) -> None:
         """Share assignment and separator owners with the application controller."""
         self._assets = lifecycle
+        self.source_beatmaps.assets = lifecycle
 
     def set_restored_sample_loaded_callback(self, callback: Callable[[int], bool]) -> None:
         """Register behavior that runs after a restored sample finishes loading."""
@@ -727,6 +736,7 @@ class LoaderController(_IncomingIntentControl, _MaterialCreationOwnership):
         deferred = self._pair_deferred_sample_ids
         self._refresh_incoming_global_intent()
         self._accepted_restore.poll(deferred_sample_ids=deferred)
+        self.source_beatmaps.poll(deferred, admit_restore=False)
         self._poll_material_creation()
         self._assets.retry_retirements()
         handlers: dict[str, Callable[[int, dict[str, object]], None]] = {
@@ -738,6 +748,7 @@ class LoaderController(_IncomingIntentControl, _MaterialCreationOwnership):
             "task_progress": self._handle_task_progress,
             "task_success": self._handle_task_success,
             "task_error": self._handle_task_error,
+            "source_beatmap_completed": self.source_beatmaps.completed,
         }
 
         held, self._pair_held_loader_events = self._pair_held_loader_events, []
@@ -752,6 +763,9 @@ class LoaderController(_IncomingIntentControl, _MaterialCreationOwnership):
             self._deliver_loader_event(incoming, handlers, deferred)
         self._poll_material_creation()
         self._retry_deferred_restores()
+        # Native readiness can precede this control-side source ACK's complete
+        # timing/runtime refresh. Admit only after its original success delivery.
+        self.source_beatmaps.poll(deferred | frozenset(self._session.loading_sample_ids))
 
     def _deliver_loader_event(
         self,
@@ -892,6 +906,11 @@ class LoaderController(_IncomingIntentControl, _MaterialCreationOwnership):
                 self._project.sample_paths, sample_id, defaults.sample_paths[sample_id]
             ),
             _reset_pad_value(self._project.pad_content, sample_id, defaults.pad_content[sample_id]),
+            _reset_pad_value(
+                self._project.pad_source_beatmap_intent,
+                sample_id,
+                defaults.pad_source_beatmap_intent[sample_id],
+            ),
             _reset_pad_value(
                 self._project.sample_durations,
                 sample_id,
@@ -1054,6 +1073,7 @@ class LoaderController(_IncomingIntentControl, _MaterialCreationOwnership):
                 sample_id, event, incoming, adopted, timing_stale=timing_stale
             )
             self._project.pad_key_intent[sample_id] = PadKeyIntent()
+            self._project.pad_source_beatmap_intent[sample_id] = None
             self._key_analysis.cancel(sample_id)
             self._project.sample_paths[sample_id] = target_path
             self._clear_stem_cache(sample_id)

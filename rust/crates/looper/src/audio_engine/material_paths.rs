@@ -655,6 +655,8 @@ pub(super) fn prune_empty_material(path: &Path) {
         material.join(".pcm-cache/stems/v1/.pairs"),
         material.join(".pcm-cache/stems/v1"),
         material.join(".pcm-cache/stems"),
+        material.join(".pcm-cache/source-beatmaps/v1"),
+        material.join(".pcm-cache/source-beatmaps"),
         material.join(".pcm-cache/v1"),
         material.join(".pcm-cache"),
     ] {

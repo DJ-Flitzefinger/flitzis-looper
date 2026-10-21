@@ -18,7 +18,7 @@ use std::path::{Component, Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, OnceLock, Weak};
 use std::thread;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 use stem_readers::SharedStemReaders;
 
 const MAX_RETIREMENTS: usize = 1024;
@@ -62,6 +62,15 @@ struct PathOwner {
     path: PathBuf,
     identity: Option<FileIdentity>,
     saved_assignment: AtomicBool,
+    map_directory_identity: Option<FileIdentity>,
+    source_map: OnceLock<BoundSourceMap>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct BoundSourceMap {
+    directory: FileIdentity,
+    leaf: VerifiedFile,
+    receipt: String,
 }
 
 impl PathOwner {
@@ -84,6 +93,79 @@ pub struct ProjectAssetLease {
 
 #[pymethods]
 impl ProjectAssetLease {
+    /// Cached compact cleanup evidence only, never current source qualification.
+    #[getter]
+    pub fn source_beatmap_bound(&self) -> bool {
+        self.owner
+            .as_ref()
+            .is_some_and(|owner| owner.source_map.get().is_some())
+    }
+
+    /// Bind compact historical evidence to this already acquired exact map pin.
+    pub fn bind_source_beatmap(&self, receipt_json: String) -> PyResult<()> {
+        let owner = self
+            .owner
+            .as_ref()
+            .ok_or_else(|| PyRuntimeError::new_err("asset lease released"))?;
+        let (reference, bytes, sha256, receipt) =
+            super::source_beatmap_artifact::receipt_evidence(&receipt_json)
+                .map_err(PyRuntimeError::new_err)?;
+        if owner.root.parent().map(|parent| parent.join(reference)) != Some(owner.path.clone()) {
+            return Err(PyRuntimeError::new_err(
+                "map receipt differs from acquired map leaf",
+            ));
+        }
+        let proof = BoundSourceMap {
+            receipt,
+            directory: owner
+                .map_directory_identity
+                .clone()
+                .ok_or_else(|| PyRuntimeError::new_err("lease is not an acquired map leaf"))?,
+            leaf: VerifiedFile {
+                name: "map.json".into(),
+                identity: owner
+                    .identity
+                    .clone()
+                    .ok_or_else(|| PyRuntimeError::new_err("map leaf was absent at admission"))?,
+                bytes,
+                sha256,
+            },
+        };
+        if let Some(current) = owner.source_map.get() {
+            if current != &proof {
+                return Err(PyRuntimeError::new_err(
+                    "map lease already bound to different evidence",
+                ));
+            }
+        } else if owner.source_map.set(proof.clone()).is_err()
+            && owner.source_map.get() != Some(&proof)
+        {
+            return Err(PyRuntimeError::new_err("map lease binding changed"));
+        }
+        Ok(())
+    }
+
+    /// Queue exact map proof; all current pins/readers continue to protect it.
+    pub fn retire_source_beatmap(&self) -> PyResult<()> {
+        let owner = self
+            .owner
+            .as_ref()
+            .ok_or_else(|| PyRuntimeError::new_err("asset lease released"))?;
+        ProjectAssets::shared()
+            .retire_bound_source_map(owner)
+            .map_err(|error| PyRuntimeError::new_err(error.to_string()))
+    }
+
+    /// A saved-map publication may cancel obsolete retirement after Config commit.
+    pub fn acknowledge_source_beatmap(&self) -> PyResult<()> {
+        let owner = self
+            .owner
+            .as_ref()
+            .ok_or_else(|| PyRuntimeError::new_err("asset lease released"))?;
+        ProjectAssets::shared()
+            .acknowledge_source_map(owner)
+            .map_err(|error| PyRuntimeError::new_err(error.to_string()))
+    }
     /// Promote a reserved delivered original without another owner allocation.
     /// The load worker reserved this pin before irreversible native adoption.
     pub fn acknowledge(&self, expected_path: String) -> PyResult<()> {
@@ -161,6 +243,94 @@ struct Retirement {
     files: Option<Vec<VerifiedFile>>,
     pcm: bool,
     protection: Option<Arc<RetirementProtection>>,
+    map: Option<MapRetirement>,
+}
+
+/// Exact private map evidence on the existing retirement queue, never persisted.
+struct MapRetirement {
+    leaf_identity: Option<FileIdentity>,
+    delete: bool,
+    deferred: Vec<DeferredMapReaders>,
+    next_attempt: Instant,
+}
+
+pub(super) struct DeferredMapReaders {
+    pub _map: Option<super::source_beatmap::SourceBeatmap>,
+    pub _file: Option<fs::File>,
+    pub _guards: Vec<fs::File>,
+    pub _pin: Option<ProjectAssetLease>,
+}
+
+/// A birth/output reserves capacity in the SAME queue before file acquisition.
+pub(super) struct MapRetirementSlot {
+    assets: Arc<ProjectAssets>,
+    reserved: bool,
+}
+
+impl Drop for MapRetirementSlot {
+    fn drop(&mut self) {
+        if self.reserved {
+            let mut state = self
+                .assets
+                .state
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
+            state.reserved_retirements -= 1;
+        }
+    }
+}
+
+impl MapRetirementSlot {
+    pub(super) fn queue(
+        mut self,
+        root: PathBuf,
+        path: PathBuf,
+        identity: FileIdentity,
+        leaf_proof: (Option<FileIdentity>, Option<VerifiedFile>),
+        delete: bool,
+        deferred: Vec<DeferredMapReaders>,
+    ) {
+        let (leaf_identity, file) = leaf_proof;
+        let mut state = self
+            .assets
+            .state
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        state.reserved_retirements -= 1;
+        self.reserved = false;
+        let target = Retirement {
+            root,
+            recursive: true,
+            identity: Some(identity),
+            files: file.map(|file| vec![file]),
+            pcm: false,
+            protection: None,
+            map: Some(MapRetirement {
+                leaf_identity,
+                delete,
+                deferred,
+                next_attempt: Instant::now(),
+            }),
+        };
+        if let Some(previous) = state.retiring.get_mut(&path) {
+            if let (Some(old), Some(mut incoming)) = (previous.map.as_mut(), target.map) {
+                // Actual outputs for the same immutable generation share cleanup,
+                // while the first captured identity remains deletion authority.
+                old.deferred.append(&mut incoming.deferred);
+                if previous.identity == target.identity {
+                    old.delete |= incoming.delete;
+                    if previous.files.is_none() {
+                        previous.files = target.files;
+                    }
+                    if old.leaf_identity.is_none() {
+                        old.leaf_identity = incoming.leaf_identity;
+                    }
+                }
+            }
+        } else {
+            state.retiring.insert(path, target);
+        }
+    }
 }
 
 impl Retirement {
@@ -218,6 +388,7 @@ pub(super) struct State {
     owners: Vec<Weak<PathOwner>>,
     readers: Vec<Reader>,
     retiring: HashMap<PathBuf, Retirement>,
+    reserved_retirements: usize,
     deleted: u64,
     errors: Vec<String>,
     histories: Vec<Weak<PcmHistory>>,
@@ -455,55 +626,123 @@ impl ProjectAssets {
             .count()
     }
 
-    /// Exact map-birth rollback only, serialized with every existing admission.
-    /// This neither queues collection nor authorizes saved-artifact retirement.
-    pub(super) fn retire_source_beatmap_birth(
-        &self,
-        root: &Path,
-        path: &Path,
-        own_pin: Option<&ProjectAssetLease>,
-        remove: impl FnOnce() -> io::Result<()>,
-    ) -> io::Result<()> {
-        let (root, path) = owned_path(root, path)?;
-        let mut reference = Path::new("samples").join(
-            path.strip_prefix(&root)
-                .map_err(|_| io::Error::other("map birth escaped samples"))?,
-        );
-        if let Some(name) = reference
-            .file_name()
-            .and_then(|name| name.to_str())
-            .and_then(|name| name.strip_prefix(".generation-"))
-            .map(str::to_owned)
-        {
-            if !super::material_paths::valid_id(&name) {
-                return Err(io::Error::other("invalid map birth generation"));
-            }
-            reference.set_file_name(format!(".ready-{name}"));
-        }
-        if !matches!(
-            super::material_paths::classify(&reference)?,
-            super::material_paths::AssetKind::SourceBeatmapDirectory { .. }
-        ) {
-            return Err(io::Error::other(
-                "map rollback requires an exact typed birth",
-            ));
-        }
-        let state = self
+    #[cfg(test)]
+    pub(super) fn map_retirement_pending_for_test(&self, leaf: &Path) -> bool {
+        leaf.parent()
+            .and_then(|directory| canonical_with_missing(directory).ok())
+            .is_some_and(|directory| self.state.lock().unwrap().retiring.contains_key(&directory))
+    }
+
+    pub(super) fn reserve_map_retirement(self: &Arc<Self>) -> io::Result<MapRetirementSlot> {
+        let mut state = self
             .state
             .lock()
             .map_err(|_| io::Error::other("asset gate poisoned"))?;
-        let excluded = own_pin.and_then(|pin| pin.owner.as_ref());
-        let overlaps = |other: &Path| other.starts_with(&path) || path.starts_with(other);
-        if state.owners.iter().filter_map(Weak::upgrade).any(|owner| {
-            !excluded.is_some_and(|excluded| Arc::ptr_eq(excluded, &owner)) && overlaps(&owner.path)
-        }) || state.readers.iter().any(|reader| overlaps(&reader.path))
-        {
-            return Err(io::Error::other(
-                "map birth has another retained owner; preserved",
-            ));
+        if state.retiring.len() + state.reserved_retirements >= MAX_RETIREMENTS {
+            return Err(io::Error::other("project asset retirement queue full"));
         }
-        // Keep this SAME admission gate through actual exact object removal.
-        remove()
+        let additional = state.reserved_retirements + 1;
+        state
+            .retiring
+            .try_reserve(additional)
+            .map_err(|_| io::Error::other("map retirement queue reservation failed"))?;
+        state.reserved_retirements += 1;
+        Ok(MapRetirementSlot {
+            assets: self.clone(),
+            reserved: true,
+        })
+    }
+
+    fn retire_bound_source_map(&self, owner: &Arc<PathOwner>) -> io::Result<()> {
+        let proof = owner
+            .source_map
+            .get()
+            .ok_or_else(|| io::Error::other("map lease has no bound receipt"))?;
+        let path = owner
+            .path
+            .parent()
+            .ok_or_else(|| io::Error::other("map generation missing"))?
+            .to_owned();
+        let mut state = self
+            .state
+            .lock()
+            .map_err(|_| io::Error::other("asset gate poisoned"))?;
+        if let Some(previous) = state.retiring.get_mut(&path) {
+            if previous.identity.as_ref() != Some(&proof.directory)
+                || previous
+                    .files
+                    .as_ref()
+                    .is_some_and(|files| files != &vec![proof.leaf.clone()])
+                || previous.map.is_none()
+            {
+                return Err(io::Error::other(
+                    "map retirement evidence changed; preserved",
+                ));
+            }
+            previous.files = Some(vec![proof.leaf.clone()]);
+            let map = previous.map.as_mut().expect("checked map retirement");
+            map.leaf_identity = Some(proof.leaf.identity.clone());
+            map.delete = true;
+        } else {
+            if state.retiring.len() + state.reserved_retirements >= MAX_RETIREMENTS {
+                return Err(io::Error::other("project asset retirement queue full"));
+            }
+            state.retiring.insert(
+                path,
+                Retirement {
+                    root: owner.root.clone(),
+                    recursive: true,
+                    identity: Some(proof.directory.clone()),
+                    files: Some(vec![proof.leaf.clone()]),
+                    pcm: false,
+                    protection: None,
+                    map: Some(MapRetirement {
+                        leaf_identity: Some(proof.leaf.identity.clone()),
+                        delete: true,
+                        deferred: Vec::new(),
+                        next_attempt: Instant::now(),
+                    }),
+                },
+            );
+        }
+        owner.saved_assignment.store(false, Ordering::Release);
+        Ok(())
+    }
+
+    fn acknowledge_source_map(&self, owner: &Arc<PathOwner>) -> io::Result<()> {
+        let proof = owner
+            .source_map
+            .get()
+            .ok_or_else(|| io::Error::other("map lease has no bound receipt"))?;
+        let path = owner
+            .path
+            .parent()
+            .ok_or_else(|| io::Error::other("map generation missing"))?;
+        let mut state = self
+            .state
+            .lock()
+            .map_err(|_| io::Error::other("asset gate poisoned"))?;
+        if let Some(previous) = state.retiring.get_mut(path) {
+            if previous.identity.as_ref() != Some(&proof.directory)
+                || previous
+                    .files
+                    .as_ref()
+                    .is_some_and(|files| files != &vec![proof.leaf.clone()])
+            {
+                return Err(io::Error::other(
+                    "saved map acknowledgement differs from queued evidence",
+                ));
+            }
+            let map = previous
+                .map
+                .as_mut()
+                .ok_or_else(|| io::Error::other("map retirement has wrong kind"))?;
+            // Keep deferred releases on the worker; acknowledgement itself performs
+            // no hashing, resource deallocation or physical deletion on the UI.
+            map.delete = false;
+        }
+        owner.saved_assignment.store(true, Ordering::Release);
+        Ok(())
     }
 
     fn acquire_internal(
@@ -528,10 +767,26 @@ impl ProjectAssets {
                 "verified asset was replaced before admission",
             ));
         }
-        let original = matches!(
-            super::material_paths::resolve(&root, &path)?.kind,
-            super::material_paths::AssetKind::Original { .. }
+        let kind = super::material_paths::resolve(&root, &path)?.kind;
+        let map_leaf = matches!(
+            kind,
+            super::material_paths::AssetKind::SourceBeatmapArtifact { .. }
         );
+        let claim_pending = claim_pending
+            && !matches!(
+                kind,
+                super::material_paths::AssetKind::SourceBeatmapArtifact { .. }
+                    | super::material_paths::AssetKind::SourceBeatmapDirectory { .. }
+            );
+        let map_directory_identity = if map_leaf {
+            capture_identity(
+                path.parent()
+                    .ok_or_else(|| io::Error::other("map generation missing"))?,
+            )?
+        } else {
+            None
+        };
+        let original = matches!(kind, super::material_paths::AssetKind::Original { .. });
         if claim_pending && original && path.exists() {
             super::cold_store::admit_original_owner(&path)?;
         }
@@ -572,6 +827,8 @@ impl ProjectAssets {
             path,
             identity,
             saved_assignment: AtomicBool::new(claim_pending),
+            map_directory_identity,
+            source_map: OnceLock::new(),
         });
         state.owners.push(Arc::downgrade(&owner));
         let _ = root;
@@ -903,7 +1160,7 @@ impl ProjectAssets {
                 .iter()
                 .filter(|(target, _)| !state.retiring.contains_key(target))
                 .count();
-            if state.retiring.len() + needed > MAX_RETIREMENTS {
+            if state.retiring.len() + state.reserved_retirements + needed > MAX_RETIREMENTS {
                 return Err(io::Error::other("project asset retirement queue full"));
             }
             state
@@ -970,7 +1227,9 @@ impl ProjectAssets {
                 "paired artifact retirement requires complete verified evidence",
             ));
         }
-        if !state.retiring.contains_key(&path) && state.retiring.len() >= MAX_RETIREMENTS {
+        if !state.retiring.contains_key(&path)
+            && state.retiring.len() + state.reserved_retirements >= MAX_RETIREMENTS
+        {
             return Err(io::Error::other("project asset retirement queue full"));
         }
         for reader in &mut state.readers {
@@ -988,6 +1247,7 @@ impl ProjectAssets {
                 files: None,
                 pcm: false,
                 protection: None,
+                map: None,
             },
         );
         Ok(())
@@ -1128,7 +1388,7 @@ impl ProjectAssets {
             if let Some(previous) = previous.protection.as_ref() {
                 return Ok(Some(previous.outcome.clone()));
             }
-        } else if state.retiring.len() >= MAX_RETIREMENTS {
+        } else if state.retiring.len() + state.reserved_retirements >= MAX_RETIREMENTS {
             return Err(io::Error::other("project asset retirement queue full"));
         }
         for reader in &mut state.readers {
@@ -1146,6 +1406,7 @@ impl ProjectAssets {
                 files: Some(files),
                 pcm,
                 protection: protection.clone(),
+                map: None,
             },
         );
         Ok(protection.map(|value| value.outcome.clone()))
@@ -1184,6 +1445,16 @@ impl ProjectAssets {
         let Ok(mut state) = self.state.lock() else {
             return;
         };
+        // Genuine artifact readers and large geometry retire only on this existing
+        // worker. Release them before deriving owner eligibility for exact cleanup.
+        for target in state.retiring.values_mut() {
+            if let Some(map) = target.map.as_mut() {
+                map.deferred.clear();
+            }
+        }
+        state
+            .retiring
+            .retain(|_, target| target.map.as_ref().is_none_or(|map| map.delete));
         state.owners.retain(|owner| owner.strong_count() > 0);
         Self::prune_pcm_locators(&mut state);
         let owners: Vec<_> = state.owners.iter().filter_map(Weak::upgrade).collect();
@@ -1311,6 +1582,12 @@ impl ProjectAssets {
         let mut eligible: Vec<_> = retiring
             .into_iter()
             .filter(|path| !protected_paths.intersects(path))
+            .filter(|path| {
+                state.retiring[path]
+                    .map
+                    .as_ref()
+                    .is_none_or(|map| map.next_attempt <= Instant::now())
+            })
             .collect();
         // Stable round-robin selection also rotates attempts that Windows keeps
         // blocked by external sharing handles; eight retries cannot starve nine.
@@ -1322,12 +1599,17 @@ impl ProjectAssets {
             state.retirement_cursor = (state.retirement_cursor + attempted) % count;
             eligible.truncate(attempted);
         }
+        let mut maps = Vec::new();
         for path in eligible {
             let target = state
                 .retiring
                 .get(&path)
                 .expect("retirement remains under gate");
-            let remove_empty_pad = target.recursive;
+            if target.map.is_some() {
+                maps.push((target.root.clone(), path));
+                continue;
+            }
+            let remove_empty_pad = target.recursive && target.map.is_none();
             let result = if target.pcm {
                 CommittedColdLease::queue_verified_retirement(
                     &path,
@@ -1389,6 +1671,101 @@ impl ProjectAssets {
                 }
             }
         }
+        drop(state);
+        // Inventory -> assets is the established lock order. Registered Configs
+        // are read only for an actual unpinned map attempt, never each poll.
+        for (root, path) in maps {
+            self.collect_source_map(&root, &path);
+        }
+    }
+
+    fn collect_source_map(&self, root: &Path, path: &Path) {
+        let configs = super::material_migration_recovery::map_config_guard(root, path);
+        let Ok(mut state) = self.state.lock() else {
+            return;
+        };
+        let Some(target) = state.retiring.get(path) else {
+            return;
+        };
+        let Some(map) = target.map.as_ref().filter(|map| map.delete) else {
+            return;
+        };
+        // Admission may have changed while the asset gate was released for the
+        // registered Config inventory. Recheck every actual owner and reader.
+        if state
+            .owners
+            .iter()
+            .filter_map(Weak::upgrade)
+            .any(|owner| intersects(&owner.path, path))
+            || state
+                .readers
+                .iter()
+                .any(|reader| reader.protects_path(path))
+        {
+            return;
+        }
+        let result = match configs {
+            Ok(Some(_guards)) => delete_source_map(
+                root,
+                path,
+                target.identity.as_ref().expect("map directory identity"),
+                map.leaf_identity.as_ref(),
+                target.files.as_ref().and_then(|files| files.first()),
+            ),
+            Ok(None) => {
+                // The ordinary writer may flush after actual reader release.
+                // Retain this SAME exact proof until the saved reference clears;
+                // only a genuine saved-map ACK cancels obsolete retirement.
+                if let Some(map) = state
+                    .retiring
+                    .get_mut(path)
+                    .and_then(|target| target.map.as_mut())
+                {
+                    map.next_attempt = Instant::now() + Duration::from_secs(1);
+                }
+                return;
+            }
+            Err(error) => Err(error),
+        };
+        match result {
+            Ok(()) => {
+                state.retiring.remove(path);
+                state.deleted += 1;
+                if let Some(material) = super::material_paths::material_root(path) {
+                    let protected = state
+                        .owners
+                        .iter()
+                        .filter_map(Weak::upgrade)
+                        .any(|owner| intersects(&owner.path, material))
+                        || state
+                            .readers
+                            .iter()
+                            .any(|reader| reader.protects_path(material))
+                        || state
+                            .retiring
+                            .keys()
+                            .any(|queued| intersects(queued, material));
+                    if !protected {
+                        super::material_paths::prune_empty_material(path);
+                    }
+                }
+            }
+            Err(error) if retryable(&error) => {
+                if let Some(map) = state
+                    .retiring
+                    .get_mut(path)
+                    .and_then(|target| target.map.as_mut())
+                {
+                    map.next_attempt = Instant::now() + Duration::from_secs(1);
+                }
+            }
+            Err(error) => {
+                state.retiring.remove(path);
+                if state.errors.len() < MAX_REPORTED_ERRORS {
+                    state.errors.push(format!("{}: {error}", path.display()));
+                }
+            }
+        }
     }
 }
 
@@ -1406,6 +1783,79 @@ fn remove_empty_pad_container(pad: &Path) -> io::Result<()> {
 
 fn intersects(left: &Path, right: &Path) -> bool {
     left.starts_with(right) || right.starts_with(left)
+}
+
+/// Private map-birth rollback accepts staging only through its captured directory
+/// identity. Public generic recursive retirement retains its original deny rules.
+fn delete_source_map(
+    root: &Path,
+    path: &Path,
+    identity: &FileIdentity,
+    leaf_identity: Option<&FileIdentity>,
+    proof: Option<&VerifiedFile>,
+) -> io::Result<()> {
+    let (root, path) = owned_path(root, path)?;
+    let relative = path
+        .strip_prefix(&root)
+        .map_err(|_| io::Error::other("map retirement escaped samples"))?;
+    let mut reference = Path::new("samples").join(relative);
+    if let Some(id) = reference
+        .file_name()
+        .and_then(|name| name.to_str())
+        .and_then(|name| name.strip_prefix(".generation-"))
+        .map(str::to_owned)
+    {
+        if !super::material_paths::valid_id(&id) {
+            return Err(io::Error::other("invalid private map generation"));
+        }
+        reference.set_file_name(format!(".ready-{id}"));
+    }
+    if !matches!(
+        super::material_paths::classify(&reference)?,
+        super::material_paths::AssetKind::SourceBeatmapDirectory { .. }
+    ) {
+        return Err(io::Error::other(
+            "map retirement requires exact typed generation",
+        ));
+    }
+    let _parents = directory_guards(
+        path.parent()
+            .ok_or_else(|| io::Error::other("map parent missing"))?,
+    )?;
+    if !path.try_exists()? {
+        return Ok(());
+    }
+    let guards = directory_guards(&path)?;
+    if capture_identity(&path)?.as_ref() != Some(identity) {
+        return Err(io::Error::other("map generation replaced; preserved"));
+    }
+    let entries = fs::read_dir(&path)?
+        .take(2)
+        .collect::<io::Result<Vec<_>>>()?;
+    if entries.len() > 1
+        || entries.iter().any(|entry| {
+            entry.file_name() != "map.json" || !entry.file_type().is_ok_and(|kind| kind.is_file())
+        })
+    {
+        return Err(io::Error::other(
+            "map generation contains unknown children; preserved",
+        ));
+    }
+    if !entries.is_empty() {
+        let leaf = path.join("map.json");
+        reject_links(&leaf)?;
+        if let Some(proof) = proof {
+            remove_verified_file(&leaf, proof)?;
+        } else if let Some(identity) = leaf_identity {
+            remove_owned_file(&leaf, Some(identity))?;
+        } else {
+            return Err(io::Error::other(
+                "map leaf has no exact birth evidence; preserved",
+            ));
+        }
+    }
+    drop(guards);
+    remove_empty_directory(&path, identity)
 }
 
 /// Every native component prefix, including prefix-only Windows drives and the
@@ -2017,6 +2467,10 @@ impl super::AudioEngine {
             .map_err(|error| PyRuntimeError::new_err(error.to_string()))
     }
 }
+
+#[cfg(test)]
+#[path = "project_assets/source_map_tests.rs"]
+mod source_map_tests;
 
 #[cfg(test)]
 mod tests {

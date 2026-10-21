@@ -111,6 +111,7 @@ impl Reader {
                             files: Some(pair.proofs[index].clone()),
                             pcm: false,
                             protection: None,
+                            map: None,
                         },
                     )
                 })
@@ -1650,6 +1651,7 @@ mod paired_owner_tests {
                         files: None,
                         pcm: false,
                         protection: None,
+                        map: None,
                     },
                 );
             }

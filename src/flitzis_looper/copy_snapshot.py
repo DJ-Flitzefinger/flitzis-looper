@@ -2,7 +2,7 @@
 
 import json
 import math
-from typing import Self
+from typing import Literal, Self
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
@@ -28,6 +28,7 @@ from flitzis_looper.models import (
     TimingIntent,
     validate_sample_id,
 )
+from flitzis_looper.source_beatmap_intent import PadSourceBeatmapIntent
 from flitzis_looper.stem_intent import PadStemIntent
 
 CONTENT_FIELDS = (
@@ -42,6 +43,7 @@ CONTENT_FIELDS = (
     ("manual_bpm", "manual_bpm"),
     ("timing_intent", "pad_timing_intent"),
     ("key_intent", "pad_key_intent"),
+    ("source_beatmap_intent", "pad_source_beatmap_intent"),
     ("gain_db", "pad_gain_db"),
     ("eq_low_db", "pad_eq_low_db"),
     ("eq_mid_db", "pad_eq_mid_db"),
@@ -87,6 +89,9 @@ class MusicalSnapshotData(BaseModel):
     manual_bpm: float | None = Field(gt=0, allow_inf_nan=False)
     timing_intent: TimingIntent
     key_intent: PadKeyIntent
+    source_beatmap_intent: PadSourceBeatmapIntent | None = Field(
+        default=None, exclude_if=lambda value: value is None
+    )
     gain_db: float = Field(ge=PAD_GAIN_DB_MIN, le=PAD_GAIN_DB_MAX, allow_inf_nan=False)
     eq_low_db: float = Field(ge=PAD_EQ_DB_MIN, le=PAD_EQ_DB_MAX, allow_inf_nan=False)
     eq_mid_db: float = Field(ge=PAD_EQ_DB_MIN, le=PAD_EQ_DB_MAX, allow_inf_nan=False)
@@ -98,10 +103,12 @@ class MusicalSnapshotData(BaseModel):
     grid_offset_samples: int
     grid_anchor_s: float | None = Field(ge=0, allow_inf_nan=False)
 
-    @field_validator("stem_intent", "key_intent", mode="before")
+    @field_validator("stem_intent", "key_intent", "source_beatmap_intent", mode="before")
     @classmethod
     def _detach_intent_models(cls, value: object) -> object:
-        if isinstance(value, (PadContentIdentity, PadStemIntent, PadKeyIntent)):
+        if isinstance(
+            value, (PadContentIdentity, PadStemIntent, PadKeyIntent, PadSourceBeatmapIntent)
+        ):
             return _model_data(value)
         return value
 
@@ -167,6 +174,15 @@ class CopySnapshotData(MusicalSnapshotData):
 
     source_path: str = Field(min_length=1)
     source_identity: PadContentIdentity
+
+
+def musical_snapshot_projection(
+    image: MusicalSnapshotData, *, mode: Literal["python", "json"] = "python"
+) -> dict[str, object]:
+    """Restore neutral table rows for projection without changing legacy sealed bytes."""
+    data = image.model_dump(mode=mode, warnings="error")
+    data.setdefault("source_beatmap_intent", None)
+    return data
 
 
 class CopySnapshot(BaseModel):
@@ -305,7 +321,7 @@ def project_with_copy_snapshot(
     identity = _validate_target_identity(project, captured.source_identity, target_identity)
     musical_content_data(project, target_id)
     data = project.model_dump(mode="python", exclude_computed_fields=True, warnings="error")
-    projection = captured.model_dump(mode="python", warnings="error")
+    projection = musical_snapshot_projection(captured)
     projection["source_identity"] = identity.model_dump(mode="python", warnings="error")
     for name, project_field in CONTENT_FIELDS:
         data[project_field][target_id] = projection[name]

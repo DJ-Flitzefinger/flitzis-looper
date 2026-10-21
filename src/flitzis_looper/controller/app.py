@@ -142,7 +142,7 @@ class AppController:
             on_stem_generation_error=self.stems._handle_stem_generation_error,
             on_stems_deleted=self.stems.delete_stems,
         )
-        self.loader.bind_asset_lifecycle(self._assets)
+        self._bind_loader_assets()
         self.transport.bind_incoming_global_key_lock(self.loader._refresh_incoming_global_intent)
         self.transport.bind_current_pad_edit(
             self.loader.record_current_pad_edit,
@@ -184,6 +184,17 @@ class AppController:
 
         self._restore_initial_runtime_state()
         self._discover_recordings()
+
+    def _bind_loader_assets(self) -> None:
+        self.loader.bind_asset_lifecycle(self._assets)
+        self.loader.source_beatmaps.bind(
+            self._persistence.commit_source_beatmap_selection,
+            blocked=lambda: (
+                self._persistence.stem_selection_write_blocked()
+                or self._persistence.load_error is not None
+            ),
+            edit_guard=self.ensure_not_copy_target,
+        )
 
     def _init_recording_control(self) -> None:
         """Bind one original Engine and project namespace before restore and UI work."""

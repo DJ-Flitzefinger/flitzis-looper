@@ -2,12 +2,17 @@
 
 import hashlib
 import threading
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from itertools import pairwise
 from pathlib import Path
 from typing import TYPE_CHECKING
 from uuid import uuid4
 
+from flitzis_looper.controller.copy_arrangement_custody import (
+    CopyJournalCustody,
+    journal_project_images,
+    prepare_recovery_map_publication,
+)
 from flitzis_looper.controller.material_migration_recovery import (
     config_reference_matches,
     inspect_migration_recovery,
@@ -35,6 +40,7 @@ from flitzis_looper.pair_snapshot import capture_pair_snapshot, project_with_pai
 if TYPE_CHECKING:
     from flitzis_looper.controller.app import AppController
     from flitzis_looper.controller.asset_lifecycle import AssetRetirementReservation
+    from flitzis_looper.controller.copy_arrangement_custody import MapRecoveryPublication
     from flitzis_looper.controller.persistence import ConfigCommitReceipt
     from flitzis_looper.pair_snapshot import PairSnapshot
     from flitzis_looper_audio import RecoveredPairAcceptance
@@ -51,6 +57,7 @@ class OriginalPairRecoveryHandoff:
     retirement: AssetRetirementReservation
     predecessor: PairJournalOwner
     ancestors: tuple[PairJournalOwner, ...] = ()
+    custody: CopyJournalCustody = field(default_factory=CopyJournalCustody)
     writer_transferred: bool = False
     delivered: bool = False
     completed: bool = False
@@ -65,6 +72,7 @@ class _AfterRecovery:
     acceptance: RecoveredPairAcceptance | None = None
     receipt: ConfigCommitReceipt | None = None
     acceptance_released: bool = False
+    map_publication: MapRecoveryPublication | None = None
 
 
 def _before_image(snapshot: PairSnapshot) -> PairArrangementAfterImage:
@@ -109,6 +117,7 @@ class PairArrangementStartup:
         self._unknown = False
         self._completed = False
         self._compacted_ancestors: set[str] = set()
+        self._custody = CopyJournalCustody()
         try:
             self._initialize()
         except (OSError, RuntimeError, TypeError, ValueError) as error:
@@ -208,6 +217,14 @@ class PairArrangementStartup:
         if actual_reference != persistence.config_reference:
             message = "Selected Config custody changed location; Pair evidence remains fenced"
             raise PersistenceFenceError(message)
+        self._custody.acquire(
+            self._app._assets,
+            self.samples.parent,
+            (),
+            project_images=journal_project_images(
+                text for owner in self.histories for text in owner.encoded
+            ),
+        )
         decision = self._tip_decision(selected.journal)
         if decision.disposition == "conflict":
             self.error, self.status = decision.error, "conflict"
@@ -454,6 +471,7 @@ class PairArrangementStartup:
                 self._retirement,
                 self._original,
                 ancestors=tuple(self.histories),
+                custody=self._custody,
             )
         handoff = self._handoff
         if handoff.delivered:
@@ -572,24 +590,7 @@ class PairArrangementStartup:
                 original.source_id, original.target_id
             )
         if not recovery.acceptance_released:
-            if not app._audio.validate_recovered_pad_pair(recovery.acceptance):
-                message = "Fresh Pair recovery source/timing acceptance is no longer current"
-                raise PersistenceFenceError(message)
-            if recovery.receipt is None or recovery.receipt.revision != app.persistence.revision:
-                # Current restored rows already contain the after layout. Save only
-                # that current independent image with genuinely fresh Native timing.
-                recovery.receipt = app.persistence.commit_migration_receipt(
-                    self._fence,
-                    app.persistence.revision,
-                    app.project.model_copy(deep=True),
-                )
-            recovery.journal.append(record.committed(recovery.receipt))
-            if app.persistence.revision != recovery.receipt.revision:
-                return
-            if not app._audio.validate_recovered_pad_pair(recovery.acceptance):
-                message = "Fresh Pair recovery acceptance changed after actual Config commit"
-                raise PersistenceFenceError(message)
-            if not app._audio.release_recovered_pad_pair(recovery.acceptance):
+            if not self._commit_recovered_after(recovery, record):
                 return
             recovery.acceptance_released = True
         committed = recovery.journal.journal
@@ -600,6 +601,43 @@ class PairArrangementStartup:
         self._validate_terminal_after(latest)
         self._compact_ancestors(recovery.ancestors, recovery.journal)
         self._finish_startup()
+
+    def _commit_recovered_after(
+        self, recovery: _AfterRecovery, record: PairArrangementJournal
+    ) -> bool:
+        app = self._app
+        assert recovery.acceptance is not None
+        assert self._retirement is not None
+        assert self._fence is not None
+        if not app._audio.validate_recovered_pad_pair(recovery.acceptance):
+            message = "Fresh Pair recovery source/timing acceptance is no longer current"
+            raise PersistenceFenceError(message)
+        if recovery.receipt is None or recovery.receipt.revision != app.persistence.revision:
+            # Current restored rows already contain the after layout. Save only
+            # that current independent image with genuinely fresh Native timing.
+            self._custody.acquire(
+                app._assets,
+                self.samples.parent,
+                (),
+                project_images=(app.project.model_dump_json(),),
+            )
+            with self._retirement.activate():
+                recovery.map_publication = prepare_recovery_map_publication(
+                    app._assets, app.project, recovery.map_publication
+                )
+            recovery.receipt = app.persistence.commit_migration_receipt(
+                self._fence, app.persistence.revision, app.project.model_copy(deep=True)
+            )
+        recovery.journal.append(record.committed(recovery.receipt))
+        if app.persistence.revision != recovery.receipt.revision:
+            return False
+        if recovery.map_publication is not None:
+            with self._retirement.activate():
+                recovery.map_publication[1].apply()
+        if not app._audio.validate_recovered_pad_pair(recovery.acceptance):
+            message = "Fresh Pair recovery acceptance changed after actual Config commit"
+            raise PersistenceFenceError(message)
+        return app._audio.release_recovered_pad_pair(recovery.acceptance)
 
     def _validate_terminal_after(self, record: PairArrangementJournal) -> None:
         persistence = self._app.persistence
@@ -656,6 +694,7 @@ class PairArrangementStartup:
         assert self._retirement is not None
         self._app.persistence.release_migration(self._fence)
         self._retirement.close()
+        self._custody.release()
         if self._after is not None:
             self._after.acceptance = None
         self._completed = True

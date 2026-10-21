@@ -143,7 +143,7 @@ class _Stems:
 
 class _Assets(_CopyAssets):
     def reserve(self, capacity: int) -> _Retirement:
-        assert capacity == 9 * 36
+        assert capacity == 11 * 36
         return self.retirement
 
 

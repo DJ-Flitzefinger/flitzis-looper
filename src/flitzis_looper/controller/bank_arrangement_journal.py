@@ -21,6 +21,7 @@ from flitzis_looper.copy_snapshot import (
     CopySnapshot,
     CopySnapshotData,
     canonical_snapshot_json,
+    musical_snapshot_projection,
 )
 from flitzis_looper.material_migration_model import MigrationDigest, MigrationID
 from flitzis_looper_audio import MaterialMigrationJournalStore
@@ -49,7 +50,7 @@ def _project_rows(
 ) -> ProjectState:
     data = project.model_dump(mode="python", exclude_computed_fields=True, warnings="error")
     for sample_id, image in rows:
-        musical = image.model_dump(mode="python", warnings="error")
+        musical = musical_snapshot_projection(image)
         for name, field in CONTENT_FIELDS:
             data[field][sample_id] = musical[name]
     return validated_project_image(canonical_snapshot_json(data))

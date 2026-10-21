@@ -35,6 +35,7 @@ from flitzis_looper.controller.timing_persistence import (
 )
 from flitzis_looper.material_migration_model import MaterialMigrationAlias
 from flitzis_looper.models import ProjectState
+from flitzis_looper.source_beatmap_intent import PadSourceBeatmapIntent
 
 if TYPE_CHECKING:
     from collections.abc import Callable
@@ -71,6 +72,22 @@ def _validate_transaction_id(transaction_id: str) -> None:
     if type(transaction_id) is not str or re.fullmatch(r"[0-9a-f]{32}", transaction_id) is None:
         message = "material migration transaction ID must be 32 lowercase hex characters"
         raise ValueError(message)
+
+
+def _recover_source_beatmap_intent(recovered: dict[str, object]) -> None:
+    if "pad_source_beatmap_intent" not in recovered:
+        return
+    rows = recovered["pad_source_beatmap_intent"]
+    valid_rows: list[PadSourceBeatmapIntent | None] = [None] * len(ProjectState().sample_paths)
+    if isinstance(rows, list):
+        for index, row in enumerate(rows[: len(valid_rows)]):
+            try:
+                valid_rows[index] = (
+                    None if row is None else PadSourceBeatmapIntent.model_validate(row)
+                )
+            except ValidationError:
+                continue
+    recovered["pad_source_beatmap_intent"] = valid_rows
 
 
 class ProjectPersistence:
@@ -269,6 +286,43 @@ class ProjectPersistence:
                 before_replace=check_current,
             )
 
+    def commit_source_beatmap_selection(
+        self,
+        sample_id: int,
+        previous: PadSourceBeatmapIntent | None,
+        selected: PadSourceBeatmapIntent,
+        current: Callable[[], bool],
+    ) -> None:
+        """Write a compact map selection before transferring its assignment owners."""
+        if type(sample_id) is not int or not 0 <= sample_id < len(self.project.sample_paths):
+            message = "source beatmap sample ID is out of range"
+            raise ValueError(message)
+        selected = PadSourceBeatmapIntent.model_validate(selected)
+        with self._writer:
+            expected_revision = self._revision
+
+            def check_current() -> None:
+                if self._migration_owner is not None or self._revision != expected_revision:
+                    message = "project writer changed before source beatmap commit"
+                    raise PersistenceFenceError(message)
+                if (
+                    self.project.pad_source_beatmap_intent[sample_id] is not previous
+                    or not current()
+                ):
+                    message = "source beatmap intent changed before config commit"
+                    raise PersistenceFenceError(message)
+
+            check_current()
+            candidate = self.project.model_copy(deep=True)
+            candidate.pad_source_beatmap_intent[sample_id] = selected
+            self._write_snapshot(
+                candidate,
+                expected_revision + 1,
+                monotonic(),
+                expected_revision=expected_revision,
+                before_replace=check_current,
+            )
+
     def maybe_flush(self, *, now: float | None = None) -> bool:
         """Write config if dirty and the debounce window has elapsed."""
         if not self._dirty or self._migration_owner is not None:
@@ -458,6 +512,16 @@ class ProjectPersistence:
                         if persistence.load_error is not None
                         else selection_error
                     )
+                if any(
+                    item["loc"] and item["loc"][0] == "pad_source_beatmap_intent"
+                    for item in error.errors()
+                ):
+                    selection_error = "Unsupported source beatmap metadata retained on disk"
+                    persistence.load_error = (
+                        f"{persistence.load_error}; {selection_error}"
+                        if persistence.load_error is not None
+                        else selection_error
+                    )
                 return persistence
 
         persistence = ProjectPersistence(state)
@@ -469,7 +533,13 @@ class ProjectPersistence:
         """Neutralize only malformed new metadata, preserving all valid performer intent."""
         if any(
             item["loc"][0]
-            not in {"pad_key_intent", "pad_stem_intent", "material_migrations", "config_revision"}
+            not in {
+                "pad_key_intent",
+                "pad_stem_intent",
+                "pad_source_beatmap_intent",
+                "material_migrations",
+                "config_revision",
+            }
             and not is_pair_metadata_error(item["loc"])
             for item in error.errors()
             if item["loc"]
@@ -483,6 +553,7 @@ class ProjectPersistence:
                 recovered = recover_project_key_intent(recovered)
             recovered = recover_project_stem_intent(recovered)
             recover_stem_pair_metadata(recovered, error)
+            _recover_source_beatmap_intent(recovered)
             revision = recovered.get("config_revision", 0)
             if type(revision) is not int or revision < 0:
                 recovered["config_revision"] = 0

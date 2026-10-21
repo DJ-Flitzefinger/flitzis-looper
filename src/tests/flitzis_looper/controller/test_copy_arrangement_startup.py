@@ -32,7 +32,11 @@ from flitzis_looper.controller.pair_arrangement_journal import (
     PairJournalOwner,
 )
 from flitzis_looper.controller.persistence import PersistenceFenceError, ProjectPersistence
-from flitzis_looper.copy_snapshot import CONTENT_FIELDS, capture_copy_snapshot
+from flitzis_looper.copy_snapshot import (
+    CONTENT_FIELDS,
+    capture_copy_snapshot,
+    musical_snapshot_projection,
+)
 from flitzis_looper.material_migration_model import MaterialMigrationJournal, MigrationAssignment
 from flitzis_looper.models import PadContentIdentity, ProjectState, SessionState, StemCacheEntry
 from flitzis_looper.pair_snapshot import capture_pair_snapshot
@@ -338,7 +342,7 @@ def _startup(app: _App) -> CopyArrangementStartup:
 
 def _before_image(project: ProjectState, journal: CopyArrangementJournal) -> ProjectState:
     data = project.model_dump(mode="python", exclude_computed_fields=True)
-    predecessor = journal.predecessor.projected().model_dump(mode="python")
+    predecessor = musical_snapshot_projection(journal.predecessor.projected())
     for field, array in CONTENT_FIELDS:
         data[array][journal.target_id] = predecessor[field]
     return ProjectState.model_validate(data)

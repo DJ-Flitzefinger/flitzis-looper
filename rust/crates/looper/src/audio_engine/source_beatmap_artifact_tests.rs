@@ -77,7 +77,13 @@ fn flush_python_drops() {
 }
 
 fn wait_output_retired(fixture: &ColdCustody, path: &Path) {
-    wait_until(|| fixture.engine.project_assets.held_owner_count(path) == 0);
+    wait_until(|| {
+        fixture.engine.project_assets.held_owner_count(path) == 0
+            && !fixture
+                .engine
+                .project_assets
+                .map_retirement_pending_for_test(path)
+    });
 }
 
 fn ready_maps(fixture: &ColdCustody) -> Vec<PathBuf> {
@@ -841,7 +847,7 @@ fn unknown_children_survive_a_real_cancelled_prepared_birth_cleanup_attempt() {
 }
 
 #[test]
-fn existing_other_logical_pins_preserve_unresolved_output_without_a_sealed_reader() {
+fn existing_other_logical_pins_retain_exact_unresolved_proof_until_actual_last_reader() {
     for pin_directory in [false, true] {
         let fixture = ColdCustody::new();
         let expected = record(&fixture, 0);
@@ -879,11 +885,126 @@ fn existing_other_logical_pins_preserve_unresolved_output_without_a_sealed_reade
         );
         other.release();
         assert_eq!(fixture.engine.project_assets.held_owner_count(&pinned), 0);
+        wait_until(|| !path.parent().unwrap().exists());
         assert!(
-            path.exists(),
-            "this prerequisite does not invent automatic map collection"
+            !path.parent().unwrap().exists(),
+            "same queued proof retires the exact generation after last reader"
         );
     }
+}
+
+#[test]
+#[ignore = "requires exclusive process-wide asset capacity; run this exact test alone"]
+fn full_asset_retirement_queue_refuses_actual_worker_store_before_any_generation_birth() {
+    let fixture = ColdCustody::new();
+    let expected = record(&fixture, 0);
+    let mut reservations = Vec::new();
+    while let Ok(slot) = fixture.engine.project_assets.reserve_map_retirement() {
+        reservations.push(slot);
+    }
+    assert!(!reservations.is_empty());
+    let before = ready_maps(&fixture);
+    let job = fixture
+        .engine
+        .begin_source_beatmap_store_async(0, expected.to_string())
+        .unwrap();
+    let status = wait_terminal(&job);
+    assert_eq!(status["stage"], "failed");
+    assert!(
+        status["detail"]
+            .as_str()
+            .unwrap()
+            .contains("retirement queue full")
+    );
+    assert_eq!(
+        ready_maps(&fixture),
+        before,
+        "capacity refusal precedes generation creation"
+    );
+    assert!(maps(&fixture).is_empty());
+    drop(reservations);
+    assert_offline_available(&fixture);
+}
+
+#[test]
+#[ignore = "requires exclusive process-wide owner capacity; run this exact test alone"]
+fn acknowledged_unselected_artifact_uses_original_cleanup_proof_when_owner_registry_is_full() {
+    let fixture = ColdCustody::new();
+    let expected = record(&fixture, 0);
+    let (job, event) = stored_event(&fixture, &expected);
+    let artifact = resolve_artifact(&job, &delivery(&event)).unwrap();
+    let receipt: Value = serde_json::from_str(artifact.receipt_json()).unwrap();
+    let path = artifact_path(&fixture, &receipt);
+    let mut pins = Vec::new();
+    while let Ok(pin) = fixture
+        .engine
+        .project_assets
+        .acquire_pin(&samples_root(&fixture), &path)
+    {
+        pins.push(pin);
+    }
+    assert!(!pins.is_empty());
+    let refused = fixture
+        .engine
+        .project_assets
+        .acquire(&samples_root(&fixture), &path)
+        .unwrap_err();
+    assert!(refused.to_string().contains("owner registry full"));
+    artifact.retire_unselected();
+    drop(artifact);
+    drop(event);
+    drop(job);
+    flush_python_drops();
+    wait_until(|| {
+        fixture
+            .engine
+            .project_assets
+            .map_retirement_pending_for_test(&path)
+    });
+    assert!(
+        path.exists(),
+        "actual independently acquired pins retain the exact queued birth"
+    );
+    drop(pins);
+    wait_until(|| !path.parent().unwrap().exists());
+    assert!(
+        !path.exists(),
+        "original reserved proof cleans up without another owner admission"
+    );
+}
+
+#[test]
+fn discarding_a_fresh_source_restored_artifact_never_creates_birth_deletion_rights() {
+    let fixture = ColdCustody::new();
+    let expected = record(&fixture, 0);
+    let (job, event) = stored_event(&fixture, &expected);
+    let artifact = resolve_artifact(&job, &delivery(&event)).unwrap();
+    let encoded = artifact.receipt_json().to_owned();
+    let receipt: Value = serde_json::from_str(&encoded).unwrap();
+    let path = artifact_path(&fixture, &receipt);
+    drop(artifact);
+    drop(event);
+    drop(job);
+    flush_python_drops();
+    wait_output_retired(&fixture, &path);
+    assert!(path.exists());
+    let job = fixture
+        .engine
+        .begin_source_beatmap_restore_async(0, encoded)
+        .unwrap();
+    assert_eq!(wait_terminal(&job)["stage"], "ready");
+    let event = maps(&fixture).pop().unwrap();
+    let restored = resolve_artifact(&job, &delivery(&event)).unwrap();
+    restored.retire_unselected();
+    drop(restored);
+    drop(event);
+    drop(job);
+    flush_python_drops();
+    wait_output_retired(&fixture, &path);
+    assert!(
+        path.exists(),
+        "genuine restore owns readers, never the original export birth"
+    );
 }
 
 #[test]
@@ -921,6 +1042,7 @@ fn publication_failures_cleanup_only_exact_known_births_at_every_store_boundary(
             .unwrap()
             .clone()
             .expect("the actual named publication boundary ran");
+        wait_until(|| !directory.exists());
         assert!(!directory.exists(), "known birth survives {point:?}");
         assert!(maps(&fixture).is_empty());
         assert_offline_available(&fixture);
@@ -1072,6 +1194,9 @@ fn actual_engine_shutdown_waits_for_prepared_store_and_removes_only_unacknowledg
     assert_eq!(wait_terminal(&job)["stage"], "cancelled");
     assert_eq!(fixture.engine.cold_jobs.counts_for_test(), (0, 0, 0));
     assert!(!fixture.engine.offline_jobs.has_pad(0));
+    // Cold-lane shutdown and physical retirement have distinct owners. The
+    // original asset worker must actually finish the deferred exact cleanup.
+    wait_output_retired(&fixture, &path);
     assert!(
         !path.exists(),
         "actual shutdown retired its unresolved map birth"

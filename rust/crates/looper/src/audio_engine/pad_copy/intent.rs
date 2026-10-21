@@ -85,7 +85,9 @@ impl CopyIntent {
         if json.len() > 32 * 1024 * 1024 {
             return Err("copy snapshot exceeds its admission limit".into());
         }
-        let envelope: Value = serde_json::from_str(json).map_err(|error| error.to_string())?;
+        let envelope =
+            crate::audio_engine::material_migration_recovery::metadata_json(json, 32 * 1024 * 1024)
+                .map_err(|error| error.to_string())?;
         let object = envelope
             .as_object()
             .ok_or("copy envelope must be an object")?;
@@ -101,8 +103,16 @@ impl CopyIntent {
         let data = snapshot
             .as_object()
             .ok_or("copy snapshot must be an object")?;
-        if data.len() != FIELDS.len() || !FIELDS.iter().all(|key| data.contains_key(*key)) {
+        let has_map = data.contains_key("source_beatmap_intent");
+        if data.len() != FIELDS.len() + usize::from(has_map)
+            || !FIELDS.iter().all(|key| data.contains_key(*key))
+        {
             return Err("copy snapshot fields differ from the complete musical schema".into());
+        }
+        if has_map {
+            crate::audio_engine::source_beatmap_artifact::validate_intent_value(
+                &snapshot["source_beatmap_intent"],
+            )?;
         }
         let path = snapshot["source_path"]
             .as_str()
@@ -268,5 +278,69 @@ impl CopyIntent {
             eq_mid_db: scalar("eq_mid_db", PAD_EQ_DB_MIN, PAD_EQ_DB_MAX)?,
             eq_high_db: scalar("eq_high_db", PAD_EQ_DB_MIN, PAD_EQ_DB_MAX)?,
         })
+    }
+}
+
+#[cfg(test)]
+mod map_schema_tests {
+    use super::*;
+    use serde_json::json;
+
+    fn envelope() -> Value {
+        json!({"schema_version":1,"resolved_key_lock":false,"snapshot":{
+            "source_path":"samples/Owned/original.wav","source_identity":{"instance_id":"a".repeat(32)},
+            "duration":1.0,"analysis":null,"stem_cache":null,"stem_mix_mode":"full_mix",
+            "stem_intent":{"schema_version":1,"enabled_mask":15,"last_custom_mask":15,"display_mode":"all"},
+            "key_lock":null,"manual_bpm":null,"timing_intent":"legacy","key_intent":null,
+            "gain_db":0.0,"eq_low_db":0.0,"eq_mid_db":0.0,"eq_high_db":0.0,
+            "loop_start_s":0.0,"loop_end_s":null,"loop_auto":false,"loop_bars":8.0,
+            "grid_offset_samples":0,"grid_anchor_s":null}})
+    }
+
+    #[test]
+    fn copy_accepts_exact_legacy21_or_complete22_without_inline_geometry() {
+        let mut image = envelope();
+        assert!(CopyIntent::parse(&image.to_string()).is_ok());
+        image["snapshot"]["source_beatmap_intent"] =
+            json!({"schema_version":1,"revision":u64::MAX,"selected":null});
+        assert!(CopyIntent::parse(&image.to_string()).is_ok());
+        image["snapshot"]["source_beatmap_intent"]["selected"] = json!({
+            "schema_version":1,"kind":"source-beatmap-v1",
+            "reference":"samples/Owned/.pcm-cache/source-beatmaps/v1/.ready-0123456789abcdef0123456789abcdef/map.json",
+            "bytes":1024,"sha256":"a".repeat(64),"map_revision":"b".repeat(64),"decoder_identity":"c".repeat(64)});
+        assert!(CopyIntent::parse(&image.to_string()).is_ok());
+        let valid = image.clone();
+        for field in ["schema_version", "revision", "selected"] {
+            let mut broken = valid.clone();
+            broken["snapshot"]["source_beatmap_intent"]
+                .as_object_mut()
+                .unwrap()
+                .remove(field);
+            assert!(
+                CopyIntent::parse(&broken.to_string()).is_err(),
+                "missing {field}"
+            );
+        }
+        for field in ["identity", "verified", "record"] {
+            let mut broken = valid.clone();
+            broken["snapshot"]["source_beatmap_intent"]["selected"][field] = json!(true);
+            assert!(
+                CopyIntent::parse(&broken.to_string()).is_err(),
+                "unknown {field}"
+            );
+        }
+        image["snapshot"]["source_beatmap_intent"] = Value::Null;
+        assert!(CopyIntent::parse(&image.to_string()).is_err());
+        image["snapshot"]
+            .as_object_mut()
+            .unwrap()
+            .remove("source_beatmap_intent");
+        image["snapshot"]["unrecognized"] = json!(null);
+        assert!(CopyIntent::parse(&image.to_string()).is_err());
+        let duplicate =
+            valid
+                .to_string()
+                .replacen("\"revision\":", "\"revision\":1,\"revision\":", 1);
+        assert!(CopyIntent::parse(&duplicate).is_err());
     }
 }

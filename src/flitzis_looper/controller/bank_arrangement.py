@@ -22,7 +22,10 @@ from flitzis_looper.controller.bank_arrangement_mirror import (
     validate_bank_mirror_admission,
 )
 from flitzis_looper.controller.bank_arrangement_startup import BankArrangementStartup
-from flitzis_looper.controller.copy_arrangement_custody import CopyJournalCustody
+from flitzis_looper.controller.copy_arrangement_custody import (
+    CopyJournalCustody,
+    journal_project_images,
+)
 
 if TYPE_CHECKING:
     from flitzis_looper.bank_snapshot import BankSnapshot
@@ -298,12 +301,18 @@ class BankArrangementController:
 
     def _ensure_journal(self, bank: _Bank) -> BankJournalOwner:
         if bank.retirement is None:
-            # At most 2 original units + 6 legacy stem paths + 1 group per target.
-            bank.retirement = self._app._assets.reserve(9 * NUM_PADS)
-        if not bank.custody.acquired:
-            bank.custody.acquire(
-                self._app._assets, Path.cwd(), bank_journal_snapshots(bank.initial)
-            )
+            # Original, map and legacy-stem retirement units for every target.
+            bank.retirement = self._app._assets.reserve(11 * NUM_PADS)
+        bank.custody.acquire(
+            self._app._assets,
+            Path.cwd(),
+            bank_journal_snapshots(bank.initial),
+            project_images=(
+                bank.initial.captured_project_image_json,
+                bank.initial.project_image_json,
+                *journal_project_images(bank.journal.encoded if bank.journal else ()),
+            ),
+        )
         if bank.journal is None:
             bank.journal_open_attempted = True
             bank.journal = BankJournalOwner(Path.cwd() / "samples", bank.initial)
@@ -318,6 +327,9 @@ class BankArrangementController:
 
     def _before_record(self, bank: _Bank, phase: str) -> BankArrangementJournal:
         image = bank_before_project(self._app.project, bank.initial)
+        bank.custody.acquire(
+            self._app._assets, Path.cwd(), (), project_images=(image.model_dump_json(),)
+        )
         return bank.initial.changed(
             phase=phase,
             intent_revision=self._app.persistence.revision,
@@ -468,6 +480,9 @@ class BankArrangementController:
         if bank.candidate is not None and bank.candidate_revision == revision:
             return
         candidate = self._prepare_mirror(bank).projected_project()
+        bank.custody.acquire(
+            self._app._assets, Path.cwd(), (), project_images=(candidate.model_dump_json(),)
+        )
         assets = self._app._assets
         image = assets.prepare_assignment_image(candidate)
         try:

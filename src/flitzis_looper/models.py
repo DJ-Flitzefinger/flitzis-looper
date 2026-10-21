@@ -19,7 +19,7 @@ from pydantic import (
     model_validator,
 )
 
-from flitzis_looper import stem_intent
+from flitzis_looper import source_beatmap_intent, stem_intent
 from flitzis_looper.accepted_timing import PersistedAcceptedTiming
 from flitzis_looper.audio_gain import legacy_gain_value_to_db
 from flitzis_looper.constants import (
@@ -56,6 +56,8 @@ from flitzis_looper.stem_pair_selection import StemFingerprintSchema, StemPairSe
 
 if TYPE_CHECKING:
     from collections.abc import Iterable
+
+    from flitzis_looper.source_beatmap_intent import PadSourceBeatmapIntent
 
 MIGRATION_ID_ADAPTER: TypeAdapter[str] = TypeAdapter(MigrationID)
 
@@ -279,6 +281,10 @@ def _default_pad_timing_intent() -> list[TimingIntent]:
 
 def _default_pad_key_intent() -> list[PadKeyIntent]:
     return [PadKeyIntent() for _ in range(NUM_SAMPLES)]
+
+
+def _default_pad_source_beatmap_intent() -> list[None]:
+    return [None] * NUM_SAMPLES
 
 
 def _default_pad_gain_db() -> list[float]:
@@ -565,6 +571,13 @@ class ProjectState(BaseModel):
     )
     """Durable per-content key metadata and neutral pitch intent; no native permits."""
 
+    pad_source_beatmap_intent: list[PadSourceBeatmapIntent | None] = Field(
+        default_factory=_default_pad_source_beatmap_intent,
+        min_length=NUM_SAMPLES,
+        max_length=NUM_SAMPLES,
+    )
+    """Compact content-owned map requests; saved references never grant Native authority."""
+
     # Mypy cannot yet type Pydantic's computed-field decorator over a property.
     @field_validator("material_migrations")
     @classmethod
@@ -816,6 +829,11 @@ class ProjectState(BaseModel):
                 msg = f"pad_grid_anchor_s values must be None or finite and >= 0.0, got {anchor_s}"
                 raise ValueError(msg)
         return value
+
+
+ProjectState.model_rebuild(
+    _types_namespace={"PadSourceBeatmapIntent": source_beatmap_intent.PadSourceBeatmapIntent}
+)
 
 
 def _default_pad_playhead_s() -> list[float | None]:

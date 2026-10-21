@@ -9,7 +9,10 @@ from typing import TYPE_CHECKING, Protocol
 from uuid import uuid4
 
 from flitzis_looper.constants import NUM_SAMPLES
-from flitzis_looper.controller.copy_arrangement_custody import CopyJournalCustody
+from flitzis_looper.controller.copy_arrangement_custody import (
+    CopyJournalCustody,
+    journal_project_images,
+)
 from flitzis_looper.controller.copy_arrangement_journal import (
     CopyArrangementJournal,
     CopyJournalOwner,
@@ -57,6 +60,7 @@ _COPY_FIELDS = (
     "manual_bpm",
     "pad_timing_intent",
     "pad_key_intent",
+    "pad_source_beatmap_intent",
     "pad_gain_db",
     "pad_eq_low_db",
     "pad_eq_mid_db",
@@ -495,6 +499,9 @@ class PadArrangementController:
     def _ensure_journal(self, copy: _Copy) -> CopyJournalOwner | None:
         initial = copy.initial_journal
         if initial is None:
+            intent = copy.snapshot.projected().source_beatmap_intent
+            if intent is not None and intent.selected is not None:
+                copy.journal_custody.acquire(self._assets, Path.cwd(), (copy.snapshot,))
             return None
         if (
             copy.journal is not None
@@ -506,7 +513,14 @@ class PadArrangementController:
         ):
             return copy.journal
         copy.journal_custody.acquire(
-            self._assets, Path.cwd(), (initial.source, initial.predecessor, initial.after)
+            self._assets,
+            Path.cwd(),
+            (initial.source, initial.predecessor, initial.after),
+            project_images=(
+                initial.captured_project_image_json,
+                initial.project_image_json,
+                *journal_project_images(copy.journal.encoded if copy.journal else ()),
+            ),
         )
         if copy.journal is None:
             copy.journal = CopyJournalOwner(Path.cwd() / "samples", initial)
@@ -772,6 +786,9 @@ class PadArrangementController:
         if copy.candidate is not None and copy.candidate_revision == revision:
             return
         candidate = _candidate(self._project, copy)
+        copy.journal_custody.acquire(
+            self._assets, Path.cwd(), (), project_images=(candidate.model_dump_json(),)
+        )
         image = self._assets.prepare_assignment_image(candidate)
         try:
             publication = self._assets.prepare_assignment_publication(image)
@@ -862,6 +879,9 @@ class PadArrangementController:
         assert copy.initial_journal is not None
         initial = copy.initial_journal
         image = copy_before_project(self._project, initial)
+        copy.journal_custody.acquire(
+            self._assets, Path.cwd(), (), project_images=(image.model_dump_json(),)
+        )
         return initial.changed(
             project_image_json=image.model_dump_json(),
             intent_revision=self._persistence.revision,
