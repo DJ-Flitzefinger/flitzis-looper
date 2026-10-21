@@ -92,6 +92,157 @@ def test_unowned_dictionary_never_resolves_or_selects_candidate(
     assert maps.status(0) == "pending"
 
 
+def _pending_after_previous_map(controller: AppController, audio: Mock, *, restoring: bool) -> Mock:
+    _assigned(controller, audio)
+    maps = controller.loader.source_beatmaps
+    previous_job = _job(audio)
+    maps.select(0, "previous accepted record")
+    maps.completed(0, _event(previous_job))
+    job = _job(audio)
+    if restoring:
+        # A fresh restore has durable intent but no in-memory effective owner.
+        maps._effective.clear()
+        maps.poll(frozenset())
+    else:
+        maps.select(0, "replacement accepted record")
+    return job
+
+
+@pytest.mark.parametrize("restoring", [False, True], ids=["selection", "restore"])
+def test_late_placement_pending_retries_original_accepted_completion(
+    controller: AppController,
+    audio_engine_mock: Mock,
+    monkeypatch: pytest.MonkeyPatch,
+    *,
+    restoring: bool,
+) -> None:
+    job = _pending_after_previous_map(controller, audio_engine_mock, restoring=restoring)
+    maps = controller.loader.source_beatmaps
+    geometry, delivery = maps.effective(0), maps.playback_delivery(0)
+    pending = maps._pending["e" * 32]
+    reservation = pending.reservation
+    reserved = controller._assets._reserved
+    before = controller.project.model_dump()
+    saved = controller._persistence.config_path.read_bytes()
+    changed = Mock()
+    monkeypatch.setattr(maps, "changed", changed)
+    event = _event(job, "a" if restoring else "b")
+    artifact = job.resolve_source_beatmap_artifact_completion.return_value
+    owner = event["_native_event_owner"]
+    job.resolve_source_beatmap_artifact_completion.side_effect = [
+        RuntimeError("loader event content placement pending"),
+        RuntimeError("loader event content placement pending"),
+        artifact,
+    ]
+    job.source_beatmap_async_status.return_value = {"stage": "ready", "terminal": True}
+    admissions = (
+        audio_engine_mock.begin_source_beatmap_store_async.call_count,
+        audio_engine_mock.begin_source_beatmap_restore_async.call_count,
+    )
+    audio_engine_mock.poll_loader_events.side_effect = [event, None]
+
+    for _ in range(2):
+        controller.loader.poll_loader_events()
+        assert controller.loader._pair_held_loader_events == [event]
+        assert controller.loader._pair_held_loader_events[0] is event
+        assert maps._pending["e" * 32] is pending
+        assert pending.job is job
+        assert pending.reservation is reservation
+        assert controller._assets._reserved == reserved
+        assert maps.status(0) == ("restoring" if restoring else "pending")
+        assert controller.project.model_dump() == before
+        assert controller._persistence.config_path.read_bytes() == saved
+        assert maps.effective(0) is geometry
+        assert maps.playback_delivery(0) is delivery
+        assert not maps.errors
+        artifact.receipt_json.assert_not_called()
+        job.cancel.assert_not_called()
+        changed.assert_not_called()
+        audio_engine_mock.poll_loader_events.side_effect = [None]
+
+    controller.loader.poll_loader_events()
+
+    assert not controller.loader._pair_held_loader_events
+    assert not maps._pending
+    assert maps.status(0) == "effective"
+    assert controller.project.pad_source_beatmap_intent[0].selected == reference(
+        "a" if restoring else "b"
+    )
+    assert maps.playback_delivery(0) is owner
+    assert controller._assets._reserved == 0
+    assert (
+        audio_engine_mock.begin_source_beatmap_store_async.call_count,
+        audio_engine_mock.begin_source_beatmap_restore_async.call_count,
+    ) == admissions
+    assert job.resolve_source_beatmap_artifact_completion.call_count == 3
+    assert all(
+        call.args[0] is owner
+        for call in job.resolve_source_beatmap_artifact_completion.call_args_list
+    )
+    artifact.receipt_json.assert_called_once()
+    artifact.retire_unselected.assert_not_called()
+    job.cancel.assert_not_called()
+
+
+def test_clear_before_late_placement_retry_cannot_revive_accepted_map(
+    controller: AppController, audio_engine_mock: Mock
+) -> None:
+    _assigned(controller, audio_engine_mock)
+    maps = controller.loader.source_beatmaps
+    job = _job(audio_engine_mock)
+    maps.select(0, "accepted record")
+    event = _event(job)
+    artifact = job.resolve_source_beatmap_artifact_completion.return_value
+    job.resolve_source_beatmap_artifact_completion.side_effect = [
+        RuntimeError("loader event content placement pending"),
+        artifact,
+    ]
+    audio_engine_mock.poll_loader_events.side_effect = [event, None]
+    controller.loader.poll_loader_events()
+    assert controller.loader._pair_held_loader_events[0] is event
+
+    maps.clear(0)
+    saved = controller._persistence.config_path.read_bytes()
+    audio_engine_mock.poll_loader_events.side_effect = [None]
+    controller.loader.poll_loader_events()
+
+    assert not controller.loader._pair_held_loader_events
+    assert not maps._pending
+    assert maps.status(0) == "none"
+    assert maps.effective(0) is None
+    assert controller.project.pad_source_beatmap_intent[0].selected is None
+    assert controller._persistence.config_path.read_bytes() == saved
+    assert controller._assets._reserved == 0
+    job.cancel.assert_called_once()
+    job.resolve_source_beatmap_artifact_completion.assert_called_once_with(
+        event["_native_event_owner"]
+    )
+    artifact.receipt_json.assert_not_called()
+
+
+@pytest.mark.parametrize(
+    "detail", ["map resolution failed", "loader event content placement pending: unrelated"]
+)
+def test_accepted_completion_does_not_hide_other_resolution_errors(
+    controller: AppController, audio_engine_mock: Mock, detail: str
+) -> None:
+    _assigned(controller, audio_engine_mock)
+    maps = controller.loader.source_beatmaps
+    job = _job(audio_engine_mock)
+    maps.select(0, "accepted record")
+    event = _event(job)
+    job.resolve_source_beatmap_artifact_completion.side_effect = RuntimeError(detail)
+    audio_engine_mock.poll_loader_events.side_effect = [event, None]
+
+    with pytest.raises(RuntimeError, match=detail):
+        controller.loader.poll_loader_events()
+
+    assert not controller.loader._pair_held_loader_events
+    assert maps.status(0) == "pending"
+    assert not maps.errors
+    job.cancel.assert_not_called()
+
+
 def test_failed_selection_commit_keeps_old_selection_and_retires_only_candidate(
     controller: AppController,
     audio_engine_mock: Mock,

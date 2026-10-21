@@ -837,7 +837,7 @@ class LoaderController(_IncomingIntentControl, _MaterialCreationOwnership):
                 handler(sample_id, event)
             except RuntimeError as error:
                 if (
-                    event_type != "source_beatmap_raw_completed"
+                    event_type not in {"source_beatmap_completed", "source_beatmap_raw_completed"}
                     or str(error) != "loader event content placement pending"
                 ):
                     raise
