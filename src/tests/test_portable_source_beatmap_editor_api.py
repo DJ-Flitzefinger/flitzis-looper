@@ -35,6 +35,17 @@ def _raw(self: object, sample_id: int, *, expected_source_generation: int) -> Ne
     _forbidden()
 
 
+def _review(
+    self: object,
+    sample_id: int,
+    candidate: object,
+    review_json: str,
+    *,
+    expected_source_generation: int,
+) -> Never:
+    _forbidden()
+
+
 def _raw_completion(self: object, delivery: object) -> Never:
     _forbidden()
 
@@ -93,6 +104,7 @@ def source_beatmap_editor_native_module(engine_base: type = object) -> SimpleNam
                 "begin_source_beatmap_create_async": _create,
                 "begin_source_beatmap_edit_async": _edit,
                 "begin_source_beatmap_raw_async": _raw,
+                "begin_source_beatmap_review_async": _review,
                 "pad_source_sync_status": _SyncStatus(),
             },
         ),
@@ -172,6 +184,7 @@ def test_class_attribute_descriptor_can_expose_the_native_integer_capability() -
         ("AudioEngine", "begin_source_beatmap_edit_async"),
         ("AudioEngine", "pad_source_sync_status"),
         ("AudioEngine", "begin_source_beatmap_raw_async"),
+        ("AudioEngine", "begin_source_beatmap_review_async"),
         ("OfflineAnalysisJob", "resolve_source_beatmap_raw_completion"),
         ("OfflineAnalysisJob", "source_beatmap_async_status"),
         ("SourceBeatmapRawCandidate", "info"),
@@ -314,10 +327,15 @@ def test_raw_review_requires_opaque_native_result_and_original_job_types(owner: 
         _check(native)
 
 
+@pytest.mark.parametrize(
+    "method", ["begin_source_beatmap_raw_async", "begin_source_beatmap_review_async"]
+)
 @pytest.mark.parametrize("invalid", ["missing-generation", "optional-generation", "positional"])
-def test_raw_acquisition_requires_exact_current_source_fence(invalid: str) -> None:
+def test_raw_acquisition_and_review_require_exact_current_source_fence(
+    method: str, invalid: str
+) -> None:
     native = source_beatmap_editor_native_module()
-    complete = signature(native.AudioEngine.begin_source_beatmap_raw_async)
+    complete = signature(getattr(native.AudioEngine, method))
     parameters = list(complete.parameters.values())
     if invalid == "missing-generation":
         parameters.pop()
@@ -327,10 +345,24 @@ def test_raw_acquisition_requires_exact_current_source_fence(invalid: str) -> No
         parameters[-1] = parameters[-1].replace(kind=Parameter.POSITIONAL_OR_KEYWORD)
     _replace_signature(
         native.AudioEngine,
-        "begin_source_beatmap_raw_async",
+        method,
         complete.replace(parameters=parameters),
     )
-    with pytest.raises(AssertionError, match="begin_source_beatmap_raw_async"):
+    with pytest.raises(AssertionError, match=method):
+        _check(native)
+
+
+@pytest.mark.parametrize("argument", ["candidate", "review_json"])
+def test_review_requires_original_candidate_and_separate_intent_arguments(argument: str) -> None:
+    native = source_beatmap_editor_native_module()
+    method = "begin_source_beatmap_review_async"
+    complete = signature(getattr(native.AudioEngine, method))
+    parameters = [
+        parameter.replace(name="record_json") if parameter.name == argument else parameter
+        for parameter in complete.parameters.values()
+    ]
+    _replace_signature(native.AudioEngine, method, complete.replace(parameters=parameters))
+    with pytest.raises(AssertionError, match=method):
         _check(native)
 
 

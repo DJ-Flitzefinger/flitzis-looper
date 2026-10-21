@@ -2,7 +2,7 @@
 
 import math
 from contextlib import suppress
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import TYPE_CHECKING
 from weakref import WeakKeyDictionary
 
@@ -57,9 +57,12 @@ class _EditorInputs:
 
 @dataclass(slots=True)
 class _RawInputs:
-    key: tuple[int, object, int, str | None]
+    key: tuple[int, str | None]
     start_index: int = 0
     inspecting: bool = False
+    raw_index: str = ""
+    quarter_coordinate: str = ""
+    labels: list[tuple[int, float]] = field(default_factory=list)
 
 
 _INPUTS: WeakKeyDictionary[WaveformEditorActions, _EditorInputs] = WeakKeyDictionary()
@@ -487,7 +490,7 @@ def _interval_fields(ctx: UiContext, frame: SourceMapEditorFrame, state: _Editor
 
 
 def _raw_inputs(ctx: UiContext, frame: SourceMapEditorFrame) -> _RawInputs:
-    key = frame.pad_id, frame.identity, frame.raw.attempt, frame.raw.revision
+    key = frame.raw.attempt, frame.raw.revision
     state = _RAW_INPUTS.get(ctx.ui.waveform)
     if state is None or state.key != key:
         state = _RawInputs(key)
@@ -545,6 +548,10 @@ def _show_raw_page(ctx: UiContext, frame: SourceMapEditorFrame, state: _RawInput
     imgui.begin_child("raw-detection-page", (-1, imgui.get_text_line_height_with_spacing() * 7))
     try:
         for event in page["events"]:
+            index = event["raw_index"]
+            if imgui.button(f"Use detection #{index}##source-raw-use-{index}"):
+                _use_raw_detection(ctx, frame, state, index)
+            imgui.same_line(spacing=SPACING)
             downbeat = "yes" if event["detected_downbeat"] else "no"
             imgui.text_unformatted(
                 f"#{event['raw_index']} | ODF frame {event['odf_frame']:.17g} | "
@@ -553,6 +560,110 @@ def _show_raw_page(ctx: UiContext, frame: SourceMapEditorFrame, state: _RawInput
             )
     finally:
         imgui.end_child()
+
+
+def _require_raw_observation(ctx: UiContext, frame: SourceMapEditorFrame, index: int) -> None:
+    info = frame.raw.info
+    if info is None:
+        message = "Raw detection metadata is unavailable."
+        raise ValueError(message)
+    if type(index) is not int or not 0 <= index < info["event_count"]:
+        message = f"Raw event index must satisfy 0 <= index < {info['event_count']}."
+        raise ValueError(message)
+    assert frame.raw.revision is not None
+    page = ctx.ui.source_map.selection.inspect_raw(
+        frame.pad_id,
+        expected_attempt=frame.raw.attempt,
+        expected_revision=frame.raw.revision,
+        start_index=index,
+        max_events=1,
+    )
+    if (
+        page["status"] != "ready"
+        or page["raw_revision"] != frame.raw.revision
+        or page["returned_count"] != 1
+        or page["events"][0]["raw_index"] != index
+        or page["events"][0]["physical_domain"] != "inside"
+    ):
+        message = "Choose one current detection inside the physical original source."
+        raise ValueError(message)
+
+
+def _use_raw_detection(
+    ctx: UiContext, frame: SourceMapEditorFrame, state: _RawInputs, index: int
+) -> None:
+    _require_raw_observation(ctx, frame, index)
+    state.raw_index, state.quarter_coordinate = str(index), ""
+
+
+def _add_raw_label(ctx: UiContext, frame: SourceMapEditorFrame, state: _RawInputs) -> None:
+    index, quarter = int(state.raw_index), float(state.quarter_coordinate)
+    if not math.isfinite(quarter):
+        message = "Enter an explicit finite quarter-note coordinate."
+        raise ValueError(message)
+    _require_raw_observation(ctx, frame, index)
+    existing = next((row for row, label in enumerate(state.labels) if label[0] == index), None)
+    if existing is not None:
+        state.labels[existing] = index, quarter
+        return
+    if len(state.labels) >= 64:
+        message = "This review accepts at most 64 explicit labels."
+        raise ValueError(message)
+    state.labels.append((index, quarter))
+
+
+def _remove_raw_label(ctx: UiContext, frame: SourceMapEditorFrame, state: _RawInputs) -> None:
+    index = int(state.raw_index)
+    _require_raw_observation(ctx, frame, index)
+    existing = next((row for row, label in enumerate(state.labels) if label[0] == index), None)
+    if existing is None:
+        message = "No explicit label exists for this raw event index."
+        raise ValueError(message)
+    state.labels.pop(existing)
+    state.quarter_coordinate = ""
+
+
+def _raw_label_controls(ctx: UiContext, frame: SourceMapEditorFrame, state: _RawInputs) -> None:
+    imgui.set_next_item_width(110.0)
+    _, state.raw_index = imgui.input_text("Raw event index##source-raw-index", state.raw_index)
+    imgui.same_line(spacing=SPACING)
+    imgui.set_next_item_width(150.0)
+    _, state.quarter_coordinate = imgui.input_text(
+        "Quarter-note coordinate##source-raw-quarter", state.quarter_coordinate
+    )
+    if imgui.button("Add/update label##source-raw-label"):
+        _run_raw(ctx, frame, lambda: _add_raw_label(ctx, frame, state))
+    imgui.same_line(spacing=SPACING)
+    if imgui.button("Remove label##source-raw-remove-label"):
+        _run_raw(ctx, frame, lambda: _remove_raw_label(ctx, frame, state))
+    if state.labels:
+        imgui.begin_child(
+            "raw-explicit-labels", (-1, imgui.get_text_line_height_with_spacing() * 3)
+        )
+        try:
+            for index, quarter in state.labels:
+                imgui.text_unformatted(f"Raw #{index}: quarter-note coordinate {quarter:.17g}")
+        finally:
+            imgui.end_child()
+    imgui.text_wrapped(
+        "Supply labels in chronological order without filling unlabelled detections. "
+        "Intervals start uncertain. Meter and bar phase remain unknown."
+    )
+    imgui.begin_disabled(len(state.labels) < 2 or frame.status in _BUSY)
+    if imgui.button("Build source map from labels##source-raw-build"):
+        revision = frame.raw.revision
+        assert revision is not None
+        _run_raw(
+            ctx,
+            frame,
+            lambda: ctx.ui.source_map.selection.review_raw(
+                frame.pad_id,
+                list(state.labels),
+                expected_attempt=frame.raw.attempt,
+                expected_revision=revision,
+            ),
+        )
+    imgui.end_disabled()
 
 
 def _raw_review(ctx: UiContext, frame: SourceMapEditorFrame) -> None:
@@ -576,6 +687,7 @@ def _raw_review(ctx: UiContext, frame: SourceMapEditorFrame) -> None:
         return
     _raw_provenance(frame)
     state = _raw_inputs(ctx, frame)
+    _raw_label_controls(ctx, frame, state)
     if imgui.button("Inspect detections##source-raw-inspect"):
         state.inspecting = True
     if state.inspecting:

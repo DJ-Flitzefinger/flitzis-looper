@@ -13,16 +13,17 @@ def _write_attribute(target: object, field: str, value: object) -> None:
     setattr(target, field, value)
 
 
-def envelope() -> dict[str, object]:
+def envelope(version: int = 1) -> dict[str, object]:
     return {
-        "schema_version": 1,
-        "encoding": "source-beatmap-pwa-v1",
+        "schema_version": version,
+        "encoding": f"source-beatmap-pwa-v{version}",
         "record": {"source": {"decoder_identity": "unverified"}, "anchors": ["exact-bits"]},
     }
 
 
-def test_supported_record_roundtrips_as_an_object_without_native_acceptance() -> None:
-    data = envelope()
+@pytest.mark.parametrize("version", [1, 2])
+def test_supported_record_roundtrips_as_an_object_without_native_acceptance(version: int) -> None:
+    data = envelope(version)
     saved = PersistedSourceBeatmap.model_validate(data)
     assert saved.model_dump() == data
     restored = PersistedSourceBeatmap.from_json(saved.model_dump_json())
@@ -31,8 +32,9 @@ def test_supported_record_roundtrips_as_an_object_without_native_acceptance() ->
     assert restored.record_data()["source"] == {"decoder_identity": "unverified"}
 
 
-def test_caller_and_returned_nested_metadata_cannot_mutate_saved_record() -> None:
-    data = envelope()
+@pytest.mark.parametrize("version", [1, 2])
+def test_caller_and_returned_nested_metadata_cannot_mutate_saved_record(version: int) -> None:
+    data = envelope(version)
     saved = PersistedSourceBeatmap.model_validate(data)
     source = data["record"]
     assert isinstance(source, dict)
@@ -48,11 +50,21 @@ def test_caller_and_returned_nested_metadata_cannot_mutate_saved_record() -> Non
         _write_attribute(saved, "record", "replacement")
 
 
-@pytest.mark.parametrize("version", [True, False, 1.0, "1", 0, 2])
+@pytest.mark.parametrize("version", [True, False, 1.0, 2.0, "1", "2", 0, 3])
 def test_unsupported_or_noninteger_schema_is_not_recognized(version: object) -> None:
     data = envelope()
     data["schema_version"] = version
     with pytest.raises(ValidationError):
+        PersistedSourceBeatmap.model_validate(data)
+
+
+@pytest.mark.parametrize(
+    ("version", "encoding"), [(1, "source-beatmap-pwa-v2"), (2, "source-beatmap-pwa-v1")]
+)
+def test_version_and_encoding_must_be_the_same_supported_pair(version: int, encoding: str) -> None:
+    data = envelope(version)
+    data["encoding"] = encoding
+    with pytest.raises(ValidationError, match="does not match schema_version"):
         PersistedSourceBeatmap.model_validate(data)
 
 

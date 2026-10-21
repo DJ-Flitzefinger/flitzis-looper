@@ -49,6 +49,11 @@ class AudioEngine:
             raise AssertionError('launcher must never create a source beatmap')
         def begin_source_beatmap_edit_async(self, sample_id, receipt_json, operation_json):
             raise AssertionError('launcher must never edit a source beatmap')
+    if os.environ['LAUNCHER_NATIVE_MODE'] != 'editor-missing-review':
+        def begin_source_beatmap_review_async(
+            self, sample_id, candidate, review_json, *, expected_source_generation,
+        ):
+            raise AssertionError('launcher must never build a source beatmap')
 class SourceBeatmap:
     def __init__(self):
         raise AssertionError('launcher must never construct a map')
@@ -377,6 +382,7 @@ def test_recording_lifecycle_requires_current_native_before_application(
         "editor-version-old",
         "editor-version-future",
         "editor-missing-span",
+        "editor-missing-review",
         "editor-span-optional",
         "editor-span-keyword-only",
         "editor-span-positional-only",

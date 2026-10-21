@@ -101,7 +101,7 @@ fn bits(value: f64) -> String {
     format!("{:016x}", value.to_bits())
 }
 
-fn seal(mut value: Value) -> Result<SourceBeatmap, String> {
+pub(in crate::audio_engine) fn seal(mut value: Value) -> Result<SourceBeatmap, String> {
     check_record_size(&value)?;
     value["record"]["raw"]
         .as_object_mut()
@@ -267,10 +267,7 @@ impl SourceBeatmap {
                 )
             }
             EditOperation::Undo { .. } => {
-                let raw_count = value["record"]["raw"]["beat_seconds_bits"]
-                    .as_array()
-                    .ok_or("raw_missing")?
-                    .len();
+                let raw_count = self.inner.raw_count;
                 let last = undo_operation(
                     &value["record"],
                     self.inner.sample_rate_hz,

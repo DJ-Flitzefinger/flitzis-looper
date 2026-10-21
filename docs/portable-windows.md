@@ -255,9 +255,11 @@ diagnostic setup remains a separate environment workflow.
 ### Source Map editor Native compatibility
 
 The launcher and Portable preflight require the manual Source Map creation/edit
-APIs and the shared Native editor/coordinate queries. Portable also reflects the
-create call's keyword-only `expected_source_generation=None` fence and bounded
-query defaults without constructing an Engine, opening a device or running jobs.
+and original-candidate review APIs, plus the shared Native editor/coordinate
+queries. Portable reflects the review call's required keyword-only source
+generation, original candidate and separate intent arguments, the create call's
+optional `expected_source_generation=None` fence, and bounded query defaults
+without constructing an Engine, opening a device or running jobs.
 A stale Native module is rejected before the App starts; rebuild/update the existing
 installation through its ordinary workflow. This API check does not establish
 musical map quality, live-map audio adoption or device/Human acceptance.

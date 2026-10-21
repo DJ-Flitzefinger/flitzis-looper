@@ -524,6 +524,18 @@ def check_source_beatmap_editor_api(native_module: object) -> None:
     for owner, method, arguments, keyword_only in (
         (
             engine,
+            "begin_source_beatmap_review_async",
+            (
+                ("self", required),
+                ("sample_id", required),
+                ("candidate", required),
+                ("review_json", required),
+                ("expected_source_generation", required),
+            ),
+            {"expected_source_generation"},
+        ),
+        (
+            engine,
             "begin_source_beatmap_raw_async",
             (
                 ("self", required),

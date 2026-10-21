@@ -841,6 +841,8 @@ the actual material root, or under `samples/` for a legacy flat original. The
 portable receipt includes the literal `samples/` prefix, byte count, full-file
 SHA256, map revision and decoder identity. It carries no saved runtime FileID or
 verified flag. The existing Rust map parser remains authoritative.
+The `v1` path and receipt describe the artifact container; an additive V2 accepted
+record uses the same container and does not create another storage lifecycle.
 
 Only `resolve_source_beatmap_artifact_completion` on the original job can return
 the privately held `SourceBeatmapArtifact` and acknowledge a new durable export.
@@ -854,15 +856,31 @@ automatic collection or selected-map authority. Artifact-owned cleanup runs off
 UI; existing independent geometry clones retain their existing Arc lifetime.
 Conservative rollback preserves a file blocked by another owner/reader, changed
 identity or unknown child; it does not retry after that outside owner releases.
-Failure to start final output retirement also preserves its owner. Eventual
-last-reader collection still needs the later selection/history integration.
+Failure to start final output retirement also preserves its owner. Last-reader
+collection uses the existing selection/history asset integration.
 The contract is `store-source-beatmap-artifacts`.
 
 Parsing or receiving a map DTO does not grant a current audio-source permit,
-Native timing acknowledgement or live trajectory. Source-bound loader/model/persistence/
-copy integration and the later editor/SYNC work remain open. The verified map DTO
-supplies data, not selected-map or live authority. Reuse the existing
-Cold custody, content identities and single audio timing authority for those
-steps. The schema and remaining integration contract are in
-`prepare-versioned-source-beatmaps`; synthetic query tests are bounded software
-evidence and do not replace model, musical, resource or Human acceptance.
+Native timing acknowledgement or live trajectory. The existing selection owner
+integrates genuine completions with compact Config, assignment/history, Copy and
+fresh source verification; the editor and supported dry SYNC path consume that
+qualified owner. Full continuous Native/SYNC behavior retains its separate gates.
+The verified map DTO supplies data, not selected-map or live authority. Cold
+custody, content identities and one audio timing authority remain authoritative.
+The schema and integration contracts are in `prepare-versioned-source-beatmaps`
+and its later changes; synthetic query tests do not replace model, musical,
+resource or Human acceptance.
+
+`begin_source_beatmap_review_async(sample_id, candidate, review_json, *,
+expected_source_generation=...)` extends the same worker and accepted selection
+path from an actual opaque Raw candidate. Its bounded intent labels original Raw
+indices with exact binary64 quarter bits; source geometry stays Native-owned.
+The shared interpretation builder creates an additive V2 record embedding the
+complete original capture, retaining strict V1 support. It begins uncertain with
+unknown meter/phase and estimated positions. The accepted job has independent
+source/cancel custody after admission, so Raw discard cannot revoke it. Raw
+reader/lease retention covers serialization and independent accepted reparse;
+the accepted result does not keep the old Raw cancellation owner. Existing
+artifact receipts, Config-before-Selection and source-qualified restore remain
+unchanged. See `interpret-original-raw-detections` and the user flow in
+`beatmap-sync-design.md`; explicit review is not automatic musical qualification.

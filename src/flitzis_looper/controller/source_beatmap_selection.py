@@ -1,6 +1,8 @@
 """Loader-owned compact map selection through the existing Native job and asset paths."""
 
 import json
+import math
+import struct
 from dataclasses import dataclass
 from time import monotonic
 from typing import TYPE_CHECKING, Literal, cast
@@ -223,6 +225,83 @@ class SourceBeatmapSelection:
         if raw.candidate is not None:
             self._raw_info(raw)
         self._cancel_raw()
+
+    def review_raw(
+        self,
+        sample_id: int,
+        review_intent: list[tuple[int, float]],
+        *,
+        expected_attempt: int,
+        expected_revision: str,
+    ) -> None:
+        """Submit explicit quarter labels to the original-candidate Native builder.
+
+        These pairs are control intent only. Native resolves every source position
+        from the original capture and creates the sole accepted geometry.
+        """
+        raw = self._raw_target(sample_id, expected_attempt, expected_revision)
+        content = self._guard(sample_id)
+        info = self._raw_info(raw)
+        if (
+            info is None
+            or info["status"] != "ready"
+            or raw.candidate is None
+            or raw.status != "unreviewed"
+            or info["raw_revision"] != expected_revision
+        ):
+            message = "The original raw candidate is not ready for interpretation."
+            raise ValueError(message)
+        encoded = self._encode_raw_review(review_intent, expected_revision, info["event_count"])
+        self._raw_target(sample_id, expected_attempt, expected_revision)
+        candidate = raw.candidate
+        self._admit(
+            sample_id,
+            content,
+            lambda: self.audio.begin_source_beatmap_review_async(
+                sample_id,
+                candidate,
+                encoded,
+                expected_source_generation=raw.source_generation,
+            ),
+        )
+
+    @staticmethod
+    def _encode_raw_review(
+        review_intent: list[tuple[int, float]], revision: str, event_count: int
+    ) -> str:
+        if type(review_intent) is not list or not 2 <= len(review_intent) <= 64:
+            message = "Enter between 2 and 64 explicit raw event/quarter-coordinate labels."
+            raise ValueError(message)
+        anchors = []
+        previous_index, previous_quarter = -1, -math.inf
+        for label in review_intent:
+            if type(label) is not tuple or len(label) != 2:
+                message = "Each review label needs one raw index and one finite quarter coordinate."
+                raise ValueError(message)
+            raw_index, quarter = label
+            if (
+                type(raw_index) is not int
+                or not previous_index < raw_index < event_count
+                or type(quarter) is not float
+                or not math.isfinite(quarter)
+                or quarter <= previous_quarter
+            ):
+                message = "Raw indices and finite quarter coordinates must be strictly increasing."
+                raise ValueError(message)
+            anchors.append({
+                "raw_index": raw_index,
+                "quarter_bits": struct.pack(">d", quarter).hex(),
+            })
+            previous_index, previous_quarter = raw_index, quarter
+        encoded = json.dumps(
+            {"schema_version": 1, "raw_revision": revision, "anchors": anchors},
+            allow_nan=False,
+            separators=(",", ":"),
+        )
+        if len(encoded.encode("utf-8")) > 8192:
+            message = "Raw review intent exceeds the 8 KiB limit."
+            raise ValueError(message)
+        return encoded
 
     def raw_completed(self, sample_id: int, event: dict[str, object]) -> None:
         """Resolve raw evidence only through this job's original private Native delivery."""

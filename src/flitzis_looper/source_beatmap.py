@@ -1,7 +1,7 @@
 """Supported historical map envelope; Rust owns geometry and actual source checks."""
 
 import json
-from typing import Literal
+from typing import Literal, Self
 
 from pydantic import (
     BaseModel,
@@ -10,6 +10,7 @@ from pydantic import (
     TypeAdapter,
     field_serializer,
     field_validator,
+    model_validator,
 )
 
 MAX_SOURCE_BEATMAP_BYTES = 64 * 1024 * 1024
@@ -32,9 +33,16 @@ class PersistedSourceBeatmap(BaseModel):
 
     model_config = ConfigDict(frozen=True, extra="forbid", strict=True)
 
-    schema_version: Literal[1]
-    encoding: Literal["source-beatmap-pwa-v1"]
+    schema_version: Literal[1, 2]
+    encoding: Literal["source-beatmap-pwa-v1", "source-beatmap-pwa-v2"]
     record: str
+
+    @model_validator(mode="after")
+    def _match_envelope_version(self) -> Self:
+        if self.encoding != f"source-beatmap-pwa-v{self.schema_version}":
+            msg = "source beatmap encoding does not match schema_version"
+            raise ValueError(msg)
+        return self
 
     @classmethod
     def from_json(cls, encoded: str | bytes) -> PersistedSourceBeatmap:

@@ -2644,6 +2644,24 @@ impl AudioEngine {
         self.begin_source_beatmap_raw_async_with(sample_id, expected_source_generation, || {})
     }
 
+    /// Build an accepted map from explicit labels on a genuine original capture.
+    #[pyo3(signature=(sample_id,candidate,review_json,*,expected_source_generation))]
+    pub fn begin_source_beatmap_review_async(
+        &self,
+        sample_id: usize,
+        candidate: &SourceBeatmapRawCandidate,
+        review_json: String,
+        expected_source_generation: u64,
+    ) -> PyResult<OfflineAnalysisJob> {
+        self.begin_source_beatmap_review_async_with(
+            sample_id,
+            candidate,
+            review_json,
+            expected_source_generation,
+            || {},
+        )
+    }
+
     /// Queue source-bound map verification on the existing bounded cold worker lane.
     pub fn begin_source_beatmap_async(
         &self,

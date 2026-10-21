@@ -13,6 +13,7 @@ use pyo3::prelude::*;
 use pyo3::types::{PyDict, PyList};
 
 pub(super) mod editor;
+pub(super) mod interpretation;
 mod interval_edits;
 mod query;
 mod record;

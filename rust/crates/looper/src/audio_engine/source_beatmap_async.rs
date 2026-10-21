@@ -20,6 +20,10 @@ const FAILED: u8 = 4;
 const CANCELLED: u8 = 5;
 
 enum AsyncMapInput {
+    Review {
+        artifact: crate::audio_engine::source_beatmap_artifact::SourceBeatmapRawArtifact,
+        intent: crate::audio_engine::source_beatmap::interpretation::Interpretation,
+    },
     AcquireRaw {
         expected_generation: u64,
     },
@@ -40,6 +44,7 @@ enum AsyncMapInput {
 impl AsyncMapInput {
     fn borrowed(&self) -> MapInput<'_> {
         match self {
+            Self::Review { artifact, intent } => MapInput::Review { artifact, intent },
             Self::AcquireRaw {
                 expected_generation,
             } => MapInput::AcquireRaw {
@@ -63,6 +68,7 @@ impl AsyncMapInput {
 
     fn bounded(&self) -> bool {
         match self {
+            Self::Review { .. } => true, // strict intent validated before admission
             Self::AcquireRaw {
                 expected_generation,
             } => *expected_generation > 0,
@@ -291,6 +297,117 @@ impl Drop for AsyncMapRetirement {
 }
 
 impl AudioEngine {
+    pub(in crate::audio_engine) fn begin_source_beatmap_review_async_with(
+        &self,
+        sample_id: usize,
+        candidate: &crate::audio_engine::SourceBeatmapRawCandidate,
+        review_json: String,
+        expected_generation: u64,
+        after_verify: impl FnOnce() + Send + 'static,
+    ) -> PyResult<OfflineAnalysisJob> {
+        self.begin_source_beatmap_review_async_with_hooks(
+            sample_id,
+            candidate,
+            review_json,
+            expected_generation,
+            after_verify,
+            |_, _| Ok(()),
+        )
+    }
+
+    pub(in crate::audio_engine) fn begin_source_beatmap_review_async_with_hooks(
+        &self,
+        sample_id: usize,
+        candidate: &crate::audio_engine::SourceBeatmapRawCandidate,
+        review_json: String,
+        expected_generation: u64,
+        after_verify: impl FnOnce() + Send + 'static,
+        observe: impl FnMut(StorePoint, &Path) -> Result<(), String> + Send + 'static,
+    ) -> PyResult<OfflineAnalysisJob> {
+        self.queue_source_beatmap_review(
+            (sample_id, expected_generation),
+            candidate,
+            review_json,
+            after_verify,
+            observe,
+            |_, _, _| Ok(()),
+        )
+    }
+
+    fn queue_source_beatmap_review(
+        &self,
+        source_target: (usize, u64),
+        candidate: &crate::audio_engine::SourceBeatmapRawCandidate,
+        review_json: String,
+        after_verify: impl FnOnce() + Send + 'static,
+        observe: impl FnMut(StorePoint, &Path) -> Result<(), String> + Send + 'static,
+        fault: impl Fn(&Self, &OfflineAnalysisJob, bool) -> Result<(), String>,
+    ) -> PyResult<OfflineAnalysisJob> {
+        let (sample_id, expected_generation) = source_target;
+        let intent = crate::audio_engine::source_beatmap::interpretation::Interpretation::parse(
+            &review_json,
+        )
+        .map_err(PyValueError::new_err)?;
+        let (artifact, binding) =
+            candidate.review_artifact(self, sample_id, expected_generation, &intent)?;
+        // This closure exists only during synchronous admission. Work retains
+        // the real artifact reader, never the old cancellation owner or DTO.
+        self.queue_source_beatmap_input_with_admission_hook(
+            sample_id,
+            AsyncMapInput::Review { artifact, intent },
+            after_verify,
+            observe,
+            |engine, job, armed| {
+                if !armed {
+                    let _requests = engine
+                        .pad_request_ids
+                        .lock()
+                        .map_err(|_| "request lock poisoned")?;
+                    if candidate.status_for_review() != "ready"
+                        || !job
+                            .state()
+                            .native_owner
+                            .as_ref()
+                            .is_some_and(|owner| owner.source_map_admission_current(&binding))
+                    {
+                        return Err("raw review source changed before accepted admission".into());
+                    }
+                    // Accepted authority transitions here. Subsequent Raw
+                    // cancellation is intentionally never consulted again.
+                }
+                fault(engine, job, armed)
+            },
+        )
+    }
+
+    #[cfg(test)]
+    pub(in crate::audio_engine) fn begin_source_beatmap_review_admission_fault_for_test(
+        &self,
+        sample_id: usize,
+        candidate: &crate::audio_engine::SourceBeatmapRawCandidate,
+        review_json: String,
+        expected_generation: u64,
+        after_arm: bool,
+    ) -> PyResult<OfflineAnalysisJob> {
+        self.queue_source_beatmap_review(
+            (sample_id, expected_generation),
+            candidate,
+            review_json,
+            || {},
+            |_, _| Ok(()),
+            move |engine, job, armed| {
+                if armed == after_arm {
+                    if after_arm {
+                        engine.cold_jobs.close_admission();
+                    } else {
+                        job.state().preparing.store(true, Ordering::Release);
+                    }
+                }
+                Ok(())
+            },
+        )
+    }
+
     pub(in crate::audio_engine) fn begin_source_beatmap_admitted(
         &self,
         id: usize,
@@ -405,6 +522,7 @@ impl AudioEngine {
                         job.state().preparing.store(true, Ordering::Release);
                     }
                 }
+                Ok(())
             },
         )
     }
@@ -517,7 +635,7 @@ impl AudioEngine {
             input,
             after_verify,
             observe,
-            |_, _, _| {},
+            |_, _, _| Ok(()),
         )
     }
 
@@ -529,7 +647,7 @@ impl AudioEngine {
         input: AsyncMapInput,
         after_verify: impl FnOnce() + Send + 'static,
         observe: impl FnMut(StorePoint, &Path) -> Result<(), String> + Send + 'static,
-        admission: impl Fn(&Self, &OfflineAnalysisJob, bool),
+        admission: impl Fn(&Self, &OfflineAnalysisJob, bool) -> Result<(), String>,
     ) -> PyResult<OfflineAnalysisJob> {
         if !input.bounded() {
             return Err(PyValueError::new_err(
@@ -548,10 +666,10 @@ impl AudioEngine {
         };
         let reservation = self.cold_jobs.reserve().map_err(PyRuntimeError::new_err)?;
         let job = self.begin_source_beatmap_admitted(sample_id, raw_review)?;
-        admission(self, &job, false);
+        admission(self, &job, false).map_err(PyRuntimeError::new_err)?;
         let work = AsyncMapWork::arm(&job, input, &reservation, self.cold_cancelled.clone())
             .map_err(PyRuntimeError::new_err)?;
-        admission(self, &job, true);
+        admission(self, &job, true).map_err(PyRuntimeError::new_err)?;
         self.cold_jobs
             .submit(reservation, move || work.run(after_verify, observe))
             .map_err(PyRuntimeError::new_err)?;

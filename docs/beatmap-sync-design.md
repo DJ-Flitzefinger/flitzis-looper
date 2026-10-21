@@ -436,7 +436,9 @@ detected-downbeat flags remain detector observations; they do not assign quarter
 notes, bars, meter, musical coverage or exact sample anchors. Events outside the
 physical source remain retained and classified. No raw candidate changes grids,
 snapping, Apply bars, accepted selection, persistence, timing, SYNC or playback.
-Musical interpretation and accepted-map promotion remain separate work.
+Musical interpretation remains separate from acquisition. The explicit label
+builder below can create an accepted data artifact without claiming automatic
+musical qualification.
 
 One transient review slot retains the original content/source admission and an
 attempt token. Move follows that content; Copy, Bank and restart do not inherit
@@ -451,7 +453,53 @@ Raw acquisition preflights a 512-MiB simultaneous job peak, 16-MiB raw encoding 
 reads, conversion, inference and final artifact retirement stay off realtime.
 Accepted maps and edits keep their existing authority throughout raw work. See
 `../openspec/changes/acquire-original-raw-detections/` for this bounded contract;
-durable raw references and full SYNC/music/device/Human gates remain open.
+standalone durable raw references are not introduced. Full automatic musical
+qualification and SYNC/music/device/Human gates remain open.
+
+## Explicit Raw interpretation and complete accepted records — 2026-10-21
+
+After acquisition, the Raw inspector accepts explicitly entered **Raw event index**
+and **Quarter-note coordinate** labels. Both fields start blank. **Use detection**
+fills only the index and clears the coordinate; it never interprets an event's
+ordinal position as a quarter count. Add/update or remove at most 64 labels, then
+use **Build source map from labels**. At least two strictly chronological usable
+observations and strictly increasing finite coordinates are required. Skipped
+extra detections and non-ordinal quarter labels are retained exactly as entered.
+
+Native resolves source positions from the original capture; Python sends only
+the capture revision, indices and exact binary64 quarter bits. The single Native
+builder uses the existing map validator and B/S evaluator. Initial intervals are
+uncertain, meter unknown and bar phase unavailable. Position estimates remain
+estimated. Count, coverage, position and meter/phase corrections retain their
+existing separate actions. Explicit labels are a review client of the shared
+builder; qualified automatic full-track interpretation and B2 remain separate
+full-Goal obligations.
+
+The additive `source-beatmap-pwa-v2` record embeds the entire original capture,
+including exact ODF bits, downbeat indices, configuration/input hashes and
+outside-source observations. No derived seconds copy replaces it. The original
+capture revision, canonical Raw-wrapper revision and complete map revision are
+different identities. Existing strict V1 records keep their format and guards.
+V2 edits, Undo, Copy/Bank and fresh source-verified restore keep the complete
+capture without another model call. The compact artifact receipt is unchanged.
+Initial labels must name observations inside the source. Later explicit signed
+alignment retains the existing virtual-coordinate contract; physical source and
+playback checks remain independent of those historical map coordinates.
+
+Build admission checks the genuine opaque candidate and its original engine,
+content, placement, source generation and revision; UI attempts additionally
+fence stale gestures. A valid accepted job then owns separate original source
+and cancellation rights. Discarding Raw afterward does not cancel that job or
+its completion. Its genuine Raw reader and lease remain held until independently
+owned accepted bytes and geometry exist. Actual source replacement still fences
+the new job. The existing worker/artifact/private delivery and durable-before-
+selection path publish it; failures preserve the previous accepted selection and
+effective delivery. Building does not itself change BPM, markers, SYNC or audio.
+
+Capture serialization and accepted reparse have a checked simultaneous job
+budget; input byte limits alone are not a process-RAM guarantee. No new callback
+work or persistent Raw-reference lifecycle is added. See
+`../openspec/changes/interpret-original-raw-detections/`.
 
 ## Manual Source Map Loop Editor — 2026-10-21
 

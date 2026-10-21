@@ -4,7 +4,7 @@ use std::collections::HashSet;
 use std::fmt;
 use std::sync::Arc;
 
-use serde::de::{self, SeqAccess, Visitor};
+use serde::de::{self, DeserializeOwned, IgnoredAny, SeqAccess, Visitor};
 use serde::{Deserialize, Deserializer, Serialize};
 use serde_json::Value;
 
@@ -12,6 +12,7 @@ use super::super::cold_store::{canonical, descriptor_digest};
 use super::{MAX_ANCHORS, MAX_RECORD_BYTES};
 
 const ENCODING: &str = "source-beatmap-pwa-v1";
+const ENCODING_V2: &str = "source-beatmap-pwa-v2";
 const INTERPOLATION: &str = "pwa-source-seconds-quarter-v1";
 const BOUNDARY: &str = "right-interior-left-final-gap-unavailable-v1";
 const SNAP: &str = "nearest-quarter-subdivision-later-tie-v1";
@@ -19,18 +20,60 @@ const MAX_TEXT_BYTES: usize = 4096;
 
 #[derive(Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
-struct Envelope {
+struct Envelope<R> {
     schema_version: u32,
     encoding: String,
-    record: Record,
+    record: Record<R>,
 }
 
 #[derive(Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
-struct Record {
+struct Record<R> {
     source: Source,
-    raw: Raw,
+    raw: R,
     accepted: Accepted,
+}
+
+#[derive(Serialize)]
+#[serde(untagged)]
+enum VersionedRaw {
+    Legacy(Raw),
+    Capture(CapturedRaw),
+}
+
+/// Inspect only the small discriminator while skipping the bounded record.
+/// Direct typed dispatch preserves each version's precise bounded-array errors;
+/// an untagged fallback must not hide a genuine V1 refusal behind enum mismatch.
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct EnvelopeHeader {
+    schema_version: u32,
+    encoding: String,
+    #[serde(rename = "record")]
+    _record: IgnoredAny,
+}
+
+fn typed_envelope<R: DeserializeOwned>(
+    encoded: &str,
+    wrap: impl FnOnce(R) -> VersionedRaw,
+) -> Result<Envelope<VersionedRaw>, String> {
+    let envelope: Envelope<R> = serde_json::from_str(encoded).map_err(|error| error.to_string())?;
+    Ok(Envelope {
+        schema_version: envelope.schema_version,
+        encoding: envelope.encoding,
+        record: Record {
+            source: envelope.record.source,
+            raw: wrap(envelope.record.raw),
+            accepted: envelope.record.accepted,
+        },
+    })
+}
+
+#[derive(Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+struct CapturedRaw {
+    raw_revision: String,
+    capture: super::super::source_beatmap_raw_data::Envelope,
 }
 
 #[derive(Deserialize, Serialize)]
@@ -211,6 +254,7 @@ pub(super) struct ValidatedMap {
     pub(super) sample_rate_hz: u32,
     pub(super) source_frames: u64,
     pub(super) can_undo: bool,
+    pub(super) raw_count: usize,
     pub(super) anchors: Box<[Anchor]>,
     pub(super) segments: Box<[Segment]>,
     /// Derived immutable coverage index, not another map or timing authority.
@@ -259,14 +303,35 @@ pub(super) fn parse(encoded: &str) -> Result<ValidatedMap, String> {
     if encoded.len() > MAX_RECORD_BYTES {
         return Err("beatmap_byte_limit".into());
     }
-    let envelope: Envelope = serde_json::from_str(encoded).map_err(|error| error.to_string())?;
-    if envelope.schema_version != 1 || envelope.encoding != ENCODING {
-        return Err("unsupported_beatmap_envelope".into());
-    }
-    let record = &envelope.record;
+    let header: EnvelopeHeader =
+        serde_json::from_str(encoded).map_err(|error| error.to_string())?;
+    let mut envelope = match (header.schema_version, header.encoding.as_str()) {
+        (1, ENCODING) => typed_envelope(encoded, VersionedRaw::Legacy)?,
+        (2, ENCODING_V2) => typed_envelope(encoded, VersionedRaw::Capture)?,
+        _ => return Err("unsupported_beatmap_envelope".into()),
+    };
+    let version = envelope.schema_version;
+    let encoding = envelope.encoding.clone();
+    let record = &mut envelope.record;
     let source_duration = source_duration(&record.source)?;
-    validate_raw(&record.raw, source_duration)?;
-    let (anchors, segments) = geometry(&record.accepted, record.raw.beat_seconds_bits.len())?;
+    let raw_count = match (&mut record.raw, version, encoding.as_str()) {
+        (VersionedRaw::Legacy(raw), 1, ENCODING) => {
+            validate_raw(raw, source_duration)?;
+            raw.beat_seconds_bits.len()
+        }
+        (VersionedRaw::Capture(raw), 2, ENCODING_V2) => {
+            digest_text(&raw.raw_revision)?;
+            let capture = raw.capture.validate()?;
+            if capture.decoder_identity != record.source.decoder_identity
+                || capture.source_descriptor != record.source.decoder_descriptor
+            {
+                return Err("capture_source_identity_mismatch".into());
+            }
+            capture.beat_frames.len()
+        }
+        _ => return Err("unsupported_beatmap_envelope".into()),
+    };
+    let (anchors, segments) = geometry(&record.accepted, raw_count)?;
     let mut unsupported_prefix = Vec::new();
     let mut meter_prefix = Vec::new();
     let mut gap_prefix = Vec::new();
@@ -333,7 +398,6 @@ pub(super) fn parse(encoded: &str) -> Result<ValidatedMap, String> {
     let source_frames = record.source.decoder_descriptor["pcm"]["full_frames"]
         .as_u64()
         .ok_or("decoder_extent_missing")?;
-    let raw_count = record.raw.beat_seconds_bits.len();
 
     // Move the typed payload into one JSON tree after preparing small geometry.
     // Existing canonical/digest helpers remain the only hash authority. These
@@ -352,7 +416,7 @@ pub(super) fn parse(encoded: &str) -> Result<ValidatedMap, String> {
     }
     value["accepted"]["map_revision"] = declared;
     let envelope_value = serde_json::json!({
-        "schema_version": 1, "encoding": ENCODING, "record": value,
+        "schema_version": version, "encoding": encoding, "record": value,
     });
     let canonical_value = canonical(&envelope_value);
     let encoded = serde_json::to_string(&canonical_value).map_err(|error| error.to_string())?;
@@ -367,6 +431,7 @@ pub(super) fn parse(encoded: &str) -> Result<ValidatedMap, String> {
         sample_rate_hz,
         source_frames,
         can_undo,
+        raw_count,
         anchors: anchors.into_boxed_slice(),
         segments: segments.into_boxed_slice(),
         unsupported_prefix: unsupported_prefix.into_boxed_slice(),

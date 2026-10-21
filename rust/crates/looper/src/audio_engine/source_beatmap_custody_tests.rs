@@ -913,6 +913,9 @@ mod source_beatmap_async_tests {
 
     mod source_beatmap_raw_tests {
         include!("source_beatmap_raw_tests.rs");
+        mod source_beatmap_review_tests {
+            include!("source_beatmap_review_tests.rs");
+        }
     }
 
     mod source_beatmap_artifact_tests {

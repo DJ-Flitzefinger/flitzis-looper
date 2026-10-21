@@ -68,6 +68,38 @@ pub struct SourceBeatmapRawCandidate {
 }
 
 impl SourceBeatmapRawCandidate {
+    pub(super) fn review_artifact(
+        &self,
+        engine: &super::AudioEngine,
+        id: usize,
+        generation: u64,
+        intent: &super::source_beatmap::interpretation::Interpretation,
+    ) -> PyResult<(SourceBeatmapRawArtifact, super::InputRuntimePadBinding)> {
+        if id >= super::NUM_SAMPLES || generation == 0 {
+            return Err(PyValueError::new_err("raw review source is out of range"));
+        }
+        let _requests = engine
+            .pad_request_ids
+            .lock()
+            .map_err(|_| pyo3::exceptions::PyRuntimeError::new_err("request lock poisoned"))?;
+        let binding = super::input_runtime_binding::capture_under_request_lock(engine, id)?
+            .ok_or_else(|| PyValueError::new_err("raw review source is unavailable"))?;
+        if self.status() != "ready"
+            || binding.source_generation != generation
+            || !self.owner.source_map_admission_current(&binding)
+            || !matches!(self.owner.observe_control(), super::content_placement::PlacementObservation::Current(place) if place.slot() == id)
+        {
+            return Err(PyValueError::new_err(
+                "raw review original candidate is stale or placement pending",
+            ));
+        }
+        intent
+            .validate_for(self.artifact.raw())
+            .map_err(PyValueError::new_err)?;
+        // Clone the actual artifact reader/lease, never the old cancellation owner.
+        Ok((self.artifact.clone(), binding))
+    }
+
     pub(super) fn new(
         artifact: SourceBeatmapRawArtifact,
         owner: NativeAnalysisOwner,
@@ -78,6 +110,10 @@ impl SourceBeatmapRawCandidate {
             owner,
             shutdown,
         }
+    }
+
+    pub(super) fn status_for_review(&self) -> &'static str {
+        self.status()
     }
 
     fn status(&self) -> &'static str {

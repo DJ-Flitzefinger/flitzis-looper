@@ -885,6 +885,14 @@ class AudioEngine:
     def begin_source_beatmap_raw_async(
         self, sample_id: int, *, expected_source_generation: int
     ) -> OfflineAnalysisJob: ...
+    def begin_source_beatmap_review_async(
+        self,
+        sample_id: int,
+        candidate: SourceBeatmapRawCandidate,
+        review_json: str,
+        *,
+        expected_source_generation: int,
+    ) -> OfflineAnalysisJob: ...
     def begin_source_beatmap_async(
         self, sample_id: int, record_json: str
     ) -> OfflineAnalysisJob: ...

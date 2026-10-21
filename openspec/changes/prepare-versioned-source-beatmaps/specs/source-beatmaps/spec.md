@@ -12,7 +12,9 @@ Sample-domain accepted edits SHALL retain the selected sample index and source r
 Model timestamp resolution and coordinate representation SHALL NOT be equated with musical
 detection accuracy. Pitch/transposition intent SHALL NOT change source-map identity or coordinates.
 
-The supported additive envelope SHALL use schema version 1 and encoding `source-beatmap-pwa-v1`.
+The original additive envelope SHALL use schema version 1 and encoding `source-beatmap-pwa-v1`.
+The separately specified `interpret-original-raw-detections` change SHALL add version 2 with
+complete embedded Raw capture; version 1 and its strict validation SHALL remain supported.
 Its strict record SHALL separate stable source identity, immutable raw evidence and accepted
 anchors/coverage/correction lineage. Authoritative binary64 coordinates and evidence SHALL retain
 their exact hexadecimal bits. Raw and map revisions SHALL be complete 64-digit lowercase SHA-256

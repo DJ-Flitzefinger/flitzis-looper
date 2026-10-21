@@ -113,13 +113,31 @@ pub(super) struct RawData {
     pub(super) downbeat_indices: Vec<usize>,
 }
 
-#[derive(Deserialize)]
+#[derive(Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
-struct Envelope {
+pub(super) struct Envelope {
     schema_version: u32,
     encoding: String,
     raw_revision: String,
     data: RawData,
+}
+
+impl Envelope {
+    /// Nested captures follow the map's object order, while retaining their
+    /// original typed revision and every detector bit.
+    pub(super) fn validate(&mut self) -> Result<&RawData, String> {
+        if self.schema_version != SCHEMA_VERSION || self.encoding != ENCODING {
+            return Err("raw acquisition encoding version invalid".into());
+        }
+        self.data.raw_revision = self.raw_revision.clone();
+        self.data.source_descriptor = canonical(&self.data.source_descriptor);
+        self.data.validate()?;
+        if !digest_text(&self.raw_revision) || self.data.revision()? != self.raw_revision {
+            return Err("raw acquisition revision differs".into());
+        }
+        self.data.encoded_len()?;
+        Ok(&self.data)
+    }
 }
 
 #[derive(Serialize)]
@@ -491,6 +509,50 @@ impl RawData {
         hash.0.update([0]);
         serde_json::to_writer(&mut hash, self).map_err(|error| error.to_string())?;
         Ok(format!("{:x}", hash.0.finalize()))
+    }
+
+    pub(super) fn embedded_value(&self) -> Result<Value, String> {
+        self.validate()?;
+        if self.revision()? != self.raw_revision {
+            return Err("raw acquisition revision differs".into());
+        }
+        serde_json::to_value(Encoded {
+            schema_version: SCHEMA_VERSION,
+            encoding: ENCODING,
+            raw_revision: &self.raw_revision,
+            data: self,
+        })
+        .map_err(|error| error.to_string())
+    }
+
+    /// Count all provenance before allocating an enclosing serialization tree.
+    pub(super) fn encoded_len(&self) -> Result<usize, String> {
+        struct Counter(usize);
+        impl Write for Counter {
+            fn write(&mut self, bytes: &[u8]) -> io::Result<usize> {
+                self.0 = self
+                    .0
+                    .checked_add(bytes.len())
+                    .filter(|n| *n <= MAX_RAW_BYTES)
+                    .ok_or_else(|| io::Error::other("raw acquisition encoding exceeds 16 MiB"))?;
+                Ok(bytes.len())
+            }
+            fn flush(&mut self) -> io::Result<()> {
+                Ok(())
+            }
+        }
+        let mut count = Counter(0);
+        serde_json::to_writer(
+            &mut count,
+            &Encoded {
+                schema_version: SCHEMA_VERSION,
+                encoding: ENCODING,
+                raw_revision: &self.raw_revision,
+                data: self,
+            },
+        )
+        .map_err(|error| error.to_string())?;
+        Ok(count.0)
     }
 
     pub(super) fn encode(&self) -> Result<Vec<u8>, String> {
@@ -869,6 +931,10 @@ impl<'de> Visitor<'de> for DescriptorSeed<'_> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    mod interpretation_tests {
+        include!("source_beatmap/interpretation_tests.rs");
+    }
 
     fn capture() -> RawData {
         let descriptor = json!({"schema_version":1,"original":{"sha256":"a".repeat(64),"bytes":128},

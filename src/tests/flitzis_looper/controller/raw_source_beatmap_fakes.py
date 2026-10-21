@@ -106,3 +106,13 @@ def raw_event(job: Mock, candidate: FakeRawCandidate) -> dict[str, object]:
         candidate if owner is delivery else None
     )
     return {"type": "source_beatmap_raw_completed", "id": 0, "_native_event_owner": delivery}
+
+
+def review_job(audio: Mock) -> Mock:
+    """Install the independent accepted admission seam against an older loaded Native."""
+    job = Mock()
+    job.is_cancelled.return_value = False
+    job.source_beatmap_async_status.return_value = None
+    job.resolve_source_beatmap_artifact_completion.return_value = None
+    audio.begin_source_beatmap_review_async = Mock(return_value=job)
+    return job

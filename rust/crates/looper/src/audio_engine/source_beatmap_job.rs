@@ -16,6 +16,10 @@ pub(super) enum PreparedMap {
 }
 
 pub(super) enum MapInput<'a> {
+    Review {
+        artifact: &'a crate::audio_engine::source_beatmap_artifact::SourceBeatmapRawArtifact,
+        intent: &'a crate::audio_engine::source_beatmap::interpretation::Interpretation,
+    },
     AcquireRaw {
         expected_generation: u64,
     },
@@ -128,6 +132,21 @@ impl JobState {
             return Ok(());
         }
         let (map, artifact) = match input {
+            MapInput::Review { artifact, intent } => {
+                let map = crate::audio_engine::source_beatmap::interpretation::build(
+                    artifact.raw(),
+                    intent,
+                    reader.held_bytes()?,
+                )?;
+                // Independent accepted bytes/parse own all provenance before
+                // the queued input's real Raw reader may retire.
+                reader.verify_source_beatmap(&map, &cancelled)?;
+                let (root, original) = reader.map_artifact_paths()?;
+                let stored =
+                    SourceBeatmapArtifact::store(root, original, map, &cancelled, observe)?;
+                reader.require_map_custody()?;
+                (stored.map(), Some(stored))
+            }
             MapInput::AcquireRaw { .. } => {
                 unreachable!("raw preparation returned through its typed branch")
             }
