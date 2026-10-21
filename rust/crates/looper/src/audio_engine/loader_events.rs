@@ -17,6 +17,29 @@ use std::sync::mpsc::TryRecvError;
 pub struct LoaderEventDelivery {
     owner: super::complete_context::NativeAnalysisOwner,
     timing_epoch: Option<u64>,
+    source_beatmap: Option<super::source_beatmap::SourceBeatmap>,
+}
+
+impl LoaderEventDelivery {
+    /// Original-job data resolution never consults mutable Python DTO fields.
+    pub(super) fn source_beatmap_for(
+        &self,
+        owner: &super::complete_context::NativeAnalysisOwner,
+    ) -> PyResult<Option<super::source_beatmap::SourceBeatmap>> {
+        if !owner.same_admission(&self.owner) || !owner.current() {
+            return Ok(None);
+        }
+        let Some(map) = self.source_beatmap.as_ref() else {
+            return Ok(None);
+        };
+        match self.owner.observe_control() {
+            PlacementObservation::Current(_) => Ok(Some(map.clone())),
+            PlacementObservation::Pending => Err(PyRuntimeError::new_err(
+                "loader event content placement pending",
+            )),
+            PlacementObservation::Stale | PlacementObservation::Retired => Ok(None),
+        }
+    }
 }
 
 #[pymethods]
@@ -271,6 +294,10 @@ pub(super) fn poll(
             LoaderEvent::Success { timing_epoch, .. } => *timing_epoch,
             _ => None,
         };
+        let source_beatmap = match &event {
+            LoaderEvent::SourceBeatmapCompleted { map, .. } => Some(map.clone()),
+            _ => None,
+        };
         dict.set_item(
             "_native_event_owner",
             Py::new(
@@ -278,6 +305,7 @@ pub(super) fn poll(
                 LoaderEventDelivery {
                     owner,
                     timing_epoch,
+                    source_beatmap,
                 },
             )?,
         )?;

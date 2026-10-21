@@ -824,6 +824,14 @@ Natural release of a successfully finished handle preserves valid completion.
 No mono export, diagnostic Beat/Key result or JSON serialization during event
 polling is involved. The bounded contract is `bind-source-beatmap-custody`.
 
+`begin_source_beatmap_async` uses that same job owner on the existing bounded cold
+worker lane. Its status distinguishes requested cancellation from actual queued
+or running retirement. The original job resolves completion through the private
+map retained in `LoaderEventDelivery`; mutable event dictionary fields and equal
+numeric source requests cannot substitute another map admission. No parsing,
+hashing or complete map serialization belongs in ordinary status/delivery polling.
+The additional contract is `queue-source-beatmap-verification`.
+
 Parsing or receiving a map DTO does not grant a current audio-source permit,
 Native timing acknowledgement or live trajectory. Source-bound loader/model/persistence/
 copy integration and the later editor/SYNC work remain open. The verified map DTO

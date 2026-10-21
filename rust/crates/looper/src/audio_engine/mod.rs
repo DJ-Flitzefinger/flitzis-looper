@@ -2651,6 +2651,15 @@ impl AudioEngine {
             .map_err(PyRuntimeError::new_err)
     }
 
+    /// Queue source-bound map verification on the existing bounded cold worker lane.
+    pub fn begin_source_beatmap_async(
+        &self,
+        sample_id: usize,
+        record_json: String,
+    ) -> PyResult<OfflineAnalysisJob> {
+        self.begin_source_beatmap_async_with(sample_id, record_json, || {})
+    }
+
     /// Declare automatic/manual/TAP/legacy timing authority under the native owner.
     #[pyo3(name = "set_pad_timing_intent", signature = (sample_id, intent, *, expected_source_generation=None))]
     pub fn set_pad_timing_intent_with_source(

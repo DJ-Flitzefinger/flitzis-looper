@@ -61,6 +61,7 @@ fn dequeued_native_delivery_retains_original_owner_through_actual_move_and_swap(
             assert!(retained.borrow(py).same_owner(&LoaderEventDelivery {
                 owner: owner.clone(),
                 timing_epoch: None,
+                source_beatmap: None,
             }));
             let (_, feedback) = RingBuffer::<AudioMessage>::new(8);
             fixture.engine.test_control_channels =
@@ -130,6 +131,7 @@ fn retained_source_delivery_rechecks_timing_without_borrowing_new_analysis() {
     let delivery = LoaderEventDelivery {
         owner,
         timing_epoch: Some(EPOCH),
+        source_beatmap: None,
     };
     assert_eq!(
         resolve_delivery(&fixture.engine, &delivery).unwrap(),

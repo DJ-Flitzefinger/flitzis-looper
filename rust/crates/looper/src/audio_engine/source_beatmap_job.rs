@@ -16,6 +16,9 @@ impl JobState {
             .transitions
             .lock()
             .map_err(|_| "offline transition lock poisoned")?;
+        if self.async_map.get().is_some() {
+            return Err("asynchronous source beatmap owns its preparation".into());
+        }
         if self.finished.load(Ordering::Acquire)
             || self.cancelled()
             || self.retirement_started.load(Ordering::Acquire)
@@ -26,6 +29,18 @@ impl JobState {
         }
         let _running = RunningGuard(&self.preparing);
         drop(transition);
+        self.prepare_source_beatmap_body(encoded, after_verify)
+    }
+
+    /// The caller already owns direct preparation or the original armed async guard.
+    pub(super) fn prepare_source_beatmap_body(
+        &self,
+        encoded: &str,
+        after_verify: impl FnOnce(),
+    ) -> Result<(), String> {
+        if self.cancelled() {
+            return Err("source beatmap preparation superseded or cancelled".into());
+        }
         let mut prepared = self
             .prepared_map
             .lock()
@@ -54,11 +69,19 @@ impl JobState {
     }
 
     pub(super) fn finish_source_beatmap(&self) -> Result<bool, String> {
+        self.finish_source_beatmap_body(true)
+    }
+
+    /// Async cleanup retains both admissions after publication until actual retirement.
+    pub(super) fn finish_source_beatmap_body(&self, retire: bool) -> Result<bool, String> {
         self.require_purpose(OfflinePurpose::SourceBeatmap)?;
         let _transition = self
             .transitions
             .lock()
             .map_err(|_| "offline transition lock poisoned")?;
+        if retire && self.async_map.get().is_some() {
+            return Err("asynchronous source beatmap owns its completion".into());
+        }
         if self.preparing.load(Ordering::Acquire) {
             return Err("offline native work is still retiring".into());
         }
@@ -86,7 +109,7 @@ impl JobState {
             matches!(snapshot.as_ref(), Some(OfflineInput::Complete(reader))
                 if reader.require_map_custody().is_ok())
         };
-        let accepted = !self.cancelled.load(Ordering::Acquire)
+        let accepted = !self.cancelled()
             && source_current
             && self
                 .native_owner
@@ -107,9 +130,11 @@ impl JobState {
             false
         };
         drop(requests);
-        self.drop_pcm();
-        self.finished.store(true, Ordering::Release);
-        self.release_reservation();
+        if retire {
+            self.drop_pcm();
+            self.finished.store(true, Ordering::Release);
+            self.release_reservation();
+        }
         Ok(queued)
     }
 

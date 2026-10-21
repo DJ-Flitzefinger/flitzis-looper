@@ -23,7 +23,7 @@ use serde_json::{Value, json};
 use std::fs::{File, OpenOptions};
 use std::io::{Seek, SeekFrom};
 use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
-use std::sync::{Arc, Mutex, Weak, mpsc::Sender};
+use std::sync::{Arc, Mutex, OnceLock, Weak, mpsc::Sender};
 
 const MAX_PCM_BYTES: usize = 512 * 1024 * 1024;
 const MAX_RESULT_BYTES: usize = 1024 * 1024;
@@ -33,6 +33,10 @@ mod corrected_legacy;
 
 #[path = "source_beatmap_job.rs"]
 mod source_beatmap_job;
+
+#[path = "source_beatmap_async.rs"]
+mod source_beatmap_async;
+use source_beatmap_async::AsyncMapStatus;
 
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum OfflinePurpose {
@@ -296,6 +300,7 @@ impl OfflineJobs {
             legacy_running: AtomicBool::new(false),
             legacy_result: Mutex::new(None),
             prepared_map: Mutex::new(None),
+            async_map: OnceLock::new(),
             finished: AtomicBool::new(false),
             transitions: Mutex::new(()),
             busy: self.busy.clone(),
@@ -402,6 +407,7 @@ struct JobState {
     legacy_running: AtomicBool,
     legacy_result: Mutex<Option<String>>,
     prepared_map: Mutex<Option<SourceBeatmap>>,
+    async_map: OnceLock<Arc<AsyncMapStatus>>,
     finished: AtomicBool,
     transitions: Mutex<()>,
     busy: Arc<AtomicBool>,
@@ -501,6 +507,10 @@ impl JobState {
 
     fn cancelled(&self) -> bool {
         self.cancelled.load(Ordering::Acquire)
+            || self
+                .async_map
+                .get()
+                .is_some_and(|status| status.shutdown_requested())
             || self
                 .native_owner
                 .as_ref()
@@ -995,6 +1005,11 @@ impl OfflineAnalysisJob {
             .transitions
             .lock()
             .map_err(|_| PyRuntimeError::new_err("offline transition lock poisoned"))?;
+        if state.async_map.get().is_some() {
+            return Err(PyRuntimeError::new_err(
+                "asynchronous source beatmap owns its queued retirement",
+            ));
+        }
         if state.preparing.load(Ordering::Acquire)
             || state.key_started.load(Ordering::Acquire)
             || state.legacy_started.load(Ordering::Acquire)
@@ -1062,6 +1077,37 @@ impl OfflineAnalysisJob {
         py.detach(|| self.state().finish_source_beatmap())
             .map_err(PyRuntimeError::new_err)
     }
+
+    /// Observe bounded lifecycle scalars; cancellation alone is never retirement.
+    pub fn source_beatmap_async_status(&self, py: Python<'_>) -> PyResult<Option<Py<PyDict>>> {
+        self.state()
+            .async_map
+            .get()
+            .map(|status| status.dictionary(py, self.state().cancelled.load(Ordering::Acquire)))
+            .transpose()
+    }
+
+    /// Return only this original job's privately retained genuine map payload.
+    pub fn resolve_source_beatmap_completion(
+        &self,
+        delivery: &super::loader_events::LoaderEventDelivery,
+    ) -> PyResult<Option<SourceBeatmap>> {
+        let state = self.state();
+        state
+            .require_purpose(OfflinePurpose::SourceBeatmap)
+            .map_err(PyRuntimeError::new_err)?;
+        let _requests = state
+            .request_ids
+            .lock()
+            .map_err(|_| PyRuntimeError::new_err("request lock poisoned"))?;
+        if state.cancelled() {
+            return Ok(None);
+        }
+        let Some(owner) = state.native_owner.as_ref() else {
+            return Ok(None);
+        };
+        delivery.source_beatmap_for(owner)
+    }
 }
 
 impl OfflineAnalysisJob {
@@ -1089,6 +1135,11 @@ impl Drop for OfflineAnalysisJob {
                 return;
             }
             let _ = state.cancel_request();
+            if state.async_map.get().is_some() {
+                // Its armed queue/worker guard retains the actual source and
+                // both admissions, including when the closure never executes.
+                return;
+            }
             if state.finished.load(Ordering::Acquire)
                 || state.retirement_started.swap(true, Ordering::AcqRel)
             {

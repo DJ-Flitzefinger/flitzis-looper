@@ -3,6 +3,7 @@
 use std::cell::Cell;
 use std::collections::VecDeque;
 use std::io;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc;
 use std::sync::{Arc, Condvar, Mutex};
 use std::thread::{self, JoinHandle};
@@ -212,25 +213,70 @@ fn reserve_shared(shared: &Arc<Shared>) -> Result<Reservation, String> {
     }
     state.admitted += 1;
     Ok(Reservation {
-        shared: shared.clone(),
-        running: false,
+        owner: Arc::new(ReservationOwner {
+            shared: shared.clone(),
+            running: AtomicBool::new(false),
+            retired: Arc::new(AtomicBool::new(false)),
+        }),
     })
 }
 
 /// An unused reservation rolls back without advancing source/request ownership.
 pub(super) struct Reservation {
-    shared: Arc<Shared>,
-    running: bool,
+    owner: Arc<ReservationOwner>,
 }
 
-impl Drop for Reservation {
+struct ReservationOwner {
+    shared: Arc<Shared>,
+    running: AtomicBool,
+    retired: Arc<AtomicBool>,
+}
+
+/// Retain the same admission through captured-owner retirement, never another job.
+pub(super) struct ReservationRetirementGuard {
+    owner: Arc<ReservationOwner>,
+}
+
+impl Reservation {
+    pub(super) fn retain_until_retired(&self) -> ReservationRetirementGuard {
+        ReservationRetirementGuard {
+            owner: self.owner.clone(),
+        }
+    }
+
+    fn mark_running(&self) {
+        let previous = self.owner.running.swap(true, Ordering::AcqRel);
+        debug_assert!(!previous, "one original reservation enters one worker");
+    }
+}
+
+impl ReservationRetirementGuard {
+    pub(super) fn is_running(&self) -> bool {
+        self.owner.running.load(Ordering::Acquire)
+    }
+
+    /// Observation only; retaining this flag retains no lane admission.
+    pub(super) fn retirement_receipt(&self) -> Arc<AtomicBool> {
+        self.owner.retired.clone()
+    }
+}
+
+impl Drop for ReservationOwner {
     fn drop(&mut self) {
-        if let Ok(mut state) = self.shared.state.lock() {
+        {
+            // Cleanup retains valid accounting even after an unrelated kernel
+            // poisoned admission. Exactly one final Arc owns this decrement.
+            let mut state = self
+                .shared
+                .state
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
             state.admitted -= 1;
-            if self.running {
+            if self.running.load(Ordering::Acquire) {
                 state.active -= 1;
             }
         }
+        self.retired.store(true, Ordering::Release);
     }
 }
 
@@ -262,10 +308,10 @@ impl ColdJobs {
                                     return;
                                 }
                                 {
-                                    let mut job =
+                                    let job =
                                         state.jobs.pop_front().expect("nonempty bounded queue");
                                     state.active += 1;
-                                    job.reservation.running = true;
+                                    job.reservation.mark_running();
                                     job
                                 }
                             };

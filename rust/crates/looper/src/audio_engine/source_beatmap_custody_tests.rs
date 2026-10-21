@@ -906,3 +906,7 @@ fn map_only_work_preserves_already_pending_ordinary_and_piano_playback() {
         assert_eq!(source_fences(&fixture), original_fences);
     }
 }
+
+mod source_beatmap_async_tests {
+    include!("source_beatmap_async_tests.rs");
+}
