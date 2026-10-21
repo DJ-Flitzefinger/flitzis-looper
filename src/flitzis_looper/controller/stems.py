@@ -84,6 +84,7 @@ from flitzis_looper.controller.stem_publication_retry import (
     StemPublicationRetries,
     StemPublicationRetry,
 )
+from flitzis_looper.controller.stem_resources import StemResourceGuard
 from flitzis_looper.controller.stem_separators import (
     SelectedStemGenerationBackend,
     separator_model_cache_dir,
@@ -292,6 +293,7 @@ class StemController(BaseController):  # noqa: PLR0904
         stem_backend: StemGenerationBackend | None = None,
         stem_task_runner: StemTaskRunner | None = None,
         asset_lifecycle: ProjectAssetLifecycle | None = None,
+        stem_resources: StemResourceGuard | None = None,
     ) -> None:
         super().__init__(project, session, audio, on_project_changed)
         self._pad_edit_guard: Callable[[int], None] | None = None
@@ -309,6 +311,7 @@ class StemController(BaseController):  # noqa: PLR0904
         self._stem_backend = (
             stem_backend if stem_backend is not None else SelectedStemGenerationBackend()
         )
+        self._stem_resources = stem_resources if stem_resources is not None else StemResourceGuard()
         self._stem_worker_pool: StemWorkerPool | None = None
         if stem_task_runner is None:
             self._stem_worker_pool = StemWorkerPool()
@@ -328,7 +331,7 @@ class StemController(BaseController):  # noqa: PLR0904
         self._delete_logical_interests: Callable[[], Mapping[int, StemGenerationInterest]] = dict
         self._restored_stem_candidates: dict[int, StemCacheEntry] = {}
         self._pair_preparations = StemPairPreparationQueue(
-            audio, self._assets, self._stem_task_runner
+            audio, self._assets, self._stem_task_runner, self._stem_resources
         )
         self._resident_pairs: set[int] = set()
         self._publication_retries = StemPublicationRetries()
@@ -1685,6 +1688,13 @@ class StemController(BaseController):  # noqa: PLR0904
                 if binding is not None and binding.interest_owner is not None:
                     binding.interest_owner.mark_failed("Original stem preparation changed")
                 self._requested_preparations.pop(sample_id, None)
+        if not self._stem_admission_candidates():
+            return
+        resources = self._stem_resources.admission()
+        if self._diagnostics is not None:
+            self._diagnostics.observe("stem_resources", resources.message)
+        if not resources.allowed:
+            return
         self._stem_admission.run(
             self._stem_admission_candidates, pool.try_reserve, self._admit_stem_candidate
         )
@@ -2817,7 +2827,8 @@ class StemController(BaseController):  # noqa: PLR0904
         """Return the last reported stem generation stage for a pad."""
         validate_sample_id(sample_id)
         if sample_id in self._requested_generations:
-            return "Queued"
+            resources = self._stem_resources.current
+            return resources.message if not resources.allowed and resources.message else "Queued"
         return self._session.stem_generation_stage.get(sample_id)
 
     def stem_generation_block_reason(self, sample_id: int) -> str | None:
@@ -4708,6 +4719,7 @@ class StemController(BaseController):  # noqa: PLR0904
         error = None
         completed = False
         try:
+            self._stem_resources.entry()
             request = self._resolved_processing_request(
                 replace(
                     request, original_bytes=self._verified_original_extent(request, source_lease)
@@ -4817,9 +4829,12 @@ class StemController(BaseController):  # noqa: PLR0904
             else None
         )
         try:
+            self._stem_resources.entry()
             if processing is not None:
                 processing[0].verify()
-            with stem_command_scope(job.cancel_event, directory=request.cache_dir):
+            with stem_command_scope(
+                job.cancel_event, directory=request.cache_dir, resources=self._stem_resources
+            ):
                 result = self._stem_backend.generate(request, report_progress)
             self._verified_original_extent(request, source_lease)
             self._verify_generation_provenance(job, request, processing, result)

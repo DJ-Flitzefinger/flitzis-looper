@@ -28,6 +28,7 @@ if TYPE_CHECKING:
     from flitzis_looper.controller.stem_generation import StemGenerationRequest
     from flitzis_looper.controller.stem_intent import StemGenerationIntent
     from flitzis_looper.controller.stem_job import StemGenerationInterests
+    from flitzis_looper.controller.stem_resources import StemResourceGuard
     from flitzis_looper.controller.stem_workers import StemWorkerReservation
     from flitzis_looper_audio import (
         AudioEngine,
@@ -115,10 +116,12 @@ class StemPairPreparationQueue:
         audio: AudioEngine,
         assets: ProjectAssetLifecycle,
         runner: Callable[[Callable[[], None]], None],
+        resources: StemResourceGuard | None = None,
     ) -> None:
         self._audio = audio
         self._assets = assets
         self._runner = runner
+        self._resources = resources
         self._results: SimpleQueue[PairPreparation] = SimpleQueue()
         self._held_results: list[PairPreparation] = []
         self.pending: dict[int, PairPreparation] = {}
@@ -239,6 +242,8 @@ class StemPairPreparationQueue:
                 # empty-interest custody without a check-then-fence race here.
                 request.error = "Stem pair preparation cancelled"
             if eligible and not request.cancelled.is_set():
+                if self._resources is not None:
+                    self._resources.entry()
                 if request.processing_request is not None:
                     request.compatibility_rejected = True
                     processing = capture_processing_files(request.processing_request)

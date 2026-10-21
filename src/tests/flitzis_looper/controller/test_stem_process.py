@@ -7,12 +7,20 @@ from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from threading import Event
 from typing import TYPE_CHECKING
+from unittest.mock import Mock
 
 import pytest
 
 from flitzis_looper.analysis.process import OwnedCommandResult
-from flitzis_looper.controller import stem_process
-from flitzis_looper.controller.stem_generation import CommandResult, run_command
+from flitzis_looper.controller import bs_roformer_generation, stem_generation, stem_process
+from flitzis_looper.controller.bs_roformer_generation import BsRoformerStemGenerationBackend
+from flitzis_looper.controller.stem_generation import (
+    AudioShape,
+    CommandResult,
+    DemucsStemGenerationBackend,
+    StemGenerationRequest,
+    run_command,
+)
 from flitzis_looper.controller.stem_process import (
     StemCommandCancelledError,
     stem_command_checkpoint,
@@ -132,10 +140,12 @@ def test_exact_own_modules_receive_fresh_channel_and_foreign_commands_strip_inhe
         env: dict[str, str],
         cancel: Event,
         request_abort: Callable[[], None] | None = None,
+        stop_reason: Callable[[], str | None] | None = None,
     ) -> OwnedCommandResult:
         assert args == arguments
         assert cwd == tmp_path
         assert not cancel.is_set()
+        assert stop_reason is None
         observed.append(env.get(CANCEL_PATH_ENV))
         if own_channel:
             assert request_abort is not None
@@ -159,3 +169,116 @@ def test_exact_own_modules_receive_fresh_channel_and_foreign_commands_strip_inhe
     else:
         assert observed == [None, None]
         assert not private.exists()
+
+
+class _ResourceError(RuntimeError):
+    """Distinct fixture failure that must escape backend CUDA fallback."""
+
+
+def _resources() -> Mock:
+    guard = Mock(spec=["entry", "command_stop_reason", "failure"])
+    guard.entry.return_value = None
+    guard.command_stop_reason.return_value = "resource_pressure"
+    guard.failure.return_value = _ResourceError("fixture memory pressure")
+    return guard
+
+
+def test_resource_entry_refusal_starts_no_child_or_cancellation_namespace(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    guard = _resources()
+    guard.entry.side_effect = _ResourceError("fixture unavailable headroom")
+    launch = Mock()
+    monkeypatch.setattr(stem_process, "_run_owned", launch)
+    private = tmp_path / "private"
+    cancel = Event()
+    with (
+        stem_command_scope(cancel, directory=private, resources=guard),
+        pytest.raises(_ResourceError, match="unavailable headroom"),
+    ):
+        stem_process.run_stem_command(
+            [sys.executable, "-m", "flitzis_looper.demucs_streaming"],
+            cwd=tmp_path,
+            env=dict(os.environ),
+        )
+    launch.assert_not_called()
+    guard.command_stop_reason.assert_not_called()
+    assert not private.exists()
+    assert not cancel.is_set()
+
+
+def test_user_cancellation_wins_before_resource_entry(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    guard = _resources()
+    guard.entry.side_effect = _ResourceError("fixture pressure")
+    launch = Mock()
+    monkeypatch.setattr(stem_process, "_run_owned", launch)
+    cancel = Event()
+    cancel.set()
+    with stem_command_scope(cancel, resources=guard), pytest.raises(StemCommandCancelledError):
+        stem_process.run_stem_command(["unused"], cwd=tmp_path, env={})
+    guard.entry.assert_not_called()
+    launch.assert_not_called()
+
+
+@pytest.mark.parametrize("reason", ["resource_pressure", "resource_unavailable"])
+@pytest.mark.parametrize("separator", ["demucs", "bs-roformer"])
+def test_typed_resource_stop_propagates_through_both_backends_without_cpu_fallback(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, reason: str, separator: str
+) -> None:
+    guard = _resources()
+    guard.command_stop_reason.return_value = reason
+    cancel = Event()
+    launched_devices: list[str] = []
+    private = tmp_path / "private"
+
+    def run(
+        args: list[str],
+        cwd: Path,
+        env: dict[str, str],
+        cancel: Event,
+        request_abort: Callable[[], None] | None = None,
+        stop_reason: Callable[[], str | None] | None = None,
+    ) -> OwnedCommandResult:
+        assert not cancel.is_set()
+        assert stop_reason is not None
+        if args[:3] in (
+            [sys.executable, "-m", "flitzis_looper.demucs_streaming"],
+            [sys.executable, "-m", "flitzis_bs_roformer"],
+        ):
+            flag = "-d" if separator == "demucs" else "--device"
+            launched_devices.append(args[args.index(flag) + 1])
+            assert Path(env[CANCEL_PATH_ENV]).parent.is_dir()
+            assert request_abort is not None
+            assert stop_reason() == reason
+            return OwnedCommandResult(reason, -1, b"", b"")
+        return OwnedCommandResult("ok", 0, b"", b"")
+
+    monkeypatch.setattr(stem_process, "_run_owned", run)
+    monkeypatch.setattr(stem_generation, "_has_required_demucs_model", lambda *_args: True)
+    monkeypatch.setattr(bs_roformer_generation, "verify_model_assets", lambda *_args: None)
+    backend = (
+        DemucsStemGenerationBackend(cuda_detector=lambda *_args: True)
+        if separator == "demucs"
+        else BsRoformerStemGenerationBackend(cuda_detector=lambda *_args: True)
+    )
+    source = tmp_path / "fixture.wav"
+    source.write_bytes(b"no model or audio decoding occurs")
+    request = StemGenerationRequest(
+        sample_id=0,
+        source_path=source,
+        source_version="fixture-source",
+        cache_dir=tmp_path / "cache",
+        target_shape=AudioShape(48000, 2, 4),
+        model_cache_dir=tmp_path / "model",
+    )
+    with (
+        stem_command_scope(cancel, directory=private, resources=guard),
+        pytest.raises(_ResourceError, match="memory pressure"),
+    ):
+        backend.generate(request, lambda *_args: None)
+    assert launched_devices == ["cuda"]
+    guard.failure.assert_called_once_with(reason)
+    assert not cancel.is_set()
+    assert not list(private.glob(".stem-command-*"))

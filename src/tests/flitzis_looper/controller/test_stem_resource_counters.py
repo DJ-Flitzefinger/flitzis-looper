@@ -10,16 +10,16 @@ from unittest.mock import Mock
 
 import pytest
 
+from flitzis_looper.system_resources import system_commit_bytes
 from tests.flitzis_looper.controller.stem_batch_neural_native_probe import (
     _HostMinimumSnapshots,
-    _system_commit_bytes,
     _WindowsCounters,
 )
 
 
 def test_commit_page_conversion_has_exact_system_byte_extent() -> None:
-    assert _system_commit_bytes(3, 9, 4096) == (12288, 36864, 24576)
-    assert _system_commit_bytes(9, 9, 4096) == (36864, 36864, 0)
+    assert system_commit_bytes(3, 9, 4096) == (12288, 36864, 24576)
+    assert system_commit_bytes(9, 9, 4096) == (36864, 36864, 0)
 
 
 @pytest.mark.parametrize(
@@ -30,12 +30,12 @@ def test_commit_page_conversion_rejects_invalid_or_coerced_geometry(
     total: int, limit: int, page_size: int
 ) -> None:
     with pytest.raises(ValueError, match="invalid commit geometry"):
-        _system_commit_bytes(total, limit, page_size)
+        system_commit_bytes(total, limit, page_size)
 
 
 def test_commit_byte_overflow_is_not_a_zero_or_unlimited_reading() -> None:
     with pytest.raises(ValueError, match="byte extent overflow"):
-        _system_commit_bytes(0, 2**64 - 1, 2)
+        system_commit_bytes(0, 2**64 - 1, 2)
 
 
 def _host(caller: int, system: int, physical: int, stamp: int) -> dict[str, int]:

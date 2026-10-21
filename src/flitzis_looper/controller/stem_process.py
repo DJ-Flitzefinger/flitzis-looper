@@ -19,11 +19,14 @@ from flitzis_looper.stem_cancellation import CANCEL_PATH_ENV
 if TYPE_CHECKING:
     from collections.abc import Callable, Iterator
 
+    from flitzis_looper.controller.stem_resources import StemResourceGuard
+
 
 @dataclass(frozen=True, slots=True)
 class _StemCommandScope:
     cancel: Event
     directory: Path | None
+    resources: StemResourceGuard | None
 
 
 _COMMAND_SCOPE: ContextVar[_StemCommandScope | None] = ContextVar(
@@ -38,13 +41,15 @@ class StemCommandCancelledError(RuntimeError):
 
 
 @contextmanager
-def stem_command_scope(cancel: Event, *, directory: Path | None = None) -> Iterator[None]:
-    """Bind one job's sticky cancellation to commands on its existing worker.
+def stem_command_scope(
+    cancel: Event, *, directory: Path | None = None, resources: StemResourceGuard | None = None
+) -> Iterator[None]:
+    """Bind one job's cancellation and resource guard on its existing worker.
 
     Context tokens are reset even on backend failure. Separately admitted workers
     and injected fake command runners keep their independent state/signatures.
     """
-    token = _COMMAND_SCOPE.set(_StemCommandScope(cancel, directory))
+    token = _COMMAND_SCOPE.set(_StemCommandScope(cancel, directory, resources))
     try:
         yield
     finally:
@@ -80,6 +85,7 @@ def _run_owned(
     env: dict[str, str],
     cancel: Event,
     request_abort: Callable[[], None] | None = None,
+    stop_reason: Callable[[], str | None] | None = None,
 ) -> OwnedCommandResult:
     return run_owned_command(
         args,
@@ -90,6 +96,7 @@ def _run_owned(
         receipt_prefixes=_RECEIPT_PREFIXES,
         request_abort=request_abort,
         abort_grace_seconds=0.4,
+        stop_reason=stop_reason,
     )
 
 
@@ -97,7 +104,11 @@ def run_stem_command(args: list[str], *, cwd: Path, env: dict[str, str]) -> Owne
     """Drain bounded diagnostics and hold caller custody until tree/read retirement."""
     stem_command_checkpoint()
     scope = _COMMAND_SCOPE.get()
+    resources = scope.resources if scope is not None else None
+    if resources is not None:
+        resources.entry()
     cancel = scope.cancel if scope is not None else Event()
+    stop_reason = resources.command_stop_reason if resources is not None else None
     child_env = dict(env)
     child_env.pop(CANCEL_PATH_ENV, None)
     if scope is not None and scope.directory is not None and _own_inference(args):
@@ -105,12 +116,16 @@ def run_stem_command(args: list[str], *, cwd: Path, env: dict[str, str]) -> Owne
         with TemporaryDirectory(prefix=".stem-command-", dir=scope.directory) as name:
             marker = Path(name).absolute() / "cancel"
             child_env[CANCEL_PATH_ENV] = str(marker)
-            result = _run_owned(args, cwd, child_env, cancel, partial(_request_abort, marker))
+            result = _run_owned(
+                args, cwd, child_env, cancel, partial(_request_abort, marker), stop_reason
+            )
     else:
-        result = _run_owned(args, cwd, child_env, cancel)
+        result = _run_owned(args, cwd, child_env, cancel, stop_reason=stop_reason)
     if result.reason == "cancelled":
         msg = "Stem command cancelled"
         raise StemCommandCancelledError(msg)
+    if resources is not None and result.reason in {"resource_pressure", "resource_unavailable"}:
+        raise resources.failure(result.reason)
     if result.reason not in {"ok", "worker_crashed"}:
         msg = f"Stem command failed: {result.reason}"
         raise RuntimeError(msg)

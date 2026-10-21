@@ -32,6 +32,11 @@ from flitzis_looper.controller.stem_identity import source_digest
 from flitzis_looper.controller.stem_separators import SelectedStemGenerationBackend
 from flitzis_looper.controller.stems import StemController
 from flitzis_looper.models import PadContentIdentity, ProjectState, SessionState
+from flitzis_looper.system_resources import (
+    HostMemory,
+    PerformanceInformation,
+    windows_host_memory_snapshot,
+)
 from tests.flitzis_looper.controller.stem_batch_216_native_probe import (
     _PoolObservation,
     _ShapeAudio,
@@ -63,61 +68,6 @@ class _Memory(ctypes.Structure):
 
 class _FileTime(ctypes.Structure):
     _fields_ = [("low", wintypes.DWORD), ("high", wintypes.DWORD)]
-
-
-class _HostMemory(ctypes.Structure):
-    _fields_ = [
-        ("length", wintypes.DWORD),
-        ("load", wintypes.DWORD),
-        ("total_physical", ctypes.c_ulonglong),
-        ("available_physical", ctypes.c_ulonglong),
-        ("commit_limit", ctypes.c_ulonglong),
-        ("available_commit", ctypes.c_ulonglong),
-        ("total_virtual", ctypes.c_ulonglong),
-        ("available_virtual", ctypes.c_ulonglong),
-        ("available_extended_virtual", ctypes.c_ulonglong),
-    ]
-
-
-class _PerformanceInformation(ctypes.Structure):
-    _fields_ = [
-        ("size", wintypes.DWORD),
-        *[
-            (name, ctypes.c_size_t)
-            for name in (
-                "commit_total",
-                "commit_limit",
-                "commit_peak",
-                "physical_total",
-                "physical_available",
-                "system_cache",
-                "kernel_total",
-                "kernel_paged",
-                "kernel_nonpaged",
-                "page_size",
-            )
-        ],
-        ("handles", wintypes.DWORD),
-        ("processes", wintypes.DWORD),
-        ("threads", wintypes.DWORD),
-    ]
-
-
-def _system_commit_bytes(total: int, limit: int, page_size: int) -> tuple[int, int, int]:
-    """Convert one real PERFORMANCE_INFORMATION page image without coercion."""
-    if (
-        any(type(value) is not int for value in (total, limit, page_size))
-        or page_size <= 0
-        or total < 0
-        or total > limit
-    ):
-        message = "GetPerformanceInfo returned invalid commit geometry"
-        raise ValueError(message)
-    values = total * page_size, limit * page_size, (limit - total) * page_size
-    if any(value > 2**64 - 1 for value in values):
-        message = "GetPerformanceInfo commit byte extent overflow"
-        raise ValueError(message)
-    return values
 
 
 class _HostMinimumSnapshots:
@@ -172,10 +122,10 @@ class _WindowsCounters:
                 wintypes.BOOL,
             ),
             ("WaitForSingleObject", [wintypes.HANDLE, wintypes.DWORD], wintypes.DWORD),
-            ("GlobalMemoryStatusEx", [ctypes.POINTER(_HostMemory)], wintypes.BOOL),
+            ("GlobalMemoryStatusEx", [ctypes.POINTER(HostMemory)], wintypes.BOOL),
             (
                 "GetPerformanceInfo",
-                [ctypes.POINTER(_PerformanceInformation), wintypes.DWORD],
+                [ctypes.POINTER(PerformanceInformation), wintypes.DWORD],
                 wintypes.BOOL,
             ),
         )
@@ -229,31 +179,7 @@ class _WindowsCounters:
 
     def host(self) -> dict[str, int]:
         """Read sequential caller/system headroom; this is not an atomic OS snapshot."""
-        started = time.perf_counter_ns()
-        observed_at = time.time_ns()
-        status = _HostMemory()
-        status.length = ctypes.sizeof(status)
-        if not self.kernel.GlobalMemoryStatusEx(ctypes.byref(status)):
-            raise ctypes.WinError(ctypes.get_last_error())
-        system = _PerformanceInformation()
-        system.size = ctypes.sizeof(system)
-        if not self.kernel.K32GetPerformanceInfo(ctypes.byref(system), system.size):
-            raise ctypes.WinError(ctypes.get_last_error())
-        total, limit, available = _system_commit_bytes(
-            system.commit_total, system.commit_limit, system.page_size
-        )
-        caller = {
-            name: int(getattr(status, name))
-            for name in ("total_physical", "available_physical", "commit_limit", "available_commit")
-        }
-        return caller | {
-            "system_commit_total_bytes": total,
-            "system_commit_limit_bytes": limit,
-            "system_available_commit_bytes": available,
-            "observed_at_unix_ns": observed_at,
-            "observation_started_perf_counter_ns": started,
-            "observation_span_ns": time.perf_counter_ns() - started,
-        }
+        return windows_host_memory_snapshot(self.kernel)
 
 
 @dataclass(slots=True)

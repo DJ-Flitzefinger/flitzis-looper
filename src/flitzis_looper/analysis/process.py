@@ -300,7 +300,24 @@ def _start(command: WorkerCommand, request_path: Path) -> subprocess.Popen[bytes
     )
 
 
-def _monitor(owned: _OwnedProcess, cancel: Event, limits: WorkerLimits) -> str:
+def _resource_stop_reason(stop_reason: Callable[[], str | None] | None) -> str | None:
+    if stop_reason is None:
+        return None
+    try:
+        reason = stop_reason()
+    except OSError, RuntimeError, ValueError:
+        return "resource_unavailable"
+    if reason is None or reason in {"resource_pressure", "resource_unavailable"}:
+        return reason
+    return "resource_unavailable"
+
+
+def _monitor(
+    owned: _OwnedProcess,
+    cancel: Event,
+    limits: WorkerLimits,
+    stop_reason: Callable[[], str | None] | None = None,
+) -> str:
     deadline = time.monotonic() + limits.timeout_seconds
     while True:
         if isinstance(owned.process, _OwnedTreeProcess):
@@ -314,6 +331,8 @@ def _monitor(owned: _OwnedProcess, cancel: Event, limits: WorkerLimits) -> str:
         returncode = owned.process.poll()
         if returncode is not None:
             return "ok" if returncode == 0 else "worker_crashed"
+        if resource_reason := _resource_stop_reason(stop_reason):
+            return resource_reason
         if time.monotonic() >= deadline:
             return "worker_timeout"
         cancel.wait(_POLL_SECONDS)
@@ -377,14 +396,16 @@ def run_owned_command(
     receipt_prefixes: tuple[bytes, ...] = (),
     request_abort: Callable[[], None] | None = None,
     abort_grace_seconds: float = 0.2,
+    stop_reason: Callable[[], str | None] | None = None,
 ) -> OwnedCommandResult:
     """Run under caller admission, retaining the worker through actual read end.
 
     This function creates no executor and acquires no analysis process slot.
-    Cancellation is observed on the existing offline worker. An optional owned
-    child abort hook receives finite grace before tree termination; without a
-    child handler, cancellation uses owned tree termination. A finite reap failure
-    keeps this worker and all caller resources occupied until retirement succeeds.
+    Cancellation and optional resource pressure are observed on the existing
+    offline worker. An optional owned child abort hook receives finite grace before
+    tree termination. Completed commands win over a later resource observation.
+    A finite reap failure keeps this worker and all caller resources occupied until
+    retirement succeeds.
     """
     limits = limits or WorkerLimits(
         timeout_seconds=21600.0,
@@ -412,8 +433,10 @@ def run_owned_command(
         process.activate()
         for reader in owned.readers:
             reader.thread.start()
-        reason = _monitor(owned, cancel, limits)
-        if reason == "cancelled" and request_abort is not None:
+        reason = _monitor(owned, cancel, limits, stop_reason)
+        if reason in {"cancelled", "resource_pressure", "resource_unavailable"} and (
+            request_abort is not None
+        ):
             request_abort()
             with suppress(subprocess.TimeoutExpired):
                 process.wait(timeout=abort_grace_seconds)
