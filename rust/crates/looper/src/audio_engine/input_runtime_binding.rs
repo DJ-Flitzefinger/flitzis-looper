@@ -2332,9 +2332,17 @@ pub struct InputRuntimePadBinding {
     pub(super) ownership: Arc<InputRuntimeOwnership>,
     pub(super) acknowledgements: Arc<CurrentTimingAcknowledgements>,
     accepted: Option<CurrentConstantTimingRecord>,
+    source_map: super::source_map_admission::SourceMapLaunchSnapshot,
 }
 
 impl InputRuntimePadBinding {
+    /// Launch-only map witness; physical preparation keeps its existing currentness contract.
+    pub(crate) fn source_map_launch_snapshot(
+        &self,
+    ) -> super::source_map_admission::SourceMapLaunchSnapshot {
+        self.source_map.clone()
+    }
+
     /// Already admitted work keeps its original source and timing owners through placement.
     /// Pair reservations fence new admission; they do not revoke this captured permission.
     pub(super) fn admitted_current(&self) -> bool {
@@ -2391,7 +2399,7 @@ impl InputRuntimePadBinding {
         if ownership.content_lifetime(id) == 0 {
             ownership.publish_content_lifetime(id, super::content_lifetime::reserve().unwrap());
         }
-        Self {
+        let mut captured = Self {
             id,
             source_generation: 1,
             content_lifetime: ownership.content_lifetime(id),
@@ -2412,7 +2420,13 @@ impl InputRuntimePadBinding {
             ownership,
             acknowledgements: Arc::default(),
             accepted: None,
-        }
+            source_map: super::source_map_admission::SourceMapLaunchSnapshot::unavailable(),
+        };
+        captured.source_map = super::source_map_admission::SourceMapLaunchSnapshot::scalar(
+            &captured.ownership,
+            captured.binding,
+        );
+        captured
     }
     pub(super) fn current(&self) -> bool {
         self.ownership
@@ -2673,7 +2687,7 @@ pub(super) fn capture_under_request_lock(
     {
         return Ok(None);
     }
-    Ok(Some(InputRuntimePadBinding {
+    let mut captured = InputRuntimePadBinding {
         id,
         source_generation: generation,
         content_lifetime: engine.input_runtime_ownership.content_lifetime(id),
@@ -2694,7 +2708,25 @@ pub(super) fn capture_under_request_lock(
         ownership: engine.input_runtime_ownership.clone(),
         acknowledgements: engine.current_timing_acknowledgements.clone(),
         accepted,
-    }))
+        source_map: super::source_map_admission::SourceMapLaunchSnapshot::unavailable(),
+    };
+    // The caller still holds pad_requests. Do not add cache -> runtime-state
+    // lock nesting when capturing the selected map's independent launch witness.
+    drop(all_records);
+    drop(digests);
+    drop(generations);
+    drop(cache);
+    drop(intents);
+    captured.source_map = match engine.input_runtime.as_ref() {
+        Some(runtime) => runtime
+            .source_map_snapshot_for_binding(&captured)
+            .map_err(PyRuntimeError::new_err)?,
+        None => super::source_map_admission::SourceMapLaunchSnapshot::scalar(
+            &captured.ownership,
+            captured.binding,
+        ),
+    };
+    Ok(Some(captured))
 }
 
 #[cfg(test)]

@@ -288,7 +288,7 @@ fn actual_rate_steps(mut clock: SourcePlayback) -> [(usize, f64); 2] {
     // Probe only a Copy of the actual clock; never advance a live voice.
     std::array::from_fn(|_| {
         let span = clock.chunk(1024);
-        clock.advance(span.0);
+        assert!(clock.advance(span.0));
         span
     })
 }

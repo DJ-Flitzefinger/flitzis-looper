@@ -10,9 +10,12 @@ use super::input_runtime_binding::{
     InputPadBinding, InputRuntimeOwnership, InputRuntimePadBinding,
 };
 use super::key_lock_start_policy::{KeyLockStartBehavior, KeyLockStartLease};
+use super::mapped_source_clock::MappedLoopGeometry;
 use super::ordinary_start::OrdinaryStartWork;
 use super::pitch_actions::PitchActionReject;
 use super::resident_relocation::{ResidentLaunchGuard, ResidentWindowTicket};
+use super::source_map_admission::{QualifiedSourceMap, SourceMapLaunchSnapshot};
+use super::source_reader::effective_loop_region;
 use pyo3::exceptions::PyValueError;
 use pyo3::prelude::*;
 use std::sync::{
@@ -26,6 +29,70 @@ type InputOwners = Option<(Arc<AtomicBool>, Arc<AtomicBool>, Arc<AtomicBool>)>;
 struct PublishedBinding {
     binding: InputPadBinding,
     resident_guard: Option<ResidentLaunchGuard>,
+}
+
+struct MappedStartSource {
+    qualified: QualifiedSourceMap,
+    geometry: MappedLoopGeometry,
+}
+
+impl MappedStartSource {
+    /// Control/MIDI capture only. Coverage scans and owning geometry never originate on RT.
+    fn prepare(
+        qualified: QualifiedSourceMap,
+        binding: InputPadBinding,
+        start_s: f64,
+        end_s: Option<f64>,
+    ) -> Result<Self, PitchActionReject> {
+        let rate = qualified.loaded_rate();
+        if rate == 0
+            || binding.sample_rate_hz != rate
+            || binding.channels == 0
+            || !binding.sample_count.is_multiple_of(binding.channels)
+        {
+            return Err(PitchActionReject::SourceChanged);
+        }
+        let sample_frames = binding.sample_count / binding.channels;
+        let start = start_s * f64::from(rate);
+        let end = end_s.map(|end| end * f64::from(rate));
+        if !start.is_finite() || end.is_some_and(|end| !end.is_finite()) {
+            return Err(PitchActionReject::InvalidAction);
+        }
+        let region = effective_loop_region(
+            start.round() as usize,
+            end.map(|end| end.round() as usize),
+            sample_frames,
+        )
+        .ok_or(PitchActionReject::InvalidAction)?;
+        let exact = qualified.exact_quarters();
+        let quarters = match exact {
+            Some(quarters) => quarters,
+            None => {
+                let start = qualified
+                    .map()
+                    .canonical_beat_at_source(region.start as f64 / f64::from(rate));
+                let end = qualified
+                    .map()
+                    .canonical_beat_at_source(region.end as f64 / f64::from(rate));
+                end.zip(start)
+                    .map(|(end, start)| end - start)
+                    .ok_or(PitchActionReject::TimingUnavailable)?
+            }
+        };
+        let geometry = MappedLoopGeometry::new(
+            qualified.map().clone(),
+            sample_frames,
+            rate,
+            region,
+            quarters,
+            exact.is_some(),
+        )
+        .map_err(|_| PitchActionReject::TimingUnavailable)?;
+        Ok(Self {
+            qualified,
+            geometry,
+        })
+    }
 }
 
 struct PadStartOwner {
@@ -44,6 +111,7 @@ struct PadStartOwner {
     exclusive: bool,
     received_at_ns: u64,
     sequence: u64,
+    mapped: Option<MappedStartSource>,
     input_owners: InputOwners,
     work: Mutex<Option<Box<OrdinaryStartWork>>>,
     publication: OnceLock<PublishedBinding>,
@@ -199,6 +267,7 @@ impl CapturedPadStart {
             received_at_ns,
             render_format,
             input_owners,
+            binding.source_map_launch_snapshot(),
         )
     }
 
@@ -215,6 +284,7 @@ impl CapturedPadStart {
         received_at_ns: u64,
         render_format: (u32, usize),
         input_owners: InputOwners,
+        source_map: SourceMapLaunchSnapshot,
     ) -> Result<Self, PitchActionReject> {
         if !start_s.is_finite()
             || start_s < 0.0
@@ -246,6 +316,10 @@ impl CapturedPadStart {
         let launch_cancel_revision = ownership
             .launch_revision_for_cell(key.cell())
             .load(Ordering::Acquire);
+        let mapped = source_map
+            .admit(&ownership, binding)?
+            .map(|qualified| MappedStartSource::prepare(qualified, binding, start_s, end_s))
+            .transpose()?;
         let start_policy = ownership
             .register_key_lock_start_owner()
             .map_err(PitchActionReject::from_start_policy_admission)?;
@@ -269,6 +343,7 @@ impl CapturedPadStart {
                 exclusive,
                 received_at_ns,
                 sequence,
+                mapped,
                 input_owners,
                 work: Mutex::new(Some(work)),
                 publication: OnceLock::new(),
@@ -299,6 +374,18 @@ impl CapturedPadStart {
 
     pub(crate) fn sequence(&self) -> u64 {
         self.owner.sequence
+    }
+    /// Borrow immutable admitted geometry; its original owner retains all source/artifact pins.
+    pub(crate) fn mapped_geometry(&self) -> Option<&MappedLoopGeometry> {
+        self.owner.mapped.as_ref().map(|mapped| &mapped.geometry)
+    }
+
+    /// Admission/claim only. An already effective reader never polls the old job token.
+    pub(crate) fn mapped_source_current(&self, binding: InputPadBinding) -> bool {
+        self.owner
+            .mapped
+            .as_ref()
+            .is_none_or(|mapped| mapped.qualified.current_for(&self.owner.ownership, binding))
     }
     pub(crate) fn start_behavior(&self) -> KeyLockStartBehavior {
         self.owner.start_policy.behavior()
@@ -368,6 +455,9 @@ impl CapturedPadStart {
         }
         if !self.input_current() {
             return Err(PitchActionReject::InputDisabled);
+        }
+        if owner.status.load(Ordering::Acquire) != APPLIED && !self.mapped_source_current(binding) {
+            return Err(PitchActionReject::SourceChanged);
         }
         if !ownership.content_key_current(owner.key)
             || binding
@@ -948,6 +1038,7 @@ impl CapturedPadStart {
             16 => Some("already_published"),
             17 => Some("sequence_exhausted"),
             18 => Some("launch_cancelled"),
+            19 => Some("mapped_timing_unavailable"),
             _ => None,
         }
     }

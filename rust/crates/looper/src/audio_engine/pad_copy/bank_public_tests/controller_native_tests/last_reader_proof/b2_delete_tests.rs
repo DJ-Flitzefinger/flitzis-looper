@@ -46,7 +46,12 @@ from flitzis_looper.controller.performance_confirmation import (
 from flitzis_looper.controller.persistence import ProjectPersistence
 from flitzis_looper.controller.stem_batch import StemBatchController
 from flitzis_looper.controller.stem_delete import StemDeleteController
-from flitzis_looper.copy_snapshot import CONTENT_FIELDS, copy_after_snapshot, musical_content_data
+from flitzis_looper.copy_snapshot import (
+    CONTENT_FIELDS,
+    copy_after_snapshot,
+    musical_content_data,
+    musical_snapshot_projection,
+)
 
 
 def _changed_values(expected, actual):
@@ -278,7 +283,9 @@ class DeleteProbe:
             json.dumps(saved_image, indent=2, ensure_ascii=False) + "\n"
         ).encode("utf-8")
         after = copy_after_snapshot(copy.snapshot, copy.identity)
-        assert musical_content_data(self.project, 72) == after.projected().model_dump(mode="json")
+        assert musical_content_data(self.project, 72) == musical_snapshot_projection(
+            after.projected(), mode="json"
+        )
         assert written_copy_image_matches(receipt.projected(), after, 72)
         assert copy.journal is not None
         reopened = CopyJournalOwner.open(Path.cwd() / "samples", copy.owner)

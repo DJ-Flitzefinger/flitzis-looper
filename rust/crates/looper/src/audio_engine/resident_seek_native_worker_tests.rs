@@ -552,10 +552,12 @@ impl SeekOracle {
                 .unwrap()
             });
             let mut playback = active.source_playback;
-            playback.configure_domain(
-                active
-                    .source_timing
-                    .loop_domain(sample.frame_count(), region),
+            assert!(
+                playback.configure_domain(
+                    active
+                        .source_timing
+                        .loop_domain(sample.frame_count(), region),
+                )
             );
             playback
         };

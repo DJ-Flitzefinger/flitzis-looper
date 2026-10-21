@@ -3,6 +3,82 @@
 use super::MAX_PROJECTION_POINTS;
 use super::record::{Anchor, Coverage, ValidatedMap};
 
+/// Fixed original anchors for the same inverse used by control queries.
+/// Copying this value conveys geometry only, never source or map ownership.
+#[derive(Clone, Copy, Debug)]
+pub(crate) struct CanonicalBeatSegment {
+    pub(crate) source_start: f64,
+    pub(crate) source_end: f64,
+    pub(crate) beat_start: f64,
+    pub(crate) beat_end: f64,
+}
+
+impl CanonicalBeatSegment {
+    fn from_anchors(left: Anchor, right: Anchor) -> Self {
+        Self {
+            source_start: left.seconds,
+            source_end: right.seconds,
+            beat_start: left.beat,
+            beat_end: right.beat,
+        }
+    }
+
+    /// Keep exact anchor bits and the canonical interior operation order.
+    pub(crate) fn source_at_beat(self, beat: f64) -> Option<f64> {
+        if beat == self.beat_start {
+            return Some(self.source_start);
+        }
+        if beat == self.beat_end {
+            return Some(self.source_end);
+        }
+        self.interpolate(beat, false, false)
+    }
+
+    pub(crate) fn seconds_per_quarter(self) -> f64 {
+        (self.source_end - self.source_start) / (self.beat_end - self.beat_start)
+    }
+
+    fn interpolate(self, target: f64, source_axis: bool, extrapolate: bool) -> Option<f64> {
+        let (left, right, other_left, other_right) = if source_axis {
+            (
+                self.source_start,
+                self.source_end,
+                self.beat_start,
+                self.beat_end,
+            )
+        } else {
+            (
+                self.beat_start,
+                self.beat_end,
+                self.source_start,
+                self.source_end,
+            )
+        };
+        let fraction = (target - left) / (right - left);
+        let other = other_left + fraction * (other_right - other_left);
+        (fraction.is_finite()
+            && other.is_finite()
+            && (extrapolate || (0.0..=1.0).contains(&fraction)))
+        .then_some(other)
+    }
+
+    pub(crate) fn matches_exact(self, other: Self) -> bool {
+        self.source_start.to_bits() == other.source_start.to_bits()
+            && self.source_end.to_bits() == other.source_end.to_bits()
+            && self.beat_start.to_bits() == other.beat_start.to_bits()
+            && self.beat_end.to_bits() == other.beat_end.to_bits()
+    }
+}
+
+/// Off-realtime whole-interval proof and extrema, derived from the original map.
+#[derive(Clone, Copy, Debug)]
+pub(crate) struct CanonicalLoopInterval {
+    pub(crate) beat_start: f64,
+    pub(crate) source_end: f64,
+    pub(crate) min_seconds_per_quarter: f64,
+    pub(crate) max_seconds_per_quarter: f64,
+}
+
 #[derive(Clone, Copy, Debug)]
 pub(super) struct Evaluation {
     pub(super) source_seconds: Option<f64>,
@@ -52,6 +128,70 @@ impl Projection {
 }
 
 impl ValidatedMap {
+    pub(super) fn canonical_segment_at_beat(&self, beat: f64) -> Option<CanonicalBeatSegment> {
+        if !beat.is_finite()
+            || beat < self.anchors[0].beat
+            || beat > self.anchors[self.anchors.len() - 1].beat
+        {
+            return None;
+        }
+        let index = self
+            .anchors
+            .partition_point(|anchor| anchor.beat <= beat)
+            .saturating_sub(1)
+            .min(self.segments.len() - 1);
+        (self.segments[index].coverage == Coverage::Trusted).then(|| {
+            CanonicalBeatSegment::from_anchors(self.anchors[index], self.anchors[index + 1])
+        })
+    }
+
+    pub(super) fn canonical_loop_interval(
+        &self,
+        source_start: f64,
+        quarters: f64,
+        four_four: bool,
+    ) -> Option<CanonicalLoopInterval> {
+        if !quarters.is_finite() || quarters <= 0.0 {
+            return None;
+        }
+        let start = self.at_source(source_start);
+        let beat_start = start.beat?;
+        let end = self.source_after_beats(source_start, quarters, four_four);
+        if !end.supported() || beat_start + quarters <= beat_start {
+            return None;
+        }
+        let source_end = end.source_seconds?;
+        let first = self
+            .anchors
+            .partition_point(|anchor| anchor.seconds <= source_start)
+            .saturating_sub(1)
+            .min(self.segments.len() - 1);
+        let after = self
+            .anchors
+            .partition_point(|anchor| anchor.seconds < source_end)
+            .max(first + 1)
+            .min(self.segments.len());
+        // This scan is construction-only. Realtime refresh uses binary lookup.
+        let mut minimum = f64::INFINITY;
+        let mut maximum = 0.0_f64;
+        for index in first..after {
+            let slope =
+                CanonicalBeatSegment::from_anchors(self.anchors[index], self.anchors[index + 1])
+                    .seconds_per_quarter();
+            if !slope.is_finite() || slope <= 0.0 {
+                return None;
+            }
+            minimum = minimum.min(slope);
+            maximum = maximum.max(slope);
+        }
+        Some(CanonicalLoopInterval {
+            beat_start,
+            source_end,
+            min_seconds_per_quarter: minimum,
+            max_seconds_per_quarter: maximum,
+        })
+    }
+
     pub(super) fn sample_index(&self, seconds: f64) -> Option<u64> {
         if !seconds.is_finite() || seconds < 0.0 || seconds >= self.source_duration {
             return None;
@@ -151,16 +291,13 @@ impl ValidatedMap {
         }
         let left = self.anchors[index];
         let right = self.anchors[index + 1];
-        let fraction = (target - axis(left, source_axis))
-            / (axis(right, source_axis) - axis(left, source_axis));
-        let other = axis(left, !source_axis)
-            + fraction * (axis(right, !source_axis) - axis(left, !source_axis));
-        if !fraction.is_finite()
-            || !other.is_finite()
-            || (!extrapolate && !(0.0..=1.0).contains(&fraction))
-        {
+        let Some(other) = CanonicalBeatSegment::from_anchors(left, right).interpolate(
+            target,
+            source_axis,
+            extrapolate,
+        ) else {
             return self.missing_axis(target, source_axis, "numerical_unavailable");
-        }
+        };
         let (source, beat) = if source_axis {
             (target, other)
         } else {

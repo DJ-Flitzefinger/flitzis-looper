@@ -2223,6 +2223,7 @@ impl ReadyPlaybackAudio {
             loop_ends,
             bindings,
             pitch_rows,
+            None,
         )
     }
 

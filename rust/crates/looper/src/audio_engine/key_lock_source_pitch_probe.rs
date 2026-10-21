@@ -66,17 +66,20 @@ fn shared_unity_branch(fixture: &Fixture, history: usize, frames: usize) -> Vec<
                 playback.position(),
                 unity_position(fixture, history, elapsed)
             );
-            request.plan.fill_fractional_buffers(
-                &fixture.sample,
-                fixture.stems.as_ref(),
-                &playback,
-                &mut buffers,
-                count,
-            );
+            request
+                .plan
+                .fill_fractional_buffers(
+                    &fixture.sample,
+                    fixture.stems.as_ref(),
+                    &playback,
+                    &mut buffers,
+                    count,
+                )
+                .expect("known scalar test source read");
             for channel in 0..2 {
                 output[channel].extend_from_slice(&buffers[channel][..count]);
             }
-            playback.advance(count);
+            assert!(playback.advance(count));
             elapsed += count;
             partition += 1;
         }

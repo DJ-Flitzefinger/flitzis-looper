@@ -186,10 +186,13 @@ mod scalar_grid;
 pub(crate) use scalar_grid::ScalarSourceGrid;
 #[cfg(test)]
 mod l3_source_reader_tests;
+mod mapped_source_clock;
 mod scheduler;
 mod source_control_epoch;
 mod source_feed_history;
 mod source_grid;
+mod source_map_admission;
+mod source_map_api;
 mod source_playback;
 mod source_reader;
 mod stem_cache;
@@ -1982,7 +1985,7 @@ impl AudioEngine {
         Ok(())
     }
 
-    #[pyo3(signature = (multi_loop, loaded, loop_starts, loop_ends, bindings=None, pitch_rows=None))]
+    #[pyo3(signature = (multi_loop, loaded, loop_starts, loop_ends, bindings=None, pitch_rows=None, source_map_rows=None))]
     pub fn set_input_runtime_state(
         &self,
         py: Python<'_>,
@@ -1992,6 +1995,7 @@ impl AudioEngine {
         loop_ends: Vec<Option<f64>>,
         bindings: Option<Vec<Option<Py<InputRuntimePadBinding>>>>,
         pitch_rows: Option<Vec<Py<PyDict>>>,
+        source_map_rows: Option<Vec<Py<PyDict>>>,
     ) -> PyResult<()> {
         let runtime = self
             .input_runtime
@@ -2007,22 +2011,21 @@ impl AudioEngine {
             .map(|binding| binding.as_ref().map(|binding| binding.borrow(py)))
             .collect();
         let bindings = borrowed.iter().map(|binding| binding.as_deref()).collect();
-        if let Some(rows) = pitch_rows {
-            runtime
-                .set_runtime_state_with_pitch(
-                    multi_loop,
-                    loaded,
-                    loop_starts,
-                    loop_ends,
-                    bindings,
-                    pitch_api::parse_rows(py, rows)?,
-                )
-                .map_err(PyValueError::new_err)
-        } else {
-            runtime
-                .set_runtime_state(multi_loop, loaded, loop_starts, loop_ends, bindings)
-                .map_err(PyValueError::new_err)
-        }
+        runtime
+            .set_runtime_state_with_source_maps(
+                multi_loop,
+                loaded,
+                loop_starts,
+                loop_ends,
+                bindings,
+                pitch_rows
+                    .map(|rows| pitch_api::parse_rows(py, rows))
+                    .transpose()?,
+                source_map_rows
+                    .map(|rows| source_map_api::parse_rows(py, rows))
+                    .transpose()?,
+            )
+            .map_err(PyValueError::new_err)
     }
 
     /// GUI selection enters the same Native ordering as mapped device selection.

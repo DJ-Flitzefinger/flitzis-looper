@@ -97,7 +97,9 @@ impl RtMixer {
             retirement.retire_pad_copy(work);
             return false;
         }
-        if retirement.available_retirement_slots() < work.retirement_slots_needed() {
+        if retirement.available_retirement_slots()
+            < work.retirement_slots_needed() + self.mapped_owner_retirement_slots()
+        {
             self.defer_control(crate::messages::ControlMessage::PadCopy(work));
             return false;
         }

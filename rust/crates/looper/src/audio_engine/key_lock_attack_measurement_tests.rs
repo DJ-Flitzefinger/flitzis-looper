@@ -253,7 +253,7 @@ fn measurement_seals_original_source_readers_pitch_rate_and_action_coordinates()
     assert!(measurement.matches_request(&request));
 
     let playback = request.playback;
-    request.playback.set_target(1.37);
+    assert!(request.playback.set_target(1.37));
     assert!(!measurement.matches_request(&request));
     request.playback = playback;
     let pitch = request.pitch_intent;
@@ -339,7 +339,7 @@ fn unsupported_trajectories_stay_unavailable_without_rejecting_exact_metadata() 
     assert!(matches!(ramp.result, AttackCorrespondence::Unavailable));
     assert!(ramp.matches_request(&request));
     request.plan.transition.clear();
-    request.playback.set_target(1.37);
+    assert!(request.playback.set_target(1.37));
     let rate = measure_attack_reference_for_request(&request);
     assert!(matches!(rate.result, AttackCorrespondence::Unavailable));
     assert!(rate.matches_request(&request));
@@ -415,9 +415,9 @@ fn late_capture_uses_the_original_launch_epoch_after_its_initial_history() {
         ExplicitSeekMode::Normal,
         0.73,
     );
-    playback.configure(request.plan.sample_frames, request.plan.loop_region);
+    assert!(playback.configure(request.plan.sample_frames, request.plan.loop_region));
     let catchup = 8192;
-    playback.advance(catchup);
+    assert!(playback.advance(catchup));
     request.playback = playback;
     request.plan.frame_pos = playback.position().frame;
     let contract = RequestContract::capture(&request).unwrap();
@@ -487,9 +487,11 @@ fn physical_birth_fixture(ratio: f64, remote_tail: bool) -> NativeHistoryRequest
         ExplicitSeekMode::Normal,
         ratio,
     );
-    request
-        .playback
-        .configure(request.plan.sample_frames, region);
+    assert!(
+        request
+            .playback
+            .configure(request.plan.sample_frames, region)
+    );
     request.plan.frame_pos = region.start;
     request.plan.seek_mode = ExplicitSeekMode::Normal;
     request
@@ -662,7 +664,7 @@ fn birth_unavailable_metadata_is_truthful_mode_specific_and_bound_to_the_origina
                 request.plan.transition =
                     StemTransition::start(StemRenderSelection::full_mix(), 128)
             }
-            2 => request.playback.set_target(1.16),
+            2 => assert!(request.playback.set_target(1.16)),
             _ => unreachable!(),
         }
         let birth = measure_attack_reference_for_birth(&request);

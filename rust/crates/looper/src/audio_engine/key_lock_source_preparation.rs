@@ -125,7 +125,7 @@ impl<'a> PreparedSourceStream<'a> {
         let retained = prepared_feed - discard;
 
         let mut logical = request.logical.at_constant_ratio(request.tempo_ratio);
-        logical.configure_domain(plan.domain());
+        assert!(logical.configure_domain(plan.domain()));
         let history_output_frames = request
             .source_history
             .map_or(0, |history| history.output_frames);
@@ -146,7 +146,7 @@ impl<'a> PreparedSourceStream<'a> {
                 return Err(PreparationError::InvalidHistory);
             }
             let mut origin = history.origin.at_constant_ratio(request.tempo_ratio);
-            origin.configure_domain(plan.domain());
+            assert!(origin.configure_domain(plan.domain()));
             if origin.position() != origin_position {
                 return Err(PreparationError::InvalidHistory);
             }
@@ -161,7 +161,7 @@ impl<'a> PreparedSourceStream<'a> {
                 return Err(PreparationError::InvalidHistory);
             }
             let mut anchor = origin;
-            anchor.advance(history_output_frames);
+            assert!(anchor.advance(history_output_frames));
             if anchor.position() != requested_position {
                 return Err(PreparationError::InvalidHistory);
             }
@@ -228,7 +228,7 @@ impl<'a> PreparedSourceStream<'a> {
             self.valid = false;
         }
         result?;
-        self.logical.advance(frames);
+        assert!(self.logical.advance(frames));
         Ok(&self.output)
     }
 
@@ -267,17 +267,13 @@ impl<'a> PreparedSourceStream<'a> {
     }
 
     fn fill_feed(&mut self, frames: usize) {
-        self.plan.fill_fractional_buffers(
-            self.sample,
-            self.stems,
-            &self.feed,
-            &mut self.input,
-            frames,
-        );
+        self.plan
+            .fill_fractional_buffers(self.sample, self.stems, &self.feed, &mut self.input, frames)
+            .expect("known scalar test source read");
         self.plan
             .transition
             .advance_output_frames(frames, self.feed.tempo_ratio());
-        self.feed.advance(frames);
+        assert!(self.feed.advance(frames));
     }
 
     pub(super) fn logical_position(&self) -> FractionalSourcePosition {
@@ -370,8 +366,8 @@ mod bounds {
             transition: StemTransition::default(),
         };
         let mut logical = SourcePlayback::new(7, plan.seek_mode, 0.73);
-        logical.configure(plan.sample_frames, plan.loop_region);
-        logical.advance(13);
+        assert!(logical.configure(plan.sample_frames, plan.loop_region));
+        assert!(logical.advance(13));
         (
             sample,
             SourcePreparation {

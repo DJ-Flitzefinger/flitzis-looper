@@ -165,13 +165,18 @@ struct Oracle {
 }
 
 impl Oracle {
-    fn born(id: usize, note: i32, source: &Source, voice: &VoiceSlot) -> Self {
+    fn born(id: usize, note: i32, voice: &VoiceSlot) -> Self {
+        assert_eq!(voice.source_playback.tempo_ratio(), 1.0);
+        assert_eq!(voice.source_playback.rate_target(), 1.0);
+        assert!(voice.stretch.native_has_physical_birth_context_for_test());
         let pitch = 2.0_f64.powf(f64::from(note) / 12.0);
         assert!((0.5..=2.0).contains(&pitch));
         assert_eq!(RawRubberBand::history_bound(pitch), HISTORY);
         let mut raw = RawRubberBand::new(pitch);
-        for age in -(HISTORY as i64)..0 {
-            raw.sample(source.sample(age), pitch);
+        // Stable-r1 retriggers are fresh physical births, even when replacing a voice.
+        // Their declared prehistory is silence; a cyclic loop tail is a different context.
+        for _ in 0..HISTORY {
+            raw.sample(0.0, pitch);
         }
         let handle = voice.stretch.native_state_address();
         Self {
@@ -525,7 +530,6 @@ impl Harness {
         assert_eq!(action.original_due_frame(), original);
         assert_eq!(action.execution_target(), execution);
         assert_eq!(self.starts[id], starts + 1);
-        let source = &self.sources[id];
         let voice = self
             .callback
             .as_mut()
@@ -536,7 +540,7 @@ impl Harness {
             .iter()
             .find(|voice| voice.is_playing_sample(id))
             .unwrap();
-        let oracle = Oracle::born(id, note, source, voice);
+        let oracle = Oracle::born(id, note, voice);
         assert_eq!(oracle.native_id, candidate);
         assert_eq!(voice.stretch.pending_fifo_frames(), oracle.raw.fifo());
         self.oracles[id] = Some(oracle);

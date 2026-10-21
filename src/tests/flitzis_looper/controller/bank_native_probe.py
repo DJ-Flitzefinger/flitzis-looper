@@ -27,7 +27,12 @@ from flitzis_looper.controller.pair_arrangement import PairArrangementController
 from flitzis_looper.controller.persistence import PersistenceFenceError
 from flitzis_looper.controller.stems import StemController
 from flitzis_looper.controller.transport import TransportController
-from flitzis_looper.copy_snapshot import CONTENT_FIELDS, copy_after_snapshot, musical_content_data
+from flitzis_looper.copy_snapshot import (
+    CONTENT_FIELDS,
+    copy_after_snapshot,
+    musical_content_data,
+    musical_snapshot_projection,
+)
 from flitzis_looper.key_intent import PadKeyIntent
 from flitzis_looper.ui.context import WaveformEditorActions
 
@@ -254,7 +259,9 @@ class BankControllerProbe:
         written = json.loads(self.persistence.config_path.read_bytes())
         assert written["config_revision"] == copy.committed_revision
         expected = copy_after_snapshot(copy.snapshot, copy.identity).projected()
-        assert musical_content_data(self.project, target) == expected.model_dump(mode="json")
+        assert musical_content_data(self.project, target) == musical_snapshot_projection(
+            expected, mode="json"
+        )
         binding = self.audio.current_input_runtime_pad_binding(target)
         assert binding is not None
         assert binding.is_current()
@@ -447,7 +454,9 @@ class BankControllerProbe:
             slot = row.target_id
             assert observation["slot"] == slot
             assert type(observation["components_available"]) is bool
-            assert musical_content_data(self.project, slot) == row.after.model_dump(mode="json")
+            assert musical_content_data(self.project, slot) == musical_snapshot_projection(
+                row.after, mode="json"
+            )
             entry = self.project.stem_cache[slot]
             assert (entry.available if entry is not None else False) == observation[
                 "components_available"

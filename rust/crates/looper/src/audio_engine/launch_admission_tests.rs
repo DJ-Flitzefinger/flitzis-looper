@@ -46,6 +46,7 @@ impl LaunchFixture {
                 .unwrap()
                 .unwrap();
             state.pads[id] = RuntimePadState {
+                source_map: Default::default(),
                 loaded: true,
                 loop_start_s: 16.0 / f64::from(RATE),
                 loop_end_s: Some(96.0 / f64::from(RATE)),

@@ -1051,6 +1051,33 @@ fn launch_with_producer_before_commit(
     if !Arc::ptr_eq(&ticket.ownership, &engine.input_runtime_ownership) {
         return Ok(false);
     }
+    let mut map_binding = ticket.binding;
+    if let Some(key) = map_binding
+        .placement
+        .and_then(|placement| placement.content_key())
+    {
+        let super::content_placement::PlacementObservation::Current(current) =
+            ticket.ownership.observe_control_key(key)
+        else {
+            return Ok(false);
+        };
+        map_binding.placement = Some(current);
+    }
+    let map_snapshot = match engine.input_runtime.as_ref() {
+        Some(runtime) => runtime
+            .source_map_snapshot_for_input_binding(
+                map_binding
+                    .placement
+                    .map_or(usize::MAX, |placement| placement.slot()),
+                &ticket.ownership,
+                map_binding,
+            )
+            .map_err(PyRuntimeError::new_err)?,
+        None => super::source_map_admission::SourceMapLaunchSnapshot::scalar(
+            &ticket.ownership,
+            map_binding,
+        ),
+    };
     let mut producer = producer
         .lock()
         .map_err(|_| PyRuntimeError::new_err("producer lock poisoned"))?;
@@ -1083,6 +1110,7 @@ fn launch_with_producer_before_commit(
         received_at_ns,
         engine.ordinary_start_render_format()?,
         None,
+        map_snapshot,
     )
     .map_err(|reason| PyRuntimeError::new_err(reason.as_str()))?;
     let Some(work) = start

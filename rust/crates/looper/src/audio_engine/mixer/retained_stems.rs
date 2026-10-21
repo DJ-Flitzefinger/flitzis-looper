@@ -89,8 +89,11 @@ impl RtMixer {
             .or_else(|| self.effective_loop_region(id, sample.frame_count()))?;
         let timing = self.timing_for_voice(voice);
         let mut playback = voice.source_playback;
-        playback.set_target(self.tempo_ratio_for_source_period(timing.period_seconds()));
-        playback.configure_domain(timing.loop_domain(sample.frame_count(), region));
+        if !playback.set_target(self.tempo_ratio_for_source_period(timing.period_seconds()))
+            || !playback.configure_domain(timing.loop_domain(sample.frame_count(), region))
+        {
+            return None;
+        }
         playback.chunk(DEFAULT_BLOCK_SAMPLES);
         let position = playback.position();
         let plan = SourceReadPlan {
@@ -128,9 +131,13 @@ impl RtMixer {
             self.outgoing_stems[id].as_ref(),
         );
         self.voices.iter().enumerate().all(|(index, voice)| {
-            !voice.active
-                || voice.sample_id != id
-                || self.voice_keeps_frozen_stem_source(voice)
+            if !voice.active || voice.sample_id != id {
+                return true;
+            }
+            if voice.source_playback.is_mapped() {
+                return false;
+            }
+            self.voice_keeps_frozen_stem_source(voice)
                 || !voice.stretch.has_retained_source_input()
                 || (voice.sample.as_ref().is_some_and(|sample| {
                     self.input_runtime_ownership.source_current(

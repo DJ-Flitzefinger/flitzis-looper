@@ -2,7 +2,13 @@ use super::*;
 use crate::audio_engine::buffer_retirement::ImmediateAudioBufferRetirement;
 use crate::audio_engine::content_placement::PlacementObservation;
 use crate::audio_engine::input_runtime_binding::InputRuntimeOwnership;
+use crate::audio_engine::mapped_source_clock::{MappedClockEpoch, MappedLoopGeometry};
+use crate::audio_engine::source_beatmap::SourceBeatmap;
+use crate::audio_engine::source_playback::SourcePlayback;
+use crate::audio_engine::source_reader::FrameRange;
+use crate::audio_engine::transport::TransportTimeline;
 use crate::messages::SampleBuffer;
+use serde_json::json;
 use std::sync::atomic::Ordering;
 
 const SOURCE: usize = 3;
@@ -37,6 +43,47 @@ fn lane(mixer: &RtMixer, id: usize) -> usize {
         .iter()
         .position(|voice| voice.is_playing_sample(id))
         .unwrap()
+}
+
+fn extra_source_lane(mixer: &mut RtMixer) -> usize {
+    let config = mixer
+        .prepare_play_sample_rt(SOURCE, 1.0, 0, &mut ImmediateAudioBufferRetirement)
+        .unwrap();
+    let index = mixer.voices.iter().position(|voice| !voice.active).unwrap();
+    mixer.voices[index].start_rt(config, &mut ImmediateAudioBufferRetirement);
+    index
+}
+
+fn mapped_voice_fixture(mixer: &mut RtMixer, index: usize) -> MappedLoopGeometry {
+    // Numerical fixture only: these tests exercise rejection, never map admission or render.
+    let descriptor = json!({
+        "schema_version": 1,
+        "original": {"sha256": "a".repeat(64), "bytes": 2048},
+        "pcm": {
+            "format": "f32-le-interleaved-v1",
+            "channel_layout": "interleaved-channel-index-order-v1",
+            "rate_hz": RATE, "channels": 1, "full_frames": 512, "full_bytes": 2048,
+            "interleaved_sha256": "b".repeat(64), "mono_sha256": "c".repeat(64),
+            "mono_revision": "hold-gate-numerical-fixture", "source_zero_bits": "0000000000000000",
+            "provenance": {"synthetic_geometry_only": true}
+        }
+    });
+    let period = 512.0 / f64::from(RATE);
+    let map = SourceBeatmap::manual(descriptor, 0.0, period).unwrap();
+    let geometry = MappedLoopGeometry::new(
+        map,
+        512,
+        RATE,
+        FrameRange { start: 0, end: 512 },
+        1.0,
+        false,
+    )
+    .unwrap();
+    let mut timeline = TransportTimeline::new(RATE);
+    assert!(timeline.set_master_period(period));
+    let epoch = MappedClockEpoch::new(1, timeline, 0.0).unwrap();
+    mixer.voices[index].source_playback = SourcePlayback::mapped(&geometry, epoch, 0).unwrap();
+    geometry
 }
 
 fn admit(mixer: &RtMixer, slot: usize, press: u64) -> Arc<NativeHoldAction> {
@@ -560,6 +607,138 @@ impl AudioBufferRetirement for HoldRetirement {
     fn available_retirement_slots(&mut self) -> usize {
         2
     }
+}
+
+#[test]
+fn mapped_hold_pause_rejects_complete_cohort_and_retires_exact_incoming_work() {
+    let mut mixer = fixture();
+    let mapped = lane(&mixer, SOURCE);
+    let scalar = extra_source_lane(&mut mixer);
+    let _geometry = mapped_voice_fixture(&mut mixer, mapped);
+    let before = [
+        mixer.voices[mapped].source_playback,
+        mixer.voices[scalar].source_playback,
+    ];
+    let action = admit(&mixer, SOURCE, 26);
+    let work = HoldActionRtWork::pause(action.clone());
+    let address = std::ptr::from_ref(work.as_ref());
+    let mut retirement = HoldRetirement::default();
+    let rejected = mixer.apply_pause_hold_rt(work, 130, &mut retirement);
+    assert_eq!(rejected.state, HoldActionState::Rejected);
+    assert!(rejected.effect.is_none());
+    assert_eq!(retirement.held.len(), 1);
+    assert_eq!(std::ptr::from_ref(retirement.held[0].as_ref()), address);
+    assert!(mixer.capture_hold_projection_rt(action.key()).is_none());
+    for (index, playback) in [mapped, scalar].into_iter().zip(before) {
+        assert!(!mixer.voices[index].paused);
+        assert!(mixer.voices[index].source_playback.matches_exact(&playback));
+    }
+    assert!(!mixer.voices[lane(&mixer, TARGET)].paused);
+}
+
+#[test]
+fn mapped_transport_refuses_before_revoking_hold_or_mutating_any_cohort_lane() {
+    use crate::messages::TransportContentEffect;
+    for effect in [
+        TransportContentEffect::Pause,
+        TransportContentEffect::Resume,
+        TransportContentEffect::Seek {
+            position_s: 0.02,
+            expected_source_generation: None,
+        },
+    ] {
+        let mut mixer = fixture();
+        let mapped = lane(&mixer, SOURCE);
+        let scalar = extra_source_lane(&mut mixer);
+        let action = admit(&mixer, SOURCE, 27);
+        assert_eq!(
+            apply_pause(&mut mixer, &action, 140).state,
+            HoldActionState::PausedOwned
+        );
+        let _geometry = mapped_voice_fixture(&mut mixer, mapped);
+        let before = [
+            mixer.voices[mapped].source_playback,
+            mixer.voices[scalar].source_playback,
+        ];
+        let mut retirement = HoldRetirement::default();
+        mixer.apply_transport_content_rt(action.key(), effect, 141, &mut retirement);
+        assert_eq!(action.state(), HoldActionState::PausedOwned);
+        assert!(Arc::ptr_eq(
+            &mixer.hold_actions[action.key().cell().index()]
+                .as_ref()
+                .unwrap()
+                .action,
+            &action,
+        ));
+        assert!(retirement.held.is_empty());
+        for (index, playback) in [mapped, scalar].into_iter().zip(before) {
+            assert!(mixer.voices[index].paused);
+            assert!(mixer.voices[index].source_playback.matches_exact(&playback));
+        }
+    }
+}
+
+#[test]
+fn mapped_pause_rejection_preserves_previous_exact_hold_owner() {
+    let mut mixer = fixture();
+    let mapped = lane(&mixer, SOURCE);
+    let previous = admit(&mixer, SOURCE, 28);
+    assert_eq!(
+        apply_pause(&mut mixer, &previous, 150).state,
+        HoldActionState::PausedOwned
+    );
+    let _geometry = mapped_voice_fixture(&mut mixer, mapped);
+    let next = admit(&mixer, SOURCE, 29);
+    let mut retirement = HoldRetirement::default();
+    let rejected =
+        mixer.apply_pause_hold_rt(HoldActionRtWork::pause(next.clone()), 151, &mut retirement);
+    assert_eq!(rejected.state, HoldActionState::Rejected);
+    assert_eq!(previous.state(), HoldActionState::PausedOwned);
+    assert!(Arc::ptr_eq(
+        &mixer.hold_actions[previous.key().cell().index()]
+            .as_ref()
+            .unwrap()
+            .action,
+        &previous,
+    ));
+    assert!(mixer.voices[mapped].paused);
+    assert_eq!(retirement.held.len(), 1);
+    assert!(Arc::ptr_eq(&retirement.held[0].action, &next));
+}
+
+#[test]
+fn mapped_release_rejects_without_resume_and_retires_both_exact_owners() {
+    let mut mixer = fixture();
+    let mapped = lane(&mixer, SOURCE);
+    let scalar = extra_source_lane(&mut mixer);
+    let action = admit(&mixer, SOURCE, 30);
+    let pause = HoldActionRtWork::pause(action.clone());
+    let pause_address = std::ptr::from_ref(pause.as_ref());
+    let mut retirement = HoldRetirement::default();
+    assert_eq!(
+        mixer.apply_pause_hold_rt(pause, 160, &mut retirement).state,
+        HoldActionState::PausedOwned,
+    );
+    let _geometry = mapped_voice_fixture(&mut mixer, mapped);
+    assert!(action.request_release());
+    assert!(action.mark_release_admitted());
+    let release = HoldActionRtWork::release(action.clone());
+    let release_address = std::ptr::from_ref(release.as_ref());
+    let rejected = mixer.apply_release_hold_rt(release, 161, &mut retirement);
+    assert_eq!(rejected.state, HoldActionState::Rejected);
+    assert!(mixer.voices[mapped].paused);
+    assert!(mixer.voices[scalar].paused);
+    assert!(!mixer.voices[lane(&mixer, TARGET)].paused);
+    assert!(mixer.capture_hold_projection_rt(action.key()).is_none());
+    assert_eq!(retirement.held.len(), 2);
+    assert_eq!(
+        std::ptr::from_ref(retirement.held[0].as_ref()),
+        pause_address
+    );
+    assert_eq!(
+        std::ptr::from_ref(retirement.held[1].as_ref()),
+        release_address
+    );
 }
 
 #[test]

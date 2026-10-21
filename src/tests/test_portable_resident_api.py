@@ -212,8 +212,13 @@ def _capture_selected_pitch(
     _forbidden_native_work(self, action_key, received_at_ns=received_at_ns)
 
 
-def _pitch_runtime_state(self: object, *arguments: object, pitch_rows: object = None) -> None:
-    _forbidden_native_work(self, *arguments, pitch_rows=pitch_rows)
+def _pitch_runtime_state(
+    self: object,
+    *arguments: object,
+    pitch_rows: object = None,
+    source_map_rows: object = None,
+) -> None:
+    _forbidden_native_work(self, *arguments, pitch_rows=pitch_rows, source_map_rows=source_map_rows)
 
 
 def _pitch_restore_source(
@@ -292,6 +297,7 @@ def test_incomplete_pitch_receipt_cannot_activate(attribute: str) -> None:
     ("method", "keyword"),
     [
         ("set_input_runtime_state", "pitch_rows"),
+        ("set_input_runtime_state", "source_map_rows"),
         ("capture_pad_pitch_action", "received_at_ns"),
         ("capture_selected_pitch_action", "received_at_ns"),
         ("load_sample_async", "initial_base_shift"),

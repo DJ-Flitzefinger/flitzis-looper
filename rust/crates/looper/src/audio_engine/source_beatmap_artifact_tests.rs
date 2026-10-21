@@ -1209,3 +1209,6 @@ fn actual_engine_shutdown_waits_for_prepared_store_and_removes_only_unacknowledg
     assert!(!path.parent().unwrap().exists());
     assert!(maps(&fixture).is_empty());
 }
+mod source_map_admission_custody_tests {
+    include!("source_map_admission_custody_tests.rs");
+}

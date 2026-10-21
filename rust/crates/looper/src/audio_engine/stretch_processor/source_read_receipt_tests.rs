@@ -37,9 +37,9 @@ fn source(channels: usize) -> SampleBuffer {
 
 fn playback(start: usize, mode: ExplicitSeekMode) -> SourcePlayback {
     let mut playback = SourcePlayback::new(start, mode, RATIO);
-    playback.configure(SOURCE_FRAMES, REGION);
+    assert!(playback.configure(SOURCE_FRAMES, REGION));
     // A real fractional epoch, rather than a receipt assembled from an integer playhead.
-    playback.advance(1);
+    assert!(playback.advance(1));
     playback
 }
 
@@ -130,7 +130,7 @@ fn actual_read_receipts_preserve_fractional_intro_normal_tail_under_partitions()
                 }
             }
             history.record_read(receipt);
-            actual.advance(frames);
+            assert!(actual.advance(frames));
             elapsed += frames;
         }
         let mut snapshot = SourceFeedSnapshot::new();
@@ -139,7 +139,12 @@ fn actual_read_receipts_preserve_fractional_intro_normal_tail_under_partitions()
         assert_eq!(snapshot.spans().len(), 1);
         let span = snapshot.spans().next().unwrap();
         assert!(span.playback.matches_exact(&origin));
-        assert_eq!(span.playback.position_at(71), actual.position());
+        assert_eq!(
+            span.playback
+                .position_at(71)
+                .expect("known scalar partitioned read endpoint"),
+            actual.position()
+        );
     }
 }
 
@@ -165,13 +170,23 @@ fn native_receipt_counts_accepted_fifo_prefix_before_first_shift_and_tracks_actu
     assert!(processor.wet_rendered);
     let history = processor.productive_history().unwrap();
     assert_eq!(history.fed_output_frames, 1);
-    assert_eq!(history.next_position, actual.position_at(1));
-    assert_ne!(history.next_position, logical.position_at(1));
+    assert_eq!(
+        history.next_position,
+        actual
+            .position_at(1)
+            .expect("known scalar actual FIFO input endpoint")
+    );
+    assert_ne!(
+        history.next_position,
+        logical
+            .position_at(1)
+            .expect("known scalar logical FIFO input endpoint")
+    );
     assert!(logical.matches_exact(&logical_before));
     let mut journal = SourceFeedHistory::new();
     journal.record_read(receipt);
 
-    actual.advance(1);
+    assert!(actual.advance(1));
     let frames = processor.rubberband_block_size();
     let receipt = processor
         .process_source(feed(&sample, &actual, true), frames, true)
@@ -180,7 +195,13 @@ fn native_receipt_counts_accepted_fifo_prefix_before_first_shift_and_tracks_actu
     assert!(processor.native.used);
     let history = processor.productive_history().unwrap();
     assert_eq!(history.fed_output_frames, (1 + frames) as u64);
-    assert_eq!(history.next_position, receipt.playback.position_at(frames));
+    assert_eq!(
+        history.next_position,
+        receipt
+            .playback
+            .position_at(frames)
+            .expect("known scalar Native read endpoint")
+    );
     journal.record_read(receipt);
     let mut snapshot = SourceFeedSnapshot::new();
     assert!(journal.capture_into(&mut snapshot));
@@ -307,7 +328,9 @@ fn real_callback_journals_fractional_source_receipts_and_leaves_logical_cursor_o
     assert_eq!(voice.source_playback.position().frame, 4_836);
     assert_eq!(voice.source_playback.position().fraction, 0.75);
     assert_eq!(
-        span.playback.position_at(49),
+        span.playback
+            .position_at(49)
+            .expect("known scalar callback read endpoint"),
         voice.source_playback.position()
     );
     assert!(
@@ -377,7 +400,9 @@ fn retained_native_continuation_reads_and_journals_future_input_without_moving_l
         assert_eq!(receipt.domain, SourceReadDomain::NativeInput);
         assert_eq!(
             receipt.playback.position(),
-            actual_origin.position_at(elapsed)
+            actual_origin
+                .position_at(elapsed)
+                .expect("known scalar retained input coordinate")
         );
         assert_ne!(receipt.playback.position(), logical.position());
         assert_eq!(processor.native_state_address(), address);
@@ -385,10 +410,12 @@ fn retained_native_continuation_reads_and_journals_future_input_without_moving_l
         assert!(processor.wet_source_rendered);
         assert_eq!(
             processor.productive_history().unwrap().next_position,
-            actual_origin.position_at(elapsed + frames)
+            actual_origin
+                .position_at(elapsed + frames)
+                .expect("known scalar retained read endpoint")
         );
         journal.record_read(receipt);
-        logical.advance(frames);
+        assert!(logical.advance(frames));
         let position = logical.position();
         plan.frame_pos = position.frame;
         plan.seek_mode = position.seek_mode;
@@ -403,7 +430,7 @@ fn retained_native_continuation_reads_and_journals_future_input_without_moving_l
     assert_ne!(span.playback.position(), logical_origin.position());
     let pending_input = processor.native.input_fifo[0].len();
     let retained_output = processor.native.output_fifo[0].len();
-    logical.set_target(1.5);
+    assert!(logical.set_target(1.5));
     assert!(
         processor
             .process_source(
@@ -520,11 +547,15 @@ fn actual_finite_callback_keeps_retained_native_feed_ahead_of_unchanged_logical_
         assert_eq!(voice.stretch.native_state_address(), address);
         assert_eq!(
             voice.source_playback.position(),
-            logical.position_at(elapsed)
+            logical
+                .position_at(elapsed)
+                .expect("known scalar logical callback coordinate")
         );
         assert_eq!(
             voice.stretch.productive_history().unwrap().next_position,
-            actual_origin.position_at(elapsed)
+            actual_origin
+                .position_at(elapsed)
+                .expect("known scalar retained callback coordinate")
         );
         let mut journal = SourceFeedSnapshot::new();
         assert!(voice.source_feed_history.capture_into(&mut journal));
@@ -532,8 +563,13 @@ fn actual_finite_callback_keeps_retained_native_feed_ahead_of_unchanged_logical_
         assert_eq!(actual_span.playback.position(), actual_origin.position());
         assert_ne!(actual_span.playback.position(), logical.position());
         assert_eq!(
-            actual_span.playback.position_at(elapsed),
-            actual_origin.position_at(elapsed)
+            actual_span
+                .playback
+                .position_at(elapsed)
+                .expect("known scalar journal continuation"),
+            actual_origin
+                .position_at(elapsed)
+                .expect("known scalar retained journal coordinate")
         );
         assert_eq!(
             actual_span.context.binding.source_address,

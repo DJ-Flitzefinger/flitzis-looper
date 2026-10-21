@@ -14,6 +14,7 @@ use std::sync::mpsc::TryRecvError;
 
 /// Retained Native event custody survives a Python participant-observer fence.
 #[pyclass(frozen)]
+#[derive(Clone, Debug)]
 pub struct LoaderEventDelivery {
     owner: super::complete_context::NativeAnalysisOwner,
     timing_epoch: Option<u64>,
@@ -22,6 +23,61 @@ pub struct LoaderEventDelivery {
 }
 
 impl LoaderEventDelivery {
+    pub(super) fn source_map_binding_current(
+        &self,
+        ownership: &std::sync::Arc<super::input_runtime_binding::InputRuntimeOwnership>,
+        binding: super::input_runtime_binding::InputPadBinding,
+    ) -> bool {
+        self.owner.source_map_binding_current(ownership, binding)
+    }
+
+    /// Called under the existing request lock before a runtime publication is staged.
+    pub(super) fn qualify_source_map(
+        &self,
+        binding: &super::input_runtime_binding::InputRuntimePadBinding,
+        exact_quarters: Option<f64>,
+    ) -> Result<super::source_map_admission::QualifiedSourceMap, String> {
+        if !self.owner.source_map_admission_current(binding) {
+            return Err(
+                "source map original Native admission is stale or belongs to another source".into(),
+            );
+        }
+        let current = match self.owner.observe_control() {
+            PlacementObservation::Current(current) => current,
+            PlacementObservation::Pending => {
+                return Err("source map content placement is pending".into());
+            }
+            PlacementObservation::Stale | PlacementObservation::Retired => {
+                return Err("source map content placement changed".into());
+            }
+        };
+        if !binding
+            .binding
+            .placement
+            .is_some_and(|placement| placement.same_projection(current))
+        {
+            return Err("source map does not belong to the original runtime row".into());
+        }
+        let map = self
+            .source_beatmap
+            .clone()
+            .ok_or("source map delivery has no genuine map")?;
+        let artifact = self
+            .source_beatmap_artifact
+            .clone()
+            .ok_or("source map delivery has no artifact custody")?;
+        if !self.owner.source_map_admission_current(binding) {
+            return Err("source map original Native admission changed during qualification".into());
+        }
+        super::source_map_admission::QualifiedSourceMap::new(
+            self.clone(),
+            map,
+            artifact,
+            binding,
+            exact_quarters,
+        )
+    }
+
     pub(super) fn source_beatmap_artifact_for(
         &self,
         owner: &super::complete_context::NativeAnalysisOwner,

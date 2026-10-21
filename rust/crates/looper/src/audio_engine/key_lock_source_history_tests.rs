@@ -73,8 +73,8 @@ impl Fixture {
             seek_mode: mode,
         };
         let mut origin = SourcePlayback::new(start, mode, f64::from(0.73_f32));
-        origin.configure(SOURCE_FRAMES, LOOP);
-        origin.advance(initial_frames);
+        assert!(origin.configure(SOURCE_FRAMES, LOOP));
+        assert!(origin.advance(initial_frames));
         assert_eq!(origin.position(), phase);
         let reference_samples = sample.samples.clone();
         Self {
@@ -103,7 +103,7 @@ impl Fixture {
 
     fn request(&self, history: usize, discard: usize) -> SourcePreparation {
         let mut logical = self.origin.at_constant_ratio(f64::from(self.ratio));
-        logical.advance(history);
+        assert!(logical.advance(history));
         let position = logical.position();
         assert_eq!(position, self.reference_position(history));
         SourcePreparation {
@@ -365,18 +365,18 @@ fn source_history_rejects_bounds_phase_domain_and_active_transition_mismatches()
         assert_invalid_history(&fixture, invalid);
     }
     let mut invalid = request;
-    invalid.logical.advance(1);
+    assert!(invalid.logical.advance(1));
     assert_invalid_history(&fixture, invalid);
     let mut invalid = request;
     let position = request.logical.position();
     invalid.logical = SourcePlayback::new(position.frame, position.seek_mode, 0.5);
-    invalid.logical.configure(SOURCE_FRAMES, LOOP);
-    invalid.logical.advance(1);
+    assert!(invalid.logical.configure(SOURCE_FRAMES, LOOP));
+    assert!(invalid.logical.advance(1));
     assert_eq!(invalid.logical.position().frame, position.frame);
     assert_ne!(invalid.logical.position().fraction, position.fraction);
     assert_invalid_history(&fixture, invalid);
     let mut invalid = request;
-    invalid.source_history.as_mut().unwrap().origin.advance(1);
+    assert!(invalid.source_history.as_mut().unwrap().origin.advance(1));
     assert_invalid_history(&fixture, invalid);
     for (frame, mode) in [
         (0, ExplicitSeekMode::Normal),

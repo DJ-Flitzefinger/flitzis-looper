@@ -316,7 +316,9 @@ fn assert_last_stem_read(fixture: &Fixture, stems: &PreparedStemSet, mask: Optio
         assert_eq!(span.context.current_stem_owners, [0; 6]);
     }
     assert_eq!(
-        span.playback.position_at(span.frames),
+        span.playback
+            .position_at(span.frames)
+            .expect("known scalar retained stem read endpoint"),
         fixture
             .voice(0)
             .stretch

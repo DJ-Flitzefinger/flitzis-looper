@@ -36,8 +36,8 @@ struct Fixture {
 impl Fixture {
     fn request(&self, initial_frames: usize, discard: usize) -> SourcePreparation {
         let mut logical = SourcePlayback::new(self.start, self.mode, f64::from(self.ratio));
-        logical.configure(self.sample.samples.len() / 2, self.region);
-        logical.advance(initial_frames);
+        assert!(logical.configure(self.sample.samples.len() / 2, self.region));
+        assert!(logical.advance(initial_frames));
         let position = logical.position();
         let selection = self
             .stem_mask

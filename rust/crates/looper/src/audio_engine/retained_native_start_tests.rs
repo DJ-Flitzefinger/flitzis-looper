@@ -34,8 +34,9 @@ fn raw_reference(
                 &playback,
                 &mut input,
                 frames,
-            );
-            playback.advance(frames);
+            )
+            .expect("known scalar test source read");
+            assert!(playback.advance(frames));
         }
         for channel in &mut input {
             channel.copy_within(0..frames, prefix);
@@ -136,7 +137,8 @@ fn declared_raw_suffix_keeps_logical_endpoint_and_matches_direct_native_under_un
                             &actual,
                             &mut feed,
                             frames,
-                        );
+                        )
+                        .expect("known scalar test source read");
                         state.render(&feed, &mut output, frames, pitch).unwrap();
                         for channel in 0..2 {
                             assert_eq!(
@@ -146,7 +148,7 @@ fn declared_raw_suffix_keeps_logical_endpoint_and_matches_direct_native_under_un
                             );
                         }
                         state.advance_retained_start_feed(frames);
-                        logical.advance(frames);
+                        assert!(logical.advance(frames));
                         let position = logical.position();
                         logical_plan.frame_pos = position.frame;
                         logical_plan.seek_mode = position.seek_mode;
@@ -179,10 +181,10 @@ fn retained_future_feed_cannot_follow_changed_logical_position_or_control_trajec
         )
         .unwrap();
     let mut changed = logical;
-    changed.advance(1);
+    assert!(changed.advance(1));
     assert!(state.retained_start_feed(&changed, plan).is_err());
     let mut changed = logical;
-    changed.set_target(1.5);
+    assert!(changed.set_target(1.5));
     assert!(state.retained_start_feed(&changed, plan).is_err());
     let mut changed_plan = plan;
     changed_plan.loop_region.end -= 1;

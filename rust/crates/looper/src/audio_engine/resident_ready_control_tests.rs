@@ -658,6 +658,16 @@ fn ready_full_feedback_retains_start_until_real_poll_and_next_callback_with_one_
         .filter(|voice| voice.is_playing_sample(0))
         .collect();
     assert_eq!(voices.len(), 1);
+    let sample = voices[0].sample.as_ref().unwrap();
+    assert!(sample.valid_residency(48_000, 2));
+    assert_eq!(sample.frame_count(), loaded.mono.len());
+    assert!(sample.same_window(&loaded.sample()));
+    assert_eq!((sample.resident_start(), sample.resident_end()), (32, 64));
+    assert_eq!(voices[0].source_playback.tempo_ratio(), 1.0);
+    assert_eq!(voices[0].source_playback.rate_target(), 1.0);
+    assert!(!voices[0].source_playback.is_mapped());
+    assert_eq!(voices[0].source_playback.position().frame, 32 + 300 % 32);
+    assert_eq!(voices[0].source_playback.position().fraction, 0.0);
     assert_eq!(
         voices[0]
             .source_admission
@@ -667,7 +677,9 @@ fn ready_full_feedback_retains_start_until_real_poll_and_next_callback_with_one_
         Some(key)
     );
     for (relative_frame, stereo) in output.chunks_exact(2).enumerate().skip(128) {
-        let expected = loaded.mono[32 + (execution as usize + relative_frame) % 32];
+        // Deferred physical birth begins at the selected source origin, without
+        // consuming the unheard interval between original T and actual E.
+        let expected = loaded.mono[32 + relative_frame % 32];
         for value in stereo {
             assert_eq!(
                 value.to_bits(),

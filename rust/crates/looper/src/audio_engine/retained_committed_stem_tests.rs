@@ -116,12 +116,16 @@ fn assert_actual_continuity(
     let current = voice(&p.h.callback.mixer);
     assert_eq!(
         current.source_playback.position(),
-        logical.position_at(elapsed)
+        logical
+            .position_at(elapsed)
+            .expect("known scalar logical continuation")
     );
     let history = current.stretch.productive_history().unwrap();
     assert_eq!(
         history.next_position,
-        actual.position_at(elapsed),
+        actual
+            .position_at(elapsed)
+            .expect("known scalar retained input continuation"),
         "committed stem control lost the retained actual input clock"
     );
     assert_ne!(history.next_position, current.source_playback.position());
@@ -132,7 +136,9 @@ fn assert_actual_continuity(
     assert!(current.source_feed_history.capture_into(&mut journal));
     let last = journal.spans().last().unwrap();
     assert_eq!(
-        last.playback.position_at(last.frames),
+        last.playback
+            .position_at(last.frames)
+            .expect("known scalar committed stem read endpoint"),
         history.next_position
     );
     assert_eq!(last.context.binding.source_address, sample.source_address());

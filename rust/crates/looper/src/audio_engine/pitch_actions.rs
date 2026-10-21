@@ -234,6 +234,7 @@ pub(crate) enum PitchActionReject {
     AlreadyPublished,
     SequenceExhausted,
     LaunchCancelled,
+    MappedTimingUnavailable,
 }
 
 impl PitchActionReject {
@@ -268,6 +269,7 @@ impl PitchActionReject {
             Self::AlreadyPublished => "already_published",
             Self::SequenceExhausted => "sequence_exhausted",
             Self::LaunchCancelled => "launch_cancelled",
+            Self::MappedTimingUnavailable => "mapped_timing_unavailable",
         }
     }
 
@@ -291,6 +293,7 @@ impl PitchActionReject {
             16 => Self::AlreadyPublished,
             17 => Self::SequenceExhausted,
             18 => Self::LaunchCancelled,
+            19 => Self::MappedTimingUnavailable,
             _ => return None,
         })
     }

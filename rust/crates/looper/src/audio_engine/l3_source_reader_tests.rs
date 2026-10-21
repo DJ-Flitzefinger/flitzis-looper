@@ -118,8 +118,8 @@ fn missing_exact_outgoing_rejects_before_fill_even_with_an_empty_mask() {
     let v1 = stems(&sample, 1.0);
     let v2 = stems(&sample, 7.0);
     let mut playback = SourcePlayback::new(9, ExplicitSeekMode::Normal, 0.625);
-    playback.configure(FRAMES, REGION);
-    playback.advance(1);
+    assert!(playback.configure(FRAMES, REGION));
+    assert!(playback.advance(1));
     for mask in [0, 0b0001, STEM_COMPONENT_MASK] {
         for full_mix in [false, true] {
             let mut reader = plan(&v2, &v1, mask);
@@ -160,8 +160,8 @@ fn actual_outgoing_fractional_tap_must_be_resident_before_any_output_changes() {
     v1.stems[0].samples = Arc::from(&v1.stems[0].samples[..10 * CHANNELS]);
     let reader = plan(&v2, &v1, 0b0001);
     let mut playback = SourcePlayback::new(9, ExplicitSeekMode::Normal, 0.625);
-    playback.configure(FRAMES, REGION);
-    playback.advance(1);
+    assert!(playback.configure(FRAMES, REGION));
+    assert!(playback.advance(1));
     let readers = StemReadSets::new(Some(&v2), Some(&v1));
     assert!(reader.tap_available_with_readers(&sample, readers, 9, 0));
     assert!(!reader.tap_available_with_readers(&sample, readers, 10, 0));
@@ -190,7 +190,7 @@ fn render_partitions(
 ) -> (Vec<f32>, SourcePlayback, SourceReadPlan) {
     let mut reader = plan(v2, v1, mask);
     let mut playback = SourcePlayback::new(9, ExplicitSeekMode::Normal, ratio);
-    playback.configure(FRAMES, REGION);
+    assert!(playback.configure(FRAMES, REGION));
     let mut output = Vec::new();
     let mut remaining = 240;
     let mut partition = 0;
@@ -212,7 +212,7 @@ fn render_partitions(
         for frame in 0..frames {
             output.extend([buffers[0][frame], buffers[1][frame]]);
         }
-        playback.advance(frames);
+        assert!(playback.advance(frames));
         reader.transition.advance_output_frames(frames, ratio);
         remaining -= frames;
         partition += 1;
@@ -268,15 +268,15 @@ fn render_changing_rate(
 ) -> Vec<f32> {
     let mut reader = plan(v2, v1, 0b0001);
     let mut playback = SourcePlayback::new(9, ExplicitSeekMode::Normal, 0.63);
-    playback.configure(FRAMES, REGION);
+    assert!(playback.configure(FRAMES, REGION));
     let mut output = Vec::new();
     let mut consumed = 0;
     let mut partition = 0;
     while consumed < 300 {
         if consumed == 37 {
-            playback.set_target(1.25);
+            assert!(playback.set_target(1.25));
         } else if consumed == 81 {
-            playback.set_target(0.7);
+            assert!(playback.set_target(0.7));
         }
         let boundary = if consumed < 37 {
             37
@@ -301,7 +301,7 @@ fn render_changing_rate(
             )
             .unwrap();
         output.extend_from_slice(&buffers[0]);
-        playback.advance(frames);
+        assert!(playback.advance(frames));
         reader.transition.advance_output_frames(frames, ratio);
         consumed += frames;
         partition += 1;

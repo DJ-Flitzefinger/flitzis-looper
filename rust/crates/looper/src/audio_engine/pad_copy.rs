@@ -258,8 +258,8 @@ pub(crate) struct PadCopyRtWork {
 impl PadCopyRtWork {
     pub(crate) fn retirement_slots_needed(&self) -> usize {
         if self.guard.target_binding.is_some() {
-            // Each old voice owns input plus up to two frozen stem readers;
-            // the old Hold and this aggregate each need their own retirement entry.
+            // Input and two frozen stem readers per old voice, plus old Hold and
+            // this aggregate. The mixer separately reserves actual mapped owners.
             3 * super::constants::MAX_VOICES + 2
         } else {
             1

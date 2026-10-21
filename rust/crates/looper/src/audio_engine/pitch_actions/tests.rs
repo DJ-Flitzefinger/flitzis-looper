@@ -683,7 +683,7 @@ fn action_capture_requires_own_epoch_arc_even_when_all_scalar_pitch_source_and_d
     let permit = first.capture_history_permit(&sample, 48_000, None).unwrap();
     let region = FrameRange { start: 0, end: 128 };
     let mut playback = SourcePlayback::new(0, ExplicitSeekMode::Normal, 1.0);
-    playback.configure(128, region);
+    assert!(playback.configure(128, region));
     let plan = SourceReadPlan {
         channels: 1,
         sample_frames: 128,

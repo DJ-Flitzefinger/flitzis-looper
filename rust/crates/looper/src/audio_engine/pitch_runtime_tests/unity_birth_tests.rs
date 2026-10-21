@@ -299,7 +299,7 @@ fn public_native_unity_birth_then_rate_edit_keeps_first_irregular_wet_history_an
         .collect();
     assert!(pcm_difference(&pending, &pending_expected).0 < 2.0e-5);
     let mut expected_clock = before;
-    expected_clock.advance(HISTORY_FRAMES);
+    assert!(expected_clock.advance(HISTORY_FRAMES));
     assert!(
         fixture
             .voice(0)
@@ -320,11 +320,11 @@ fn public_native_unity_birth_then_rate_edit_keeps_first_irregular_wet_history_an
     assert_eq!(applied.effect_revision, preparing.request_revision);
     assert_eq!(applied.execution_frame, Some(rate_execution));
     assert_eq!(applied.effective_speed, 1.8);
-    expected_clock.set_target(1.8);
+    assert!(expected_clock.set_target(1.8));
     let (frames, actual_rate) = expected_clock.chunk(FIRST_CHUNK);
     assert_eq!(frames, FIRST_CHUNK);
     assert_eq!(actual_rate, 1.95);
-    expected_clock.advance(frames);
+    assert!(expected_clock.advance(frames));
 
     // The declared A-reset reference starts at A=E-4096=F, feeds only the actual
     // old unity history, and continues at E. Continuous-O remains diagnostic;
@@ -663,7 +663,7 @@ fn superseded_rate_identity_cannot_apply_at_its_old_deadline_or_replace_the_late
         .collect();
     assert!(pcm_difference(&all_dry, &expected).0 < 2.0e-5);
     let mut expected_clock = before;
-    expected_clock.advance(all_dry.len());
+    assert!(expected_clock.advance(all_dry.len()));
     assert!(
         fixture
             .voice(0)
@@ -731,8 +731,8 @@ fn complete_rate_from_dry_unity(fixture: &mut Fixture, request: &RateStatus) -> 
         raw.sample(sample, 1.0);
     }
     let mut expected_clock = before;
-    expected_clock.advance(HISTORY_FRAMES);
-    expected_clock.set_target(request.requested_speed);
+    assert!(expected_clock.advance(HISTORY_FRAMES));
+    assert!(expected_clock.set_target(request.requested_speed));
     let (frames, actual_rate) = expected_clock.chunk(FIRST_CHUNK);
     assert_eq!(frames, FIRST_CHUNK);
     let expected: Vec<_> = (0..FIRST_CHUNK)
@@ -743,7 +743,7 @@ fn complete_rate_from_dry_unity(fixture: &mut Fixture, request: &RateStatus) -> 
             )
         })
         .collect();
-    expected_clock.advance(FIRST_CHUNK);
+    assert!(expected_clock.advance(FIRST_CHUNK));
     let actual = fixture.render(FIRST_CHUNK);
     let difference = pcm_difference(&actual, &expected);
     assert!(difference.0 < 2.0e-5, "recovered first PCM={difference:?}");
@@ -1239,10 +1239,10 @@ fn foreign_second_history_lane_refuses_both_unity_voices_before_work_and_both_re
     assert_eq!(fixture.transport.master_period_seconds(), Some(0.75));
     let mut expected_clocks = before;
     for clock in &mut expected_clocks {
-        clock.advance(HISTORY_FRAMES);
-        clock.set_target(1.6);
+        assert!(clock.advance(HISTORY_FRAMES));
+        assert!(clock.set_target(1.6));
         assert_eq!(clock.chunk(FIRST_CHUNK), (FIRST_CHUNK, 1.95));
-        clock.advance(FIRST_CHUNK);
+        assert!(clock.advance(FIRST_CHUNK));
     }
     let mut expected = [Vec::new(), Vec::new()];
     for frame in 0..FIRST_CHUNK {

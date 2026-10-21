@@ -396,7 +396,9 @@ fn render(case: Case, partition: &[usize], cycles: usize) -> (Vec<f32>, serde_js
             .iter()
             .filter(|(_, n)| *n > offset && *n <= offset + count)
         {
-            let position = observed_clock.position_at(capture - offset);
+            let position = observed_clock
+                .position_at(capture - offset)
+                .expect("known scalar musical-loop coordinate");
             let phase = position.frame as f64 + position.fraction - case.physical_start() as f64;
             captured.push((cycle, capture, phase));
         }

@@ -341,6 +341,16 @@ impl TransportTimeline {
         )
     }
 
+    /// Compare the frozen beat projection, independently of callback progress or bootstrap UI.
+    /// A copied projection is data from this same authority, never another transport clock.
+    pub(crate) fn matches_clock_epoch(&self, other: &Self) -> bool {
+        self.sample_rate_hz == other.sample_rate_hz
+            && self.master_period_seconds.map(f64::to_bits)
+                == other.master_period_seconds.map(f64::to_bits)
+            && self.beat_anchor_frame == other.beat_anchor_frame
+            && self.beat_anchor_position.to_bits() == other.beat_anchor_position.to_bits()
+    }
+
     #[allow(dead_code)]
     pub(crate) fn beat_phase(&self) -> Option<f64> {
         Some(normalize_phase(self.beat_position()?, 1.0))

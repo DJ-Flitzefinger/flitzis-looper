@@ -141,7 +141,7 @@ fn request(
     request_id: u64,
 ) -> NativeHistoryRequest {
     let mut playback = SourcePlayback::new(REGION.start, ExplicitSeekMode::Normal, profile.ratio);
-    playback.configure(SOURCE_FRAMES, REGION);
+    assert!(playback.configure(SOURCE_FRAMES, REGION));
     let permit = NativeHistoryContext {
         id: 0,
         ownership,

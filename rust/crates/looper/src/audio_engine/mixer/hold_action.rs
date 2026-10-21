@@ -22,6 +22,9 @@ impl RtMixer {
         let Some(id) = self.content_effect_slot(key) else {
             return;
         };
+        if self.hold_content_is_mapped_rt(id, key) {
+            return;
+        }
         self.revoke_hold_for_content_rt(key, HoldActionState::Superseded, output_frame, retirement);
         match effect {
             TransportContentEffect::Pause | TransportContentEffect::Resume => {
@@ -129,6 +132,12 @@ impl RtMixer {
             retirement.retire_hold_action(work);
             return projection;
         }
+        if self.hold_content_is_mapped_rt(id, key) {
+            action.settle(HoldActionState::Rejected, output_frame);
+            let projection = action.projection();
+            retirement.retire_hold_action(work);
+            return projection;
+        }
 
         let mut effect = NativePauseEffect {
             key,
@@ -219,6 +228,7 @@ impl RtMixer {
         let state = match self.content_effect_slot(key) {
             None => HoldActionState::Retired,
             Some(_) if !action.intent_current() => HoldActionState::Superseded,
+            Some(id) if self.hold_content_is_mapped_rt(id, key) => HoldActionState::Rejected,
             Some(id) => {
                 let same_owner = self.hold_actions[cell].as_ref().is_some_and(|owned| {
                     Arc::ptr_eq(&owned.action, action)
@@ -245,6 +255,14 @@ impl RtMixer {
         self.retire_matching_hold_registry_rt(action, retirement);
         retirement.retire_hold_action(work);
         projection
+    }
+
+    fn hold_content_is_mapped_rt(&self, id: usize, key: ContentKey) -> bool {
+        // Mapped pause/resume needs an owned transport-phase reanchor before either is legal.
+        self.voices.iter().any(|voice| {
+            Self::hold_voice_belongs_to_content_rt(voice, id, key)
+                && voice.source_playback.is_mapped()
+        })
     }
 
     fn hold_effect_cohort_current_rt(&self, id: usize, effect: NativePauseEffect) -> bool {

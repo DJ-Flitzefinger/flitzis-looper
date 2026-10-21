@@ -793,6 +793,16 @@ impl StretchProcessor {
             outgoing_stems: readers.outgoing,
             ..feed
         };
+        if !feed.playback.can_read_frames(frames) {
+            self.silence_output(frames);
+            self.wet_render_failed = true;
+            return None;
+        }
+        let Some(next_position) = feed.playback.position_at(frames) else {
+            self.silence_output(frames);
+            self.wet_render_failed = true;
+            return None;
+        };
         if self
             .native
             .source_transition
@@ -899,14 +909,21 @@ impl StretchProcessor {
         let prior_frames = self
             .productive_history
             .map_or(0, |history| history.fed_output_frames);
-        if !finite {
-            feed.plan.fill_fractional_buffers_with_readers(
-                feed.sample,
-                readers,
-                feed.playback,
-                self.resampled_buffers_mut(frames),
-                frames,
-            );
+        if !finite
+            && feed
+                .plan
+                .fill_fractional_buffers_with_readers(
+                    feed.sample,
+                    readers,
+                    feed.playback,
+                    self.resampled_buffers_mut(frames),
+                    frames,
+                )
+                .is_err()
+        {
+            self.silence_output(frames);
+            self.wet_render_failed = wet;
+            return None;
         }
         self.process_resampled_with_pitch(
             frames,
@@ -944,7 +961,7 @@ impl StretchProcessor {
         if receipt.domain == SourceReadDomain::NativeInput {
             self.productive_history = Some(ProductiveSourceHistory {
                 binding: receipt.context.binding,
-                next_position: receipt.playback.position_at(receipt.output_frames),
+                next_position,
                 domain: Some(receipt.plan.domain()),
                 fed_output_frames: prior_frames.saturating_add(receipt.output_frames as u64),
             });
@@ -1475,7 +1492,7 @@ mod tests {
             ),
             ACTIVE_FRAMES,
         );
-        source.playback.advance(ACTIVE_FRAMES);
+        assert!(source.playback.advance(ACTIVE_FRAMES));
         source.playback.chunk(DEFAULT_BLOCK_SAMPLES);
         let position = source.playback.position();
         source.plan.frame_pos = position.frame;

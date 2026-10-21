@@ -121,7 +121,31 @@ impl RtMixer {
         id: usize,
     ) -> Result<PitchSourceSnapshot, PitchActionReject> {
         let (start_s, end_s) = self.ordinary_loop_region(work, id);
-        let snapshot = self.normal_start_snapshot(id, start_s, end_s)?;
+        let mut snapshot = self.normal_start_snapshot(id, start_s, end_s)?;
+        if let Some(geometry) = work.origin().mapped_geometry() {
+            let (epoch, original) = work
+                .mapped_clock()
+                .ok_or(PitchActionReject::MappedTimingUnavailable)?;
+            let render = self.ordinary_start_render(id);
+            // This first productive envelope is dry varispeed. A Native/FIFO
+            // trajectory must be prepared under its own exact future input clock.
+            if render.key_lock
+                || render.pitch.total_semitones() != 0
+                || !self.bpm_lock_enabled
+                || self.speed.to_bits() != 1.0f64.to_bits()
+                || epoch.master_period_seconds().map(f64::to_bits)
+                    != self.master_period_seconds.map(f64::to_bits)
+                || snapshot.plan.loop_region != geometry.domain().region
+            {
+                return Err(PitchActionReject::MappedTimingUnavailable);
+            }
+            snapshot.playback = SourcePlayback::mapped(geometry, epoch, original)
+                .map_err(|_| PitchActionReject::MappedTimingUnavailable)?;
+            let position = snapshot.playback.position();
+            snapshot.plan.frame_pos = position.frame;
+            snapshot.plan.seek_mode = position.seek_mode;
+            snapshot.plan.loop_period = snapshot.playback.loop_period();
+        }
         if let Some(origin) = work.late_reprepare_snapshot() {
             if !origin.matches_exact(
                 super::super::prepared_native_history::SourceReadCheckpoint {
@@ -159,10 +183,12 @@ impl RtMixer {
             ExplicitSeekMode::Normal,
             self.tempo_ratio_for_sample_id(id),
         );
-        snapshot.playback.configure_domain(
+        if !snapshot.playback.configure_domain(
             self.timing_for_sample_id(id)
                 .loop_domain(sample.frame_count(), region),
-        );
+        ) {
+            return Err(PitchActionReject::PreparedMismatch);
+        }
         snapshot.plan.frame_pos = region.start;
         snapshot.plan.loop_region = region;
         snapshot.plan.loop_period = snapshot.playback.loop_period();
@@ -218,8 +244,7 @@ impl RtMixer {
         let guard = self.ordinary_start_guard(work)?;
         let render = self.ordinary_start_render(guard.id);
         work.freeze_loop(self.ordinary_loop_region(work, guard.id));
-        let (start_s, end_s) = work.loop_region();
-        let snapshot = self.normal_start_snapshot(guard.id, start_s, end_s)?;
+        let snapshot = self.ordinary_start_snapshot(work, guard.id)?;
         let launch_origin = super::super::prepared_native_history::SourceReadCheckpoint {
             playback: snapshot.playback,
             plan: snapshot.plan,
@@ -404,7 +429,8 @@ impl RtMixer {
         {
             return Err(PitchActionReject::PreparedMismatch);
         }
-        let retirement_needed = 1 + if exclusive { 3 * MAX_VOICES } else { 3 };
+        let retirement_needed =
+            1 + if exclusive { 3 * MAX_VOICES } else { 3 } + self.mapped_owner_retirement_slots();
         let feedback_needed = 1 + if exclusive {
             self.voices.iter().filter(|voice| voice.active).count()
         } else {
@@ -529,6 +555,8 @@ impl RtMixer {
                         voice.start_rt(config, retirement);
                     }
                     voice.source_playback = snapshot.playback;
+                    voice.mapped_start =
+                        snapshot.playback.is_mapped().then(|| work.origin().clone());
                     if let Some(continued_controls) = continued_controls {
                         voice.source_control_epoch = continued_controls;
                     }

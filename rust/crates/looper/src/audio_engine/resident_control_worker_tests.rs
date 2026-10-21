@@ -1623,7 +1623,9 @@ fn actual_executor_same_normal_markers_after_accepted_period_seam_keep_native_fi
     let playback = active(&loaded.callback.mixer).source_playback;
     let offset = (0..4096)
         .find(|offset| {
-            let position = playback.position_at(*offset);
+            let position = playback
+                .position_at(*offset)
+                .expect("known scalar resident trajectory coordinate");
             position.frame == 64 && position.fraction > 0.0
         })
         .expect("fractional P/H seam in the real copied trajectory");

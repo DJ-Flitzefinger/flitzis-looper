@@ -90,6 +90,9 @@ pub struct VoiceSlot {
     pub frame_pos: usize,
     pub volume: f32,
     pub(crate) source_playback: SourcePlayback,
+    // Original launch owner pins qualified immutable geometry for the effective voice.
+    // Stop/restart transfers it through the existing off-thread retirement lane.
+    pub(crate) mapped_start: Option<super::pad_start::CapturedPadStart>,
     pub(crate) source_timing: VoiceSourceTiming,
     /// Frozen only when this voice keeps an old source after bank replacement.
     pub(crate) source_loop_region: Option<FrameRange>,
@@ -116,6 +119,7 @@ impl VoiceSlot {
             frame_pos: 0,
             volume: 0.0,
             source_playback: SourcePlayback::new(0, ExplicitSeekMode::Normal, 1.0),
+            mapped_start: None,
             source_timing: VoiceSourceTiming::default(),
             source_loop_region: None,
             frozen_stems: None,
@@ -142,7 +146,7 @@ impl VoiceSlot {
             retirement.retire_sample(old_sample);
         }
         self.retire_frozen_stems(retirement);
-
+        self.retire_mapped_start(retirement);
         self.start_inner(config);
     }
 
@@ -184,6 +188,7 @@ impl VoiceSlot {
         self.stretch.reset();
         self.sample = None;
         self.frozen_stems = None;
+        self.mapped_start = None;
         self.stop_inner();
     }
 
@@ -194,7 +199,7 @@ impl VoiceSlot {
             retirement.retire_sample(sample);
         }
         self.retire_frozen_stems(retirement);
-
+        self.retire_mapped_start(retirement);
         self.stop_inner();
     }
 
@@ -224,6 +229,12 @@ impl VoiceSlot {
         }
     }
 
+    fn retire_mapped_start(&mut self, retirement: &mut impl AudioBufferRetirement) {
+        if let Some(owner) = self.mapped_start.take() {
+            retirement.retire_pad_start_target(owner);
+        }
+    }
+
     pub(crate) fn restart(
         &mut self,
         initial_frame_pos: usize,
@@ -235,6 +246,7 @@ impl VoiceSlot {
         self.source_feed_history.reset();
         self.source_control_epoch.reset();
         self.retire_frozen_stems(retirement);
+        self.retire_mapped_start(retirement);
         self.source_loop_region = None;
         self.generation = self.generation.saturating_add(1);
         self.history_lifetime
@@ -256,7 +268,11 @@ impl VoiceSlot {
         frame_pos: usize,
         mode: ExplicitSeekMode,
         _output_frame: Option<u64>,
-    ) {
+    ) -> bool {
+        let mut playback = self.source_playback;
+        if !playback.seek(frame_pos, mode) {
+            return false;
+        }
         self.source_feed_history.reset();
         self.source_control_epoch.reset();
         self.generation = self.generation.saturating_add(1);
@@ -265,8 +281,9 @@ impl VoiceSlot {
         self.frame_pos = frame_pos;
         self.explicit_seek_mode = mode;
         // Seek is an explicit discontinuity: retain rate, discard only the old source phase.
-        self.source_playback.seek(frame_pos, mode);
+        self.source_playback = playback;
         self.stretch.reset();
+        true
     }
 
     pub(crate) fn clear_explicit_seek(&mut self) {

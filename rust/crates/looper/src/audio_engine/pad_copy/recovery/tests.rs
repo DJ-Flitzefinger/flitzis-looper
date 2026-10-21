@@ -338,8 +338,12 @@ fn capture_rejects_foreign_stale_untracked_loading_and_unavailable_timing_bindin
 fn current_target_guards_and_source_request_incarnation_remain_required_after_capture() {
     for case in 0..10 {
         let (fixture, _mixer) = accepted_fixture();
-        let acceptance = capture_recovered(&fixture.engine, &target_binding(&fixture)).unwrap();
         let ownership = &fixture.engine.input_runtime_ownership;
+        // Stage a fixture-only mutation before reserving the target. A fresh
+        // request after capture must still fail its normal copy-reservation guard.
+        let advance =
+            (case == 6).then(|| ownership.prepare_source_request_advance(TARGET).unwrap());
+        let acceptance = capture_recovered(&fixture.engine, &target_binding(&fixture)).unwrap();
         let placement = acceptance.participant.placement();
         match case {
             0 => {
@@ -373,10 +377,8 @@ fn current_target_guards_and_source_request_incarnation_remain_required_after_ca
                     .fetch_add(1, Ordering::AcqRel);
             }
             6 => {
-                ownership
-                    .prepare_source_request_advance(TARGET)
-                    .unwrap()
-                    .commit();
+                assert!(ownership.prepare_source_request_advance(TARGET).is_err());
+                advance.unwrap().commit();
             }
             7 => {
                 ownership.set_timing_intent_for_cell(placement.cell(), TimingIntent::Legacy);

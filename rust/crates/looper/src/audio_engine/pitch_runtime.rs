@@ -465,6 +465,7 @@ impl PitchRuntime {
         mut work: Box<OrdinaryStartWork>,
         scheduler: &mut FixedCapacityScheduler<CAPACITY>,
         callback: u64,
+        timeline: Option<super::transport::TransportTimeline>,
         retirement: &mut impl AudioBufferRetirement,
     ) {
         let result = (|| {
@@ -480,6 +481,7 @@ impl PitchRuntime {
                 .origin()
                 .target_frame()
                 .ok_or(PitchActionReject::TimingUnavailable)?;
+            work.freeze_mapped_clock(timeline, original)?;
             let required = mixer.requires_ordinary_start_preparation(&work)?;
             let hit = required
                 && original >= callback
@@ -522,6 +524,7 @@ impl PitchRuntime {
         scheduler: &mut FixedCapacityScheduler<CAPACITY>,
         callback: u64,
         original: u64,
+        timeline: Option<super::transport::TransportTimeline>,
         retirement: &mut impl AudioBufferRetirement,
     ) {
         let Some(work) = batch.take_prepared_starts() else {
@@ -558,6 +561,9 @@ impl PitchRuntime {
                 return Err(PitchActionReject::Capacity);
             }
             let mut required = false;
+            for work in group.work.iter_mut().flatten() {
+                work.freeze_mapped_clock(timeline, original)?;
+            }
             for work in &group.work {
                 required |= mixer.requires_ordinary_start_preparation(
                     work.as_ref().ok_or(PitchActionReject::PreparedMismatch)?,
@@ -640,6 +646,7 @@ impl PitchRuntime {
         mixer: &mut RtMixer,
         index: usize,
         frame: u64,
+        timeline: Option<super::transport::TransportTimeline>,
         messages: &mut impl AudioMessageSink,
         retirement: &mut impl AudioBufferRetirement,
     ) -> bool {
@@ -809,14 +816,21 @@ impl PitchRuntime {
             self.slots[index].group = Some(group);
             return false;
         }
-        let result = mixer.execute_ordinary_global_start(
-            &mut group.work,
-            &group.batch,
-            key,
-            frame,
-            messages,
-            retirement,
-        );
+        let epoch_current = group
+            .work
+            .iter()
+            .flatten()
+            .try_for_each(|work| work.validate_mapped_timeline(timeline));
+        let result = epoch_current.and_then(|()| {
+            mixer.execute_ordinary_global_start(
+                &mut group.work,
+                &group.batch,
+                key,
+                frame,
+                messages,
+                retirement,
+            )
+        });
         if matches!(
             result,
             Err(PitchActionReject::PlacementPending | PitchActionReject::WindowPending)
@@ -847,6 +861,7 @@ impl PitchRuntime {
         index: usize,
         sequence: u64,
         frame: u64,
+        timeline: Option<super::transport::TransportTimeline>,
         messages: &mut impl AudioMessageSink,
         retirement: &mut impl AudioBufferRetirement,
     ) -> ScheduledExecution {
@@ -863,7 +878,7 @@ impl PitchRuntime {
             return ScheduledExecution::Complete;
         };
         if slot.group.is_some() {
-            return if self.execute_group(mixer, index, frame, messages, retirement) {
+            return if self.execute_group(mixer, index, frame, timeline, messages, retirement) {
                 ScheduledExecution::Complete
             } else if self.slots[index].planned > frame {
                 ScheduledExecution::Replanned {
@@ -955,7 +970,9 @@ impl PitchRuntime {
                 if work.origin().state() == "rejected" {
                     Err(PitchActionReject::PreparationFailed)
                 } else {
-                    mixer.execute_ordinary_start(work, frame, messages, retirement)
+                    work.validate_mapped_timeline(timeline).and_then(|()| {
+                        mixer.execute_ordinary_start(work, frame, messages, retirement)
+                    })
                 }
             }
         };
@@ -1008,6 +1025,7 @@ pub(super) fn accept_ordinary<const CAPACITY: usize>(
     work: Box<OrdinaryStartWork>,
     scheduler: &mut FixedCapacityScheduler<CAPACITY>,
     callback: u64,
+    timeline: Option<super::transport::TransportTimeline>,
     retirement: &mut impl AudioBufferRetirement,
 ) {
     let mut runtime = mixer
@@ -1015,7 +1033,7 @@ pub(super) fn accept_ordinary<const CAPACITY: usize>(
         .take()
         .expect("one callback owns preparation lane");
     runtime.poll();
-    runtime.accept_ordinary(mixer, work, scheduler, callback, retirement);
+    runtime.accept_ordinary(mixer, work, scheduler, callback, timeline, retirement);
     mixer.pitch_runtime = Some(runtime);
 }
 
@@ -1025,6 +1043,7 @@ pub(super) fn accept_group<const CAPACITY: usize>(
     scheduler: &mut FixedCapacityScheduler<CAPACITY>,
     callback: u64,
     original: u64,
+    timeline: Option<super::transport::TransportTimeline>,
     retirement: &mut impl AudioBufferRetirement,
 ) {
     let mut runtime = mixer
@@ -1032,7 +1051,9 @@ pub(super) fn accept_group<const CAPACITY: usize>(
         .take()
         .expect("one callback owns preparation lane");
     runtime.poll();
-    runtime.accept_group(mixer, batch, scheduler, callback, original, retirement);
+    runtime.accept_group(
+        mixer, batch, scheduler, callback, original, timeline, retirement,
+    );
     mixer.pitch_runtime = Some(runtime);
 }
 
@@ -1041,6 +1062,7 @@ pub(super) fn execute(
     slot: usize,
     sequence: u64,
     frame: u64,
+    timeline: Option<super::transport::TransportTimeline>,
     messages: &mut impl AudioMessageSink,
     retirement: &mut impl AudioBufferRetirement,
 ) -> ScheduledExecution {
@@ -1048,7 +1070,7 @@ pub(super) fn execute(
         .pitch_runtime
         .take()
         .expect("one callback owns preparation lane");
-    let result = runtime.execute(mixer, slot, sequence, frame, messages, retirement);
+    let result = runtime.execute(mixer, slot, sequence, frame, timeline, messages, retirement);
     mixer.pitch_runtime = Some(runtime);
     result
 }

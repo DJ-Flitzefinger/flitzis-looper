@@ -3,6 +3,9 @@ use crate::audio_engine::input_runtime_binding::{
     InputPadBinding, InputRuntimeOwnership, InputRuntimePadBinding, LaunchWriteKind,
 };
 use crate::audio_engine::pitch_actions::{CapturedPitchAction, PitchActionReject, PitchActionSpec};
+use crate::audio_engine::source_map_admission::{
+    SourceMapLaunchSnapshot, SourceMapProjection, SourceMapRow,
+};
 use crate::audio_engine::timing::InputClock;
 use crate::messages::ControlMessage;
 use midir::{Ignore, MidiInput, MidiInputConnection};
@@ -82,6 +85,7 @@ struct RuntimePadState {
     pitch_anchor: Option<pitch::RequestedPitchAnchor>,
     acknowledgements:
         Option<Arc<crate::audio_engine::constant_timing::CurrentTimingAcknowledgements>>,
+    source_map: SourceMapProjection,
 }
 
 impl std::fmt::Debug for RuntimePadState {
@@ -106,6 +110,7 @@ impl PartialEq for RuntimePadState {
             && self.pitch == other.pitch
             && self.latest_request_sequence == other.latest_request_sequence
             && self.pitch_anchor == other.pitch_anchor
+            && self.source_map.same_projection(&other.source_map)
             && match (&self.acknowledgements, &other.acknowledgements) {
                 (Some(left), Some(right)) => Arc::ptr_eq(left, right),
                 (None, None) => true,
@@ -117,6 +122,7 @@ impl PartialEq for RuntimePadState {
 impl RuntimePadState {
     fn same_projection(&self, other: &Self) -> bool {
         self.same_runtime_projection(other)
+            && self.source_map.same_projection(&other.source_map)
             && self.pitch == other.pitch
             && self.latest_request_sequence == other.latest_request_sequence
             && self.pitch_anchor == other.pitch_anchor
@@ -132,6 +138,7 @@ impl RuntimePadState {
             && self.loop_start_s == other.loop_start_s
             && self.loop_end_s == other.loop_end_s
             && binding_matches
+            && self.source_map.same_launch_projection(&other.source_map)
     }
 }
 
@@ -146,6 +153,7 @@ impl Default for RuntimePadState {
             latest_request_sequence: 0,
             pitch_anchor: None,
             acknowledgements: None,
+            source_map: SourceMapProjection::default(),
         }
     }
 }
@@ -169,6 +177,8 @@ mod pitch;
 mod pitch_steps;
 #[cfg(test)]
 mod reserved_runtime_refresh_tests;
+#[cfg(test)]
+mod source_map_projection_tests;
 pub(crate) use pitch::PitchPadProjection;
 use pitch::RuntimeSelectedContent;
 
@@ -447,6 +457,70 @@ impl InputRuntime {
         )
     }
 
+    /// The existing whole-runtime publication also owns qualified selected-map data.
+    #[allow(clippy::too_many_arguments)]
+    pub(crate) fn set_runtime_state_with_source_maps(
+        &self,
+        multi_loop: bool,
+        loaded: Vec<bool>,
+        loop_starts: Vec<f64>,
+        loop_ends: Vec<Option<f64>>,
+        bindings: Vec<Option<&InputRuntimePadBinding>>,
+        pitch: Option<Vec<PitchPadProjection>>,
+        source_map_rows: Option<Vec<SourceMapRow>>,
+    ) -> Result<(), String> {
+        self.set_runtime_state_with_source_maps_before_commit(
+            multi_loop,
+            loaded,
+            loop_starts,
+            loop_ends,
+            bindings,
+            pitch,
+            source_map_rows,
+            || {},
+        )
+    }
+
+    /// Snapshot the map and current cancellation witness at this action, never at publication.
+    pub(crate) fn source_map_snapshot_for_binding(
+        &self,
+        binding: &InputRuntimePadBinding,
+    ) -> Result<SourceMapLaunchSnapshot, String> {
+        self.source_map_snapshot_for_input_binding(binding.id, &binding.ownership, binding.binding)
+    }
+
+    pub(crate) fn source_map_snapshot_for_input_binding(
+        &self,
+        id: usize,
+        ownership: &Arc<InputRuntimeOwnership>,
+        binding: InputPadBinding,
+    ) -> Result<SourceMapLaunchSnapshot, String> {
+        let state = self
+            .runtime_state
+            .lock()
+            .map_err(|_| "input runtime lock poisoned")?;
+        let row = state.pads.get(id).ok_or("input runtime pad out of range")?;
+        let matches = row.binding.is_some_and(|row_binding| {
+            row_binding
+                .placement
+                .and_then(|placement| placement.content_key())
+                == binding
+                    .placement
+                    .and_then(|placement| placement.content_key())
+                && row_binding.source_address == binding.source_address
+                && row_binding.sample_count == binding.sample_count
+                && row_binding.channels == binding.channels
+                && row_binding.sample_rate_hz == binding.sample_rate_hz
+        });
+        if !matches {
+            return Ok(row
+                .source_map
+                .without_selection()
+                .snapshot(ownership, binding));
+        }
+        Ok(row.source_map.snapshot(ownership, binding))
+    }
+
     // The complete source/loop/pitch projection must publish in one existing claim.
     #[allow(clippy::too_many_arguments)]
     fn set_runtime_state_with_pitch_before_commit(
@@ -459,10 +533,37 @@ impl InputRuntime {
         pitch: Option<Vec<PitchPadProjection>>,
         before_commit: impl FnOnce(),
     ) -> Result<(), String> {
+        self.set_runtime_state_with_source_maps_before_commit(
+            multi_loop,
+            loaded,
+            loop_starts,
+            loop_ends,
+            bindings,
+            pitch,
+            None,
+            before_commit,
+        )
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn set_runtime_state_with_source_maps_before_commit(
+        &self,
+        multi_loop: bool,
+        loaded: Vec<bool>,
+        loop_starts: Vec<f64>,
+        loop_ends: Vec<Option<f64>>,
+        bindings: Vec<Option<&InputRuntimePadBinding>>,
+        pitch: Option<Vec<PitchPadProjection>>,
+        source_map_rows: Option<Vec<SourceMapRow>>,
+        before_commit: impl FnOnce(),
+    ) -> Result<(), String> {
         if loaded.len() != NUM_SAMPLES
             || loop_starts.len() != NUM_SAMPLES
             || loop_ends.len() != NUM_SAMPLES
             || bindings.len() != NUM_SAMPLES
+            || source_map_rows
+                .as_ref()
+                .is_some_and(|rows| rows.len() != NUM_SAMPLES)
             || pitch
                 .as_ref()
                 .is_some_and(|pitch| pitch.len() != NUM_SAMPLES)
@@ -529,6 +630,20 @@ impl InputRuntime {
                 acknowledgements: bindings[idx]
                     .filter(|_| loaded[idx])
                     .map(|binding| binding.acknowledgements.clone()),
+                source_map: match &source_map_rows {
+                    Some(rows) => SourceMapProjection::qualify(&rows[idx], bindings[idx])?,
+                    None => {
+                        let previous = &guard.pads[idx].source_map;
+                        if previous.publication_current(&self.ownership, binding) {
+                            previous.clone()
+                        } else {
+                            // An omitted extension preserves only a still-qualified
+                            // original. Unload/replacement/cancel cannot carry its
+                            // obsolete permit into the complete new runtime row.
+                            previous.without_selection()
+                        }
+                    }
+                },
             });
         }
 
@@ -558,6 +673,7 @@ impl InputRuntime {
         }
         pitch_shadow.reconcile(&mut pads, &self.ownership);
         let mut revisions = Vec::with_capacity(NUM_SAMPLES);
+        let mut map_cancellations = Vec::with_capacity(NUM_SAMPLES);
         for (idx, pad) in pads.iter_mut().enumerate() {
             if reservations[idx] == (0, 0)
                 && let Some(binding) = &mut pad.binding
@@ -575,12 +691,25 @@ impl InputRuntime {
             let prepared = self
                 .ownership
                 .prepare_runtime_revision_write(placement, changed)?;
+            let cancellation = if reservations[idx] == (0, 0)
+                && !guard.pads[idx]
+                    .source_map
+                    .same_launch_projection(&pad.source_map)
+            {
+                Some(
+                    self.ownership
+                        .prepare_launch_write(placement, LaunchWriteKind::Cancel)?,
+                )
+            } else {
+                None
+            };
             if reservations[idx] == (0, 0)
                 && let Some(binding) = &mut pad.binding
             {
                 binding.runtime_revision = prepared.revision();
             }
             revisions.push(prepared);
+            map_cancellations.push(cancellation);
         }
         let anchor = revisions[0].placement();
         let write = self
@@ -596,6 +725,10 @@ impl InputRuntime {
                 return Err("MIDI binding changed during runtime publication".into());
             }
         }
+        let map_checks: Vec<_> = pads
+            .iter()
+            .map(|pad| (pad.source_map.clone(), pad.binding))
+            .collect();
         let mut replacement = Some(RuntimeState {
             multi_loop,
             pads,
@@ -614,6 +747,17 @@ impl InputRuntime {
                     revisions
                         .iter()
                         .all(|prepared| self.ownership.runtime_revision_write_current(*prepared))
+                        && map_cancellations
+                            .iter()
+                            .flatten()
+                            .all(|prepared| self.ownership.launch_write_current(*prepared))
+                        && map_checks
+                            .iter()
+                            .enumerate()
+                            .all(|(idx, (projection, binding))| {
+                                reservations[idx] != (0, 0)
+                                    || projection.publication_current(&self.ownership, *binding)
+                            })
                         && bindings.iter().enumerate().all(|(idx, binding)| {
                             reservations[idx]
                                 == (
@@ -631,6 +775,9 @@ impl InputRuntime {
                 |_| {
                     for prepared in &revisions {
                         self.ownership.apply_runtime_revision_write(*prepared);
+                    }
+                    for prepared in map_cancellations.iter().flatten() {
+                        self.ownership.apply_launch_write(*prepared);
                     }
                     previous = Some(std::mem::replace(
                         &mut *guard,
@@ -698,6 +845,7 @@ impl InputRuntime {
             received_at_ns,
             format,
             None,
+            pad.source_map.snapshot(&self.ownership, binding),
         ) else {
             return false;
         };
@@ -1730,6 +1878,7 @@ mod tests {
                 pitch: PitchPadProjection::default(),
                 latest_request_sequence: 0,
                 acknowledgements: None,
+                source_map: SourceMapProjection::default(),
                 pitch_anchor: None,
             };
         }
@@ -1805,6 +1954,7 @@ mod tests {
             pitch: PitchPadProjection::default(),
             latest_request_sequence: 0,
             acknowledgements: None,
+            source_map: SourceMapProjection::default(),
             pitch_anchor: None,
         };
         let result = dispatch_trigger_pad(1, 42, &state, &ownership, &producer, None);

@@ -219,7 +219,9 @@ impl SourceFeedSpan {
         let mut result = self;
         result.active_start += offset as u64;
         result.frames = frames;
-        advance_source(&mut result.playback, &mut result.plan, offset);
+        if !advance_source(&mut result.playback, &mut result.plan, offset) {
+            return None;
+        }
         result.context = result.context.for_plan(result.plan);
         Some(result)
     }
@@ -230,18 +232,22 @@ impl SourceFeedSpan {
         }
         let mut playback = self.playback;
         let mut plan = self.plan;
-        advance_source(&mut playback, &mut plan, self.frames);
-        playback.matches_exact(&next.playback) && plan.matches_exact(next.plan)
+        advance_source(&mut playback, &mut plan, self.frames)
+            && playback.matches_exact(&next.playback)
+            && plan.matches_exact(next.plan)
     }
 }
 
-fn advance_source(playback: &mut SourcePlayback, plan: &mut SourceReadPlan, frames: usize) {
+fn advance_source(playback: &mut SourcePlayback, plan: &mut SourceReadPlan, frames: usize) -> bool {
     let ratio = playback.tempo_ratio();
-    playback.advance(frames);
+    if !playback.advance(frames) {
+        return false;
+    }
     let position = playback.position();
     plan.frame_pos = position.frame;
     plan.seek_mode = position.seek_mode;
     plan.transition.advance_output_frames(frames, ratio);
+    true
 }
 
 /// Allocate once with the voice, outside the callback. Every later journal operation is bounded
@@ -310,6 +316,10 @@ impl SourceFeedHistory {
         frames: usize,
     ) {
         if frames == 0 {
+            return;
+        }
+        if !playback.can_read_frames(frames) {
+            self.record_gap(frames);
             return;
         }
         let active_start = self.advance_clock(frames);
@@ -765,13 +775,13 @@ mod tests {
 
     fn playback(start: usize, mode: ExplicitSeekMode, ratio: f64) -> SourcePlayback {
         let mut playback = SourcePlayback::new(start, mode, ratio);
-        playback.configure(
+        assert!(playback.configure(
             2003,
             FrameRange {
                 start: 19,
                 end: 1519,
             },
-        );
+        ));
         playback
     }
 
@@ -806,16 +816,18 @@ mod tests {
         ] {
             let mut history = SourceFeedHistory::new();
             let mut playback = playback(start, mode, 0.73);
-            playback.configure_domain(
-                SourceLoopDomain::musical(
-                    2003,
-                    FrameRange {
-                        start: 19,
-                        end: 1519,
-                    },
-                    1500.25,
+            assert!(
+                playback.configure_domain(
+                    SourceLoopDomain::musical(
+                        2003,
+                        FrameRange {
+                            start: 19,
+                            end: 1519,
+                        },
+                        1500.25,
+                    )
+                    .unwrap(),
                 )
-                .unwrap(),
             );
             let mut transition = StemTransition::start(StemRenderSelection::full_mix(), 80_000);
             let mut observed = Vec::new();
@@ -825,19 +837,21 @@ mod tests {
             let partitions = [31, 113, 7, 311, 53];
             while active < 3500 {
                 match active {
-                    137 => playback.set_target(1.19),
-                    911 => playback.configure_domain(
-                        SourceLoopDomain::musical(
-                            2003,
-                            FrameRange {
-                                start: 19,
-                                end: 1519,
-                            },
-                            1499.75,
+                    137 => assert!(playback.set_target(1.19)),
+                    911 => assert!(
+                        playback.configure_domain(
+                            SourceLoopDomain::musical(
+                                2003,
+                                FrameRange {
+                                    start: 19,
+                                    end: 1519,
+                                },
+                                1499.75,
+                            )
+                            .unwrap(),
                         )
-                        .unwrap(),
                     ),
-                    2027 => playback.set_target(0.61),
+                    2027 => assert!(playback.set_target(0.61)),
                     _ => {}
                 }
                 let boundary = *boundaries
@@ -856,7 +870,7 @@ mod tests {
                 };
                 observed.push(feed);
                 history.record_success(playback, plan, context(), frames);
-                playback.advance(frames);
+                assert!(playback.advance(frames));
                 transition.advance_output_frames(frames, ratio);
                 active += frames;
                 partition += 1;
@@ -908,7 +922,7 @@ mod tests {
         // A seek/reconfigured epoch at the same visible source position is not the old clock.
         let position = playback.position();
         let mut rebased = SourcePlayback::new(position.frame, position.seek_mode, 1.0);
-        rebased.configure_domain(plan.domain());
+        assert!(rebased.configure_domain(plan.domain()));
         assert_eq!(rebased.position(), playback.position());
         assert!(!rebased.matches_exact(&playback));
         history.record_success(rebased, plan, context(), 11);
@@ -1041,7 +1055,7 @@ mod tests {
         let mut partition = 0;
         while active < 629 {
             if let Some((_, target)) = controls.iter().find(|(at, _)| *at == active) {
-                playback.set_target(*target);
+                assert!(playback.set_target(*target));
             }
             let boundary = controls
                 .iter()
@@ -1168,7 +1182,7 @@ mod tests {
         assert_eq!(retained.spans().len(), 1);
         let first = retained.spans().next().unwrap();
         let mut expected = initial;
-        expected.advance(37_856);
+        assert!(expected.advance(37_856));
         assert!(first.playback.matches_exact(&expected));
         assert_eq!(first.frames, SOURCE_FEED_HISTORY_MAX_FRAMES);
         assert!(
@@ -1187,7 +1201,7 @@ mod tests {
         let retained = capture(&oversized);
         assert_eq!(retained.retained_range(), Some(123..262_267));
         let mut expected = initial;
-        expected.advance(123);
+        assert!(expected.advance(123));
         assert!(
             retained
                 .spans()
@@ -1424,7 +1438,7 @@ mod tests {
             let mut transition = StemTransition::start(StemRenderSelection::full_mix(), 80_000);
             for span_index in 0..SOURCE_FEED_HISTORY_MAX_SPANS {
                 let target = 0.53 + ((span_index * 13 + iteration) % 83) as f64 * 0.017;
-                playback.set_target(target);
+                assert!(playback.set_target(target));
                 let (frames, ratio) = playback.chunk(1 + (span_index + iteration) % 29);
                 let read_plan = plan(playback, transition);
                 let mut context = context();
@@ -1433,7 +1447,7 @@ mod tests {
                     1 + iteration * SOURCE_FEED_HISTORY_MAX_SPANS + span_index * 7 + owner
                 });
                 history.record_success(playback, read_plan, context, frames);
-                playback.advance(frames);
+                assert!(playback.advance(frames));
                 transition.advance_output_frames(frames, ratio);
             }
             assert_eq!(history.len, SOURCE_FEED_HISTORY_MAX_SPANS);

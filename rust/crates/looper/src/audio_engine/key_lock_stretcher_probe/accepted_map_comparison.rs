@@ -109,7 +109,9 @@ fn mapped_live(
                     )
                     .unwrap();
                     for offset in 0..frames {
-                        let actual = playback.position_at(offset);
+                        let actual = playback
+                            .position_at(offset)
+                            .expect("known scalar diagnostic coordinate");
                         let expected = fixture.coordinates[(mapped + offset) % OUTPUT];
                         assert!((actual.frame as f64 + actual.fraction - expected).abs() <= 1.0e-8);
                     }
@@ -124,7 +126,8 @@ fn mapped_live(
                         selection: StemRenderSelection::full_mix(),
                         transition: StemTransition::default(),
                     };
-                    plan.fill_fractional_buffers(sample, None, &playback, &mut feed, frames);
+                    plan.fill_fractional_buffers(sample, None, &playback, &mut feed, frames)
+                        .expect("complete scalar diagnostic source read");
                     let scale = pitch
                         .native_pitch_scale(fixture.rates[segment], lock)
                         .unwrap();

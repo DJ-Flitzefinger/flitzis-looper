@@ -297,7 +297,7 @@ mod tests {
             end: 3100,
         };
         let mut playback = SourcePlayback::new(1000, ExplicitSeekMode::Normal, 0.73);
-        playback.configure_domain(SourceLoopDomain::physical(4096, region));
+        assert!(playback.configure_domain(SourceLoopDomain::physical(4096, region)));
         let checkpoint = SourceReadCheckpoint {
             playback,
             plan: SourceReadPlan {
@@ -337,12 +337,16 @@ mod tests {
     }
 
     fn reset_phase(mut checkpoint: SourceReadCheckpoint) -> SourceReadCheckpoint {
-        checkpoint
-            .playback
-            .seek(checkpoint.plan.loop_region.start, ExplicitSeekMode::Normal);
-        checkpoint
-            .playback
-            .configure_domain(checkpoint.plan.domain());
+        assert!(
+            checkpoint
+                .playback
+                .seek(checkpoint.plan.loop_region.start, ExplicitSeekMode::Normal)
+        );
+        assert!(
+            checkpoint
+                .playback
+                .configure_domain(checkpoint.plan.domain())
+        );
         checkpoint.plan.frame_pos = checkpoint.plan.loop_region.start;
         checkpoint.plan.seek_mode = ExplicitSeekMode::Normal;
         checkpoint
@@ -426,14 +430,16 @@ mod tests {
                 .is_none()
         );
         let mut intro = next;
-        intro.checkpoint.playback.seek(
+        assert!(intro.checkpoint.playback.seek(
             intro.checkpoint.plan.loop_region.start - 1,
             ExplicitSeekMode::BeforeLoop,
+        ));
+        assert!(
+            intro
+                .checkpoint
+                .playback
+                .configure_domain(intro.checkpoint.plan.domain())
         );
-        intro
-            .checkpoint
-            .playback
-            .configure_domain(intro.checkpoint.plan.domain());
         intro.checkpoint.plan.frame_pos = intro.checkpoint.plan.loop_region.start - 1;
         intro.checkpoint.plan.seek_mode = ExplicitSeekMode::BeforeLoop;
         assert!(
@@ -442,7 +448,7 @@ mod tests {
                 .is_none()
         );
         let mut gliding = next;
-        gliding.checkpoint.playback.set_target(1.43);
+        assert!(gliding.checkpoint.playback.set_target(1.43));
         assert!(
             epoch
                 .continue_independent_birth(612, previous, gliding)
@@ -454,10 +460,12 @@ mod tests {
             ExplicitSeekMode::Normal,
             1.43,
         );
-        other_rate
-            .checkpoint
-            .playback
-            .configure_domain(other_rate.checkpoint.plan.domain());
+        assert!(
+            other_rate
+                .checkpoint
+                .playback
+                .configure_domain(other_rate.checkpoint.plan.domain())
+        );
         assert!(
             epoch
                 .continue_independent_birth(612, previous, other_rate)
@@ -671,7 +679,7 @@ mod tests {
         epoch.record_paused(Some(674), 31, checkpoint, context, 9);
         assert!(!epoch.covers_paused(642, 705, checkpoint, context, 9));
         let mut gliding = checkpoint;
-        gliding.playback.set_target(1.37);
+        assert!(gliding.playback.set_target(1.37));
         epoch.record_paused(Some(705), 31, gliding, context, 9);
         assert!(!epoch.covers_paused(704, 736, gliding, context, 9));
         epoch.record_paused(Some(736), 31, checkpoint, context, 9);

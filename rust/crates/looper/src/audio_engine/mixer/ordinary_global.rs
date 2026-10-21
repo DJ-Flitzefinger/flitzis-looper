@@ -73,7 +73,10 @@ impl RtMixer {
         }
         // Reserve the whole transaction before cloning source pins or claiming any owner.
         if retirement.available_retirement_slots()
-            < 3 * MAX_VOICES + 1 + usize::from(batch.capture_publication.is_some())
+            < 3 * MAX_VOICES
+                + self.mapped_owner_retirement_slots()
+                + 1
+                + usize::from(batch.capture_publication.is_some())
             || audio_messages.available_audio_message_slots() < count
         {
             return Err(PitchActionReject::Capacity);
@@ -316,6 +319,8 @@ impl RtMixer {
                         voice.start_rt(config, retirement);
                     }
                     voice.source_playback = snapshot.playback;
+                    voice.mapped_start =
+                        snapshot.playback.is_mapped().then(|| work.origin().clone());
                     if work.native_required() {
                         let feed = ProductiveSourceFeed {
                             sample: &snapshot.sample,

@@ -1131,10 +1131,13 @@ mod tests {
                 start: 19,
                 end: 1519,
             };
-            playback.configure(2003, region);
+            assert!(playback.configure(2003, region));
             let mut transition = StemTransition::start(StemRenderSelection::full_mix(), 80_000);
             for span_index in 0..SOURCE_FEED_HISTORY_MAX_SPANS {
-                playback.set_target(0.53 + ((span_index * 13 + voice_index) % 83) as f64 * 0.017);
+                assert!(
+                    playback
+                        .set_target(0.53 + ((span_index * 13 + voice_index) % 83) as f64 * 0.017)
+                );
                 let (frames, ratio) = playback.chunk(1 + (span_index + voice_index) % 29);
                 let position = playback.position();
                 let plan = SourceReadPlan {
@@ -1161,7 +1164,7 @@ mod tests {
                     SourceFeedContext::new(binding, StemReadSets::default()),
                     frames,
                 );
-                playback.advance(frames);
+                assert!(playback.advance(frames));
                 transition.advance_output_frames(frames, ratio);
             }
             playback.chunk(1024);
@@ -1368,7 +1371,7 @@ mod tests {
     fn paused_history_capture_keeps_original_global_e_without_projecting_active_frames() {
         let (mut callback, mut worker) = source_history_lanes(1);
         let mut request = fixture(1, 48_000, 1.37, ExplicitSeekMode::Normal, None);
-        request.playback.set_target(0.73);
+        assert!(request.playback.set_target(0.73));
         request
             .playback
             .chunk(super::super::stretch_processor::DEFAULT_BLOCK_SAMPLES);

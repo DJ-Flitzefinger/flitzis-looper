@@ -126,7 +126,9 @@ impl NativeSourcePreparationError {
 
     fn from_coverage(error: RubberBandError) -> Self {
         match error {
-            RubberBandError::InvalidBlockSize => Self::Unavailable(error),
+            RubberBandError::InvalidBlockSize | RubberBandError::UnavailableSourceHistory => {
+                Self::Unavailable(error)
+            }
             _ => Self::Backend(error),
         }
     }
@@ -161,6 +163,11 @@ impl SourceReadCheckpoint {
     /// Work is bounded by the supported rate range, including a terminal constant interval.
     /// Failure does not partially update this checkpoint.
     pub(crate) fn project_output_frames(&mut self, output_frames: u64) -> bool {
+        // A copied span is not an owning map. Arbitrary mapped F-to-E requires
+        // the caller's retained geometry and its direct canonical projection.
+        if self.playback.is_mapped() && output_frames != 0 {
+            return false;
+        }
         let mut projected = *self;
         let mut remaining = output_frames;
         for _ in 0..SourcePlayback::MAX_PROJECTION_SEGMENTS {
@@ -172,7 +179,9 @@ impl SourceReadCheckpoint {
             if frames == 0 {
                 return false;
             }
-            projected.playback.advance(frames);
+            if !projected.playback.advance(frames) {
+                return false;
+            }
             projected
                 .plan
                 .transition
@@ -864,7 +873,11 @@ impl NativeAdapterState {
                 RubberBandError::UnavailableSourceHistory,
             ));
         }
-        request.playback.advance(PREPARED_HISTORY_FRAMES);
+        if !request.playback.advance(PREPARED_HISTORY_FRAMES) {
+            return Err(NativeSourcePreparationError::Unavailable(
+                RubberBandError::UnavailableSourceHistory,
+            ));
+        }
         request.playback.chunk(DEFAULT_BLOCK_SAMPLES);
         let position = request.playback.position();
         request.plan.frame_pos = position.frame;
@@ -939,6 +952,16 @@ impl NativeAdapterState {
         source_rebase: Option<(usize, SourceReadCheckpoint)>,
         mut dsp: Option<(usize, &mut super::late_start_dsp::LateStartDspWork)>,
     ) -> Result<(), NativeSourcePreparationError> {
+        if request.playback.is_mapped()
+            && source_rebase.is_none()
+            && !request
+                .playback
+                .can_read_frames(history_frames.saturating_sub(silent_prefix))
+        {
+            return Err(NativeSourcePreparationError::Unavailable(
+                RubberBandError::UnavailableSourceHistory,
+            ));
+        }
         if !request
             .actual_feed_checkpoint()
             .matches_exact(SourceReadCheckpoint {
@@ -1036,6 +1059,17 @@ impl NativeAdapterState {
             let (frames, ratio) = request
                 .playback
                 .chunk(remaining.min(DEFAULT_BLOCK_SAMPLES).min(until_rebase));
+            if frames == 0 {
+                return Err(NativeSourcePreparationError::Unavailable(
+                    RubberBandError::UnavailableSourceHistory,
+                ));
+            }
+            let mut next_playback = request.playback;
+            if silent_prefix == 0 && !next_playback.advance(frames) {
+                return Err(NativeSourcePreparationError::Unavailable(
+                    RubberBandError::UnavailableSourceHistory,
+                ));
+            }
             let pitch = request
                 .pitch_intent
                 .native_pitch_scale(ratio, request.key_lock)
@@ -1076,7 +1110,7 @@ impl NativeAdapterState {
                 dsp.consume(&request, &output, frames)
                     .map_err(NativeSourcePreparationError::from_history)?;
             }
-            request.playback.advance(frames);
+            request.playback = next_playback;
             request.plan.transition.advance_output_frames(frames, ratio);
             let position = request.playback.position();
             request.plan.frame_pos = position.frame;
@@ -1105,6 +1139,11 @@ impl NativeAdapterState {
         frames: usize,
         pitch: f64,
     ) -> Result<(), NativeSourcePreparationError> {
+        if !request.playback.can_read_frames(frames) {
+            return Err(NativeSourcePreparationError::Unavailable(
+                RubberBandError::UnavailableSourceHistory,
+            ));
+        }
         if request.coverage.is_some() {
             if !normal_loop_feed_available(
                 &request.sample,
@@ -1134,13 +1173,16 @@ impl NativeAdapterState {
                 )
                 .map_err(NativeSourcePreparationError::from_coverage)?;
         } else if complete_view_available(&request.sample) {
-            request.plan.fill_fractional_buffers(
-                &request.sample,
-                request.stems.as_ref(),
-                &request.playback,
-                feed,
-                frames,
-            );
+            request
+                .plan
+                .fill_fractional_buffers(
+                    &request.sample,
+                    request.stems.as_ref(),
+                    &request.playback,
+                    feed,
+                    frames,
+                )
+                .map_err(NativeSourcePreparationError::from_coverage)?;
         } else {
             return Err(NativeSourcePreparationError::Unavailable(
                 RubberBandError::InvalidBlockSize,
@@ -1229,6 +1271,55 @@ pub(super) mod tests {
         end: 23_999,
     };
 
+    #[test]
+    fn copied_mapped_checkpoint_requires_geometry_for_positive_projection() {
+        use crate::audio_engine::mapped_source_clock::{MappedClockEpoch, MappedLoopGeometry};
+        use crate::audio_engine::source_beatmap::render_comparison_tests::{
+            CanonicalFixture, RATE, SOURCE, SPAN, Signal,
+        };
+        use crate::audio_engine::transport::TransportTimeline;
+
+        let fixture = CanonicalFixture::new(Signal::StereoTone);
+        let geometry = MappedLoopGeometry::new(
+            fixture.map,
+            SOURCE,
+            RATE,
+            FrameRange {
+                start: 0,
+                // This ownership test uses two supported variable segments;
+                // the full comparison fixture rounds its 2.0 boundary above max.
+                end: SPAN + SPAN / 2,
+            },
+            4.0,
+            false,
+        )
+        .unwrap();
+        let mut timeline = TransportTimeline::new(RATE);
+        assert!(timeline.set_master_period(SPAN as f64 / 2.0 / f64::from(RATE)));
+        let epoch = MappedClockEpoch::new(71, timeline, 0.0).unwrap();
+        let playback = SourcePlayback::mapped(&geometry, epoch, 0).unwrap();
+        let domain = geometry.domain();
+        let mut checkpoint = SourceReadCheckpoint {
+            playback,
+            plan: SourceReadPlan {
+                channels: 2,
+                sample_frames: SOURCE,
+                frame_pos: playback.position().frame,
+                loop_region: domain.region,
+                loop_period: domain.musical_period,
+                seek_mode: ExplicitSeekMode::Normal,
+                selection: StemRenderSelection::full_mix(),
+                transition: StemTransition::default(),
+            },
+        };
+        let original = checkpoint;
+        assert!(geometry.position_at(epoch, 1).is_ok());
+        assert!(!checkpoint.project_output_frames(1));
+        assert!(checkpoint.matches_exact(original));
+        assert!(checkpoint.project_output_frames(0));
+        assert!(checkpoint.matches_exact(original));
+    }
+
     pub(crate) fn fixture(
         channels: usize,
         rate: u32,
@@ -1276,8 +1367,8 @@ pub(super) mod tests {
             ExplicitSeekMode::AfterLoop => 24_000,
         };
         let mut playback = SourcePlayback::new(frame, mode, ratio);
-        playback.configure(SOURCE_FRAMES, REGION);
-        playback.advance(1);
+        assert!(playback.configure(SOURCE_FRAMES, REGION));
+        assert!(playback.advance(1));
         let position = playback.position();
         let ownership = Arc::new(InputRuntimeOwnership::tracked());
         ownership.publish_test_source(0, &sample, rate, 13);
@@ -1466,7 +1557,8 @@ pub(super) mod tests {
                                     &playback,
                                     &mut feed,
                                     frames,
-                                );
+                                )
+                                .unwrap();
                                 state
                                     .render(
                                         &feed,
@@ -1483,7 +1575,7 @@ pub(super) mod tests {
                                         "rate={rate} ratio={ratio} mode={mode:?} channels={channels} stems={stem_mask:?} pattern={pattern:?}"
                                     );
                                 }
-                                playback.advance(frames);
+                                assert!(playback.advance(frames));
                                 let position = playback.position();
                                 plan.frame_pos = position.frame;
                                 plan.seek_mode = position.seek_mode;
@@ -1557,7 +1649,7 @@ pub(super) mod tests {
                 ] {
                     for stem_mask in [None, Some(0b1010), Some(0b1111)] {
                         let mut request = fixture(channels, rate, 0.73, mode, stem_mask);
-                        request.playback.set_target(1.37);
+                        assert!(request.playback.set_target(1.37));
                         request.playback.chunk(DEFAULT_BLOCK_SAMPLES);
                         let mut raw = RubberBandLiveShifter::new(rate, channels).unwrap();
                         let block = raw.block_size();
@@ -1691,7 +1783,8 @@ pub(super) mod tests {
                                 &playback,
                                 &mut feed,
                                 frames,
-                            );
+                            )
+                            .unwrap();
                             state
                                 .render(
                                     &feed,
@@ -1708,7 +1801,7 @@ pub(super) mod tests {
                                     "smoothed raw-native mismatch rate={rate} channels={channels} mode={mode:?} stems={stem_mask:?} n={elapsed}"
                                 );
                             }
-                            playback.advance(frames);
+                            assert!(playback.advance(frames));
                             let position = playback.position();
                             plan.frame_pos = position.frame;
                             plan.seek_mode = position.seek_mode;
@@ -1741,9 +1834,9 @@ pub(super) mod tests {
             ExplicitSeekMode::AfterLoop => SOURCE_FRAMES - 5,
         };
         let mut playback = SourcePlayback::new(origin, mode, ratio);
-        playback.configure_domain(
+        assert!(playback.configure_domain(
             SourceLoopDomain::musical(SOURCE_FRAMES, MUSICAL_REGION, period).unwrap(),
-        );
+        ));
         request.playback = playback;
         request.plan.frame_pos = origin;
         request.plan.seek_mode = mode;
@@ -1887,7 +1980,8 @@ pub(super) mod tests {
                                         &playback,
                                         &mut feed,
                                         frames,
-                                    );
+                                    )
+                                    .unwrap();
                                     state
                                         .render(
                                             &feed,
@@ -1904,7 +1998,7 @@ pub(super) mod tests {
                                             "fractional native FIFO rate={rate} ratio={ratio} P={period} mode={mode:?} mask={mask:?} n={elapsed}"
                                         );
                                     }
-                                    playback.advance(frames);
+                                    assert!(playback.advance(frames));
                                     let position = playback.position();
                                     plan.frame_pos = position.frame;
                                     plan.seek_mode = position.seek_mode;
@@ -1929,9 +2023,9 @@ pub(super) mod tests {
     fn same_phase_rate_and_integer_bounds_do_not_authorize_different_musical_worker_domain() {
         let request = musical_fixture(48_000, 0.73, 127.25, ExplicitSeekMode::Normal, None);
         let mut changed_clock = request.playback;
-        changed_clock.configure_domain(
+        assert!(changed_clock.configure_domain(
             SourceLoopDomain::musical(SOURCE_FRAMES, MUSICAL_REGION, 126.75).unwrap(),
-        );
+        ));
         assert_eq!(request.playback.position(), changed_clock.position());
         assert_eq!(request.playback.tempo_ratio(), changed_clock.tempo_ratio());
         assert!(!request.playback.matches_exact(&changed_clock));

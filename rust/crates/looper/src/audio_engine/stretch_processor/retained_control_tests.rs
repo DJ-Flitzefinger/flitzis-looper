@@ -92,10 +92,17 @@ fn assert_retained_coordinates(
     let voice = fixture.voice(0);
     assert_eq!(
         voice.source_playback.position(),
-        logical.position_at(elapsed)
+        logical
+            .position_at(elapsed)
+            .expect("known scalar logical retained coordinate")
     );
     let productive = voice.stretch.productive_history().unwrap();
-    assert_eq!(productive.next_position, actual.position_at(elapsed));
+    assert_eq!(
+        productive.next_position,
+        actual
+            .position_at(elapsed)
+            .expect("known scalar productive retained coordinate")
+    );
     assert_ne!(productive.next_position, voice.source_playback.position());
     let sample = voice.sample.as_ref().unwrap();
     assert_eq!(productive.binding.source_address, sample.source_address());
@@ -108,7 +115,9 @@ fn assert_retained_coordinates(
     let span = journal.spans().last().unwrap();
     assert_eq!(span.context.binding.source_address, sample.source_address());
     assert_eq!(
-        span.playback.position_at(span.frames),
+        span.playback
+            .position_at(span.frames)
+            .expect("known scalar retained read endpoint"),
         productive.next_position
     );
 }
@@ -460,7 +469,9 @@ fn public_rate_commit_preserves_retained_native_fifo_history_and_both_moving_sou
         let span = journal.spans().last().unwrap();
         assert_eq!(span.context.binding, productive.binding);
         assert_eq!(
-            span.playback.position_at(span.frames),
+            span.playback
+                .position_at(span.frames)
+                .expect("known scalar retained control read endpoint"),
             productive.next_position
         );
     }

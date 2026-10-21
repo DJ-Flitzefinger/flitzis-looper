@@ -5,7 +5,9 @@
 use super::cold_jobs::PCM_LIMIT_BYTES;
 use super::cold_store::CommittedColdLease;
 use super::content_placement::{ContentKey, PlacementObservation, SlotSnapshot};
-use super::input_runtime_binding::{InputPadBinding, InputRuntimeOwnership, SourcePublication};
+use super::input_runtime_binding::{
+    InputPadBinding, InputRuntimeOwnership, InputRuntimePadBinding, SourcePublication,
+};
 use super::progress::LoadProgressStage;
 use super::{AudioEngine, PadTaskGuard, admit_sample_analysis, analyze_sample};
 use crate::messages::SampleBuffer;
@@ -128,6 +130,36 @@ impl NativeAnalysisOwner {
 
     pub(super) fn belongs_to(&self, ownership: &Arc<InputRuntimeOwnership>) -> bool {
         Arc::ptr_eq(&self.source.ownership, ownership)
+    }
+
+    /// Genuine immutable source geometry may outlive a physical resident window.
+    /// Matching metadata alone never substitutes for this original Native owner.
+    pub(super) fn source_map_binding_current(
+        &self,
+        ownership: &Arc<InputRuntimeOwnership>,
+        binding: InputPadBinding,
+    ) -> bool {
+        let original = self.source.binding;
+        self.belongs_to(ownership)
+            && self.current()
+            && self.source.key().is_some()
+            && self.source.key()
+                == binding
+                    .placement
+                    .and_then(|placement| placement.content_key())
+            && binding.source_address == original.source_address
+            && binding.sample_count == original.sample_count
+            && binding.channels == original.channels
+            && binding.sample_rate_hz == self.source.rate
+            && binding.placement.is_some_and(|placement| {
+                ownership.binding_source_generation(placement.slot(), binding)
+                    == Some(self.source.generation)
+            })
+    }
+
+    pub(super) fn source_map_admission_current(&self, binding: &InputRuntimePadBinding) -> bool {
+        self.source.generation == binding.source_generation
+            && self.source_map_binding_current(&binding.ownership, binding.binding)
     }
 
     pub(super) fn observe_control(&self) -> PlacementObservation<SlotSnapshot> {

@@ -154,7 +154,7 @@ fn late_mouse_case(rate: f64, policy: &str, prior: PriorPlayback) {
     assert_eq!(position.frame, expected_source.floor() as usize);
     assert!((position.fraction - expected_source.fract()).abs() < 1.0e-8);
     assert!(initial_pcm.iter().all(|sample| sample.is_finite()));
-    other_playback.advance((execution - TARGET) as usize + 512);
+    assert!(other_playback.advance((execution - TARGET) as usize + 512));
     assert!(other_playback.matches_exact(&voice(&route, 1).source_playback));
     assert_eq!(voice(&route, 1).generation, other_generation);
     assert_eq!(route.starts(1), 0);

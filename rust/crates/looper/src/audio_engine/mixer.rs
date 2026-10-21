@@ -347,6 +347,16 @@ pub struct RtMixer {
 }
 
 impl RtMixer {
+    /// Each mapped voice retains one original launch owner in addition to the
+    /// existing input and two frozen stem readers. Scalar voices keep their
+    /// established retirement admission, including exclusive preflight retries.
+    pub(crate) fn mapped_owner_retirement_slots(&self) -> usize {
+        self.voices
+            .iter()
+            .filter(|voice| voice.mapped_start.is_some())
+            .count()
+    }
+
     fn observe_dsp_inputs(&mut self, frame: u64) {
         for id in 0..NUM_SAMPLES {
             if let Some(key) = self
@@ -547,8 +557,11 @@ impl RtMixer {
             .or_else(|| self.effective_loop_region(id, sample.frame_count()))?;
         let timing = self.timing_for_voice(voice);
         let mut playback = voice.source_playback;
-        playback.set_target(self.tempo_ratio_for_source_period(timing.period_seconds()));
-        playback.configure_domain(timing.loop_domain(sample.frame_count(), region));
+        if !playback.set_target(self.tempo_ratio_for_source_period(timing.period_seconds()))
+            || !playback.configure_domain(timing.loop_domain(sample.frame_count(), region))
+        {
+            return None;
+        }
         playback.chunk(DEFAULT_BLOCK_SAMPLES);
         let frozen = voice.frozen_stems.as_ref().filter(|_| {
             !self.sample_bank[id]
@@ -631,7 +644,9 @@ impl RtMixer {
             explicit_seek_mode_for_frame(start_frame, region, sample.frame_count()),
             self.tempo_ratio_for_sample_id(id),
         );
-        playback.configure_domain(timing.loop_domain(sample.frame_count(), region));
+        if !playback.configure_domain(timing.loop_domain(sample.frame_count(), region)) {
+            return None;
+        }
         let stems = prepared_stem_set_for_render(
             self.prepared_stems[id].as_ref(),
             sample,
@@ -1253,6 +1268,25 @@ impl RtMixer {
     }
 
     fn loop_context_available(&self, id: usize, start: usize, end: Option<usize>) -> bool {
+        if self.voices.iter().any(|voice| {
+            voice.is_playing_sample(id)
+                && voice.source_playback.is_mapped()
+                && voice.sample.as_ref().is_some_and(|sample| {
+                    self.sample_bank[id]
+                        .as_ref()
+                        .is_some_and(|bank| bank.same_source(sample))
+                        && voice
+                            .mapped_start
+                            .as_ref()
+                            .and_then(|owner| owner.mapped_geometry())
+                            .is_none_or(|geometry| {
+                                effective_loop_region(start, end, sample.frame_count())
+                                    != Some(geometry.domain().region)
+                            })
+                })
+        }) {
+            return false;
+        }
         if self.outgoing_stems[id].is_some()
             && self.stem_transitions[id].is_active()
             && (self.pad_loop_start_frame[id] != start || self.pad_loop_end_frame[id] != end)
@@ -1392,6 +1426,9 @@ impl RtMixer {
     }
 
     fn key_lock_context_available(&self, id: usize) -> bool {
+        if self.mapped_voice_active(id) {
+            return false;
+        }
         let full = |sample: &SampleBuffer| {
             sample.resident_start() == 0 && sample.resident_end() == sample.frame_count()
         };
@@ -1471,7 +1508,9 @@ impl RtMixer {
             ExplicitSeekMode::Normal,
             self.tempo_ratio_for_sample_id(id),
         );
-        playback.configure_domain(timing.loop_domain(sample.frame_count(), region));
+        if !playback.configure_domain(timing.loop_domain(sample.frame_count(), region)) {
+            return false;
+        }
         normal_loop_feed_available_with_readers(
             sample,
             StemReadSets::new(stems, self.outgoing_stems[id].as_ref()),
@@ -1524,10 +1563,12 @@ impl RtMixer {
         // Controls can edit the effective region before the next render configures
         // the live clock. Prove that next trajectory without advancing its state.
         let mut playback = voice.source_playback;
-        playback.configure_domain(
+        if !playback.configure_domain(
             self.timing_for_voice(voice)
                 .loop_domain(sample.frame_count(), region),
-        );
+        ) {
+            return false;
+        }
         let position = playback.position();
         normal_loop_feed_available_with_readers(
             sample,
@@ -1569,14 +1610,18 @@ impl RtMixer {
         let timing = self.timing_for_voice(voice);
         let mut playback = voice.source_playback;
         if let Some(target) = seek {
-            playback.seek(
+            if !playback.seek(
                 target,
                 explicit_seek_mode_for_frame(target, region, sample.frame_count()),
-            );
+            ) {
+                return false;
+            }
         } else {
             playback.clear_explicit_seek();
         }
-        playback.configure_domain(timing.loop_domain(sample.frame_count(), region));
+        if !playback.configure_domain(timing.loop_domain(sample.frame_count(), region)) {
+            return false;
+        }
         let position = playback.position();
         let frozen = voice.frozen_stems.as_ref().filter(|_| {
             !self.sample_bank[id]
@@ -1624,10 +1669,12 @@ impl RtMixer {
         }
         let mut playback = voice.source_playback;
         playback.clear_explicit_seek();
-        playback.configure_domain(
+        if !playback.configure_domain(
             self.timing_for_voice(voice)
                 .loop_domain(sample.frame_count(), region),
-        );
+        ) {
+            return true;
+        }
         let next = playback.position();
         if before.frame != next.frame
             || before.fraction.to_bits() != next.fraction.to_bits()
@@ -1660,6 +1707,17 @@ impl RtMixer {
 
     /// Fixed voice scan; retirement/readiness admission precedes every physical cut.
     fn loop_cut_available(&self, id: usize, sample: &SampleBuffer, region: FrameRange) -> bool {
+        if self.voices.iter().any(|voice| {
+            voice.is_playing_sample(id)
+                && voice.source_playback.is_mapped()
+                && voice
+                    .mapped_start
+                    .as_ref()
+                    .and_then(|owner| owner.mapped_geometry())
+                    .is_none_or(|geometry| geometry.domain().region != region)
+        }) {
+            return false;
+        }
         !self.pad_pitch_processing_enabled(id)
             || self
                 .voices
@@ -2347,6 +2405,21 @@ impl RtMixer {
             retirement.retire_resident_transaction(transaction);
             return false;
         };
+        if self.mapped_voice_active(id)
+            && (transaction.intent.seek_position_s.is_some()
+                || transaction.intent.loop_region.is_some()
+                || transaction.intent.key_lock.is_some())
+        {
+            transaction.publication.mark_rejected();
+            self.input_runtime_ownership
+                .finish_resident_control_for_binding(
+                    id,
+                    transaction.binding,
+                    transaction.publication.expected,
+                );
+            retirement.retire_resident_transaction(transaction);
+            return false;
+        }
         // A previous storage claim retains its original mode owner through final settlement.
         // Let render polling retire that owner before another storage transaction can claim
         // this pad, including when the normal retirement queue/backlog is saturated.
@@ -3542,6 +3615,18 @@ impl RtMixer {
             .any(|voice| voice.active && voice.sample_id == id)
     }
 
+    fn mapped_voice_active(&self, id: usize) -> bool {
+        self.voices
+            .iter()
+            .any(|voice| voice.is_playing_sample(id) && voice.source_playback.is_mapped())
+    }
+
+    pub(crate) fn has_mapped_voice(&self) -> bool {
+        self.voices
+            .iter()
+            .any(|voice| voice.active && voice.source_playback.is_mapped())
+    }
+
     fn finite_key_lock_voice_active(&self, id: usize) -> bool {
         self.pad_pitch_processing_enabled(id)
             && self.voices.iter().any(|voice| {
@@ -3686,7 +3771,7 @@ impl RtMixer {
                         .frozen_stems
                         .as_ref()
                         .is_some_and(|view| view.outgoing.is_some()),
-                )
+                ) + usize::from(voice.mapped_start.is_some())
             });
         needed == 0 || retirement.available_retirement_slots() >= needed
     }
@@ -3893,6 +3978,9 @@ impl RtMixer {
         start_output_frame: Option<u64>,
         retirement: &mut impl AudioBufferRetirement,
     ) -> Option<VoiceStartConfig> {
+        if self.mapped_voice_active(id) {
+            return None;
+        }
         if id >= NUM_SAMPLES || !self.can_adopt_sample(id, retirement) {
             return None;
         }
@@ -3956,6 +4044,9 @@ impl RtMixer {
         config: VoiceStartConfig,
         retirement: &mut impl AudioBufferRetirement,
     ) -> bool {
+        if self.mapped_voice_active(config.sample_id) {
+            return false;
+        }
         let id = config.sample_id;
 
         // Sample is already playing? -> reset play position
@@ -4020,9 +4111,13 @@ impl RtMixer {
                 let domain = self
                     .timing_for_voice(voice)
                     .loop_domain(sample.frame_count(), region);
-                self.voices[voice_index]
+                if !self.voices[voice_index]
                     .source_playback
-                    .configure_domain(domain);
+                    .configure_domain(domain)
+                {
+                    self.cancel_pending_key_lock(id);
+                    return;
+                }
             }
             // Neither a stopped reserve nor retained A's earlier wet output certifies this
             // new B/retriggered voice. Keep its own receipt guarded through actual first wet,
@@ -4067,7 +4162,12 @@ impl RtMixer {
             return;
         }
 
-        if self.refuse_legacy_global_rate_if_pending() {
+        if self
+            .voices
+            .iter()
+            .any(|voice| voice.active && voice.source_playback.is_mapped())
+            || self.refuse_legacy_global_rate_if_pending()
+        {
             return;
         }
 
@@ -4077,7 +4177,12 @@ impl RtMixer {
     }
 
     pub fn set_bpm_lock(&mut self, enabled: bool) {
-        if self.refuse_legacy_global_rate_if_pending() {
+        if self
+            .voices
+            .iter()
+            .any(|voice| voice.active && voice.source_playback.is_mapped())
+            || self.refuse_legacy_global_rate_if_pending()
+        {
             return;
         }
         self.invalidate_source_for_all();
@@ -4361,6 +4466,12 @@ impl RtMixer {
             .input_runtime_ownership
             .binding_source_generation(id, binding)
             .map(|generation| (generation, binding.source_address));
+        if self.mapped_voice_active(id) && enabled != self.pad_key_lock_enabled[id] {
+            self.queued_key_lock_tuples[id] = None;
+            self.pad_key_lock_rejected[id] = true;
+            self.publish_key_lock_status(id);
+            return;
+        }
         if self.key_lock_tuple_needs_preparation(id, enabled) {
             self.queued_key_lock_tuples[id] = Some(key_lock_tuple::KeyLockTupleRequest {
                 enabled,
@@ -4521,7 +4632,12 @@ impl RtMixer {
 
     pub(crate) fn set_master_period(&mut self, period: f64) {
         if period.is_finite() && period > 0.0 {
-            if self.refuse_legacy_global_rate_if_pending() {
+            if self
+                .voices
+                .iter()
+                .any(|voice| voice.active && voice.source_playback.is_mapped())
+                || self.refuse_legacy_global_rate_if_pending()
+            {
                 return;
             }
             self.invalidate_source_for_all();
@@ -4914,7 +5030,12 @@ impl RtMixer {
 
     /// Immutable source/reader admission, shared by direct and claimed resident seeks.
     fn seek_sample_target(&self, id: usize, position_s: f64) -> Option<(usize, ExplicitSeekMode)> {
-        if id >= NUM_SAMPLES || !position_s.is_finite() || position_s < 0.0 || self.channels == 0 {
+        if id >= NUM_SAMPLES
+            || !position_s.is_finite()
+            || position_s < 0.0
+            || self.channels == 0
+            || self.mapped_voice_active(id)
+        {
             return None;
         }
 
@@ -4982,8 +5103,7 @@ impl RtMixer {
         let mut did_seek = false;
         for voice_slot in &mut self.voices {
             if voice_slot.is_playing_sample(id) {
-                voice_slot.seek(target_frame, seek_mode, output_frame);
-                did_seek = true;
+                did_seek |= voice_slot.seek(target_frame, seek_mode, output_frame);
             }
         }
 
@@ -4994,6 +5114,9 @@ impl RtMixer {
     }
 
     fn seek_cut_available(&self, id: usize) -> bool {
+        if self.mapped_voice_active(id) {
+            return false;
+        }
         !self.pad_pitch_processing_enabled(id)
             || self
                 .voices
@@ -5111,7 +5234,16 @@ impl RtMixer {
             .or_else(|| self.effective_loop_region(id, sample_frames))?;
         let mut playback = voice.source_playback;
         let timing = self.timing_for_voice(voice);
-        playback.configure_domain(timing.loop_domain(sample_frames, region));
+        if playback.is_mapped() {
+            let geometry = voice.mapped_start.as_ref()?.mapped_geometry()?;
+            let position = playback.position();
+            return geometry.map().canonical_beat_at_source(
+                (position.frame as f64 + position.fraction) / f64::from(self.sample_rate_hz),
+            );
+        }
+        if !playback.configure_domain(timing.loop_domain(sample_frames, region)) {
+            return None;
+        }
         let position = playback.position();
         timing
             .grid(f64::from(self.sample_rate_hz))?
@@ -5198,7 +5330,7 @@ impl RtMixer {
     }
 
     fn pause_sample_with_output_frame(&mut self, id: usize, _output_frame: Option<u64>) {
-        if id >= NUM_SAMPLES {
+        if id >= NUM_SAMPLES || self.mapped_voice_active(id) {
             return;
         }
 
@@ -5224,7 +5356,7 @@ impl RtMixer {
     }
 
     fn resume_sample_with_output_frame(&mut self, id: usize, _output_frame: Option<u64>) {
-        if id >= NUM_SAMPLES {
+        if id >= NUM_SAMPLES || self.mapped_voice_active(id) {
             return;
         }
 
@@ -5533,7 +5665,11 @@ impl RtMixer {
                 let mut source_transition =
                     frozen.map_or(stem_transitions[voice.sample_id], |view| view.transition);
 
-                voice.source_playback.set_target(tempo_ratios[voice_index]);
+                if !voice.source_playback.is_mapped()
+                    && !voice.source_playback.set_target(tempo_ratios[voice_index])
+                {
+                    continue;
+                }
 
                 let Some(loop_region) = voice.source_loop_region.or_else(|| {
                     effective_loop_region(
@@ -5546,15 +5682,38 @@ impl RtMixer {
                     voice.stop_rt(retirement);
                     continue;
                 };
-                voice
-                    .source_playback
-                    .configure_domain(voice.source_timing.loop_domain(sample_frames, loop_region));
+                let domain = voice
+                    .mapped_start
+                    .as_ref()
+                    .and_then(|owner| owner.mapped_geometry())
+                    .map_or_else(
+                        || voice.source_timing.loop_domain(sample_frames, loop_region),
+                        |geometry| geometry.domain(),
+                    );
+                if !voice.source_playback.configure_domain(domain) {
+                    continue;
+                }
                 let mut rendered = 0;
                 // Each iteration consumes output frames and crosses at most one fixed rate step.
                 // The enclosing render chunk is bounded by max_realtime_render_frames().
                 while rendered < frames {
                     let output_frame =
                         output_start_frame.map(|frame| frame.saturating_add(rendered as u64));
+                    if voice.source_playback.is_mapped() {
+                        let Some(geometry) = voice
+                            .mapped_start
+                            .as_ref()
+                            .and_then(|owner| owner.mapped_geometry())
+                        else {
+                            break;
+                        };
+                        if voice.source_playback.mapped_output_frame() != output_frame
+                            || (!voice.source_playback.can_read_frames(1)
+                                && voice.source_playback.refresh_mapped_span(geometry).is_err())
+                        {
+                            break;
+                        }
+                    }
                     let remaining = output_frame.map_or(frames - rendered, |frame| {
                         voice
                             .stretch
@@ -5584,7 +5743,19 @@ impl RtMixer {
                         source_plan,
                         chunk_frames,
                     );
-                    let next_position = voice.source_playback.position_at(chunk_frames);
+                    let Some(next_position) = voice
+                        .source_playback
+                        .position_at(chunk_frames)
+                        .filter(|_| chunk_frames > 0)
+                    else {
+                        break;
+                    };
+                    // Validate the complete logical read before Native/FIFO or
+                    // actual-history publication. No partial mapped advancement.
+                    let mut next_playback = voice.source_playback;
+                    if !next_playback.advance(chunk_frames) {
+                        break;
+                    }
                     let current_epoch_cell = ownership
                         .slot_snapshot(voice.sample_id)
                         .map(|snapshot| snapshot.cell());
@@ -5705,7 +5876,7 @@ impl RtMixer {
                                 pad_peaks[voice.sample_id].max(contribution.abs());
                         }
                     }
-                    voice.source_playback.advance(chunk_frames);
+                    voice.source_playback = next_playback;
                     rendered += chunk_frames;
                 }
                 let position = voice.source_playback.position();
@@ -5726,11 +5897,21 @@ impl RtMixer {
                         sample.frame_count(),
                     )
                 }) {
-                    voice.source_playback.configure_domain(
-                        voice
-                            .source_timing
-                            .loop_domain(sample.frame_count(), region),
-                    );
+                    let domain = voice
+                        .mapped_start
+                        .as_ref()
+                        .and_then(|owner| owner.mapped_geometry())
+                        .map_or_else(
+                            || {
+                                voice
+                                    .source_timing
+                                    .loop_domain(sample.frame_count(), region)
+                            },
+                            |geometry| geometry.domain(),
+                        );
+                    if !voice.source_playback.configure_domain(domain) {
+                        continue;
+                    }
                     let position = voice.source_playback.position();
                     voice.frame_pos = position.frame;
                     voice.explicit_seek_mode = position.seek_mode;

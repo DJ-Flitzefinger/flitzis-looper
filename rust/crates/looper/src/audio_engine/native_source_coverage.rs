@@ -568,11 +568,11 @@ mod tests {
             .window_for(&sample)
             .unwrap();
             let mut playback = SourcePlayback::new(REGION.start, ExplicitSeekMode::Normal, 0.73);
-            playback.configure_domain(
+            assert!(playback.configure_domain(
                 SourceLoopDomain::musical(full.frame_count(), REGION, period).unwrap(),
-            );
-            playback.advance(17);
-            playback.set_target(1.371234567890123);
+            ));
+            assert!(playback.advance(17));
+            assert!(playback.set_target(1.371234567890123));
             let plan = SourceReadPlan {
                 channels: 2,
                 sample_frames: full.frame_count(),
@@ -649,8 +649,8 @@ mod tests {
                 ExplicitSeekMode::AfterLoop => self.full.frame_count() - 2,
             };
             self.playback = SourcePlayback::new(frame, mode, 0.73);
-            self.playback.configure_domain(self.plan.domain());
-            self.playback.set_target(1.371234567890123);
+            assert!(self.playback.configure_domain(self.plan.domain()));
+            assert!(self.playback.set_target(1.371234567890123));
             self.plan.frame_pos = frame;
             self.plan.seek_mode = mode;
             self.ownership.publish_window(0, &self.sample);
@@ -758,7 +758,7 @@ mod tests {
                 assert_eq!(observed.missing_reads, 0);
                 assert!(observed.min_frame.unwrap() >= REGION.start);
                 assert!(observed.max_frame.unwrap() < REGION.end);
-                playback.advance(frames);
+                assert!(playback.advance(frames));
                 plan.frame_pos = playback.position().frame;
             }
             let seam = SourceReadPlan {
@@ -838,7 +838,7 @@ mod tests {
                             assert!(observed.min_frame.unwrap() >= fixture.sample.resident_start());
                             assert!(observed.max_frame.unwrap() < fixture.sample.resident_end());
                             right_reads += observed.right_reads;
-                            playback.advance(frames);
+                            assert!(playback.advance(frames));
                             plan.transition.advance_output_frames(frames, ratio);
                             let position = playback.position();
                             plan.frame_pos = position.frame;
@@ -875,8 +875,8 @@ mod tests {
                 .unwrap();
             assert!(!normal_loop_context_available(&incomplete, REGION, mode));
             let mut playback = SourcePlayback::new(frame, mode, 0.5);
-            playback.configure_domain(fixture.plan.domain());
-            playback.advance(1);
+            assert!(playback.configure_domain(fixture.plan.domain()));
+            assert!(playback.advance(1));
             let position = playback.position();
             let plan = SourceReadPlan {
                 frame_pos: position.frame,
@@ -962,7 +962,8 @@ mod tests {
                             &playback,
                             &mut expected_feed,
                             frames,
-                        );
+                        )
+                        .expect("known scalar test source read");
                         assert_eq!(actual_feed, expected_feed);
                         let pitch = pitch_scale_for_tempo_ratio(ratio);
                         actual
@@ -990,7 +991,7 @@ mod tests {
                                 expected.output_fifo[channel].len()
                             );
                         }
-                        playback.advance(frames);
+                        assert!(playback.advance(frames));
                         let position = playback.position();
                         plan.frame_pos = position.frame;
                         plan.seek_mode = position.seek_mode;
@@ -1023,7 +1024,7 @@ mod tests {
             let mut playback = fixture.playback;
             for _ in 0..8 {
                 let (frames, _) = playback.chunk(512);
-                playback.advance(frames);
+                assert!(playback.advance(frames));
             }
             let position = playback.position();
             assert_eq!(position.seek_mode, ExplicitSeekMode::Normal);
@@ -1073,11 +1074,11 @@ mod tests {
                 ExplicitSeekMode::Normal
             ));
             let mut playback = SourcePlayback::new(frame, ExplicitSeekMode::Normal, 0.5);
-            playback.configure_domain(SourceLoopDomain::physical(
+            assert!(playback.configure_domain(SourceLoopDomain::physical(
                 fixture.full.frame_count(),
                 REGION,
-            ));
-            playback.advance(1);
+            )));
+            assert!(playback.advance(1));
             let plan = SourceReadPlan {
                 frame_pos: frame,
                 loop_period: None,
@@ -1154,7 +1155,7 @@ mod tests {
             false
         ));
         let mut changed_rate = fixture.playback;
-        changed_rate.set_target(1.5);
+        assert!(changed_rate.set_target(1.5));
         assert!(!coverage.matches(
             &fixture.sample,
             Some(&fixture.stems),
@@ -1403,7 +1404,7 @@ mod tests {
             let mut playback = fixture.playback;
             for frames in [1, 73, 511] {
                 let (frames, ratio) = playback.chunk(frames);
-                playback.advance(frames);
+                assert!(playback.advance(frames));
                 plan.transition.advance_output_frames(frames, ratio);
                 let position = playback.position();
                 plan.frame_pos = position.frame;

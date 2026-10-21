@@ -3,7 +3,8 @@
 //! Parsing proves supported structure, digest consistency and numeric geometry.
 //! It does not prove decoded-source custody, musical quality, current pad
 //! ownership, callback acknowledgement or permission to prepare/adopt audio.
-//! Construction, serialization and all queries belong outside realtime.
+//! Construction, serialization and Python queries belong outside realtime.
+//! Prequalified Rust playback borrows bounded pure geometry without ownership changes.
 
 use std::sync::Arc;
 
@@ -16,6 +17,7 @@ mod interval_edits;
 mod query;
 mod record;
 
+pub(crate) use query::{CanonicalBeatSegment, CanonicalLoopInterval};
 use query::{Evaluation, Projection};
 use record::ValidatedMap;
 
@@ -31,6 +33,30 @@ pub struct SourceBeatmap {
 }
 
 impl SourceBeatmap {
+    /// Borrowed pure geometry for already qualified callers; no audio permission.
+    pub(crate) fn canonical_segment_at_beat(&self, beat: f64) -> Option<CanonicalBeatSegment> {
+        self.inner.canonical_segment_at_beat(beat)
+    }
+
+    pub(crate) fn canonical_source_at_beat(&self, beat: f64) -> Option<f64> {
+        self.inner.at_beat(beat).source_seconds
+    }
+
+    pub(crate) fn canonical_beat_at_source(&self, source_seconds: f64) -> Option<f64> {
+        self.inner.at_source(source_seconds).beat
+    }
+
+    /// Whole-interval coverage and slope extrema are resolved off realtime.
+    pub(crate) fn canonical_loop_interval(
+        &self,
+        source_start: f64,
+        quarters: f64,
+        require_four_four: bool,
+    ) -> Option<CanonicalLoopInterval> {
+        self.inner
+            .canonical_loop_interval(source_start, quarters, require_four_four)
+    }
+
     pub(super) fn canonical_record(&self) -> &str {
         &self.inner.encoded
     }

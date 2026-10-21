@@ -768,6 +768,7 @@ class AudioEngine:
         loop_ends: list[float | None],
         bindings: list[InputRuntimePadBinding | None] | None = None,
         pitch_rows: list[dict[str, object]] | None = None,
+        source_map_rows: list[dict[str, object]] | None = None,
     ) -> None: ...
     def current_input_runtime_pad_binding(
         self, sample_id: int

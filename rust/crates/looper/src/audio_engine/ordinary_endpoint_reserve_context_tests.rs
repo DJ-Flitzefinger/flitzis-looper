@@ -33,7 +33,7 @@ fn physical_birth_cache_rejects_source_history_without_consuming_either_owner_an
         end: 7168,
     };
     let mut playback = SourcePlayback::new(region.start, ExplicitSeekMode::Normal, 1.0);
-    playback.configure(8192, region);
+    assert!(playback.configure(8192, region));
     let request = |request_id| NativeHistoryRequest {
         pitch_intent: PitchIntent::new(0, 7).unwrap(),
         key_lock: true,
@@ -143,7 +143,7 @@ fn action_request(
         end: 100800,
     };
     let mut playback = SourcePlayback::new(region.start, ExplicitSeekMode::Normal, 1.0);
-    playback.configure(144_000, region);
+    assert!(playback.configure(144_000, region));
     NativeHistoryRequest {
         pitch_intent: pitch,
         key_lock: true,

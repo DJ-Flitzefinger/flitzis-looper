@@ -69,8 +69,8 @@ impl Source {
             ExplicitSeekMode::Normal,
             ratio,
         );
-        playback.configure(full.frame_count(), REGION);
-        playback.advance(ACTIVE_AT_CAPTURE);
+        assert!(playback.configure(full.frame_count(), REGION));
+        assert!(playback.advance(ACTIVE_AT_CAPTURE));
         let plan = SourceReadPlan {
             channels: 1,
             sample_frames: full.frame_count(),
@@ -286,7 +286,7 @@ fn normal_worker_requests_keep_e_and_prepare_all_pitch_totals_with_real_finite_p
         assert!(taps.min_frame.unwrap() >= REGION.start);
         assert!(taps.max_frame.unwrap() < REGION.end);
         let mut playback = source.playback;
-        playback.advance(4096);
+        assert!(playback.advance(4096));
         playback.chunk(1024);
         assert!(owner.playback.matches_exact(&playback));
         let phase = (ORIGIN_OFFSET as f64 + (ACTIVE_AT_CAPTURE + 4096) as f64 * ratio)
@@ -343,13 +343,13 @@ fn normal_worker_requests_keep_e_and_prepare_all_pitch_totals_with_real_finite_p
 fn unavailable_expanded_trajectory_completes_its_request_and_keeps_both_lanes_available() {
     let (mut lanes, _worker) = create_key_lock_preparation(1, RATE, 2).unwrap();
     let mut source = Source::new(6, 18, 1.0, false);
-    source.playback.set_target(1.05);
+    assert!(source.playback.set_target(1.05));
     let permit = source.permit(&lanes[0]);
     assert!(lanes[0].request_source(&source.feed(&permit, &source.playback, CAPTURE_FRAME), 0, 1,));
     wait_until(|| lanes[0].source_work_finished(1));
     assert!(lanes[0].prepared_state().is_none());
     assert!(lanes.iter().all(|lane| !lane.worker_failed()));
-    source.playback.set_target(1.0);
+    assert!(source.playback.set_target(1.0));
     for (index, lane) in lanes.iter_mut().enumerate() {
         let permit = source.permit(lane);
         assert!(lane.request_source(

@@ -486,6 +486,9 @@ fn anchor_transport_phase_from_pad_at_frame(
     id: usize,
     output_frame: u64,
 ) -> bool {
+    if mixer.has_mapped_voice() {
+        return false;
+    }
     let Some(source_beat) = mixer.active_pad_beat_position(id) else {
         return false;
     };
@@ -511,7 +514,7 @@ fn try_bootstrap_transport_from_reference(
     transport: &mut TransportTimeline,
     output_frame: u64,
 ) -> bool {
-    if mixer.has_pending_global_rate() {
+    if mixer.has_pending_global_rate() || mixer.has_mapped_voice() {
         return false;
     }
     let Some(id) = transport.bootstrap_reference() else {
@@ -695,7 +698,8 @@ fn execute_admitted_trigger<S: AudioMessageSink, R: AudioBufferRetirement>(
     ) else {
         return CallbackEffectResult::Settled(false);
     };
-    let retirement_needed = if *exclusive { 3 * MAX_VOICES } else { 3 };
+    let retirement_needed =
+        if *exclusive { 3 * MAX_VOICES } else { 3 } + mixer.mapped_owner_retirement_slots();
     let feedback_needed = if *exclusive {
         mixer.voices.iter().filter(|voice| voice.active).count() + 1
     } else {
@@ -814,7 +818,8 @@ fn execute_admitted_stop<S: AudioMessageSink, R: AudioBufferRetirement>(
     let Some(id) = mixer.timing_effect_slot(placement.slot(), Some(placement)) else {
         return CallbackEffectResult::Settled(false);
     };
-    if retirement.available_retirement_slots() < 3 * MAX_VOICES
+    if retirement.available_retirement_slots()
+        < 3 * MAX_VOICES + mixer.mapped_owner_retirement_slots()
         || audio_messages.available_audio_message_slots() < 1
     {
         return CallbackEffectResult::Pending;
@@ -883,6 +888,7 @@ pub(super) fn execute_scheduled_command<S: AudioMessageSink, R: AudioBufferRetir
                 slot,
                 action_sequence,
                 output_frame,
+                Some(*transport),
                 audio_messages,
                 retirement,
             );
@@ -962,7 +968,9 @@ pub(super) fn execute_scheduled_command<S: AudioMessageSink, R: AudioBufferRetir
             if !mixer.expected_source_generation_current(id, expected_source_generation) {
                 return ScheduledExecution::Complete;
             }
-            if retirement.available_retirement_slots() < 3 * MAX_VOICES {
+            if retirement.available_retirement_slots()
+                < 3 * MAX_VOICES + mixer.mapped_owner_retirement_slots()
+            {
                 return ScheduledExecution::Complete;
             }
             let Some(prepared) = mixer.prepare_play_sample_rt(id, volume, output_frame, retirement)
@@ -1013,7 +1021,9 @@ fn execute_accepted_timing_refresh<R: AudioBufferRetirement>(
     refresh: &super::accepted_timing_refresh::AcceptedTimingRefresh,
     retirement: &mut R,
 ) -> bool {
-    if refresh.master_period_seconds.is_some() && mixer.refuse_legacy_global_rate_if_pending() {
+    if refresh.master_period_seconds.is_some()
+        && (mixer.has_mapped_voice() || mixer.refuse_legacy_global_rate_if_pending())
+    {
         return false;
     }
     if retirement.available_retirement_slots() < 1
@@ -1086,7 +1096,7 @@ fn execute_global_playback_batch<S: AudioMessageSink, R: AudioBufferRetirement>(
     }
     // One fixed retirement reservation covers every old pin plus this immutable payload.
     let retirement_slots = retirement.available_retirement_slots();
-    if retirement_slots < 3 * MAX_VOICES + 1 {
+    if retirement_slots < 3 * MAX_VOICES + mixer.mapped_owner_retirement_slots() + 1 {
         // Preserve the existing atomic capacity rejection. Only an unavailable
         // payload-retirement slot must retain the event to avoid a final RT drop.
         return if retirement_slots == 0 {
@@ -1520,17 +1530,22 @@ fn publish_pad_telemetry<S: AudioMessageSink>(
     }
 }
 
-fn control_message_retirement_slots_needed(message: &ControlMessage) -> usize {
+fn control_message_retirement_slots_needed(
+    message: &ControlMessage,
+    mapped_owners: usize,
+) -> usize {
     match message {
         ControlMessage::StartMixCapture { .. } => 2,
         ControlMessage::GlobalPlaybackBatch(batch) => {
-            3 * MAX_VOICES + 1 + usize::from(batch.capture_publication.is_some())
+            3 * MAX_VOICES + mapped_owners + 1 + usize::from(batch.capture_publication.is_some())
         }
         ControlMessage::RelocateResident(_) => 3 * MAX_VOICES + 3,
         ControlMessage::CaptureResidentSeek(_) => 3,
         ControlMessage::CommittedStemWork(_) => 3,
-        ControlMessage::PadCopy(work) => work.retirement_slots_needed(),
-        ControlMessage::BankMutation(_) => 3 * MAX_VOICES + super::constants::NUM_PADS + 1,
+        ControlMessage::PadCopy(work) => work.retirement_slots_needed() + mapped_owners,
+        ControlMessage::BankMutation(_) => {
+            3 * MAX_VOICES + mapped_owners + super::constants::NUM_PADS + 1
+        }
         ControlMessage::VerifyRecoveredBank(_) => 1,
         ControlMessage::PadPair(_) => 1,
         ControlMessage::HoldAction(_) => 2,
@@ -1542,7 +1557,7 @@ fn control_message_retirement_slots_needed(message: &ControlMessage) -> usize {
         ControlMessage::LoadColdSample {
             replace_assignment: true,
             ..
-        } => 3 * MAX_VOICES + 5,
+        } => 3 * MAX_VOICES + mapped_owners + 5,
         ControlMessage::LoadColdSample {
             replace_assignment: false,
             ..
@@ -1556,16 +1571,16 @@ fn control_message_retirement_slots_needed(message: &ControlMessage) -> usize {
         ControlMessage::PlaySample { .. }
         | ControlMessage::TriggerInputPad {
             exclusive: false, ..
-        } => 3,
+        } => 3 + mapped_owners,
         #[cfg(test)]
-        ControlMessage::StopSample { .. } => 3 * MAX_VOICES,
-        ControlMessage::StopSampleForPlacement { .. } => 3 * MAX_VOICES,
-        ControlMessage::UnloadSample { .. } => 3 * MAX_VOICES + 3,
+        ControlMessage::StopSample { .. } => 3 * MAX_VOICES + mapped_owners,
+        ControlMessage::StopSampleForPlacement { .. } => 3 * MAX_VOICES + mapped_owners,
+        ControlMessage::UnloadSample { .. } => 3 * MAX_VOICES + mapped_owners + 3,
         ControlMessage::StopAll()
         | ControlMessage::PlaySampleExclusive { .. }
         | ControlMessage::TriggerInputPad {
             exclusive: true, ..
-        } => 3 * MAX_VOICES,
+        } => 3 * MAX_VOICES + mapped_owners,
         _ => 0,
     }
 }
@@ -1790,8 +1805,10 @@ pub(super) fn drain_control_messages<
                     break;
                 }
                 (
-                    control_message_retirement_slots_needed(message)
-                        + usize::from(source.is_some()),
+                    control_message_retirement_slots_needed(
+                        message,
+                        mixer.mapped_owner_retirement_slots(),
+                    ) + usize::from(source.is_some()),
                     usize::from(matches!(
                         message,
                         ControlMessage::UnloadSample { .. }
@@ -2373,6 +2390,7 @@ pub(super) fn process_control_message<
                     scheduler,
                     callback_start_frame,
                     target,
+                    Some(*transport),
                     retirement,
                 );
             } else {
@@ -2782,6 +2800,7 @@ pub(super) fn process_control_message<
                     work,
                     scheduler,
                     callback_start_frame,
+                    Some(*transport),
                     retirement,
                 );
             }
@@ -4258,27 +4277,33 @@ mod tests {
     #[test]
     fn retirement_slot_estimate_covers_polyphonic_stop_paths() {
         assert_eq!(
-            control_message_retirement_slots_needed(&ControlMessage::StopSample { id: 0 }),
+            control_message_retirement_slots_needed(&ControlMessage::StopSample { id: 0 }, 0),
             3 * MAX_VOICES
         );
         assert_eq!(
-            control_message_retirement_slots_needed(&ControlMessage::UnloadSample {
-                id: 0,
-                publication: None
-            }),
+            control_message_retirement_slots_needed(
+                &ControlMessage::UnloadSample {
+                    id: 0,
+                    publication: None
+                },
+                0
+            ),
             3 * MAX_VOICES + 3
         );
         assert_eq!(
-            control_message_retirement_slots_needed(&ControlMessage::StopAll()),
+            control_message_retirement_slots_needed(&ControlMessage::StopAll(), 0),
             3 * MAX_VOICES
         );
         assert_eq!(
-            control_message_retirement_slots_needed(&ControlMessage::PlaySampleExclusive {
-                expected_source_generation: None,
-                id: 0,
-                volume: 1.0,
-                received_at_ns: None
-            }),
+            control_message_retirement_slots_needed(
+                &ControlMessage::PlaySampleExclusive {
+                    expected_source_generation: None,
+                    id: 0,
+                    volume: 1.0,
+                    received_at_ns: None
+                },
+                0
+            ),
             3 * MAX_VOICES
         );
     }

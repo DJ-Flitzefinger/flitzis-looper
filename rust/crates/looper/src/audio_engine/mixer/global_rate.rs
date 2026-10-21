@@ -213,6 +213,16 @@ impl RtMixer {
     }
 
     fn global_rate_needs_history(&self, requested: RateTuple) -> Result<bool, RateError> {
+        if requested != self.effective_global_rate()
+            && self
+                .voices
+                .iter()
+                .any(|voice| voice.active && voice.source_playback.is_mapped())
+        {
+            // A new master epoch needs the original map's prepared endpoint and
+            // every participant's atomic continuity proof; scalar history is insufficient.
+            return Err(RateError::HistoryUnavailable);
+        }
         for index in 0..MAX_VOICES {
             if self.voices[index].active && self.rate_voice_needs_history(index, requested)? {
                 return Ok(true);
@@ -406,6 +416,14 @@ impl RtMixer {
     }
 
     fn global_rate_current(&self, pending: &PendingRate) -> Result<(), RateError> {
+        if pending.requested != self.effective_global_rate()
+            && self
+                .voices
+                .iter()
+                .any(|voice| voice.active && voice.source_playback.is_mapped())
+        {
+            return Err(RateError::HistoryUnavailable);
+        }
         if self
             .input_runtime_ownership
             .global_rate_status
@@ -556,6 +574,7 @@ impl RtMixer {
         let tuple = pending.requested;
         let mut candidate = *transport;
         if let Some(period) = tuple.period
+            && candidate.master_period_seconds().map(f64::to_bits) != Some(period.to_bits())
             && !candidate.set_master_period_preserving_beat_position_at_frame(period, frame)
         {
             return Err(RateError::InvalidTransport);
@@ -611,6 +630,7 @@ impl RtMixer {
     ) -> Result<(), RateError> {
         let mut candidate = *transport;
         if let Some(period) = pending.requested.period
+            && candidate.master_period_seconds().map(f64::to_bits) != Some(period.to_bits())
             && !candidate.set_master_period_preserving_beat_position_at_frame(period, frame)
         {
             return Err(RateError::InvalidTransport);

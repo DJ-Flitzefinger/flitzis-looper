@@ -240,7 +240,8 @@ impl RtMixer {
         retirement: &mut impl AudioBufferRetirement,
     ) -> bool {
         if self.placement_pending()
-            || retirement.available_retirement_slots() < work.retirement_slots_needed()
+            || retirement.available_retirement_slots()
+                < work.retirement_slots_needed() + self.mapped_owner_retirement_slots()
         {
             self.defer_bank_mutation(work);
             return false;

@@ -769,14 +769,14 @@ impl SourceReadPlan {
         playback: &SourcePlayback,
         buffers: &mut [Vec<f32>],
         output_frames: usize,
-    ) {
+    ) -> Result<(), super::rubberband_backend::RubberBandError> {
         self.fill_fractional_buffers_with_readers(
             sample,
             StemReadSets::new(stems, None),
             playback,
             buffers,
             output_frames,
-        );
+        )
     }
 
     pub(crate) fn fill_fractional_buffers_with_readers(
@@ -786,7 +786,7 @@ impl SourceReadPlan {
         playback: &SourcePlayback,
         buffers: &mut [Vec<f32>],
         output_frames: usize,
-    ) {
+    ) -> Result<(), super::rubberband_backend::RubberBandError> {
         debug_assert!(self.channels > 0 && buffers.len() >= self.channels);
         debug_assert!(playback.matches_domain(self.domain()));
         debug_assert_eq!(sample.frame_count(), self.sample_frames);
@@ -796,9 +796,14 @@ impl SourceReadPlan {
                 .take(self.channels)
                 .all(|buffer| buffer.len() >= output_frames)
         );
+        if !playback.can_read_frames(output_frames) {
+            return Err(super::rubberband_backend::RubberBandError::UnavailableSourceHistory);
+        }
         let tempo_ratio = playback.tempo_ratio();
         for frame in 0..output_frames {
-            let position = playback.position_at(frame);
+            let position = playback
+                .position_at(frame)
+                .ok_or(super::rubberband_backend::RubberBandError::UnavailableSourceHistory)?;
             let plan = Self {
                 frame_pos: position.frame,
                 seek_mode: position.seek_mode,
@@ -815,6 +820,7 @@ impl SourceReadPlan {
                 );
             }
         }
+        Ok(())
     }
 
     /// Reject unavailable actual taps before feeding any native/FIFO state.
@@ -856,8 +862,13 @@ impl SourceReadPlan {
         {
             return Err(super::rubberband_backend::RubberBandError::InvalidBlockSize);
         }
+        if !playback.can_read_frames(output_frames) {
+            return Err(super::rubberband_backend::RubberBandError::UnavailableSourceHistory);
+        }
         for offset in 0..output_frames {
-            let position = playback.position_at(offset);
+            let position = playback
+                .position_at(offset)
+                .ok_or(super::rubberband_backend::RubberBandError::UnavailableSourceHistory)?;
             let plan = Self {
                 frame_pos: position.frame,
                 seek_mode: position.seek_mode,
@@ -879,14 +890,7 @@ impl SourceReadPlan {
                 }
             }
         }
-        self.fill_fractional_buffers_with_readers(
-            sample,
-            readers,
-            playback,
-            buffers,
-            output_frames,
-        );
-        Ok(())
+        self.fill_fractional_buffers_with_readers(sample, readers, playback, buffers, output_frames)
     }
 
     pub(crate) fn tap_available_with_readers(
@@ -1600,14 +1604,16 @@ mod tests {
         read_plan.transition.advance_fractional(0.5);
         let transition = read_plan.transition;
         let mut playback = SourcePlayback::new(3, ExplicitSeekMode::Normal, 0.73);
-        playback.configure(6, read_plan.loop_region);
-        playback.advance(2);
-        playback.set_target(1.25);
+        assert!(playback.configure(6, read_plan.loop_region));
+        assert!(playback.advance(2));
+        assert!(playback.set_target(1.25));
         let (frames, ratio) = playback.chunk(12);
         assert_eq!(frames, 12);
         let position = playback.position();
         let mut buffers = [vec![-99.0; 13], vec![-99.0; 13]];
-        read_plan.fill_fractional_buffers(&sample, Some(&stems), &playback, &mut buffers, frames);
+        read_plan
+            .fill_fractional_buffers(&sample, Some(&stems), &playback, &mut buffers, frames)
+            .expect("known scalar test source read");
 
         // Independent address/interpolation oracle: after two 0.73 frames the base is frame 4,
         // fraction 0.46. The newly accepted target has made only its first 0.05 ratio step.
@@ -1641,8 +1647,8 @@ mod tests {
         let elapsed = 8_388_608;
         assert_eq!(ratio as f32, 1.0);
         let mut playback = SourcePlayback::new(2, ExplicitSeekMode::Normal, ratio);
-        playback.configure(6, FrameRange { start: 2, end: 5 });
-        playback.advance(elapsed);
+        assert!(playback.configure(6, FrameRange { start: 2, end: 5 }));
+        assert!(playback.advance(elapsed));
         assert_eq!(playback.position().fraction, 0.5);
 
         for (selection, gain) in [
@@ -1657,7 +1663,9 @@ mod tests {
                 ..plan(2, ExplicitSeekMode::Normal)
             };
             let mut buffers = [vec![-99.0; 4], vec![-99.0; 4]];
-            read_plan.fill_fractional_buffers(&sample, Some(&stems), &playback, &mut buffers, 3);
+            read_plan
+                .fill_fractional_buffers(&sample, Some(&stems), &playback, &mut buffers, 3)
+                .expect("known scalar test source read");
             // Source integral and both wrapped taps are algebraic, independent of reader helpers.
             for frame in 0..3 {
                 let distance = (elapsed + frame) as f64 * ratio;

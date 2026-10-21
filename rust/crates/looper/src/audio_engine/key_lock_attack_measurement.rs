@@ -141,6 +141,13 @@ fn reader_context(request: &NativeHistoryRequest) -> SourceFeedContext {
 }
 
 fn scalar_layout_available(request: &NativeHistoryRequest) -> bool {
+    if request.playback.is_mapped()
+        || request
+            .actual_feed
+            .is_some_and(|checkpoint| checkpoint.playback.is_mapped())
+    {
+        return false;
+    }
     let sample_layout = |sample: &crate::messages::SampleBuffer| {
         sample.channels != 0
             && !sample.samples.is_empty()
@@ -592,7 +599,9 @@ fn capture_in_context(
                     frames,
                 )
                 .ok()?;
-            checkpoint.playback.advance(frames);
+            if !checkpoint.playback.advance(frames) {
+                return None;
+            }
             let position = checkpoint.playback.position();
             checkpoint.plan.frame_pos = position.frame;
             checkpoint.plan.seek_mode = position.seek_mode;

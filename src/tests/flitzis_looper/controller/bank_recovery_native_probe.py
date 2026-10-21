@@ -21,7 +21,11 @@ from flitzis_looper.controller.bank_arrangement_journal import (
 )
 from flitzis_looper.controller.pad_arrangement import PadArrangementController
 from flitzis_looper.controller.persistence import ProjectPersistence
-from flitzis_looper.copy_snapshot import CONTENT_FIELDS, musical_content_data
+from flitzis_looper.copy_snapshot import (
+    CONTENT_FIELDS,
+    musical_content_data,
+    musical_snapshot_projection,
+)
 from flitzis_looper.models import ProjectState, SessionState
 from tests.flitzis_looper.controller.bank_native_probe import BankControllerProbe
 
@@ -555,8 +559,8 @@ class RecoveryProbe(BankControllerProbe):
         assert _musical_project(self.project) == self.proof[role], (role, self.diagnostics())
         for row in self.original.bank.projected().slots:
             expected = row.before if role == "before" else row.after
-            assert musical_content_data(self.project, row.target_id) == expected.model_dump(
-                mode="json"
+            assert musical_content_data(self.project, row.target_id) == musical_snapshot_projection(
+                expected, mode="json"
             )
 
     def _ancestor_path(self) -> Path:

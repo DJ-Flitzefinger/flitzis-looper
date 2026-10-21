@@ -51,8 +51,11 @@ impl EndpointResetHistory {
             return Err(unavailable());
         }
         let mut reset = self.playback;
-        reset.seek(request.plan.loop_region.start, ExplicitSeekMode::Normal);
-        reset.configure_domain(request.plan.domain());
+        if !reset.seek(request.plan.loop_region.start, ExplicitSeekMode::Normal)
+            || !reset.configure_domain(request.plan.domain())
+        {
+            return Err(unavailable());
+        }
         let mut plan = self.plan;
         plan.frame_pos = request.plan.loop_region.start;
         plan.seek_mode = ExplicitSeekMode::Normal;
@@ -134,10 +137,13 @@ fn future_continues_actual_history(
     // An empty journal has no endpoint proof: the replay coverage checks below
     // still distinguish a new lifecycle origin from missing required input.
     history.spans().next_back().is_none_or(|last| {
+        let Some(next_position) = last.playback.position_at(last.frames) else {
+            return false;
+        };
         last.active_end() == history.active_frames()
             && ProductiveSourceHistory {
                 binding: last.context.binding,
-                next_position: last.playback.position_at(last.frames),
+                next_position,
                 domain: Some(last.plan.domain()),
                 fed_output_frames: last.frames as u64,
             }
@@ -265,6 +271,9 @@ impl NativeAdapterState {
                 .permit
                 .current(&request.sample, request.binding.sample_rate_hz)
             || !future_continues_actual_history(history, future)
+            // This scalar future builder holds no map owner with which to refresh
+            // copied spans. Genuine mapped receipts remain replayable below.
+            || (future.0.is_mapped() && future.2 != 0)
         {
             return Err(unavailable());
         }
@@ -297,6 +306,10 @@ impl NativeAdapterState {
             if frames == 0 {
                 return Err(unavailable());
             }
+            let mut next_playback = playback;
+            if !next_playback.advance(frames) {
+                return Err(unavailable());
+            }
             let position = playback.position();
             plan.frame_pos = position.frame;
             plan.seek_mode = position.seek_mode;
@@ -307,7 +320,7 @@ impl NativeAdapterState {
                 plan,
                 context: future_context.for_plan(plan),
             });
-            playback.advance(frames);
+            playback = next_playback;
             plan.transition.advance_output_frames(frames, ratio);
             active = active.checked_add(frames as u64).ok_or_else(unavailable)?;
             remaining -= frames as u64;
@@ -649,13 +662,13 @@ mod tests {
             let key = ownership.slot_snapshot(0).unwrap().content_key().unwrap();
             assert!(ownership.acknowledge_callback_source(key));
             let mut playback = SourcePlayback::new(117, ExplicitSeekMode::Normal, 1.2);
-            playback.configure(
+            assert!(playback.configure(
                 12_000,
                 FrameRange {
                     start: 100,
                     end: 3100,
                 },
-            );
+            ));
             let mut history = SourceFeedHistory::new();
             let old_component = SampleBuffer {
                 channels: 1,
@@ -700,7 +713,7 @@ mod tests {
             let mut read = vec![vec![0.0; 512]];
             while active < CAPTURE {
                 if rate_edit && active == 32_017 {
-                    playback.set_target(0.55);
+                    assert!(playback.set_target(0.55));
                 }
                 let boundary = if active < 32_017 {
                     32_017
@@ -732,7 +745,7 @@ mod tests {
                 } else {
                     history.record_success(playback, plan, context, frames);
                 }
-                playback.advance(frames);
+                assert!(playback.advance(frames));
                 active += frames;
             }
             playback.chunk(512);
@@ -807,10 +820,12 @@ mod tests {
                 playback: request.playback,
                 plan: request.plan,
             };
-            request
-                .playback
-                .seek(request.plan.loop_region.start, ExplicitSeekMode::Normal);
-            request.playback.configure_domain(request.plan.domain());
+            assert!(
+                request
+                    .playback
+                    .seek(request.plan.loop_region.start, ExplicitSeekMode::Normal)
+            );
+            assert!(request.playback.configure_domain(request.plan.domain()));
             request.plan.frame_pos = request.plan.loop_region.start;
             request.plan.seek_mode = ExplicitSeekMode::Normal;
             request.plan.transition.clear();
@@ -841,7 +856,7 @@ mod tests {
             let mut displaced = Fixture::with_controls(false, false, moving);
             // Same PCM, frame labels and tuple, but future begins at a different source
             // position. This models actual ahead-of-logical input joined to logical future.
-            displaced.playback.advance(17);
+            assert!(displaced.playback.advance(17));
             let position = displaced.playback.position();
             displaced.plan.frame_pos = position.frame;
             displaced.plan.seek_mode = position.seek_mode;
@@ -907,8 +922,8 @@ mod tests {
         let mut plan = fixture.plan;
         let mut buffers = vec![vec![0.0; 17]];
         for frame in [317, 1703] {
-            playback.seek(frame, ExplicitSeekMode::Normal);
-            playback.configure_domain(plan.domain());
+            assert!(playback.seek(frame, ExplicitSeekMode::Normal));
+            assert!(playback.configure_domain(plan.domain()));
             plan.frame_pos = frame;
             plan.seek_mode = ExplicitSeekMode::Normal;
             plan.fill_fractional_buffers_checked(
@@ -920,7 +935,7 @@ mod tests {
             )
             .unwrap();
             history.record_success(playback, plan, fixture.feed_context(), 17);
-            playback.advance(17);
+            assert!(playback.advance(17));
         }
         let position = playback.position();
         plan.frame_pos = position.frame;
@@ -931,7 +946,7 @@ mod tests {
             &snapshot,
             (playback, plan, 0, fixture.feed_context())
         ));
-        playback.advance(1);
+        assert!(playback.advance(1));
         plan.frame_pos = playback.position().frame;
         assert!(!future_continues_actual_history(
             &snapshot,
@@ -966,7 +981,7 @@ mod tests {
         plan.loop_period = prior_domain.musical_period;
         plan.frame_pos = 1518;
         let mut playback = SourcePlayback::new(1518, ExplicitSeekMode::Normal, 1.125);
-        playback.configure_domain(prior_domain);
+        assert!(playback.configure_domain(prior_domain));
         let mut buffers = vec![vec![0.0; 1]];
         plan.fill_fractional_buffers_checked(&fixture.sample, None, &playback, &mut buffers, 1)
             .unwrap();
@@ -980,7 +995,8 @@ mod tests {
                 .next_back()
                 .unwrap()
                 .playback
-                .position_at(1),
+                .position_at(1)
+                .unwrap(),
             FractionalSourcePosition {
                 frame: 1519,
                 fraction: 0.125,
@@ -988,8 +1004,8 @@ mod tests {
             }
         );
         let mut future = SourcePlayback::new(18, ExplicitSeekMode::Normal, 1.375);
-        future.advance(1);
-        future.configure_domain(next_domain);
+        assert!(future.advance(1));
+        assert!(future.configure_domain(next_domain));
         assert_eq!(
             future.position(),
             FractionalSourcePosition {
@@ -1081,7 +1097,7 @@ mod tests {
     fn empty_post_gap_journal_does_not_invent_a_required_historical_prefix() {
         let mut fixture = Fixture::new(false, false);
         fixture.history.record_gap(37);
-        fixture.playback.advance(37);
+        assert!(fixture.playback.advance(37));
         fixture.playback.chunk(DEFAULT_BLOCK_SAMPLES);
         let position = fixture.playback.position();
         fixture.plan.frame_pos = position.frame;

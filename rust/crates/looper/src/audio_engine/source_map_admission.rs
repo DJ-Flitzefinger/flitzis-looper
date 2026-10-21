@@ -1,0 +1,244 @@
+//! Control-owned selected maps and immutable launch witnesses. No geometry grants authority.
+
+use super::content_placement::ContentKey;
+use super::input_runtime_binding::{
+    InputPadBinding, InputRuntimeOwnership, InputRuntimePadBinding,
+};
+use super::loader_events::LoaderEventDelivery;
+use super::pitch_actions::PitchActionReject;
+use super::source_beatmap::SourceBeatmap;
+use super::source_beatmap_artifact::SourceBeatmapArtifact;
+use std::sync::Arc;
+use std::sync::atomic::Ordering;
+
+/// A complete control projection, carried by the existing input-runtime publication.
+/// A selected map remains data-only until explicit SYNC intent is present.
+#[derive(Clone, Debug, Default)]
+pub(crate) struct SourceMapRow {
+    pub(crate) sync_requested: bool,
+    pub(crate) intent_revision: u64,
+    pub(crate) delivery: Option<LoaderEventDelivery>,
+    pub(crate) exact_quarters: Option<f64>,
+}
+
+/// The genuine original worker delivery owns the source qualification and artifact pin.
+/// New admission/claim checks freshness; effective voices only retain the immutable pin.
+#[derive(Clone, Debug)]
+pub(crate) struct QualifiedSourceMap {
+    delivery: LoaderEventDelivery,
+    map: SourceBeatmap,
+    _artifact: SourceBeatmapArtifact,
+    key: ContentKey,
+    generation: u64,
+    loaded_rate: u32,
+    exact_quarters: Option<f64>,
+}
+
+impl QualifiedSourceMap {
+    pub(super) fn new(
+        delivery: LoaderEventDelivery,
+        map: SourceBeatmap,
+        artifact: SourceBeatmapArtifact,
+        binding: &InputRuntimePadBinding,
+        exact_quarters: Option<f64>,
+    ) -> Result<Self, String> {
+        let key = binding
+            .binding
+            .placement
+            .and_then(|placement| placement.content_key())
+            .ok_or("source map requires current content")?;
+        Ok(Self {
+            delivery,
+            map,
+            _artifact: artifact,
+            key,
+            generation: binding.source_generation,
+            loaded_rate: binding.binding.sample_rate_hz,
+            exact_quarters,
+        })
+    }
+
+    pub(crate) fn map(&self) -> &SourceBeatmap {
+        &self.map
+    }
+
+    pub(crate) fn loaded_rate(&self) -> u32 {
+        self.loaded_rate
+    }
+
+    pub(crate) fn exact_quarters(&self) -> Option<f64> {
+        self.exact_quarters
+    }
+
+    /// Bounded scalar freshness for pending admission, including the original job token.
+    pub(crate) fn current_for(
+        &self,
+        ownership: &Arc<InputRuntimeOwnership>,
+        binding: InputPadBinding,
+    ) -> bool {
+        binding
+            .placement
+            .and_then(|placement| placement.content_key())
+            == Some(self.key)
+            && binding.sample_rate_hz == self.loaded_rate
+            && ownership.binding_source_generation(
+                binding
+                    .placement
+                    .map_or(usize::MAX, |placement| placement.slot()),
+                binding,
+            ) == Some(self.generation)
+            && self.delivery.source_map_binding_current(ownership, binding)
+    }
+
+    fn same_projection(&self, other: &Self) -> bool {
+        self.key == other.key
+            && self.generation == other.generation
+            && self.loaded_rate == other.loaded_rate
+            && self.exact_quarters == other.exact_quarters
+            && self.delivery.same_owner(&other.delivery)
+            && self.map.map_revision() == other.map.map_revision()
+    }
+}
+
+/// Immutable data in one existing RuntimePadState, never a second selected-map registry.
+#[derive(Clone, Debug, Default)]
+pub(crate) struct SourceMapProjection {
+    sync_requested: bool,
+    intent_revision: u64,
+    selected: Option<QualifiedSourceMap>,
+}
+
+impl SourceMapProjection {
+    #[cfg(test)]
+    pub(crate) fn intent_revision_for_test(&self) -> u64 {
+        self.intent_revision
+    }
+
+    pub(crate) fn without_selection(&self) -> Self {
+        Self {
+            sync_requested: self.sync_requested,
+            intent_revision: self.intent_revision,
+            selected: None,
+        }
+    }
+
+    pub(crate) fn qualify(
+        row: &SourceMapRow,
+        binding: Option<&InputRuntimePadBinding>,
+    ) -> Result<Self, String> {
+        if row
+            .exact_quarters
+            .is_some_and(|quarters| !quarters.is_finite() || quarters <= 0.0)
+        {
+            return Err("mapped exact quarter-note extent must be finite and positive".into());
+        }
+        let selected = row
+            .delivery
+            .as_ref()
+            .map(|delivery| {
+                delivery.qualify_source_map(
+                    binding.ok_or("selected source map requires current loaded binding")?,
+                    row.exact_quarters,
+                )
+            })
+            .transpose()?;
+        Ok(Self {
+            sync_requested: row.sync_requested,
+            intent_revision: row.intent_revision,
+            selected,
+        })
+    }
+
+    pub(crate) fn same_projection(&self, other: &Self) -> bool {
+        self.sync_requested == other.sync_requested
+            && self.intent_revision == other.intent_revision
+            && match (&self.selected, &other.selected) {
+                (Some(left), Some(right)) => left.same_projection(right),
+                (None, None) => true,
+                _ => false,
+            }
+    }
+
+    /// Data-only selection changes never invalidate ordinary unmapped work.
+    pub(crate) fn same_launch_projection(&self, other: &Self) -> bool {
+        (!self.sync_requested && !other.sync_requested) || self.same_projection(other)
+    }
+
+    pub(crate) fn publication_current(
+        &self,
+        ownership: &Arc<InputRuntimeOwnership>,
+        binding: Option<InputPadBinding>,
+    ) -> bool {
+        self.selected.as_ref().is_none_or(|selected| {
+            binding.is_some_and(|binding| selected.current_for(ownership, binding))
+        })
+    }
+
+    pub(crate) fn snapshot(
+        &self,
+        ownership: &Arc<InputRuntimeOwnership>,
+        binding: InputPadBinding,
+    ) -> SourceMapLaunchSnapshot {
+        let revision = binding
+            .placement
+            .map(|placement| {
+                ownership
+                    .launch_revision_for_cell(placement.cell())
+                    .load(Ordering::Acquire)
+            })
+            .unwrap_or(u64::MAX);
+        SourceMapLaunchSnapshot {
+            projection: self.clone(),
+            launch_revision: revision,
+        }
+    }
+}
+
+/// The projection and launch revision are captured together, before any later CLEAR.
+#[derive(Clone, Debug)]
+pub(crate) struct SourceMapLaunchSnapshot {
+    projection: SourceMapProjection,
+    launch_revision: u64,
+}
+
+impl SourceMapLaunchSnapshot {
+    pub(crate) fn unavailable() -> Self {
+        Self {
+            projection: SourceMapProjection::default(),
+            launch_revision: u64::MAX,
+        }
+    }
+
+    pub(crate) fn scalar(ownership: &Arc<InputRuntimeOwnership>, binding: InputPadBinding) -> Self {
+        SourceMapProjection::default().snapshot(ownership, binding)
+    }
+
+    /// A stale old-map binding cannot inherit a newer cancellation revision.
+    pub(crate) fn admit(
+        &self,
+        ownership: &Arc<InputRuntimeOwnership>,
+        binding: InputPadBinding,
+    ) -> Result<Option<QualifiedSourceMap>, PitchActionReject> {
+        let placement = binding.placement.ok_or(PitchActionReject::StaleContent)?;
+        if self.launch_revision == u64::MAX
+            || ownership
+                .launch_revision_for_cell(placement.cell())
+                .load(Ordering::Acquire)
+                != self.launch_revision
+        {
+            return Err(PitchActionReject::LaunchCancelled);
+        }
+        if !self.projection.sync_requested {
+            return Ok(None);
+        }
+        let selected = self
+            .projection
+            .selected
+            .as_ref()
+            .ok_or(PitchActionReject::TimingUnavailable)?;
+        if !selected.current_for(ownership, binding) {
+            return Err(PitchActionReject::SourceChanged);
+        }
+        Ok(Some(selected.clone()))
+    }
+}

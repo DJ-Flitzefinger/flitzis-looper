@@ -1,10 +1,13 @@
-//! Scalar source clock shared by live resampling and non-realtime source preparation.
+//! Copied source clock shared by live resampling and non-realtime preparation.
 //!
 //! A constant-rate epoch is addressed by its active output-frame count, never by callback
 //! endpoints. Rebases preserve the fractional source position. All operations are bounded and
 //! allocation-free; pausing simply stops advancing this clock.
 
 use super::constants::{SPEED_MAX, SPEED_MIN};
+use super::mapped_source_clock::{
+    MappedClockEpoch, MappedClockError, MappedLoopGeometry, MappedSourceSpan,
+};
 #[cfg(test)]
 use super::source_reader::FrameRange;
 use super::source_reader::{
@@ -22,6 +25,12 @@ pub(crate) struct FractionalSourcePosition {
 }
 
 #[derive(Clone, Copy, Debug)]
+struct MappedCopyState {
+    span: MappedSourceSpan,
+    intended_output_frame: u64,
+}
+
+#[derive(Clone, Copy, Debug)]
 pub(crate) struct SourcePlayback {
     origin: FractionalSourcePosition,
     domain: Option<SourceLoopDomain>,
@@ -31,9 +40,112 @@ pub(crate) struct SourcePlayback {
     frames_until_step: usize,
     // Before this epoch, only an intentional start/seek defines reconstructible source history.
     history_reconstructible: bool,
+    mapped: Option<MappedCopyState>,
 }
 
 impl SourcePlayback {
+    /// The caller separately retains and qualifies the original immutable map
+    /// owner. This value contains only a copied trajectory and identity markers.
+    pub(crate) fn mapped(
+        geometry: &MappedLoopGeometry,
+        epoch: MappedClockEpoch,
+        intended_output_frame: u64,
+    ) -> Result<Self, MappedClockError> {
+        let span = geometry.refresh_span(epoch, intended_output_frame)?;
+        let origin = span
+            .position_at(intended_output_frame)
+            .ok_or(MappedClockError::NumericalUnavailable)?;
+        let ratio = span.local_rate().ok_or(MappedClockError::UnsupportedRate)?;
+        Ok(Self {
+            origin,
+            domain: Some(geometry.domain()),
+            elapsed_output_frames: 0,
+            ratio,
+            target: ratio,
+            frames_until_step: 0,
+            history_reconstructible: false,
+            mapped: Some(MappedCopyState {
+                span,
+                intended_output_frame,
+            }),
+        })
+    }
+
+    pub(crate) fn is_mapped(&self) -> bool {
+        self.mapped.is_some()
+    }
+
+    pub(crate) fn mapped_epoch(&self) -> Option<MappedClockEpoch> {
+        self.mapped.map(|state| state.span.epoch())
+    }
+
+    pub(crate) fn mapped_output_frame(&self) -> Option<u64> {
+        self.mapped.map(|state| state.intended_output_frame)
+    }
+
+    /// Include the canonical exclusive endpoint, but never invent a later span.
+    pub(crate) fn can_read_frames(&self, output_frames: usize) -> bool {
+        self.mapped.is_none_or(|state| {
+            state
+                .intended_output_frame
+                .checked_add(output_frames as u64)
+                .is_some_and(|end| end <= state.span.end_frame())
+        })
+    }
+
+    /// Refresh derived geometry at this exact cursor. The caller must supply
+    /// the original qualified owning map; equal geometry is not that permission.
+    pub(crate) fn refresh_mapped_span(
+        &mut self,
+        geometry: &MappedLoopGeometry,
+    ) -> Result<(), MappedClockError> {
+        let state = self.mapped.ok_or(MappedClockError::InvalidEpoch)?;
+        if self.domain != Some(geometry.domain()) {
+            return Err(MappedClockError::InvalidGeometry);
+        }
+        let replacement = Self::mapped(geometry, state.span.epoch(), state.intended_output_frame)?;
+        if !same_position(self.origin, replacement.origin) {
+            return Err(MappedClockError::InvalidGeometry);
+        }
+        *self = replacement;
+        Ok(())
+    }
+
+    /// Direct canonical F-to-E projection with the retained owner. This operation
+    /// supplies coordinates only and does not certify actual historical reads.
+    pub(crate) fn project_mapped_to(
+        &mut self,
+        geometry: &MappedLoopGeometry,
+        intended_output_frame: u64,
+    ) -> Result<(), MappedClockError> {
+        let state = self.mapped.ok_or(MappedClockError::InvalidEpoch)?;
+        if self.domain != Some(geometry.domain()) {
+            return Err(MappedClockError::InvalidGeometry);
+        }
+        let replacement = Self::mapped(geometry, state.span.epoch(), intended_output_frame)?;
+        *self = replacement;
+        Ok(())
+    }
+
+    /// A caller's atomic master-epoch claim may replace the frozen projection
+    /// only at the same intended frame and exact canonical source position.
+    pub(crate) fn replace_mapped_epoch(
+        &mut self,
+        geometry: &MappedLoopGeometry,
+        epoch: MappedClockEpoch,
+    ) -> Result<(), MappedClockError> {
+        let state = self.mapped.ok_or(MappedClockError::InvalidEpoch)?;
+        if self.domain != Some(geometry.domain()) {
+            return Err(MappedClockError::InvalidGeometry);
+        }
+        let replacement = Self::mapped(geometry, epoch, state.intended_output_frame)?;
+        if !same_position(self.origin, replacement.origin) {
+            return Err(MappedClockError::InvalidEpoch);
+        }
+        *self = replacement;
+        Ok(())
+    }
+
     /// Isolated map diagnostics start an exact affine epoch, without the live scalar glide.
     /// This constructs no source, timing, preparation or continuation permission.
     #[cfg(test)]
@@ -75,6 +187,7 @@ impl SourcePlayback {
             target: ratio,
             frames_until_step: 0,
             history_reconstructible: true,
+            mapped: None,
         }
     }
 
@@ -84,6 +197,9 @@ impl SourcePlayback {
     /// the accepted target and active-frame step interval.
     #[cfg(test)]
     pub(crate) fn at_constant_ratio(mut self, ratio: f64) -> Self {
+        if self.is_mapped() {
+            return self;
+        }
         self.rebase();
         self.ratio = checked_ratio(ratio);
         self.target = self.ratio;
@@ -106,6 +222,9 @@ impl SourcePlayback {
     /// its endpoint and is explicitly unavailable; ordinary forward catch-up retains it.
     /// The second result counts silence before physical source zero for Intro/Tail history.
     pub(crate) fn history_before_constant(&self, output_frames: usize) -> Option<(Self, usize)> {
+        if self.is_mapped() {
+            return None;
+        }
         if self.ratio.to_bits() != self.target.to_bits() {
             return None;
         }
@@ -159,6 +278,9 @@ impl SourcePlayback {
     /// never introduces a new rounding anchor. This is derived input, not a claim
     /// that the live voice actually read these shifted source positions.
     pub(crate) fn shifted_normal_history(mut self, shift: f64) -> Option<Self> {
+        if self.is_mapped() {
+            return None;
+        }
         let domain = self.domain?;
         if self.origin.seek_mode != ExplicitSeekMode::Normal
             || self.origin.frame < domain.region.start
@@ -190,6 +312,15 @@ impl SourcePlayback {
     /// smoothing interval changes future feed. The copied worker cursor must reach the same
     /// canonical epoch and exact binary64 state, rather than merely a wrapped position.
     pub(crate) fn matches_exact(&self, other: &Self) -> bool {
+        match (self.mapped, other.mapped) {
+            (Some(left), Some(right)) => {
+                return self.domain == other.domain
+                    && left.intended_output_frame == right.intended_output_frame
+                    && left.span.matches_exact(right.span);
+            }
+            (Some(_), None) | (None, Some(_)) => return false,
+            (None, None) => {}
+        }
         self.origin.frame == other.origin.frame
             && self.origin.fraction.to_bits() == other.origin.fraction.to_bits()
             && self.origin.seek_mode == other.origin.seek_mode
@@ -203,12 +334,21 @@ impl SourcePlayback {
 
     /// Check pending preparation control intent while its copied smoothing clock advances.
     pub(crate) fn matches_rate_target(&self, other: &Self) -> bool {
+        match (self.mapped, other.mapped) {
+            (Some(left), Some(right)) => {
+                return self.domain == other.domain
+                    && left.span.epoch().matches_exact(right.span.epoch());
+            }
+            (Some(_), None) | (None, Some(_)) => return false,
+            (None, None) => {}
+        }
         self.target.to_bits() == other.target.to_bits()
     }
 
     #[cfg(test)]
-    pub(crate) fn configure(&mut self, sample_frames: usize, region: FrameRange) {
-        self.configure_domain(SourceLoopDomain::physical(sample_frames, region));
+    #[must_use]
+    pub(crate) fn configure(&mut self, sample_frames: usize, region: FrameRange) -> bool {
+        self.configure_domain(SourceLoopDomain::physical(sample_frames, region))
     }
 
     pub(crate) fn loop_period(&self) -> Option<f64> {
@@ -219,9 +359,13 @@ impl SourcePlayback {
         self.domain == Some(domain)
     }
 
-    pub(crate) fn configure_domain(&mut self, domain: SourceLoopDomain) {
+    #[must_use]
+    pub(crate) fn configure_domain(&mut self, domain: SourceLoopDomain) -> bool {
         if self.domain == Some(domain) {
-            return;
+            return true;
+        }
+        if self.is_mapped() {
+            return false;
         }
         let same_geometry = self.domain.is_some_and(|previous| {
             previous.sample_frames == domain.sample_frames && previous.region == domain.region
@@ -246,9 +390,13 @@ impl SourcePlayback {
             self.origin.frame = domain.region.start;
             self.origin.fraction = 0.0;
         }
+        true
     }
 
     pub(crate) fn clear_explicit_seek(&mut self) {
+        if self.is_mapped() {
+            return;
+        }
         self.rebase();
         let was_explicit = self.origin.seek_mode != ExplicitSeekMode::Normal;
         self.origin.seek_mode = ExplicitSeekMode::Normal;
@@ -261,16 +409,25 @@ impl SourcePlayback {
         }
     }
 
-    pub(crate) fn set_target(&mut self, target: f64) {
+    #[must_use]
+    pub(crate) fn set_target(&mut self, target: f64) -> bool {
+        if self.is_mapped() {
+            return false;
+        }
         let target = checked_ratio(target);
         if target != self.target {
             self.target = target;
             self.frames_until_step = 0;
         }
+        true
     }
 
     /// A seek changes source phase, while the accepted rate target and smoothing clock continue.
-    pub(crate) fn seek(&mut self, frame: usize, seek_mode: ExplicitSeekMode) {
+    #[must_use]
+    pub(crate) fn seek(&mut self, frame: usize, seek_mode: ExplicitSeekMode) -> bool {
+        if self.is_mapped() {
+            return false;
+        }
         self.origin = FractionalSourcePosition {
             frame,
             fraction: 0.0,
@@ -279,10 +436,18 @@ impl SourcePlayback {
         self.domain = None;
         self.elapsed_output_frames = 0;
         self.history_reconstructible = true;
+        true
     }
 
     /// Begin a constant-ratio chunk, bounded by the next active-output-frame smoothing step.
     pub(crate) fn chunk(&mut self, max_frames: usize) -> (usize, f64) {
+        if let Some(state) = self.mapped {
+            let remaining = state.span.end_frame() - state.intended_output_frame;
+            return (
+                max_frames.min(usize::try_from(remaining).unwrap_or(usize::MAX)),
+                self.ratio,
+            );
+        }
         if self.frames_until_step == 0 && self.ratio != self.target {
             self.rebase();
             self.history_reconstructible = false;
@@ -303,10 +468,25 @@ impl SourcePlayback {
     }
 
     pub(crate) fn position(&self) -> FractionalSourcePosition {
-        self.position_at(0)
+        if self.is_mapped() {
+            self.origin
+        } else {
+            self.scalar_position_at(0)
+        }
     }
 
-    pub(crate) fn position_at(&self, output_offset: usize) -> FractionalSourcePosition {
+    pub(crate) fn position_at(&self, output_offset: usize) -> Option<FractionalSourcePosition> {
+        if let Some(state) = self.mapped {
+            return state.span.position_at(
+                state
+                    .intended_output_frame
+                    .checked_add(output_offset as u64)?,
+            );
+        }
+        Some(self.scalar_position_at(output_offset))
+    }
+
+    fn scalar_position_at(&self, output_offset: usize) -> FractionalSourcePosition {
         let distance = self.origin.fraction
             + self
                 .elapsed_output_frames
@@ -385,17 +565,45 @@ impl SourcePlayback {
         }
     }
 
-    pub(crate) fn advance(&mut self, output_frames: usize) {
+    #[must_use]
+    pub(crate) fn advance(&mut self, output_frames: usize) -> bool {
+        self.try_advance(output_frames)
+    }
+
+    #[must_use]
+    pub(crate) fn try_advance(&mut self, output_frames: usize) -> bool {
+        if let Some(mut state) = self.mapped {
+            let Some(next) = state
+                .intended_output_frame
+                .checked_add(output_frames as u64)
+            else {
+                return false;
+            };
+            let Some(position) = state.span.position_at(next) else {
+                return false;
+            };
+            state.intended_output_frame = next;
+            self.mapped = Some(state);
+            self.origin = position;
+            return true;
+        }
         self.elapsed_output_frames = self
             .elapsed_output_frames
             .saturating_add(output_frames as u64);
         self.frames_until_step = self.frames_until_step.saturating_sub(output_frames);
+        true
     }
 
     fn rebase(&mut self) {
         self.origin = self.position();
         self.elapsed_output_frames = 0;
     }
+}
+
+fn same_position(left: FractionalSourcePosition, right: FractionalSourcePosition) -> bool {
+    left.frame == right.frame
+        && left.fraction.to_bits() == right.fraction.to_bits()
+        && left.seek_mode == right.seek_mode
 }
 
 fn checked_ratio(ratio: f64) -> f64 {
@@ -426,8 +634,8 @@ mod tests {
             ] {
                 for rate in [0.5, 1.3, 2.0] {
                     let mut endpoint = SourcePlayback::new(start, mode, rate);
-                    endpoint.configure_domain(domain);
-                    endpoint.advance(110);
+                    assert!(endpoint.configure_domain(domain));
+                    assert!(endpoint.advance(110));
                     assert_eq!(endpoint.position().seek_mode, ExplicitSeekMode::Normal);
                     let (history, silence) = endpoint.history_before_constant(256).unwrap();
                     // Independent physical prefix and musical-loop arithmetic. In particular,
@@ -439,7 +647,7 @@ mod tests {
                             continue;
                         }
                         assert!(frame >= silence);
-                        let observed = history.position_at(frame - silence);
+                        let observed = history.position_at(frame - silence).unwrap();
                         let (expected, expected_mode) = if raw < boundary as f64 {
                             (raw, mode)
                         } else {
@@ -464,19 +672,19 @@ mod tests {
     fn pitch_history_never_invents_the_past_of_a_newly_settled_rate_or_domain() {
         let region = FrameRange { start: 10, end: 90 };
         let mut playback = SourcePlayback::new(10, ExplicitSeekMode::Normal, 1.0);
-        playback.configure(100, region);
-        playback.set_target(1.05);
+        assert!(playback.configure(100, region));
+        assert!(playback.set_target(1.05));
         assert_eq!(playback.chunk(1), (1, 1.05));
-        playback.advance(1);
+        assert!(playback.advance(1));
         assert_eq!(playback.tempo_ratio(), playback.rate_target());
         assert!(playback.history_before_constant(4096).is_none());
-        playback.advance(4095);
+        assert!(playback.advance(4095));
         let (history, silence) = playback.history_before_constant(4096).unwrap();
         assert_eq!(silence, 0);
-        assert_eq!(history.position_at(4096), playback.position());
-        playback.configure_domain(SourceLoopDomain::musical(100, region, 80.25).unwrap());
+        assert_eq!(history.position_at(4096).unwrap(), playback.position());
+        assert!(playback.configure_domain(SourceLoopDomain::musical(100, region, 80.25).unwrap()));
         assert!(playback.history_before_constant(4096).is_none());
-        playback.advance(4096);
+        assert!(playback.advance(4096));
         assert!(playback.history_before_constant(4096).is_some());
     }
 
@@ -485,28 +693,28 @@ mod tests {
         let region = FrameRange { start: 2, end: 5 };
         let domain = SourceLoopDomain::musical(6, region, 3.25).unwrap();
         let mut playback = SourcePlayback::new(2, ExplicitSeekMode::Normal, 0.5);
-        playback.configure_domain(domain);
-        playback.advance(6);
+        assert!(playback.configure_domain(domain));
+        assert!(playback.advance(6));
         assert_eq!(playback.position().frame, 5); // Virtual, exclusive physical end.
         assert_eq!(playback.position().fraction, 0.0);
         let before = playback.position();
-        playback.set_target(0.55);
+        assert!(playback.set_target(0.55));
         assert_eq!(playback.chunk(1), (1, 0.55));
         assert_eq!(playback.position(), before);
-        playback.advance(1);
+        assert!(playback.advance(1));
         assert!((playback.position().fraction - 0.3).abs() < 1.0e-14);
         assert_eq!(playback.position().frame, 2);
         let retained = playback.position();
-        playback.configure_domain(SourceLoopDomain::musical(6, region, 2.75).unwrap());
+        assert!(playback.configure_domain(SourceLoopDomain::musical(6, region, 2.75).unwrap()));
         assert_eq!(playback.position(), retained);
-        playback.seek(5, ExplicitSeekMode::AfterLoop);
-        playback.configure_domain(domain);
+        assert!(playback.seek(5, ExplicitSeekMode::AfterLoop));
+        assert!(playback.configure_domain(domain));
         assert_eq!(playback.position().seek_mode, ExplicitSeekMode::AfterLoop);
-        playback.advance(4);
+        assert!(playback.advance(4));
         assert_eq!(playback.position().seek_mode, ExplicitSeekMode::Normal);
         assert!((playback.position().fraction - 0.2).abs() < 1.0e-14);
         playback.clear_explicit_seek();
-        playback.configure_domain(domain);
+        assert!(playback.configure_domain(domain));
         assert!((playback.position().fraction - 0.2).abs() < 1.0e-14);
     }
 
@@ -514,13 +722,13 @@ mod tests {
     fn subframe_period_change_wraps_fraction_without_changing_integer_frame() {
         let region = FrameRange { start: 2, end: 3 };
         let mut playback = SourcePlayback::new(2, ExplicitSeekMode::Normal, 0.7);
-        playback.configure(4, region);
-        playback.advance(1);
+        assert!(playback.configure(4, region));
+        assert!(playback.advance(1));
         assert_eq!(playback.position().fraction, 0.7);
-        playback.configure_domain(SourceLoopDomain::musical(4, region, 0.25).unwrap());
+        assert!(playback.configure_domain(SourceLoopDomain::musical(4, region, 0.25).unwrap()));
         assert_eq!(playback.position().frame, 2);
         assert!((playback.position().fraction - 0.2).abs() < 1.0e-14);
-        playback.advance(13);
+        assert!(playback.advance(13));
         assert_eq!(playback.position().frame, 2);
         assert!((playback.position().fraction - 0.05).abs() < 1.0e-14);
     }
@@ -535,14 +743,14 @@ mod tests {
         let shorter = SourceLoopDomain::musical(1600, region, 1499.75).unwrap();
         // The power-of-two divisor reaches this exact binary64 seam at a legal rate.
         let mut playback = SourcePlayback::new(10, ExplicitSeekMode::Normal, 1500.125 / 2048.0);
-        playback.configure_domain(initial);
-        playback.advance(2048);
+        assert!(playback.configure_domain(initial));
+        assert!(playback.advance(2048));
         let before = playback.position();
         assert_eq!(before.frame, 1510);
         assert_eq!(before.fraction, 0.125);
         let mut cleared = playback;
         playback.clear_explicit_seek(); // Same physical marker reapplication.
-        playback.configure_domain(shorter);
+        assert!(playback.configure_domain(shorter));
         assert_eq!(playback.position().frame, 10);
         assert_eq!(playback.position().fraction, 0.375);
         assert_eq!(
@@ -550,7 +758,7 @@ mod tests {
             Some(playback.position())
         );
         cleared.clear_explicit_seek();
-        cleared.configure(1600, region);
+        assert!(cleared.configure(1600, region));
         assert_eq!(cleared.position().frame, 10);
         assert_eq!(cleared.position().fraction, 0.125);
         assert_eq!(
@@ -567,7 +775,7 @@ mod tests {
         )
         .unwrap();
         playback.clear_explicit_seek();
-        playback.configure_domain(changed_geometry);
+        assert!(playback.configure_domain(changed_geometry));
         assert_eq!(playback.position().frame, 20);
         assert_eq!(playback.position().fraction, 0.0);
     }
@@ -581,11 +789,11 @@ mod tests {
             (5, ExplicitSeekMode::AfterLoop),
         ] {
             let mut playback = SourcePlayback::new(frame, mode, 0.73);
-            playback.configure_domain(domain);
-            playback.advance(1);
+            assert!(playback.configure_domain(domain));
+            assert!(playback.advance(1));
             assert_eq!(playback.position().seek_mode, mode);
             playback.clear_explicit_seek();
-            playback.configure_domain(domain);
+            assert!(playback.configure_domain(domain));
             assert_eq!(playback.position().frame, 2);
             assert_eq!(playback.position().fraction, 0.0);
             assert_eq!(playback.position().seek_mode, ExplicitSeekMode::Normal);
@@ -596,18 +804,18 @@ mod tests {
     fn copied_musical_domain_requires_exact_period_and_preserves_integer_control_arithmetic() {
         let region = FrameRange { start: 7, end: 101 };
         let mut physical = SourcePlayback::new(7, ExplicitSeekMode::Normal, 0.73);
-        physical.configure(101, region);
+        assert!(physical.configure(101, region));
         let mut musical = SourcePlayback::new(7, ExplicitSeekMode::Normal, 0.73);
-        musical.configure_domain(SourceLoopDomain::musical(101, region, 94.0).unwrap());
+        assert!(musical.configure_domain(SourceLoopDomain::musical(101, region, 94.0).unwrap()));
         for frames in [1, 31, 96, 257, 512, 1_000_001] {
-            physical.advance(frames);
-            musical.advance(frames);
+            assert!(physical.advance(frames));
+            assert!(musical.advance(frames));
             assert_eq!(physical.position(), musical.position());
         }
         let mut changed = musical;
-        changed.configure_domain(
+        assert!(changed.configure_domain(
             SourceLoopDomain::musical(101, region, f64::from_bits(94.0_f64.to_bits() + 1)).unwrap(),
-        );
+        ));
         assert!(!musical.matches_exact(&changed));
         assert_eq!(musical.loop_period(), Some(94.0));
     }
@@ -621,12 +829,12 @@ mod tests {
             (89, ExplicitSeekMode::AfterLoop, 11.0),
         ] {
             let mut playback = SourcePlayback::new(frame, mode, 0.73);
-            playback.configure_domain(domain);
-            playback.advance(7);
+            assert!(playback.configure_domain(domain));
+            assert!(playback.advance(7));
             let earlier = playback.position();
             assert_eq!(earlier.seek_mode, mode);
             assert!((earlier.frame as f64 + earlier.fraction - frame as f64 - 5.11).abs() < 1e-12);
-            playback.advance(93);
+            assert!(playback.advance(93));
             let phase = (100.0_f64 * 0.73 - prefix).rem_euclid(58.25);
             let position = playback.position();
             assert_eq!(position.seek_mode, ExplicitSeekMode::Normal);
@@ -644,9 +852,9 @@ mod tests {
             let run = |partition: &[usize]| {
                 let mut playback =
                     SourcePlayback::new(7, ExplicitSeekMode::Normal, 0.9345678901234568);
-                playback.configure_domain(domain);
-                playback.advance(17);
-                playback.set_target(1.1234567890123457);
+                assert!(playback.configure_domain(domain));
+                assert!(playback.advance(17));
+                assert!(playback.set_target(1.1234567890123457));
                 let mut trace = Vec::new();
                 let mut rendered = 0;
                 let mut segment = 0;
@@ -656,9 +864,10 @@ mod tests {
                     while remaining > 0 {
                         let (frames, ratio) = playback.chunk(remaining);
                         trace.extend(
-                            (0..frames).map(|offset| (ratio, playback.position_at(offset))),
+                            (0..frames)
+                                .map(|offset| (ratio, playback.position_at(offset).unwrap())),
                         );
-                        playback.advance(frames);
+                        assert!(playback.advance(frames));
                         remaining -= frames;
                     }
                     rendered += requested;
@@ -686,9 +895,9 @@ mod tests {
     fn prepared_adoption_requires_equal_future_rate_target_and_smoothing_interval() {
         let region = FrameRange { start: 7, end: 101 };
         let mut current = SourcePlayback::new(7, ExplicitSeekMode::Normal, 1.0);
-        current.configure(101, region);
+        assert!(current.configure(101, region));
         let mut changed_target = current;
-        changed_target.set_target(1.0 + 2.0_f64.powi(-24));
+        assert!(changed_target.set_target(1.0 + 2.0_f64.powi(-24)));
         assert_eq!(current.position(), changed_target.position());
         assert_eq!(current.tempo_ratio(), changed_target.tempo_ratio());
         assert!(!current.matches_exact(&changed_target));
@@ -697,12 +906,12 @@ mod tests {
 
         let ramp = |frames| {
             let mut playback = SourcePlayback::new(7, ExplicitSeekMode::Normal, 1.0);
-            playback.configure(101, region);
-            playback.set_target(1.2);
+            assert!(playback.configure(101, region));
+            assert!(playback.set_target(1.2));
             playback.chunk(frames);
-            playback.advance(frames);
-            playback.seek(47, ExplicitSeekMode::Normal);
-            playback.configure(101, region);
+            assert!(playback.advance(frames));
+            assert!(playback.seek(47, ExplicitSeekMode::Normal));
+            assert!(playback.configure(101, region));
             playback
         };
         let mut later_step = ramp(100);
@@ -718,9 +927,9 @@ mod tests {
     #[test]
     fn copied_prepared_trajectory_matches_exactly_across_canonical_rate_steps_and_partitions() {
         let mut initial = SourcePlayback::new(95, ExplicitSeekMode::AfterLoop, 0.73);
-        initial.configure(100, FrameRange { start: 13, end: 71 });
-        initial.advance(2);
-        initial.set_target(1.371_234_567_890_123);
+        assert!(initial.configure(100, FrameRange { start: 13, end: 71 }));
+        assert!(initial.advance(2));
+        assert!(initial.set_target(1.371_234_567_890_123));
         let advance = |mut playback: SourcePlayback, partition: &[usize]| {
             let mut elapsed = 0;
             let mut segment = 0;
@@ -729,7 +938,7 @@ mod tests {
                 let mut remaining = requested;
                 while remaining > 0 {
                     let (frames, _) = playback.chunk(remaining);
-                    playback.advance(frames);
+                    assert!(playback.advance(frames));
                     remaining -= frames;
                 }
                 elapsed += requested;
@@ -749,11 +958,11 @@ mod tests {
     fn long_constant_epoch_uses_exact_count_instead_of_segment_rounding() {
         let ratio = 123.45_f64 / 97.3_f64;
         let mut playback = SourcePlayback::new(7, ExplicitSeekMode::Normal, ratio);
-        playback.configure(101, FrameRange { start: 7, end: 101 });
+        assert!(playback.configure(101, FrameRange { start: 7, end: 101 }));
         // Thirty minutes at 96 kHz, advanced with unrelated chunk sizes.
         let total = 96_000 * 60 * 30;
         for frames in [1, 31, 512, total - 544] {
-            playback.advance(frames);
+            assert!(playback.advance(frames));
         }
         let distance = total as f64 * ratio;
         let position = playback.position();
@@ -769,22 +978,22 @@ mod tests {
         let target = 1.0 + 2.0_f64.powi(-24);
         assert_eq!(target as f32, 1.0);
         let mut playback = SourcePlayback::new(7, ExplicitSeekMode::Normal, 1.0);
-        playback.configure(101, FrameRange { start: 7, end: 101 });
-        playback.advance(17);
+        assert!(playback.configure(101, FrameRange { start: 7, end: 101 }));
+        assert!(playback.advance(17));
         let before = playback.position();
-        playback.set_target(target);
+        assert!(playback.set_target(target));
         assert_eq!(playback.chunk(8_388_608), (8_388_608, target));
         assert_eq!(playback.position(), before);
-        playback.advance(8_388_608);
+        assert!(playback.advance(8_388_608));
         let position = playback.position();
         assert_eq!(position.frame, 7 + (17 + 8_388_608) % 94);
         assert_eq!(position.fraction, 0.5);
 
         let next_target = target + 2.0_f64.powi(-25);
-        playback.set_target(next_target);
+        assert!(playback.set_target(next_target));
         assert_eq!(playback.chunk(1), (1, next_target));
         assert_eq!(playback.position(), position);
-        playback.advance(1);
+        assert!(playback.advance(1));
         assert_eq!(playback.position().fraction, (0.5 + next_target).fract());
     }
 
@@ -796,9 +1005,9 @@ mod tests {
         let region = FrameRange { start: 7, end: 101 };
         let run = |partition: &[usize]| {
             let mut playback = SourcePlayback::new(7, ExplicitSeekMode::Normal, start);
-            playback.configure(101, region);
-            playback.advance(17);
-            playback.set_target(target);
+            assert!(playback.configure(101, region));
+            assert!(playback.advance(17));
+            assert!(playback.set_target(target));
             let mut trace = Vec::with_capacity(total);
             let mut rendered = 0;
             let mut segment = 0;
@@ -808,9 +1017,9 @@ mod tests {
                 while remaining > 0 {
                     let (frames, ratio) = playback.chunk(remaining);
                     for offset in 0..frames {
-                        trace.push((ratio, playback.position_at(offset)));
+                        trace.push((ratio, playback.position_at(offset).unwrap()));
                     }
-                    playback.advance(frames);
+                    assert!(playback.advance(frames));
                     remaining -= frames;
                 }
                 rendered += requested;
@@ -846,15 +1055,15 @@ mod tests {
     #[test]
     fn copied_preparation_clock_and_live_continuation_have_identical_positions() {
         let mut live = SourcePlayback::new(0, ExplicitSeekMode::BeforeLoop, 0.73);
-        live.configure(100, FrameRange { start: 13, end: 71 });
-        live.advance(17);
+        assert!(live.configure(100, FrameRange { start: 13, end: 71 }));
+        assert!(live.advance(17));
         let mut prepared = live;
         for frames in [1, 31, 96, 257, 512] {
             for offset in 0..frames {
-                assert_eq!(live.position_at(offset), prepared.position());
-                prepared.advance(1);
+                assert_eq!(live.position_at(offset).unwrap(), prepared.position());
+                assert!(prepared.advance(1));
             }
-            live.advance(frames);
+            assert!(live.advance(frames));
             assert_eq!(live.position(), prepared.position());
         }
     }
@@ -862,11 +1071,11 @@ mod tests {
     #[test]
     fn exact_preparation_copy_retains_phase_and_does_not_consume_live_smoothing() {
         let mut logical = SourcePlayback::new(95, ExplicitSeekMode::AfterLoop, 0.73);
-        logical.configure(100, FrameRange { start: 13, end: 71 });
-        logical.advance(2);
-        logical.set_target(1.25);
+        assert!(logical.configure(100, FrameRange { start: 13, end: 71 }));
+        assert!(logical.advance(2));
+        assert!(logical.set_target(1.25));
         assert_eq!(logical.chunk(3).0, 3);
-        logical.advance(3);
+        assert!(logical.advance(3));
         let position = logical.position();
         let remaining_step_frames = logical.frames_until_step;
         let exact_ratio = 1.37_f64;
@@ -875,7 +1084,7 @@ mod tests {
         assert_eq!(feed.position(), position);
         assert_eq!(feed.tempo_ratio(), exact_ratio);
         assert_eq!(feed.chunk(777), (777, exact_ratio));
-        feed.advance(7);
+        assert!(feed.advance(7));
         let distance = position.fraction + 7.0 * exact_ratio;
         let expected_frame = 13 + (position.frame + distance.floor() as usize - 100) % 58;
         assert_eq!(feed.position().frame, expected_frame);
@@ -891,29 +1100,29 @@ mod tests {
     #[test]
     fn seek_retains_the_remaining_active_frames_before_a_rate_step() {
         let mut playback = SourcePlayback::new(0, ExplicitSeekMode::Normal, 1.0);
-        playback.configure(
+        assert!(playback.configure(
             1000,
             FrameRange {
                 start: 10,
                 end: 900,
             },
-        );
-        playback.set_target(1.5);
+        ));
+        assert!(playback.set_target(1.5));
         assert_eq!(playback.chunk(100), (100, 1.05));
-        playback.advance(100);
-        playback.seek(47, ExplicitSeekMode::Normal);
-        playback.configure(
+        assert!(playback.advance(100));
+        assert!(playback.seek(47, ExplicitSeekMode::Normal));
+        assert!(playback.configure(
             1000,
             FrameRange {
                 start: 10,
                 end: 900,
             },
-        );
-        playback.set_target(1.5);
+        ));
+        assert!(playback.set_target(1.5));
         assert_eq!(playback.position().frame, 47);
         assert_eq!(playback.position().fraction, 0.0);
         assert_eq!(playback.chunk(512), (412, 1.05));
-        playback.advance(412);
+        assert!(playback.advance(412));
         let (frames, ratio) = playback.chunk(1);
         assert_eq!(frames, 1);
         assert!((ratio - 1.1).abs() < 1e-6);

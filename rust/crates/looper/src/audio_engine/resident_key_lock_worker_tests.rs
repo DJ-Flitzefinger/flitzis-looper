@@ -8,8 +8,8 @@ use crate::audio_engine::resident_relocation::launch_with_producer;
 use crate::audio_engine::rubberband_backend::{RubberBandLiveShifter, pitch_scale_for_tempo_ratio};
 use std::collections::VecDeque;
 
-// Independent Native/FIFO oracle. Keeping its feed explicit also lets the ordinary
-// attack prime real negative-time loop PCM before its first audible output sample.
+// Independent Native/FIFO oracle. Ordinary physical births prime declared silence;
+// subsequent live mode preparation consumes its real source chronology below.
 struct RawChronology {
     native: RubberBandLiveShifter,
     input: VecDeque<f32>,
@@ -56,18 +56,9 @@ impl RawChronology {
         self.output.drain(..samples.len()).collect()
     }
 
-    fn endpoint(source: &SampleBuffer, ratio: f64) -> Self {
+    fn physical_birth(ratio: f64) -> Self {
         let mut raw = Self::new(ratio, true);
-        let history: Vec<_> = (0..4096)
-            .map(|frame| {
-                let phase = ((frame as f64 - 4096.0) * ratio).rem_euclid(72.0);
-                let left = 24 + phase.floor() as usize;
-                let right = if left + 1 == 96 { 24 } else { left + 1 };
-                let a = source.samples[left];
-                a + (source.samples[right] - a) * phase.fract() as f32
-            })
-            .collect();
-        raw.feed(&history);
+        raw.feed(&[0.0; 4096]);
         raw
     }
 
@@ -91,7 +82,7 @@ impl RawChronology {
     }
 }
 
-fn prepare_complete_endpoint(
+fn prepare_complete_physical_birth(
     mixer: &mut RtMixer,
     ownership: &Arc<InputRuntimeOwnership>,
     execution: u64,
@@ -130,7 +121,7 @@ fn prepare_complete_endpoint(
             2,
         ),
     );
-    candidate.prepare_source_at_endpoint(request).unwrap();
+    candidate.prepare_source_at_physical_birth(request).unwrap();
     let snapshot = mixer.capture_pitch_voice_snapshot(index).unwrap();
     let feed = crate::audio_engine::stretch_processor::ProductiveSourceFeed {
         pitch_intent: crate::audio_engine::pitch_intent::PitchIntent::default(),
@@ -149,6 +140,11 @@ fn prepare_complete_endpoint(
         mixer.voices[index]
             .stretch
             .adopt_prepared_pitch(&mut candidate, &feed, epoch, 1)
+    );
+    assert!(
+        mixer.voices[index]
+            .stretch
+            .native_has_physical_birth_context_for_test()
     );
 }
 
@@ -286,6 +282,14 @@ impl ModeOracle {
         if initial {
             let actual = voice(&loaded.callback.mixer);
             assert_eq!(actual.stretch.adopted_request_id(), Some(start.sequence()));
+            assert!(actual.stretch.native_has_physical_birth_context_for_test());
+            assert_eq!(actual.stretch.native_primed_output_frames(), 4096);
+            let sample = actual.sample.as_ref().unwrap();
+            assert!(sample.valid_residency(48_000, 2));
+            assert_eq!(sample.frame_count(), loaded.mono.len());
+            assert!(sample.same_window(&loaded.sample()));
+            assert_eq!(actual.source_playback.tempo_ratio(), ratio);
+            assert_eq!(actual.source_playback.rate_target(), ratio);
             assert_eq!(
                 actual
                     .stretch
@@ -295,10 +299,11 @@ impl ModeOracle {
                 4096
             );
             let taps = actual.stretch.native_tap_observation().unwrap();
-            assert_eq!(taps.left_reads, 4096 * 2);
+            assert_eq!(taps.left_reads, 0);
+            assert_eq!(taps.right_reads, 0);
             assert_eq!(taps.missing_reads, 0);
-            assert!(taps.min_frame.is_some_and(|frame| frame >= 24));
-            assert!(taps.max_frame.is_some_and(|frame| frame < 96));
+            assert_eq!(taps.min_frame, None);
+            assert_eq!(taps.max_frame, None);
             assert_eq!(actual.source_playback.position().frame, 24);
             assert_eq!(actual.source_playback.position().fraction, 0.0);
         }
@@ -338,13 +343,13 @@ impl ModeOracle {
         assert!(complete.play_sample_at_output_frame(0, 1.0, execution));
         complete.set_pad_key_lock(0, initial);
         if initial {
-            prepare_complete_endpoint(&mut complete, &ownership, execution);
+            prepare_complete_physical_birth(&mut complete, &ownership, execution);
         }
         for mixer in [complete.as_mut(), &mut loaded.callback.mixer] {
             mixer.set_pad_eq(0, -12.0, -3.0, 4.0);
         }
         let raw = if initial {
-            RawChronology::endpoint(&source, ratio)
+            RawChronology::physical_birth(ratio)
         } else {
             RawChronology::new(ratio, false)
         };
@@ -1147,7 +1152,9 @@ fn actual_mode_ack_never_certifies_on_after_native_worker_failure_or_exhausted_w
                 voice(&oracle.loaded.callback.mixer)
                     .source_playback
                     .position(),
-                before.position_at(1801)
+                before
+                    .position_at(1801)
+                    .expect("known scalar failed-preparation continuation")
             );
         }
     }

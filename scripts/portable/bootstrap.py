@@ -272,6 +272,7 @@ def check_pitch_action_api(native_module: object) -> None:
         )
     for method, keyword in (
         ("set_input_runtime_state", "pitch_rows"),
+        ("set_input_runtime_state", "source_map_rows"),
         ("capture_pad_pitch_action", "received_at_ns"),
         ("capture_selected_pitch_action", "received_at_ns"),
         ("load_sample_async", "initial_base_shift"),

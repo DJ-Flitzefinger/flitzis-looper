@@ -41,6 +41,8 @@ pub(crate) struct OrdinaryStartWork {
     pending_late_reprepare: Option<PendingLateReprepare>,
     inherit_loop: bool,
     captured_loop: Option<(f64, Option<f64>)>,
+    mapped_clock: Option<super::mapped_source_clock::MappedClockEpoch>,
+    mapped_origin_frame: Option<u64>,
 }
 
 impl OrdinaryStartWork {
@@ -76,11 +78,59 @@ impl OrdinaryStartWork {
             pending_late_reprepare: None,
             inherit_loop: false,
             captured_loop: None,
+            mapped_clock: None,
+            mapped_origin_frame: None,
         }))
     }
 
     pub(crate) fn sequence(&self) -> u64 {
         self.sequence
+    }
+
+    /// The existing scheduler supplies its actual immutable master projection.
+    /// No map access or ownership allocation occurs on the callback.
+    pub(crate) fn freeze_mapped_clock(
+        &mut self,
+        timeline: Option<super::transport::TransportTimeline>,
+        original: u64,
+    ) -> Result<(), PitchActionReject> {
+        let Some(geometry) = self.origin().mapped_geometry() else {
+            return Ok(());
+        };
+        if self.mapped_clock.is_some() {
+            return Err(PitchActionReject::PreparedMismatch);
+        }
+        let timeline = timeline.ok_or(PitchActionReject::MappedTimingUnavailable)?;
+        let phase = -timeline
+            .beat_position_at_frame(original)
+            .ok_or(PitchActionReject::TimingUnavailable)?;
+        let epoch =
+            super::mapped_source_clock::MappedClockEpoch::new(self.sequence, timeline, phase)
+                .ok_or(PitchActionReject::TimingUnavailable)?;
+        geometry
+            .validate_epoch(epoch)
+            .map_err(|_| PitchActionReject::MappedTimingUnavailable)?;
+        self.mapped_clock = Some(epoch);
+        self.mapped_origin_frame = Some(original);
+        Ok(())
+    }
+
+    pub(crate) fn mapped_clock(
+        &self,
+    ) -> Option<(super::mapped_source_clock::MappedClockEpoch, u64)> {
+        self.mapped_clock.zip(self.mapped_origin_frame)
+    }
+    pub(crate) fn validate_mapped_timeline(
+        &self,
+        timeline: Option<super::transport::TransportTimeline>,
+    ) -> Result<(), PitchActionReject> {
+        if self
+            .mapped_clock
+            .is_some_and(|epoch| timeline.is_none_or(|actual| !epoch.matches_timeline(&actual)))
+        {
+            return Err(PitchActionReject::MappedTimingUnavailable);
+        }
+        Ok(())
     }
     pub(crate) fn use_current_loop(&mut self) {
         self.inherit_loop = true;
@@ -149,6 +199,11 @@ impl OrdinaryStartWork {
         if self.frames.is_some() || execution < original {
             return Err(PitchActionReject::PreparedMismatch);
         }
+        // Native/FIFO mapped preparation and delayed attack reconstruction are
+        // separate admission gates. Never skip the first attack to catch up.
+        if self.mapped_clock.is_some() && execution != original {
+            return Err(PitchActionReject::MappedTimingUnavailable);
+        }
         self.origin().freeze_frames(original, execution)?;
         self.frames = Some((original, execution));
         Ok(())
@@ -182,6 +237,9 @@ impl OrdinaryStartWork {
         dsp_intent: super::late_start_dsp::DspInputIntent,
         execution: u64,
     ) -> Result<(), PitchActionReject> {
+        if self.mapped_clock.is_some() {
+            return Err(PitchActionReject::MappedTimingUnavailable);
+        }
         let (original, previous_execution) =
             self.frames.ok_or(PitchActionReject::PreparedMismatch)?;
         let origin = self

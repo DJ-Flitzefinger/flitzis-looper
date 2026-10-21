@@ -151,9 +151,9 @@ impl NativeAdapterState {
         }
         let mut logical = timeline.logical;
         let mut actual = timeline.actual;
-        logical.playback.set_target(target);
-        actual.playback.set_target(target);
-        if !logical.project_output_frames(0)
+        if !logical.playback.set_target(target)
+            || !actual.playback.set_target(target)
+            || !logical.project_output_frames(0)
             || !actual.project_output_frames(0)
             || !logical.is_consistent()
             || !actual.is_consistent()
@@ -238,6 +238,13 @@ impl NativeAdapterState {
         dsp: Option<&mut crate::audio_engine::late_start_dsp::LateStartDspWork>,
         context: NativeStartHistoryContext,
     ) -> Result<(), NativeSourcePreparationError> {
+        if request.playback.is_mapped()
+            || request
+                .actual_feed
+                .is_some_and(|checkpoint| checkpoint.playback.is_mapped())
+        {
+            return Err(unavailable());
+        }
         if declared_cut.is_some() && catchup_frames != 0 {
             return Err(unavailable());
         }

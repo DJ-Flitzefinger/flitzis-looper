@@ -266,7 +266,7 @@ fn birth_between_capture_and_delivery(policy: &str, birth_after_t: u64, second_n
     let actual_phase = selected.source_playback.position();
     assert_eq!(actual_phase.frame, phase.floor() as usize);
     assert!((actual_phase.fraction - phase.fract()).abs() < 1.0e-8);
-    peer_playback.advance((execution - delivery) as usize + EMITTED_FRAMES);
+    assert!(peer_playback.advance((execution - delivery) as usize + EMITTED_FRAMES));
     assert!(peer_playback.matches_exact(&voice(&burst, 1).source_playback));
     assert_eq!(voice(&burst, 1).generation, peer_generation);
     assert_eq!(

@@ -90,6 +90,9 @@ impl RtMixer {
 
     fn committed_stem_capture_current(&self, capture: &StemVoiceCapture, id: usize) -> bool {
         if id >= NUM_SAMPLES
+            || self.voices.iter().any(|voice| {
+                voice.active && voice.sample_id == id && voice.source_playback.is_mapped()
+            })
             || !capture.status.preparation_current()
             || !self.admitted_source_binding_current(id, capture.binding)
             || !self.admitted_launch_current(id, capture.binding, capture.launch_revision)
@@ -191,7 +194,9 @@ impl RtMixer {
                     0,
                 )
             };
-        playback.configure_domain(timing.loop_domain(sample.frame_count(), region));
+        if !playback.configure_domain(timing.loop_domain(sample.frame_count(), region)) {
+            return None;
+        }
         let position = playback.position();
         if !committed_stem_mode_available(
             position.seek_mode,
@@ -257,6 +262,10 @@ impl RtMixer {
         let id = transaction.id;
         let pin = &transaction.pin;
         if id >= NUM_SAMPLES
+            || pin.playback.is_mapped()
+            || self.voices.iter().any(|voice| {
+                voice.active && voice.sample_id == id && voice.source_playback.is_mapped()
+            })
             || !transaction.status.publication.current()
             || !transaction.status.preparation_current()
             || !self.admitted_source_binding_current(id, transaction.binding)
@@ -393,10 +402,12 @@ impl RtMixer {
                     return false;
                 };
                 let mut playback = voice.source_playback;
-                playback.configure_domain(
+                if !playback.configure_domain(
                     self.timing_for_voice(voice)
                         .loop_domain(pin.sample.frame_count(), region),
-                );
+                ) {
+                    return false;
+                }
                 let position = playback.position();
                 let actual = SourceReadPlan {
                     frame_pos: position.frame,

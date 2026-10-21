@@ -20,6 +20,9 @@ fn retrigger_needs_native(
     render: FrozenPitchRender,
     snapshot: &PitchSourceSnapshot,
 ) -> Result<bool, PitchActionReject> {
+    if snapshot.playback.is_mapped() {
+        return Err(PitchActionReject::MappedTimingUnavailable);
+    }
     let pitch = render
         .pitch
         .native_pitch_scale(snapshot.playback.tempo_ratio(), render.key_lock)
@@ -141,6 +144,9 @@ impl RtMixer {
         snapshot: &PitchSourceSnapshot,
         index: usize,
     ) -> Result<bool, PitchActionReject> {
+        if snapshot.playback.is_mapped() {
+            return Err(PitchActionReject::MappedTimingUnavailable);
+        }
         let render = work.action.render();
         let id = self.voices[index].sample_id;
         let same_owned = self.pad_pitch_intent[id] == render.pitch
@@ -165,6 +171,9 @@ impl RtMixer {
             return Err(PitchActionReject::StaleContent);
         }
         let guard = work.current_guard()?;
+        if !self.mapped_pitch_action_available(guard.id) {
+            return Err(PitchActionReject::MappedTimingUnavailable);
+        }
         if !self.admitted_source_binding_current(guard.id, guard.binding) {
             return Err(PitchActionReject::SourceChanged);
         }
@@ -174,6 +183,13 @@ impl RtMixer {
             return Err(PitchActionReject::TimingChanged);
         }
         Ok(guard)
+    }
+
+    fn mapped_pitch_action_available(&self, id: usize) -> bool {
+        !self
+            .voices
+            .iter()
+            .any(|voice| voice.active && voice.sample_id == id && voice.source_playback.is_mapped())
     }
 
     fn pitch_action_voice(
@@ -273,11 +289,14 @@ impl RtMixer {
             // A piano attack resets phase, not the accepted active-frame rate clock.
             // Native history remains subject to its existing exact endpoint guard.
             let mut playback = current.playback;
-            playback.seek(snapshot.plan.loop_region.start, ExplicitSeekMode::Normal);
-            playback.configure_domain(
-                self.timing_for_sample_id(id)
-                    .loop_domain(snapshot.sample.frame_count(), snapshot.plan.loop_region),
-            );
+            if !playback.seek(snapshot.plan.loop_region.start, ExplicitSeekMode::Normal)
+                || !playback.configure_domain(
+                    self.timing_for_sample_id(id)
+                        .loop_domain(snapshot.sample.frame_count(), snapshot.plan.loop_region),
+                )
+            {
+                return Err(PitchActionReject::MappedTimingUnavailable);
+            }
             snapshot.playback = playback;
             snapshot.plan.loop_period = playback.loop_period();
         }
@@ -571,6 +590,11 @@ impl RtMixer {
         index: usize,
         output_frame: u64,
     ) -> bool {
+        if snapshot.playback.is_mapped()
+            || !self.mapped_pitch_action_available(self.voices[index].sample_id)
+        {
+            return false;
+        }
         if !work.native_required() {
             return work.dry_source_matches(snapshot);
         }
@@ -712,7 +736,7 @@ impl RtMixer {
         }
         let retirement_needed = 1 + if retrigger {
             if work.action.exclusive() {
-                3 * MAX_VOICES
+                3 * MAX_VOICES + self.mapped_owner_retirement_slots()
             } else {
                 3
             }
@@ -805,6 +829,7 @@ impl RtMixer {
                     let mixer = mixer.borrow();
                     let work = work.borrow();
                     work.claim_current(guard)
+                        && mixer.mapped_pitch_action_available(id)
                         && mixer.admitted_source_binding_current(id, guard.binding)
                         && work.source_control_revision.is_none_or(|revision| {
                             mixer.source_control_revision_matches(
