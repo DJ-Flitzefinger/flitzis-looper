@@ -296,6 +296,15 @@ impl ColdTransaction {
         } else {
             None
         };
+        let read_maximum = if let Some(token) = reservation.as_ref() {
+            token
+                .remaining_bytes()
+                .map_err(crate::audio_engine::resident_proposal::admission_io)?
+                .checked_add(CHUNK_BYTES)
+                .ok_or_else(|| invalid("reserved resident read extent overflow"))?
+        } else {
+            maximum
+        };
         let samples = if let Some(samples) = shared {
             samples
         } else {
@@ -304,7 +313,7 @@ impl ColdTransaction {
                 start,
                 end - start,
                 source.channels,
-                maximum,
+                read_maximum,
                 cancelled,
                 &mut self.integrity,
             )?

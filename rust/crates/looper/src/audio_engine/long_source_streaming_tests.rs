@@ -727,6 +727,15 @@ fn x11_long_productive_child() {
     );
     let mut all_error = None;
     if case == "large" {
+        // This scenario deliberately tests a user-selected residency ceiling;
+        // automatic mode now follows actual host headroom rather than duration.
+        Python::attach(|py| {
+            let value = engine.borrow(py);
+            value
+                .project_assets
+                .set_resident_budget_mib(&value.resident_account, 128)
+                .unwrap();
+        });
         assert!(
             lease
                 .read_complete_cancellable(&sample, 1024 * 1024 * 1024, &|| false)

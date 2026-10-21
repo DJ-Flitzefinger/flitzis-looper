@@ -658,11 +658,20 @@ def test_deferred_startup_restore_treats_stopped_lane_as_terminal_failure(
     audio_engine_mock.load_sample_async.assert_not_called()
 
 
-def test_startup_budget_pressure_rotates_without_losing_any_saved_assignment(
+@pytest.mark.parametrize(
+    "pressure",
+    [
+        "[resident_pcm_budget_exceeded] requested=4096 budget=2048",
+        "[resident_memory_pressure] insufficient host allocation headroom",
+        "[resident_memory_unavailable] OS memory query failed",
+    ],
+)
+def test_startup_memory_pressure_rotates_without_losing_any_saved_assignment(
     controller: AppController,
     audio_engine_mock: Mock,
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
+    pressure: str,
 ) -> None:
     original = tmp_path / "samples" / "old.wav"
     _populate_saved_automatic_sources(controller.project, "/")
@@ -672,8 +681,7 @@ def test_startup_budget_pressure_rotates_without_losing_any_saved_assignment(
 
     def admit(sample_id: int, _path: str, **_kwargs: object) -> int:
         if sample_id == 0:
-            message = "[resident_pcm_budget_exceeded] requested=4096 budget=2048"
-            raise RuntimeError(message)
+            raise RuntimeError(pressure)
         admitted.append(sample_id)
         return sample_id + 1
 
@@ -690,9 +698,25 @@ def test_startup_budget_pressure_rotates_without_losing_any_saved_assignment(
     assert controller.project.model_dump() == before
 
 
-@pytest.mark.parametrize("pressure", [True, False])
-def test_matching_async_restore_budget_failure_is_deferred_only_for_typed_codec(
-    controller: AppController, audio_engine_mock: Mock, tmp_path: Path, *, pressure: bool
+@pytest.mark.parametrize(
+    ("message", "pressure"),
+    [
+        ("[resident_pcm_budget_exceeded] requested=4096 budget=2048", True),
+        ("[resident_memory_pressure] insufficient host allocation headroom", True),
+        ("[resident_memory_unavailable] OS memory query failed", True),
+        ("corrupt source: path contains [resident_pcm_budget_exceeded]", False),
+        ("corrupt source: path contains [resident_memory_pressure]", False),
+        ("memory allocation failed", False),
+        ("I/O error reading complete PCM", False),
+    ],
+)
+def test_matching_async_restore_memory_failure_is_deferred_only_for_typed_codec(
+    controller: AppController,
+    audio_engine_mock: Mock,
+    tmp_path: Path,
+    message: str,
+    *,
+    pressure: bool,
 ) -> None:
     original = tmp_path / "samples" / "old.wav"
     original.parent.mkdir(parents=True)
@@ -701,11 +725,6 @@ def test_matching_async_restore_budget_failure_is_deferred_only_for_typed_codec(
     before = controller.project.model_dump()
     audio_engine_mock.load_sample_async.return_value = 1
     controller.loader.restore_samples_from_project_state()
-    message = (
-        "[resident_pcm_budget_exceeded] requested=4096 budget=2048"
-        if pressure
-        else ("corrupt source: path contains [resident_pcm_budget_exceeded]")
-    )
     audio_engine_mock.load_sample_async.side_effect = RuntimeError(message)
     audio_engine_mock.poll_loader_events.side_effect = [
         {"type": "error", "id": 0, "request_id": 1, "msg": message},
@@ -715,6 +734,16 @@ def test_matching_async_restore_budget_failure_is_deferred_only_for_typed_codec(
     assert (0 in controller.loader._deferred_restores) is pressure
     assert controller.project.model_dump() == before
     assert controller.session.sample_load_errors[0] == message
+    if pressure:
+        audio_engine_mock.load_sample_async.side_effect = None
+        audio_engine_mock.load_sample_async.return_value = 2
+        audio_engine_mock.poll_loader_events.side_effect = None
+        audio_engine_mock.poll_loader_events.return_value = None
+        controller.loader.poll_loader_events()
+        assert 0 not in controller.loader._deferred_restores
+        assert 0 not in controller.session.sample_load_errors
+        assert controller.loader._load_request_ids[0] == 2
+        assert controller.project.model_dump() == before
 
 
 def test_unload_admission_failure_preserves_source_session_and_deferred_restore(

@@ -302,6 +302,7 @@ impl VerifiedStemPair {
         &self,
         index: usize,
         current: &SampleBuffer,
+        maximum: usize,
         cancelled: &impl Fn() -> bool,
     ) -> Result<SampleBuffer, String> {
         check_cancelled(cancelled)?;
@@ -330,7 +331,7 @@ impl VerifiedStemPair {
             .checked_mul(current.channels)
             .and_then(|n| n.checked_mul(4))
             .ok_or("stem window extent overflow")?;
-        if length > super::cold_jobs::PCM_LIMIT_BYTES {
+        if length > maximum {
             return Err("stem window exceeds admission".into());
         }
         #[cfg(test)]
@@ -415,21 +416,42 @@ impl VerifiedStemPair {
         &self,
         current: &SampleBuffer,
     ) -> Result<[SampleBuffer; 4], String> {
-        self.prepare_component_views_cancellable(current, &|| false)
+        let maximum = admitted_component_view_bytes(current.samples.len())?;
+        if maximum > super::cold_jobs::PCM_LIMIT_BYTES {
+            return Err("component transient PCM admission exceeded".into());
+        }
+        self.prepare_component_views_with_limit(current, &|| false, maximum)
     }
     pub(super) fn prepare_component_views_cancellable(
         &self,
         current: &SampleBuffer,
         cancelled: &impl Fn() -> bool,
+        reservation: &super::resident_accounting::ResidentReservation,
+    ) -> Result<[SampleBuffer; 4], String> {
+        let maximum = reservation
+            .remaining_bytes()
+            .map_err(|error| error.to_string())?;
+        self.prepare_component_views_with_limit(current, cancelled, maximum)
+    }
+
+    fn prepare_component_views_with_limit(
+        &self,
+        current: &SampleBuffer,
+        cancelled: &impl Fn() -> bool,
+        maximum: usize,
     ) -> Result<[SampleBuffer; 4], String> {
         check_cancelled(cancelled)?;
-        let maximum = admitted_component_view_bytes(current.samples.len())?;
-        if maximum > super::cold_jobs::PCM_LIMIT_BYTES {
-            return Err("component transient PCM admission exceeded".into());
+        let bytes = current
+            .samples
+            .len()
+            .checked_mul(16)
+            .ok_or("component resident extent overflow")?;
+        if bytes > maximum {
+            return Err("component resident allocation exceeds its reservation".into());
         }
         let mut buffers = Vec::with_capacity(4);
         for index in 0..4 {
-            buffers.push(self.read_range(index, current, cancelled)?);
+            buffers.push(self.read_range(index, current, maximum, cancelled)?);
         }
         buffers
             .try_into()
@@ -446,7 +468,7 @@ impl VerifiedStemPair {
         if maximum > super::cold_jobs::PCM_LIMIT_BYTES {
             return Err("instrumental transient PCM admission exceeded".into());
         }
-        self.read_range(4, current, &|| false)
+        self.read_range(4, current, super::cold_jobs::PCM_LIMIT_BYTES, &|| false)
     }
 }
 
@@ -983,6 +1005,7 @@ pub(super) fn prepare_complete_pair(
 }
 
 /// Existing source plus four final Arc views and one bounded encoded read chunk.
+#[cfg(test)]
 pub(super) fn admitted_component_view_bytes(sample_count: usize) -> Result<usize, String> {
     sample_count
         .checked_mul(4)

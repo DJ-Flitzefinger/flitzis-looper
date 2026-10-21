@@ -113,6 +113,7 @@ def test_settings_renders_exact_pcm_and_pinned_over_budget_without_process_ram_c
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     ctx = UiContext(controller)
+    controller.project.resident_pcm_budget_automatic = False
     audio_engine_mock.get_resident_pcm_budget_status.return_value = {
         "budget_mib": 512,
         "budget_bytes": 512 * 1048576,
@@ -125,11 +126,7 @@ def test_settings_renders_exact_pcm_and_pinned_over_budget_without_process_ram_c
         "available_bytes": 0,
     }
     text: list[str] = []
-    monkeypatch.setattr(settings, "item_width", lambda _width: nullcontext())
-    monkeypatch.setattr(imgui, "checkbox", Mock(return_value=(False, False)))
-    monkeypatch.setattr(imgui, "slider_int", Mock(return_value=(False, 512)))
-    monkeypatch.setattr(imgui, "is_item_deactivated_after_edit", Mock(return_value=False))
-    monkeypatch.setattr(imgui, "text_wrapped", text.append)
+    _resident_controls_widgets(monkeypatch, text)
     settings._resident_pcm_controls(ctx)
     assert any("629145600 B" in message for message in text)
     assert any("Pinned readers temporarily exceed" in message for message in text)
@@ -145,11 +142,154 @@ def test_settings_accounting_failure_never_renders_invented_zero_bytes(
     ctx = UiContext(controller)
     audio_engine_mock.get_resident_pcm_budget_status.return_value = {}
     text: list[str] = []
-    monkeypatch.setattr(settings, "item_width", lambda _width: nullcontext())
-    monkeypatch.setattr(imgui, "checkbox", Mock(return_value=(False, False)))
-    monkeypatch.setattr(imgui, "slider_int", Mock(return_value=(False, 512)))
-    monkeypatch.setattr(imgui, "is_item_deactivated_after_edit", Mock(return_value=False))
-    monkeypatch.setattr(imgui, "text_wrapped", text.append)
+    _resident_controls_widgets(monkeypatch, text)
     settings._resident_pcm_controls(ctx)
     assert any("Resident accounting unavailable" in message for message in text)
     assert not any("Exact unique resident PCM" in message for message in text)
+
+
+def _resident_controls_widgets(
+    monkeypatch: pytest.MonkeyPatch, text: list[str]
+) -> tuple[Mock, Mock, Mock]:
+    checkbox = Mock(return_value=(False, False))
+    slider = Mock(return_value=(False, 1))
+    disabled = Mock()
+    monkeypatch.setattr(settings, "item_width", lambda _width: nullcontext())
+    monkeypatch.setattr(imgui, "checkbox", checkbox)
+    monkeypatch.setattr(imgui, "slider_int", slider)
+    monkeypatch.setattr(imgui, "begin_disabled", disabled)
+    monkeypatch.setattr(imgui, "end_disabled", Mock())
+    monkeypatch.setattr(imgui, "is_item_deactivated_after_edit", Mock(return_value=False))
+    monkeypatch.setattr(imgui, "text_wrapped", text.append)
+    return checkbox, slider, disabled
+
+
+def test_automatic_admission_disables_manual_limit_and_shows_os_headroom_separately(
+    controller: AppController,
+    audio_engine_mock: Mock,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    ctx = UiContext(controller)
+    native = audio_engine_mock.get_resident_pcm_budget_status.return_value
+    native.update({
+        "automatic": True,
+        "budget_mib": 0,
+        "budget_bytes": 0,
+        "available_bytes": 0,
+        "host_pending_allocation_bytes": 123,
+        "host_available_physical_bytes": 987654321,
+        "host_available_commit_bytes": 876543210,
+        "host_allocation_allowance_bytes": 765432109,
+        "host_memory_error": None,
+    })
+    text: list[str] = []
+    _, slider, disabled = _resident_controls_widgets(monkeypatch, text)
+    slider.return_value = (True, 12)
+    audio_engine_mock.set_resident_pcm_budget_mib.reset_mock()
+
+    settings._resident_pcm_controls(ctx)
+
+    disabled.assert_called_once()
+    assert disabled.call_args.args == (True,)
+    assert controller.project.resident_pcm_budget_mib == 512
+    audio_engine_mock.set_resident_pcm_budget_mib.assert_not_called()
+    assert any("automatic; no fixed resident PCM limit" in message for message in text)
+    assert any("physical 987654321 B; commit 876543210 B" in message for message in text)
+    assert any("Outstanding host allocation reservations 123 B" in message for message in text)
+    assert any("PCM counters are not process RSS" in message for message in text)
+    assert not any("Effective manual resident PCM limit" in message for message in text)
+
+
+def test_settings_toggle_uses_retained_manual_limit_and_flushes_after_native_acceptance(
+    controller: AppController,
+    audio_engine_mock: Mock,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    ctx = UiContext(controller)
+    controller.project.resident_pcm_budget_mib = 2048
+    checkbox, _, disabled = _resident_controls_widgets(monkeypatch, [])
+    checkbox.side_effect = lambda label, _value: (label == "Automatic memory admission", False)
+    audio_engine_mock.set_resident_pcm_budget_mib.reset_mock()
+    flush = Mock(return_value=True)
+    monkeypatch.setattr(ctx.persistence, "flush_if_dirty", flush)
+
+    settings._resident_pcm_controls(ctx)
+
+    disabled.assert_called_once()
+    assert disabled.call_args.args == (False,)
+    audio_engine_mock.set_resident_pcm_budget_mib.assert_called_once_with(2048)
+    assert not controller.project.resident_pcm_budget_automatic
+    flush.assert_called_once_with()
+
+
+def test_settings_failed_mode_toggle_keeps_automatic_and_exposes_native_error(
+    controller: AppController,
+    audio_engine_mock: Mock,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    ctx = UiContext(controller)
+    text: list[str] = []
+    checkbox, _, disabled = _resident_controls_widgets(monkeypatch, text)
+    checkbox.side_effect = lambda label, _value: (label == "Automatic memory admission", False)
+    audio_engine_mock.set_resident_pcm_budget_mib.side_effect = RuntimeError("Native stopped")
+    flush = Mock(return_value=True)
+    monkeypatch.setattr(ctx.persistence, "flush_if_dirty", flush)
+
+    settings._resident_pcm_controls(ctx)
+
+    disabled.assert_called_once()
+    assert disabled.call_args.args == (True,)
+    assert controller.project.resident_pcm_budget_automatic
+    assert controller.project.resident_pcm_budget_mib == 512
+    assert controller.session.resident_pcm_settings_error == "Native stopped"
+    assert "Native stopped" in text
+    flush.assert_not_called()
+
+
+def test_rendering_gib_slider_preserves_exact_legacy_manual_limit(
+    controller: AppController,
+    audio_engine_mock: Mock,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    ctx = UiContext(controller)
+    controller.project.resident_pcm_budget_mib = 9925
+    controller.project.resident_pcm_budget_automatic = False
+    text: list[str] = []
+    _, slider, disabled = _resident_controls_widgets(monkeypatch, text)
+    slider.return_value = (False, 10)
+    audio_engine_mock.set_resident_pcm_budget_mib.reset_mock()
+
+    settings._resident_pcm_budget_controls(ctx)
+
+    slider.assert_called_once_with("Choose manual limit (GiB)", 10, 1, 16)
+    disabled.assert_called_once()
+    assert disabled.call_args.args == (False,)
+    assert controller.project.resident_pcm_budget_mib == 9925
+    assert "Retained manual limit: 9.69 GiB (9925 MiB)." in text
+    audio_engine_mock.set_resident_pcm_budget_mib.assert_not_called()
+
+
+def test_gib_slider_gesture_applies_whole_gib_before_persisting(
+    controller: AppController,
+    audio_engine_mock: Mock,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    ctx = UiContext(controller)
+    controller.project.resident_pcm_budget_mib = 9925
+    controller.project.resident_pcm_budget_automatic = False
+    text: list[str] = []
+    _, slider, _ = _resident_controls_widgets(monkeypatch, text)
+    slider.return_value = (True, 12)
+
+    def apply_native(value: int) -> None:
+        assert controller.project.resident_pcm_budget_mib == 9925
+        assert value == 12288
+
+    audio_engine_mock.set_resident_pcm_budget_mib.reset_mock()
+    audio_engine_mock.set_resident_pcm_budget_mib.side_effect = apply_native
+
+    settings._resident_pcm_budget_controls(ctx)
+
+    audio_engine_mock.set_resident_pcm_budget_mib.assert_called_once_with(12288)
+    assert controller.project.resident_pcm_budget_mib == 12288
+    assert "Retained manual limit: 12.00 GiB (12288 MiB)." in text

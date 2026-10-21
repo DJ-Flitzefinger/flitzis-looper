@@ -560,6 +560,15 @@ impl ColdTransaction {
         } else {
             None
         };
+        let read_maximum = if let Some(token) = reservation.as_ref() {
+            token
+                .remaining_bytes()
+                .map_err(crate::audio_engine::resident_proposal::admission_io)?
+                .checked_add(CHUNK_BYTES)
+                .ok_or_else(|| invalid("reserved resident read extent overflow"))?
+        } else {
+            maximum
+        };
         let samples = if matches!(request, ReuseRequest::Prepared) {
             None
         } else if let Some(samples) = shared_pcm {
@@ -570,7 +579,7 @@ impl ColdTransaction {
                 start,
                 end - start,
                 channels,
-                maximum,
+                read_maximum,
                 cancelled,
                 &mut self.integrity,
             )?)
@@ -699,10 +708,7 @@ pub(super) fn read_playback_range(
     let length = count
         .checked_mul(4)
         .ok_or_else(|| invalid("warm PCM extent overflow"))?;
-    if length
-        .checked_add(CHUNK_BYTES)
-        .is_none_or(|n| n > maximum.min(crate::audio_engine::cold_jobs::PCM_LIMIT_BYTES))
-    {
+    if length.checked_add(CHUNK_BYTES).is_none_or(|n| n > maximum) {
         return Err(invalid("warm PCM conversion exceeds whole-job budget"));
     }
     let offset = start

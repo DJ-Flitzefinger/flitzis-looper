@@ -79,7 +79,7 @@ class SettingsController(BaseController):
             self._on_residency_policy_changed()
 
     def set_resident_pcm_budget_mib(self, value: int) -> None:
-        """Apply Native admission allowance before committing its persistent preference."""
+        """Retain the manual limit, applying it first only when manual mode is active."""
         if type(value) is not int:
             message = "resident PCM budget must be an integer"
             raise TypeError(message)
@@ -88,8 +88,27 @@ class SettingsController(BaseController):
             raise ValueError(message)
         if value == self._project.resident_pcm_budget_mib:
             return
-        self._audio.set_resident_pcm_budget_mib(value)
+        if not self._project.resident_pcm_budget_automatic:
+            self._audio.set_resident_pcm_budget_mib(value)
         self._project.resident_pcm_budget_mib = value
+        self._mark_project_changed()
+        if (
+            not self._project.resident_pcm_budget_automatic
+            and self._on_residency_policy_changed is not None
+        ):
+            self._on_residency_policy_changed()
+
+    def set_resident_pcm_budget_automatic(self, *, enabled: bool) -> None:
+        """Apply admission mode before persisting it, retaining the optional manual limit."""
+        if type(enabled) is not bool:
+            message = "automatic resident PCM admission must be a boolean"
+            raise TypeError(message)
+        if enabled == self._project.resident_pcm_budget_automatic:
+            return
+        self._audio.set_resident_pcm_budget_mib(
+            0 if enabled else self._project.resident_pcm_budget_mib
+        )
+        self._project.resident_pcm_budget_automatic = enabled
         self._mark_project_changed()
         if self._on_residency_policy_changed is not None:
             self._on_residency_policy_changed()

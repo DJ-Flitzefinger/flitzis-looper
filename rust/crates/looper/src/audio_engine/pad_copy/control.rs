@@ -528,7 +528,7 @@ fn prepare_owned(state: &Arc<PadCopyState>) -> Result<PreparedCopyOwners, String
         transferred: false,
     };
     let sample = lease
-        .read_window_resident(
+        .read_window_reserved(
             &capture.source,
             capture.source.resident_start(),
             capture.source.resident_end(),
@@ -539,9 +539,8 @@ fn prepare_owned(state: &Arc<PadCopyState>) -> Result<PreparedCopyOwners, String
                 .as_ref()
                 .ok_or("copy source descriptor missing")?
                 .context,
-            crate::audio_engine::cold_jobs::PCM_LIMIT_BYTES,
             &cancelled,
-            Some(&capture.resident),
+            &capture.resident,
         )
         .map_err(|error| error.to_string())?;
     // Consume this source read's own reserved reader slot before timing or stem

@@ -91,7 +91,7 @@ class AppController:
         self._pending_content_feedback: deque[AudioMessage] = deque()
 
         self._audio = AudioEngine()
-        self._audio.set_resident_pcm_budget_mib(self._project.resident_pcm_budget_mib)
+        self._apply_startup_resident_admission()
         if not self._audio.set_key_lock_start_behavior(self._project.key_lock_start_behavior):
             message = "Key Lock start behavior could not be restored before audio startup"
             raise RuntimeError(message)
@@ -184,6 +184,13 @@ class AppController:
 
         self._restore_initial_runtime_state()
         self._discover_recordings()
+
+    def _apply_startup_resident_admission(self) -> None:
+        """Restore the persisted memory admission policy before audio startup."""
+        manual_budget = self._project.resident_pcm_budget_mib
+        self._audio.set_resident_pcm_budget_mib(
+            0 if self._project.resident_pcm_budget_automatic else manual_budget
+        )
 
     def _bind_loader_assets(self) -> None:
         self.loader.bind_asset_lifecycle(self._assets)

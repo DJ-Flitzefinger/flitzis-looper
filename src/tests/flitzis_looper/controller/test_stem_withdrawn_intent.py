@@ -242,6 +242,8 @@ def test_fresh_mask_before_poll_is_not_retired_with_the_old_receipt(
     [
         ("cold source queue full (2 workers, 32 queued jobs)", "queued"),
         ("[resident_pcm_budget_exceeded] selected backing exceeds allowance", "deferred"),
+        ("[resident_memory_pressure] insufficient host allocation headroom", "deferred"),
+        ("[resident_memory_unavailable] OS memory query failed", "deferred"),
     ],
 )
 def test_changed_mask_after_completed_withdrawal_keeps_own_pressure_retry(

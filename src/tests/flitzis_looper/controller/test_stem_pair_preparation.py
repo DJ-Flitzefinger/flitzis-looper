@@ -1109,11 +1109,19 @@ def test_all216_demand_scheduling_is_bounded_fair_and_direct_request_is_not_star
 
 
 @pytest.mark.parametrize(
-    ("message", "recoverable"),
+    ("message", "recoverable", "waiting_state"),
     [
-        ("cold source queue full (2 workers, 32 queued jobs)", True),
-        ("cold source lane stopped", False),
-        ("corrupt marker contains cold source queue full (2 workers, 32 queued jobs)", False),
+        ("cold source queue full (2 workers, 32 queued jobs)", True, "queued"),
+        ("[resident_memory_pressure] insufficient host allocation headroom", True, "deferred"),
+        ("[resident_memory_unavailable] OS memory query failed", True, "deferred"),
+        ("cold source lane stopped", False, "error"),
+        ("memory allocation failed", False, "error"),
+        ("I/O error reading complete PCM", False, "error"),
+        (
+            "corrupt marker contains cold source queue full (2 workers, 32 queued jobs)",
+            False,
+            "error",
+        ),
     ],
 )
 def test_async_metadata_native_capacity_retries_complete_verification_without_assignment_loss(
@@ -1122,6 +1130,7 @@ def test_async_metadata_native_capacity_retries_complete_verification_without_as
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
     message: str,
+    waiting_state: str,
     *,
     recoverable: bool,
 ) -> None:
@@ -1130,6 +1139,8 @@ def test_async_metadata_native_capacity_retries_complete_verification_without_as
     )
     demand = controller.stems._remember_demand(0, previous)
     demand.verify_disk = True
+    regenerate = Mock()
+    monkeypatch.setattr(controller.stems, "_regenerate_incompatible_pair", regenerate)
     audio_engine_mock.prepare_stem_pair.side_effect = RuntimeError(message)
     jobs[0]()
     controller.stems._poll_pair_preparations()
@@ -1137,7 +1148,7 @@ def test_async_metadata_native_capacity_retries_complete_verification_without_as
     assert controller.project.pad_stem_mix_mode[0] == "all_stems"
     assert not controller.stems._pair_preparations.pending
     assert controller._assets._reserved == 0
-    assert demand.state == ("queued" if recoverable else "error")
+    assert demand.state == waiting_state
     audio_engine_mock.prepare_stem_pair.side_effect = None
     controller.stems._poll_residency_demands()
     assert len(jobs) == (2 if recoverable else 1)
@@ -1155,6 +1166,7 @@ def test_async_metadata_native_capacity_retries_complete_verification_without_as
     else:
         assert audio_engine_mock.prepare_stem_pair.call_count == 1
     audio_engine_mock.publish_stem_pair.assert_not_called()
+    regenerate.assert_not_called()
 
 
 def _registered_metadata_pair(

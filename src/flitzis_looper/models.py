@@ -283,7 +283,9 @@ def _default_pad_key_intent() -> list[PadKeyIntent]:
     return [PadKeyIntent() for _ in range(NUM_SAMPLES)]
 
 
-def _default_pad_source_beatmap_intent() -> list[None]:
+def _default_pad_source_beatmap_intent() -> list[
+    source_beatmap_intent.PadSourceBeatmapIntent | None
+]:
     return [None] * NUM_SAMPLES
 
 
@@ -496,6 +498,8 @@ class ProjectState(BaseModel):
         _normalize_unloaded_pad_key_lock_fields(data)
         _migrate_legacy_timing_intent(data)
         _migrate_legacy_key_intent(data)
+        if "resident_pcm_budget_automatic" not in data:
+            data["resident_pcm_budget_automatic"] = data.get("resident_pcm_budget_mib", 512) == 512
 
         return data
 
@@ -653,7 +657,9 @@ class ProjectState(BaseModel):
     preload_stem_loops_on_startup: bool = Field(default=False, strict=True)
     """Deliberately retain eligible existing component loops without changing stem mode."""
     resident_pcm_budget_mib: int = Field(default=512, strict=True, ge=128, le=16384)
-    """Aggregate unique resident PCM allowance, independent of preparation and process RSS."""
+    """Retained optional manual PCM limit, independent of preparation and process RSS."""
+    resident_pcm_budget_automatic: bool = Field(default=True, strict=True)
+    """Use measured host headroom instead of the retained manual resident PCM limit."""
     demucs_shifts: int = Field(
         default=DEFAULT_DEMUCS_SHIFTS,
         ge=MIN_DEMUCS_SHIFTS,

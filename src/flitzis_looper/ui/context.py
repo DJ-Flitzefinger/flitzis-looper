@@ -1650,6 +1650,18 @@ class SettingsActions:
         self._controller.session.resident_pcm_settings_error = None
         return True
 
+    def set_resident_pcm_budget_automatic(self, *, enabled: bool) -> bool:
+        """Report Native refusal without changing the persistent admission mode."""
+        try:
+            self._controller.settings.set_resident_pcm_budget_automatic(enabled=enabled)
+        except (RuntimeError, ValueError) as error:
+            self._controller.session.resident_pcm_settings_error = str(error)
+            self._controller.diagnostics.begin_attempt("resident_pcm_settings")
+            self._controller.diagnostics.observe("resident_pcm_settings", str(error))
+            return False
+        self._controller.session.resident_pcm_settings_error = None
+        return True
+
     def set_trigger_quantization_step(self, step: TriggerQuantizationStep) -> None:
         self._controller.transport.global_params.set_trigger_quantization_step(step)
 

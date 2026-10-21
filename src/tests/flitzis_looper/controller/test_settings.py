@@ -127,7 +127,7 @@ def test_resident_budget_rejects_out_of_range_without_native_mutation(value: int
 
 
 def test_native_budget_failure_preserves_persisted_allowance_and_policy() -> None:
-    project = ProjectState(preload_stem_loops_on_startup=True)
+    project = ProjectState(preload_stem_loops_on_startup=True, resident_pcm_budget_automatic=False)
     audio = Mock()
     audio.set_resident_pcm_budget_mib.side_effect = RuntimeError("Native stopped")
     changed, policy = Mock(), Mock()
@@ -165,9 +165,11 @@ def test_residency_settings_round_trip_and_old_config_defaults(tmp_path: Path) -
     project = ProjectState()
     assert project.preload_stem_loops_on_startup is False
     assert project.resident_pcm_budget_mib == 512
+    assert project.resident_pcm_budget_automatic
     project.pad_stem_mix_mode[0] = "all_stems"
     settings = SettingsController(project, SessionState(), Mock())
     settings.set_preload_stem_loops_on_startup(enabled=True)
+    settings.set_resident_pcm_budget_automatic(enabled=False)
     settings.set_resident_pcm_budget_mib(16384)
     persistence = ProjectPersistence(project)
     persistence.config_path = tmp_path / "project.json"
@@ -176,4 +178,91 @@ def test_residency_settings_round_trip_and_old_config_defaults(tmp_path: Path) -
     reopened = ProjectPersistence.from_config_path(persistence.config_path).project
     assert reopened.preload_stem_loops_on_startup
     assert reopened.resident_pcm_budget_mib == 16384
+    assert not reopened.resident_pcm_budget_automatic
     assert reopened.pad_stem_mix_mode[0] == "all_stems"
+
+
+@pytest.mark.parametrize("automatic", [True, False])
+def test_admission_mode_applies_native_before_persisting_without_changing_audio(
+    *, automatic: bool
+) -> None:
+    project = ProjectState(resident_pcm_budget_mib=2048, resident_pcm_budget_automatic=automatic)
+    session = SessionState(active_sample_ids={0}, paused_sample_ids={1})
+    project.pad_stem_mix_mode[0] = "all_stems"
+    audio, changed, policy = Mock(), Mock(), Mock()
+
+    def apply_native(value: int) -> None:
+        assert project.resident_pcm_budget_automatic is automatic
+        assert project.resident_pcm_budget_mib == 2048
+        assert value == (2048 if automatic else 0)
+        changed.assert_not_called()
+        policy.assert_not_called()
+
+    audio.set_resident_pcm_budget_mib.side_effect = apply_native
+    settings = SettingsController(project, session, audio, on_project_changed=changed)
+    settings.bind_residency_policy(policy)
+    settings.set_resident_pcm_budget_automatic(enabled=not automatic)
+    assert project.resident_pcm_budget_automatic is not automatic
+    assert project.resident_pcm_budget_mib == 2048
+    assert project.pad_stem_mix_mode[0] == "all_stems"
+    assert session.active_sample_ids == {0}
+    assert session.paused_sample_ids == {1}
+    assert audio.mock_calls == [call.set_resident_pcm_budget_mib(2048 if automatic else 0)]
+    changed.assert_called_once_with()
+    policy.assert_called_once_with()
+
+
+@pytest.mark.parametrize("automatic", [True, False])
+def test_admission_mode_native_failure_preserves_both_preferences(*, automatic: bool) -> None:
+    project = ProjectState(resident_pcm_budget_mib=2048, resident_pcm_budget_automatic=automatic)
+    audio, changed, policy = Mock(), Mock(), Mock()
+    audio.set_resident_pcm_budget_mib.side_effect = RuntimeError("Native stopped")
+    settings = SettingsController(project, SessionState(), audio, on_project_changed=changed)
+    settings.bind_residency_policy(policy)
+    with pytest.raises(RuntimeError, match="Native stopped"):
+        settings.set_resident_pcm_budget_automatic(enabled=not automatic)
+    assert project.resident_pcm_budget_automatic is automatic
+    assert project.resident_pcm_budget_mib == 2048
+    changed.assert_not_called()
+    policy.assert_not_called()
+
+
+def test_automatic_admission_retains_manual_limit_without_applying_or_refreshing_it() -> None:
+    project = ProjectState()
+    audio, changed, policy = Mock(), Mock(), Mock()
+    settings = SettingsController(project, SessionState(), audio, on_project_changed=changed)
+    settings.bind_residency_policy(policy)
+    settings.set_resident_pcm_budget_mib(2048)
+    assert project.resident_pcm_budget_automatic
+    assert project.resident_pcm_budget_mib == 2048
+    audio.set_resident_pcm_budget_mib.assert_not_called()
+    changed.assert_called_once_with()
+    policy.assert_not_called()
+    restored = ProjectState.model_validate_json(project.model_dump_json())
+    assert restored.resident_pcm_budget_automatic
+    assert restored.resident_pcm_budget_mib == 2048
+    settings.set_resident_pcm_budget_automatic(enabled=False)
+    audio.set_resident_pcm_budget_mib.assert_called_once_with(2048)
+
+
+@pytest.mark.parametrize("enabled", [0, 1, "false", None])
+def test_admission_mode_rejects_nonboolean_without_native_or_persistence(enabled: object) -> None:
+    project = ProjectState()
+    audio, changed = Mock(), Mock()
+    settings = SettingsController(project, SessionState(), audio, on_project_changed=changed)
+    with pytest.raises(TypeError, match="boolean"):
+        settings.set_resident_pcm_budget_automatic(enabled=cast("bool", enabled))
+    assert project.resident_pcm_budget_automatic
+    audio.set_resident_pcm_budget_mib.assert_not_called()
+    changed.assert_not_called()
+
+
+def test_unchanged_admission_mode_does_not_republish_or_dirty_settings() -> None:
+    project = ProjectState()
+    audio, changed, policy = Mock(), Mock(), Mock()
+    settings = SettingsController(project, SessionState(), audio, on_project_changed=changed)
+    settings.bind_residency_policy(policy)
+    settings.set_resident_pcm_budget_automatic(enabled=True)
+    audio.set_resident_pcm_budget_mib.assert_not_called()
+    changed.assert_not_called()
+    policy.assert_not_called()

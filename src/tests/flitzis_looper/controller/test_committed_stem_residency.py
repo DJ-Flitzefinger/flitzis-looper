@@ -380,17 +380,23 @@ def test_preload_has_own_ack_without_requesting_or_relabelling_audio_mode(
     ]
 
 
-@pytest.mark.parametrize("recoverable", [True, False])
-def test_preload_retries_only_exact_native_budget_codec(
-    residency: _Harness, *, recoverable: bool
+@pytest.mark.parametrize(
+    ("message", "recoverable"),
+    [
+        ("[resident_pcm_budget_exceeded] requested=4096 budget=2048", True),
+        ("[resident_memory_pressure] insufficient host allocation headroom", True),
+        ("[resident_memory_unavailable] OS memory query failed", True),
+        ("corrupt marker contains [resident_pcm_budget_exceeded]", False),
+        ("corrupt marker contains [resident_memory_pressure]", False),
+        ("memory allocation failed", False),
+        ("I/O error reading complete PCM", False),
+    ],
+)
+def test_preload_retries_only_exact_native_memory_admission_codec(
+    residency: _Harness, message: str, *, recoverable: bool
 ) -> None:
     registration = _RegistrationTicket(state="accepted")
     residency.bind(registration)
-    message = (
-        "[resident_pcm_budget_exceeded] requested=4096 budget=2048"
-        if recoverable
-        else ("corrupt marker contains [resident_pcm_budget_exceeded]")
-    )
     failed = _ResidencyReceipt(residency="rejected", message=message)
     fresh = _ResidencyReceipt(effective="not_requested")
     residency.audio.request_committed_stem_residency.side_effect = [failed, fresh]

@@ -173,7 +173,7 @@ impl StemOwner {
                     .try_into()
                     .map_err(|_| "retained component count differs".to_string())?
             } else {
-                pair.prepare_component_views_cancellable(window, cancelled)?
+                pair.prepare_component_views_cancellable(window, cancelled, &reservation)?
             };
             let set = PreparedStemSet {
                 complete_set_identity: self.set.complete_set_identity.clone(),
@@ -2077,7 +2077,7 @@ fn admitted_window_peak_with_readers(
             })
             .ok_or("resident PCM overlap overflow")?
     };
-    if peak > super::cold_jobs::PCM_LIMIT_BYTES {
+    if stems.is_some_and(|owner| owner.pair.is_none()) && peak > super::cold_jobs::PCM_LIMIT_BYTES {
         return Err("resident preparation exceeds the 1-GiB transient PCM admission".into());
     }
     Ok(peak)
@@ -2328,15 +2328,14 @@ impl WindowWork {
         }
         let sample = self
             .source_lease
-            .read_window_resident(
+            .read_window_reserved(
                 &self.old,
                 self.start,
                 self.end,
                 self.revision,
                 self.context,
-                super::cold_jobs::PCM_LIMIT_BYTES,
                 &|| !self.current(),
-                Some(&resident),
+                &resident,
             )
             .map_err(|error| error.to_string())?;
         {
@@ -3407,6 +3406,44 @@ mod tests {
         drop(owners.pop());
         assert!(ensure_window_history_capacity(&mut history, &old, 200, 400).is_ok());
         assert_eq!(history.len(), 127);
+    }
+
+    #[test]
+    fn sealed_live_window_geometry_above_one_gib_keeps_actual_overlap_without_fixed_cutoff() {
+        // Geometry-only admission regression for the reported relocation gate.
+        // These actual tiny backings do not prove a large file, read, ACK or
+        // render; host/resident admission and productive reads have separate tests.
+        let frames = super::super::cold_jobs::PCM_LIMIT_BYTES / 4 + 4096;
+        let mut old = SampleBuffer {
+            channels: 1,
+            samples: Arc::from([0.25; 64]),
+            residency: Some(Arc::new(crate::messages::ResidentSourceView {
+                source: Arc::new(crate::messages::CompleteSourceIdentity {
+                    frame_count: frames,
+                    channels: 1,
+                    sample_rate_hz: 48_000,
+                    original_sha256: [0; 32],
+                    playback_sha256: [0; 32],
+                    mono_sha256: [0; 32],
+                    transform_sha256: [0; 32],
+                    source_zero_frame: 0,
+                }),
+                start_frame: 0,
+                window_revision: 1,
+                context: ResidentContext::FiniteLoop,
+            })),
+        };
+        let retained: Arc<[f32]> = Arc::from([0.5; 32]);
+        let held = [old.samples.clone(), retained.clone(), retained];
+        let peak = admitted_window_peak_with_readers(&old, 0, frames, None, &held).unwrap();
+        assert_eq!(peak, frames * 4 + (64 + 32) * 4 + 64 * 1024);
+        assert!(peak > super::super::cold_jobs::PCM_LIMIT_BYTES);
+        assert_eq!(old.samples.len(), 64);
+        assert!(admitted_window_peak_with_readers(&old, 0, frames + 1, None, &held).is_err());
+        let view = Arc::make_mut(old.residency.as_mut().unwrap());
+        let identity = Arc::get_mut(&mut view.source).unwrap();
+        identity.frame_count = usize::MAX;
+        assert!(admitted_window_peak_with_readers(&old, 0, usize::MAX, None, &held).is_err());
     }
 
     #[test]

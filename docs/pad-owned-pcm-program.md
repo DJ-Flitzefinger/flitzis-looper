@@ -222,7 +222,7 @@ native nonauthor closure. The original canonical38-ID order below remains an unc
 | P4a | Direct verified retained descriptor ranges/shared eligible backing, changed-content-only refresh | Complete-buffer dry tap/P-H/seam oracles 75/1000 cycles; echte ACK, old voice/job/window races; unveraenderte215 Handles |
 | P4b | Wirkliche finite DSP/KEYLOCK-Versorgung+Continuation fuer heutigen production k=0 | Executed feed/lookahead/history/FIFO/filter/seams/crossfade/oldvoices; causality1598/33.292ms erhalten, fallback-only laesst Gate offen. Nonzero k bleibt B5 |
 | P5a | Guarded erster aktiver None->Some fuer schon selected same committed Set plus resident/effective-mode ACK | FullMix laeuft weiter, continuous128 sourceframes, voice/cursor/loop/timing/history; new-generation adoption remains separately guarded under E11-05/19; offline activity restrictions are superseded only after the new job safety proof |
-| P5b | Lazy savedALL/generation/explicit requests, Settings preloadOFF/budget128..16384MiB default512, fair echte216 admission | Exact requested/preparing/ACK/error+unique backing/old-new overlap; 2/32/8 and1GiB simultaneous scratch (not total file extent) with timing/analysis512 separate. Keine216voices/96-handle-fantasy, echter ausreichender supported Budgetfall |
+| P5b | Lazy savedALL/generation/explicit requests, Settings preloadOFF, automatic host admission with optional manual128..16384MiB allowance, fair echte216 admission | Exact requested/preparing/ACK/error+unique backing/old-new overlap; 2/32/8 and1GiB genuine simultaneous conversion scratch with timing/analysis512 separate. Final resident arrays use actual host admission, not a fixed scratch ceiling. Keine216voices/96-handle-fantasy |
 | R1 | Expliziter musical CopySnapshot und sourceunabhaengiger save/reopen restore | Deep-copy mutable intent incl aktuelle **Sessionstemmask/preset/Mutes**, loop/grid/timing/correction/base/extra/KeyLock/GainEQ/Haken; same material refs, neue gestoppte instance/DSP, keine cursor/voice/progress/jobhandle Kopie; source-delete/reopen ohne model/analysis/decode |
 | R2 | Atomarer nativer pair move/swap/copy-overwrite plus selected-content follow UND angenommene HoldRelease-Uebernahme | Zwei laufende Quellen ohne Restart/FIFO-/Filterreset; gestoppte Kopien ohne Holdtoken, nur removed target stop; slot-MIDI unveraendert; ContentInstance/Lifetime/PauseEffect/acceptedAction/NativeACK atomar remapped oder retired; alle R2-Holdfaelle der gebundenen Evidence-Matrix und eigenstaendige Nichtautor-Closure vor R3/R4 |
 | R3 | Re-Arrange toggle/Gestenhilfe/Pad-left move-swap/right copy-overwrite UI | DefaultOFF nach restart, Warnfarbe bevorzugt untenlinks, keine mouse trigger/stop bei dragbegin, MIDI nutzbar; eindeutig target/op, kein single-pad dialog; cancel/self/invalid/empty no-op |
@@ -264,7 +264,14 @@ STOP/bank/accepted P/integer H/one rate-owner obligations remain. Keep36 mixture
 288 cases/24 failed nonneutral and1598 frames/33.292ms unavailable-at-T,75/1000-cycle
 oracles. Current32 voices/96 preparation handles are distinct from216 residents;
 keep2 workers/32 queue/8 startup admissions/1GiB simultaneous scratch (not total complete extent)/separate512MiB timing/analysis.
-The new aggregate resident budget128..16384MiB/default512 is separately admitted.
+Latest Human2026-10-21 supersedes the fixed512MiB default: automatic live residency
+uses actual physical and caller/system commit headroom plus shared pending allocation
+promises. Optional manual128..16384MiB remains an additional scoped ownership limit;
+Settings edits wholeGiB steps while retaining precise legacyMiB values. Nondefault
+legacy manual choices remain manual. Final live arrays are not conversion scratch.
+See `openspec/changes/admit-long-remix-residency` for the normative delta and actual
+remaining verification. Contiguous live ranges still require their real PCM; this
+does not claim advancing-window streaming, start-onlyEOF or completed liveSYNC.
 Power-loss/non-Windows capture, model-unavailable, GPU/native ORT same-model parity,
 independent components, process peaks, dependency/rollback and final human gates
 stay OPEN until their specific evidence. Already accepted foundations are preserved,

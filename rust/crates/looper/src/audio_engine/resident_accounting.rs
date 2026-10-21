@@ -5,12 +5,13 @@
 //! also live. This ledger cannot supply playback buffers or file authority.
 
 use super::project_assets::{PcmHistory, ProjectAssets};
+use super::resident_host_memory::{HostAdmissionError, HostHeadroom, HostReservation};
 use crate::messages::{PreparedStemSet, ResidentSourceView, SampleBuffer};
 use std::collections::HashSet;
 use std::io;
 use std::sync::{Arc, Weak};
 
-pub(super) const DEFAULT_BUDGET_MIB: usize = 512;
+pub(super) const DEFAULT_BUDGET_MIB: usize = 0;
 pub(super) const MIN_BUDGET_MIB: usize = 128;
 pub(super) const MAX_BUDGET_MIB: usize = 16384;
 const MIB: usize = 1024 * 1024;
@@ -25,16 +26,44 @@ const MAX_OWNER_WITNESSES: usize = 1024 * 128;
 
 /// An opaque control/worker scope. It contains no PCM or callback destructor.
 #[derive(Default)]
-pub(super) struct ResidentAccount;
+pub(super) struct ResidentAccount {
+    #[cfg(test)]
+    host_image: std::sync::Mutex<Option<Result<HostHeadroom, String>>>,
+}
 
 impl ResidentAccount {
     pub(super) fn new() -> Arc<Self> {
-        Arc::new(Self)
+        Arc::new(Self::default())
+    }
+
+    fn host_headroom(&self) -> Result<HostHeadroom, String> {
+        #[cfg(test)]
+        if let Some(image) = self
+            .host_image
+            .lock()
+            .map_err(|_| "test host image poisoned")?
+            .as_ref()
+        {
+            return image.clone();
+        }
+        super::resident_host_memory::host_headroom()
+    }
+
+    #[cfg(test)]
+    pub(super) fn set_host_memory_for_test(&self, image: Result<HostHeadroom, String>) {
+        *self.host_image.lock().unwrap() = Some(image);
+    }
+
+    #[cfg(test)]
+    pub(super) fn clear_host_memory_for_test(&self) {
+        *self.host_image.lock().unwrap() = None;
     }
 }
 
 #[derive(Debug, thiserror::Error)]
 pub(super) enum ResidentAdmissionError {
+    #[error(transparent)]
+    Host(#[from] HostAdmissionError),
     #[error(
         "[resident_pcm_budget_exceeded] resident PCM budget exceeded: requested={requested_bytes} held={held_bytes} pending={pending_bytes} budget={budget_bytes} bytes"
     )]
@@ -55,7 +84,7 @@ pub(super) enum ResidentAdmissionError {
 impl ResidentAdmissionError {
     /// Keep resource pressure typed through the warm-cache IO boundary.
     pub(super) fn into_io_error(self) -> io::Error {
-        let kind = if matches!(self, Self::BudgetExceeded { .. }) {
+        let kind = if matches!(self, Self::BudgetExceeded { .. } | Self::Host(_)) {
             io::ErrorKind::OutOfMemory
         } else {
             io::ErrorKind::Other
@@ -75,6 +104,7 @@ struct PendingReservation {
     owner_slots: usize,
     reader_slots: usize,
     history: Option<HistoryReservation>,
+    host: HostReservation,
 }
 
 struct HistoryReservation {
@@ -124,6 +154,7 @@ impl ResidentScope {
             .checked_add(pending)
             .ok_or(ResidentAdmissionError::Invalid("admitted byte overflow"))?;
         let snapshot = ResidentSnapshot {
+            automatic: self.budget_bytes == 0,
             budget_mib: self.budget_bytes / MIB,
             budget_bytes: self.budget_bytes,
             held_unique_pcm_bytes: held,
@@ -132,7 +163,7 @@ impl ResidentScope {
             unique_backing_count: seen.len(),
             pending_reservation_count: self.pending.len(),
             available_bytes: self.budget_bytes.saturating_sub(total),
-            over_budget: total > self.budget_bytes,
+            over_budget: self.budget_bytes != 0 && total > self.budget_bytes,
         };
         Ok((snapshot, seen))
     }
@@ -200,6 +231,7 @@ impl ResidentLedger {
 }
 
 pub(super) struct ResidentSnapshot {
+    pub automatic: bool,
     pub budget_mib: usize,
     pub budget_bytes: usize,
     pub held_unique_pcm_bytes: usize,
@@ -243,9 +275,9 @@ impl ProjectAssets {
         account: &Arc<ResidentAccount>,
         mib: usize,
     ) -> Result<(), ResidentAdmissionError> {
-        if !(MIN_BUDGET_MIB..=MAX_BUDGET_MIB).contains(&mib) {
+        if mib != 0 && !(MIN_BUDGET_MIB..=MAX_BUDGET_MIB).contains(&mib) {
             return Err(ResidentAdmissionError::Invalid(
-                "budget must be 128..16384 MiB",
+                "budget must be 0 (automatic) or 128..16384 MiB",
             ));
         }
         let bytes = mib
@@ -330,7 +362,8 @@ impl ProjectAssets {
                 .ok_or(ResidentAdmissionError::Invalid(
                     "reused owners exceed reserved slots",
                 ))?;
-        if requested > 0
+        if scope.budget_bytes != 0
+            && requested > 0
             && snapshot
                 .admitted_total_bytes
                 .checked_add(requested)
@@ -365,6 +398,9 @@ impl ProjectAssets {
             .next_reservation
             .checked_add(1)
             .ok_or(ResidentAdmissionError::Invalid("reservation id exhausted"))?;
+        // OS memory already includes every reused backing, including backings
+        // newly registered to this account. Promise only new allocation bytes.
+        let host = HostReservation::reserve_with(new_bytes, || account.host_headroom())?;
         scope.next_reservation = id;
         // Real reused candidates already pin their local view and PCM. Register
         // them with admission, so retirement of an earlier same-scope owner
@@ -376,6 +412,7 @@ impl ProjectAssets {
             owner_slots: pending_owner_slots,
             reader_slots: 0,
             history: None,
+            host,
         });
         Ok(ResidentReservation {
             assets: self.clone(),
@@ -386,6 +423,23 @@ impl ProjectAssets {
 }
 
 impl ResidentReservation {
+    /// Exact final backing still promised by this operation, separate from scratch.
+    pub(super) fn remaining_bytes(&self) -> Result<usize, ResidentAdmissionError> {
+        let state = self
+            .assets
+            .state
+            .lock()
+            .map_err(|_| ResidentAdmissionError::Poisoned)?;
+        state
+            .residency
+            .scopes
+            .iter()
+            .find(|scope| Arc::ptr_eq(&scope.account, &self.account))
+            .and_then(|scope| scope.pending.iter().find(|record| record.id == self.id))
+            .map(|record| record.bytes)
+            .ok_or(ResidentAdmissionError::Invalid("reservation ended"))
+    }
+
     /// Reserve this pad's existing 128-reader history before selected allocation.
     /// All paths use asset -> history lock order; no caller holds that history lock.
     pub(super) fn reserve_history_slot(
@@ -628,6 +682,7 @@ impl ResidentReservation {
                     "actual owners exceed reserved slots",
                 ))?;
         // All fallible validation precedes the atomic pending -> weak-owner transition.
+        record.host.commit(charged)?;
         scope.owners.extend(added);
         record.bytes = remaining_bytes;
         record.owner_slots = remaining_slots;
@@ -807,6 +862,11 @@ mod tests {
     fn checked_pending_boundary_reduction_and_raii_preserve_held_readers() {
         let assets = ProjectAssets::isolated();
         let account = ResidentAccount::new();
+        account.set_host_memory_for_test(Ok(HostHeadroom {
+            available_physical: 64 * 1024 * 1024 * 1024,
+            caller_available_commit: 64 * 1024 * 1024 * 1024,
+            system_available_commit: 64 * 1024 * 1024 * 1024,
+        }));
         assets.set_resident_budget_mib(&account, 256).unwrap();
         let held = sample(0.75);
         let held_address = held.samples.as_ptr();
@@ -850,6 +910,66 @@ mod tests {
         assert_eq!(status.pending_reservation_count, 0);
         assert!(!status.over_budget);
         assert!(held.samples.iter().all(|value| *value == 0.75));
+    }
+
+    #[test]
+    fn automatic_default_manual_limit_and_zero_allocation_reuse_keep_distinct_authority() {
+        let assets = ProjectAssets::isolated();
+        let account = ResidentAccount::new();
+        let held = sample(0.5);
+        admit(&assets, &account, &held);
+        let status = assets.resident_budget_status(&account).unwrap();
+        assert!(status.automatic);
+        assert_eq!(status.budget_mib, 0);
+        assert_eq!(status.budget_bytes, 0);
+        assert!(!status.over_budget);
+        account.set_host_memory_for_test(Err("query failed".into()));
+        let another_view = local_view(&held);
+        admit(&assets, &account, &another_view);
+        assert!(matches!(
+            assets.reserve_resident(&account, 1, &[], 1),
+            Err(ResidentAdmissionError::Host(_))
+        ));
+        assert_eq!(
+            assets
+                .resident_budget_status(&account)
+                .unwrap()
+                .held_unique_pcm_bytes,
+            128
+        );
+        assets.set_resident_budget_mib(&account, 128).unwrap();
+        let manual = assets.resident_budget_status(&account).unwrap();
+        assert!(!manual.automatic);
+        assert_eq!(manual.budget_mib, 128);
+        assert!(matches!(
+            assets.reserve_resident(&account, 128 * MIB, &[], 1),
+            Err(ResidentAdmissionError::BudgetExceeded { .. })
+        ));
+        assets.set_resident_budget_mib(&account, 0).unwrap();
+        assert!(assets.resident_budget_status(&account).unwrap().automatic);
+        drop(held);
+        assert_eq!(
+            assets
+                .resident_budget_status(&account)
+                .unwrap()
+                .held_unique_pcm_bytes,
+            128
+        );
+        drop(another_view);
+        assert_eq!(
+            assets
+                .resident_budget_status(&account)
+                .unwrap()
+                .held_unique_pcm_bytes,
+            0
+        );
+        assert_eq!(
+            assets
+                .resident_budget_status(&account)
+                .unwrap()
+                .pending_reservation_count,
+            0
+        );
     }
 
     #[test]

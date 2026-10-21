@@ -17,8 +17,12 @@ if TYPE_CHECKING:
 
 
 def resident_pcm_budget_pressure(message: object) -> bool:
-    """Recognize the Native resource codec without treating other failures as retryable."""
-    return isinstance(message, str) and message.startswith("[resident_pcm_budget_exceeded]")
+    """Recognize declared allowance/headroom refusals, preserving terminal failures."""
+    return isinstance(message, str) and message.startswith((
+        "[resident_pcm_budget_exceeded]",
+        "[resident_memory_pressure]",
+        "[resident_memory_unavailable]",
+    ))
 
 
 def resident_stem_capacity_pressure(message: object) -> bool:

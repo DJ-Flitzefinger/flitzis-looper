@@ -17,7 +17,7 @@ REPO = Path(__file__).resolve().parents[2]
 
 
 class _CompatibleEngine:
-    RESIDENT_PCM_ADMISSION_VERSION = 1
+    RESIDENT_PCM_ADMISSION_VERSION = 2
 
     def __init__(self) -> None:
         pytest.fail("Preflight must not construct an engine or open a device")
@@ -43,6 +43,7 @@ def test_compatible_class_is_checked_without_an_engine() -> None:
     ("attribute", "value", "message"),
     [
         ("RESIDENT_PCM_ADMISSION_VERSION", 0, "protocol missing"),
+        ("RESIDENT_PCM_ADMISSION_VERSION", 1, "automatic residency admission protocol missing"),
         ("set_resident_pcm_budget_mib", None, "set_resident_pcm_budget_mib"),
         ("get_resident_pcm_budget_status", None, "get_resident_pcm_budget_status"),
         ("request_committed_stem_residency", lambda self, ticket: None, "preload interest"),

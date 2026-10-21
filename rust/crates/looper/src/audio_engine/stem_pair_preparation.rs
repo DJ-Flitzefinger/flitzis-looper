@@ -1,7 +1,6 @@
 //! Ordinary off-thread complete-pair preparation and independent pad publication.
 
 use super::AudioEngine;
-use super::cold_jobs::PCM_LIMIT_BYTES;
 use super::complete_context::CompleteSourceReader;
 use super::material_migration::{PreparedMigrationMaterial, prepare_material_for_reference};
 use super::material_migration_stems::copy_stem_generation;
@@ -344,12 +343,6 @@ impl StemPairPreparationWork {
         let reader = CompleteSourceReader::new(sample.clone(), Some(lease.clone()))?;
         let cancelled =
             || cold_cancelled.load(std::sync::atomic::Ordering::Acquire) || !publication.current();
-        if components
-            && super::stem_pair::admitted_component_view_bytes(sample.samples.len())?
-                > PCM_LIMIT_BYTES
-        {
-            return Err("four-component worker transient admission exceeded".into());
-        }
         let material = if lease.material_id.is_some() {
             PreparedMigrationMaterial::from_current(&root, sample.clone(), lease)?
         } else {
@@ -505,7 +498,11 @@ impl StemPairPreparationWork {
                     channels: sample.channels,
                     frame_count: sample.frame_count(),
                     available_mask: 0b1111,
-                    stems: pair.prepare_component_views_cancellable(&sample, &cancelled)?,
+                    stems: pair.prepare_component_views_cancellable(
+                        &sample,
+                        &cancelled,
+                        &reservation,
+                    )?,
                 },
             };
             let mut views = vec![&sample];

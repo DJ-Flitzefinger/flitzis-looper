@@ -1474,8 +1474,13 @@ fn stopped_full_mix_ack_releases_component_control_owner_without_claiming_output
 }
 
 #[test]
-fn actual_residency_worker_read_registry_and_bounded_peak_failures_preserve_full_mix_owners() {
-    for failure in ["component_read", "bounded_peak", "reader_registry"] {
+fn actual_residency_worker_read_registry_and_host_pressure_failures_preserve_full_mix_owners() {
+    for failure in [
+        "component_read",
+        "host_pressure",
+        "host_unavailable",
+        "reader_registry",
+    ] {
         let mut p = Productive::new(false, 0.75);
         let source = p.h.callback.mixer.bank_for_measurement()[0]
             .clone()
@@ -1515,14 +1520,19 @@ fn actual_residency_worker_read_registry_and_bounded_peak_failures_preserve_full
                 }
                 assert!(full, "the actual fixed reader registry must become full");
             }
-            "bounded_peak" => {
-                // Snapshot a bounded per-pad test cap into the same actual
-                // worker's held+new+scratch calculation. Production retains its
-                // fixed 1-GiB cap; this proves that admission/error route only.
-                let minimum_peak = source.samples.len() * 20 + 64 * 1024;
-                p.h.engine.resident_stem_cache.lock().unwrap()[0]
-                    .committed
-                    .pcm_limit_for_test = Some(minimum_peak - 1);
+            "host_pressure" => {
+                p.h.engine.resident_account.set_host_memory_for_test(Ok(
+                    crate::audio_engine::resident_host_memory::HostHeadroom {
+                        available_physical: 0,
+                        caller_available_commit: 0,
+                        system_available_commit: 0,
+                    },
+                ));
+            }
+            "host_unavailable" => {
+                p.h.engine
+                    .resident_account
+                    .set_host_memory_for_test(Err("injected query failure".into()));
             }
             _ => unreachable!(),
         }
@@ -1543,7 +1553,8 @@ fn actual_residency_worker_read_registry_and_bounded_peak_failures_preserve_full
                 "reader_registry" => {
                     error == "resident PCM admission capacity exceeded: asset reader registry"
                 }
-                "bounded_peak" => error.contains("transient admission"),
+                "host_pressure" => error.starts_with("[resident_memory_pressure]"),
+                "host_unavailable" => error.starts_with("[resident_memory_unavailable]"),
                 _ => false,
             },
             "{failure}: {error}"

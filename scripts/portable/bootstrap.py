@@ -80,8 +80,8 @@ def private_dlls(runtime: Path, checkout: Path) -> dict[str, str]:
 
 def check_resident_api(engine_type: type) -> None:
     """Reject an incompatible Native before activation without constructing an engine."""
-    assert getattr(engine_type, "RESIDENT_PCM_ADMISSION_VERSION", 0) >= 1, (
-        "Native residency admission protocol missing"
+    assert getattr(engine_type, "RESIDENT_PCM_ADMISSION_VERSION", 0) >= 2, (
+        "Native automatic residency admission protocol missing; rebuild the Release extension"
     )
     for method in ("set_resident_pcm_budget_mib", "get_resident_pcm_budget_status"):
         assert callable(getattr(engine_type, method, None)), (

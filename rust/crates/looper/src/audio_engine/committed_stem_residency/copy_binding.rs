@@ -819,7 +819,7 @@ pub(in crate::audio_engine) fn prepare_copy_selection(
         let stems = if let Some(backing) = &backing {
             backing.stems.clone()
         } else {
-            pair.prepare_component_views_cancellable(target, cancelled)?
+            pair.prepare_component_views_cancellable(target, cancelled, &reservation)?
         };
         let set = PreparedStemSet {
             complete_set_identity: identity.clone(),

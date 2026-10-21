@@ -152,7 +152,7 @@ def test_controller_validates_restored_samples_before_projecting_audio(
 
     assert controller._audio is audio_engine_mock
     assert order == [
-        "budget:512",
+        "budget:0",
         "run",
         "validate",
         "transport",
@@ -160,6 +160,38 @@ def test_controller_validates_restored_samples_before_projecting_audio(
         "stems",
         "input",
     ]
+
+
+@pytest.mark.parametrize(
+    ("automatic", "manual_limit", "native_budget"),
+    [(True, 2048, 0), (False, 512, 512), (False, 2048, 2048)],
+)
+def test_controller_restores_admission_mode_before_running_audio(
+    audio_engine_mock: Mock,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    *,
+    automatic: bool,
+    manual_limit: int,
+    native_budget: int,
+) -> None:
+    monkeypatch.chdir(tmp_path)
+    project = ProjectState(
+        resident_pcm_budget_mib=manual_limit, resident_pcm_budget_automatic=automatic
+    )
+    config_path = tmp_path / "project.json"
+    config_path.write_text(project.model_dump_json(), encoding="utf-8")
+    order: list[str] = []
+    audio_engine_mock.set_resident_pcm_budget_mib.side_effect = lambda value: order.append(
+        f"budget:{value}"
+    )
+    audio_engine_mock.run.side_effect = lambda: order.append("run")
+
+    controller = app_module.AppController(project_config_path=config_path)
+
+    assert order[:2] == [f"budget:{native_budget}", "run"]
+    assert controller.project.resident_pcm_budget_automatic is automatic
+    assert controller.project.resident_pcm_budget_mib == manual_limit
 
 
 def test_controller_clears_missing_restored_sample_before_audio_projection(

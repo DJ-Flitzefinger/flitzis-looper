@@ -1763,13 +1763,30 @@ views in one account charge the backing once. Pending reservations include
 prospective allocation and ownership; publication transfers them to real view
 witnesses under the asset gate. These values measure PCM, not process RSS.
 
-The persisted settings are strict `preload_stem_loops_on_startup=false` and
-`resident_pcm_budget_mib=512`, with an accepted integer range of128..16384MiB.
-Native receives the budget before the engine starts and before restore. Lowering
-the budget preserves live pins and reports above-budget occupancy; future
-admission waits or reports a typed budget error. Ordinary timing/analysis
-preparation remains separately bounded at512MiB, and paired preparation retains
-its existing separate1GiB bound. Existing2-worker/32-job lanes are reused.
+Latest Human2026-10-21: persist strict `preload_stem_loops_on_startup=false`,
+`resident_pcm_budget_automatic=true` and retained optional manual
+`resident_pcm_budget_mib=512` (integer128..16384MiB). Missing mode with a saved
+nondefault manual value remains manual; the Human's9925MiB is preserved exactly.
+The manual slider chooses wholeGiB steps while showing actual precise legacy
+values without rounding on render. Native admission protocol2 receives0 for
+automatic or the explicit manual limit before startup/restore or persisting edits.
+Stale Native1 cannot activate the matching controls through Portable preflight.
+
+Both modes check new allocations against Windows available physical and caller/
+system commit headroom, operating reserves and globally shared pending allocation
+promises outside realtime. Existing reused PCM already occupies host memory and
+costs no new physical allocation; scope-local real ownership remains charged.
+Automatic mode has no fixed resident ceiling. Lowering a manual cap preserves live
+pins and reports above-budget occupancy. Budget/host pressure or unavailable
+observations return recoverable admission reasons without erasing assignments.
+
+Final source/component resident arrays are separate from genuine conversion
+scratch. Sealed cold/warm/positioned range paths use exact resident reservations,
+not the former1GiB total-overlap cutoff. Legacy complete-array conversion retains
+its genuine bound; timing/analysis remain separately512MiB, bounded stream chunks
+and existing2-worker/32-job lanes remain. Contiguous live ranges still require
+their actual full resident allocation; advancing disk windows and start-onlyEOF
+are separate pending work. Normative delta: `admit-long-remix-residency`.
 
 Incoming unknown geometry and callback-captured window/seek/stem demand start as
 bounded proposals. Exact byte/owner/reader capacity is reserved and fences are

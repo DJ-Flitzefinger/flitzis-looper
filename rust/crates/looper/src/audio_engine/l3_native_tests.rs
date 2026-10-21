@@ -710,8 +710,8 @@ fn stopped_candidate_is_control_ready_and_ordinary_v2_modes_need_their_own_ack()
 }
 
 #[test]
-fn preclaim_withdrawal_and_peak_rejection_preserve_selected_v1_control_and_audio() {
-    for reject_peak in [false, true] {
+fn preclaim_withdrawal_and_host_rejection_preserve_selected_v1_control_and_audio() {
+    for reject_host in [false, true] {
         let mut p = Productive::new(false, 0.73);
         make_v1_effective(&mut p);
         let old = p.h.callback.mixer.stems_for_measurement()[0]
@@ -720,13 +720,13 @@ fn preclaim_withdrawal_and_peak_rejection_preserve_selected_v1_control_and_audio
             .complete_set_identity
             .clone();
         let (_pair, selected) = candidate(&mut p, 104);
-        if reject_peak {
-            p.h.engine.resident_stem_cache.lock().unwrap()[0]
-                .committed
-                .pcm_limit_for_test = Some(1);
+        if reject_host {
+            p.h.engine
+                .resident_account
+                .set_host_memory_for_test(Err("injected host query failure".into()));
         }
         let receipt = request_candidate(&mut p, &selected, 0b1010);
-        if reject_peak {
+        if reject_host {
             assert_eq!(p.h.callback.drain(&mut p.h.consumer), 1);
             wait_until(|| receipt.error().is_some());
             assert_eq!(receipt.residency_status(), "rejected");
@@ -746,9 +746,7 @@ fn preclaim_withdrawal_and_peak_rejection_preserve_selected_v1_control_and_audio
                 .complete_set_identity
         ));
         p.render(257, false);
-        p.h.engine.resident_stem_cache.lock().unwrap()[0]
-            .committed
-            .pcm_limit_for_test = None;
+        p.h.engine.resident_account.clear_host_memory_for_test();
         let full = p.request("full_mix", 0b1010);
         p.capture_then_wait(&full);
         assert_eq!(p.h.callback.drain(&mut p.h.consumer), 1);

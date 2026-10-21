@@ -156,6 +156,7 @@ mod productive_source_history;
 mod progress;
 mod project_assets;
 mod resident_accounting;
+mod resident_host_memory;
 mod resident_proposal;
 pub(crate) mod resident_relocation;
 pub(crate) mod resident_seek;
@@ -1410,7 +1411,7 @@ impl AudioEngine {
 
     /// Device-free capability proof for scoped admission and residency interests.
     #[classattr]
-    const RESIDENT_PCM_ADMISSION_VERSION: u32 = 1;
+    const RESIDENT_PCM_ADMISSION_VERSION: u32 = 2;
     /// Seal an already committed immutable disk selection independently of component residency.
     pub fn register_committed_stem_pair(
         &self,
@@ -1454,15 +1455,17 @@ impl AudioEngine {
         )
     }
 
-    /// Configure this ProjectState's finite resident allowance without evicting readers.
+    /// Configure automatic host admission or an additional manual limit, without eviction.
     pub fn set_resident_pcm_budget_mib(&self, value: &Bound<'_, PyAny>) -> PyResult<()> {
         if value.is_instance_of::<PyBool>() || !value.is_instance_of::<PyInt>() {
             return Err(PyValueError::new_err(
-                "resident_pcm_budget_mib must be an integer in 128..16384",
+                "resident_pcm_budget_mib must be 0 (automatic) or an integer in 128..16384",
             ));
         }
         let mib = value.extract::<usize>().map_err(|_| {
-            PyValueError::new_err("resident_pcm_budget_mib must be an integer in 128..16384")
+            PyValueError::new_err(
+                "resident_pcm_budget_mib must be 0 (automatic) or an integer in 128..16384",
+            )
         })?;
         self.project_assets
             .set_resident_budget_mib(&self.resident_account, mib)
@@ -1477,6 +1480,7 @@ impl AudioEngine {
             .map_err(|error| PyRuntimeError::new_err(error.to_string()))?;
         let dict = PyDict::new(py);
         dict.set_item("budget_mib", status.budget_mib)?;
+        dict.set_item("automatic", status.automatic)?;
         dict.set_item("budget_bytes", status.budget_bytes)?;
         dict.set_item("held_unique_pcm_bytes", status.held_unique_pcm_bytes)?;
         dict.set_item("pending_resident_bytes", status.pending_resident_bytes)?;
@@ -1488,6 +1492,26 @@ impl AudioEngine {
         )?;
         dict.set_item("available_bytes", status.available_bytes)?;
         dict.set_item("over_budget", status.over_budget)?;
+        let pending = resident_host_memory::pending_bytes()
+            .map_err(|error| PyRuntimeError::new_err(error.to_string()))?;
+        dict.set_item("host_pending_allocation_bytes", pending)?;
+        match resident_host_memory::host_headroom() {
+            Ok(image) => {
+                dict.set_item("host_available_physical_bytes", image.available_physical)?;
+                dict.set_item("host_available_commit_bytes", image.available_commit())?;
+                dict.set_item(
+                    "host_allocation_allowance_bytes",
+                    image.allowance().saturating_sub(pending),
+                )?;
+                dict.set_item("host_memory_error", py.None())?;
+            }
+            Err(error) => {
+                dict.set_item("host_available_physical_bytes", py.None())?;
+                dict.set_item("host_available_commit_bytes", py.None())?;
+                dict.set_item("host_allocation_allowance_bytes", py.None())?;
+                dict.set_item("host_memory_error", error)?;
+            }
+        }
         Ok(dict.unbind())
     }
 

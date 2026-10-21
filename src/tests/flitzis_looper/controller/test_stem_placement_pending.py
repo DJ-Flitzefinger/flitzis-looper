@@ -37,7 +37,11 @@ PLACEMENT_PENDING = "[resident_stem_placement_pending] content placement publica
     ("message", "state"),
     [
         ("[resident_pcm_budget_exceeded] requested=4096 budget=1024", "deferred"),
+        ("[resident_memory_pressure] insufficient host allocation headroom", "deferred"),
+        ("[resident_memory_unavailable] OS memory query failed", "deferred"),
         ("content placement is pending or unavailable", "error"),
+        ("memory allocation failed", "error"),
+        ("I/O error reading complete PCM", "error"),
     ],
 )
 def test_mask_pressure_keeps_budget_deferral_and_terminal_policy(
@@ -190,14 +194,24 @@ def _registered_control(
     return _PlacementControl(entry, registration, receipt, request)
 
 
-def test_placement_pending_retains_original_demand_then_requires_its_own_ack(
+@pytest.mark.parametrize(
+    ("pressure", "waiting_state"),
+    [
+        (PLACEMENT_PENDING, "queued"),
+        ("[resident_memory_pressure] insufficient host allocation headroom", "deferred"),
+        ("[resident_memory_unavailable] OS memory query failed", "deferred"),
+    ],
+)
+def test_admission_pressure_retains_original_demand_then_requires_its_own_ack(
     controller: AppController,
     audio_engine_mock: Mock,
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
+    pressure: str,
+    waiting_state: str,
 ) -> None:
     rig = _registered_control(controller, audio_engine_mock, monkeypatch, tmp_path)
-    rig.request.side_effect = RuntimeError(PLACEMENT_PENDING)
+    rig.request.side_effect = RuntimeError(pressure)
 
     assert controller.stems.set_stem_mix_mode(0, "all_stems")
     demand = controller.stems._demands[0]
@@ -210,12 +224,13 @@ def test_placement_pending_retains_original_demand_then_requires_its_own_ack(
     for _ in range(3):
         controller.stems.on_frame_render()
         assert controller.stems._demands[0] is demand
-        assert demand.state == "queued"
+        assert demand.state == waiting_state
         assert demand.explicit
         assert controller.project.stem_cache[0] is rig.entry
         assert controller.project.pad_stem_mix_mode[0] == "all_stems"
         summary = controller.stems.residency_summary()
-        assert (summary.requested, summary.queued, summary.acked, summary.errors) == (1, 1, 0, 0)
+        assert (summary.requested, summary.acked, summary.errors) == (1, 0, 0)
+        assert summary.queued + summary.deferred == 1
         status = controller.stems.stem_residency_status(0)
         assert status is not None
         assert status.registration == "accepted"

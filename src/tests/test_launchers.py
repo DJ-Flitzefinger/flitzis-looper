@@ -22,13 +22,19 @@ if os.environ['LAUNCHER_NATIVE_MODE'] == 'import-error':
 if os.environ['LAUNCHER_NATIVE_MODE'] != 'older':
     def native_build_profile():
         mode = os.environ['LAUNCHER_NATIVE_MODE']
-        if mode in {'old-piano', 'old-recording', 'old-editor'} or mode.startswith('editor-'):
+        if (
+            mode in {'old-piano', 'old-recording', 'old-editor', 'old-residency'}
+            or mode.startswith('editor-')
+        ):
             return 'release'
         return mode
 class CapturedPitchAction:
     if os.environ['LAUNCHER_NATIVE_MODE'] != 'old-piano':
         resets_key_correction = property(lambda self: False)
 class AudioEngine:
+    RESIDENT_PCM_ADMISSION_VERSION = (
+        1 if os.environ['LAUNCHER_NATIVE_MODE'] == 'old-residency' else 2
+    )
     def __init__(self):
         raise AssertionError('launcher must never construct an engine')
     if os.environ['LAUNCHER_NATIVE_MODE'] != 'old-recording':
@@ -327,6 +333,20 @@ def test_build_success_must_match_actual_installed_profile(
     assert "A usable Release native build is required." in result.stdout
     assert f"failed (exit code {exit_code})." in result.stdout
     assert (launchers.pause_prompt in result.stdout) is (starter == "build-release.bat")
+
+
+@pytest.mark.parametrize("starter", ["start.bat", "start-release.bat"])
+def test_automatic_memory_requires_current_native_before_application(
+    launchers: _Launchers, starter: str
+) -> None:
+    launchers.environment["LAUNCHER_NATIVE_MODE"] = "old-residency"
+    result = launchers.run(starter)
+    assert result.returncode != 0
+    assert "Native automatic residency admission requires a current Release build" in (
+        result.stdout + result.stderr
+    )
+    assert not launchers.app_log.exists()
+    assert launchers.profile_log.exists()
 
 
 @pytest.mark.parametrize("starter", ["start.bat", "start-release.bat"])

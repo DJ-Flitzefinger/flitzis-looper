@@ -422,6 +422,7 @@ class MaterialMigrationJournalStore:
     def compact(self, expected_records: list[str]) -> None: ...
 
 class ResidentPcmBudgetStatus(TypedDict):
+    automatic: bool
     budget_mib: int
     budget_bytes: int
     held_unique_pcm_bytes: int
@@ -431,6 +432,11 @@ class ResidentPcmBudgetStatus(TypedDict):
     pending_reservation_count: int
     available_bytes: int
     over_budget: bool
+    host_pending_allocation_bytes: int
+    host_available_physical_bytes: int | None
+    host_available_commit_bytes: int | None
+    host_allocation_allowance_bytes: int | None
+    host_memory_error: str | None
 
 class CapturedPadCopy:
     def publication_status(self) -> str: ...

@@ -837,7 +837,7 @@ def test_stem_mask_display_mode_validation(project_state: ProjectState) -> None:
         })
 
 
-@pytest.mark.parametrize("budget", [True, False, 512.0, "512", None, 127, 16385])
+@pytest.mark.parametrize("budget", [True, False, 512.0, "512", None, 0, 127, 16385])
 def test_residency_budget_model_rejects_noninteger_or_out_of_range(budget: object) -> None:
     with pytest.raises(ValidationError):
         ProjectState.model_validate({"resident_pcm_budget_mib": budget})
@@ -847,3 +847,33 @@ def test_residency_budget_model_rejects_noninteger_or_out_of_range(budget: objec
 def test_residency_preload_model_requires_actual_boolean(enabled: object) -> None:
     with pytest.raises(ValidationError):
         ProjectState.model_validate({"preload_stem_loops_on_startup": enabled})
+
+
+@pytest.mark.parametrize(
+    ("data", "automatic", "manual_limit"),
+    [
+        ({}, True, 512),
+        ({"resident_pcm_budget_mib": 512}, True, 512),
+        ({"resident_pcm_budget_mib": 2048}, False, 2048),
+        ({"resident_pcm_budget_mib": 9925}, False, 9925),
+        ({"resident_pcm_budget_mib": 128}, False, 128),
+        ({"resident_pcm_budget_mib": 16384}, False, 16384),
+        ({"resident_pcm_budget_mib": 512, "resident_pcm_budget_automatic": False}, False, 512),
+        ({"resident_pcm_budget_mib": 2048, "resident_pcm_budget_automatic": True}, True, 2048),
+    ],
+)
+def test_resident_admission_migrates_default_but_preserves_explicit_manual_limits(
+    data: dict[str, object], manual_limit: int, *, automatic: bool
+) -> None:
+    project = ProjectState.model_validate(data)
+    assert project.resident_pcm_budget_automatic is automatic
+    assert project.resident_pcm_budget_mib == manual_limit
+    restored = ProjectState.model_validate_json(project.model_dump_json())
+    assert restored.resident_pcm_budget_automatic is automatic
+    assert restored.resident_pcm_budget_mib == manual_limit
+
+
+@pytest.mark.parametrize("automatic", [0, 1, "false", "true", None])
+def test_resident_admission_mode_requires_actual_boolean(automatic: object) -> None:
+    with pytest.raises(ValidationError):
+        ProjectState.model_validate({"resident_pcm_budget_automatic": automatic})

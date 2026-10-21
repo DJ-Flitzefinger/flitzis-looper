@@ -203,6 +203,54 @@ def _key_lock_start_behavior_controls(ctx: UiContext) -> None:
         imgui.text_wrapped("Stop playback to change")
 
 
+def _resident_pcm_budget_controls(ctx: UiContext) -> None:
+    automatic = ctx.state.project.resident_pcm_budget_automatic
+    changed, value = imgui.checkbox("Automatic memory admission", automatic)
+    if changed and ctx.ui.settings.set_resident_pcm_budget_automatic(enabled=bool(value)):
+        ctx.persistence.flush_if_dirty()
+    automatic = ctx.state.project.resident_pcm_budget_automatic
+    budget = int(ctx.state.project.resident_pcm_budget_mib)
+    choice_gib = min(16, max(1, round(budget / 1024)))
+    imgui.begin_disabled(automatic)
+    try:
+        with item_width(240):
+            changed, budget_value = imgui.slider_int("Choose manual limit (GiB)", choice_gib, 1, 16)
+        if changed and not automatic:
+            ctx.ui.settings.set_resident_pcm_budget_mib(int(budget_value) * 1024)
+        _flush_settings_edit_if_completed(ctx)
+    finally:
+        imgui.end_disabled()
+    budget = int(ctx.state.project.resident_pcm_budget_mib)
+    imgui.text_wrapped(f"Retained manual limit: {budget / 1024:.2f} GiB ({budget} MiB).")
+    imgui.text_wrapped(
+        "Automatic admission uses available host memory without a fixed PCM limit. "
+        "Manual mode adds the retained limit above. Both modes check operating-system "
+        "physical and commit headroom before new allocations and keep current readers valid."
+    )
+    if ctx.state.session.resident_pcm_settings_error:
+        imgui.text_wrapped(ctx.state.session.resident_pcm_settings_error)
+
+
+def _resident_host_memory_status(native: dict[str, int | bool | str | None]) -> None:
+    physical = native.get("host_available_physical_bytes")
+    commit = native.get("host_available_commit_bytes")
+    allowance = native.get("host_allocation_allowance_bytes")
+    if native.get("host_memory_error"):
+        imgui.text_wrapped("Host memory monitoring unavailable; new allocations wait.")
+    elif physical is not None and commit is not None and allowance is not None:
+        imgui.text_wrapped(
+            f"OS headroom snapshot: physical {physical} B; commit {commit} B. "
+            f"New-allocation allowance after reserves {allowance} B. "
+            "Headroom can change before an allocation is admitted."
+        )
+    else:
+        imgui.text_wrapped("Host memory headroom is unavailable in this status snapshot.")
+    if "host_pending_allocation_bytes" in native:
+        imgui.text_wrapped(
+            f"Outstanding host allocation reservations {native['host_pending_allocation_bytes']} B."
+        )
+
+
 def _resident_pcm_controls(ctx: UiContext) -> None:
     enabled = bool(ctx.state.project.preload_stem_loops_on_startup)
     changed, value = imgui.checkbox("Preload existing stem loops at startup", enabled)
@@ -214,12 +262,7 @@ def _resident_pcm_controls(ctx: UiContext) -> None:
         "It adds RAM use, preserves each pad's audio mode, and does not generate stems "
         "or guarantee admission. With preload off, saved ALL STEMS waits for an explicit request."
     )
-    budget = int(ctx.state.project.resident_pcm_budget_mib)
-    with item_width(240):
-        changed, budget_value = imgui.slider_int("Resident PCM budget (MiB)", budget, 128, 16384)
-    if changed:
-        ctx.ui.settings.set_resident_pcm_budget_mib(int(budget_value))
-    _flush_settings_edit_if_completed(ctx)
+    _resident_pcm_budget_controls(ctx)
     summary = ctx.state.stems.residency_summary()
     imgui.text_wrapped(
         f"Conservative all-pad FullMix + eligible components: "
@@ -242,9 +285,15 @@ def _resident_pcm_controls(ctx: UiContext) -> None:
         f"Exact unique resident PCM {native.get('held_unique_pcm_bytes', 0)} B; "
         f"admitted pending PCM {native.get('pending_resident_bytes', 0)} B "
         f"({native.get('pending_reservation_count', 0)} reservations); "
-        f"total {native.get('admitted_total_bytes', 0)} B / "
-        f"budget {native.get('budget_bytes', 0)} B."
+        f"total {native.get('admitted_total_bytes', 0)} B."
     )
+    if native.get("automatic"):
+        imgui.text_wrapped("Effective admission: automatic; no fixed resident PCM limit.")
+    else:
+        imgui.text_wrapped(
+            f"Effective manual resident PCM limit {native.get('budget_bytes', 0)} B."
+        )
+    _resident_host_memory_status(native)
     if native.get("over_budget"):
         imgui.text_wrapped(
             "Pinned readers temporarily exceed the allowance. Current audio stays valid; "
@@ -254,7 +303,7 @@ def _resident_pcm_controls(ctx: UiContext) -> None:
         "Preparing requests can still have unknown geometry and no admitted PCM reservation. "
         "PCM counters are not process RSS. Timing/analysis and per-job preparation have "
         "separate limits; Native/DSP, inference and other process overhead are not included. "
-        "A larger finite allowance does not guarantee available host RAM."
+        "Available host memory is checked separately from these PCM counters."
     )
 
 

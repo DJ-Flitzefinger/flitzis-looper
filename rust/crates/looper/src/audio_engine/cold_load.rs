@@ -1235,26 +1235,9 @@ impl ColdLoad {
             };
             let mut sample = prepared
                 .lease
-                .read_window_resident(
-                    source,
-                    start,
-                    end,
-                    1,
-                    context,
-                    PCM_LIMIT_BYTES,
-                    &cancelled,
-                    Some(&self.resident),
-                )
+                .read_window_reserved(source, start, end, 1, context, &cancelled, &self.resident)
                 .map_err(|error| error.to_string())?;
             if self.reuses_assignment(&sample)? {
-                let overlap = sample
-                    .samples
-                    .len()
-                    .checked_mul(8)
-                    .ok_or("migration PCM extent overflow")?;
-                if overlap > PCM_LIMIT_BYTES {
-                    return Err("migration subscriber exceeds transient PCM byte limit".into());
-                }
                 sample = self.resident.copy_selected(&sample)?;
             }
             let lease = prepared
@@ -1320,9 +1303,6 @@ impl ColdLoad {
                     .len()
                     .checked_mul(8)
                     .ok_or("assignment PCM extent overflow")?;
-                if overlap > PCM_LIMIT_BYTES {
-                    return Err("same-pad warm assignment exceeds transient PCM byte limit".into());
-                }
                 sample = self.resident.copy_selected(&sample)?;
                 transaction.record_assignment_copy((overlap / 2) as u64);
             }
@@ -1529,9 +1509,6 @@ impl ColdLoad {
                     .len()
                     .checked_mul(8)
                     .ok_or("assignment PCM extent overflow")?;
-                if overlap > PCM_LIMIT_BYTES {
-                    return Err("same-pad warm assignment exceeds transient PCM byte limit".into());
-                }
                 sample = self.resident.copy_selected(&sample)?;
                 transaction.record_assignment_copy((overlap / 2) as u64);
             }

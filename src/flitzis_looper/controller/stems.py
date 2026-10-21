@@ -276,7 +276,7 @@ class StemResidencySummary:
     estimated_pcm_bytes: int
     unknown_shapes: int
     full_track_exceptions: int
-    native: dict[str, int | bool]
+    native: dict[str, int | bool | str | None]
     unconfirmed: int = 0
     accounting_error: str | None = None
 
@@ -866,7 +866,7 @@ class StemController(BaseController):  # noqa: PLR0904
             for sample_id, demand in requested
         )
         estimate, unknown, full_track = self._estimate_all_pad_pcm()
-        native: dict[str, int | bool] = {}
+        native: dict[str, int | bool | str | None] = {}
         error = None
         try:
             native = self._resident_accounting_counters(
@@ -890,7 +890,7 @@ class StemController(BaseController):  # noqa: PLR0904
         )
 
     @staticmethod
-    def _resident_accounting_counters(raw: object) -> dict[str, int | bool]:
+    def _resident_accounting_counters(raw: object) -> dict[str, int | bool | str | None]:
         counters = {
             "budget_mib",
             "budget_bytes",
@@ -908,7 +908,42 @@ class StemController(BaseController):  # noqa: PLR0904
         ):
             message = "Native resident accounting returned invalid counters"
             raise TypeError(message)
-        return cast("dict[str, int | bool]", {key: raw[key] for key in counters | {"over_budget"}})
+        return cast(
+            "dict[str, int | bool | str | None]",
+            {key: raw[key] for key in counters | {"over_budget"}},
+        ) | StemController._resident_host_memory_counters(raw)
+
+    @staticmethod
+    def _resident_host_memory_counters(
+        raw: dict[str, object],
+    ) -> dict[str, int | bool | str | None]:
+        optional: dict[str, int | bool | str | None] = {}
+        for key in (
+            "host_pending_allocation_bytes",
+            "host_available_physical_bytes",
+            "host_available_commit_bytes",
+            "host_allocation_allowance_bytes",
+        ):
+            if key in raw:
+                value = raw[key]
+                if (value is None and key == "host_pending_allocation_bytes") or (
+                    value is not None and (type(value) is not int or value < 0)
+                ):
+                    message = "Native host memory accounting returned invalid counters"
+                    raise TypeError(message)
+                optional[key] = value
+        if "automatic" in raw:
+            if type(raw["automatic"]) is not bool:
+                message = "Native resident accounting returned invalid admission mode"
+                raise TypeError(message)
+            optional["automatic"] = raw["automatic"]
+        if "host_memory_error" in raw:
+            error = raw["host_memory_error"]
+            if error is not None and not isinstance(error, str):
+                message = "Native host memory accounting returned invalid status"
+                raise TypeError(message)
+            optional["host_memory_error"] = error
+        return optional
 
     def _demand_acked_current(self, sample_id: int, demand: _StemDemand) -> bool:
         try:

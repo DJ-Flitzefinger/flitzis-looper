@@ -489,9 +489,6 @@ pub(super) struct CommittedStemState {
     policy_interest: bool,
     explicit_interest: bool,
     policy_epoch: Arc<AtomicU64>,
-    /// The real admission calculation is exercised without allocating a GiB fixture.
-    #[cfg(test)]
-    pub(super) pcm_limit_for_test: Option<usize>,
 }
 impl CommittedStemState {
     fn proposal_slot(&mut self, policy: bool) -> &mut Option<PendingResidency> {
@@ -1280,12 +1277,6 @@ impl AudioEngine {
         {
             return Err(PyRuntimeError::new_err("resident adoption is in progress"));
         }
-        #[cfg(test)]
-        let pcm_limit = owner
-            .committed
-            .pcm_limit_for_test
-            .unwrap_or(super::cold_jobs::PCM_LIMIT_BYTES)
-            .min(super::cold_jobs::PCM_LIMIT_BYTES);
         let base_intent = owner.intent_epoch.load(Ordering::Acquire);
         let (epoch, expected) = if policy_only {
             let expected = next_epoch(&owner.committed.policy_operation_epoch)
@@ -1399,7 +1390,6 @@ impl AudioEngine {
             launch_revision,
             candidate: candidate.clone(),
             assets: self.project_assets.clone(),
-            history: self.cold_pcm_history.clone(),
             owners: self.resident_stem_cache.clone(),
             producer: producer.clone(),
             cancelled: self.cold_cancelled.clone(),
@@ -1412,8 +1402,6 @@ impl AudioEngine {
             ),
             policy_only,
             preload,
-            #[cfg(test)]
-            pcm_limit,
         };
         drop(owners);
         drop(producer_guard);
@@ -1568,7 +1556,6 @@ struct ResidencyWork {
     launch_revision: u64,
     candidate: Option<Arc<CandidateAuthority>>,
     assets: Arc<super::project_assets::ProjectAssets>,
-    history: Arc<super::project_assets::PcmHistory>,
     owners: Arc<Mutex<Vec<super::resident_relocation::ResidentStemCache>>>,
     producer: Arc<Mutex<Producer<ControlMessage>>>,
     cancelled: Arc<AtomicBool>,
@@ -1578,8 +1565,6 @@ struct ResidencyWork {
     resident: super::resident_proposal::ResidentReadContext,
     policy_only: bool,
     preload: bool,
-    #[cfg(test)]
-    pcm_limit: usize,
 }
 impl ResidencyWork {
     fn current(&self) -> bool {
@@ -1668,60 +1653,13 @@ impl ResidencyWork {
             pin.stems.clone()
         } else {
             // Serialize admission and allocation against every existing same-pad resident reader.
-            let (_owners, preparation_slot) = self.current_owners()?;
+            let (_owners, _preparation_slot) = self.current_owners()?;
             if !self.current() {
                 return Err("Committed stem preparation superseded".into());
             }
-            let readers = self
-                .assets
-                .held_same_pad_reader_backings(
-                    &self.history,
-                    preparation_slot.slot(),
-                    &self.selection.pair.source_lease,
-                )
-                .map_err(|error| error.to_string())?;
-            let mut held = vec![pin.sample.samples.clone()];
-            for samples in readers {
-                if !held.iter().any(|old| Arc::ptr_eq(old, &samples)) {
-                    held.push(samples);
-                }
-            }
-            if let Some(set) = &pin.stems {
-                for component in &set.stems {
-                    if !held.iter().any(|old| Arc::ptr_eq(old, &component.samples)) {
-                        held.push(component.samples.clone());
-                    }
-                }
-            }
-            let held_bytes = held
-                .iter()
-                .try_fold(0usize, |sum, samples| {
-                    samples
-                        .len()
-                        .checked_mul(4)
-                        .and_then(|bytes| sum.checked_add(bytes))
-                })
-                .ok_or("committed stem held PCM overflow")?;
-            let new_bytes = if pin.stems.is_some() && self.candidate.is_none() {
-                0
-            } else {
-                pin.sample
-                    .samples
-                    .len()
-                    .checked_mul(16)
-                    .ok_or("committed stem component PCM overflow")?
-            };
-            #[cfg(test)]
-            let pcm_limit = self.pcm_limit;
-            #[cfg(not(test))]
-            let pcm_limit = super::cold_jobs::PCM_LIMIT_BYTES;
-            if held_bytes
-                .checked_add(new_bytes)
-                .and_then(|bytes| bytes.checked_add(64 * 1024))
-                .is_none_or(|peak| peak > pcm_limit)
-            {
-                return Err("committed stem residency exceeds 1-GiB transient admission".into());
-            }
+            // Existing/history backings remain charged in the scoped ledger
+            // until their actual last reader. Discover reuse before promising
+            // any new host memory; a reused set needs no host query.
             let shared = if pin.stems.is_none() && self.candidate.is_none() {
                 self.assets
                     .shared_stems(
@@ -1778,7 +1716,11 @@ impl ResidencyWork {
                     .selection
                     .pair
                     .reader
-                    .prepare_component_views_cancellable(&pin.sample, &|| !self.current())?;
+                    .prepare_component_views_cancellable(
+                        &pin.sample,
+                        &|| !self.current(),
+                        &resident,
+                    )?;
                 PreparedStemSet {
                     complete_set_identity: self.selection.identity.clone(),
                     accepted_timing: pin.accepted,

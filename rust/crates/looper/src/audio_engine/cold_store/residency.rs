@@ -87,6 +87,31 @@ impl CommittedColdLease {
     }
 
     #[allow(clippy::too_many_arguments)]
+    pub(in crate::audio_engine) fn read_window_reserved(
+        &self,
+        reference: &SampleBuffer,
+        start: usize,
+        end: usize,
+        revision: u64,
+        context: ResidentContext,
+        cancelled: &dyn Fn() -> bool,
+        resident: &crate::audio_engine::resident_proposal::ResidentReadContext,
+    ) -> io::Result<SampleBuffer> {
+        // This live route has no total-PCM constant. Allocation is admitted
+        // before I/O and its exact promise supplies the final read allowance.
+        self.read_window_resident(
+            reference,
+            start,
+            end,
+            revision,
+            context,
+            0,
+            cancelled,
+            Some(resident),
+        )
+    }
+
+    #[allow(clippy::too_many_arguments)]
     pub(in crate::audio_engine) fn read_window_resident(
         &self,
         reference: &SampleBuffer,
@@ -139,7 +164,6 @@ impl CommittedColdLease {
             .len()
             .checked_mul(4)
             .ok_or_else(|| invalid("held resident extent overflow"))?;
-        let maximum = maximum.min(PCM_LIMIT_BYTES);
         let same_range = start == reference.resident_start() && end == reference.resident_end();
         let peak = if same_range {
             held
@@ -148,7 +172,7 @@ impl CommittedColdLease {
                 .and_then(|n| n.checked_add(CHUNK_BYTES))
                 .ok_or_else(|| invalid("resident range peak overflow"))?
         };
-        if peak > maximum {
+        if resident.is_none() && peak > maximum.min(PCM_LIMIT_BYTES) {
             return Err(invalid("resident range exceeds transient PCM admission"));
         }
         let residency = Arc::new(ResidentSourceView {
@@ -177,6 +201,20 @@ impl CommittedColdLease {
         } else {
             None
         };
+        // Live final PCM was admitted by the resident/host reservation above.
+        // The old whole-job cap remains for callers without live ownership.
+        let read_maximum = if let Some(token) = reservation.as_ref() {
+            token
+                .remaining_bytes()
+                .map_err(crate::audio_engine::resident_proposal::admission_io)?
+                .checked_add(CHUNK_BYTES)
+                .ok_or_else(|| invalid("resident range read extent overflow"))?
+        } else {
+            maximum
+                .min(PCM_LIMIT_BYTES)
+                .checked_sub(held)
+                .ok_or_else(|| invalid("resident range budget underflow"))?
+        };
         // Even the sharing path validates the actual held FileID and full extent.
         let mut reader = self.open_complete_reader(reference)?;
         if cancelled() {
@@ -192,7 +230,7 @@ impl CommittedColdLease {
                 start,
                 end - start,
                 reference.channels,
-                maximum - held,
+                read_maximum,
                 &|| cancelled(),
                 &mut IntegrityMetrics::default(),
             )?

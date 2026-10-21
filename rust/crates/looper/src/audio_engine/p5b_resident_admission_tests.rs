@@ -430,7 +430,7 @@ fn wait_source_ack(h: &mut Harness, id: usize, request: u64) {
 }
 
 #[test]
-fn two_stopped_subscribers_admit_shared_components_with_own_publication_ack() {
+fn two_stopped_subscribers_admit_shared_components_with_own_ack_even_when_headroom_query_fails() {
     let mut h = long_harness();
     let preparation = current_material_preparation(&h);
     for id in 0..2 {
@@ -467,6 +467,13 @@ fn two_stopped_subscribers_admit_shared_components_with_own_publication_ack() {
 
     let mut first: Option<PreparedStemSet> = None;
     for (id, selected) in selections.iter().enumerate() {
+        if id == 1 {
+            // The first subscriber owns the genuine ready components. The
+            // second must reuse those arrays without querying host headroom.
+            h.engine
+                .resident_account
+                .set_host_memory_for_test(Err("headroom query failed".into()));
+        }
         assert!(h.callback.mixer.stems_for_measurement()[id].is_none());
         let receipt = h
             .engine
