@@ -711,5 +711,22 @@ Config/journal settlement, current selection and shutdown preparation. These
 bounded checks establish neither device acceptance nor the separately reported
 copied-loop reader failure. That exact failure remains unreproduced in four TAP
 finite-source/launch/controller profiles and one genuine acknowledged Automatic/QM
-profile. Seek-only adoption with differing voice/bank windows and Copy followed
-by Move/Swap, collection and loop edits remain useful uncovered compositions.
+profile. The additional Copy/Seek/Move/Swap and Voice/Bank compositions described
+below extend this bounded coverage; they still do not reproduce that Human error.
+
+## Copied finite readers through Seek and later placement
+
+The continuation adds actual Copy, intro/tail Seek, Move into an empty cell,
+Swap with an independent copy and subsequent loop/complete-source preparation.
+Collection runs before and after the original Pair Native ACK and control mirror;
+each moved content retains its assignment and lifetime while neighboring copies
+retain independent loops. Both Key Lock modes are covered.
+
+Separate cold-adoption cases establish a genuinely different active Voice and
+current Bank window through the existing material subscriber lane. They cover
+both the same immutable source and a different source, unload the original PAD,
+release replacement-admission handles and collect before seeking the retained
+copied voice. Loop preparation then resolves the current Bank's own assignment.
+The fixture retains its original complete material seed, distinct from these
+finite Voice and Bank PCM allocations. These are bounded ownership regressions,
+not audio, device or Human acceptance and not evidence of a product fix.

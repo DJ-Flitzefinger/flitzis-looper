@@ -7,6 +7,9 @@ mod launch_tests;
 #[path = "copied_loop_custody_tests/controller_tests.rs"]
 mod controller_tests;
 
+#[path = "copied_loop_custody_tests/seek_pair_tests.rs"]
+mod seek_pair_tests;
+
 use super::*;
 use crate::audio_engine::native_owned_work::CompleteSampleWork;
 use crate::audio_engine::resident_relocation::ResidentWindowTicket;

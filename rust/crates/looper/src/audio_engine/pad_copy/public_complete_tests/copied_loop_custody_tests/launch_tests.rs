@@ -4,7 +4,7 @@
 use super::*;
 use pyo3::types::PyInt;
 
-fn wait_window(fixture: &mut Fixture, ticket: &ResidentWindowTicket) {
+pub(super) fn wait_window(fixture: &mut Fixture, ticket: &ResidentWindowTicket) {
     wait_for_with_diagnostics(
         || {
             collect(fixture);
@@ -29,7 +29,7 @@ fn wait_window(fixture: &mut Fixture, ticket: &ResidentWindowTicket) {
     assert!(ticket.error().unwrap().is_none());
 }
 
-fn request_window(
+pub(super) fn request_window(
     fixture: &Fixture,
     slot: usize,
     start: usize,

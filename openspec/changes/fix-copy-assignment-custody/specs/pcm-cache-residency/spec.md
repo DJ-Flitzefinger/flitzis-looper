@@ -37,3 +37,15 @@ Each prepared Copy source SHALL register its own subscriber and source reader th
 - **WHEN** the actual final native readers and saved owners release that backing through existing retirement rules
 - **THEN** collection releases the Copy subscriber as well as the original subscriber
 - **AND** unloading one PAD alone does not revoke another live PAD or saved owner
+
+#### Scenario: Copied content is moved and swapped after a seek
+- **GIVEN** independent acknowledged copies hold active finite source voices
+- **WHEN** an actual seek is followed by Move to an empty slot, Swap with another copy and loop editing, with collection before and after each original Native acknowledgement and control mirror
+- **THEN** each destination resolves the assignment and lifetime of its moved content
+- **AND** complete-source preparation and subsequent loop edits preserve the other copies and original PAD
+
+#### Scenario: A copied voice survives a later source-bank adoption
+- **GIVEN** an acknowledged Copy has an active finite voice and a later source adoption replaces its bank window while preserving that voice
+- **WHEN** seek preparation captures the actual voice and collection runs before and after its Native acknowledgement
+- **THEN** the worker resolves the verified source lease appropriate to that actual voice
+- **AND** later loop preparation resolves the current bank's own registered assignment without borrowing a sibling's authority
