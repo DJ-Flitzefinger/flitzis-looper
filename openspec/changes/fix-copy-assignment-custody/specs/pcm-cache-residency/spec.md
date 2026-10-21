@@ -49,3 +49,12 @@ Each prepared Copy source SHALL register its own subscriber and source reader th
 - **WHEN** seek preparation captures the actual voice and collection runs before and after its Native acknowledgement
 - **THEN** the worker resolves the verified source lease appropriate to that actual voice
 - **AND** later loop preparation resolves the current bank's own registered assignment without borrowing a sibling's authority
+
+### Requirement: Saved direct stem sets have consistent typed retirement
+The existing artifact namespace SHALL recognize the five declared stem WAV names and complete marker directly beneath a saved canonical material stem container, for both readable and material-ID layouts. Retirement SHALL retain exact path, object identity and last-owner checks. It MUST preserve other live subscribers, unknown files, the material original and newer generation directories; accepting known direct leaves MUST NOT authorize recursive deletion of the base container.
+
+#### Scenario: A copied saved direct set loses its last selection
+- **GIVEN** two independent PAD assignments share a saved direct stem set beneath a readable or material-ID root
+- **WHEN** the first selection is removed and then the final selection is removed
+- **THEN** the first removal preserves all shared artifacts and the final removal admits only the six declared direct files for off-thread retirement
+- **AND** both PAD source assignments, unknown files and newer generations remain intact without an artifact-classification cleanup error

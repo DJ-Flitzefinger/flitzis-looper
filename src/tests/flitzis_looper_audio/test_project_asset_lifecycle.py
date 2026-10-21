@@ -1,3 +1,5 @@
+import hashlib
+import json
 import time
 from contextlib import closing
 from typing import TYPE_CHECKING
@@ -5,7 +7,8 @@ from typing import TYPE_CHECKING
 import pytest
 
 from flitzis_looper.controller.asset_lifecycle import ProjectAssetLifecycle
-from flitzis_looper.models import ProjectState
+from flitzis_looper.controller.stem_cache import expected_stem_files
+from flitzis_looper.models import STEM_KINDS, ProjectState, StemCacheEntry
 from flitzis_looper_audio import AudioEngine
 
 if TYPE_CHECKING:
@@ -58,6 +61,95 @@ def _wait_for_deletion(path: Path, audio: AudioEngine) -> None:
     while path.exists() and time.monotonic() < deadline:
         time.sleep(0.01)
     assert not path.exists(), audio.project_asset_cleanup_status()
+
+
+def _saved_direct_stems(assets: ProjectAssetLifecycle, layout: str) -> tuple[Path, Path, str]:
+    samples = assets._root / "samples"
+    payload = b"owned synthetic original"
+    digest = hashlib.sha256(payload).hexdigest()
+    if layout == "legacy":
+        original = samples / "source.wav"
+        stems = samples / "stems" / "#1"
+    elif layout == "readable":
+        material = samples / "source.wav"
+        material.mkdir()
+        original = material / "source.wav"
+        (material / ".material.json").write_text(
+            json.dumps({
+                "schema_version": 1,
+                "sha256": digest,
+                "bytes": len(payload),
+                "original_leaf": original.name,
+            })
+        )
+        stems = material / "stems"
+    else:
+        material = samples / "materials" / f"M{digest[:32]}"
+        original = material / "original" / "source.wav"
+        stems = material / "stems"
+    original.parent.mkdir(parents=True, exist_ok=True)
+    original.write_bytes(payload)
+    stems.mkdir(parents=True)
+    leaves = [*(f"{kind}.wav" for kind in STEM_KINDS), ".complete.json"]
+    for name in leaves:
+        (stems / name).write_bytes(f"declared {name}".encode())
+    unknown = stems / "performer-notes.txt"
+    unknown.write_bytes(b"preserved unknown content")
+    newer = stems / f".ready-{'a' * 32}"
+    newer.mkdir()
+    (newer / "drums.wav").write_bytes(b"newer generation")
+    source = original.relative_to(assets._root).as_posix()
+    cache = stems.relative_to(assets._root).as_posix()
+    entry = StemCacheEntry(
+        source_version=f"{source}|sha256-v1:{digest}",
+        cache_dir=cache,
+        stems=expected_stem_files(cache),
+        available=True,
+    )
+    for slot in [0, 1]:
+        assets._project.sample_paths[slot] = source
+        assets._project.stem_cache[slot] = entry.model_copy(deep=True)
+    assets.sync_assignments()
+    return original, stems, source
+
+
+@pytest.mark.parametrize("layout", ["legacy", "readable", "material_id"])
+def test_saved_direct_stems_retire_after_last_copy_without_clearing_sources(
+    native_assets: ProjectAssetLifecycle, layout: str
+) -> None:
+    """Use real Native path admission, alias owners and physical off-thread cleanup."""
+    assets = native_assets
+    original, stems, source = _saved_direct_stems(assets, layout)
+    leaves = [*(f"{kind}.wav" for kind in STEM_KINDS), ".complete.json"]
+    assert ("stems", 0) in assets._assignments
+    assert ("stems", 1) in assets._assignments
+    with pytest.raises((RuntimeError, ValueError)):
+        assets._audio.retire_project_asset(str(stems), recursive=True)
+    with pytest.raises((RuntimeError, ValueError)):
+        assets._audio.retire_project_asset(str(stems / "performer-notes.txt"))
+    assets._project.stem_cache[0] = None
+    with assets.admission():
+        assets.sync_assignments()
+    assert not assets.retirement_errors
+    assert all((stems / name).exists() for name in leaves)
+    reader = assets.acquire(stems / "drums.wav")
+    assets._project.stem_cache[1] = None
+    try:
+        with assets.admission():
+            assets.sync_assignments()
+        assert not assets.retirement_errors
+        for name in leaves:
+            if name != "drums.wav":
+                _wait_for_deletion(stems / name, assets._audio)
+        assert (stems / "drums.wav").read_bytes() == b"declared drums.wav"
+    finally:
+        reader.release()
+    for name in leaves:
+        _wait_for_deletion(stems / name, assets._audio)
+    assert assets._project.sample_paths[:2] == [source, source]
+    assert original.read_bytes() == b"owned synthetic original"
+    assert (stems / "performer-notes.txt").read_bytes() == b"preserved unknown content"
+    assert (stems / f".ready-{'a' * 32}" / "drums.wav").read_bytes() == b"newer generation"
 
 
 def test_uninitialized_native_registry_waits_for_last_assignment_owner(

@@ -179,6 +179,9 @@ pub(super) fn classify(path: &Path) -> io::Result<AssetKind> {
         {
             Ok(AssetKind::StemArtifact)
         }
+        [owner, "stems", name] if readable::readable_container(owner) && stem_file(name) => {
+            Ok(AssetKind::StemArtifact)
+        }
         [owner, ".pcm-cache", "v1", generation]
             if readable::readable_container(owner) && pcm_generation(generation) =>
         {
@@ -260,6 +263,11 @@ pub(super) fn classify(path: &Path) -> io::Result<AssetKind> {
             if owner.strip_prefix('M').is_some_and(valid_id)
                 && stem_generation(generation)
                 && stem_file(name) =>
+        {
+            Ok(AssetKind::StemArtifact)
+        }
+        ["materials", owner, "stems", name]
+            if owner.strip_prefix('M').is_some_and(valid_id) && stem_file(name) =>
         {
             Ok(AssetKind::StemArtifact)
         }

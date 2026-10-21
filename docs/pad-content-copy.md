@@ -730,3 +730,21 @@ copied voice. Loop preparation then resolves the current Bank's own assignment.
 The fixture retains its original complete material seed, distinct from these
 finite Voice and Bank PCM allocations. These are bounded ownership regressions,
 not audio, device or Human acceptance and not evidence of a product fix.
+
+## Saved direct stem sets and source replacement
+
+Saved direct stem sets under readable and material-ID roots were accepted by the
+control lifecycle, but their six known direct files were missing from Native
+artifact classification. Retiring the final shared selection therefore reported
+`asset path does not name a declared project artifact`. The namespace now admits
+only those five stem WAV names and the complete marker. Existing containment,
+binding, exact-object and last-reader checks still apply; recursive base-container
+retirement, unknown files, newer generations and source originals stay protected.
+
+Actual Native lifecycle tests cover all three layouts, shared saved owners and an
+independent retained reader. A real Copy/Config/assets/public-Loader regression
+also retains a successful external `drums.wav` replacement through later polling,
+collection and persistence, while a genuine decode error preserves its copied
+predecessor. This is a standalone Loader composition without whole-App stem-reuse
+callbacks. The reported disappearing PAD has not been separately reproduced;
+the cleanup message alone does not clear a source assignment.
