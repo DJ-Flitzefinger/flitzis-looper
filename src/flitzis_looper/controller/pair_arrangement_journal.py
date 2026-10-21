@@ -62,7 +62,7 @@ def strict_json_object(text: str) -> dict[str, object]:
 
 
 def validated_project_image(text: str) -> ProjectState:
-    """Require a complete project image, retaining no silently discarded metadata."""
+    """Require a strictly understood current or known historical project image."""
     if len(text.encode("utf-8")) > PROJECT_IMAGE_BYTES:
         message = "Pair project image exceeds bounded UTF8 size"
         raise ValueError(message)
@@ -70,13 +70,14 @@ def validated_project_image(text: str) -> ProjectState:
     fields = set(ProjectState.model_fields)
     computed = set(ProjectState.model_computed_fields)
     missing = fields - data.keys()
-    if missing not in (set(), {"pad_source_beatmap_intent"}) or data.keys() - fields - computed:
+    historical_fields = {"pad_source_beatmap_intent", "resident_pcm_budget_automatic"}
+    if not missing <= historical_fields or data.keys() - fields - computed:
         message = "Pair project image is incomplete or contains unknown fields"
         raise ValueError(message)
     project = ProjectState.model_validate_json(text, strict=True)
     expected = project.model_dump(mode="json", exclude_computed_fields=True, warnings="error")
-    if missing:
-        expected.pop("pad_source_beatmap_intent")
+    for field in missing:
+        expected.pop(field)
     if {key: value for key, value in data.items() if key not in computed} != expected:
         message = "Pair project image contains unrecognized or inconsistent nested metadata"
         raise ValueError(message)
