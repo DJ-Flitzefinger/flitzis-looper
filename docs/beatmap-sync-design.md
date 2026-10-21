@@ -516,12 +516,23 @@ physical endpoints retain their own canonical interval rather than inheriting ol
 stored bars. Copy retains independent intent and requires fresh Native map
 qualification; default-neutral snapshot omission preserves old sealed images.
 
-This control delivery retains the initial actual dry envelope: Key Lock off,
-total pitch zero, speed one, BPM Lock on, stable real master epoch and E=T.
-It does not establish full continuous SYNC, prepared Native/FIFO integration,
-all required rates/pitches, both start policies or resource/music/device/Human
-acceptance. Automatic original-fullmix map acquisition also remains required;
+The productive envelope remains Key Lock off, total pitch zero, speed one,
+BPM Lock on, stable real master epoch and E=T. Internal constant-h physical-birth
+preparation reuses Native/FIFO ownership, H silence frames and the unchanged
+canonical source origin. Real component input can follow knots and wraps, but
+the delayed Native output still needs its aligned intended-output range.
+A matching uncropped Raw-Native stream proves input/processor continuity; it
+cannot authorize public activation. Nonzero mapped starts remain refused and
+cannot publish successful effective SYNC.
+
+Real future canonical input, retained actual/logical/output-time ownership and
+per-path alignment remain required. Full continuous SYNC, Key Lock on/variable
+h/r, all rates, delayed/retained-offset preparation, both Native start policies
+and resource/music/device/Human acceptance remain open. Mapped delayed
+reconstruction refuses before scalar endpoint comparison, preserving its target
+and old audio without content skipping. Automatic fullmix acquisition is required;
 raw detector arrays do not independently verify quarter counts, meter or gaps.
 The current implementation contract is in
 `../openspec/changes/publish-source-sync-intent/` and
-`../openspec/changes/admit-mapped-source-clock/`.
+`../openspec/changes/admit-mapped-source-clock/` and
+`../openspec/changes/prepare-mapped-fixed-pitch-start/`.

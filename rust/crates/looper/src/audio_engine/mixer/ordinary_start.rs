@@ -127,8 +127,9 @@ impl RtMixer {
                 .mapped_clock()
                 .ok_or(PitchActionReject::MappedTimingUnavailable)?;
             let render = self.ordinary_start_render(id);
-            // This first productive envelope is dry varispeed. A Native/FIFO
-            // trajectory must be prepared under its own exact future input clock.
+            // Native-input chronology alone does not prove alignment to the
+            // common output timeline. Keep public activation gated until that
+            // per-path contract (including AttackAtGrid) is actually integrated.
             if render.key_lock
                 || render.pitch.total_semitones() != 0
                 || !self.bpm_lock_enabled
@@ -213,6 +214,18 @@ impl RtMixer {
             snapshot.stems = None;
         }
         Ok(snapshot)
+    }
+
+    /// Component tests borrow the real ordinary source snapshot; this grants no
+    /// launch admission, mapped permission, state mutation or output alignment.
+    #[cfg(test)]
+    pub(crate) fn normal_start_snapshot_for_test(
+        &self,
+        id: usize,
+        start_s: f64,
+        end_s: Option<f64>,
+    ) -> Result<PitchSourceSnapshot, PitchActionReject> {
+        self.normal_start_snapshot(id, start_s, end_s)
     }
 
     pub(crate) fn requires_ordinary_start_preparation(
@@ -304,6 +317,11 @@ impl RtMixer {
         PitchActionReject,
     > {
         let guard = self.ordinary_start_guard(work)?;
+        // A delayed mapped birth needs an owning canonical replay trajectory.
+        // Refuse before the scalar endpoint comparison below can relabel it.
+        if work.mapped_clock().is_some() {
+            return Err(PitchActionReject::MappedTimingUnavailable);
+        }
         if work.render != Some(self.ordinary_start_render(guard.id))
             || execution <= work.execution_frame()
         {

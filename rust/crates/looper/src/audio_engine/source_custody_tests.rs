@@ -136,6 +136,10 @@ mod cold {
         }
 
         fn new_selected(hint: Option<ResidentLoadHint>) -> Self {
+            Self::new_selected_with_pcm(hint, [8192; 128])
+        }
+
+        fn new_selected_with_pcm(hint: Option<ResidentLoadHint>, pcm: [i16; 128]) -> Self {
             pyo3::Python::initialize();
             let directory = tempfile::tempdir().unwrap();
             let mut bytes = Vec::new();
@@ -151,8 +155,8 @@ mod cold {
             bytes.extend_from_slice(&16_u16.to_le_bytes());
             bytes.extend_from_slice(b"data");
             bytes.extend_from_slice(&(128 * 2_u32).to_le_bytes());
-            for _ in 0..128 {
-                bytes.extend_from_slice(&8192_i16.to_le_bytes());
+            for sample in pcm {
+                bytes.extend_from_slice(&sample.to_le_bytes());
             }
             fs::write(directory.path().join("external.wav"), bytes).unwrap();
             let mut engine = AudioEngine::new().unwrap();

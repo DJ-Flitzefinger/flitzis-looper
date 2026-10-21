@@ -238,10 +238,18 @@ impl NativeAdapterState {
         dsp: Option<&mut crate::audio_engine::late_start_dsp::LateStartDspWork>,
         context: NativeStartHistoryContext,
     ) -> Result<(), NativeSourcePreparationError> {
-        if request.playback.is_mapped()
+        let mapped = request.playback.is_mapped()
             || request
                 .actual_feed
-                .is_some_and(|checkpoint| checkpoint.playback.is_mapped())
+                .is_some_and(|checkpoint| checkpoint.playback.is_mapped());
+        if mapped
+            && (context != NativeStartHistoryContext::PhysicalBirth
+                || request.key_lock
+                || request.pitch_intent.total_semitones() == 0
+                || declared_cut.is_some()
+                || catchup_frames != 0
+                || dsp.is_some()
+                || request.actual_feed.is_some())
         {
             return Err(unavailable());
         }

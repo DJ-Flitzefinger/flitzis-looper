@@ -28,7 +28,10 @@ struct LaunchPath {
 
 impl LaunchPath {
     fn new() -> Self {
-        let mut source = runtime_fixture();
+        Self::from_source(runtime_fixture())
+    }
+
+    fn from_source(mut source: ColdCustody) -> Self {
         source.engine.test_output_format = Some((RATE, 2));
         source
             .engine
@@ -143,6 +146,10 @@ impl LaunchPath {
         assert!(output.iter().all(|sample| sample.is_finite()));
         output
     }
+}
+
+mod mapped_fixed_pitch_birth_tests {
+    include!("mapped_fixed_pitch_birth_tests.rs");
 }
 
 fn variable_original_delivery(path: &LaunchPath) -> (OfflineAnalysisJob, LoaderEventDelivery) {
