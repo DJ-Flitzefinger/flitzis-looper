@@ -144,6 +144,17 @@ mod cold {
         }
 
         fn new_selected_with_signal(hint: Option<ResidentLoadHint>, pcm: &[i16]) -> Self {
+            Self::new_selected_with_interleaved_signal(hint, pcm, 1)
+        }
+
+        fn new_selected_with_interleaved_signal(
+            hint: Option<ResidentLoadHint>,
+            pcm: &[i16],
+            channels: u16,
+        ) -> Self {
+            assert!(matches!(channels, 1 | 2));
+            assert!(!pcm.is_empty() && pcm.len().is_multiple_of(usize::from(channels)));
+            let original_frames = pcm.len() / usize::from(channels);
             pyo3::Python::initialize();
             let directory = tempfile::tempdir().unwrap();
             let mut bytes = Vec::new();
@@ -153,10 +164,10 @@ mod cold {
             bytes.extend_from_slice(b"WAVEfmt ");
             bytes.extend_from_slice(&16_u32.to_le_bytes());
             bytes.extend_from_slice(&1_u16.to_le_bytes());
-            bytes.extend_from_slice(&1_u16.to_le_bytes());
+            bytes.extend_from_slice(&channels.to_le_bytes());
             bytes.extend_from_slice(&48_000_u32.to_le_bytes());
-            bytes.extend_from_slice(&96_000_u32.to_le_bytes());
-            bytes.extend_from_slice(&2_u16.to_le_bytes());
+            bytes.extend_from_slice(&(96_000_u32 * u32::from(channels)).to_le_bytes());
+            bytes.extend_from_slice(&(2_u16 * channels).to_le_bytes());
             bytes.extend_from_slice(&16_u16.to_le_bytes());
             bytes.extend_from_slice(b"data");
             bytes.extend_from_slice(&pcm_bytes.to_le_bytes());
@@ -183,8 +194,8 @@ mod cold {
                 consumer,
                 mixer,
             };
-            fixture.load_and_ack_selected_with_frames(0, hint, pcm.len());
-            fixture.load_and_ack_selected_with_frames(1, hint, pcm.len());
+            fixture.load_and_ack_selected_with_frames(0, hint, original_frames);
+            fixture.load_and_ack_selected_with_frames(1, hint, original_frames);
             fixture
         }
 

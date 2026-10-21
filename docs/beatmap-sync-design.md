@@ -662,3 +662,44 @@ must remain visible in independent evidence; raw suffix agreement cannot conceal
 first-attack loss or authorize effective SYNC. Public nonzero mapped admission
 remains closed until per-path output alignment and full policy behavior pass.
 See `../openspec/changes/own-mapped-native-future/` for the internal contract.
+
+The bounded owning-future output measurement combines the existing B5 authored
+stereo signals and nonuniform source spans nominally .5/1/2/1.5 with actual copy-first
+decoding, original ACKs, private map artifact delivery and captured Native/FIFO
+ownership. It includes an isolated event at the physical beginning, four later
+span events and a stereo tone. Fixed nonzero h and Key Lock off keep this separate
+from unimplemented variable-h/r integration. Independent quantized source PCM and
+direct C-ABI processing check the complete emitted beginning, input chronology
+and caller-partition invariance. Acoustic results retain their original timing,
+peak, energy-discard and capture-tail criteria; a technical pass does not turn a
+negative acoustic result into accepted output alignment.
+
+The original nearest-rounded B5 seconds produce an actual local rate of
+2.0000000000000004 and remain a genuine strict admission-refusal case. The measured
+supported fixture is a separately declared map with knot3 at its adjacent lower
+binary64 second (about -2.13e-11 loaded frames). Exact anchor/rate bits and the
+displacement remain in the output. Audio, authored event times, independent source
+equations and criteria are unchanged. This is no acceptance of the old exact record
+or exact-r2 boundary, and the original shared B5 fixture remains intact.
+
+A genuine fresh capture fixes its physical origin. The measurement therefore
+varies Native block phase with zero or 17 extra silent history frames, rather than
+injecting the earlier scalar diagnostic's shifted creative phase. Complete early
+raw output remains evidence. Neither nominal API delay nor suffix equality picks
+musical C or supplies a start policy. The last 20 ms check is bounded capture-tail
+evidence, not proof of internal Native tail exhaustion. No production admission
+or callback changes follow from these measurements. A later productive Native
+opening must qualify intended output at both existing prepared adoption and live
+read consumers. See `../openspec/changes/measure-owned-mapped-native-output/`.
+
+The measured supported cohort contains 72 complete streams. All match the separate
+C-ABI stream exactly, retain identical output across caller partitions and pass
+the original-source/coordinate assertions. All 60 isolated responses preserve the
+original raw peak and meet the bounded response-completeness check. However,
+none of those 60 pass the unchanged q10/q50 timing gates; 40 have an empty common
+timing interval and 44 have an empty joint timing/retention interval. Tone windows
+pass 72 of 96 cases. These are negative acoustic results, not qualified SYNC output.
+The empty timing intervals require addressing response deformation; selecting a
+single delay cannot satisfy those cases. A Drum-D analysis fallback can help beat
+evidence, but cannot repair this renderer response. The existing fullmix analysis
+approach and public admission guards therefore remain unchanged.

@@ -152,6 +152,10 @@ mod mapped_fixed_pitch_birth_tests {
     include!("mapped_fixed_pitch_birth_tests.rs");
 }
 
+mod mapped_native_output_tests {
+    include!("mapped_native_output_tests.rs");
+}
+
 mod mapped_dry_global_rate_tests {
     include!("mapped_dry_global_rate_tests.rs");
 }
