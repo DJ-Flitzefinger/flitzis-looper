@@ -173,3 +173,53 @@ pub(super) fn status(
     // bounded final recheck prevents that snapshot becoming replacement truth.
     Ok(binding.current().then(|| result.unbind()))
 }
+
+pub(super) fn source_sync_status(
+    engine: &AudioEngine,
+    py: Python<'_>,
+    id: usize,
+) -> PyResult<Option<Py<PyDict>>> {
+    if id >= super::constants::NUM_SAMPLES {
+        return Err(PyValueError::new_err("id out of range"));
+    }
+    let Some(binding) = input_runtime_binding::capture(engine, id)? else {
+        return Ok(None);
+    };
+    let Some(status) = engine.input_runtime_ownership.source_sync_status(id) else {
+        return Ok(None);
+    };
+    if !binding.current()
+        || status.source_generation != binding.source_generation
+        || status.source_address != binding.binding.source_address
+        || status.window_revision != binding.binding.resident.map_or(0, |window| window.revision)
+    {
+        return Ok(None);
+    }
+    let result = PyDict::new(py);
+    result.set_item("source_generation", status.source_generation)?;
+    result.set_item("source_identity", status.source_address)?;
+    result.set_item("window_revision", status.window_revision)?;
+    result.set_item("active", status.active)?;
+    result.set_item("effective", status.witness.is_some())?;
+    result.set_item(
+        "intent_revision",
+        status.witness.map(|witness| witness.intent_revision),
+    )?;
+    result.set_item(
+        "map_revision",
+        status.witness.map(|witness| {
+            witness
+                .map_revision
+                .iter()
+                .map(|word| format!("{word:016x}"))
+                .collect::<String>()
+        }),
+    )?;
+    // Dictionary allocation is control-only. A replacement during it must not
+    // project the old callback witness onto a new source or content incarnation.
+    Ok(
+        (binding.current()
+            && engine.input_runtime_ownership.source_sync_status(id) == Some(status))
+        .then(|| result.unbind()),
+    )
+}

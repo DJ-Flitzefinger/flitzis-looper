@@ -119,6 +119,7 @@ class PadLoopController:
         end: float,
         *,
         bars: float | None = None,
+        auto: bool = False,
     ) -> None:
         if (
             self._project.pad_content[sample_id] is not edit.content
@@ -135,7 +136,7 @@ class PadLoopController:
         previous = self._loop_intent(sample_id)
         self._project.pad_loop_start_s[sample_id] = start
         self._project.pad_loop_end_s[sample_id] = end
-        self._project.pad_loop_auto[sample_id] = False
+        self._project.pad_loop_auto[sample_id] = auto
         if bars is not None:
             self._project.pad_loop_bars[sample_id] = bars
         self._publish_loop_edit(
@@ -181,7 +182,14 @@ class PadLoopController:
         start, _ = self.requested_region(sample_id, timing=edit.timing)
         start = physical_source_marker_s(start, sample_rate_hz=edit.rate)
         end = self._source_map_bar_end(edit, start, bars)
-        self._publish_source_map_region(sample_id, edit, start, end, bars=bars)
+        self._publish_source_map_region(
+            sample_id,
+            edit,
+            start,
+            end,
+            bars=bars,
+            auto=self._project.pad_source_sync_intent[sample_id].requested,
+        )
 
     def snap_source_map_markers(self, sample_id: int) -> None:
         """Snap both requested physical markers through one current Native map snapshot."""
@@ -201,7 +209,13 @@ class PadLoopController:
             edit.geometry, edit.geometry.nearest_grid_source(start, 1.0 / 16.0), edit.rate
         )
         end = self._source_map_bar_end(edit, start, self._stored_bars(sample_id))
-        self._publish_source_map_region(sample_id, edit, start, end)
+        self._publish_source_map_region(
+            sample_id,
+            edit,
+            start,
+            end,
+            auto=self._project.pad_source_sync_intent[sample_id].requested,
+        )
 
     def _set_source_map_end(self, sample_id: int, end: float | None) -> None:
         edit = self._capture_source_map_edit(sample_id)
@@ -688,6 +702,10 @@ class PadLoopController:
         timing = self._resolve_timing(sample_id, timing)
         start_s, end_s = start, end
 
+        mapped = self._mapped_auto_region(sample_id, start=start, bars=bars) if auto else None
+        if mapped is not None:
+            return mapped
+
         sample_rate_hz = self._timing_sample_rate_hz(timing)
         one_sample_s = (
             1.0 / sample_rate_hz if sample_rate_hz is not None and sample_rate_hz > 0 else 0.0001
@@ -728,6 +746,23 @@ class PadLoopController:
             end_s_effective = min(end_s_effective, physical_end)
         return (start_s, end_s_effective)
 
+    def _mapped_auto_region(
+        self, sample_id: int, *, start: float, bars: float
+    ) -> tuple[float, float] | None:
+        if not self._project.pad_source_sync_intent[sample_id].requested:
+            return None
+        geometry = None if self._source_maps is None else self._source_maps.effective(sample_id)
+        if geometry is None:
+            return None
+        rate = geometry.editor_info()["sample_rate_hz"]
+        start = physical_source_marker_s(start, sample_rate_hz=rate)
+        result = geometry.source_after_beats(start, bars * 4.0, require_four_four=True)
+        end = self._source_map_marker(geometry, result, rate)
+        if end <= start:
+            message = "Mapped automatic loop has no physical source interval"
+            raise ValueError(message)
+        return start, end
+
     def effective_region(
         self,
         sample_id: int,
@@ -755,6 +790,12 @@ class PadLoopController:
         generation = self._transport.capture_current_pad_edit_generation(sample_id)
         self._transport.residency.remember(sample_id)
         if enabled == self._transport._project.pad_loop_auto[sample_id]:
+            return
+
+        if enabled and self._project.pad_source_sync_intent[sample_id].requested:
+            # An explicit mapped bar cycle preserves the physical chosen start.
+            # Scalar grid snapping would move it under a different timing owner.
+            self.apply_source_map_bars(sample_id)
             return
 
         timing = self._bpm.current_timing(sample_id)

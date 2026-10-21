@@ -36,6 +36,7 @@ from flitzis_looper.controller.timing_persistence import (
 from flitzis_looper.material_migration_model import MaterialMigrationAlias
 from flitzis_looper.models import ProjectState
 from flitzis_looper.source_beatmap_intent import PadSourceBeatmapIntent
+from flitzis_looper.source_sync_intent import PadSourceSyncIntent, neutral_source_sync_intent
 
 if TYPE_CHECKING:
     from collections.abc import Callable
@@ -88,6 +89,20 @@ def _recover_source_beatmap_intent(recovered: dict[str, object]) -> None:
             except ValidationError:
                 continue
     recovered["pad_source_beatmap_intent"] = valid_rows
+
+
+def _recover_source_sync_intent(recovered: dict[str, object]) -> None:
+    if "pad_source_sync_intent" not in recovered:
+        return
+    rows = recovered["pad_source_sync_intent"]
+    valid_rows = [neutral_source_sync_intent() for _ in range(len(ProjectState().sample_paths))]
+    if isinstance(rows, list):
+        for index, row in enumerate(rows[: len(valid_rows)]):
+            try:
+                valid_rows[index] = PadSourceSyncIntent.model_validate(row)
+            except ValidationError:
+                continue
+    recovered["pad_source_sync_intent"] = valid_rows
 
 
 class ProjectPersistence:
@@ -513,7 +528,8 @@ class ProjectPersistence:
                         else selection_error
                     )
                 if any(
-                    item["loc"] and item["loc"][0] == "pad_source_beatmap_intent"
+                    item["loc"]
+                    and item["loc"][0] in {"pad_source_beatmap_intent", "pad_source_sync_intent"}
                     for item in error.errors()
                 ):
                     selection_error = "Unsupported source beatmap metadata retained on disk"
@@ -537,6 +553,7 @@ class ProjectPersistence:
                 "pad_key_intent",
                 "pad_stem_intent",
                 "pad_source_beatmap_intent",
+                "pad_source_sync_intent",
                 "material_migrations",
                 "config_revision",
             }
@@ -554,6 +571,7 @@ class ProjectPersistence:
             recovered = recover_project_stem_intent(recovered)
             recover_stem_pair_metadata(recovered, error)
             _recover_source_beatmap_intent(recovered)
+            _recover_source_sync_intent(recovered)
             revision = recovered.get("config_revision", 0)
             if type(revision) is not int or revision < 0:
                 recovered["config_revision"] = 0

@@ -204,6 +204,7 @@ class AppController:
             source_generation=self.transport.capture_current_pad_edit_generation,
         )
         self.transport.loop.bind_source_maps(self.loader.source_beatmaps)
+        self.transport.source_sync.bind_source_maps(self.loader.source_beatmaps)
 
     def _init_recording_control(self) -> None:
         """Bind one original Engine and project namespace before restore and UI work."""
@@ -263,6 +264,7 @@ class AppController:
             )
         )
         self.transport.pitch.bind_diagnostics(self.diagnostics)
+        self.transport.source_sync.bind_diagnostics(self.diagnostics)
         self.transport.residency._bind_diagnostics(self.diagnostics)
         self.transport.waveform.bind_diagnostics(self.diagnostics)
         self.loader._bind_diagnostics(self.diagnostics)

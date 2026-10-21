@@ -2,7 +2,7 @@
 
 use super::content_placement::ContentKey;
 use super::input_runtime_binding::{
-    InputPadBinding, InputRuntimeOwnership, InputRuntimePadBinding,
+    InputPadBinding, InputRuntimeOwnership, InputRuntimePadBinding, SourceSyncWitness,
 };
 use super::loader_events::LoaderEventDelivery;
 use super::pitch_actions::PitchActionReject;
@@ -10,6 +10,20 @@ use super::source_beatmap::SourceBeatmap;
 use super::source_beatmap_artifact::SourceBeatmapArtifact;
 use std::sync::Arc;
 use std::sync::atomic::Ordering;
+
+/// Strict additive durable intent, independent of selected map data and live effect.
+pub(crate) fn validate_source_sync_intent(value: &serde_json::Value) -> Result<(), String> {
+    if value.as_object().is_none_or(|object| {
+        object.len() != 2 || !object.contains_key("requested") || !object.contains_key("revision")
+    }) || value["requested"].as_bool().is_none()
+        || value["revision"].as_u64().is_none()
+    {
+        return Err(
+            "source SYNC intent requires exactly boolean requested and u64 revision".into(),
+        );
+    }
+    Ok(())
+}
 
 /// A complete control projection, carried by the existing input-runtime publication.
 /// A selected map remains data-only until explicit SYNC intent is present.
@@ -32,6 +46,7 @@ pub(crate) struct QualifiedSourceMap {
     generation: u64,
     loaded_rate: u32,
     exact_quarters: Option<f64>,
+    witness: SourceSyncWitness,
 }
 
 impl QualifiedSourceMap {
@@ -47,6 +62,17 @@ impl QualifiedSourceMap {
             .placement
             .and_then(|placement| placement.content_key())
             .ok_or("source map requires current content")?;
+        let mut revision = [0; 4];
+        for (word, text) in revision
+            .iter_mut()
+            .zip(map.map_revision().as_bytes().chunks_exact(16))
+        {
+            *word = u64::from_str_radix(
+                std::str::from_utf8(text).map_err(|_| "source map revision is not hexadecimal")?,
+                16,
+            )
+            .map_err(|_| "source map revision is not hexadecimal")?;
+        }
         Ok(Self {
             delivery,
             map,
@@ -55,6 +81,10 @@ impl QualifiedSourceMap {
             generation: binding.source_generation,
             loaded_rate: binding.binding.sample_rate_hz,
             exact_quarters,
+            witness: SourceSyncWitness {
+                intent_revision: 0,
+                map_revision: revision,
+            },
         })
     }
 
@@ -68,6 +98,10 @@ impl QualifiedSourceMap {
 
     pub(crate) fn exact_quarters(&self) -> Option<f64> {
         self.exact_quarters
+    }
+
+    pub(crate) fn sync_witness(&self) -> SourceSyncWitness {
+        self.witness
     }
 
     /// Bounded scalar freshness for pending admission, including the original job token.
@@ -136,10 +170,12 @@ impl SourceMapProjection {
             .delivery
             .as_ref()
             .map(|delivery| {
-                delivery.qualify_source_map(
+                let mut selected = delivery.qualify_source_map(
                     binding.ok_or("selected source map requires current loaded binding")?,
                     row.exact_quarters,
-                )
+                )?;
+                selected.witness.intent_revision = row.intent_revision;
+                Ok::<_, String>(selected)
             })
             .transpose()?;
         Ok(Self {

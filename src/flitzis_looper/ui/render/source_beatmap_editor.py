@@ -491,11 +491,26 @@ def _render_source_map_controls(
     timing: CurrentPadTiming | None,
 ) -> None:
     state = _inputs(ctx, frame)
+    sync = ctx.audio.pads.source_sync_status(frame.pad_id)
+    imgui.begin_disabled(frame.identity is None)
+    if imgui.button(f"SYNC {'ON' if sync.requested else 'OFF'}##source-sync-toggle", (-1, 0)):
+        ctx.audio.pads.toggle_source_sync(frame.pad_id)
+    imgui.end_disabled()
+    effective = "unconfirmed" if sync.effective is None else "ON" if sync.effective else "OFF"
+    imgui.push_id("source-sync-status")
+    try:
+        _status_line(
+            f"SYNC requested {'ON' if sync.requested else 'OFF'} | Audio {effective} | {sync.state}"
+        )
+    finally:
+        imgui.pop_id()
+    if sync.state in {"pending", "stopped"}:
+        imgui.text_wrapped(
+            "Start/retrigger applies the requested mode when its source map is ready."
+        )
     expanded = imgui.collapsing_header("Source Map##source-map-controls")
     revision = "" if frame.revision is None else f" | Revision {frame.revision[:12]}"
-    label = (
-        f"Editor only | Audio: scalar | {frame.status}{revision} | {_local_tempo_label(ctx, frame)}"
-    )
+    label = f"Source map {frame.status}{revision} | {_local_tempo_label(ctx, frame)}"
     _status_line(label)
     if not expanded:
         return

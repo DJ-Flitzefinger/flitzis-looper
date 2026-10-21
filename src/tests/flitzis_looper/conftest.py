@@ -540,6 +540,7 @@ class FakeInputSelection:
         loop_ends: list[float | None],
         bindings: list[object] | None = None,
         pitch_rows: list[dict[str, object]] | None = None,
+        source_map_rows: list[dict[str, object]] | None = None,
     ) -> object:
         """Record only explicit ready bindings; preserve the caller's mock return value."""
         rows = bindings if bindings is not None else [None] * len(loaded)

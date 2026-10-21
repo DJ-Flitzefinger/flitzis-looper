@@ -51,6 +51,7 @@ from flitzis_looper.material_migration_model import (
     MigrationID,
 )
 from flitzis_looper.recording_options import RecordingOptions
+from flitzis_looper.source_sync_intent import PadSourceSyncIntent, neutral_source_sync_intent
 from flitzis_looper.stem_intent import PadStemIntent
 from flitzis_looper.stem_pair_selection import StemFingerprintSchema, StemPairSelection
 
@@ -287,6 +288,10 @@ def _default_pad_source_beatmap_intent() -> list[
     source_beatmap_intent.PadSourceBeatmapIntent | None
 ]:
     return [None] * NUM_SAMPLES
+
+
+def _default_pad_source_sync_intent() -> list[PadSourceSyncIntent]:
+    return [neutral_source_sync_intent() for _ in range(NUM_SAMPLES)]
 
 
 def _default_pad_gain_db() -> list[float]:
@@ -581,6 +586,13 @@ class ProjectState(BaseModel):
         max_length=NUM_SAMPLES,
     )
     """Compact content-owned map requests; saved references never grant Native authority."""
+
+    pad_source_sync_intent: list[PadSourceSyncIntent] = Field(
+        default_factory=_default_pad_source_sync_intent,
+        min_length=NUM_SAMPLES,
+        max_length=NUM_SAMPLES,
+    )
+    """Independent content-owned SYNC requests; callback adoption remains separate."""
 
     # Mypy cannot yet type Pydantic's computed-field decorator over a property.
     @field_validator("material_migrations")

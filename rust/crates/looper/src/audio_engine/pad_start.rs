@@ -380,6 +380,22 @@ impl CapturedPadStart {
         self.owner.mapped.as_ref().map(|mapped| &mapped.geometry)
     }
 
+    /// Actual immutable launch witness; later requested runtime/map changes do not rewrite it.
+    pub(crate) fn source_sync_witness(
+        &self,
+        key: ContentKey,
+        source_generation: u64,
+    ) -> Option<super::input_runtime_binding::SourceSyncWitness> {
+        (self.owner.key == key && self.owner.source_generation == source_generation)
+            .then(|| {
+                self.owner
+                    .mapped
+                    .as_ref()
+                    .map(|mapped| mapped.qualified.sync_witness())
+            })
+            .flatten()
+    }
+
     /// Admission/claim only. An already effective reader never polls the old job token.
     pub(crate) fn mapped_source_current(&self, binding: InputPadBinding) -> bool {
         self.owner

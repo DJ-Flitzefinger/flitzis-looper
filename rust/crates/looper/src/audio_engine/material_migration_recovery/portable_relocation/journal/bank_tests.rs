@@ -218,6 +218,17 @@ fn place(project: &mut Value, id: usize, image: &Value) {
             .cloned()
             .unwrap_or(Value::Null);
     }
+    if project.get("pad_source_sync_intent").is_some() || image.get("source_sync_intent").is_some()
+    {
+        if project.get("pad_source_sync_intent").is_none() {
+            project["pad_source_sync_intent"] =
+                json!(vec![json!({"requested":false,"revision":0}); 216]);
+        }
+        project["pad_source_sync_intent"][id] = image
+            .get("source_sync_intent")
+            .cloned()
+            .unwrap_or_else(|| json!({"requested":false,"revision":0}));
+    }
 }
 
 fn sealed(value: &Value) -> Value {
@@ -318,10 +329,15 @@ fn native_portable_bank_carries_compact_map_selection_and_keeps_neutral_empty_le
     let mut bank = bank(&initial);
     bank["slots"][0]["source"]["source_beatmap_intent"] = intent.clone();
     bank["slots"][0]["after"]["source_beatmap_intent"] = intent.clone();
+    let sync = json!({"requested":true,"revision":17});
+    bank["slots"][0]["source"]["source_sync_intent"] = sync.clone();
+    bank["slots"][0]["after"]["source_sync_intent"] = sync.clone();
     initial["bank"] = sealed(&bank);
     let mut captured = image(&initial);
     captured["pad_source_beatmap_intent"] = json!(vec![Value::Null; 216]);
     captured["pad_source_beatmap_intent"][0] = intent;
+    captured["pad_source_sync_intent"] = json!(vec![json!({"requested":false,"revision":0}); 216]);
+    captured["pad_source_sync_intent"][0] = sync;
     set_image(&mut initial, captured);
     initial["captured_project_image_json"] = initial["project_image_json"].clone();
     initial["captured_config_sha256"] = json!(format!(

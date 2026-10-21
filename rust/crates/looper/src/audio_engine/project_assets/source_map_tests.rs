@@ -20,15 +20,18 @@ impl Fixture {
         let temp = tempfile::tempdir().unwrap();
         let root = temp.path().join("samples");
         let directory = root
-            .join("Owned/.pcm-cache/source-beatmaps/v1")
+            .join("Owned")
+            .join(".pcm-cache")
+            .join("source-beatmaps")
+            .join("v1")
             .join(GENERATION);
         fs::create_dir_all(&directory).unwrap();
         // Readable material resolution requires the same canonical immutable
         // source marker as production; a bare named folder is not a material.
         let original = b"owned exact map retirement original";
-        fs::write(root.join("Owned/original.wav"), original).unwrap();
+        fs::write(root.join("Owned").join("original.wav"), original).unwrap();
         fs::write(
-            root.join("Owned/.material.json"),
+            root.join("Owned").join(".material.json"),
             json!({"schema_version":1,
             "sha256":format!("{:x}",Sha256::digest(original)),"bytes":original.len(),
             "original_leaf":"original.wav"})
@@ -296,7 +299,15 @@ fn replaced_map_generation_junction_never_reaches_foreign_bytes() {
         .arg(&foreign)
         .output()
         .unwrap();
-    assert!(output.status.success());
+    assert!(
+        output.status.success(),
+        "mklink /J {} {} failed: status={}; stdout={}; stderr={}",
+        fixture.directory.display(),
+        foreign.display(),
+        output.status,
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr),
+    );
     fixture.assets.collect();
     assert_eq!(
         fs::read(foreign.join("map.json")).unwrap(),

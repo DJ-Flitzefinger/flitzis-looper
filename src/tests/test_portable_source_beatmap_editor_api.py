@@ -59,6 +59,17 @@ def _after(
     _forbidden()
 
 
+class _SyncStatus:
+    # Preserve the Native keyword spelling without declaring a shadowing Python argument.
+    __signature__ = Signature([
+        Parameter("self", Parameter.POSITIONAL_OR_KEYWORD),
+        Parameter("id", Parameter.POSITIONAL_OR_KEYWORD),
+    ])
+
+    def __call__(self, *_args: object, **_kwargs: object) -> Never:
+        _forbidden()
+
+
 def source_beatmap_editor_native_module(engine_base: type = object) -> SimpleNamespace:
     """Return fresh nonexecuting capabilities for direct and full-runtime preflight."""
     return SimpleNamespace(
@@ -69,6 +80,7 @@ def source_beatmap_editor_native_module(engine_base: type = object) -> SimpleNam
                 "__init__": _forbidden,
                 "begin_source_beatmap_create_async": _create,
                 "begin_source_beatmap_edit_async": _edit,
+                "pad_source_sync_status": _SyncStatus(),
             },
         ),
         SourceBeatmap=type(
@@ -131,6 +143,7 @@ def test_class_attribute_descriptor_can_expose_the_native_integer_capability() -
     [
         ("AudioEngine", "begin_source_beatmap_create_async"),
         ("AudioEngine", "begin_source_beatmap_edit_async"),
+        ("AudioEngine", "pad_source_sync_status"),
         ("SourceBeatmap", "editor_info"),
         ("SourceBeatmap", "editor_span"),
         ("SourceBeatmap", "editor_view"),
@@ -240,4 +253,22 @@ def test_edit_requires_exact_receipt_and_operation_arguments_without_replacement
         complete.replace(parameters=parameters),
     )
     with pytest.raises(AssertionError, match="begin_source_beatmap_edit_async"):
+        _check(native)
+
+
+@pytest.mark.parametrize("invalid", ["missing-id", "optional-id", "positional-id"])
+def test_sync_feedback_requires_a_current_pad_query_without_executing_it(invalid: str) -> None:
+    native = source_beatmap_editor_native_module()
+    complete = signature(native.AudioEngine.pad_source_sync_status)
+    parameters = list(complete.parameters.values())
+    if invalid == "missing-id":
+        parameters.pop()
+    elif invalid == "optional-id":
+        parameters[-1] = parameters[-1].replace(default=0)
+    else:
+        parameters = [parameter.replace(kind=Parameter.POSITIONAL_ONLY) for parameter in parameters]
+    _replace_signature(
+        native.AudioEngine, "pad_source_sync_status", complete.replace(parameters=parameters)
+    )
+    with pytest.raises(AssertionError, match="pad_source_sync_status"):
         _check(native)

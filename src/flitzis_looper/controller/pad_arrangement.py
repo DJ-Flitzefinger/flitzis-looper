@@ -61,6 +61,7 @@ _COPY_FIELDS = (
     "pad_timing_intent",
     "pad_key_intent",
     "pad_source_beatmap_intent",
+    "pad_source_sync_intent",
     "pad_gain_db",
     "pad_eq_low_db",
     "pad_eq_mid_db",

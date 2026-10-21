@@ -22,8 +22,8 @@ use std::sync::{
 
 #[path = "key_lock_status.rs"]
 mod key_lock_status;
-pub(crate) use key_lock_status::KeyLockStatus;
 use key_lock_status::KeyLockStatusSlot;
+pub(crate) use key_lock_status::{KeyLockStatus, SourceSyncStatus, SourceSyncWitness};
 #[path = "input_runtime_binding/pair_control.rs"]
 mod pair_control;
 pub(crate) use pair_control::PairControlProjection;
@@ -618,6 +618,23 @@ impl InputRuntimeOwnership {
                     && source.window_revision.load(Ordering::SeqCst) == status.window_revision))
         {
             self.key_lock[cell.index()].publish(status);
+        }
+    }
+
+    pub(crate) fn publish_callback_source_sync_status(&self, id: usize, status: SourceSyncStatus) {
+        let Some(cell) = self.callback_cell(id) else {
+            return;
+        };
+        let source = &self.sources[cell.index()];
+        if self
+            .callback_feedback_key(id)
+            .is_some_and(|key| key.lifetime() == status.content_lifetime)
+            && (!self.source_tracking
+                || (source.generation.load(Ordering::SeqCst) == status.source_generation
+                    && source.address.load(Ordering::SeqCst) == status.source_address
+                    && source.window_revision.load(Ordering::SeqCst) == status.window_revision))
+        {
+            self.key_lock[cell.index()].publish_source_sync(status);
         }
     }
     pub(crate) fn slot_snapshot_fields_current(&self, snapshot: SlotSnapshot) -> bool {
@@ -1615,6 +1632,18 @@ impl InputRuntimeOwnership {
             && again.source_generation == status.source_generation
             && again.window_revision == status.window_revision)
             .then_some(again)
+    }
+
+    pub(crate) fn source_sync_status(&self, id: usize) -> Option<SourceSyncStatus> {
+        let placement = self.slot_snapshot(id)?;
+        let source = &self.sources[placement.cell().index()];
+        let status = self.key_lock[placement.cell().index()].read_source_sync()?;
+        (self.slot_snapshot_fields_current(placement)
+            && placement.lifetime() == status.content_lifetime
+            && source.generation.load(Ordering::SeqCst) == status.source_generation
+            && source.address.load(Ordering::SeqCst) == status.source_address
+            && source.window_revision.load(Ordering::SeqCst) == status.window_revision)
+            .then_some(status)
     }
     #[cfg(test)]
     pub(crate) fn mark_launch_admitted(&self, id: usize) {

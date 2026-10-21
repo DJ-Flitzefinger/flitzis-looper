@@ -70,7 +70,11 @@ def validated_project_image(text: str) -> ProjectState:
     fields = set(ProjectState.model_fields)
     computed = set(ProjectState.model_computed_fields)
     missing = fields - data.keys()
-    historical_fields = {"pad_source_beatmap_intent", "resident_pcm_budget_automatic"}
+    historical_fields = {
+        "pad_source_beatmap_intent",
+        "pad_source_sync_intent",
+        "resident_pcm_budget_automatic",
+    }
     if not missing <= historical_fields or data.keys() - fields - computed:
         message = "Pair project image is incomplete or contains unknown fields"
         raise ValueError(message)

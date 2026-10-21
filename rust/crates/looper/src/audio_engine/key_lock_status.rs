@@ -13,6 +13,23 @@ pub(crate) struct KeyLockStatus {
     pub(crate) error: Option<&'static str>,
 }
 
+/// Fixed witness prepared from the original admitted map before entering realtime.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) struct SourceSyncWitness {
+    pub(crate) intent_revision: u64,
+    pub(crate) map_revision: [u64; 4],
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) struct SourceSyncStatus {
+    pub(crate) content_lifetime: u64,
+    pub(crate) source_generation: u64,
+    pub(crate) source_address: usize,
+    pub(crate) window_revision: u64,
+    pub(crate) active: bool,
+    pub(crate) witness: Option<SourceSyncWitness>,
+}
+
 #[derive(Default)]
 pub(super) struct KeyLockStatusSlot {
     pub(super) request: AtomicU64,
@@ -22,11 +39,74 @@ pub(super) struct KeyLockStatusSlot {
     window: AtomicU64,
     acknowledged_request: AtomicU64,
     flags: AtomicU8,
+    sync_generation: AtomicU64,
+    sync_lifetime: AtomicU64,
+    sync_address: AtomicUsize,
+    sync_window: AtomicU64,
+    sync_flags: AtomicU8,
+    sync_intent: AtomicU64,
+    sync_map: [AtomicU64; 4],
 }
 
 impl KeyLockStatusSlot {
     pub(super) fn clear(&self) {
         self.generation.store(0, Ordering::SeqCst);
+        self.sync_generation.store(0, Ordering::SeqCst);
+    }
+
+    pub(super) fn publish_source_sync(&self, status: SourceSyncStatus) {
+        // Same sole callback writer and sequence as mode feedback. SYNC cannot
+        // depend on a KEYLOCK request ACK: a pending mode request may coexist
+        // with an old mapped voice, stop, or a replacement source.
+        let sequence = self.sequence.load(Ordering::SeqCst);
+        self.sequence
+            .store(sequence.wrapping_add(1), Ordering::SeqCst);
+        self.sync_generation
+            .store(status.source_generation, Ordering::SeqCst);
+        self.sync_lifetime
+            .store(status.content_lifetime, Ordering::SeqCst);
+        self.sync_address
+            .store(status.source_address, Ordering::SeqCst);
+        self.sync_window
+            .store(status.window_revision, Ordering::SeqCst);
+        self.sync_flags.store(
+            u8::from(status.active) | (u8::from(status.witness.is_some()) << 1),
+            Ordering::SeqCst,
+        );
+        let witness = status.witness.unwrap_or(SourceSyncWitness {
+            intent_revision: 0,
+            map_revision: [0; 4],
+        });
+        self.sync_intent
+            .store(witness.intent_revision, Ordering::SeqCst);
+        for (word, value) in self.sync_map.iter().zip(witness.map_revision) {
+            word.store(value, Ordering::SeqCst);
+        }
+        self.sequence
+            .store(sequence.wrapping_add(2), Ordering::SeqCst);
+    }
+
+    pub(super) fn read_source_sync(&self) -> Option<SourceSyncStatus> {
+        let sequence = self.sequence.load(Ordering::SeqCst);
+        if sequence & 1 != 0 {
+            return None;
+        }
+        let flags = self.sync_flags.load(Ordering::SeqCst);
+        let status = SourceSyncStatus {
+            content_lifetime: self.sync_lifetime.load(Ordering::SeqCst),
+            source_generation: self.sync_generation.load(Ordering::SeqCst),
+            source_address: self.sync_address.load(Ordering::SeqCst),
+            window_revision: self.sync_window.load(Ordering::SeqCst),
+            active: flags & 1 != 0,
+            witness: (flags & 2 != 0).then(|| SourceSyncWitness {
+                intent_revision: self.sync_intent.load(Ordering::SeqCst),
+                map_revision: std::array::from_fn(|index| {
+                    self.sync_map[index].load(Ordering::SeqCst)
+                }),
+            }),
+        };
+        (status.source_generation != 0 && self.sequence.load(Ordering::SeqCst) == sequence)
+            .then_some(status)
     }
 
     pub(super) fn publish(&self, status: KeyLockStatus) {

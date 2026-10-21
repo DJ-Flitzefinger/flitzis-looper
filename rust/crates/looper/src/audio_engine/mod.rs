@@ -4020,6 +4020,15 @@ impl AudioEngine {
         key_lock_feedback::status(self, py, id)
     }
 
+    /// Observe the actual current-source mapped voices, independently of requested SYNC intent.
+    pub fn pad_source_sync_status(
+        &self,
+        py: Python<'_>,
+        id: usize,
+    ) -> PyResult<Option<Py<PyDict>>> {
+        key_lock_feedback::source_sync_status(self, py, id)
+    }
+
     /// Observe queued global rate intent separately from the callback-confirmed effect.
     pub fn global_rate_status(&self, py: Python<'_>) -> PyResult<Option<Py<PyDict>>> {
         use global_rate_status::RateState;

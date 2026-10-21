@@ -516,6 +516,12 @@ def check_source_beatmap_editor_api(native_module: object) -> None:
     for owner, method, arguments, keyword_only in (
         (
             engine,
+            "pad_source_sync_status",
+            (("self", required), ("id", required)),
+            set(),
+        ),
+        (
+            engine,
             "begin_source_beatmap_create_async",
             (
                 ("self", required),

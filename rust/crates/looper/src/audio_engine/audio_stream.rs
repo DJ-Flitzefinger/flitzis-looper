@@ -2487,6 +2487,13 @@ pub(super) fn process_control_message<
             if let Some(sample) = pending_sample {
                 retirement.retire_sample(sample);
             }
+            if result.is_ok()
+                && let Some(target) = target
+            {
+                // Source-load telemetry is valid only after its callback-source
+                // ACK. A stopped replacement has no voice render to refresh it.
+                mixer.publish_source_sync_status(target);
+            }
             drop(ownership);
             retirement.retire_source_publication(publication);
         }
@@ -2677,6 +2684,7 @@ pub(super) fn process_control_message<
                 return;
             }
             if accepted.get() {
+                mixer.publish_source_sync_status(id);
                 adoption.store(2, std::sync::atomic::Ordering::Release);
                 if replace_assignment {
                     #[cfg(test)]

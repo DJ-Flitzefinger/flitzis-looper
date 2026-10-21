@@ -1392,6 +1392,7 @@ class MaterialMigrationController:
         self._project.sample_paths = candidate.sample_paths
         self._project.pad_content = candidate.pad_content
         self._project.pad_source_beatmap_intent = candidate.pad_source_beatmap_intent
+        self._project.pad_source_sync_intent = candidate.pad_source_sync_intent
         self._project.stem_cache = candidate.stem_cache
         self._project.material_migrations = candidate.material_migrations
         with self._retirement.activate():

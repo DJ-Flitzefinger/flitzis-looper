@@ -121,6 +121,13 @@ class LooperAction(BaseModel):
         return cls(key=key, source="direct" if parse_pitch_action(key) is not None else "python")
 
 
+def source_sync_toggle_action(pad_id: int) -> LooperAction:
+    """Toggle the independent content request at the captured PAD target."""
+    return LooperAction(
+        key=f"pad.source_sync.toggle:{pad_id}", label=f"Toggle SYNC pad {pad_id + 1}"
+    )
+
+
 def pitch_base_action(target: MusicalKey, *, retrigger: bool) -> LooperAction:
     """Return an absolute same-mode target, independent of menu and selected content."""
     variant = _pitch_variant(retrigger=retrigger)

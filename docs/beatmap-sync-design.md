@@ -1,17 +1,21 @@
 # Beat This migration and independent pad pitch: implementation design
 
-Decision date: 2026-10-05. Status: diagnostic PCM/job boundary and optional B1b
-reference worker implemented; default cutover and live map/pitch stages remain pending.
+Decision date: 2026-10-05. Current integration: independent pitch controls, source-map
+custody/editor and the qualified initial mapped launch are implemented. The
+independent source-SYNC control and its exact delivery boundary are described below;
+default analyzer cutover and full continuous mapped Native integration remain gated.
 This document adopts the user's selected direction: **Beat This! 1.1.0, final0, minimal
 postprocessing** replaces the normal beat/downbeat analyzer after the stated acceptance gates.
 It is no longer an open model shortlist. `small0` is a later explicit footprint option.
 The [research evidence](beatmap-sync-research.md) remains relevant; the sequence here supersedes
 its earlier comparator-first recommendation.
 
-The resulting engine must support variable-tempo MULTILOOP with independent SYNC and KEYLOCK,
-and be ready for a later per-pad musical transposition control. That future control changes
-pitch without changing source timing, master time or another pad. This plan prepares its contract
-and tests now; it does not implement the future KEY UI or a full application Rust port.
+The engine must support variable-tempo MULTILOOP with independent SYNC and KEYLOCK.
+The existing per-pad musical transposition controls change pitch without changing
+source timing, master time or another pad. Earlier staged design sections below
+retain their architectural constraints; they do not reopen delivered pitch controls
+or establish full mapped playback acceptance. A full application Rust port remains
+outside this pre-Rust program.
 
 ## Fixed architectural decisions
 
@@ -490,5 +494,34 @@ selection owner. Sequential Undo restores exact predecessor beat bits and metada
 Copy and fresh source-qualified restore retain the independent corrected revision.
 All mutation gestures additionally capture the selected range. Detailed local and
 worker failures go to the existing redacted console sink; rendering keeps normal
-readiness state. These controls remain **Editor only | Audio: scalar**, with physical
-loop markers unchanged until an explicit marker action.
+readiness state. Selection and editing alone do not activate mapped audio; physical
+loop markers remain unchanged until an explicit marker action or a separately
+requested automatic mapped-loop resolution.
+
+## Independent source SYNC control
+
+The separate per-content SYNC request uses the existing qualified selection,
+runtime publication and actual start/retrigger path. It does not change BPM Lock
+or Key Lock. Saved intent and a ready editor map do not prove audible adoption:
+callback-owned feedback retains the actual voice's request and map revision.
+Changing the request can therefore show a pending replacement while the previous
+voice continues. Until continuous adoption is integrated, an actual supported
+start/retrigger applies the new request.
+
+Missing, restoring or stale map qualification does not silently select scalar
+playback for a requested mapped launch. The existing refusal preserves previous
+effective audio. Automatic mapped bars retain exactly four quarter notes per bar;
+rounded resident PCM coverage does not redefine that musical length. Manual
+physical endpoints retain their own canonical interval rather than inheriting old
+stored bars. Copy retains independent intent and requires fresh Native map
+qualification; default-neutral snapshot omission preserves old sealed images.
+
+This control delivery retains the initial actual dry envelope: Key Lock off,
+total pitch zero, speed one, BPM Lock on, stable real master epoch and E=T.
+It does not establish full continuous SYNC, prepared Native/FIFO integration,
+all required rates/pitches, both start policies or resource/music/device/Human
+acceptance. Automatic original-fullmix map acquisition also remains required;
+raw detector arrays do not independently verify quarter counts, meter or gaps.
+The current implementation contract is in
+`../openspec/changes/publish-source-sync-intent/` and
+`../openspec/changes/admit-mapped-source-clock/`.

@@ -66,6 +66,11 @@ The installation uses these areas:
 - `b`: reusable Native build output; its short name protects linker paths.
 - `logs`: installation-local diagnostics.
 
+The runtime preflight also requires `AudioEngine.pad_source_sync_status(id)` by
+reflection, before starting an engine or opening a device. Source-SYNC intent is
+separate from BPM Lock; saved intent and restored map metadata never substitute
+for callback-confirmed mapped playback.
+
 Native source-beatmap exports store immutable `map.json` sidecars under
 `samples/<material>/.pcm-cache/source-beatmaps/v1/.ready-<32 hex>/`, or directly
 under `samples/.pcm-cache/source-beatmaps/v1/` for flat legacy originals. The

@@ -13,6 +13,7 @@ from unittest.mock import Mock
 import pytest
 
 from flitzis_looper.source_beatmap_intent import PadSourceBeatmapIntent
+from flitzis_looper.source_sync_intent import PadSourceSyncIntent
 from flitzis_looper_audio import SourceBeatmap
 
 if TYPE_CHECKING:
@@ -153,6 +154,56 @@ def test_selection_preserves_existing_scalar_auto_region_until_explicit_map_bars
     mapped_loop.effective.assert_called_once_with(0)
     audio_engine_mock.set_pad_bpm.assert_not_called()
     audio_engine_mock.set_pad_timing_metadata.assert_not_called()
+
+
+def test_sync_auto_bars_retain_musical_extent_and_manual_end_clears_auto_intent(
+    controller: AppController, mapped_loop: Mock
+) -> None:
+    controller.project.pad_source_sync_intent[0] = PadSourceSyncIntent(requested=True, revision=1)
+
+    controller.transport.loop.set_bars(0, bars=1.0)
+
+    assert _intent(controller) == (1.0, 3.5, True, 1.0)
+    assert controller.transport.loop.requested_region(0) == (1.0, 3.5)
+    controller.transport.loop.set_end(0, 5.0390625)
+    assert _intent(controller) == (1.0, 5.078125, False, 1.0)
+
+
+def test_sync_auto_region_rounds_coverage_without_deriving_bars_from_it(
+    controller: AppController, mapped_loop: Mock
+) -> None:
+    project = controller.project
+    project.pad_source_sync_intent[0] = PadSourceSyncIntent(requested=True, revision=1)
+    project.pad_loop_start_s[0] = 1.0 + 1.0 / 48_000
+    exact_end = 3.5 + 1.5 / 48_000
+
+    start, physical_end = controller.transport.loop.requested_region(0)
+
+    assert start == project.pad_loop_start_s[0]
+    assert physical_end == round(exact_end * 48_000) / 48_000
+    assert physical_end != exact_end
+    assert project.pad_loop_bars[0] == 1.0
+    assert project.pad_loop_auto[0] is True
+
+
+def test_enabling_sync_auto_preserves_selected_physical_start_and_canonical_bar_end(
+    controller: AppController, audio_engine_mock: Mock, mapped_loop: Mock
+) -> None:
+    project = controller.project
+    project.pad_source_sync_intent[0] = PadSourceSyncIntent(requested=True, revision=1)
+    project.pad_loop_auto[0] = False
+    project.pad_loop_start_s[0] = 1.012345
+    project.pad_loop_end_s[0] = 4.0
+    start = round(1.012345 * 48_000) / 48_000
+    # The independent fixture has B(s)=2*s here and S(b)=2+(b-4)*3/4 at the end.
+    end = round((2.0 + ((2.0 * start + 4.0) - 4.0) * 0.75) * 48_000) / 48_000
+
+    controller.transport.loop.set_auto(0, enabled=True)
+
+    assert _intent(controller) == (start, end, True, 1.0)
+    audio_engine_mock.set_pad_loop_region.assert_called_once_with(
+        0, start, end, expected_source_generation=1
+    )
 
 
 def test_explicit_map_markers_keep_materialized_region_when_map_is_cleared(

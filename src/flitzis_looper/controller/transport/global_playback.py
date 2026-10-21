@@ -338,6 +338,7 @@ class GlobalPlaybackController:
             return None
         if any(not self._incoming_target_ready(sample_id) for sample_id in sorted(target_ids)):
             return None
+        self._transport.refresh_input_runtime(target_ids)
         entries: list[
             tuple[InputRuntimePadBinding, float, float | None, ResidentWindowTicket | None]
         ] = []

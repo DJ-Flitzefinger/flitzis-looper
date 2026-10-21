@@ -191,6 +191,265 @@ fn publish_original(path: &LaunchPath, delivery: &LoaderEventDelivery, revision:
     publish(&path.source, row).unwrap();
 }
 
+fn sync_feedback(path: &LaunchPath) -> Option<serde_json::Value> {
+    Python::attach(|py| {
+        let status = path.source.engine.pad_source_sync_status(py, 0).unwrap()?;
+        let encoded: String = py
+            .import("json")
+            .unwrap()
+            .call_method1("dumps", (status,))
+            .unwrap()
+            .extract()
+            .unwrap();
+        Some(serde_json::from_str(&encoded).unwrap())
+    })
+}
+
+#[test]
+fn public_source_sync_feedback_retains_original_effect_across_requested_changes_and_stop() {
+    let mut path = LaunchPath::new();
+    let (job, delivery) = variable_original_delivery(&path);
+    let revision = job
+        .resolve_source_beatmap_artifact_completion(&delivery)
+        .unwrap()
+        .unwrap()
+        .map()
+        .map_revision()
+        .to_owned();
+    publish_original(&path, &delivery, 7);
+    let captured = path.start();
+    path.render(145);
+    verify_actual_reads(&path, &captured, 145);
+    let before = sync_feedback(&path).unwrap();
+    let source = binding(&path.source, 0);
+    assert_eq!(
+        before,
+        json!({
+            "source_generation":source.source_generation,
+            "source_identity":source.binding.source_address,
+            "window_revision":source.binding.resident.map_or(0, |window| window.revision),
+            "active":true,"effective":true,"intent_revision":7,"map_revision":revision,
+        })
+    );
+    publish(
+        &path.source,
+        SourceMapRow {
+            sync_requested: false,
+            intent_revision: 8,
+            delivery: Some(delivery),
+            exact_quarters: None,
+        },
+    )
+    .unwrap();
+    path.drain();
+    path.render(3);
+    assert_eq!(
+        sync_feedback(&path),
+        Some(before.clone()),
+        "a requested OFF cannot acknowledge itself over the old actual mapped voice"
+    );
+    // The original immutable map stays authoritative after its job is no longer
+    // usable for new admission. Feedback must not poll that historical token.
+    job.cancel();
+    path.render(5);
+    assert_eq!(sync_feedback(&path), Some(before));
+    path.source
+        .mixer
+        .stop_sample_rt(0, &mut ImmediateAudioBufferRetirement);
+    let stopped = sync_feedback(&path).unwrap();
+    assert_eq!(stopped["active"], false);
+    assert_eq!(stopped["effective"], false);
+    assert!(stopped["intent_revision"].is_null());
+    assert!(stopped["map_revision"].is_null());
+    let scalar = path.capture();
+    path.publish_capture(&scalar);
+    path.render(3);
+    let restarted = sync_feedback(&path).unwrap();
+    assert_eq!(restarted["active"], true);
+    assert_eq!(restarted["effective"], false);
+    assert!(restarted["map_revision"].is_null());
+}
+
+#[test]
+fn source_sync_feedback_aggregates_actual_paused_mixed_and_replacement_voices() {
+    let mut path = LaunchPath::new();
+    let (_job, delivery) = variable_original_delivery(&path);
+    publish_original(&path, &delivery, 1);
+    let captured = path.start();
+    path.render(7);
+    let before = sync_feedback(&path).unwrap();
+    let index = path
+        .source
+        .mixer
+        .voices
+        .iter()
+        .position(|voice| voice.active && voice.sample_id == 0)
+        .unwrap();
+    // Mapped pause controls remain intentionally guarded. Observe an actually
+    // paused retained voice directly; a pause cannot invent a new map witness.
+    path.source.mixer.voices[index].pause();
+    path.render(3);
+    assert_eq!(sync_feedback(&path), Some(before.clone()));
+    path.source.mixer.voices[index].resume();
+    let sample = path.source.mixer.voices[index].sample.clone().unwrap();
+    let extra = path
+        .source
+        .mixer
+        .voices
+        .iter()
+        .position(|voice| !voice.active)
+        .unwrap();
+    path.source.mixer.voices[extra].start_rt(
+        crate::audio_engine::voice_slot::VoiceStartConfig {
+            sample_id: 0,
+            sample,
+            initial_frame_pos: 32,
+            volume: 0.3,
+            initial_tempo_ratio: 1.0,
+            start_output_frame: None,
+            source_timing: Default::default(),
+            source_admission: None,
+        },
+        &mut ImmediateAudioBufferRetirement,
+    );
+    path.render(3);
+    let mixed = sync_feedback(&path).unwrap();
+    assert_eq!(mixed["active"], true);
+    assert_eq!(mixed["effective"], false);
+    assert!(mixed["intent_revision"].is_null());
+    path.source.mixer.voices[extra].stop_rt(&mut ImmediateAudioBufferRetirement);
+    path.render(3);
+    assert_eq!(sync_feedback(&path), Some(before.clone()));
+    assert!(
+        path.voice()
+            .mapped_start
+            .as_ref()
+            .unwrap()
+            .same_owner(&captured)
+    );
+    path.source.load_and_ack_selected(0, None);
+    path.render(3);
+    let replaced = sync_feedback(&path).unwrap();
+    assert_eq!(replaced["effective"], false);
+    assert!(replaced["map_revision"].is_null());
+    assert_ne!(replaced["source_generation"], before["source_generation"]);
+}
+
+#[test]
+fn real_python_source_sync_status_matches_native_binding_then_reports_pending_disable_and_stop() {
+    let mut path = LaunchPath::new();
+    let (job, delivery) = variable_original_delivery(&path);
+    let map = job
+        .resolve_source_beatmap_artifact_completion(&delivery)
+        .unwrap()
+        .unwrap()
+        .map();
+    publish_original(&path, &delivery, 7);
+    let captured = path.start();
+    path.render(145);
+    verify_actual_reads(&path, &captured, 145);
+    // Move the same actual engine into Python after its real callback launch and
+    // reads. The mixer keeps the original shared ownership; no DTO substitutes
+    // a source binding or feedback dictionary in this vertical observation.
+    let ColdCustody {
+        engine,
+        mut mixer,
+        directory,
+        ..
+    } = path.source;
+    let (native, controller) = Python::attach(|py| {
+        let repository = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .ancestors()
+            .nth(3)
+            .unwrap();
+        py.import("sys")
+            .unwrap()
+            .getattr("path")
+            .unwrap()
+            .call_method1(
+                "insert",
+                (0, repository.join("src").to_string_lossy().as_ref()),
+            )
+            .unwrap();
+        let native = Py::new(py, engine).unwrap();
+        let map = Py::new(py, map).unwrap();
+        let code = std::ffi::CString::new(r#"
+from types import SimpleNamespace
+from flitzis_looper.controller.transport.source_sync import SourceSyncController
+from flitzis_looper.models import ProjectState, PadContentIdentity
+from flitzis_looper.source_sync_intent import PadSourceSyncIntent
+
+def make(audio, geometry):
+    project = ProjectState()
+    project.pad_content[0] = PadContentIdentity(instance_id='a' * 32)
+    project.pad_source_sync_intent[0] = PadSourceSyncIntent(requested=True, revision=7)
+    def ready(pad):
+        binding = audio.current_input_runtime_pad_binding(pad)
+        assert binding is not None and binding.is_current()
+    transport = SimpleNamespace(
+        _project=project, _audio=audio,
+        ensure_current_source_assignment_ready=ready,
+        _mark_project_changed=lambda: None,
+        refresh_input_runtime=lambda: None,
+        residency=SimpleNamespace(status=lambda pad: (None, None)),
+        loop=SimpleNamespace(requested_region=lambda pad: None),
+    )
+    controller = SourceSyncController(transport)
+    controller.bind_source_maps(SimpleNamespace(
+        effective=lambda pad: geometry, status=lambda pad: 'effective', errors={},
+    ))
+    status = controller.status(0)
+    assert status.state == 'effective' and status.requested and status.effective and status.active, status
+    metadata = audio.current_input_runtime_pad_binding(0).metadata()
+    feedback = audio.pad_source_sync_status(0)
+    assert isinstance(metadata['source_id'], str)
+    assert type(feedback['source_identity']) is int
+    controller.set_requested(0, requested=False)
+    status = controller.status(0)
+    assert status.state == 'pending' and not status.requested and status.effective and status.active, status
+    return controller
+
+def stopped(controller):
+    status = controller.status(0)
+    assert status.state == 'off' and not status.requested and not status.effective and not status.active, status
+"#).unwrap();
+        let module = pyo3::types::PyModule::from_code(
+            py,
+            &code,
+            c"source_sync_status_probe.py",
+            c"source_sync_status_probe",
+        )
+        .unwrap();
+        let controller = module
+            .getattr("make")
+            .unwrap()
+            .call1((native.clone_ref(py), map))
+            .unwrap()
+            .unbind();
+        (native, (controller, module.unbind()))
+    });
+    mixer.stop_sample_rt(0, &mut ImmediateAudioBufferRetirement);
+    Python::attach(|py| {
+        controller
+            .1
+            .bind(py)
+            .getattr("stopped")
+            .unwrap()
+            .call1((controller.0.bind(py),))
+            .unwrap();
+        assert!(
+            native
+                .borrow(py)
+                .pad_source_sync_status(py, NUM_SAMPLES)
+                .is_err()
+        );
+    });
+    drop(controller);
+    drop(native);
+    drop(mixer);
+    drop(directory);
+}
+
 fn verify_actual_reads(
     path: &LaunchPath,
     captured: &CapturedPadStart,

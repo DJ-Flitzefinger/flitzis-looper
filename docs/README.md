@@ -60,7 +60,7 @@ For focused areas:
 | `selected-backend-bpm.md` | Frozen complete-sequence/representative-region BPM metadata, shared G2 fitting, diagnostic integration and unverified evaluation limits. |
 | `accepted-constant-timing.md` | G3a immutable accepted-period revision, explicit acceptance/origin evidence, control-only adoption guard and remaining live/loop gates. |
 | `beatmap-sync-research.md` | Sourced feasibility decision for variable beatmaps and independent Quantize/SYNC; proposals and evidence limits, not current runtime behavior. |
-| `beatmap-sync-design.md` | Selected Beat This migration and staged shared-grid/SYNC design, including the future independent per-pad KEY contract and validation gates. |
+| `beatmap-sync-design.md` | Selected gated Beat This migration, shared-map architecture, current independent source-SYNC control and remaining continuous Native integration/acceptance boundaries. |
 | `accepted-map-render-comparison.md` | Measured shared-map renderer comparison, retained acoustic failures, unsupported combinations and limits before live adoption. |
 | `todos.md` | Explicit user-requested TODO notes; not an automatic work queue. |
 

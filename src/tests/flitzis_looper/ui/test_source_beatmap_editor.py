@@ -8,6 +8,7 @@ import pytest
 from imgui_bundle import imgui
 
 from flitzis_looper.controller.current_timing import CurrentPadTiming
+from flitzis_looper.models import PadContentIdentity
 from flitzis_looper.ui.render import source_beatmap_editor, waveform_editor
 from tests.flitzis_looper.ui.test_waveform_render_stability import (
     _click_toolbar,
@@ -151,6 +152,23 @@ def _expose(
     return edit, identity
 
 
+def _observe_status_windows(monkeypatch: pytest.MonkeyPatch) -> list[tuple[int, int, float, float]]:
+    """Inspect real Native child identity and layout, rather than text-call hooks."""
+    children: list[tuple[int, int, float, float]] = []
+    original = imgui.begin_child
+
+    def begin(label: str, *args: object, **kwargs: object) -> bool:
+        visible = original(label, *args, **kwargs)
+        if label == "source-map-status":
+            window = imgui.internal.get_current_window()
+            assert window.parent_window is not None
+            children.append((window.id_, window.parent_window.id_, window.pos.y, window.size.y))
+        return visible
+
+    monkeypatch.setattr(imgui, "begin_child", begin)
+    return children
+
+
 def test_full_editor_manual_creation_captures_source_scalar_intent(
     controller: AppController, audio_engine_mock: Mock, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -172,6 +190,88 @@ def test_full_editor_manual_creation_captures_source_scalar_intent(
         create.assert_called_once_with(0, timing.origin_seconds, timing.period_seconds)
         edit.assert_not_called()
         assert before == (
+            controller.project.pad_loop_start_s[0],
+            controller.project.pad_loop_end_s[0],
+        )
+        audio_engine_mock.seek_sample.assert_not_called()
+
+
+def test_actual_sync_click_changes_request_and_keeps_readiness_and_refusal_truthful(
+    controller: AppController,
+    audio_engine_mock: Mock,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    with _plot_context():
+        ctx, worker = _context(controller, audio_engine_mock)
+        ctx.bold_font = imgui.get_io().fonts.fonts[1]
+        controller.project.pad_content[0] = PadContentIdentity(instance_id="e" * 32)
+        ctx.ui.waveform.open(0)
+        _edit, _identity = _expose(ctx, monkeypatch, _map())
+        binding = audio_engine_mock.current_input_runtime_pad_binding(0)
+        binding._metadata["window_revision"] = 0
+        audio_engine_mock.current_input_runtime_pad_binding.side_effect = None
+        audio_engine_mock.current_input_runtime_pad_binding.return_value = binding
+        # A real UI/controller test with a callback boundary double; map readiness
+        # cannot manufacture audio adoption from this explicit stopped observation.
+        audio_engine_mock.pad_source_sync_status = Mock(
+            return_value={
+                "source_generation": 1,
+                "source_identity": 1234,
+                "window_revision": 0,
+                "active": False,
+                "effective": False,
+                "intent_revision": None,
+                "map_revision": None,
+            }
+        )
+        original_status, original_wrapped = source_beatmap_editor._status_line, imgui.text_wrapped
+        rendered: list[str] = []
+
+        def status(label: str) -> None:
+            rendered.append(label)
+            original_status(label)
+
+        def wrapped(label: str) -> None:
+            rendered.append(label)
+            original_wrapped(label)
+
+        monkeypatch.setattr(source_beatmap_editor, "_status_line", status)
+        monkeypatch.setattr(imgui, "text_wrapped", wrapped)
+        children = _observe_status_windows(monkeypatch)
+        controls = (
+            controller.project.bpm_lock,
+            controller.project.key_lock,
+            controller.project.multi_loop,
+            controller.project.pad_loop_start_s[0],
+            controller.project.pad_loop_end_s[0],
+        )
+        observer = _observe_draw(monkeypatch)
+        frames = [_full_frame(ctx, worker, observer) for _ in range(5)]
+
+        _click_toolbar("SYNC OFF##source-sync-toggle", ctx, worker, observer, frames)
+        frames.append(_full_frame(ctx, worker, observer))
+
+        assert controller.project.pad_source_sync_intent[0].requested
+        assert controller.project.pad_source_sync_intent[0].revision == 1
+        assert ctx.audio.pads.source_sync_status(0).state == "stopped"
+        assert any("SYNC requested ON | Audio OFF | stopped" in label for label in rendered)
+        technical = "mapped Native h/r tuple unavailable: diagnostic ID42"
+        controller.transport.residency.report_launch_error(0, technical)
+        frames.append(_full_frame(ctx, worker, observer))
+        assert any("SYNC requested ON | Audio OFF | refused" in label for label in rendered)
+        assert all(technical not in label and "ID42" not in label for label in rendered)
+        assert technical in capsys.readouterr().err
+        assert len(children) >= 10
+        for sync, source_map in zip(children[::2], children[1::2], strict=True):
+            assert sync[0] != source_map[0]
+            assert sync[1] == source_map[1]
+            assert sync[3] == source_map[3]
+            assert source_map[2] >= sync[2] + sync[3]
+        assert controls == (
+            controller.project.bpm_lock,
+            controller.project.key_lock,
+            controller.project.multi_loop,
             controller.project.pad_loop_start_s[0],
             controller.project.pad_loop_end_s[0],
         )

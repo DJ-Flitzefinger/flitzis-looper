@@ -29,6 +29,7 @@ from flitzis_looper.input_mapping.actions import (
     pitch_original_action,
     pitch_reset_base_action,
     pitch_step_action,
+    source_sync_toggle_action,
 )
 from flitzis_looper.input_timing import validate_input_timestamp_ns
 from flitzis_looper.ui.pad_action import perform_pad_action
@@ -51,6 +52,7 @@ if TYPE_CHECKING:
     from flitzis_looper.controller.stems import StemResidencySummary
     from flitzis_looper.controller.transport.global_params import GlobalRateStatus
     from flitzis_looper.controller.transport.key_lock_status import KeyLockStatus
+    from flitzis_looper.controller.transport.source_sync import SourceSyncStatus
     from flitzis_looper.key_intent import MusicalKey, PadKeyIntent
     from flitzis_looper.models import (
         KeyLockStartBehavior,
@@ -382,6 +384,25 @@ class UiState:
 class PadAudioActions:  # noqa: PLR0904 - pad action facade mirrors selected-pad controls.
     def __init__(self, controller: AppController):
         self._controller = controller
+
+    def source_sync_status(self, pad_id: int) -> SourceSyncStatus:
+        """Read callback confirmation independently of requested SYNC/map readiness."""
+        return self._controller.transport.source_sync.status(pad_id)
+
+    def toggle_source_sync(self, pad_id: int) -> None:
+        """Learn or execute the same fixed-target SYNC request action."""
+
+        def execute() -> None:
+            perform_pad_action(
+                self._controller,
+                pad_id,
+                lambda: self._controller.transport.source_sync.toggle(pad_id),
+                operation="source_sync",
+            )
+
+        self._controller.input_mapping.perform_learnable_action(
+            source_sync_toggle_action(pad_id), execute
+        )
 
     def residency_status(self, pad_id: int) -> tuple[str | None, str | None]:
         """Read requested control readiness separately from effective playback."""

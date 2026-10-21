@@ -4535,6 +4535,7 @@ impl RtMixer {
     }
 
     fn publish_key_lock_status(&mut self, id: usize) {
+        self.publish_source_sync_status(id);
         if self.pad_key_lock_ack_source[id].is_none() {
             return;
         }
@@ -4619,6 +4620,68 @@ impl RtMixer {
                 .publish_callback_key_lock_status(id, status);
             self.pad_key_lock_status[id] = Some(status);
         }
+    }
+
+    pub(super) fn publish_source_sync_status(&self, id: usize) {
+        let Some(sample) = self.sample_bank[id].as_ref() else {
+            return;
+        };
+        let Some(key) = self.input_runtime_ownership.callback_feedback_key(id) else {
+            return;
+        };
+        let Some(source_generation) = self.input_runtime_ownership.callback_source_generation(
+            id,
+            sample,
+            self.sample_rate_hz as u32,
+        ) else {
+            return;
+        };
+        let mut active = false;
+        let mut coherent = true;
+        let mut witness = None;
+        for voice in self
+            .voices
+            .iter()
+            .filter(|voice| voice.active && voice.sample_id == id)
+        {
+            let current = voice
+                .sample
+                .as_ref()
+                .is_some_and(|held| held.same_window(sample));
+            active |= current;
+            let actual = current
+                .then(|| {
+                    voice
+                        .source_playback
+                        .is_mapped()
+                        .then(|| {
+                            voice
+                                .mapped_start
+                                .as_ref()?
+                                .source_sync_witness(key, source_generation)
+                        })
+                        .flatten()
+                })
+                .flatten();
+            match (witness, actual) {
+                (_, None) => coherent = false,
+                (None, Some(actual)) => witness = Some(actual),
+                (Some(previous), Some(actual)) if previous != actual => coherent = false,
+                _ => {}
+            }
+        }
+        self.input_runtime_ownership
+            .publish_callback_source_sync_status(
+                id,
+                super::input_runtime_binding::SourceSyncStatus {
+                    content_lifetime: key.lifetime(),
+                    source_generation,
+                    source_address: sample.source_address(),
+                    window_revision: sample.window_revision(),
+                    active,
+                    witness: (active && coherent).then_some(witness).flatten(),
+                },
+            );
     }
 
     #[cfg(test)]

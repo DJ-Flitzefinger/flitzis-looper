@@ -104,7 +104,8 @@ impl CopyIntent {
             .as_object()
             .ok_or("copy snapshot must be an object")?;
         let has_map = data.contains_key("source_beatmap_intent");
-        if data.len() != FIELDS.len() + usize::from(has_map)
+        let has_sync = data.contains_key("source_sync_intent");
+        if data.len() != FIELDS.len() + usize::from(has_map) + usize::from(has_sync)
             || !FIELDS.iter().all(|key| data.contains_key(*key))
         {
             return Err("copy snapshot fields differ from the complete musical schema".into());
@@ -112,6 +113,11 @@ impl CopyIntent {
         if has_map {
             crate::audio_engine::source_beatmap_artifact::validate_intent_value(
                 &snapshot["source_beatmap_intent"],
+            )?;
+        }
+        if has_sync {
+            crate::audio_engine::source_map_admission::validate_source_sync_intent(
+                &snapshot["source_sync_intent"],
             )?;
         }
         let path = snapshot["source_path"]
@@ -341,6 +347,49 @@ mod map_schema_tests {
             valid
                 .to_string()
                 .replacen("\"revision\":", "\"revision\":1,\"revision\":", 1);
+        assert!(CopyIntent::parse(&duplicate).is_err());
+    }
+
+    #[test]
+    fn copy_sync_intent_is_strict_additive_and_preserves_disabled_revision() {
+        let legacy = envelope();
+        let parsed = CopyIntent::parse(&legacy.to_string()).unwrap();
+        assert_eq!(parsed.snapshot, legacy["snapshot"]);
+        for requested in [false, true] {
+            for revision in [0, 7, u64::MAX] {
+                let mut image = legacy.clone();
+                image["snapshot"]["source_sync_intent"] =
+                    json!({"requested":requested,"revision":revision});
+                let parsed = CopyIntent::parse(&image.to_string()).unwrap();
+                assert_eq!(
+                    parsed.snapshot["source_sync_intent"],
+                    image["snapshot"]["source_sync_intent"]
+                );
+            }
+        }
+        for invalid in [
+            Value::Null,
+            json!({}),
+            json!({"requested":true}),
+            json!({"revision":1}),
+            json!({"requested":1,"revision":1}),
+            json!({"requested":false,"revision":true}),
+            json!({"requested":false,"revision":-1}),
+            json!({"requested":false,"revision":1.0}),
+            json!({"requested":false,"revision":1,"effective":false}),
+            json!({"requested":false,"revision":18446744073709551616.0_f64}),
+        ] {
+            let mut image = legacy.clone();
+            image["snapshot"]["source_sync_intent"] = invalid;
+            assert!(CopyIntent::parse(&image.to_string()).is_err(), "{image}");
+        }
+        let mut image = legacy;
+        image["snapshot"]["source_sync_intent"] = json!({"requested":true,"revision":3});
+        let duplicate = image.to_string().replacen(
+            "\"requested\":true",
+            "\"requested\":false,\"requested\":true",
+            1,
+        );
         assert!(CopyIntent::parse(&duplicate).is_err());
     }
 }

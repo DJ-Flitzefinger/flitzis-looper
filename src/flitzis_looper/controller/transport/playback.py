@@ -89,6 +89,7 @@ class PadPlaybackController:
         exclusive: bool = False,
         received_at_ns: int | None = None,
     ) -> None:
+        self._transport.refresh_input_runtime((sample_id,))
         generation = self._transport.capture_current_pad_edit_generation(sample_id)
         options = self._transport.source_generation_options(generation)
         start_s, end_s = self._loop.requested_region(sample_id)

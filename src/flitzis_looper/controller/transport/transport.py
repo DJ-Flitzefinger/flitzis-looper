@@ -9,11 +9,12 @@ from flitzis_looper.controller.transport.pad import PadController
 from flitzis_looper.controller.transport.pitch import PitchController
 from flitzis_looper.controller.transport.playback import PadPlaybackController
 from flitzis_looper.controller.transport.residency import ResidencyController
+from flitzis_looper.controller.transport.source_sync import SourceSyncController
 from flitzis_looper.controller.transport.state import ApplyProjectState
 from flitzis_looper.controller.transport.waveform import WaveformController
 
 if TYPE_CHECKING:
-    from collections.abc import Callable
+    from collections.abc import Callable, Iterable
 
     from flitzis_looper.models import ProjectState, SessionState
     from flitzis_looper_audio import AudioEngine, InputRuntimePadBinding, ResidentWindowTicket
@@ -52,6 +53,7 @@ class TransportController(BaseController):
         self._incoming_load_request: Callable[[int], int | None] | None = None
         self._pad_edit_guard: Callable[[int], None] | None = None
         self._global_key_lock_edit_guard: Callable[[], None] | None = None
+        self._refresh_input_runtime: Callable[[], bool] | None = None
         self._on_current_pad_edit: (
             Callable[[int, int | None, Literal["key_lock", "loop", "timing"]], None] | None
         ) = None
@@ -63,7 +65,26 @@ class TransportController(BaseController):
         self.playback = PadPlaybackController(self)
         self.pad = PadController(self)
         self.pitch = PitchController(self)
+        self.source_sync = SourceSyncController(self)
         self.waveform = WaveformController(self)
+
+    def bind_input_runtime_refresh(self, refresh: Callable[[], bool]) -> None:
+        """Publish complete current rows before any original GUI launch capture."""
+        self._refresh_input_runtime = refresh
+
+    def refresh_input_runtime(self, sample_ids: Iterable[int] | None = None) -> None:
+        """Fence a capture when the complete current control publication is unavailable."""
+        if sample_ids is not None and not any(
+            (intent := self._project.pad_source_sync_intent[sample_id]).requested
+            or intent.revision > 0
+            for sample_id in sample_ids
+        ):
+            # Untouched scalar captures retain their original one-snapshot path.
+            # Unrelated SYNC content does not add another source/timing capture.
+            return
+        if self._refresh_input_runtime is not None and not self._refresh_input_runtime():
+            message = "Audio control state is not ready for this playback choice."
+            raise RuntimeError(message)
 
     def apply_project_state_to_audio(
         self, *, restored_sample_ids: frozenset[int] | None = None

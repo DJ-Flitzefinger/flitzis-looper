@@ -50,6 +50,7 @@ if TYPE_CHECKING:
         CapturedInputPadTrigger,
         CapturedPitchAction,
         InputRuntimePadBinding,
+        LoaderEventDelivery,
     )
 
 type InputSource = Literal["midi", "keyboard"]
@@ -84,6 +85,22 @@ class _InputPitchProjection:
 
 
 @dataclass(frozen=True)
+class _InputSourceMapProjection:
+    requested: bool = False
+    revision: int = 0
+    delivery: LoaderEventDelivery | None = None
+    exact_quarters: float | None = None
+
+    def payload(self) -> dict[str, object]:
+        return {
+            "sync_requested": self.requested,
+            "intent_revision": self.revision,
+            "delivery": self.delivery,
+            "exact_quarters": self.exact_quarters,
+        }
+
+
+@dataclass(frozen=True)
 class _InputRuntimePadSignature:
     sample_path: str | None = None
     duration_seconds: float | None = None
@@ -94,6 +111,7 @@ class _InputRuntimePadSignature:
     source_signature: tuple[object, ...] | None = None
     ready: bool = False
     pitch: _InputPitchProjection = field(default_factory=_InputPitchProjection)
+    source_map: _InputSourceMapProjection = field(default_factory=_InputSourceMapProjection)
     binding: InputRuntimePadBinding | None = field(default=None, compare=False)
 
 
@@ -122,6 +140,7 @@ class InputMappingController(BaseController):
         self._last_input_runtime_state_error: str | None = None
         self._input_action_error: tuple[str, str] | None = None
         app.transport.pitch.bind_runtime_refresh(self.refresh_pitch_runtime_state)
+        app.transport.bind_input_runtime_refresh(self._refresh_rust_runtime_state)
         self._on_frame_render_callbacks.append(self._sync_rust_runtime_state)
         self._on_frame_render_callbacks.append(self._poll_rust_input_events)
 
@@ -392,6 +411,7 @@ class InputMappingController(BaseController):
             ("pad.unload:", self._execute_unload_pad),
             ("pad.analyze:", self._execute_analyze_pad),
             ("pad.adjust_loop:", self._execute_adjust_loop),
+            ("pad.source_sync.toggle:", self._execute_source_sync_toggle),
             ("pad.tap_bpm:", self._execute_tap_bpm),
             ("pad.gain_db:", self._execute_pad_gain_db),
             ("pad.gain:", self._execute_legacy_pad_gain),
@@ -804,6 +824,7 @@ class InputMappingController(BaseController):
                     loop_ends,
                     bindings,
                     pitch_rows=[pad.pitch.payload() for pad in pad_signatures],
+                    source_map_rows=[pad.source_map.payload() for pad in pad_signatures],
                 )
             else:
                 self._audio.set_input_runtime_state(
@@ -846,7 +867,21 @@ class InputMappingController(BaseController):
 
             timing = self._app.transport.bpm.current_timing(sample_id)
             snapshot = capture_current_pad_binding(self._audio, sample_id, timing=timing)
-            start_s, end_s = self._app.transport.loop.effective_region(sample_id, timing=timing)
+            sync_intent = self._project.pad_source_sync_intent[sample_id]
+            try:
+                region = (
+                    self._app.transport.loop.requested_region
+                    if sync_intent.requested or sync_intent.revision > 0
+                    else self._app.transport.loop.effective_region
+                )
+                start_s, end_s = region(sample_id, timing=timing)
+            except RuntimeError, ValueError:
+                if not sync_intent.requested:
+                    raise
+                # An unavailable mapped extent must not block unrelated PAD rows.
+                # The independent request below withholds delivery and refuses launch.
+                start_s = self._project.pad_loop_start_s[sample_id]
+                end_s = self._project.pad_loop_end_s[sample_id]
             pad_signatures.append(
                 _InputRuntimePadSignature(
                     sample_path=sample_path,
@@ -858,6 +893,7 @@ class InputMappingController(BaseController):
                     source_signature=snapshot.source_signature if snapshot else None,
                     ready=snapshot is not None,
                     pitch=self._input_pitch_projection(sample_id),
+                    source_map=self._input_source_map_projection(sample_id),
                     binding=snapshot.binding if snapshot else None,
                 )
             )
@@ -887,6 +923,34 @@ class InputMappingController(BaseController):
             sync=self._project.bpm_lock,
             request_sequence=self._app.transport.pitch.projection_sequence(sample_id),
         )
+
+    def _execute_source_sync_toggle(self, key: str) -> bool:
+        target = key.removeprefix("pad.source_sync.toggle:")
+        if not target.isascii() or not target.isdecimal():
+            return False
+        sample_id = int(target)
+        if not 0 <= sample_id < len(self._project.sample_paths):
+            return False
+        self._app.transport.source_sync.toggle(sample_id)
+        return True
+
+    def _input_source_map_projection(self, sample_id: int) -> _InputSourceMapProjection:
+        intent = self._project.pad_source_sync_intent[sample_id]
+        maps = self._app.loader.source_beatmaps
+        delivery = maps.playback_delivery(sample_id)
+        if intent.requested and delivery is not None:
+            try:
+                self._app.transport.loop.requested_region(sample_id)
+            except RuntimeError, ValueError:
+                # Preserve requested SYNC while withholding inadmissible geometry.
+                # Other valid PAD rows must still publish, without scalar fallback.
+                delivery = None
+        exact = (
+            self._project.pad_loop_bars[sample_id] * 4.0
+            if intent.requested and self._project.pad_loop_auto[sample_id]
+            else None
+        )
+        return _InputSourceMapProjection(intent.requested, intent.revision, delivery, exact)
 
     def _set_rust_enabled(self, *, enabled: bool) -> None:
         with suppress(RuntimeError, TypeError):

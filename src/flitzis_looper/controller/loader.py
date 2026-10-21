@@ -31,6 +31,7 @@ from flitzis_looper.models import (
     validate_sample_id,
 )
 from flitzis_looper.project_materials import original_asset
+from flitzis_looper.source_sync_intent import neutral_source_sync_intent
 from flitzis_looper.stem_intent import PadStemIntent
 from flitzis_looper_audio import ProjectAssetLease
 
@@ -912,6 +913,11 @@ class LoaderController(_IncomingIntentControl, _MaterialCreationOwnership):
                 defaults.pad_source_beatmap_intent[sample_id],
             ),
             _reset_pad_value(
+                self._project.pad_source_sync_intent,
+                sample_id,
+                defaults.pad_source_sync_intent[sample_id],
+            ),
+            _reset_pad_value(
                 self._project.sample_durations,
                 sample_id,
                 defaults.sample_durations[sample_id],
@@ -1074,6 +1080,7 @@ class LoaderController(_IncomingIntentControl, _MaterialCreationOwnership):
             )
             self._project.pad_key_intent[sample_id] = PadKeyIntent()
             self._project.pad_source_beatmap_intent[sample_id] = None
+            self._project.pad_source_sync_intent[sample_id] = neutral_source_sync_intent()
             self._key_analysis.cancel(sample_id)
             self._project.sample_paths[sample_id] = target_path
             self._clear_stem_cache(sample_id)
