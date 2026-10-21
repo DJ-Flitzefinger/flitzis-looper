@@ -35,6 +35,10 @@ def _info(self: object) -> Never:
     _forbidden()
 
 
+def _span(self: object, first_anchor_index: int, last_anchor_index: int) -> Never:
+    _forbidden()
+
+
 def _view(
     self: object,
     start_s: float,
@@ -72,7 +76,9 @@ def source_beatmap_editor_native_module(engine_base: type = object) -> SimpleNam
             (),
             {
                 "__init__": _forbidden,
+                "EDITOR_CORRECTION_API_VERSION": 2,
                 "editor_info": _info,
+                "editor_span": _span,
                 "editor_view": _view,
                 "source_after_beats": _after,
                 **dict.fromkeys(
@@ -110,12 +116,23 @@ def test_current_editor_contract_is_reflected_without_any_native_work() -> None:
     _check(source_beatmap_editor_native_module())
 
 
+def test_class_attribute_descriptor_can_expose_the_native_integer_capability() -> None:
+    class CorrectionCapability:
+        def __get__(self, _instance: object, _owner: type) -> int:
+            return 2
+
+    native = source_beatmap_editor_native_module()
+    native.SourceBeatmap.EDITOR_CORRECTION_API_VERSION = CorrectionCapability()
+    _check(native)
+
+
 @pytest.mark.parametrize(
     ("owner_name", "method"),
     [
         ("AudioEngine", "begin_source_beatmap_create_async"),
         ("AudioEngine", "begin_source_beatmap_edit_async"),
         ("SourceBeatmap", "editor_info"),
+        ("SourceBeatmap", "editor_span"),
         ("SourceBeatmap", "editor_view"),
         ("SourceBeatmap", "source_after_beats"),
         ("SourceBeatmap", "nearest_grid_source"),
@@ -127,6 +144,45 @@ def test_missing_editor_or_shared_snap_capability_rejects_stale_native(
     native = source_beatmap_editor_native_module()
     delattr(getattr(native, owner_name), method)
     with pytest.raises(AssertionError, match=method):
+        _check(native)
+
+
+def test_previous_methods_without_correction_version_reject_stale_native() -> None:
+    native = source_beatmap_editor_native_module()
+    delattr(native.SourceBeatmap, "EDITOR_CORRECTION_API_VERSION")
+    with pytest.raises(AssertionError, match="EDITOR_CORRECTION_API_VERSION"):
+        _check(native)
+
+
+@pytest.mark.parametrize("invalid", [None, False, True, 2.0, "2", 0, 1, 3])
+def test_correction_version_requires_exact_current_integer(invalid: object) -> None:
+    native = source_beatmap_editor_native_module()
+    native.SourceBeatmap.EDITOR_CORRECTION_API_VERSION = invalid
+    with pytest.raises(AssertionError, match="EDITOR_CORRECTION_API_VERSION"):
+        _check(native)
+
+
+@pytest.mark.parametrize(
+    "invalid", ["missing-first", "renamed-last", "optional-last", "keyword-only", "positional-only"]
+)
+def test_span_requires_exact_required_anchor_indices(invalid: str) -> None:
+    native = source_beatmap_editor_native_module()
+    complete = signature(native.SourceBeatmap.editor_span)
+    parameters = list(complete.parameters.values())
+    if invalid == "missing-first":
+        parameters.pop(1)
+    elif invalid == "renamed-last":
+        parameters[-1] = parameters[-1].replace(name="anchor_index")
+    elif invalid == "optional-last":
+        parameters[-1] = parameters[-1].replace(default=None)
+    elif invalid == "keyword-only":
+        parameters[1:] = [
+            parameter.replace(kind=Parameter.KEYWORD_ONLY) for parameter in parameters[1:]
+        ]
+    else:
+        parameters = [parameter.replace(kind=Parameter.POSITIONAL_ONLY) for parameter in parameters]
+    _replace_signature(native.SourceBeatmap, "editor_span", complete.replace(parameters=parameters))
+    with pytest.raises(AssertionError, match="editor_span"):
         _check(native)
 
 

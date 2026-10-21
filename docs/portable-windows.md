@@ -74,6 +74,13 @@ without a bootstrap change. A compact receipt still needs fresh source
 qualification after reopening; relocation grants no current map/audio authority.
 This prerequisite does not yet save selected maps in Config or arrangement journals.
 
+Portable validation and the local launchers require the exact integer
+`SourceBeatmap.EDITOR_CORRECTION_API_VERSION = 2` and the bounded
+`editor_span(first_anchor_index, last_anchor_index)` inspector signature before
+opening the App. Native builds with only the earlier editor methods are refused;
+these checks reflect the API without creating an Engine, evaluating a map or
+starting an editor job.
+
 There is no second `Runtime/app` copy and no permanent per-version runtime tree.
 The full checkout's installed-file inventory distinguishes shipped files from
 Human changes. Unknown files or changed tracked files outside persistent sample

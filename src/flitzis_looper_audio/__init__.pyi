@@ -37,6 +37,7 @@ class SourceBeatmapEvaluation(TypedDict):
     segment_index: int | None
     physical_domain: str
     meter_status: str
+    downbeat_label: int | None
 
 class SourceBeatmapEditorInfo(TypedDict):
     map_revision: str
@@ -51,6 +52,7 @@ class SourceBeatmapEditorLine(TypedDict):
     major: bool
     reference: bool
     meter_status: str
+    downbeat: bool
 
 class SourceBeatmapEditorAnchor(TypedDict):
     source_seconds: float
@@ -64,6 +66,21 @@ class SourceBeatmapEditorView(TypedDict):
     lines: list[SourceBeatmapEditorLine]
     anchors: list[SourceBeatmapEditorAnchor]
 
+class SourceBeatmapEditorSpanAnchor(SourceBeatmapEditorAnchor):
+    index: int
+
+class SourceBeatmapEditorSpan(TypedDict):
+    map_revision: str
+    status: str
+    first_anchor: SourceBeatmapEditorSpanAnchor | None
+    last_anchor: SourceBeatmapEditorSpanAnchor | None
+    quarter_notes: float | None
+    interval_count: int
+    coverage: str
+    meter_status: str
+    downbeat_status: str
+    downbeat_label: int | None
+
 class SourceBeatmapProjection(TypedDict):
     map_revision: str
     status: str
@@ -71,12 +88,16 @@ class SourceBeatmapProjection(TypedDict):
 
 class SourceBeatmap:
     # Immutable control-side geometry; parsing supplies no source/audio authority.
+    EDITOR_CORRECTION_API_VERSION: ClassVar[int]
     @staticmethod
     def from_json(record_json: str) -> SourceBeatmap: ...
     def record_json(self) -> str: ...
     def revision(self) -> str: ...
     def source_identity(self) -> str: ...
     def editor_info(self) -> SourceBeatmapEditorInfo: ...
+    def editor_span(
+        self, first_anchor_index: int, last_anchor_index: int
+    ) -> SourceBeatmapEditorSpan: ...
     def editor_view(
         self,
         start_s: float,

@@ -209,7 +209,20 @@ fn partial_final_subdivision_snaps_to_the_supported_nearest_grid_target() {
 
 #[test]
 fn exact_grid_anchor_does_not_require_a_representable_later_neighbor() {
-    let map = prepared(fixture(&[(0.0, 0.0), (f64::MAX, f64::MAX)], &["trusted"]));
+    let mut value = fixture(&[(0.0, 0.0), (f64::MAX, f64::MAX)], &["trusted"]);
+    assert_eq!(
+        prepared(value.clone())
+            .inner
+            .nearest_grid(f64::MAX, f64::MAX)
+            .coordinate_status,
+        "unsupported_downbeat"
+    );
+    // This is a bar-sized lattice: qualify its meter and phase while keeping
+    // the exact maximum endpoint and all no-later-neighbor assertions intact.
+    value["record"]["accepted"]["intervals"][0]["meter"]["status"] =
+        json!("quarter_note_4_4_verified");
+    value["record"]["accepted"]["intervals"][0]["meter"]["downbeat_label"] = json!(0);
+    let map = prepared(value);
     let snapped = map.inner.nearest_grid(f64::MAX, f64::MAX);
     assert_eq!(snapped.source_seconds, Some(f64::MAX));
     assert_eq!(snapped.beat, Some(f64::MAX));

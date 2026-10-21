@@ -158,9 +158,9 @@ struct Meter {
     evidence: String,
 }
 
-#[derive(Deserialize, Serialize)]
+#[derive(Clone, Copy, Debug, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
-enum MeterStatus {
+pub(super) enum MeterStatus {
     Unknown,
     #[serde(rename = "quarter_note_4_4_verified")]
     QuarterNote4_4Verified,
@@ -185,6 +185,7 @@ enum OperationKind {
     DownbeatMeter,
     WholeMapTranslation,
     Refinement,
+    Coverage,
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -198,6 +199,8 @@ pub(super) struct Segment {
     pub(super) coverage: Coverage,
     pub(super) bpm: f64,
     pub(super) four_four: bool,
+    /// Effective phase only: a historical label with unknown meter is not a bar claim.
+    pub(super) downbeat_label: Option<i64>,
 }
 
 pub(super) struct ValidatedMap {
@@ -214,6 +217,10 @@ pub(super) struct ValidatedMap {
     pub(super) unsupported_prefix: Box<[u32]>,
     pub(super) meter_prefix: Box<[u32]>,
     pub(super) gap_prefix: Box<[u32]>,
+    pub(super) coverage_changes: Box<[u32]>,
+    pub(super) meter_changes: Box<[u32]>,
+    pub(super) phase_changes: Box<[u32]>,
+    pub(super) unknown_phase_prefix: Box<[u32]>,
 }
 
 /// Bound arrays during typed deserialization, not after collecting arbitrary input.
@@ -269,7 +276,46 @@ pub(super) fn parse(encoded: &str) -> Result<ValidatedMap, String> {
     unsupported_prefix.push(0_u32);
     meter_prefix.push(0_u32);
     gap_prefix.push(0_u32);
+    let mut unknown_phase_prefix = Vec::new();
+    unknown_phase_prefix
+        .try_reserve_exact(segments.len() + 1)
+        .map_err(|error| error.to_string())?;
+    unknown_phase_prefix.push(0_u32);
+    let mut coverage_changes = Vec::new();
+    let mut meter_changes = Vec::new();
+    let mut phase_changes = Vec::new();
+    for changes in [
+        &mut coverage_changes,
+        &mut meter_changes,
+        &mut phase_changes,
+    ] {
+        changes
+            .try_reserve_exact(segments.len())
+            .map_err(|error| error.to_string())?;
+        changes.push(0_u32);
+    }
+    for pair in segments.windows(2) {
+        coverage_changes.push(
+            coverage_changes.last().copied().unwrap_or(0)
+                + u32::from(pair[0].coverage != pair[1].coverage),
+        );
+        meter_changes.push(
+            meter_changes.last().copied().unwrap_or(0)
+                + u32::from(pair[0].four_four != pair[1].four_four),
+        );
+        phase_changes.push(
+            phase_changes.last().copied().unwrap_or(0)
+                + u32::from(
+                    pair[0].downbeat_label.map(|label| label.rem_euclid(4))
+                        != pair[1].downbeat_label.map(|label| label.rem_euclid(4)),
+                ),
+        );
+    }
     for segment in &segments {
+        unknown_phase_prefix.push(
+            unknown_phase_prefix.last().copied().unwrap_or(0)
+                + u32::from(segment.downbeat_label.is_none()),
+        );
         let count = unsupported_prefix.last().copied().unwrap_or(0);
         unsupported_prefix.push(count + u32::from(segment.coverage != Coverage::Trusted));
         meter_prefix
@@ -294,8 +340,7 @@ pub(super) fn parse(encoded: &str) -> Result<ValidatedMap, String> {
     // bounded operations are off realtime; peak RAM still requires measurement.
     let mut value = serde_json::to_value(envelope.record).map_err(|error| error.to_string())?;
     let can_undo =
-        super::editor::undo_operation(&value["accepted"], sample_rate_hz, source_frames, raw_count)
-            .is_some();
+        super::editor::undo_operation(&value, sample_rate_hz, source_frames, raw_count).is_some();
     verify_revision(&mut value["raw"], "raw_revision")?;
     let declared = value["accepted"]
         .as_object_mut()
@@ -327,6 +372,10 @@ pub(super) fn parse(encoded: &str) -> Result<ValidatedMap, String> {
         unsupported_prefix: unsupported_prefix.into_boxed_slice(),
         meter_prefix: meter_prefix.into_boxed_slice(),
         gap_prefix: gap_prefix.into_boxed_slice(),
+        coverage_changes: coverage_changes.into_boxed_slice(),
+        meter_changes: meter_changes.into_boxed_slice(),
+        phase_changes: phase_changes.into_boxed_slice(),
+        unknown_phase_prefix: unknown_phase_prefix.into_boxed_slice(),
     })
 }
 
@@ -516,6 +565,9 @@ fn geometry(accepted: &Accepted, raw_count: usize) -> Result<(Vec<Anchor>, Vec<S
             coverage: interval.coverage,
             bpm,
             four_four: matches!(interval.meter.status, MeterStatus::QuarterNote4_4Verified),
+            downbeat_label: matches!(interval.meter.status, MeterStatus::QuarterNote4_4Verified)
+                .then_some(interval.meter.downbeat_label)
+                .flatten(),
         });
     }
     let mut operations = HashSet::new();

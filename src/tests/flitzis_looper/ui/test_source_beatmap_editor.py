@@ -20,7 +20,11 @@ from tests.flitzis_looper.ui.test_waveform_render_stability import (
 if TYPE_CHECKING:
     from flitzis_looper.controller import AppController
     from flitzis_looper.ui.context import UiContext
-    from flitzis_looper_audio import SourceBeatmapEvaluation
+    from flitzis_looper_audio import (
+        SourceBeatmapEditorSpan,
+        SourceBeatmapEditorSpanAnchor,
+        SourceBeatmapEvaluation,
+    )
 
 
 def _evaluate(source: float) -> SourceBeatmapEvaluation:
@@ -36,6 +40,7 @@ def _evaluate(source: float) -> SourceBeatmapEvaluation:
         "segment_index": 0 if source < 0.5 else 1,
         "physical_domain": "exclusive_source_end" if source == 600.0 else "within_source",
         "meter_status": "quarter_note_4_4_verified",
+        "downbeat_label": 0,
     }
 
 
@@ -60,6 +65,34 @@ def _nearest_grid(source: float, step_beats: float = 0.0625) -> SourceBeatmapEva
     return _evaluate(_source_at_beat(math.floor(beat / step_beats + 0.5) * step_beats))
 
 
+def _span_anchor(index: int) -> SourceBeatmapEditorSpanAnchor:
+    source = (0.0, 0.5, 600.0)[index]
+    beat = _evaluate(source)["beat"]
+    assert beat is not None
+    return {
+        "index": index,
+        "beat": beat,
+        "source_seconds": source,
+        "sample_index": None if source == 600.0 else round(source * 48_000),
+    }
+
+
+def _span(first: int, last: int) -> SourceBeatmapEditorSpan:
+    left, right = _span_anchor(first), _span_anchor(last)
+    return {
+        "map_revision": "a" * 64,
+        "status": "complete",
+        "first_anchor": left,
+        "last_anchor": right,
+        "quarter_notes": right["beat"] - left["beat"],
+        "interval_count": last - first,
+        "coverage": "trusted",
+        "meter_status": "quarter_note_4_4_verified",
+        "downbeat_status": "known",
+        "downbeat_label": 0,
+    }
+
+
 def _map() -> Mock:
     geometry = Mock()
     geometry.revision.return_value = "a" * 64
@@ -74,6 +107,7 @@ def _map() -> Mock:
     geometry.local_tempo_at_source.side_effect = _evaluate
     geometry.source_after_beats.side_effect = _source_after_beats
     geometry.nearest_grid_source.side_effect = _nearest_grid
+    geometry.editor_span.side_effect = _span
     geometry.editor_view.return_value = {
         "map_revision": "a" * 64,
         "status": "complete",
@@ -85,6 +119,7 @@ def _map() -> Mock:
                 "major": True,
                 "reference": False,
                 "meter_status": "quarter_note_4_4_verified",
+                "downbeat": False,
             }
         ],
         "anchors": [],
@@ -103,6 +138,7 @@ def _expose(
     monkeypatch.setattr(maps, "status", lambda _pad: "effective" if geometry else "none")
     identity = Mock(return_value=("content", 3, (7, "a" * 64, 28_800_000, 48_000)))
     monkeypatch.setattr(ctx.ui.source_map, "identity", identity)
+    monkeypatch.setattr(ctx.ui.source_map, "report_error", Mock())
     edit = Mock()
     monkeypatch.setattr(maps, "edit", edit)
     original_header = imgui.collapsing_header
@@ -307,3 +343,319 @@ def test_failed_or_stale_edit_reports_error_without_changing_selection(
     action.assert_not_called()
     assert state.error is not None
     assert "source changed" in state.error
+
+
+def test_index_navigation_and_playhead_select_an_unsupported_interval(
+    controller: AppController, audio_engine_mock: Mock, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    with _plot_context():
+        ctx, worker = _context(controller, audio_engine_mock)
+        ctx.bold_font = imgui.get_io().fonts.fonts[1]
+        ctx.ui.waveform.open(0)
+        geometry = _map()
+        edit, _identity = _expose(ctx, monkeypatch, geometry)
+        gap = _evaluate(1.0)
+        gap.update(
+            beat=None,
+            local_bpm=None,
+            coordinate_status="gap",
+            interval_status="gap_unknown_count",
+        )
+        geometry.evaluate_source.return_value = gap
+        geometry.evaluate_source.side_effect = None
+        geometry.editor_view.return_value.update(status="unsupported_reference", lines=[])
+
+        def gap_span(first: int, last: int) -> SourceBeatmapEditorSpan:
+            span = _span(first, last)
+            if first == 1:
+                span["coverage"] = "gap_unknown_count"
+            return span
+
+        geometry.editor_span.side_effect = gap_span
+        observer = _observe_draw(monkeypatch)
+        frames = [_full_frame(ctx, worker, observer) for _ in range(5)]
+        state = source_beatmap_editor._INPUTS[ctx.ui.waveform]
+
+        _click_toolbar("Next span##source-map-next", ctx, worker, observer, frames)
+        assert (state.first_anchor, state.last_anchor) == ("1", "2")
+        _click_toolbar("Previous span##source-map-previous", ctx, worker, observer, frames)
+        assert (state.first_anchor, state.last_anchor) == ("0", "1")
+        _click_toolbar(
+            "Select interval at playhead##source-map-select-playhead", ctx, worker, observer, frames
+        )
+
+        assert (state.first_anchor, state.last_anchor) == ("1", "2")
+        geometry.editor_span.assert_called_with(1, 2)
+        assert state.inspected_span == (1, 2)
+        assert state.coverage == "gap_unknown_count"
+        edit.assert_not_called()
+        geometry.record_json.assert_not_called()
+        audio_engine_mock.seek_sample.assert_not_called()
+
+
+@pytest.mark.parametrize(
+    ("field", "value", "button", "operation", "expected"),
+    [
+        ("quarter_notes", "2.5", "count", "set_count", {"quarter_notes": 2.5}),
+        ("meter_status", "unknown", "meter", "set_meter", {"meter_status": "unknown"}),
+        (
+            "meter_status",
+            "quarter_note_4_4_verified",
+            "meter",
+            "set_meter",
+            {"meter_status": "quarter_note_4_4_verified"},
+        ),
+        (
+            "downbeat_label",
+            "-9223372036854775808",
+            "downbeat",
+            "set_downbeat",
+            {"downbeat_label": -(1 << 63)},
+        ),
+        ("downbeat_label", "", "downbeat", "set_downbeat", {"downbeat_label": None}),
+        (
+            "coverage",
+            "trusted",
+            "coverage",
+            "set_coverage",
+            {"coverage": "trusted", "reviewed_quarter_notes": 1.0},
+        ),
+        (
+            "coverage",
+            "uncertain",
+            "coverage",
+            "set_coverage",
+            {"coverage": "uncertain", "reviewed_quarter_notes": 1.0},
+        ),
+        (
+            "coverage",
+            "gap_unknown_count",
+            "coverage",
+            "set_coverage",
+            {"coverage": "gap_unknown_count", "reviewed_quarter_notes": None},
+        ),
+    ],
+)
+def test_distinct_interval_buttons_send_only_their_explicit_intent(
+    controller: AppController,
+    audio_engine_mock: Mock,
+    monkeypatch: pytest.MonkeyPatch,
+    field: str,
+    value: str,
+    button: str,
+    operation: str,
+    expected: dict[str, object],
+) -> None:
+    with _plot_context():
+        ctx, worker = _context(controller, audio_engine_mock)
+        ctx.bold_font = imgui.get_io().fonts.fonts[1]
+        ctx.ui.waveform.open(0)
+        geometry = _map()
+        edit, _identity = _expose(ctx, monkeypatch, geometry)
+        before = controller.project.model_dump()
+        observer = _observe_draw(monkeypatch)
+        frames = [_full_frame(ctx, worker, observer) for _ in range(5)]
+        state = source_beatmap_editor._INPUTS[ctx.ui.waveform]
+        state.quarter_notes = "123.5"
+        setattr(state, field, value)
+        suffix = operation.removeprefix("set_")
+
+        _click_toolbar(f"Set {button}##source-map-set-{suffix}", ctx, worker, observer, frames)
+
+        edit.assert_called_once_with(
+            0,
+            {
+                "schema_version": 1,
+                "operation": operation,
+                "first_anchor_index": 0,
+                "last_anchor_index": 1,
+                **expected,
+            },
+            expected_revision="a" * 64,
+        )
+        assert controller.project.model_dump() == before
+        geometry.record_json.assert_not_called()
+        audio_engine_mock.seek_sample.assert_not_called()
+
+
+@pytest.mark.parametrize(
+    ("field", "value", "button"),
+    [
+        ("quarter_notes", "nan", "Set count##source-map-set-count"),
+        ("quarter_notes", "inf", "Set count##source-map-set-count"),
+        ("quarter_notes", "0", "Set count##source-map-set-count"),
+        ("quarter_notes", "-1", "Set count##source-map-set-count"),
+        ("downbeat_label", "1.5", "Set downbeat##source-map-set-downbeat"),
+        ("downbeat_label", "9223372036854775808", "Set downbeat##source-map-set-downbeat"),
+        ("meter_status", "3/4", "Set meter##source-map-set-meter"),
+        ("first_anchor", "1.5", "Previous span##source-map-previous"),
+        ("first_anchor", "-1", "Previous span##source-map-previous"),
+        ("last_anchor", "3", "Previous span##source-map-previous"),
+        ("last_anchor", "0", "Previous span##source-map-previous"),
+    ],
+)
+def test_invalid_explicit_inputs_refuse_at_actual_buttons(
+    controller: AppController,
+    audio_engine_mock: Mock,
+    monkeypatch: pytest.MonkeyPatch,
+    field: str,
+    value: str,
+    button: str,
+) -> None:
+    with _plot_context():
+        ctx, worker = _context(controller, audio_engine_mock)
+        ctx.bold_font = imgui.get_io().fonts.fonts[1]
+        ctx.ui.waveform.open(0)
+        edit, _identity = _expose(ctx, monkeypatch, _map())
+        reported = Mock()
+        monkeypatch.setattr(ctx.ui.source_map, "report_error", reported)
+        observer = _observe_draw(monkeypatch)
+        frames = [_full_frame(ctx, worker, observer) for _ in range(5)]
+        state = source_beatmap_editor._INPUTS[ctx.ui.waveform]
+        setattr(state, field, value)
+        frames.append(_full_frame(ctx, worker, observer))
+
+        _click_toolbar(button, ctx, worker, observer, frames)
+
+        edit.assert_not_called()
+        assert state.error
+        reported.assert_called_with(0, state.error)
+
+
+@pytest.mark.parametrize("label", ["1", ""])
+def test_downbeat_does_not_implicitly_enable_unknown_meter(
+    controller: AppController,
+    audio_engine_mock: Mock,
+    monkeypatch: pytest.MonkeyPatch,
+    label: str,
+) -> None:
+    with _plot_context():
+        ctx, worker = _context(controller, audio_engine_mock)
+        ctx.bold_font = imgui.get_io().fonts.fonts[1]
+        ctx.ui.waveform.open(0)
+        geometry = _map()
+        span = _span(0, 1)
+        span.update(meter_status="unknown", downbeat_status="unknown", downbeat_label=None)
+        geometry.editor_span.side_effect = None
+        geometry.editor_span.return_value = span
+        edit, _identity = _expose(ctx, monkeypatch, geometry)
+        observer = _observe_draw(monkeypatch)
+        frames = [_full_frame(ctx, worker, observer) for _ in range(5)]
+        state = source_beatmap_editor._INPUTS[ctx.ui.waveform]
+        state.downbeat_label = label
+
+        _click_toolbar("Set downbeat##source-map-set-downbeat", ctx, worker, observer, frames)
+
+        if label:
+            edit.assert_not_called()
+            assert state.error
+        else:
+            assert edit.call_args.args[1]["operation"] == "set_downbeat"
+            assert edit.call_args.args[1]["downbeat_label"] is None
+
+
+@pytest.mark.parametrize("changed", ["range", "source", "revision"])
+@pytest.mark.parametrize("operation", ["count", "meter", "downbeat", "coverage"])
+def test_interval_release_never_transfers_to_another_target(
+    controller: AppController,
+    audio_engine_mock: Mock,
+    monkeypatch: pytest.MonkeyPatch,
+    changed: str,
+    operation: str,
+) -> None:
+    with _plot_context():
+        ctx, worker = _context(controller, audio_engine_mock)
+        ctx.bold_font = imgui.get_io().fonts.fonts[1]
+        ctx.ui.waveform.open(0)
+        geometry = _map()
+        edit, identity = _expose(ctx, monkeypatch, geometry)
+        observer = _observe_draw(monkeypatch)
+        frames = [_full_frame(ctx, worker, observer) for _ in range(5)]
+        rect = frames[-1]["buttons"][f"Set {operation}##source-map-set-{operation}"]
+        mouse = ((rect[0] + rect[2]) / 2, (rect[1] + rect[3]) / 2)
+        _full_frame(ctx, worker, observer, mouse=mouse)
+        _full_frame(ctx, worker, observer, mouse=mouse, down=True)
+        if changed == "range":
+            state = source_beatmap_editor._INPUTS[ctx.ui.waveform]
+            state.first_anchor, state.last_anchor = "1", "2"
+        elif changed == "source":
+            identity.return_value = ("replacement", 5, (9, "b" * 64, 28_800_000, 48_000))
+        else:
+            geometry.revision.return_value = "b" * 64
+
+        _full_frame(ctx, worker, observer, mouse=mouse, down=False)
+
+        edit.assert_not_called()
+
+
+@pytest.mark.parametrize("status", ["pending", "restoring", "settling"])
+def test_busy_map_disables_interval_mutations(
+    controller: AppController,
+    audio_engine_mock: Mock,
+    monkeypatch: pytest.MonkeyPatch,
+    status: str,
+) -> None:
+    with _plot_context():
+        ctx, worker = _context(controller, audio_engine_mock)
+        ctx.bold_font = imgui.get_io().fonts.fonts[1]
+        ctx.ui.waveform.open(0)
+        edit, _identity = _expose(ctx, monkeypatch, _map())
+        monkeypatch.setattr(ctx.ui.source_map.selection, "status", lambda _pad: status)
+        observer = _observe_draw(monkeypatch)
+        frames = [_full_frame(ctx, worker, observer) for _ in range(5)]
+
+        _click_toolbar("Set count##source-map-set-count", ctx, worker, observer, frames)
+
+        edit.assert_not_called()
+
+
+def test_detailed_failure_reaches_console_facade_without_waveform_text_or_tooltip(
+    controller: AppController, audio_engine_mock: Mock, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    with _plot_context():
+        ctx, worker = _context(controller, audio_engine_mock)
+        ctx.bold_font = imgui.get_io().fonts.fonts[1]
+        ctx.ui.waveform.open(0)
+        edit, _identity = _expose(ctx, monkeypatch, _map())
+        detail = "private-path/secret.wav failed with internal source descriptor"
+        edit.side_effect = ValueError(detail)
+        reported = Mock()
+        monkeypatch.setattr(ctx.ui.source_map, "report_error", reported)
+        text: list[str] = []
+        original = source_beatmap_editor._status_line
+
+        def status(label: str) -> None:
+            text.append(label)
+            original(label)
+
+        monkeypatch.setattr(source_beatmap_editor, "_status_line", status)
+        tooltip = Mock()
+        monkeypatch.setattr(imgui, "set_tooltip", tooltip)
+        observer = _observe_draw(monkeypatch)
+        frames = [_full_frame(ctx, worker, observer) for _ in range(5)]
+
+        _click_toolbar("Set count##source-map-set-count", ctx, worker, observer, frames)
+        frames.append(_full_frame(ctx, worker, observer))
+
+        reported.assert_called_with(0, detail)
+        assert text
+        assert all(detail not in label and "secret.wav" not in label for label in text)
+        assert all(detail not in str(call) for call in tooltip.call_args_list)
+
+
+def test_native_downbeat_flag_adds_a_stronger_line_without_changing_quarter_emphasis(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    with _plot_context():
+        lines = _map().editor_view.return_value["lines"]
+        lines[0]["downbeat"] = True
+        lines.append({**lines[0], "source_seconds": 1.0, "downbeat": False})
+        draw = Mock()
+        monkeypatch.setattr(waveform_editor.implot, "plot_to_pixels", lambda x, y: (x, y))
+
+        waveform_editor._draw_source_map_downbeats(draw, lines)
+
+        assert [line["major"] for line in lines] == [True, True]
+        draw.add_line.assert_called_once()
+        assert draw.add_line.call_args.args[:2] == ((0.5, 1.0), (0.5, -1.0))
+        assert draw.add_line.call_args.kwargs == {"thickness": 2.0}

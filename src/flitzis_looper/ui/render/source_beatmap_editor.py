@@ -1,6 +1,7 @@
 """Transient editor intent over the loader's source-qualified Native map."""
 
 import math
+from contextlib import suppress
 from dataclasses import dataclass
 from typing import TYPE_CHECKING
 from weakref import WeakKeyDictionary
@@ -14,7 +15,7 @@ if TYPE_CHECKING:
 
     from flitzis_looper.controller.current_timing import CurrentPadTiming
     from flitzis_looper.ui.context import UiContext, WaveformEditorActions
-    from flitzis_looper_audio import SourceBeatmap
+    from flitzis_looper_audio import SourceBeatmap, SourceBeatmapEditorSpan
 
 
 @dataclass(frozen=True, slots=True)
@@ -28,8 +29,8 @@ class SourceMapEditorFrame:
     geometry: SourceBeatmap | None
     revision: str | None
     rate: int | None
+    anchor_count: int
     can_undo: bool
-    error: str | None
 
 
 @dataclass(slots=True)
@@ -38,6 +39,13 @@ class _EditorInputs:
     beat: str = "0"
     sample: str = "0"
     translation: str = "0"
+    first_anchor: str = "0"
+    last_anchor: str = "1"
+    inspected_span: tuple[int, int] | None = None
+    quarter_notes: str = ""
+    meter_status: str = "unknown"
+    downbeat_label: str = ""
+    coverage: str = "gap_unknown_count"
     error: str | None = None
 
 
@@ -58,8 +66,8 @@ def capture_source_map(ctx: UiContext, pad_id: int) -> SourceMapEditorFrame:
         geometry=geometry,
         revision=None if geometry is None else geometry.revision(),
         rate=None if info is None else info["sample_rate_hz"],
+        anchor_count=0 if info is None else info["anchor_count"],
         can_undo=False if info is None else info["can_undo"],
-        error=maps.errors.get(pad_id),
     )
 
 
@@ -69,7 +77,9 @@ def _inputs(ctx: UiContext, frame: SourceMapEditorFrame) -> _EditorInputs:
     if state is None or state.key != key:
         state = _EditorInputs(key)
         _INPUTS[ctx.ui.waveform] = state
-        _use_playhead(ctx, frame, state)
+        # Unsupported coverage is ordinary initial readiness, not an edit failure.
+        with suppress(ValueError):
+            _use_playhead(ctx, frame, state)
     return state
 
 
@@ -82,29 +92,35 @@ def _use_playhead(ctx: UiContext, frame: SourceMapEditorFrame, state: _EditorInp
     evaluated = frame.geometry.evaluate_source(source)
     beat = evaluated["beat"]
     if beat is None or not math.isfinite(beat):
-        state.error = "The playhead has no supported musical beat coordinate."
-        return
+        message = "The playhead has no supported musical beat coordinate."
+        raise ValueError(message)
     state.beat = format(beat, ".17g")
     state.sample = str(round(source * frame.rate))
-    state.error = None
+
+
+def _report(
+    ctx: UiContext, frame: SourceMapEditorFrame, state: _EditorInputs, reason: str | None
+) -> None:
+    state.error = reason
+    ctx.ui.source_map.report_error(frame.pad_id, reason)
 
 
 def _run(
     ctx: UiContext,
     frame: SourceMapEditorFrame,
     state: _EditorInputs,
-    action: Callable[[], None],
+    action: Callable[[], object],
 ) -> None:
     """Refuse an old text target before the loader captures its own Native job."""
     if frame.identity is None or ctx.ui.source_map.identity(frame.pad_id) != frame.identity:
-        state.error = "The source changed. Reopen the Source Map controls before editing."
+        _report(ctx, frame, state, "The source changed. Reopen Source Map before editing.")
         return
     try:
         action()
     except (OSError, RuntimeError, ValueError) as error:
-        state.error = str(error)
+        _report(ctx, frame, state, str(error))
     else:
-        state.error = None
+        _report(ctx, frame, state, None)
 
 
 def _move_beat(ctx: UiContext, frame: SourceMapEditorFrame, state: _EditorInputs) -> None:
@@ -144,7 +160,7 @@ def _translate(ctx: UiContext, frame: SourceMapEditorFrame, state: _EditorInputs
 
 
 def _status_line(label: str) -> None:
-    """Keep pending/error text from changing the waveform's vertical layout."""
+    """Keep ordinary readiness text from changing the waveform's vertical layout."""
     height = imgui.get_frame_height()
     imgui.begin_child(
         "source-map-status",
@@ -166,6 +182,7 @@ def _status_line(label: str) -> None:
     )
     draw_list.pop_clip_rect()
     imgui.dummy((available, height))
+    # Only normal readiness/timing text reaches this line; errors use the console.
     if imgui.is_item_hovered():
         imgui.set_tooltip(label)
     imgui.end_child()
@@ -195,7 +212,7 @@ def _correction_fields(ctx: UiContext, frame: SourceMapEditorFrame, state: _Edit
     imgui.set_next_item_width(145.0)
     _, state.sample = imgui.input_text("Source sample##source-map-sample", state.sample)
     if imgui.button("Use playhead##source-map-position"):
-        _use_playhead(ctx, frame, state)
+        _run(ctx, frame, state, lambda: _use_playhead(ctx, frame, state))
     imgui.same_line(spacing=SPACING)
     if imgui.button("Move beat##source-map-move"):
         _run(ctx, frame, state, lambda: _move_beat(ctx, frame, state))
@@ -219,6 +236,239 @@ def _correction_fields(ctx: UiContext, frame: SourceMapEditorFrame, state: _Edit
             ),
         )
     imgui.end_disabled()
+
+
+def _span_indices(frame: SourceMapEditorFrame, state: _EditorInputs) -> tuple[int, int]:
+    first, last = int(state.first_anchor), int(state.last_anchor)
+    if not 0 <= first < last < frame.anchor_count:
+        message = "Choose existing anchor indices with 0 <= first < last < anchor count."
+        raise ValueError(message)
+    return first, last
+
+
+def _inspect_span(frame: SourceMapEditorFrame, state: _EditorInputs) -> SourceBeatmapEditorSpan:
+    assert frame.geometry is not None
+    first, last = _span_indices(frame, state)
+    span = frame.geometry.editor_span(first, last)
+    if span["map_revision"] != frame.revision or span["status"] != "complete":
+        message = "The selected anchor span is unavailable in the current map revision."
+        raise ValueError(message)
+    return span
+
+
+def _select_span(frame: SourceMapEditorFrame, state: _EditorInputs, first: int, last: int) -> None:
+    if not 0 <= first < last < frame.anchor_count:
+        message = "The requested interval is outside the existing accepted anchors."
+        raise ValueError(message)
+    state.first_anchor, state.last_anchor = str(first), str(last)
+
+
+def _step_span(frame: SourceMapEditorFrame, state: _EditorInputs, direction: int) -> None:
+    first, last = _span_indices(frame, state)
+    _select_span(frame, state, first + direction, last + direction)
+
+
+def _select_playhead_span(
+    ctx: UiContext, frame: SourceMapEditorFrame, state: _EditorInputs
+) -> None:
+    assert frame.geometry is not None
+    source = ctx.state.session.pad_playhead_s[frame.pad_id]
+    if source is None:
+        source = ctx.state.project.pad_loop_start_s[frame.pad_id]
+    evaluated = frame.geometry.evaluate_source(source)
+    index = evaluated["segment_index"]
+    if evaluated["map_revision"] != frame.revision or index is None:
+        message = "The playhead is outside the accepted anchor intervals."
+        raise ValueError(message)
+    # Gap queries still identify their actual interval without inventing its B coordinate.
+    _select_span(frame, state, index, index + 1)
+
+
+def _range_selection(ctx: UiContext, frame: SourceMapEditorFrame, state: _EditorInputs) -> None:
+    imgui.text_colored(TEXT_MUTED_RGBA, f"Accepted anchor indices: 0 to {frame.anchor_count - 1}")
+    imgui.set_next_item_width(70.0)
+    first_changed, state.first_anchor = imgui.input_text(
+        "First anchor##source-map-first", state.first_anchor
+    )
+    imgui.same_line(spacing=SPACING)
+    imgui.set_next_item_width(70.0)
+    last_changed, state.last_anchor = imgui.input_text(
+        "Last anchor##source-map-last", state.last_anchor
+    )
+    if first_changed or last_changed:
+        _run(ctx, frame, state, lambda: _inspect_span(frame, state))
+    if imgui.button("Previous span##source-map-previous"):
+        _run(ctx, frame, state, lambda: _step_span(frame, state, -1))
+    imgui.same_line(spacing=SPACING)
+    if imgui.button("Next span##source-map-next"):
+        _run(ctx, frame, state, lambda: _step_span(frame, state, 1))
+    imgui.same_line(spacing=SPACING)
+    if imgui.button("Select interval at playhead##source-map-select-playhead"):
+        _run(ctx, frame, state, lambda: _select_playhead_span(ctx, frame, state))
+
+
+def _span_defaults(state: _EditorInputs, span: SourceBeatmapEditorSpan) -> None:
+    first, last = span["first_anchor"], span["last_anchor"]
+    assert first is not None
+    assert last is not None
+    key = first["index"], last["index"]
+    if state.inspected_span == key:
+        return
+    state.inspected_span = key
+    count = span["quarter_notes"]
+    assert count is not None
+    state.quarter_notes = format(count, ".17g")
+    state.meter_status = span["meter_status"]
+    state.downbeat_label = "" if span["downbeat_label"] is None else str(span["downbeat_label"])
+    state.coverage = span["coverage"]
+
+
+def _span_summary(span: SourceBeatmapEditorSpan) -> None:
+    count = span["quarter_notes"]
+    assert count is not None
+    for label, anchor in (("First", span["first_anchor"]), ("Last", span["last_anchor"])):
+        assert anchor is not None
+        sample = "virtual" if anchor["sample_index"] is None else str(anchor["sample_index"])
+        imgui.text_colored(
+            TEXT_MUTED_RGBA,
+            f"{label} #{anchor['index']}: beat {anchor['beat']:.17g}, "
+            f"source {anchor['source_seconds']:.17g} s, sample {sample}",
+        )
+    phase = span["downbeat_status"]
+    if span["downbeat_label"] is not None:
+        phase = f"{phase} ({span['downbeat_label']} + 4Z)"
+    imgui.text_colored(
+        TEXT_MUTED_RGBA,
+        f"{count:.17g} quarter notes / {span['interval_count']} intervals | "
+        f"Coverage: {span['coverage']} | Meter: {span['meter_status']} | Downbeat: {phase}",
+    )
+
+
+def _edit_span(
+    ctx: UiContext,
+    frame: SourceMapEditorFrame,
+    state: _EditorInputs,
+    operation: str,
+) -> None:
+    assert frame.revision is not None
+    first, last = _span_indices(frame, state)
+    span = _inspect_span(frame, state)
+    fields: dict[str, object]
+    if operation == "set_count":
+        count = float(state.quarter_notes)
+        if not math.isfinite(count) or count <= 0:
+            message = "Enter a finite positive quarter-note count."
+            raise ValueError(message)
+        fields = {"quarter_notes": count}
+    elif operation == "set_meter":
+        if state.meter_status not in {"unknown", "quarter_note_4_4_verified"}:
+            message = "Select unknown meter or explicitly verified 4/4."
+            raise ValueError(message)
+        fields = {"meter_status": state.meter_status}
+    elif operation == "set_downbeat":
+        label = None if not state.downbeat_label.strip() else int(state.downbeat_label)
+        if label is not None and not -(1 << 63) <= label < 1 << 63:
+            message = "The downbeat label must fit an exact signed 64-bit integer."
+            raise ValueError(message)
+        if label is not None and span["meter_status"] != "quarter_note_4_4_verified":
+            message = "Setting a downbeat requires explicitly verified 4/4 in the selected span."
+            raise ValueError(message)
+        fields = {"downbeat_label": label}
+    elif operation == "set_coverage":
+        if state.coverage not in {"trusted", "uncertain", "gap_unknown_count"}:
+            message = "Select trusted, uncertain or unknown-count gap coverage."
+            raise ValueError(message)
+        fields = {
+            "coverage": state.coverage,
+            "reviewed_quarter_notes": (
+                None if state.coverage == "gap_unknown_count" else span["quarter_notes"]
+            ),
+        }
+    else:
+        message = "Unknown source-map interval correction."
+        raise ValueError(message)
+    ctx.ui.source_map.selection.edit(
+        frame.pad_id,
+        {
+            "schema_version": 1,
+            "operation": operation,
+            "first_anchor_index": first,
+            "last_anchor_index": last,
+            **fields,
+        },
+        expected_revision=frame.revision,
+    )
+
+
+def _choice(label: str, current: str, choices: tuple[tuple[str, str], ...]) -> str:
+    labels = dict(choices)
+    imgui.set_next_item_width(180.0)
+    if imgui.begin_combo(label, labels.get(current, "Mixed; choose interpretation")):
+        for value, text in choices:
+            if imgui.selectable(text, value == current)[0]:
+                current = value
+        imgui.end_combo()
+    return current
+
+
+def _interpretation_actions(
+    ctx: UiContext, frame: SourceMapEditorFrame, state: _EditorInputs
+) -> None:
+    imgui.set_next_item_width(180.0)
+    _, state.quarter_notes = imgui.input_text(
+        "Quarter-note count##source-map-count", state.quarter_notes
+    )
+    imgui.same_line(spacing=SPACING)
+    if imgui.button("Set count##source-map-set-count"):
+        _run(ctx, frame, state, lambda: _edit_span(ctx, frame, state, "set_count"))
+    state.meter_status = _choice(
+        "Meter##source-map-meter",
+        state.meter_status,
+        (("unknown", "Unknown"), ("quarter_note_4_4_verified", "Verified 4/4")),
+    )
+    imgui.same_line(spacing=SPACING)
+    if imgui.button("Set meter##source-map-set-meter"):
+        _run(ctx, frame, state, lambda: _edit_span(ctx, frame, state, "set_meter"))
+    imgui.set_next_item_width(180.0)
+    _, state.downbeat_label = imgui.input_text(
+        "Downbeat label (blank: unknown)##source-map-downbeat", state.downbeat_label
+    )
+    imgui.same_line(spacing=SPACING)
+    if imgui.button("Set downbeat##source-map-set-downbeat"):
+        _run(ctx, frame, state, lambda: _edit_span(ctx, frame, state, "set_downbeat"))
+    state.coverage = _choice(
+        "Coverage##source-map-coverage",
+        state.coverage,
+        (
+            ("trusted", "Trusted"),
+            ("uncertain", "Uncertain"),
+            ("gap_unknown_count", "Unknown-count gap"),
+        ),
+    )
+    imgui.same_line(spacing=SPACING)
+    if imgui.button("Set coverage##source-map-set-coverage"):
+        _run(ctx, frame, state, lambda: _edit_span(ctx, frame, state, "set_coverage"))
+
+
+def _interval_fields(ctx: UiContext, frame: SourceMapEditorFrame, state: _EditorInputs) -> None:
+    _range_selection(ctx, frame, state)
+    try:
+        span = _inspect_span(frame, state)
+    except ValueError:
+        imgui.text_colored(TEXT_MUTED_RGBA, "Selected interval unavailable")
+        return
+    _span_defaults(state, span)
+    _span_summary(span)
+    imgui.text_wrapped(
+        "Count proportionally redistributes selected existing beat coordinates and shifts later "
+        "beat labels; source samples stay fixed. Changed counts clear selected downbeat phase. "
+        "Trusted/uncertain coverage accepts the displayed current count; gap asserts no count."
+    )
+    imgui.push_id(repr(state.inspected_span))
+    try:
+        _interpretation_actions(ctx, frame, state)
+    finally:
+        imgui.pop_id()
 
 
 def render_source_map_editor(
@@ -246,8 +496,7 @@ def _render_source_map_controls(
     label = (
         f"Editor only | Audio: scalar | {frame.status}{revision} | {_local_tempo_label(ctx, frame)}"
     )
-    error = state.error or frame.error
-    _status_line(label if error is None else f"{label} | {error}")
+    _status_line(label)
     if not expanded:
         return
 
@@ -277,5 +526,6 @@ def _render_source_map_controls(
         imgui.begin_disabled(frame.geometry is None)
         if frame.geometry is not None:
             _correction_fields(ctx, frame, state)
+            _interval_fields(ctx, frame, state)
         imgui.end_disabled()
     imgui.end_disabled()

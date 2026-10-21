@@ -969,6 +969,12 @@ class SourceMapEditorActions:
         """Return the Loader's original source-qualified map selection owner."""
         return self._controller.loader.source_beatmaps
 
+    def report_error(self, pad_id: int, reason: str | None) -> None:
+        """Report one explicit editor attempt through the original console sink."""
+        sink = self._controller.diagnostics
+        sink.begin_attempt("source_map_edit", pad_id)
+        sink.observe("source_map_edit", reason, pad_id=pad_id)
+
     def identity(self, pad_id: int) -> object:
         """Capture actual content/source generation for transient editor inputs."""
         content = self._controller.project.pad_content[pad_id]

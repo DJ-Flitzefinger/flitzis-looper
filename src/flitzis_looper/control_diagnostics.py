@@ -99,6 +99,7 @@ def poll_control_diagnostics(app: AppController) -> None:
         ("load", session.sample_load_errors),
         ("analysis", session.sample_analysis_errors),
         ("stem_generation", session.stem_generation_errors),
+        ("source_map_prepare", app.loader.source_beatmaps.errors),
     )
     for operation, messages in errors:
         sink.observe_pad_errors(operation, messages)

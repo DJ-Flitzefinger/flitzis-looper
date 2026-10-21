@@ -3,9 +3,12 @@
 use serde::Deserialize;
 use serde_json::{Value, json};
 use std::collections::{HashMap, HashSet};
+use std::io::{self, Write};
 
 use super::super::cold_store::descriptor_digest;
-use super::{MAX_ANCHORS, MAX_PROJECTION_POINTS, SourceBeatmap, record};
+use super::{
+    MAX_ANCHORS, MAX_PROJECTION_POINTS, MAX_RECORD_BYTES, SourceBeatmap, interval_edits, record,
+};
 
 pub(in crate::audio_engine) const MAX_EDIT_BYTES: usize = 8192;
 
@@ -15,7 +18,7 @@ pub(super) struct EditIntent {
 
 #[derive(Clone, Copy, Deserialize)]
 #[serde(tag = "operation", rename_all = "snake_case", deny_unknown_fields)]
-enum EditOperation {
+pub(super) enum EditOperation {
     MoveBeat {
         schema_version: u32,
         beat: f64,
@@ -29,6 +32,31 @@ enum EditOperation {
     },
     Undo {
         schema_version: u32,
+    },
+    SetCount {
+        schema_version: u32,
+        first_anchor_index: usize,
+        last_anchor_index: usize,
+        quarter_notes: f64,
+    },
+    SetMeter {
+        schema_version: u32,
+        first_anchor_index: usize,
+        last_anchor_index: usize,
+        meter_status: record::MeterStatus,
+    },
+    SetDownbeat {
+        schema_version: u32,
+        first_anchor_index: usize,
+        last_anchor_index: usize,
+        downbeat_label: Option<i64>,
+    },
+    SetCoverage {
+        schema_version: u32,
+        first_anchor_index: usize,
+        last_anchor_index: usize,
+        coverage: record::Coverage,
+        reviewed_quarter_notes: Option<f64>,
     },
 }
 
@@ -45,10 +73,26 @@ fn parse_intent(encoded: &str) -> Result<EditIntent, String> {
     let version = match &operation {
         EditOperation::MoveBeat { schema_version, .. }
         | EditOperation::Translate { schema_version, .. }
+        | EditOperation::SetCount { schema_version, .. }
+        | EditOperation::SetMeter { schema_version, .. }
+        | EditOperation::SetDownbeat { schema_version, .. }
+        | EditOperation::SetCoverage { schema_version, .. }
         | EditOperation::Undo { schema_version } => *schema_version,
     };
     if version != 1 {
         return Err("unsupported_beatmap_edit_schema".into());
+    }
+    let value: Value = serde_json::from_str(encoded).map_err(|error| error.to_string())?;
+    if (matches!(operation, EditOperation::SetDownbeat { .. })
+        && value
+            .as_object()
+            .is_none_or(|object| !object.contains_key("downbeat_label")))
+        || (matches!(operation, EditOperation::SetCoverage { .. })
+            && value
+                .as_object()
+                .is_none_or(|object| !object.contains_key("reviewed_quarter_notes")))
+    {
+        return Err("beatmap_edit_field_missing".into());
     }
     Ok(EditIntent { operation })
 }
@@ -58,6 +102,7 @@ fn bits(value: f64) -> String {
 }
 
 fn seal(mut value: Value) -> Result<SourceBeatmap, String> {
+    check_record_size(&value)?;
     value["record"]["raw"]
         .as_object_mut()
         .ok_or("raw_not_object")?
@@ -71,6 +116,25 @@ fn seal(mut value: Value) -> Result<SourceBeatmap, String> {
     value["record"]["accepted"]["map_revision"] =
         json!(descriptor_digest(&value["record"]).map_err(|error| error.to_string())?);
     SourceBeatmap::parse(&value.to_string())
+}
+
+/// Bound serialization before digest helpers allocate their canonical encoding.
+fn check_record_size(value: &Value) -> Result<(), String> {
+    struct ByteLimit(usize);
+    impl Write for ByteLimit {
+        fn write(&mut self, bytes: &[u8]) -> io::Result<usize> {
+            self.0 = self
+                .0
+                .checked_add(bytes.len())
+                .filter(|size| *size <= MAX_RECORD_BYTES)
+                .ok_or_else(|| io::Error::other("beatmap_byte_limit"))?;
+            Ok(bytes.len())
+        }
+        fn flush(&mut self) -> io::Result<()> {
+            Ok(())
+        }
+    }
+    serde_json::to_writer(&mut ByteLimit(0), value).map_err(|_| "beatmap_byte_limit".into())
 }
 
 impl SourceBeatmap {
@@ -208,7 +272,7 @@ impl SourceBeatmap {
                     .ok_or("raw_missing")?
                     .len();
                 let last = undo_operation(
-                    &value["record"]["accepted"],
+                    &value["record"],
                     self.inner.sample_rate_hz,
                     self.inner.source_frames,
                     raw_count,
@@ -218,14 +282,25 @@ impl SourceBeatmap {
                 let undone_id = last["id"].clone();
                 let kind = last["kind"].as_str().ok_or("beatmap_no_undo")?.to_owned();
                 let redo = apply_inverse(&mut value["record"]["accepted"], &inverse)?;
-                let kind = if kind == "whole_map_translation" {
-                    "whole_map_translation"
-                } else {
-                    "source_position"
-                };
+                (
+                    match kind.as_str() {
+                        "whole_map_translation" => "whole_map_translation",
+                        "beat_count" => "beat_count",
+                        "downbeat_meter" => "downbeat_meter",
+                        "coverage" => "coverage",
+                        _ => "source_position",
+                    },
+                    json!({"intent":{"schema_version":1,"operation":"undo"},"undoes_operation_id":undone_id,"inverse":redo}),
+                )
+            }
+            operation => {
+                let kind = interval_edits::kind(operation).ok_or("beatmap_edit_invalid")?;
+                let predecessor_parent_revision =
+                    value["record"]["accepted"]["parent_revision"].clone();
+                let inverse = interval_edits::apply(&mut value["record"]["accepted"], operation)?;
                 (
                     kind,
-                    json!({"intent":{"schema_version":1,"operation":"undo"},"undoes_operation_id":undone_id,"inverse":redo}),
+                    json!({"intent":serde_json::from_str::<Value>(encoded).map_err(|error|error.to_string())?,"inverse":inverse,"predecessor_parent_revision":predecessor_parent_revision}),
                 )
             }
         };
@@ -263,6 +338,9 @@ fn inverse_shape(inverse: &Value, kind: &str, undo: bool) -> bool {
     let Some(action) = inverse["action"].as_str() else {
         return false;
     };
+    if action == "restore_interval_edit" {
+        return interval_edits::inverse_shape(inverse, kind);
+    }
     if action == "restore_positions" {
         return kind == "whole_map_translation"
             && exact_keys(inverse, &["action", "positions"])
@@ -336,7 +414,7 @@ fn anchor_shape(anchor: &Value) -> bool {
         })
 }
 
-fn interval_shape(interval: &Value) -> bool {
+pub(super) fn interval_shape(interval: &Value) -> bool {
     exact_keys(interval, &["coverage", "meter"])
         && matches!(
             interval["coverage"].as_str(),
@@ -392,6 +470,8 @@ fn editor_operation(
         payload,
         if undo {
             &["intent", "inverse", "undoes_operation_id"]
+        } else if interval_edits::kind(intent).is_some() {
+            &["intent", "inverse", "predecessor_parent_revision"]
         } else {
             &["intent", "inverse"]
         },
@@ -412,17 +492,19 @@ fn editor_operation(
         EditOperation::Translate { sample_rate_hz, .. }
             if kind == "whole_map_translation" && *sample_rate_hz == rate => {}
         EditOperation::Undo { .. } if payload["undoes_operation_id"].as_str().is_some() => {}
+        operation if interval_edits::kind(*operation) == Some(kind) => {}
         _ => return None,
     }
     Some(intent)
 }
 
 pub(super) fn undo_operation(
-    accepted: &Value,
+    record_value: &Value,
     rate: u32,
     frames: u64,
     raw_count: usize,
 ) -> Option<&Value> {
+    let accepted = &record_value["accepted"];
     let lineage = accepted["lineage"].as_array()?;
     let ids: HashMap<&str, usize> = lineage
         .iter()
@@ -455,6 +537,20 @@ pub(super) fn undo_operation(
         }
         let inverse = &operation["payload"]["inverse"];
         let anchors = accepted["anchors"].as_array()?;
+        let mut preview = json!({"lineage":[]});
+        for key in [
+            "map_revision",
+            "parent_revision",
+            "beat_unit",
+            "interpolation_policy",
+            "boundary_policy",
+            "snap_policy",
+            "anchors",
+            "intervals",
+        ] {
+            preview[key] = accepted[key].clone();
+        }
+        let interval_edit = interval_edits::kind(intent).is_some();
         match intent {
             EditOperation::MoveBeat {
                 beat,
@@ -515,22 +611,29 @@ pub(super) fn undo_operation(
                 }
             }
             EditOperation::Undo { .. } => return None,
+            operation => {
+                if !interval_edits::matches_current(accepted, &mut preview, inverse, operation) {
+                    return None;
+                }
+            }
         }
-        let mut preview = json!({"lineage":[]});
-        for key in [
-            "map_revision",
-            "parent_revision",
-            "beat_unit",
-            "interpolation_policy",
-            "boundary_policy",
-            "snap_policy",
-            "anchors",
-            "intervals",
-        ] {
-            preview[key] = accepted[key].clone();
+        if !interval_edit {
+            apply_inverse(&mut preview, inverse).ok()?;
         }
-        apply_inverse(&mut preview, inverse).ok()?;
         record::validate_editor_geometry(&preview, raw_count).ok()?;
+        if interval_edit {
+            preview["parent_revision"] =
+                operation["payload"]["predecessor_parent_revision"].clone();
+            preview["lineage"] = Value::Array(lineage[..index].to_vec());
+            preview.as_object_mut()?.remove("map_revision");
+            let predecessor = json!({"source":record_value["source"],"raw":record_value["raw"],"accepted":preview});
+            check_record_size(&predecessor).ok()?;
+            if descriptor_digest(&predecessor).ok()?.as_str()
+                != operation["parent_revision"].as_str()?
+            {
+                return None;
+            }
+        }
         return Some(operation);
     }
     None
@@ -538,6 +641,9 @@ pub(super) fn undo_operation(
 
 pub(super) fn apply_inverse(accepted: &mut Value, inverse: &Value) -> Result<Value, String> {
     let action = inverse["action"].as_str().ok_or("beatmap_no_undo")?;
+    if action == "restore_interval_edit" {
+        return interval_edits::apply_inverse(accepted, inverse);
+    }
     if action == "restore_positions" {
         let positions = inverse["positions"]
             .as_array()
@@ -624,6 +730,7 @@ pub(super) struct EditorLine {
     pub(super) seconds: f64,
     pub(super) loop_beat: f64,
     pub(super) major: bool,
+    pub(super) downbeat: bool,
     pub(super) reference: bool,
     pub(super) meter: &'static str,
 }
@@ -701,6 +808,10 @@ impl SourceBeatmap {
             "uncertain"
         } else if self.inner.meter_prefix[first_segment] != self.inner.meter_prefix[after_segment] {
             "unknown_meter"
+        } else if self.inner.unknown_phase_prefix[first_segment]
+            != self.inner.unknown_phase_prefix[after_segment]
+        {
+            "unknown_downbeat"
         } else {
             "complete"
         };
@@ -729,9 +840,19 @@ impl SourceBeatmap {
                     * (right.beat - left.beat)
         };
         for step in [0.0625, 0.125, 0.25, 0.5, 1.0, 4.0, 16.0] {
-            let projection =
+            let projection = if step < 4.0 {
                 self.inner
-                    .project(coordinate(lower), coordinate(upper), step, available);
+                    .project(coordinate(lower), coordinate(upper), step, available)
+            } else {
+                self.project_visible_phase(
+                    coordinate(lower),
+                    coordinate(upper),
+                    first_segment,
+                    after_segment,
+                    step,
+                    available,
+                )
+            };
             if projection.status != "complete" {
                 continue;
             }
@@ -754,18 +875,20 @@ impl SourceBeatmap {
                 previous = Some(seconds);
                 let beat = point.beat.unwrap();
                 let loop_beat = 1.0 + beat - origin;
-                let major_step = if step < 1.0 {
-                    1.0
+                let phase = point.downbeat_label.map(|label| label.rem_euclid(4) as f64);
+                let downbeat = phase.is_some_and(|phase| beat.rem_euclid(4.0) == phase);
+                let major = if step < 1.0 {
+                    point.meter_status == "quarter_note_4_4_verified" && beat.rem_euclid(1.0) == 0.0
                 } else if step == 1.0 {
-                    4.0
+                    downbeat
                 } else {
-                    16.0
+                    phase.is_some_and(|phase| beat.rem_euclid(16.0) == phase)
                 };
                 lines.push(EditorLine {
                     seconds,
                     loop_beat,
-                    major: point.meter_status == "quarter_note_4_4_verified"
-                        && beat.rem_euclid(major_step) == 0.0,
+                    major,
+                    downbeat,
                     reference: loop_beat == 1.0,
                     meter: point.meter_status,
                 });
@@ -784,5 +907,67 @@ impl SourceBeatmap {
             }
         }
         refused("projection_limit")
+    }
+
+    /// The caller already bounds visible anchors, so at most limit+1 segments are visited.
+    fn project_visible_phase(
+        &self,
+        first: f64,
+        last: f64,
+        first_segment: usize,
+        after_segment: usize,
+        step: f64,
+        limit: usize,
+    ) -> super::query::Projection {
+        let refused = |status| super::query::Projection {
+            status,
+            points: Vec::new(),
+        };
+        let mut points: Vec<super::query::Evaluation> = Vec::new();
+        if points.try_reserve_exact(limit).is_err() {
+            return refused("allocation_refused");
+        }
+        for index in first_segment..after_segment {
+            let segment = self.inner.segments[index];
+            let Some(label) = segment.downbeat_label else {
+                continue;
+            };
+            if segment.coverage != record::Coverage::Trusted {
+                continue;
+            }
+            let phase = label.rem_euclid(4) as f64;
+            let start = first.max(self.inner.anchors[index].beat);
+            let end = last.min(self.inner.anchors[index + 1].beat);
+            if end < start {
+                continue;
+            }
+            let projection = self.inner.project_lattice(start, end, step, phase, limit);
+            if projection.status != "complete" {
+                return refused(projection.status);
+            }
+            for point in projection.points {
+                if !point.supported()
+                    || point
+                        .downbeat_label
+                        .is_none_or(|value| value.rem_euclid(4) != label.rem_euclid(4))
+                {
+                    continue;
+                }
+                if points
+                    .last()
+                    .is_some_and(|previous| previous.beat == point.beat)
+                {
+                    continue;
+                }
+                if points.len() == limit {
+                    return refused("projection_limit");
+                }
+                points.push(point);
+            }
+        }
+        super::query::Projection {
+            status: "complete",
+            points,
+        }
     }
 }

@@ -13,6 +13,7 @@ pub(super) struct Evaluation {
     pub(super) segment_index: Option<usize>,
     pub(super) physical_domain: &'static str,
     pub(super) meter_status: &'static str,
+    pub(super) downbeat_label: Option<i64>,
 }
 
 impl Evaluation {
@@ -26,6 +27,7 @@ impl Evaluation {
             segment_index: None,
             physical_domain: "unavailable",
             meter_status: "unavailable",
+            downbeat_label: None,
         }
     }
 
@@ -50,6 +52,14 @@ impl Projection {
 }
 
 impl ValidatedMap {
+    pub(super) fn sample_index(&self, seconds: f64) -> Option<u64> {
+        if !seconds.is_finite() || seconds < 0.0 || seconds >= self.source_duration {
+            return None;
+        }
+        let sample = (seconds * f64::from(self.sample_rate_hz)).round();
+        (sample >= 0.0 && sample < self.source_frames as f64).then_some(sample as u64)
+    }
+
     pub(super) fn at_source(&self, source: f64) -> Evaluation {
         self.evaluate(source, true, false)
     }
@@ -111,6 +121,7 @@ impl ValidatedMap {
             segment_index: Some(segment_index),
             physical_domain: self.physical_domain(anchor.seconds),
             meter_status: self.meter_status(segment_index),
+            downbeat_label: self.segments[segment_index].downbeat_label,
         }
     }
 
@@ -135,6 +146,7 @@ impl ValidatedMap {
             missing.interval_status = segment.coverage.label();
             missing.segment_index = Some(index);
             missing.meter_status = self.meter_status(index);
+            missing.downbeat_label = segment.downbeat_label;
             return missing;
         }
         let left = self.anchors[index];
@@ -171,6 +183,7 @@ impl ValidatedMap {
             segment_index: Some(index),
             physical_domain: self.physical_domain(source),
             meter_status: self.meter_status(index),
+            downbeat_label: segment.downbeat_label,
         }
     }
 
@@ -257,6 +270,7 @@ impl ValidatedMap {
         let endpoint_segment = if beats >= 0.0 { after - 1 } else { first };
         end.interval_status = "trusted";
         end.meter_status = self.meter_status(endpoint_segment);
+        end.downbeat_label = self.segments[endpoint_segment].downbeat_label;
         end.local_bpm = Some(self.segments[endpoint_segment].bpm);
         end
     }
@@ -273,25 +287,43 @@ impl ValidatedMap {
         let Some(beat) = current.beat else {
             return Evaluation::unavailable("numerical_unavailable");
         };
-        let steps = beat / step;
+        let bar_grid = step >= 4.0 && step.rem_euclid(4.0) == 0.0;
+        let phase = if bar_grid {
+            let Some(label) = current.downbeat_label else {
+                return Evaluation::unavailable("unsupported_downbeat");
+            };
+            label.rem_euclid(4) as f64
+        } else {
+            0.0
+        };
+        let compatible = |other| {
+            self.same_supported_island(current, other)
+                && (!bar_grid || self.same_supported_phase(current, other))
+        };
+        let steps = (beat - phase) / step;
         if !steps.is_finite() {
             return Evaluation::unavailable("numerical_unavailable");
         }
         let lower = steps.floor();
-        let lower_beat = lower * step;
+        let lower_beat = phase + lower * step;
         if !lower_beat.is_finite() {
             return Evaluation::unavailable("numerical_unavailable");
         }
         // An exact supported endpoint needs no hypothetical point beyond it.
-        if lower_beat == beat {
+        if lower_beat == beat && (!bar_grid || lower_beat.rem_euclid(4.0) == phase) {
             let exact = self.at_beat(lower_beat);
-            if exact.source_seconds == Some(source) && self.same_supported_island(current, exact) {
+            if exact.source_seconds == Some(source) && compatible(exact) {
                 return exact;
             }
         }
         let upper = lower + 1.0;
-        let upper_beat = upper * step;
-        if upper <= lower || !upper_beat.is_finite() || lower_beat >= upper_beat {
+        let upper_beat = phase + upper * step;
+        if upper <= lower
+            || !upper_beat.is_finite()
+            || lower_beat >= upper_beat
+            || (bar_grid
+                && (lower_beat.rem_euclid(4.0) != phase || upper_beat.rem_euclid(4.0) != phase))
+        {
             return Evaluation::unavailable("numerical_unavailable");
         }
         // Compare the source coordinate with the shared inverse's midpoint.
@@ -301,12 +333,12 @@ impl ValidatedMap {
         if midpoint_tick <= lower || midpoint_tick >= upper {
             return Evaluation::unavailable("numerical_unavailable");
         }
-        let midpoint = self.at_beat(midpoint_tick * step);
+        let midpoint = self.at_beat(phase + midpoint_tick * step);
         // The musical coordinate first identifies the nearest target. A
         // supported same-island midpoint refines only the floating-point
         // comparison; missing coverage at that hypothetical point must not
         // discard an otherwise valid target in a partial final subdivision.
-        let choose_lower = if self.same_supported_island(current, midpoint) {
+        let choose_lower = if compatible(midpoint) {
             match midpoint.source_seconds {
                 Some(midpoint_source) => source < midpoint_source,
                 None => return Evaluation::unavailable("numerical_unavailable"),
@@ -318,7 +350,7 @@ impl ValidatedMap {
         if !target.supported() {
             return target;
         }
-        if !self.same_supported_island(current, target) {
+        if !compatible(target) {
             return Evaluation::unavailable("unsupported_crossing");
         }
         target
@@ -341,19 +373,46 @@ impl ValidatedMap {
             .is_some_and(|(before, after)| before == after)
     }
 
+    fn same_supported_phase(&self, left: Evaluation, right: Evaluation) -> bool {
+        let (Some(left_index), Some(right_index), Some(left_phase), Some(right_phase)) = (
+            left.segment_index,
+            right.segment_index,
+            left.downbeat_label,
+            right.downbeat_label,
+        ) else {
+            return false;
+        };
+        let first = left_index.min(right_index);
+        let last = left_index.max(right_index);
+        left_phase.rem_euclid(4) == right_phase.rem_euclid(4)
+            && self.phase_changes[first] == self.phase_changes[last]
+    }
+
     pub(super) fn project(&self, first: f64, last: f64, step: f64, limit: usize) -> Projection {
+        self.project_lattice(first, last, step, 0.0, limit)
+    }
+
+    pub(super) fn project_lattice(
+        &self,
+        first: f64,
+        last: f64,
+        step: f64,
+        phase: f64,
+        limit: usize,
+    ) -> Projection {
         if !first.is_finite()
             || !last.is_finite()
             || !step.is_finite()
             || step <= 0.0
+            || !phase.is_finite()
             || last < first
             || limit == 0
             || limit > MAX_PROJECTION_POINTS
         {
             return Projection::refused("invalid");
         }
-        let start_tick = (first / step).ceil();
-        let end_tick = (last / step).floor();
+        let start_tick = ((first - phase) / step).ceil();
+        let end_tick = ((last - phase) / step).floor();
         if !start_tick.is_finite() || !end_tick.is_finite() {
             return Projection::refused("numerical_unavailable");
         }
@@ -373,8 +432,15 @@ impl ValidatedMap {
         }
         let mut previous = None;
         for index in 0..count as usize {
-            let beat = (start_tick + index as f64) * step;
-            if !beat.is_finite() || previous.is_some_and(|before| beat <= before) {
+            let beat = phase + (start_tick + index as f64) * step;
+            if !beat.is_finite()
+                || previous.is_some_and(|before| beat <= before)
+                || beat < first
+                || beat > last
+                || (step >= 4.0
+                    && step.rem_euclid(4.0) == 0.0
+                    && beat.rem_euclid(4.0) != phase.rem_euclid(4.0))
+            {
                 return Projection::refused("numerical_unavailable");
             }
             points.push(self.at_beat(beat));

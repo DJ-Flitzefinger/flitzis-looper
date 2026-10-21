@@ -427,8 +427,9 @@ the loaded rate. It creates a local accepted anchor without rewriting raw detect
 **Translate map** applies a separate signed sample alignment to all anchors, retaining
 musical intervals. **Undo map edit** applies the preceding supported editor correction's
 captured inverse as another immutable revision. These operations preserve raw
-uncertainty and parent-linked lineage; they do not repair beat count/downbeat labels
-or perform automatic onset refinement. Those remain distinct B4 work.
+uncertainty and parent-linked lineage. Count, meter, downbeat and coverage corrections
+are separate actions described below. Automatic onset refinement remains separately
+gated B4 work.
 
 **Snap markers** explicitly uses the map's later-tie 1/16-beat snap followed by final
 loaded-frame rounding. **Apply bars** computes `S(B(start) + 4*bars)` only across
@@ -445,3 +446,40 @@ never reconstructing the map or parsing full geometry during a frame. Corrected 
 retain the delivered independent Copy/Move/Swap/Pair/Bank, historical custody and
 fresh source-qualified model-free restore semantics. These engineering paths alone
 prove no musical accuracy, device/hearing result or whole-project RAM/I/O/P6 budget.
+
+### Interval count, meter, downbeat and coverage corrections
+
+The same Source Map controls select a span between two existing accepted anchor
+indices, or the interval containing the retained playhead. The Native inspector
+shows its source endpoints, quarter-note count and interpretation even when a gap
+makes the waveform's loop-reference grid unavailable. Virtual bounds remain virtual;
+the inspector does not grant physical sample access.
+
+**Set count** accepts a positive number of quarter notes over the selected span.
+It redistributes the existing interior beat coordinates proportionally and shifts
+later beat labels, keeping every source sample fixed. It does not certify gaps or
+change meter. Dependent downbeat phase becomes unknown within the changed span;
+later phase follows an integral beat shift, while a fractional shift leaves it
+unknown. Raw evidence stays unchanged.
+
+**Set meter** explicitly chooses unknown or quarter-note 4/4; changing meter clears
+its old downbeat interpretation. **Set downbeat** is a separate exact integer
+quarter-note origin, or blank for unknown. A known origin describes a repeating
+four-quarter phase, so -3 and 1 describe the same downbeat lattice. It cannot enable
+4/4 implicitly. Known 4/4 with an unknown downbeat still supports four-quarter
+durations, while bar-phase accents and bar-sized snapping remain unavailable.
+
+**Set coverage** explicitly chooses trusted, uncertain or unknown-count gap.
+Trusted and uncertain actions require acceptance of the displayed current count
+allocation; merely editing count, meter or phase never promotes coverage. A broad
+count correction therefore does not silently declare every internal gap repaired.
+Known bar lines use their actual phase at coarse as well as fine zoom. Fine
+subdivision locations do not move when only the integer downbeat phase changes.
+
+Every correction is a new immutable revision through the original job and durable
+selection owner. Sequential Undo restores exact predecessor beat bits and metadata;
+Copy and fresh source-qualified restore retain the independent corrected revision.
+All mutation gestures additionally capture the selected range. Detailed local and
+worker failures go to the existing redacted console sink; rendering keeps normal
+readiness state. These controls remain **Editor only | Audio: scalar**, with physical
+loop markers unchanged until an explicit marker action.

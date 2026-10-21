@@ -38,6 +38,7 @@ if TYPE_CHECKING:
 
     from flitzis_looper.controller.current_timing import CurrentPadTiming
     from flitzis_looper.ui.context import UiContext
+    from flitzis_looper_audio import SourceBeatmapEditorLine
 
 _LOOP_START_DRAG_LINE_ID = 0
 _LOOP_END_DRAG_LINE_ID = 1
@@ -691,6 +692,7 @@ def _plot_source_map_grid(
         return
     lines = source_map_grid_lines(view["lines"])
     _draw_musical_grid_lines(draw_list, lines)
+    _draw_source_map_downbeats(draw_list, view["lines"])
     _draw_musical_grid_labels(
         draw_list, lines, loop_start_s=loop_start_s, start_s=start_s, end_s=end_s
     )
@@ -701,6 +703,21 @@ def _plot_source_map_grid(
             imgui.get_color_u32(TEXT_MUTED_RGBA),
             f"Map coverage: {view['status']}",
         )
+
+
+def _draw_source_map_downbeats(
+    draw_list: imgui.ImDrawList, lines: list[SourceBeatmapEditorLine]
+) -> None:
+    """Accent Native-confirmed bar phase while retaining the fine quarter hierarchy."""
+    base = TEXT_MUTED_RGBA
+    color = imgui.get_color_u32(ImVec4(base.x, base.y, base.z, 0.44))
+    for line in lines:
+        if not line["downbeat"]:
+            continue
+        source = line["source_seconds"]
+        p1 = implot.plot_to_pixels(source, 1.0)
+        p2 = implot.plot_to_pixels(source, -1.0)
+        draw_list.add_line(p1, p2, color, thickness=2.0)
 
 
 def _handle_clicks(ctx: UiContext, pad_id: int, sample_duration_s: float) -> None:

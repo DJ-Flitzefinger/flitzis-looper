@@ -165,6 +165,100 @@ class Probe:
         )
         return True
 
+    def begin_interval_edit(self, operation_json):
+        """Use the original actual-source job for each independent correction."""
+        maps = self.loader.source_beatmaps
+        geometry = maps.effective(36)
+        self.interval_before = json.loads(geometry.record_json())["record"]
+        self.interval_project = self.project.model_dump(mode="json")
+        self.interval_native = [
+            (
+                self.audio.waveform_source_identity(pad),
+                self.audio.current_input_runtime_pad_binding(pad).metadata(),
+            )
+            for pad in (0, 36)
+        ]
+        if not hasattr(self, "interval_history"):
+            self.interval_history = []
+        self.interval_operation = json.loads(operation_json)
+        if self.interval_operation["operation"] == "undo":
+            self.interval_expected = self.interval_history.pop()
+        else:
+            self.interval_history.append(self.interval_before["accepted"])
+            self.interval_expected = None
+        maps.edit(36, self.interval_operation, expected_revision=geometry.revision())
+        assert maps.status(36) == "pending"
+
+    def interval_edit_settled(self):
+        self.poll()
+        maps = self.loader.source_beatmaps
+        if maps.status(36) != "effective":
+            return False
+        geometry = maps.effective(36)
+        current = json.loads(geometry.record_json())["record"]
+        assert geometry.revision() != self.interval_before["accepted"]["map_revision"]
+        assert current["source"] == self.interval_before["source"]
+        assert current["raw"] == self.interval_before["raw"]
+        assert (
+            current["accepted"]["parent_revision"]
+            == (self.interval_before["accepted"]["map_revision"])
+        )
+        if self.interval_expected is not None:
+            for field in ("anchors", "intervals"):
+                assert current["accepted"][field] == self.interval_expected[field], field
+        else:
+            self._assert_new_interval_geometry(geometry, current)
+        self._assert_interval_owners(geometry)
+        return True
+
+    def _assert_new_interval_geometry(self, geometry, current):
+        operation = self.interval_operation["operation"]
+        for before, after in zip(
+            self.interval_before["accepted"]["anchors"],
+            current["accepted"]["anchors"],
+            strict=True,
+        ):
+            for field in before:
+                if field != "beat_bits" or operation != "set_count":
+                    assert after[field] == before[field], field
+        span = geometry.editor_span(0, geometry.editor_info()["anchor_count"] - 1)
+        assert span["status"] == "complete"
+        if operation == "set_count":
+            assert span["quarter_notes"] == self.interval_operation["quarter_notes"]
+        elif operation == "set_coverage":
+            assert span["coverage"] == self.interval_operation["coverage"]
+        elif operation == "set_meter":
+            assert span["meter_status"] == self.interval_operation["meter_status"]
+        elif operation == "set_downbeat":
+            assert span["downbeat_status"] == "known"
+            assert span["downbeat_label"] == self.interval_operation["downbeat_label"]
+
+    def _assert_interval_owners(self, geometry):
+        maps = self.loader.source_beatmaps
+        assert maps.effective(0).record_json() == self.original_record
+        assert self.project.pad_source_beatmap_intent[0] is self.original_intent
+        current = self.project.model_dump(mode="json")
+        current.pop("pad_source_beatmap_intent")
+        before = dict(self.interval_project)
+        before.pop("pad_source_beatmap_intent")
+        # The original Config-before-owner commit advances its durable revision.
+        assert current.pop("config_revision") > before.pop("config_revision")
+        assert current == before
+        assert [
+            (
+                self.audio.waveform_source_identity(pad),
+                self.audio.current_input_runtime_pad_binding(pad).metadata(),
+            )
+            for pad in (0, 36)
+        ] == self.interval_native
+        saved = ProjectPersistence.from_config_path(self.path)
+        assert saved.project.config_revision == self.project.config_revision
+        assert (
+            saved.project.pad_source_beatmap_intent[36]
+            == (self.project.pad_source_beatmap_intent[36])
+        )
+        assert geometry.editor_info()["can_undo"]
+
     def current_copied_record(self):
         return self.loader.source_beatmaps.effective(36).record_json()
 

@@ -493,6 +493,13 @@ def check_source_beatmap_editor_api(native_module: object) -> None:
     beatmap = getattr(native_module, "SourceBeatmap", None)
     assert isinstance(engine, type), "Native source beatmap editor API missing type: AudioEngine"
     assert isinstance(beatmap, type), "Native source beatmap editor API missing type: SourceBeatmap"
+    correction_version = getattr(beatmap, "EDITOR_CORRECTION_API_VERSION", None)
+    assert type(correction_version) is int, (
+        "Native source beatmap editor API requires EDITOR_CORRECTION_API_VERSION=2"
+    )
+    assert correction_version == 2, (
+        "Native source beatmap editor API requires EDITOR_CORRECTION_API_VERSION=2"
+    )
     for method in (
         "revision",
         "source_identity",
@@ -532,6 +539,16 @@ def check_source_beatmap_editor_api(native_module: object) -> None:
         (beatmap, "editor_info", (("self", required),), set()),
         (
             beatmap,
+            "editor_span",
+            (
+                ("self", required),
+                ("first_anchor_index", required),
+                ("last_anchor_index", required),
+            ),
+            set(),
+        ),
+        (
+            beatmap,
             "editor_view",
             (
                 ("self", required),
@@ -564,7 +581,7 @@ def check_source_beatmap_editor_api(native_module: object) -> None:
         )
         for name, default in arguments:
             parameter = parameters[name]
-            kinds = (
+            kinds: set[int] = (
                 {inspect.Parameter.POSITIONAL_ONLY, inspect.Parameter.POSITIONAL_OR_KEYWORD}
                 if name == "self"
                 else {inspect.Parameter.KEYWORD_ONLY}

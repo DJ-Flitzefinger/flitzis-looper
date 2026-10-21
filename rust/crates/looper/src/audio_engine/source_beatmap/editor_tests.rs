@@ -22,6 +22,161 @@ fn four_four(mut value: Value) -> Value {
     value
 }
 
+mod interval_editor_tests {
+    use super::*;
+    include!("interval_editor_tests.rs");
+}
+
+fn phased_map(anchors: &[(f64, f64)], labels: &[Option<i64>]) -> SourceBeatmap {
+    let mut value = four_four(fixture(anchors, &vec!["trusted"; labels.len()]));
+    for (interval, label) in value["record"]["accepted"]["intervals"]
+        .as_array_mut()
+        .unwrap()
+        .iter_mut()
+        .zip(labels)
+    {
+        interval["meter"]["downbeat_label"] = json!(label);
+    }
+    prepared(value)
+}
+
+#[test]
+fn native_phase_grid_reduces_i64_before_float_and_keeps_coarse_nonzero_origin() {
+    // i64::MAX is phase three; conversion to f64 first would falsely yield phase zero.
+    let map = phased_map(&[(0.0, 0.0), (10.0, 20.0)], &[Some(i64::MAX)]);
+    let fine = map.viewport(0.0, 10.0, 0.0, 100.0, 2048);
+    assert!(
+        fine.lines
+            .iter()
+            .any(|line| line.downbeat && line.loop_beat == 4.0)
+    );
+    assert!(
+        fine.lines
+            .iter()
+            .all(|line| !line.downbeat || (line.loop_beat - 4.0).rem_euclid(4.0) == 0.0)
+    );
+    let coarse = map.viewport(0.0, 10.0, 0.0, 8.0, 2048);
+    assert_eq!(coarse.step, 4.0);
+    assert_eq!(
+        coarse
+            .lines
+            .iter()
+            .map(|line| line.loop_beat - 1.0)
+            .collect::<Vec<_>>(),
+        vec![3.0, 7.0, 11.0, 15.0, 19.0]
+    );
+    assert!(coarse.lines.iter().all(|line| line.downbeat));
+    let far = map.viewport(0.0, 10.0, 0.0, 0.1, 2048);
+    assert_eq!(far.step, 16.0);
+    assert_eq!(
+        far.lines
+            .iter()
+            .map(|line| line.loop_beat - 1.0)
+            .collect::<Vec<_>>(),
+        vec![3.0, 19.0]
+    );
+    let snapped = map.inner.nearest_grid(2.0, 4.0);
+    assert_eq!(snapped.beat, Some(3.0));
+    assert_eq!(snapped.source_seconds, Some(1.5));
+}
+
+#[test]
+fn coarse_projection_obeys_each_segment_phase_and_refuses_incompatible_bar_snap() {
+    let map = phased_map(&[(0.0, 0.0), (2.0, 4.0), (5.0, 10.0)], &[Some(1), Some(2)]);
+    let view = map.viewport(0.0, 5.0, 0.0, 6.0, 2048);
+    assert_eq!(view.step, 4.0);
+    assert_eq!(
+        view.lines
+            .iter()
+            .map(|line| line.loop_beat - 1.0)
+            .collect::<Vec<_>>(),
+        vec![1.0, 6.0, 10.0]
+    );
+    assert!(view.lines.iter().all(|line| line.downbeat));
+    assert_eq!(
+        map.inner.nearest_grid(1.9, 4.0).coordinate_status,
+        "unsupported_crossing"
+    );
+    assert!(map.inner.nearest_grid(1.9, 0.25).supported());
+}
+
+#[test]
+fn unknown_phase_has_no_bar_claim_but_four_quarter_duration_remains_supported() {
+    let map = phased_map(&[(0.0, 0.0), (10.0, 20.0)], &[None]);
+    let view = map.viewport(0.0, 10.0, 0.0, 100.0, 2048);
+    assert_eq!(view.status, "unknown_downbeat");
+    assert!(view.lines.iter().all(|line| !line.downbeat));
+    assert_eq!(
+        map.inner.nearest_grid(1.0, 4.0).coordinate_status,
+        "unsupported_downbeat"
+    );
+    assert!(map.inner.nearest_grid(1.0, 0.25).supported());
+    assert_eq!(
+        map.inner.source_after_beats(0.5, 4.0, true).source_seconds,
+        Some(2.5)
+    );
+}
+
+#[test]
+fn derived_inspector_metadata_preserves_equivalent_signed_labels_and_virtual_endpoints() {
+    let map = phased_map(
+        &[(-1.0, -2.0), (1.0, 2.0), (10.0, 20.0)],
+        &[Some(-3), Some(i64::MIN + 1)],
+    );
+    assert_eq!(map.inner.phase_changes.as_ref(), &[0, 0]);
+    assert_eq!(map.inner.coverage_changes.as_ref(), &[0, 0]);
+    assert_eq!(map.inner.meter_changes.as_ref(), &[0, 0]);
+    assert_eq!(map.inner.sample_index(-1.0), None);
+    assert_eq!(map.inner.sample_index(10.0), None);
+    assert_eq!(map.inner.sample_index(1.0), Some(48000));
+    assert_eq!(map.inner.segments[0].downbeat_label, Some(-3));
+    let mut legacy = record_of(&map);
+    legacy["record"]["accepted"]["intervals"][0]["meter"]["status"] = json!("unknown");
+    let legacy = prepared(legacy);
+    assert_eq!(legacy.inner.at_source(0.0).downbeat_label, None);
+    assert_eq!(legacy.inner.phase_changes.as_ref(), &[0, 1]);
+}
+
+#[test]
+fn phased_viewport_keeps_total_line_and_anchor_capacity_and_final_boundaries() {
+    let map = phased_map(
+        &[(0.0, 0.0), (1.5, 3.0), (3.5, 7.0), (5.5, 11.0)],
+        &[Some(3), Some(3), Some(3)],
+    );
+    let view = map.viewport(0.0, 5.5, 0.0, 8.0, 7);
+    assert!(view.lines.len() + view.anchors.len() <= 7);
+    assert_eq!(
+        view.lines
+            .iter()
+            .filter(|line| line.loop_beat == 4.0)
+            .count(),
+        1
+    );
+    assert_eq!(
+        view.lines
+            .iter()
+            .filter(|line| line.loop_beat == 12.0)
+            .count(),
+        1
+    );
+    assert_eq!(
+        map.viewport(0.0, 5.5, 0.0, 8.0, 3).status,
+        "projection_limit"
+    );
+    assert_eq!(map.viewport(0.0, 5.5, 0.0, 8.0, 2049).status, "invalid");
+}
+
+#[test]
+fn unrepresentable_phase_at_large_quarter_coordinates_refuses_instead_of_claiming_zero_phase() {
+    let origin = (1_u64 << 54) as f64;
+    let map = phased_map(&[(0.0, origin), (10.0, origin + 256.0)], &[Some(1)]);
+    let snapped = map.inner.nearest_grid(5.0, 4.0);
+    assert_eq!(snapped.coordinate_status, "numerical_unavailable");
+    let view = map.viewport(0.0, 10.0, 0.0, 0.1, 2048);
+    assert!(view.lines.iter().all(|line| !line.downbeat));
+    assert_ne!(view.status, "complete");
+}
+
 #[test]
 fn manual_seed_keeps_empty_raw_and_explicit_quarter_meter_full_source_coverage() {
     let value = fixture(&[(0.0, 0.0), (10.0, 20.0)], &["trusted"]);
@@ -428,10 +583,7 @@ fn bar_endpoint_checks_entire_supported_meter_interval_and_physical_source() {
 
 #[test]
 fn viewport_uses_actual_inverse_finest_spaced_lines_bounded_projection_and_gap_status() {
-    let map = prepared(four_four(fixture(
-        &[(0.0, 0.0), (1.0, 4.0), (3.0, 8.0)],
-        &["trusted", "trusted"],
-    )));
+    let map = phased_map(&[(0.0, 0.0), (1.0, 4.0), (3.0, 8.0)], &[Some(0), Some(0)]);
     let view = map.viewport(0.0, 3.0, 0.0, 100.0, 2048);
     assert_eq!(view.status, "complete");
     assert_eq!(view.step, 0.5);
@@ -464,10 +616,7 @@ fn viewport_uses_actual_inverse_finest_spaced_lines_bounded_projection_and_gap_s
             .iter()
             .all(|line| line.seconds <= 1.0 || line.seconds >= 2.0)
     );
-    let dense = prepared(four_four(fixture(
-        &[(0.0, 0.0), (10.0, 128.0)],
-        &["trusted"],
-    )));
+    let dense = phased_map(&[(0.0, 0.0), (10.0, 128.0)], &[Some(0)]);
     let fallback = dense.viewport(0.0, 10.0, 0.0, 0.01, 2048);
     assert_eq!(fallback.status, "complete");
     assert_eq!(fallback.step, 16.0);

@@ -10,6 +10,7 @@ import pytest
 from flitzis_looper.control_diagnostics import ConsoleDiagnostics, poll_control_diagnostics
 from flitzis_looper.controller.stem_generation import StemGenerationResult
 from flitzis_looper.input_mapping.actions import describe_pitch_rejection
+from flitzis_looper.models import PadContentIdentity
 from flitzis_looper.ui.context import UiContext
 from tests.flitzis_looper.controller.test_stem_batch import _ControlledStems
 from tests.flitzis_looper.controller.test_stem_delete import _ControlledDelete
@@ -133,6 +134,52 @@ def test_async_load_errors_reach_console_without_selected_pad_rendering(
     assert "operation=analysis PAD=5 reason=synthetic analysis refusal" in first
     assert "operation=stem_generation PAD=18 reason=synthetic separator refusal" in first
     assert not capsys.readouterr().err
+
+
+def test_source_map_worker_error_reaches_console_without_editor_rendering(
+    controller: AppController, capsys: pytest.CaptureFixture[str]
+) -> None:
+    maps = controller.loader.source_beatmaps
+    content = PadContentIdentity(instance_id="d" * 32)
+    controller.project.pad_content[12] = content
+    maps._errors[content.instance_id] = r"Cannot restore 'D:\private map folder\map.json'"
+    capsys.readouterr()
+
+    poll_control_diagnostics(controller)
+    first = capsys.readouterr().err
+    poll_control_diagnostics(controller)
+
+    assert "operation=source_map_prepare PAD=13" in first
+    assert "[private path]" in first
+    assert "private map folder" not in first
+    assert not capsys.readouterr().err
+    maps._errors.clear()
+    poll_control_diagnostics(controller)
+    controller.project.pad_content[12] = None
+    controller.project.pad_content[22] = content
+    maps._errors[content.instance_id] = "beatmap_spacing_invalid"
+    poll_control_diagnostics(controller)
+    moved = capsys.readouterr().err
+    assert "operation=source_map_prepare PAD=23" in moved
+    assert "reason=beatmap_spacing_invalid" in moved
+
+
+def test_explicit_source_map_failures_repeat_per_attempt_without_mutating_intent(
+    controller: AppController, capsys: pytest.CaptureFixture[str]
+) -> None:
+    actions = UiContext(controller).ui.source_map
+    before = controller.project.model_dump()
+    capsys.readouterr()
+
+    actions.report_error(1, "source beatmap correction target is no longer current")
+    actions.report_error(1, "source beatmap correction target is no longer current")
+
+    lines = capsys.readouterr().err.splitlines()
+    assert len(lines) == 2
+    assert all("operation=source_map_edit PAD=2" in line for line in lines)
+    actions.report_error(1, None)
+    assert not capsys.readouterr().err
+    assert controller.project.model_dump() == before
 
 
 def test_global_rejection_logs_each_attempt_without_mutating_intent(

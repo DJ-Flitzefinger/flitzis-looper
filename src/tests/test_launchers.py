@@ -22,11 +22,15 @@ if os.environ['LAUNCHER_NATIVE_MODE'] == 'import-error':
 if os.environ['LAUNCHER_NATIVE_MODE'] != 'older':
     def native_build_profile():
         mode = os.environ['LAUNCHER_NATIVE_MODE']
-        return 'release' if mode in {'old-piano', 'old-recording', 'old-editor'} else mode
+        if mode in {'old-piano', 'old-recording', 'old-editor'} or mode.startswith('editor-'):
+            return 'release'
+        return mode
 class CapturedPitchAction:
     if os.environ['LAUNCHER_NATIVE_MODE'] != 'old-piano':
         resets_key_correction = property(lambda self: False)
 class AudioEngine:
+    def __init__(self):
+        raise AssertionError('launcher must never construct an engine')
     if os.environ['LAUNCHER_NATIVE_MODE'] != 'old-recording':
         def audio_stream_failed(self):
             raise AssertionError('launcher must only reflect stream lifecycle')
@@ -40,6 +44,34 @@ class AudioEngine:
         def begin_source_beatmap_edit_async(self, sample_id, receipt_json, operation_json):
             raise AssertionError('launcher must never edit a source beatmap')
 class SourceBeatmap:
+    def __init__(self):
+        raise AssertionError('launcher must never construct a map')
+    if os.environ['LAUNCHER_NATIVE_MODE'] != 'editor-missing-version':
+        EDITOR_CORRECTION_API_VERSION = {
+            'editor-version-none': None,
+            'editor-version-false': False,
+            'editor-version-true': True,
+            'editor-version-float': 2.0,
+            'editor-version-string': '2',
+            'editor-version-old': 1,
+            'editor-version-future': 3,
+        }.get(os.environ['LAUNCHER_NATIVE_MODE'], 2)
+    if os.environ['LAUNCHER_NATIVE_MODE'] != 'editor-missing-span':
+        if os.environ['LAUNCHER_NATIVE_MODE'] == 'editor-span-optional':
+            def editor_span(self, first_anchor_index, last_anchor_index=None):
+                raise AssertionError('launcher must never query a span')
+        elif os.environ['LAUNCHER_NATIVE_MODE'] == 'editor-span-keyword-only':
+            def editor_span(self, *, first_anchor_index, last_anchor_index):
+                raise AssertionError('launcher must never query a span')
+        elif os.environ['LAUNCHER_NATIVE_MODE'] == 'editor-span-positional-only':
+            def editor_span(self, first_anchor_index, last_anchor_index, /):
+                raise AssertionError('launcher must never query a span')
+        elif os.environ['LAUNCHER_NATIVE_MODE'] == 'editor-span-renamed':
+            def editor_span(self, first_anchor_index, anchor_index):
+                raise AssertionError('launcher must never query a span')
+        else:
+            def editor_span(self, first_anchor_index, last_anchor_index):
+                raise AssertionError('launcher must never query a span')
     def editor_info(self):
         raise AssertionError('launcher must only reflect map capabilities')
     def editor_view(self, start_s, end_s, loop_start_s, px_per_s, max_points=2048):
@@ -312,10 +344,29 @@ def test_recording_lifecycle_requires_current_native_before_application(
 
 
 @pytest.mark.parametrize("starter", ["start.bat", "start-release.bat"])
+@pytest.mark.parametrize(
+    "mode",
+    [
+        "old-editor",
+        "editor-missing-version",
+        "editor-version-none",
+        "editor-version-false",
+        "editor-version-true",
+        "editor-version-float",
+        "editor-version-string",
+        "editor-version-old",
+        "editor-version-future",
+        "editor-missing-span",
+        "editor-span-optional",
+        "editor-span-keyword-only",
+        "editor-span-positional-only",
+        "editor-span-renamed",
+    ],
+)
 def test_source_beatmap_editor_requires_current_native_before_application(
-    launchers: _Launchers, starter: str
+    launchers: _Launchers, starter: str, mode: str
 ) -> None:
-    launchers.environment["LAUNCHER_NATIVE_MODE"] = "old-editor"
+    launchers.environment["LAUNCHER_NATIVE_MODE"] = mode
     result = launchers.run(starter)
     assert result.returncode != 0
     assert "Native source beatmap editor API requires a current build" in (

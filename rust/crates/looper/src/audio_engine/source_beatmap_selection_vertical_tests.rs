@@ -118,6 +118,42 @@ fn wait_probe(
     }
 }
 
+fn interval_operations() -> [Value; 7] {
+    [
+        json!({"schema_version":1,"operation":"set_count","first_anchor_index":0,"last_anchor_index":2,"quarter_notes":8.5}),
+        json!({"schema_version":1,"operation":"set_meter","first_anchor_index":0,"last_anchor_index":2,"meter_status":"unknown"}),
+        json!({"schema_version":1,"operation":"set_meter","first_anchor_index":0,"last_anchor_index":2,"meter_status":"quarter_note_4_4_verified"}),
+        json!({"schema_version":1,"operation":"set_downbeat","first_anchor_index":0,"last_anchor_index":2,"downbeat_label":-3}),
+        json!({"schema_version":1,"operation":"set_coverage","first_anchor_index":0,"last_anchor_index":2,"coverage":"gap_unknown_count","reviewed_quarter_notes":null}),
+        json!({"schema_version":1,"operation":"set_coverage","first_anchor_index":0,"last_anchor_index":2,"coverage":"uncertain","reviewed_quarter_notes":8.5}),
+        json!({"schema_version":1,"operation":"set_coverage","first_anchor_index":0,"last_anchor_index":2,"coverage":"trusted","reviewed_quarter_notes":8.5}),
+    ]
+}
+
+fn apply_interval_edits(
+    probe: &Py<PyAny>,
+    consumer: &mut rtrb::Consumer<ControlMessage>,
+    parameters: &mut rtrb::Consumer<ControlParameterMessage>,
+    mixer: &mut RtMixer,
+) {
+    let undo = json!({"schema_version":1,"operation":"undo"});
+    // Genuine sequential Undo must restore exact bits through mixed operation
+    // kinds; then retain a corrected revision for the separate-process restore.
+    let operations: Vec<Value> = interval_operations()
+        .into_iter()
+        .chain(std::iter::repeat_n(undo, 7))
+        .chain(interval_operations())
+        .collect();
+    for operation in operations {
+        Python::attach(|py| {
+            probe
+                .call_method1(py, "begin_interval_edit", (operation.to_string(),))
+                .unwrap();
+        });
+        wait_probe(probe, "interval_edit_settled", consumer, parameters, mixer);
+    }
+}
+
 fn child_name(name: &str) -> String {
     format!("{}::{name}", module_path!().split_once("::").unwrap().1)
 }
@@ -302,6 +338,7 @@ fn run_selection_vertical(manual: bool) {
             &mut parameter_consumer,
             &mut mixer,
         );
+        apply_interval_edits(&probe, &mut consumer, &mut parameter_consumer, &mut mixer);
         let corrected: String = Python::attach(|py| {
             probe
                 .call_method0(py, "current_copied_record")

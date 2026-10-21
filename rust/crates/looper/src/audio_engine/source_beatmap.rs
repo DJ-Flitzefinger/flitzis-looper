@@ -12,6 +12,7 @@ use pyo3::prelude::*;
 use pyo3::types::{PyDict, PyList};
 
 pub(super) mod editor;
+mod interval_edits;
 mod query;
 mod record;
 
@@ -57,6 +58,9 @@ impl std::fmt::Debug for SourceBeatmap {
 
 #[pymethods]
 impl SourceBeatmap {
+    #[classattr]
+    const EDITOR_CORRECTION_API_VERSION: u32 = 2;
+
     /// Validate data only; actual source acceptance requires separate custody checks.
     #[staticmethod]
     fn from_json(py: Python<'_>, record_json: String) -> PyResult<Self> {
@@ -85,6 +89,96 @@ impl SourceBeatmap {
         Ok(result.unbind())
     }
 
+    /// Bounded diagnostics remain available even where interpolation is unsupported.
+    fn editor_span(
+        &self,
+        py: Python<'_>,
+        first_anchor_index: i64,
+        last_anchor_index: i64,
+    ) -> PyResult<Py<PyDict>> {
+        let result = PyDict::new(py);
+        result.set_item("map_revision", &self.inner.revision)?;
+        let selection = usize::try_from(first_anchor_index)
+            .ok()
+            .zip(usize::try_from(last_anchor_index).ok())
+            .filter(|(first, last)| first < last && *last < self.inner.anchors.len())
+            .filter(|(first, last)| {
+                let count = self.inner.anchors[*last].beat - self.inner.anchors[*first].beat;
+                count.is_finite() && count > 0.0
+            });
+        let Some((first, last)) = selection else {
+            result.set_item("status", "invalid_selection")?;
+            for key in [
+                "first_anchor",
+                "last_anchor",
+                "quarter_notes",
+                "downbeat_label",
+            ] {
+                result.set_item(key, py.None())?;
+            }
+            result.set_item("interval_count", 0)?;
+            for key in ["coverage", "meter_status", "downbeat_status"] {
+                result.set_item(key, "unavailable")?;
+            }
+            return Ok(result.unbind());
+        };
+        result.set_item("status", "complete")?;
+        for (key, index) in [("first_anchor", first), ("last_anchor", last)] {
+            let anchor = self.inner.anchors[index];
+            let row = PyDict::new(py);
+            row.set_item("index", index)?;
+            row.set_item("beat", anchor.beat)?;
+            row.set_item("source_seconds", anchor.seconds)?;
+            row.set_item("sample_index", self.inner.sample_index(anchor.seconds))?;
+            result.set_item(key, row)?;
+        }
+        result.set_item(
+            "quarter_notes",
+            self.inner.anchors[last].beat - self.inner.anchors[first].beat,
+        )?;
+        result.set_item("interval_count", last - first)?;
+        let segment = self.inner.segments[first];
+        let homogeneous = |prefix: &[u32]| prefix[first] == prefix[last - 1];
+        result.set_item(
+            "coverage",
+            if homogeneous(&self.inner.coverage_changes) {
+                segment.coverage.label()
+            } else {
+                "mixed"
+            },
+        )?;
+        result.set_item(
+            "meter_status",
+            if !homogeneous(&self.inner.meter_changes) {
+                "mixed"
+            } else if segment.four_four {
+                "quarter_note_4_4_verified"
+            } else {
+                "unknown"
+            },
+        )?;
+        let same_phase = homogeneous(&self.inner.phase_changes);
+        result.set_item(
+            "downbeat_status",
+            if !same_phase {
+                "mixed"
+            } else if segment.downbeat_label.is_some() {
+                "known"
+            } else {
+                "unknown"
+            },
+        )?;
+        result.set_item(
+            "downbeat_label",
+            if same_phase {
+                segment.downbeat_label
+            } else {
+                None
+            },
+        )?;
+        Ok(result.unbind())
+    }
+
     #[pyo3(signature=(start_s,end_s,loop_start_s,px_per_s,max_points=2048))]
     fn editor_view(
         &self,
@@ -106,6 +200,7 @@ impl SourceBeatmap {
             row.set_item("source_seconds", line.seconds)?;
             row.set_item("loop_beat", line.loop_beat)?;
             row.set_item("major", line.major)?;
+            row.set_item("downbeat", line.downbeat)?;
             row.set_item("reference", line.reference)?;
             row.set_item("meter_status", line.meter)?;
             lines.append(row)?;
@@ -116,10 +211,7 @@ impl SourceBeatmap {
             let row = PyDict::new(py);
             row.set_item("source_seconds", seconds)?;
             row.set_item("beat", beat)?;
-            let sample = seconds * f64::from(self.inner.sample_rate_hz);
-            let sample_index = (sample >= 0.0 && sample < self.inner.source_frames as f64)
-                .then(|| sample.round() as u64);
-            row.set_item("sample_index", sample_index)?;
+            row.set_item("sample_index", self.inner.sample_index(seconds))?;
             anchors.append(row)?;
         }
         result.set_item("anchors", anchors)?;
@@ -217,6 +309,7 @@ fn evaluation_dict(py: Python<'_>, map: &ValidatedMap, value: Evaluation) -> PyR
     result.set_item("segment_index", value.segment_index)?;
     result.set_item("physical_domain", value.physical_domain)?;
     result.set_item("meter_status", value.meter_status)?;
+    result.set_item("downbeat_label", value.downbeat_label)?;
     // No field in this DTO represents actual source custody or audible adoption.
     Ok(result.unbind())
 }
