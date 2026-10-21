@@ -33,6 +33,7 @@ mod corrected_legacy;
 
 #[path = "source_beatmap_job.rs"]
 mod source_beatmap_job;
+use source_beatmap_job::PreparedMap;
 
 #[path = "source_beatmap_async.rs"]
 mod source_beatmap_async;
@@ -406,7 +407,7 @@ struct JobState {
     legacy_started: AtomicBool,
     legacy_running: AtomicBool,
     legacy_result: Mutex<Option<String>>,
-    prepared_map: Mutex<Option<SourceBeatmap>>,
+    prepared_map: Mutex<Option<PreparedMap>>,
     async_map: OnceLock<Arc<AsyncMapStatus>>,
     finished: AtomicBool,
     transitions: Mutex<()>,
@@ -1107,6 +1108,28 @@ impl OfflineAnalysisJob {
             return Ok(None);
         };
         delivery.source_beatmap_for(owner)
+    }
+
+    /// Resolve genuine output and acknowledge only its exact exported birth.
+    pub fn resolve_source_beatmap_artifact_completion(
+        &self,
+        delivery: &super::loader_events::LoaderEventDelivery,
+    ) -> PyResult<Option<super::source_beatmap_artifact::SourceBeatmapArtifact>> {
+        let state = self.state();
+        state
+            .require_purpose(OfflinePurpose::SourceBeatmap)
+            .map_err(PyRuntimeError::new_err)?;
+        let _requests = state
+            .request_ids
+            .lock()
+            .map_err(|_| PyRuntimeError::new_err("request lock poisoned"))?;
+        if state.cancelled() {
+            return Ok(None);
+        }
+        let Some(owner) = state.native_owner.as_ref() else {
+            return Ok(None);
+        };
+        delivery.source_beatmap_artifact_for(owner)
     }
 }
 

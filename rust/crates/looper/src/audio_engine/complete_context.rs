@@ -338,6 +338,17 @@ impl CompleteSourceReader {
             .map_err(|error| error.to_string())
     }
 
+    pub(super) fn map_artifact_paths(
+        &self,
+    ) -> Result<(&std::path::Path, &std::path::Path), String> {
+        self.require_map_custody()?;
+        let lease = self
+            .lease
+            .as_ref()
+            .ok_or("source beatmap cold lease unavailable")?;
+        Ok((lease.samples_root(), &lease.original_path))
+    }
+
     /// Worker-only actual original verification under the same captured assignment.
     pub(super) fn verify_source_beatmap(
         &self,

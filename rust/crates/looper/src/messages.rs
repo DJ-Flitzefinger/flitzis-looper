@@ -976,6 +976,7 @@ pub enum LoaderEvent {
         id: usize,
         request_id: u64,
         map: crate::audio_engine::SourceBeatmap,
+        artifact: Option<crate::audio_engine::SourceBeatmapArtifact>,
     },
     /// Loading started for the given sample slot id.
     Started { id: usize, request_id: u64 },

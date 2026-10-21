@@ -21,6 +21,12 @@ pub(super) enum AssetKind {
     StemArtifact,
     PcmDirectory,
     PcmArtifact,
+    SourceBeatmapDirectory {
+        material: Option<String>,
+    },
+    SourceBeatmapArtifact {
+        material: Option<String>,
+    },
     StemPcmDirectory {
         material: String,
         generation: bool,
@@ -150,6 +156,40 @@ pub(super) fn classify(path: &Path) -> io::Result<AssetKind> {
         return Err(invalid("asset reference must start with samples"));
     }
     let parts = &parts[1..];
+    // Map sidecars are a distinct typed namespace, including explicit legacy roots.
+    // Only published ready generations are externally addressable.
+    let map_parts = match parts {
+        [".pcm-cache", "source-beatmaps", "v1", rest @ ..] => Some((None, rest)),
+        [owner, ".pcm-cache", "source-beatmaps", "v1", rest @ ..]
+            if readable::readable_container(owner) =>
+        {
+            Some((Some(String::new()), rest))
+        }
+        [
+            "materials",
+            owner,
+            ".pcm-cache",
+            "source-beatmaps",
+            "v1",
+            rest @ ..,
+        ] if owner.strip_prefix('M').is_some_and(valid_id) => {
+            Some((Some(owner[1..].to_owned()), rest))
+        }
+        _ => None,
+    };
+    if let Some((material, tail)) = map_parts {
+        return match tail {
+            [generation] if ready_generation(generation) => {
+                Ok(AssetKind::SourceBeatmapDirectory { material })
+            }
+            [generation, "map.json"] if ready_generation(generation) => {
+                Ok(AssetKind::SourceBeatmapArtifact { material })
+            }
+            _ => Err(invalid(
+                "source beatmap reference requires an exact ready artifact",
+            )),
+        };
+    }
     match parts {
         [owner, name]
             if readable::readable_container(owner)
@@ -421,7 +461,9 @@ pub(super) fn resolve(root: &Path, path: &Path) -> io::Result<ResolvedAsset> {
             }
             AssetKind::StemDirectory {
                 material: value, ..
-            } => *value = Some(id),
+            }
+            | AssetKind::SourceBeatmapDirectory { material: value }
+            | AssetKind::SourceBeatmapArtifact { material: value } => *value = Some(id),
             AssetKind::StemPcmDirectory {
                 material: value, ..
             }
@@ -446,6 +488,8 @@ pub fn resolve_project_asset(
         AssetKind::StemArtifact => ("stem_artifact", None),
         AssetKind::PcmDirectory => ("pcm_directory", None),
         AssetKind::PcmArtifact => ("pcm_artifact", None),
+        AssetKind::SourceBeatmapDirectory { material } => ("source_beatmap_directory", material),
+        AssetKind::SourceBeatmapArtifact { material } => ("source_beatmap_artifact", material),
         AssetKind::StemPcmDirectory { material, .. } => ("stem_pcm_directory", Some(material)),
         AssetKind::StemPcmArtifact => ("stem_pcm_artifact", None),
         AssetKind::StemPairDescriptor { material } => ("stem_pair_descriptor", Some(material)),

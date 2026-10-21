@@ -29,6 +29,14 @@ pub struct SourceBeatmap {
 }
 
 impl SourceBeatmap {
+    pub(super) fn canonical_record(&self) -> &str {
+        &self.inner.encoded
+    }
+
+    pub(super) fn map_revision(&self) -> &str {
+        &self.inner.revision
+    }
+
     pub(super) fn parse(encoded: &str) -> Result<Self, String> {
         Ok(Self {
             inner: Arc::new(record::parse(encoded)?),

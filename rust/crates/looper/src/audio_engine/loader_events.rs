@@ -18,9 +18,38 @@ pub struct LoaderEventDelivery {
     owner: super::complete_context::NativeAnalysisOwner,
     timing_epoch: Option<u64>,
     source_beatmap: Option<super::source_beatmap::SourceBeatmap>,
+    source_beatmap_artifact: Option<super::source_beatmap_artifact::SourceBeatmapArtifact>,
 }
 
 impl LoaderEventDelivery {
+    pub(super) fn source_beatmap_artifact_for(
+        &self,
+        owner: &super::complete_context::NativeAnalysisOwner,
+    ) -> PyResult<Option<super::source_beatmap_artifact::SourceBeatmapArtifact>> {
+        if !owner.same_admission(&self.owner) || !owner.current() {
+            return Ok(None);
+        }
+        let Some(artifact) = self.source_beatmap_artifact.as_ref() else {
+            return Ok(None);
+        };
+        match self.owner.observe_control() {
+            PlacementObservation::Current(_) => {
+                // This final successful currentness check is the ACK
+                // linearization point. Concurrent cancellation afterwards
+                // follows valid resolution; cancellation before it refuses.
+                if !owner.current() {
+                    return Ok(None);
+                }
+                artifact.acknowledge_export();
+                Ok(Some(artifact.clone()))
+            }
+            PlacementObservation::Pending => Err(PyRuntimeError::new_err(
+                "loader event content placement pending",
+            )),
+            PlacementObservation::Stale | PlacementObservation::Retired => Ok(None),
+        }
+    }
+
     /// Original-job data resolution never consults mutable Python DTO fields.
     pub(super) fn source_beatmap_for(
         &self,
@@ -298,6 +327,10 @@ pub(super) fn poll(
             LoaderEvent::SourceBeatmapCompleted { map, .. } => Some(map.clone()),
             _ => None,
         };
+        let source_beatmap_artifact = match &event {
+            LoaderEvent::SourceBeatmapCompleted { artifact, .. } => artifact.clone(),
+            _ => None,
+        };
         dict.set_item(
             "_native_event_owner",
             Py::new(
@@ -306,6 +339,7 @@ pub(super) fn poll(
                     owner,
                     timing_epoch,
                     source_beatmap,
+                    source_beatmap_artifact,
                 },
             )?,
         )?;
@@ -331,6 +365,7 @@ pub(super) fn poll(
             id,
             request_id,
             map,
+            artifact,
         } => {
             dict.set_item("type", "source_beatmap_completed")?;
             dict.set_item("id", id)?;
@@ -338,6 +373,11 @@ pub(super) fn poll(
             // O(1) native Arc transfer; JSON serialization remains an explicit
             // data query, never ordinary event polling of a possibly64MiB map.
             dict.set_item("map", Py::new(py, map)?)?;
+            if let Some(artifact) = artifact {
+                // Small historical data only. The genuine output object and
+                // durable ACK remain behind original-job private resolution.
+                dict.set_item("artifact_receipt", artifact.receipt_json())?;
+            }
         }
         LoaderEvent::Started { id, request_id } => {
             dict.set_item("type", "started")?;

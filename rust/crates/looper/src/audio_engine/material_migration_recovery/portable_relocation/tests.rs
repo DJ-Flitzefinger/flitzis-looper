@@ -227,6 +227,40 @@ fn legacy_move_recover_and_rollback_preserve_real_ids_bytes_and_pending_history(
 }
 
 #[test]
+fn map_sidecar_namespaces_survive_actual_portable_move_and_rollback() {
+    let fixture = Fixture::new(true);
+    let generation = format!(".ready-{}", "d".repeat(32));
+    // This proves the installer's sealed tree inventory, not source-map
+    // qualification. The map parser/actual source proof lives in custody tests.
+    let roots = [
+        String::new(),
+        "source.wav/".to_owned(),
+        format!("materials/M{}/", "e".repeat(32)),
+    ];
+    let mut artifacts = Vec::new();
+    for (index, root) in roots.into_iter().enumerate() {
+        let relative = format!("{root}.pcm-cache/source-beatmaps/v1/{generation}/map.json");
+        let artifact = fixture.source.join(&relative);
+        fs::create_dir_all(artifact.parent().unwrap()).unwrap();
+        let bytes = format!("opaque map envelope inventory fixture {index}").into_bytes();
+        fs::write(&artifact, &bytes).unwrap();
+        artifacts.push((relative, identity(&artifact).unwrap(), bytes));
+    }
+    let before = snapshot(&fixture.source, false);
+    fixture.move_samples();
+    assert_eq!(snapshot(&fixture.target, false), before);
+    for (relative, expected_id, bytes) in &artifacts {
+        let artifact = fixture.target.join(relative);
+        assert_eq!(identity(&artifact).unwrap(), *expected_id);
+        assert_eq!(fs::read(artifact).unwrap(), *bytes);
+    }
+    assert_eq!(phase(fixture.act("recover").unwrap()), "moved");
+    assert_eq!(phase(fixture.act("rollback").unwrap()), "rolled_back");
+    assert_eq!(snapshot(&fixture.source, false), before);
+    assert!(!fixture.target.exists());
+}
+
+#[test]
 fn rollback_before_any_move_is_idempotent_and_preserves_original_samples() {
     let fixture = Fixture::new(true);
     let before = snapshot(&fixture.source, false);

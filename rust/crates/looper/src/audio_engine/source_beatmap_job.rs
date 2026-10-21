@@ -2,8 +2,21 @@
 
 use super::{JobState, OfflineInput, OfflinePurpose, RunningGuard};
 use crate::audio_engine::source_beatmap::SourceBeatmap;
+use crate::audio_engine::source_beatmap_artifact::{SourceBeatmapArtifact, StorePoint};
 use crate::messages::LoaderEvent;
+use std::path::Path;
 use std::sync::atomic::Ordering;
+
+pub(super) struct PreparedMap {
+    map: SourceBeatmap,
+    artifact: Option<SourceBeatmapArtifact>,
+}
+
+pub(super) enum MapInput<'a> {
+    Validate(&'a str),
+    Store(&'a str),
+    Restore(&'a str),
+}
 
 impl JobState {
     pub(super) fn prepare_source_beatmap(
@@ -38,6 +51,19 @@ impl JobState {
         encoded: &str,
         after_verify: impl FnOnce(),
     ) -> Result<(), String> {
+        self.prepare_source_beatmap_input_body(
+            MapInput::Validate(encoded),
+            after_verify,
+            &mut |_, _| Ok(()),
+        )
+    }
+
+    pub(super) fn prepare_source_beatmap_input_body(
+        &self,
+        input: MapInput<'_>,
+        after_verify: impl FnOnce(),
+        observe: &mut impl FnMut(StorePoint, &Path) -> Result<(), String>,
+    ) -> Result<(), String> {
         if self.cancelled() {
             return Err("source beatmap preparation superseded or cancelled".into());
         }
@@ -56,15 +82,39 @@ impl JobState {
             return Err("source beatmap original custody unavailable".into());
         };
         reader.require_map_custody()?;
-        let map = SourceBeatmap::parse(encoded)?;
-        reader.verify_source_beatmap(&map, &|| self.cancelled())?;
+        let cancelled = || self.cancelled();
+        let (map, artifact) = match input {
+            MapInput::Validate(encoded) => {
+                let map = SourceBeatmap::parse(encoded)?;
+                reader.verify_source_beatmap(&map, &cancelled)?;
+                (map, None)
+            }
+            MapInput::Store(encoded) => {
+                let map = SourceBeatmap::parse(encoded)?;
+                // Verify the held actual original once, then keep this source
+                // custody throughout immutable artifact publication.
+                reader.verify_source_beatmap(&map, &cancelled)?;
+                let (root, original) = reader.map_artifact_paths()?;
+                let artifact =
+                    SourceBeatmapArtifact::store(root, original, map, &cancelled, observe)?;
+                reader.require_map_custody()?;
+                (artifact.map(), Some(artifact))
+            }
+            MapInput::Restore(receipt) => {
+                let (root, _) = reader.map_artifact_paths()?;
+                let artifact = SourceBeatmapArtifact::restore(root, receipt, &cancelled)?;
+                let map = artifact.map();
+                reader.verify_source_beatmap(&map, &cancelled)?;
+                (map, Some(artifact))
+            }
+        };
         // Tests block this exact admitted request while all real readers and the
         // running reservation remain held. Production supplies an empty closure.
         after_verify();
         if self.cancelled() {
             return Err("source beatmap preparation superseded or cancelled".into());
         }
-        *prepared = Some(map);
+        *prepared = Some(PreparedMap { map, artifact });
         Ok(())
     }
 
@@ -89,7 +139,7 @@ impl JobState {
         {
             return Err("offline request already retired".into());
         }
-        let map = self
+        let prepared = self
             .prepared_map
             .lock()
             .map_err(|_| "source beatmap result lock poisoned")?
@@ -120,13 +170,14 @@ impl JobState {
                 .send(self.owned_event(LoaderEvent::SourceBeatmapCompleted {
                     id: self.identity.pad_id,
                     request_id: self.identity.request_id,
-                    map,
+                    map: prepared.map,
+                    artifact: prepared.artifact,
                 }))
                 .is_ok()
         } else {
             // Retire a rejected potentially large map on this worker before the
             // shared reservation admits subsequent work.
-            drop(map);
+            drop(prepared);
             false
         };
         drop(requests);

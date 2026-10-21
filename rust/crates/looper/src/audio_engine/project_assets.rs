@@ -443,6 +443,69 @@ impl ProjectAssets {
         self.acquire_internal(root, path, false, Some(identity))
     }
 
+    #[cfg(test)]
+    pub(super) fn held_owner_count(&self, path: &Path) -> usize {
+        self.state
+            .lock()
+            .unwrap()
+            .owners
+            .iter()
+            .filter_map(Weak::upgrade)
+            .filter(|owner| owner.path == path)
+            .count()
+    }
+
+    /// Exact map-birth rollback only, serialized with every existing admission.
+    /// This neither queues collection nor authorizes saved-artifact retirement.
+    pub(super) fn retire_source_beatmap_birth(
+        &self,
+        root: &Path,
+        path: &Path,
+        own_pin: Option<&ProjectAssetLease>,
+        remove: impl FnOnce() -> io::Result<()>,
+    ) -> io::Result<()> {
+        let (root, path) = owned_path(root, path)?;
+        let mut reference = Path::new("samples").join(
+            path.strip_prefix(&root)
+                .map_err(|_| io::Error::other("map birth escaped samples"))?,
+        );
+        if let Some(name) = reference
+            .file_name()
+            .and_then(|name| name.to_str())
+            .and_then(|name| name.strip_prefix(".generation-"))
+            .map(str::to_owned)
+        {
+            if !super::material_paths::valid_id(&name) {
+                return Err(io::Error::other("invalid map birth generation"));
+            }
+            reference.set_file_name(format!(".ready-{name}"));
+        }
+        if !matches!(
+            super::material_paths::classify(&reference)?,
+            super::material_paths::AssetKind::SourceBeatmapDirectory { .. }
+        ) {
+            return Err(io::Error::other(
+                "map rollback requires an exact typed birth",
+            ));
+        }
+        let state = self
+            .state
+            .lock()
+            .map_err(|_| io::Error::other("asset gate poisoned"))?;
+        let excluded = own_pin.and_then(|pin| pin.owner.as_ref());
+        let overlaps = |other: &Path| other.starts_with(&path) || path.starts_with(other);
+        if state.owners.iter().filter_map(Weak::upgrade).any(|owner| {
+            !excluded.is_some_and(|excluded| Arc::ptr_eq(excluded, &owner)) && overlaps(&owner.path)
+        }) || state.readers.iter().any(|reader| overlaps(&reader.path))
+        {
+            return Err(io::Error::other(
+                "map birth has another retained owner; preserved",
+            ));
+        }
+        // Keep this SAME admission gate through actual exact object removal.
+        remove()
+    }
+
     fn acquire_internal(
         &self,
         root: &Path,

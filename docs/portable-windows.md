@@ -66,6 +66,14 @@ The installation uses these areas:
 - `b`: reusable Native build output; its short name protects linker paths.
 - `logs`: installation-local diagnostics.
 
+Native source-beatmap exports store immutable `map.json` sidecars under
+`samples/<material>/.pcm-cache/source-beatmaps/v1/.ready-<32 hex>/`, or directly
+under `samples/.pcm-cache/source-beatmaps/v1/` for flat legacy originals. The
+existing sealed sample-tree relocation retains these files and their identities
+without a bootstrap change. A compact receipt still needs fresh source
+qualification after reopening; relocation grants no current map/audio authority.
+This prerequisite does not yet save selected maps in Config or arrangement journals.
+
 There is no second `Runtime/app` copy and no permanent per-version runtime tree.
 The full checkout's installed-file inventory distinguishes shipped files from
 Human changes. Unknown files or changed tracked files outside persistent sample

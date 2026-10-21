@@ -422,6 +422,7 @@ fn unowned_historical_map_cannot_publish_an_actual_source_completion() {
             id: 0,
             request_id,
             map: historical,
+            artifact: None,
         })
         .unwrap();
     assert!(
@@ -909,4 +910,8 @@ fn map_only_work_preserves_already_pending_ordinary_and_piano_playback() {
 
 mod source_beatmap_async_tests {
     include!("source_beatmap_async_tests.rs");
+
+    mod source_beatmap_artifact_tests {
+        include!("source_beatmap_artifact_tests.rs");
+    }
 }

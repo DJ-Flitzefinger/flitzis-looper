@@ -832,6 +832,32 @@ numeric source requests cannot substitute another map admission. No parsing,
 hashing or complete map serialization belongs in ordinary status/delivery polling.
 The additional contract is `queue-source-beatmap-verification`.
 
+`begin_source_beatmap_store_async` and `begin_source_beatmap_restore_async` extend
+that same original worker/job lane with immutable out-of-line artifacts. Store
+accepts the supported envelope; restore accepts only a compact receipt and does
+all file reading, hashing, parsing and fresh source qualification on the worker.
+The typed file is `.pcm-cache/source-beatmaps/v1/.ready-<32 lowercase hex>/map.json` under
+the actual material root, or under `samples/` for a legacy flat original. The
+portable receipt includes the literal `samples/` prefix, byte count, full-file
+SHA256, map revision and decoder identity. It carries no saved runtime FileID or
+verified flag. The existing Rust map parser remains authoritative.
+
+Only `resolve_source_beatmap_artifact_completion` on the original job can return
+the privately held `SourceBeatmapArtifact` and acknowledge a new durable export.
+Geometry-only completion does not acknowledge a new file. The immutable artifact
+has `receipt_json()`, `reference()` and `map()` methods and retains actual sealed
+file/ancestor custody plus the existing project-asset pin. Output custody can
+outlive terminal worker status without keeping a running pool reservation. An
+unresolved new birth is cleaned safely off UI; resolved files deliberately remain
+durable after readers close. Restored files are never birth-owned. This adds no
+automatic collection or selected-map authority. Artifact-owned cleanup runs off
+UI; existing independent geometry clones retain their existing Arc lifetime.
+Conservative rollback preserves a file blocked by another owner/reader, changed
+identity or unknown child; it does not retry after that outside owner releases.
+Failure to start final output retirement also preserves its owner. Eventual
+last-reader collection still needs the later selection/history integration.
+The contract is `store-source-beatmap-artifacts`.
+
 Parsing or receiving a map DTO does not grant a current audio-source permit,
 Native timing acknowledgement or live trajectory. Source-bound loader/model/persistence/
 copy integration and the later editor/SYNC work remain open. The verified map DTO

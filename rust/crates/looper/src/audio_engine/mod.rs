@@ -100,6 +100,8 @@ pub(crate) mod mix_capture;
 mod mix_capture_api;
 mod source_beatmap;
 pub use source_beatmap::SourceBeatmap;
+mod source_beatmap_artifact;
+pub use source_beatmap_artifact::SourceBeatmapArtifact;
 mod mixer;
 pub use mix_capture_api::MixCaptureTicket;
 pub use mix_capture_api::inspect_mix_capture_spool;
@@ -2658,6 +2660,24 @@ impl AudioEngine {
         record_json: String,
     ) -> PyResult<OfflineAnalysisJob> {
         self.begin_source_beatmap_async_with(sample_id, record_json, || {})
+    }
+
+    /// Export immutable map data without changing project or playback selection.
+    pub fn begin_source_beatmap_store_async(
+        &self,
+        sample_id: usize,
+        record_json: String,
+    ) -> PyResult<OfflineAnalysisJob> {
+        self.begin_source_beatmap_store_async_with(sample_id, record_json, || {})
+    }
+
+    /// Restore a compact historical receipt under newly captured source custody.
+    pub fn begin_source_beatmap_restore_async(
+        &self,
+        sample_id: usize,
+        receipt_json: String,
+    ) -> PyResult<OfflineAnalysisJob> {
+        self.begin_source_beatmap_restore_async_with(sample_id, receipt_json, || {})
     }
 
     /// Declare automatic/manual/TAP/legacy timing authority under the native owner.

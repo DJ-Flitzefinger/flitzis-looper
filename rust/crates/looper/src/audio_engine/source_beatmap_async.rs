@@ -1,12 +1,15 @@
 //! One original map job on the existing bounded cold lane, including queued retirement.
 
+use super::source_beatmap_job::MapInput;
 use super::{JobState, OfflineAnalysisJob, OfflinePurpose};
 use crate::audio_engine::AudioEngine;
 use crate::audio_engine::cold_jobs::{Reservation, ReservationRetirementGuard};
 use crate::audio_engine::source_beatmap::MAX_RECORD_BYTES;
+use crate::audio_engine::source_beatmap_artifact::{MAX_RECEIPT_BYTES, StorePoint};
 use pyo3::exceptions::{PyRuntimeError, PyValueError};
 use pyo3::prelude::*;
 use pyo3::types::PyDict;
+use std::path::Path;
 use std::sync::atomic::{AtomicBool, AtomicU8, Ordering};
 use std::sync::{Arc, Mutex};
 
@@ -15,6 +18,29 @@ const RUNNING: u8 = 2;
 const READY: u8 = 3;
 const FAILED: u8 = 4;
 const CANCELLED: u8 = 5;
+
+enum AsyncMapInput {
+    Validate(String),
+    Store(String),
+    Restore(String),
+}
+
+impl AsyncMapInput {
+    fn borrowed(&self) -> MapInput<'_> {
+        match self {
+            Self::Validate(encoded) => MapInput::Validate(encoded),
+            Self::Store(encoded) => MapInput::Store(encoded),
+            Self::Restore(receipt) => MapInput::Restore(receipt),
+        }
+    }
+
+    fn bounded(&self) -> bool {
+        match self {
+            Self::Validate(encoded) | Self::Store(encoded) => encoded.len() <= MAX_RECORD_BYTES,
+            Self::Restore(receipt) => receipt.len() <= MAX_RECEIPT_BYTES,
+        }
+    }
+}
 
 /// These scalars observe one existing job; they own no source or lane admission.
 pub(super) struct AsyncMapStatus {
@@ -75,7 +101,7 @@ struct AsyncMapWork {
 
 struct AsyncMapRetirement {
     state: Arc<JobState>,
-    encoded: Option<String>,
+    input: Option<AsyncMapInput>,
     reservation: Option<ReservationRetirementGuard>,
     status: Arc<AsyncMapStatus>,
     outcome: u8,
@@ -84,7 +110,7 @@ struct AsyncMapRetirement {
 impl AsyncMapWork {
     fn arm(
         job: &OfflineAnalysisJob,
-        encoded: String,
+        input: AsyncMapInput,
         reservation: &Reservation,
         shutdown: Arc<AtomicBool>,
     ) -> Result<Self, String> {
@@ -125,7 +151,7 @@ impl AsyncMapWork {
         Ok(Self {
             retirement: Some(AsyncMapRetirement {
                 state,
-                encoded: Some(encoded),
+                input: Some(input),
                 reservation: Some(retained),
                 status,
                 outcome: CANCELLED,
@@ -134,7 +160,11 @@ impl AsyncMapWork {
         })
     }
 
-    fn run(mut self, after_verify: impl FnOnce()) {
+    fn run(
+        mut self,
+        after_verify: impl FnOnce(),
+        mut observe: impl FnMut(StorePoint, &Path) -> Result<(), String>,
+    ) {
         self.started = true;
         let work = self
             .retirement
@@ -143,11 +173,13 @@ impl AsyncMapWork {
         debug_assert!(work.reservation.as_ref().unwrap().is_running());
         work.status.stage.store(RUNNING, Ordering::Release);
         let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-            work.state.prepare_source_beatmap_body(
-                work.encoded
-                    .as_deref()
-                    .expect("queued map input remains owned"),
+            work.state.prepare_source_beatmap_input_body(
+                work.input
+                    .as_ref()
+                    .expect("queued map input remains owned")
+                    .borrowed(),
                 after_verify,
+                &mut observe,
             )?;
             work.state.preparing.store(false, Ordering::Release);
             work.state.finish_source_beatmap_body(false)
@@ -205,7 +237,7 @@ impl Drop for AsyncMapRetirement {
         // unique discarded queued owner. Recover poisoned locks for cleanup.
         self.state.drop_pcm();
         self.state.discard_prepared_map();
-        drop(self.encoded.take());
+        drop(self.input.take());
         self.state.preparing.store(false, Ordering::Release);
         self.state.finished.store(true, Ordering::Release);
         self.state.release_reservation();
@@ -226,19 +258,78 @@ impl AudioEngine {
         record_json: String,
         after_verify: impl FnOnce() + Send + 'static,
     ) -> PyResult<OfflineAnalysisJob> {
-        if record_json.len() > MAX_RECORD_BYTES {
+        self.queue_source_beatmap_input(
+            sample_id,
+            AsyncMapInput::Validate(record_json),
+            after_verify,
+            |_, _| Ok(()),
+        )
+    }
+
+    pub(in crate::audio_engine) fn begin_source_beatmap_store_async_with(
+        &self,
+        sample_id: usize,
+        record_json: String,
+        after_verify: impl FnOnce() + Send + 'static,
+    ) -> PyResult<OfflineAnalysisJob> {
+        self.queue_source_beatmap_input(
+            sample_id,
+            AsyncMapInput::Store(record_json),
+            after_verify,
+            |_, _| Ok(()),
+        )
+    }
+
+    pub(in crate::audio_engine) fn begin_source_beatmap_restore_async_with(
+        &self,
+        sample_id: usize,
+        receipt_json: String,
+        after_verify: impl FnOnce() + Send + 'static,
+    ) -> PyResult<OfflineAnalysisJob> {
+        self.queue_source_beatmap_input(
+            sample_id,
+            AsyncMapInput::Restore(receipt_json),
+            after_verify,
+            |_, _| Ok(()),
+        )
+    }
+
+    #[cfg(test)]
+    pub(in crate::audio_engine) fn begin_source_beatmap_store_async_with_hooks(
+        &self,
+        sample_id: usize,
+        record_json: String,
+        after_verify: impl FnOnce() + Send + 'static,
+        observe: impl FnMut(StorePoint, &Path) -> Result<(), String> + Send + 'static,
+    ) -> PyResult<OfflineAnalysisJob> {
+        self.queue_source_beatmap_input(
+            sample_id,
+            AsyncMapInput::Store(record_json),
+            after_verify,
+            observe,
+        )
+    }
+
+    fn queue_source_beatmap_input(
+        &self,
+        sample_id: usize,
+        input: AsyncMapInput,
+        after_verify: impl FnOnce() + Send + 'static,
+        observe: impl FnMut(StorePoint, &Path) -> Result<(), String> + Send + 'static,
+    ) -> PyResult<OfflineAnalysisJob> {
+        if !input.bounded() {
             return Err(PyValueError::new_err(
-                "source beatmap record exceeds byte limit",
+                "source beatmap input exceeds byte limit",
             ));
         }
         // Reserve the existing lane BEFORE offline/source admission. Refusal
         // therefore changes neither source counters nor the offline busy slot.
         let reservation = self.cold_jobs.reserve().map_err(PyRuntimeError::new_err)?;
         let job = self.begin_source_beatmap(sample_id)?;
-        let work = AsyncMapWork::arm(&job, record_json, &reservation, self.cold_cancelled.clone())
+        let work = AsyncMapWork::arm(&job, input, &reservation, self.cold_cancelled.clone())
             .map_err(PyRuntimeError::new_err)?;
         self.cold_jobs
-            .submit(reservation, move || work.run(after_verify))
+            .submit(reservation, move || work.run(after_verify, observe))
             .map_err(PyRuntimeError::new_err)?;
         Ok(job)
     }
