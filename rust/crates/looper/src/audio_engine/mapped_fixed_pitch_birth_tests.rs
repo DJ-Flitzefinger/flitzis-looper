@@ -102,7 +102,7 @@ impl Drop for RawStereo {
     }
 }
 
-fn configured(shift: i32) -> LaunchPath {
+pub(super) fn configured(shift: i32) -> LaunchPath {
     // This sequence is written BEFORE the real copy-first loader captures source.
     // Its first loop sample is distinct, with nonconstant subsequent attack content.
     let pcm = std::array::from_fn(|index| {
@@ -138,7 +138,7 @@ fn configured(shift: i32) -> LaunchPath {
     path
 }
 
-fn drain_grid(path: &mut LaunchPath) {
+pub(super) fn drain_grid(path: &mut LaunchPath) {
     let frame = path.timeline.output_frame();
     drain_control_messages(
         &mut path.source.consumer,
@@ -176,7 +176,7 @@ fn wait_prepared(path: &mut LaunchPath, start: &CapturedPadStart) {
     );
 }
 
-fn independent_extent() -> (f64, f64) {
+pub(super) fn independent_extent() -> (f64, f64) {
     // Original declared source-second/beat anchor bits, without decimal reduction:
     // B(32/RATE) and B(64/RATE)-B(32/RATE) are the captured full-loop intent.
     let beginning = ((32.0 / f64::from(RATE)) / (48.0 / f64::from(RATE))) * 0.6;

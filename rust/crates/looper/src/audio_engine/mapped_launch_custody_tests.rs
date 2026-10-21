@@ -152,6 +152,10 @@ mod mapped_fixed_pitch_birth_tests {
     include!("mapped_fixed_pitch_birth_tests.rs");
 }
 
+mod mapped_dry_global_rate_tests {
+    include!("mapped_dry_global_rate_tests.rs");
+}
+
 fn variable_original_delivery(path: &LaunchPath) -> (OfflineAnalysisJob, LoaderEventDelivery) {
     let mut expected = record(&path.source, 0);
     let accepted = &mut expected["record"]["accepted"];
@@ -642,7 +646,7 @@ fn clear_or_original_job_cancel_refuses_pending_launch_and_keeps_effective_origi
 }
 
 #[test]
-fn unsupported_mapped_speed_tuple_rejects_without_replacing_previous_scalar_voice() {
+fn unsupported_mapped_whole_map_rate_rejects_without_replacing_previous_scalar_voice() {
     let mut path = LaunchPath::new();
     let (_job, delivery) = variable_original_delivery(&path);
     publish_original(&path, &delivery, 1);
@@ -650,6 +654,8 @@ fn unsupported_mapped_speed_tuple_rejects_without_replacing_previous_scalar_voic
         .mixer
         .set_pad_loop_region(0, 32.0 / f64::from(RATE), Some(64.0 / f64::from(RATE)));
     path.source.mixer.set_speed(1.25);
+    path.source.mixer.set_master_period(PERIOD / 2.0);
+    assert!(path.timeline.set_master_period(PERIOD / 2.0));
     assert!(path.source.mixer.play_sample(0, 0.6));
     let before = path.voice().source_playback;
     let captured = path.capture();
@@ -868,6 +874,8 @@ fn one_unsupported_global_member_refuses_entire_group_before_replacing_previous_
     let (_job, delivery) = variable_original_delivery(&path);
     publish_mixed_members(&path, &delivery);
     path.source.mixer.set_speed(1.25);
+    path.source.mixer.set_master_period(PERIOD / 2.0);
+    assert!(path.timeline.set_master_period(PERIOD / 2.0));
     path.source
         .mixer
         .set_pad_loop_region(1, 32.0 / f64::from(RATE), Some(64.0 / f64::from(RATE)));

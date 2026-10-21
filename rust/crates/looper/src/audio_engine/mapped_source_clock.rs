@@ -85,6 +85,12 @@ impl MappedClockEpoch {
         self.timeline.matches_clock_epoch(timeline)
     }
 
+    /// Reuse this voice's marker and creative phase with the same authoritative transport.
+    /// The group claimant separately proves M(E), canonical position and original map ownership.
+    pub(crate) fn with_timeline(self, timeline: TransportTimeline) -> Option<Self> {
+        Self::new(self.marker, timeline, self.phase_quarters)
+    }
+
     pub(crate) fn matches_exact(self, other: Self) -> bool {
         self.marker == other.marker
             && self.phase_quarters.to_bits() == other.phase_quarters.to_bits()

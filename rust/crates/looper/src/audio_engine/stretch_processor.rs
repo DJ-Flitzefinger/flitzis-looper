@@ -106,6 +106,11 @@ impl StretchProcessor {
         self.native.has_retained_feed()
     }
 
+    /// A productive Native can need no new history while still owning audible/FIFO state.
+    pub(crate) fn has_active_native_ownership(&self) -> bool {
+        self.native.active
+    }
+
     #[cfg(test)]
     pub(crate) fn retained_mapped_output_coordinates(
         &self,

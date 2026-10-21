@@ -133,7 +133,6 @@ impl RtMixer {
             if render.key_lock
                 || render.pitch.total_semitones() != 0
                 || !self.bpm_lock_enabled
-                || self.speed.to_bits() != 1.0f64.to_bits()
                 || epoch.master_period_seconds().map(f64::to_bits)
                     != self.master_period_seconds.map(f64::to_bits)
                 || snapshot.plan.loop_region != geometry.domain().region

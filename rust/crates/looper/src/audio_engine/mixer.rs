@@ -549,6 +549,20 @@ impl RtMixer {
     }
 
     pub(crate) fn capture_pitch_voice_snapshot(&self, index: usize) -> Option<PitchSourceSnapshot> {
+        self.capture_voice_snapshot(index, false)
+    }
+
+    /// The global dry-rate claim alone may capture an existing mapped trajectory.
+    /// Generic pitch/Key-Lock/history callers keep their established mapped refusal.
+    fn capture_rate_voice_snapshot(&self, index: usize) -> Option<PitchSourceSnapshot> {
+        self.capture_voice_snapshot(index, true)
+    }
+
+    fn capture_voice_snapshot(
+        &self,
+        index: usize,
+        allow_mapped_rate: bool,
+    ) -> Option<PitchSourceSnapshot> {
         let voice = self.voices.get(index).filter(|voice| voice.active)?;
         let sample = voice.sample.as_ref()?;
         let id = voice.sample_id;
@@ -557,7 +571,18 @@ impl RtMixer {
             .or_else(|| self.effective_loop_region(id, sample.frame_count()))?;
         let timing = self.timing_for_voice(voice);
         let mut playback = voice.source_playback;
-        if !playback.set_target(self.tempo_ratio_for_source_period(timing.period_seconds()))
+        if playback.is_mapped() {
+            if !allow_mapped_rate {
+                return None;
+            }
+            let geometry = voice.mapped_start.as_ref()?.mapped_geometry()?;
+            if region != geometry.domain().region
+                || !playback.matches_domain(geometry.domain())
+                || playback.refresh_mapped_span(geometry).is_err()
+            {
+                return None;
+            }
+        } else if !playback.set_target(self.tempo_ratio_for_source_period(timing.period_seconds()))
             || !playback.configure_domain(timing.loop_domain(sample.frame_count(), region))
         {
             return None;

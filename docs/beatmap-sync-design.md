@@ -516,8 +516,30 @@ physical endpoints retain their own canonical interval rather than inheriting ol
 stored bars. Copy retains independent intent and requires fresh Native map
 qualification; default-neutral snapshot omission preserves old sealed images.
 
-The productive envelope remains Key Lock off, total pitch zero, speed one,
-BPM Lock on, stable real master epoch and E=T. Internal constant-h physical-birth
+The productive mapped path remains Key Lock off, total pitch zero, BPM Lock on,
+a qualified actual master epoch and ordinary launch E=T. Supported dry global
+speed/master-period changes use the existing coordinator and atomic participant
+claim at the actual settled callback boundary. Each voice retains its original
+map, marker and creative phase; master beat and canonical source position stay
+unchanged at that boundary. Subsequent mapped reads follow the new master slope
+directly while scalar dry peers retain their established .05/512 rate glide.
+
+The coupled fader already supplies the new master period. Mapped playback uses
+that master beat once, without multiplying stored speed again. A speed-only edit
+with unchanged period preserves the mapped epoch and source trajectory. Ordinary
+dry start/retrigger after a qualified nonunity tuple uses the actual epoch and
+original target. A real epoch change instead fences pending old-epoch starts;
+equal-period edits cannot silently re-anchor them.
+
+This supported change is an all-dry cohort: active Native ownership (including
+an owner that needs no new history), retained Native input, paused mapped state,
+unsupported transitions, stale source/readers or whole-map rate overflow refuse
+the entire effect. Preparing waits for settled command/parameter drains. No
+source clip, scalar fallback, partial group update or implicit pad phase anchor
+supplies missing permission. See
+`../openspec/changes/adapt-dry-mapped-global-rate/`.
+
+Internal constant-h physical-birth
 preparation reuses Native/FIFO ownership, H silence frames and the unchanged
 canonical source origin. Real component input can follow knots and wraps, but
 the delayed Native output still needs its aligned intended-output range.
@@ -525,9 +547,10 @@ A matching uncropped Raw-Native stream proves input/processor continuity; it
 cannot authorize public activation. Nonzero mapped starts remain refused and
 cannot publish successful effective SYNC.
 
-Real future canonical input, retained actual/logical/output-time ownership and
-per-path alignment remain required. Full continuous SYNC, Key Lock on/variable
-h/r, all rates, delayed/retained-offset preparation, both Native start policies
+Original-owned future canonical input and declared raw/logical/actual provenance
+exist internally; per-path intended-output alignment remains required before
+productive Native admission. Full continuous SYNC, Key Lock on/variable
+h/r, all rates/pitch values, productive delayed/retained-offset preparation, both Native start policies
 and resource/music/device/Human acceptance remain open. Mapped delayed
 reconstruction refuses before scalar endpoint comparison, preserving its target
 and old audio without content skipping. Automatic fullmix acquisition is required;

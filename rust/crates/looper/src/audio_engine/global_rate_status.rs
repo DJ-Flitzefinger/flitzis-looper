@@ -38,6 +38,7 @@ pub(crate) enum RateError {
     OtherRatePending,
     InvalidTransport,
     ParticipantChanged,
+    MappedTimingUnavailable,
 }
 
 impl RateError {
@@ -53,6 +54,7 @@ impl RateError {
             Self::OtherRatePending => Some("Rate change refused: another rate edit is preparing"),
             Self::InvalidTransport => Some("Rate change refused: invalid master timing"),
             Self::ParticipantChanged => Some("Rate change refused: playing voices changed"),
+            Self::MappedTimingUnavailable => Some("Rate change refused: mapped timing unavailable"),
         }
     }
 }
@@ -147,6 +149,7 @@ impl RateRecord {
             6 => RateError::MissedBoundary,
             7 => RateError::OtherRatePending,
             8 => RateError::InvalidTransport,
+            10 => RateError::MappedTimingUnavailable,
             _ => RateError::ParticipantChanged,
         };
         let value = RateEffect {
