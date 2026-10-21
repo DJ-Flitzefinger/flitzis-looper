@@ -693,6 +693,7 @@ mod tests {
                 playback: self.playback,
                 plan: self.plan,
                 actual_feed: None,
+                mapped_input: None,
                 target_output_frame: 4096,
                 request_id: 1,
                 epoch: 0,

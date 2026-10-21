@@ -311,6 +311,7 @@ impl KeyLockPreparationLane {
             playback: *feed.playback,
             plan: feed.plan,
             actual_feed: None,
+            mapped_input: None,
             target_output_frame,
             request_id,
             epoch,

@@ -31,12 +31,37 @@ struct PublishedBinding {
     resident_guard: Option<ResidentLaunchGuard>,
 }
 
-struct MappedStartSource {
+pub(crate) struct MappedStartSource {
     qualified: QualifiedSourceMap,
     geometry: MappedLoopGeometry,
 }
 
+/// Scalar pending-admission witness. It holds no Work and cannot create a map owner.
+pub(crate) struct MappedStartPendingGuard {
+    status: Arc<AtomicU8>,
+    ownership: Arc<InputRuntimeOwnership>,
+    binding: InputPadBinding,
+    key: ContentKey,
+    launch_cancel_revision: u64,
+}
+
+impl MappedStartPendingGuard {
+    pub(crate) fn current(&self, source: &MappedStartSource) -> bool {
+        self.status.load(Ordering::Acquire) != REJECTED
+            && self
+                .ownership
+                .launch_revision_for_cell(self.key.cell())
+                .load(Ordering::Acquire)
+                == self.launch_cancel_revision
+            && source.qualified.current_for(&self.ownership, self.binding)
+    }
+}
+
 impl MappedStartSource {
+    pub(crate) fn geometry(&self) -> &MappedLoopGeometry {
+        &self.geometry
+    }
+
     /// Control/MIDI capture only. Coverage scans and owning geometry never originate on RT.
     fn prepare(
         qualified: QualifiedSourceMap,
@@ -111,14 +136,14 @@ struct PadStartOwner {
     exclusive: bool,
     received_at_ns: u64,
     sequence: u64,
-    mapped: Option<MappedStartSource>,
+    mapped: Option<Arc<MappedStartSource>>,
     input_owners: InputOwners,
     work: Mutex<Option<Box<OrdinaryStartWork>>>,
     publication: OnceLock<PublishedBinding>,
     window_prepared: AtomicBool,
     published: AtomicBool,
     admitted: AtomicBool,
-    status: AtomicU8,
+    status: Arc<AtomicU8>,
     reason: AtomicU8,
     effective_frame: AtomicU64,
     target_captured: AtomicBool,
@@ -318,7 +343,9 @@ impl CapturedPadStart {
             .load(Ordering::Acquire);
         let mapped = source_map
             .admit(&ownership, binding)?
-            .map(|qualified| MappedStartSource::prepare(qualified, binding, start_s, end_s))
+            .map(|qualified| {
+                MappedStartSource::prepare(qualified, binding, start_s, end_s).map(Arc::new)
+            })
             .transpose()?;
         let start_policy = ownership
             .register_key_lock_start_owner()
@@ -350,7 +377,7 @@ impl CapturedPadStart {
                 window_prepared: AtomicBool::new(false),
                 published: AtomicBool::new(false),
                 admitted: AtomicBool::new(false),
-                status: AtomicU8::new(CAPTURED),
+                status: Arc::new(AtomicU8::new(CAPTURED)),
                 reason: AtomicU8::new(0),
                 effective_frame: AtomicU64::new(0),
                 target_captured: AtomicBool::new(false),
@@ -378,6 +405,24 @@ impl CapturedPadStart {
     /// Borrow immutable admitted geometry; its original owner retains all source/artifact pins.
     pub(crate) fn mapped_geometry(&self) -> Option<&MappedLoopGeometry> {
         self.owner.mapped.as_ref().map(|mapped| &mapped.geometry)
+    }
+
+    /// Share only the original immutable qualified map, never this owner's mutable Work.
+    pub(crate) fn mapped_source_owner(&self) -> Option<Arc<MappedStartSource>> {
+        self.owner.mapped.clone()
+    }
+
+    pub(crate) fn mapped_pending_guard(
+        &self,
+    ) -> Result<MappedStartPendingGuard, PitchActionReject> {
+        let guard = self.callback_guard()?;
+        Ok(MappedStartPendingGuard {
+            status: self.owner.status.clone(),
+            ownership: self.owner.ownership.clone(),
+            binding: guard.binding,
+            key: self.owner.key,
+            launch_cancel_revision: self.owner.launch_cancel_revision,
+        })
     }
 
     /// Actual immutable launch witness; later requested runtime/map changes do not rewrite it.

@@ -22,7 +22,13 @@ use std::sync::Arc;
 
 #[path = "retained_native_start.rs"]
 mod retained_start;
+#[cfg(test)]
+pub(crate) use retained_start::RetainedMappedOutputCoordinates;
 use retained_start::RetainedNativeStartTimeline;
+
+#[path = "mapped_native_input.rs"]
+mod mapped_input;
+pub(crate) use mapped_input::MappedNativeInput;
 
 pub(crate) const PREPARED_HISTORY_FRAMES: usize = 4096;
 // A near-unity request remains a real request. Only actual native p=1 permits dry bypass.
@@ -321,6 +327,7 @@ impl PitchSourceSnapshot {
             playback: self.playback,
             plan: self.plan,
             actual_feed: self.actual_feed,
+            mapped_input: None,
             target_output_frame,
             request_id,
             epoch,
@@ -340,6 +347,8 @@ pub(crate) struct NativeHistoryRequest {
     pub(crate) plan: SourceReadPlan,
     /// Logical adoption remains authoritative; this names only the actual next Native input.
     pub(crate) actual_feed: Option<SourceReadCheckpoint>,
+    /// Immutable original map pins retire with this source request, never in reset_adapter.
+    pub(crate) mapped_input: Option<Box<MappedNativeInput>>,
     pub(crate) target_output_frame: u64,
     pub(crate) request_id: u64,
     pub(crate) epoch: u64,
@@ -589,6 +598,10 @@ impl NativeHistoryRequest {
     }
     pub(crate) fn matches_contract(&self, feed: &ProductiveSourceFeed<'_>, epoch: u64) -> bool {
         self.epoch == epoch
+            && self
+                .mapped_input
+                .as_ref()
+                .is_none_or(|input| input.matches_request(self) && input.pending_current())
             && self.pitch_intent == feed.pitch_intent
             && self.key_lock == feed.key_lock
             && self.coverage_matches(feed, true)
@@ -840,6 +853,9 @@ impl NativeAdapterState {
         &mut self,
         request: NativeHistoryRequest,
     ) -> Result<(), RubberBandError> {
+        if request.mapped_input.is_some() {
+            return Err(RubberBandError::UnavailableSourceHistory);
+        }
         self.prepare_source_with_silence(request, 0, PREPARED_HISTORY_FRAMES, false, None, None)
             .map_err(NativeSourcePreparationError::into_backend)
     }
@@ -852,6 +868,11 @@ impl NativeAdapterState {
         &mut self,
         mut request: NativeHistoryRequest,
     ) -> Result<(), NativeSourcePreparationError> {
+        if request.mapped_input.is_some() {
+            return Err(NativeSourcePreparationError::Unavailable(
+                RubberBandError::UnavailableSourceHistory,
+            ));
+        }
         let pitch = request
             .pitch_intent
             .native_pitch_scale(request.playback.tempo_ratio(), request.key_lock)
@@ -953,6 +974,7 @@ impl NativeAdapterState {
         mut dsp: Option<(usize, &mut super::late_start_dsp::LateStartDspWork)>,
     ) -> Result<(), NativeSourcePreparationError> {
         if request.playback.is_mapped()
+            && request.mapped_input.is_none()
             && source_rebase.is_none()
             && !request
                 .playback
@@ -1037,6 +1059,22 @@ impl NativeAdapterState {
         #[cfg(test)]
         super::source_reader::reset_tap_observation_for_test();
         while remaining > 0 {
+            if request
+                .mapped_input
+                .as_ref()
+                .is_some_and(|input| !input.pending_current())
+                || (request.mapped_input.is_some()
+                    && !request
+                        .permit
+                        .current(&request.sample, request.binding.sample_rate_hz))
+            {
+                return Err(NativeSourcePreparationError::Unavailable(
+                    RubberBandError::UnavailableSourceHistory,
+                ));
+            }
+            if silent_prefix == 0 {
+                Self::refresh_owned_mapped_request(&mut request)?;
+            }
             let consumed = history_frames - remaining;
             if let Some((boundary, checkpoint)) = source_rebase
                 && consumed == boundary
@@ -1118,6 +1156,20 @@ impl NativeAdapterState {
             remaining -= frames;
         }
         // Live rendering begins a smoothing chunk before passing its cursor to this adapter.
+        if request
+            .mapped_input
+            .as_ref()
+            .is_some_and(|input| !input.pending_current())
+            || (request.mapped_input.is_some()
+                && !request
+                    .permit
+                    .current(&request.sample, request.binding.sample_rate_hz))
+        {
+            return Err(NativeSourcePreparationError::Unavailable(
+                RubberBandError::UnavailableSourceHistory,
+            ));
+        }
+        Self::refresh_owned_mapped_request(&mut request)?;
         request.playback.chunk(DEFAULT_BLOCK_SAMPLES);
         #[cfg(test)]
         if let Some(coverage) = &mut request.coverage {
@@ -1126,6 +1178,23 @@ impl NativeAdapterState {
         self.source = Some(request);
         self.primed_output_frames = history_frames;
         self.input_history_context = Some(NativeStartHistoryContext::SourceHistory);
+        Ok(())
+    }
+
+    fn refresh_owned_mapped_request(
+        request: &mut NativeHistoryRequest,
+    ) -> Result<(), NativeSourcePreparationError> {
+        if let Some(input) = &request.mapped_input {
+            let mut checkpoint = SourceReadCheckpoint {
+                playback: request.playback,
+                plan: request.plan,
+            };
+            input
+                .project(&mut checkpoint, 0)
+                .map_err(NativeSourcePreparationError::from_history)?;
+            request.playback = checkpoint.playback;
+            request.plan = checkpoint.plan;
+        }
         Ok(())
     }
 
@@ -1407,6 +1476,7 @@ pub(super) mod tests {
             playback,
             plan,
             actual_feed: None,
+            mapped_input: None,
             target_output_frame: PREPARED_HISTORY_FRAMES as u64,
             request_id: 1,
             epoch: 3,

@@ -705,6 +705,7 @@ fn action_capture_requires_own_epoch_arc_even_when_all_scalar_pitch_source_and_d
         playback,
         plan,
         actual_feed: None,
+        mapped_input: None,
         target_output_frame: second.execution_target(),
         request_id: second.sequence(),
         epoch: second.epoch(),

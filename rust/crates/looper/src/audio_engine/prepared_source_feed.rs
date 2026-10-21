@@ -267,6 +267,7 @@ impl NativeAdapterState {
         endpoint_reset: Option<EndpointResetHistory>,
     ) -> Result<(), RubberBandError> {
         if !history.is_current()
+            || request.mapped_input.is_some()
             || !request
                 .permit
                 .current(&request.sample, request.binding.sample_rate_hz)

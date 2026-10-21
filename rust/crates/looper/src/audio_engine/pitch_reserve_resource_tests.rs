@@ -170,6 +170,7 @@ fn request(
             transition: StemTransition::default(),
         },
         actual_feed: None,
+        mapped_input: None,
         target_output_frame: 0,
         request_id,
         epoch: 1,

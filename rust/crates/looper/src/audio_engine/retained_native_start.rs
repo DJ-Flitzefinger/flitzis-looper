@@ -5,7 +5,7 @@
 //! D+B-1 adapter frames therefore leaves raw Native frame D next in the same FIFO owner.
 
 use super::{
-    NativeAdapterState, NativeHistoryRequest, NativeSourcePreparationError,
+    MappedNativeInput, NativeAdapterState, NativeHistoryRequest, NativeSourcePreparationError,
     NativeStartHistoryContext, RetainedNativeStartCut, RubberBandError, SourceReadCheckpoint,
 };
 use crate::audio_engine::source_feed_history::SOURCE_FEED_HISTORY_MAX_FRAMES;
@@ -53,8 +53,44 @@ struct RetainedRateUpdate {
     actual: SourceReadCheckpoint,
 }
 
+/// Declared stream coordinates only; these never certify intended-output alignment.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) struct RetainedMappedOutputCoordinates {
+    pub(crate) logical_output_frame: u64,
+    pub(crate) raw_output_frame: u64,
+    pub(crate) actual_input_frame: u64,
+}
+
+fn project_checkpoint(
+    checkpoint: &mut SourceReadCheckpoint,
+    frames: u64,
+    mapped: Option<&MappedNativeInput>,
+) -> bool {
+    if let Some(mapped) = mapped {
+        mapped.project(checkpoint, frames).is_ok()
+    } else {
+        checkpoint.project_output_frames(frames)
+    }
+}
+
+fn same_checkpoint(
+    left: SourceReadCheckpoint,
+    right: SourceReadCheckpoint,
+    mapped: Option<&MappedNativeInput>,
+) -> bool {
+    mapped.map_or_else(
+        || left.matches_exact(right),
+        |mapped| mapped.same_checkpoint(left, right),
+    )
+}
+
 impl RawStartProvenance {
-    fn proves_endpoint(self, block_size: usize, primed_output_frames: usize) -> bool {
+    fn proves_endpoint(
+        self,
+        block_size: usize,
+        primed_output_frames: usize,
+        mapped: Option<&MappedNativeInput>,
+    ) -> bool {
         let Some(actual_frames) = self
             .cut
             .discarded_raw_output_frames
@@ -66,37 +102,56 @@ impl RawStartProvenance {
             return false;
         };
         let mut expected = self.input_origin;
-        expected.project_output_frames(actual_frames as u64)
-            && expected.matches_exact(self.endpoint)
+        project_checkpoint(&mut expected, actual_frames as u64, mapped)
+            && same_checkpoint(expected, self.endpoint, mapped)
     }
 }
 
 impl RetainedNativeStartTimeline {
-    fn proves_endpoints(self, block_size: usize, primed_output_frames: usize) -> bool {
+    fn proves_endpoints(
+        self,
+        block_size: usize,
+        primed_output_frames: usize,
+        mapped: Option<&MappedNativeInput>,
+    ) -> bool {
         if !self.valid {
             return false;
         }
         if !self
             .provenance
             .raw
-            .is_none_or(|raw| raw.proves_endpoint(block_size, primed_output_frames))
+            .is_none_or(|raw| raw.proves_endpoint(block_size, primed_output_frames, mapped))
         {
             return false;
+        }
+        if let Some(mapped) = mapped {
+            let Some(raw) = self.provenance.raw else {
+                return false;
+            };
+            let mut expected_logical = raw.input_origin;
+            if !project_checkpoint(
+                &mut expected_logical,
+                raw.emitted_output_frames as u64,
+                Some(mapped),
+            ) || !same_checkpoint(expected_logical, self.logical, Some(mapped))
+            {
+                return false;
+            }
         }
         match self.provenance.continuation {
             None => self
                 .provenance
                 .raw
-                .is_some_and(|raw| raw.endpoint.matches_exact(self.actual)),
+                .is_some_and(|raw| same_checkpoint(raw.endpoint, self.actual, mapped)),
             Some(RetainedContinuation {
                 mut logical_origin,
                 mut actual_origin,
                 emitted_output_frames,
             }) => {
-                logical_origin.project_output_frames(emitted_output_frames)
-                    && actual_origin.project_output_frames(emitted_output_frames)
-                    && logical_origin.matches_exact(self.logical)
-                    && actual_origin.matches_exact(self.actual)
+                project_checkpoint(&mut logical_origin, emitted_output_frames, mapped)
+                    && project_checkpoint(&mut actual_origin, emitted_output_frames, mapped)
+                    && same_checkpoint(logical_origin, self.logical, mapped)
+                    && same_checkpoint(actual_origin, self.actual, mapped)
             }
         }
     }
@@ -107,6 +162,97 @@ fn unavailable() -> NativeSourcePreparationError {
 }
 
 impl NativeAdapterState {
+    fn mapped_input(&self) -> Option<&MappedNativeInput> {
+        self.source
+            .as_ref()
+            .and_then(|source| source.mapped_input.as_deref())
+    }
+
+    pub(crate) fn retained_mapped_output_coordinates(
+        &self,
+    ) -> Result<Option<RetainedMappedOutputCoordinates>, RubberBandError> {
+        let Some(mapped) = self.mapped_input() else {
+            return Ok(None);
+        };
+        let timeline = self
+            .retained_start_timeline
+            .ok_or(RubberBandError::UnavailableSourceHistory)?;
+        if !timeline.proves_endpoints(self.block_size, self.primed_output_frames, Some(mapped)) {
+            return Err(RubberBandError::UnavailableSourceHistory);
+        }
+        let raw = timeline
+            .provenance
+            .raw
+            .ok_or(RubberBandError::UnavailableSourceHistory)?;
+        let logical_output_frame = timeline
+            .logical
+            .playback
+            .mapped_output_frame()
+            .ok_or(RubberBandError::UnavailableSourceHistory)?;
+        let actual_input_frame = timeline
+            .actual
+            .playback
+            .mapped_output_frame()
+            .ok_or(RubberBandError::UnavailableSourceHistory)?;
+        let raw_output_frame = u64::try_from(raw.cut.discarded_raw_output_frames)
+            .ok()
+            .and_then(|frame| frame.checked_add(raw.emitted_output_frames as u64))
+            .ok_or(RubberBandError::UnavailableSourceHistory)?;
+        Ok(Some(RetainedMappedOutputCoordinates {
+            logical_output_frame,
+            raw_output_frame,
+            actual_input_frame,
+        }))
+    }
+
+    /// The read receipt names actual input; the caller still emits at the distinct logical n.
+    pub(crate) fn owned_mapped_read_ready(
+        &self,
+        logical: &SourcePlayback,
+        plan: SourceReadPlan,
+        output_frame: Option<u64>,
+        frames: usize,
+    ) -> bool {
+        let Some(mapped) = self.mapped_input() else {
+            return true;
+        };
+        let Some(timeline) = self.retained_start_timeline else {
+            return false;
+        };
+        let Ok(Some(coordinates)) = self.retained_mapped_output_coordinates() else {
+            return false;
+        };
+        let mut next_logical = SourceReadCheckpoint {
+            playback: *logical,
+            plan,
+        };
+        let mut next_actual = timeline.actual;
+        output_frame == Some(coordinates.logical_output_frame)
+            && coordinates
+                .logical_output_frame
+                .checked_add(frames as u64)
+                .is_some()
+            && coordinates
+                .actual_input_frame
+                .checked_add(frames as u64)
+                .is_some()
+            && coordinates
+                .raw_output_frame
+                .checked_add(frames as u64)
+                .is_some()
+            && self
+                .retained_start_feed_chunk_limit(logical, plan, frames)
+                .is_ok_and(|bound| bound == frames)
+            // An exclusive span endpoint alone does not prove the next canonical
+            // read state is representable. Fail before touching Native or FIFOs.
+            && mapped.project(&mut next_logical, frames as u64).is_ok()
+            && mapped.project(&mut next_actual, frames as u64).is_ok()
+    }
+
+    pub(crate) fn has_owned_mapped_input(&self) -> bool {
+        self.mapped_input().is_some()
+    }
+
     pub(crate) fn has_retained_feed(&self) -> bool {
         self.retained_start_timeline.is_some()
     }
@@ -117,14 +263,16 @@ impl NativeAdapterState {
         let Some(timeline) = self.retained_start_timeline else {
             return false;
         };
-        if !timeline.proves_endpoints(self.block_size, self.primed_output_frames)
-            || self.effective_stem_read_context.is_some_and(|context| {
-                !context.plan.matches_source_contract(timeline.actual.plan)
-                    || self.source_transition.is_none_or(|transition| {
-                        !transition.matches_exact(timeline.actual.plan.transition)
-                    })
-            })
-        {
+        if !timeline.proves_endpoints(
+            self.block_size,
+            self.primed_output_frames,
+            self.mapped_input(),
+        ) || self.effective_stem_read_context.is_some_and(|context| {
+            !context.plan.matches_source_contract(timeline.actual.plan)
+                || self.source_transition.is_none_or(|transition| {
+                    !transition.matches_exact(timeline.actual.plan.transition)
+                })
+        }) {
             return true;
         }
         let owner = Arc::as_ptr(&stems.complete_set_identity) as usize;
@@ -145,7 +293,11 @@ impl NativeAdapterState {
             || !self.active
             || !self.used
             || self.dirty
-            || !timeline.proves_endpoints(self.block_size, self.primed_output_frames)
+            || !timeline.proves_endpoints(
+                self.block_size,
+                self.primed_output_frames,
+                self.mapped_input(),
+            )
         {
             return Err(RubberBandError::UnavailableSourceHistory);
         }
@@ -232,21 +384,72 @@ impl NativeAdapterState {
 
     pub(super) fn prepare_retained_source_start_context_checked(
         &mut self,
-        mut request: NativeHistoryRequest,
+        request: NativeHistoryRequest,
         declared_cut: Option<RetainedNativeStartCut>,
         catchup_frames: u64,
         dsp: Option<&mut crate::audio_engine::late_start_dsp::LateStartDspWork>,
         context: NativeStartHistoryContext,
     ) -> Result<(), NativeSourcePreparationError> {
+        self.prepare_retained_source_start_context_inner(
+            request,
+            declared_cut,
+            catchup_frames,
+            dsp,
+            context,
+            false,
+        )
+    }
+
+    /// Internal declared-stream experiment only. This supplies no productive output policy.
+    /// The request's immutable original-map capability retires with its existing source pins.
+    pub(crate) fn prepare_owned_mapped_birth_future(
+        &mut self,
+        request: NativeHistoryRequest,
+        cut: RetainedNativeStartCut,
+    ) -> Result<(), NativeSourcePreparationError> {
+        self.prepare_retained_source_start_context_inner(
+            request,
+            Some(cut),
+            0,
+            None,
+            NativeStartHistoryContext::PhysicalBirth,
+            true,
+        )
+    }
+
+    fn prepare_retained_source_start_context_inner(
+        &mut self,
+        mut request: NativeHistoryRequest,
+        declared_cut: Option<RetainedNativeStartCut>,
+        catchup_frames: u64,
+        dsp: Option<&mut crate::audio_engine::late_start_dsp::LateStartDspWork>,
+        context: NativeStartHistoryContext,
+        allow_owned_mapped_future: bool,
+    ) -> Result<(), NativeSourcePreparationError> {
         let mapped = request.playback.is_mapped()
             || request
                 .actual_feed
                 .is_some_and(|checkpoint| checkpoint.playback.is_mapped());
+        let owned_future = allow_owned_mapped_future
+            && mapped
+            && request
+                .mapped_input
+                .as_ref()
+                .is_some_and(|input| input.matches_request(&request) && input.pending_current())
+            && request
+                .permit
+                .current(&request.sample, request.binding.sample_rate_hz);
+        if allow_owned_mapped_future != owned_future
+            || (request.mapped_input.is_some() && !owned_future)
+            || request.plan.transition.is_active() && owned_future
+        {
+            return Err(unavailable());
+        }
         if mapped
             && (context != NativeStartHistoryContext::PhysicalBirth
                 || request.key_lock
                 || request.pitch_intent.total_semitones() == 0
-                || declared_cut.is_some()
+                || (declared_cut.is_some() && !owned_future)
                 || catchup_frames != 0
                 || dsp.is_some()
                 || request.actual_feed.is_some())
@@ -257,7 +460,7 @@ impl NativeAdapterState {
             return Err(unavailable());
         }
         if context == NativeStartHistoryContext::PhysicalBirth
-            && (declared_cut.is_some() || catchup_frames != 0 || dsp.is_some())
+            && ((declared_cut.is_some() && !owned_future) || catchup_frames != 0 || dsp.is_some())
         {
             return Err(unavailable());
         }
@@ -311,6 +514,18 @@ impl NativeAdapterState {
             || feed_frames < cut.history_output_frames
         {
             return Err(unavailable());
+        }
+        if let Some(input) = &request.mapped_input {
+            let mut future = SourceReadCheckpoint {
+                playback: endpoint,
+                plan: endpoint_plan,
+            };
+            input
+                .project(
+                    &mut future,
+                    (feed_frames - cut.history_output_frames) as u64,
+                )
+                .map_err(NativeSourcePreparationError::from_history)?;
         }
         let (source_rebase, history, silent_prefix) = match context {
             NativeStartHistoryContext::SourceHistory => {
@@ -379,8 +594,8 @@ impl NativeAdapterState {
         source.playback = endpoint;
         source.plan = endpoint_plan;
         source.actual_feed = (feed_frames != cut.history_output_frames).then_some(actual);
-        self.retained_start_timeline =
-            (feed_frames != cut.history_output_frames).then_some(RetainedNativeStartTimeline {
+        self.retained_start_timeline = (feed_frames != cut.history_output_frames || owned_future)
+            .then_some(RetainedNativeStartTimeline {
                 logical,
                 actual,
                 provenance: RetainedFeedProvenance {
@@ -409,14 +624,24 @@ impl NativeAdapterState {
         let Some(timeline) = self.retained_start_timeline else {
             return Ok(None);
         };
-        if !timeline.logical.matches_exact(SourceReadCheckpoint {
-            playback: *logical,
-            plan: logical_plan,
-        }) || !timeline.proves_endpoints(self.block_size, self.primed_output_frames)
+        let mapped = self.mapped_input();
+        if !same_checkpoint(
+            timeline.logical,
+            SourceReadCheckpoint {
+                playback: *logical,
+                plan: logical_plan,
+            },
+            mapped,
+        ) || !timeline.proves_endpoints(self.block_size, self.primed_output_frames, mapped)
         {
             return Err(RubberBandError::UnavailableSourceHistory);
         }
-        Ok(Some((timeline.actual.playback, timeline.actual.plan)))
+        let actual = if let Some(mapped) = mapped {
+            mapped.canonicalize(timeline.actual)?
+        } else {
+            timeline.actual
+        };
+        Ok(Some((actual.playback, actual.plan)))
     }
 
     /// Bound one actual read before either copied smoothing clock crosses a rate step.
@@ -430,7 +655,15 @@ impl NativeAdapterState {
         let Some((mut actual, _)) = self.retained_start_feed(logical, logical_plan)? else {
             return Ok(max_frames);
         };
-        Ok(actual.chunk(max_frames).0)
+        let mut logical = SourceReadCheckpoint {
+            playback: *logical,
+            plan: logical_plan,
+        };
+        if let Some(mapped) = self.mapped_input() {
+            logical = mapped.canonicalize(logical)?;
+        }
+        let logical_frames = logical.playback.chunk(max_frames).0;
+        Ok(actual.chunk(logical_frames).0)
     }
 
     /// Worker-only: install the two endpoints after genuine source replay succeeded.
@@ -441,7 +674,9 @@ impl NativeAdapterState {
         logical: SourceReadCheckpoint,
         actual: SourceReadCheckpoint,
     ) -> Result<(), RubberBandError> {
-        if !logical.is_consistent()
+        if logical.playback.is_mapped()
+            || actual.playback.is_mapped()
+            || !logical.is_consistent()
             || !actual.is_consistent()
             || !self.active
             || !self.used
@@ -489,7 +724,11 @@ impl NativeAdapterState {
         mut logical: SourceReadCheckpoint,
         mut actual: SourceReadCheckpoint,
     ) -> Result<(), RubberBandError> {
-        if !logical.project_output_frames(0) || !actual.project_output_frames(0) {
+        if logical.playback.is_mapped()
+            || actual.playback.is_mapped()
+            || !logical.project_output_frames(0)
+            || !actual.project_output_frames(0)
+        {
             return Err(RubberBandError::UnavailableSourceHistory);
         }
         let Some(timeline) = self.retained_start_timeline else {
@@ -503,7 +742,11 @@ impl NativeAdapterState {
         };
         if !timeline.logical.matches_exact(previous_logical)
             || !timeline.actual.matches_exact(previous_actual)
-            || !timeline.proves_endpoints(self.block_size, self.primed_output_frames)
+            || !timeline.proves_endpoints(
+                self.block_size,
+                self.primed_output_frames,
+                self.mapped_input(),
+            )
             || !logical.is_consistent()
             || !actual.is_consistent()
         {
@@ -531,15 +774,34 @@ impl NativeAdapterState {
 
     /// Commit only after the actual read and Native/FIFO render succeeded.
     pub(crate) fn advance_retained_start_feed(&mut self, frames: usize) {
+        let mapped = self
+            .source
+            .as_ref()
+            .and_then(|source| source.mapped_input.as_deref());
         let Some(timeline) = &mut self.retained_start_timeline else {
             return;
         };
-        if !timeline.logical.project_output_frames(frames as u64)
-            || !timeline.actual.project_output_frames(frames as u64)
+        let mut logical = timeline.logical;
+        let mut actual = timeline.actual;
+        let counters_fit = match timeline.provenance.continuation {
+            Some(continuation) => continuation
+                .emitted_output_frames
+                .checked_add(frames as u64)
+                .is_some(),
+            None => timeline
+                .provenance
+                .raw
+                .is_some_and(|raw| raw.emitted_output_frames.checked_add(frames).is_some()),
+        };
+        if !counters_fit
+            || !project_checkpoint(&mut logical, frames as u64, mapped)
+            || !project_checkpoint(&mut actual, frames as u64, mapped)
         {
             timeline.valid = false;
             return;
         }
+        timeline.logical = logical;
+        timeline.actual = actual;
         match (
             &mut timeline.provenance.continuation,
             &mut timeline.provenance.raw,

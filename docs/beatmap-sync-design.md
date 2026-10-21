@@ -536,3 +536,21 @@ The current implementation contract is in
 `../openspec/changes/publish-source-sync-intent/` and
 `../openspec/changes/admit-mapped-source-clock/` and
 `../openspec/changes/prepare-mapped-fixed-pitch-start/`.
+
+The internal owning-future path retains the original immutable qualified map
+beside Native source custody. It validates each checkpoint against that original
+canonical trajectory before positive projection, refreshes both logical and actual
+spans, and bounds reads by both exclusive endpoints. Copied spans remain unable
+to authorize arbitrary future input. SourceHistory, delayed execution, active stem
+transitions and Key Lock on retain their separate integration gates.
+
+For a predeclared raw stream cut D, silent physical-birth prefix H and block B,
+preparation consumes F=D+B-1 adapter frames, with genuine source input only after
+the H zeros. After j emitted frames the three labels are logical T+j, raw Native
+output D+j and actual next input T+(F-H)+j. Retaining this ledger and the exact
+Native/FIFO owner permits internal continuity experiments. It does not choose a
+musical cut or prove that raw output D belongs to intended output T. Early output
+must remain visible in independent evidence; raw suffix agreement cannot conceal
+first-attack loss or authorize effective SYNC. Public nonzero mapped admission
+remains closed until per-path output alignment and full policy behavior pass.
+See `../openspec/changes/own-mapped-native-future/` for the internal contract.

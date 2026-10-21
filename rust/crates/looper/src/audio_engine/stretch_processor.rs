@@ -106,6 +106,16 @@ impl StretchProcessor {
         self.native.has_retained_feed()
     }
 
+    #[cfg(test)]
+    pub(crate) fn retained_mapped_output_coordinates(
+        &self,
+    ) -> Result<
+        Option<super::prepared_native_history::RetainedMappedOutputCoordinates>,
+        super::rubberband_backend::RubberBandError,
+    > {
+        self.native.retained_mapped_output_coordinates()
+    }
+
     pub(crate) fn retained_rate_change_ready(
         &self,
         feed: &ProductiveSourceFeed<'_>,
@@ -141,6 +151,9 @@ impl StretchProcessor {
         previous: &ProductiveSourceFeed<'_>,
         next: &ProductiveSourceFeed<'_>,
     ) -> bool {
+        if self.native.has_owned_mapped_input() {
+            return false;
+        }
         if !self.has_retained_source_input() {
             return true;
         }
@@ -768,6 +781,14 @@ impl StretchProcessor {
         self.wet_source_output_emitted = false;
         let frames = output_frames.min(DEFAULT_BLOCK_SAMPLES);
         if frames == 0 || self.channels == 0 {
+            return None;
+        }
+        if !self
+            .native
+            .owned_mapped_read_ready(feed.playback, feed.plan, feed.output_frame, frames)
+        {
+            self.silence_output(frames);
+            self.wet_render_failed = true;
             return None;
         }
         let retained_feed = match self.native.retained_start_feed(feed.playback, feed.plan) {
