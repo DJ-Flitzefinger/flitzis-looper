@@ -21,6 +21,11 @@ their exact hexadecimal bits. Raw and map revisions SHALL be complete 64-digit l
 identities over their canonical complete payloads, excluding only the respective self-revision
 field. The map revision SHALL bind source, raw provenance and complete accepted state.
 
+The separately specified `acquire-original-beat-this-detections` change SHALL add version 3,
+encoding `source-beatmap-pwa-v3`, for complete embedded Beat This capture. Version 2 SHALL
+continue to require its original QM capture; neither new capture nor new map versions SHALL
+reinterpret older encodings, remove evidence or relax existing numeric and authority guards.
+
 #### Scenario: Output rate changes without changing the source
 - **GIVEN** an accepted map tied to the same decoded source
 - **WHEN** that source is loaded at a different supported output rate

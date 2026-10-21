@@ -256,7 +256,7 @@ struct MapRetirement {
 
 pub(super) struct DeferredMapReaders {
     pub _map: Option<super::source_beatmap::SourceBeatmap>,
-    pub _raw: Option<Arc<super::source_beatmap_raw_data::RawData>>,
+    pub _raw: Option<Arc<super::source_beatmap_capture::RawCapture>>,
     pub _file: Option<fs::File>,
     pub _guards: Vec<fs::File>,
     pub _pin: Option<ProjectAssetLease>,

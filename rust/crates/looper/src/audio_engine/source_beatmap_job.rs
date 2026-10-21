@@ -23,6 +23,10 @@ pub(super) enum MapInput<'a> {
     AcquireRaw {
         expected_generation: u64,
     },
+    AcquireBeatThis {
+        expected_generation: u64,
+        installation_root: &'a str,
+    },
     Validate(&'a str),
     Store(&'a str),
     Restore(&'a str),
@@ -102,10 +106,10 @@ impl JobState {
         };
         reader.require_map_custody()?;
         let cancelled = || self.cancelled();
-        if let MapInput::AcquireRaw {
-            expected_generation,
-        } = input
-        {
+        if matches!(
+            input,
+            MapInput::AcquireRaw { .. } | MapInput::AcquireBeatThis { .. }
+        ) {
             let lease = self
                 .raw_review
                 .lock()
@@ -113,11 +117,22 @@ impl JobState {
                 .as_ref()
                 .cloned()
                 .ok_or("raw acquisition requires its original review admission")?;
-            let raw = crate::audio_engine::source_beatmap_raw_data::RawData::acquire(
-                reader,
-                expected_generation,
-                &cancelled,
-            )?;
+            let raw = match input {
+                MapInput::AcquireRaw {
+                    expected_generation,
+                } => crate::audio_engine::source_beatmap_capture::RawCapture::from(
+                    crate::audio_engine::source_beatmap_raw_data::RawData::acquire(
+                        reader,
+                        expected_generation,
+                        &cancelled,
+                    )?,
+                ),
+                MapInput::AcquireBeatThis {
+                    expected_generation,
+                    installation_root,
+                } => self.acquire_beat_this_raw(reader, expected_generation, installation_root)?,
+                _ => unreachable!("only an acquisition enters this branch"),
+            };
             let (root, original) = reader.map_artifact_paths()?;
             let artifact =
                 crate::audio_engine::source_beatmap_artifact::SourceBeatmapRawArtifact::store(
@@ -147,7 +162,7 @@ impl JobState {
                 reader.require_map_custody()?;
                 (stored.map(), Some(stored))
             }
-            MapInput::AcquireRaw { .. } => {
+            MapInput::AcquireRaw { .. } | MapInput::AcquireBeatThis { .. } => {
                 unreachable!("raw preparation returned through its typed branch")
             }
             MapInput::Validate(encoded) => {

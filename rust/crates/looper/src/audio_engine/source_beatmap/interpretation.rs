@@ -1,7 +1,7 @@
 //! Explicit coordinates over immutable observations; never musical qualification.
 
 use super::{MAX_RECORD_BYTES, SourceBeatmap, editor, record};
-use crate::audio_engine::source_beatmap_raw_data::RawData;
+use crate::audio_engine::source_beatmap_capture::CaptureView;
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 
@@ -53,24 +53,23 @@ impl Interpretation {
     }
 
     /// Small geometry only: no source coordinates are accepted from the client.
-    fn accepted(&self, raw: &RawData) -> Result<Value, String> {
-        if self.raw_revision != raw.raw_revision {
+    fn accepted(&self, raw: &impl CaptureView) -> Result<Value, String> {
+        if self.raw_revision != raw.revision() {
             return Err("beatmap_review_capture_revision_changed".into());
         }
-        let duration = raw.source_descriptor["pcm"]["full_frames"]
+        let duration = raw.source_descriptor()["pcm"]["full_frames"]
             .as_u64()
             .ok_or("decoder_extent_missing")? as f64
-            / raw.source_descriptor["pcm"]["rate_hz"]
+            / raw.source_descriptor()["pcm"]["rate_hz"]
                 .as_u64()
                 .ok_or("decoder_rate_missing")? as f64;
         let mut anchors = Vec::with_capacity(self.anchors.len());
         for (ordinal, label) in self.anchors.iter().enumerate() {
-            let frame = raw
-                .beat_frames
-                .get(label.raw_index)
+            let seconds = raw
+                .source_seconds(label.raw_index)
                 .ok_or("beatmap_review_raw_index_outside_capture")?;
-            let seconds = raw.source_seconds(*frame);
-            let physical_end = raw.source_frame_count as f64 / f64::from(raw.source_sample_rate_hz);
+            let physical_end =
+                raw.source_frame_count() as f64 / f64::from(raw.source_sample_rate_hz());
             if !seconds.is_finite()
                 || seconds < 0.0
                 || seconds >= duration
@@ -95,8 +94,11 @@ impl Interpretation {
                 "author":"source-map-review"}]}))
     }
 
-    pub(in crate::audio_engine) fn validate_for(&self, raw: &RawData) -> Result<(), String> {
-        record::validate_editor_geometry(&self.accepted(raw)?, raw.beat_frames.len())
+    pub(in crate::audio_engine) fn validate_for(
+        &self,
+        raw: &impl CaptureView,
+    ) -> Result<(), String> {
+        record::validate_editor_geometry(&self.accepted(raw)?, raw.event_count())
     }
 }
 
@@ -131,15 +133,16 @@ pub(in crate::audio_engine) fn budget(
 /// Data-only seam shared by explicit labels and later qualified evidence. Only
 /// already validated interpretation may supply coordinates, never ordinal count.
 pub(in crate::audio_engine) fn build(
-    raw: &RawData,
+    raw: &impl CaptureView,
     intent: &Interpretation,
     held_source_bytes: usize,
 ) -> Result<SourceBeatmap, String> {
     budget(raw.encoded_len()?, held_source_bytes, intent.anchors.len())?;
     intent.validate_for(raw)?;
+    let version = raw.map_envelope_version();
     editor::seal(
-        json!({"schema_version":2,"encoding":"source-beatmap-pwa-v2","record":{
-        "source":{"decoder_identity":raw.decoder_identity,"decoder_descriptor":raw.source_descriptor},
+        json!({"schema_version":version,"encoding":format!("source-beatmap-pwa-v{version}"),"record":{
+        "source":{"decoder_identity":raw.decoder_identity(),"decoder_descriptor":raw.source_descriptor()},
         "raw":{"raw_revision":"0".repeat(64),"capture":raw.embedded_value()?},
         "accepted":intent.accepted(raw)?}}),
     )

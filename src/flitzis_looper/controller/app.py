@@ -72,6 +72,7 @@ class AppController:
         stem_task_runner: StemTaskRunner | None = None,
         *,
         project_config_path: Path | None = None,
+        beat_this_installation_root: Path | None = None,
     ) -> None:
         self._persistence = (
             ProjectPersistence.from_config_path()
@@ -142,7 +143,7 @@ class AppController:
             on_stem_generation_error=self.stems._handle_stem_generation_error,
             on_stems_deleted=self.stems.delete_stems,
         )
-        self._bind_loader_assets()
+        self._bind_loader_assets(beat_this_installation_root=beat_this_installation_root)
         self.transport.bind_incoming_global_key_lock(self.loader._refresh_incoming_global_intent)
         self.transport.bind_current_pad_edit(
             self.loader.record_current_pad_edit,
@@ -192,7 +193,16 @@ class AppController:
             0 if self._project.resident_pcm_budget_automatic else manual_budget
         )
 
-    def _bind_loader_assets(self) -> None:
+    def _bind_loader_assets(self, *, beat_this_installation_root: Path | None = None) -> None:
+        if (
+            not hasattr(self, "_beat_this_installation_root")
+            or beat_this_installation_root is not None
+        ):
+            self._beat_this_installation_root = (
+                Path.cwd().absolute().parent / "analysis-runtime" / "beat-this"
+                if beat_this_installation_root is None
+                else beat_this_installation_root.absolute()
+            )
         self.loader.bind_asset_lifecycle(self._assets)
         self.loader.source_beatmaps.bind(
             self._persistence.commit_source_beatmap_selection,
@@ -202,6 +212,7 @@ class AppController:
             ),
             edit_guard=self.ensure_not_copy_target,
             source_generation=self.transport.capture_current_pad_edit_generation,
+            beat_this_installation_root=self._beat_this_installation_root,
         )
         self.transport.loop.bind_source_maps(self.loader.source_beatmaps)
         self.transport.source_sync.bind_source_maps(self.loader.source_beatmaps)

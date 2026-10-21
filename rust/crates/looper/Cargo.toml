@@ -27,8 +27,6 @@ serde = { version = "1", features = ["derive"] }
 cute-dsp = "0.0.40"
 base64 = "0.22.1"
 sha2 = "0.10"
-
-[dev-dependencies]
 tempfile = "3"
 
 [build-dependencies]

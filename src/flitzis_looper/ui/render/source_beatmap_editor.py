@@ -553,8 +553,11 @@ def _show_raw_page(ctx: UiContext, frame: SourceMapEditorFrame, state: _RawInput
                 _use_raw_detection(ctx, frame, state, index)
             imgui.same_line(spacing=SPACING)
             downbeat = "yes" if event["detected_downbeat"] else "no"
+            detector_position = (
+                "" if event["odf_frame"] is None else f"ODF frame {event['odf_frame']:.17g} | "
+            )
             imgui.text_unformatted(
-                f"#{event['raw_index']} | ODF frame {event['odf_frame']:.17g} | "
+                f"#{event['raw_index']} | {detector_position}"
                 f"source {event['source_seconds']:.17g} s | "
                 f"detected downbeat: {downbeat} | {event['physical_domain']}"
             )
@@ -677,6 +680,8 @@ def _raw_review(ctx: UiContext, frame: SourceMapEditorFrame) -> None:
     _raw_actions(ctx, frame)
     if raw.status == "failed":
         imgui.text_colored(TEXT_MUTED_RGBA, "Raw analysis failed; see console diagnostics.")
+        if raw.error:
+            imgui.text_wrapped(raw.error)
     if raw.status != "unreviewed" or raw.info is None:
         return
     imgui.text_wrapped(
@@ -697,7 +702,7 @@ def _raw_review(ctx: UiContext, frame: SourceMapEditorFrame) -> None:
 def _raw_actions(ctx: UiContext, frame: SourceMapEditorFrame) -> None:
     raw = frame.raw
     imgui.begin_disabled(raw.occupied or frame.status in _BUSY or frame.identity is None)
-    action = "Analyze again" if raw.status == "failed" else "Analyze original full mix"
+    action = "Analyze again" if raw.status == "failed" else "Analyze original full mix (Beat This)"
     if imgui.button(f"{action}##source-raw-analyze"):
         _run_raw(
             ctx,
@@ -731,18 +736,34 @@ def _raw_provenance(frame: SourceMapEditorFrame) -> None:
     )
     if imgui.tree_node("Input provenance##source-raw-provenance"):
         try:
+            if raw.info.get("backend") == "beat_this":
+                detector_input = (
+                    f"Worker input: {raw.info['worker_input_frame_count']} frames at "
+                    f"{raw.info['worker_input_sample_rate_hz']} Hz, "
+                    f"frame zero {raw.info['worker_input_source_zero_frame']}\n"
+                    f"Worker input SHA-256: {raw.info['worker_input_sha256']}\n"
+                    f"Frontend identity: {raw.info['frontend_identity']}\n"
+                    f"Model: {raw.info['model']}\n"
+                    f"Complete logits: {raw.info['beat_logit_count']} beat / "
+                    f"{raw.info['downbeat_logit_count']} downbeat\n"
+                )
+            else:
+                detector_input = (
+                    f"Analyzer: {raw.info['analyzer_frame_count']} frames at "
+                    f"{raw.info['analyzer_sample_rate_hz']} Hz | "
+                    f"Conversion: {raw.info['conversion_revision']}\n"
+                    f"Analyzer SHA-256: {raw.info['analyzer_sha256']}\n"
+                    f"Hop: {raw.info['odf_hop_samples']} | Settings: {raw.info['configuration']}\n"
+                )
             imgui.text_wrapped(
                 f"Decoder: {raw.info['decoder_identity']} | Mono rule: {raw.info['mono_rule']}\n"
                 f"Mono SHA-256: {raw.info['mono_sha256']}\n"
-                f"Analyzer: {raw.info['analyzer_frame_count']} frames at "
-                f"{raw.info['analyzer_sample_rate_hz']} Hz | "
-                f"Conversion: {raw.info['conversion_revision']}\n"
-                f"Analyzer SHA-256: {raw.info['analyzer_sha256']}\n"
+                f"{detector_input}"
                 f"Raw revision: {raw.revision} | "
                 f"Detected downbeats: {raw.info['detected_downbeat_count']} | "
                 f"Outside source: {raw.info['outside_source_event_count']}\n"
-                f"Detector: {raw.info['detector_id']} | Hop: {raw.info['odf_hop_samples']} | "
-                f"Code: {raw.info['code_revision']} | Settings: {raw.info['configuration']}"
+                f"Detector: {raw.info['detector_id']} | Code: {raw.info['code_revision']} | "
+                f"Capture: {raw.info.get('capture_encoding', 'legacy QM')}"
             )
         finally:
             imgui.tree_pop()

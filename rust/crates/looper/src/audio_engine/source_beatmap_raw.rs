@@ -1,4 +1,4 @@
-//! One unverified legacy-QM review. All construction, queries and retirement are off realtime.
+//! One unverified backend capture review. Construction, queries and retirement are off realtime.
 
 use super::complete_context::NativeAnalysisOwner;
 use super::project_assets::ProjectAssets;
@@ -68,6 +68,13 @@ pub struct SourceBeatmapRawCandidate {
 }
 
 impl SourceBeatmapRawCandidate {
+    #[cfg(test)]
+    pub(in crate::audio_engine) fn captured_data_for_test(
+        &self,
+    ) -> &super::source_beatmap_capture::RawCapture {
+        self.artifact.raw()
+    }
+
     pub(super) fn review_artifact(
         &self,
         engine: &super::AudioEngine,
@@ -132,48 +139,17 @@ impl SourceBeatmapRawCandidate {
 #[pymethods]
 impl SourceBeatmapRawCandidate {
     #[classattr]
-    const RAW_REVIEW_API_VERSION: u32 = 1;
+    const RAW_REVIEW_API_VERSION: u32 = 2;
 
     fn info(&self, py: Python<'_>) -> PyResult<Py<PyDict>> {
         let before = self.status();
-        let data = self.artifact.raw();
-        let result = PyDict::new(py);
-        result.set_item("raw_revision", &data.raw_revision)?;
-        result.set_item("decoder_identity", &data.decoder_identity)?;
-        result.set_item("source_sample_rate_hz", data.source_sample_rate_hz)?;
-        result.set_item("source_frame_count", data.source_frame_count)?;
-        result.set_item("source_zero_frame", data.source_zero_frame)?;
-        result.set_item("mono_sha256", &data.mono_sha256)?;
-        result.set_item("mono_rule", &data.mono_rule)?;
-        result.set_item("analyzer_sha256", &data.analyzer_sha256)?;
-        result.set_item("analyzer_sample_rate_hz", data.analyzer_sample_rate_hz)?;
-        result.set_item("analyzer_frame_count", data.analyzer_frame_count)?;
-        result.set_item("conversion_revision", &data.conversion_revision)?;
-        result.set_item("odf_hop_samples", data.odf_hop_samples)?;
-        result.set_item("detector_id", &data.detector_id)?;
-        result.set_item("code_revision", &data.code_revision)?;
-        let configuration = PyDict::new(py);
-        let value = data.configuration.value();
-        for (key, value) in value.as_object().expect("typed detector configuration") {
-            if let Some(value) = value.as_u64() {
-                configuration.set_item(key, value)?;
-            } else if let Some(value) = value.as_f64() {
-                configuration.set_item(key, value)?;
-            } else {
-                return Err(PyValueError::new_err(
-                    "unsupported detector configuration value",
-                ));
-            }
-        }
-        result.set_item("configuration", configuration)?;
-        result.set_item("event_count", data.beat_frames.len())?;
-        result.set_item("detected_downbeat_count", data.downbeat_indices.len())?;
-        result.set_item(
-            "outside_source_event_count",
-            data.outside_source_event_count(),
-        )?;
-        result.set_item("interpretation", "unverified")?;
-        result.set_item("timing_uncertainty", "unknown")?;
+        // This bounded metadata conversion is control-side only. The actual
+        // capture, source and reader authority never cross this JSON boundary.
+        let encoded = self.artifact.raw().backend_info().to_string();
+        let result = py
+            .import("json")?
+            .call_method1("loads", (encoded,))?
+            .cast_into::<PyDict>()?;
         let after = self.status();
         result.set_item("status", if before == "ready" { after } else { before })?;
         Ok(result.unbind())
@@ -181,10 +157,37 @@ impl SourceBeatmapRawCandidate {
 
     #[pyo3(signature=(start_index,max_events=128))]
     fn inspect(&self, py: Python<'_>, start_index: i64, max_events: i64) -> PyResult<Py<PyDict>> {
+        self.inspect_page(py, start_index, max_events, false)
+    }
+
+    #[pyo3(signature=(start_index,max_events=128))]
+    fn inspect_downbeats(
+        &self,
+        py: Python<'_>,
+        start_index: i64,
+        max_events: i64,
+    ) -> PyResult<Py<PyDict>> {
+        self.inspect_page(py, start_index, max_events, true)
+    }
+}
+
+impl SourceBeatmapRawCandidate {
+    fn inspect_page(
+        &self,
+        py: Python<'_>,
+        start_index: i64,
+        max_events: i64,
+        downbeats: bool,
+    ) -> PyResult<Py<PyDict>> {
         let data = self.artifact.raw();
+        let count = if downbeats {
+            data.downbeat_count()
+        } else {
+            data.event_count()
+        };
         let start = usize::try_from(start_index)
             .ok()
-            .filter(|start| *start <= data.beat_frames.len())
+            .filter(|start| *start <= count)
             .ok_or_else(|| PyValueError::new_err("raw event start is outside 0..=event_count"))?;
         let maximum = usize::try_from(max_events)
             .ok()
@@ -193,22 +196,31 @@ impl SourceBeatmapRawCandidate {
                 PyValueError::new_err("raw inspection max_events must be within 1..=128")
             })?;
         let before = self.status();
-        let end = start.saturating_add(maximum).min(data.beat_frames.len());
+        let end = start.saturating_add(maximum).min(count);
         let rows = PyList::empty(py);
         if before == "ready" {
             for index in start..end {
-                let frame = data.beat_frames[index];
-                let seconds = data.source_seconds(frame);
+                let seconds = if downbeats {
+                    data.downbeat_seconds(index)
+                } else {
+                    data.source_seconds(index)
+                }
+                .expect("bounded validated raw event");
                 let duration =
-                    data.source_frame_count as f64 / f64::from(data.source_sample_rate_hz);
+                    data.source_frame_count() as f64 / f64::from(data.source_sample_rate_hz());
                 let row = PyDict::new(py);
-                row.set_item("raw_index", index)?;
-                row.set_item("odf_frame", frame)?;
+                if downbeats {
+                    row.set_item("raw_downbeat_index", index)?;
+                    row.set_item(
+                        "exact_matching_beat_index",
+                        data.exact_matching_beat_index(seconds),
+                    )?;
+                } else {
+                    row.set_item("raw_index", index)?;
+                    row.set_item("odf_frame", data.odf_frame(index))?;
+                    row.set_item("detected_downbeat", data.detected_downbeat(index))?;
+                }
                 row.set_item("source_seconds", seconds)?;
-                row.set_item(
-                    "detected_downbeat",
-                    data.downbeat_indices.binary_search(&index).is_ok(),
-                )?;
                 row.set_item(
                     "physical_domain",
                     if seconds < duration {
@@ -229,14 +241,11 @@ impl SourceBeatmapRawCandidate {
         }
         let result = PyDict::new(py);
         result.set_item("status", status)?;
-        result.set_item("raw_revision", &data.raw_revision)?;
+        result.set_item("raw_revision", data.revision())?;
         result.set_item("start_index", start)?;
         result.set_item("returned_count", rows.len())?;
-        result.set_item("total_event_count", data.beat_frames.len())?;
-        result.set_item(
-            "has_more",
-            status == "ready" && end < data.beat_frames.len(),
-        )?;
+        result.set_item("total_event_count", count)?;
+        result.set_item("has_more", status == "ready" && end < count)?;
         result.set_item("events", rows)?;
         Ok(result.unbind())
     }

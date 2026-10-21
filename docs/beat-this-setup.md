@@ -1,7 +1,8 @@
 # Optional Beat This reference worker
 
-B1b provides an explicitly installed diagnostic worker. Automatic loading, normal
-Analyze, saved grids and live timing still use the existing behavior. B2 must
+B1b provides an explicitly installed worker, now also used by Source Map's
+original-fullmix review. Automatic loading, normal Analyze, saved grids and live
+timing still use the existing behavior. B2 must
 accept quality/resources before changing the new-analysis default.
 
 ## Locked Windows runtime
@@ -35,6 +36,11 @@ This is the operation that can download the locked interpreter/packages and the
 selected checkpoint. Normal startup, loading, restoration and analysis never
 invoke it. `uv` uses its normal package/interpreter caches. Setup logs stay in
 the requested scratch directory.
+
+The application binds this documented sibling installation path when binding its
+Source Map controller. **Analyze original full mix** reports a missing or invalid
+installation without falling back to QM. This command captures complete Beat This
+evidence for separate interpretation; it does not complete the B2 default switch.
 
 For offline provisioning, supply `--checkpoint-file <absolute-final0-path>`
 and `--offline`; the pinned interpreter and wheels must already be cached.

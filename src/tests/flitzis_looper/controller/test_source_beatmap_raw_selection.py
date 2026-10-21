@@ -1,5 +1,6 @@
 """Raw controller routing and lifecycle; actual Native custody is tested separately."""
 
+from pathlib import Path
 from typing import TYPE_CHECKING
 from unittest.mock import Mock
 
@@ -31,6 +32,20 @@ def _review(controller: AppController, audio: Mock) -> tuple[Mock, FakeRawCandid
     maps.analyze_original(0, expected_attempt=0)
     maps.raw_completed(0, raw_event(job, candidate))
     return job, candidate
+
+
+def test_app_binds_explicit_local_worker_root_without_changing_ordinary_analysis(
+    controller: AppController, audio_engine_mock: Mock
+) -> None:
+    maps = _raw_assigned(controller, audio_engine_mock)
+    assert (
+        controller._beat_this_installation_root
+        == Path.cwd().absolute().parent / "analysis-runtime" / "beat-this"
+    )
+    raw_job(audio_engine_mock)
+    maps.analyze_original(0, expected_attempt=0)
+    audio_engine_mock.begin_source_beatmap_raw_async.assert_not_called()
+    audio_engine_mock.begin_offline_analysis.assert_not_called()
 
 
 def test_raw_original_completion_preserves_accepted_delivery_config_and_audio(
@@ -71,7 +86,12 @@ def test_raw_original_completion_preserves_accepted_delivery_config_and_audio(
     changed.assert_not_called()
     job.resolve_source_beatmap_raw_completion.assert_called_once_with(event["_native_event_owner"])
     job.resolve_source_beatmap_artifact_completion.assert_not_called()
-    audio.begin_source_beatmap_raw_async.assert_called_once_with(0, expected_source_generation=71)
+    audio.begin_source_beatmap_beat_this_raw_async.assert_called_once_with(
+        sample_id=0,
+        installation_root=str(controller._beat_this_installation_root),
+        expected_source_generation=71,
+    )
+    audio.begin_source_beatmap_raw_async.assert_not_called()
     audio.seek_sample.assert_not_called()
     audio.stop_all.assert_not_called()
 
@@ -283,7 +303,9 @@ def test_raw_admission_refusal_preserves_attempt_intent_and_review_slot(
 ) -> None:
     maps = _raw_assigned(controller, audio_engine_mock)
     raw_job(audio_engine_mock)
-    audio_engine_mock.begin_source_beatmap_raw_async.side_effect = RuntimeError("cold queue full")
+    audio_engine_mock.begin_source_beatmap_beat_this_raw_async.side_effect = RuntimeError(
+        "cold queue full"
+    )
     before = controller.project.model_dump()
     with pytest.raises(RuntimeError, match="cold queue full"):
         maps.analyze_original(0, expected_attempt=0)
@@ -301,7 +323,7 @@ def test_raw_begin_requires_current_native_generation(
     raw_job(audio_engine_mock)
     with pytest.raises(ValueError, match="current Native source generation"):
         maps.analyze_original(0, expected_attempt=0)
-    audio_engine_mock.begin_source_beatmap_raw_async.assert_not_called()
+    audio_engine_mock.begin_source_beatmap_beat_this_raw_async.assert_not_called()
 
 
 def test_raw_begin_refuses_accepted_preparation_and_terminal_candidate_allows_edit(
@@ -313,7 +335,7 @@ def test_raw_begin_refuses_accepted_preparation_and_terminal_candidate_allows_ed
     job = raw_job(audio_engine_mock)
     with pytest.raises(RuntimeError, match="Accepted source map preparation"):
         maps.analyze_original(0, expected_attempt=0)
-    audio_engine_mock.begin_source_beatmap_raw_async.assert_not_called()
+    audio_engine_mock.begin_source_beatmap_beat_this_raw_async.assert_not_called()
     maps.completed(0, _event(accepted))
     geometry = accepted.resolve_source_beatmap_artifact_completion.return_value.map.return_value
     geometry.revision.return_value = "a" * 64

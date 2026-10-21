@@ -103,8 +103,11 @@ pub use source_beatmap::SourceBeatmap;
 mod source_beatmap_artifact;
 pub use source_beatmap_artifact::SourceBeatmapArtifact;
 pub(crate) use source_beatmap_artifact::SourceBeatmapRawArtifact;
+mod source_beatmap_capture;
 mod source_beatmap_raw;
 mod source_beatmap_raw_data;
+#[cfg(all(test, windows))]
+mod source_map_test_support;
 pub use source_beatmap_raw::SourceBeatmapRawCandidate;
 mod mixer;
 pub use mix_capture_api::MixCaptureTicket;
@@ -2642,6 +2645,22 @@ impl AudioEngine {
         expected_source_generation: u64,
     ) -> PyResult<OfflineAnalysisJob> {
         self.begin_source_beatmap_raw_async_with(sample_id, expected_source_generation, || {})
+    }
+
+    /// Analyze complete original fullmix with the explicitly installed Beat This worker.
+    #[pyo3(signature=(sample_id,installation_root,*,expected_source_generation))]
+    pub fn begin_source_beatmap_beat_this_raw_async(
+        &self,
+        sample_id: usize,
+        installation_root: String,
+        expected_source_generation: u64,
+    ) -> PyResult<OfflineAnalysisJob> {
+        self.begin_source_beatmap_beat_this_raw_async_with(
+            sample_id,
+            expected_source_generation,
+            installation_root,
+            || {},
+        )
     }
 
     /// Build an accepted map from explicit labels on a genuine original capture.

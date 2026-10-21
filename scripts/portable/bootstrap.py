@@ -502,6 +502,11 @@ def check_source_beatmap_editor_api(native_module: object) -> None:
     assert isinstance(job, type), (
         "Native source beatmap editor API missing type: OfflineAnalysisJob"
     )
+    raw_version = getattr(raw_candidate, "RAW_REVIEW_API_VERSION", None)
+    assert type(raw_version) is int, (
+        "Native source beatmap editor API requires RAW_REVIEW_API_VERSION=2"
+    )
+    assert raw_version == 2, "Native source beatmap editor API requires RAW_REVIEW_API_VERSION=2"
     correction_version = getattr(beatmap, "EDITOR_CORRECTION_API_VERSION", None)
     assert type(correction_version) is int, (
         "Native source beatmap editor API requires EDITOR_CORRECTION_API_VERSION=2"
@@ -536,6 +541,17 @@ def check_source_beatmap_editor_api(native_module: object) -> None:
         ),
         (
             engine,
+            "begin_source_beatmap_beat_this_raw_async",
+            (
+                ("self", required),
+                ("sample_id", required),
+                ("installation_root", required),
+                ("expected_source_generation", required),
+            ),
+            {"expected_source_generation"},
+        ),
+        (
+            engine,
             "begin_source_beatmap_raw_async",
             (
                 ("self", required),
@@ -555,6 +571,12 @@ def check_source_beatmap_editor_api(native_module: object) -> None:
         (
             raw_candidate,
             "inspect",
+            (("self", required), ("start_index", required), ("max_events", 128)),
+            set(),
+        ),
+        (
+            raw_candidate,
+            "inspect_downbeats",
             (("self", required), ("start_index", required), ("max_events", 128)),
             set(),
         ),

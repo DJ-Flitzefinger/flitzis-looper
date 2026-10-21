@@ -423,7 +423,17 @@ original, including silence and tail outside a finite resident window. Selecting
 only a vocal or drum stem does not change this input. Acquisition uses the existing
 Native map job, complete-source reader, cold lane and immutable artifact owner.
 
-The result is **Unreviewed detections**. It retains original binary64 QM detector
+The current Source Map command uses the selected, explicitly installed Beat This
+worker. Its distinct Raw v2 capture retains complete binary64 beat/downbeat
+timestamps and both logit arrays, actual Native staged-input provenance and the
+pinned model/frontend identity. Independent downbeat paging does not assume that
+every downbeat equals a detected beat. QM ODF coordinates are unavailable for this
+backend. Missing installation is visible; acquisition never downloads or falls
+back. Ordinary pad-load analysis still awaits the separate B2 default cutover.
+See `../openspec/changes/acquire-original-beat-this-detections/`.
+
+The compatible original QM Native acquisition remains supported. Its result is
+also **Unreviewed detections**. It retains original binary64 QM detector
 frames and downbeat-index observations, actual input hashes, source extent and
 conversion provenance. The executed streamed mono rule is f64 channel averaging
 followed by f32 storage, then the existing 44,100-Hz conversion and f64 analyzer
@@ -433,12 +443,21 @@ This unverified legacy-QM path does not change the gated Beat This default plan.
 
 The inspector pages through at most 128 original events. Event indices and
 detected-downbeat flags remain detector observations; they do not assign quarter
-notes, bars, meter, musical coverage or exact sample anchors. Events outside the
-physical source remain retained and classified. No raw candidate changes grids,
+notes, bars, meter, musical coverage or exact sample anchors. Legacy QM events
+outside the physical source remain retained and classified. Beat This delivered
+positions must lie inside the original half-open extent; its complete logits
+retain the centered frontend's final frame. No raw candidate changes grids,
 snapping, Apply bars, accepted selection, persistence, timing, SYNC or playback.
 Musical interpretation remains separate from acquisition. The explicit label
 builder below can create an accepted data artifact without claiming automatic
 musical qualification.
+
+The same bounded explicit-label builder can embed complete Beat This Raw in map
+V3 (`source-beatmap-pwa-v3`). Earlier map V1/V2 retain their strict prior versions.
+New anchors remain estimated, intervals uncertain and meter unknown; complete
+detector output alone does not qualify automatic musical geometry. A full-track
+variable accepted map supplies changing local tempo during playback without
+performing inference in the callback or adding another musical clock.
 
 One transient review slot retains the original content/source admission and an
 attempt token. Move follows that content; Copy, Bank and restart do not inherit

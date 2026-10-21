@@ -13,6 +13,7 @@ use super::{MAX_ANCHORS, MAX_RECORD_BYTES};
 
 const ENCODING: &str = "source-beatmap-pwa-v1";
 const ENCODING_V2: &str = "source-beatmap-pwa-v2";
+const ENCODING_V3: &str = "source-beatmap-pwa-v3";
 const INTERPOLATION: &str = "pwa-source-seconds-quarter-v1";
 const BOUNDARY: &str = "right-interior-left-final-gap-unavailable-v1";
 const SNAP: &str = "nearest-quarter-subdivision-later-tie-v1";
@@ -37,8 +38,9 @@ struct Record<R> {
 #[derive(Serialize)]
 #[serde(untagged)]
 enum VersionedRaw {
-    Legacy(Raw),
-    Capture(CapturedRaw),
+    Legacy(Box<Raw>),
+    Capture(Box<CapturedRaw>),
+    BeatThis(Box<CapturedBeatThis>),
 }
 
 /// Inspect only the small discriminator while skipping the bounded record.
@@ -74,6 +76,13 @@ fn typed_envelope<R: DeserializeOwned>(
 struct CapturedRaw {
     raw_revision: String,
     capture: super::super::source_beatmap_raw_data::Envelope,
+}
+
+#[derive(Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+struct CapturedBeatThis {
+    raw_revision: String,
+    capture: super::super::source_beatmap_capture::beat_this::Envelope,
 }
 
 #[derive(Deserialize, Serialize)]
@@ -308,6 +317,7 @@ pub(super) fn parse(encoded: &str) -> Result<ValidatedMap, String> {
     let mut envelope = match (header.schema_version, header.encoding.as_str()) {
         (1, ENCODING) => typed_envelope(encoded, VersionedRaw::Legacy)?,
         (2, ENCODING_V2) => typed_envelope(encoded, VersionedRaw::Capture)?,
+        (3, ENCODING_V3) => typed_envelope(encoded, VersionedRaw::BeatThis)?,
         _ => return Err("unsupported_beatmap_envelope".into()),
     };
     let version = envelope.schema_version;
@@ -328,6 +338,16 @@ pub(super) fn parse(encoded: &str) -> Result<ValidatedMap, String> {
                 return Err("capture_source_identity_mismatch".into());
             }
             capture.beat_frames.len()
+        }
+        (VersionedRaw::BeatThis(raw), 3, ENCODING_V3) => {
+            digest_text(&raw.raw_revision)?;
+            let capture = raw.capture.validate()?;
+            if capture.decoder_identity() != record.source.decoder_identity
+                || capture.source_descriptor() != &record.source.decoder_descriptor
+            {
+                return Err("capture_source_identity_mismatch".into());
+            }
+            capture.event_count()
         }
         _ => return Err("unsupported_beatmap_envelope".into()),
     };

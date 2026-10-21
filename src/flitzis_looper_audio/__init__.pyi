@@ -141,6 +141,8 @@ class SourceBeatmapArtifact:
     def map(self) -> SourceBeatmap: ...
 
 class SourceBeatmapRawInfo(TypedDict):
+    backend: Literal["legacy_qm", "beat_this"]
+    capture_encoding: str
     status: Literal["ready", "placement_pending", "stale", "cancelled"]
     raw_revision: str
     decoder_identity: str
@@ -149,14 +151,22 @@ class SourceBeatmapRawInfo(TypedDict):
     source_zero_frame: int
     mono_sha256: str
     mono_rule: str
-    analyzer_sha256: str
-    analyzer_sample_rate_hz: int
-    analyzer_frame_count: int
-    conversion_revision: str
-    odf_hop_samples: int
+    analyzer_sha256: str | None
+    analyzer_sample_rate_hz: int | None
+    analyzer_frame_count: int | None
+    conversion_revision: str | None
+    odf_hop_samples: int | None
     detector_id: str
     code_revision: str
-    configuration: dict[str, object]
+    configuration: dict[str, object] | None
+    worker_input_sha256: str | None
+    worker_input_sample_rate_hz: int | None
+    worker_input_frame_count: int | None
+    worker_input_source_zero_frame: int | None
+    model: dict[str, str] | None
+    frontend_identity: str | None
+    beat_logit_count: int
+    downbeat_logit_count: int
     event_count: int
     detected_downbeat_count: int
     outside_source_event_count: int
@@ -165,7 +175,7 @@ class SourceBeatmapRawInfo(TypedDict):
 
 class SourceBeatmapRawEvent(TypedDict):
     raw_index: int
-    odf_frame: float
+    odf_frame: float | None
     source_seconds: float
     detected_downbeat: bool
     physical_domain: Literal["inside", "exclusive_end", "outside"]
@@ -179,11 +189,27 @@ class SourceBeatmapRawInspection(TypedDict):
     has_more: bool
     events: list[SourceBeatmapRawEvent]
 
+class SourceBeatmapRawDownbeatEvent(TypedDict):
+    raw_downbeat_index: int
+    source_seconds: float
+    physical_domain: Literal["inside", "exclusive_end", "outside"]
+    exact_matching_beat_index: int | None
+
+class SourceBeatmapRawDownbeatInspection(TypedDict):
+    status: Literal["ready", "placement_pending", "stale", "cancelled"]
+    raw_revision: str
+    start_index: int
+    returned_count: int
+    total_event_count: int
+    has_more: bool
+    events: list[SourceBeatmapRawDownbeatEvent]
+
 class SourceBeatmapRawCandidate:
     # Nonconstructible unverified original evidence; no map/receipt/ACK API.
     RAW_REVIEW_API_VERSION: ClassVar[int]
     def info(self) -> SourceBeatmapRawInfo: ...
     def inspect(self, start_index: int, max_events: int = 128) -> SourceBeatmapRawInspection: ...
+    def inspect_downbeats(self, start_index: int, max_events: int = 128) -> SourceBeatmapRawDownbeatInspection: ...
 
 class AudioMessage:
     def sample_id(self) -> int | None: ...
@@ -884,6 +910,9 @@ class AudioEngine:
     def begin_source_beatmap(self, sample_id: int) -> OfflineAnalysisJob: ...
     def begin_source_beatmap_raw_async(
         self, sample_id: int, *, expected_source_generation: int
+    ) -> OfflineAnalysisJob: ...
+    def begin_source_beatmap_beat_this_raw_async(
+        self, sample_id: int, installation_root: str, *, expected_source_generation: int
     ) -> OfflineAnalysisJob: ...
     def begin_source_beatmap_review_async(
         self,

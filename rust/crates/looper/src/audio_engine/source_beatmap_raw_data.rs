@@ -836,7 +836,9 @@ fn bounded_indices<'de, D: Deserializer<'de>>(deserializer: D) -> Result<Vec<usi
 // Deserialize only the small descriptor as Value. Raw arrays never use Value.
 // The node/text allowance bounds allocation even for malicious nested metadata;
 // the byte counter then enforces the independent 64-KiB serialized maximum.
-fn bounded_descriptor<'de, D: Deserializer<'de>>(deserializer: D) -> Result<Value, D::Error> {
+pub(super) fn bounded_descriptor<'de, D: Deserializer<'de>>(
+    deserializer: D,
+) -> Result<Value, D::Error> {
     let mut remaining = MAX_DESCRIPTOR_BYTES;
     DescriptorSeed {
         remaining: &mut remaining,

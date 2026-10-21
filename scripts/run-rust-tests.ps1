@@ -69,6 +69,10 @@ $Triplet = if ($env:RUBBERBAND_VCPKG_TRIPLET) {
 
 $Candidates = [System.Collections.Generic.List[string]]::new()
 $PythonEnvironment = Get-UvPythonEnvironment
+# Embedded CPython does not process the editable installation's .pth discovery
+# like uv's interpreter startup. Native off-thread orchestration imports the
+# application package too, so bind this checkout's source explicitly for tests.
+$PythonEnvironment.module_dirs = @((Join-Path $RepoRoot "src")) + @($PythonEnvironment.module_dirs)
 
 foreach ($PathEntry in $PythonEnvironment.runtime_dirs) {
     Add-CandidateDirectory $Candidates $PathEntry

@@ -33,8 +33,8 @@ class PersistedSourceBeatmap(BaseModel):
 
     model_config = ConfigDict(frozen=True, extra="forbid", strict=True)
 
-    schema_version: Literal[1, 2]
-    encoding: Literal["source-beatmap-pwa-v1", "source-beatmap-pwa-v2"]
+    schema_version: Literal[1, 2, 3]
+    encoding: Literal["source-beatmap-pwa-v1", "source-beatmap-pwa-v2", "source-beatmap-pwa-v3"]
     record: str
 
     @model_validator(mode="after")

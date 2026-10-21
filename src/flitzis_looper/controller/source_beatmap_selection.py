@@ -16,6 +16,7 @@ from flitzis_looper.source_beatmap_intent import (
 
 if TYPE_CHECKING:
     from collections.abc import Callable
+    from pathlib import Path
 
     from flitzis_looper.controller.asset_lifecycle import (
         AssetRetirementReservation,
@@ -113,6 +114,7 @@ class SourceBeatmapSelection:
         self._blocked: Callable[[], bool] = lambda: False
         self._edit_guard: Callable[[int], None] = lambda _sample_id: None
         self._source_generation: Callable[[int], int | None] = lambda _sample_id: None
+        self._beat_this_installation_root: Path | None = None
         self._pending: dict[str, _MapJob] = {}
         self._effective: dict[str, _EffectiveMap] = {}
         self._publications: list[_Publication] = []
@@ -138,8 +140,14 @@ class SourceBeatmapSelection:
         if type(generation) is not int or not 0 < generation < 1 << 64:
             message = "Raw analysis requires a current Native source generation."
             raise ValueError(message)
-        job = self.audio.begin_source_beatmap_raw_async(
-            sample_id, expected_source_generation=generation
+        installation_root = self._beat_this_installation_root
+        if installation_root is None:
+            message = "The Beat This worker installation is not configured."
+            raise RuntimeError(message)
+        job = self.audio.begin_source_beatmap_beat_this_raw_async(
+            sample_id=sample_id,
+            installation_root=str(installation_root),
+            expected_source_generation=generation,
         )
         self._raw_attempt += 1
         self._raw = _RawReview(content, generation, self._raw_attempt, job)
@@ -391,12 +399,15 @@ class SourceBeatmapSelection:
         blocked: Callable[[], bool],
         edit_guard: Callable[[int], None],
         source_generation: Callable[[int], int | None] | None = None,
+        beat_this_installation_root: Path | None = None,
     ) -> None:
         self._commit = commit
         self._blocked = blocked
         self._edit_guard = edit_guard
         if source_generation is not None:
             self._source_generation = source_generation
+        if beat_this_installation_root is not None:
+            self._beat_this_installation_root = beat_this_installation_root
 
     def _content(self, sample_id: int) -> str | None:
         content = self.project.pad_content[sample_id]

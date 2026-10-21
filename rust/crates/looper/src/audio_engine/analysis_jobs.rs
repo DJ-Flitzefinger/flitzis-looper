@@ -39,6 +39,9 @@ use source_beatmap_job::PreparedMap;
 mod source_beatmap_async;
 use source_beatmap_async::AsyncMapStatus;
 
+#[path = "source_beatmap_neural.rs"]
+mod source_beatmap_neural;
+
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum OfflinePurpose {
     Analysis,

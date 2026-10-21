@@ -105,7 +105,7 @@ fn complete_source_guard_rejects_native_revocation_with_equal_old_metadata_and_s
 }
 
 #[cfg(windows)]
-mod cold {
+pub(in crate::audio_engine) mod cold {
     use super::*;
     use crate::audio_engine::cold_residency::ResidentLoadHint;
     use crate::audio_engine::content_placement::SlotSnapshot;
@@ -116,9 +116,9 @@ mod cold {
 
     /// Same productive admission/ACK lane as cold_offline_tests::ColdOffline.
     /// Both immutable assignments are issued by the worker, never assembled here.
-    struct ColdCustody {
-        engine: AudioEngine,
-        directory: tempfile::TempDir,
+    pub(in crate::audio_engine) struct ColdCustody {
+        pub(in crate::audio_engine) engine: AudioEngine,
+        pub(in crate::audio_engine) directory: tempfile::TempDir,
         producer: Arc<Mutex<Producer<ControlMessage>>>,
         consumer: Consumer<ControlMessage>,
         // Match the production stream's heap-owned mixer. Returning multiple
@@ -143,7 +143,10 @@ mod cold {
             Self::new_selected_with_signal(hint, &pcm)
         }
 
-        fn new_selected_with_signal(hint: Option<ResidentLoadHint>, pcm: &[i16]) -> Self {
+        pub(in crate::audio_engine) fn new_selected_with_signal(
+            hint: Option<ResidentLoadHint>,
+            pcm: &[i16],
+        ) -> Self {
             Self::new_selected_with_interleaved_signal(hint, pcm, 1)
         }
 

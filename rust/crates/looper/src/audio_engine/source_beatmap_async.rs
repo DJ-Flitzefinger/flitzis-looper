@@ -27,6 +27,10 @@ enum AsyncMapInput {
     AcquireRaw {
         expected_generation: u64,
     },
+    AcquireBeatThis {
+        expected_generation: u64,
+        installation_root: String,
+    },
     Validate(String),
     Store(String),
     Restore(String),
@@ -50,6 +54,13 @@ impl AsyncMapInput {
             } => MapInput::AcquireRaw {
                 expected_generation: *expected_generation,
             },
+            Self::AcquireBeatThis {
+                expected_generation,
+                installation_root,
+            } => MapInput::AcquireBeatThis {
+                expected_generation: *expected_generation,
+                installation_root,
+            },
             Self::Validate(encoded) => MapInput::Validate(encoded),
             Self::Store(encoded) => MapInput::Store(encoded),
             Self::Restore(receipt) => MapInput::Restore(receipt),
@@ -72,6 +83,15 @@ impl AsyncMapInput {
             Self::AcquireRaw {
                 expected_generation,
             } => *expected_generation > 0,
+            Self::AcquireBeatThis {
+                expected_generation,
+                installation_root,
+            } => {
+                *expected_generation > 0
+                    && !installation_root.is_empty()
+                    && installation_root.len() <= 4096
+                    && Path::new(installation_root).is_absolute()
+            }
             Self::Validate(encoded) | Self::Store(encoded) => encoded.len() <= MAX_RECORD_BYTES,
             Self::Restore(receipt) => receipt.len() <= MAX_RECEIPT_BYTES,
             Self::Create { origin, period, .. } => {
@@ -482,6 +502,24 @@ impl AudioEngine {
         )
     }
 
+    pub(in crate::audio_engine) fn begin_source_beatmap_beat_this_raw_async_with(
+        &self,
+        sample_id: usize,
+        expected_generation: u64,
+        installation_root: String,
+        after_verify: impl FnOnce() + Send + 'static,
+    ) -> PyResult<OfflineAnalysisJob> {
+        self.queue_source_beatmap_input(
+            sample_id,
+            AsyncMapInput::AcquireBeatThis {
+                expected_generation,
+                installation_root,
+            },
+            after_verify,
+            |_, _| Ok(()),
+        )
+    }
+
     #[cfg(test)]
     pub(in crate::audio_engine) fn begin_source_beatmap_raw_async_with_hooks(
         &self,
@@ -656,7 +694,10 @@ impl AudioEngine {
         }
         // Reserve the existing lane BEFORE offline/source admission. Refusal
         // therefore changes neither source counters nor the offline busy slot.
-        let raw_review = if matches!(input, AsyncMapInput::AcquireRaw { .. }) {
+        let raw_review = if matches!(
+            input,
+            AsyncMapInput::AcquireRaw { .. } | AsyncMapInput::AcquireBeatThis { .. }
+        ) {
             Some(
                 crate::audio_engine::source_beatmap_raw::RawReviewLease::reserve()
                     .map_err(PyRuntimeError::new_err)?,

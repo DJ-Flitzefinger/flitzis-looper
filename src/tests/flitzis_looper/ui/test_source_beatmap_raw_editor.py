@@ -48,12 +48,19 @@ def test_actual_analyze_click_uses_original_generation_without_selecting_map_or_
         frames = [_full_frame(ctx, worker, observer) for _ in range(5)]
 
         _click_toolbar(
-            "Analyze original full mix##source-raw-analyze", ctx, worker, observer, frames
+            "Analyze original full mix (Beat This)##source-raw-analyze",
+            ctx,
+            worker,
+            observer,
+            frames,
         )
 
-        audio_engine_mock.begin_source_beatmap_raw_async.assert_called_once_with(
-            0, expected_source_generation=71
+        audio_engine_mock.begin_source_beatmap_beat_this_raw_async.assert_called_once_with(
+            sample_id=0,
+            installation_root=str(controller._beat_this_installation_root),
+            expected_source_generation=71,
         )
+        audio_engine_mock.begin_source_beatmap_raw_async.assert_not_called()
         assert ctx.ui.source_map.selection.raw_state(0).status == "queued"
         assert controller.project.model_dump() == before
         assert controller.project.pad_source_beatmap_intent[0] is None
@@ -157,7 +164,7 @@ def test_analyze_mouse_release_does_not_transfer_to_a_replaced_original(
         raw_job(audio_engine_mock)
         observer = _observe_draw(monkeypatch)
         frames = [_full_frame(ctx, worker, observer) for _ in range(5)]
-        rect = frames[-1]["buttons"]["Analyze original full mix##source-raw-analyze"]
+        rect = frames[-1]["buttons"]["Analyze original full mix (Beat This)##source-raw-analyze"]
         mouse = ((rect[0] + rect[2]) / 2, (rect[1] + rect[3]) / 2)
         _full_frame(ctx, worker, observer, mouse=mouse)
         _full_frame(ctx, worker, observer, mouse=mouse, down=True)
@@ -165,7 +172,7 @@ def test_analyze_mouse_release_does_not_transfer_to_a_replaced_original(
 
         _full_frame(ctx, worker, observer, mouse=mouse, down=False)
 
-        audio_engine_mock.begin_source_beatmap_raw_async.assert_not_called()
+        audio_engine_mock.begin_source_beatmap_beat_this_raw_async.assert_not_called()
 
 
 @pytest.mark.parametrize("status", ["pending", "restoring", "settling"])
@@ -187,10 +194,14 @@ def test_raw_analyze_is_disabled_during_accepted_map_preparation(
         frames = [_full_frame(ctx, worker, observer) for _ in range(5)]
 
         _click_toolbar(
-            "Analyze original full mix##source-raw-analyze", ctx, worker, observer, frames
+            "Analyze original full mix (Beat This)##source-raw-analyze",
+            ctx,
+            worker,
+            observer,
+            frames,
         )
 
-        audio_engine_mock.begin_source_beatmap_raw_async.assert_not_called()
+        audio_engine_mock.begin_source_beatmap_beat_this_raw_async.assert_not_called()
 
 
 def test_raw_admission_details_reach_console_facade_without_waveform_error_text(
@@ -204,7 +215,7 @@ def test_raw_admission_details_reach_console_facade_without_waveform_error_text(
         _assign_raw_ui(ctx, controller)
         raw_job(audio_engine_mock)
         detail = "private/source.wav failed with injected descriptor detail"
-        audio_engine_mock.begin_source_beatmap_raw_async.side_effect = ValueError(detail)
+        audio_engine_mock.begin_source_beatmap_beat_this_raw_async.side_effect = ValueError(detail)
         reported = Mock()
         monkeypatch.setattr(ctx.ui.source_map, "report_raw_error", reported)
         displayed: list[str] = []
@@ -219,7 +230,11 @@ def test_raw_admission_details_reach_console_facade_without_waveform_error_text(
         frames = [_full_frame(ctx, worker, observer) for _ in range(5)]
 
         _click_toolbar(
-            "Analyze original full mix##source-raw-analyze", ctx, worker, observer, frames
+            "Analyze original full mix (Beat This)##source-raw-analyze",
+            ctx,
+            worker,
+            observer,
+            frames,
         )
 
         reported.assert_called_with(0, detail)

@@ -21,7 +21,7 @@ def envelope(version: int = 1) -> dict[str, object]:
     }
 
 
-@pytest.mark.parametrize("version", [1, 2])
+@pytest.mark.parametrize("version", [1, 2, 3])
 def test_supported_record_roundtrips_as_an_object_without_native_acceptance(version: int) -> None:
     data = envelope(version)
     saved = PersistedSourceBeatmap.model_validate(data)
@@ -32,7 +32,7 @@ def test_supported_record_roundtrips_as_an_object_without_native_acceptance(vers
     assert restored.record_data()["source"] == {"decoder_identity": "unverified"}
 
 
-@pytest.mark.parametrize("version", [1, 2])
+@pytest.mark.parametrize("version", [1, 2, 3])
 def test_caller_and_returned_nested_metadata_cannot_mutate_saved_record(version: int) -> None:
     data = envelope(version)
     saved = PersistedSourceBeatmap.model_validate(data)
@@ -50,7 +50,7 @@ def test_caller_and_returned_nested_metadata_cannot_mutate_saved_record(version:
         _write_attribute(saved, "record", "replacement")
 
 
-@pytest.mark.parametrize("version", [True, False, 1.0, 2.0, "1", "2", 0, 3])
+@pytest.mark.parametrize("version", [True, False, 1.0, 2.0, 3.0, "1", "2", "3", 0, 4])
 def test_unsupported_or_noninteger_schema_is_not_recognized(version: object) -> None:
     data = envelope()
     data["schema_version"] = version
@@ -59,7 +59,13 @@ def test_unsupported_or_noninteger_schema_is_not_recognized(version: object) -> 
 
 
 @pytest.mark.parametrize(
-    ("version", "encoding"), [(1, "source-beatmap-pwa-v2"), (2, "source-beatmap-pwa-v1")]
+    ("version", "encoding"),
+    [
+        (1, "source-beatmap-pwa-v2"),
+        (2, "source-beatmap-pwa-v1"),
+        (3, "source-beatmap-pwa-v2"),
+        (2, "source-beatmap-pwa-v3"),
+    ],
 )
 def test_version_and_encoding_must_be_the_same_supported_pair(version: int, encoding: str) -> None:
     data = envelope(version)

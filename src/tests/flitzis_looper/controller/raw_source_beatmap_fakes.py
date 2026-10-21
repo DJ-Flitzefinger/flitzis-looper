@@ -95,7 +95,7 @@ def raw_job(audio: Mock) -> Mock:
         "raw_review_retired": False,
     }
     job.resolve_source_beatmap_raw_completion.return_value = None
-    audio.begin_source_beatmap_raw_async = Mock(return_value=job)
+    audio.begin_source_beatmap_beat_this_raw_async = Mock(return_value=job)
     return job
 
 

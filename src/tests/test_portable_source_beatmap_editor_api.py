@@ -35,6 +35,12 @@ def _raw(self: object, sample_id: int, *, expected_source_generation: int) -> Ne
     _forbidden()
 
 
+def _beat_this_raw(
+    self: object, sample_id: int, installation_root: str, *, expected_source_generation: int
+) -> Never:
+    _forbidden()
+
+
 def _review(
     self: object,
     sample_id: int,
@@ -104,6 +110,7 @@ def source_beatmap_editor_native_module(engine_base: type = object) -> SimpleNam
                 "begin_source_beatmap_create_async": _create,
                 "begin_source_beatmap_edit_async": _edit,
                 "begin_source_beatmap_raw_async": _raw,
+                "begin_source_beatmap_beat_this_raw_async": _beat_this_raw,
                 "begin_source_beatmap_review_async": _review,
                 "pad_source_sync_status": _SyncStatus(),
             },
@@ -120,7 +127,13 @@ def source_beatmap_editor_native_module(engine_base: type = object) -> SimpleNam
         SourceBeatmapRawCandidate=type(
             "SourceBeatmapRawCandidate",
             (),
-            {"__init__": _forbidden, "info": _info, "inspect": _raw_inspect},
+            {
+                "__init__": _forbidden,
+                "RAW_REVIEW_API_VERSION": 2,
+                "info": _info,
+                "inspect": _raw_inspect,
+                "inspect_downbeats": _raw_inspect,
+            },
         ),
         SourceBeatmap=type(
             "SourceBeatmap",
@@ -184,11 +197,13 @@ def test_class_attribute_descriptor_can_expose_the_native_integer_capability() -
         ("AudioEngine", "begin_source_beatmap_edit_async"),
         ("AudioEngine", "pad_source_sync_status"),
         ("AudioEngine", "begin_source_beatmap_raw_async"),
+        ("AudioEngine", "begin_source_beatmap_beat_this_raw_async"),
         ("AudioEngine", "begin_source_beatmap_review_async"),
         ("OfflineAnalysisJob", "resolve_source_beatmap_raw_completion"),
         ("OfflineAnalysisJob", "source_beatmap_async_status"),
         ("SourceBeatmapRawCandidate", "info"),
         ("SourceBeatmapRawCandidate", "inspect"),
+        ("SourceBeatmapRawCandidate", "inspect_downbeats"),
         ("SourceBeatmap", "editor_info"),
         ("SourceBeatmap", "editor_span"),
         ("SourceBeatmap", "editor_view"),
@@ -217,6 +232,14 @@ def test_correction_version_requires_exact_current_integer(invalid: object) -> N
     native = source_beatmap_editor_native_module()
     native.SourceBeatmap.EDITOR_CORRECTION_API_VERSION = invalid
     with pytest.raises(AssertionError, match="EDITOR_CORRECTION_API_VERSION"):
+        _check(native)
+
+
+@pytest.mark.parametrize("invalid", [None, False, True, 2.0, "2", 0, 1, 3])
+def test_backend_aware_raw_version_requires_exact_current_integer(invalid: object) -> None:
+    native = source_beatmap_editor_native_module()
+    native.SourceBeatmapRawCandidate.RAW_REVIEW_API_VERSION = invalid
+    with pytest.raises(AssertionError, match="RAW_REVIEW_API_VERSION"):
         _check(native)
 
 
@@ -328,7 +351,12 @@ def test_raw_review_requires_opaque_native_result_and_original_job_types(owner: 
 
 
 @pytest.mark.parametrize(
-    "method", ["begin_source_beatmap_raw_async", "begin_source_beatmap_review_async"]
+    "method",
+    [
+        "begin_source_beatmap_raw_async",
+        "begin_source_beatmap_review_async",
+        "begin_source_beatmap_beat_this_raw_async",
+    ],
 )
 @pytest.mark.parametrize("invalid", ["missing-generation", "optional-generation", "positional"])
 def test_raw_acquisition_and_review_require_exact_current_source_fence(

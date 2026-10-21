@@ -4,8 +4,9 @@ use super::cold_store::sealed_reader;
 use super::material_paths::{self, AssetKind};
 use super::project_assets::{self, FileIdentity, ProjectAssetLease, ProjectAssets, VerifiedFile};
 use super::source_beatmap::{MAX_RECORD_BYTES, SourceBeatmap};
+use super::source_beatmap_capture::RawCapture;
 use super::source_beatmap_raw::RawReviewLease;
-use super::source_beatmap_raw_data::{MAX_RAW_BYTES, RawData};
+use super::source_beatmap_raw_data::MAX_RAW_BYTES;
 use pyo3::prelude::*;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
@@ -152,7 +153,7 @@ impl Drop for Birth {
 
 struct Resources {
     map: Option<SourceBeatmap>,
-    raw: Option<Arc<RawData>>,
+    raw: Option<Arc<RawCapture>>,
     file: Option<File>,
     guards: Vec<File>,
     pin: Option<ProjectAssetLease>,
@@ -375,13 +376,13 @@ impl std::fmt::Debug for SourceBeatmapRawArtifact {
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         formatter
             .debug_struct("SourceBeatmapRawArtifact")
-            .field("raw_revision", &self.raw().raw_revision)
+            .field("raw_revision", &self.raw().revision())
             .finish_non_exhaustive()
     }
 }
 
 impl SourceBeatmapRawArtifact {
-    pub(super) fn raw(&self) -> &RawData {
+    pub(super) fn raw(&self) -> &RawCapture {
         self.inner
             .resources
             .raw
@@ -392,7 +393,7 @@ impl SourceBeatmapRawArtifact {
     pub(super) fn store(
         root: &Path,
         original: &Path,
-        raw: RawData,
+        raw: RawCapture,
         lease: RawReviewLease,
         cancelled: &impl Fn() -> bool,
         observe: &mut impl FnMut(StorePoint, &Path) -> Result<(), String>,
@@ -413,7 +414,7 @@ impl SourceBeatmapRawArtifact {
 
 enum ArtifactPayload {
     Accepted(SourceBeatmap),
-    Raw(Arc<RawData>),
+    Raw(Arc<RawCapture>),
 }
 
 impl ArtifactPayload {
@@ -435,15 +436,14 @@ impl ArtifactPayload {
         match self {
             Self::Accepted(_) => read_map(file, receipt, cancelled).map(Self::Accepted),
             Self::Raw(raw) => {
-                if receipt.kind != "source-beatmap-raw-qm-v1"
-                    || receipt.bytes > MAX_RAW_BYTES as u64
-                {
+                if receipt.kind != raw.artifact_kind() || receipt.bytes > MAX_RAW_BYTES as u64 {
                     return Err("unsupported raw artifact encoding or extent".into());
                 }
                 let bytes = read_verified_bytes(file, receipt.bytes, &receipt.sha256, cancelled)?;
-                let reopened = RawData::decode(&bytes)?;
-                if reopened.raw_revision != raw.raw_revision
-                    || reopened.decoder_identity != raw.decoder_identity
+                let reopened = RawCapture::decode(&bytes)?;
+                if reopened.artifact_kind() != raw.artifact_kind()
+                    || reopened.revision() != raw.revision()
+                    || reopened.decoder_identity() != raw.decoder_identity()
                 {
                     return Err(
                         "raw artifact revision or decoder differs from actual capture".into(),
@@ -509,11 +509,7 @@ fn store_payload(
             map.map_revision(),
             map.source_identity(),
         ),
-        ArtifactPayload::Raw(raw) => (
-            "source-beatmap-raw-qm-v1",
-            raw.raw_revision.as_str(),
-            raw.decoder_identity.as_str(),
-        ),
+        ArtifactPayload::Raw(raw) => (raw.artifact_kind(), raw.revision(), raw.decoder_identity()),
     };
     let receipt = Receipt {
         schema_version: 1,
