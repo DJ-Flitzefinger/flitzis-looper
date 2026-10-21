@@ -91,9 +91,7 @@ fn prepared(mut value: Value) -> SourceBeatmap {
 
 fn failure(mut value: Value) -> String {
     seal(&mut value);
-    SourceBeatmap::parse(&value.to_string())
-        .err()
-        .expect("must reject")
+    SourceBeatmap::parse(&value.to_string()).expect_err("must reject")
 }
 
 #[test]

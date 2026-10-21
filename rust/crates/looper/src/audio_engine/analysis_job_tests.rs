@@ -40,6 +40,32 @@ fn completions(rx: &Receiver<LoaderEvent>) -> usize {
         .count()
 }
 
+#[test]
+fn analysis_metadata_preserves_the_strict_python_wire_contract() {
+    Python::initialize();
+    let jobs = OfflineJobs::default();
+    let ids = Arc::new(Mutex::new(vec![7]));
+    let (tx, _rx) = channel();
+    let job = begin(&jobs, &ids, &tx);
+    Python::attach(|py| {
+        let sys = py.import("sys").unwrap();
+        sys.getattr("path")
+            .unwrap()
+            .call_method1(
+                "insert",
+                (0, concat!(env!("CARGO_MANIFEST_DIR"), "/../../../src")),
+            )
+            .unwrap();
+        let model = py
+            .import("flitzis_looper.analysis.beat_candidate_models")
+            .unwrap()
+            .getattr("NativeMetadata")
+            .unwrap();
+        let metadata = job.metadata(py).unwrap();
+        model.call_method1("model_validate", (metadata,)).unwrap();
+    });
+}
+
 fn encoded_predictions(values: &[f64]) -> String {
     STANDARD.encode(
         values

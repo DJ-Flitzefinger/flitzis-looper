@@ -813,9 +813,21 @@ outside the GIL. `PersistedSourceBeatmap` in `flitzis_looper.source_beatmap`
 preserves its envelope with defensive serialization. Exact anchors, coverage,
 uncertainty and unsupported gaps remain explicit.
 
-This foundation does not grant a current source lease, content permission, Native
-timing acknowledgement or live trajectory. Source-bound loader/model/persistence/
-copy integration and the later editor/SYNC work remain open. Reuse the existing
+`AudioEngine.begin_source_beatmap` now admits source-bound data validation through
+the existing offline job reservation. `prepare_source_beatmap` parses the record
+and verifies the exact held cold decoder/original off realtime, for complete and
+finite residency. `finish_source_beatmap` queues a frozen map through the original
+Native owner, following actual Move/Pair acknowledgement and control mirroring.
+It snapshots source-request state; map cancellation changes only its own token,
+including queued delivery, and preserves already scheduled PAD/Piano playback.
+Natural release of a successfully finished handle preserves valid completion.
+No mono export, diagnostic Beat/Key result or JSON serialization during event
+polling is involved. The bounded contract is `bind-source-beatmap-custody`.
+
+Parsing or receiving a map DTO does not grant a current audio-source permit,
+Native timing acknowledgement or live trajectory. Source-bound loader/model/persistence/
+copy integration and the later editor/SYNC work remain open. The verified map DTO
+supplies data, not selected-map or live authority. Reuse the existing
 Cold custody, content identities and single audio timing authority for those
 steps. The schema and remaining integration contract are in
 `prepare-versioned-source-beatmaps`; synthetic query tests are bounded software

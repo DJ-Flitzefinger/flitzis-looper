@@ -971,6 +971,12 @@ pub enum LoaderEvent {
         request_id: u64,
         result_json: String,
     },
+    /// Source-verified immutable data, never a current audio or project selection.
+    SourceBeatmapCompleted {
+        id: usize,
+        request_id: u64,
+        map: crate::audio_engine::SourceBeatmap,
+    },
     /// Loading started for the given sample slot id.
     Started { id: usize, request_id: u64 },
 

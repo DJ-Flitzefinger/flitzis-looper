@@ -15,6 +15,14 @@ impl CommittedColdLease {
     /// Worker-only full original verification under the already held immutable
     /// assignment readers. Retirement of an origin pad does not revoke custody.
     pub(in crate::audio_engine) fn verify_original_for_offline(&self) -> io::Result<()> {
+        self.verify_original_for_offline_cancellable(&|| false)
+    }
+
+    pub(in crate::audio_engine) fn verify_original_for_offline_cancellable(
+        &self,
+        cancelled: &impl Fn() -> bool,
+    ) -> io::Result<()> {
+        check_cancelled(cancelled)?;
         if self.original_path != self._original.path {
             return Err(invalid(
                 "offline original binding disagrees with held reader",
@@ -51,7 +59,7 @@ impl CommittedColdLease {
         {
             return Err(invalid("offline original FileID or extent changed"));
         }
-        verify_file(&mut reader, digest, bytes, &|| false)?;
+        verify_file(&mut reader, digest, bytes, cancelled)?;
         if file_identity(&reader)? != self._original.identity {
             return Err(invalid(
                 "offline original identity changed during verification",

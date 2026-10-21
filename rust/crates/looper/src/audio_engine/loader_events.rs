@@ -69,7 +69,8 @@ fn identity(event: &LoaderEvent) -> (usize, u64) {
         | LoaderEvent::TaskProgress { id, request_id, .. }
         | LoaderEvent::TaskSuccess { id, request_id, .. }
         | LoaderEvent::TaskError { id, request_id, .. }
-        | LoaderEvent::OfflineAnalysisCompleted { id, request_id, .. } => (*id, *request_id),
+        | LoaderEvent::OfflineAnalysisCompleted { id, request_id, .. }
+        | LoaderEvent::SourceBeatmapCompleted { id, request_id, .. } => (*id, *request_id),
     }
 }
 
@@ -90,7 +91,8 @@ fn project_slot(event: &mut LoaderEvent, slot: usize) {
         | LoaderEvent::TaskProgress { id, .. }
         | LoaderEvent::TaskSuccess { id, .. }
         | LoaderEvent::TaskError { id, .. }
-        | LoaderEvent::OfflineAnalysisCompleted { id, .. } => *id = slot,
+        | LoaderEvent::OfflineAnalysisCompleted { id, .. }
+        | LoaderEvent::SourceBeatmapCompleted { id, .. } => *id = slot,
         LoaderEvent::NativeOwned { .. } => unreachable!("payload is unwrapped"),
     }
 }
@@ -132,6 +134,16 @@ pub(super) fn poll(
             LoaderEvent::NativeOwned { owner, .. } => Some(owner.clone()),
             _ => None,
         };
+        if native_owner.is_none()
+            && matches!(
+                payload(&mut event),
+                LoaderEvent::SourceBeatmapCompleted { .. }
+            )
+        {
+            // A data-shaped payload cannot manufacture the original request's
+            // verified source custody or content-placement delivery authority.
+            continue;
+        }
         let (captured_id, request_id) = identity(&event);
         let id = if let Some(owner) = native_owner.as_ref() {
             if !owner.belongs_to(&engine.input_runtime_ownership) {
@@ -286,6 +298,18 @@ pub(super) fn poll(
             dict.set_item("id", id)?;
             dict.set_item("request_id", request_id)?;
             dict.set_item("result_json", result_json)?;
+        }
+        LoaderEvent::SourceBeatmapCompleted {
+            id,
+            request_id,
+            map,
+        } => {
+            dict.set_item("type", "source_beatmap_completed")?;
+            dict.set_item("id", id)?;
+            dict.set_item("request_id", request_id)?;
+            // O(1) native Arc transfer; JSON serialization remains an explicit
+            // data query, never ordinary event polling of a possibly64MiB map.
+            dict.set_item("map", Py::new(py, map)?)?;
         }
         LoaderEvent::Started { id, request_id } => {
             dict.set_item("type", "started")?;

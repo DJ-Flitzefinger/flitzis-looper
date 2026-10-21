@@ -14,7 +14,7 @@ use pyo3::exceptions::PyRuntimeError;
 use std::io::{self, Read, Seek, SeekFrom, Write};
 use std::ops::Range;
 use std::sync::Arc;
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 
 #[cfg(test)]
 #[path = "source_custody_tests.rs"]
@@ -26,6 +26,7 @@ pub(super) const READER_SCRATCH_BYTES: usize = CHUNK_SAMPLES * 12;
 pub(super) struct CompleteSourceReader {
     pub(super) reference: SampleBuffer,
     lease: Option<CommittedColdLease>,
+    lease_generation: u64,
     pub(super) guard: Option<CompleteSourceGuard>,
     pub(super) analysis_owner: Option<NativeAnalysisOwner>,
 }
@@ -36,6 +37,7 @@ pub(super) struct CompleteSourceReader {
 pub(crate) struct NativeAnalysisOwner {
     source: CompleteSourceGuard,
     epoch: Option<(Arc<AtomicU64>, u64)>,
+    cancellation: Option<Arc<AtomicBool>>,
 }
 
 impl std::fmt::Debug for NativeAnalysisOwner {
@@ -60,19 +62,32 @@ impl NativeAnalysisOwner {
             (None, None) => true,
             _ => false,
         };
+        let same_cancellation = match (&self.cancellation, &other.cancellation) {
+            (Some(left), Some(right)) => Arc::ptr_eq(left, right),
+            (None, None) => true,
+            _ => false,
+        };
         same_epoch
+            && same_cancellation
             && Arc::ptr_eq(&self.source.ownership, &other.source.ownership)
             && self.source.binding.same_projection(&other.source.binding)
             && self.source.generation == other.source.generation
             && self.source.rate == other.source.rate
     }
-    /// Called under the existing request lock, immediately after its accepted advance.
+    /// Capture the current epoch under the existing request lock, after any purpose-specific advance.
     pub(super) fn new(source: CompleteSourceGuard, epoch: Arc<AtomicU64>) -> Self {
         let admitted_epoch = epoch.load(Ordering::Acquire);
         Self {
             source,
             epoch: Some((epoch, admitted_epoch)),
+            cancellation: None,
         }
+    }
+
+    /// Map-only terminal delivery keeps the exact original request's cancellation.
+    pub(super) fn with_cancellation(mut self, cancellation: Arc<AtomicBool>) -> Self {
+        self.cancellation = Some(cancellation);
+        self
     }
 
     /// The actual source publisher carries its original Native permit into delivery.
@@ -91,10 +106,19 @@ impl NativeAnalysisOwner {
                 ownership: publication.ownership.clone(),
             },
             epoch: None,
+            cancellation: None,
         }
     }
 
     pub(super) fn current(&self) -> bool {
+        !self
+            .cancellation
+            .as_ref()
+            .is_some_and(|flag| flag.load(Ordering::Acquire))
+            && self.request_current()
+    }
+
+    fn request_current(&self) -> bool {
         self.source.current()
             && self
                 .epoch
@@ -241,27 +265,22 @@ impl CompleteSourceReader {
         id: usize,
         reference: SampleBuffer,
     ) -> Result<Self, String> {
-        let finite =
-            reference.resident_start() != 0 || reference.resident_end() != reference.frame_count();
-        let lease = if finite {
-            Some(
-                engine
-                    .cold_leases
-                    .lock()
-                    .map_err(|_| "complete lease lock poisoned")?
-                    .get(id)
-                    .and_then(Clone::clone)
-                    .ok_or("complete source lease unavailable")?,
-            )
-        } else {
-            None
-        };
+        // Keep the exact optional assignment even for complete residency. Ordinary
+        // complete PCM reads still use RAM; map acceptance separately requires it.
+        let leases = engine
+            .cold_leases
+            .lock()
+            .map_err(|_| "complete lease lock poisoned")?;
+        let lease = leases.get(id).and_then(Clone::clone);
+        let lease_generation = engine.cold_lease_generations[id].load(Ordering::Acquire);
+        drop(leases);
         let (generation, rate) = engine
             .loaded_source_generations
             .lock()
             .map_err(|_| "source generation lock poisoned")?[id];
         let guard = CompleteSourceGuard::capture(engine, id, &reference, generation, rate)?;
         let mut reader = Self::new(reference, lease)?;
+        reader.lease_generation = lease_generation;
         reader.guard = Some(guard);
         Ok(reader)
     }
@@ -295,9 +314,48 @@ impl CompleteSourceReader {
         Ok(Self {
             reference,
             lease,
+            lease_generation: 0,
             guard: None,
             analysis_owner: None,
         })
+    }
+
+    /// Map-only bounded admission checks; JSON metadata is never a custody permit.
+    pub(super) fn require_map_custody(&self) -> Result<(), String> {
+        let lease = self
+            .lease
+            .as_ref()
+            .ok_or("source beatmap cold lease unavailable")?;
+        let guard = self
+            .guard
+            .as_ref()
+            .ok_or("source beatmap owner unavailable")?;
+        if !guard.current() || self.lease_generation != guard.generation {
+            return Err("source beatmap cold lease generation is stale".into());
+        }
+        lease
+            .verify_reference(&self.reference)
+            .map_err(|error| error.to_string())
+    }
+
+    /// Worker-only actual original verification under the same captured assignment.
+    pub(super) fn verify_source_beatmap(
+        &self,
+        map: &super::source_beatmap::SourceBeatmap,
+        cancelled: &impl Fn() -> bool,
+    ) -> Result<(), String> {
+        self.require_map_custody()?;
+        let lease = self
+            .lease
+            .as_ref()
+            .ok_or("source beatmap cold lease unavailable")?;
+        if map.source_identity() != lease.manifest.decoder_identity.as_str() {
+            return Err("source beatmap decoder identity differs from held source".into());
+        }
+        lease
+            .verify_original_for_offline_cancellable(cancelled)
+            .map_err(|error| error.to_string())?;
+        self.require_map_custody()
     }
 
     pub(super) fn held_bytes(&self) -> Result<usize, String> {
@@ -341,7 +399,13 @@ impl CompleteSourceReader {
         check()?;
         let channels = self.reference.channels;
         let frames_per_chunk = CHUNK_SAMPLES / channels;
-        if let Some(lease) = self.lease.as_ref() {
+        if self.reference.resident_start() != 0
+            || self.reference.resident_end() != self.reference.frame_count()
+        {
+            let lease = self
+                .lease
+                .as_ref()
+                .ok_or_else(|| io::Error::other("complete source lease unavailable"))?;
             let mut file = lease.open_complete_reader(&self.reference)?;
             let offset = region
                 .start
@@ -406,6 +470,11 @@ impl CompleteSourceReader {
     ) -> Result<SampleBuffer, String> {
         if cancelled() || self.guard.as_ref().is_some_and(|guard| !guard.current()) {
             return Err("complete source read cancelled".into());
+        }
+        if self.reference.resident_start() == 0
+            && self.reference.resident_end() == self.reference.frame_count()
+        {
+            return Ok(self.reference.clone());
         }
         match self.lease.as_ref() {
             Some(lease) => lease

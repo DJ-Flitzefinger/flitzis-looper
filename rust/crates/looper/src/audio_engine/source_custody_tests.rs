@@ -121,11 +121,21 @@ mod cold {
         directory: tempfile::TempDir,
         producer: Arc<Mutex<Producer<ControlMessage>>>,
         consumer: Consumer<ControlMessage>,
-        mixer: RtMixer,
+        // Match the production stream's heap-owned mixer. Returning multiple
+        // inline mixers through fixture branches overflows the default test stack.
+        mixer: Box<RtMixer>,
     }
 
     impl ColdCustody {
         fn new() -> Self {
+            Self::new_selected(Some(ResidentLoadHint {
+                start_s: 32.0 / 48_000.0,
+                end_s: 64.0 / 48_000.0,
+                key_lock: false,
+            }))
+        }
+
+        fn new_selected(hint: Option<ResidentLoadHint>) -> Self {
             pyo3::Python::initialize();
             let directory = tempfile::tempdir().unwrap();
             let mut bytes = Vec::new();
@@ -151,7 +161,7 @@ mod cold {
             let producer = Arc::new(Mutex::new(producer));
             let (_, feedback) = RingBuffer::<AudioMessage>::new(8);
             engine.test_control_channels = Some((producer.clone(), Arc::new(Mutex::new(feedback))));
-            let mut mixer = RtMixer::new(2, 48_000.0);
+            let mut mixer = Box::new(RtMixer::new(2, 48_000.0));
             mixer.set_input_runtime_ownership(engine.input_runtime_ownership.clone());
             mixer.set_current_timing_acknowledgements(
                 engine.current_timing_acknowledgements.clone(),
@@ -164,12 +174,12 @@ mod cold {
                 consumer,
                 mixer,
             };
-            fixture.load_and_ack(0);
-            fixture.load_and_ack(1);
+            fixture.load_and_ack_selected(0, hint);
+            fixture.load_and_ack_selected(1, hint);
             fixture
         }
 
-        fn load_and_ack(&mut self, id: usize) {
+        fn load_and_ack_selected(&mut self, id: usize, hint: Option<ResidentLoadHint>) {
             let request = crate::audio_engine::cold_load::admit_for_format_selected(
                 &self.engine,
                 id,
@@ -178,16 +188,7 @@ mod cold {
                     .join("external.wav")
                     .to_string_lossy()
                     .into(),
-                (
-                    false,
-                    false,
-                    true,
-                    Some(ResidentLoadHint {
-                        start_s: 32.0 / 48_000.0,
-                        end_s: 64.0 / 48_000.0,
-                        key_lock: false,
-                    }),
-                ),
+                (false, false, true, hint),
                 self.producer.clone(),
                 (2, 48_000, self.directory.path().join("samples")),
             )
@@ -206,9 +207,9 @@ mod cold {
                 .clone()
                 .unwrap();
             assert_eq!(sample.frame_count(), 128);
-            assert_eq!(sample.resident_start(), 32);
-            assert_eq!(sample.resident_end(), 64);
-            assert_eq!(sample.samples.len(), 64);
+            assert_eq!(sample.resident_start(), if hint.is_some() { 32 } else { 0 });
+            assert_eq!(sample.resident_end(), if hint.is_some() { 64 } else { 128 });
+            assert_eq!(sample.samples.len(), if hint.is_some() { 64 } else { 256 });
             assert_eq!(
                 self.engine.loaded_source_generations.lock().unwrap()[id],
                 (request, 48_000)
@@ -423,5 +424,9 @@ mod cold {
                 .open(&lease.original_path)
                 .is_err()
         );
+    }
+
+    mod source_beatmap_custody_tests {
+        include!("source_beatmap_custody_tests.rs");
     }
 }

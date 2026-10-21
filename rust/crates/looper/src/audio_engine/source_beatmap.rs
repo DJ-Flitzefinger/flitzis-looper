@@ -29,10 +29,20 @@ pub struct SourceBeatmap {
 }
 
 impl SourceBeatmap {
-    fn parse(encoded: &str) -> Result<Self, String> {
+    pub(super) fn parse(encoded: &str) -> Result<Self, String> {
         Ok(Self {
             inner: Arc::new(record::parse(encoded)?),
         })
+    }
+}
+
+impl std::fmt::Debug for SourceBeatmap {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("SourceBeatmap")
+            .field("revision", &self.inner.revision)
+            .field("source_identity", &self.inner.source_identity)
+            .finish_non_exhaustive()
     }
 }
 
@@ -56,7 +66,7 @@ impl SourceBeatmap {
         &self.inner.revision
     }
 
-    fn source_identity(&self) -> &str {
+    pub(super) fn source_identity(&self) -> &str {
         &self.inner.source_identity
     }
 
