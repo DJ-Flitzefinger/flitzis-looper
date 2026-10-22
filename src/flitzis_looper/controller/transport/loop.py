@@ -20,6 +20,7 @@ from flitzis_looper.controller.scalar_grid import (
 from flitzis_looper.controller.timing_metadata import timing_anchor_sec_from_analysis
 from flitzis_looper.controller.validation import ensure_finite
 from flitzis_looper.models import validate_sample_id
+from flitzis_looper.timing_policy import variable_source_timing
 
 if TYPE_CHECKING:
     from flitzis_looper.controller.source_beatmap_selection import SourceBeatmapSelection
@@ -57,6 +58,16 @@ class PadLoopController:
     def _source_map_selected(self, sample_id: int) -> bool:
         return self._source_maps is not None and self._source_maps.is_selected(sample_id)
 
+    def _variable_map_selected(self, sample_id: int) -> bool:
+        return variable_source_timing(
+            self._project.global_timing_policy
+        ) and self._source_map_selected(sample_id)
+
+    def _requires_variable_map(self, sample_id: int) -> bool:
+        return variable_source_timing(
+            self._project.global_timing_policy
+        ) and self._project.resolve_pad_source_sync(sample_id)
+
     def _source_map_snapshot(self, sample_id: int) -> tuple[SourceBeatmap, int, float]:
         geometry = None if self._source_maps is None else self._source_maps.effective(sample_id)
         if geometry is None:
@@ -93,6 +104,9 @@ class PadLoopController:
         return physical_source_marker_s(value, sample_rate_hz=sample_rate_hz)
 
     def _capture_source_map_edit(self, sample_id: int) -> _SourceMapLoopEdit:
+        if not variable_source_timing(self._project.global_timing_policy):
+            message = "Realtime BPM is OFF; source-map physical loop actions are unavailable."
+            raise ValueError(message)
         generation = self._transport.capture_current_pad_edit_generation(sample_id)
         if generation is None:
             message = "Source map loop editing requires the current source generation"
@@ -188,7 +202,7 @@ class PadLoopController:
             start,
             end,
             bars=bars,
-            auto=self._project.pad_source_sync_intent[sample_id].requested,
+            auto=self._project.resolve_pad_source_sync(sample_id),
         )
 
     def snap_source_map_markers(self, sample_id: int) -> None:
@@ -214,7 +228,7 @@ class PadLoopController:
             edit,
             start,
             end,
-            auto=self._project.pad_source_sync_intent[sample_id].requested,
+            auto=self._project.resolve_pad_source_sync(sample_id),
         )
 
     def _set_source_map_end(self, sample_id: int, end: float | None) -> None:
@@ -651,7 +665,7 @@ class PadLoopController:
         validate_sample_id(sample_id)
 
         timing = self._resolve_timing(sample_id, timing)
-        if self._source_map_selected(sample_id):
+        if self._variable_map_selected(sample_id) or self._requires_variable_map(sample_id):
             return self._max_source_map_bars(sample_id, timing=timing)
         if timing is None:
             return None
@@ -702,7 +716,9 @@ class PadLoopController:
         timing = self._resolve_timing(sample_id, timing)
         start_s, end_s = start, end
 
-        mapped = self._mapped_auto_region(sample_id, start=start, bars=bars) if auto else None
+        mapped = (
+            self._auto_policy_region(sample_id, start=start, end=end, bars=bars) if auto else None
+        )
         if mapped is not None:
             return mapped
 
@@ -746,13 +762,42 @@ class PadLoopController:
             end_s_effective = min(end_s_effective, physical_end)
         return (start_s, end_s_effective)
 
+    def _auto_policy_region(
+        self, sample_id: int, *, start: float, end: float | None, bars: float
+    ) -> tuple[float, float | None] | None:
+        policy = self._project.global_timing_policy
+        preserve = (
+            not policy.is_neutral
+            and variable_source_timing(policy)
+            and not self._project.resolve_pad_source_sync(sample_id)
+        )
+        try:
+            mapped = self._mapped_auto_region(sample_id, start=start, bars=bars)
+        except RuntimeError, ValueError:
+            if not preserve:
+                raise
+            mapped = None
+        if mapped is None and preserve and self._source_map_selected(sample_id):
+            # OFF playback can retain its existing physical loop while variable
+            # grid/auto-map edits remain unsupported. Never relabel it as fixed bars.
+            return start, end
+        return mapped
+
     def _mapped_auto_region(
         self, sample_id: int, *, start: float, bars: float
     ) -> tuple[float, float] | None:
-        if not self._project.pad_source_sync_intent[sample_id].requested:
+        policy = self._project.global_timing_policy
+        if not variable_source_timing(policy):
+            return None
+        if not self._project.resolve_pad_source_sync(sample_id) and (
+            policy.is_neutral or not self._source_map_selected(sample_id)
+        ):
             return None
         geometry = None if self._source_maps is None else self._source_maps.effective(sample_id)
         if geometry is None:
+            if self._project.resolve_pad_source_sync(sample_id):
+                message = "Variable SYNC requires a qualified source map."
+                raise ValueError(message)
             return None
         rate = geometry.editor_info()["sample_rate_hz"]
         start = physical_source_marker_s(start, sample_rate_hz=rate)
@@ -792,7 +837,7 @@ class PadLoopController:
         if enabled == self._transport._project.pad_loop_auto[sample_id]:
             return
 
-        if enabled and self._project.pad_source_sync_intent[sample_id].requested:
+        if enabled and self._requires_variable_map(sample_id):
             # An explicit mapped bar cycle preserves the physical chosen start.
             # Scalar grid snapping would move it under a different timing owner.
             self.apply_source_map_bars(sample_id)
@@ -815,7 +860,7 @@ class PadLoopController:
 
     def set_bars(self, sample_id: int, *, bars: float) -> None:
         validate_sample_id(sample_id)
-        if self._source_map_selected(sample_id):
+        if self._variable_map_selected(sample_id):
             self.apply_source_map_bars(sample_id, bars)
             return
         generation = self._transport.capture_current_pad_edit_generation(sample_id)
@@ -839,7 +884,7 @@ class PadLoopController:
     def set_start(self, sample_id: int, start_s: float) -> None:
         validate_sample_id(sample_id)
         ensure_finite(start_s)
-        if self._source_map_selected(sample_id) and self._project.pad_loop_auto[sample_id]:
+        if self._variable_map_selected(sample_id) and self._project.pad_loop_auto[sample_id]:
             self._set_source_map_start(sample_id, start_s)
             return
         generation = self._transport.capture_current_pad_edit_generation(sample_id)
@@ -871,7 +916,7 @@ class PadLoopController:
         validate_sample_id(sample_id)
         if end_s is not None:
             ensure_finite(end_s)
-        if self._source_map_selected(sample_id) and self._project.pad_loop_auto[sample_id]:
+        if self._variable_map_selected(sample_id) and self._project.pad_loop_auto[sample_id]:
             self._set_source_map_end(sample_id, end_s)
             return
         generation = self._transport.capture_current_pad_edit_generation(sample_id)

@@ -81,7 +81,7 @@ fn drain_with_mode(fixture: &mut Fixture, mut mode: TriggerQuantization) {
 
 /// Bound the host wait while virtual playback remains fixed. This proves readiness,
 /// not a CPAL/device deadline or performer listening acceptance.
-fn wait_ready(fixture: &mut Fixture, sequences: &[u64]) {
+pub(in crate::audio_engine) fn wait_ready(fixture: &mut Fixture, sequences: &[u64]) {
     let frame = fixture.transport.output_frame();
     let deadline = Instant::now() + WORKER_WAIT;
     loop {
@@ -102,7 +102,7 @@ fn wait_ready(fixture: &mut Fixture, sequences: &[u64]) {
     assert_eq!(fixture.transport.output_frame(), frame);
 }
 
-fn complete_attack(fixture: &mut Fixture, execution: u64) -> Vec<f32> {
+pub(in crate::audio_engine) fn complete_attack(fixture: &mut Fixture, execution: u64) -> Vec<f32> {
     let before = fixture.render_to(execution);
     assert!(before.iter().all(|sample| *sample == 0.0));
     // Include the actual first output sample. No startup or FIFO prefix is discarded.

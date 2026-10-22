@@ -8,6 +8,7 @@ from weakref import WeakKeyDictionary
 
 from imgui_bundle import imgui
 
+from flitzis_looper.timing_policy import variable_source_timing
 from flitzis_looper.ui.constants import SPACING, TEXT_MUTED_RGBA
 
 if TYPE_CHECKING:
@@ -207,6 +208,13 @@ def _status_line(label: str) -> None:
 
 
 def _local_tempo_label(ctx: UiContext, frame: SourceMapEditorFrame) -> str:
+    if not variable_source_timing(ctx.state.project.global_timing_policy):
+        timing = ctx.state.pads.current_timing(frame.pad_id)
+        return (
+            "Fixed source BPM unavailable"
+            if timing is None
+            else f"Fixed source BPM {timing.bpm:.3f}"
+        )
     if frame.geometry is None:
         return "Source BPM unavailable"
     position = ctx.state.session.pad_playhead_s[frame.pad_id]
@@ -799,8 +807,9 @@ def _render_source_map_controls(
 ) -> None:
     state = _inputs(ctx, frame)
     sync = ctx.audio.pads.source_sync_status(frame.pad_id)
+    preference = ctx.audio.pads.source_sync_preference(frame.pad_id)
     imgui.begin_disabled(frame.identity is None)
-    if imgui.button(f"SYNC {'ON' if sync.requested else 'OFF'}##source-sync-toggle", (-1, 0)):
+    if imgui.button(f"SYNC PAD {'ON' if preference else 'OFF'}##source-sync-toggle", (-1, 0)):
         ctx.audio.pads.toggle_source_sync(frame.pad_id)
     imgui.end_disabled()
     effective = "unconfirmed" if sync.effective is None else "ON" if sync.effective else "OFF"
@@ -812,9 +821,7 @@ def _render_source_map_controls(
     finally:
         imgui.pop_id()
     if sync.state in {"pending", "stopped"}:
-        imgui.text_wrapped(
-            "Start/retrigger applies the requested mode when its source map is ready."
-        )
+        imgui.text_wrapped("Start/retrigger to apply this timing change.")
     expanded = imgui.collapsing_header("Source Map##source-map-controls")
     revision = "" if frame.revision is None else f" | Revision {frame.revision[:12]}"
     label = f"Source map {frame.status}{revision} | {_local_tempo_label(ctx, frame)}"

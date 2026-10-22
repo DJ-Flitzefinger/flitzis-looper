@@ -16,8 +16,10 @@ wrapping and MUST NOT silently change other controls or cancel map preparation.
 ### Requirement: Existing runtime publication carries genuine map custody
 The existing complete input-runtime publication SHALL carry the separate SYNC
 request revision and only a current original source-qualified Native delivery.
-Requested SYNC without a usable map MUST remain requested but unavailable; it
-MUST NOT fall back to scalar launch or reconstruct authority from receipt data.
+Requested variable-map SYNC without a usable map MUST remain requested but
+unavailable; it MUST NOT fall back to scalar launch or reconstruct authority from
+receipt data. Explicit fixed timing selected through the separate global tempo
+policy uses its own current constant-timing contract; it is not a missing-map fallback.
 Same-frame GUI capture and mapped device capture SHALL observe current intent.
 Reserved arrangement rows MUST retain their whole previously published state
 until the existing actual completion/mirror permits replacement.

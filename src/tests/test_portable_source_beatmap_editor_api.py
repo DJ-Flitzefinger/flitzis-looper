@@ -64,6 +64,21 @@ def _info(self: object) -> Never:
     _forbidden()
 
 
+def _runtime(
+    self: object,
+    multi_loop: object,
+    loaded: list[bool],
+    loop_starts: list[float],
+    loop_ends: list[float | None],
+    bindings: object = None,
+    pitch_rows: object = None,
+    source_map_rows: object = None,
+    *,
+    timing_policy_json: str | None = None,
+) -> Never:
+    _forbidden()
+
+
 def _span(self: object, first_anchor_index: int, last_anchor_index: int) -> Never:
     _forbidden()
 
@@ -107,6 +122,8 @@ def source_beatmap_editor_native_module(engine_base: type = object) -> SimpleNam
             (engine_base,),
             {
                 "__init__": _forbidden,
+                "GLOBAL_TIMING_POLICY_API_VERSION": 1,
+                "set_input_runtime_state": _runtime,
                 "begin_source_beatmap_create_async": _create,
                 "begin_source_beatmap_edit_async": _edit,
                 "begin_source_beatmap_raw_async": _raw,
@@ -224,6 +241,33 @@ def test_previous_methods_without_correction_version_reject_stale_native() -> No
     native = source_beatmap_editor_native_module()
     delattr(native.SourceBeatmap, "EDITOR_CORRECTION_API_VERSION")
     with pytest.raises(AssertionError, match="EDITOR_CORRECTION_API_VERSION"):
+        _check(native)
+
+
+@pytest.mark.parametrize("invalid", [None, False, True, 1.0, "1", 0, 2])
+def test_global_policy_requires_exact_integer_capability(invalid: object) -> None:
+    native = source_beatmap_editor_native_module()
+    native.AudioEngine.GLOBAL_TIMING_POLICY_API_VERSION = invalid
+    with pytest.raises(AssertionError, match="GLOBAL_TIMING_POLICY_API_VERSION"):
+        _check(native)
+
+
+@pytest.mark.parametrize("invalid", ["missing", "positional", "required", "default-false"])
+def test_global_policy_requires_optional_keyword_only_publication(invalid: str) -> None:
+    native = source_beatmap_editor_native_module()
+    complete = signature(native.AudioEngine.set_input_runtime_state)
+    parameters = list(complete.parameters.values())
+    parameter = parameters.pop()
+    if invalid == "positional":
+        parameters.append(parameter.replace(kind=Parameter.POSITIONAL_OR_KEYWORD))
+    elif invalid == "required":
+        parameters.append(parameter.replace(default=Parameter.empty))
+    elif invalid == "default-false":
+        parameters.append(parameter.replace(default=False))
+    _replace_signature(
+        native.AudioEngine, "set_input_runtime_state", complete.replace(parameters=parameters)
+    )
+    with pytest.raises(AssertionError, match="timing_policy_json"):
         _check(native)
 
 

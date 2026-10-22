@@ -1,5 +1,17 @@
 # Shared-material PCM and extended pre-Rust delivery program
 
+Latest Human priority2026-10-22: finish usable original-fullmix SYNC first;
+Drum-D remains a conditional analysis alternative, not a stem prerequisite.
+Add independent global Realtime BPM and SYNC controls while retaining the set
+master tempo. Realtime OFF uses initial constant timing; ON requires qualified
+variable geometry for mapped synchronization. Preserve PAD preferences and
+truthful pending/actual adoption. See
+[global timing policy](../openspec/changes/add-global-tempo-sync-policy/design.md).
+These controls do not close automatic-map, renderer/onset, continuous live,
+B2/default-cutover, musical/Human or other full-program gates. The existing
+48 IDs/78 edges/189 rows and all remaining obligations stay binding; stop before
+the full Rust port/Slice8. Older execution priorities below are historical.
+
 Latest Human execution priority2026-10-14: finish the current Controller/Durable/
 Hold delivery, then its actually needed remaining R2 ownership/selection foundation
 and the rate/map/finite/DSP prerequisites for a complete testable Key + Transposition,

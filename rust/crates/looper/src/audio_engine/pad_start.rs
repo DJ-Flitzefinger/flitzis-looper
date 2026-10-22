@@ -137,6 +137,7 @@ struct PadStartOwner {
     received_at_ns: u64,
     sequence: u64,
     mapped: Option<Arc<MappedStartSource>>,
+    sync_request: super::source_sync_policy::SourceSyncRequest,
     input_owners: InputOwners,
     work: Mutex<Option<Box<OrdinaryStartWork>>>,
     publication: OnceLock<PublishedBinding>,
@@ -341,6 +342,7 @@ impl CapturedPadStart {
         let launch_cancel_revision = ownership
             .launch_revision_for_cell(key.cell())
             .load(Ordering::Acquire);
+        let sync_request = source_map.request();
         let mapped = source_map
             .admit(&ownership, binding)?
             .map(|qualified| {
@@ -371,6 +373,7 @@ impl CapturedPadStart {
                 received_at_ns,
                 sequence,
                 mapped,
+                sync_request,
                 input_owners,
                 work: Mutex::new(Some(work)),
                 publication: OnceLock::new(),
@@ -405,6 +408,10 @@ impl CapturedPadStart {
     /// Borrow immutable admitted geometry; its original owner retains all source/artifact pins.
     pub(crate) fn mapped_geometry(&self) -> Option<&MappedLoopGeometry> {
         self.owner.mapped.as_ref().map(|mapped| &mapped.geometry)
+    }
+
+    pub(crate) fn sync_request(&self) -> super::source_sync_policy::SourceSyncRequest {
+        self.owner.sync_request
     }
 
     /// Share only the original immutable qualified map, never this owner's mutable Work.

@@ -7,6 +7,7 @@ from imgui_bundle import ImVec4, icons_fontawesome_6, imgui, imgui_ctx, implot
 
 from flitzis_looper.constants import PAD_LOOP_BARS_MIN
 from flitzis_looper.controller.current_timing import UNRESOLVED_TIMING, UnresolvedTiming
+from flitzis_looper.timing_policy import variable_source_timing
 from flitzis_looper.ui.constants import (
     PLOT_FILL_RGBA,
     PLOT_MARKER_RGBA,
@@ -322,10 +323,14 @@ def _render_loop_controls_body(
     if _render_text_button("ALL##wf_loop_all", height):
         ctx.audio.pads.set_pad_full_track_loop_region(pad_id)
 
-    map_mode = source_map is not None and source_map.selected
-    map_unavailable = (
+    map_mode = (
         source_map is not None
         and source_map.selected
+        and variable_source_timing(ctx.state.project.global_timing_policy)
+    )
+    map_unavailable = (
+        map_mode
+        and source_map is not None
         and (
             source_map.geometry is None or source_map.status in {"pending", "restoring", "settling"}
         )
@@ -644,7 +649,7 @@ def _plot_musical_grid(
 ) -> None:
     if source_map is None:
         source_map = capture_source_map(ctx, pad_id)
-    if source_map.selected:
+    if source_map.selected and variable_source_timing(ctx.state.project.global_timing_policy):
         _plot_source_map_grid(ctx, source_map, draw_list, start_s, end_s, timing=timing)
         return
     if isinstance(timing, UnresolvedTiming):

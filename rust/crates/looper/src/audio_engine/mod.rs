@@ -202,6 +202,7 @@ mod source_map_admission;
 mod source_map_api;
 mod source_playback;
 mod source_reader;
+mod source_sync_policy;
 mod stem_cache;
 mod stem_pair;
 mod stem_pair_preparation;
@@ -1422,6 +1423,8 @@ impl AudioEngine {
     /// Device-free capability proof for scoped admission and residency interests.
     #[classattr]
     const RESIDENT_PCM_ADMISSION_VERSION: u32 = 2;
+    #[classattr]
+    const GLOBAL_TIMING_POLICY_API_VERSION: u32 = 1;
     /// Seal an already committed immutable disk selection independently of component residency.
     pub fn register_committed_stem_pair(
         &self,
@@ -1992,7 +1995,7 @@ impl AudioEngine {
         Ok(())
     }
 
-    #[pyo3(signature = (multi_loop, loaded, loop_starts, loop_ends, bindings=None, pitch_rows=None, source_map_rows=None))]
+    #[pyo3(signature = (multi_loop, loaded, loop_starts, loop_ends, bindings=None, pitch_rows=None, source_map_rows=None, *, timing_policy_json=None))]
     pub fn set_input_runtime_state(
         &self,
         py: Python<'_>,
@@ -2003,6 +2006,7 @@ impl AudioEngine {
         bindings: Option<Vec<Option<Py<InputRuntimePadBinding>>>>,
         pitch_rows: Option<Vec<Py<PyDict>>>,
         source_map_rows: Option<Vec<Py<PyDict>>>,
+        timing_policy_json: Option<String>,
     ) -> PyResult<()> {
         let runtime = self
             .input_runtime
@@ -2019,7 +2023,7 @@ impl AudioEngine {
             .collect();
         let bindings = borrowed.iter().map(|binding| binding.as_deref()).collect();
         runtime
-            .set_runtime_state_with_source_maps(
+            .set_runtime_state_with_policy(
                 multi_loop,
                 loaded,
                 loop_starts,
@@ -2031,6 +2035,8 @@ impl AudioEngine {
                 source_map_rows
                     .map(|rows| source_map_api::parse_rows(py, rows))
                     .transpose()?,
+                source_sync_policy::GlobalTimingPolicy::parse(timing_policy_json.as_deref())
+                    .map_err(PyValueError::new_err)?,
             )
             .map_err(PyValueError::new_err)
     }

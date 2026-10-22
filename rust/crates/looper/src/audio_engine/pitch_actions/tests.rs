@@ -6,6 +6,7 @@ fn action(ownership: Arc<InputRuntimeOwnership>, key: &str) -> CapturedPitchActi
     let binding = native.binding;
     let spec = PitchActionSpec::parse(key).unwrap();
     CapturedPitchAction::capture(PitchActionAdmission {
+        sync_request: Default::default(),
         key: binding.placement.unwrap().content_key().unwrap(),
         binding,
         ownership,
@@ -46,6 +47,7 @@ fn source_action(
         accepted: None,
     };
     CapturedPitchAction::capture(PitchActionAdmission {
+        sync_request: Default::default(),
         key: binding.placement.unwrap().content_key().unwrap(),
         binding,
         ownership: ownership.clone(),

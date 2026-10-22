@@ -488,6 +488,22 @@ def check_mix_capture_api(native_module: object) -> None:
         _check_mix_capture_signature(owner, method, label, arguments)
 
 
+def _check_global_timing_policy_api(engine: type) -> None:
+    """Reject stale timing publication APIs using reflection alone."""
+    timing_version = getattr(engine, "GLOBAL_TIMING_POLICY_API_VERSION", None)
+    assert type(timing_version) is int, (
+        "Native timing API requires GLOBAL_TIMING_POLICY_API_VERSION=1"
+    )
+    assert timing_version == 1, "Native timing API requires GLOBAL_TIMING_POLICY_API_VERSION=1"
+    runtime = getattr(engine, "set_input_runtime_state", None)
+    assert callable(runtime), "Native timing API missing: set_input_runtime_state"
+    timing_parameter = inspect.signature(runtime).parameters.get("timing_policy_json")
+    timing_error = "Native timing API requires optional keyword-only timing_policy_json=None"
+    assert timing_parameter is not None, timing_error
+    assert timing_parameter.kind == inspect.Parameter.KEYWORD_ONLY, timing_error
+    assert timing_parameter.default is None, timing_error
+
+
 def check_source_beatmap_editor_api(native_module: object) -> None:
     """Reflect the source-qualified editor contract without starting Native work."""
     engine = getattr(native_module, "AudioEngine", None)
@@ -495,6 +511,7 @@ def check_source_beatmap_editor_api(native_module: object) -> None:
     raw_candidate = getattr(native_module, "SourceBeatmapRawCandidate", None)
     job = getattr(native_module, "OfflineAnalysisJob", None)
     assert isinstance(engine, type), "Native source beatmap editor API missing type: AudioEngine"
+    _check_global_timing_policy_api(engine)
     assert isinstance(beatmap, type), "Native source beatmap editor API missing type: SourceBeatmap"
     assert isinstance(raw_candidate, type), (
         "Native source beatmap editor API missing type: SourceBeatmapRawCandidate"

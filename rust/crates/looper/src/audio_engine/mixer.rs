@@ -497,7 +497,8 @@ impl RtMixer {
         {
             let needs_native = [
                 voice.source_playback.tempo_ratio(),
-                self.tempo_ratio_for_source_period(self.timing_for_voice(voice).period_seconds()),
+                self.tempo_ratio_for_voice(voice)
+                    .ok_or(PadPitchApplyError::PreparationUnavailable)?,
             ]
             .into_iter()
             .any(|rate| {
@@ -582,7 +583,7 @@ impl RtMixer {
             {
                 return None;
             }
-        } else if !playback.set_target(self.tempo_ratio_for_source_period(timing.period_seconds()))
+        } else if !playback.set_target(self.tempo_ratio_for_voice(voice)?)
             || !playback.configure_domain(timing.loop_domain(sample.frame_count(), region))
         {
             return None;
@@ -4233,9 +4234,8 @@ impl RtMixer {
                 && voice.sample_id == id
                 && [
                     voice.source_playback.tempo_ratio(),
-                    self.tempo_ratio_for_source_period(
-                        self.timing_for_voice(voice).period_seconds(),
-                    ),
+                    self.tempo_ratio_for_voice(voice)
+                        .unwrap_or(voice.source_playback.rate_target()),
                 ]
                 .into_iter()
                 .any(|ratio| {
@@ -4345,7 +4345,8 @@ impl RtMixer {
             }
             if [
                 voice.source_playback.tempo_ratio(),
-                self.tempo_ratio_for_source_period(self.timing_for_voice(voice).period_seconds()),
+                self.tempo_ratio_for_voice(voice)
+                    .unwrap_or(voice.source_playback.rate_target()),
             ]
             .into_iter()
             .any(|ratio| {
@@ -4664,6 +4665,8 @@ impl RtMixer {
         let mut active = false;
         let mut coherent = true;
         let mut witness = None;
+        let mut policy_coherent = true;
+        let mut policy: Option<super::source_sync_policy::SourceSyncObservation> = None;
         for voice in self
             .voices
             .iter()
@@ -4694,6 +4697,35 @@ impl RtMixer {
                 (Some(previous), Some(actual)) if previous != actual => coherent = false,
                 _ => {}
             }
+            if !current {
+                policy_coherent = false;
+                continue;
+            }
+            let request = voice.sync_request;
+            let settled = match request.mode {
+                super::source_sync_policy::SourceSyncMode::Mapped => {
+                    voice.source_playback.is_mapped() && actual.is_some()
+                }
+                super::source_sync_policy::SourceSyncMode::Legacy => {
+                    !voice.source_playback.is_mapped()
+                }
+                super::source_sync_policy::SourceSyncMode::Off
+                | super::source_sync_policy::SourceSyncMode::Fixed => {
+                    !voice.source_playback.is_mapped()
+                        && self.tempo_ratio_for_voice(voice).is_some_and(|ratio| {
+                            voice.source_playback.rate_target().to_bits() == ratio.to_bits()
+                                && voice.source_playback.tempo_ratio().to_bits() == ratio.to_bits()
+                        })
+                }
+            };
+            match &mut policy {
+                None => {
+                    policy =
+                        Some(super::source_sync_policy::SourceSyncObservation { request, settled })
+                }
+                Some(previous) if previous.request == request => previous.settled &= settled,
+                Some(_) => policy_coherent = false,
+            }
         }
         self.input_runtime_ownership
             .publish_callback_source_sync_status(
@@ -4704,7 +4736,15 @@ impl RtMixer {
                     source_address: sample.source_address(),
                     window_revision: sample.window_revision(),
                     active,
-                    witness: (active && coherent).then_some(witness).flatten(),
+                    witness: (active
+                        && coherent
+                        && policy_coherent
+                        && policy.is_some_and(|policy| {
+                            policy.request.mode == super::source_sync_policy::SourceSyncMode::Mapped
+                        }))
+                    .then_some(witness)
+                    .flatten(),
+                    policy: (active && policy_coherent).then_some(policy).flatten(),
                 },
             );
     }
@@ -5289,6 +5329,13 @@ impl RtMixer {
     }
 
     pub(crate) fn transport_reference_period_for_sample_id(&self, id: usize) -> Option<f64> {
+        if self.voices.iter().any(|voice| {
+            voice.active && voice.sample_id == id && voice.sync_request.global_revision.is_some()
+        }) {
+            // Explicit source policy never turns a source's local/initial period
+            // into a new master. The existing master remains the sole target.
+            return self.master_period_seconds;
+        }
         if self.bpm_lock_enabled {
             // Rate clipping cannot redefine the requested master period.
             self.master_period_seconds
@@ -5356,19 +5403,32 @@ impl RtMixer {
         speed: f64,
         master_period: Option<f64>,
     ) -> f64 {
-        let mut ratio = speed;
+        self.tempo_ratio_for_request_with_rate(
+            super::source_sync_policy::SourceSyncRequest::default(),
+            source_period,
+            speed,
+            master_period,
+        )
+        .expect("legacy scalar arithmetic always produces its established bounded ratio")
+    }
 
-        if self.bpm_lock_enabled
-            && let (Some(master_period), Some(source_period)) = (master_period, source_period)
-        {
-            ratio = source_period / master_period;
-        }
+    fn tempo_ratio_for_request_with_rate(
+        &self,
+        request: super::source_sync_policy::SourceSyncRequest,
+        source_period: Option<f64>,
+        speed: f64,
+        master_period: Option<f64>,
+    ) -> Option<f64> {
+        request.scalar_ratio(source_period, speed, master_period, self.bpm_lock_enabled)
+    }
 
-        if !ratio.is_finite() {
-            ratio = 1.0;
-        }
-
-        ratio.clamp(SPEED_MIN, SPEED_MAX)
+    fn tempo_ratio_for_voice(&self, voice: &VoiceSlot) -> Option<f64> {
+        self.tempo_ratio_for_request_with_rate(
+            voice.sync_request,
+            self.timing_for_voice(voice).period_seconds(),
+            self.speed,
+            self.master_period_seconds,
+        )
     }
 
     /// Stops all voices playing a specific sample.
@@ -5662,7 +5722,8 @@ impl RtMixer {
         let voice_timings: [VoiceSourceTiming; MAX_VOICES] =
             std::array::from_fn(|index| self.timing_for_voice(&self.voices[index]));
         let tempo_ratios: [f64; MAX_VOICES] = std::array::from_fn(|index| {
-            self.tempo_ratio_for_source_period(voice_timings[index].period_seconds())
+            self.tempo_ratio_for_voice(&self.voices[index])
+                .unwrap_or(self.voices[index].source_playback.rate_target())
         });
         let pad_gain_smoothers = &mut self.pad_gain_smoothers;
         let pad_dsp_chains = &mut self.pad_dsp_chains;

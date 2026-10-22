@@ -32,11 +32,25 @@ class CapturedPitchAction:
     if os.environ['LAUNCHER_NATIVE_MODE'] != 'old-piano':
         resets_key_correction = property(lambda self: False)
 class AudioEngine:
+    GLOBAL_TIMING_POLICY_API_VERSION = 1
     RESIDENT_PCM_ADMISSION_VERSION = (
         1 if os.environ['LAUNCHER_NATIVE_MODE'] == 'old-residency' else 2
     )
     def __init__(self):
         raise AssertionError('launcher must never construct an engine')
+    def set_input_runtime_state(
+        self, multi_loop, loaded, loop_starts, loop_ends, bindings=None,
+        pitch_rows=None, source_map_rows=None, *, timing_policy_json=None,
+    ):
+        raise AssertionError('launcher must only reflect timing policy')
+    def pad_source_sync_status(self, id):
+        raise AssertionError('launcher must only reflect sync status')
+    def begin_source_beatmap_raw_async(self, sample_id, *, expected_source_generation):
+        raise AssertionError('launcher must never analyze source audio')
+    def begin_source_beatmap_beat_this_raw_async(
+        self, sample_id, installation_root, *, expected_source_generation,
+    ):
+        raise AssertionError('launcher must never run inference')
     if os.environ['LAUNCHER_NATIVE_MODE'] != 'old-recording':
         def audio_stream_failed(self):
             raise AssertionError('launcher must only reflect stream lifecycle')
@@ -95,6 +109,18 @@ class SourceBeatmap:
     evaluate_beat = editor_info
     local_tempo_at_source = editor_info
     nearest_grid_source = editor_info
+class SourceBeatmapRawCandidate:
+    RAW_REVIEW_API_VERSION = 2
+    def info(self):
+        raise AssertionError('launcher must only reflect raw results')
+    def inspect(self, start_index, max_events=128):
+        raise AssertionError('launcher must never inspect raw results')
+    inspect_downbeats = inspect
+class OfflineAnalysisJob:
+    def resolve_source_beatmap_raw_completion(self, delivery):
+        raise AssertionError('launcher must never resolve a worker result')
+    def source_beatmap_async_status(self):
+        raise AssertionError('launcher must only reflect worker status')
 """
 _APP_STUB = """
 import json
@@ -175,12 +201,14 @@ def launchers(tmp_path: Path, pause_prompt: str) -> _Launchers:
     caller.mkdir()
     tools.mkdir()
     (repository / "scripts").mkdir()
+    (repository / "scripts/portable").mkdir()
     for relative in (
         "start.bat",
         "start-dev.bat",
         "start-release.bat",
         "build-release.bat",
         "scripts/start-app.bat",
+        "scripts/portable/bootstrap.py",
     ):
         shutil.copyfile(_REPOSITORY / relative, repository / relative)
     venv.EnvBuilder(with_pip=False).create(repository / ".venv")

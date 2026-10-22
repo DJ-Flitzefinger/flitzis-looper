@@ -93,6 +93,7 @@ pub struct VoiceSlot {
     // Original launch owner pins qualified immutable geometry for the effective voice.
     // Stop/restart transfers it through the existing off-thread retirement lane.
     pub(crate) mapped_start: Option<super::pad_start::CapturedPadStart>,
+    pub(crate) sync_request: super::source_sync_policy::SourceSyncRequest,
     pub(crate) source_timing: VoiceSourceTiming,
     /// Frozen only when this voice keeps an old source after bank replacement.
     pub(crate) source_loop_region: Option<FrameRange>,
@@ -120,6 +121,7 @@ impl VoiceSlot {
             volume: 0.0,
             source_playback: SourcePlayback::new(0, ExplicitSeekMode::Normal, 1.0),
             mapped_start: None,
+            sync_request: super::source_sync_policy::SourceSyncRequest::default(),
             source_timing: VoiceSourceTiming::default(),
             source_loop_region: None,
             frozen_stems: None,
@@ -151,6 +153,7 @@ impl VoiceSlot {
     }
 
     fn start_inner(&mut self, config: VoiceStartConfig) {
+        self.sync_request = super::source_sync_policy::SourceSyncRequest::default();
         self.source_control_epoch.reset();
         self.generation = self.generation.saturating_add(1);
         self.history_lifetime
@@ -204,6 +207,7 @@ impl VoiceSlot {
     }
 
     fn stop_inner(&mut self) {
+        self.sync_request = super::source_sync_policy::SourceSyncRequest::default();
         self.source_control_epoch.reset();
         self.generation = self.generation.saturating_add(1);
         self.history_lifetime.store(0, Ordering::Release);
@@ -243,6 +247,7 @@ impl VoiceSlot {
         _start_output_frame: Option<u64>,
         retirement: &mut impl AudioBufferRetirement,
     ) {
+        self.sync_request = super::source_sync_policy::SourceSyncRequest::default();
         self.source_feed_history.reset();
         self.source_control_epoch.reset();
         self.retire_frozen_stems(retirement);

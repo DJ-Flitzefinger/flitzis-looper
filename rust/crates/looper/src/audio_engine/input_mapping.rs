@@ -469,7 +469,7 @@ impl InputRuntime {
         pitch: Option<Vec<PitchPadProjection>>,
         source_map_rows: Option<Vec<SourceMapRow>>,
     ) -> Result<(), String> {
-        self.set_runtime_state_with_source_maps_before_commit(
+        self.set_runtime_state_with_policy(
             multi_loop,
             loaded,
             loop_starts,
@@ -477,6 +477,31 @@ impl InputRuntime {
             bindings,
             pitch,
             source_map_rows,
+            super::source_sync_policy::GlobalTimingPolicy::default(),
+        )
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    pub(crate) fn set_runtime_state_with_policy(
+        &self,
+        multi_loop: bool,
+        loaded: Vec<bool>,
+        loop_starts: Vec<f64>,
+        loop_ends: Vec<Option<f64>>,
+        bindings: Vec<Option<&InputRuntimePadBinding>>,
+        pitch: Option<Vec<PitchPadProjection>>,
+        source_map_rows: Option<Vec<SourceMapRow>>,
+        policy: super::source_sync_policy::GlobalTimingPolicy,
+    ) -> Result<(), String> {
+        self.set_runtime_state_with_policy_before_commit(
+            multi_loop,
+            loaded,
+            loop_starts,
+            loop_ends,
+            bindings,
+            pitch,
+            source_map_rows,
+            policy,
             || {},
         )
     }
@@ -557,6 +582,32 @@ impl InputRuntime {
         source_map_rows: Option<Vec<SourceMapRow>>,
         before_commit: impl FnOnce(),
     ) -> Result<(), String> {
+        self.set_runtime_state_with_policy_before_commit(
+            multi_loop,
+            loaded,
+            loop_starts,
+            loop_ends,
+            bindings,
+            pitch,
+            source_map_rows,
+            super::source_sync_policy::GlobalTimingPolicy::default(),
+            before_commit,
+        )
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn set_runtime_state_with_policy_before_commit(
+        &self,
+        multi_loop: bool,
+        loaded: Vec<bool>,
+        loop_starts: Vec<f64>,
+        loop_ends: Vec<Option<f64>>,
+        bindings: Vec<Option<&InputRuntimePadBinding>>,
+        pitch: Option<Vec<PitchPadProjection>>,
+        source_map_rows: Option<Vec<SourceMapRow>>,
+        policy: super::source_sync_policy::GlobalTimingPolicy,
+        before_commit: impl FnOnce(),
+    ) -> Result<(), String> {
         if loaded.len() != NUM_SAMPLES
             || loop_starts.len() != NUM_SAMPLES
             || loop_ends.len() != NUM_SAMPLES
@@ -582,6 +633,10 @@ impl InputRuntime {
             .runtime_state
             .lock()
             .map_err(|_| "input runtime lock poisoned")?;
+        let policy_changed = guard
+            .pads
+            .iter()
+            .any(|pad| pad.source_map.policy() != policy);
         let mut reservations = Vec::with_capacity(NUM_SAMPLES);
         let mut pads = Vec::with_capacity(NUM_SAMPLES);
         for idx in 0..NUM_SAMPLES {
@@ -597,6 +652,11 @@ impl InputRuntime {
                 self.ownership.copy_reservation(idx),
                 self.ownership.pair_reservation(idx),
             );
+            if policy_changed && reservation != (0, 0) {
+                return Err(
+                    "global timing policy waits for the complete arrangement ACK/mirror".into(),
+                );
+            }
             reservations.push(reservation);
             if reservation != (0, 0) {
                 // The original row belongs to the arrangement through its ACK and
@@ -630,7 +690,7 @@ impl InputRuntime {
                 acknowledgements: bindings[idx]
                     .filter(|_| loaded[idx])
                     .map(|binding| binding.acknowledgements.clone()),
-                source_map: match &source_map_rows {
+                source_map: (match &source_map_rows {
                     Some(rows) => SourceMapProjection::qualify(&rows[idx], bindings[idx])?,
                     None => {
                         let previous = &guard.pads[idx].source_map;
@@ -643,7 +703,8 @@ impl InputRuntime {
                             previous.without_selection()
                         }
                     }
-                },
+                })
+                .with_policy(policy),
             });
         }
 

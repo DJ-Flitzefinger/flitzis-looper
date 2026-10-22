@@ -200,10 +200,37 @@ pub(super) fn source_sync_status(
     result.set_item("source_identity", status.source_address)?;
     result.set_item("window_revision", status.window_revision)?;
     result.set_item("active", status.active)?;
-    result.set_item("effective", status.witness.is_some())?;
+    let fixed_effective = status.policy.is_some_and(|policy| {
+        policy.request.mode == super::source_sync_policy::SourceSyncMode::Fixed && policy.settled
+    });
+    result.set_item("effective", status.witness.is_some() || fixed_effective)?;
+    result.set_item(
+        "policy_mode",
+        status.policy.map(|policy| policy.request.mode.name()),
+    )?;
+    result.set_item(
+        "policy_revision",
+        status
+            .policy
+            .and_then(|policy| policy.request.global_revision),
+    )?;
+    result.set_item(
+        "policy_sync",
+        status.policy.and_then(|policy| policy.request.policy_sync),
+    )?;
+    result.set_item(
+        "policy_realtime_bpm",
+        status
+            .policy
+            .and_then(|policy| policy.request.policy_realtime_bpm),
+    )?;
+    result.set_item("settled", status.policy.map(|policy| policy.settled))?;
     result.set_item(
         "intent_revision",
-        status.witness.map(|witness| witness.intent_revision),
+        status
+            .policy
+            .map(|policy| policy.request.intent_revision)
+            .or(status.witness.map(|witness| witness.intent_revision)),
     )?;
     result.set_item(
         "map_revision",

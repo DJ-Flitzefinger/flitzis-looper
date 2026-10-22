@@ -2224,6 +2224,7 @@ impl ReadyPlaybackAudio {
             bindings,
             pitch_rows,
             None,
+            None,
         )
     }
 

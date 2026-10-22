@@ -90,7 +90,12 @@ impl RtMixer {
         // This current snapshot validates the retained data contract; it never supplies
         // a new source, request, permit or reset origin to the original worker.
         let (start, end) = work.action.loop_region();
-        let mut snapshot = self.normal_start_snapshot(guard.id, start, end)?;
+        let mut snapshot = self.normal_start_snapshot_with_policy(
+            guard.id,
+            start,
+            end,
+            work.action.sync_request(),
+        )?;
         if !snapshot.plan.matches_source_contract(origin.plan)
             || snapshot.playback.tempo_ratio().to_bits() != origin.playback.tempo_ratio().to_bits()
             || snapshot.playback.rate_target().to_bits() != origin.playback.rate_target().to_bits()
@@ -270,7 +275,13 @@ impl RtMixer {
         projection_frames: u64,
     ) -> Result<PitchSourceSnapshot, PitchActionReject> {
         let (start_s, end_s) = work.action.loop_region();
-        let mut snapshot = self.normal_start_snapshot(id, start_s, end_s)?;
+        if work.action.sync_request().mode
+            == super::super::source_sync_policy::SourceSyncMode::Mapped
+        {
+            return Err(PitchActionReject::MappedTimingUnavailable);
+        }
+        let mut snapshot =
+            self.normal_start_snapshot_with_policy(id, start_s, end_s, work.action.sync_request())?;
         let guard = self.pitch_action_guard(work)?;
         let active = match self.pitch_action_voice(id, guard.binding) {
             Ok(active) => active,
@@ -279,7 +290,9 @@ impl RtMixer {
             Err(PitchActionReject::SourceChanged) => None,
             Err(reason) => return Err(reason),
         };
-        if let Some(index) = active {
+        if let Some(index) =
+            active.filter(|&index| self.voices[index].sync_request == work.action.sync_request())
+        {
             let mut current = self
                 .capture_pitch_voice_snapshot(index)
                 .ok_or(PitchActionReject::TimingUnavailable)?;
@@ -404,7 +417,12 @@ impl RtMixer {
                     .ok_or(PitchActionReject::PreparedMismatch)?;
                 if active.is_none() {
                     let (start, end) = work.action.loop_region();
-                    let original = self.normal_start_snapshot(guard.id, start, end)?;
+                    let original = self.normal_start_snapshot_with_policy(
+                        guard.id,
+                        start,
+                        end,
+                        work.action.sync_request(),
+                    )?;
                     if original.playback.tempo_ratio().to_bits()
                         == original.playback.rate_target().to_bits()
                     {
@@ -921,6 +939,7 @@ impl RtMixer {
                             voice.start_rt(config, retirement);
                         }
                         voice.source_playback = snapshot.playback;
+                        voice.sync_request = work.action.sync_request();
                         if let Some(continued_controls) = continued_controls {
                             voice.source_control_epoch = continued_controls;
                         }

@@ -35,6 +35,11 @@ class SourceSyncStatus(TypedDict):
     effective: bool
     intent_revision: int | None
     map_revision: str | None
+    policy_mode: Literal["legacy", "off", "fixed", "mapped"] | None
+    policy_revision: int | None
+    policy_sync: bool | None
+    policy_realtime_bpm: bool | None
+    settled: bool | None
 
 class SourceBeatmapEvaluation(TypedDict):
     map_revision: str
@@ -209,7 +214,9 @@ class SourceBeatmapRawCandidate:
     RAW_REVIEW_API_VERSION: ClassVar[int]
     def info(self) -> SourceBeatmapRawInfo: ...
     def inspect(self, start_index: int, max_events: int = 128) -> SourceBeatmapRawInspection: ...
-    def inspect_downbeats(self, start_index: int, max_events: int = 128) -> SourceBeatmapRawDownbeatInspection: ...
+    def inspect_downbeats(
+        self, start_index: int, max_events: int = 128
+    ) -> SourceBeatmapRawDownbeatInspection: ...
 
 class AudioMessage:
     def sample_id(self) -> int | None: ...
@@ -640,6 +647,7 @@ class MixCaptureTicket:
     def session_id(self) -> int: ...
 
 class AudioEngine:
+    GLOBAL_TIMING_POLICY_API_VERSION: ClassVar[int]
     def audio_stream_failed(self) -> bool: ...
     def quiesce_failed_audio_stream(self) -> bool: ...
     # Internal float-spool capture; successful_spool is not an encoded/public take.
@@ -852,6 +860,8 @@ class AudioEngine:
         bindings: list[InputRuntimePadBinding | None] | None = None,
         pitch_rows: list[dict[str, object]] | None = None,
         source_map_rows: list[dict[str, object]] | None = None,
+        *,
+        timing_policy_json: str | None = None,
     ) -> None: ...
     def current_input_runtime_pad_binding(
         self, sample_id: int

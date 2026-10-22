@@ -37,6 +37,7 @@ from flitzis_looper.material_migration_model import MaterialMigrationAlias
 from flitzis_looper.models import ProjectState
 from flitzis_looper.source_beatmap_intent import PadSourceBeatmapIntent
 from flitzis_looper.source_sync_intent import PadSourceSyncIntent, neutral_source_sync_intent
+from flitzis_looper.timing_policy import GlobalTimingPolicy, neutral_global_timing_policy
 
 if TYPE_CHECKING:
     from collections.abc import Callable
@@ -95,7 +96,17 @@ def _recover_source_sync_intent(recovered: dict[str, object]) -> None:
     if "pad_source_sync_intent" not in recovered:
         return
     rows = recovered["pad_source_sync_intent"]
-    valid_rows = [neutral_source_sync_intent() for _ in range(len(ProjectState().sample_paths))]
+    policy = GlobalTimingPolicy.model_validate(
+        recovered.get("global_timing_policy", neutral_global_timing_policy())
+    )
+    # Unknown PAD intent must not become inherited ON after global activation.
+    # This is a transient safe recovery; original bytes stay behind the save fence.
+    valid_rows = [
+        PadSourceSyncIntent(requested=False, revision=1)
+        if policy.sync is True
+        else neutral_source_sync_intent()
+        for _ in range(len(ProjectState().sample_paths))
+    ]
     if isinstance(rows, list):
         for index, row in enumerate(rows[: len(valid_rows)]):
             try:
@@ -103,6 +114,21 @@ def _recover_source_sync_intent(recovered: dict[str, object]) -> None:
             except ValidationError:
                 continue
     recovered["pad_source_sync_intent"] = valid_rows
+
+
+def _recover_global_timing_policy(recovered: dict[str, object]) -> None:
+    if "global_timing_policy" not in recovered:
+        return
+    try:
+        recovered["global_timing_policy"] = GlobalTimingPolicy.model_validate(
+            recovered["global_timing_policy"]
+        )
+    except ValidationError:
+        # Neutral legacy mode could inherit an old explicit PAD ON despite unknown
+        # global OFF metadata. Recover safely without claiming the invalid choice.
+        recovered["global_timing_policy"] = GlobalTimingPolicy(
+            schema_version=1, sync=False, realtime_bpm=False, revision=0
+        )
 
 
 class ProjectPersistence:
@@ -538,6 +564,16 @@ class ProjectPersistence:
                         if persistence.load_error is not None
                         else selection_error
                     )
+                if any(
+                    item["loc"] and item["loc"][0] == "global_timing_policy"
+                    for item in error.errors()
+                ):
+                    policy_error = "Unsupported global timing metadata retained on disk"
+                    persistence.load_error = (
+                        f"{persistence.load_error}; {policy_error}"
+                        if persistence.load_error is not None
+                        else policy_error
+                    )
                 return persistence
 
         persistence = ProjectPersistence(state)
@@ -554,6 +590,7 @@ class ProjectPersistence:
                 "pad_stem_intent",
                 "pad_source_beatmap_intent",
                 "pad_source_sync_intent",
+                "global_timing_policy",
                 "material_migrations",
                 "config_revision",
             }
@@ -571,6 +608,7 @@ class ProjectPersistence:
             recovered = recover_project_stem_intent(recovered)
             recover_stem_pair_metadata(recovered, error)
             _recover_source_beatmap_intent(recovered)
+            _recover_global_timing_policy(recovered)
             _recover_source_sync_intent(recovered)
             revision = recovered.get("config_revision", 0)
             if type(revision) is not int or revision < 0:

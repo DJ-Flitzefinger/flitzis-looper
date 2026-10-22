@@ -228,17 +228,20 @@ impl RtMixer {
         requested: RateTuple,
     ) -> Result<bool, RateError> {
         let (pitch, key_lock) = self.effective_rate_voice_tuple(index);
+        let target = self
+            .tempo_ratio_for_request_with_rate(
+                self.voices[index].sync_request,
+                self.timing_for_voice(&self.voices[index]).period_seconds(),
+                requested.speed,
+                requested.period,
+            )
+            .ok_or(RateError::HistoryUnavailable)?;
         if self.voices[index]
             .stretch
             .owns_pitch_contract(pitch, key_lock)
         {
             return Ok(false);
         }
-        let target = self.tempo_ratio_for_source_period_with_rate(
-            self.timing_for_voice(&self.voices[index]).period_seconds(),
-            requested.speed,
-            requested.period,
-        );
         pitch
             .native_pitch_scale(target, key_lock)
             .map(|pitch| pitch != 1.0)
@@ -274,8 +277,13 @@ impl RtMixer {
     }
 
     fn dry_mapped_rate_cohort_current(&self, requested: RateTuple) -> Result<(), RateError> {
-        if !self.bpm_lock_enabled
-            || self.master_period_seconds.is_none()
+        if self.voices.iter().any(|voice| {
+            voice.active
+                && voice.source_playback.is_mapped()
+                && !voice
+                    .sync_request
+                    .mapped_matching_enabled(self.bpm_lock_enabled)
+        }) || self.master_period_seconds.is_none()
             || requested.period.is_none()
         {
             return Err(RateError::MappedTimingUnavailable);
@@ -641,11 +649,14 @@ impl RtMixer {
             }
             if let Some(work) = expected.work {
                 let prospective = feed(&snapshot, expected.pitch, expected.key_lock, frame, None);
-                let target = self.tempo_ratio_for_source_period_with_rate(
+                let Some(target) = self.tempo_ratio_for_request_with_rate(
+                    self.voices[index].sync_request,
                     self.timing_for_voice(&self.voices[index]).period_seconds(),
                     pending.requested.speed,
                     pending.requested.period,
-                );
+                ) else {
+                    return false;
+                };
                 if !self.voices[index].stretch.prospective_rate_change_ready(
                     &prospective,
                     work.epoch,
@@ -656,11 +667,14 @@ impl RtMixer {
                 }
             } else if self.voices[index].stretch.has_retained_source_input() {
                 let prospective = feed(&snapshot, expected.pitch, expected.key_lock, frame, None);
-                let target = self.tempo_ratio_for_source_period_with_rate(
+                let Some(target) = self.tempo_ratio_for_request_with_rate(
+                    self.voices[index].sync_request,
                     self.timing_for_voice(&self.voices[index]).period_seconds(),
                     pending.requested.speed,
                     pending.requested.period,
-                );
+                ) else {
+                    return false;
+                };
                 if !self.voices[index]
                     .stretch
                     .retained_rate_change_ready(&prospective, target)
@@ -695,11 +709,14 @@ impl RtMixer {
             let snapshot = self
                 .capture_pitch_voice_snapshot(index)
                 .ok_or(RateError::SourceChanged)?;
-            let requested = self.tempo_ratio_for_source_period_with_rate(
-                self.timing_for_voice(voice).period_seconds(),
-                tuple.speed,
-                tuple.period,
-            );
+            let requested = self
+                .tempo_ratio_for_request_with_rate(
+                    voice.sync_request,
+                    self.timing_for_voice(voice).period_seconds(),
+                    tuple.speed,
+                    tuple.period,
+                )
+                .ok_or(RateError::HistoryUnavailable)?;
             let (pitch, key_lock) = self.effective_rate_voice_tuple(index);
             let current = feed(&snapshot, pitch, key_lock, frame, None);
             if !voice
@@ -826,11 +843,14 @@ impl RtMixer {
                         if !voice.active || !voice.stretch.has_retained_source_input() {
                             continue;
                         }
-                        let target = mixer.tempo_ratio_for_source_period_with_rate(
-                            mixer.timing_for_voice(voice).period_seconds(),
-                            pending.requested.speed,
-                            pending.requested.period,
-                        );
+                        let target = mixer
+                            .tempo_ratio_for_request_with_rate(
+                                voice.sync_request,
+                                mixer.timing_for_voice(voice).period_seconds(),
+                                pending.requested.speed,
+                                pending.requested.period,
+                            )
+                            .expect("complete rate claim validated every scalar policy ratio");
                         mixer.voices[index]
                             .stretch
                             .retarget_retained_rate_claimed(target);

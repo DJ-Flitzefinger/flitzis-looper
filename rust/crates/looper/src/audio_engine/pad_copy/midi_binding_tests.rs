@@ -45,7 +45,17 @@ fn publish_mapped_runtime(fixture: &Fixture, start: usize) -> u64 {
         let mut bindings: Vec<_> = (0..NUM_SAMPLES).map(|_| None).collect();
         bindings[0] = Some(Py::new(py, binding).unwrap());
         engine
-            .set_input_runtime_state(py, true, loaded, starts, ends, Some(bindings), None, None)
+            .set_input_runtime_state(
+                py,
+                true,
+                loaded,
+                starts,
+                ends,
+                Some(bindings),
+                None,
+                None,
+                None,
+            )
             .unwrap();
         let revision = engine.input_runtime_ownership.runtime_revision(0);
         assert_ne!(revision, 0);

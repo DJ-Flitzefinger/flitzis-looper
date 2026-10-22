@@ -119,11 +119,11 @@ pub(in crate::audio_engine) mod cold {
     pub(in crate::audio_engine) struct ColdCustody {
         pub(in crate::audio_engine) engine: AudioEngine,
         pub(in crate::audio_engine) directory: tempfile::TempDir,
-        producer: Arc<Mutex<Producer<ControlMessage>>>,
-        consumer: Consumer<ControlMessage>,
+        pub(in crate::audio_engine) producer: Arc<Mutex<Producer<ControlMessage>>>,
+        pub(in crate::audio_engine) consumer: Consumer<ControlMessage>,
         // Match the production stream's heap-owned mixer. Returning multiple
         // inline mixers through fixture branches overflows the default test stack.
-        mixer: Box<RtMixer>,
+        pub(in crate::audio_engine) mixer: Box<RtMixer>,
     }
 
     impl ColdCustody {

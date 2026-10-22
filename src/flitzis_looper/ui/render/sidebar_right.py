@@ -25,6 +25,7 @@ from flitzis_looper.ui.render.control_gestures import (
     item_middle_clicked,
 )
 from flitzis_looper.ui.render.key_lock import render_key_lock_button
+from flitzis_looper.ui.render.timing_policy import render_global_timing_policy
 
 if TYPE_CHECKING:
     from flitzis_looper.ui.context import UiContext
@@ -364,6 +365,7 @@ def sidebar_right(ctx: UiContext) -> None:
 
         with style_var(imgui.StyleVar_.item_spacing, (0.0, SPACING / 4)):
             _render_global_key_lock(ctx)
+            render_global_timing_policy(ctx)
 
             bpm_lock_style: ButtonStyleName = "mode-on" if bpm_lock else "mode-off"
             with button_style(bpm_lock_style):

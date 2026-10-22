@@ -8,6 +8,7 @@ use super::loader_events::LoaderEventDelivery;
 use super::pitch_actions::PitchActionReject;
 use super::source_beatmap::SourceBeatmap;
 use super::source_beatmap_artifact::SourceBeatmapArtifact;
+use super::source_sync_policy::{GlobalTimingPolicy, SourceSyncMode, SourceSyncRequest};
 use std::sync::Arc;
 use std::sync::atomic::Ordering;
 
@@ -140,6 +141,7 @@ pub(crate) struct SourceMapProjection {
     sync_requested: bool,
     intent_revision: u64,
     selected: Option<QualifiedSourceMap>,
+    policy: GlobalTimingPolicy,
 }
 
 impl SourceMapProjection {
@@ -153,6 +155,7 @@ impl SourceMapProjection {
             sync_requested: self.sync_requested,
             intent_revision: self.intent_revision,
             selected: None,
+            policy: self.policy,
         }
     }
 
@@ -182,12 +185,28 @@ impl SourceMapProjection {
             sync_requested: row.sync_requested,
             intent_revision: row.intent_revision,
             selected,
+            policy: GlobalTimingPolicy::default(),
         })
+    }
+
+    pub(crate) fn with_policy(mut self, policy: GlobalTimingPolicy) -> Self {
+        self.policy = policy;
+        self
+    }
+
+    pub(crate) fn policy(&self) -> GlobalTimingPolicy {
+        self.policy
+    }
+
+    pub(crate) fn request(&self) -> SourceSyncRequest {
+        self.policy
+            .request(self.sync_requested, self.intent_revision)
     }
 
     pub(crate) fn same_projection(&self, other: &Self) -> bool {
         self.sync_requested == other.sync_requested
             && self.intent_revision == other.intent_revision
+            && self.policy == other.policy
             && match (&self.selected, &other.selected) {
                 (Some(left), Some(right)) => left.same_projection(right),
                 (None, None) => true,
@@ -197,7 +216,15 @@ impl SourceMapProjection {
 
     /// Data-only selection changes never invalidate ordinary unmapped work.
     pub(crate) fn same_launch_projection(&self, other: &Self) -> bool {
-        (!self.sync_requested && !other.sync_requested) || self.same_projection(other)
+        if self.request().mode == SourceSyncMode::Legacy
+            && other.request().mode == SourceSyncMode::Legacy
+            && self.request().global_revision.is_none()
+            && other.request().global_revision.is_none()
+        {
+            return true;
+        }
+        self.request() == other.request()
+            && (self.request().mode != SourceSyncMode::Mapped || self.same_projection(other))
     }
 
     pub(crate) fn publication_current(
@@ -238,6 +265,9 @@ pub(crate) struct SourceMapLaunchSnapshot {
 }
 
 impl SourceMapLaunchSnapshot {
+    pub(crate) fn request(&self) -> SourceSyncRequest {
+        self.projection.request()
+    }
     pub(crate) fn unavailable() -> Self {
         Self {
             projection: SourceMapProjection::default(),
@@ -264,7 +294,7 @@ impl SourceMapLaunchSnapshot {
         {
             return Err(PitchActionReject::LaunchCancelled);
         }
-        if !self.projection.sync_requested {
+        if self.request().mode != SourceSyncMode::Mapped {
             return Ok(None);
         }
         let selected = self

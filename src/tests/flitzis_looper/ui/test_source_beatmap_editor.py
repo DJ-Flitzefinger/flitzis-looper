@@ -249,7 +249,7 @@ def test_actual_sync_click_changes_request_and_keeps_readiness_and_refusal_truth
         observer = _observe_draw(monkeypatch)
         frames = [_full_frame(ctx, worker, observer) for _ in range(5)]
 
-        _click_toolbar("SYNC OFF##source-sync-toggle", ctx, worker, observer, frames)
+        _click_toolbar("SYNC PAD OFF##source-sync-toggle", ctx, worker, observer, frames)
         frames.append(_full_frame(ctx, worker, observer))
 
         assert controller.project.pad_source_sync_intent[0].requested

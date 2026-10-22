@@ -121,7 +121,12 @@ impl RtMixer {
         id: usize,
     ) -> Result<PitchSourceSnapshot, PitchActionReject> {
         let (start_s, end_s) = self.ordinary_loop_region(work, id);
-        let mut snapshot = self.normal_start_snapshot(id, start_s, end_s)?;
+        let mut snapshot = self.normal_start_snapshot_with_policy(
+            id,
+            start_s,
+            end_s,
+            work.origin().sync_request(),
+        )?;
         if let Some(geometry) = work.origin().mapped_geometry() {
             let (epoch, original) = work
                 .mapped_clock()
@@ -132,7 +137,10 @@ impl RtMixer {
             // per-path contract (including AttackAtGrid) is actually integrated.
             if render.key_lock
                 || render.pitch.total_semitones() != 0
-                || !self.bpm_lock_enabled
+                || !work
+                    .origin()
+                    .sync_request()
+                    .mapped_matching_enabled(self.bpm_lock_enabled)
                 || epoch.master_period_seconds().map(f64::to_bits)
                     != self.master_period_seconds.map(f64::to_bits)
                 || snapshot.plan.loop_region != geometry.domain().region
@@ -165,6 +173,21 @@ impl RtMixer {
         start_s: f64,
         end_s: Option<f64>,
     ) -> Result<PitchSourceSnapshot, PitchActionReject> {
+        self.normal_start_snapshot_with_policy(
+            id,
+            start_s,
+            end_s,
+            super::super::source_sync_policy::SourceSyncRequest::default(),
+        )
+    }
+
+    pub(super) fn normal_start_snapshot_with_policy(
+        &self,
+        id: usize,
+        start_s: f64,
+        end_s: Option<f64>,
+        request: super::super::source_sync_policy::SourceSyncRequest,
+    ) -> Result<PitchSourceSnapshot, PitchActionReject> {
         let (start, end) = self
             .loop_intent_frames(id, start_s, end_s)
             .ok_or(PitchActionReject::InvalidAction)?;
@@ -181,7 +204,13 @@ impl RtMixer {
         snapshot.playback = SourcePlayback::new(
             region.start,
             ExplicitSeekMode::Normal,
-            self.tempo_ratio_for_sample_id(id),
+            self.tempo_ratio_for_request_with_rate(
+                request,
+                self.source_period_for_sample_id(id),
+                self.speed,
+                self.master_period_seconds,
+            )
+            .ok_or(PitchActionReject::TimingUnavailable)?,
         );
         if !snapshot.playback.configure_domain(
             self.timing_for_sample_id(id)
@@ -333,7 +362,12 @@ impl RtMixer {
             .late_reprepare_snapshot()
             .ok_or(PitchActionReject::PreparedMismatch)?;
         let (start_s, end_s) = work.loop_region();
-        let snapshot = self.normal_start_snapshot(guard.id, start_s, end_s)?;
+        let snapshot = self.normal_start_snapshot_with_policy(
+            guard.id,
+            start_s,
+            end_s,
+            work.origin().sync_request(),
+        )?;
         if !origin.matches_exact(
             super::super::prepared_native_history::SourceReadCheckpoint {
                 playback: snapshot.playback,
@@ -572,6 +606,7 @@ impl RtMixer {
                         voice.start_rt(config, retirement);
                     }
                     voice.source_playback = snapshot.playback;
+                    voice.sync_request = work.origin().sync_request();
                     voice.mapped_start =
                         snapshot.playback.is_mapped().then(|| work.origin().clone());
                     if let Some(continued_controls) = continued_controls {

@@ -319,6 +319,7 @@ impl RtMixer {
                         voice.start_rt(config, retirement);
                     }
                     voice.source_playback = snapshot.playback;
+                    voice.sync_request = work.origin().sync_request();
                     voice.mapped_start =
                         snapshot.playback.is_mapped().then(|| work.origin().clone());
                     if work.native_required() {

@@ -23,6 +23,8 @@ from flitzis_looper.input_mapping import (
 )
 from flitzis_looper.input_mapping.actions import (
     PitchCcMode,
+    global_realtime_bpm_toggle_action,
+    global_source_sync_toggle_action,
     pitch_base_action,
     pitch_extra_action,
     pitch_note_action,
@@ -53,6 +55,10 @@ if TYPE_CHECKING:
     from flitzis_looper.controller.transport.global_params import GlobalRateStatus
     from flitzis_looper.controller.transport.key_lock_status import KeyLockStatus
     from flitzis_looper.controller.transport.source_sync import SourceSyncStatus
+    from flitzis_looper.controller.transport.timing_policy import (
+        GlobalTimingControlStatus,
+        TimingControl,
+    )
     from flitzis_looper.key_intent import MusicalKey, PadKeyIntent
     from flitzis_looper.models import (
         KeyLockStartBehavior,
@@ -325,6 +331,9 @@ class GlobalSelectors:
         """Return the aggregate confirmed/pending/mixed state of loaded targets."""
         return self._controller.transport.global_params.key_lock_status()
 
+    def timing_policy_status(self, control: TimingControl) -> GlobalTimingControlStatus:
+        return self._controller.transport.timing_policy.status(control)
+
     def global_rate_status(self) -> GlobalRateStatus:
         """Return the last coherent callback rate confirmation from the runtime tick."""
         return self._controller.transport.global_params.global_rate_status()
@@ -388,6 +397,9 @@ class PadAudioActions:  # noqa: PLR0904 - pad action facade mirrors selected-pad
     def source_sync_status(self, pad_id: int) -> SourceSyncStatus:
         """Read callback confirmation independently of requested SYNC/map readiness."""
         return self._controller.transport.source_sync.status(pad_id)
+
+    def source_sync_preference(self, pad_id: int) -> bool:
+        return self._controller.project.pad_source_sync_preference(pad_id)
 
     def toggle_source_sync(self, pad_id: int) -> None:
         """Learn or execute the same fixed-target SYNC request action."""
@@ -934,6 +946,21 @@ class GlobalAudioActions:
                     enabled=not self._controller.project.bpm_lock
                 ),
                 operation="global_toggle_bpm_lock",
+            ),
+        )
+
+    def toggle_source_sync(self) -> None:
+        self._toggle_timing_policy("sync", global_source_sync_toggle_action())
+
+    def toggle_realtime_bpm(self) -> None:
+        self._toggle_timing_policy("realtime_bpm", global_realtime_bpm_toggle_action())
+
+    def _toggle_timing_policy(self, control: TimingControl, action: LooperAction) -> None:
+        self._controller.input_mapping.perform_learnable_action(
+            action,
+            lambda: self._perform_playback_action(
+                lambda: self._controller.transport.timing_policy.toggle(control),
+                operation=f"global_toggle_{control}",
             ),
         )
 

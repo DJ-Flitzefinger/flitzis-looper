@@ -307,6 +307,7 @@ impl std::fmt::Display for PitchActionReject {
 
 /// Source/scalar capture is control-owned; it grants no PCM custody by itself.
 pub(crate) struct PitchActionAdmission {
+    pub(crate) sync_request: super::source_sync_policy::SourceSyncRequest,
     pub(crate) key: ContentKey,
     pub(crate) binding: InputPadBinding,
     pub(crate) ownership: Arc<InputRuntimeOwnership>,
@@ -424,6 +425,9 @@ pub(crate) struct PitchActionGuard {
 }
 
 impl CapturedPitchAction {
+    pub(crate) fn sync_request(&self) -> super::source_sync_policy::SourceSyncRequest {
+        self.owner.admission.sync_request
+    }
     pub(crate) fn capture(admission: PitchActionAdmission) -> Result<Self, PitchActionReject> {
         let id = admission
             .binding

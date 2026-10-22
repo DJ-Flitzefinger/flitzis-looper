@@ -530,6 +530,10 @@ pub(super) fn project(text: &str) -> io::Result<Value> {
     if project.get("pad_source_sync_intent").is_some() {
         keys.push("pad_source_sync_intent");
     }
+    if let Some(policy) = project.get("global_timing_policy") {
+        keys.push("global_timing_policy");
+        global_timing_policy(policy)?;
+    }
     exact_keys(&project, &keys)?;
     let mut instances = BTreeSet::new();
     for sample in 0..216 {
@@ -699,6 +703,22 @@ pub(super) fn slot_matches(
     }
     Ok(actual == expected)
 }
+fn global_timing_policy(policy: &Value) -> io::Result<()> {
+    exact_keys(
+        policy,
+        &["schema_version", "sync", "realtime_bpm", "revision"],
+    )?;
+    if policy["schema_version"].as_u64() != Some(1)
+        || policy["revision"].as_u64().is_none()
+        || ["sync", "realtime_bpm"]
+            .iter()
+            .any(|key| !policy[*key].is_null() && !policy[*key].is_boolean())
+    {
+        return Err(invalid("portable global timing policy invalid"));
+    }
+    Ok(())
+}
+
 pub(super) fn project_intent(samples: &Path, record: &Value) -> io::Result<Value> {
     let mut project = project(record["project_image_json"].as_str().unwrap())?;
     // Comparison-only migration. Raw historical images/seals and their SHA bytes
@@ -709,6 +729,10 @@ pub(super) fn project_intent(samples: &Path, record: &Value) -> io::Result<Value
     if project.get("pad_source_sync_intent").is_none() {
         project["pad_source_sync_intent"] =
             json!(vec![json!({"requested":false,"revision":0}); 216]);
+    }
+    if project.get("global_timing_policy").is_none() {
+        project["global_timing_policy"] =
+            json!({"schema_version":1,"sync":null,"realtime_bpm":null,"revision":0});
     }
     project.as_object_mut().unwrap().remove("manual_key");
     for sample in 0..216 {
@@ -727,6 +751,10 @@ pub(super) fn project_intent(samples: &Path, record: &Value) -> io::Result<Value
 }
 
 #[cfg(test)]
+#[path = "timing_policy_tests.rs"]
+mod timing_policy_tests;
+
+#[cfg(test)]
 mod tests {
     use super::*;
 
@@ -737,7 +765,7 @@ mod tests {
             "bytes":1024,"sha256":"a".repeat(64),"map_revision":"b".repeat(64),"decoder_identity":"c".repeat(64)}})
     }
 
-    fn complete_project() -> Value {
+    pub(super) fn complete_project() -> Value {
         let empty = empty_slot();
         let mut project = json!({"config_revision":1,"material_migrations":{},"key_lock_intent_version":2,
             "multi_loop":false,"key_lock":false,"bpm_lock":false,"trigger_quantization_enabled":false,

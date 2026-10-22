@@ -266,6 +266,7 @@ fn genuine_retrigger_capture_before_worker_or_scheduler_blocks_policy_until_reje
         .unwrap();
     let spec = PitchActionSpec::parse("pitch.extra:2:set_retrigger").unwrap();
     let action = CapturedPitchAction::capture(PitchActionAdmission {
+        sync_request: Default::default(),
         key: binding.binding.placement.unwrap().content_key().unwrap(),
         binding: binding.binding,
         ownership: fixture.control.engine.input_runtime_ownership.clone(),

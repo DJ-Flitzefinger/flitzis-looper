@@ -11,6 +11,7 @@ from flitzis_looper.controller.transport.playback import PadPlaybackController
 from flitzis_looper.controller.transport.residency import ResidencyController
 from flitzis_looper.controller.transport.source_sync import SourceSyncController
 from flitzis_looper.controller.transport.state import ApplyProjectState
+from flitzis_looper.controller.transport.timing_policy import TimingPolicyController
 from flitzis_looper.controller.transport.waveform import WaveformController
 
 if TYPE_CHECKING:
@@ -66,6 +67,7 @@ class TransportController(BaseController):
         self.pad = PadController(self)
         self.pitch = PitchController(self)
         self.source_sync = SourceSyncController(self)
+        self.timing_policy = TimingPolicyController(self)
         self.waveform = WaveformController(self)
 
     def bind_input_runtime_refresh(self, refresh: Callable[[], bool]) -> None:
@@ -74,10 +76,15 @@ class TransportController(BaseController):
 
     def refresh_input_runtime(self, sample_ids: Iterable[int] | None = None) -> None:
         """Fence a capture when the complete current control publication is unavailable."""
-        if sample_ids is not None and not any(
-            (intent := self._project.pad_source_sync_intent[sample_id]).requested
-            or intent.revision > 0
-            for sample_id in sample_ids
+        if (
+            self._project.global_timing_policy.is_neutral
+            and sample_ids is not None
+            and not any(
+                self._project.resolve_pad_source_sync(sample_id)
+                or (intent := self._project.pad_source_sync_intent[sample_id]).requested
+                or intent.revision > 0
+                for sample_id in sample_ids
+            )
         ):
             # Untouched scalar captures retain their original one-snapshot path.
             # Unrelated SYNC content does not add another source/timing capture.

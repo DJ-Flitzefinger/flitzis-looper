@@ -642,6 +642,7 @@ fn capture_row(
         clock.output_frame
     };
     let action = CapturedPitchAction::capture(PitchActionAdmission {
+        sync_request: pad.source_map.request(),
         key,
         binding,
         ownership: ownership.clone(),

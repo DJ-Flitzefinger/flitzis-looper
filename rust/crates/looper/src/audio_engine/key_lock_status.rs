@@ -1,4 +1,7 @@
 //! Fixed callback-owned mode acknowledgement and actual wet readiness.
+use crate::audio_engine::source_sync_policy::{
+    SourceSyncMode, SourceSyncObservation, SourceSyncRequest,
+};
 use std::sync::atomic::{AtomicU8, AtomicU64, AtomicUsize, Ordering};
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -28,6 +31,7 @@ pub(crate) struct SourceSyncStatus {
     pub(crate) window_revision: u64,
     pub(crate) active: bool,
     pub(crate) witness: Option<SourceSyncWitness>,
+    pub(crate) policy: Option<SourceSyncObservation>,
 }
 
 #[derive(Default)]
@@ -46,6 +50,9 @@ pub(super) struct KeyLockStatusSlot {
     sync_flags: AtomicU8,
     sync_intent: AtomicU64,
     sync_map: [AtomicU64; 4],
+    sync_policy_mode: AtomicU8,
+    sync_policy_revision: AtomicU64,
+    sync_policy_choices: AtomicU8,
 }
 
 impl KeyLockStatusSlot {
@@ -70,15 +77,55 @@ impl KeyLockStatusSlot {
         self.sync_window
             .store(status.window_revision, Ordering::SeqCst);
         self.sync_flags.store(
-            u8::from(status.active) | (u8::from(status.witness.is_some()) << 1),
+            u8::from(status.active)
+                | (u8::from(status.witness.is_some()) << 1)
+                | (u8::from(status.policy.is_some()) << 2)
+                | (u8::from(
+                    status
+                        .policy
+                        .is_some_and(|policy| policy.request.global_revision.is_some()),
+                ) << 3)
+                | (u8::from(status.policy.is_some_and(|policy| policy.settled)) << 4),
             Ordering::SeqCst,
         );
         let witness = status.witness.unwrap_or(SourceSyncWitness {
             intent_revision: 0,
             map_revision: [0; 4],
         });
-        self.sync_intent
-            .store(witness.intent_revision, Ordering::SeqCst);
+        self.sync_intent.store(
+            status.policy.map_or(witness.intent_revision, |policy| {
+                policy.request.intent_revision
+            }),
+            Ordering::SeqCst,
+        );
+        self.sync_policy_mode.store(
+            status.policy.map_or(0, |policy| match policy.request.mode {
+                SourceSyncMode::Legacy => 0,
+                SourceSyncMode::Off => 1,
+                SourceSyncMode::Fixed => 2,
+                SourceSyncMode::Mapped => 3,
+            }),
+            Ordering::SeqCst,
+        );
+        self.sync_policy_revision.store(
+            status
+                .policy
+                .and_then(|policy| policy.request.global_revision)
+                .unwrap_or(0),
+            Ordering::SeqCst,
+        );
+        let choice = |value: Option<bool>| match value {
+            None => 0,
+            Some(false) => 1,
+            Some(true) => 2,
+        };
+        self.sync_policy_choices.store(
+            status.policy.map_or(0, |policy| {
+                choice(policy.request.policy_sync)
+                    | (choice(policy.request.policy_realtime_bpm) << 2)
+            }),
+            Ordering::SeqCst,
+        );
         for (word, value) in self.sync_map.iter().zip(witness.map_revision) {
             word.store(value, Ordering::SeqCst);
         }
@@ -103,6 +150,33 @@ impl KeyLockStatusSlot {
                 map_revision: std::array::from_fn(|index| {
                     self.sync_map[index].load(Ordering::SeqCst)
                 }),
+            }),
+            policy: (flags & 4 != 0).then(|| SourceSyncObservation {
+                request: SourceSyncRequest {
+                    mode: match self.sync_policy_mode.load(Ordering::SeqCst) {
+                        1 => SourceSyncMode::Off,
+                        2 => SourceSyncMode::Fixed,
+                        3 => SourceSyncMode::Mapped,
+                        _ => SourceSyncMode::Legacy,
+                    },
+                    global_revision: (flags & 8 != 0)
+                        .then(|| self.sync_policy_revision.load(Ordering::SeqCst)),
+                    intent_revision: self.sync_intent.load(Ordering::SeqCst),
+                    policy_sync: match self.sync_policy_choices.load(Ordering::SeqCst) & 3 {
+                        1 => Some(false),
+                        2 => Some(true),
+                        _ => None,
+                    },
+                    policy_realtime_bpm: match (self.sync_policy_choices.load(Ordering::SeqCst)
+                        >> 2)
+                        & 3
+                    {
+                        1 => Some(false),
+                        2 => Some(true),
+                        _ => None,
+                    },
+                },
+                settled: flags & 16 != 0,
             }),
         };
         (status.source_generation != 0 && self.sequence.load(Ordering::SeqCst) == sequence)
