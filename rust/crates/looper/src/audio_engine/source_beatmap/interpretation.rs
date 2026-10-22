@@ -7,7 +7,6 @@ use serde_json::{Value, json};
 
 pub(in crate::audio_engine) const MAX_REVIEW_BYTES: usize = 8 * 1024;
 const MAX_LABELS: usize = 64;
-const MAX_BUILD_BYTES: usize = 512 * 1024 * 1024;
 
 #[derive(Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
@@ -102,11 +101,10 @@ impl Interpretation {
     }
 }
 
-/// The retained capture, three canonical JSON trees, canonical hash scratch,
-/// typed reparse, output strings and geometry coexist during seal/parse/store.
-/// The 32x serialized bound covers their node/string/vector capacity overhead;
-/// fixed work also charges the bounded source descriptor and label trees. Count
-/// before any complete Value tree grows; overflow refuses instead of wrapping.
+/// Historical Raw-review byte guard; preserve its exact arithmetic and values.
+/// The known typed capture receives additional pre-embedding shape admission in
+/// build, and generic seal/parse paths use their own tree-density admission.
+/// This 32x floor alone does not bound arbitrary JSON node allocations.
 pub(in crate::audio_engine) fn budget(
     raw_bytes: usize,
     held_source_bytes: usize,
@@ -118,16 +116,7 @@ pub(in crate::audio_engine) fn budget(
     if record_bound > MAX_RECORD_BYTES || labels > MAX_LABELS {
         return Err("beatmap_review_record_limit".into());
     }
-    let peak = raw_bytes
-        .checked_mul(32)
-        .and_then(|n| n.checked_add(held_source_bytes))
-        .and_then(|n| n.checked_add(labels.checked_mul(8192)?))
-        .and_then(|n| n.checked_add(16 * 1024 * 1024))
-        .ok_or("beatmap_review_budget_overflow")?;
-    if peak > MAX_BUILD_BYTES {
-        return Err("beatmap review exceeds 512-MiB simultaneous job peak".into());
-    }
-    Ok(peak)
+    super::budget::peak(raw_bytes, held_source_bytes, labels, 0, 0)
 }
 
 /// Data-only seam shared by explicit labels and later qualified evidence. Only
@@ -138,12 +127,60 @@ pub(in crate::audio_engine) fn build(
     held_source_bytes: usize,
 ) -> Result<SourceBeatmap, String> {
     budget(raw.encoded_len()?, held_source_bytes, intent.anchors.len())?;
+    super::budget::peak(
+        raw.encoded_len()?,
+        held_source_bytes,
+        intent.anchors.len(),
+        super::review_index::prospective_bytes(raw.event_count(), intent.anchors.len())?,
+        0,
+    )?;
+    // No embedded_value or descriptor clone may precede this shape gate. The
+    // only arbitrary capture JSON is the borrowed, already 64-KiB-bounded source
+    // descriptor, which appears in both Source and embedded Raw. QM's fixed
+    // 16-hex strings cost at most six serialized extents including doubled Value
+    // slots/String capacity; BeatThis's four base64 strings cost at most three.
+    // Half a MiB covers fixed typed backend metadata/envelope containers; each
+    // explicit label receives the existing 8192-byte geometry allowance.
+    let raw_bytes = raw.encoded_len()?;
+    let descriptor_tree = super::budget::value_tree(raw.source_descriptor())?;
+    let raw_tree_factor = match raw.map_envelope_version() {
+        2 => 6,
+        3 => 3,
+        _ => return Err("unsupported review capture memory shape".into()),
+    };
+    let tree = super::budget::sum(&[
+        descriptor_tree
+            .checked_mul(2)
+            .ok_or("beatmap_review_budget_overflow")?,
+        raw_bytes
+            .checked_mul(raw_tree_factor)
+            .ok_or("beatmap_review_budget_overflow")?,
+        intent
+            .anchors
+            .len()
+            .checked_mul(8192)
+            .ok_or("beatmap_review_budget_overflow")?,
+        512 * 1024,
+    ])?;
+    super::budget::tree_admission(
+        super::budget::sum(&[raw_bytes, 128 * 1024])?,
+        tree,
+        held_source_bytes,
+        raw_bytes
+            .checked_mul(2)
+            .ok_or("beatmap_review_budget_overflow")?,
+    )?;
     intent.validate_for(raw)?;
     let version = raw.map_envelope_version();
-    editor::seal(
-        json!({"schema_version":version,"encoding":format!("source-beatmap-pwa-v{version}"),"record":{
+    let mut value = json!({"schema_version":version,"encoding":format!("source-beatmap-pwa-v{version}"),"record":{
         "source":{"decoder_identity":raw.decoder_identity(),"decoder_descriptor":raw.source_descriptor()},
         "raw":{"raw_revision":"0".repeat(64),"capture":raw.embedded_value()?},
-        "accepted":intent.accepted(raw)?}}),
+        "accepted":intent.accepted(raw)?}});
+    editor::seal_with_context(
+        &mut value,
+        held_source_bytes,
+        raw.encoded_len()?
+            .checked_mul(2)
+            .ok_or("beatmap_review_budget_overflow")?,
     )
 }

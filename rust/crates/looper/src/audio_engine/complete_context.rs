@@ -439,10 +439,30 @@ impl CompleteSourceReader {
             .lease
             .as_ref()
             .ok_or("source beatmap cold lease unavailable")?;
-        let map = super::source_beatmap::SourceBeatmap::manual(
+        super::source_beatmap_raw_data::validate_source_descriptor(
+            &lease.manifest.descriptor["decoder"],
+            &lease.manifest.decoder_identity,
+        )?;
+        // The existing decoder is borrowed throughout density counting. Charge
+        // the fixed two-anchor/manual envelope before cloning that descriptor.
+        let descriptor = &lease.manifest.descriptor["decoder"];
+        super::source_beatmap::budget::tree_admission(
+            super::source_beatmap::budget::sum(&[
+                super::source_beatmap::budget::serialized_len(descriptor)?,
+                128 * 1024,
+            ])?,
+            super::source_beatmap::budget::sum(&[
+                super::source_beatmap::budget::value_tree(descriptor)?,
+                32 * 8192,
+            ])?,
+            self.held_bytes()?,
+            0,
+        )?;
+        let map = super::source_beatmap::SourceBeatmap::manual_with_held(
             lease.manifest.descriptor["decoder"].clone(),
             origin,
             period,
+            self.held_bytes()?,
         )?;
         self.verify_source_beatmap(&map, cancelled)?;
         Ok(map)

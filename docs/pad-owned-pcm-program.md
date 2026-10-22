@@ -20,6 +20,15 @@ and complete Raw evidence; it grants no musical or audio qualification. Unsuppor
 new-beat insertion remains refused. See
 [uncertain-anchor inspection](../openspec/changes/inspect-uncertain-source-anchors/design.md).
 
+Selected captured maps gain bounded explicit review windows through their existing
+edit/source-custody/publication path. The editor reads embedded observations after
+transient capture discard or restore, extends either end, and replaces a bounded
+interior while preserving corrections and outside qualification. New intervals
+remain uncertain; explicit review does not supply an automatic full-track musical
+qualifier. Shared memory admission precedes large restoration and edit growth.
+See [window contract](../openspec/changes/review-accepted-raw-windows/design.md)
+and [verification status](../openspec/changes/review-accepted-raw-windows/results.md).
+
 A bounded original-owned Short/Medium Native comparison reproduces the earlier
 Short evidence and measures a real classification-readahead variant. Medium improves
 necessary first-attack retention in the +7 profile, but neither variant closes

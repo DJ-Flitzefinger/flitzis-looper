@@ -526,10 +526,10 @@ def check_source_beatmap_editor_api(native_module: object) -> None:
     assert raw_version == 2, "Native source beatmap editor API requires RAW_REVIEW_API_VERSION=2"
     correction_version = getattr(beatmap, "EDITOR_CORRECTION_API_VERSION", None)
     assert type(correction_version) is int, (
-        "Native source beatmap editor API requires EDITOR_CORRECTION_API_VERSION=2"
+        "Native source beatmap editor API requires EDITOR_CORRECTION_API_VERSION=3"
     )
-    assert correction_version == 2, (
-        "Native source beatmap editor API requires EDITOR_CORRECTION_API_VERSION=2"
+    assert correction_version == 3, (
+        "Native source beatmap editor API requires EDITOR_CORRECTION_API_VERSION=3"
     )
     for method in (
         "revision",
@@ -627,6 +627,19 @@ def check_source_beatmap_editor_api(native_module: object) -> None:
             set(),
         ),
         (beatmap, "editor_info", (("self", required),), set()),
+        (beatmap, "editor_review_info", (("self", required),), set()),
+        (
+            beatmap,
+            "editor_review_page",
+            (
+                ("self", required),
+                ("first_anchor_index", required),
+                ("last_anchor_index", required),
+                ("start_index", required),
+                ("max_events", 128),
+            ),
+            set(),
+        ),
         (
             beatmap,
             "editor_span",

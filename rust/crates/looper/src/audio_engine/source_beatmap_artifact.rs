@@ -290,9 +290,10 @@ impl SourceBeatmapArtifact {
         })
     }
 
-    pub(super) fn restore(
+    pub(super) fn restore_with_context(
         root: &Path,
         encoded_receipt: &str,
+        context: (usize, usize),
         cancelled: &impl Fn() -> bool,
     ) -> Result<Self, String> {
         check_cancelled(cancelled)?;
@@ -321,7 +322,7 @@ impl SourceBeatmapArtifact {
         let pin = ProjectAssets::shared()
             .acquire_verified_pin(root, &checked.path, &identity)
             .map_err(error)?;
-        let map = read_map(&mut file, &receipt, cancelled)?;
+        let map = read_map(&mut file, &receipt, context, cancelled)?;
         Self::from_parts(
             receipt,
             Resources {
@@ -342,10 +343,11 @@ impl SourceBeatmapArtifact {
         )
     }
 
-    pub(super) fn store(
+    pub(super) fn store_with_context(
         root: &Path,
         original: &Path,
         map: SourceBeatmap,
+        context: (usize, usize),
         cancelled: &impl Fn() -> bool,
         observe: &mut impl FnMut(StorePoint, &Path) -> Result<(), String>,
     ) -> Result<Self, String> {
@@ -354,6 +356,7 @@ impl SourceBeatmapArtifact {
             original,
             ArtifactPayload::Accepted(map),
             None,
+            context,
             cancelled,
             observe,
         )?;
@@ -403,6 +406,7 @@ impl SourceBeatmapRawArtifact {
             original,
             ArtifactPayload::Raw(Arc::new(raw)),
             Some(lease),
+            (0, 0),
             cancelled,
             observe,
         )?;
@@ -431,10 +435,15 @@ impl ArtifactPayload {
         &self,
         file: &mut File,
         receipt: &Receipt,
+        context: (usize, usize),
         cancelled: &impl Fn() -> bool,
     ) -> Result<Self, String> {
         match self {
-            Self::Accepted(_) => read_map(file, receipt, cancelled).map(Self::Accepted),
+            Self::Accepted(map) => {
+                let retained =
+                    super::source_beatmap::budget::sum(&[context.1, map.retained_bytes()?])?;
+                read_map(file, receipt, (context.0, retained), cancelled).map(Self::Accepted)
+            }
             Self::Raw(raw) => {
                 if receipt.kind != raw.artifact_kind() || receipt.bytes > MAX_RAW_BYTES as u64 {
                     return Err("unsupported raw artifact encoding or extent".into());
@@ -460,6 +469,7 @@ fn store_payload(
     original: &Path,
     payload: ArtifactPayload,
     raw_review: Option<RawReviewLease>,
+    context: (usize, usize),
     cancelled: &impl Fn() -> bool,
     observe: &mut impl FnMut(StorePoint, &Path) -> Result<(), String>,
 ) -> Result<(Receipt, Resources), String> {
@@ -549,7 +559,7 @@ fn store_payload(
         if project_assets::file_identity(&reader).map_err(error)? != file_identity {
             return Err("source beatmap staging leaf identity changed".into());
         }
-        drop(payload.read(&mut reader, &receipt, cancelled)?);
+        drop(payload.read(&mut reader, &receipt, context, cancelled)?);
     }
     observe(StorePoint::BeforeRename, &staging)?;
     check_cancelled(cancelled)?;
@@ -575,7 +585,7 @@ fn store_payload(
         return Err("source beatmap ready leaf identity changed".into());
     }
     // Reopen/hash/parse qualifies the artifact, not a second original scan.
-    let reopened = payload.read(&mut file, &receipt, cancelled)?;
+    let reopened = payload.read(&mut file, &receipt, context, cancelled)?;
     let pin = ProjectAssets::shared()
         .acquire_verified_pin(root, &path, &file_identity)
         .map_err(error)?;
@@ -660,11 +670,13 @@ fn require_only_map(path: &Path) -> Result<(), String> {
 fn read_map(
     file: &mut File,
     receipt: &Receipt,
+    context: (usize, usize),
     cancelled: &impl Fn() -> bool,
 ) -> Result<SourceBeatmap, String> {
     if file.metadata().map_err(error)?.len() != receipt.bytes {
         return Err("source beatmap artifact extent differs from receipt".into());
     }
+    super::source_beatmap::budget::edit(receipt.bytes as usize, context.0, context.1)?;
     let mut encoded = Vec::with_capacity(receipt.bytes as usize);
     let mut digest = Sha256::new();
     let mut buffer = [0_u8; 64 * 1024];
@@ -689,7 +701,7 @@ fn read_map(
         return Err("source beatmap artifact hash differs from receipt".into());
     }
     let text = std::str::from_utf8(&encoded).map_err(error)?;
-    let map = SourceBeatmap::parse(text)?;
+    let map = SourceBeatmap::parse_with_context(text, context.0, context.1)?;
     if map.map_revision() != receipt.map_revision
         || map.source_identity() != receipt.decoder_identity
         || map.canonical_record().as_bytes() != encoded

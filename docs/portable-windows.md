@@ -80,11 +80,15 @@ qualification after reopening; relocation grants no current map/audio authority.
 This prerequisite does not yet save selected maps in Config or arrangement journals.
 
 Portable validation and the local launchers require the exact integer
-`SourceBeatmap.EDITOR_CORRECTION_API_VERSION = 2` and the bounded
-`editor_span(first_anchor_index, last_anchor_index)` inspector signature before
-opening the App. Native builds with only the earlier editor methods are refused;
-these checks reflect the API without creating an Engine, evaluating a map or
-starting an editor job.
+`SourceBeatmap.EDITOR_CORRECTION_API_VERSION = 3`, the existing bounded
+`editor_span(first_anchor_index, last_anchor_index)` signature and the embedded
+capture methods `editor_review_info()` and
+`editor_review_page(first_anchor_index, last_anchor_index, start_index, max_events=128)`
+before opening the App. Captured maps can be reviewed after transient candidate
+discard or restore; legacy maps report this feature unavailable and retain their
+existing edits. Native builds with only the earlier editor methods are refused.
+These checks reflect the API without creating an Engine, evaluating a map or
+starting an editor job. Explicit review labels do not qualify musical coverage.
 
 There is no second `Runtime/app` copy and no permanent per-version runtime tree.
 The full checkout's installed-file inventory distinguishes shipped files from

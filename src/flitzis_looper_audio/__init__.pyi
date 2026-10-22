@@ -95,6 +95,52 @@ class SourceBeatmapEditorSpan(TypedDict):
     downbeat_status: str
     downbeat_label: int | None
 
+class SourceBeatmapReviewInfo(TypedDict):
+    status: Literal["ready", "unavailable"]
+    reason: str | None
+    map_revision: str
+    source_identity: str
+    capture_revision: str | None
+    capture_encoding: str | None
+    backend: Literal["legacy_qm", "beat_this"] | None
+    event_count: int
+    anchor_count: int
+    source_sample_rate_hz: int
+    source_frame_count: int
+
+class SourceBeatmapReviewAnchor(TypedDict):
+    index: int
+    source_seconds: float
+    source_seconds_bits: str
+    beat: float
+    beat_bits: str
+    raw_beat_index: int | None
+    review: Literal["estimated", "reviewed"]
+    sample_index: int | None
+    has_sample_edit: bool
+
+class SourceBeatmapReviewEvent(TypedDict):
+    raw_index: int
+    source_seconds: float
+    source_seconds_bits: str
+    detected_downbeat: bool
+    physical_domain: Literal["inside", "exclusive_end", "outside"]
+
+class SourceBeatmapReviewPage(TypedDict):
+    status: Literal["ready", "unavailable"]
+    reason: str | None
+    map_revision: str
+    source_identity: str
+    capture_revision: str | None
+    first_anchor_index: int
+    last_anchor_index: int
+    start_index: int
+    returned_count: int
+    total_event_count: int
+    has_more: bool
+    anchors: list[SourceBeatmapReviewAnchor]
+    events: list[SourceBeatmapReviewEvent]
+
 class SourceBeatmapProjection(TypedDict):
     map_revision: str
     status: str
@@ -112,6 +158,14 @@ class SourceBeatmap:
     def editor_span(
         self, first_anchor_index: int, last_anchor_index: int
     ) -> SourceBeatmapEditorSpan: ...
+    def editor_review_info(self) -> SourceBeatmapReviewInfo: ...
+    def editor_review_page(
+        self,
+        first_anchor_index: int,
+        last_anchor_index: int,
+        start_index: int,
+        max_events: int = 128,
+    ) -> SourceBeatmapReviewPage: ...
     def editor_view(
         self,
         start_s: float,

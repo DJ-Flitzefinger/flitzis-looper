@@ -10,6 +10,7 @@ from imgui_bundle import imgui
 
 from flitzis_looper.timing_policy import variable_source_timing
 from flitzis_looper.ui.constants import SPACING, TEXT_MUTED_RGBA
+from flitzis_looper.ui.render.source_beatmap_review_window import render_review_window
 
 if TYPE_CHECKING:
     from collections.abc import Callable
@@ -523,6 +524,7 @@ def _interval_fields(ctx: UiContext, frame: SourceMapEditorFrame, state: _Editor
         _interpretation_actions(ctx, frame, state)
     finally:
         imgui.pop_id()
+    render_review_window(ctx, frame, span)
 
 
 def _raw_inputs(ctx: UiContext, frame: SourceMapEditorFrame) -> _RawInputs:

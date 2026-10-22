@@ -109,6 +109,19 @@ def _map() -> Mock:
     geometry.source_after_beats.side_effect = _source_after_beats
     geometry.nearest_grid_source.side_effect = _nearest_grid
     geometry.editor_span.side_effect = _span
+    geometry.editor_review_info.return_value = {
+        "status": "unavailable",
+        "reason": "This legacy map has no complete captured observations.",
+        "map_revision": "a" * 64,
+        "source_identity": "legacy-source",
+        "capture_revision": None,
+        "capture_encoding": None,
+        "backend": None,
+        "event_count": 0,
+        "anchor_count": 3,
+        "source_sample_rate_hz": 48_000,
+        "source_frame_count": 28_800_000,
+    }
     geometry.editor_view.return_value = {
         "map_revision": "a" * 64,
         "status": "complete",

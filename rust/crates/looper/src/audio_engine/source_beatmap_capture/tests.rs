@@ -265,3 +265,112 @@ fn bounded_capture_decode_canonical_spelling_and_publication_peak_fail_closed() 
         BeatThisRawData::from_worker(source, &request.to_string(), &result.to_string()).is_err()
     );
 }
+
+#[test]
+fn map_v3_accepted_raw_windows_keep_all_four_arrays_and_inner_revision_after_restore() {
+    use pyo3::prelude::*;
+    use pyo3::types::PyDict;
+    let raw = capture();
+    let intent = Interpretation::parse(
+        &json!({"schema_version":1,"raw_revision":raw.revision(),"anchors":[
+        {"raw_index":0,"quarter_bits":format!("{:016x}",0.0_f64.to_bits())},
+        {"raw_index":2,"quarter_bits":format!("{:016x}",2.0_f64.to_bits())}]})
+        .to_string(),
+    )
+    .unwrap();
+    let map = interpretation::build(&raw, &intent, 4096).unwrap();
+    let wire = |map: &SourceBeatmap, mode: &str, first: usize, last: usize, rows: Value| {
+        json!({
+        "schema_version":1,"operation":"review_raw_window","map_revision":map.map_revision(),
+        "capture_revision":raw.revision(),"mode":mode,"first_anchor_index":first,"last_anchor_index":last,"rows":rows}).to_string()
+    };
+    let extended = map
+        .edited(&wire(
+            &map,
+            "extend_end",
+            1,
+            1,
+            json!([
+        {"kind":"raw","raw_index":3,"quarter_bits":format!("{:016x}",3.0_f64.to_bits())}]),
+        ))
+        .unwrap();
+    let repaired = extended
+        .edited(&wire(
+            &extended,
+            "replace_interior",
+            0,
+            2,
+            json!([
+        {"kind":"raw","raw_index":1,"quarter_bits":format!("{:016x}",0.75_f64.to_bits())},
+        {"kind":"existing","anchor_index":1,"quarter_bits":format!("{:016x}",2.25_f64.to_bits())}]),
+        ))
+        .unwrap();
+    let restored = SourceBeatmap::parse(repaired.clone().canonical_record()).unwrap();
+    let before: Value = serde_json::from_str(map.canonical_record()).unwrap();
+    let after: Value = serde_json::from_str(restored.canonical_record()).unwrap();
+    assert_eq!(before["record"]["raw"], after["record"]["raw"]);
+    assert_eq!(
+        after["record"]["raw"]["capture"]["data"]["result"]["predictions"],
+        raw.embedded_value().unwrap()["data"]["result"]["predictions"]
+    );
+    Python::initialize();
+    Python::attach(|py| {
+        let object = Py::new(py, restored.clone()).unwrap();
+        let page = object
+            .bind(py)
+            .call_method1("editor_review_page", (0, 3, 0, 128))
+            .unwrap();
+        let page = page.cast::<PyDict>().unwrap();
+        assert_eq!(
+            page.get_item("capture_revision")
+                .unwrap()
+                .unwrap()
+                .extract::<String>()
+                .unwrap(),
+            raw.revision()
+        );
+        let events = page.get_item("events").unwrap().unwrap();
+        assert_eq!(events.len().unwrap(), 4);
+        assert_eq!(
+            events
+                .get_item(1)
+                .unwrap()
+                .get_item("source_seconds_bits")
+                .unwrap()
+                .extract::<String>()
+                .unwrap(),
+            "3fe0000000000001"
+        );
+        assert!(
+            !events
+                .get_item(1)
+                .unwrap()
+                .get_item("detected_downbeat")
+                .unwrap()
+                .extract::<bool>()
+                .unwrap()
+        );
+        assert!(
+            events
+                .get_item(3)
+                .unwrap()
+                .get_item("detected_downbeat")
+                .unwrap()
+                .extract::<bool>()
+                .unwrap()
+        );
+    });
+    let undone = restored
+        .edited(r#"{"schema_version":1,"operation":"undo"}"#)
+        .unwrap();
+    let undone: Value = serde_json::from_str(undone.canonical_record()).unwrap();
+    let extended: Value = serde_json::from_str(extended.canonical_record()).unwrap();
+    assert_eq!(
+        undone["record"]["accepted"]["anchors"],
+        extended["record"]["accepted"]["anchors"]
+    );
+    assert_eq!(
+        undone["record"]["accepted"]["intervals"],
+        extended["record"]["accepted"]["intervals"]
+    );
+}

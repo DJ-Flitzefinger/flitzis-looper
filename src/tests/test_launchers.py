@@ -76,11 +76,11 @@ class SourceBeatmap:
             'editor-version-none': None,
             'editor-version-false': False,
             'editor-version-true': True,
-            'editor-version-float': 2.0,
-            'editor-version-string': '2',
-            'editor-version-old': 1,
-            'editor-version-future': 3,
-        }.get(os.environ['LAUNCHER_NATIVE_MODE'], 2)
+            'editor-version-float': 3.0,
+            'editor-version-string': '3',
+            'editor-version-old': 2,
+            'editor-version-future': 4,
+        }.get(os.environ['LAUNCHER_NATIVE_MODE'], 3)
     if os.environ['LAUNCHER_NATIVE_MODE'] != 'editor-missing-span':
         if os.environ['LAUNCHER_NATIVE_MODE'] == 'editor-span-optional':
             def editor_span(self, first_anchor_index, last_anchor_index=None):
@@ -99,6 +99,39 @@ class SourceBeatmap:
                 raise AssertionError('launcher must never query a span')
     def editor_info(self):
         raise AssertionError('launcher must only reflect map capabilities')
+    if os.environ['LAUNCHER_NATIVE_MODE'] != 'editor-missing-review-info':
+        if os.environ['LAUNCHER_NATIVE_MODE'] == 'editor-review-info-optional':
+            def editor_review_info(self, rows=None):
+                raise AssertionError('launcher must never inspect embedded capture metadata')
+        else:
+            def editor_review_info(self):
+                raise AssertionError('launcher must never inspect embedded capture metadata')
+    if os.environ['LAUNCHER_NATIVE_MODE'] != 'editor-missing-review-page':
+        if os.environ['LAUNCHER_NATIVE_MODE'] == 'editor-review-page-limit':
+            def editor_review_page(
+                self, first_anchor_index, last_anchor_index, start_index, max_events=64,
+            ):
+                raise AssertionError('launcher must never inspect embedded capture rows')
+        elif os.environ['LAUNCHER_NATIVE_MODE'] == 'editor-review-page-renamed':
+            def editor_review_page(
+                self, first_anchor_index, last_anchor_index, raw_index, max_events=128,
+            ):
+                raise AssertionError('launcher must never inspect embedded capture rows')
+        elif os.environ['LAUNCHER_NATIVE_MODE'] == 'editor-review-page-keyword-only':
+            def editor_review_page(
+                self, first_anchor_index, last_anchor_index, start_index, *, max_events=128,
+            ):
+                raise AssertionError('launcher must never inspect embedded capture rows')
+        elif os.environ['LAUNCHER_NATIVE_MODE'] == 'editor-review-page-bool':
+            def editor_review_page(
+                self, first_anchor_index, last_anchor_index, start_index, max_events=True,
+            ):
+                raise AssertionError('launcher must never inspect embedded capture rows')
+        else:
+            def editor_review_page(
+                self, first_anchor_index, last_anchor_index, start_index, max_events=128,
+            ):
+                raise AssertionError('launcher must never inspect embedded capture rows')
     def editor_view(self, start_s, end_s, loop_start_s, px_per_s, max_points=2048):
         raise AssertionError('launcher must never query source geometry')
     def source_after_beats(self, source_seconds, beats, require_four_four=True):
@@ -411,6 +444,8 @@ def test_recording_lifecycle_requires_current_native_before_application(
         "editor-version-future",
         "editor-missing-span",
         "editor-missing-review",
+        "editor-missing-review-info",
+        "editor-missing-review-page",
         "editor-span-optional",
         "editor-span-keyword-only",
         "editor-span-positional-only",
@@ -426,6 +461,28 @@ def test_source_beatmap_editor_requires_current_native_before_application(
     assert "Native source beatmap editor API requires a current build" in (
         result.stdout + result.stderr
     )
+    assert not launchers.app_log.exists()
+    assert launchers.profile_log.exists()
+
+
+@pytest.mark.parametrize("starter", ["start.bat", "start-release.bat"])
+@pytest.mark.parametrize(
+    ("mode", "method"),
+    [
+        ("editor-review-page-limit", "editor_review_page"),
+        ("editor-review-page-renamed", "editor_review_page"),
+        ("editor-review-page-keyword-only", "editor_review_page"),
+        ("editor-review-page-bool", "editor_review_page"),
+        ("editor-review-info-optional", "editor_review_info"),
+    ],
+)
+def test_embedded_review_page_signature_is_checked_without_querying_native(
+    launchers: _Launchers, starter: str, mode: str, method: str
+) -> None:
+    launchers.environment["LAUNCHER_NATIVE_MODE"] = mode
+    result = launchers.run(starter)
+    assert result.returncode != 0
+    assert f"SourceBeatmap.{method}" in result.stdout + result.stderr
     assert not launchers.app_log.exists()
     assert launchers.profile_log.exists()
 

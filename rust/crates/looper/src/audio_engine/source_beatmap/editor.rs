@@ -7,7 +7,8 @@ use std::io::{self, Write};
 
 use super::super::cold_store::descriptor_digest;
 use super::{
-    MAX_ANCHORS, MAX_PROJECTION_POINTS, MAX_RECORD_BYTES, SourceBeatmap, interval_edits, record,
+    MAX_ANCHORS, MAX_PROJECTION_POINTS, MAX_RECORD_BYTES, SourceBeatmap, budget, interval_edits,
+    record, review_index::RawIndex, review_window,
 };
 
 pub(in crate::audio_engine) const MAX_EDIT_BYTES: usize = 8192;
@@ -16,9 +17,10 @@ pub(super) struct EditIntent {
     operation: EditOperation,
 }
 
-#[derive(Clone, Copy, Deserialize)]
+#[derive(Clone, Deserialize)]
 #[serde(tag = "operation", rename_all = "snake_case", deny_unknown_fields)]
 pub(super) enum EditOperation {
+    ReviewRawWindow(review_window::ReviewWindow),
     MoveBeat {
         schema_version: u32,
         beat: f64,
@@ -78,9 +80,13 @@ fn parse_intent(encoded: &str) -> Result<EditIntent, String> {
         | EditOperation::SetDownbeat { schema_version, .. }
         | EditOperation::SetCoverage { schema_version, .. }
         | EditOperation::Undo { schema_version } => *schema_version,
+        EditOperation::ReviewRawWindow(window) => window.schema_version,
     };
     if version != 1 {
         return Err("unsupported_beatmap_edit_schema".into());
+    }
+    if let EditOperation::ReviewRawWindow(window) = &operation {
+        window.validate()?;
     }
     let value: Value = serde_json::from_str(encoded).map_err(|error| error.to_string())?;
     if (matches!(operation, EditOperation::SetDownbeat { .. })
@@ -101,8 +107,18 @@ fn bits(value: f64) -> String {
     format!("{:016x}", value.to_bits())
 }
 
+#[cfg(test)]
 pub(in crate::audio_engine) fn seal(mut value: Value) -> Result<SourceBeatmap, String> {
-    check_record_size(&value)?;
+    seal_with_context(&mut value, 0, 0)
+}
+
+pub(in crate::audio_engine) fn seal_with_context(
+    value: &mut Value,
+    held: usize,
+    retained: usize,
+) -> Result<SourceBeatmap, String> {
+    budget::value_admission(value, held, retained)?;
+    check_record_size(value)?;
     value["record"]["raw"]
         .as_object_mut()
         .ok_or("raw_not_object")?
@@ -115,7 +131,7 @@ pub(in crate::audio_engine) fn seal(mut value: Value) -> Result<SourceBeatmap, S
         .remove("map_revision");
     value["record"]["accepted"]["map_revision"] =
         json!(descriptor_digest(&value["record"]).map_err(|error| error.to_string())?);
-    SourceBeatmap::parse(&value.to_string())
+    SourceBeatmap::parse_with_context(&value.to_string(), held, retained)
 }
 
 /// Bound serialization before digest helpers allocate their canonical encoding.
@@ -138,10 +154,20 @@ fn check_record_size(value: &Value) -> Result<(), String> {
 }
 
 impl SourceBeatmap {
+    #[cfg(test)]
     pub(in crate::audio_engine) fn manual(
         descriptor: Value,
         origin: f64,
         period: f64,
+    ) -> Result<Self, String> {
+        Self::manual_with_held(descriptor, origin, period, 0)
+    }
+
+    pub(in crate::audio_engine) fn manual_with_held(
+        descriptor: Value,
+        origin: f64,
+        period: f64,
+        held: usize,
     ) -> Result<Self, String> {
         let rate = descriptor["pcm"]["rate_hz"]
             .as_u64()
@@ -166,20 +192,94 @@ impl SourceBeatmap {
             "id":format!("manual-bound-{index}"),"source_seconds_bits":bits(seconds),"beat_bits":bits(beat),
             "raw_beat_index":null,"review":"reviewed","sample_edit":null,
         })).collect();
-        seal(
-            json!({"schema_version":1,"encoding":"source-beatmap-pwa-v1","record":{
-                "source":{"decoder_identity":descriptor_digest(&descriptor).map_err(|error|error.to_string())?,"decoder_descriptor":descriptor},
-                "raw":{"raw_revision":"0".repeat(64),"detector":{"detector_id":"explicit-manual-source-grid","code_revision":"manual-source-grid-v1", "configuration":{"origin_seconds_bits":bits(origin),"period_seconds_bits":bits(period)},"model":null,"preprocessing":{}},"analysis_input":null,"timestamp_resolution_seconds_bits":null,"beat_seconds_bits":[],"downbeat_seconds_bits":[],"uncertainty":"Manual timing and 4/4 interpretation; no detector or musical acceptance"},
-                "accepted":{"map_revision":"0".repeat(64),"parent_revision":null,"beat_unit":"quarter_note","interpolation_policy":"pwa-source-seconds-quarter-v1","boundary_policy":"right-interior-left-final-gap-unavailable-v1","snap_policy":"nearest-quarter-subdivision-later-tie-v1","anchors":anchors,"intervals":[{"coverage":"trusted","meter":{"status":"quarter_note_4_4_verified","downbeat_label":0,"evidence":"Explicit manual quarter-note 4/4 interpretation"}}],"lineage":[]}
-            }}),
-        )
+        let mut value = json!({"schema_version":1,"encoding":"source-beatmap-pwa-v1","record":{
+            "source":{"decoder_identity":descriptor_digest(&descriptor).map_err(|error|error.to_string())?,"decoder_descriptor":descriptor},
+            "raw":{"raw_revision":"0".repeat(64),"detector":{"detector_id":"explicit-manual-source-grid","code_revision":"manual-source-grid-v1", "configuration":{"origin_seconds_bits":bits(origin),"period_seconds_bits":bits(period)},"model":null,"preprocessing":{}},"analysis_input":null,"timestamp_resolution_seconds_bits":null,"beat_seconds_bits":[],"downbeat_seconds_bits":[],"uncertainty":"Manual timing and 4/4 interpretation; no detector or musical acceptance"},
+            "accepted":{"map_revision":"0".repeat(64),"parent_revision":null,"beat_unit":"quarter_note","interpolation_policy":"pwa-source-seconds-quarter-v1","boundary_policy":"right-interior-left-final-gap-unavailable-v1","snap_policy":"nearest-quarter-subdivision-later-tie-v1","anchors":anchors,"intervals":[{"coverage":"trusted","meter":{"status":"quarter_note_4_4_verified","downbeat_label":0,"evidence":"Explicit manual quarter-note 4/4 interpretation"}}],"lineage":[]}
+        }});
+        seal_with_context(&mut value, held, 0)
     }
 
+    #[cfg(test)]
     pub(in crate::audio_engine) fn edited(&self, encoded: &str) -> Result<Self, String> {
+        self.edited_with_held(encoded, 0)
+    }
+
+    pub(in crate::audio_engine) fn edited_with_held(
+        &self,
+        encoded: &str,
+        held: usize,
+    ) -> Result<Self, String> {
         let intent = parse_intent(encoded)?;
+        let retained = self.inner.retained_bytes()?;
+        budget::scan(self.canonical_record(), held, retained)?;
+        budget::edit(
+            budget::edit_bound(self.canonical_record().len())?,
+            held,
+            retained,
+        )?;
         let mut value: Value =
             serde_json::from_str(self.canonical_record()).map_err(|error| error.to_string())?;
+        // Count existing geometry and any complete executable inverse by borrowing
+        // it. A tiny wire intent cannot conceal arbitrarily long old provenance.
+        let accepted = &value["record"]["accepted"];
+        let inverse_bytes = accepted["lineage"]
+            .as_array()
+            .ok_or("lineage_missing")?
+            .iter()
+            .try_fold(0_usize, |largest, row| {
+                Ok::<_, String>(largest.max(budget::serialized_len(&row["payload"]["inverse"])?))
+            })?;
+        let prospective = budget::sum(&[
+            self.canonical_record().len(),
+            budget::serialized_len(&accepted["anchors"])?,
+            budget::serialized_len(&accepted["intervals"])?,
+            inverse_bytes,
+            MAX_EDIT_BYTES,
+            budget::EDIT_ALLOWANCE,
+        ])?;
+        budget::edit(prospective, held, retained)?;
+        // Arbitrary imported payloads can be far denser than their byte text.
+        // Borrow-count every possible old inverse and geometry before copying.
+        let inverse_tree = accepted["lineage"]
+            .as_array()
+            .ok_or("lineage_missing")?
+            .iter()
+            .try_fold(0_usize, |largest, row| {
+                Ok::<_, String>(largest.max(budget::value_tree(&row["payload"]["inverse"])?))
+            })?;
+        let prospective_tree = budget::sum(&[
+            budget::value_tree(&value)?,
+            budget::value_tree(&accepted["anchors"])?,
+            budget::value_tree(&accepted["intervals"])?,
+            inverse_tree,
+            budget::scan(encoded, 0, 0)?,
+            64 * 8192 + 16 * 1024,
+        ])?;
+        budget::tree_admission(prospective, prospective_tree, held, retained)?;
         let operation = match intent.operation {
+            EditOperation::ReviewRawWindow(window) => {
+                let raw = self
+                    .inner
+                    .raw_index
+                    .as_ref()
+                    .ok_or("beatmap_window_complete_capture_unavailable")?;
+                let predecessor_parent_revision =
+                    value["record"]["accepted"]["parent_revision"].clone();
+                let inverse = review_window::apply(
+                    &mut value["record"]["accepted"],
+                    raw,
+                    &window,
+                    &self.inner.revision,
+                    self.inner.sample_rate_hz,
+                    self.inner.source_frames,
+                )?;
+                (
+                    "refinement",
+                    json!({"intent":serde_json::from_str::<Value>(encoded).map_err(|e|e.to_string())?,
+                    "inverse":inverse,"predecessor_parent_revision":predecessor_parent_revision}),
+                )
+            }
             EditOperation::MoveBeat {
                 beat,
                 sample_index,
@@ -272,6 +372,7 @@ impl SourceBeatmap {
                     self.inner.sample_rate_hz,
                     self.inner.source_frames,
                     raw_count,
+                    self.inner.raw_index.as_ref(),
                 )
                 .ok_or("beatmap_no_undo")?;
                 let inverse = last["payload"]["inverse"].clone();
@@ -284,13 +385,14 @@ impl SourceBeatmap {
                         "beat_count" => "beat_count",
                         "downbeat_meter" => "downbeat_meter",
                         "coverage" => "coverage",
+                        "refinement" => "refinement",
                         _ => "source_position",
                     },
                     json!({"intent":{"schema_version":1,"operation":"undo"},"undoes_operation_id":undone_id,"inverse":redo}),
                 )
             }
             operation => {
-                let kind = interval_edits::kind(operation).ok_or("beatmap_edit_invalid")?;
+                let kind = interval_edits::kind(operation.clone()).ok_or("beatmap_edit_invalid")?;
                 let predecessor_parent_revision =
                     value["record"]["accepted"]["parent_revision"].clone();
                 let inverse = interval_edits::apply(&mut value["record"]["accepted"], operation)?;
@@ -306,7 +408,7 @@ impl SourceBeatmap {
             .as_array_mut()
             .ok_or("lineage_missing")?;
         lineage.push(json!({"id":format!("editor-{}-{}",&self.inner.revision[..16],lineage.len()),"parent_revision":self.inner.revision,"kind":operation.0,"payload":operation.1,"evidence":"Explicit immutable editor correction; raw evidence retained","author":"performer"}));
-        seal(value)
+        seal_with_context(&mut value, held, retained)
     }
 
     fn validate_rate(&self, rate: u32) -> Result<(), String> {
@@ -334,6 +436,9 @@ fn inverse_shape(inverse: &Value, kind: &str, undo: bool) -> bool {
     let Some(action) = inverse["action"].as_str() else {
         return false;
     };
+    if action == "restore_review_window" {
+        return review_window::inverse_shape(inverse, kind);
+    }
     if action == "restore_interval_edit" {
         return interval_edits::inverse_shape(inverse, kind);
     }
@@ -374,7 +479,7 @@ fn inverse_shape(inverse: &Value, kind: &str, undo: bool) -> bool {
     }
 }
 
-fn anchor_shape(anchor: &Value) -> bool {
+pub(super) fn anchor_shape(anchor: &Value) -> bool {
     exact_keys(
         anchor,
         &[
@@ -466,7 +571,9 @@ fn editor_operation(
         payload,
         if undo {
             &["intent", "inverse", "undoes_operation_id"]
-        } else if interval_edits::kind(intent).is_some() {
+        } else if interval_edits::kind(intent.clone()).is_some()
+            || matches!(intent, EditOperation::ReviewRawWindow(_))
+        {
             &["intent", "inverse", "predecessor_parent_revision"]
         } else {
             &["intent", "inverse"]
@@ -476,6 +583,8 @@ fn editor_operation(
         return None;
     }
     match &intent {
+        EditOperation::ReviewRawWindow(window)
+            if kind == "refinement" && window.map_revision == parent => {}
         EditOperation::MoveBeat {
             beat,
             sample_index,
@@ -488,18 +597,19 @@ fn editor_operation(
         EditOperation::Translate { sample_rate_hz, .. }
             if kind == "whole_map_translation" && *sample_rate_hz == rate => {}
         EditOperation::Undo { .. } if payload["undoes_operation_id"].as_str().is_some() => {}
-        operation if interval_edits::kind(*operation) == Some(kind) => {}
+        operation if interval_edits::kind((*operation).clone()) == Some(kind) => {}
         _ => return None,
     }
     Some(intent)
 }
 
-pub(super) fn undo_operation(
-    record_value: &Value,
+pub(super) fn undo_operation<'a>(
+    record_value: &'a Value,
     rate: u32,
     frames: u64,
     raw_count: usize,
-) -> Option<&Value> {
+    raw_index: Option<&RawIndex>,
+) -> Option<&'a Value> {
     let accepted = &record_value["accepted"];
     let lineage = accepted["lineage"].as_array()?;
     let ids: HashMap<&str, usize> = lineage
@@ -546,8 +656,22 @@ pub(super) fn undo_operation(
         ] {
             preview[key] = accepted[key].clone();
         }
-        let interval_edit = interval_edits::kind(intent).is_some();
+        let interval_edit = interval_edits::kind(intent.clone()).is_some();
+        let window_edit = matches!(intent, EditOperation::ReviewRawWindow(_));
         match intent {
+            EditOperation::ReviewRawWindow(window) => {
+                if !review_window::matches_current(
+                    accepted,
+                    &mut preview,
+                    inverse,
+                    raw_index?,
+                    &window,
+                    operation["parent_revision"].as_str()?,
+                    (rate, frames),
+                ) {
+                    return None;
+                }
+            }
             EditOperation::MoveBeat {
                 beat,
                 sample_index,
@@ -613,14 +737,19 @@ pub(super) fn undo_operation(
                 }
             }
         }
-        if !interval_edit {
+        if !interval_edit && !window_edit {
             apply_inverse(&mut preview, inverse).ok()?;
         }
         record::validate_editor_geometry(&preview, raw_count).ok()?;
-        if interval_edit {
+        if interval_edit || window_edit {
             preview["parent_revision"] =
                 operation["payload"]["predecessor_parent_revision"].clone();
             preview["lineage"] = Value::Array(lineage[..index].to_vec());
+            // Generic payload JSON is not a validated predecessor. Install its
+            // actual revision before checking the complete restored metadata,
+            // including null-or-digest parent shape and the self-parent guard.
+            preview["map_revision"] = operation["parent_revision"].clone();
+            record::validate_editor_geometry(&preview, raw_count).ok()?;
             preview.as_object_mut()?.remove("map_revision");
             let predecessor = json!({"source":record_value["source"],"raw":record_value["raw"],"accepted":preview});
             check_record_size(&predecessor).ok()?;
@@ -637,6 +766,9 @@ pub(super) fn undo_operation(
 
 pub(super) fn apply_inverse(accepted: &mut Value, inverse: &Value) -> Result<Value, String> {
     let action = inverse["action"].as_str().ok_or("beatmap_no_undo")?;
+    if action == "restore_review_window" {
+        return review_window::apply_inverse(accepted, inverse);
+    }
     if action == "restore_interval_edit" {
         return interval_edits::apply_inverse(accepted, inverse);
     }

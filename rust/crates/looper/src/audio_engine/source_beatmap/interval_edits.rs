@@ -53,7 +53,7 @@ fn encoded_bits(value: f64) -> Value {
 
 /// The same deterministic transform serves execution and closed Undo correspondence.
 pub(super) fn apply(accepted: &mut Value, operation: EditOperation) -> Result<Value, String> {
-    let (first, last) = range(operation).ok_or("beatmap_edit_invalid")?;
+    let (first, last) = range(operation.clone()).ok_or("beatmap_edit_invalid")?;
     let anchors = accepted["anchors"].as_array().ok_or("anchors_missing")?;
     if first >= last || last >= anchors.len() {
         return Err("beatmap_edit_invalid_selection".into());
@@ -315,7 +315,7 @@ pub(super) fn matches_current(
     inverse: &Value,
     operation: EditOperation,
 ) -> bool {
-    let Some((first, last)) = range(operation) else {
+    let Some((first, last)) = range(operation.clone()) else {
         return false;
     };
     if inverse["first_anchor_index"].as_u64() != Some(first as u64)

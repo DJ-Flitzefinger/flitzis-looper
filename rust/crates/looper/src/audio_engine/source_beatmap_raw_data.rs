@@ -938,6 +938,10 @@ mod tests {
         include!("source_beatmap/interpretation_tests.rs");
     }
 
+    mod review_window_tests {
+        include!("source_beatmap/review_window_tests.rs");
+    }
+
     fn capture() -> RawData {
         let descriptor = json!({"schema_version":1,"original":{"sha256":"a".repeat(64),"bytes":128},
             "pcm":{"format":"f32-le-interleaved-v1","channel_layout":"interleaved-channel-index-order-v1",

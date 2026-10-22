@@ -214,6 +214,56 @@ fn interpretation_peak_charges_retained_source_and_checked_trees_before_growth()
 }
 
 #[test]
+fn interpretation_shape_refuses_before_embedded_capture_or_descriptor_copy() {
+    use crate::audio_engine::source_beatmap_capture::CaptureView;
+    struct NeverEmbedded<'a>(&'a RawData);
+    impl CaptureView for NeverEmbedded<'_> {
+        fn revision(&self) -> &str {
+            &self.0.raw_revision
+        }
+        fn decoder_identity(&self) -> &str {
+            &self.0.decoder_identity
+        }
+        fn source_descriptor(&self) -> &Value {
+            &self.0.source_descriptor
+        }
+        fn source_sample_rate_hz(&self) -> u32 {
+            self.0.source_sample_rate_hz
+        }
+        fn source_frame_count(&self) -> usize {
+            self.0.source_frame_count
+        }
+        fn event_count(&self) -> usize {
+            self.0.beat_frames.len()
+        }
+        fn source_seconds(&self, index: usize) -> Option<f64> {
+            CaptureView::source_seconds(self.0, index)
+        }
+        fn encoded_len(&self) -> Result<usize, String> {
+            self.0.encoded_len()
+        }
+        fn embedded_value(&self) -> Result<Value, String> {
+            panic!("overbudget capture was cloned before admission")
+        }
+        fn map_envelope_version(&self) -> u32 {
+            2
+        }
+    }
+    let (raw, intent) = labelled_capture();
+    let bytes = raw.encoded_len().unwrap();
+    let old_peak = interpretation::budget(bytes, 0, 2).unwrap();
+    // Leave enough for the existing exact old gate and derived index, while
+    // withholding the genuinely needed dense-tree/sealing reserve.
+    let held = 512 * 1024 * 1024 - old_peak - 4096;
+    assert!(interpretation::budget(bytes, held, 2).is_ok());
+    assert!(
+        interpretation::build(&NeverEmbedded(&raw), &intent, held)
+            .unwrap_err()
+            .contains("512-MiB")
+    );
+}
+
+#[test]
 fn v2_signed_virtual_translation_preserves_geometry_but_grants_no_physical_indices_or_loop() {
     use pyo3::prelude::*;
     use pyo3::types::PyDict;

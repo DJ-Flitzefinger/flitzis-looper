@@ -230,6 +230,21 @@ impl BeatThisRawData {
         self.predictions().beat_seconds.len()
     }
 
+    pub(in crate::audio_engine) fn observation_seconds(&self, index: usize) -> Option<f64> {
+        self.predictions().beat_seconds.get(index).copied()
+    }
+
+    pub(in crate::audio_engine) fn capture_revision(&self) -> &str {
+        &self.raw_revision
+    }
+
+    pub(in crate::audio_engine) fn observation_downbeat(&self, seconds: f64) -> bool {
+        self.predictions()
+            .downbeat_seconds
+            .binary_search_by(|value| value.total_cmp(&seconds))
+            .is_ok()
+    }
+
     fn validate(&self) -> Result<(), String> {
         validate_source_descriptor(
             &self.source.source_descriptor,

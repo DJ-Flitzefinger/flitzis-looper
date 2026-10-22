@@ -199,3 +199,46 @@ fn edit_receipt_is_reverified_against_replaced_actual_source_and_does_not_publis
     assert_eq!(artifact_record(&base), base_record);
     assert_offline_available(&fixture);
 }
+
+#[test]
+fn actual_validate_store_restore_jobs_refuse_peak_before_json_parse_or_receipt_read() {
+    let fixture = ColdCustody::new();
+    let base = created(&fixture);
+    let fences = source_fences(&fixture);
+    let paths = ready_maps(&fixture);
+    // Below the structural 64-MiB cap, but already beyond simultaneous trees,
+    // retained input/index and actual held-source admission. Malformed input
+    // and a deliberately incorrect receipt extent prove which guard ran first.
+    let bytes = 16 * 1024 * 1024;
+    for store in [false, true] {
+        let input = " ".repeat(bytes);
+        let job = if store {
+            fixture
+                .engine
+                .begin_source_beatmap_store_async(0, input)
+                .unwrap()
+        } else {
+            fixture.engine.begin_source_beatmap_async(0, input).unwrap()
+        };
+        let status = wait_terminal(&job);
+        assert_eq!(status["stage"], "failed");
+        assert!(status["detail"].as_str().unwrap().contains("512-MiB"));
+        assert!(maps(&fixture).is_empty());
+        assert_eq!(source_fences(&fixture), fences);
+        assert_eq!(ready_maps(&fixture), paths);
+        assert_offline_available(&fixture);
+    }
+    let mut receipt: Value = serde_json::from_str(base.receipt_json()).unwrap();
+    receipt["bytes"] = json!(bytes);
+    let job = fixture
+        .engine
+        .begin_source_beatmap_restore_async(0, receipt.to_string())
+        .unwrap();
+    let status = wait_terminal(&job);
+    assert_eq!(status["stage"], "failed");
+    assert!(status["detail"].as_str().unwrap().contains("512-MiB"));
+    assert!(maps(&fixture).is_empty());
+    assert_eq!(source_fences(&fixture), fences);
+    assert_eq!(ready_maps(&fixture), paths);
+    assert_offline_available(&fixture);
+}

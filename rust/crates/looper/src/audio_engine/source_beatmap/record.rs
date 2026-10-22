@@ -9,7 +9,7 @@ use serde::{Deserialize, Deserializer, Serialize};
 use serde_json::Value;
 
 use super::super::cold_store::{canonical, descriptor_digest};
-use super::{MAX_ANCHORS, MAX_RECORD_BYTES};
+use super::{MAX_ANCHORS, MAX_RECORD_BYTES, budget, review_index};
 
 const ENCODING: &str = "source-beatmap-pwa-v1";
 const ENCODING_V2: &str = "source-beatmap-pwa-v2";
@@ -264,6 +264,8 @@ pub(super) struct ValidatedMap {
     pub(super) source_frames: u64,
     pub(super) can_undo: bool,
     pub(super) raw_count: usize,
+    pub(super) raw_index: Option<review_index::RawIndex>,
+    pub(super) accepted_metadata: Box<[review_index::AcceptedMetadata]>,
     pub(super) anchors: Box<[Anchor]>,
     pub(super) segments: Box<[Segment]>,
     /// Derived immutable coverage index, not another map or timing authority.
@@ -308,10 +310,11 @@ where
     deserializer.deserialize_seq(Bounded(std::marker::PhantomData))
 }
 
-pub(super) fn parse(encoded: &str) -> Result<ValidatedMap, String> {
+pub(super) fn parse(encoded: &str, held: usize, retained: usize) -> Result<ValidatedMap, String> {
     if encoded.len() > MAX_RECORD_BYTES {
         return Err("beatmap_byte_limit".into());
     }
+    let tree = budget::scan(encoded, held, retained)?;
     let header: EnvelopeHeader =
         serde_json::from_str(encoded).map_err(|error| error.to_string())?;
     let mut envelope = match (header.schema_version, header.encoding.as_str()) {
@@ -324,10 +327,10 @@ pub(super) fn parse(encoded: &str) -> Result<ValidatedMap, String> {
     let encoding = envelope.encoding.clone();
     let record = &mut envelope.record;
     let source_duration = source_duration(&record.source)?;
-    let raw_count = match (&mut record.raw, version, encoding.as_str()) {
+    let raw_index = match (&mut record.raw, version, encoding.as_str()) {
         (VersionedRaw::Legacy(raw), 1, ENCODING) => {
             validate_raw(raw, source_duration)?;
-            raw.beat_seconds_bits.len()
+            None
         }
         (VersionedRaw::Capture(raw), 2, ENCODING_V2) => {
             digest_text(&raw.raw_revision)?;
@@ -337,7 +340,17 @@ pub(super) fn parse(encoded: &str) -> Result<ValidatedMap, String> {
             {
                 return Err("capture_source_identity_mismatch".into());
             }
-            capture.beat_frames.len()
+            let index_bytes = review_index::prospective_bytes(
+                capture.beat_frames.len(),
+                record.accepted.anchors.len(),
+            )?;
+            budget::tree_admission(
+                encoded.len(),
+                tree,
+                held,
+                budget::sum(&[retained, index_bytes])?,
+            )?;
+            Some(review_index::RawIndex::qm(capture)?)
         }
         (VersionedRaw::BeatThis(raw), 3, ENCODING_V3) => {
             digest_text(&raw.raw_revision)?;
@@ -347,10 +360,38 @@ pub(super) fn parse(encoded: &str) -> Result<ValidatedMap, String> {
             {
                 return Err("capture_source_identity_mismatch".into());
             }
-            capture.event_count()
+            let index_bytes = review_index::prospective_bytes(
+                capture.event_count(),
+                record.accepted.anchors.len(),
+            )?;
+            budget::tree_admission(
+                encoded.len(),
+                tree,
+                held,
+                budget::sum(&[retained, index_bytes])?,
+            )?;
+            Some(review_index::RawIndex::beat_this(capture)?)
         }
         _ => return Err("unsupported_beatmap_envelope".into()),
     };
+    let raw_count = raw_index.as_ref().map_or_else(
+        || match &record.raw {
+            VersionedRaw::Legacy(raw) => raw.beat_seconds_bits.len(),
+            _ => 0,
+        },
+        |index| index.seconds.len(),
+    );
+    let mut accepted_metadata = Vec::new();
+    accepted_metadata
+        .try_reserve_exact(record.accepted.anchors.len())
+        .map_err(|e| e.to_string())?;
+    for anchor in &record.accepted.anchors {
+        accepted_metadata.push(review_index::AcceptedMetadata {
+            raw_index: anchor.raw_beat_index,
+            reviewed: matches!(&anchor.review, Review::Reviewed),
+            sample_edit: anchor.sample_edit.is_some(),
+        });
+    }
     let (anchors, segments) = geometry(&record.accepted, raw_count)?;
     let mut unsupported_prefix = Vec::new();
     let mut meter_prefix = Vec::new();
@@ -421,10 +462,17 @@ pub(super) fn parse(encoded: &str) -> Result<ValidatedMap, String> {
 
     // Move the typed payload into one JSON tree after preparing small geometry.
     // Existing canonical/digest helpers remain the only hash authority. These
-    // bounded operations are off realtime; peak RAM still requires measurement.
+    // bounded operations are off realtime and admitted from streaming shape
+    // before typed construction, including caller-held source/map context.
     let mut value = serde_json::to_value(envelope.record).map_err(|error| error.to_string())?;
-    let can_undo =
-        super::editor::undo_operation(&value, sample_rate_hz, source_frames, raw_count).is_some();
+    let can_undo = super::editor::undo_operation(
+        &value,
+        sample_rate_hz,
+        source_frames,
+        raw_count,
+        raw_index.as_ref(),
+    )
+    .is_some();
     verify_revision(&mut value["raw"], "raw_revision")?;
     let declared = value["accepted"]
         .as_object_mut()
@@ -452,6 +500,8 @@ pub(super) fn parse(encoded: &str) -> Result<ValidatedMap, String> {
         source_frames,
         can_undo,
         raw_count,
+        raw_index,
+        accepted_metadata: accepted_metadata.into_boxed_slice(),
         anchors: anchors.into_boxed_slice(),
         segments: segments.into_boxed_slice(),
         unsupported_prefix: unsupported_prefix.into_boxed_slice(),

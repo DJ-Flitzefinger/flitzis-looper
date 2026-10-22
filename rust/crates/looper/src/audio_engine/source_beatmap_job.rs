@@ -157,8 +157,21 @@ impl JobState {
                 // the queued input's real Raw reader may retire.
                 reader.verify_source_beatmap(&map, &cancelled)?;
                 let (root, original) = reader.map_artifact_paths()?;
-                let stored =
-                    SourceBeatmapArtifact::store(root, original, map, &cancelled, observe)?;
+                let stored = SourceBeatmapArtifact::store_with_context(
+                    root,
+                    original,
+                    map,
+                    (
+                        reader.held_bytes()?,
+                        artifact
+                            .raw()
+                            .encoded_len()?
+                            .checked_mul(2)
+                            .ok_or("beatmap_review_budget_overflow")?,
+                    ),
+                    &cancelled,
+                    observe,
+                )?;
                 reader.require_map_custody()?;
                 (stored.map(), Some(stored))
             }
@@ -166,24 +179,61 @@ impl JobState {
                 unreachable!("raw preparation returned through its typed branch")
             }
             MapInput::Validate(encoded) => {
-                let map = SourceBeatmap::parse(encoded)?;
+                crate::audio_engine::source_beatmap::budget::edit(
+                    encoded.len(),
+                    reader.held_bytes()?,
+                    encoded.len(),
+                )?;
+                let map = SourceBeatmap::parse_with_context(
+                    encoded,
+                    reader.held_bytes()?,
+                    encoded.len(),
+                )?;
                 reader.verify_source_beatmap(&map, &cancelled)?;
                 (map, None)
             }
             MapInput::Store(encoded) => {
-                let map = SourceBeatmap::parse(encoded)?;
+                crate::audio_engine::source_beatmap::budget::edit(
+                    encoded.len(),
+                    reader.held_bytes()?,
+                    encoded.len(),
+                )?;
+                let map = SourceBeatmap::parse_with_context(
+                    encoded,
+                    reader.held_bytes()?,
+                    encoded.len(),
+                )?;
                 // Verify the held actual original once, then keep this source
                 // custody throughout immutable artifact publication.
                 reader.verify_source_beatmap(&map, &cancelled)?;
                 let (root, original) = reader.map_artifact_paths()?;
-                let artifact =
-                    SourceBeatmapArtifact::store(root, original, map, &cancelled, observe)?;
+                let artifact = SourceBeatmapArtifact::store_with_context(
+                    root,
+                    original,
+                    map,
+                    (reader.held_bytes()?, encoded.len()),
+                    &cancelled,
+                    observe,
+                )?;
                 reader.require_map_custody()?;
                 (artifact.map(), Some(artifact))
             }
             MapInput::Restore(receipt) => {
+                let (_, bytes, _, _) =
+                    crate::audio_engine::source_beatmap_artifact::receipt_evidence(receipt)?;
+                let bytes = usize::try_from(bytes).map_err(|_| "beatmap_review_budget_overflow")?;
+                crate::audio_engine::source_beatmap::budget::edit(
+                    bytes,
+                    reader.held_bytes()?,
+                    bytes,
+                )?;
                 let (root, _) = reader.map_artifact_paths()?;
-                let artifact = SourceBeatmapArtifact::restore(root, receipt, &cancelled)?;
+                let artifact = SourceBeatmapArtifact::restore_with_context(
+                    root,
+                    receipt,
+                    (reader.held_bytes()?, 0),
+                    &cancelled,
+                )?;
                 let map = artifact.map();
                 reader.verify_source_beatmap(&map, &cancelled)?;
                 (map, Some(artifact))
@@ -193,6 +243,14 @@ impl JobState {
                 period,
                 expected_generation,
             } => {
+                // The borrowed descriptor is validated against the established
+                // 64-KiB bound before clone; 128 KiB covers the fixed manual
+                // envelope and two anchors. Admit while the real source is held.
+                crate::audio_engine::source_beatmap::budget::edit(
+                    64 * 1024 + 128 * 1024,
+                    reader.held_bytes()?,
+                    0,
+                )?;
                 let map = reader.manual_source_beatmap(
                     origin,
                     period,
@@ -200,24 +258,50 @@ impl JobState {
                     &cancelled,
                 )?;
                 let (root, original) = reader.map_artifact_paths()?;
-                let artifact =
-                    SourceBeatmapArtifact::store(root, original, map, &cancelled, observe)?;
+                let artifact = SourceBeatmapArtifact::store_with_context(
+                    root,
+                    original,
+                    map,
+                    (reader.held_bytes()?, 0),
+                    &cancelled,
+                    observe,
+                )?;
                 reader.require_map_custody()?;
                 (artifact.map(), Some(artifact))
             }
             MapInput::Edit { receipt, operation } => {
+                let held = reader.held_bytes()?;
+                let (_, bytes, _, _) =
+                    crate::audio_engine::source_beatmap_artifact::receipt_evidence(receipt)?;
+                let bytes = usize::try_from(bytes).map_err(|_| "beatmap_review_budget_overflow")?;
+                crate::audio_engine::source_beatmap::budget::edit(
+                    crate::audio_engine::source_beatmap::budget::edit_bound(bytes)?,
+                    held,
+                    bytes,
+                )?;
                 let (root, original) = reader.map_artifact_paths()?;
-                let base = SourceBeatmapArtifact::restore(root, receipt, &cancelled)?;
+                let base = SourceBeatmapArtifact::restore_with_context(
+                    root,
+                    receipt,
+                    (held, 0),
+                    &cancelled,
+                )?;
                 let map = base.map();
                 // The base receipt supplies exact revision/content bytes; actual
                 // held source verification hashes the original only once.
                 reader.verify_source_beatmap(&map, &cancelled)?;
-                let edited = map.edited(operation)?;
+                let edited = map.edited_with_held(operation, held)?;
                 if cancelled() {
                     return Err("source beatmap edit cancelled".into());
                 }
-                let artifact =
-                    SourceBeatmapArtifact::store(root, original, edited, &cancelled, observe)?;
+                let artifact = SourceBeatmapArtifact::store_with_context(
+                    root,
+                    original,
+                    edited,
+                    (held, map.retained_bytes()?),
+                    &cancelled,
+                    observe,
+                )?;
                 reader.require_map_custody()?;
                 (artifact.map(), Some(artifact))
             }

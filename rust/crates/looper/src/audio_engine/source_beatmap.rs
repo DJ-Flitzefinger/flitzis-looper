@@ -12,11 +12,14 @@ use pyo3::exceptions::PyValueError;
 use pyo3::prelude::*;
 use pyo3::types::{PyDict, PyList};
 
+pub(super) mod budget;
 pub(super) mod editor;
 pub(super) mod interpretation;
 mod interval_edits;
 mod query;
 mod record;
+mod review_index;
+mod review_window;
 
 pub(crate) use query::{CanonicalBeatSegment, CanonicalLoopInterval};
 use query::{Evaluation, Projection};
@@ -67,9 +70,21 @@ impl SourceBeatmap {
     }
 
     pub(super) fn parse(encoded: &str) -> Result<Self, String> {
+        Self::parse_with_context(encoded, 0, 0)
+    }
+
+    pub(super) fn parse_with_context(
+        encoded: &str,
+        held: usize,
+        retained: usize,
+    ) -> Result<Self, String> {
         Ok(Self {
-            inner: Arc::new(record::parse(encoded)?),
+            inner: Arc::new(record::parse(encoded, held, retained)?),
         })
+    }
+
+    pub(super) fn retained_bytes(&self) -> Result<usize, String> {
+        self.inner.retained_bytes()
     }
 }
 
@@ -86,7 +101,7 @@ impl std::fmt::Debug for SourceBeatmap {
 #[pymethods]
 impl SourceBeatmap {
     #[classattr]
-    const EDITOR_CORRECTION_API_VERSION: u32 = 2;
+    const EDITOR_CORRECTION_API_VERSION: u32 = 3;
 
     /// Validate data only; actual source acceptance requires separate custody checks.
     #[staticmethod]
@@ -114,6 +129,29 @@ impl SourceBeatmap {
         result.set_item("anchor_count", self.inner.anchors.len())?;
         result.set_item("can_undo", self.inner.can_undo)?;
         Ok(result.unbind())
+    }
+
+    fn editor_review_info(&self, py: Python<'_>) -> PyResult<Py<PyDict>> {
+        review_index::info(self, py)
+    }
+
+    #[pyo3(signature=(first_anchor_index,last_anchor_index,start_index,max_events=128))]
+    fn editor_review_page(
+        &self,
+        py: Python<'_>,
+        first_anchor_index: i64,
+        last_anchor_index: i64,
+        start_index: i64,
+        max_events: i64,
+    ) -> PyResult<Py<PyDict>> {
+        review_index::page(
+            self,
+            py,
+            first_anchor_index,
+            last_anchor_index,
+            start_index,
+            max_events,
+        )
     }
 
     /// Bounded diagnostics remain available even where interpolation is unsupported.

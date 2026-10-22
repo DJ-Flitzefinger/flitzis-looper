@@ -83,6 +83,16 @@ def _span(self: object, first_anchor_index: int, last_anchor_index: int) -> Neve
     _forbidden()
 
 
+def _review_page(
+    self: object,
+    first_anchor_index: int,
+    last_anchor_index: int,
+    start_index: int,
+    max_events: int = 128,
+) -> Never:
+    _forbidden()
+
+
 def _view(
     self: object,
     start_s: float,
@@ -157,8 +167,10 @@ def source_beatmap_editor_native_module(engine_base: type = object) -> SimpleNam
             (),
             {
                 "__init__": _forbidden,
-                "EDITOR_CORRECTION_API_VERSION": 2,
+                "EDITOR_CORRECTION_API_VERSION": 3,
                 "editor_info": _info,
+                "editor_review_info": _info,
+                "editor_review_page": _review_page,
                 "editor_span": _span,
                 "editor_view": _view,
                 "source_after_beats": _after,
@@ -200,7 +212,7 @@ def test_current_editor_contract_is_reflected_without_any_native_work() -> None:
 def test_class_attribute_descriptor_can_expose_the_native_integer_capability() -> None:
     class CorrectionCapability:
         def __get__(self, _instance: object, _owner: type) -> int:
-            return 2
+            return 3
 
     native = source_beatmap_editor_native_module()
     native.SourceBeatmap.EDITOR_CORRECTION_API_VERSION = CorrectionCapability()
@@ -222,6 +234,8 @@ def test_class_attribute_descriptor_can_expose_the_native_integer_capability() -
         ("SourceBeatmapRawCandidate", "inspect"),
         ("SourceBeatmapRawCandidate", "inspect_downbeats"),
         ("SourceBeatmap", "editor_info"),
+        ("SourceBeatmap", "editor_review_info"),
+        ("SourceBeatmap", "editor_review_page"),
         ("SourceBeatmap", "editor_span"),
         ("SourceBeatmap", "editor_view"),
         ("SourceBeatmap", "source_after_beats"),
@@ -271,7 +285,7 @@ def test_global_policy_requires_optional_keyword_only_publication(invalid: str) 
         _check(native)
 
 
-@pytest.mark.parametrize("invalid", [None, False, True, 2.0, "2", 0, 1, 3])
+@pytest.mark.parametrize("invalid", [None, False, True, 3.0, "3", 0, 1, 2, 4])
 def test_correction_version_requires_exact_current_integer(invalid: object) -> None:
     native = source_beatmap_editor_native_module()
     native.SourceBeatmap.EDITOR_CORRECTION_API_VERSION = invalid
@@ -308,6 +322,44 @@ def test_span_requires_exact_required_anchor_indices(invalid: str) -> None:
         parameters = [parameter.replace(kind=Parameter.POSITIONAL_ONLY) for parameter in parameters]
     _replace_signature(native.SourceBeatmap, "editor_span", complete.replace(parameters=parameters))
     with pytest.raises(AssertionError, match="editor_span"):
+        _check(native)
+
+
+@pytest.mark.parametrize(
+    "invalid",
+    ["missing-start", "renamed-first", "optional-last", "keyword-only", "positional-only", "limit"],
+)
+def test_review_page_requires_exact_bounded_signature(invalid: str) -> None:
+    native = source_beatmap_editor_native_module()
+    complete = signature(native.SourceBeatmap.editor_review_page)
+    parameters = list(complete.parameters.values())
+    if invalid == "missing-start":
+        parameters.pop(3)
+    elif invalid == "renamed-first":
+        parameters[1] = parameters[1].replace(name="first_index")
+    elif invalid == "optional-last":
+        parameters[3] = parameters[3].replace(default=0)
+    elif invalid == "keyword-only":
+        parameters[-1] = parameters[-1].replace(kind=Parameter.KEYWORD_ONLY)
+    elif invalid == "positional-only":
+        parameters = [parameter.replace(kind=Parameter.POSITIONAL_ONLY) for parameter in parameters]
+    else:
+        parameters[-1] = parameters[-1].replace(default=64)
+    _replace_signature(
+        native.SourceBeatmap, "editor_review_page", complete.replace(parameters=parameters)
+    )
+    with pytest.raises(AssertionError, match="editor_review_page"):
+        _check(native)
+
+
+def test_review_info_accepts_no_client_geometry_or_optional_arguments() -> None:
+    native = source_beatmap_editor_native_module()
+    complete = signature(native.SourceBeatmap.editor_review_info)
+    parameters = [*complete.parameters.values(), Parameter("rows", Parameter.POSITIONAL_OR_KEYWORD)]
+    _replace_signature(
+        native.SourceBeatmap, "editor_review_info", complete.replace(parameters=parameters)
+    )
+    with pytest.raises(AssertionError, match="editor_review_info"):
         _check(native)
 
 
