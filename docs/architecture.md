@@ -725,6 +725,14 @@ a stopped live engine may retain loaded PCM for restart.
 
 ## Speed, BPM Lock, And Key Lock
 
+An opt-in `signalsmith-probe` Cargo feature isolates a private canonical-input
+pitch experiment from productive playback. It uses pinned MIT Signalsmith
+Stretch/Linear headers behind a small exclusive C ABI owner; normal builds do
+not compile its C++ module. Existing source progression, Native history, public
+APIs and admission remain authoritative. The bounded prerequisite and its
+evidence limits are specified in
+[`probe-signalsmith-canonical-pitch`](../openspec/changes/probe-signalsmith-canonical-pitch/design.md).
+
 Speed and BPM Lock resolve to one Rust mixer tempo ratio per active voice:
 
 - BPM Lock off: global speed multiplier.

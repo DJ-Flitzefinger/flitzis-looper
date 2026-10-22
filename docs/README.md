@@ -62,6 +62,7 @@ For focused areas:
 | `beatmap-sync-research.md` | Sourced feasibility decision for variable beatmaps and independent Quantize/SYNC; proposals and evidence limits, not current runtime behavior. |
 | `beatmap-sync-design.md` | Selected gated Beat This migration, shared-map architecture, current independent source-SYNC control and remaining continuous Native integration/acceptance boundaries. |
 | `accepted-map-render-comparison.md` | Measured shared-map renderer comparison, retained acoustic failures, unsupported combinations and limits before live adoption. |
+| `../openspec/changes/probe-signalsmith-canonical-pitch/design.md` | Isolated nondefault Signalsmith canonical pitch prerequisite; pinned sources, natural latency/ending, fixed criteria and remaining audio gates. |
 | `todos.md` | Explicit user-requested TODO notes; not an automatic work queue. |
 
 ## What Belongs In OpenSpec Instead

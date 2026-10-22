@@ -17,6 +17,7 @@ const RERUN_ENV_VARS: &[&str] = &[
 ];
 
 fn main() {
+    build_signalsmith_probe();
     for var in RERUN_ENV_VARS {
         println!("cargo:rerun-if-env-changed={var}");
     }
@@ -52,6 +53,37 @@ fn main() {
         }
     }
 }
+
+#[cfg(feature = "signalsmith-probe")]
+fn build_signalsmith_probe() {
+    let files = [
+        "native/signalsmith_probe.cpp",
+        "native/signalsmith_probe.h",
+        "vendor/signalsmith/signalsmith-stretch.h",
+        "vendor/signalsmith/signalsmith-linear/stft.h",
+        "vendor/signalsmith/signalsmith-linear/fft.h",
+        "vendor/signalsmith/provenance.json",
+    ];
+    for file in files {
+        println!("cargo:rerun-if-changed={file}");
+    }
+    let mut build = cc::Build::new();
+    build
+        .cpp(true)
+        .std("c++14")
+        .opt_level(2)
+        .include("vendor/signalsmith")
+        .file("native/signalsmith_probe.cpp");
+    if env::var("CARGO_CFG_TARGET_ENV").as_deref() == Ok("msvc") {
+        build.flag("/EHsc").flag("/fp:precise");
+    } else {
+        build.flag("-fno-fast-math");
+    }
+    build.compile("flitzis_signalsmith_probe");
+}
+
+#[cfg(not(feature = "signalsmith-probe"))]
+fn build_signalsmith_probe() {}
 
 fn validate_pkg_config_live_api(library: &pkg_config::Library) {
     for include_dir in &library.include_paths {

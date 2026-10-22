@@ -473,6 +473,7 @@ dependencies = [
  "audioadapter",
  "audioadapter-buffers",
  "base64",
+ "cc",
  "cpal",
  "cute-dsp",
  "env_logger",

@@ -1,0 +1,7 @@
+# Pinned upstream sources retain exact bytes, including upstream whitespace.
+rust/crates/looper/vendor/signalsmith/signalsmith-stretch.h -text -whitespace
+rust/crates/looper/vendor/signalsmith/signalsmith-linear/stft.h -text -whitespace
+rust/crates/looper/vendor/signalsmith/signalsmith-linear/fft.h -text -whitespace
+rust/crates/looper/vendor/signalsmith/STRETCH-LICENSE.txt -text
+rust/crates/looper/vendor/signalsmith/LINEAR-LICENSE.txt -text
+rust/crates/looper/vendor/signalsmith/provenance.json text eol=lf

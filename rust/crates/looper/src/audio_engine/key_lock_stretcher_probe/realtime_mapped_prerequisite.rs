@@ -6,6 +6,10 @@ use super::*;
 #[path = "realtime_highspeed_prerequisite.rs"]
 mod highspeed_prerequisite;
 
+#[cfg(feature = "signalsmith-probe")]
+#[path = "signalsmith_canonical_prerequisite.rs"]
+mod signalsmith_prerequisite;
+
 // Pinned v4.0.0 rubberband-c.h: RealTime | ThreadingNever | WindowStandard |
 // PitchHighConsistency | ChannelsTogether | EngineFiner. Standard contributes zero.
 const REALTIME_OPTIONS: c_int = 0x3401_0001;

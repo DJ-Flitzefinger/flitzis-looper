@@ -102,6 +102,12 @@ No production winner or live activation follows from this comparison. All 37 off
 total -23..+24, other rates/layouts/maps, actual prepared stems, complete transition/
 resource/RT, musical and genuine Human/device gates remain open.
 
+The separate real Signalsmith Stretch default-preset canonical q1/p2 prerequisite
+also fails all four kick cases: its unity coordinate control passes, but original
+attack energy and peak retention fail. It remains an isolated nondefault test
+feature. [Measured results and fixed criteria](../openspec/changes/probe-signalsmith-canonical-pitch/results.md)
+retain the negative result; no backend or admission change follows.
+
 Run the opt-in diagnostic through the normal Windows Native test wrapper:
 
 ```powershell

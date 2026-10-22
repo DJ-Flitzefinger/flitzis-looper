@@ -16,6 +16,11 @@ build files. `Flitzis-Looper/Runtime` holds the private Python interpreter,
 dependencies, FFmpeg and launch helpers. Native binaries sit beside their tracked
 wrappers in the checkout. The app's working directory is this checkout.
 
+The optional `signalsmith-probe` Cargo feature is a development diagnostic.
+Ordinary locked Portable builds do not enable it, compile its C++ shim or add a
+Signalsmith runtime DLL. Its pinned MIT headers ship as tracked source; existing
+MSVC/SDK selection and the productive RubberBand dependency remain unchanged.
+
 Start the installed app with `Flitzis-Looper/START-LOOPER.bat`. The `start.bat` and
 `start-release.bat` aliases select the same private Release runtime. Ordinary
 starts perform no build, dependency installation, update or model preflight.
