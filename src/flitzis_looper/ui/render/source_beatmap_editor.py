@@ -282,6 +282,22 @@ def _inspect_span(frame: SourceMapEditorFrame, state: _EditorInputs) -> SourceBe
     return span
 
 
+def _use_span_anchor(
+    ctx: UiContext, frame: SourceMapEditorFrame, state: _EditorInputs, *, first: bool
+) -> None:
+    current = ctx.ui.source_map.selection.effective(frame.pad_id)
+    if current is None or current.revision() != frame.revision:
+        message = "The selected map changed. Reopen Source Map before selecting an anchor."
+        raise ValueError(message)
+    span = _inspect_span(frame, state)
+    anchor = span["first_anchor" if first else "last_anchor"]
+    if anchor is None or anchor["sample_index"] is None:
+        message = "This virtual anchor has no physical source sample to position."
+        raise ValueError(message)
+    state.beat = format(anchor["beat"], ".17g")
+    state.sample = str(anchor["sample_index"])
+
+
 def _select_span(frame: SourceMapEditorFrame, state: _EditorInputs, first: int, last: int) -> None:
     if not 0 <= first < last < frame.anchor_count:
         message = "The requested interval is outside the existing accepted anchors."
@@ -484,6 +500,18 @@ def _interval_fields(ctx: UiContext, frame: SourceMapEditorFrame, state: _Editor
         imgui.text_colored(TEXT_MUTED_RGBA, "Selected interval unavailable")
         return
     _span_defaults(state, span)
+    imgui.push_id(repr(state.inspected_span))
+    try:
+        if imgui.button("Use first anchor##source-map-use-first"):
+            _run(ctx, frame, state, lambda: _use_span_anchor(ctx, frame, state, first=True))
+        imgui.same_line(spacing=SPACING)
+        if imgui.button("Use last anchor##source-map-use-last"):
+            _run(ctx, frame, state, lambda: _use_span_anchor(ctx, frame, state, first=False))
+    finally:
+        imgui.pop_id()
+    imgui.text_colored(
+        TEXT_MUTED_RGBA, "Anchor marks show positions; coverage is reviewed separately."
+    )
     _span_summary(span)
     imgui.text_wrapped(
         "Count proportionally redistributes selected existing beat coordinates and shifts later "

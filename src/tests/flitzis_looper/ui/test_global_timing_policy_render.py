@@ -81,5 +81,6 @@ def test_fixed_global_source_timing_keeps_selected_map_out_of_generic_waveform_g
         timing=CurrentPadTiming(0.5, 0.0, 48000),
         source_map=selected,
     )
-    mapped.assert_not_called()
+    mapped.assert_called_once()
+    assert mapped.call_args.kwargs["draw_grid"] is False
     scalar.assert_called_once_with(start_s=0.0, end_s=4.0)

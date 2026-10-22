@@ -194,10 +194,6 @@ impl SourceBeatmap {
                 {
                     return Err("beatmap_edit_sample_outside_source".into());
                 }
-                let current = self.inner.at_beat(beat);
-                if !current.supported() {
-                    return Err("beatmap_edit_unsupported_beat".into());
-                }
                 let index = self
                     .inner
                     .anchors
@@ -210,6 +206,9 @@ impl SourceBeatmap {
                     .anchors
                     .get(index)
                     .is_some_and(|anchor| anchor.beat == beat);
+                if !existing && !self.inner.at_beat(beat).supported() {
+                    return Err("beatmap_edit_unsupported_beat".into());
+                }
                 let inverse = if existing {
                     json!({"action":"restore_anchor","index":index,"anchor":anchors[index]})
                 } else {
@@ -755,6 +754,7 @@ impl SourceBeatmap {
         };
         if !start.is_finite()
             || !end.is_finite()
+            || !loop_start.is_finite()
             || end < start
             || !pixels.is_finite()
             || pixels <= 0.0
@@ -763,11 +763,6 @@ impl SourceBeatmap {
         {
             return refused("invalid");
         }
-        let reference = self.inner.at_source(loop_start);
-        if !reference.supported() {
-            return refused("unsupported_reference");
-        }
-        let origin = reference.beat.unwrap();
         let lower = start.max(0.0).max(self.inner.anchors[0].seconds);
         let upper = end
             .min(self.inner.source_duration)
@@ -783,6 +778,23 @@ impl SourceBeatmap {
             .inner
             .anchors
             .partition_point(|anchor| anchor.seconds <= upper);
+        if after - first > limit {
+            return refused("projection_limit");
+        }
+        let anchors: Vec<(f64, f64)> = self.inner.anchors[first..after]
+            .iter()
+            .map(|anchor| (anchor.seconds, anchor.beat))
+            .collect();
+        let reference = self.inner.at_source(loop_start);
+        if !reference.supported() {
+            return EditorView {
+                status: "unsupported_reference",
+                step: 0.0,
+                lines: Vec::new(),
+                anchors,
+            };
+        }
+        let origin = reference.beat.unwrap();
         let first_segment = self
             .inner
             .anchors
@@ -812,13 +824,6 @@ impl SourceBeatmap {
         } else {
             "complete"
         };
-        if after - first > limit {
-            return refused("projection_limit");
-        }
-        let anchors: Vec<(f64, f64)> = self.inner.anchors[first..after]
-            .iter()
-            .map(|anchor| (anchor.seconds, anchor.beat))
-            .collect();
         let available = limit - anchors.len();
         if available == 0 {
             return refused("projection_limit");

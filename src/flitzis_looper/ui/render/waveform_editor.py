@@ -20,6 +20,7 @@ from flitzis_looper.ui.constants import (
     TEXT_RGBA,
 )
 from flitzis_looper.ui.contextmanager import implot_style_color, implot_style_var
+from flitzis_looper.ui.render.source_beatmap_anchors import draw_source_map_anchors
 from flitzis_looper.ui.render.source_beatmap_editor import (
     SourceMapEditorFrame,
     capture_source_map,
@@ -649,9 +650,13 @@ def _plot_musical_grid(
 ) -> None:
     if source_map is None:
         source_map = capture_source_map(ctx, pad_id)
-    if source_map.selected and variable_source_timing(ctx.state.project.global_timing_policy):
-        _plot_source_map_grid(ctx, source_map, draw_list, start_s, end_s, timing=timing)
-        return
+    if source_map.selected:
+        variable = variable_source_timing(ctx.state.project.global_timing_policy)
+        _plot_source_map_grid(
+            ctx, source_map, draw_list, start_s, end_s, timing=timing, draw_grid=variable
+        )
+        if variable:
+            return
     if isinstance(timing, UnresolvedTiming):
         timing = ctx.state.pads.current_timing(pad_id)
     if timing is None:
@@ -684,6 +689,7 @@ def _plot_source_map_grid(
     end_s: float,
     *,
     timing: CurrentPadTiming | UnresolvedTiming | None,
+    draw_grid: bool = True,
 ) -> None:
     geometry = source_map.geometry
     if geometry is None:
@@ -695,12 +701,16 @@ def _plot_source_map_grid(
     view = geometry.editor_view(start_s, end_s, loop_start_s, px_per_sec, 2048)
     if view["map_revision"] != source_map.revision:
         return
-    lines = source_map_grid_lines(view["lines"])
-    _draw_musical_grid_lines(draw_list, lines)
-    _draw_source_map_downbeats(draw_list, view["lines"])
-    _draw_musical_grid_labels(
-        draw_list, lines, loop_start_s=loop_start_s, start_s=start_s, end_s=end_s
-    )
+    draw_source_map_anchors(draw_list, view["anchors"])
+    if not draw_grid:
+        return
+    if view["lines"]:
+        lines = source_map_grid_lines(view["lines"])
+        _draw_musical_grid_lines(draw_list, lines)
+        _draw_source_map_downbeats(draw_list, view["lines"])
+        _draw_musical_grid_labels(
+            draw_list, lines, loop_start_s=loop_start_s, start_s=start_s, end_s=end_s
+        )
     if view["status"] != "complete":
         position = implot.plot_to_pixels(start_s, -1.0)
         draw_list.add_text(

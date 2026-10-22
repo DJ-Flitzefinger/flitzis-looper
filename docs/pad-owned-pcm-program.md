@@ -12,6 +12,14 @@ B2/default-cutover, musical/Human or other full-program gates. The existing
 48 IDs/78 edges/189 rows and all remaining obligations stay binding; stop before
 the full Rust port/Slice8. Older execution priorities below are historical.
 
+Existing uncertain source-map anchors can be inspected and positioned before
+coverage review: bounded Native positions appear as short inspection marks, and
+either inspected span endpoint can fill the sample-position controls. Exact
+existing-anchor correction preserves count, coverage, meter, review classification
+and complete Raw evidence; it grants no musical or audio qualification. Unsupported
+new-beat insertion remains refused. See
+[uncertain-anchor inspection](../openspec/changes/inspect-uncertain-source-anchors/design.md).
+
 Latest Human execution priority2026-10-14: finish the current Controller/Durable/
 Hold delivery, then its actually needed remaining R2 ownership/selection foundation
 and the rate/map/finite/DSP prerequisites for a complete testable Key + Transposition,

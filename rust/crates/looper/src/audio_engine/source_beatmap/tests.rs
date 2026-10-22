@@ -5,6 +5,11 @@ mod editor_tests {
     include!("editor_tests.rs");
 }
 
+mod unsupported_editor_tests {
+    use super::*;
+    include!("unsupported_editor_tests.rs");
+}
+
 use super::super::cold_store::descriptor_digest;
 use super::*;
 use serde_json::{Value, json};
