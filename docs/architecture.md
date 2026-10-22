@@ -780,6 +780,16 @@ the same accepted-only domain, including old voices with pinned source/timing.
 live mixer, productive worker and non-live source-preparation proof. These shared rules do not
 compensate audible delay.
 
+Dry mapped waveform-hold continuation uses the same copied source trajectory
+and the original qualified map owner. A checked output-address translation keeps
+the saved source point exact while the actual transport advances during pause.
+A later supported dry master claim preserves that point through an explicit
+claim-frame projection; old actual-read spans keep their original epochs. The
+bounded cohort preflight and actual callback timeline belong to the mixer hold
+path. Its existing own-effect acknowledgement remains separate from ordinary
+Pause/Resume, whose lossless feedback is Stage B of
+[`resume-dry-mapped-playback`](../openspec/changes/resume-dry-mapped-playback/design.md).
+
 `key_lock_preparation.rs` constructs three unique native handles per voice
 before stream rendering: 96 handles for 32 voices, with one shared preparation
 worker. The existing effective/neutral-reserve pair is warmed at setup; the third

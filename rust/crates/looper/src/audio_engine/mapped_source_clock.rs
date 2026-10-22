@@ -54,6 +54,15 @@ pub(crate) struct MappedClockEpoch {
     marker: u64,
     timeline: TransportTimeline,
     phase_quarters: f64,
+    address_shift: u64,
+    first_output_frame: u64,
+    continuation_anchor: Option<ContinuationAnchor>,
+}
+
+#[derive(Clone, Copy, Debug)]
+struct ContinuationAnchor {
+    total_quarters: f64,
+    master_quarters: f64,
 }
 
 impl MappedClockEpoch {
@@ -74,6 +83,9 @@ impl MappedClockEpoch {
             marker,
             timeline,
             phase_quarters,
+            address_shift: 0,
+            first_output_frame: 0,
+            continuation_anchor: None,
         })
     }
 
@@ -88,17 +100,81 @@ impl MappedClockEpoch {
     /// Reuse this voice's marker and creative phase with the same authoritative transport.
     /// The group claimant separately proves M(E), canonical position and original map ownership.
     pub(crate) fn with_timeline(self, timeline: TransportTimeline) -> Option<Self> {
+        if self.address_shift != 0 || self.continuation_anchor.is_some() {
+            return None;
+        }
         Self::new(self.marker, timeline, self.phase_quarters)
+    }
+
+    /// The all-dry claimant alone changes the actual master epoch. A paused-derived
+    /// projection anchors its exact old total at E rather than extrapolating the
+    /// new master slope backward through a previous pause's address translation.
+    pub(crate) fn with_timeline_at(self, timeline: TransportTimeline, frame: u64) -> Option<Self> {
+        if timeline.matches_clock_epoch(&self.timeline) {
+            return Some(self);
+        }
+        if self.address_shift == 0 && self.continuation_anchor.is_none() {
+            return self.with_timeline(timeline);
+        }
+        let total_quarters = self.total_at(frame)?;
+        let master_quarters = timeline.beat_position_at_frame(frame)?;
+        if !master_quarters.is_finite() {
+            return None;
+        }
+        let mut replacement = Self::new(self.marker, timeline, 0.0)?;
+        replacement.first_output_frame = frame;
+        replacement.continuation_anchor = Some(ContinuationAnchor {
+            total_quarters,
+            master_quarters,
+        });
+        Some(replacement)
+    }
+
+    /// Copy one voice's creative source phase; the authoritative transport does
+    /// not change. At R, querying R-(R-P) repeats precisely the old evaluation P.
+    pub(crate) fn resumed_at(
+        self,
+        actual: &TransportTimeline,
+        paused: u64,
+        resumed: u64,
+    ) -> Option<Self> {
+        if !self.matches_timeline(actual) || paused < self.first_output_frame {
+            return None;
+        }
+        let duration = resumed.checked_sub(paused)?;
+        self.total_at(paused)?;
+        let mut replacement = self;
+        replacement.address_shift = self.address_shift.checked_add(duration)?;
+        replacement.first_output_frame = self.first_output_frame.checked_add(duration)?;
+        Some(replacement)
     }
 
     pub(crate) fn matches_exact(self, other: Self) -> bool {
         self.marker == other.marker
             && self.phase_quarters.to_bits() == other.phase_quarters.to_bits()
+            && self.address_shift == other.address_shift
+            && self.first_output_frame == other.first_output_frame
+            && match (self.continuation_anchor, other.continuation_anchor) {
+                (None, None) => true,
+                (Some(left), Some(right)) => {
+                    left.total_quarters.to_bits() == right.total_quarters.to_bits()
+                        && left.master_quarters.to_bits() == right.master_quarters.to_bits()
+                }
+                _ => false,
+            }
             && self.timeline.matches_clock_epoch(&other.timeline)
     }
 
     fn total_at(self, output_frame: u64) -> Option<f64> {
-        let total = self.timeline.beat_position_at_frame(output_frame)? + self.phase_quarters;
+        if output_frame < self.first_output_frame {
+            return None;
+        }
+        let addressed = output_frame.checked_sub(self.address_shift)?;
+        let master = self.timeline.beat_position_at_frame(addressed)?;
+        let total = self.continuation_anchor.map_or_else(
+            || master + self.phase_quarters,
+            |anchor| anchor.total_quarters + (master - anchor.master_quarters),
+        );
         total.is_finite().then_some(total)
     }
 
@@ -318,7 +394,9 @@ impl MappedLoopGeometry {
                 || (candidate_cycle == cycle
                     && self.beat_start + candidate.rem_euclid(self.quarters) >= boundary)
         };
-        let start_frame = first_true(0, output_frame, |frame| boundary_reached(frame, left));
+        let start_frame = first_true(epoch.first_output_frame, output_frame, |frame| {
+            boundary_reached(frame, left)
+        });
         let next = output_frame
             .checked_add(1)
             .ok_or(MappedClockError::NumericalUnavailable)?;

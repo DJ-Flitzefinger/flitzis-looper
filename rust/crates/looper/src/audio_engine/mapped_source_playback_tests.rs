@@ -30,6 +30,53 @@ fn variable_geometry() -> MappedLoopGeometry {
 }
 
 #[test]
+fn repeated_fractional_pause_projection_matches_uninterrupted_active_address_bits() {
+    let geometry = variable_geometry();
+    let original_epoch = epoch(0.173);
+    let mut playback = SourcePlayback::mapped(&geometry, original_epoch, 0).unwrap();
+    let mut shift = 0;
+    for active in 0..307 {
+        assert_eq!(
+            playback.position(),
+            geometry.position_at(original_epoch, active).unwrap()
+        );
+        if [1, 7, 31, 102, 219].contains(&active) {
+            let saved = playback.position();
+            let duration = 93 + active % 17;
+            shift += duration;
+            playback
+                .resume_mapped_at(&geometry, &original_epoch.timeline, active + shift)
+                .unwrap();
+            assert_eq!(playback.position().frame, saved.frame);
+            assert_eq!(
+                playback.position().fraction.to_bits(),
+                saved.fraction.to_bits()
+            );
+            assert_eq!(playback.mapped_output_frame(), Some(active + shift));
+        }
+        playback.refresh_mapped_span(&geometry).unwrap();
+        assert!(playback.advance(1));
+    }
+    let before = playback;
+    assert!(
+        playback
+            .resume_mapped_at(&geometry, &original_epoch.timeline, 1)
+            .is_err()
+    );
+    assert!(playback.matches_exact(&before));
+    let mut stale = original_epoch.timeline;
+    assert!(stale.set_master_period(0.81));
+    assert!(playback.resume_mapped_at(&geometry, &stale, 1000).is_err());
+    assert!(playback.matches_exact(&before));
+    assert!(
+        playback
+            .resume_mapped_at(&geometry, &original_epoch.timeline, u64::MAX)
+            .is_err()
+    );
+    assert!(playback.matches_exact(&before));
+}
+
+#[test]
 fn copied_playback_refuses_span_overrun_and_keeps_canonical_endpoint() {
     let geometry = variable_geometry();
     let epoch = epoch(0.0);

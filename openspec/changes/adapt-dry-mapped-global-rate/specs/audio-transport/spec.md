@@ -3,6 +3,13 @@
 ### Requirement: Replace a dry mapped master epoch without changing current phase
 At an accepted dry mapped global rate boundary E, the system SHALL preserve the shared TransportTimeline master beat and bar phase, output-frame clock and each mapped voice's exact canonical source position. The replacement epoch SHALL retain that voice's original marker and creative phase and SHALL borrow its original immutable map. Every fallible projection and coverage check SHALL complete before effective stores. The system SHALL NOT reset, retrigger, implicitly anchor to a pad or move the original launch target.
 
+For a voice that has completed qualified dry waveform-hold continuation under
+resume-dry-mapped-playback, the same creative source phase MAY use an explicit
+claim-frame projection preserving old Q(E) exactly. This representation SHALL
+retain the original marker/map and the one actual transport; previous actual
+read spans MUST keep their previous epochs. Never-paused epochs SHALL retain
+their existing evaluation. No new rate admission while paused is authorized.
+
 #### Scenario: Repeated master-period changes cross map knots and wraps
 - **WHEN** qualified dry mapped voices accept repeated master-period changes at actual boundaries
 - **THEN** their source positions at each boundary SHALL remain unchanged

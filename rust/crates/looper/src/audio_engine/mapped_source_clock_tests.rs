@@ -77,6 +77,84 @@ fn coordinate(position: FractionalSourcePosition) -> f64 {
 }
 
 #[test]
+fn pause_translation_reuses_exact_old_addresses_and_refuses_pre_pause_extrapolation() {
+    let geometry = geometry(
+        map(&[(0.0, 0.0), (1.2, 1.0)], &["trusted"], false),
+        1.0,
+        120,
+    );
+    let original = epoch(-0.373);
+    let resumed = original
+        .resumed_at(&original.timeline, 31, 987_654_321)
+        .unwrap();
+    let delay = 987_654_321 - 31;
+    assert_eq!(
+        geometry.position_at(resumed, delay - 1),
+        Err(MappedClockError::NumericalUnavailable)
+    );
+    assert_eq!(
+        geometry.refresh_span(resumed, delay - 1).unwrap_err(),
+        MappedClockError::NumericalUnavailable
+    );
+    for active in [0, 1, 31, 32, 127, 100_003] {
+        let before = geometry.position_at(original, active).unwrap();
+        let after = geometry.position_at(resumed, active + delay).unwrap();
+        assert_eq!(before.frame, after.frame);
+        assert_eq!(before.fraction.to_bits(), after.fraction.to_bits());
+        let span = geometry.refresh_span(resumed, active + delay).unwrap();
+        assert!(span.start_frame() >= delay);
+        assert_eq!(span.position_at(active + delay), Some(after));
+    }
+    assert!(original.resumed_at(&original.timeline, 31, 30).is_none());
+    let mut stale = original.timeline;
+    assert!(stale.set_master_period_preserving_beat_position_at_frame(0.81, 17));
+    assert!(original.resumed_at(&stale, 31, 91).is_none());
+    let terminal = resumed
+        .resumed_at(&original.timeline, 987_654_321, u64::MAX)
+        .unwrap();
+    // A terminal address can be projected, but no nonempty exclusive span can
+    // start there. SourcePlayback must refuse that unusable continuation.
+    assert_eq!(
+        geometry.refresh_span(terminal, u64::MAX).unwrap_err(),
+        MappedClockError::NumericalUnavailable
+    );
+}
+
+#[test]
+fn paused_master_claim_anchors_at_claim_frame_and_keeps_legacy_projection_exact() {
+    let original = epoch(-0.373);
+    let paused = original.resumed_at(&original.timeline, 31, 10_003).unwrap();
+    let execution = 10_019;
+    let mut candidate = original.timeline;
+    assert!(candidate.set_master_period_preserving_beat_position_at_frame(0.81, execution));
+    let claimed = paused.with_timeline_at(candidate, execution).unwrap();
+    assert_eq!(
+        claimed.total_at(execution).unwrap().to_bits(),
+        paused.total_at(execution).unwrap().to_bits()
+    );
+    assert_eq!(claimed.total_at(execution - 1), None);
+    for frame in [execution, execution + 1, execution + 99] {
+        let expected = paused.total_at(execution).unwrap()
+            + (candidate.beat_position_at_frame(frame).unwrap()
+                - candidate.beat_position_at_frame(execution).unwrap());
+        assert_eq!(
+            claimed.total_at(frame).unwrap().to_bits(),
+            expected.to_bits()
+        );
+    }
+    let again = claimed
+        .resumed_at(&candidate, execution + 7, execution + 101)
+        .unwrap();
+    assert_eq!(again.total_at(execution + 93), None);
+    assert_eq!(
+        again.total_at(execution + 101).unwrap().to_bits(),
+        claimed.total_at(execution + 7).unwrap().to_bits()
+    );
+    let legacy = original.with_timeline(candidate).unwrap();
+    assert!(legacy.matches_exact(original.with_timeline_at(candidate, execution).unwrap()));
+}
+
+#[test]
 fn fractional_point_three_output_knot_and_many_knots_use_canonical_exclusive_endpoint() {
     let map = map(
         &[
@@ -347,12 +425,35 @@ fn bounded_copy_span_carries_no_owned_map_or_dynamic_storage() {
         crate::audio_engine::source_playback::SourcePlayback,
     >());
     assert!(std::mem::size_of::<MappedSourceSpan>() <= 240);
+    let cohort_bytes = std::mem::size_of::<
+        [Option<crate::audio_engine::source_playback::SourcePlayback>;
+            crate::audio_engine::constants::MAX_VOICES],
+    >();
+    assert!(cohort_bytes <= 16 * 1024);
     eprintln!(
         "mapped_clock_sizes: epoch={} span={} playback={} source_feed_span={}",
         std::mem::size_of::<MappedClockEpoch>(),
         std::mem::size_of::<MappedSourceSpan>(),
         std::mem::size_of::<crate::audio_engine::source_playback::SourcePlayback>(),
         std::mem::size_of::<crate::audio_engine::source_feed_history::SourceFeedSpan>()
+    );
+    let voices = crate::audio_engine::constants::MAX_VOICES;
+    let slots = crate::audio_engine::source_feed_history::SOURCE_FEED_HISTORY_MAX_SPANS;
+    let slot_bytes =
+        std::mem::size_of::<Option<crate::audio_engine::source_feed_history::SourceFeedSpan>>();
+    eprintln!(
+        "mapped_continuation_sizes: checkpoint={} cohort_stack={} option_history_span={} \
+         slots_per_owner={} startup_journals={} startup_prospective_snapshots={} \
+         max_control_allocated_action_snapshots=64 startup_span_payload_bytes={} \
+         max_simultaneous_span_payload_bytes={} (excludes inline work, Native/PCM, allocator/Arc/ring overhead)",
+        std::mem::size_of::<crate::audio_engine::prepared_native_history::SourceReadCheckpoint>(),
+        cohort_bytes,
+        slot_bytes,
+        slots,
+        voices,
+        voices,
+        2 * voices * slots * slot_bytes,
+        (2 * voices + 64) * slots * slot_bytes,
     );
 }
 

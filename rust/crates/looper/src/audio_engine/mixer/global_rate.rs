@@ -794,7 +794,7 @@ impl RtMixer {
                     continue;
                 }
                 let epoch = old_epoch
-                    .with_timeline(candidate)
+                    .with_timeline_at(candidate, frame)
                     .ok_or(RateError::MappedTimingUnavailable)?;
                 let mut playback = voice.source_playback;
                 playback

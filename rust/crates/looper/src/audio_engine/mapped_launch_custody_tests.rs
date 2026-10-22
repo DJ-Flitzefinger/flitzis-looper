@@ -160,6 +160,10 @@ mod mapped_dry_global_rate_tests {
     include!("mapped_dry_global_rate_tests.rs");
 }
 
+mod mapped_hold_continuation_tests {
+    include!("mapped_hold_continuation_tests.rs");
+}
+
 fn variable_original_delivery(path: &LaunchPath) -> (OfflineAnalysisJob, LoaderEventDelivery) {
     let mut expected = record(&path.source, 0);
     let accepted = &mut expected["record"]["accepted"];

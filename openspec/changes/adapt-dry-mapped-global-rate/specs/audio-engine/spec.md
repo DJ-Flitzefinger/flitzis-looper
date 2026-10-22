@@ -24,7 +24,7 @@ Dry mapped rate capture SHALL use its actual settled execution boundary without 
 - **AND** the first valid settled boundary SHALL capture and claim the effect without inventing a worker delay or bypassing freshness checks
 
 ### Requirement: Admit ordinary dry mapped starts after qualified nonunity rate changes
-An ordinary mapped start or retrigger at nonunity stored speed MAY use the actual qualified master epoch when Key Lock is off, total pitch is zero, the frozen matching-enable choice above is satisfied and execution equals the original target. The canonical map SHALL use the actual master beat once, without a second speed multiplier. Native pitch, delayed execution, mapped pause/seek and unsupported trajectories SHALL remain gated.
+An ordinary mapped start or retrigger at nonunity stored speed MAY use the actual qualified master epoch when Key Lock is off, total pitch is zero, the frozen matching-enable choice above is satisfied and execution equals the original target. The canonical map SHALL use the actual master beat once, without a second speed multiplier. Native pitch, delayed execution, ordinary mapped Pause/Resume, mapped Seek and unsupported trajectories SHALL remain gated. Qualified dry waveform-hold continuation MAY use only the bounded own-ACK Stage A contract of resume-dry-mapped-playback; that exception SHALL NOT admit a rate change while a mapped voice is paused.
 
 #### Scenario: Stop and retrigger after a supported coupled fader change
 - **WHEN** the user starts or retriggers the mapped pad after a qualified nonunity speed/master-period effect

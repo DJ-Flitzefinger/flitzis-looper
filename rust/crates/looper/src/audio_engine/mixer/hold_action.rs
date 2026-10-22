@@ -90,10 +90,21 @@ impl RtMixer {
     }
     /// The outer callback publisher owns the same-content marker and has already reserved
     /// retirement capacity. Stable-cell registry storage follows content, never pad images.
+    #[cfg(test)]
     pub(crate) fn apply_pause_hold_rt(
         &mut self,
         work: Box<HoldActionRtWork>,
         output_frame: u64,
+        retirement: &mut impl AudioBufferRetirement,
+    ) -> NativeHoldProjection {
+        self.apply_pause_hold_with_timeline_rt(work, output_frame, None, retirement)
+    }
+
+    pub(crate) fn apply_pause_hold_with_timeline_rt(
+        &mut self,
+        work: Box<HoldActionRtWork>,
+        output_frame: u64,
+        transport: Option<&crate::audio_engine::transport::TransportTimeline>,
         retirement: &mut impl AudioBufferRetirement,
     ) -> NativeHoldProjection {
         let action = &work.action;
@@ -132,13 +143,14 @@ impl RtMixer {
             retirement.retire_hold_action(work);
             return projection;
         }
-        if self.hold_content_is_mapped_rt(id, key) {
+        // Legacy numerical helpers carry no actual callback epoch and remain
+        // closed even when their artificial mapped cohort is already paused.
+        if transport.is_none() && self.hold_content_is_mapped_rt(id, key) {
             action.settle(HoldActionState::Rejected, output_frame);
             let projection = action.projection();
             retirement.retire_hold_action(work);
             return projection;
         }
-
         let mut effect = NativePauseEffect {
             key,
             action_id: action.action_id(),
@@ -166,6 +178,23 @@ impl RtMixer {
                     effect.changed_mask |= bit;
                 }
             }
+        }
+
+        if self
+            .mapped_hold_continuations_rt(
+                id,
+                key,
+                effect.changed_mask,
+                None,
+                output_frame,
+                transport,
+            )
+            .is_none()
+        {
+            action.settle(HoldActionState::Rejected, output_frame);
+            let projection = action.projection();
+            retirement.retire_hold_action(work);
+            return projection;
         }
 
         // A later accepted physical hold may not inherit another hold's pause. Its producer
@@ -200,10 +229,21 @@ impl RtMixer {
 
     /// Resume exactly the lanes that this ticket actually paused, only if the complete
     /// cohort and accepted intent still agree. All validation precedes the first change.
+    #[cfg(test)]
     pub(crate) fn apply_release_hold_rt(
         &mut self,
         work: Box<HoldActionRtWork>,
         output_frame: u64,
+        retirement: &mut impl AudioBufferRetirement,
+    ) -> NativeHoldProjection {
+        self.apply_release_hold_with_timeline_rt(work, output_frame, None, retirement)
+    }
+
+    pub(crate) fn apply_release_hold_with_timeline_rt(
+        &mut self,
+        work: Box<HoldActionRtWork>,
+        output_frame: u64,
+        transport: Option<&crate::audio_engine::transport::TransportTimeline>,
         retirement: &mut impl AudioBufferRetirement,
     ) -> NativeHoldProjection {
         let action = &work.action;
@@ -228,7 +268,9 @@ impl RtMixer {
         let state = match self.content_effect_slot(key) {
             None => HoldActionState::Retired,
             Some(_) if !action.intent_current() => HoldActionState::Superseded,
-            Some(id) if self.hold_content_is_mapped_rt(id, key) => HoldActionState::Rejected,
+            Some(id) if transport.is_none() && self.hold_content_is_mapped_rt(id, key) => {
+                HoldActionState::Rejected
+            }
             Some(id) => {
                 let same_owner = self.hold_actions[cell].as_ref().is_some_and(|owned| {
                     Arc::ptr_eq(&owned.action, action)
@@ -238,13 +280,27 @@ impl RtMixer {
                     Some(effect)
                         if same_owner && self.hold_effect_cohort_current_rt(id, effect) =>
                     {
-                        for (index, voice) in self.voices.iter_mut().enumerate() {
-                            if effect.changed_mask & (1u32 << index) != 0 {
-                                voice.resume();
+                        if let Some(replacements) = self.mapped_hold_continuations_rt(
+                            id,
+                            key,
+                            effect.changed_mask,
+                            Some(effect.paused_at_output_frame),
+                            output_frame,
+                            transport,
+                        ) {
+                            for (index, voice) in self.voices.iter_mut().enumerate() {
+                                if effect.changed_mask & (1u32 << index) != 0 {
+                                    if let Some(playback) = replacements[index] {
+                                        voice.source_playback = playback;
+                                    }
+                                    voice.resume();
+                                }
                             }
+                            self.publish_key_lock_status(id);
+                            HoldActionState::Resumed
+                        } else {
+                            HoldActionState::Rejected
                         }
-                        self.publish_key_lock_status(id);
-                        HoldActionState::Resumed
                     }
                     _ => HoldActionState::Superseded,
                 }
@@ -258,7 +314,7 @@ impl RtMixer {
     }
 
     fn hold_content_is_mapped_rt(&self, id: usize, key: ContentKey) -> bool {
-        // Mapped pause/resume needs an owned transport-phase reanchor before either is legal.
+        // Ordinary transport stays closed until its durable revision-correct feedback exists.
         self.voices.iter().any(|voice| {
             Self::hold_voice_belongs_to_content_rt(voice, id, key)
                 && voice.source_playback.is_mapped()
@@ -291,7 +347,7 @@ impl RtMixer {
         actual_mask == effect.cohort_mask
     }
 
-    fn hold_voice_belongs_to_content_rt(
+    pub(super) fn hold_voice_belongs_to_content_rt(
         voice: &crate::audio_engine::voice_slot::VoiceSlot,
         id: usize,
         key: ContentKey,

@@ -146,6 +146,32 @@ impl SourcePlayback {
         Ok(())
     }
 
+    /// Resume only a copied mapped trajectory, borrowing the original geometry
+    /// and actual callback master. Source/content/reader ownership is a separate
+    /// mixer preflight. This projection creates no actual read or Native permit.
+    pub(crate) fn resume_mapped_at(
+        &mut self,
+        geometry: &MappedLoopGeometry,
+        actual: &super::transport::TransportTimeline,
+        output_frame: u64,
+    ) -> Result<(), MappedClockError> {
+        let state = self.mapped.ok_or(MappedClockError::InvalidEpoch)?;
+        if self.domain != Some(geometry.domain()) {
+            return Err(MappedClockError::InvalidGeometry);
+        }
+        let epoch = state
+            .span
+            .epoch()
+            .resumed_at(actual, state.intended_output_frame, output_frame)
+            .ok_or(MappedClockError::InvalidEpoch)?;
+        let replacement = Self::mapped(geometry, epoch, output_frame)?;
+        if !same_position(self.origin, replacement.origin) {
+            return Err(MappedClockError::InvalidEpoch);
+        }
+        *self = replacement;
+        Ok(())
+    }
+
     /// Isolated map diagnostics start an exact affine epoch, without the live scalar glide.
     /// This constructs no source, timing, preparation or continuation permission.
     #[cfg(test)]

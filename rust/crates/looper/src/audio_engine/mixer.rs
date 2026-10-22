@@ -14,6 +14,7 @@ mod global_rate;
 #[path = "mixer/hold_action.rs"]
 mod hold_action;
 mod key_lock_tuple;
+mod mapped_continuation;
 mod ordinary_global;
 mod ordinary_start;
 #[path = "mixer/pad_copy.rs"]

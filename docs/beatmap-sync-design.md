@@ -620,8 +620,8 @@ physical endpoints retain their own canonical interval rather than inheriting ol
 stored bars. Copy retains independent intent and requires fresh Native map
 qualification; default-neutral snapshot omission preserves old sealed images.
 
-The productive mapped path remains Key Lock off, total pitch zero, BPM Lock on,
-a qualified actual master epoch and ordinary launch E=T. Supported dry global
+The productive mapped path remains Key Lock off, total pitch zero, frozen explicit
+global SYNC ON or legacy BPM Lock on, a qualified actual master epoch and ordinary launch E=T. Supported dry global
 speed/master-period changes use the existing coordinator and atomic participant
 claim at the actual settled callback boundary. Each voice retains its original
 map, marker and creative phase; master beat and canonical source position stay
@@ -642,6 +642,20 @@ the entire effect. Preparing waits for settled command/parameter drains. No
 source clip, scalar fallback, partial group update or implicit pad phase anchor
 supplies missing permission. See
 `../openspec/changes/adapt-dry-mapped-global-rate/`.
+
+Qualified dry waveform holds use their existing Native caused-pause ticket and
+complete changed/cohort masks. Pause retains the exact next source point while
+the same master timeline continues; release prepares a checked copied address
+translation before changing any voice. Later supported dry master changes retain
+that saved creative phase through an explicit claim-frame projection. Old actual
+history remains attached to its original epoch. No Native/pitch path or rate
+change while paused is admitted by this continuation.
+
+This is Stage A of
+[`resume-dry-mapped-playback`](../openspec/changes/resume-dry-mapped-playback/design.md).
+Ordinary content Pause/Resume remains gated for mapped playback until Stage B
+provides lossless, revision-correct confirmation. An enqueued ordinary request or
+temporary Hold projection cannot substitute for that confirmation.
 
 Internal constant-h physical-birth
 preparation reuses Native/FIFO ownership, H silence frames and the unchanged

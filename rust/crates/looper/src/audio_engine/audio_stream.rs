@@ -1589,6 +1589,7 @@ fn apply_hold_action_message(
     mixer: &mut RtMixer,
     work: Box<super::hold_action::HoldActionRtWork>,
     output_frame: u64,
+    transport: &TransportTimeline,
     retirement: &mut impl AudioBufferRetirement,
 ) {
     use super::hold_action::{HoldActionState, HoldWorkKind};
@@ -1628,10 +1629,20 @@ fn apply_hold_action_message(
             let work = pending.take().unwrap();
             match work.kind {
                 HoldWorkKind::Pause => {
-                    mixer.apply_pause_hold_rt(work, output_frame, retirement);
+                    mixer.apply_pause_hold_with_timeline_rt(
+                        work,
+                        output_frame,
+                        Some(transport),
+                        retirement,
+                    );
                 }
                 HoldWorkKind::Release => {
-                    mixer.apply_release_hold_rt(work, output_frame, retirement);
+                    mixer.apply_release_hold_with_timeline_rt(
+                        work,
+                        output_frame,
+                        Some(transport),
+                        retirement,
+                    );
                 }
             }
         },
@@ -2770,7 +2781,7 @@ pub(super) fn process_control_message<
             mixer.pair_pad_rt(work, retirement);
         }
         ControlMessage::HoldAction(work) => {
-            apply_hold_action_message(mixer, work, callback_start_frame, retirement);
+            apply_hold_action_message(mixer, work, callback_start_frame, transport, retirement);
         }
         ControlMessage::PitchAction(publication) => {
             if let Some(work) = publication.take() {
