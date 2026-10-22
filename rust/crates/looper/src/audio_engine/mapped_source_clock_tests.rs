@@ -53,10 +53,14 @@ fn map(anchors: &[(f64, f64)], coverage: &[&str], verified_meter: bool) -> Sourc
     SourceBeatmap::parse(&record.to_string()).unwrap()
 }
 
-fn epoch(phase: f64) -> MappedClockEpoch {
+fn timeline() -> TransportTimeline {
     let mut timeline = TransportTimeline::new(RATE);
     assert!(timeline.set_master_period(1.0));
-    MappedClockEpoch::new(7, timeline, phase).unwrap()
+    timeline
+}
+
+fn epoch(phase: f64) -> MappedClockEpoch {
+    MappedClockEpoch::new(7, timeline(), phase).unwrap()
 }
 
 fn geometry(map: SourceBeatmap, quarters: f64, end: usize) -> MappedLoopGeometry {
@@ -84,9 +88,7 @@ fn pause_translation_reuses_exact_old_addresses_and_refuses_pre_pause_extrapolat
         120,
     );
     let original = epoch(-0.373);
-    let resumed = original
-        .resumed_at(&original.timeline, 31, 987_654_321)
-        .unwrap();
+    let resumed = original.resumed_at(&timeline(), 31, 987_654_321).unwrap();
     let delay = 987_654_321 - 31;
     assert_eq!(
         geometry.position_at(resumed, delay - 1),
@@ -105,12 +107,12 @@ fn pause_translation_reuses_exact_old_addresses_and_refuses_pre_pause_extrapolat
         assert!(span.start_frame() >= delay);
         assert_eq!(span.position_at(active + delay), Some(after));
     }
-    assert!(original.resumed_at(&original.timeline, 31, 30).is_none());
-    let mut stale = original.timeline;
+    assert!(original.resumed_at(&timeline(), 31, 30).is_none());
+    let mut stale = timeline();
     assert!(stale.set_master_period_preserving_beat_position_at_frame(0.81, 17));
     assert!(original.resumed_at(&stale, 31, 91).is_none());
     let terminal = resumed
-        .resumed_at(&original.timeline, 987_654_321, u64::MAX)
+        .resumed_at(&timeline(), 987_654_321, u64::MAX)
         .unwrap();
     // A terminal address can be projected, but no nonempty exclusive span can
     // start there. SourcePlayback must refuse that unusable continuation.
@@ -123,9 +125,9 @@ fn pause_translation_reuses_exact_old_addresses_and_refuses_pre_pause_extrapolat
 #[test]
 fn paused_master_claim_anchors_at_claim_frame_and_keeps_legacy_projection_exact() {
     let original = epoch(-0.373);
-    let paused = original.resumed_at(&original.timeline, 31, 10_003).unwrap();
+    let paused = original.resumed_at(&timeline(), 31, 10_003).unwrap();
     let execution = 10_019;
-    let mut candidate = original.timeline;
+    let mut candidate = timeline();
     assert!(candidate.set_master_period_preserving_beat_position_at_frame(0.81, execution));
     let claimed = paused.with_timeline_at(candidate, execution).unwrap();
     assert_eq!(
@@ -244,8 +246,7 @@ fn irregular_partition_and_midspan_refresh_retain_exact_global_anchors() {
                 let direct = geometry.position_at(epoch, frame).unwrap();
                 assert_eq!(span.position_at(frame), Some(direct), "frame={frame}");
                 let beat = geometry.start_beat()
-                    + (epoch.timeline.beat_position_at_frame(frame).unwrap()
-                        + epoch.phase_quarters)
+                    + (timeline().beat_position_at_frame(frame).unwrap() + epoch.phase_quarters)
                         .rem_euclid(geometry.exact_quarters());
                 let canonical =
                     geometry.map().canonical_source_at_beat(beat).unwrap() * f64::from(RATE);
@@ -338,7 +339,7 @@ fn rate_extrema_reject_even_an_unvisited_segment_without_clamping() {
 #[test]
 fn epoch_identity_ignores_incidental_callback_now_but_preserves_real_anchor() {
     let first = epoch(0.23);
-    let mut incidental = first.timeline;
+    let mut incidental = timeline();
     incidental.advance_by_rendered_frames(997);
     let same = MappedClockEpoch::new(first.marker, incidental, first.phase_quarters).unwrap();
     assert!(first.matches_exact(same));
@@ -348,6 +349,36 @@ fn epoch_identity_ignores_incidental_callback_now_but_preserves_real_anchor() {
     assert!(!first.matches_exact(MappedClockEpoch::new(7, incidental, 0.23).unwrap()));
     assert!(MappedClockEpoch::new(0, incidental, 0.23).is_none());
     assert!(MappedClockEpoch::new(7, incidental, f64::NAN).is_none());
+    incidental.clear_master_bpm();
+    assert!(!first.matches_timeline(&incidental));
+    assert!(MappedClockEpoch::new(7, incidental, 0.23).is_none());
+}
+
+#[test]
+fn compact_epoch_preserves_original_large_frame_projection_and_incidental_identity() {
+    let mut actual = TransportTimeline::new(48_000);
+    assert!(actual.set_master_period_and_anchor_beat_position_at_frame(
+        0.500_000_001_234_567_9,
+        -5.25,
+        (1_u64 << 53) + 7,
+    ));
+    let phase = -0.373;
+    let frozen = MappedClockEpoch::new(7, actual, phase).unwrap();
+    for frame in [0, 1, 96_007, (1_u64 << 53) + 1, u64::MAX] {
+        let expected = actual.beat_position_at_frame(frame).unwrap() + phase;
+        assert_eq!(
+            frozen.total_at(frame).unwrap().to_bits(),
+            expected.to_bits()
+        );
+    }
+    actual.advance_by_rendered_frames(997);
+    actual.request_bootstrap(3);
+    assert!(frozen.matches_timeline(&actual));
+    assert!(frozen.matches_exact(frozen.with_timeline_at(actual, 96_007).unwrap()));
+    assert_eq!(
+        frozen.master_period_seconds().unwrap().to_bits(),
+        actual.master_period_seconds().unwrap().to_bits(),
+    );
 }
 
 #[test]
@@ -418,9 +449,12 @@ fn decimal_cycle_boundaries_follow_remainder_even_next_to_binary64_wrap() {
 fn bounded_copy_span_carries_no_owned_map_or_dynamic_storage() {
     fn copy<T: Copy>() {}
     copy::<MappedClockEpoch>();
+    copy::<TransportBeatProjection>();
     copy::<MappedSourceSpan>();
     copy::<crate::audio_engine::source_playback::SourcePlayback>();
     assert!(!std::mem::needs_drop::<MappedSourceSpan>());
+    assert!(!std::mem::needs_drop::<TransportBeatProjection>());
+    assert!(std::mem::size_of::<TransportBeatProjection>() <= 32);
     assert!(!std::mem::needs_drop::<
         crate::audio_engine::source_playback::SourcePlayback,
     >());
@@ -431,11 +465,12 @@ fn bounded_copy_span_carries_no_owned_map_or_dynamic_storage() {
     >();
     assert!(cohort_bytes <= 16 * 1024);
     eprintln!(
-        "mapped_clock_sizes: epoch={} span={} playback={} source_feed_span={}",
+        "mapped_clock_sizes: epoch={} span={} playback={} source_feed_span={} projection={}",
         std::mem::size_of::<MappedClockEpoch>(),
         std::mem::size_of::<MappedSourceSpan>(),
         std::mem::size_of::<crate::audio_engine::source_playback::SourcePlayback>(),
-        std::mem::size_of::<crate::audio_engine::source_feed_history::SourceFeedSpan>()
+        std::mem::size_of::<crate::audio_engine::source_feed_history::SourceFeedSpan>(),
+        std::mem::size_of::<TransportBeatProjection>(),
     );
     let voices = crate::audio_engine::constants::MAX_VOICES;
     let slots = crate::audio_engine::source_feed_history::SOURCE_FEED_HISTORY_MAX_SPANS;

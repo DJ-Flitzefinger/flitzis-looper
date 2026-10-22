@@ -45,7 +45,7 @@ fn repeated_fractional_pause_projection_matches_uninterrupted_active_address_bit
             let duration = 93 + active % 17;
             shift += duration;
             playback
-                .resume_mapped_at(&geometry, &original_epoch.timeline, active + shift)
+                .resume_mapped_at(&geometry, &timeline(), active + shift)
                 .unwrap();
             assert_eq!(playback.position().frame, saved.frame);
             assert_eq!(
@@ -60,17 +60,17 @@ fn repeated_fractional_pause_projection_matches_uninterrupted_active_address_bit
     let before = playback;
     assert!(
         playback
-            .resume_mapped_at(&geometry, &original_epoch.timeline, 1)
+            .resume_mapped_at(&geometry, &timeline(), 1)
             .is_err()
     );
     assert!(playback.matches_exact(&before));
-    let mut stale = original_epoch.timeline;
+    let mut stale = timeline();
     assert!(stale.set_master_period(0.81));
     assert!(playback.resume_mapped_at(&geometry, &stale, 1000).is_err());
     assert!(playback.matches_exact(&before));
     assert!(
         playback
-            .resume_mapped_at(&geometry, &original_epoch.timeline, u64::MAX)
+            .resume_mapped_at(&geometry, &timeline(), u64::MAX)
             .is_err()
     );
     assert!(playback.matches_exact(&before));
@@ -186,13 +186,13 @@ fn epoch_replacement_is_atomic_and_preserves_exact_due_frame_position() {
     let epoch = epoch(0.0);
     let mut playback = SourcePlayback::mapped(&geometry, epoch, 17).unwrap();
     let before = playback;
-    let changed_phase = MappedClockEpoch::new(8, epoch.timeline, 0.1).unwrap();
+    let changed_phase = MappedClockEpoch::new(8, timeline(), 0.1).unwrap();
     assert_eq!(
         playback.replace_mapped_epoch(&geometry, changed_phase),
         Err(MappedClockError::InvalidEpoch)
     );
     assert!(playback.matches_exact(&before));
-    let mut next_timeline = epoch.timeline;
+    let mut next_timeline = timeline();
     assert!(next_timeline.set_master_period_preserving_beat_position_at_frame(0.75, 17));
     let new_epoch = MappedClockEpoch::new(8, next_timeline, 0.0).unwrap();
     playback.replace_mapped_epoch(&geometry, new_epoch).unwrap();

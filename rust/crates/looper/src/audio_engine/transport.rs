@@ -42,6 +42,45 @@ pub(crate) struct TransportTimeline {
     bootstrap_complete: bool,
 }
 
+/// Immutable beat projection copied only from the authoritative transport.
+/// It retains exactly the clock-epoch comparison inputs, without callback
+/// progress, grid display or bootstrap state. It cannot advance a transport.
+#[derive(Debug, Clone, Copy)]
+pub(crate) struct TransportBeatProjection {
+    sample_rate_hz: u32,
+    master_period_seconds: f64,
+    beat_anchor_frame: u64,
+    beat_anchor_position: f64,
+}
+
+impl TransportBeatProjection {
+    pub(crate) fn master_period_seconds(self) -> f64 {
+        self.master_period_seconds
+    }
+
+    pub(crate) fn frames_per_beat(self) -> f64 {
+        f64::from(self.sample_rate_hz) * self.master_period_seconds
+    }
+
+    pub(crate) fn beat_position_at_frame(self, output_frame: u64) -> f64 {
+        self.beat_anchor_position
+            + (output_frame as f64 - self.beat_anchor_frame as f64) / self.frames_per_beat()
+    }
+
+    pub(crate) fn matches_exact(self, other: Self) -> bool {
+        self.sample_rate_hz == other.sample_rate_hz
+            && self.master_period_seconds.to_bits() == other.master_period_seconds.to_bits()
+            && self.beat_anchor_frame == other.beat_anchor_frame
+            && self.beat_anchor_position.to_bits() == other.beat_anchor_position.to_bits()
+    }
+
+    pub(crate) fn matches_timeline(self, timeline: &TransportTimeline) -> bool {
+        timeline
+            .beat_projection()
+            .is_some_and(|other| self.matches_exact(other))
+    }
+}
+
 impl TransportTimeline {
     pub(crate) fn new(sample_rate_hz: u32) -> Self {
         let sample_rate_hz = if sample_rate_hz == 0 {
@@ -339,6 +378,15 @@ impl TransportTimeline {
             self.beat_anchor_position
                 + (output_frame as f64 - self.beat_anchor_frame as f64) / self.frames_per_beat()?,
         )
+    }
+
+    pub(crate) fn beat_projection(&self) -> Option<TransportBeatProjection> {
+        Some(TransportBeatProjection {
+            sample_rate_hz: self.sample_rate_hz,
+            master_period_seconds: self.master_period_seconds?,
+            beat_anchor_frame: self.beat_anchor_frame,
+            beat_anchor_position: self.beat_anchor_position,
+        })
     }
 
     /// Compare the frozen beat projection, independently of callback progress or bootstrap UI.
@@ -908,5 +956,113 @@ mod tests {
         assert_eq!(transport.beat_position(), beat);
         assert_eq!(transport.downbeat_frame(), downbeat);
         assert_eq!(transport.bootstrap_reference(), Some(3));
+    }
+
+    #[test]
+    fn copied_beat_projection_preserves_legacy_frame_arithmetic_bits() {
+        for rate in [100, 44_100, 48_000] {
+            for period in [0.5, 0.500_000_001_234_567_9, 0.734_567_890_123_456_7] {
+                for anchor_frame in [0, 96_007, (1_u64 << 53) + 7] {
+                    for anchor_position in [-5.25, 3.125] {
+                        let mut transport = TransportTimeline::new(rate);
+                        assert!(
+                            transport.set_master_period_and_anchor_beat_position_at_frame(
+                                period,
+                                anchor_position,
+                                anchor_frame,
+                            )
+                        );
+                        let projection = transport.beat_projection().unwrap();
+                        assert_eq!(
+                            projection.master_period_seconds().to_bits(),
+                            period.to_bits()
+                        );
+                        assert_eq!(
+                            projection.frames_per_beat().to_bits(),
+                            transport.frames_per_beat().unwrap().to_bits(),
+                        );
+                        for frame in [0, 1, 137, anchor_frame, (1_u64 << 53) + 1, u64::MAX] {
+                            assert_eq!(
+                                projection.beat_position_at_frame(frame).to_bits(),
+                                transport.beat_position_at_frame(frame).unwrap().to_bits(),
+                                "rate={rate}, period={period:?}, anchor={anchor_frame}, frame={frame}",
+                            );
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn copied_beat_projection_matches_exactly_the_transport_epoch_inputs() {
+        let mut transport = TransportTimeline::new(48_000);
+        let period = 0.500_000_001_234_567_9;
+        assert!(
+            transport.set_master_period_and_anchor_beat_position_at_frame(period, 3.125, 96_007,)
+        );
+        let projection = transport.beat_projection().unwrap();
+        for changed in [
+            TransportTimeline {
+                sample_rate_hz: 44_100,
+                ..transport
+            },
+            TransportTimeline {
+                master_period_seconds: Some(f64::from_bits(period.to_bits() + 1)),
+                ..transport
+            },
+            TransportTimeline {
+                beat_anchor_frame: 96_008,
+                ..transport
+            },
+            TransportTimeline {
+                beat_anchor_position: f64::from_bits(3.125_f64.to_bits() + 1),
+                ..transport
+            },
+        ] {
+            assert!(!transport.matches_clock_epoch(&changed));
+            assert!(!projection.matches_timeline(&changed));
+            assert!(!projection.matches_exact(changed.beat_projection().unwrap()));
+        }
+        transport.clear_master_bpm();
+        assert!(transport.beat_projection().is_none());
+        assert!(!projection.matches_timeline(&transport));
+
+        let positive_zero = TransportTimeline::new(48_000);
+        let negative_zero = TransportTimeline {
+            beat_anchor_position: -0.0,
+            ..positive_zero
+        };
+        assert!(!positive_zero.matches_clock_epoch(&negative_zero));
+        assert!(
+            !positive_zero
+                .beat_projection()
+                .unwrap()
+                .matches_timeline(&negative_zero)
+        );
+    }
+
+    #[test]
+    fn copied_beat_projection_excludes_progress_display_and_bootstrap_state() {
+        let mut transport = transport_at(96_007);
+        assert!(transport.anchor_beat_position_at_frame(-5.25, 96_007));
+        let projection = transport.beat_projection().unwrap();
+        let future = (1_u64 << 53) + 7;
+        let before = projection.beat_position_at_frame(future).to_bits();
+
+        transport.advance_by_rendered_frames(997);
+        transport.request_bootstrap(3);
+        transport.downbeat_frame = 1_234;
+        transport.beats_per_bar = 7;
+        assert!(projection.matches_timeline(&transport));
+        assert_eq!(transport.bootstrap_reference(), Some(3));
+        transport.clear_pending_bootstrap_for_pad(3);
+        transport.bootstrap_complete = true;
+        assert!(projection.matches_timeline(&transport));
+        assert!(projection.matches_exact(transport.beat_projection().unwrap()));
+
+        assert!(transport.set_master_period_preserving_beat_position_at_frame(0.81, 97_004));
+        assert!(!projection.matches_timeline(&transport));
+        assert_eq!(projection.beat_position_at_frame(future).to_bits(), before);
     }
 }

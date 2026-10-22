@@ -9,7 +9,7 @@ use super::constants::{SPEED_MAX, SPEED_MIN};
 use super::source_beatmap::{CanonicalBeatSegment, SourceBeatmap};
 use super::source_playback::FractionalSourcePosition;
 use super::source_reader::{ExplicitSeekMode, FrameRange, SourceLoopDomain};
-use super::transport::TransportTimeline;
+use super::transport::{TransportBeatProjection, TransportTimeline};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum MappedClockError {
@@ -52,7 +52,7 @@ pub(crate) struct MappedLoopGeometry {
 #[derive(Clone, Copy, Debug)]
 pub(crate) struct MappedClockEpoch {
     marker: u64,
-    timeline: TransportTimeline,
+    projection: TransportBeatProjection,
     phase_quarters: f64,
     address_shift: u64,
     first_output_frame: u64,
@@ -71,7 +71,8 @@ impl MappedClockEpoch {
         timeline: TransportTimeline,
         phase_quarters: f64,
     ) -> Option<Self> {
-        let frames_per_beat = timeline.frames_per_beat()?;
+        let projection = timeline.beat_projection()?;
+        let frames_per_beat = projection.frames_per_beat();
         if marker == 0
             || !phase_quarters.is_finite()
             || !frames_per_beat.is_finite()
@@ -81,7 +82,7 @@ impl MappedClockEpoch {
         }
         Some(Self {
             marker,
-            timeline,
+            projection,
             phase_quarters,
             address_shift: 0,
             first_output_frame: 0,
@@ -90,11 +91,11 @@ impl MappedClockEpoch {
     }
 
     pub(crate) fn master_period_seconds(self) -> Option<f64> {
-        self.timeline.master_period_seconds()
+        Some(self.projection.master_period_seconds())
     }
 
     pub(crate) fn matches_timeline(self, timeline: &TransportTimeline) -> bool {
-        self.timeline.matches_clock_epoch(timeline)
+        self.projection.matches_timeline(timeline)
     }
 
     /// Reuse this voice's marker and creative phase with the same authoritative transport.
@@ -110,7 +111,7 @@ impl MappedClockEpoch {
     /// projection anchors its exact old total at E rather than extrapolating the
     /// new master slope backward through a previous pause's address translation.
     pub(crate) fn with_timeline_at(self, timeline: TransportTimeline, frame: u64) -> Option<Self> {
-        if timeline.matches_clock_epoch(&self.timeline) {
+        if self.projection.matches_timeline(&timeline) {
             return Some(self);
         }
         if self.address_shift == 0 && self.continuation_anchor.is_none() {
@@ -162,7 +163,7 @@ impl MappedClockEpoch {
                 }
                 _ => false,
             }
-            && self.timeline.matches_clock_epoch(&other.timeline)
+            && self.projection.matches_exact(other.projection)
     }
 
     fn total_at(self, output_frame: u64) -> Option<f64> {
@@ -170,7 +171,7 @@ impl MappedClockEpoch {
             return None;
         }
         let addressed = output_frame.checked_sub(self.address_shift)?;
-        let master = self.timeline.beat_position_at_frame(addressed)?;
+        let master = self.projection.beat_position_at_frame(addressed);
         let total = self.continuation_anchor.map_or_else(
             || master + self.phase_quarters,
             |anchor| anchor.total_quarters + (master - anchor.master_quarters),
@@ -236,7 +237,7 @@ impl MappedSourceSpan {
     /// Derivative of the same canonical mapping, excluding wrap discontinuity.
     pub(crate) fn local_rate(self) -> Option<f64> {
         let rate = f64::from(self.loaded_rate_hz) * self.segment.seconds_per_quarter()
-            / self.epoch.timeline.frames_per_beat()?;
+            / self.epoch.projection.frames_per_beat();
         valid_rate(rate).then_some(rate)
     }
 
@@ -317,11 +318,10 @@ impl MappedLoopGeometry {
 
     /// O(1) admission using extrema scanned during non-realtime construction.
     pub(crate) fn validate_epoch(&self, epoch: MappedClockEpoch) -> Result<(), MappedClockError> {
-        let frames_per_beat = epoch
-            .timeline
-            .frames_per_beat()
-            .filter(|period| period.is_finite() && *period > 0.0)
-            .ok_or(MappedClockError::InvalidEpoch)?;
+        let frames_per_beat = epoch.projection.frames_per_beat();
+        if !frames_per_beat.is_finite() || frames_per_beat <= 0.0 {
+            return Err(MappedClockError::InvalidEpoch);
+        }
         for slope in [self.min_seconds_per_quarter, self.max_seconds_per_quarter] {
             if !valid_rate(f64::from(self.loaded_rate_hz) * slope / frames_per_beat) {
                 return Err(MappedClockError::UnsupportedRate);
