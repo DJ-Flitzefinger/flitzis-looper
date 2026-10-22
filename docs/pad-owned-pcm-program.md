@@ -34,6 +34,11 @@ public admission and all other pitch/rate, continuous, full-map and Human gates
 remain unchanged. See
 [actual-output results](../openspec/changes/render-aligned-mapped-native-birth/results.md).
 
+A separate existing-library realtime Stretcher Standard/HighConsistency candidate
+is rejected on all four retained canonical kick cases, despite a valid unity
+coordinate control and complete output capture. Production remains unchanged;
+see [realtime candidate results](../openspec/changes/probe-realtime-mapped-stretcher/results.md).
+
 Latest Human execution priority2026-10-14: finish the current Controller/Durable/
 Hold delivery, then its actually needed remaining R2 ownership/selection foundation
 and the rate/map/finite/DSP prerequisites for a complete testable Key + Transposition,
