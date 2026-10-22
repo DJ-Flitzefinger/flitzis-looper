@@ -224,9 +224,19 @@ impl RawOracle {
     }
 
     fn capture(&self, pcm: &[f32], history: usize) -> Vec<Vec<f32>> {
+        self.capture_with_input(pcm, history, history + OUTPUT, independent_input)
+    }
+
+    fn capture_with_input(
+        &self,
+        pcm: &[f32],
+        silent_history: usize,
+        total_input_frames: usize,
+        input_at: fn(&[f32], usize) -> [f32; 2],
+    ) -> Vec<Vec<f32>> {
         // Direct complete Native blocks only: no copied adapter/FIFO/source-reader routine.
         // The DUT retains any final partial input block; it has not processed those frames.
-        let processed = (history + OUTPUT) / BLOCK * BLOCK;
+        let processed = total_input_frames / BLOCK * BLOCK;
         let mut output = (0..2)
             .map(|_| Vec::with_capacity(processed))
             .collect::<Vec<_>>();
@@ -234,8 +244,8 @@ impl RawOracle {
             let input = std::array::from_fn(|channel| {
                 std::array::from_fn(|offset| {
                     (first + offset)
-                        .checked_sub(history)
-                        .map_or(0.0, |frame| independent_input(pcm, frame)[channel])
+                        .checked_sub(silent_history)
+                        .map_or(0.0, |frame| input_at(pcm, frame)[channel])
                 })
             });
             let shifted = self.shift(&input);
@@ -276,7 +286,18 @@ fn captured_fixture(
     geometry: GeometryProfile,
 ) -> CapturedFixture {
     geometry.report();
-    let duration = SOURCE as f64 / f64::from(RATE);
+    captured_fixture_with_geometry(pcm, decoded, shift, SOURCE, &geometry.seconds())
+}
+
+fn captured_fixture_with_geometry(
+    pcm: &[i16],
+    decoded: &[f32],
+    shift: i32,
+    source_frames: usize,
+    stored_seconds: &[f64],
+) -> CapturedFixture {
+    assert!(stored_seconds.len() >= 2);
+    let duration = source_frames as f64 / f64::from(RATE);
     let mut source = ColdCustody::new_selected_with_interleaved_signal(
         Some(crate::audio_engine::cold_residency::ResidentLoadHint {
             start_s: 0.0,
@@ -290,9 +311,9 @@ fn captured_fixture(
         .clone()
         .unwrap();
     assert_eq!(loaded.channels, 2);
-    assert_eq!(loaded.frame_count(), SOURCE);
+    assert_eq!(loaded.frame_count(), source_frames);
     assert_eq!(loaded.resident_start(), 0);
-    assert_eq!(loaded.resident_end(), SOURCE);
+    assert_eq!(loaded.resident_end(), source_frames);
     assert!(
         loaded
             .samples
@@ -322,8 +343,7 @@ fn captured_fixture(
     expected["record"]["raw"]["uncertainty"] =
         json!("authored software-fixture coordinates; no automatic or musical qualification");
     expected["record"]["accepted"]["anchors"] = json!(
-        geometry
-            .seconds()
+        stored_seconds
             .iter()
             .enumerate()
             .map(|(index, seconds)| json!({
@@ -335,7 +355,7 @@ fn captured_fixture(
             .collect::<Vec<_>>()
     );
     let interval = expected["record"]["accepted"]["intervals"][0].clone();
-    expected["record"]["accepted"]["intervals"] = json!(vec![interval; 4]);
+    expected["record"]["accepted"]["intervals"] = json!(vec![interval; stored_seconds.len() - 1]);
     seal(&mut expected);
     let (job, event) = stored_event(&path.source, &expected);
     let delivery = Python::attach(|py| {
@@ -400,19 +420,31 @@ fn captured_fixture(
 }
 
 fn owned_birth(pcm: &[i16], decoded: &[f32], shift: i32) -> OwnedBirth {
+    owned_birth_from_capture(
+        captured_fixture(
+            pcm,
+            decoded,
+            shift,
+            GeometryProfile::DeclaredAdjacentSupported,
+        ),
+        shift,
+        SOURCE,
+    )
+}
+
+fn owned_birth_from_capture(
+    fixture: CapturedFixture,
+    shift: i32,
+    source_frames: usize,
+) -> OwnedBirth {
     let CapturedFixture {
         path,
         job,
         delivery,
         captured,
-    } = captured_fixture(
-        pcm,
-        decoded,
-        shift,
-        GeometryProfile::DeclaredAdjacentSupported,
-    );
+    } = fixture;
     let target = captured.target_frame().unwrap();
-    let duration = SOURCE as f64 / f64::from(RATE);
+    let duration = source_frames as f64 / f64::from(RATE);
     let intent = PitchIntent::new(shift.clamp(-23, 23), shift - shift.clamp(-23, 23)).unwrap();
     let mut work = captured.take_work(None).unwrap().unwrap();
     work.freeze_mapped_clock(Some(path.timeline), target)
@@ -520,12 +552,27 @@ struct Capture {
     profile: NativeOutputProfile,
 }
 
+struct CaptureProtocol {
+    shift: i32,
+    block_phase: usize,
+    caller: (&'static str, &'static [usize]),
+    profile: NativeOutputProfile,
+    history: usize,
+    raw_cut: usize,
+    input_advance: usize,
+    native_delay: usize,
+    minimum_history: usize,
+    coordinate: fn(usize) -> f64,
+    input_at: fn(&[f32], usize) -> [f32; 2],
+    geometry_label: &'static str,
+}
+
 fn capture(
     pcm: &[i16],
     decoded: &[f32],
     shift: i32,
     block_phase: usize,
-    caller: (&str, &[usize]),
+    caller: (&'static str, &'static [usize]),
 ) -> Capture {
     capture_profile(
         pcm,
@@ -542,18 +589,11 @@ fn capture_profile(
     decoded: &[f32],
     shift: i32,
     block_phase: usize,
-    caller: (&str, &[usize]),
+    caller: (&'static str, &'static [usize]),
     profile: NativeOutputProfile,
 ) -> Capture {
     assert!(matches!(block_phase, 0 | 17));
     let fixture = owned_birth(pcm, decoded, shift);
-    let source = fixture.request.sample.clone();
-    let stems = fixture.request.stems.clone();
-    let accepted = fixture.request.binding.accepted;
-    let intent = fixture.request.pitch_intent;
-    let mut playback = fixture.request.playback;
-    let mut plan = fixture.request.plan;
-    let target = fixture.captured.target_frame().unwrap();
     let pitch = 2.0_f64.powf(f64::from(shift) / 12.0);
     let oracle = match profile {
         NativeOutputProfile::Short => RawOracle::new(pitch),
@@ -576,6 +616,58 @@ fn capture_profile(
         raw.iter()
             .all(|channel| channel[..raw_cut].iter().all(|sample| *sample == 0.0))
     );
+    render_owned_capture(
+        fixture,
+        decoded,
+        raw,
+        CaptureProtocol {
+            shift,
+            block_phase,
+            caller,
+            profile,
+            history,
+            raw_cut,
+            input_advance: 0,
+            native_delay: oracle.delay,
+            minimum_history: oracle.minimum_history,
+            coordinate,
+            input_at: independent_input,
+            geometry_label: GeometryProfile::DeclaredAdjacentSupported.label(),
+        },
+    )
+}
+
+fn render_owned_capture(
+    fixture: OwnedBirth,
+    decoded: &[f32],
+    raw: Vec<Vec<f32>>,
+    protocol: CaptureProtocol,
+) -> Capture {
+    let CaptureProtocol {
+        shift,
+        block_phase,
+        caller,
+        profile,
+        history,
+        raw_cut,
+        input_advance,
+        native_delay,
+        minimum_history,
+        coordinate,
+        input_at,
+        geometry_label,
+    } = protocol;
+    let fed_frames = history + input_advance;
+    assert_eq!(raw_cut + BLOCK - 1, fed_frames);
+    assert!(raw.iter().all(|channel| channel.len() >= raw_cut + OUTPUT));
+    let source = fixture.request.sample.clone();
+    let stems = fixture.request.stems.clone();
+    let accepted = fixture.request.binding.accepted;
+    let intent = fixture.request.pitch_intent;
+    let mut playback = fixture.request.playback;
+    let mut plan = fixture.request.plan;
+    let target = fixture.captured.target_frame().unwrap();
+    let pitch = 2.0_f64.powf(f64::from(shift) / 12.0);
     let mut candidate = Box::new(NativeAdapterState::new(Some(profile.native()), 2));
     let native = candidate.rubberband.as_ref().unwrap().state_address();
     candidate
@@ -590,10 +682,10 @@ fn capture_profile(
     // These cached observations were queried by exact preparation before its first
     // source block; source processing does not remeasure or replace them.
     let prepared_native = candidate.rubberband.as_ref().unwrap();
-    assert_eq!(prepared_native.start_delay(), oracle.delay);
+    assert_eq!(prepared_native.start_delay(), native_delay);
     assert_eq!(
         prepared_native.source_history_frames(pitch).unwrap(),
-        oracle.minimum_history
+        minimum_history
     );
     let mut processor = StretchProcessor::new(2);
     processor.reset();
@@ -645,7 +737,10 @@ fn capture_profile(
                 .unwrap();
             assert_eq!(before.logical_output_frame, target + emitted as u64);
             assert_eq!(before.raw_output_frame, (raw_cut + emitted) as u64);
-            assert_eq!(before.actual_input_frame, target + emitted as u64);
+            assert_eq!(
+                before.actual_input_frame,
+                target + (input_advance + emitted) as u64
+            );
             let feed = ProductiveSourceFeed {
                 pitch_intent: intent,
                 key_lock: false,
@@ -667,7 +762,7 @@ fn capture_profile(
             assert_eq!(receipt.domain, SourceReadDomain::NativeInput);
             assert_eq!(
                 receipt.playback.mapped_output_frame(),
-                Some(target + emitted as u64)
+                Some(target + (input_advance + emitted) as u64)
             );
             // This separate dry renderer shares the original source/clock, not mutable wet state.
             let dry_receipt = dry_processor
@@ -677,14 +772,16 @@ fn capture_profile(
             for offset in 0..=frames {
                 let actual = receipt.playback.position_at(offset).unwrap();
                 let dry_position = dry_receipt.playback.position_at(offset).unwrap();
-                let expected = coordinate(emitted + offset);
-                assert!((actual.frame as f64 + actual.fraction - expected).abs() <= 1.0e-8);
+                let expected_actual = coordinate(input_advance + emitted + offset);
+                let expected_dry = coordinate(emitted + offset);
+                assert!((actual.frame as f64 + actual.fraction - expected_actual).abs() <= 1.0e-8);
                 assert!(
-                    (dry_position.frame as f64 + dry_position.fraction - expected).abs() <= 1.0e-8
+                    (dry_position.frame as f64 + dry_position.fraction - expected_dry).abs()
+                        <= 1.0e-8
                 );
             }
             for offset in 0..frames {
-                let expected = independent_input(decoded, emitted + offset);
+                let expected = input_at(decoded, emitted + offset);
                 for channel in 0..2 {
                     let dry_sample = dry_processor.output_buffers()[channel][offset];
                     assert!((dry_sample - expected[channel]).abs() <= 1.0e-7);
@@ -699,8 +796,8 @@ fn capture_profile(
             assert_eq!(
                 processor.pending_fifo_frames(),
                 (
-                    (history + emitted) % BLOCK,
-                    BLOCK - 1 - (history + emitted) % BLOCK,
+                    (fed_frames + emitted) % BLOCK,
+                    BLOCK - 1 - (fed_frames + emitted) % BLOCK,
                 )
             );
             assert!(processor.wet_render_ready());
@@ -721,27 +818,27 @@ fn capture_profile(
         "shift={shift} phase={block_phase} caller={} error={error}",
         caller.0
     );
-    assert_eq!(processor.native_primed_output_frames(), history);
+    assert_eq!(processor.native_primed_output_frames(), fed_frames);
     assert_eq!(
         processor.productive_history().unwrap().fed_output_frames,
-        (history + OUTPUT) as u64
+        (fed_frames + OUTPUT) as u64
     );
     assert!(fixture.captured.effective_frame().is_none());
     assert_eq!(sync_feedback(&fixture.path).unwrap()["effective"], false);
     emit(
         json!({"stage":"complete_stream","shift":shift,"h":pitch,"key_lock":false,
         "profile":profile.label(),
-        "geometry_profile":GeometryProfile::DeclaredAdjacentSupported.label(),
+        "geometry_profile":geometry_label,
         "native_block_phase":block_phase,"creative_phase_output_frames":0,"caller":caller.0,
         "target":target,"logical_output_range":[target,target+OUTPUT as u64],
-        "H":history,"D":raw_cut,"F":history,"adapter_initial_silent_frames":BLOCK-1,
+        "H":history,"D":raw_cut,"F":fed_frames,"adapter_initial_silent_frames":BLOCK-1,
         "raw_native_frames":raw[0].len(),"raw_prefix_frames":raw_cut,
         "raw_prefix_energy":raw.iter().map(|ch|ch[..raw_cut].iter().map(|x|f64::from(*x).powi(2)).sum::<f64>()).sum::<f64>(),
         "raw_native_sha256":interleaved_hash(&raw),"emitted_sha256":interleaved_hash(&output),
         "dry_sha256":interleaved_hash(&dry),"complete_pcm_error":error,"native_identity":native,
         "source_identity":fixture.captured.mapped_geometry().unwrap().map().source_identity(),
         "map_revision":fixture.captured.mapped_geometry().unwrap().map().map_revision(),
-        "nominal_delay_observation_only":oracle.delay,"expanded_unity_warm_retarget":pitch>2.0,
+        "nominal_delay_observation_only":native_delay,"expanded_unity_warm_retarget":pitch>2.0,
         "separate_unity_warm_frames":if pitch>2.0 {BLOCK} else {0},
         "separate_unity_warm_output_all_zero":true,
         "accepted_musical_c":null,"public_native_admission":false,
@@ -753,8 +850,8 @@ fn capture_profile(
         raw,
         raw_cut,
         target,
-        native_delay: oracle.delay,
-        minimum_history: oracle.minimum_history,
+        native_delay,
+        minimum_history,
         profile,
     }
 }
@@ -932,4 +1029,8 @@ fn measure_original_owned_mapped_native_complete_output() {
 
 mod mapped_native_profile_tests {
     include!("mapped_native_profile_tests.rs");
+}
+
+mod aligned_mapped_birth_tests {
+    include!("aligned_mapped_birth_tests.rs");
 }

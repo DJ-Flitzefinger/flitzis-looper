@@ -26,6 +26,14 @@ necessary first-attack retention in the +7 profile, but neither variant closes
 extreme-pitch timing or full intended-output acceptance. Production remains unchanged;
 see [comparison results](../openspec/changes/compare-mapped-native-window-profiles/results.md).
 
+The next bounded experiment emits actual aligned Medium +7 PCM through the existing
+retained Native/FIFOs and passes all eight isolated-event cases, including unchanged
+timing, original-peak retention, discarded energy and complete fixed end windows.
+The worst q10/q50 error is 1.75 ms. This is component evidence; production profiles,
+public admission and all other pitch/rate, continuous, full-map and Human gates
+remain unchanged. See
+[actual-output results](../openspec/changes/render-aligned-mapped-native-birth/results.md).
+
 Latest Human execution priority2026-10-14: finish the current Controller/Durable/
 Hold delivery, then its actually needed remaining R2 ownership/selection foundation
 and the rate/map/finite/DSP prerequisites for a complete testable Key + Transposition,
