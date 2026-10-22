@@ -8,6 +8,8 @@ import pytest
 
 from flitzis_looper.controller import pair_arrangement
 from flitzis_looper.controller.pair_arrangement_journal import PairArrangementAfterImage
+from flitzis_looper.models import PadContentIdentity
+from tests.flitzis_looper.controller.transport.test_pause_intent import PauseObservation
 
 if TYPE_CHECKING:
     from flitzis_looper.controller import AppController
@@ -158,3 +160,156 @@ def test_pair_preclaim_schema_failure_releases_only_acquired_writer_and_retireme
     release.assert_called_once()
     capture.assert_not_called()
     assert not controller.pairs.active
+
+
+@dataclass(slots=True)
+class _OrdinaryFeedback:
+    observation_sequence: int
+    owner: int = 1
+    cell: int = 0
+    lifetime: int = 1
+    transport_revision: int = 1
+
+    @staticmethod
+    def feedback_kind() -> str:
+        return "ordinary_transport"
+
+
+def _ordinary(sequence: int, *, cell: int = 0, lifetime: int = 1) -> AudioMessage:
+    return cast("AudioMessage", _OrdinaryFeedback(sequence, cell=cell, lifetime=lifetime))
+
+
+def test_ordinary_pending_placement_retains_exact_message_and_uses_distinct_resolver(
+    controller: AppController, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    controller.project.pad_content[215] = PadContentIdentity(instance_id="a" * 32)
+    message = _ordinary(1)
+    observation = PauseObservation(ordinary_paused=True, sample_id=215)
+    resolver = Mock(side_effect=[RuntimeError("content feedback placement pending"), observation])
+    monkeypatch.setattr(
+        controller._audio, "_resolve_ordinary_transport_feedback", resolver, raising=False
+    )
+    legacy = Mock()
+    monkeypatch.setattr(controller._audio, "_resolve_pad_feedback", legacy, raising=False)
+
+    controller._handle_audio_message(message)
+    assert list(controller._pending_ordinary_feedback.values()) == [message]
+    assert not controller.session.paused_sample_ids
+    controller._poll_audio_messages()
+
+    assert controller.session.paused_sample_ids == {215}
+    assert not controller._pending_ordinary_feedback
+    legacy.assert_not_called()
+    assert all(call.args[0] is message for call in resolver.call_args_list)
+
+
+@pytest.mark.parametrize("fence", ["pairs", "arrangement", "banks"])
+def test_ordinary_observation_waits_for_each_original_python_mirror_fence(
+    controller: AppController, monkeypatch: pytest.MonkeyPatch, fence: str
+) -> None:
+    controller.project.pad_content[0] = PadContentIdentity(instance_id="a" * 32)
+    controller.session.active_sample_ids.add(0)
+    controller.transport.playback.pause_pad(0)
+    owner = controller.transport.playback._pause_intent._owners["a" * 32]
+    observation = PauseObservation(ordinary_paused=True, settled=owner.admission)
+    owner.admission.observation = observation
+    blocked = {0}
+    name = "fenced_sample_ids" if fence == "arrangement" else "observer_fenced_sample_ids"
+    monkeypatch.setattr(
+        type(getattr(controller, fence)), name, property(lambda _: frozenset(blocked))
+    )
+    controller._sync_arrangement_observers()
+    monkeypatch.setattr(
+        controller._audio,
+        "_resolve_ordinary_transport_feedback",
+        Mock(return_value=observation),
+        raising=False,
+    )
+
+    controller._handle_audio_message(_ordinary(1))
+    controller.transport.playback.poll_pause_observations()
+    assert controller.session.paused_sample_ids == set()
+    assert owner.pending is True
+    assert len(controller._pending_ordinary_feedback) == 1
+    blocked.clear()
+    controller._sync_arrangement_observers()
+    controller._poll_audio_messages()
+    assert controller.session.paused_sample_ids == {0}
+    assert owner.pending is False
+
+
+def test_over_1024_ordinary_pending_events_coalesce_latest_across_lifetimes(
+    controller: AppController, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    controller.project.pad_content[0] = PadContentIdentity(instance_id="a" * 32)
+    resolver = Mock(side_effect=RuntimeError("content feedback placement pending"))
+    monkeypatch.setattr(
+        controller._audio, "_resolve_ordinary_transport_feedback", resolver, raising=False
+    )
+    latest = None
+    for sequence in range(1, 1501):
+        latest = _ordinary(sequence, lifetime=1 if sequence < 1000 else 2)
+        controller._handle_audio_message(latest)
+    controller._handle_audio_message(_ordinary(1499, lifetime=1))
+    assert list(controller._pending_ordinary_feedback.values()) == [latest]
+    resolver.side_effect = None
+    resolver.return_value = PauseObservation(
+        ordinary_paused=True, observation_sequence=1500, content_lifetime=2
+    )
+    controller._poll_audio_messages()
+    assert controller.session.paused_sample_ids == {0}
+    assert resolver.call_args.args[0] is latest
+
+
+def test_ordinary_pending_map_is_bounded_to_native_cells_and_resets_on_engine_change(
+    controller: AppController,
+) -> None:
+    for cell in range(217):
+        controller._retain_ordinary_transport_feedback(_ordinary(1, cell=cell))
+    assert len(controller._pending_ordinary_feedback) == 216
+    controller._audio = Mock()
+    replacement = cast("AudioMessage", _OrdinaryFeedback(1, owner=2))
+    controller._retain_ordinary_transport_feedback(replacement)
+    assert list(controller._pending_ordinary_feedback.values()) == [replacement]
+
+
+def test_first_seek_observation_retains_durable_monitor_for_lost_lifecycle_and_next_toggle(
+    controller: AppController, audio_engine_mock: Mock, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    controller.project.sample_paths[0] = "/synthetic/held-seek.wav"
+    controller.project.pad_content[0] = PadContentIdentity(instance_id="a" * 32)
+    controller.session.active_sample_ids.add(0)
+    # Native certifies that Seek took over a Hold pause. No ordinary admission
+    # preceded this first observation, so it must supply its own monitor custody.
+    seek = PauseObservation(ordinary_paused=True, requested_effect="seek")
+    monkeypatch.setattr(
+        controller._audio,
+        "_resolve_ordinary_transport_feedback",
+        Mock(return_value=seek),
+        raising=False,
+    )
+
+    controller._handle_audio_message(_ordinary(1))
+
+    owner = controller.transport.playback._pause_intent._owners["a" * 32]
+    assert owner.admission is None
+    assert owner.monitor is seek
+    assert owner.pending is False
+    assert controller.session.paused_sample_ids == {0}
+    seek.current = PauseObservation(
+        ordinary_paused=False,
+        observation_sequence=2,
+        status_kind="started",
+        requested_effect=None,
+        outcome=None,
+        transport_revision=0,
+    )
+    audio_engine_mock._current_ordinary_transport_observation.side_effect = lambda sample_id: (
+        seek.current_observation() if sample_id == 0 else None
+    )
+
+    controller.transport.playback.toggle_pause_pad(0)
+
+    assert controller.session.paused_sample_ids == set()
+    audio_engine_mock.pause_sample.assert_called_once_with(0)
+    audio_engine_mock.resume_sample.assert_not_called()

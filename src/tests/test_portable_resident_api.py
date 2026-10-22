@@ -11,6 +11,7 @@ import pytest
 
 from tests.test_portable_bank_api import bank_native_module
 from tests.test_portable_mix_capture_api import mix_capture_native_module
+from tests.test_portable_ordinary_transport_api import ordinary_transport_native_module
 from tests.test_portable_source_beatmap_editor_api import source_beatmap_editor_native_module
 
 REPO = Path(__file__).resolve().parents[2]
@@ -892,6 +893,9 @@ def test_runtime_preflight_accepts_complete_reflected_native_before_activation(
     vars(complete_native).update(vars(mix_capture_native_module(complete_native.AudioEngine)))
     vars(complete_native).update(
         vars(source_beatmap_editor_native_module(complete_native.AudioEngine))
+    )
+    vars(complete_native).update(
+        vars(ordinary_transport_native_module(complete_native.AudioEngine))
     )
     native = SimpleNamespace(
         flitzis_looper_audio=SimpleNamespace(

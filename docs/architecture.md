@@ -787,8 +787,26 @@ A later supported dry master claim preserves that point through an explicit
 claim-frame projection; old actual-read spans keep their original epochs. The
 bounded cohort preflight and actual callback timeline belong to the mixer hold
 path. Its existing own-effect acknowledgement remains separate from ordinary
-Pause/Resume, whose lossless feedback is Stage B of
+Pause/Resume. The latter reuses each changed lane's own saved source pivot and
+the same original qualified map through Stage B of
 [`resume-dry-mapped-playback`](../openspec/changes/resume-dry-mapped-playback/design.md).
+
+Ordinary transport uses the existing content-bound command and callback claim.
+A focused Native observation module retains fixed current state per stable
+content cell, with original command origin, monotone observation freshness and
+nonresurrecting semantic-source custody. Completion capacity is checked before
+effect; the exact command defers under pressure. Same-source resident-window
+refresh preserves custody. Legacy generic feedback keeps its existing resolver.
+Opaque admissions expose current observations for UI polling without becoming
+audio authority. The focused Python pause-intent owner follows existing content
+instances, projects confirmed state through placement/arrangement fences before
+settling requests, and retains bounded monitors for actual lifecycle changes.
+Its bounded current-slot query also discovers a new source or lifecycle state
+without a raw event or prior pause admission; old source receipts stay invalid.
+One fixed pending ordinary origin retains exact superseded Hold cause through
+feedback pressure until the ordered command can confirm its disposition.
+Waveform Hold keeps its separate cause and acknowledgement. Native capability
+version 1 is required by the launcher and Portable preflight for this interface.
 
 `key_lock_preparation.rs` constructs three unique native handles per voice
 before stream rendering: 96 handles for 32 voices, with one shared preparation

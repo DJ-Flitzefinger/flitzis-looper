@@ -13,7 +13,7 @@ pub(super) fn publish_under_request_lock(
     producer: &mut Producer<ControlMessage>,
     id: usize,
     effect: TransportContentEffect,
-) -> PyResult<()> {
+) -> PyResult<super::ordinary_transport::OrdinaryTransportAdmission> {
     engine
         .input_runtime_ownership
         .ensure_no_copy_reservation(id)?;
@@ -28,28 +28,57 @@ pub(super) fn publish_under_request_lock(
         .input_runtime_ownership
         .prepare_transport_intent(placement)
         .map_err(|error| PyRuntimeError::new_err(error.to_string()))?;
+    if !engine
+        .input_runtime_ownership
+        .ordinary_available(placement.cell())
+    {
+        return Err(PyRuntimeError::new_err(
+            "ordinary transport observation unavailable",
+        ));
+    }
     let mut enqueued = false;
+    let mut admission = None;
+    let source_epoch = engine
+        .input_runtime_ownership
+        .ordinary_source_epoch(placement.cell())
+        .unwrap_or(0);
     engine
         .input_runtime_ownership
-        .commit_transport_intent(
+        .commit_ordinary_transport_intent(
             prepared,
             || {
                 engine.input_runtime_ownership.copy_reservation(id) == 0
                     && engine.input_runtime_ownership.pair_reservation(id) == 0
+                    && engine
+                        .input_runtime_ownership
+                        .ordinary_source_epoch(placement.cell())
+                        .unwrap_or(0)
+                        == source_epoch
             },
             || {
                 enqueued = producer
                     .push(ControlMessage::TransportForPlacement {
                         placement,
                         transport_revision: prepared.revision(),
+                        source_epoch,
                         effect,
                     })
                     .is_ok();
+                if enqueued {
+                    admission = Some(super::ordinary_transport::OrdinaryTransportAdmission::new(
+                        engine.input_runtime_ownership.clone(),
+                        placement.content_key(),
+                        source_epoch,
+                        prepared.revision(),
+                        effect,
+                    ));
+                }
+                enqueued
             },
         )
         .map_err(|error| PyRuntimeError::new_err(error.to_string()))?;
     if !enqueued {
         return Err(PyRuntimeError::new_err("reserved transport capacity lost"));
     }
-    Ok(())
+    admission.ok_or_else(|| PyRuntimeError::new_err("reserved transport admission lost"))
 }

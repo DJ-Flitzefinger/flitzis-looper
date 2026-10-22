@@ -575,6 +575,17 @@ impl RtMixer {
                                 ));
                                 feedback_count += 1;
                                 mixer.pad_dsp_chains[stopped_id].reset();
+                                if let Some(key) = mixer.voices[voice_index]
+                                    .source_admission
+                                    .as_ref()
+                                    .and_then(|admission| admission.content_key())
+                                {
+                                    ownership.publish_ordinary_lifecycle(
+                                        key,
+                                        crate::audio_engine::ordinary_transport::STOPPED,
+                                        false,
+                                    );
+                                }
                                 mixer.voices[voice_index].stop_rt(retirement);
                                 mixer.publish_key_lock_status(stopped_id);
                             }
@@ -640,6 +651,11 @@ impl RtMixer {
                     // A clean prepared owner remains in place: reserve_wet_mode cannot
                     // exchange or reset it merely to rearm feedback for the new voice.
                     mixer.rearm_key_lock_after_voice_start(id, index);
+                    ownership.publish_ordinary_lifecycle(
+                        work.origin().content_key(),
+                        crate::audio_engine::ordinary_transport::STARTED,
+                        true,
+                    );
                     feedback[feedback_count] =
                         Some((captured_feedback(&ownership, id, true), id, true));
                     feedback_count += 1;

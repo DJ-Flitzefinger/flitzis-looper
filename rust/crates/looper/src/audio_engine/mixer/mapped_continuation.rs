@@ -10,6 +10,13 @@ use crate::audio_engine::source_reader::{
 };
 use crate::audio_engine::transport::TransportTimeline;
 
+#[derive(Clone, Copy)]
+enum ContinuationPivot {
+    Pause,
+    Hold(u64),
+    Ordinary { resume: bool, changed_mask: u32 },
+}
+
 impl RtMixer {
     /// Only changed lanes participate. An already paused lane keeps its original
     /// cursor, capture fences and history even when another lane changes now.
@@ -22,14 +29,72 @@ impl RtMixer {
         output_frame: u64,
         transport: Option<&TransportTimeline>,
     ) -> Option<[Option<SourcePlayback>; MAX_VOICES]> {
+        self.mapped_continuations_rt(
+            id,
+            key,
+            changed_mask,
+            paused_at.map_or(ContinuationPivot::Pause, ContinuationPivot::Hold),
+            output_frame,
+            transport,
+        )
+    }
+
+    /// Ordinary intent can supersede Hold without changing a paused flag. Qualify
+    /// every mapped cohort participant; only changed resumed lanes receive a copy.
+    pub(super) fn mapped_transport_continuations_rt(
+        &self,
+        id: usize,
+        key: ContentKey,
+        masks: (u32, u32),
+        resume: bool,
+        output_frame: u64,
+        transport: Option<&TransportTimeline>,
+    ) -> Option<[Option<SourcePlayback>; MAX_VOICES]> {
+        let (cohort_mask, changed_mask) = masks;
+        self.mapped_continuations_rt(
+            id,
+            key,
+            cohort_mask,
+            ContinuationPivot::Ordinary {
+                resume,
+                changed_mask,
+            },
+            output_frame,
+            transport,
+        )
+    }
+
+    fn mapped_continuations_rt(
+        &self,
+        id: usize,
+        key: ContentKey,
+        participant_mask: u32,
+        pivot: ContinuationPivot,
+        output_frame: u64,
+        transport: Option<&TransportTimeline>,
+    ) -> Option<[Option<SourcePlayback>; MAX_VOICES]> {
         let mut replacements = [None; MAX_VOICES];
         for (index, replacement) in replacements.iter_mut().enumerate() {
             let voice = &self.voices[index];
-            if changed_mask & (1u32 << index) == 0 || !voice.source_playback.is_mapped() {
+            let bit = 1u32 << index;
+            if participant_mask & bit == 0 || !voice.source_playback.is_mapped() {
                 continue;
             }
+            let changed = match pivot {
+                ContinuationPivot::Ordinary { changed_mask, .. } => changed_mask & bit != 0,
+                _ => true,
+            };
             let transport = transport?;
-            let expected_frame = paused_at.unwrap_or(output_frame);
+            let expected_frame = match pivot {
+                ContinuationPivot::Pause => output_frame,
+                ContinuationPivot::Hold(frame) => frame,
+                ContinuationPivot::Ordinary { resume, .. }
+                    if (resume && changed) || voice.paused =>
+                {
+                    voice.source_playback.mapped_output_frame()?
+                }
+                ContinuationPivot::Ordinary { .. } => output_frame,
+            };
             let (pitch, key_lock) = self.effective_voice_tuple(index);
             if !Self::hold_voice_belongs_to_content_rt(voice, id, key)
                 || voice.source_playback.mapped_output_frame() != Some(expected_frame)
@@ -97,7 +162,9 @@ impl RtMixer {
             // An exact endpoint can still carry the preceding span's derivative.
             // Refresh the copy before checking the resumed read, never the live lane.
             playback.refresh_mapped_span(geometry).ok()?;
-            if paused_at.is_some() {
+            let resume = matches!(pivot, ContinuationPivot::Hold(_))
+                || matches!(pivot, ContinuationPivot::Ordinary { resume: true, .. }) && changed;
+            if resume {
                 playback
                     .resume_mapped_at(geometry, transport, output_frame)
                     .ok()?;

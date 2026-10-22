@@ -1674,20 +1674,33 @@ fn same_parameter_participant(
 
 fn apply_transport_content_message(
     mixer: &mut RtMixer,
-    original: SlotSnapshot,
-    revision: u64,
-    effect: crate::messages::TransportContentEffect,
+    command: ControlMessage,
     output_frame: u64,
+    transport: &TransportTimeline,
+    audio_messages: &mut impl AudioMessageSink,
     retirement: &mut impl AudioBufferRetirement,
 ) {
+    let ControlMessage::TransportForPlacement {
+        placement: original,
+        transport_revision: revision,
+        source_epoch,
+        effect,
+    } = command
+    else {
+        return;
+    };
     let ownership = mixer.input_ownership_for_effect();
     if revision == 0 || original.owner() != ownership.owner_identity() {
         return;
     }
-    if retirement.available_retirement_slots() == 0 || ownership.placement_pending() {
+    if retirement.available_retirement_slots() == 0
+        || ownership.placement_pending()
+        || audio_messages.available_audio_message_slots() == 0
+    {
         mixer.defer_control(ControlMessage::TransportForPlacement {
             placement: original,
             transport_revision: revision,
+            source_epoch,
             effect,
         });
         return;
@@ -1713,6 +1726,7 @@ fn apply_transport_content_message(
         mixer.defer_control(ControlMessage::TransportForPlacement {
             placement: original,
             transport_revision: revision,
+            source_epoch,
             effect,
         });
         return;
@@ -1721,10 +1735,12 @@ fn apply_transport_content_message(
         mixer.defer_control(ControlMessage::TransportForPlacement {
             placement: original,
             transport_revision: revision,
+            source_epoch,
             effect,
         });
         return;
     };
+    let mut completed = None;
     let result = ownership.commit_slot_write_fixed(
         &write,
         || {
@@ -1738,10 +1754,51 @@ fn apply_transport_content_message(
         },
         |_| {
             if let Some(key) = key {
-                mixer.apply_transport_content_rt(key, effect, output_frame, retirement);
+                // Preflight next publication before any trajectory or Hold-cause
+                // mutation. Terminal unavailability is an explicit query/admission
+                // error; this queued control must never report false success.
+                if ownership.ordinary_available(original.cell()) {
+                    if ownership.ordinary_source_epoch(original.cell()) == Some(source_epoch) {
+                        let (outcome, active, paused) = mixer
+                            .apply_transport_content_with_timeline_rt(
+                                key,
+                                effect,
+                                output_frame,
+                                Some(transport),
+                                Some(revision),
+                                retirement,
+                            );
+                        completed = ownership.publish_ordinary_effect(
+                            key, revision, effect, outcome, active, paused,
+                        );
+                    } else if mixer.consume_ordinary_hold_cause_rt(
+                        key,
+                        revision,
+                        output_frame,
+                        retirement,
+                    ) {
+                        completed = ownership.publish_ordinary_effect_for_source(
+                            key,
+                            source_epoch,
+                            revision,
+                            effect,
+                            super::ordinary_transport::REFUSED,
+                            true,
+                            true,
+                        );
+                    }
+                }
+                ownership.finish_pending_ordinary_origin(key, revision);
             }
         },
     );
+    if result.is_ok() {
+        #[cfg(test)]
+        content_feedback_tests::after_effect();
+        if let Some(completed) = completed {
+            audio_messages.push_audio_message(completed);
+        }
+    }
     if matches!(
         result,
         Err(super::content_placement::PlacementError::Pending)
@@ -1750,6 +1807,7 @@ fn apply_transport_content_message(
         mixer.defer_control(ControlMessage::TransportForPlacement {
             placement: original,
             transport_revision: revision,
+            source_epoch,
             effect,
         });
     }
@@ -1822,7 +1880,8 @@ pub(super) fn drain_control_messages<
                     ) + usize::from(source.is_some()),
                     usize::from(matches!(
                         message,
-                        ControlMessage::UnloadSample { .. }
+                        ControlMessage::TransportForPlacement { .. }
+                            | ControlMessage::UnloadSample { .. }
                             | ControlMessage::LoadColdSample {
                                 replace_assignment: true,
                                 ..
@@ -3136,17 +3195,13 @@ pub(super) fn process_control_message<
                 mixer.seek_sample_at_output_frame(id, position_s, callback_start_frame);
             }
         }
-        ControlMessage::TransportForPlacement {
-            placement,
-            transport_revision,
-            effect,
-        } => {
+        message @ ControlMessage::TransportForPlacement { .. } => {
             apply_transport_content_message(
                 mixer,
-                placement,
-                transport_revision,
-                effect,
+                message,
                 callback_start_frame,
+                transport,
+                audio_messages,
                 retirement,
             );
         }

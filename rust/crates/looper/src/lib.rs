@@ -37,6 +37,10 @@ mod flitzis_looper_audio {
 
     #[pymodule_export]
     use super::audio_engine::AudioEngine;
+    #[pymodule_export]
+    use super::audio_engine::OrdinaryTransportAdmission;
+    #[pymodule_export]
+    use super::audio_engine::OrdinaryTransportObservation;
 
     #[pymodule_export]
     use super::audio_engine::SourceBeatmap;

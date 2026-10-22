@@ -126,6 +126,11 @@ impl RtMixer {
             || guard.claim_stable(),
             |cell| {
                 if let Some(old_key) = guard.target_placement.content_key() {
+                    ownership.publish_ordinary_lifecycle(
+                        old_key,
+                        crate::audio_engine::ordinary_transport::STOPPED,
+                        false,
+                    );
                     self.retire_content_actions_rt(
                         old_key,
                         crate::audio_engine::hold_action::HoldActionState::Retired,
@@ -185,6 +190,11 @@ impl RtMixer {
             work.source_generation,
             work.authority_revision,
             intent.timing_intent,
+        );
+        ownership.publish_ordinary_lifecycle(
+            work.content_key,
+            crate::audio_engine::ordinary_transport::SOURCE_ADOPTED,
+            false,
         );
         work.guard
             .target_epoch

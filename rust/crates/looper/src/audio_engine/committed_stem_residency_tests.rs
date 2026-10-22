@@ -2288,6 +2288,13 @@ impl ReadyPlaybackAudio {
     fn loaded_sample_shape(&self, id: usize) -> PyResult<(u32, usize, usize)> {
         self.engine.loaded_sample_shape(id)
     }
+    fn _current_ordinary_transport_observation(
+        &self,
+        id: usize,
+    ) -> PyResult<Option<crate::audio_engine::ordinary_transport::OrdinaryTransportObservation>>
+    {
+        self.engine._current_ordinary_transport_observation(id)
+    }
     fn loaded_residency(&self, py: Python<'_>, id: usize) -> PyResult<Py<PyDict>> {
         self.engine.loaded_residency(py, id)
     }

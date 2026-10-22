@@ -9,10 +9,10 @@
 
 ### Stage B: ordinary content transport and truthful feedback
 
-- [ ] Freeze lossless content/revision-correct ordinary pause/resume feedback, including Pause/Seek ordering.
-- [ ] Reuse Stage A continuation through actual public content Pause/Resume.
-- [ ] Confirm ordinary effective state from Native, preserving fast gestures and separate Hold ownership.
-- [ ] Verify feedback pressure, newer revisions, Move/Swap, retirement and UI/control regressions; perform the coherent delivery checks.
+- [x] Freeze lossless content/revision-correct ordinary pause/resume feedback, including Pause/Seek ordering.
+- [x] Reuse Stage A continuation through actual public content Pause/Resume.
+- [x] Confirm ordinary effective state from Native, preserving fast gestures and separate Hold ownership.
+- [x] Verify feedback pressure, newer revisions, Move/Swap, retirement and UI/control regressions; perform the coherent delivery checks.
 
 After each coherent stage, commit and normally push it to existing main without
 individual approval; verify clean HEAD/tracking/fresh actual remote equality

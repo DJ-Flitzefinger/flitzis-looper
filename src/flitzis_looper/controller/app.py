@@ -3,8 +3,9 @@ from collections import deque
 from contextlib import suppress
 from pathlib import Path
 from time import monotonic
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, cast
 
+from flitzis_looper.constants import NUM_SAMPLES
 from flitzis_looper.control_diagnostics import ConsoleDiagnostics, poll_control_diagnostics
 from flitzis_looper.controller.accepted_publication import AcceptedTimingController
 from flitzis_looper.controller.asset_lifecycle import ProjectAssetLifecycle
@@ -89,7 +90,7 @@ class AppController:
         self._shutdown_complete = False
         self._gui_native_selection: tuple[int, int] | None = None
         self._pair_waveform_views: list[WaveformEditorActions] = []
-        self._pending_content_feedback: deque[AudioMessage] = deque()
+        self._init_audio_feedback()
 
         self._audio = AudioEngine()
         self._apply_startup_resident_admission()
@@ -181,10 +182,20 @@ class AppController:
             self.stems,
             self.input_mapping,
         }
-        self.transport.playback.set_global_playback_feedback_poll(self._poll_audio_messages)
+        self._bind_playback_feedback()
 
         self._restore_initial_runtime_state()
         self._discover_recordings()
+
+    def _init_audio_feedback(self) -> None:
+        self._pending_content_feedback: deque[AudioMessage] = deque()
+        self._pending_ordinary_feedback: dict[tuple[int, int], AudioMessage] = {}
+        self._ordinary_feedback_owner: int | None = None
+        self._ordinary_feedback_audio: AudioEngine | None = None
+
+    def _bind_playback_feedback(self) -> None:
+        self.transport.playback.set_global_playback_feedback_poll(self._poll_audio_messages)
+        self.transport.playback.set_pause_observation_fence(self._ordinary_observation_fenced)
 
     def _apply_startup_resident_admission(self) -> None:
         """Restore the persisted memory admission policy before audio startup."""
@@ -566,6 +577,7 @@ class AppController:
             raise RuntimeError(message)
         self._sync_arrangement_observers()
         self.transport.residency.cancel(sample_id)
+        self.transport.playback.forget_pause_intent(sample_id)
         self.accepted_timing.cancel(sample_id)
         self.loader._clear_analysis_task_state(sample_id)
         self.stems.retire_overwritten_native_state(sample_id, original_content_id=original)
@@ -599,6 +611,7 @@ class AppController:
         )
 
     def _on_sample_unloaded(self, sample_id: int) -> None:
+        self.transport.playback.forget_pause_intent(sample_id)
         if self._session.waveform_editor_pad_id == sample_id:
             self.transport.waveform.close_editor()
         self.transport.residency.cancel(sample_id)
@@ -631,12 +644,21 @@ class AppController:
         self.transport.residency.apply_key_lock(sample_id, force=True)
 
     def _poll_audio_messages(self) -> None:
+        if self._ordinary_feedback_audio is not self._audio:
+            self._pending_ordinary_feedback.clear()
+            self._ordinary_feedback_owner = None
+            self._ordinary_feedback_audio = self._audio
+        ordinary_pending = tuple(self._pending_ordinary_feedback.values())
+        self._pending_ordinary_feedback.clear()
+        for msg in ordinary_pending:
+            self._handle_audio_message(msg)
         for _ in range(len(self._pending_content_feedback)):
             msg = self._pending_content_feedback.popleft()
             self._handle_audio_message(msg)
         while True:
             incoming = self._audio.receive_msg()
             if incoming is None:
+                self.transport.playback.poll_pause_observations()
                 return
 
             self._handle_audio_message(incoming)
@@ -659,6 +681,8 @@ class AppController:
         kind = getattr(msg, "feedback_kind", lambda: None)()
         if kind is None:
             return False
+        if kind == "ordinary_transport":
+            return self._handle_ordinary_transport_feedback(msg)
         try:
             sample_id = self._audio._resolve_pad_feedback(msg)
         except RuntimeError as error:
@@ -684,6 +708,64 @@ class AppController:
         if (handler := handlers.get(kind)) is not None:
             handler(msg, sample_id=sample_id)
         return True
+
+    def _handle_ordinary_transport_feedback(self, msg: AudioMessage) -> bool:
+        try:
+            observation = self._audio._resolve_ordinary_transport_feedback(msg)
+        except RuntimeError as error:
+            if str(error) != "content feedback placement pending":
+                raise
+            self._retain_ordinary_transport_feedback(msg)
+            return True
+        if observation is None:
+            return True
+        if self._ordinary_observation_fenced(observation.sample_id):
+            self._retain_ordinary_transport_feedback(msg)
+            return True
+        self.transport.playback.handle_ordinary_transport_observation(observation)
+        return True
+
+    def _ordinary_observation_fenced(self, sample_id: int) -> bool:
+        return (
+            sample_id in self._session.loading_sample_ids
+            or self.loader.incoming_load_request_id(sample_id) is not None
+            or sample_id
+            in (
+                self.pairs.observer_fenced_sample_ids
+                | self.arrangement.fenced_sample_ids
+                | self.banks.observer_fenced_sample_ids
+            )
+        )
+
+    def _retain_ordinary_transport_feedback(self, msg: AudioMessage) -> None:
+        # Diagnostic coordinates only index retained messages; Native resolution
+        # remains the sole authority for current content and actual audio state.
+        message = cast("AudioMessage.OrdinaryTransportFeedback", msg)
+        owner, cell = message.owner, message.cell
+        if (
+            type(owner) is not int
+            or owner <= 0
+            or type(cell) is not int
+            or not 0 <= cell < NUM_SAMPLES
+        ):
+            return
+        if self._ordinary_feedback_audio is not self._audio:
+            self._pending_ordinary_feedback.clear()
+            self._ordinary_feedback_owner = None
+            self._ordinary_feedback_audio = self._audio
+        if self._ordinary_feedback_owner is None:
+            self._ordinary_feedback_owner = owner
+        if self._ordinary_feedback_owner != owner:
+            return
+        key = (owner, cell)
+        previous = self._pending_ordinary_feedback.get(key)
+        previous_sequence = (
+            cast("AudioMessage.OrdinaryTransportFeedback", previous).observation_sequence
+            if previous is not None
+            else -1
+        )
+        if message.observation_sequence > previous_sequence:
+            self._pending_ordinary_feedback[key] = msg
 
     def _retain_content_feedback(self, msg: AudioMessage) -> None:
         if len(self._pending_content_feedback) < 1024:

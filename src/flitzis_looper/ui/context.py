@@ -1111,20 +1111,12 @@ class WaveformEditorActions:
         if pad_id not in self._controller.session.active_sample_ids:
             return
 
-        if pad_id in self._controller.session.paused_sample_ids:
-            perform_pad_action(
-                self._controller,
-                pad_id,
-                lambda: self._controller.transport.playback.resume_pad(pad_id),
-                operation="pause_selected_pad_on_press",
-            )
-        else:
-            perform_pad_action(
-                self._controller,
-                pad_id,
-                lambda: self._controller.transport.playback.pause_pad(pad_id),
-                operation="pause_selected_pad_on_press",
-            )
+        perform_pad_action(
+            self._controller,
+            pad_id,
+            lambda: self._controller.transport.playback.toggle_pause_pad(pad_id),
+            operation="pause_selected_pad_on_press",
+        )
 
     def pause_selected_pad_hold_on_press(self, *, received_at_ns: int | None = None) -> None:
         """Admit one Native caused-pause owner for this physical right-button press."""

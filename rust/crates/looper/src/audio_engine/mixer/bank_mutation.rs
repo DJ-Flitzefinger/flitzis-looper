@@ -260,6 +260,11 @@ impl RtMixer {
                 for (index, image) in work.images.iter_mut().enumerate() {
                     let before = guard.targets[index];
                     if let Some(key) = before.content_key() {
+                        ownership.publish_ordinary_lifecycle(
+                            key,
+                            crate::audio_engine::ordinary_transport::STOPPED,
+                            false,
+                        );
                         self.retire_content_actions_rt(
                             key,
                             HoldActionState::Retired,

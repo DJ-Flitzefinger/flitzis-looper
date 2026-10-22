@@ -84,6 +84,9 @@ if not "%APP_EXIT_CODE%"=="0" goto profile_failed
 call ".venv\Scripts\python.exe" -c "import inspect, runpy; import flitzis_looper_audio as native; required = inspect.Parameter.empty; self_kinds = (inspect.Parameter.POSITIONAL_ONLY, inspect.Parameter.POSITIONAL_OR_KEYWORD); info = inspect.signature(native.SourceBeatmap.editor_review_info).parameters; assert list(info) == ['self'] and info['self'].kind in self_kinds and info['self'].default is required, 'Native source beatmap editor API requires a current build: SourceBeatmap.editor_review_info'; page = inspect.signature(native.SourceBeatmap.editor_review_page).parameters; assert list(page) == ['self', 'first_anchor_index', 'last_anchor_index', 'start_index', 'max_events'] and page['self'].kind in self_kinds and all(page[name].kind == inspect.Parameter.POSITIONAL_OR_KEYWORD for name in ('first_anchor_index', 'last_anchor_index', 'start_index', 'max_events')) and all(parameter.default is required for name, parameter in page.items() if name != 'max_events') and type(page['max_events'].default) is int and page['max_events'].default == 128, 'Native source beatmap editor API requires a current build: SourceBeatmap.editor_review_page.max_events'; runpy.run_path('scripts/portable/bootstrap.py')['check_source_beatmap_editor_api'](native)"
 set "APP_EXIT_CODE=%errorlevel%"
 if not "%APP_EXIT_CODE%"=="0" goto profile_failed
+call ".venv\Scripts\python.exe" -c "import runpy; import flitzis_looper_audio as native; runpy.run_path('scripts/portable/bootstrap.py')['check_ordinary_transport_api'](native)"
+set "APP_EXIT_CODE=%errorlevel%"
+if not "%APP_EXIT_CODE%"=="0" goto profile_failed
 if defined APP_CHECK_ONLY (
     echo Release startup check passed. The app was not started.
     goto succeeded

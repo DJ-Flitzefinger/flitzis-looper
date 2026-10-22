@@ -459,11 +459,18 @@ impl LaterIntent {
 
     fn assert_applied(self, fixture: &CallbackFixture, slot: usize, held: &LaneEvidence) {
         let voice = &fixture.mixer.voices[held.lane];
+        // Manual Pause takes ordinary ownership of this already-paused Hold cohort.
+        // It changes no lane flag, source clock, capture fence or retained history.
+        let expected_delta = if matches!(self, Self::ManualPause) {
+            0
+        } else {
+            1
+        };
         assert!(Arc::ptr_eq(&voice.history_lifetime, &held.lifetime));
         assert!(Arc::ptr_eq(voice.stretch.source_epoch_owner(), &held.epoch));
         assert_eq!(
             voice.stretch.source_epoch_owner().load(Ordering::Acquire),
-            held.epoch_value + 1
+            held.epoch_value + expected_delta
         );
         assert_eq!(voice.stretch.native_state_address(), held.native);
         match self {
@@ -511,7 +518,7 @@ impl LaterIntent {
                 assert!(fixture.mixer.dsp_source_history_for_test(slot).is_none());
             }
             Self::ManualPause | Self::Resume => {
-                held.assert_retained(&fixture.mixer, slot, 1);
+                held.assert_retained(&fixture.mixer, slot, expected_delta);
                 assert_eq!(voice.paused, matches!(self, Self::ManualPause));
             }
         }

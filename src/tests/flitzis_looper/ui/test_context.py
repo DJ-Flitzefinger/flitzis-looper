@@ -1071,10 +1071,10 @@ class TestWaveformEditorTransportControls:
         audio_engine_mock.pause_sample.assert_called_once_with(0)
         assert controller.session.pad_playhead_s[0] == pytest.approx(8.0)
         assert controller.session.pad_playhead_s[1] == pytest.approx(0.5)
-        assert 0 in controller.session.paused_sample_ids
+        assert 0 not in controller.session.paused_sample_ids
         assert 1 not in controller.session.paused_sample_ids
 
-        # Simulate no audio message change for pause (paused state managed by UI)
+        # Admission alone cannot certify the callback's effective paused state.
 
     def test_pause_selected_pad_hold_pauses_then_resumes_on_release(
         self, controller: AppController, audio_engine_mock: Mock
@@ -1148,8 +1148,8 @@ class TestWaveformEditorTransportControls:
         ctx.ui.waveform.pause_selected_pad_on_press()
 
         audio_engine_mock.resume_sample.assert_called_once_with(0)
-        assert 0 not in controller.session.paused_sample_ids
-        # Pause flag cleared, active remains
+        assert 0 in controller.session.paused_sample_ids
+        # Effective pause is retained until a current Native completion is observed.
         assert 0 in controller.session.active_sample_ids
 
     def test_view_jump_start_and_end_update_view_range_without_playback_changes(

@@ -348,6 +348,11 @@ impl RtMixer {
                     // Each claimed birth owns fresh first-live-wet feedback under its
                     // already proved actual tuple; retain its clean prepared Native/FIFO.
                     mixer.rearm_key_lock_after_voice_start(id, index);
+                    ownership.publish_ordinary_lifecycle(
+                        work.origin().content_key(),
+                        crate::audio_engine::ordinary_transport::STARTED,
+                        true,
+                    );
                     feedback[position] = captured_feedback(&ownership, id, true);
                     work.origin().mark_effective(output_frame);
                 }

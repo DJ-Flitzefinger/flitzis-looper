@@ -969,6 +969,11 @@ impl RtMixer {
                     }
                     mixer.publish_key_lock_status(id);
                     if retrigger {
+                        ownership.publish_ordinary_lifecycle(
+                            work.action.content_key(),
+                            crate::audio_engine::ordinary_transport::STARTED,
+                            true,
+                        );
                         feedback[feedback_count] =
                             Some((captured_feedback(&ownership, id, true), id, true));
                         feedback_count += 1;

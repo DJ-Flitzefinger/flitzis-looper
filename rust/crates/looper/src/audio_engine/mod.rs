@@ -72,8 +72,10 @@ mod input_mapping;
 pub(crate) mod input_runtime_binding;
 #[cfg(all(test, windows))]
 mod ordinary_loader_incoming_tests;
+mod ordinary_transport;
 mod transport_intent_control;
 pub use input_runtime_binding::InputRuntimePadBinding;
+pub use ordinary_transport::{OrdinaryTransportAdmission, OrdinaryTransportObservation};
 pub(crate) mod global_rate_status;
 mod key_lock_attack_measurement;
 mod key_lock_attack_reference;
@@ -1425,6 +1427,8 @@ impl AudioEngine {
     const RESIDENT_PCM_ADMISSION_VERSION: u32 = 2;
     #[classattr]
     const GLOBAL_TIMING_POLICY_API_VERSION: u32 = 1;
+    #[classattr]
+    const ORDINARY_TRANSPORT_API_VERSION: u32 = 1;
     /// Seal an already committed immutable disk selection independently of component residency.
     pub fn register_committed_stem_pair(
         &self,
@@ -3402,6 +3406,24 @@ impl AudioEngine {
         }
     }
 
+    pub fn _resolve_ordinary_transport_feedback(
+        &self,
+        message: &AudioMessage,
+    ) -> PyResult<Option<OrdinaryTransportObservation>> {
+        ordinary_transport::resolve(&self.input_runtime_ownership, message)
+    }
+
+    /// Read current Native truth through the same content/source/placement fences.
+    pub fn _current_ordinary_transport_observation(
+        &self,
+        id: usize,
+    ) -> PyResult<Option<OrdinaryTransportObservation>> {
+        if id >= NUM_SAMPLES {
+            return Err(PyValueError::new_err("Invalid sample ID"));
+        }
+        ordinary_transport::current_for_slot(&self.input_runtime_ownership, id)
+    }
+
     #[pyo3(signature = (sample_id, physical_press_id, received_at_ns=None))]
     pub fn pause_waveform_hold(
         &self,
@@ -4463,6 +4485,7 @@ impl AudioEngine {
                 expected_source_generation,
             },
         )
+        .map(|_| ())
     }
 
     pub fn set_trigger_quantization(&mut self, mode: &str) -> PyResult<()> {
@@ -4518,7 +4541,7 @@ impl AudioEngine {
     ///
     /// If the sample is playing, it becomes silent but retains its current
     /// playback position. If the sample is not playing, this has no effect.
-    pub fn pause_sample(&mut self, id: usize) -> PyResult<()> {
+    pub fn pause_sample(&mut self, id: usize) -> PyResult<OrdinaryTransportAdmission> {
         if id >= NUM_SAMPLES {
             return Err(PyValueError::new_err(format!(
                 "id out of range (expected 0..{}, got {id})",
@@ -4549,7 +4572,7 @@ impl AudioEngine {
     ///
     /// If the sample was paused, playback continues. If the sample was not
     /// paused, this has no effect.
-    pub fn resume_sample(&mut self, id: usize) -> PyResult<()> {
+    pub fn resume_sample(&mut self, id: usize) -> PyResult<OrdinaryTransportAdmission> {
         if id >= NUM_SAMPLES {
             return Err(PyValueError::new_err(format!(
                 "id out of range (expected 0..{}, got {id})",

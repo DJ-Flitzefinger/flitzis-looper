@@ -20,7 +20,6 @@ impl Batch216SourceShape {
     fn loaded_sample_shape(&self, py: Python<'_>, id: usize) -> PyResult<(u32, usize, usize)> {
         assert!(id < NUM_SAMPLES);
         let engine = self.engine.borrow(py);
-        assert!(engine.loaded_source_digest(id)?.is_some());
         let cache = engine.sample_cache.lock().unwrap();
         let sample = cache[id].as_ref().unwrap();
         let generations = engine.loaded_source_generations.lock().unwrap();
@@ -28,6 +27,118 @@ impl Batch216SourceShape {
         assert!(generation > 0 && rate > 0);
         Ok((rate, sample.channels, sample.frame_count()))
     }
+}
+
+#[test]
+fn streamless_shape_survives_real_placement_claim_while_optional_digest_waits() {
+    isolated(
+        "bank_public_tests::controller_native_tests::batch_216_tests::streamless_shape_survives_real_placement_claim_while_optional_digest_waits",
+        || {
+            Python::initialize();
+            let owned = owned_directory(false);
+            let previous = CurrentDirectory(std::env::current_dir().unwrap());
+            std::env::set_current_dir(owned.path()).unwrap();
+            let root = owned.path().join("samples");
+            fs::create_dir(&root).unwrap();
+            let (engine, mut callback, producer) = empty_engine();
+            let source = root.join("placement-shape.wav");
+            fs::write(&source, source_wav(0)).unwrap();
+            let material =
+                prepare_material_complete_for_test(&root, &source, RATE, 2, &|| false).unwrap();
+            let preparation = prepared_for_test(&engine, material, &root).unwrap();
+            let ticket = adopt_for_format(
+                &engine,
+                0,
+                &preparation,
+                producer.clone(),
+                (2, RATE, root.clone()),
+            )
+            .unwrap();
+            let deadline = Instant::now() + Duration::from_secs(10);
+            while engine.cold_loading[0].load(Ordering::Acquire) != 0 {
+                callback.drain();
+                assert!(
+                    Instant::now() < deadline,
+                    "source never received its own cold ACK"
+                );
+                std::thread::sleep(Duration::from_millis(1));
+            }
+            assert!(ticket.is_current().unwrap());
+            preparation.release_preparation().unwrap();
+            Python::attach(|py| {
+                let engine = Py::new(py, engine).unwrap();
+                let shape = Batch216SourceShape {
+                    engine: engine.clone_ref(py),
+                };
+                let native = engine.borrow(py);
+                let digest = native.loaded_source_digest(0).unwrap().unwrap();
+                let sample = native.sample_cache.lock().unwrap()[0].clone().unwrap();
+                let generation = native.loaded_source_generations.lock().unwrap()[0];
+                let expected = shape.loaded_sample_shape(py, 0).unwrap();
+                assert_eq!(
+                    expected,
+                    (generation.1, sample.channels, sample.frame_count())
+                );
+                let ownership = &native.input_runtime_ownership;
+                let placement = ownership.slot_snapshot(0).unwrap();
+                let write = ownership
+                    .prepare_slot_write_fixed(placement, placement.lifetime())
+                    .unwrap();
+                ownership
+                    .commit_slot_write_fixed(
+                        &write,
+                        || ownership.slot_snapshot_fields_current(placement),
+                        |_| {
+                            assert!(
+                                ownership.placement_pending(),
+                                "the real shared mutation marker is held"
+                            );
+                            assert!(native.loaded_source_digest(0).unwrap().is_none());
+                            assert_eq!(
+                                native.loaded_source_digests.lock().unwrap()[0].as_deref(),
+                                Some(digest.as_str())
+                            );
+                            assert!(Arc::ptr_eq(
+                                &native.sample_cache.lock().unwrap()[0]
+                                    .as_ref()
+                                    .unwrap()
+                                    .samples,
+                                &sample.samples
+                            ));
+                            assert_eq!(
+                                native.loaded_source_generations.lock().unwrap()[0],
+                                generation
+                            );
+                            assert_eq!(shape.loaded_sample_shape(py, 0).unwrap(), expected);
+                        },
+                    )
+                    .unwrap();
+                assert!(!ownership.placement_pending());
+                assert_eq!(
+                    native.loaded_source_digest(0).unwrap().as_deref(),
+                    Some(digest.as_str())
+                );
+                assert_eq!(shape.loaded_sample_shape(py, 0).unwrap(), expected);
+                assert_eq!(
+                    native.loaded_source_generations.lock().unwrap()[0],
+                    generation
+                );
+                assert!(Arc::ptr_eq(
+                    &native.sample_cache.lock().unwrap()[0]
+                        .as_ref()
+                        .unwrap()
+                        .samples,
+                    &sample.samples
+                ));
+            });
+            drop(ticket);
+            drop(preparation);
+            drop(callback);
+            drop(producer);
+            drop(previous);
+            drop(owned);
+        },
+    );
 }
 
 struct ReleaseProducerCheckpoint(Py<PyAny>);

@@ -331,6 +331,15 @@ pub enum AudioMessage {
         kind: u8,
         value: f64,
     },
+    /// Original ordinary effect identity; the durable callback snapshot owns its state.
+    OrdinaryTransportFeedback {
+        id: usize,
+        owner: usize,
+        cell: usize,
+        lifetime: u64,
+        transport_revision: u64,
+        observation_sequence: u64,
+    },
 }
 
 #[pymethods]
@@ -342,6 +351,7 @@ impl AudioMessage {
             AudioMessage::PadPeak { id, peak: _ } => Some(*id),
             AudioMessage::PadPlayhead { id, position_s: _ } => Some(*id),
             AudioMessage::ContentFeedback { id, .. } => Some(*id),
+            AudioMessage::OrdinaryTransportFeedback { id, .. } => Some(*id),
             AudioMessage::MasterPeak { peak: _ } => None,
             _ => None,
         }
@@ -372,6 +382,7 @@ impl AudioMessage {
 
     pub fn feedback_kind(&self) -> Option<&'static str> {
         match self {
+            Self::OrdinaryTransportFeedback { .. } => Some("ordinary_transport"),
             Self::ContentFeedback { kind: 1, .. } => Some("started"),
             Self::ContentFeedback { kind: 2, .. } => Some("stopped"),
             Self::ContentFeedback { kind: 3, .. } => Some("peak"),
@@ -843,6 +854,7 @@ pub enum ControlMessage {
     TransportForPlacement {
         placement: crate::audio_engine::content_placement::SlotSnapshot,
         transport_revision: u64,
+        source_epoch: u64,
         effect: TransportContentEffect,
     },
 

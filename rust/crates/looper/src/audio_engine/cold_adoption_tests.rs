@@ -1,6 +1,9 @@
 //! Failure/race cases use the same productive worker and native callback drain.
 use super::*;
 
+#[path = "ordinary_source_adoption_tests.rs"]
+mod ordinary_source_adoption_tests;
+
 struct Fixture {
     engine: AudioEngine,
     producer: Arc<Mutex<Producer<ControlMessage>>>,

@@ -13,6 +13,10 @@ mod public_route_tests {
     include!("mapped_hold_public_route_tests.rs");
 }
 
+mod ordinary_transport_tests {
+    include!("ordinary_mapped_transport_tests.rs");
+}
+
 fn qualified() -> (LaunchPath, OfflineAnalysisJob, CapturedPadStart) {
     let mut path = mapped_fixed_pitch_birth_tests::configured(0);
     let (job, delivery) = variable_original_delivery(&path);

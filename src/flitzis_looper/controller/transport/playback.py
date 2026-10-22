@@ -1,6 +1,7 @@
 from typing import TYPE_CHECKING
 
 from flitzis_looper.controller.transport.global_playback import GlobalPlaybackController
+from flitzis_looper.controller.transport.pause_intent import OrdinaryPauseIntentController
 from flitzis_looper.controller.validation import ensure_finite
 from flitzis_looper.input_timing import validate_input_timestamp_ns
 from flitzis_looper.models import validate_sample_id
@@ -10,7 +11,7 @@ if TYPE_CHECKING:
 
     from flitzis_looper.controller.recording import RecordingGroupGate
     from flitzis_looper.controller.transport import TransportController
-    from flitzis_looper_audio import AudioMessage
+    from flitzis_looper_audio import AudioMessage, OrdinaryTransportObservation
 
 
 class PadPlaybackController:
@@ -23,6 +24,26 @@ class PadPlaybackController:
         self._audio = transport._audio
         self._loop = transport.loop
         self._global_playback = GlobalPlaybackController(transport)
+        self._pause_intent = OrdinaryPauseIntentController(transport)
+        transport._on_frame_render_callbacks.append(self._pause_intent.poll)
+
+    def forget_pause_intent(self, sample_id: int) -> None:
+        """Evict the retired assignment's original requested pause owner."""
+        self._pause_intent.forget_pad(sample_id)
+
+    def poll_pause_observations(self) -> None:
+        """Project current durable Native state even when a generic lifecycle event was lost."""
+        self._pause_intent.poll()
+
+    def set_pause_observation_fence(self, fenced: Callable[[int], bool]) -> None:
+        """Use the App's same content/arrangement boundary for current snapshot queries."""
+        self._pause_intent.bind_observation_fence(fenced)
+
+    def handle_ordinary_transport_observation(
+        self, observation: OrdinaryTransportObservation
+    ) -> None:
+        """Project a current Native observation through the existing content/mirror boundary."""
+        self._pause_intent.project(observation)
 
     def _forget_global_start_stop_restore(self) -> None:
         self._global_playback.forget_restore()
@@ -145,8 +166,9 @@ class PadPlaybackController:
         validate_sample_id(sample_id)
         if sample_id not in self._session.active_sample_ids:
             return
-        self._audio.pause_sample(sample_id)
-        self._session.paused_sample_ids.add(sample_id)
+        self._transport.ensure_current_source_assignment_ready(sample_id)
+        admission = self._audio.pause_sample(sample_id)
+        self._pause_intent.remember(sample_id, admission)
 
     def resume_pad(self, sample_id: int) -> None:
         """Resume a paused pad.
@@ -157,11 +179,24 @@ class PadPlaybackController:
         validate_sample_id(sample_id)
         if sample_id not in self._session.active_sample_ids:
             return
-        if sample_id not in self._session.paused_sample_ids:
+        self._transport.ensure_current_source_assignment_ready(sample_id)
+        if not self._pause_intent.requested_paused(sample_id):
             return  # Not paused
 
-        self._audio.resume_sample(sample_id)
-        self._session.paused_sample_ids.discard(sample_id)
+        admission = self._audio.resume_sample(sample_id)
+        self._pause_intent.remember(sample_id, admission)
+
+    def toggle_pause_pad(self, sample_id: int) -> None:
+        """Toggle ordinary requested intent; waveform Hold keeps its separate ownership."""
+        validate_sample_id(sample_id)
+        self._transport.ensure_current_source_assignment_ready(sample_id)
+        paused = self._pause_intent.requested_paused(sample_id)
+        if sample_id not in self._session.active_sample_ids:
+            return
+        if paused:
+            self.resume_pad(sample_id)
+        else:
+            self.pause_pad(sample_id)
 
     def seek_pad(self, sample_id: int, position_s: float) -> None:
         """Seek an active or paused pad voice without changing loop markers."""

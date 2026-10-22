@@ -653,9 +653,27 @@ change while paused is admitted by this continuation.
 
 This is Stage A of
 [`resume-dry-mapped-playback`](../openspec/changes/resume-dry-mapped-playback/design.md).
-Ordinary content Pause/Resume remains gated for mapped playback until Stage B
-provides lossless, revision-correct confirmation. An enqueued ordinary request or
-temporary Hold projection cannot substitute for that confirmation.
+Stage B reuses that projection for qualified ordinary dry Pause/Resume, using
+each changed lane's saved next-read frame even when an earlier Hold first paused
+it. Its existing content command defers unchanged if completion capacity is
+unavailable. Fixed Native current observations distinguish original admission,
+actual completion and lifecycle freshness; the generic feedback resolver remains
+unchanged. Durable observations carry an exact completed Pause/Resume frontier
+across Seek and lifecycle so delayed feedback cannot settle a different request.
+The UI follows the living content instance and projects Native state through all
+existing assignment/placement/arrangement fences before clearing a request. Its
+bounded pending retention uses stable owner/cell and newest sequence, with a
+durable monitor after settlement. A Hold alone never changes ordinary pause
+intent. An enqueued request or temporary Hold projection cannot substitute for
+confirmed state. Mapped Seek, rate change while mapped-paused, Native/pitch and
+unsupported transition paths keep their existing guards; this is not full SYNC
+or musical acceptance.
+Current-state polling also bootstraps observation after source replacement or
+missing first-event feedback. It queries only living content through the same
+assignment fences and does not revalidate an old source receipt. Pending ordinary
+supersession retains the exact Hold cause under pressure; a refused effect never
+claims an audible change, and warm same-content adoption preserves surviving
+ordinary pause cause while resetting source receipt/frontier authority.
 
 Internal constant-h physical-birth
 preparation reuses Native/FIFO ownership, H silence frames and the unchanged

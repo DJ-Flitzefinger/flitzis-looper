@@ -24,10 +24,15 @@ use std::sync::{
 mod key_lock_status;
 use key_lock_status::KeyLockStatusSlot;
 pub(crate) use key_lock_status::{KeyLockStatus, SourceSyncStatus, SourceSyncWitness};
+mod ordinary_custody;
 #[path = "input_runtime_binding/pair_control.rs"]
 mod pair_control;
 pub(crate) use pair_control::PairControlProjection;
 mod source_request;
+
+#[cfg(test)]
+#[path = "ordinary_source_epoch_tests.rs"]
+mod ordinary_source_epoch_tests;
 
 /// One prepared runtime store retains the original slot/cell and old counter. It grants
 /// no new source authority and may only be applied inside the complete runtime claim.
@@ -199,6 +204,7 @@ impl SourcePublication {
 /// One control-owned current PCM publication. Zero generation fences all new starts.
 /// Readers perform one bounded check and recheck; they never spin or dereference its address.
 struct CurrentSourceFence {
+    ordinary_epoch: AtomicU64,
     generation: AtomicU64,
     address: AtomicUsize,
     count: AtomicUsize,
@@ -214,6 +220,7 @@ struct CurrentSourceFence {
 impl Default for CurrentSourceFence {
     fn default() -> Self {
         Self {
+            ordinary_epoch: AtomicU64::new(1),
             generation: AtomicU64::new(0),
             address: AtomicUsize::new(0),
             count: AtomicUsize::new(0),
@@ -251,6 +258,11 @@ pub(crate) struct InputRuntimeOwnership {
     copy_reservations: [AtomicU64; NUM_SAMPLES],
     pair_reservations: [AtomicU64; NUM_SAMPLES],
     transport_intents: [AtomicU64; NUM_SAMPLES],
+    // Custody only: preserve an exact caused Hold until its ordered ordinary command
+    // can dispose of it. The command retains the full key and semantic source fence.
+    pending_ordinary_origins: [AtomicU64; NUM_SAMPLES],
+    pub(super) ordinary_observations:
+        [super::ordinary_transport::OrdinaryObservationSlot; NUM_SAMPLES],
     parameter_intents: [AtomicU64; NUM_SAMPLES],
     // Source/request intent belongs to stable content cells. Window preparation and
     // physical placement counters do not change this incarnation.
@@ -287,6 +299,10 @@ impl Default for InputRuntimeOwnership {
             copy_reservations: std::array::from_fn(|_| AtomicU64::new(0)),
             pair_reservations: std::array::from_fn(|_| AtomicU64::new(0)),
             transport_intents: std::array::from_fn(|_| AtomicU64::new(0)),
+            pending_ordinary_origins: std::array::from_fn(|_| AtomicU64::new(0)),
+            ordinary_observations: std::array::from_fn(|_| {
+                super::ordinary_transport::OrdinaryObservationSlot::default()
+            }),
             parameter_intents: std::array::from_fn(|_| AtomicU64::new(0)),
             source_requests: std::array::from_fn(|_| AtomicU64::new(1)),
             control_cell_to_slot: std::array::from_fn(|slot| AtomicUsize::new(slot)),
@@ -341,6 +357,7 @@ impl InputRuntimeOwnership {
                         self.admitted_launches[cell].store(false, Ordering::Release);
                         self.resident_controls[cell].store(0, Ordering::Release);
                         self.transport_intents[cell].store(0, Ordering::Release);
+                        self.pending_ordinary_origins[cell].store(0, Ordering::Release);
                         self.parameter_intents[cell].store(0, Ordering::Release);
                     }
                 }
@@ -417,6 +434,7 @@ impl InputRuntimeOwnership {
     }
 
     pub(crate) fn apply_empty_source_for_cell(&self, cell: ContentCell, authority: u64) {
+        self.advance_ordinary_source_epoch(cell);
         self.authority_for_cell(cell)
             .store(authority, Ordering::Release);
         self.sources[cell.index()]
@@ -714,6 +732,7 @@ impl InputRuntimeOwnership {
                     self.admitted_launches[cell.index()].store(false, Ordering::Release);
                     self.resident_controls[cell.index()].store(0, Ordering::Release);
                     self.transport_intents[cell.index()].store(0, Ordering::Release);
+                    self.pending_ordinary_origins[cell.index()].store(0, Ordering::Release);
                     self.parameter_intents[cell.index()].store(0, Ordering::Release);
                 }
                 apply(cell);
@@ -849,6 +868,7 @@ impl InputRuntimeOwnership {
             )
         });
         let placement = self.commit_slot_write(prepared, claim, |cell| {
+            self.advance_ordinary_source_epoch(cell);
             self.authority_for_cell(cell)
                 .store(authority, Ordering::Release);
             self.sources[cell.index()]
@@ -1873,6 +1893,7 @@ impl InputRuntimeOwnership {
             return;
         };
         let cell = snapshot.cell().index();
+        self.advance_ordinary_source_epoch(snapshot.cell());
         self.sources[cell].generation.store(0, Ordering::SeqCst);
         self.resident_controls[cell].store(0, Ordering::Release);
         self.key_lock[cell].clear();
@@ -1906,6 +1927,10 @@ impl InputRuntimeOwnership {
         rate: u32,
         generation: u64,
     ) {
+        let same_source = self.source_generation_for_cell(cell, sample, rate) == Some(generation);
+        if !same_source {
+            self.advance_ordinary_source_epoch(cell);
+        }
         let cell = cell.index();
         let source = &self.sources[cell];
         source.generation.store(0, Ordering::SeqCst);
@@ -1991,6 +2016,31 @@ impl InputRuntimeOwnership {
 
     pub(crate) fn source_current(&self, id: usize, sample: &SampleBuffer, rate: u32) -> bool {
         self.source_generation(id, sample, rate).is_some()
+    }
+
+    /// Serialized source publication owns this fence; it never writes callback snapshots.
+    /// Complete semantic identity excludes the mutable resident allocation/window.
+    fn advance_ordinary_source_epoch(&self, cell: ContentCell) {
+        let epoch = &self.sources[cell.index()].ordinary_epoch;
+        let current = epoch.load(Ordering::SeqCst);
+        epoch.store(current.saturating_add(1), Ordering::SeqCst);
+    }
+
+    pub(crate) fn ordinary_source_epoch(&self, cell: ContentCell) -> Option<u64> {
+        let source = &self.sources[cell.index()];
+        let epoch = source.ordinary_epoch.load(Ordering::SeqCst);
+        (epoch != 0
+            && epoch != u64::MAX
+            && (!self.source_tracking || source.generation.load(Ordering::SeqCst) != 0)
+            && source.ordinary_epoch.load(Ordering::SeqCst) == epoch)
+            .then_some(epoch)
+    }
+
+    pub(crate) fn ordinary_source_available(&self, cell: ContentCell) -> bool {
+        self.sources[cell.index()]
+            .ordinary_epoch
+            .load(Ordering::SeqCst)
+            != u64::MAX
     }
 
     /// Capture the actual loaded request generation with one bounded source check/recheck.

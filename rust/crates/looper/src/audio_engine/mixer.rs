@@ -2030,6 +2030,21 @@ impl RtMixer {
             return false;
         }
 
+        let ordinary_source_changed = self.sample_bank[id]
+            .as_ref()
+            .is_none_or(|previous| !previous.same_source(&sample))
+            || self
+                .input_runtime_ownership
+                .callback_content_key(id)
+                .is_some_and(|key| {
+                    self.input_runtime_ownership
+                        .ordinary_recorded_source(key)
+                        .is_some_and(|recorded| {
+                            self.input_runtime_ownership
+                                .ordinary_source_epoch(key.cell())
+                                != Some(recorded)
+                        })
+                });
         // A timing mutation and bank replacement can share a callback with no intervening
         // render (including paused voices). Freeze the old pin's latest effective timing first.
         let previous_timing = self.timing_for_sample_id(id);
@@ -2133,6 +2148,28 @@ impl RtMixer {
         }
         self.pad_key_lock_status[id] = None;
         self.publish_key_lock_status(id);
+        if ordinary_source_changed
+            && let Some(key) = self.input_runtime_ownership.callback_content_key(id)
+        {
+            let previous_ordinary_pause = self
+                .input_runtime_ownership
+                .ordinary_recorded_snapshot(key)
+                .is_some_and(|previous| previous.paused);
+            let mut active = false;
+            let mut all_paused = true;
+            for voice in &self.voices {
+                if Self::hold_voice_belongs_to_content_rt(voice, id, key) {
+                    active = true;
+                    all_paused &= voice.paused;
+                }
+            }
+            self.input_runtime_ownership
+                .publish_ordinary_source_adoption(
+                    key,
+                    active,
+                    active && all_paused && previous_ordinary_pause,
+                );
+        }
         true
     }
 
@@ -4075,6 +4112,10 @@ impl RtMixer {
             return false;
         }
         let id = config.sample_id;
+        let ordinary_key = config
+            .source_admission
+            .as_ref()
+            .and_then(|admission| admission.content_key());
 
         // Sample is already playing? -> reset play position
         for (voice_index, voice_slot) in self.voices.iter_mut().enumerate() {
@@ -4100,6 +4141,13 @@ impl RtMixer {
                     voice_slot.start_rt(config, retirement);
                 }
                 self.rearm_key_lock_after_voice_start(id, voice_index);
+                if let Some(key) = ordinary_key {
+                    self.input_runtime_ownership.publish_ordinary_lifecycle(
+                        key,
+                        super::ordinary_transport::STARTED,
+                        true,
+                    );
+                }
                 return true;
             }
         }
@@ -4111,6 +4159,13 @@ impl RtMixer {
                 self.pad_dsp_chains[id].reset();
                 voice_slot.start_rt(config, retirement);
                 self.rearm_key_lock_after_voice_start(id, voice_index);
+                if let Some(key) = ordinary_key {
+                    self.input_runtime_ownership.publish_ordinary_lifecycle(
+                        key,
+                        super::ordinary_transport::STARTED,
+                        true,
+                    );
+                }
                 return true;
             }
         }
@@ -5452,6 +5507,14 @@ impl RtMixer {
             return;
         }
 
+        if let Some(key) = self.input_runtime_ownership.callback_content_key(id) {
+            self.input_runtime_ownership.publish_ordinary_lifecycle(
+                key,
+                super::ordinary_transport::STOPPED,
+                false,
+            );
+        }
+
         self.pad_dsp_chains[id].reset();
 
         for voice_slot in &mut self.voices {
@@ -5741,6 +5804,7 @@ impl RtMixer {
         let acknowledgements = &self.current_timing_acknowledgements;
         let prepared_source_epochs = &self.prepared_source_epochs;
         let source_control_revisions = &self.source_control_revisions;
+        let mut ordinary_terminated = [None; MAX_VOICES];
 
         for (voice_index, voice) in self.voices.iter_mut().enumerate() {
             if !voice.active {
@@ -5758,6 +5822,10 @@ impl RtMixer {
 
             let Some(sample) = voice.sample.clone() else {
                 pad_dsp_chains[voice.sample_id].reset();
+                ordinary_terminated[voice_index] = voice
+                    .source_admission
+                    .as_ref()
+                    .and_then(|admission| admission.content_key());
                 voice.stop_rt(retirement);
                 continue;
             };
@@ -5767,6 +5835,10 @@ impl RtMixer {
                 let sample_frames = sample.frame_count();
                 if sample_frames == 0 {
                     pad_dsp_chains[voice.sample_id].reset();
+                    ordinary_terminated[voice_index] = voice
+                        .source_admission
+                        .as_ref()
+                        .and_then(|admission| admission.content_key());
                     voice.stop_rt(retirement);
                     continue;
                 }
@@ -5829,6 +5901,10 @@ impl RtMixer {
                     )
                 }) else {
                     pad_dsp_chains[voice.sample_id].reset();
+                    ordinary_terminated[voice_index] = voice
+                        .source_admission
+                        .as_ref()
+                        .and_then(|admission| admission.content_key());
                     voice.stop_rt(retirement);
                     continue;
                 };
@@ -6155,6 +6231,21 @@ impl RtMixer {
                 }
             }
             pad_playhead_frame[voice.sample_id] = Some(voice.frame_pos);
+        }
+        for key in ordinary_terminated.into_iter().flatten() {
+            let active = self.voices.iter().any(|voice| {
+                voice.active
+                    && voice
+                        .source_admission
+                        .as_ref()
+                        .and_then(|admission| admission.content_key())
+                        == Some(key)
+            });
+            ownership.publish_ordinary_lifecycle(
+                key,
+                super::ordinary_transport::TERMINATED,
+                active,
+            );
         }
         self.retire_unused_pair_components(retirement);
         self.settle_invalid_hold_actions_rt(output_start_frame.unwrap_or(0), retirement);

@@ -424,6 +424,47 @@ class FakeInputRuntimePadBinding:
         return dict(self._metadata)
 
 
+@dataclass(slots=True, kw_only=True)
+class FakeOrdinaryTransportAdmission:
+    """Explicit routing-only admission; it invents no callback completion."""
+
+    slot: int | None
+    requested_paused: bool
+    transport_revision: int = 1
+    content_lifetime: int = 1
+    observation: object | None = None
+    error: str | None = None
+    slot_queries: int = 0
+    observation_queries: int = 0
+
+    def current_control_slot(self) -> int | None:
+        self.slot_queries += 1
+        if self.error is not None:
+            raise RuntimeError(self.error)
+        return self.slot
+
+    def current_observation(self) -> object | None:
+        self.observation_queries += 1
+        if self.error is not None:
+            raise RuntimeError(self.error)
+        follow = getattr(self.observation, "follow_current_source", None)
+        if callable(follow):
+            follow(self)
+        return self.observation
+
+
+def _install_ordinary_transport_fakes(audio: Mock) -> None:
+    audio.receive_msg.return_value = None
+    audio._resolve_ordinary_transport_feedback = Mock(return_value=None)
+    audio._current_ordinary_transport_observation = Mock(return_value=None)
+    audio.pause_sample.side_effect = lambda sample_id: FakeOrdinaryTransportAdmission(
+        slot=sample_id, requested_paused=True
+    )
+    audio.resume_sample.side_effect = lambda sample_id: FakeOrdinaryTransportAdmission(
+        slot=sample_id, requested_paused=False
+    )
+
+
 FakeGlobalStartEntry = tuple[FakeInputRuntimePadBinding, float, float | None, object | None]
 
 
@@ -702,7 +743,7 @@ def audio_engine_mock() -> Iterator[Mock]:
             }
         )
         audio_engine.return_value.poll_input_events.return_value = None
-        audio_engine.return_value.receive_msg.return_value = None
+        _install_ordinary_transport_fakes(audio_engine.return_value)
         audio_engine.return_value.current_constant_timing.return_value = None
         audio_engine.return_value.pad_timing_intent.return_value = "legacy"
         audio_engine.return_value.cancel_pad_launches = Mock(return_value=False)

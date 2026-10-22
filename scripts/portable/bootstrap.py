@@ -227,6 +227,93 @@ def check_global_rate_api(engine_type: object) -> None:
     )
 
 
+def check_ordinary_transport_api(native_module: object) -> None:
+    """Reject admission-only pause runtimes before any application or device starts."""
+    engine = getattr(native_module, "AudioEngine", None)
+    version = getattr(engine, "ORDINARY_TRANSPORT_API_VERSION", None)
+    assert type(version) is int, (
+        "Native ordinary transport API requires ORDINARY_TRANSPORT_API_VERSION=1"
+    )
+    assert version == 1, "Native ordinary transport API requires ORDINARY_TRANSPORT_API_VERSION=1"
+    getters = {
+        "OrdinaryTransportAdmission": (
+            "content_lifetime",
+            "transport_revision",
+            "requested_paused",
+        ),
+        "OrdinaryTransportObservation": (
+            "sample_id",
+            "content_lifetime",
+            "transport_revision",
+            "observation_sequence",
+            "status_kind",
+            "requested_effect",
+            "outcome",
+            "active",
+            "ordinary_paused",
+        ),
+    }
+    for name, attributes in getters.items():
+        native_type = getattr(native_module, name, None)
+        assert isinstance(native_type, type), f"Native ordinary transport API missing type: {name}"
+        for attribute in attributes:
+            getter = inspect.getattr_static(native_type, attribute, None)
+            assert (
+                (isinstance(getter, property) and getter.fget is not None and getter.fset is None)
+                or inspect.isgetsetdescriptor(getter)
+                or inspect.ismemberdescriptor(getter)
+            ), f"Native ordinary transport API missing getter: {name}.{attribute}"
+    signatures = (
+        (engine, "pause_sample", ("self", "id")),
+        (engine, "resume_sample", ("self", "id")),
+        (engine, "_resolve_ordinary_transport_feedback", ("self", "message")),
+        (engine, "_current_ordinary_transport_observation", ("self", "id")),
+        (native_module.OrdinaryTransportAdmission, "current_control_slot", ("self",)),
+        (native_module.OrdinaryTransportAdmission, "current_observation", ("self",)),
+        (native_module.OrdinaryTransportObservation, "current_control_slot", ("self",)),
+        (native_module.OrdinaryTransportObservation, "current_observation", ("self",)),
+        (
+            native_module.OrdinaryTransportObservation,
+            "matches_admission",
+            ("self", "admission"),
+        ),
+        (
+            native_module.OrdinaryTransportObservation,
+            "settles_admission",
+            ("self", "admission"),
+        ),
+    )
+    for native_type, method, names in signatures:
+        implementation = getattr(native_type, method, None)
+        assert callable(implementation), f"Native ordinary transport API missing method: {method}"
+        parameters = inspect.signature(implementation).parameters
+        assert tuple(parameters) == names, (
+            f"Native ordinary transport API invalid signature: {method}"
+        )
+        assert all(
+            parameter.kind
+            in {
+                inspect.Parameter.POSITIONAL_ONLY,
+                inspect.Parameter.POSITIONAL_OR_KEYWORD,
+            }
+            and parameter.default is inspect.Parameter.empty
+            for parameter in parameters.values()
+        ), f"Native ordinary transport API invalid signature: {method}"
+    message_type = getattr(
+        getattr(native_module, "AudioMessage", None), "OrdinaryTransportFeedback", None
+    )
+    assert isinstance(message_type, type), (
+        "Native ordinary transport API missing type: AudioMessage.OrdinaryTransportFeedback"
+    )
+    for attribute in ("owner", "cell", "lifetime", "transport_revision", "observation_sequence"):
+        assert inspect.getattr_static(message_type, attribute, None) is not None, (
+            f"Native ordinary transport API missing message getter: {attribute}"
+        )
+    assert callable(getattr(message_type, "feedback_kind", None)), (
+        "Native ordinary transport API missing method: feedback_kind"
+    )
+
+
 def check_pitch_action_api(native_module: object) -> None:
     """Require immutable pitch capture and atomic runtime projection without Native work."""
     capture_type = getattr(native_module, "CapturedPitchAction", None)
@@ -720,6 +807,7 @@ def check_runtime(root: Path, checkout: Path, runtime: Path) -> None:
     check_global_rate_api(native_module.AudioEngine)
     check_mix_capture_api(native_module)
     check_source_beatmap_editor_api(native_module)
+    check_ordinary_transport_api(native_module)
     assert physical_path(Path(sys.executable)).is_relative_to(physical_path(runtime / "python"))
     customization = importlib.import_module("sitecustomize")
     assert customization.__file__ is not None, "Portable sitecustomize has no file origin"

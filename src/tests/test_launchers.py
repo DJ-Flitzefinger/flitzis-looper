@@ -23,8 +23,9 @@ if os.environ['LAUNCHER_NATIVE_MODE'] != 'older':
     def native_build_profile():
         mode = os.environ['LAUNCHER_NATIVE_MODE']
         if (
-            mode in {'old-piano', 'old-recording', 'old-editor', 'old-residency'}
+            mode in {'old-piano', 'old-recording', 'old-editor', 'old-residency', 'old-ordinary'}
             or mode.startswith('editor-')
+            or mode.startswith('ordinary-')
         ):
             return 'release'
         return mode
@@ -33,6 +34,23 @@ class CapturedPitchAction:
         resets_key_correction = property(lambda self: False)
 class AudioEngine:
     GLOBAL_TIMING_POLICY_API_VERSION = 1
+    if os.environ['LAUNCHER_NATIVE_MODE'] != 'old-ordinary':
+        ORDINARY_TRANSPORT_API_VERSION = {
+            'ordinary-version-false': False,
+            'ordinary-version-true': True,
+            'ordinary-version-old': 0,
+            'ordinary-version-future': 2,
+        }.get(os.environ['LAUNCHER_NATIVE_MODE'], 1)
+    def pause_sample(self, id):
+        raise AssertionError('launcher must never pause audio')
+    def resume_sample(self, id):
+        raise AssertionError('launcher must never resume audio')
+    if os.environ['LAUNCHER_NATIVE_MODE'] != 'ordinary-missing-resolver':
+        def _resolve_ordinary_transport_feedback(self, message):
+            raise AssertionError('launcher must never resolve playback')
+    if os.environ['LAUNCHER_NATIVE_MODE'] != 'ordinary-missing-current-query':
+        def _current_ordinary_transport_observation(self, id):
+            raise AssertionError('launcher must never query current content playback')
     RESIDENT_PCM_ADMISSION_VERSION = (
         1 if os.environ['LAUNCHER_NATIVE_MODE'] == 'old-residency' else 2
     )
@@ -154,6 +172,44 @@ class OfflineAnalysisJob:
         raise AssertionError('launcher must never resolve a worker result')
     def source_beatmap_async_status(self):
         raise AssertionError('launcher must only reflect worker status')
+class OrdinaryTransportAdmission:
+    content_lifetime = property(lambda self: 1)
+    transport_revision = property(lambda self: 1)
+    requested_paused = property(lambda self: True)
+    def current_control_slot(self):
+        raise AssertionError('launcher must never inspect content placement')
+    if os.environ['LAUNCHER_NATIVE_MODE'] != 'ordinary-missing-query':
+        def current_observation(self):
+            raise AssertionError('launcher must never inspect playback state')
+class OrdinaryTransportObservation:
+    sample_id = property(lambda self: 0)
+    content_lifetime = property(lambda self: 1)
+    transport_revision = property(lambda self: 1)
+    observation_sequence = property(lambda self: 1)
+    status_kind = property(lambda self: 'transport')
+    requested_effect = property(lambda self: 'pause')
+    outcome = property(lambda self: 'applied')
+    active = property(lambda self: True)
+    ordinary_paused = property(lambda self: True)
+    def matches_admission(self, admission):
+        raise AssertionError('launcher must never match a playback admission')
+    if os.environ['LAUNCHER_NATIVE_MODE'] != 'ordinary-missing-settlement':
+        def settles_admission(self, admission):
+            raise AssertionError('launcher must never settle a playback admission')
+    def current_control_slot(self):
+        raise AssertionError('launcher must never inspect observed content placement')
+    if os.environ['LAUNCHER_NATIVE_MODE'] != 'ordinary-missing-observation-query':
+        def current_observation(self):
+            raise AssertionError('launcher must never query observed content state')
+class AudioMessage:
+    class OrdinaryTransportFeedback:
+        owner = property(lambda self: 1)
+        cell = property(lambda self: 0)
+        lifetime = property(lambda self: 1)
+        transport_revision = property(lambda self: 1)
+        observation_sequence = property(lambda self: 1)
+        def feedback_kind(self):
+            raise AssertionError('launcher must only reflect playback feedback')
 """
 _APP_STUB = """
 import json
@@ -425,6 +481,33 @@ def test_recording_lifecycle_requires_current_native_before_application(
     assert (
         "Native recording lifecycle API requires a current build" in result.stdout + result.stderr
     )
+    assert not launchers.app_log.exists()
+    assert launchers.profile_log.exists()
+
+
+@pytest.mark.parametrize("starter", ["start.bat", "start-release.bat"])
+@pytest.mark.parametrize(
+    "mode",
+    [
+        "old-ordinary",
+        "ordinary-version-false",
+        "ordinary-version-true",
+        "ordinary-version-old",
+        "ordinary-version-future",
+        "ordinary-missing-resolver",
+        "ordinary-missing-current-query",
+        "ordinary-missing-query",
+        "ordinary-missing-settlement",
+        "ordinary-missing-observation-query",
+    ],
+)
+def test_ordinary_transport_requires_current_native_before_application(
+    launchers: _Launchers, starter: str, mode: str
+) -> None:
+    launchers.environment["LAUNCHER_NATIVE_MODE"] = mode
+    result = launchers.run(starter)
+    assert result.returncode != 0
+    assert "Native ordinary transport API" in result.stdout + result.stderr
     assert not launchers.app_log.exists()
     assert launchers.profile_log.exists()
 

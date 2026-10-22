@@ -76,6 +76,17 @@ reflection, before starting an engine or opening a device. Source-SYNC intent is
 separate from BPM Lock; saved intent and restored map metadata never substitute
 for callback-confirmed mapped playback.
 
+Ordinary Pause/Resume now requires `AudioEngine.ORDINARY_TRANSPORT_API_VERSION = 1`,
+the immutable admission and observation types, their durable current-state queries
+and the distinct ordinary feedback message. The current-slot observation query
+also ensures a missing lifecycle event or a new source cannot strand the pause
+display. Installer activation and the local launcher reflect the complete
+interface before App start; an older binary that
+only enqueues pause commands is rejected. The existing locked Release build
+provides this API without another dependency or installation stage. Admission
+alone does not confirm a pause, and this compatibility check does not establish
+full SYNC or listening acceptance.
+
 Native source-beatmap exports store immutable `map.json` sidecars under
 `samples/<material>/.pcm-cache/source-beatmaps/v1/.ready-<32 hex>/`, or directly
 under `samples/.pcm-cache/source-beatmaps/v1/` for flat legacy originals. The

@@ -91,6 +91,7 @@ def test_pad_control_refusal_is_visible_without_state_mutation_or_background_rep
     before_project = controller.project.model_dump()
     before_session = controller.session.model_dump()
     failure = getattr(audio_engine_mock, native_method)
+    original_side_effect = failure.side_effect
     failure.side_effect = error_type(REFUSAL)
     execute = _actions(ctx)[action]
 
@@ -110,7 +111,7 @@ def test_pad_control_refusal_is_visible_without_state_mutation_or_background_rep
     assert ctx.audio.pads.residency_status(0) == (None, REFUSAL)
     assert controller.project.model_dump() == before_project
     assert controller.session.model_dump() == before_session
-    failure.side_effect = None
+    failure.side_effect = original_side_effect
 
     execute()
 
@@ -118,6 +119,8 @@ def test_pad_control_refusal_is_visible_without_state_mutation_or_background_rep
     assert ctx.audio.pads.residency_status(0) == (None, None)
     assert ctx.audio.pads.residency_status(2) == (None, OTHER_ERROR)
     assert controller.project.model_dump() == before_project
+    if action in {"waveform_pause", "waveform_resume"}:
+        assert controller.session.paused_sample_ids == before_session["paused_sample_ids"]
     assert 2 in controller.session.active_sample_ids
     assert 2 in controller.session.paused_sample_ids
     assert controller.session.pad_playhead_s[2] == 9.0

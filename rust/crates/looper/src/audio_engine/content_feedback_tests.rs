@@ -6,6 +6,10 @@ use crate::audio_engine::input_mapping::launch_admission_tests::LaunchFixture;
 use crate::audio_engine::pad_pair;
 use std::sync::atomic::AtomicU8;
 
+mod ordinary_after_effect_tests {
+    include!("ordinary_transport_after_effect_tests.rs");
+}
+
 thread_local! {
     static AFTER_EFFECT: RefCell<Option<Box<dyn FnOnce()>>> = RefCell::new(None);
 }

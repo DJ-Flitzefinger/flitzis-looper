@@ -297,6 +297,7 @@ def _references(
         components.append(component)
     for owner, name in (
         (transport.playback, "_global_playback"),
+        (transport.playback, "_pause_intent"),
         (controller.loader, "_accepted_restore"),
         (controller.loader, "_key_analysis"),
     ):

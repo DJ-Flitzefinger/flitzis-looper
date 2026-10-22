@@ -1,6 +1,8 @@
 use super::*;
 
-fn mixed_cohort(prepaused: bool) -> (LaunchPath, OfflineAnalysisJob, CapturedPadStart, usize) {
+pub(super) fn mixed_cohort(
+    prepaused: bool,
+) -> (LaunchPath, OfflineAnalysisJob, CapturedPadStart, usize) {
     let mut path = mapped_fixed_pitch_birth_tests::configured(0);
     // Capture the existing scalar source admission before the mapped birth.
     // Ordinary productive starts replace one active same-content voice; this
@@ -218,18 +220,35 @@ fn actual_mapped_release_refuses_changed_master_or_terminal_output_without_parti
 }
 
 #[test]
-fn ordinary_transport_stays_closed_and_newer_seek_cannot_release_a_mapped_hold() {
+fn ordinary_transport_opens_with_receipts_and_newer_seek_cannot_release_a_mapped_hold() {
     let (mut path, _job, _captured) = qualified();
     path.render(7);
     let before = path.voice().source_playback;
     let revision = path.voice().source_feed_history.continuity_revision();
-    path.source.engine.pause_sample(0).unwrap();
+    let ordinary = path.source.engine.pause_sample(0).unwrap();
     path.drain();
-    assert!(!path.voice().paused);
+    assert!(path.voice().paused);
+    assert!(
+        ordinary
+            .current_observation()
+            .unwrap()
+            .unwrap()
+            .matches_admission(&ordinary)
+    );
     assert!(path.voice().source_playback.matches_exact(&before));
     assert_eq!(
         path.voice().source_feed_history.continuity_revision(),
-        revision
+        revision + 1
+    );
+    let resumed = path.source.engine.resume_sample(0).unwrap();
+    path.drain();
+    assert!(!path.voice().paused);
+    assert!(
+        resumed
+            .current_observation()
+            .unwrap()
+            .unwrap()
+            .matches_admission(&resumed)
     );
     let ticket = pause(&path, 1);
     path.drain();

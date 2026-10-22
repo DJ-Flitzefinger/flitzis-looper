@@ -10,7 +10,46 @@ use crate::audio_engine::hold_action::{
 };
 use std::sync::Arc;
 
+#[cfg(test)]
+thread_local! {
+    static BEFORE_CLEANUP_INTENT_READ: std::cell::RefCell<Option<Box<dyn FnOnce()>>> =
+        const { std::cell::RefCell::new(None) };
+}
+
+#[cfg(test)]
+fn before_cleanup_intent_read() {
+    let hook = BEFORE_CLEANUP_INTENT_READ.with(|slot| slot.borrow_mut().take());
+    if let Some(hook) = hook {
+        hook();
+    }
+}
+
 impl RtMixer {
+    #[cfg(test)]
+    pub(crate) fn with_hold_cleanup_intent_interleaving_for_test<T>(
+        hook: impl FnOnce() + 'static,
+        action: impl FnOnce() -> T,
+    ) -> T {
+        struct Reset;
+        impl Drop for Reset {
+            fn drop(&mut self) {
+                BEFORE_CLEANUP_INTENT_READ.with(|slot| *slot.borrow_mut() = None);
+            }
+        }
+        BEFORE_CLEANUP_INTENT_READ.with(|slot| {
+            assert!(slot.borrow().is_none());
+            *slot.borrow_mut() = Some(Box::new(hook));
+        });
+        let _reset = Reset;
+        let result = action();
+        assert!(
+            BEFORE_CLEANUP_INTENT_READ.with(|slot| slot.borrow().is_none()),
+            "requested Hold cleanup interleaving was never reached"
+        );
+        result
+    }
+
+    #[cfg(test)]
     pub(crate) fn apply_transport_content_rt(
         &mut self,
         key: ContentKey,
@@ -18,18 +57,87 @@ impl RtMixer {
         output_frame: u64,
         retirement: &mut impl AudioBufferRetirement,
     ) {
+        self.apply_transport_content_with_timeline_rt(
+            key,
+            effect,
+            output_frame,
+            None,
+            None,
+            retirement,
+        );
+    }
+
+    pub(crate) fn apply_transport_content_with_timeline_rt(
+        &mut self,
+        key: ContentKey,
+        effect: crate::messages::TransportContentEffect,
+        output_frame: u64,
+        transport: Option<&crate::audio_engine::transport::TransportTimeline>,
+        accepted_revision: Option<u64>,
+        retirement: &mut impl AudioBufferRetirement,
+    ) -> (u64, bool, bool) {
+        use crate::audio_engine::ordinary_transport::{APPLIED, NO_EFFECT, REFUSED};
         use crate::messages::TransportContentEffect;
         let Some(id) = self.content_effect_slot(key) else {
-            return;
+            return (REFUSED, false, false);
         };
-        if self.hold_content_is_mapped_rt(id, key) {
-            return;
+        // The original admitted ordinary gesture already superseded this exact Hold's
+        // release authority. Consume only its still-valid own effect, even if the
+        // requested trajectory change is subsequently refused. Legacy numerical
+        // helpers have no admitted revision and cannot manufacture this takeover.
+        let accepted_hold_pause = accepted_revision.is_some_and(|revision| {
+            self.consume_ordinary_hold_cause_rt(key, revision, output_frame, retirement)
+        });
+        let previous_paused = accepted_hold_pause
+            || self
+                .input_runtime_ownership
+                .ordinary_snapshot(key)
+                .is_some_and(|value| value.paused);
+        let mut cohort = 0u32;
+        let mut changed = 0u32;
+        let mut unowned_lane = false;
+        for (index, voice) in self.voices.iter().enumerate() {
+            if voice.is_playing_sample(id) {
+                if !Self::hold_voice_belongs_to_content_rt(voice, id, key) {
+                    unowned_lane = true;
+                    continue;
+                }
+                cohort |= 1u32 << index;
+                if match effect {
+                    TransportContentEffect::Pause => !voice.paused,
+                    TransportContentEffect::Resume => voice.paused,
+                    _ => false,
+                } {
+                    changed |= 1u32 << index;
+                }
+            }
         }
-        self.revoke_hold_for_content_rt(key, HoldActionState::Superseded, output_frame, retirement);
+        if unowned_lane {
+            return (REFUSED, cohort != 0, previous_paused);
+        }
         match effect {
             TransportContentEffect::Pause | TransportContentEffect::Resume => {
-                for voice in &mut self.voices {
-                    if Self::hold_voice_belongs_to_content_rt(voice, id, key) {
+                let Some(replacements) = self.mapped_transport_continuations_rt(
+                    id,
+                    key,
+                    (cohort, changed),
+                    matches!(effect, TransportContentEffect::Resume),
+                    output_frame,
+                    transport,
+                ) else {
+                    return (REFUSED, cohort != 0, previous_paused);
+                };
+                self.revoke_hold_for_content_rt(
+                    key,
+                    HoldActionState::Superseded,
+                    output_frame,
+                    retirement,
+                );
+                for (index, voice) in self.voices.iter_mut().enumerate() {
+                    if changed & (1u32 << index) != 0 {
+                        if let Some(playback) = replacements[index] {
+                            voice.source_playback = playback;
+                        }
                         if matches!(effect, TransportContentEffect::Pause) {
                             voice.pause();
                         } else {
@@ -38,23 +146,107 @@ impl RtMixer {
                     }
                 }
                 self.publish_key_lock_status(id);
+                (
+                    if changed == 0 { NO_EFFECT } else { APPLIED },
+                    cohort != 0,
+                    cohort != 0 && matches!(effect, TransportContentEffect::Pause),
+                )
             }
             TransportContentEffect::Seek {
                 position_s,
                 expected_source_generation,
             } => {
-                if self.expected_source_generation_current(id, expected_source_generation)
+                if self.hold_content_is_mapped_rt(id, key) {
+                    return (REFUSED, cohort != 0, previous_paused);
+                }
+                let held_cohort = self.hold_actions[key.cell().index()]
+                    .as_ref()
+                    .filter(|owned| owned.action.key() == key)
+                    .and_then(|owned| owned.action.effect())
+                    .is_some_and(|held| self.hold_effect_cohort_current_rt(id, held));
+                self.revoke_hold_for_content_rt(
+                    key,
+                    HoldActionState::Superseded,
+                    output_frame,
+                    retirement,
+                );
+                let applied = self
+                    .expected_source_generation_current(id, expected_source_generation)
+                    && self.seek_sample_at_output_frame(id, position_s, output_frame);
+                let takeover = held_cohort
+                    && cohort != 0
                     && self
                         .voices
                         .iter()
-                        .filter(|voice| voice.is_playing_sample(id))
-                        .all(|voice| Self::hold_voice_belongs_to_content_rt(voice, id, key))
-                {
-                    self.seek_sample_at_output_frame(id, position_s, output_frame);
-                }
+                        .enumerate()
+                        .all(|(index, voice)| cohort & (1u32 << index) == 0 || voice.paused);
+                (
+                    if applied {
+                        APPLIED
+                    } else if cohort == 0 {
+                        NO_EFFECT
+                    } else {
+                        REFUSED
+                    },
+                    cohort != 0,
+                    previous_paused || takeover,
+                )
             }
         }
     }
+
+    fn pending_ordinary_hold_cause_rt(&self, action: &Arc<NativeHoldAction>) -> bool {
+        let key = action.key();
+        self.input_runtime_ownership
+            .pending_ordinary_origin(key.cell())
+            > action.transport_revision()
+            && self.hold_actions[key.cell().index()]
+                .as_ref()
+                .is_some_and(|owned| Arc::ptr_eq(&owned.action, action))
+            && self.content_effect_slot(key).is_some_and(|id| {
+                action
+                    .effect()
+                    .is_some_and(|effect| self.hold_effect_cohort_current_rt(id, effect))
+            })
+    }
+
+    /// Admission superseded release authority already. Only its exact, still-current
+    /// caused effect can become an ordinary pause cause, including a fenced release
+    /// that settled Superseded while the ordinary command waited for feedback space.
+    pub(crate) fn consume_ordinary_hold_cause_rt(
+        &mut self,
+        key: ContentKey,
+        revision: u64,
+        output_frame: u64,
+        retirement: &mut impl AudioBufferRetirement,
+    ) -> bool {
+        let accepted = self.hold_actions[key.cell().index()]
+            .as_ref()
+            .is_some_and(|owned| {
+                let action = &owned.action;
+                action.key() == key
+                    && action.transport_revision() < revision
+                    && !action.intent_current()
+                    && (action.state() == HoldActionState::PausedOwned
+                        || (action.state() == HoldActionState::Superseded
+                            && self.pending_ordinary_hold_cause_rt(action)))
+                    && self.content_effect_slot(key).is_some_and(|id| {
+                        action
+                            .effect()
+                            .is_some_and(|effect| self.hold_effect_cohort_current_rt(id, effect))
+                    })
+            });
+        if accepted {
+            self.revoke_hold_for_content_rt(
+                key,
+                HoldActionState::Superseded,
+                output_frame,
+                retirement,
+            );
+        }
+        accepted
+    }
+
     /// Actual cohort replacement and source retirement also settle retained tickets.
     /// Capacity pressure keeps the exact owner in its registry for the next bounded retry.
     pub(crate) fn settle_invalid_hold_actions_rt(
@@ -70,7 +262,6 @@ impl RtMixer {
             let key = action.key();
             let state = match self.content_effect_slot(key) {
                 None => Some(HoldActionState::Retired),
-                Some(_) if !action.intent_current() => Some(HoldActionState::Superseded),
                 Some(id)
                     if action
                         .effect()
@@ -78,7 +269,17 @@ impl RtMixer {
                 {
                     Some(HoldActionState::Superseded)
                 }
-                _ => None,
+                Some(_) => {
+                    // An ordinary admission publishes custody before its Release
+                    // transport fence. Observe that fence first: acquiring its new
+                    // revision orders the subsequent custody read. The inverse order
+                    // could see old zero custody followed by the superseding revision.
+                    #[cfg(test)]
+                    before_cleanup_intent_read();
+                    let intent_current = action.intent_current();
+                    let pending_ordinary = self.pending_ordinary_hold_cause_rt(action);
+                    (!intent_current && !pending_ordinary).then_some(HoldActionState::Superseded)
+                }
             };
             if let Some(state) = state {
                 if retirement.available_retirement_slots() == 0 {
@@ -261,7 +462,9 @@ impl RtMixer {
         }
         if action.state().terminal() {
             let projection = action.projection();
-            self.retire_matching_hold_registry_rt(action, retirement);
+            if !self.pending_ordinary_hold_cause_rt(action) {
+                self.retire_matching_hold_registry_rt(action, retirement);
+            }
             retirement.retire_hold_action(work);
             return projection;
         }
@@ -308,7 +511,9 @@ impl RtMixer {
         };
         action.settle(state, output_frame);
         let projection = action.projection();
-        self.retire_matching_hold_registry_rt(action, retirement);
+        if !self.pending_ordinary_hold_cause_rt(action) {
+            self.retire_matching_hold_registry_rt(action, retirement);
+        }
         retirement.retire_hold_action(work);
         projection
     }
