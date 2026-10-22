@@ -16,6 +16,7 @@ pub(super) mod budget;
 pub(super) mod editor;
 pub(super) mod interpretation;
 mod interval_edits;
+mod manual_insert;
 mod query;
 mod record;
 mod review_index;
@@ -101,7 +102,7 @@ impl std::fmt::Debug for SourceBeatmap {
 #[pymethods]
 impl SourceBeatmap {
     #[classattr]
-    const EDITOR_CORRECTION_API_VERSION: u32 = 3;
+    const EDITOR_CORRECTION_API_VERSION: u32 = 4;
 
     /// Validate data only; actual source acceptance requires separate custody checks.
     #[staticmethod]

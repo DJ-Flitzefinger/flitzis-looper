@@ -8,7 +8,7 @@ use std::io::{self, Write};
 use super::super::cold_store::descriptor_digest;
 use super::{
     MAX_ANCHORS, MAX_PROJECTION_POINTS, MAX_RECORD_BYTES, SourceBeatmap, budget, interval_edits,
-    record, review_index::RawIndex, review_window,
+    manual_insert, record, review_index::RawIndex, review_window,
 };
 
 pub(in crate::audio_engine) const MAX_EDIT_BYTES: usize = 8192;
@@ -21,6 +21,7 @@ pub(super) struct EditIntent {
 #[serde(tag = "operation", rename_all = "snake_case", deny_unknown_fields)]
 pub(super) enum EditOperation {
     ReviewRawWindow(review_window::ReviewWindow),
+    InsertManualBeat(manual_insert::ManualInsert),
     MoveBeat {
         schema_version: u32,
         beat: f64,
@@ -81,12 +82,16 @@ fn parse_intent(encoded: &str) -> Result<EditIntent, String> {
         | EditOperation::SetCoverage { schema_version, .. }
         | EditOperation::Undo { schema_version } => *schema_version,
         EditOperation::ReviewRawWindow(window) => window.schema_version,
+        EditOperation::InsertManualBeat(insert) => insert.schema_version,
     };
     if version != 1 {
         return Err("unsupported_beatmap_edit_schema".into());
     }
     if let EditOperation::ReviewRawWindow(window) = &operation {
         window.validate()?;
+    }
+    if let EditOperation::InsertManualBeat(insert) = &operation {
+        insert.validate()?;
     }
     let value: Value = serde_json::from_str(encoded).map_err(|error| error.to_string())?;
     if (matches!(operation, EditOperation::SetDownbeat { .. })
@@ -258,6 +263,28 @@ impl SourceBeatmap {
         ])?;
         budget::tree_admission(prospective, prospective_tree, held, retained)?;
         let operation = match intent.operation {
+            EditOperation::InsertManualBeat(insert) => {
+                let raw = self
+                    .inner
+                    .raw_index
+                    .as_ref()
+                    .ok_or("beatmap_manual_complete_capture_unavailable")?;
+                let predecessor_parent_revision =
+                    value["record"]["accepted"]["parent_revision"].clone();
+                let inverse = manual_insert::apply(
+                    &mut value["record"]["accepted"],
+                    raw,
+                    &insert,
+                    &self.inner.revision,
+                    self.inner.sample_rate_hz,
+                    self.inner.source_frames,
+                )?;
+                (
+                    "refinement",
+                    json!({"intent":serde_json::from_str::<Value>(encoded).map_err(|error|error.to_string())?,
+                    "inverse":inverse,"predecessor_parent_revision":predecessor_parent_revision}),
+                )
+            }
             EditOperation::ReviewRawWindow(window) => {
                 let raw = self
                     .inner
@@ -572,7 +599,10 @@ fn editor_operation(
         if undo {
             &["intent", "inverse", "undoes_operation_id"]
         } else if interval_edits::kind(intent.clone()).is_some()
-            || matches!(intent, EditOperation::ReviewRawWindow(_))
+            || matches!(
+                intent,
+                EditOperation::ReviewRawWindow(_) | EditOperation::InsertManualBeat(_)
+            )
         {
             &["intent", "inverse", "predecessor_parent_revision"]
         } else {
@@ -583,6 +613,11 @@ fn editor_operation(
         return None;
     }
     match &intent {
+        EditOperation::InsertManualBeat(insert)
+            if kind == "refinement"
+                && insert.map_revision == parent
+                && insert.sample_index < frames
+                && insert.sample_rate_hz == rate => {}
         EditOperation::ReviewRawWindow(window)
             if kind == "refinement" && window.map_revision == parent => {}
         EditOperation::MoveBeat {
@@ -657,8 +692,24 @@ pub(super) fn undo_operation<'a>(
             preview[key] = accepted[key].clone();
         }
         let interval_edit = interval_edits::kind(intent.clone()).is_some();
-        let window_edit = matches!(intent, EditOperation::ReviewRawWindow(_));
+        let window_edit = matches!(
+            intent,
+            EditOperation::ReviewRawWindow(_) | EditOperation::InsertManualBeat(_)
+        );
         match intent {
+            EditOperation::InsertManualBeat(insert) => {
+                if !manual_insert::matches_current(
+                    accepted,
+                    &mut preview,
+                    inverse,
+                    raw_index?,
+                    &insert,
+                    operation["parent_revision"].as_str()?,
+                    (rate, frames),
+                ) {
+                    return None;
+                }
+            }
             EditOperation::ReviewRawWindow(window) => {
                 if !review_window::matches_current(
                     accepted,

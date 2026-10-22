@@ -1,4 +1,8 @@
 // Genuine Raw-to-accepted admission and reader retirement. No device/music claim.
+mod manual_insert_async_tests {
+    include!("source_beatmap_manual_insert_async_tests.rs");
+}
+
 use super::*;
 use crate::audio_engine::SourceBeatmapArtifact;
 use std::path::Path;

@@ -80,7 +80,7 @@ qualification after reopening; relocation grants no current map/audio authority.
 This prerequisite does not yet save selected maps in Config or arrangement journals.
 
 Portable validation and the local launchers require the exact integer
-`SourceBeatmap.EDITOR_CORRECTION_API_VERSION = 3`, the existing bounded
+`SourceBeatmap.EDITOR_CORRECTION_API_VERSION = 4`, the existing bounded
 `editor_span(first_anchor_index, last_anchor_index)` signature and the embedded
 capture methods `editor_review_info()` and
 `editor_review_page(first_anchor_index, last_anchor_index, start_index, max_events=128)`
@@ -89,6 +89,11 @@ discard or restore; legacy maps report this feature unavailable and retain their
 existing edits. Native builds with only the earlier editor methods are refused.
 These checks reflect the API without creating an Engine, evaluating a map or
 starting an editor job. Explicit review labels do not qualify musical coverage.
+Capability4 also permits an explicit detector-missed beat at a physical original
+source sample, bound to the current map, embedded capture and fixed endpoints.
+It preserves complete detector evidence; new intervals remain uncertain with
+unknown meter and phase until separately reviewed. Earlier capability3 builds
+are refused before opening the App.
 
 There is no second `Runtime/app` copy and no permanent per-version runtime tree.
 The full checkout's installed-file inventory distinguishes shipped files from

@@ -148,6 +148,7 @@ class SourceBeatmapProjection(TypedDict):
 
 class SourceBeatmap:
     # Immutable control-side geometry; parsing supplies no source/audio authority.
+    # Capability 4 adds explicit captured-map insert_manual_beat intent.
     EDITOR_CORRECTION_API_VERSION: ClassVar[int]
     @staticmethod
     def from_json(record_json: str) -> SourceBeatmap: ...

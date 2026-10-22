@@ -167,7 +167,7 @@ def source_beatmap_editor_native_module(engine_base: type = object) -> SimpleNam
             (),
             {
                 "__init__": _forbidden,
-                "EDITOR_CORRECTION_API_VERSION": 3,
+                "EDITOR_CORRECTION_API_VERSION": 4,
                 "editor_info": _info,
                 "editor_review_info": _info,
                 "editor_review_page": _review_page,
@@ -212,7 +212,7 @@ def test_current_editor_contract_is_reflected_without_any_native_work() -> None:
 def test_class_attribute_descriptor_can_expose_the_native_integer_capability() -> None:
     class CorrectionCapability:
         def __get__(self, _instance: object, _owner: type) -> int:
-            return 3
+            return 4
 
     native = source_beatmap_editor_native_module()
     native.SourceBeatmap.EDITOR_CORRECTION_API_VERSION = CorrectionCapability()
@@ -285,7 +285,7 @@ def test_global_policy_requires_optional_keyword_only_publication(invalid: str) 
         _check(native)
 
 
-@pytest.mark.parametrize("invalid", [None, False, True, 3.0, "3", 0, 1, 2, 4])
+@pytest.mark.parametrize("invalid", [None, False, True, 4.0, "4", 0, 1, 2, 3, 5])
 def test_correction_version_requires_exact_current_integer(invalid: object) -> None:
     native = source_beatmap_editor_native_module()
     native.SourceBeatmap.EDITOR_CORRECTION_API_VERSION = invalid

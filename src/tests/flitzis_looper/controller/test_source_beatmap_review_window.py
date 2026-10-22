@@ -6,6 +6,7 @@ from unittest.mock import Mock
 
 import pytest
 
+from flitzis_looper.source_beatmap_manual import insert_manual_beat_operation
 from flitzis_looper.source_beatmap_review import ReviewWindowRow, review_window_operation
 from tests.flitzis_looper.controller.test_source_beatmap_persistence import reference
 from tests.flitzis_looper.controller.test_source_beatmap_selection import _assigned, _event, _job
@@ -38,8 +39,17 @@ def _window() -> dict[str, object]:
     )
 
 
+@pytest.fixture(params=["window", "manual"])
+def operation(request: pytest.FixtureRequest) -> dict[str, object]:
+    if request.param == "window":
+        return _window()
+    return insert_manual_beat_operation(
+        reference().map_revision, "d" * 64, "interior", 0, 1, 12_001, 48_000, 0.5
+    )
+
+
 def test_window_uses_current_edit_owner_then_original_completion_and_undo_path(
-    controller: AppController, audio_engine_mock: Mock
+    controller: AppController, audio_engine_mock: Mock, operation: dict[str, object]
 ) -> None:
     maps = _selected(controller, audio_engine_mock)
     old_geometry, old_delivery = maps.effective(0), maps.playback_delivery(0)
@@ -48,10 +58,10 @@ def test_window_uses_current_edit_owner_then_original_completion_and_undo_path(
     edit_job = Mock()
     edit_job.is_cancelled.return_value = False
     audio_engine_mock.begin_source_beatmap_edit_async = Mock(return_value=edit_job)
-    maps.edit(0, _window(), expected_revision=reference().map_revision)
+    maps.edit(0, operation, expected_revision=reference().map_revision)
     call = audio_engine_mock.begin_source_beatmap_edit_async.call_args
     assert json.loads(call.args[1]) == reference().model_dump(mode="json")
-    assert json.loads(call.args[2]) == _window()
+    assert json.loads(call.args[2]) == operation
     assert maps.effective(0) is old_geometry
     assert maps.playback_delivery(0) is old_delivery
     assert controller._persistence.config_path.read_bytes() == saved
@@ -79,7 +89,10 @@ def test_window_uses_current_edit_owner_then_original_completion_and_undo_path(
 
 
 def test_window_native_admission_refusal_and_save_failure_keep_previous_selection(
-    controller: AppController, audio_engine_mock: Mock, monkeypatch: pytest.MonkeyPatch
+    controller: AppController,
+    audio_engine_mock: Mock,
+    monkeypatch: pytest.MonkeyPatch,
+    operation: dict[str, object],
 ) -> None:
     maps = _selected(controller, audio_engine_mock)
     geometry, delivery = maps.effective(0), maps.playback_delivery(0)
@@ -90,14 +103,14 @@ def test_window_native_admission_refusal_and_save_failure_keep_previous_selectio
         side_effect=ValueError("window conflict")
     )
     with pytest.raises(ValueError, match="window conflict"):
-        maps.edit(0, _window(), expected_revision=reference().map_revision)
+        maps.edit(0, operation, expected_revision=reference().map_revision)
     assert controller.project.pad_source_beatmap_intent[0] is previous
     assert controller._assets._reserved == 0
     edit_job = Mock()
     edit_job.is_cancelled.return_value = False
     audio_engine_mock.begin_source_beatmap_edit_async.side_effect = None
     audio_engine_mock.begin_source_beatmap_edit_async.return_value = edit_job
-    maps.edit(0, _window(), expected_revision=reference().map_revision)
+    maps.edit(0, operation, expected_revision=reference().map_revision)
 
     def refuse(*_args: object, **_kwargs: object) -> None:
         message = "window Config write failure"
@@ -115,16 +128,16 @@ def test_window_native_admission_refusal_and_save_failure_keep_previous_selectio
 
 
 def test_stale_window_never_admits_and_clear_cancels_only_original_edit_owner(
-    controller: AppController, audio_engine_mock: Mock
+    controller: AppController, audio_engine_mock: Mock, operation: dict[str, object]
 ) -> None:
     maps = _selected(controller, audio_engine_mock)
     edit_job = Mock()
     edit_job.is_cancelled.return_value = False
     audio_engine_mock.begin_source_beatmap_edit_async = Mock(return_value=edit_job)
     with pytest.raises(ValueError, match="no longer current"):
-        maps.edit(0, _window(), expected_revision="f" * 64)
+        maps.edit(0, operation, expected_revision="f" * 64)
     audio_engine_mock.begin_source_beatmap_edit_async.assert_not_called()
-    maps.edit(0, _window(), expected_revision=reference().map_revision)
+    maps.edit(0, operation, expected_revision=reference().map_revision)
     maps.clear(0)
     edit_job.cancel.assert_called_once()
     saved = controller._persistence.config_path.read_bytes()

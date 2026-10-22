@@ -22,8 +22,10 @@ lines and SHALL NOT grant snap, bar, tempo or playback qualification.
 
 ### Requirement: Existing uncertain anchor positions can be corrected independently
 The editor MUST allow explicit sample positioning of an exact existing accepted beat
-anchor even when adjacent coverage is uncertain or has unknown count. Insertion of a
-new beat into unsupported geometry MUST remain refused. Finite beat, actual loaded
+anchor even when adjacent coverage is uncertain or has unknown count. Existing
+MoveBeat insertion of a new beat into unsupported geometry MUST remain refused;
+the later capability4 explicit insert_manual_beat contract is a separate bounded
+intent with uncertain new intervals and closed refinement Undo. Finite beat, actual loaded
 sample-rate, physical sample-index and strict monotonicity guards SHALL remain. Position
 correction MUST NOT promote or change quarter coordinates, coverage, meter, downbeat
 phase or the original anchor review classification. It SHALL retain immutable Raw evidence, explicit sample-position evidence,
@@ -37,7 +39,7 @@ save/cancel MUST preserve the selected predecessor and physical loop markers.
 - **AND** coverage/count/meter/phase remain unchanged and Undo restores the exact predecessor anchor
 
 #### Scenario: A new interior beat lies in an unknown-count gap
-- **WHEN** the performer requests insertion by positioning that unsupported beat
+- **WHEN** the performer requests insertion through the existing MoveBeat positioning intent for that unsupported beat
 - **THEN** the edit refuses and no immutable selection, source marker or audio intent changes
 
 ### Requirement: Span endpoints can fill position controls without implying support

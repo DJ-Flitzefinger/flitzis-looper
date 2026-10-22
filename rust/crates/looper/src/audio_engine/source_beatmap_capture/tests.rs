@@ -374,3 +374,79 @@ fn map_v3_accepted_raw_windows_keep_all_four_arrays_and_inner_revision_after_res
         extended["record"]["accepted"]["intervals"]
     );
 }
+
+#[test]
+fn map_v3_manual_missing_beat_preserves_four_raw_arrays_and_closed_undo_after_translation() {
+    let raw = capture();
+    let intent = Interpretation::parse(
+        &json!({"schema_version":1,"raw_revision":raw.revision(),
+        "anchors":[{"raw_index":0,"quarter_bits":format!("{:016x}",(-2.0_f64).to_bits())},
+            {"raw_index":2,"quarter_bits":format!("{:016x}",2.0_f64.to_bits())},
+            {"raw_index":3,"quarter_bits":format!("{:016x}",5.0_f64.to_bits())}]})
+        .to_string(),
+    )
+    .unwrap();
+    let map = interpretation::build(&raw, &intent, 4096).unwrap();
+    let before: Value = serde_json::from_str(map.canonical_record()).unwrap();
+    let sample = 60001;
+    let seconds = f64::from(sample) / 48000.0;
+    assert!(
+        (0..raw.event_count())
+            .all(|index| raw.source_seconds(index).unwrap().to_bits() != seconds.to_bits())
+    );
+    let inserted = map
+        .edited(
+            &json!({"schema_version":1,"operation":"insert_manual_beat",
+        "map_revision":map.map_revision(),"capture_revision":raw.revision(),"mode":"interior",
+        "first_anchor_index":1,"last_anchor_index":2,"sample_index":sample,"sample_rate_hz":48000,
+        "quarter_bits":format!("{:016x}",3.25_f64.to_bits())})
+            .to_string(),
+        )
+        .unwrap();
+    let after: Value = serde_json::from_str(inserted.canonical_record()).unwrap();
+    assert_eq!(after["schema_version"], 3);
+    assert_eq!(after["record"]["raw"], before["record"]["raw"]);
+    assert_eq!(
+        after["record"]["raw"]["capture"]["data"]["result"]["predictions"],
+        raw.embedded_value().unwrap()["data"]["result"]["predictions"]
+    );
+    let anchors = after["record"]["accepted"]["anchors"].as_array().unwrap();
+    assert_eq!(anchors.len(), 4);
+    assert_eq!(
+        &anchors[..2],
+        &before["record"]["accepted"]["anchors"].as_array().unwrap()[..2]
+    );
+    assert_eq!(anchors[3], before["record"]["accepted"]["anchors"][2]);
+    assert!(anchors[2]["raw_beat_index"].is_null());
+    assert_eq!(anchors[2]["review"], "reviewed");
+    assert_eq!(
+        anchors[2]["source_seconds_bits"],
+        format!("{:016x}", seconds.to_bits())
+    );
+    assert_eq!(anchors[2]["sample_edit"]["sample_index"], sample);
+    assert_eq!(
+        after["record"]["accepted"]["intervals"][0],
+        before["record"]["accepted"]["intervals"][0]
+    );
+    for interval in &after["record"]["accepted"]["intervals"].as_array().unwrap()[1..] {
+        assert_eq!(interval["coverage"], "uncertain");
+        assert_eq!(interval["meter"]["status"], "unknown");
+        assert!(interval["meter"]["downbeat_label"].is_null());
+    }
+    let moved = inserted.edited(&json!({"schema_version":1,"operation":"translate","sample_offset":1,"sample_rate_hz":48000}).to_string()).unwrap();
+    let restored = SourceBeatmap::parse(moved.canonical_record()).unwrap();
+    let undone_move = restored
+        .edited(r#"{"schema_version":1,"operation":"undo"}"#)
+        .unwrap();
+    let undone = undone_move
+        .edited(r#"{"schema_version":1,"operation":"undo"}"#)
+        .unwrap();
+    let final_value: Value = serde_json::from_str(undone.canonical_record()).unwrap();
+    for key in ["anchors", "intervals"] {
+        assert_eq!(
+            final_value["record"]["accepted"][key],
+            before["record"]["accepted"][key]
+        );
+    }
+    assert_eq!(final_value["record"]["raw"], before["record"]["raw"]);
+}

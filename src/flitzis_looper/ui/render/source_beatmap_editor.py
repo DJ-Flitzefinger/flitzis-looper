@@ -10,6 +10,11 @@ from imgui_bundle import imgui
 
 from flitzis_looper.timing_policy import variable_source_timing
 from flitzis_looper.ui.constants import SPACING, TEXT_MUTED_RGBA
+from flitzis_looper.ui.render.source_beatmap_manual_beat import (
+    discard_manual_beat,
+    observe_manual_beat,
+    render_manual_beat,
+)
 from flitzis_looper.ui.render.source_beatmap_review_window import render_review_window
 
 if TYPE_CHECKING:
@@ -822,6 +827,7 @@ def render_source_map_editor(
     timing: CurrentPadTiming | None,
 ) -> None:
     """Render explicit manual map controls without changing audio or scalar intent."""
+    observe_manual_beat(ctx, frame)
     # A mouse press on the old source/revision must not release onto a new one.
     imgui.push_id(repr((frame.pad_id, frame.identity, frame.revision)))
     try:
@@ -857,6 +863,7 @@ def _render_source_map_controls(
     label = f"Source map {frame.status}{revision} | {_local_tempo_label(ctx, frame)}"
     _status_line(label)
     if not expanded:
+        discard_manual_beat(ctx)
         return
 
     imgui.begin_disabled(frame.status in _BUSY or frame.identity is None)
@@ -885,6 +892,7 @@ def _render_source_map_controls(
         imgui.begin_disabled(frame.geometry is None)
         if frame.geometry is not None:
             _correction_fields(ctx, frame, state)
+            render_manual_beat(ctx, frame)
             _interval_fields(ctx, frame, state)
         imgui.end_disabled()
     imgui.end_disabled()

@@ -76,11 +76,11 @@ class SourceBeatmap:
             'editor-version-none': None,
             'editor-version-false': False,
             'editor-version-true': True,
-            'editor-version-float': 3.0,
-            'editor-version-string': '3',
-            'editor-version-old': 2,
-            'editor-version-future': 4,
-        }.get(os.environ['LAUNCHER_NATIVE_MODE'], 3)
+            'editor-version-float': 4.0,
+            'editor-version-string': '4',
+            'editor-version-old': 3,
+            'editor-version-future': 5,
+        }.get(os.environ['LAUNCHER_NATIVE_MODE'], 4)
     if os.environ['LAUNCHER_NATIVE_MODE'] != 'editor-missing-span':
         if os.environ['LAUNCHER_NATIVE_MODE'] == 'editor-span-optional':
             def editor_span(self, first_anchor_index, last_anchor_index=None):

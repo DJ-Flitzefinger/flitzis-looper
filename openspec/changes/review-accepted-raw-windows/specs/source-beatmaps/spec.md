@@ -1,7 +1,7 @@
 ## ADDED Requirements
 
 ### Requirement: Selected-map captured observations have bounded immutable readback
-Editor API version3 SHALL expose bounded selected-map review info and pages after
+Editor API version3 and later SHALL expose bounded selected-map review info and pages after
 transient Raw discard, Copy and fresh restore. A page MUST contain at most64
 accepted rows and128 Raw events with exact binary coordinates and the inner
 capture revision. It SHALL use a once-built charged immutable index, without
