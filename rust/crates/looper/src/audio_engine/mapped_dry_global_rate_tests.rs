@@ -222,6 +222,7 @@ fn run_piecewise(variable: bool, rates: &[f64], partitions: &[usize]) -> Vec<f32
                 .mapped_start
                 .as_ref()
                 .unwrap()
+                .original()
                 .same_owner(&captured)
         );
         assert_eq!(captured.target_frame(), Some(0));
@@ -317,6 +318,7 @@ fn dry_mapped_speed_observation_and_equal_tuple_keep_epoch_pending_target_and_pc
             .mapped_start
             .as_ref()
             .unwrap()
+            .original()
             .same_owner(&original)
     );
     output.extend(path.render(16));
@@ -349,6 +351,7 @@ fn dry_mapped_speed_observation_and_equal_tuple_keep_epoch_pending_target_and_pc
             .mapped_start
             .as_ref()
             .unwrap()
+            .original()
             .same_owner(&pending)
     );
     for span in history.spans() {
@@ -410,6 +413,7 @@ fn dry_mapped_unsettled_drain_supersession_commits_latest_at_first_settled_actua
             .mapped_start
             .as_ref()
             .unwrap()
+            .original()
             .same_owner(&captured)
     );
     assert!(!path.source.mixer.has_pending_global_rate());
@@ -537,6 +541,7 @@ fn dry_mapped_whole_map_limits_and_stale_source_or_unsupported_cohort_refuse_ato
                 .mapped_start
                 .as_ref()
                 .unwrap()
+                .original()
                 .same_owner(&captured)
         );
     }
@@ -575,6 +580,7 @@ fn dry_mapped_changed_epoch_fences_old_target_then_nonunity_new_start_retrigger_
             .mapped_start
             .as_ref()
             .unwrap()
+            .original()
             .same_owner(&original)
     );
     for stop_first in [false, true] {
@@ -595,6 +601,7 @@ fn dry_mapped_changed_epoch_fences_old_target_then_nonunity_new_start_retrigger_
                 .mapped_start
                 .as_ref()
                 .unwrap()
+                .original()
                 .same_owner(&next)
         );
         assert_eq!(path.voice().source_playback.position().frame, 32);

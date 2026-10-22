@@ -36,6 +36,59 @@ pub(crate) struct MappedStartSource {
     geometry: MappedLoopGeometry,
 }
 
+/// One voice/retirement payload retains the exact launch and its effective immutable map.
+/// Pending start work continues to use only the original launch's own geometry.
+pub(crate) struct PadStartCustody {
+    original: CapturedPadStart,
+    effective: Option<Arc<MappedStartSource>>,
+}
+
+impl PadStartCustody {
+    /// Called only after the existing complete mapped launch claim succeeds.
+    pub(crate) fn for_mapped_voice(original: &CapturedPadStart) -> Self {
+        Self {
+            original: original.clone(),
+            effective: Some(
+                original
+                    .mapped_source_owner()
+                    .expect("claimed mapped launch retains original immutable map"),
+            ),
+        }
+    }
+
+    pub(crate) fn original(&self) -> &CapturedPadStart {
+        &self.original
+    }
+
+    pub(crate) fn effective_source(&self) -> Option<&Arc<MappedStartSource>> {
+        self.effective.as_ref()
+    }
+
+    pub(crate) fn mapped_geometry(&self) -> Option<&MappedLoopGeometry> {
+        self.effective_source().map(|source| source.geometry())
+    }
+
+    pub(crate) fn source_sync_witness(
+        &self,
+        key: ContentKey,
+        source_generation: u64,
+    ) -> Option<super::input_runtime_binding::SourceSyncWitness> {
+        self.effective_source()?
+            .qualified
+            .sync_witness_for(key, source_generation)
+    }
+}
+
+impl From<CapturedPadStart> for PadStartCustody {
+    /// A raw target has no effective voice map, but still retires through the same one slot.
+    fn from(original: CapturedPadStart) -> Self {
+        Self {
+            original,
+            effective: None,
+        }
+    }
+}
+
 /// Scalar pending-admission witness. It holds no Work and cannot create a map owner.
 pub(crate) struct MappedStartPendingGuard {
     status: Arc<AtomicU8>,
@@ -433,6 +486,7 @@ impl CapturedPadStart {
     }
 
     /// Actual immutable launch witness; later requested runtime/map changes do not rewrite it.
+    #[cfg(test)]
     pub(crate) fn source_sync_witness(
         &self,
         key: ContentKey,
@@ -443,7 +497,7 @@ impl CapturedPadStart {
                 self.owner
                     .mapped
                     .as_ref()
-                    .map(|mapped| mapped.qualified.sync_witness())
+                    .and_then(|mapped| mapped.qualified.sync_witness_for(key, source_generation))
             })
             .flatten()
     }

@@ -29,6 +29,12 @@ The system SHALL retain qualified effective immutable map/source custody separat
 - **AND** original launch ownership SHALL remain retained for its original lifetime
 - **AND** displaced map and reader owners SHALL retire only after their actual last reader through the existing off-realtime path
 
+#### Scenario: An existing mapped voice stops before live adoption is enabled
+- **WHEN** a currently supported mapped launch stops or is replaced after its original successful admission
+- **THEN** its exact original launch owner and effective immutable map reference SHALL move together through one existing reserved retirement entry
+- **AND** capacity refusal SHALL retain both references and preceding audio without a callback-side final destruction
+- **AND** this custody separation alone SHALL NOT enable conversion, map replacement or policy adoption
+
 ### Requirement: Successful publication cannot strand retryable adoption
 The system SHALL keep adoption idempotent and retryable after successful runtime publication, including unchanged-signature refreshes or Native-owned pending service. It SHALL capture the current original Native runtime snapshot and preserve distinct raw revisions for away/back changes. A newly qualified map SHALL be eligible without requiring another global toggle. Publication, readiness and matching booleans SHALL NOT count as effective audio acknowledgement.
 

@@ -618,8 +618,9 @@ impl RtMixer {
                     }
                     voice.source_playback = snapshot.playback;
                     voice.sync_request = work.origin().sync_request();
-                    voice.mapped_start =
-                        snapshot.playback.is_mapped().then(|| work.origin().clone());
+                    voice.mapped_start = snapshot.playback.is_mapped().then(|| {
+                        super::super::pad_start::PadStartCustody::for_mapped_voice(work.origin())
+                    });
                     if let Some(continued_controls) = continued_controls {
                         voice.source_control_epoch = continued_controls;
                     }

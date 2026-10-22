@@ -8,6 +8,7 @@ use crate::audio_engine::audio_stream::{
 use crate::audio_engine::buffer_retirement::{
     AudioBufferRetirement, ImmediateAudioBufferRetirement,
 };
+use crate::audio_engine::pad_start::PadStartCustody;
 use crate::audio_engine::scheduler::FixedCapacityScheduler;
 use crate::audio_engine::source_feed_history::SourceFeedSnapshot;
 use crate::audio_engine::transport::TransportTimeline;
@@ -32,6 +33,13 @@ impl LaunchPath {
     }
 
     fn from_source(mut source: ColdCustody) -> Self {
+        // These parallel native tests share one embedded interpreter. Complete
+        // the controller package through the same entry before separate tests
+        // import different controller leaves and form an import-lock cycle.
+        Python::initialize();
+        Python::attach(|py| {
+            py.import("flitzis_looper.controller").unwrap();
+        });
         source.engine.test_output_format = Some((RATE, 2));
         source
             .engine
@@ -106,8 +114,10 @@ impl LaunchPath {
                 .mapped_start
                 .as_ref()
                 .unwrap()
+                .original()
                 .same_owner(&captured)
         );
+        assert_effective_custody(self.voice().mapped_start.as_ref().unwrap(), &captured);
         captured
     }
 
@@ -346,6 +356,7 @@ fn source_sync_feedback_aggregates_actual_paused_mixed_and_replacement_voices() 
             .mapped_start
             .as_ref()
             .unwrap()
+            .original()
             .same_owner(&captured)
     );
     path.source.load_and_ack_selected(0, None);
@@ -527,11 +538,11 @@ fn verify_actual_reads(
 
 #[derive(Default)]
 struct StopOwnerRetirement {
-    owner: Option<CapturedPadStart>,
+    owner: Option<PadStartCustody>,
 }
 
 impl AudioBufferRetirement for StopOwnerRetirement {
-    fn retire_pad_start_target(&mut self, owner: CapturedPadStart) {
+    fn retire_pad_start_target(&mut self, owner: PadStartCustody) {
         assert!(self.owner.is_none());
         self.owner = Some(owner);
     }
@@ -565,6 +576,43 @@ impl AudioBufferRetirement for StopOwnerRetirement {
     }
 }
 
+fn assert_effective_custody(custody: &PadStartCustody, original: &CapturedPadStart) {
+    assert!(custody.original().same_owner(original));
+    assert!(Arc::ptr_eq(
+        custody.effective_source().unwrap(),
+        &original.mapped_source_owner().unwrap(),
+    ));
+    assert!(std::ptr::eq(
+        custody.mapped_geometry().unwrap(),
+        original.mapped_geometry().unwrap(),
+    ));
+}
+
+#[test]
+fn actual_public_target_retirement_retains_original_without_an_effective_voice_map() {
+    let mut path = LaunchPath::new();
+    let (_job, delivery) = variable_original_delivery(&path);
+    publish_original(&path, &delivery, 1);
+    let captured = path.capture();
+    let mut retirement = StopOwnerRetirement::default();
+    drain_control_messages(
+        &mut path.source.consumer,
+        &mut path.scheduler,
+        0,
+        &mut crate::messages::TriggerQuantization::Immediate,
+        &mut path.timeline,
+        &mut path.source.mixer,
+        &mut path.feedback,
+        &mut retirement,
+    );
+    let retired = retirement.owner.as_ref().unwrap();
+    assert!(retired.original().same_owner(&captured));
+    assert!(retired.effective_source().is_none());
+    assert!(captured.mapped_geometry().is_some());
+    assert!(path.source.mixer.voices.iter().all(|voice| !voice.active));
+    assert_eq!(path.source.mixer.mapped_owner_retirement_slots(), 0);
+}
+
 #[test]
 fn real_original_public_ordinary_launch_reads_canonical_map_and_retires_exact_owner() {
     let mut reference = None;
@@ -589,7 +637,7 @@ fn real_original_public_ordinary_launch_reads_canonical_map_and_retires_exact_ow
         }
         let mut retirement = StopOwnerRetirement::default();
         path.source.mixer.stop_sample_rt(0, &mut retirement);
-        assert!(retirement.owner.as_ref().unwrap().same_owner(&captured));
+        assert_effective_custody(retirement.owner.as_ref().unwrap(), &captured);
         assert!(
             !path
                 .source
@@ -648,8 +696,10 @@ fn clear_or_original_job_cancel_refuses_pending_launch_and_keeps_effective_origi
                 .mapped_start
                 .as_ref()
                 .unwrap()
+                .original()
                 .same_owner(&effective)
         );
+        assert_effective_custody(path.voice().mapped_start.as_ref().unwrap(), &effective);
         path.render(61);
         verify_actual_reads(&path, &effective, 78);
     }
@@ -813,6 +863,7 @@ fn actual_midi_dispatcher_and_public_runtime_trigger_keep_the_original_mapped_st
                 .mapped_start
                 .as_ref()
                 .unwrap()
+                .original()
                 .same_owner(&captured)
         );
         for frames in [1, 13, 7, 37, 39] {
@@ -851,6 +902,7 @@ fn actual_global_mapped_and_scalar_members_claim_one_common_original_frame() {
         );
     }
     assert!(path.voice().source_playback.is_mapped());
+    assert_effective_custody(path.voice().mapped_start.as_ref().unwrap(), &members[0]);
     let scalar = path
         .source
         .mixer
@@ -956,6 +1008,10 @@ struct PausedRetirement {
 
 impl PausedRetirement {
     fn new_full() -> Self {
+        Self::new(true)
+    }
+
+    fn new(full: bool) -> Self {
         let open = Arc::new(std::sync::atomic::AtomicBool::new(false));
         let gate = open.clone();
         let (mut owner, worker) = crate::audio_engine::buffer_retirement::create_audio_buffer_retirement_with_callback_paused(
@@ -965,9 +1021,11 @@ impl PausedRetirement {
                 }
             }).unwrap();
         let capacity = owner.state_mut().available_retirement_slots();
-        let marker = Arc::new(std::sync::atomic::AtomicU8::new(0));
-        while owner.state_mut().available_retirement_slots() > 0 {
-            owner.state_mut().retire_cold_adoption(marker.clone());
+        if full {
+            let marker = Arc::new(std::sync::atomic::AtomicU8::new(0));
+            while owner.state_mut().available_retirement_slots() > 0 {
+                owner.state_mut().retire_cold_adoption(marker.clone());
+            }
         }
         Self {
             open,
@@ -985,6 +1043,219 @@ impl PausedRetirement {
 impl Drop for PausedRetirement {
     fn drop(&mut self) {
         self.release();
+    }
+}
+
+#[test]
+fn actual_public_stop_moves_original_and_effective_map_in_one_worker_retirement_slot() {
+    let mut path = LaunchPath::new();
+    let (_job, delivery) = variable_original_delivery(&path);
+    publish_original(&path, &delivery, 1);
+    let captured = path.start();
+    path.render(17);
+    let map = Arc::downgrade(
+        path.voice()
+            .mapped_start
+            .as_ref()
+            .unwrap()
+            .effective_source()
+            .unwrap(),
+    );
+    assert_eq!(path.source.mixer.mapped_owner_retirement_slots(), 1);
+    let mut retirement = PausedRetirement::new(false);
+    let before = retirement.owner.state_mut().available_retirement_slots();
+    path.source.engine.stop_sample(0).unwrap();
+    drain_control_messages(
+        &mut path.source.consumer,
+        &mut path.scheduler,
+        path.timeline.output_frame(),
+        &mut crate::messages::TriggerQuantization::Immediate,
+        &mut path.timeline,
+        &mut path.source.mixer,
+        &mut path.feedback,
+        retirement.owner.state_mut(),
+    );
+    // One existing PCM pin plus one complete launch/map aggregate, with no frozen stems.
+    assert_eq!(
+        retirement.owner.state_mut().available_retirement_slots(),
+        before - 2
+    );
+    assert_eq!(path.source.mixer.mapped_owner_retirement_slots(), 0);
+    assert!(path.source.mixer.voices.iter().all(|voice| !voice.active));
+    drop(captured);
+    assert!(
+        map.upgrade().is_some(),
+        "paused worker must retain the entire aggregate"
+    );
+    retirement.release();
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(2);
+    while map.upgrade().is_some() {
+        assert!(
+            std::time::Instant::now() < deadline,
+            "worker did not release the final map reader"
+        );
+        std::thread::sleep(std::time::Duration::from_millis(1));
+    }
+}
+
+#[test]
+fn public_move_and_swap_keep_original_and_effective_custody_on_the_same_voice() {
+    for target in [1, 2] {
+        let mut path = LaunchPath::new();
+        let (_job, delivery) = variable_original_delivery(&path);
+        publish_mixed_members(&path, &delivery);
+        let captured = path.start();
+        path.render(17);
+        let lane = path
+            .source
+            .mixer
+            .voices
+            .iter()
+            .position(|voice| voice.is_playing_sample(0))
+            .unwrap();
+        let playback = path.source.mixer.voices[lane].source_playback;
+        let generation = path.source.mixer.voices[lane].generation;
+        let pair = path.source.engine._capture_pad_pair(0, target).unwrap();
+        let pair = path.source.engine._prepare_pad_pair(&pair).unwrap();
+        path.source.engine._publish_pad_pair(&pair).unwrap();
+        path.drain();
+        assert_eq!(pair.publication_status(), "accepted");
+        let acknowledgement = pair.own_acknowledgement().unwrap();
+        assert!(path.source.engine._reconcile_pad_pair(&pair).unwrap());
+        assert!(
+            path.source
+                .engine
+                ._validate_pad_pair_acknowledgement(&pair, &acknowledgement)
+                .unwrap()
+        );
+        path.source
+            .engine
+            ._finish_pad_pair(&pair, &acknowledgement)
+            .unwrap();
+        let voice = &path.source.mixer.voices[lane];
+        assert_eq!(voice.sample_id, target);
+        assert_eq!(voice.generation, generation);
+        assert!(voice.source_playback.matches_exact(&playback));
+        assert_effective_custody(voice.mapped_start.as_ref().unwrap(), &captured);
+        assert_eq!(path.source.mixer.mapped_owner_retirement_slots(), 1);
+        path.render(13);
+        assert_effective_custody(
+            path.source.mixer.voices[lane]
+                .mapped_start
+                .as_ref()
+                .unwrap(),
+            &captured,
+        );
+        let mut retirement = StopOwnerRetirement::default();
+        path.source.engine.stop_sample(target).unwrap();
+        drain_control_messages(
+            &mut path.source.consumer,
+            &mut path.scheduler,
+            path.timeline.output_frame(),
+            &mut crate::messages::TriggerQuantization::Immediate,
+            &mut path.timeline,
+            &mut path.source.mixer,
+            &mut path.feedback,
+            &mut retirement,
+        );
+        assert_effective_custody(retirement.owner.as_ref().unwrap(), &captured);
+        assert_eq!(path.source.mixer.mapped_owner_retirement_slots(), 0);
+    }
+}
+
+#[test]
+fn actual_full_retirement_retry_keeps_old_custody_until_public_retrigger_claim() {
+    let mut path = LaunchPath::new();
+    let (_job, delivery) = variable_original_delivery(&path);
+    publish_original(&path, &delivery, 1);
+    let original = path.start();
+    path.render(7);
+    let next = path.capture();
+    drain_control_messages(
+        &mut path.source.consumer,
+        &mut path.scheduler,
+        7,
+        &mut crate::messages::TriggerQuantization::Grid { step_64ths: 16 },
+        &mut path.timeline,
+        &mut path.source.mixer,
+        &mut path.feedback,
+        &mut ImmediateAudioBufferRetirement,
+    );
+    assert_eq!(next.target_frame(), Some(64));
+    let map = Arc::downgrade(
+        path.voice()
+            .mapped_start
+            .as_ref()
+            .unwrap()
+            .effective_source()
+            .unwrap(),
+    );
+    let generation = path.voice().generation;
+    let mut retirement = PausedRetirement::new_full();
+    assert!(path.source.engine.publish_pad_start(&next, None).unwrap());
+    assert_eq!(
+        drain_control_messages(
+            &mut path.source.consumer,
+            &mut path.scheduler,
+            7,
+            &mut crate::messages::TriggerQuantization::Immediate,
+            &mut path.timeline,
+            &mut path.source.mixer,
+            &mut path.feedback,
+            retirement.owner.state_mut(),
+        ),
+        0
+    );
+    assert!(!next.accepted());
+    assert_effective_custody(path.voice().mapped_start.as_ref().unwrap(), &original);
+    path.render_with_retirement(17, retirement.owner.state_mut());
+    assert_eq!(path.voice().generation, generation);
+    assert_effective_custody(path.voice().mapped_start.as_ref().unwrap(), &original);
+    assert_eq!(path.source.mixer.mapped_owner_retirement_slots(), 1);
+    retirement.release();
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(2);
+    while retirement.owner.state_mut().available_retirement_slots() < retirement.capacity {
+        assert!(
+            std::time::Instant::now() < deadline,
+            "worker did not free retrigger capacity"
+        );
+        std::thread::sleep(std::time::Duration::from_millis(1));
+    }
+    drain_control_messages(
+        &mut path.source.consumer,
+        &mut path.scheduler,
+        24,
+        &mut crate::messages::TriggerQuantization::Immediate,
+        &mut path.timeline,
+        &mut path.source.mixer,
+        &mut path.feedback,
+        retirement.owner.state_mut(),
+    );
+    assert!(next.accepted());
+    assert_effective_custody(path.voice().mapped_start.as_ref().unwrap(), &original);
+    path.render_with_retirement(41, retirement.owner.state_mut());
+    assert_eq!(next.state(), "applied", "{:?}", next.reason());
+    assert_eq!(next.effective_frame(), Some(64));
+    assert_ne!(path.voice().generation, generation);
+    assert_effective_custody(path.voice().mapped_start.as_ref().unwrap(), &next);
+    assert_eq!(path.source.mixer.mapped_owner_retirement_slots(), 1);
+    assert!(!Arc::ptr_eq(
+        &map.upgrade().unwrap(),
+        path.voice()
+            .mapped_start
+            .as_ref()
+            .unwrap()
+            .effective_source()
+            .unwrap()
+    ));
+    drop(original);
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(2);
+    while map.upgrade().is_some() {
+        assert!(
+            std::time::Instant::now() < deadline,
+            "worker did not retire the old launch/map aggregate"
+        );
+        std::thread::sleep(std::time::Duration::from_millis(1));
     }
 }
 
@@ -1273,6 +1544,7 @@ fn repeated_equal_public_rate_keeps_pending_mapped_target_epoch_and_prior_audio(
             .mapped_start
             .as_ref()
             .unwrap()
+            .original()
             .same_owner(&captured)
     );
     verify_actual_reads(&path, &captured, 97);
@@ -1294,6 +1566,7 @@ fn repeated_equal_public_rate_keeps_active_map_epoch_owner_and_canonical_reads()
                 .mapped_start
                 .as_ref()
                 .unwrap()
+                .original()
                 .same_owner(&captured)
         );
         path.render(frames);

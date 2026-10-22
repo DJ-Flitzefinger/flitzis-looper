@@ -116,7 +116,14 @@ fn start_cohort_member(path: &mut LaunchPath, id: usize) -> CapturedPadStart {
         ("applied", Some(execution), Some(execution))
     );
     let voice = cohort_voice(path, id);
-    assert!(voice.mapped_start.as_ref().unwrap().same_owner(&captured));
+    assert!(
+        voice
+            .mapped_start
+            .as_ref()
+            .unwrap()
+            .original()
+            .same_owner(&captured)
+    );
     assert!(voice.source_playback.is_mapped());
     assert!(
         !crate::audio_engine::native_source_coverage::complete_view_available(
@@ -260,7 +267,14 @@ fn two_mapped_cohort(partitions: &[usize]) -> Vec<f32> {
             assert_eq!(voice.generation, generations[id]);
             assert_eq!(voice.source_playback.position(), positions[id]);
             assert_eq!(voice.source_playback.mapped_output_frame(), Some(execution));
-            assert!(voice.mapped_start.as_ref().unwrap().same_owner(captured));
+            assert!(
+                voice
+                    .mapped_start
+                    .as_ref()
+                    .unwrap()
+                    .original()
+                    .same_owner(captured)
+            );
             assert!(
                 voice
                     .source_playback
@@ -348,7 +362,14 @@ fn dry_mapped_two_owner_cohort_refuses_one_stale_ack_without_changing_either_par
         let voice = cohort_voice(&path, id);
         assert_eq!(voice.generation, generations[id]);
         assert!(voice.source_playback.matches_exact(&before[id]));
-        assert!(voice.mapped_start.as_ref().unwrap().same_owner(captured));
+        assert!(
+            voice
+                .mapped_start
+                .as_ref()
+                .unwrap()
+                .original()
+                .same_owner(captured)
+        );
     }
     let output = path.render(97);
     let old = [MasterSegment {

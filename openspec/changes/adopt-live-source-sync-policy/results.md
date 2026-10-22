@@ -79,3 +79,81 @@ scalar contract remains open. Stage B's original-custody live policy/map adoptio
 32-lane freshness/atomicity/retry and actual feedback remain open. Global SYNC and
 Realtime BPM are not complete. All original/extension/Human/Native/pitch/Key-Lock/
 B2/music/device/resource/parent/final gates remain; STOP full Rust-port work/Slice8.
+
+## Independent custody prerequisite, 2026-10-23
+
+PadStartCustody now keeps the exact original CapturedPadStart and a separately
+shared effective MappedStartSource in one voice/retirement payload. Existing
+successful ordinary/global mapped births share their original immutable map;
+scalar births still have no mapped custody. Live geometry and witnesses use the
+effective reference, while original admission ownership/content checks remain
+explicitly on the original launch. Pending start Work and MappedNativeInput retain
+their original geometry. There is no replacement setter, converter or live policy
+adoption in this prerequisite, and no existing admission guard is opened.
+
+The existing PadStartTarget entry retires the whole aggregate. Raw captured-target
+cleanup wraps only the original with no effective map. Reservations remain one
+entry for the aggregate, in addition to any independently required PCM entry.
+Move/Swap and capacity refusal preserve the preceding lane and custody.
+Stop/retrigger transfer the preceding complete aggregate to retirement; a
+successful retrigger attaches its newly claimed launch and effective map. Final
+destruction remains on the existing worker or close path; the callback does not
+release a final map owner.
+
+### Fresh verification
+
+The same optimized locked wrapper and shared environment/cache were used. Native
+selection sets below are disjoint. Filtered analysis-crate zero-test output and
+the initial failed run add no passing tests to the final count.
+
+| Affected native set | Result |
+| --- | --- |
+| mapped_launch_custody_tests, including mapped birth/global/Hold/Pause neighbors | 52 PASS, 0 FAIL, 3 existing IGNORE; compile 2m39s, tests 99.93s |
+| audio_engine::buffer_retirement::tests | 2 PASS, 0 FAIL/IGNORE |
+| source_callback_close_tests | 2 PASS, 0 FAIL/IGNORE; 0.19s |
+
+Total: **56 distinct native PASS**, including four new real-route tests: raw
+target cleanup, Stop with an actually paused retirement worker and final Weak
+release, Move/Swap preserving the same voice/custody, and retrigger refusal at
+exhausted retirement capacity followed by a complete successful claim. Existing
+global and refusal assertions also check the original owner and effective Arc.
+The three ignored Native-output cases are retained gates, not passing evidence.
+Constant fixture PCM proves addressing/lifetime, not musical or acoustic quality.
+
+Release all-targets Clippy PASS, 39.90s; the same existing 96 lib / 131 lib-test
+(56 duplicates) / 196 example warnings remain. Warning sites in touched paths
+refer to unchanged old fields/methods/test bodies; no lint suppression was added.
+Cargo fmt, five included-test rustfmt checks, strict OpenSpec and whitespace
+checks PASS. Source-compatible earlier Python and transport/clock evidence is
+reused explicitly; it is not counted as freshly rerun here.
+
+One normal private Release wheel built in 38.97s (39 existing lib warnings).
+Fresh private-origin import/profile and all 13 existing Portable API checks PASS,
+including editor API4 and ordinary transport. Private Native: 34,438,144 B,
+SHA256 `ff4bb07ff4846eba99178c4498a00a80ed3c146fd5903ab531d0812a996d461d`.
+It was not installed. Actual installed Native is still byte-identical at
+34,446,848 B / `91881c187435c0bad0e2c6382a901f7af5c6585caf3665e0da1b6928ac35e6ab`.
+Canonical start.bat --check PASS applies to that explicitly unchanged installation;
+it did not start the App. No App/device was started or stopped or held Native replaced.
+
+### Actual negative result and remaining limits
+
+The first default-parallel mapped run compiled successfully but ended with
+51 PASS / 1 FAIL / 3 IGNORE, 106.26s. The existing actual-Python waveform/Hold test
+hit importlib's module-lock DeadlockError when parallel fixtures imported different
+controller leaves in the shared embedded interpreter. LaunchPath now completes
+the existing controller package entry before those fixture operations. The exact
+same full selection passed with default parallelism as reported above. Assertions,
+production code, admission guards and ignored cases were not changed for this fix.
+Both failed and successful logs are retained in workspace
+test-artifacts/effective-map-custody-20261023.
+
+One continuous independent NONAUTHOR final-diff review returned CLEAR for staged
+tree `cb405868ccc23cfd7707238842c2131acbb71957`, explicitly covering this factual
+receipt and the last custody-prerequisite checkbox. The reviewer stayed read-only.
+It also corrected an overbroad custody sentence: Stop retires the preceding
+aggregate, while a successful retrigger attaches newly claimed custody.
+Numeric conversion, replacement custody, actual live
+policy/map adoption, complete 32-lane freshness/atomicity/retry and feedback remain
+open. Every FULL-Goal Human/Native/pitch/Key-Lock/B2/music/device/resource/parent/
+final gate and STOP before full Rust-port work/Slice8 remains in force.

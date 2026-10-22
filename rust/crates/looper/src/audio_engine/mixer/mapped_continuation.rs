@@ -116,8 +116,8 @@ impl RtMixer {
                 sample,
                 self.sample_rate_hz as u32,
             )?;
-            if !owner.belongs_to(&self.input_runtime_ownership)
-                || owner.content_key() != key
+            if !owner.original().belongs_to(&self.input_runtime_ownership)
+                || owner.original().content_key() != key
                 || owner.source_sync_witness(key, generation).is_none()
                 || !epoch.matches_timeline(transport)
                 || geometry.validate_epoch(epoch).is_err()

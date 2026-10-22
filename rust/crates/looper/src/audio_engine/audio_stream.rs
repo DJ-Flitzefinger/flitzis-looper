@@ -2863,7 +2863,7 @@ pub(super) fn process_control_message<
             {
                 owner.reject(reason);
             }
-            retirement.retire_pad_start_target(owner);
+            retirement.retire_pad_start_target(owner.into());
         }
         ControlMessage::CaptureGlobalStartTarget(owner) => {
             let original = quantized_target_frame(transport, *trigger_quantization)

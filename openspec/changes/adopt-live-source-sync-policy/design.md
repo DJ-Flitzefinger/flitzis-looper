@@ -75,6 +75,23 @@ AutoBars/window changes and unsupported transitions retain their explicit gates.
 
 ## Immutable custody and original lifetime
 
+Before enabling any conversion, an independent behavior-preserving prerequisite
+aggregates the current original CapturedPadStart and its effective immutable map
+reference as PadStartCustody. Existing successful mapped births obtain the same
+original map, so all current effective geometry and witnesses remain unchanged.
+Scalar births remain without mapped custody. Do not add a replacement/adoption
+setter in this prerequisite. Pending start Work and MappedNativeInput still use
+their own original captured geometry, not a living voice's effective reference.
+
+The existing PadStartTarget retirement payload carries the whole aggregate in one
+entry. Reservation accounting remains one slot per retained mapped voice; raw
+captured-target cleanup wraps only its original owner with no effective map clone.
+No owner moves before the original successful claim and retirement preflight.
+Stop/retrigger transfers both references together; failure preserves both.
+Move/Swap follows the same living content/voice without replacing this custody.
+The last effective map reference may outlive original-owner destruction, so both
+references must be destroyed on the established worker/close teardown path.
+
 MappedStartSource already holds QualifiedSourceMap, original delivery/artifact
 pins and owning geometry. Its Arc may be shared as immutable effective map custody.
 VoiceSlot must retain its exact original CapturedPadStart independently, including

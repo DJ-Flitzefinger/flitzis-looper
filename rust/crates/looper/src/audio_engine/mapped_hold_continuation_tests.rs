@@ -193,6 +193,7 @@ fn repeated_holds(partitions: &[usize]) -> Vec<f32> {
                 .mapped_start
                 .as_ref()
                 .unwrap()
+                .original()
                 .same_owner(&captured)
         );
         // Original selected-map changes and cancellation cannot rewrite an effective owner.

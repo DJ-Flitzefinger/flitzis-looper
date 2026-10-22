@@ -90,9 +90,9 @@ pub struct VoiceSlot {
     pub frame_pos: usize,
     pub volume: f32,
     pub(crate) source_playback: SourcePlayback,
-    // Original launch owner pins qualified immutable geometry for the effective voice.
-    // Stop/restart transfers it through the existing off-thread retirement lane.
-    pub(crate) mapped_start: Option<super::pad_start::CapturedPadStart>,
+    // The exact original launch and separately shared effective immutable map retire together.
+    // Stop/restart transfers the aggregate through one existing off-thread retirement slot.
+    pub(crate) mapped_start: Option<super::pad_start::PadStartCustody>,
     pub(crate) sync_request: super::source_sync_policy::SourceSyncRequest,
     pub(crate) source_timing: VoiceSourceTiming,
     /// Frozen only when this voice keeps an old source after bank replacement.

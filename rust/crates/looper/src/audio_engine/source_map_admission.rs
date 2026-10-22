@@ -105,6 +105,14 @@ impl QualifiedSourceMap {
         self.witness
     }
 
+    pub(crate) fn sync_witness_for(
+        &self,
+        key: ContentKey,
+        source_generation: u64,
+    ) -> Option<SourceSyncWitness> {
+        (self.key == key && self.generation == source_generation).then(|| self.sync_witness())
+    }
+
     /// Bounded scalar freshness for pending admission, including the original job token.
     pub(crate) fn current_for(
         &self,

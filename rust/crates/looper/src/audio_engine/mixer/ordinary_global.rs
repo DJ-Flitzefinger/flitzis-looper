@@ -320,8 +320,9 @@ impl RtMixer {
                     }
                     voice.source_playback = snapshot.playback;
                     voice.sync_request = work.origin().sync_request();
-                    voice.mapped_start =
-                        snapshot.playback.is_mapped().then(|| work.origin().clone());
+                    voice.mapped_start = snapshot.playback.is_mapped().then(|| {
+                        super::super::pad_start::PadStartCustody::for_mapped_voice(work.origin())
+                    });
                     if work.native_required() {
                         let feed = ProductiveSourceFeed {
                             sample: &snapshot.sample,

@@ -3,6 +3,12 @@
 - [x] Extract a fixed immutable beat projection from the authoritative TransportTimeline and use it in existing mapped epochs without changing arithmetic or guards.
 - [x] Verify exact epoch inputs/projection, missing master, old mapped/master/Pause/Hold paths and actual layout; finish needed delivery checks and one independent final-diff review.
 
+## Independent custody prerequisite: retain the original launch
+
+- [x] Separate the effective immutable map reference from the exact original launch in one aggregate used by existing mapped births and retirement.
+- [x] Preserve one retirement-slot reservation, raw-target cleanup, current geometry/witness access and every existing admission gate.
+- [x] Prove actual launch/stop/retrigger/capacity/Move/Swap and last-reader behavior; finish affected delivery checks and one independent final-diff review.
+
 ## Stage A: exact copied conversion prerequisite
 
 - [ ] Freeze an analytically bounded anchored source/master representation and precise domain/boundary contract.

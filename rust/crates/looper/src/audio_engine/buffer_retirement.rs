@@ -40,7 +40,7 @@ pub(crate) enum RetiredAudioBuffer {
     OrdinaryStart(Box<super::ordinary_start::OrdinaryStartWork>),
     OrdinaryStartGroup(super::ordinary_start::OrdinaryStartGroup),
     OrdinaryStartPublication(Arc<super::ordinary_start::OrdinaryStartPublication>),
-    PadStartTarget(super::pad_start::CapturedPadStart),
+    PadStartTarget(super::pad_start::PadStartCustody),
     GlobalStartTarget(super::captured_global_start::CapturedGlobalStart),
     SourcePublication(super::input_runtime_binding::SourcePublication),
 }
@@ -113,11 +113,11 @@ pub(crate) trait AudioBufferRetirement {
         work: Arc<super::ordinary_start::OrdinaryStartPublication>,
     );
     #[cfg(test)]
-    fn retire_pad_start_target(&mut self, owner: super::pad_start::CapturedPadStart) {
+    fn retire_pad_start_target(&mut self, owner: super::pad_start::PadStartCustody) {
         drop(owner);
     }
     #[cfg(not(test))]
-    fn retire_pad_start_target(&mut self, owner: super::pad_start::CapturedPadStart);
+    fn retire_pad_start_target(&mut self, owner: super::pad_start::PadStartCustody);
     #[cfg(test)]
     fn retire_pitch_action(&mut self, work: Box<super::pitch_actions::PitchActionWork>) {
         drop(work);
@@ -352,7 +352,7 @@ impl AudioBufferRetirement for RtAudioBufferRetirement {
     ) {
         self.retire_buffer(RetiredAudioBuffer::OrdinaryStartPublication(work));
     }
-    fn retire_pad_start_target(&mut self, owner: super::pad_start::CapturedPadStart) {
+    fn retire_pad_start_target(&mut self, owner: super::pad_start::PadStartCustody) {
         self.retire_buffer(RetiredAudioBuffer::PadStartTarget(owner));
     }
     fn retire_pitch_action(&mut self, work: Box<super::pitch_actions::PitchActionWork>) {

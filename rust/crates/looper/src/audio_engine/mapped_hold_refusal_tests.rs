@@ -368,6 +368,13 @@ fn actual_mapped_hold_after_move_uses_original_content_and_keeps_scalar_neighbor
     assert_eq!(voice.sample_id, 2);
     assert!(!voice.paused);
     exact(voice.source_playback.position(), saved.position());
-    assert!(voice.mapped_start.as_ref().unwrap().same_owner(&captured));
+    assert!(
+        voice
+            .mapped_start
+            .as_ref()
+            .unwrap()
+            .original()
+            .same_owner(&captured)
+    );
     assert!(!path.source.mixer.voices[other].paused);
 }
