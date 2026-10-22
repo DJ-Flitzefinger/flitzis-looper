@@ -20,6 +20,12 @@ and complete Raw evidence; it grants no musical or audio qualification. Unsuppor
 new-beat insertion remains refused. See
 [uncertain-anchor inspection](../openspec/changes/inspect-uncertain-source-anchors/design.md).
 
+A bounded original-owned Short/Medium Native comparison reproduces the earlier
+Short evidence and measures a real classification-readahead variant. Medium improves
+necessary first-attack retention in the +7 profile, but neither variant closes
+extreme-pitch timing or full intended-output acceptance. Production remains unchanged;
+see [comparison results](../openspec/changes/compare-mapped-native-window-profiles/results.md).
+
 Latest Human execution priority2026-10-14: finish the current Controller/Durable/
 Hold delivery, then its actually needed remaining R2 ownership/selection foundation
 and the rate/map/finite/DSP prerequisites for a complete testable Key + Transposition,

@@ -11,7 +11,9 @@ use crate::audio_engine::prepared_native_history::{
     MappedNativeInput, NativeAdapterState, NativeHistoryRequest, RetainedNativeStartCut,
     SourceReadCheckpoint,
 };
-use crate::audio_engine::rubberband_backend::{RubberBandLiveShifter, RubberBandLiveStateOpaque};
+use crate::audio_engine::rubberband_backend::{
+    RubberBandLiveOptions, RubberBandLiveShifter, RubberBandLiveStateOpaque,
+};
 use crate::audio_engine::source_beatmap::render_comparison_tests::{
     CanonicalFixture, OUTPUT, SOURCE, SPAN, Signal, pcm_hash,
 };
@@ -23,6 +25,37 @@ const BLOCK: usize = 512;
 const ANCHORS: [usize; 5] = [0, 16_384, 49_152, 114_688, SOURCE];
 const RATES: [f64; 4] = [0.5, 1.0, 2.0, 1.5];
 const CALLERS: [(&str, &[usize]); 2] = [("512", &[512]), ("irregular", &[73, 511, 7, 512, 127, 3])];
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum NativeOutputProfile {
+    Short,
+    Medium,
+}
+
+impl NativeOutputProfile {
+    fn label(self) -> &'static str {
+        match self {
+            Self::Short => "short-together",
+            Self::Medium => "medium-together-classification-readahead",
+        }
+    }
+
+    fn options(self) -> RubberBandLiveOptions {
+        match self {
+            Self::Short => RubberBandLiveOptions::default(),
+            Self::Medium => {
+                RubberBandLiveOptions::WINDOW_MEDIUM.union(RubberBandLiveOptions::CHANNELS_TOGETHER)
+            }
+        }
+    }
+
+    fn native(self) -> RubberBandLiveShifter {
+        match self {
+            Self::Short => RubberBandLiveShifter::new(RATE, 2).unwrap(),
+            Self::Medium => RubberBandLiveShifter::with_options(RATE, 2, self.options()).unwrap(),
+        }
+    }
+}
 
 #[derive(Clone, Copy, Debug)]
 enum GeometryProfile {
@@ -141,8 +174,16 @@ struct RawOracle {
 
 impl RawOracle {
     fn new(pitch: f64) -> Self {
+        Self::with_profile(pitch, NativeOutputProfile::Short)
+    }
+
+    fn with_profile(pitch: f64, profile: NativeOutputProfile) -> Self {
         // Pinned Live C ABI/options and exact setup, independently of DUT wrappers.
-        let state = unsafe { raw_new(RATE, 2, 0x1000_0000) };
+        let (options, window) = match profile {
+            NativeOutputProfile::Short => (0x1000_0000, 2048.0),
+            NativeOutputProfile::Medium => (0x1010_0000, 2560.0),
+        };
+        let state = unsafe { raw_new(RATE, 2, options) };
         assert!(!state.is_null());
         assert_eq!(unsafe { raw_block(state) } as usize, BLOCK);
         unsafe {
@@ -163,9 +204,9 @@ impl RawOracle {
         }
         oracle.delay = unsafe { raw_delay(state) } as usize;
         if !(0.5..=2.0).contains(&pitch) {
-            // Independent pinned 48k Short window, exact profile's reported delay and bounds.
+            // Independent pinned 48k profile window, exact reported delay and bounds.
             oracle.minimum_history =
-                ((2048.0 * pitch.max(1.0 / pitch)).ceil() as usize + oracle.delay + 2 * BLOCK)
+                ((window * pitch.max(1.0 / pitch)).ceil() as usize + oracle.delay + 2 * BLOCK)
                     .max(4096)
                     .div_ceil(BLOCK)
                     * BLOCK;
@@ -474,6 +515,9 @@ struct Capture {
     raw: Vec<Vec<f32>>,
     raw_cut: usize,
     target: u64,
+    native_delay: usize,
+    minimum_history: usize,
+    profile: NativeOutputProfile,
 }
 
 fn capture(
@@ -482,6 +526,24 @@ fn capture(
     shift: i32,
     block_phase: usize,
     caller: (&str, &[usize]),
+) -> Capture {
+    capture_profile(
+        pcm,
+        decoded,
+        shift,
+        block_phase,
+        caller,
+        NativeOutputProfile::Short,
+    )
+}
+
+fn capture_profile(
+    pcm: &[i16],
+    decoded: &[f32],
+    shift: i32,
+    block_phase: usize,
+    caller: (&str, &[usize]),
+    profile: NativeOutputProfile,
 ) -> Capture {
     assert!(matches!(block_phase, 0 | 17));
     let fixture = owned_birth(pcm, decoded, shift);
@@ -493,9 +555,20 @@ fn capture(
     let mut plan = fixture.request.plan;
     let target = fixture.captured.target_frame().unwrap();
     let pitch = 2.0_f64.powf(f64::from(shift) / 12.0);
-    let oracle = RawOracle::new(pitch);
+    let oracle = match profile {
+        NativeOutputProfile::Short => RawOracle::new(pitch),
+        NativeOutputProfile::Medium => RawOracle::with_profile(pitch, profile),
+    };
     let history = oracle.minimum_history + block_phase;
     let raw_cut = history - (BLOCK - 1);
+    let nominal_compensation = oracle.delay + BLOCK - 1;
+    emit(json!({"stage":"declared_profile_before_source_signal",
+        "profile":profile.label(),"options_bits":format!("{:08x}",profile.options().bits()),
+        "shift":shift,"h":pitch,"native_block_phase":block_phase,"caller":caller.0,
+        "N":oracle.delay,"Cnom":nominal_compensation,"Hmin":oracle.minimum_history,
+        "H":history,"D":raw_cut,"F":history,"output_frames":OUTPUT,
+        "nominal_raw_time_equation":"T+raw_index-D-Cnom",
+        "negative_time_prefix_preserved":true,"fitted_to_response":false}));
     let raw = oracle.capture(decoded, history);
     assert!(raw[0].len() >= raw_cut + OUTPUT);
     // Preserve and inspect the WHOLE raw Native prefix, separately from the adapter lead.
@@ -503,10 +576,7 @@ fn capture(
         raw.iter()
             .all(|channel| channel[..raw_cut].iter().all(|sample| *sample == 0.0))
     );
-    let mut candidate = Box::new(NativeAdapterState::new(
-        Some(RubberBandLiveShifter::new(RATE, 2).unwrap()),
-        2,
-    ));
+    let mut candidate = Box::new(NativeAdapterState::new(Some(profile.native()), 2));
     let native = candidate.rubberband.as_ref().unwrap().state_address();
     candidate
         .prepare_owned_mapped_birth_future(
@@ -517,6 +587,14 @@ fn capture(
             },
         )
         .unwrap();
+    // These cached observations were queried by exact preparation before its first
+    // source block; source processing does not remeasure or replace them.
+    let prepared_native = candidate.rubberband.as_ref().unwrap();
+    assert_eq!(prepared_native.start_delay(), oracle.delay);
+    assert_eq!(
+        prepared_native.source_history_frames(pitch).unwrap(),
+        oracle.minimum_history
+    );
     let mut processor = StretchProcessor::new(2);
     processor.reset();
     assert_eq!(processor.preparation_epoch(), fixture.work.epoch());
@@ -629,6 +707,8 @@ fn capture(
         }
         partition += 1;
     }
+    assert!(output.iter().flatten().all(|sample| sample.is_finite()));
+    assert!(dry.iter().flatten().all(|sample| sample.is_finite()));
     let error = (0..2)
         .flat_map(|channel| {
             let output = &output[channel];
@@ -650,6 +730,7 @@ fn capture(
     assert_eq!(sync_feedback(&fixture.path).unwrap()["effective"], false);
     emit(
         json!({"stage":"complete_stream","shift":shift,"h":pitch,"key_lock":false,
+        "profile":profile.label(),
         "geometry_profile":GeometryProfile::DeclaredAdjacentSupported.label(),
         "native_block_phase":block_phase,"creative_phase_output_frames":0,"caller":caller.0,
         "target":target,"logical_output_range":[target,target+OUTPUT as u64],
@@ -672,6 +753,9 @@ fn capture(
         raw,
         raw_cut,
         target,
+        native_delay: oracle.delay,
+        minimum_history: oracle.minimum_history,
+        profile,
     }
 }
 
@@ -844,4 +928,8 @@ fn measure_original_owned_mapped_native_complete_output() {
         "acoustic_failures_are_results":true,"accepted_musical_c":null,
         "public_native_admission":false,"device_music_human_or_full_goal_acceptance":false}),
     );
+}
+
+mod mapped_native_profile_tests {
+    include!("mapped_native_profile_tests.rs");
 }
