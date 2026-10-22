@@ -3,6 +3,9 @@
 
 use super::*;
 
+#[path = "realtime_highspeed_prerequisite.rs"]
+mod highspeed_prerequisite;
+
 // Pinned v4.0.0 rubberband-c.h: RealTime | ThreadingNever | WindowStandard |
 // PitchHighConsistency | ChannelsTogether | EngineFiner. Standard contributes zero.
 const REALTIME_OPTIONS: c_int = 0x3401_0001;
@@ -18,6 +21,27 @@ const UNITY_EVENT: usize = 4096;
 const MAX_PROCESS_CALLS: usize = MAX_INPUT_FRAMES.div_ceil(MAX_PROCESS_SIZE);
 const MAX_RETRIEVE_CALLS: usize = MAX_CAPTURE_FRAMES;
 const MAX_FINAL_DRAIN_CALLS: usize = 16;
+
+#[derive(Clone, Copy)]
+struct RealtimeProfile {
+    options: c_int,
+    unity_pad: usize,
+    unity_delay: usize,
+    prerequisite_pad: usize,
+    prerequisite_delay: usize,
+    pre_signal_stage: &'static str,
+    capture_stage: &'static str,
+}
+
+const HIGH_CONSISTENCY: RealtimeProfile = RealtimeProfile {
+    options: REALTIME_OPTIONS,
+    unity_pad: EXPECTED_PAD,
+    unity_delay: UNITY_DELAY,
+    prerequisite_pad: EXPECTED_PAD,
+    prerequisite_delay: PREREQUISITE_DELAY,
+    pre_signal_stage: "realtime_mapped_pre_signal_api",
+    capture_stage: "realtime_mapped_complete_raw_capture",
+};
 
 fn pcm_hash(channels: &[Vec<f32>]) -> String {
     assert_eq!(channels.len(), PROBE_CHANNELS);
@@ -67,23 +91,26 @@ struct RealtimeStretcher {
 }
 
 impl RealtimeStretcher {
-    fn new(canonical_frames: usize, pitch: f64, expected_delay: usize) -> Self {
+    fn new(canonical_frames: usize, pitch: f64, profile: RealtimeProfile) -> Self {
         assert!(pitch == 1.0 || pitch == PREREQUISITE_PITCH);
-        assert!((1..=MAX_INPUT_FRAMES - EXPECTED_PAD).contains(&canonical_frames));
-        const {
-            assert!(REALTIME_OPTIONS & 1 == 1);
-            assert!(REALTIME_OPTIONS & THREADING_NEVER == THREADING_NEVER);
-            assert!(REALTIME_OPTIONS & CHANNELS_TOGETHER == CHANNELS_TOGETHER);
-            assert!(REALTIME_OPTIONS & ENGINE_FINER == ENGINE_FINER);
-            assert!(REALTIME_OPTIONS & WINDOW_SHORT == 0);
-        }
+        let (expected_pad, expected_delay) = if pitch == 1.0 {
+            (profile.unity_pad, profile.unity_delay)
+        } else {
+            (profile.prerequisite_pad, profile.prerequisite_delay)
+        };
+        assert!((1..=MAX_INPUT_FRAMES - expected_pad).contains(&canonical_frames));
+        assert_eq!(profile.options & 1, 1);
+        assert_eq!(profile.options & THREADING_NEVER, THREADING_NEVER);
+        assert_eq!(profile.options & CHANNELS_TOGETHER, CHANNELS_TOGETHER);
+        assert_eq!(profile.options & ENGINE_FINER, ENGINE_FINER);
+        assert_eq!(profile.options & WINDOW_SHORT, 0);
         // SAFETY: All constructor scalars are validated bounded C representations.
         // The returned handle receives one exclusive RAII owner immediately.
         let state = unsafe {
             rubberband_new(
                 RATE,
                 u32::try_from(PROBE_CHANNELS).unwrap(),
-                REALTIME_OPTIONS,
+                profile.options,
                 TIME_RATIO,
                 pitch,
             )
@@ -122,11 +149,11 @@ impl RealtimeStretcher {
         owner.delay = usize::try_from(delay).unwrap();
         owner.input_frames = owner.pad.checked_add(canonical_frames).unwrap();
         emit(serde_json::json!({
-            "stage":"realtime_mapped_pre_signal_api",
-            "requested_options_bits":REALTIME_OPTIONS,"requested_engine":3,"actual_engine":engine,
+            "stage":profile.pre_signal_stage,
+            "requested_options_bits":profile.options,"requested_engine":3,"actual_engine":engine,
             "actual_channels":channels,"actual_time_ratio_q":q,"actual_pitch_p":p,
             "actual_preferred_start_pad_P":owner.pad,"actual_start_delay_N":owner.delay,
-            "expected_P":EXPECTED_PAD,"expected_N":expected_delay,
+            "expected_P":expected_pad,"expected_N":expected_delay,
             "canonical_frames":canonical_frames,"total_native_input_frames":owner.input_frames,
             "max_process_size":MAX_PROCESS_SIZE,"nominal_output_index":"raw_n - queried_N",
             "nominal_raw_window":[owner.delay,owner.delay+canonical_frames],
@@ -137,7 +164,7 @@ impl RealtimeStretcher {
         assert_eq!(channels, PROBE_CHANNELS as u32);
         assert_eq!(q, TIME_RATIO);
         assert_eq!(p, pitch);
-        assert_eq!(owner.pad, EXPECTED_PAD);
+        assert_eq!(owner.pad, expected_pad);
         assert_eq!(owner.delay, expected_delay);
         assert!(owner.input_frames <= MAX_INPUT_FRAMES);
         owner
@@ -226,6 +253,7 @@ impl Drop for RealtimeStretcher {
 struct Capture {
     raw: Vec<Vec<f32>>,
     delay: usize,
+    process_block_capacity: usize,
 }
 
 fn padded_sample(input: &[Vec<f32>], pad: usize, channel: usize, frame: usize) -> f32 {
@@ -235,6 +263,15 @@ fn padded_sample(input: &[Vec<f32>], pad: usize, channel: usize, frame: usize) -
 }
 
 fn capture(input: &[Vec<f32>], pitch: f64, caller: (&str, &[usize])) -> Capture {
+    capture_with_profile(input, pitch, caller, HIGH_CONSISTENCY)
+}
+
+fn capture_with_profile(
+    input: &[Vec<f32>],
+    pitch: f64,
+    caller: (&str, &[usize]),
+    profile: RealtimeProfile,
+) -> Capture {
     assert_eq!(input.len(), PROBE_CHANNELS);
     let frames = input[0].len();
     assert!(input.iter().all(|channel| channel.len() == frames));
@@ -246,12 +283,7 @@ fn capture(input: &[Vec<f32>], pitch: f64, caller: (&str, &[usize])) -> Capture 
             .iter()
             .all(|count| (1..=MAX_PROCESS_SIZE).contains(count))
     );
-    let expected_delay = if pitch == 1.0 {
-        UNITY_DELAY
-    } else {
-        PREREQUISITE_DELAY
-    };
-    let mut owner = RealtimeStretcher::new(frames, pitch, expected_delay);
+    let mut owner = RealtimeStretcher::new(frames, pitch, profile);
     let mut output = (0..PROBE_CHANNELS).map(|_| Vec::new()).collect::<Vec<_>>();
     let mut staging = [[0.0_f32; MAX_PROCESS_SIZE]; PROBE_CHANNELS];
     let mut staged = 0;
@@ -319,7 +351,7 @@ fn capture(input: &[Vec<f32>], pitch: f64, caller: (&str, &[usize])) -> Capture 
         );
     }
     emit(serde_json::json!({
-        "stage":"realtime_mapped_complete_raw_capture","caller":caller.0,
+        "stage":profile.capture_stage,"caller":caller.0,
         "pitch_p":pitch,"canonical_input_frames":frames,"queried_P":owner.pad,"queried_N":owner.delay,
         "canonical_pcm_sha256":pcm_hash(input),"complete_raw_pcm_sha256":pcm_hash(&output),
         "complete_raw_frames":output[0].len(),"actual_terminal_available":available,
@@ -335,6 +367,7 @@ fn capture(input: &[Vec<f32>], pitch: f64, caller: (&str, &[usize])) -> Capture 
     Capture {
         raw: output,
         delay: owner.delay,
+        process_block_capacity: owner.blocks.capacity(),
     }
 }
 
