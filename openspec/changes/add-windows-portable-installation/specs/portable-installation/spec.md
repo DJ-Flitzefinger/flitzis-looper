@@ -118,6 +118,24 @@ failure logs SHALL remain distinct from application data.
 - **AND** unchanged healthy source/runtime SHALL avoid another Native build, while missing or invalid model assets SHALL still be repaired and checked
 - **AND** ordinary GUI starts SHALL NOT acquire a new model download or build job
 
+#### Scenario: Recognized checkout contains unregistered files or directories
+- **GIVEN** a recognized accepted checkout whose registered source files remain complete and hash-correct, with unregistered files such as an older `.venv/.gitignore` or unregistered empty directories
+- **WHEN** the installer is repeated on the same or a newer exact `main`
+- **THEN** it SHALL prepare and verify a clean candidate without executing the contaminated checkout, even when the selected source commit is unchanged
+- **AND** after journaled data relocation and successful activation it SHALL preserve the entire previous checkout at its existing transaction backup path and report the actual retained path
+- **AND** it SHALL finish the accepted transaction without copying unregistered contents into the active checkout, deleting them, or requiring otherwise healthy model/tool/package/build caches to be downloaded again
+- **AND** missing or changed registered source, unregistered or changed Runtime files, unknown installation ownership and reparse paths SHALL remain refusals that preserve existing bytes
+- **AND** a later repeat on the new healthy checkout SHALL retain the unchanged-main model-repair path without another Native build
+
+#### Scenario: Candidate recovery must validate before executing
+- **GIVEN** an interrupted activation or an accepted transaction awaiting cleanup
+- **WHEN** recovery requires candidate relocation, private preflight or model execution
+- **THEN** it SHALL first verify the exact journal-bound schema-2 source commit, clean source declaration, complete source and Runtime file inventories, hashes and reparse guards
+- **AND** staged source checkouts SHALL reject unknown files and directories; Runtime SHALL reject unknown or changed files, and active source checkouts SHALL exempt only persistent Samples/Input data and their structural configuration parent
+- **AND** directory ownership in this update SHALL apply to the source checkout; Runtime directory inventory and empty-directory coverage SHALL remain unchanged and SHALL NOT be claimed as verified by these checks
+- **AND** unknown or tampered candidate contents SHALL stop recovery before execution and retain transaction and data evidence
+- **AND** a restored recognized prior checkout MAY retain extras under the same preservation policy without executing them
+
 ### Requirement: Verified legacy data relocation
 Recognized legacy installation data SHALL be relocated once under the installation
 lock, preserving exact project, journal, input, sample and PCM-cache bytes and
@@ -191,3 +209,13 @@ or speed promises.
 - **WHEN** the installer checks an unchanged installation, prepares an update or cleans a recorded retired Runtime
 - **THEN** it SHALL stop before treating the replacement bytes as disposable and preserve those bytes
 - **AND** an absent recorded Runtime leaf SHALL remain eligible for Runtime repair; absence SHALL NOT authorize deletion of a present changed leaf
+
+#### Scenario: Directory ownership is incomplete in an older checkout manifest
+- **GIVEN** an older accepted manifest records files without a directory inventory
+- **WHEN** update admission or retired-checkout cleanup assesses ownership
+- **THEN** it SHALL derive owned directory ancestors only from recorded file paths and SHALL preserve unproved empty directories conservatively with the entire previous checkout
+- **AND** current directory names or a scan of the existing tree SHALL NOT grant deletion authority
+- **AND** new manifests SHALL record all checkout directories, including empty Git directories and the structural `config` parent, before persistent input data is introduced
+- **AND** strict execution checks of an already active file-only legacy manifest MAY validate files without claiming unrecorded empty directories for cleanup
+- **AND** retired-checkout cleanup SHALL NOT exempt Samples/Input paths from ownership checks; leftover unregistered data SHALL preserve the old checkout
+- **AND** only Runtime validation MAY exempt its own unrecorded root `release-manifest.json`; Source and Input validation SHALL treat such an unregistered file as unknown

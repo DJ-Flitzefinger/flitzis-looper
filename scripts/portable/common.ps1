@@ -209,7 +209,14 @@ function Move-PortableDirectory([string] $Source, [string] $Target) {
     [IO.Directory]::Move($Source, $Target)
 }
 
-function Assert-PortableInventory([string] $Directory, $Inventory, [switch] $Persistent, [switch] $VerifyHashes) {
+function Get-PortableCheckoutDirectories($Release) {
+    if ($Release.PSObject.Properties['checkout_directories']) { return ,@($Release.checkout_directories) }
+    return $null
+}
+
+function Assert-PortableInventory([string] $Directory, $Inventory, $Directories = $null,
+    [switch] $Persistent, [switch] $VerifyHashes, [switch] $AllowExtras,
+    [switch] $IgnoreUnrecordedDirectories, [switch] $ReleaseManifest) {
     Assert-PortableTree $Directory
     if ($null -eq $Inventory) { throw "No complete file ownership inventory for $Directory; files will be preserved." }
     if (-not (Test-Path -LiteralPath $Directory)) {
@@ -217,21 +224,52 @@ function Assert-PortableInventory([string] $Directory, $Inventory, [switch] $Per
         return
     }
     $known = @{}
+    $knownDirectories = @{}
     foreach ($property in $Inventory.PSObject.Properties) {
         $relative = $property.Name
         if ($relative -match '(^[/\\]|:|(^|[/\\])\.\.([/\\]|$))' -or $property.Value -notmatch '^[a-f0-9]{64}$') {
             throw 'Invalid portable file ownership inventory.'
         }
-        $known[$relative.Replace('\','/')] = $property.Value
+        $relative = $relative.Replace('\','/')
+        $known[$relative] = $property.Value
+        while ($relative.Contains('/')) {
+            $relative = $relative.Substring(0,$relative.LastIndexOf('/'))
+            $knownDirectories[$relative] = $true
+        }
     }
+    if ($null -ne $Directories) {
+        foreach ($relative in @($Directories)) {
+            if ($relative -isnot [string] -or -not $relative -or
+                $relative -match '(^[/\\]|:|(^|[/\\])\.{1,2}([/\\]|$)|[/\\]$)') {
+                throw 'Invalid portable directory ownership inventory.'
+            }
+            $knownDirectories[$relative.Replace('\','/')] = $true
+        }
+    }
+    $extras = $false
     foreach ($file in @(Get-ChildItem -LiteralPath $Directory -Recurse -Force -File)) {
         $relative = $file.FullName.Substring($Directory.TrimEnd('\').Length + 1).Replace('\','/')
         if ($Persistent -and ($relative.StartsWith('samples/') -or $relative.StartsWith('config/input/'))) { continue }
-        if (-not $Persistent -and $relative -eq 'release-manifest.json') { continue }
-        if (-not $known.ContainsKey($relative)) { throw "Unknown file will be preserved: $($file.FullName)" }
+        if ($ReleaseManifest -and $relative -eq 'release-manifest.json') { continue }
+        if (-not $known.ContainsKey($relative)) {
+            if (-not $AllowExtras) { throw "Unknown file will be preserved: $($file.FullName)" }
+            $extras = $true
+            continue
+        }
         # Present bytes must still belong to this installation, even when absent
         # Runtime leaves are allowed so that a damaged installation can be repaired.
         Assert-Hash $file.FullName $known[$relative]
+    }
+    if ($null -ne $Directories -or -not $IgnoreUnrecordedDirectories) {
+        foreach ($folder in @(Get-ChildItem -LiteralPath $Directory -Recurse -Force -Directory)) {
+            $relative = $folder.FullName.Substring($Directory.TrimEnd('\').Length + 1).Replace('\','/')
+            if ($Persistent -and ($relative -in @('samples','config','config/input') -or
+                $relative.StartsWith('samples/') -or $relative.StartsWith('config/input/'))) { continue }
+            if (-not $knownDirectories.ContainsKey($relative)) {
+                if (-not $AllowExtras) { throw "Unknown directory will be preserved: $($folder.FullName)" }
+                $extras = $true
+            }
+        }
     }
     if ($VerifyHashes) {
         foreach ($relative in $known.Keys) {
@@ -239,6 +277,7 @@ function Assert-PortableInventory([string] $Directory, $Inventory, [switch] $Per
             if (-not (Test-Path -LiteralPath $path -PathType Leaf)) { throw "Source revision was modified: $path" }
         }
     }
+    if ($AllowExtras) { return $extras }
 }
 
 function Write-PortableBytes([string] $Path, [byte[]] $Bytes) {
@@ -276,14 +315,24 @@ function Get-PortableDataSource([string] $Root, $Record, $Paths) {
     return $Paths.checkout
 }
 
-function Get-PortableCandidateCustody($Paths) {
+function Get-PortableCandidateCustody($Paths, $Record) {
     $checkout = if (Test-Path -LiteralPath $Paths.source) { $Paths.source } else { $Paths.checkout }
     $runtime = if (Test-Path -LiteralPath $Paths.candidate) { $Paths.candidate } else { $Paths.runtime }
     foreach ($path in @($checkout,$runtime)) {
         Assert-PlainPath $path
         if (-not (Test-Path -LiteralPath $path -PathType Container)) { throw 'Transaction candidate is missing; resumption was safely stopped.' }
     }
-    return @{checkout=$checkout; runtime=$runtime}
+    $release = Get-Content -LiteralPath (Join-Path $runtime 'release-manifest.json') -Raw | ConvertFrom-Json
+    if ($release.schema_version -ne 2 -or $release.git_commit -ne $Record.git_commit -or
+        $release.source_dirty -isnot [bool] -or $release.source_dirty) {
+        throw 'Transaction candidate source revision does not match the journal.'
+    }
+    # Active legacy manifests can validate executable files without claiming
+    # unrecorded empty directories for cleanup. Staged candidates stay strict.
+    $active = $checkout -eq $Paths.checkout
+    Assert-PortableInventory $checkout $release.checkout_files -Directories (Get-PortableCheckoutDirectories $release) -Persistent:$active -VerifyHashes -IgnoreUnrecordedDirectories:$active
+    Assert-PortableInventory $runtime $release.runtime_files -VerifyHashes -ReleaseManifest -IgnoreUnrecordedDirectories
+    return @{checkout=$checkout; runtime=$runtime; release=$release}
 }
 
 function Remove-PortableBuildStages([string] $Root, $Record, $Paths) {
@@ -299,23 +348,23 @@ function Remove-PortableBuildStages([string] $Root, $Record, $Paths) {
 
 function Complete-PortableTransaction([string] $Root, $Record) {
     $paths = Get-PortablePaths $Root $Record.operation
-    $release = Get-Content -LiteralPath (Join-Path $paths.runtime 'release-manifest.json') -Raw | ConvertFrom-Json
-    if ($release.git_commit -ne $Record.git_commit -or $release.source_dirty) { throw 'Activated source revision does not match the journal.' }
-    Assert-PortableInventory $paths.checkout $release.checkout_files -Persistent -VerifyHashes
-    Assert-PortableInventory $paths.runtime $release.runtime_files
+    $custody = Get-PortableCandidateCustody $paths $Record
+    if ($custody.checkout -ne $paths.checkout -or $custody.runtime -ne $paths.runtime) { throw 'Candidate was not fully activated.' }
     if (Test-Path -LiteralPath $paths.old_checkout) {
-        Assert-PortableInventory $paths.old_checkout $Record.old_release.checkout_files -VerifyHashes
-        Remove-PortableOwnedDirectory $Root $paths.old_checkout
+        $extras = Assert-PortableInventory $paths.old_checkout $Record.old_release.checkout_files -Directories (Get-PortableCheckoutDirectories $Record.old_release) -VerifyHashes -AllowExtras
+        if ($extras) {
+            Write-Warning "Previous checkout contains unregistered files or directories and will be preserved in full: $(Resolve-PortablePhysicalPath $paths.old_checkout)"
+        } else { Remove-PortableOwnedDirectory $Root $paths.old_checkout }
     }
     if (Test-Path -LiteralPath $paths.old_runtime) {
-        Assert-PortableInventory $paths.old_runtime $Record.old_release.runtime_files
+        Assert-PortableInventory $paths.old_runtime $Record.old_release.runtime_files -ReleaseManifest -IgnoreUnrecordedDirectories
         Remove-PortableOwnedDirectory $Root $paths.old_runtime
     }
     if ($Record.legacy_directory) {
         $legacy = Join-Path (Join-Path $Root 'versions') $Record.legacy_directory
         if (Test-Path -LiteralPath $legacy) {
             if ($Record.old_release.PSObject.Properties['runtime_files']) {
-                Assert-PortableInventory $legacy $Record.old_release.runtime_files
+                Assert-PortableInventory $legacy $Record.old_release.runtime_files -ReleaseManifest -IgnoreUnrecordedDirectories
                 Assert-PortableTree $legacy
                 Remove-Item -LiteralPath $legacy -Recurse -Force
             } else {
@@ -355,7 +404,7 @@ function Undo-PortableTransaction([string] $Root, $Record) {
     $paths = Get-PortablePaths $Root $Record.operation
     Save-PortableTransaction $Root $Record 'rolling_back'
     if ($Record.had_samples -and $Record.capture_completed -and (Test-Path -LiteralPath $paths.relocation)) {
-        $custody = Get-PortableCandidateCustody $paths
+        $custody = Get-PortableCandidateCustody $paths $Record
         $sourceRoot = Get-PortableDataSource $Root $Record $paths
         Invoke-PortableRelocation $Root $custody.checkout $custody.runtime (Join-Path $sourceRoot 'samples') (Join-Path $paths.checkout 'samples') $paths.relocation 'rollback'
     }
@@ -364,7 +413,7 @@ function Undo-PortableTransaction([string] $Root, $Record) {
         $inputSource = Join-Path $sourceRoot 'config/input'
         $inputTarget = Join-Path $paths.checkout 'config/input'
         if ($inputSource -ne $inputTarget -and -not (Test-Path -LiteralPath $inputSource) -and (Test-Path -LiteralPath $inputTarget)) {
-            Assert-PortableInventory $inputTarget $Record.input_files -VerifyHashes
+            Assert-PortableInventory $inputTarget $Record.input_files -VerifyHashes -IgnoreUnrecordedDirectories
             Move-PortableDirectory $inputTarget $inputSource
         }
     }
@@ -398,6 +447,8 @@ function Recover-PortableTransaction([string] $Root) {
     if (-not $record) { return }
     $paths = Get-PortablePaths $Root $record.operation
     if ($record.phase -eq 'accepted') {
+        $custody = Get-PortableCandidateCustody $paths $record
+        if ($custody.checkout -ne $paths.checkout -or $custody.runtime -ne $paths.runtime) { throw 'Accepted candidate was not fully activated.' }
         Invoke-PortableCheck $Root $paths.checkout $paths.runtime
         Invoke-PortableModels $Root $paths.checkout $paths.runtime 'check'
         Complete-PortableTransaction $Root $record
@@ -408,9 +459,10 @@ function Recover-PortableTransaction([string] $Root) {
     if ((Test-Path -LiteralPath $paths.source) -and (Test-Path -LiteralPath (Join-Path $paths.candidate 'release-manifest.json'))) {
         $release = Get-Content -LiteralPath (Join-Path $paths.candidate 'release-manifest.json') -Raw | ConvertFrom-Json
         if ($release.schema_version -eq 2 -and $release.git_commit -eq $record.git_commit -and -not $release.source_dirty) {
-            Assert-PortableInventory $paths.source $release.checkout_files -VerifyHashes
-            Assert-PortableInventory $paths.candidate $release.runtime_files
-            $proven = $true
+            try {
+                Get-PortableCandidateCustody $paths $record | Out-Null
+                $proven = $true
+            } catch { Write-Warning "Candidate ownership is incomplete; diagnostics will be preserved: $($_.Exception.Message)" }
         }
     }
     if ($proven) {
@@ -426,10 +478,10 @@ function Recover-PortableTransaction([string] $Root) {
     if (Test-Path -LiteralPath $paths.relocation) {
         if ($record.capture_completed) { Remove-Item -LiteralPath $paths.relocation }
         else {
-            if ($record.had_checkout) { Assert-PortableInventory $paths.checkout $record.old_release.checkout_files -Persistent -VerifyHashes }
-            if ($record.had_runtime) { Assert-PortableInventory $paths.runtime $record.old_release.runtime_files }
+            if ($record.had_checkout) { Assert-PortableInventory $paths.checkout $record.old_release.checkout_files -Directories (Get-PortableCheckoutDirectories $record.old_release) -Persistent -VerifyHashes -AllowExtras | Out-Null }
+            if ($record.had_runtime) { Assert-PortableInventory $paths.runtime $record.old_release.runtime_files -ReleaseManifest -IgnoreUnrecordedDirectories }
             if ($record.legacy_directory) {
-                Assert-PortableInventory (Join-Path (Join-Path $Root 'versions') $record.legacy_directory) $record.old_release.runtime_files
+                Assert-PortableInventory (Join-Path (Join-Path $Root 'versions') $record.legacy_directory) $record.old_release.runtime_files -ReleaseManifest -IgnoreUnrecordedDirectories
             }
             $diagnostic = Join-Path $Root ('cache/failed-relocation-' + $record.operation + '.json')
             Assert-PlainPath $diagnostic

@@ -62,3 +62,20 @@ the actual-machine gates remain open.
   one independent final review and coherent publication; update BAT/scripts,
   repository maintenance rules and beginner docs together. Retain real failures
   and clean-Windows/Human/device/hearing limitations.
+
+## Direct Human checkout-extras repair — 2026-10-23
+
+- [x] 16. Let recognized previous checkouts retain unregistered files/directories
+  only through a clean candidate, including unchanged-main updates; preserve the
+  entire old checkout at its existing backup path, report it and finish the journal.
+- [x] 17. Record optional checkout directory ownership and the structural config
+  parent; derive legacy ownership only from recorded files and preserve unproved
+  empty directories without relaxing registered-source, Runtime or reparse guards.
+- [x] 18. Validate candidate custody before rollback relocation and accepted
+  recovery execution; keep staged candidates strict and preserve unproved diagnostics.
+- [x] 19. Verify old file-only `.venv`/hidden-file, import-sentinel, empty-directory,
+  repeated-cache, interruption/recovery, source/Runtime tampering and reparse cases;
+  check BAT mirror, PowerShell syntax, focused suites, strict OpenSpec and final diff.
+
+The protected Human installation is not a test target. Mocked transaction checks
+do not establish actual Native/model/device acceptance or the open machine gates.

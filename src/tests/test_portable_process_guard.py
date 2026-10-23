@@ -86,7 +86,7 @@ catch { $failure = $_.Exception.Message }
 if ($exitQuery -eq 'exited') {
     if ($failure) { throw "positive original exit did not resolve query race: $failure" }
 } else {
-    if (-not $failure -or $failure -notlike '*Python-Prozessbesitzer*') {
+    if (-not $failure -or $failure -notlike '*Python process owner cannot be verified*') {
         throw "live/unqueryable owner did not fail closed: $failure"
     }
 }
@@ -169,7 +169,7 @@ $failure = $null
 try { Assert-NoPortableProcess $root }
 catch { $failure = $_.Exception.Message }
 if ($owned) {
-    if (-not $failure -or $failure -notlike '*installierter Looper-Prozess*') {
+    if (-not $failure -or $failure -notlike '*installed Looper process is still running*') {
         throw "known live root owner did not block: $failure"
     }
     if ($second.PathQueries -ne 0) { throw 'guard continued after rejecting original owner' }

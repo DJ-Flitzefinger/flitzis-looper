@@ -41,9 +41,39 @@ verifies actual paths and captured custody; it does not infer successful publica
 from existence alone. Successful cleanup removes only complete recorded installer-owned
 candidates/downloads/backups. Samples, PCM caches, models, logs and useful measured
 build/tool caches remain. New manifests record full source/runtime file inventories.
-Legacy cleanup requires authoritative exact Git blobs, installed distribution RECORD,
-pinned interpreter/FFmpeg and original Native manifest proofs; unknown extras stop
-before activation, rather than being accepted merely by directory name or marker.
+Legacy Runtime cleanup requires authoritative exact Git blobs, installed distribution
+RECORD, pinned interpreter/FFmpeg and original Native manifest proofs; unknown Runtime
+extras stop before activation. A recognized current-layout checkout may contain
+unregistered files or directories while every registered source file is still complete
+and hash-correct. Any such extra disables the unchanged-main execution fast path and
+requires a clean candidate. The old checkout is renamed through the same journaled
+swap, its Samples/Input move through the existing custody path, and the entire remaining
+old checkout stays at its original `cache/o-<operation>` path when extras remain.
+Cleanup reports its physical path and completes the accepted journal. It neither
+merges extras into the candidate nor executes or recursively removes that backup.
+
+New manifests add optional `checkout_directories` beside the schema-2 file inventories.
+The builder records empty Git directories and creates only the structural `config`
+parent before recording ownership. File-only older manifests derive directory ownership
+from registered file ancestors; unproved empty directories trigger conservative
+retention once. An already active file-only legacy checkout may pass strict executable
+file validation without granting directory-deletion authority. Active Persistent checks
+exempt only Samples/Input data and the structural config parent. Old-checkout cleanup
+has no Persistent exemption, so any leftover data prevents recursive removal. Runtime
+retains strict file ownership and permits only its own root release manifest exception;
+the exception never applies to source or Input.
+
+The shared candidate-custody guard validates exact journal commit, schema2,
+`source_dirty=false`, complete source and Runtime files/hashes and reparse paths
+before candidate execution. Recovery uses it before Native rollback relocation and
+before accepted private preflight/model checks. Staged source rejects unknown files
+and directories; Runtime rejects unknown or changed files. Directory inventories
+cover source only; Runtime directory handling is unchanged and is not verified by
+these checks. Active new source allows only journal-bound persistent data paths. Failed
+candidate cleanup keeps diagnostics when directory ownership cannot be proved.
+Unregistered/changed Runtime files, changed or missing registered source, unknown
+installations and reparse trees remain refusals. Models, tools and useful package/
+Native caches retain their existing locations and reuse behavior.
 
 Model preparation calls the existing Demucs htdemucs resolver/checksum and pinned
 BS-RoFormer musdb18hq asset installer. Parent orchestration is Torch-free. Preparation

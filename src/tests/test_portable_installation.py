@@ -38,10 +38,17 @@ $ErrorActionPreference = 'Stop'
 $runtime = $PSScriptRoot
 . (Join-Path $runtime 'common.ps1')
 if (-not $CheckoutDirectory) { $CheckoutDirectory = Join-Path $Root 'flitzis-looper' }
+# Model an import performed by the private preflight or relocation entry point.
+# A contaminated old checkout must never reach this executable source seam.
+$importSentinel = Join-Path $CheckoutDirectory 'src/unregistered-import-sentinel.ps1'
+if (Test-Path -LiteralPath $importSentinel) { . $importSentinel }
 $release = Get-Content -LiteralPath (Join-Path $runtime 'release-manifest.json') -Raw |
     ConvertFrom-Json
 if ($release.fixture_version -ne '@VERSION@') { throw 'Wrong private launch implementation' }
 if ($RelocationAction) {
+    $entry = @{action=$RelocationAction; fixture_version='@VERSION@'} | ConvertTo-Json -Compress
+    [IO.File]::AppendAllText((Join-Path $Root 'cache/native-relocation-history.jsonl'),
+        $entry + "`n")
     function Inventory([string] $Path) {
         $result = @{}
         foreach ($file in @(Get-ChildItem -LiteralPath $Path -Recurse -Force -File)) {
@@ -149,13 +156,20 @@ function Inventory([string] $Path) {
     }
     return $result
 }
+[IO.Directory]::CreateDirectory((Join-Path $Source 'config')) | Out-Null
+function Directories([string] $Path) {
+    foreach ($directory in @(Get-ChildItem -LiteralPath $Path -Recurse -Force -Directory)) {
+        $directory.FullName.Substring($Path.TrimEnd('\').Length + 1).Replace('\','/')
+    }
+}
 if ('@FAILURE@' -ne 'missing-manifest') {
     $runtimeCommit = if ('@FAILURE@' -eq 'wrong-commit') {
         'ffffffffffffffffffffffffffffffffffffffff'
     } else { $Commit }
     $release = @{schema_version=2; release_id=$Commit; git_commit=$runtimeCommit;
         source_dirty=('@FAILURE@' -eq 'dirty-manifest'); fixture_version='@VERSION@';
-        checkout_files=(Inventory $Source); runtime_files=(Inventory $RuntimeDirectory)}
+        checkout_files=(Inventory $Source); checkout_directories=@(Directories $Source);
+        runtime_files=(Inventory $RuntimeDirectory)}
     $manifest = Join-Path $RuntimeDirectory 'release-manifest.json'
     [IO.File]::WriteAllText($manifest,($release | ConvertTo-Json -Depth 8))
 }
@@ -196,13 +210,17 @@ def _ps_string(value: Path | str) -> str:
 
 
 def _run_powershell(
-    arguments: list[str], *, environment: dict[str, str] | None = None
+    arguments: list[str],
+    *,
+    environment: dict[str, str] | None = None,
+    output_encoding: str | None = None,
 ) -> subprocess.CompletedProcess[str]:
     return subprocess.run(
         ["powershell.exe", "-NoLogo", "-NoProfile", "-ExecutionPolicy", "Bypass", *arguments],
         env=environment,
         capture_output=True,
         text=True,
+        encoding=output_encoding,
         errors="replace",
         timeout=30,
         check=False,
@@ -595,12 +613,11 @@ def test_failed_capture_is_preserved_without_native_rollback(installation: Insta
         assert path.read_bytes() == content
 
 
-@pytest.mark.parametrize("location", ["flitzis-looper/human.txt", "Runtime/human.txt"])
-def test_unknown_files_stop_update_before_swaps(installation: Installation, location: str) -> None:
+def test_unknown_runtime_files_stop_update_before_swaps(installation: Installation) -> None:
     installation.publish("first")
     require_success(installation.run())
     original = (installation.target / "current.json").read_bytes()
-    unknown = installation.target / location
+    unknown = installation.target / "Runtime/human.txt"
     unknown.write_bytes(b"Human data")
     installation.publish("second")
     assert installation.run().returncode != 0
@@ -609,14 +626,115 @@ def test_unknown_files_stop_update_before_swaps(installation: Installation, loca
     assert len(installation.trace("helper-invocations.jsonl")) == 1
 
 
-def test_changed_tracked_source_is_preserved(installation: Installation) -> None:
+def _legacy_file_only_checkout_inventory(installation: Installation) -> None:
+    pointer = installation.pointer()
+    release = cast("dict[str, object]", pointer["release"])
+    release.pop("checkout_directories")
+    (installation.target / "current.json").write_text(json.dumps(pointer))
+    (installation.target / "Runtime/release-manifest.json").write_text(json.dumps(release))
+
+
+@pytest.mark.parametrize(
+    ("update", "legacy", "relative"),
+    [
+        (False, True, ".venv/.gitignore"),
+        (True, True, ".venv/.gitignore"),
+        (False, False, "src/unregistered-import-sentinel.ps1"),
+        (True, False, "human.txt"),
+        (False, False, "human-empty/"),
+        (True, False, "config/human-empty/"),
+    ],
+)
+def test_checkout_extras_force_clean_candidate_and_preserve_complete_old_tree(
+    installation: Installation, *, update: bool, legacy: bool, relative: str
+) -> None:
+    first = installation.publish("first")
+    require_success(installation.run())
+    contents = _user_data(installation)
+    checkout = installation.target / "flitzis-looper"
+    extra = checkout / relative
+    if relative.endswith("/"):
+        extra.mkdir(parents=True)
+    else:
+        extra.parent.mkdir(parents=True, exist_ok=True)
+        extra.write_text(
+            "[IO.File]::WriteAllText((Join-Path $Root 'cache/unregistered-executed'),'unsafe')"
+        )
+        if relative == ".venv/.gitignore":
+            assert ctypes.windll.kernel32.SetFileAttributesW(str(extra), 2)
+    identity = extra.stat().st_ino
+    extra_bytes = extra.read_bytes() if extra.is_file() else None
+    cached = {
+        installation.target / "tools/retained-tool.bin": b"verified tool fixture",
+        installation.target / "cache/uv/retained-package.bin": b"cached dependency fixture",
+        installation.target / "b/retained-build.bin": b"cached build fixture",
+    }
+    for path, content in cached.items():
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_bytes(content)
+    if legacy:
+        _legacy_file_only_checkout_inventory(installation)
+    selected = installation.publish("second") if update else first
+
+    result = installation.run()
+
+    require_success(result)
+    assert installation.pointer()["git_commit"] == selected
+    assert len(installation.trace("helper-invocations.jsonl")) == 2
+    assert not extra.exists()
+    backups = list((installation.target / "cache").glob("o-*"))
+    assert len(backups) == 1
+    retained = backups[0] / relative
+    assert retained.stat().st_ino == identity
+    if extra_bytes is not None:
+        assert retained.read_bytes() == extra_bytes
+    assert (backups[0] / ".git").is_dir()
+    assert (backups[0] / "fixture-version.txt").read_text() == "first"
+    assert "preserved in full" in result.stdout
+    assert not (installation.target / "cache/unregistered-executed").exists()
+    assert not (installation.target / "portable-transaction.json").exists()
+    for path, content in (contents | cached).items():
+        assert path.read_bytes() == content
+    require_success(installation.run())
+    assert len(installation.trace("helper-invocations.jsonl")) == 2
+    assert retained.exists()
+    assert not (installation.target / "cache/unregistered-executed").exists()
+
+
+def test_file_only_legacy_empty_directories_are_preserved_once(
+    installation: Installation,
+) -> None:
+    installation.publish("first")
+    require_success(installation.run())
+    _legacy_file_only_checkout_inventory(installation)
+    empty = installation.target / "flitzis-looper/.git/unrecorded-empty"
+    empty.mkdir()
+
+    require_success(installation.run())
+
+    backups = list((installation.target / "cache").glob("o-*"))
+    assert len(backups) == 1
+    assert (backups[0] / ".git/unrecorded-empty").is_dir()
+    assert len(installation.trace("helper-invocations.jsonl")) == 2
+    require_success(installation.run())
+    assert len(installation.trace("helper-invocations.jsonl")) == 2
+
+
+@pytest.mark.parametrize("damage", ["modified", "missing"])
+def test_changed_tracked_source_is_preserved(installation: Installation, damage: str) -> None:
     installation.publish("first")
     require_success(installation.run())
     source = installation.target / "flitzis-looper/fixture-version.txt"
-    source.write_text("Human edit")
+    if damage == "modified":
+        source.write_text("Human edit")
+    else:
+        source.unlink()
     installation.publish("second")
     assert installation.run().returncode != 0
-    assert source.read_text() == "Human edit"
+    if damage == "modified":
+        assert source.read_text() == "Human edit"
+    else:
+        assert not source.exists()
     assert len(installation.trace("helper-invocations.jsonl")) == 1
 
 
@@ -649,8 +767,8 @@ def test_installer_rejects_reparse_target_without_writing_through_it(
         installation.target.rmdir()
 
 
-@pytest.mark.parametrize("location", ["samples", "config/input"])
-def test_installer_rejects_reparse_native_data_without_modifying_current(
+@pytest.mark.parametrize("location", ["samples", "config/input", ".venv"])
+def test_installer_rejects_reparse_checkout_paths_without_modifying_current(
     installation: Installation, location: str
 ) -> None:
     installation.publish("first")
@@ -662,6 +780,7 @@ def test_installer_rejects_reparse_native_data_without_modifying_current(
     sentinel = outside / "human.bin"
     sentinel.write_bytes(b"outside data")
     data = installation.target / "flitzis-looper" / location
+    data.mkdir(parents=True, exist_ok=True)
     data.rmdir()
     _junction(data, outside)
     try:
@@ -924,6 +1043,230 @@ def test_interrupted_activation_recovers_old_or_verified_new(
     assert not paths.old_runtime.exists()
 
 
+@pytest.mark.parametrize("seam", ["captured", "samples", "accepted"])
+def test_interrupted_update_preserves_old_checkout_extras(
+    installation: Installation, seam: str
+) -> None:
+    first = installation.publish("first")
+    require_success(installation.run())
+    contents = _user_data(installation)
+    extra = installation.target / "flitzis-looper/.venv/.gitignore"
+    extra.parent.mkdir()
+    extra.write_bytes(b"preserved old environment")
+    _legacy_file_only_checkout_inventory(installation)
+    second = installation.publish("second", failure="prepared-interrupt")
+    assert installation.run().returncode != 0
+    paths = _simulate_activation_interrupt(installation, seam, second)
+
+    result = installation.run()
+
+    if seam == "accepted":
+        require_success(result)
+        assert installation.pointer()["git_commit"] == second
+        assert not (installation.target / "portable-transaction.json").exists()
+        assert (paths.old_checkout / ".venv/.gitignore").read_bytes() == (
+            b"preserved old environment"
+        )
+    else:
+        assert result.returncode != 0
+        assert installation.pointer()["git_commit"] == first
+        assert extra.read_bytes() == b"preserved old environment"
+        assert not paths.old_checkout.exists()
+    for path, content in contents.items():
+        assert path.read_bytes() == content
+
+
+@pytest.mark.parametrize("relative", ["samples", "config/input"])
+@pytest.mark.parametrize("kind", ["file", "empty-directory"])
+def test_accepted_cleanup_preserves_old_checkout_with_leftover_persistent_paths(
+    installation: Installation, relative: str, kind: str
+) -> None:
+    installation.publish("first")
+    require_success(installation.run())
+    contents = _user_data(installation)
+    second = installation.publish("second", failure="prepared-interrupt")
+    assert installation.run().returncode != 0
+    paths = _simulate_activation_interrupt(installation, "accepted", second)
+    leftover = paths.old_checkout / relative / "leftover"
+    if kind == "file":
+        leftover.parent.mkdir(parents=True, exist_ok=True)
+        leftover.write_bytes(b"unregistered leftover data; preserve in old checkout")
+    else:
+        leftover.mkdir(parents=True)
+    backup_identity = paths.old_checkout.stat().st_ino
+    backup_bytes = {
+        path: path.read_bytes() for path in paths.old_checkout.rglob("*") if path.is_file()
+    }
+    pointer = (installation.target / "current.json").read_bytes()
+
+    result = _run_embedded(
+        installation.installer.parent,
+        f"Recover-PortableTransaction {_ps_string(installation.target)}",
+    )
+
+    require_success(result)
+    assert installation.pointer()["git_commit"] == second
+    assert (installation.target / "current.json").read_bytes() == pointer
+    assert not (installation.target / "portable-transaction.json").exists()
+    assert paths.old_checkout.stat().st_ino == backup_identity
+    assert (paths.old_checkout / ".git").is_dir()
+    assert (paths.old_checkout / "fixture-version.txt").read_text() == "first"
+    assert "preserved in full" in result.stdout
+    assert str(paths.old_checkout).casefold().replace(" ", "") in (
+        "".join(result.stdout.split()).casefold()
+    )
+    if kind == "empty-directory":
+        assert leftover.is_dir()
+        assert not list(leftover.iterdir())
+    for path, content in (backup_bytes | contents).items():
+        assert path.read_bytes() == content
+
+
+def test_failed_candidate_with_unproved_empty_directories_keeps_diagnostics(
+    installation: Installation,
+) -> None:
+    first = installation.publish("first")
+    require_success(installation.run())
+    installation.publish("second", failure="prepared-interrupt")
+    assert installation.run().returncode != 0
+    journal = installation.target / "portable-transaction.json"
+    record = json.loads(journal.read_text())
+    paths = ActivationPaths.for_transaction(installation.target, str(record["operation"]))
+    manifest = paths.candidate / "release-manifest.json"
+    release = json.loads(manifest.read_text())
+    release.pop("checkout_directories")
+    manifest.write_text(json.dumps(release))
+    empty = paths.source / ".git/unproved-empty"
+    empty.mkdir()
+
+    result = _run_embedded(
+        installation.installer.parent,
+        f"Recover-PortableTransaction {_ps_string(installation.target)}",
+    )
+
+    require_success(result)
+    assert installation.pointer()["git_commit"] == first
+    assert paths.source.is_dir()
+    assert paths.candidate.is_dir()
+    assert empty.is_dir()
+    diagnostic = installation.target / f"cache/failed-{record['operation']}.json"
+    assert json.loads(diagnostic.read_text(encoding="utf-8-sig")) == record
+    assert not journal.exists()
+
+
+def _damage_recovery_candidate(paths: ActivationPaths, damage: str) -> Path:
+    if damage == "source-extra":
+        changed = paths.checkout / "src/unregistered-import-sentinel.ps1"
+        changed.parent.mkdir()
+        changed.write_text(
+            "[IO.File]::WriteAllText((Join-Path $Root 'cache/unregistered-executed'),'unsafe')"
+        )
+    elif damage == "source-empty":
+        changed = paths.checkout / "unregistered-empty"
+        changed.mkdir()
+    elif damage == "source-manifest":
+        changed = paths.checkout / "release-manifest.json"
+        changed.write_bytes(b"unregistered source bytes")
+    elif damage == "source-modified":
+        changed = paths.checkout / "fixture-version.txt"
+        changed.write_text("Human replacement")
+    elif damage == "runtime-extra":
+        changed = paths.runtime / "unregistered-runtime.bin"
+        changed.write_bytes(b"unknown runtime bytes")
+    elif damage == "runtime-modified":
+        changed = paths.runtime / "python/vcruntime140.dll"
+        changed.write_bytes(b"changed runtime bytes")
+    else:
+        changed = paths.runtime / "python/vcruntime140.dll"
+        changed.unlink()
+    return changed
+
+
+@pytest.mark.parametrize("seam", ["samples", "accepted"])
+@pytest.mark.parametrize(
+    "damage",
+    [
+        "source-extra",
+        "source-empty",
+        "source-manifest",
+        "source-modified",
+        "runtime-extra",
+        "runtime-modified",
+        "runtime-missing",
+    ],
+)
+def test_recovery_validates_candidate_before_any_execution(
+    installation: Installation, seam: str, damage: str
+) -> None:
+    installation.publish("first")
+    require_success(installation.run())
+    _user_data(installation)
+    second = installation.publish("second", failure="prepared-interrupt")
+    assert installation.run().returncode != 0
+    paths = _simulate_activation_interrupt(installation, seam, second)
+    changed = _damage_recovery_candidate(paths, damage)
+    before = changed.read_bytes() if changed.is_file() else None
+    checks = installation.trace("preflight-history.jsonl")
+    models = installation.trace("model-history.jsonl")
+    relocations = installation.trace("native-relocation-history.jsonl")
+    journal = (installation.target / "portable-transaction.json").read_bytes()
+    input_checkout = paths.checkout if seam == "accepted" else paths.old_checkout
+    data_before = {
+        path: path.read_bytes()
+        for tree in (paths.checkout / "samples", input_checkout / "config/input")
+        for path in tree.rglob("*")
+        if path.is_file()
+    }
+
+    result = installation.run()
+
+    assert result.returncode != 0
+    if before is not None:
+        assert changed.read_bytes() == before
+    elif damage == "runtime-missing":
+        assert not changed.exists()
+    else:
+        assert changed.is_dir()
+        assert not list(changed.iterdir())
+    assert installation.trace("preflight-history.jsonl") == checks
+    assert installation.trace("model-history.jsonl") == models
+    assert installation.trace("native-relocation-history.jsonl") == relocations
+    for path, content in data_before.items():
+        assert path.read_bytes() == content
+    assert not (installation.target / "cache/unregistered-executed").exists()
+    assert paths.old_checkout.is_dir()
+    assert (installation.target / "portable-transaction.json").exists()
+    if seam == "accepted":
+        assert (installation.target / "portable-transaction.json").read_bytes() == journal
+
+
+def test_rollback_rejects_candidate_reparse_before_relocation_execution(
+    installation: Installation,
+) -> None:
+    installation.publish("first")
+    require_success(installation.run())
+    _user_data(installation)
+    second = installation.publish("second", failure="prepared-interrupt")
+    assert installation.run().returncode != 0
+    paths = _simulate_activation_interrupt(installation, "samples", second)
+    outside = installation.target.parent / "candidate-outside"
+    outside.mkdir()
+    sentinel = outside / "human.bin"
+    sentinel.write_bytes(b"outside bytes")
+    junction = paths.checkout / "unregistered-link"
+    _junction(junction, outside)
+    checks = installation.trace("preflight-history.jsonl")
+    try:
+        result = installation.run()
+        assert result.returncode != 0
+        assert sentinel.read_bytes() == b"outside bytes"
+        assert installation.trace("preflight-history.jsonl") == checks
+        assert paths.old_checkout.is_dir()
+        assert (installation.target / "portable-transaction.json").exists()
+    finally:
+        junction.rmdir()
+
+
 LIVE_PYTHON = """
 using System;
 using System.IO;
@@ -1029,8 +1372,38 @@ def _embedded_functions() -> str:
 
 def _run_embedded(tmp_path: Path, commands: str) -> subprocess.CompletedProcess[str]:
     script = tmp_path / "embedded-installer-functions.ps1"
-    script.write_text(_embedded_functions() + "\n" + commands, encoding="utf-8-sig")
-    return _run_powershell(["-File", str(script)])
+    script.write_text(
+        "[Console]::OutputEncoding = [Text.UTF8Encoding]::new($false)\n"
+        + _embedded_functions()
+        + "\n"
+        + commands,
+        encoding="utf-8-sig",
+    )
+    return _run_powershell(["-File", str(script)], output_encoding="utf-8")
+
+
+def test_embedded_common_helpers_match_the_shipped_source() -> None:
+    common = (REPO / "scripts/portable/common.ps1").read_text(encoding="utf-8-sig")
+    assert common.strip() in _embedded_functions()
+
+
+@pytest.mark.parametrize("scope", ["source", "input"])
+def test_unrecorded_release_manifest_is_not_a_source_or_input_exemption(
+    tmp_path: Path, scope: str
+) -> None:
+    directory = tmp_path / scope
+    directory.mkdir()
+    unknown = directory / "release-manifest.json"
+    unknown.write_bytes(b"unknown bytes outside Runtime")
+
+    result = _run_embedded(
+        tmp_path,
+        f"Assert-PortableInventory {_ps_string(directory)} ([pscustomobject]@{{}}) "
+        "-VerifyHashes -IgnoreUnrecordedDirectories",
+    )
+
+    assert result.returncode != 0
+    assert unknown.read_bytes() == b"unknown bytes outside Runtime"
 
 
 def test_download_hash_requires_the_exact_sha256(tmp_path: Path) -> None:

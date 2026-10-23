@@ -337,6 +337,15 @@ def file_inventory(directory: Path) -> dict[str, str]:
     }
 
 
+def directory_inventory(directory: Path) -> list[str]:
+    """Record owned directories, including empty Git and structural folders."""
+    return [
+        path.relative_to(directory).as_posix()
+        for path in sorted(directory.rglob("*"))
+        if path.is_dir()
+    ]
+
+
 def complete_bundle_checkout(destination: Path, commit: str) -> None:
     """Give the optional ZIP utility the same standalone full-checkout layout."""
     subprocess.run(
@@ -404,6 +413,9 @@ def build(args: argparse.Namespace) -> None:
     copy_external_runtime(runtime, checkout, args)
     copy_licenses(runtime, args.license_file)
     preflight(runtime, checkout, root)
+    # Input data is introduced only during activation; its structural parent
+    # must already be owned so a later empty parent is safe to retire.
+    (checkout / "config").mkdir(exist_ok=True)
     release = {
         "schema_version": 2,
         "release_id": commit,
@@ -414,6 +426,7 @@ def build(args: argparse.Namespace) -> None:
         "runtime_dependencies": dependencies,
         "python_version": sys.version.split()[0],
         "checkout_files": file_inventory(checkout),
+        "checkout_directories": directory_inventory(checkout),
         "runtime_files": file_inventory(runtime),
     }
     if args.runtime_directory:

@@ -67,7 +67,8 @@ The installation uses these areas:
 - `models`: persistent model caches shared by install checks and offline workers.
 - `tools`: verified bootstrap and build tools.
 - `cache`: useful package preparation caches and bounded failed-install diagnostics;
-  successful operation stages and short backups are removed.
+  successful operation stages and fully owned short backups are removed. Previous
+  checkouts containing unregistered contents are preserved in full as described below.
 - `b`: reusable Native build output; its short name protects linker paths.
 - `logs`: installation-local diagnostics.
 
@@ -113,15 +114,35 @@ are refused before opening the App.
 
 There is no second `Runtime/app` copy and no permanent per-version runtime tree.
 The full checkout's installed-file inventory distinguishes shipped files from
-Human changes. Unknown files or changed tracked files outside persistent sample
-and input areas stop activation with their concrete preserved path. Existing
+Human changes. A recognized old checkout containing unregistered files, such as
+an older `.venv/.gitignore`, or unregistered empty directories can be updated
+without deleting them. The installer prepares a clean source/runtime even if
+`main` is unchanged and never executes or copies those extras into the new checkout.
+After data relocation and verification, it preserves the entire previous checkout
+at its existing `cache/o-<operation>` path, reports the actual path and finishes
+the update. Keep that backup until you have reviewed its contents yourself. The
+new checkout resumes ordinary unchanged-main updates without repeated Native builds.
+Models, tools, downloads and useful package/build caches keep their existing reuse
+paths; missing or changed required assets can still need acquisition.
+
+New manifests record checkout directories as well as files. Older file-only
+manifests cannot prove ownership of otherwise empty folders, so one update may
+conservatively retain an old checkout even without additional files. A directory
+name alone never authorizes recursive deletion. Changed or missing registered
+source files still stop activation with their concrete preserved path. Existing
 Runtime files, including licenses and DLLs, must also match their recorded
-hashes; replacement bytes stop updates and retired-runtime cleanup. Missing
+hashes; unknown or replacement bytes stop updates and retired-runtime cleanup. Missing
 Runtime files remain eligible for repair. Files are not removed based only on
 a directory name. Completed downloads and
 successful operation-owned environment, wheel, license and bundle stages are
 removed. The installer reports retained tool/build cache sizes and their reuse
 purpose; it does not recursively purge caches merely to reduce disk usage.
+Recovery validates complete candidate source/Runtime files, hashes and reparse guards
+before running relocation, private preflight or model checks. Source directory
+ownership is also checked; Runtime directory handling remains unchanged. Unknown
+source files/directories or unknown/tampered Runtime files remain
+preserved with their recovery evidence. Unknown installation ownership and links
+remain refusals; checkout-extra preservation does not relax those boundaries.
 
 An older recognized `versions/main-...` plus `data` installation migrates once.
 The installer proves the old runtime's files from its exact source revision,
