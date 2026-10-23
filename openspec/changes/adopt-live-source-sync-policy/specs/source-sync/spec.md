@@ -173,3 +173,25 @@ Before anchored conversion relies on a frozen master horizon, it SHALL certify o
 - **AND** a full-u64 conversion SHALL require a certified endpoint at u64::MAX rather than infer safety from current E alone
 
 These numerical prerequisites SHALL add no productive conversion caller, second clock, source ownership, oversized copied span or realtime throughput approval. Geometry, reader-domain, original-knot, stack and actual callback-cost qualification SHALL remain separate mandatory gates.
+
+### Requirement: Prepared exact geometry preserves the original loop and reader
+An independently prepared initial exact-continuation geometry SHALL certify an explicit intersection domain without changing existing legacy map construction or projection. Preparation SHALL be opt-in and off realtime, retaining the same original immutable map, binary64 seconds/beat anchors, captured B/Q, physical markers, full source extent and original Some(P) reader domain. Every original segment with positive-length overlap with the admitted beat interval SHALL retain trusted coverage, and both original knot products of each such segment SHALL equal their existing binary64-rounded products exactly. Endpoint-only contact SHALL retain the existing interval-open coverage policy rather than include an unused neighboring segment. Exact B plus Q SHALL equal the captured legacy endpoint beat. The original spline SHALL close exactly at the integer physical start and at physical start plus original P. Failure SHALL refuse this new qualification without clipping, moving markers, rescaling, replacing knots or rewriting the original reader period.
+
+#### Scenario: Original variable geometry belongs to the certified intersection
+- **WHEN** original trusted knots, exact loop closure and the unchanged bounded musical domain meet the intersection requirements
+- **THEN** opt-in preparation SHALL retain the original geometry with an immutable derived certificate
+- **AND** later reader compatibility SHALL require the complete original domain to match, including Some(P) bits, source extent and physical range
+- **AND** an exact local-rate check SHALL compare original rational slope extrema with the actual frozen frames-per-beat, preserving supported bounds without a clamped approximation
+
+#### Scenario: Legacy geometry is valid but does not meet exact closure
+- **WHEN** a used knot product, captured B/Q sum or endpoint correspondence fails the exact intersection proof
+- **THEN** existing legacy construction and projection SHALL remain available with their preceding semantics
+- **AND** the new exact-continuation qualification SHALL refuse rather than move a canonical source anchor through an unproved modulo
+- **AND** unused geometry outside the admitted loop SHALL NOT invalidate an otherwise supported interval
+
+#### Scenario: A numerically similar reader is not the original domain
+- **WHEN** a caller supplies a different accepted period, physical extent, source length or None in place of the original Some(P)
+- **THEN** the prepared qualification SHALL NOT authorize that reader domain
+- **AND** coincident cursor or PCM values SHALL NOT replace original-domain, source-custody or first-PCM guards
+
+This geometry prerequisite SHALL NOT enable an anchored trajectory, live adoption, new clock or source/ACK authority. It SHALL add no hidden wide scan to existing legacy construction. General geometry outside this intersection, actual anchor conversion, copied representation, stack/callback cost and all remaining acceptance gates SHALL remain open.

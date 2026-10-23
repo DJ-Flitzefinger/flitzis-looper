@@ -40,6 +40,9 @@ anchored map, original geometry or reader-domain conversion contract.
 - [x] Certify finite ordered horizons using the unchanged actual master evaluator, preserving endpoint bits and legacy plateaus without adding a clock or productive converter.
 - [x] Prove independent rational vectors, capacity/shift/tie/subnormal/carry/failure/ownership limits and affected transport compatibility; finish needed Release/import/preflight and one independent final-diff review.
 
+- [x] Add opt-in off-realtime exact geometry/reader intersection qualification on the original immutable geometry, retaining trusted original knots, B/Q, exact endpoint closure, original domain and exact slope extrema without changing legacy construction.
+- [x] Prove independent eligibility/refusal vectors, reader-domain/geometry/legacy neighbors and bounded certificate ownership; finish needed Release/import/preflight and one independent final-diff review.
+
 - [ ] Freeze an analytically bounded anchored source/master representation and precise domain/boundary contract.
 - [ ] Implement production fractional scalar/mapped conversion without changing legacy projections or weakening exact guards.
 - [ ] Prove exact first cursor/PCM, original geometry, unequal partitions, knots/wraps, reverse glide and size/failure bounds.

@@ -635,3 +635,83 @@ receipts. Only this factual receipt and the bounded validation checkbox follow;
 the same reviewer verifies final consistency before commit/normal main push.
 Own TMP is6files/47,354,535B; direct Scratch1480->1480, zero new entries. Cleanup
 remains gated by publication/clean actual remote/terminal and ownership checks.
+
+## Prepared original geometry/reader intersection — 2026-10-23
+
+After e01a192f, the remaining gap was exact original loop closure and reader
+compatibility, before an anchored trajectory. MappedLoopGeometry now supports
+explicit consuming off-realtime qualification on the same original owner.
+Legacy new only initializes the optional certificate to None; it performs no
+new scan and keeps every projection/epoch/span operation unchanged. The private
+Copy/no-drop certificate retains two original slope-extrema segments in the
+owning geometry, never a copied span/lane or separate source/clock authority.
+
+The borrowed original-segment visitor preserves interval-open coverage: only
+positive-length overlap counts, with the original endpoint knots retained.
+Qualification reuses the exact PairMusical domain guard, checks each used knot's
+exact seconds*Fs against its existing rounded product, exact B+Q against the
+captured legacy beat endpoint, and exact source closure at integer start and
+start+original P. It does not clip/rescale/replace knots or change B/Q/P. The
+cheap reader check requires complete original Some(P) domain equality. Exact
+rational extrema/rate checks retain the original nominal epoch admission first;
+they do not bypass its intermediate overflow or introduce a new derivative.
+
+Independent stdlib Fraction/struct evidence supplies11 eligibility vectors;
+the new table executes actual legacy constructor B/Q/P assertions for1–10.
+Cases cover variable/offset/partial loops, P.75/P1.25 virtual extents, unused
+inexact outer geometry, used inexact inner knots, lost B+Q and an isolated
+non-dyadic endpoint closure. The differing-period boundary is additionally checked
+on positively qualified geometry, preserving the prior actual-source regression.
+The oracle's raw cursor pairs are not inputs to this qualifier: no cursor
+conversion, raw-fraction preservation or first-PCM acceptance follows.
+
+Two further independent exact-rate vectors establish valid legacy construction,
+P1 and legacy epoch admission before refusal: rounded rate.5 hides exact
+9007199254740992/18014398509481985<.5; rounded2 hides exact
+36028797018963968/18014398509481983>2. Original products and closure are exact,
+so these prove the additional rate guards rather than another geometry failure.
+
+Quick Release typecheck passes27.54s. Before first test execution, source review
+caught two new fixture labels using invalid shorthand gap; they were corrected
+to the existing gap_unknown_count schema value without product/criterion changes.
+Initial new12 PASS after2m37 compile/0.00s; no software-test RED occurred.
+Four final compatible receipts contain193 DISTINCT/193selected PASS, no overlap:
+MappedClock33 (21old+12new), SourceBeatmap62, SourcePlayback39 and actual map
+admission/custody59 (108.53s). Three existing aligned/Native output measurement
+profiles remain ignored and OPEN. An initial overly anchored custody filter
+selected zero tests; the count guard rejected it, and the corrected actual-name
+substring ran the59. Its empty receipt and initial12 duplicates are not passes
+added to the final distinct total.
+
+CargoFMT/explicitRust2024/strict OpenSpec/diff checks pass. All-target Release
+Clippy37.94s passes126lib/131lib-test(56duplicates)/226example warnings; nine new
+dormant production/example prerequisite warnings remain visible. Private locked
+Release38.02s passes, Native34,838,528B/SHA256
+`6624e47fd97e1b33f9c9f778bd8cd6e0ea20e7201081e8cbe3526fa06314d314`.
+Actual private origin/release/all13 API checks/editor4 pass. No install or fresh
+whole-Python claim: installed StageS Native remains34,838,016B/SHA3af872..., and
+fresh canonical start.bat --check passes without App/device start. New fixtures
+are explicitly synthetic geometry, not accepted source/custody/music evidence;
+the affected existing runtime/source integration is a separate bounded proof.
+
+Receipts/oracles/repro are outside Git at
+test-artifacts/anchored-geometry-qualification-20261023. Own TMP239files/47,690,424B,
+direct Scratch1480->1480, zero new entries. Cleanup follows reviewed coherent
+commit/normal main push/clean fresh actual-remote equality, terminal jobs and
+exact ownership/path/process/no-reparse guards. The existing shared compatible
+cache/env/worker remains retained; no full copies or old/Human cleanup.
+
+This closes opt-in numeric geometry qualification only. General geometry outside
+the intersection, actual raw-anchor conversion, generic fraction identity,
+first-PCM/reader/custody, spans/history/master transitions, copied layout and
+actual stack/callback cost remain OPEN, as do full Stage A/B and all original/
+extension/Native/music/B2/resource/Human/final gates. STOP before full Rust-port/
+Slice8.
+
+One continuous independent NONAUTHOR final-diff review returns CLEAR for exact
+staged tree `0fae41843d7c38829604beca63103b847729927c`, independently verifying
+the193 distinct/selected passes, three old ignored profiles and actual private
+Release/API/Clippy/preflight receipts. Only this factual same-review receipt and
+the bounded validation checkbox follow; the same reviewer checks final
+consistency before coherent commit and normal existing-main push. All broader
+conversion, geometry, callback-cost and acceptance gates remain OPEN.

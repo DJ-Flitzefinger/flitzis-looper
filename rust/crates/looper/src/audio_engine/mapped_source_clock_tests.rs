@@ -10,11 +10,22 @@ fn bits(value: f64) -> String {
 }
 
 fn map(anchors: &[(f64, f64)], coverage: &[&str], verified_meter: bool) -> SourceBeatmap {
+    map_with_source(anchors, coverage, verified_meter, RATE, FRAMES)
+}
+
+pub(super) fn map_with_source(
+    anchors: &[(f64, f64)],
+    coverage: &[&str],
+    verified_meter: bool,
+    rate_hz: u32,
+    source_frames: usize,
+) -> SourceBeatmap {
     let decoder = json!({
         "schema_version": 1, "original": {"sha256": "a".repeat(64), "bytes": 40_000},
         "pcm": {"format": "f32-le-interleaved-v1",
             "channel_layout": "interleaved-channel-index-order-v1",
-            "rate_hz": RATE, "channels": 1, "full_frames": FRAMES, "full_bytes": FRAMES * 4,
+            "rate_hz": rate_hz, "channels": 1, "full_frames": source_frames,
+            "full_bytes": source_frames * 4,
             "interleaved_sha256": "b".repeat(64), "mono_sha256": "c".repeat(64),
             "mono_revision": "mapped-clock-fixture", "source_zero_bits": bits(0.0),
             "provenance": {"synthetic_geometry_only": true}}

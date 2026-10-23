@@ -304,6 +304,51 @@ exclude a later infinity. Certify the actual admitted horizon, through u64::MAX
 when claiming full-u64 support. No production conversion/adoption is connected.
 Original geometry/seam choice, layout, costs and full acceptance remain OPEN.
 
+## Initial prepared exact geometry intersection
+
+The next independent prerequisite resolves an actual geometry/reader gap before
+an anchored trajectory is implemented. Legacy geometry construction remains
+unchanged. An explicit off-realtime consuming preparation method qualifies the
+same MappedLoopGeometry owner and records a private immutable Copy/no-drop
+certificate. It adds no hidden exact scan to current launches, mutable cache,
+second geometry pipeline, source permit or productive conversion caller.
+
+For this first domain, every original segment with positive-length overlap with
+[B,B+Q] must be trusted; both its original seconds*Fs products must equal the
+existing rounded products. Preserve the existing interval-open coverage policy:
+an adjacent segment with endpoint-only contact is outside this qualification.
+Require exact I(B)+I(Q)=I(legacy B+Q), without changing original B or Q. On the
+first/last original segment let X0=Fs*I(seconds0), dx=X1-X0, b0=I(beat0),
+db=I(beat1)-b0. Exact source closure at t is proved by
+X0*db+(I(t)-b0)*dx=expected_source_grid*db: expected_source_grid is
+region.start*G at B and region.start*G+I(original P) at B+Q. No clipping,
+synthetic knots or rational replacement of the retained musical extent occurs.
+Only touching segments are scanned; unrelated outside geometry is not a veto.
+
+Reuse the musical-pair domain guard for finite P in [.5,2^64], exact |P-L|<=1
+and physical extent. The cheap later reader test requires the complete original
+domain, including Some(P) bits, to equal the retained domain. The initial
+qualification does not relabel physical None as Some(L). Exact source-slope
+extrema use original dx/db cross products, not rounded extrema as a substitute.
+For actual frozen FPB, compare dx*G against db*I(FPB) and its factors of two for
+the existing [.5,2] rate bounds. Retain the existing nominal derivative/epoch
+admission first; exact comparisons are additional guards and do not bypass its
+intermediate-overflow or unsupported-rate refusals. Such wide qualification
+stays off realtime.
+
+This intersection is nonempty for variable geometry, including Fs48000 knots
+(seconds,beat)=(0,0),(.5,1),(1,4), B0/Q4, region[0,48000), original P48000.
+At FPB16000 its segment rates are exactly1.5 and.5. This is an arithmetic
+eligibility example, not fabricated accepted timing, current custody or music.
+Conversely binary64 .1 times Fs10 is exactly1+2^-54 but rounds to1; a valid
+legacy [1,2)/B1/Q1 loop can therefore fail the exact starting correspondence.
+The prepared mode refuses that case while keeping the legacy path unchanged.
+
+General arbitrary-knot/manual geometry still needs its own explicit contract.
+Actual raw-anchor inversion, generic signed-zero identity, finite-master spans,
+reader/first-PCM proof, pause/history/master transitions and copied layout/cost
+remain mandatory before an anchored mode or adoption can be enabled.
+
 ## Immutable custody and original lifetime
 
 Before enabling any conversion, an independent behavior-preserving prerequisite

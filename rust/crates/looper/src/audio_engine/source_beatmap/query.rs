@@ -128,6 +128,43 @@ impl Projection {
 }
 
 impl ValidatedMap {
+    pub(super) fn visit_canonical_segments(
+        &self,
+        beat_start: f64,
+        beat_end: f64,
+        mut visitor: impl FnMut(CanonicalBeatSegment) -> Option<()>,
+    ) -> Option<()> {
+        if !beat_start.is_finite()
+            || !beat_end.is_finite()
+            || beat_start >= beat_end
+            || beat_start < self.anchors.first()?.beat
+            || beat_end > self.anchors.last()?.beat
+        {
+            return None;
+        }
+        let first = self
+            .anchors
+            .partition_point(|anchor| anchor.beat <= beat_start)
+            .saturating_sub(1)
+            .min(self.segments.len() - 1);
+        let after = self
+            .anchors
+            .partition_point(|anchor| anchor.beat < beat_end)
+            .min(self.segments.len());
+        // Match source_after_beats: an exterior gap touching only an endpoint
+        // cannot contaminate the positive interior of this retained loop.
+        if first >= after || self.unsupported_prefix[first] != self.unsupported_prefix[after] {
+            return None;
+        }
+        for index in first..after {
+            visitor(CanonicalBeatSegment::from_anchors(
+                self.anchors[index],
+                self.anchors[index + 1],
+            ))?;
+        }
+        Some(())
+    }
+
     pub(super) fn canonical_segment_at_beat(&self, beat: f64) -> Option<CanonicalBeatSegment> {
         if !beat.is_finite()
             || beat < self.anchors[0].beat

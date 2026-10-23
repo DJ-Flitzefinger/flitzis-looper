@@ -2,14 +2,19 @@
 //!
 //! Geometry is deliberately not an audio permit. The productive owner separately
 //! retains its original qualified source/map pins and validates their lifetime.
-//! Only construction scans intervals; all frame queries and refreshes are bounded
-//! and borrow the original map without cloning or destroying an Arc on realtime.
+//! Construction and explicit off-realtime qualification scan intervals. Frame queries and
+//! refreshes borrow the original map without cloning or destroying an Arc on realtime.
 
 use super::constants::{SPEED_MAX, SPEED_MIN};
 use super::source_beatmap::{CanonicalBeatSegment, SourceBeatmap};
 use super::source_playback::FractionalSourcePosition;
 use super::source_reader::{ExplicitSeekMode, FrameRange, SourceLoopDomain};
 use super::transport::{TransportBeatProjection, TransportTimeline};
+
+#[path = "mapped_source_clock_exact.rs"]
+mod exact;
+
+use exact::ExactContinuationQualification;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum MappedClockError {
@@ -45,6 +50,7 @@ pub(crate) struct MappedLoopGeometry {
     loaded_rate_hz: u32,
     min_seconds_per_quarter: f64,
     max_seconds_per_quarter: f64,
+    exact_continuation: Option<ExactContinuationQualification>,
 }
 
 /// Frozen actual transport epoch and caller-supplied non-owning identity marker.
@@ -297,6 +303,7 @@ impl MappedLoopGeometry {
             loaded_rate_hz,
             min_seconds_per_quarter: interval.min_seconds_per_quarter,
             max_seconds_per_quarter: interval.max_seconds_per_quarter,
+            exact_continuation: None,
         })
     }
 

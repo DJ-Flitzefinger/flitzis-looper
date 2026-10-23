@@ -43,6 +43,18 @@ impl SourceBeatmap {
         self.inner.canonical_segment_at_beat(beat)
     }
 
+    /// Visit original trusted segments with positive overlap, outside realtime.
+    /// The borrowed scan allocates nothing and conveys no source or audio permission.
+    pub(crate) fn visit_canonical_segments(
+        &self,
+        beat_start: f64,
+        beat_end: f64,
+        visitor: impl FnMut(CanonicalBeatSegment) -> Option<()>,
+    ) -> Option<()> {
+        self.inner
+            .visit_canonical_segments(beat_start, beat_end, visitor)
+    }
+
     pub(crate) fn canonical_source_at_beat(&self, beat: f64) -> Option<f64> {
         self.inner.at_beat(beat).source_seconds
     }
