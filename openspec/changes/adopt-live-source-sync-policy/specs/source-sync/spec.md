@@ -23,6 +23,13 @@ The system SHALL retain qualified effective immutable map/source custody separat
 - **THEN** the complete effect SHALL leave every preceding voice, policy, master epoch and pause/Hold cause unchanged
 - **AND** no unchanged-looking value or old equal-looking ACK SHALL bypass the validation
 
+#### Scenario: Only a desired raw policy changes during an existing caused Hold
+- **WHEN** a new raw SYNC/PAD/global policy publishes while every source, content, window, accepted timing, loop, pitch, multi-loop, ACK owner and selected-map delivery/geometry projection remains unchanged
+- **THEN** publication SHALL invalidate old captured future starts through the original launch/runtime fences while preserving the existing caused Hold transport identity
+- **AND** scalar or mapped Hold release SHALL retain its original source/custody/phase guards and resume the preceding effective voice before a later qualified policy retry
+- **AND** source/window/timing/loop/pitch/multi-loop or selected-map changes and genuine transport commands SHALL retain their existing supersession rules
+- **AND** original counter exhaustion SHALL refuse atomically before publication without changing preceding Hold or audio state
+
 #### Scenario: A mapped voice changes effective map custody
 - **WHEN** a newer original qualified map is actually adopted
 - **THEN** all current rendering and feedback SHALL use that effective custody
@@ -48,6 +55,51 @@ The system SHALL keep adoption idempotent and retryable after successful runtime
 - **WHEN** an original qualified delivery replaces the unavailable map state for the same living content
 - **THEN** the system SHALL consider that exact current delivery for adoption without another toggle
 - **AND** cancellation or replacement before the claim SHALL preserve old audio rather than adopt stale custody
+
+#### Scenario: A callback closes with cached scalar adoption still pending
+- **WHEN** a scalar policy request remains queued or scheduled as the callback closes while its immutable requested snapshot is still cached
+- **THEN** the existing off-realtime close/retirement path SHALL release every dispatch owner and make that unexecuted attempt retryable
+- **AND** a later unchanged refresh SHALL reuse the current snapshot without a stranded pending flag or a callback-side final owner destruction
+
+#### Scenario: Source acknowledgement becomes ready without a runtime row edit
+- **WHEN** an original source fence or acknowledgement changes independently after a scalar snapshot was cached
+- **THEN** unchanged request service SHALL detect that actual Native fence transition and recapture the current original authority without another control toggle
+- **AND** stable retries SHALL reuse the cache without repeated owning allocation
+- **AND** stale or unavailable sources SHALL still fail the complete actual-E qualification before any effective mutation
+
+#### Scenario: A final old dispatch owner retires while unchanged service retries
+- **WHEN** the existing retirement worker is finalizing an earlier scalar attempt while control service retries its unchanged snapshot
+- **THEN** the final old dispatch owner SHALL remain reserved until its matching-attempt cleanup completes
+- **AND** no newer attempt SHALL begin inside that finalization or be overwritten by the old destructor
+- **AND** callback-side owner release SHALL remain analytically bounded without locks or owning allocation
+
+### Requirement: Scalar policy adoption preserves the current scalar trajectory
+An independently qualified scalar-to-scalar policy effect SHALL capture the complete current original Native runtime row and full raw request revisions bound to actual source/content/lifetime, physical window, pitch projection and launch/runtime freshness. It SHALL reuse the existing fixed 32-lane capture/preflight/original-claim authority. Every active participant SHALL have supported scalar current and desired state with unchanged source/window/domain and qualified readers. One unsupported, stale, paused/Hold, Native/pitch/Key-Lock, conflicting-work, missing-master/period, unsupported-rate or capacity participant SHALL refuse the whole effect before any effective mutation. Master time/tempo, source, placement, generation, projection and reader semantics SHALL remain unchanged.
+
+#### Scenario: The raw policy changes while a scalar glide already targets the same rate
+- **WHEN** a complete current scalar-only cohort has new raw request revisions but equal scalar targets
+- **THEN** actual adoption SHALL update requests atomically while preserving every complete pending scalar trajectory
+- **AND** it SHALL NOT consume an old glide step, restart, reanchor or treat matching booleans as acknowledgement
+
+#### Scenario: A supported scalar policy resolves a different target
+- **WHEN** every participant passes the final actual-E preflight with a newly resolved scalar target
+- **THEN** all request/target changes SHALL commit atomically with exact E source position and unchanged reader/PCM
+- **AND** the existing .05/512 glide boundary SHALL occur exactly once and settlement SHALL remain pending until actual target convergence
+- **AND** publication/cache-hit retry SHALL be idempotent and bounded without another Python cohort queue or repeated owning-work floods
+
+#### Scenario: A scalar attempt awaits execution or its applied rate is still settling
+- **WHEN** current qualified attempt feedback is pending, refused or applied while its actual scalar glide remains unsettled
+- **THEN** the status SHALL retain preceding actual audio state and distinguish those conditions with bounded human guidance
+- **AND** an applied attempt SHALL report its actual execution frame without claiming settled matching until the actual callback confirms the complete current raw request and target
+- **AND** a matching settled callback acknowledgement SHALL take precedence over older attempt diagnostics
+
+#### Scenario: An already current scalar policy is undergoing an ordinary tempo glide
+- **WHEN** an active callback confirms the complete current scalar raw request and current resolved target while its actual rate remains unsettled
+- **THEN** feedback SHALL report tempo settling even if an independent policy attempt was refused
+- **AND** this observation SHALL NOT fabricate settled acknowledgement, effective SYNC or an applied attempt
+- **AND** absent, malformed, stale or nonmatching target/request evidence SHALL NOT bypass attempt diagnostics or mapped geometry qualification
+
+This independent effect SHALL NOT open representation conversion, mapped admission or musical reader changes. The mathematical conversion contract remains mandatory before every such conversion.
 
 ### Requirement: Physical scalar coordinates preserve the separate source pair
 A coordinates-only physical scalar continuation SHALL retain an already canonical Normal source frame and fraction separately and SHALL use an explicit projection mode distinct from legacy scalar trajectories. It SHALL derive constant-rate displacement from the exact u64 elapsed-frame and binary64 rate product, reduce integer displacement before fractional addition, and keep circular rounding error at most 2^-53 source frame for the complete u64 epoch. Generic zero fractional displacement SHALL preserve fraction bits on every exact whole-loop revisit. This construction SHALL NOT authorize live adoption, source ownership or pre-conversion history, and SHALL NOT alter legacy arithmetic or reinterpret a musical domain as physical.

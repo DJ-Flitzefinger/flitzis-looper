@@ -238,6 +238,9 @@ impl Default for CurrentSourceFence {
 /// Control publishes revocation before queued callback work. Preparation requests
 /// deliberately do not change these source/authority epochs.
 pub(crate) struct InputRuntimeOwnership {
+    // Desired Native runtime projection only; never an audio/rate clock. Zero is
+    // sticky exhaustion. The existing runtime mutex serializes its control writers.
+    runtime_policy_revision: AtomicU64,
     pub(super) key_lock_start_policy: Arc<super::key_lock_start_policy::KeyLockStartPolicy>,
     // One original control revocation fence, shared with the callback's rate capture.
     pub(crate) global_timing_revision: Arc<AtomicU64>,
@@ -281,6 +284,7 @@ pub(crate) struct InputRuntimeOwnership {
 impl Default for InputRuntimeOwnership {
     fn default() -> Self {
         Self {
+            runtime_policy_revision: AtomicU64::new(1),
             key_lock_start_policy: Arc::default(),
             global_timing_revision: Arc::new(AtomicU64::new(1)),
             global_timing_publishing: AtomicBool::new(false),
@@ -318,6 +322,23 @@ impl Default for InputRuntimeOwnership {
 }
 
 impl InputRuntimeOwnership {
+    pub(crate) fn runtime_policy_revision(&self) -> Option<u64> {
+        let revision = self.runtime_policy_revision.load(Ordering::Acquire);
+        (revision != 0).then_some(revision)
+    }
+
+    /// Commit after actual Native row writes, under the existing runtime mutex.
+    /// Exhaustion closes only live-policy adoption; legacy controls still work.
+    pub(crate) fn publish_runtime_policy_revision(&self) {
+        let previous = self.runtime_policy_revision.load(Ordering::Relaxed);
+        let next = if previous == 0 {
+            0
+        } else {
+            previous.checked_add(1).unwrap_or(0)
+        };
+        self.runtime_policy_revision.store(next, Ordering::Release);
+    }
+
     pub(crate) fn source_request_for_cell(&self, cell: ContentCell) -> u64 {
         self.source_requests[cell.index()].load(Ordering::Acquire)
     }
@@ -1209,6 +1230,18 @@ impl InputRuntimeOwnership {
     ) -> Result<PreparedLaunchWrite, String> {
         self.prepare_launch_write_fixed(placement, kind)
             .map_err(|error| error.to_string())
+    }
+
+    /// A qualified request-only row change still cancels captured starts. Its
+    /// original caused Hold owns the transport intent until an actual command.
+    /// Keep the existing conservative checked-add exhaustion preflight intact.
+    pub(crate) fn prepare_request_only_launch_cancellation(
+        &self,
+        placement: SlotSnapshot,
+    ) -> Result<PreparedLaunchWrite, String> {
+        let mut prepared = self.prepare_launch_write(placement, LaunchWriteKind::Cancel)?;
+        prepared.next_transport = prepared.original_transport;
+        Ok(prepared)
     }
 
     /// Callback counterpart: errors carry only fixed enum values and never allocate.
@@ -2234,6 +2267,40 @@ impl InputRuntimeOwnership {
 }
 
 const CONTROL_LAUNCH_PUBLICATION_ATTEMPTS: usize = 64;
+
+#[cfg(test)]
+mod runtime_policy_revision_tests {
+    use super::*;
+    #[test]
+    fn exhausted_runtime_policy_stamp_is_sticky_without_disabling_legacy_publication() {
+        let ownership = Arc::new(InputRuntimeOwnership::default());
+        ownership
+            .runtime_policy_revision
+            .store(u64::MAX, Ordering::Release);
+        ownership.publish_runtime_policy_revision();
+        assert_eq!(ownership.runtime_policy_revision(), None);
+        ownership.publish_runtime_policy_revision();
+        assert_eq!(ownership.runtime_policy_revision(), None);
+        let (producer, mut consumer) = rtrb::RingBuffer::new(1);
+        let runtime = crate::audio_engine::input_mapping::InputRuntime::new_with_ownership(
+            Arc::new(Mutex::new(producer)),
+            crate::audio_engine::timing::InputClock::new(),
+            ownership.clone(),
+        );
+        runtime
+            .set_runtime_state(
+                true,
+                vec![false; NUM_SAMPLES],
+                vec![0.0; NUM_SAMPLES],
+                vec![None; NUM_SAMPLES],
+                vec![None; NUM_SAMPLES],
+            )
+            .unwrap();
+        runtime.request_runtime_policy_adoption().unwrap();
+        assert!(consumer.pop().is_err());
+        assert_eq!(ownership.runtime_policy_revision(), None);
+    }
+}
 
 /// Off-realtime only. The caller keeps its original producer guard across every fresh
 /// whole-set preflight/claim. Brief Pending contention yields; other failures never retry.

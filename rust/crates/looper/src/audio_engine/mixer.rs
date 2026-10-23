@@ -24,6 +24,7 @@ mod pad_pair;
 #[path = "mixer/pitch_action.rs"]
 mod pitch_action;
 mod retained_stems;
+mod scalar_policy;
 
 use crate::audio_engine::buffer_retirement::AudioBufferRetirement;
 #[cfg(test)]
@@ -70,6 +71,13 @@ use cpal::Sample;
 use std::sync::Arc;
 use std::sync::atomic::AtomicU64;
 use std::sync::atomic::Ordering;
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum SnapshotKind {
+    Pitch,
+    GlobalRate,
+    RawScalarPolicy,
+}
 
 #[path = "mixer_loop_acceptance.rs"]
 mod loop_acceptance_snapshot;
@@ -551,19 +559,19 @@ impl RtMixer {
     }
 
     pub(crate) fn capture_pitch_voice_snapshot(&self, index: usize) -> Option<PitchSourceSnapshot> {
-        self.capture_voice_snapshot(index, false)
+        self.capture_voice_snapshot(index, SnapshotKind::Pitch)
     }
 
     /// The global dry-rate claim alone may capture an existing mapped trajectory.
     /// Generic pitch/Key-Lock/history callers keep their established mapped refusal.
     fn capture_rate_voice_snapshot(&self, index: usize) -> Option<PitchSourceSnapshot> {
-        self.capture_voice_snapshot(index, true)
+        self.capture_voice_snapshot(index, SnapshotKind::GlobalRate)
     }
 
     fn capture_voice_snapshot(
         &self,
         index: usize,
-        allow_mapped_rate: bool,
+        kind: SnapshotKind,
     ) -> Option<PitchSourceSnapshot> {
         let voice = self.voices.get(index).filter(|voice| voice.active)?;
         let sample = voice.sample.as_ref()?;
@@ -574,7 +582,7 @@ impl RtMixer {
         let timing = self.timing_for_voice(voice);
         let mut playback = voice.source_playback;
         if playback.is_mapped() {
-            if !allow_mapped_rate {
+            if kind != SnapshotKind::GlobalRate {
                 return None;
             }
             let geometry = voice.mapped_start.as_ref()?.mapped_geometry()?;
@@ -584,12 +592,15 @@ impl RtMixer {
             {
                 return None;
             }
-        } else if !playback.set_target(self.tempo_ratio_for_voice(voice)?)
-            || !playback.configure_domain(timing.loop_domain(sample.frame_count(), region))
+        } else if kind != SnapshotKind::RawScalarPolicy
+            && (!playback.set_target(self.tempo_ratio_for_voice(voice)?)
+                || !playback.configure_domain(timing.loop_domain(sample.frame_count(), region)))
         {
             return None;
         }
-        playback.chunk(DEFAULT_BLOCK_SAMPLES);
+        if kind != SnapshotKind::RawScalarPolicy {
+            playback.chunk(DEFAULT_BLOCK_SAMPLES);
+        }
         let frozen = voice.frozen_stems.as_ref().filter(|_| {
             !self.sample_bank[id]
                 .as_ref()
@@ -4758,28 +4769,46 @@ impl RtMixer {
                 continue;
             }
             let request = voice.sync_request;
-            let settled = match request.mode {
+            let target_current = match request.mode {
                 super::source_sync_policy::SourceSyncMode::Mapped => {
                     voice.source_playback.is_mapped() && actual.is_some()
                 }
                 super::source_sync_policy::SourceSyncMode::Legacy => {
                     !voice.source_playback.is_mapped()
+                        && self.tempo_ratio_for_voice(voice).is_some_and(|ratio| {
+                            voice.source_playback.rate_target().to_bits() == ratio.to_bits()
+                        })
                 }
                 super::source_sync_policy::SourceSyncMode::Off
                 | super::source_sync_policy::SourceSyncMode::Fixed => {
                     !voice.source_playback.is_mapped()
                         && self.tempo_ratio_for_voice(voice).is_some_and(|ratio| {
                             voice.source_playback.rate_target().to_bits() == ratio.to_bits()
-                                && voice.source_playback.tempo_ratio().to_bits() == ratio.to_bits()
                         })
                 }
             };
+            let settled = match request.mode {
+                super::source_sync_policy::SourceSyncMode::Legacy
+                | super::source_sync_policy::SourceSyncMode::Off
+                | super::source_sync_policy::SourceSyncMode::Fixed => {
+                    target_current
+                        && voice.source_playback.tempo_ratio().to_bits()
+                            == voice.source_playback.rate_target().to_bits()
+                }
+                _ => target_current,
+            };
             match &mut policy {
                 None => {
-                    policy =
-                        Some(super::source_sync_policy::SourceSyncObservation { request, settled })
+                    policy = Some(super::source_sync_policy::SourceSyncObservation {
+                        request,
+                        target_current,
+                        settled,
+                    })
                 }
-                Some(previous) if previous.request == request => previous.settled &= settled,
+                Some(previous) if previous.request == request => {
+                    previous.target_current &= target_current;
+                    previous.settled &= settled;
+                }
                 Some(_) => policy_coherent = false,
             }
         }

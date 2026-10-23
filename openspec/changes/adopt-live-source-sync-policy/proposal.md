@@ -10,7 +10,10 @@ integer/fraction source cursor through a binary64 B/S round trip.
 
 - First compact the already-used immutable master projection without changing
   its legacy arithmetic, authority or epoch comparisons.
-- Specify phase-preserving conversion before opening live admission.
+- First allow independently qualified scalar-to-scalar live policy adoption using
+  its existing projection/reader and glide; every unsupported cohort refuses.
+- Specify phase-preserving conversion before opening any representation conversion
+  or general mapped live admission.
 - Reuse runtime publication and the existing 32-lane capture/preflight/claim path
   for idempotent, retryable dry policy and map adoption at actual execution E.
 - Separate effective immutable map custody from original launch ownership and

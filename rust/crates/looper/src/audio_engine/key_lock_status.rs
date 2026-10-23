@@ -85,7 +85,8 @@ impl KeyLockStatusSlot {
                         .policy
                         .is_some_and(|policy| policy.request.global_revision.is_some()),
                 ) << 3)
-                | (u8::from(status.policy.is_some_and(|policy| policy.settled)) << 4),
+                | (u8::from(status.policy.is_some_and(|policy| policy.settled)) << 4)
+                | (u8::from(status.policy.is_some_and(|policy| policy.target_current)) << 5),
             Ordering::SeqCst,
         );
         let witness = status.witness.unwrap_or(SourceSyncWitness {
@@ -177,6 +178,7 @@ impl KeyLockStatusSlot {
                     },
                 },
                 settled: flags & 16 != 0,
+                target_current: flags & 32 != 0,
             }),
         };
         (status.source_generation != 0 && self.sequence.load(Ordering::SeqCst) == sequence)

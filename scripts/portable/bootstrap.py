@@ -576,7 +576,7 @@ def check_mix_capture_api(native_module: object) -> None:
 
 
 def _check_global_timing_policy_api(engine: type) -> None:
-    """Reject stale timing publication APIs using reflection alone."""
+    """Reject stale timing publication/adoption APIs using reflection alone."""
     timing_version = getattr(engine, "GLOBAL_TIMING_POLICY_API_VERSION", None)
     assert type(timing_version) is int, (
         "Native timing API requires GLOBAL_TIMING_POLICY_API_VERSION=1"
@@ -589,6 +589,19 @@ def _check_global_timing_policy_api(engine: type) -> None:
     assert timing_parameter is not None, timing_error
     assert timing_parameter.kind == inspect.Parameter.KEYWORD_ONLY, timing_error
     assert timing_parameter.default is None, timing_error
+    adoption = getattr(engine, "request_input_runtime_policy_adoption", None)
+    adoption_error = (
+        "Native timing API requires AudioEngine.request_input_runtime_policy_adoption(self)"
+    )
+    assert callable(adoption), adoption_error
+    parameters = inspect.signature(adoption).parameters
+    assert tuple(parameters) == ("self",), adoption_error
+    receiver = parameters["self"]
+    assert receiver.kind in {
+        inspect.Parameter.POSITIONAL_ONLY,
+        inspect.Parameter.POSITIONAL_OR_KEYWORD,
+    }, adoption_error
+    assert receiver.default is inspect.Parameter.empty, adoption_error
 
 
 def check_source_beatmap_editor_api(native_module: object) -> None:

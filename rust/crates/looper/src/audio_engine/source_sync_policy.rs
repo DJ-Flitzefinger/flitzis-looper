@@ -37,6 +37,7 @@ pub(crate) struct SourceSyncRequest {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) struct SourceSyncObservation {
     pub(crate) request: SourceSyncRequest,
+    pub(crate) target_current: bool,
     pub(crate) settled: bool,
 }
 

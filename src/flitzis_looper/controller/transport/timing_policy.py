@@ -71,10 +71,19 @@ class TimingPolicyController:
             else {state.actual_realtime_bpm for state in states}
         )
         pending = any(state.state in {"pending", "refused", "unconfirmed"} for state in states)
+        detail = next(
+            (
+                state.guidance_text
+                for guidance in ("refused", "unconfirmed", "pending", "settling", "restart")
+                for state in states
+                if state.guidance == guidance
+            ),
+            None,
+        )
         return GlobalTimingControlStatus(
             requested=getattr(policy, control),
             preference=self.preference(control),
             effective=next(iter(values)) if len(values) == 1 else None,
             pending=pending,
-            detail="Start/retrigger applies supported timing changes." if pending else None,
+            detail=detail,
         )

@@ -1,10 +1,9 @@
 """Arrangement observer fences preserve successful runtime rows, including empties."""
 
 from typing import TYPE_CHECKING
+from unittest.mock import Mock
 
 if TYPE_CHECKING:
-    from unittest.mock import Mock
-
     from flitzis_looper.controller import AppController
 
 
@@ -65,16 +64,20 @@ def test_first_runtime_publication_waits_for_reserved_observers_without_caching_
     controller.project.sample_paths[0] = "samples/original.wav"
     controller.input_mapping._last_input_runtime_state_signature = None
     controller.transport._pair_deferred_sample_ids = frozenset({0})
+    request = Mock(return_value=None)
+    audio_engine_mock.request_input_runtime_policy_adoption = request
     audio_engine_mock.reset_mock()
 
     assert not controller.input_mapping._refresh_rust_runtime_state()
     assert controller.input_mapping._last_input_runtime_state_signature is None
     audio_engine_mock.set_input_runtime_state.assert_not_called()
     audio_engine_mock.current_input_runtime_pad_binding.assert_not_called()
+    request.assert_not_called()
 
     controller.transport._pair_deferred_sample_ids = frozenset()
     assert controller.input_mapping._refresh_rust_runtime_state()
     assert audio_engine_mock.set_input_runtime_state.call_args.args[1][0] is True
+    request.assert_called_once_with()
 
 
 def test_failed_reserved_refresh_retries_from_last_successful_rows(

@@ -1,6 +1,9 @@
 //! Generated PCM, genuine copy-first/ACK, public capture and actual callback reads.
 //! These engineering coordinates do not establish musical or hearing acceptance.
 
+#[path = "../../runtime_policy_adoption_tests.rs"]
+mod runtime_policy_adoption_tests;
+
 use super::*;
 use crate::audio_engine::analysis_jobs::OfflineAnalysisJob;
 use crate::audio_engine::audio_stream::{drain_control_messages, render_scheduled_audio};

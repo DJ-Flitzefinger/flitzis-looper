@@ -16,7 +16,7 @@ from flitzis_looper.source_sync_intent import PadSourceSyncIntent
 from flitzis_looper.timing_policy import GlobalTimingPolicy
 from flitzis_looper.ui.context import UiContext
 from tests.flitzis_looper.controller.test_source_beatmap_selection import _assigned
-from tests.flitzis_looper.controller.test_source_sync import _feedback
+from tests.flitzis_looper.controller.test_source_sync import _adoption, _feedback
 from tests.flitzis_looper.controller.transport.test_source_map_loop import _bind_map, _geometry
 
 if TYPE_CHECKING:
@@ -25,6 +25,254 @@ if TYPE_CHECKING:
 
 def _policy(*, sync: bool | None, realtime: bool | None, revision: int = 2) -> GlobalTimingPolicy:
     return GlobalTimingPolicy(schema_version=1, sync=sync, realtime_bpm=realtime, revision=revision)
+
+
+def _pending_off_adoption(
+    controller: AppController, audio: Mock, **changes: object
+) -> tuple[dict[str, object], dict[str, object]]:
+    _assigned(controller, audio)
+    controller.project.global_timing_policy = _policy(sync=False, realtime=False)
+    adoption = _adoption(
+        target_mode="off",
+        target_policy_revision=2,
+        target_policy_sync=False,
+        target_policy_realtime_bpm=False,
+        **changes,
+    )
+    feedback = _feedback(
+        audio,
+        active=True,
+        effective=True,
+        intent_revision=0,
+        map_revision=None,
+        policy_mode="fixed",
+        policy_revision=1,
+        policy_sync=True,
+        policy_realtime_bpm=False,
+        settled=True,
+        adoption=adoption,
+    )
+    return feedback, adoption
+
+
+def test_current_live_refusal_retains_actual_audio_and_only_safe_global_guidance(
+    controller: AppController, audio_engine_mock: Mock
+) -> None:
+    _pending_off_adoption(controller, audio_engine_mock, state="refused", reason="unsupported")
+    diagnostics = Mock()
+    controller.transport.source_sync.bind_diagnostics(diagnostics)
+    before = controller.project.model_dump()
+
+    status = controller.transport.source_sync.status(0)
+
+    assert status.state == "refused"
+    assert status.requested is False
+    assert status.active is True
+    assert status.effective is True
+    assert status.policy_mode == "fixed"
+    assert status.actual_realtime_bpm is False
+    assert status.guidance_text == "Live timing change refused."
+    assert status.detail is not None
+    assert "unsupported" in status.detail
+    diagnostics.observe.assert_called_once_with("source_sync", status.detail, pad_id=0, request=0)
+    global_status = controller.transport.timing_policy.status("sync")
+    assert global_status.requested is False
+    assert global_status.effective is True
+    assert global_status.pending is True
+    assert global_status.detail == status.guidance_text
+    assert global_status.detail is not None
+    assert "unsupported" not in global_status.detail
+    assert controller.project.model_dump() == before
+
+
+@pytest.mark.parametrize(
+    ("state", "execution_frame", "guidance"),
+    [
+        ("pending", None, "pending"),
+        ("applied", 123, "settling"),
+    ],
+)
+def test_live_attempt_and_applied_unsettled_effect_never_acknowledge_audio(
+    controller: AppController,
+    audio_engine_mock: Mock,
+    state: str,
+    execution_frame: int | None,
+    guidance: str,
+) -> None:
+    feedback, _ = _pending_off_adoption(
+        controller, audio_engine_mock, state=state, execution_frame=execution_frame
+    )
+    feedback.update(
+        effective=False, policy_mode="off", policy_revision=2, policy_sync=False, settled=False
+    )
+
+    status = controller.transport.source_sync.status(0)
+
+    assert status.state == "pending"
+    assert status.guidance == guidance
+    assert status.effective is False
+    assert status.actual_realtime_bpm is None
+    assert controller.transport.timing_policy.status("sync").pending is True
+
+
+def test_matching_actual_settlement_wins_over_current_refusal_and_old_launch_error(
+    controller: AppController, audio_engine_mock: Mock
+) -> None:
+    feedback, _ = _pending_off_adoption(
+        controller, audio_engine_mock, state="refused", reason="capacity"
+    )
+    controller.transport.residency.report_launch_error(0, "older launch error")
+    feedback.update(effective=False, policy_mode="off", policy_revision=2, policy_sync=False)
+
+    status = controller.transport.source_sync.status(0)
+
+    assert status.state == "off"
+    assert status.guidance is None
+    assert status.detail is None
+    assert status.actual_realtime_bpm is False
+    global_status = controller.transport.timing_policy.status("sync")
+    assert global_status.pending is False
+    assert global_status.detail is None
+
+
+def test_applied_attempt_does_not_describe_a_stopped_voice_as_settling(
+    controller: AppController, audio_engine_mock: Mock
+) -> None:
+    feedback, adoption = _pending_off_adoption(
+        controller, audio_engine_mock, state="applied", execution_frame=123
+    )
+    controller.project.global_timing_policy = _policy(sync=True, realtime=False)
+    adoption.update(target_mode="fixed", target_policy_sync=True)
+    feedback.update(
+        active=False,
+        effective=False,
+        intent_revision=None,
+        policy_mode=None,
+        policy_revision=None,
+        policy_sync=None,
+        policy_realtime_bpm=None,
+        settled=None,
+    )
+
+    status = controller.transport.source_sync.status(0)
+
+    assert status.state == "stopped"
+    assert status.guidance == "restart"
+    assert status.active is False
+    assert status.effective is False
+
+
+@pytest.mark.parametrize(
+    ("field", "value"),
+    [
+        ("target_mode", "legacy"),
+        ("target_policy_revision", 1),
+        ("target_policy_sync", True),
+        ("target_policy_realtime_bpm", None),
+        ("target_intent_revision", 1),
+    ],
+)
+def test_stale_adoption_target_cannot_label_the_current_request_refused(
+    controller: AppController, audio_engine_mock: Mock, field: str, value: object
+) -> None:
+    _, adoption = _pending_off_adoption(
+        controller, audio_engine_mock, state="refused", reason="unsupported"
+    )
+    adoption[field] = value
+
+    status = controller.transport.source_sync.status(0)
+
+    assert status.state == "pending"
+    assert status.guidance == "restart"
+    assert status.effective is True
+    assert "unsupported" not in (status.detail or "")
+
+
+def test_equal_choices_after_away_back_require_the_new_raw_adoption_revision(
+    controller: AppController, audio_engine_mock: Mock
+) -> None:
+    _, adoption = _pending_off_adoption(
+        controller, audio_engine_mock, state="refused", reason="capacity"
+    )
+    controller.project.global_timing_policy = _policy(sync=False, realtime=False, revision=4)
+
+    assert controller.transport.source_sync.status(0).guidance == "restart"
+    adoption["target_policy_revision"] = 4
+    assert controller.transport.source_sync.status(0).guidance == "refused"
+
+
+@pytest.mark.parametrize(
+    ("field", "value"),
+    [
+        ("snapshot_revision", True),
+        ("attempt", -1),
+        ("state", "queued"),
+        ("state", "applied"),
+        ("reason", "private-path/secret.wav"),
+        ("reason", "busy"),
+        ("execution_frame", True),
+        ("execution_frame", 123),
+        ("target_mode", ["off"]),
+        ("target_policy_revision", True),
+        ("target_policy_sync", 0),
+        ("target_policy_realtime_bpm", 0),
+        ("target_intent_revision", 1 << 64),
+    ],
+)
+def test_malformed_adoption_never_becomes_audio_or_refusal_confirmation(
+    controller: AppController, audio_engine_mock: Mock, field: str, value: object
+) -> None:
+    _, adoption = _pending_off_adoption(controller, audio_engine_mock)
+    adoption[field] = value
+
+    status = controller.transport.source_sync.status(0)
+
+    assert status.state == "pending"
+    assert status.guidance == "restart"
+    assert status.effective is True
+
+
+@pytest.mark.parametrize(
+    "field",
+    [
+        "snapshot_revision",
+        "attempt",
+        "state",
+        "reason",
+        "execution_frame",
+        "target_mode",
+        "target_policy_revision",
+        "target_policy_sync",
+        "target_policy_realtime_bpm",
+        "target_intent_revision",
+    ],
+)
+def test_missing_adoption_field_cannot_default_into_a_matching_target(
+    controller: AppController, audio_engine_mock: Mock, field: str
+) -> None:
+    _, adoption = _pending_off_adoption(
+        controller, audio_engine_mock, state="refused", reason="unsupported"
+    )
+    del adoption[field]
+
+    assert controller.transport.source_sync.status(0).guidance == "restart"
+
+
+@pytest.mark.parametrize("missing", [False, True])
+def test_absent_native_adoption_preserves_existing_start_guidance(
+    controller: AppController, audio_engine_mock: Mock, *, missing: bool
+) -> None:
+    feedback, _ = _pending_off_adoption(controller, audio_engine_mock)
+    if missing:
+        del feedback["adoption"]
+    else:
+        feedback["adoption"] = None
+
+    status = controller.transport.source_sync.status(0)
+
+    assert status.state == "pending"
+    assert status.guidance == "restart"
+    assert status.effective is True
 
 
 def test_global_choices_publish_one_revision_without_touching_pad_or_other_controls(
@@ -263,6 +511,8 @@ def test_gui_learn_and_midi_share_each_global_action_without_early_mutation(
     _assigned(controller, audio_engine_mock)
     ctx = UiContext(controller)
     controller.input_mapping.set_enabled(enabled=True)
+    request = Mock(return_value=None)
+    audio_engine_mock.request_input_runtime_policy_adoption = request
     ctx.input.toggle_learn()
     controller.input_mapping._handle_rust_input_event({
         "source": "midi",
@@ -271,12 +521,17 @@ def test_gui_learn_and_midi_share_each_global_action_without_early_mutation(
     getattr(ctx.audio.global_, method)()
     assert controller.project.global_timing_policy.is_neutral
     assert load_midi_mapping_file().mappings[0].action == action
+    request.assert_not_called()
     controller.input_mapping._handle_rust_input_event({
         "source": "midi",
         "binding_key": "midi:note:1:60",
         "action_key": action.key,
     })
     assert getattr(controller.project.global_timing_policy, control) is (control == "sync")
+    request.assert_called_once_with()
+    getattr(ctx.audio.global_, method)()
+    assert controller.project.global_timing_policy.revision == 2
+    assert request.call_count == 2
 
 
 def test_fixed_auto_loop_uses_initial_period_and_retains_map_without_variable_marker_actions(

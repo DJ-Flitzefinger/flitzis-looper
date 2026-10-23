@@ -5,6 +5,8 @@ from types import SimpleNamespace
 from typing import TYPE_CHECKING, cast
 from unittest.mock import Mock
 
+import pytest
+
 from flitzis_looper.controller.current_timing import CurrentPadTiming
 from flitzis_looper.controller.transport.timing_policy import GlobalTimingControlStatus
 from flitzis_looper.timing_policy import GlobalTimingPolicy
@@ -12,24 +14,34 @@ from flitzis_looper.ui.render import timing_policy as render
 from flitzis_looper.ui.render import waveform_editor
 
 if TYPE_CHECKING:
-    import pytest
     from imgui_bundle import imgui
 
     from flitzis_looper.ui.context import UiContext
     from flitzis_looper.ui.render.source_beatmap_editor import SourceMapEditorFrame
 
 
+@pytest.mark.parametrize(
+    "detail",
+    [
+        "Live timing change pending.",
+        "Timing change applied; tempo is settling.",
+        "Live timing change refused.",
+        "Start/retrigger to apply this timing change.",
+    ],
+)
 def test_global_buttons_keep_actions_separate_and_show_pending_actual_audio(
-    monkeypatch: pytest.MonkeyPatch,
+    monkeypatch: pytest.MonkeyPatch, detail: str
 ) -> None:
     text: list[str] = []
+    guidance: list[str] = []
+    tooltips: list[str] = []
     sync, realtime = Mock(), Mock()
     status = GlobalTimingControlStatus(
         requested=False,
         preference=False,
         effective=True,
         pending=True,
-        detail="Start/retrigger to apply",
+        detail=detail,
     )
     ctx = cast(
         "UiContext",
@@ -48,14 +60,21 @@ def test_global_buttons_keep_actions_separate_and_show_pending_actual_audio(
         "imgui",
         SimpleNamespace(
             button=lambda label, _size: label == "SYNC##global-sync",
-            is_item_hovered=lambda: False,
+            is_item_hovered=lambda: True,
             text_colored=lambda _color, value: text.append(value),
+            text_wrapped=guidance.append,
+            set_tooltip=tooltips.append,
         ),
     )
     render.render_global_timing_policy(ctx)
     sync.assert_called_once_with()
     realtime.assert_not_called()
-    assert text == ["Applied ON | pending; start/retrigger", "Audio ON | pending; start/retrigger"]
+    assert text == ["Applied ON | pending", "Audio ON | pending"]
+    assert guidance == [detail, detail]
+    assert all("Requested OFF." in tooltip for tooltip in tooltips)
+    assert all(detail in tooltip for tooltip in tooltips)
+    if detail != "Start/retrigger to apply this timing change.":
+        assert all("Start/retrigger" not in tooltip for tooltip in tooltips)
 
 
 def test_fixed_global_source_timing_keeps_selected_map_out_of_generic_waveform_grid(

@@ -508,7 +508,6 @@ impl StemTransition {
         self.gains_at_elapsed(self.elapsed_at_output_offset(frames, ratio))
     }
 
-    #[cfg(test)]
     fn gains_at(self, frame_offset: f64) -> (f32, f32) {
         self.gains_at_elapsed(self.elapsed_frames() + frame_offset)
     }
@@ -1044,7 +1043,8 @@ impl SourceReadPlan {
         )
     }
 
-    #[cfg(test)]
+    /// The bounded live-policy preflight uses this same interpolation path after
+    /// validating coverage. It does not record a productive source-read receipt.
     pub(crate) fn sample_fractional_with_readers(
         self,
         sample: &SampleBuffer,

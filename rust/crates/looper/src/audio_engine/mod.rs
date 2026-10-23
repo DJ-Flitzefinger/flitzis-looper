@@ -8,6 +8,7 @@ use crate::audio_engine::stem_cache::{project_stem_cache_dir, source_version_has
 use crate::audio_engine::timing::{InputClock, validated_input_timestamp};
 use crate::audio_engine::transport::QuantizeGrid;
 use flitzis_looper_analysis as analysis;
+pub(crate) use input_mapping::RuntimePolicyWork;
 
 use crate::messages::{
     AudioMessage, BackgroundTaskKind, ControlMessage, ControlParameterMessage, LoaderEvent,
@@ -4056,6 +4057,21 @@ impl AudioEngine {
         id: usize,
     ) -> PyResult<Option<Py<PyDict>>> {
         key_lock_feedback::source_sync_status(self, py, id)
+    }
+
+    /// Retry one original Native runtime policy snapshot; normal refusal is feedback.
+    pub fn request_input_runtime_policy_adoption(&self) -> PyResult<()> {
+        let runtime = self
+            .input_runtime
+            .as_ref()
+            .ok_or_else(|| PyRuntimeError::new_err("Audio engine not initialized"))?;
+        let _requests = self
+            .pad_request_ids
+            .lock()
+            .map_err(|_| PyRuntimeError::new_err("request lock poisoned"))?;
+        runtime
+            .request_runtime_policy_adoption()
+            .map_err(PyRuntimeError::new_err)
     }
 
     /// Observe queued global rate intent separately from the callback-confirmed effect.

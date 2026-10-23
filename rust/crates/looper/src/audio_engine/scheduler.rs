@@ -11,9 +11,31 @@ use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 static INPUT_ORDER: AtomicU64 = AtomicU64::new(1);
 static INPUT_ORDER_EXHAUSTED: AtomicBool = AtomicBool::new(false);
 
+#[cfg(test)]
+thread_local! { static REFUSE_NEXT_ORDER: std::cell::Cell<bool> = const { std::cell::Cell::new(false) }; }
+
+#[cfg(test)]
+pub(crate) fn with_input_order_exhaustion_for_test<T>(action: impl FnOnce() -> T) -> T {
+    struct Reset;
+    impl Drop for Reset {
+        fn drop(&mut self) {
+            REFUSE_NEXT_ORDER.with(|value| value.set(false));
+        }
+    }
+    REFUSE_NEXT_ORDER.with(|value| {
+        assert!(!value.replace(true));
+    });
+    let _reset = Reset;
+    action()
+}
+
 /// A single total ordering domain covers input captures and ordinary queued effects.
 /// The reserved exhaustion margin exceeds all bounded producers; RT uses one atomic add.
 pub(crate) fn reserve_input_order() -> Option<u64> {
+    #[cfg(test)]
+    if REFUSE_NEXT_ORDER.with(|value| value.replace(false)) {
+        return None;
+    }
     if INPUT_ORDER_EXHAUSTED.load(Ordering::Acquire) {
         return None;
     }
@@ -47,6 +69,7 @@ pub(crate) enum ScheduledCommand {
     },
     RefreshAcceptedTiming(std::sync::Arc<super::accepted_timing_refresh::AcceptedTimingRefresh>),
     GlobalPlaybackBatch(std::sync::Arc<super::global_playback_batch::GlobalPlaybackBatch>),
+    AdoptRuntimePolicy(super::input_mapping::RuntimePolicyWork),
     TriggerInputPad {
         id: usize,
         start_s: f64,

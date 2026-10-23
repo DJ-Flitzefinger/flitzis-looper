@@ -120,6 +120,26 @@ impl PartialEq for RuntimePadState {
 }
 
 impl RuntimePadState {
+    fn same_except_sync_request(&self, other: &Self) -> bool {
+        self.loaded == other.loaded
+            && self.loop_start_s.to_bits() == other.loop_start_s.to_bits()
+            && self.loop_end_s.map(f64::to_bits) == other.loop_end_s.map(f64::to_bits)
+            && match (&self.binding, &other.binding) {
+                (Some(left), Some(right)) => left.same_projection(right),
+                (None, None) => true,
+                _ => false,
+            }
+            && self.pitch == other.pitch
+            && self.latest_request_sequence == other.latest_request_sequence
+            && self.pitch_anchor == other.pitch_anchor
+            && self.source_map.same_selected_projection(&other.source_map)
+            && match (&self.acknowledgements, &other.acknowledgements) {
+                (Some(left), Some(right)) => Arc::ptr_eq(left, right),
+                (None, None) => true,
+                _ => false,
+            }
+    }
+
     fn same_projection(&self, other: &Self) -> bool {
         self.same_runtime_projection(other)
             && self.source_map.same_projection(&other.source_map)
@@ -167,6 +187,7 @@ struct RuntimeState {
     pitch_clock: Option<Arc<crate::audio_engine::timing::SharedOutputClock>>,
     render_format: Option<(u32, usize)>,
     pitch_shadow: pitch::RequestedPitchJournal,
+    policy_snapshot: Option<Arc<RuntimePolicySnapshot>>,
 }
 
 mod pair_mirror;
@@ -175,6 +196,8 @@ mod captured_trigger;
 pub use captured_trigger::CapturedInputPadTrigger;
 mod pitch;
 mod pitch_steps;
+mod runtime_policy;
+pub(crate) use runtime_policy::{RuntimePolicyError, RuntimePolicySnapshot, RuntimePolicyWork};
 #[cfg(test)]
 mod reserved_runtime_refresh_tests;
 #[cfg(test)]
@@ -192,6 +215,7 @@ impl Default for RuntimeState {
             pitch_clock: None,
             render_format: if cfg!(test) { Some((48_000, 1)) } else { None },
             pitch_shadow: pitch::RequestedPitchJournal::default(),
+            policy_snapshot: None,
         }
     }
 }
@@ -758,8 +782,15 @@ impl InputRuntime {
                     .same_launch_projection(&pad.source_map)
             {
                 Some(
-                    self.ownership
-                        .prepare_launch_write(placement, LaunchWriteKind::Cancel)?,
+                    if guard.multi_loop == multi_loop
+                        && guard.pads[idx].same_except_sync_request(pad)
+                    {
+                        self.ownership
+                            .prepare_request_only_launch_cancellation(placement)?
+                    } else {
+                        self.ownership
+                            .prepare_launch_write(placement, LaunchWriteKind::Cancel)?
+                    },
                 )
             } else {
                 None
@@ -798,7 +829,11 @@ impl InputRuntime {
             pitch_clock: guard.pitch_clock.clone(),
             render_format: guard.render_format,
             pitch_shadow,
+            policy_snapshot: guard.policy_snapshot.clone(),
         });
+        let policy_changed = replacement
+            .as_ref()
+            .is_some_and(|next| guard.multi_loop != next.multi_loop || guard.pads != next.pads);
         let mut previous = None;
         before_commit();
         self.ownership
@@ -844,6 +879,9 @@ impl InputRuntime {
                         &mut *guard,
                         replacement.take().expect("prepared runtime state"),
                     ));
+                    if policy_changed {
+                        self.ownership.publish_runtime_policy_revision();
+                    }
                 },
             )
             .map_err(|error| error.to_string())?;

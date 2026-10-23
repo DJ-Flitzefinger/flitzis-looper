@@ -45,12 +45,13 @@ def render_global_timing_policy(ctx: UiContext) -> None:
                 if control == "sync"
                 else ""
             )
-            imgui.set_tooltip(
-                f"Requested {choice}.\nStart/retrigger applies supported timing changes.{master}"
-            )
+            guidance = f"\n{status.detail}" if status.detail is not None else ""
+            imgui.set_tooltip(f"Requested {choice}.{guidance}{master}")
         actual = (
             "mixed/unconfirmed" if status.effective is None else "ON" if status.effective else "OFF"
         )
-        suffix = " | pending; start/retrigger" if status.pending else ""
+        suffix = " | pending" if status.pending else ""
         prefix = "Applied" if control == "realtime_bpm" else "Audio"
         imgui.text_colored(TEXT_MUTED_RGBA, f"{prefix} {actual}{suffix}")
+        if status.detail is not None:
+            imgui.text_wrapped(status.detail)

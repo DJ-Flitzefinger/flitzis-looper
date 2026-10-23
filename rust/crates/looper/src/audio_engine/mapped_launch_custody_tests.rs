@@ -259,7 +259,7 @@ fn public_source_sync_feedback_retains_original_effect_across_requested_changes_
             "window_revision":source.binding.resident.map_or(0, |window| window.revision),
             "active":true,"effective":true,"intent_revision":7,"map_revision":revision,
             "policy_mode":"mapped","policy_revision":null,"policy_sync":null,
-            "policy_realtime_bpm":null,"settled":true,
+            "policy_realtime_bpm":null,"settled":true,"target_current":true,"adoption":null,
         })
     );
     publish(

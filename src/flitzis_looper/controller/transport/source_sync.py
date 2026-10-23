@@ -13,6 +13,32 @@ if TYPE_CHECKING:
     from flitzis_looper.controller.transport import TransportController
 
 
+type SourceSyncGuidance = Literal["pending", "settling", "refused", "restart", "unconfirmed"]
+
+_GUIDANCE: dict[SourceSyncGuidance, str] = {
+    "pending": "Live timing change pending.",
+    "settling": "Timing change applied; tempo is settling.",
+    "refused": "Live timing change refused.",
+    "restart": "Start/retrigger to apply this timing change.",
+    "unconfirmed": "Audio confirmation unavailable.",
+}
+# Exact wire names of Native's bounded RuntimePolicyError enum.
+_ADOPTION_REASONS = frozenset({
+    "busy",
+    "stale",
+    "unsupported",
+    "source_changed",
+    "missing_master",
+    "invalid_target",
+    "phase_changed",
+    "reader_unavailable",
+    "capacity",
+    "scheduler_full",
+    "sequence_exhausted",
+    "no_active_voices",
+})
+
+
 @dataclass(frozen=True, slots=True, kw_only=True)
 class SourceSyncStatus:
     """Requested control and callback-confirmed sound are deliberately separate."""
@@ -24,6 +50,12 @@ class SourceSyncStatus:
     detail: str | None = None
     policy_mode: Literal["legacy", "off", "fixed", "mapped"] | None = None
     actual_realtime_bpm: bool | None = None
+    guidance: SourceSyncGuidance | None = None
+
+    @property
+    def guidance_text(self) -> str | None:
+        """Project only fixed human messages, never technical diagnostic detail."""
+        return None if self.guidance is None else _GUIDANCE[self.guidance]
 
 
 def _valid_feedback_fields(feedback: dict[str, object], metadata: dict[str, object]) -> bool:
@@ -39,6 +71,9 @@ def _valid_feedback_fields(feedback: dict[str, object], metadata: dict[str, obje
     if type(feedback.get("source_identity")) is not int:
         return False
     if type(feedback.get("active")) is not bool or type(feedback.get("effective")) is not bool:
+        return False
+    target_current = feedback.get("target_current")
+    if target_current is not None and type(target_current) is not bool:
         return False
     revision, map_revision = feedback.get("intent_revision"), feedback.get("map_revision")
     return (revision is None or (type(revision) is int and 0 <= revision < 1 << 64)) and (
@@ -68,9 +103,13 @@ def _policy_feedback_valid(feedback: dict[str, object]) -> bool:
         if key not in feedback or (feedback[key] is not None and type(feedback[key]) is not bool):
             return False
     revision = feedback.get("policy_revision")
+    mode = feedback.get("policy_mode")
+    if mode is not None and (
+        not isinstance(mode, str) or mode not in {"legacy", "off", "fixed", "mapped"}
+    ):
+        return False
     return (
-        feedback.get("policy_mode") in {None, "legacy", "off", "fixed", "mapped"}
-        and "policy_mode" in feedback
+        "policy_mode" in feedback
         and "policy_revision" in feedback
         and (revision is None or (type(revision) is int and 0 <= revision < 1 << 64))
         and "settled" in feedback
@@ -82,6 +121,49 @@ def _actual_realtime_bpm(feedback: dict[str, object]) -> bool | None:
     if feedback.get("policy_mode") is None or feedback.get("settled") is not True:
         return None
     return feedback["policy_realtime_bpm"] is not False
+
+
+def _adoption_state_valid(adoption: dict[str, object]) -> bool:
+    state, mode, reason = adoption["state"], adoption["target_mode"], adoption["reason"]
+    if not isinstance(state, str) or state not in {"pending", "applied", "refused"}:
+        return False
+    if not isinstance(mode, str) or mode not in {"legacy", "off", "fixed", "mapped"}:
+        return False
+    if reason is not None and (not isinstance(reason, str) or reason not in _ADOPTION_REASONS):
+        return False
+    if state == "pending" and (reason is not None or adoption["execution_frame"] is not None):
+        return False
+    return not (state == "applied" and (reason is not None or adoption["execution_frame"] is None))
+
+
+def _adoption_fields_valid(adoption: dict[str, object]) -> bool:
+    keys = {
+        "snapshot_revision",
+        "attempt",
+        "state",
+        "reason",
+        "execution_frame",
+        "target_mode",
+        "target_policy_revision",
+        "target_policy_sync",
+        "target_policy_realtime_bpm",
+        "target_intent_revision",
+    }
+    if not keys.issubset(adoption):
+        return False
+    for key in ("snapshot_revision", "attempt", "target_intent_revision"):
+        value = adoption[key]
+        if type(value) is not int or not 0 <= value < 1 << 64:
+            return False
+    for key in ("execution_frame", "target_policy_revision"):
+        value = adoption[key]
+        if value is not None and (type(value) is not int or not 0 <= value < 1 << 64):
+            return False
+    for key in ("target_policy_sync", "target_policy_realtime_bpm"):
+        value = adoption[key]
+        if value is not None and type(value) is not bool:
+            return False
+    return _adoption_state_valid(adoption)
 
 
 class SourceSyncController:
@@ -103,7 +185,7 @@ class SourceSyncController:
         self._maps = maps
 
     def set_requested(self, sample_id: int, *, requested: bool) -> None:
-        """Persist one guarded changed request; actual restart adopts supported tuples."""
+        """Persist one guarded request; Native separately confirms supported adoption."""
         validate_sample_id(sample_id)
         if type(requested) is not bool:
             message = "SYNC request must be a strict boolean."
@@ -178,15 +260,21 @@ class SourceSyncController:
         try:
             feedback = self._observation(sample_id)
         except (RuntimeError, ValueError, TypeError) as error:
-            return SourceSyncStatus(requested=requested, state="unconfirmed", detail=str(error))
+            return SourceSyncStatus(
+                requested=requested, state="unconfirmed", detail=str(error), guidance="unconfirmed"
+            )
         if feedback is None:
             return SourceSyncStatus(
                 requested=requested,
                 state="unconfirmed",
                 detail="Audio confirmation unavailable.",
+                guidance="unconfirmed",
             )
-        if not self._project.global_timing_policy.is_neutral:
+        if not self._project.global_timing_policy.is_neutral or _policy_feedback_valid(feedback):
             return self._policy_status(sample_id, feedback)
+        adoption = self._adoption_status(sample_id, feedback)
+        if adoption is not None:
+            return adoption
         active, effective = feedback["active"] is True, feedback["effective"] is True
         if not intent.requested:
             return SourceSyncStatus(
@@ -195,6 +283,7 @@ class SourceSyncController:
                 active=active,
                 state="pending" if effective else "off",
                 detail="Restart to apply SYNC OFF." if effective else None,
+                guidance="restart" if effective else None,
             )
         return self._requested_status(sample_id, feedback, active=active, effective=effective)
 
@@ -207,11 +296,10 @@ class SourceSyncController:
         mode = cast("Literal['legacy', 'off', 'fixed', 'mapped'] | None", feedback["policy_mode"])
         matching = (
             mode == expected
-            and feedback["policy_revision"] == policy.revision
+            and feedback["policy_revision"] == (None if policy.is_neutral else policy.revision)
             and feedback["policy_sync"] is policy.sync
             and feedback["policy_realtime_bpm"] is policy.realtime_bpm
             and feedback["intent_revision"] == intent.revision
-            and feedback["settled"] is True
         )
         if expected == "mapped":
             geometry = None if self._maps is None else self._maps.effective(sample_id)
@@ -220,7 +308,7 @@ class SourceSyncController:
                 and geometry is not None
                 and feedback["map_revision"] == geometry.revision()
             )
-        if matching and (not requested or effective):
+        if matching and feedback["settled"] is True and (not requested or effective):
             return SourceSyncStatus(
                 requested=requested,
                 effective=effective,
@@ -229,6 +317,25 @@ class SourceSyncController:
                 policy_mode=mode,
                 actual_realtime_bpm=_actual_realtime_bpm(feedback),
             )
+        if (
+            matching
+            and expected != "mapped"
+            and active
+            and feedback.get("target_current") is True
+            and feedback["settled"] is False
+        ):
+            return SourceSyncStatus(
+                requested=requested,
+                effective=effective,
+                active=active,
+                state="pending",
+                policy_mode=mode,
+                actual_realtime_bpm=_actual_realtime_bpm(feedback),
+                guidance="settling",
+            )
+        adoption = self._adoption_status(sample_id, feedback)
+        if adoption is not None:
+            return adoption
         if requested and expected == "mapped":
             return self._pending_mapped_policy(sample_id, feedback)
         status = SourceSyncStatus(
@@ -239,13 +346,69 @@ class SourceSyncController:
             policy_mode=mode,
             actual_realtime_bpm=_actual_realtime_bpm(feedback),
             detail=f"Start/retrigger to apply {expected} timing." if active or requested else None,
+            guidance="restart" if active or requested else None,
         )
         pending, error = self._transport.residency.status(sample_id)
         if error:
-            return replace(status, state="refused", detail=error)
-        if pending:
-            return replace(status, detail=f"Playback {pending}.")
+            status = replace(status, state="refused", detail=error)
+        elif pending:
+            status = replace(status, detail=f"Playback {pending}.")
         return status
+
+    def _current_adoption(
+        self, sample_id: int, feedback: dict[str, object]
+    ) -> dict[str, object] | None:
+        """Validate Native's current-snapshot observation against the full raw target."""
+        adoption = feedback.get("adoption")
+        if not isinstance(adoption, dict) or not _adoption_fields_valid(adoption):
+            return None
+        policy = self._project.global_timing_policy
+        intent = self._project.pad_source_sync_intent[sample_id]
+        revision = None if policy.is_neutral else policy.revision
+        if (
+            adoption["target_mode"] != self.requested_mode(sample_id)
+            or adoption["target_policy_revision"] != revision
+            or adoption["target_policy_sync"] is not policy.sync
+            or adoption["target_policy_realtime_bpm"] is not policy.realtime_bpm
+            or adoption["target_intent_revision"] != intent.revision
+        ):
+            return None
+        return adoption
+
+    def _adoption_status(
+        self, sample_id: int, feedback: dict[str, object]
+    ) -> SourceSyncStatus | None:
+        adoption = self._current_adoption(sample_id, feedback)
+        if adoption is None:
+            return None
+        active = feedback["active"] is True
+        if adoption["state"] == "applied" and not active:
+            # A stopped voice cannot acknowledge a current glide or effective policy.
+            return None
+        refused = adoption["state"] == "refused"
+        policy_valid = _policy_feedback_valid(feedback)
+        guidance: SourceSyncGuidance = (
+            "refused" if refused else "settling" if adoption["state"] == "applied" else "pending"
+        )
+        return SourceSyncStatus(
+            requested=self._project.resolve_pad_source_sync(sample_id),
+            effective=feedback["effective"] is True,
+            active=active,
+            state="refused" if refused else "pending",
+            detail=(
+                f"Live timing adoption refused: {adoption['reason'] or 'unspecified'} "
+                f"(snapshot {adoption['snapshot_revision']}, attempt {adoption['attempt']})."
+                if refused
+                else None
+            ),
+            policy_mode=(
+                cast("Literal['legacy', 'off', 'fixed', 'mapped'] | None", feedback["policy_mode"])
+                if policy_valid
+                else None
+            ),
+            actual_realtime_bpm=_actual_realtime_bpm(feedback) if policy_valid else None,
+            guidance=guidance,
+        )
 
     def _pending_mapped_policy(
         self, sample_id: int, feedback: dict[str, object]
@@ -269,6 +432,7 @@ class SourceSyncController:
                 status,
                 state="pending",
                 detail="Start/retrigger to apply the requested global policy.",
+                guidance="restart",
             )
         return status
 
@@ -320,4 +484,5 @@ class SourceSyncController:
             active=active,
             state="pending" if active else "stopped",
             detail=detail,
+            guidance="restart" if pending is None else None,
         )

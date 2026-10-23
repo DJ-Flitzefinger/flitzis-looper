@@ -20,22 +20,22 @@ struct RateWork {
     request_id: u64,
 }
 
-struct RateVoice {
-    id: usize,
-    placement: SlotSnapshot,
-    key: ContentKey,
-    incarnation: u64,
-    authority: u64,
-    generation: u64,
-    paused: bool,
-    continuity: u64,
-    pitch: PitchIntent,
-    key_lock: bool,
-    binding: ProductiveSourceBinding,
-    permit: NativeHistoryPermit,
-    playback: SourcePlayback,
-    plan: SourceReadPlan,
-    context: SourceFeedContext,
+pub(super) struct RateVoice {
+    pub(super) id: usize,
+    pub(super) placement: SlotSnapshot,
+    pub(super) key: ContentKey,
+    pub(super) incarnation: u64,
+    pub(super) authority: u64,
+    pub(super) generation: u64,
+    pub(super) paused: bool,
+    pub(super) continuity: u64,
+    pub(super) pitch: PitchIntent,
+    pub(super) key_lock: bool,
+    pub(super) binding: ProductiveSourceBinding,
+    pub(super) permit: NativeHistoryPermit,
+    pub(super) playback: SourcePlayback,
+    pub(super) plan: SourceReadPlan,
+    pub(super) context: SourceFeedContext,
     needs_history: bool,
     work: Option<RateWork>,
 }
@@ -87,7 +87,7 @@ fn feed<'a>(
 }
 
 impl RtMixer {
-    fn effective_global_rate(&self) -> RateTuple {
+    pub(super) fn effective_global_rate(&self) -> RateTuple {
         RateTuple {
             speed: self.speed,
             period: self.master_period_seconds,
@@ -218,7 +218,7 @@ impl RtMixer {
         self.global_rate = Some(coordinator);
     }
 
-    fn effective_rate_voice_tuple(&self, index: usize) -> (PitchIntent, bool) {
+    pub(super) fn effective_rate_voice_tuple(&self, index: usize) -> (PitchIntent, bool) {
         self.effective_voice_tuple(index)
     }
 
@@ -378,7 +378,7 @@ impl RtMixer {
     /// belongs to an already living voice: its actual admitted birth can also
     /// prove the same source while all original source/window/timing fences hold.
     /// Keeping PCM, a slot observation or a generic warmed Native cannot do so.
-    fn rate_voice_source_admitted(
+    pub(super) fn rate_voice_source_admitted(
         &self,
         index: usize,
         key: ContentKey,
@@ -398,6 +398,105 @@ impl RtMixer {
                         false,
                     )
             })
+    }
+
+    pub(super) fn global_rate_pending(&self) -> bool {
+        self.global_rate
+            .as_ref()
+            .is_none_or(|coordinator| coordinator.pending.is_some())
+    }
+
+    /// Shared fixed participant capture. This does not request work or change a
+    /// source clock; callers retain their own existing projection/eligibility rules.
+    pub(super) fn capture_rate_participant(
+        &self,
+        index: usize,
+        snapshot: &PitchSourceSnapshot,
+    ) -> Result<RateVoice, RateError> {
+        let voice = &self.voices[index];
+        let id = voice.sample_id;
+        let placement = self
+            .input_runtime_ownership
+            .slot_snapshot(id)
+            .ok_or(RateError::SourceChanged)?;
+        let key = placement.content_key().ok_or(RateError::SourceChanged)?;
+        if !self.rate_voice_source_admitted(index, key, snapshot) {
+            return Err(RateError::SourceChanged);
+        }
+        let permit = self
+            .capture_voice_history_permit(index, snapshot)
+            .ok_or(RateError::SourceChanged)?;
+        let (pitch, key_lock) = self.effective_rate_voice_tuple(index);
+        Ok(RateVoice {
+            id,
+            placement,
+            key,
+            incarnation: self
+                .input_runtime_ownership
+                .key_source_request_incarnation(key)
+                .ok_or(RateError::SourceChanged)?,
+            authority: self
+                .input_runtime_ownership
+                .authority_for_cell(key.cell())
+                .load(Ordering::Acquire),
+            generation: voice.generation,
+            paused: voice.paused,
+            continuity: voice.source_feed_history.continuity_revision(),
+            pitch,
+            key_lock,
+            binding: ProductiveSourceBinding::new(
+                &snapshot.sample,
+                snapshot.sample_rate_hz,
+                snapshot.accepted,
+            ),
+            permit,
+            playback: snapshot.playback,
+            plan: snapshot.plan,
+            context: snapshot.source_feed_context,
+            needs_history: false,
+            work: None,
+        })
+    }
+
+    pub(super) fn rate_participant_current(
+        &self,
+        index: usize,
+        expected: &RateVoice,
+    ) -> Result<(), RateError> {
+        let voice = &self.voices[index];
+        if !voice.active
+            || voice.sample_id != expected.id
+            || voice.generation != expected.generation
+            || voice.paused != expected.paused
+            || voice.source_feed_history.continuity_revision() != expected.continuity
+            || self.effective_rate_voice_tuple(index) != (expected.pitch, expected.key_lock)
+            || self.pending_key_lock_tuples[expected.id].is_some()
+            || self.queued_key_lock_tuples[expected.id].is_some()
+        {
+            return Err(RateError::ParticipantChanged);
+        }
+        let ownership = &self.input_runtime_ownership;
+        if !ownership.slot_snapshot_fields_current(expected.placement)
+            || ownership.callback_key_slot(expected.key) != Some(expected.id)
+            || ownership.key_source_request_incarnation(expected.key) != Some(expected.incarnation)
+            || ownership
+                .authority_for_cell(expected.key.cell())
+                .load(Ordering::Acquire)
+                != expected.authority
+        {
+            return Err(RateError::SourceChanged);
+        }
+        let sample = voice.sample.as_ref().ok_or(RateError::SourceChanged)?;
+        if ProductiveSourceBinding::new(
+            sample,
+            self.sample_rate_hz as u32,
+            self.timing_for_voice(voice).accepted,
+        ) != expected.binding
+            || !expected.permit.current(sample, self.sample_rate_hz as u32)
+        {
+            return Err(RateError::SourceChanged);
+        }
+        Ok(())
     }
 
     fn capture_global_rate(
@@ -429,55 +528,18 @@ impl RtMixer {
             {
                 return Err(RateError::Capacity);
             }
-            let placement = self
-                .input_runtime_ownership
-                .slot_snapshot(id)
-                .ok_or(RateError::SourceChanged)?;
-            let key = placement.content_key().ok_or(RateError::SourceChanged)?;
             let mut snapshot = self
                 .global_rate_snapshot(index, pending)
                 .ok_or(RateError::SourceChanged)?;
-            if !self.rate_voice_source_admitted(index, key, &snapshot) {
-                return Err(RateError::SourceChanged);
-            }
-            let permit = self
-                .capture_voice_history_permit(index, &snapshot)
-                .ok_or(RateError::SourceChanged)?;
-            let binding = ProductiveSourceBinding::new(
-                &snapshot.sample,
-                snapshot.sample_rate_hz,
-                snapshot.accepted,
-            );
-            let context = snapshot.source_feed_context;
+            let mut participant = self.capture_rate_participant(index, &snapshot)?;
             if !snapshot.project_output_frames(execution - frame) {
                 return Err(RateError::HistoryUnavailable);
             }
-            let (pitch, key_lock) = self.effective_rate_voice_tuple(index);
-            capture.voices[index] = Some(RateVoice {
-                id,
-                placement,
-                key,
-                incarnation: self
-                    .input_runtime_ownership
-                    .key_source_request_incarnation(key)
-                    .ok_or(RateError::SourceChanged)?,
-                authority: self
-                    .input_runtime_ownership
-                    .authority_for_cell(key.cell())
-                    .load(Ordering::Acquire),
-                generation: voice.generation,
-                paused: voice.paused,
-                continuity: voice.source_feed_history.continuity_revision(),
-                pitch,
-                key_lock,
-                binding,
-                permit,
-                playback: snapshot.playback,
-                plan: snapshot.plan,
-                context: context.for_plan(snapshot.plan),
-                needs_history: self.rate_voice_needs_history(index, pending.requested)?,
-                work: None,
-            });
+            participant.playback = snapshot.playback;
+            participant.plan = snapshot.plan;
+            participant.context = participant.context.for_plan(snapshot.plan);
+            participant.needs_history = self.rate_voice_needs_history(index, pending.requested)?;
+            capture.voices[index] = Some(participant);
         }
         // All foreign owners and reusable storage are checked before the first
         // lane changes epoch. A partial capture retires only our successful work.
@@ -572,39 +634,7 @@ impl RtMixer {
                 }
                 continue;
             };
-            if !voice.active
-                || voice.sample_id != expected.id
-                || voice.generation != expected.generation
-                || voice.paused != expected.paused
-                || voice.source_feed_history.continuity_revision() != expected.continuity
-                || self.effective_rate_voice_tuple(index) != (expected.pitch, expected.key_lock)
-                || self.pending_key_lock_tuples[expected.id].is_some()
-                || self.queued_key_lock_tuples[expected.id].is_some()
-            {
-                return Err(RateError::ParticipantChanged);
-            }
-            let ownership = &self.input_runtime_ownership;
-            if !ownership.slot_snapshot_fields_current(expected.placement)
-                || ownership.callback_key_slot(expected.key) != Some(expected.id)
-                || ownership.key_source_request_incarnation(expected.key)
-                    != Some(expected.incarnation)
-                || ownership
-                    .authority_for_cell(expected.key.cell())
-                    .load(Ordering::Acquire)
-                    != expected.authority
-            {
-                return Err(RateError::SourceChanged);
-            }
-            let sample = voice.sample.as_ref().ok_or(RateError::SourceChanged)?;
-            if ProductiveSourceBinding::new(
-                sample,
-                self.sample_rate_hz as u32,
-                self.timing_for_voice(voice).accepted,
-            ) != expected.binding
-                || !expected.permit.current(sample, self.sample_rate_hz as u32)
-            {
-                return Err(RateError::SourceChanged);
-            }
+            self.rate_participant_current(index, expected)?;
         }
         if self
             .input_runtime_ownership

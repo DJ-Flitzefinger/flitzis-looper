@@ -279,7 +279,8 @@ impl RequestedPitchJournal {
         &mut self,
         pads: &mut [RuntimePadState],
         ownership: &InputRuntimeOwnership,
-    ) {
+    ) -> bool {
+        let mut changed = false;
         for index in 0..REQUESTED_PITCH_CAPACITY {
             let Some(record) = &self.records[index] else {
                 continue;
@@ -318,12 +319,16 @@ impl RequestedPitchJournal {
                     if row.latest_request_sequence == record.sequence
                         && let Some(anchor) = row.pitch_anchor
                     {
+                        let before = (row.pitch, row.latest_request_sequence, row.pitch_anchor);
                         anchor.restore(row);
+                        changed |=
+                            before != (row.pitch, row.latest_request_sequence, row.pitch_anchor);
                     }
                 }
                 continue;
             }
             let row = &mut pads[placement.expect("current placement").slot()];
+            let before = (row.pitch, row.latest_request_sequence, row.pitch_anchor);
             if record.observation.rejected() {
                 let owns_correction_reset = record.correction.reset_sequence == record.sequence;
                 if owns_correction_reset {
@@ -368,6 +373,16 @@ impl RequestedPitchJournal {
                     sequence: record.sequence,
                 });
             }
+            changed |= before != (row.pitch, row.latest_request_sequence, row.pitch_anchor);
+        }
+        changed
+    }
+}
+
+impl RuntimeState {
+    fn reconcile_policy_pitch(&mut self, ownership: &InputRuntimeOwnership) {
+        if self.pitch_shadow.reconcile(&mut self.pads, ownership) {
+            ownership.publish_runtime_policy_revision();
         }
     }
 }
@@ -598,7 +613,7 @@ fn capture_row(
     }) {
         return Err(PitchActionReject::InputDisabled);
     }
-    state.pitch_shadow.reconcile(&mut state.pads, ownership);
+    state.reconcile_policy_pitch(ownership);
     if !state.pitch_shadow.has_capacity() {
         return Err(PitchActionReject::Capacity);
     }
@@ -685,6 +700,7 @@ fn capture_row(
     correction.apply(&mut state.pads[id].pitch);
     state.pads[id].pitch.request_sequence = action.sequence();
     state.pads[id].latest_request_sequence = action.sequence();
+    ownership.publish_runtime_policy_revision();
     Ok(action)
 }
 
@@ -697,10 +713,7 @@ pub(super) fn reject_undelivered_capture(
     let Ok(mut state) = runtime.lock() else {
         return;
     };
-    let RuntimeState {
-        pitch_shadow, pads, ..
-    } = &mut *state;
-    pitch_shadow.reconcile(pads, ownership);
+    state.reconcile_policy_pitch(ownership);
 }
 
 pub(super) fn capture_selected(
@@ -728,10 +741,7 @@ pub(super) fn capture_selected(
     // Never return a fresh action that crossed into such a replacement request.
     if let Err(reason) = selected_row(&state, ownership) {
         action.reject(reason);
-        let RuntimeState {
-            pitch_shadow, pads, ..
-        } = &mut *state;
-        pitch_shadow.reconcile(pads, ownership);
+        state.reconcile_policy_pitch(ownership);
         return Err(reason);
     }
     Ok(action)
@@ -752,10 +762,7 @@ impl InputRuntime {
             .runtime_state
             .lock()
             .map_err(|_| PitchActionReject::PlacementPending)?;
-        let RuntimeState {
-            pitch_shadow, pads, ..
-        } = &mut *state;
-        pitch_shadow.reconcile(pads, &self.ownership);
+        state.reconcile_policy_pitch(&self.ownership);
         if action.effective() || action.state() == "rejected" {
             return Ok(false);
         }
@@ -765,10 +772,7 @@ impl InputRuntime {
         if !(0..4).any(|_| action.reject(reason)) {
             return Ok(false);
         }
-        let RuntimeState {
-            pitch_shadow, pads, ..
-        } = &mut *state;
-        pitch_shadow.reconcile(pads, &self.ownership);
+        state.reconcile_policy_pitch(&self.ownership);
         Ok(true)
     }
 
@@ -872,14 +876,20 @@ impl InputRuntime {
             .runtime_state
             .lock()
             .map_err(|_| PitchActionReject::PlacementPending)?;
+        state.reconcile_policy_pitch(&self.ownership);
         let RuntimeState {
             pitch_shadow, pads, ..
         } = &mut *state;
-        pitch_shadow.reconcile(pads, &self.ownership);
+        let mut changed = false;
         for (row, projection) in pads.iter_mut().zip(projections) {
+            let before = (row.pitch, row.latest_request_sequence, row.pitch_anchor);
             if apply_pitch_projection(row, projection) {
                 pitch_shadow.anchor_row(row);
             }
+            changed |= before != (row.pitch, row.latest_request_sequence, row.pitch_anchor);
+        }
+        if changed {
+            self.ownership.publish_runtime_policy_revision();
         }
         Ok(())
     }

@@ -79,6 +79,28 @@ fn execution_frame(original: u64, callback: u64, needs_preparation: bool) -> u64
 }
 
 impl PitchRuntime {
+    /// Existing fixed custody only. Terminal originals and retired content never
+    /// fence an unrelated adoption; worker-held work retains its original epoch.
+    pub(crate) fn has_pending_content(&self, key: super::content_placement::ContentKey) -> bool {
+        self.slots.iter().any(|slot| {
+            slot.content == Some(key)
+                && slot
+                    .epoch
+                    .as_ref()
+                    .is_some_and(|epoch| epoch.load(Ordering::Acquire) != 0)
+                && slot.owner.as_ref().is_some_and(|owner| match owner {
+                    OriginalActionOwner::Pitch(owner) => {
+                        owner.content_is_current()
+                            && !matches!(owner.state(), "applied" | "rejected")
+                    }
+                    OriginalActionOwner::Ordinary(owner) => {
+                        owner.content_key() == key
+                            && !matches!(owner.state(), "applied" | "rejected")
+                    }
+                })
+        })
+    }
+
     pub(crate) fn capture_group_pending(&self, key: OrdinaryGroupKey, session_id: u64) -> bool {
         self.slots
             .get(key.slot)

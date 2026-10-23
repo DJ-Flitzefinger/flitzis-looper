@@ -818,7 +818,7 @@ class InputMappingController(BaseController):
             self._last_input_runtime_state_error = str(error)
             return False
         if signature == self._last_input_runtime_state_signature:
-            return True
+            return self._request_runtime_policy_adoption()
 
         multi_loop, _sample_rate_hz, pad_signatures, policy_json = signature
         policy_options: _TimingPolicyOptions = (
@@ -855,6 +855,19 @@ class InputMappingController(BaseController):
             return False
 
         self._last_input_runtime_state_signature = signature
+        return self._request_runtime_policy_adoption()
+
+    def _request_runtime_policy_adoption(self) -> bool:
+        """Retry the current Native-owned request without replacing published rows."""
+        try:
+            request = getattr(self._audio, "request_input_runtime_policy_adoption", None)
+            if callable(request):
+                # Native deduplicates before owning work. Ordinary pending/refusal
+                # returns normally; only callback feedback can confirm adoption.
+                request()
+        except (RuntimeError, ValueError, TypeError) as error:
+            self._last_input_runtime_state_error = str(error)
+            return False
         self._last_input_runtime_state_error = None
         return True
 

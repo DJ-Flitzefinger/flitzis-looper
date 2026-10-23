@@ -923,6 +923,16 @@ pub(super) fn execute_scheduled_command<S: AudioMessageSink, R: AudioBufferRetir
             batch.finish(accepted);
             retirement.retire_global_playback_batch(batch);
         }
+        ScheduledCommand::AdoptRuntimePolicy(work) => {
+            if retirement.available_retirement_slots() == 0 {
+                return ScheduledExecution::Pending(ScheduledCommand::AdoptRuntimePolicy(work));
+            }
+            // Actual E may be later than the original barrier after capacity refusal.
+            // No phase was prepared or extrapolated by the owning request.
+            let result = mixer.adopt_runtime_policy(&work, transport, output_frame);
+            work.finish(result, Some(output_frame));
+            retirement.retire_runtime_policy(work);
+        }
         command @ ScheduledCommand::TriggerInputPad { .. } => {
             if matches!(
                 execute_admitted_trigger(mixer, output_frame, &command, audio_messages, retirement),
@@ -1535,6 +1545,7 @@ fn control_message_retirement_slots_needed(
     mapped_owners: usize,
 ) -> usize {
     match message {
+        ControlMessage::AdoptRuntimePolicy(_) => 1,
         ControlMessage::StartMixCapture { .. } => 2,
         ControlMessage::GlobalPlaybackBatch(batch) => {
             3 * MAX_VOICES + mapped_owners + 1 + usize::from(batch.capture_publication.is_some())
@@ -2356,6 +2367,32 @@ pub(super) fn process_control_message<
         return;
     }
     match message {
+        ControlMessage::AdoptRuntimePolicy(work) => {
+            if retirement.available_retirement_slots() == 0 {
+                mixer.defer_control(ControlMessage::AdoptRuntimePolicy(work));
+                return;
+            }
+            let result = if !work.current() {
+                Err(super::input_mapping::RuntimePolicyError::Stale)
+            } else {
+                // schedule() consumes a command on Full AND order exhaustion.
+                // Keep the original alive until its one retirement transfer;
+                // every failed/returned scheduler clone is therefore nonfinal.
+                scheduler
+                    .schedule(
+                        callback_start_frame,
+                        ScheduledCommand::AdoptRuntimePolicy(work.clone()),
+                    )
+                    .map(|_| ())
+                    .map_err(|_| super::input_mapping::RuntimePolicyError::SchedulerFull)
+            };
+            if let Err(error) = result {
+                work.finish(Err(error), None);
+            }
+            retirement.retire_runtime_policy(work);
+            // Existing renderer due-dispatch runs after both bounded drains.
+            // Other eager due passes can only produce an honest Busy refusal.
+        }
         ControlMessage::StartMixCapture {
             publication,
             target_frame,

@@ -26,6 +26,7 @@ if os.environ['LAUNCHER_NATIVE_MODE'] != 'older':
             mode in {'old-piano', 'old-recording', 'old-editor', 'old-residency', 'old-ordinary'}
             or mode.startswith('editor-')
             or mode.startswith('ordinary-')
+            or mode.startswith('adoption-')
         ):
             return 'release'
         return mode
@@ -63,6 +64,12 @@ class AudioEngine:
         raise AssertionError('launcher must only reflect timing policy')
     def pad_source_sync_status(self, id):
         raise AssertionError('launcher must only reflect sync status')
+    if os.environ['LAUNCHER_NATIVE_MODE'] == 'adoption-extra-target':
+        def request_input_runtime_policy_adoption(self, target=None):
+            raise AssertionError('launcher must never request adoption')
+    elif os.environ['LAUNCHER_NATIVE_MODE'] != 'adoption-missing':
+        def request_input_runtime_policy_adoption(self):
+            raise AssertionError('launcher must never request adoption')
     def begin_source_beatmap_raw_async(self, sample_id, *, expected_source_generation):
         raise AssertionError('launcher must never analyze source audio')
     def begin_source_beatmap_beat_this_raw_async(
@@ -544,6 +551,19 @@ def test_source_beatmap_editor_requires_current_native_before_application(
     assert "Native source beatmap editor API requires a current build" in (
         result.stdout + result.stderr
     )
+    assert not launchers.app_log.exists()
+    assert launchers.profile_log.exists()
+
+
+@pytest.mark.parametrize("starter", ["start.bat", "start-release.bat"])
+@pytest.mark.parametrize("mode", ["adoption-missing", "adoption-extra-target"])
+def test_live_policy_requires_current_noarg_api_before_application(
+    launchers: _Launchers, starter: str, mode: str
+) -> None:
+    launchers.environment["LAUNCHER_NATIVE_MODE"] = mode
+    result = launchers.run(starter)
+    assert result.returncode != 0
+    assert "request_input_runtime_policy_adoption(self)" in result.stdout + result.stderr
     assert not launchers.app_log.exists()
     assert launchers.profile_log.exists()
 

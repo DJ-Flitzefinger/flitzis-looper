@@ -3,7 +3,7 @@
 use super::{InputRuntime, RuntimePadState, RuntimeState};
 use crate::audio_engine::content_placement::SlotSnapshot;
 use crate::messages::SampleBuffer;
-use std::sync::{MutexGuard, atomic::Ordering};
+use std::sync::{Arc, MutexGuard, atomic::Ordering};
 
 pub(in crate::audio_engine) struct CapturedPairRuntime {
     original: [SlotSnapshot; 2],
@@ -11,6 +11,7 @@ pub(in crate::audio_engine) struct CapturedPairRuntime {
 }
 
 pub(in crate::audio_engine) struct PreparedPairRuntimeMirror<'a> {
+    ownership: Arc<super::InputRuntimeOwnership>,
     state: MutexGuard<'a, RuntimeState>,
     original: [SlotSnapshot; 2],
     after: [SlotSnapshot; 2],
@@ -83,6 +84,7 @@ impl InputRuntime {
             }
         }
         let prepared = PreparedPairRuntimeMirror {
+            ownership: self.ownership.clone(),
             state,
             original: captured.original,
             after,
@@ -119,6 +121,9 @@ impl PreparedPairRuntimeMirror<'_> {
                 &mut self.next_rows[index],
             );
         }
+        // The parent's original marker owns the complete two-row publication.
+        // The runtime mutex remains held until both actual rows and this commit exist.
+        self.ownership.publish_runtime_policy_revision();
     }
 }
 

@@ -124,6 +124,10 @@ class _SyncStatus:
         _forbidden()
 
 
+def _request_policy_adoption(self: object) -> Never:
+    _forbidden()
+
+
 def source_beatmap_editor_native_module(engine_base: type = object) -> SimpleNamespace:
     """Return fresh nonexecuting capabilities for direct and full-runtime preflight."""
     return SimpleNamespace(
@@ -134,6 +138,7 @@ def source_beatmap_editor_native_module(engine_base: type = object) -> SimpleNam
                 "__init__": _forbidden,
                 "GLOBAL_TIMING_POLICY_API_VERSION": 1,
                 "set_input_runtime_state": _runtime,
+                "request_input_runtime_policy_adoption": _request_policy_adoption,
                 "begin_source_beatmap_create_async": _create,
                 "begin_source_beatmap_edit_async": _edit,
                 "begin_source_beatmap_raw_async": _raw,
@@ -207,6 +212,44 @@ def _replace_signature(owner: type, method: str, replacement: Signature) -> None
 
 def test_current_editor_contract_is_reflected_without_any_native_work() -> None:
     _check(source_beatmap_editor_native_module())
+
+
+@pytest.mark.parametrize("missing", [False, True], ids=["not-callable", "absent"])
+def test_timing_adoption_hook_is_required_before_activation(*, missing: bool) -> None:
+    native = source_beatmap_editor_native_module()
+    if missing:
+        del native.AudioEngine.request_input_runtime_policy_adoption
+    else:
+        native.AudioEngine.request_input_runtime_policy_adoption = None
+    with pytest.raises(AssertionError, match="request_input_runtime_policy_adoption"):
+        _check(native)
+
+
+@pytest.mark.parametrize(
+    "parameters",
+    [
+        (),
+        (Parameter("self", Parameter.KEYWORD_ONLY),),
+        (Parameter("self", Parameter.VAR_POSITIONAL),),
+        (
+            Parameter("self", Parameter.POSITIONAL_OR_KEYWORD),
+            Parameter("rows", Parameter.POSITIONAL_OR_KEYWORD),
+        ),
+        (
+            Parameter("self", Parameter.POSITIONAL_OR_KEYWORD),
+            Parameter("rows", Parameter.KEYWORD_ONLY, default=None),
+        ),
+    ],
+)
+def test_timing_adoption_accepts_no_python_cohort_parameters(
+    parameters: tuple[Parameter, ...],
+) -> None:
+    native = source_beatmap_editor_native_module()
+    _replace_signature(
+        native.AudioEngine, "request_input_runtime_policy_adoption", Signature(parameters)
+    )
+    with pytest.raises(AssertionError, match="request_input_runtime_policy_adoption"):
+        _check(native)
 
 
 def test_class_attribute_descriptor_can_expose_the_native_integer_capability() -> None:

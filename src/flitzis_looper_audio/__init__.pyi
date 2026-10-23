@@ -1,5 +1,5 @@
 from collections.abc import Sequence
-from typing import ClassVar, Literal, TypedDict
+from typing import ClassVar, Literal, NotRequired, TypedDict
 
 import numpy as np
 from numpy.typing import NDArray
@@ -27,6 +27,34 @@ class ScalarSourceGrid:
     def source_at_beat(self, beat: float) -> float | None: ...
     def source_after_beats(self, source_s: float, beats: float) -> float | None: ...
 
+class RuntimePolicyAdoption(TypedDict):
+    snapshot_revision: int
+    attempt: int
+    state: Literal["pending", "applied", "refused"]
+    reason: (
+        Literal[
+            "busy",
+            "stale",
+            "unsupported",
+            "source_changed",
+            "missing_master",
+            "invalid_target",
+            "phase_changed",
+            "reader_unavailable",
+            "capacity",
+            "scheduler_full",
+            "sequence_exhausted",
+            "no_active_voices",
+        ]
+        | None
+    )
+    execution_frame: int | None
+    target_mode: Literal["legacy", "off", "fixed", "mapped"]
+    target_policy_revision: int | None
+    target_policy_sync: bool | None
+    target_policy_realtime_bpm: bool | None
+    target_intent_revision: int
+
 class SourceSyncStatus(TypedDict):
     source_generation: int
     source_identity: int
@@ -40,6 +68,8 @@ class SourceSyncStatus(TypedDict):
     policy_sync: bool | None
     policy_realtime_bpm: bool | None
     settled: bool | None
+    target_current: NotRequired[bool | None]
+    adoption: NotRequired[RuntimePolicyAdoption | None]
 
 class SourceBeatmapEvaluation(TypedDict):
     map_revision: str
@@ -1241,6 +1271,7 @@ class AudioEngine:
         expected_source_generation: int | None = None,
     ) -> int: ...
     def pad_key_lock_status(self, sample_id: int) -> dict[str, object] | None: ...
+    def request_input_runtime_policy_adoption(self) -> None: ...
     def pad_source_sync_status(
         self,
         id: int,  # noqa: A002 - Match the existing Native keyword signature.

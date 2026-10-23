@@ -9,7 +9,9 @@ from imgui_bundle import imgui
 
 from flitzis_looper.controller.current_timing import CurrentPadTiming
 from flitzis_looper.models import PadContentIdentity
+from flitzis_looper.timing_policy import GlobalTimingPolicy
 from flitzis_looper.ui.render import source_beatmap_editor, waveform_editor
+from tests.flitzis_looper.controller.test_source_sync import _adoption
 from tests.flitzis_looper.ui.test_waveform_render_stability import (
     _click_toolbar,
     _context,
@@ -289,6 +291,81 @@ def test_actual_sync_click_changes_request_and_keeps_readiness_and_refusal_truth
             controller.project.pad_loop_end_s[0],
         )
         audio_engine_mock.seek_sample.assert_not_called()
+
+
+def test_full_editor_live_policy_guidance_preserves_actual_audio_and_console_detail(
+    controller: AppController,
+    audio_engine_mock: Mock,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    with _plot_context():
+        ctx, worker = _context(controller, audio_engine_mock)
+        ctx.bold_font = imgui.get_io().fonts.fonts[1]
+        controller.project.pad_content[0] = PadContentIdentity(instance_id="e" * 32)
+        ctx.ui.waveform.open(0)
+        _edit, _identity = _expose(ctx, monkeypatch, _map())
+        binding = audio_engine_mock.current_input_runtime_pad_binding(0)
+        binding._metadata["window_revision"] = 0
+        audio_engine_mock.current_input_runtime_pad_binding.side_effect = None
+        audio_engine_mock.current_input_runtime_pad_binding.return_value = binding
+        controller.project.global_timing_policy = GlobalTimingPolicy(
+            schema_version=1, sync=False, realtime_bpm=False, revision=2
+        )
+        # This callback double supplies observations; it is not an admission proof.
+        adoption = _adoption(
+            target_mode="off",
+            target_policy_revision=2,
+            target_policy_sync=False,
+            target_policy_realtime_bpm=False,
+            target_intent_revision=0,
+        )
+        audio_engine_mock.pad_source_sync_status = Mock(
+            return_value={
+                "source_generation": 1,
+                "source_identity": 1234,
+                "window_revision": 0,
+                "active": True,
+                "effective": True,
+                "intent_revision": 0,
+                "map_revision": None,
+                "policy_mode": "fixed",
+                "policy_revision": 1,
+                "policy_sync": True,
+                "policy_realtime_bpm": False,
+                "settled": True,
+                "adoption": adoption,
+            }
+        )
+        original_status, original_wrapped = source_beatmap_editor._status_line, imgui.text_wrapped
+        rendered: list[str] = []
+
+        def status(label: str) -> None:
+            rendered.append(label)
+            original_status(label)
+
+        def wrapped(label: str) -> None:
+            rendered.append(label)
+            original_wrapped(label)
+
+        monkeypatch.setattr(source_beatmap_editor, "_status_line", status)
+        monkeypatch.setattr(imgui, "text_wrapped", wrapped)
+        observer = _observe_draw(monkeypatch)
+        for _ in range(5):
+            _full_frame(ctx, worker, observer)
+        for state, execution, reason, message in (
+            ("pending", None, None, "Live timing change pending."),
+            ("applied", 123, None, "Timing change applied; tempo is settling."),
+            ("refused", 123, "unsupported", "Live timing change refused."),
+        ):
+            adoption.update(state=state, execution_frame=execution, reason=reason)
+            rendered.clear()
+            _full_frame(ctx, worker, observer)
+            assert message in rendered
+            assert any("SYNC requested OFF | Audio ON" in label for label in rendered)
+            assert all("Start/retrigger" not in label for label in rendered)
+            assert all("Live timing adoption refused:" not in label for label in rendered)
+        assert "Live timing adoption refused: unsupported" in capsys.readouterr().err
 
 
 def test_full_editor_moves_one_sample_translates_and_undoes_with_same_revision(

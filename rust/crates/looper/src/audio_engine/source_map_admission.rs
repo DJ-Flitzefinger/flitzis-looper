@@ -215,11 +215,17 @@ impl SourceMapProjection {
         self.sync_requested == other.sync_requested
             && self.intent_revision == other.intent_revision
             && self.policy == other.policy
-            && match (&self.selected, &other.selected) {
-                (Some(left), Some(right)) => left.same_projection(right),
-                (None, None) => true,
-                _ => false,
-            }
+            && self.same_selected_projection(other)
+    }
+
+    /// Raw request publication retains an existing map only through its exact
+    /// original delivery owner, source, geometry and immutable revision.
+    pub(crate) fn same_selected_projection(&self, other: &Self) -> bool {
+        match (&self.selected, &other.selected) {
+            (Some(left), Some(right)) => left.same_projection(right),
+            (None, None) => true,
+            _ => false,
+        }
     }
 
     /// Data-only selection changes never invalidate ordinary unmapped work.

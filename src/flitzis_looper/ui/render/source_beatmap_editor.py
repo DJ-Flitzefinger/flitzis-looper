@@ -856,7 +856,9 @@ def _render_source_map_controls(
         )
     finally:
         imgui.pop_id()
-    if sync.state in {"pending", "stopped"}:
+    if sync.guidance_text is not None:
+        imgui.text_wrapped(sync.guidance_text)
+    elif sync.state in {"pending", "stopped"}:
         imgui.text_wrapped("Start/retrigger to apply this timing change.")
     expanded = imgui.collapsing_header("Source Map##source-map-controls")
     revision = "" if frame.revision is None else f" | Revision {frame.revision[:12]}"

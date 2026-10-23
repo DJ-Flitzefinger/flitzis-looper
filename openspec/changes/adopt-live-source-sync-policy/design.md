@@ -21,10 +21,119 @@ projection inputs. Missing master refuses construction. This is frozen data from
 the existing clock, not a clock with an independently mutable lifetime. It frees
 fixed cursor space for conversion without opening any adoption envelope.
 
-Stage A of this change must close the mathematical conversion contract before
-Stage B opens live admission. Existing mapped starts, master changes and qualified
+Stage A must close the mathematical conversion contract before any representation
+conversion or Stage B general mapped admission. Independent Stage S below adopts
+only scalar requests/targets on an unchanged scalar projection and reader; it
+requires no map inversion and does not discharge Stage A. This explicitly replaces
+the earlier broader sequencing rule that blocked all live admission on Stage A.
+Existing mapped starts, master changes and qualified
 Hold/ordinary Pause/Resume keep their legacy canonical projections and guards.
 New anchored conversion must not silently change their established arithmetic.
+
+## Stage S: independent scalar-to-scalar live policy adoption
+
+Use the complete current original Native runtime row and its exact binding,
+source/content/lifetime, physical window, pitch projection, launch/runtime fences
+and raw policy/PAD revisions. Capture owning work off RT under existing correctly
+ordered locks; callback admission repeats bounded freshness inside the original
+placement claim. The map-withheld fallback snapshot is not proof of scalar row
+custody. Raw timing-policy revision and numeric RateTuple revision remain distinct.
+
+Every active lane in the fixed 32-lane cohort must have current scalar playback
+and a newly requested scalar policy, unchanged actual source/window/domain and
+qualified readers, zero pitch, Key Lock off, no Native/retained input or stem
+transition, no affected pause/Hold or conflicting pending work. One unsupported,
+stale, missing-master/period, unsupported-rate or capacity failure refuses the
+whole effect before mutation, including unchanged-looking participants. No mixed
+partial adoption, scalar fallback for mapped intent, new clock/scheduler or
+Python cohort queue. Master tempo/epoch, placement, generation and source stay.
+
+Resolve every prospective scalar target from its NEW captured request. Preserve
+raw actual SourcePlayback; capture_voice_snapshot's old-policy normalization and
+chunk must not consume a preceding glide step. Equal target adoption changes only
+the request; the full pending scalar trajectory remains exact. Changed targets
+use the existing set_target/.05/512 step boundary exactly once, preserving exact
+E cursor/reader/PCM. Prepare/check the resulting bounded scalar state before the
+complete actual-E claim. Existing read receipts are retained, not reconstructed.
+
+Use the existing global-rate capture/preflight/claim machinery with explicit
+policy effect identity; preserve rate-edit supersession/drain fences and serialize
+incompatible effects. Runtime publication plus cache-hit refresh or Native-owned
+pending service must retry temporary refusal. Admission is idempotent after actual
+success, including while its glide settles, and repeated refresh must not flood
+owning work or restart/reanchor the voice. Never acknowledge enqueue/publication.
+
+Existing bounded source-sync status/diagnostics report actual adopted raw request,
+pending/refusal identity and real scalar settlement. A target change is unsettled
+until its actual glide reaches target. Real GUI/MIDI/runtime-to-callback evidence
+must cover both global choices, away/back revisions, equal target/pending glide,
+retarget PCM/partitions, unchanged master, retry/idempotence, all-lane refusal,
+source/Move/Swap/pause/Hold/conflicting work, retirement and feedback pressure.
+Stage S does not authorize any scalar/map conversion or musical reader change.
+
+Runtime publication is desired intent, not a new transport command. A raw
+SYNC/PAD/global-policy-only change must still cancel previously captured future
+starts through the original launch/runtime revisions without superseding a caused
+Hold's existing transport identity. Use the original prepared Cancel write and
+retain only its original transport revision when every other row projection is
+unchanged: loaded/source/content/placement/binding, resident window, accepted
+timing, physical loop, multi_loop, pitch/latest request/anchor and ACK Arc. Selected
+maps must both be absent or have the same original delivery owner, source key/
+generation/rate, exact extent and map revision independently of raw request fields.
+This qualification applies to all requested modes: a refused scalar effect must
+not strand an existing mapped Hold. Its retained effective map/launch custody and
+original continuation guards still own the eventual release/resume.
+
+Keep the original reservations, publication-current, complete marker, runtime/
+launch/current-transport checks and cancellation of pending starts. Source/window/
+timing/loop/pitch/multi_loop or selected-map addition/removal/replacement retains
+the existing transport-superseding cancellation. No Hold/currentness/continuation
+guard is relaxed. The original Cancel counter preparation may conservatively
+refuse at transport exhaustion before publication; preserve that atomic refusal
+without wrapping or resetting counters.
+
+Stage S implementation uses one immutable RuntimePolicySnapshot cached in the
+existing Native RuntimeState, with exact original rows and ownership/ACK/map pins.
+Snapshot capture follows existing pad-request-ids then runtime-mutex lock order.
+One separate runtime-policy publication stamp includes full publication, actual
+pitch-shadow reconcile/capture/apply and pair-mirror writes; commit it after real
+projection changes, never from prospective local rows. Exhaustion closes only
+this admission without wrapping or changing legacy controls. Actual-E stamp
+freshness inside the original claim is the desired-intent linearization point.
+Source generation/request/ACK fences can also change independently of an immutable
+runtime row. On request, compare the cached captured fences to their current Native
+values in place under the existing request/runtime locks before allocating. An
+observed transition of an otherwise current cached snapshot commits one new stamp
+and recaptures the original rows/fences; unchanged fences keep the same Arc.
+Availability still has to pass actual-E qualification. A pending-to-ready ACK must
+not leave a permanently stale cached source fence or require another toggle.
+
+The existing scheduler carries a by-value RuntimePolicyWork containing a cached
+snapshot Arc and attempt identity at callback start without eager due drain.
+Normal due dispatch follows both control/parameter drains. Late/deferred dispatch
+captures fresh actual E; it never extrapolates a previously captured voice.
+Reserve one existing retirement entry before each owning control or due transfer;
+retain the original work while scheduling so Full/order exhaustion drops only a
+nonfinal clone. The snapshot cache retains no work owner. A bounded dispatch-owner
+count prevents retry until every previous work owner is destroyed off RT. Final
+work destruction makes a matching still-pending attempt retryable even when the
+snapshot remains cached across close/restart. All terminal/refusal/cancel/close
+paths use the existing worker/close owner. No owning pending effect enters
+GlobalRateCoordinator and no per-retry owning allocation is needed.
+
+An additional callback target_current observation over all actual voices of a
+PAD distinguishes already-adopted target from unsettled glide. Cache-hit dedup
+uses qualified actual raw requests and this observation, not cached Applied state
+or settlement alone; a changed living cohort can retry the same immutable snapshot.
+All scalar modes, including Legacy, report settlement only when the requested
+target is current and the actual applied rate has reached it. Their projection and
+glide arithmetic remain unchanged; a newly adopted Legacy request cannot borrow
+the earlier unconditional Legacy settlement while its new target is still gliding.
+One in-flight attempt and cached Arc reuse bound repeated requests before new
+owning capture/allocation. Nested attempt feedback retains target raw revisions
+and choices, current snapshot/attempt and actual execution E; stale source, row or
+stamp yields no attempt projection. All previous actual policy fields keep their
+meaning, and actual matching/settled callback acknowledgement retains precedence.
 
 ## Exact fractional conversion
 
@@ -152,6 +261,15 @@ pressure must remain retryable. Either service Native-owned pending work after
 publication or invoke an idempotent original-snapshot admission on cache-hit
 refresh too. A hook only under Python's changed-signature branch is insufficient.
 Do not add a Python cohort queue, a second audio clock or a second scheduler.
+The existing dispatch counter is zero when idle and includes one cleanup
+reservation throughout an active attempt. Begin publishes two for its original
+Work plus that reservation; cloning adds one. Each Drop subtracts one. A previous
+value of two uniquely identifies the final actual Work and leaves the reservation
+at one during matching pending-attempt cleanup, then publishes zero with Release.
+Unchanged service uses its existing Acquire nonzero gate, so an old destructor
+cannot overwrite a newer attempt. Release is constant work without locks or CAS
+loops. The scheduler route has at most three actual Work owners (original guard,
+returned insertion event and stored insertion event), so the counter peaks at four.
 
 At actual E, prepare all fixed conversion replacements, then repeat complete
 participant/freshness/reader/phase checks under the original claim before mutation.
@@ -166,6 +284,12 @@ Extend the existing bounded SourceSyncStatus/diagnostics. Actual voice source,
 window, mode, raw revisions/choices, PAD and map revision and settled state must
 agree before acknowledgement. Distinguish an admission refusal from awaiting an
 unimplemented start/retrigger transition; enqueue/mapready/equal values are no ACK.
+Expose the already coherent callback target-current bit as optional feedback.
+For active scalar playback, a complete current raw request plus that actual target
+bit and an unsettled rate identifies an ordinary settling trajectory before
+independent attempt diagnostics. This does not grant effective or settled ACK,
+change adoption eligibility, or replace mapped geometry qualification. Missing or
+malformed target evidence cannot establish this precedence.
 
 Use real public runtime publication through the callback and actual source reads.
 Cover exact fractional E/PCM, original knots/wraps and unequal partitions; all

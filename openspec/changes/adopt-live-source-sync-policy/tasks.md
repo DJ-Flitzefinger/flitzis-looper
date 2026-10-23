@@ -15,6 +15,15 @@
 - [x] Preserve legacy arithmetic, glide, copied trajectory/history/mode guards and checked exhaustion; refuse musical or malformed domains.
 - [x] Prove exact anchor/revisits, actual reader PCM, large frames, carry, partitions/glide/history/copies/layout; finish affected checks, private Release/import and one independent final-diff review.
 
+## Stage S: independent scalar-to-scalar live policy adoption
+
+- [x] Capture complete original Native scalar policy rows/custody with full raw revisions and actual source/window/pitch/lifetime freshness.
+- [x] Preserve caused scalar/mapped Hold identity on strictly raw-request-only publication while retaining original future-start cancellation, mixed-field supersession and counter refusal.
+- [x] Reuse the existing fixed 32-lane preflight/original-claim kernel for scalar-only request/target adoption, exact E and one existing glide boundary; refuse every ineligible cohort atomically.
+- [x] Connect publication and cache-hit retry/idempotence without owning-work floods; keep rate-edit and policy revisions/fences distinct.
+- [x] Extend existing bounded effective/pending/refusal feedback and verify actual GUI/MIDI/runtime/callback, settlement, retry/pressure and lifecycle neighbors.
+- [x] Finish affected integrated checks, needed Release/import/preflight and one independent final-diff review.
+
 ## Stage A: exact copied conversion prerequisite
 
 - [ ] Freeze an analytically bounded anchored source/master representation and precise domain/boundary contract.

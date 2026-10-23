@@ -660,6 +660,8 @@ pub enum ControlMessage {
     RefreshAcceptedTiming(
         std::sync::Arc<crate::audio_engine::accepted_timing_refresh::AcceptedTimingRefresh>,
     ),
+    /// Original Native runtime request; phase is captured only at actual execution.
+    AdoptRuntimePolicy(crate::audio_engine::RuntimePolicyWork),
 
     /// Adopt a fixed precise projection after actual current source and permit checks.
     PublishConstantTiming {
@@ -914,7 +916,8 @@ impl ControlMessage {
             | ControlMessage::CommittedStemWork(_)
             | ControlMessage::PublishPreparedStems { .. }
             | ControlMessage::PublishConstantTiming { .. }
-            | ControlMessage::RefreshAcceptedTiming(_) => ControlMessageClass::Publication,
+            | ControlMessage::RefreshAcceptedTiming(_)
+            | ControlMessage::AdoptRuntimePolicy(_) => ControlMessageClass::Publication,
             ControlMessage::SetBpmLock(_)
             | ControlMessage::SetKeyLock(_)
             | ControlMessage::SetPadKeyLock { .. }

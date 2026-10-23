@@ -224,6 +224,10 @@ pub(super) fn source_sync_status(
             .policy
             .and_then(|policy| policy.request.policy_realtime_bpm),
     )?;
+    result.set_item(
+        "target_current",
+        status.policy.map(|policy| policy.target_current),
+    )?;
     result.set_item("settled", status.policy.map(|policy| policy.settled))?;
     result.set_item(
         "intent_revision",
@@ -242,6 +246,54 @@ pub(super) fn source_sync_status(
                 .collect::<String>()
         }),
     )?;
+    let snapshot = engine
+        .input_runtime
+        .as_ref()
+        .map(|runtime| runtime.runtime_policy_snapshot())
+        .transpose()
+        .map_err(PyRuntimeError::new_err)?
+        .flatten();
+    let adoption = snapshot.as_ref().and_then(|snapshot| {
+        let row = snapshot.row(id)?;
+        let attempt = snapshot.observation()?;
+        (snapshot.row_current(id)
+            && row.binding.placement.and_then(|p| p.content_key())
+                == binding.binding.placement.and_then(|p| p.content_key())
+            && row.binding.source_address == binding.binding.source_address
+            && row.binding.sample_count == binding.binding.sample_count
+            && row.binding.channels == binding.binding.channels
+            && row.binding.sample_rate_hz == binding.binding.sample_rate_hz
+            && row.binding.resident == binding.binding.resident
+            && row.binding.accepted == binding.binding.accepted)
+            .then_some((row.request, attempt))
+    });
+    if let Some((target, attempt)) = adoption {
+        let metadata = PyDict::new(py);
+        metadata.set_item(
+            "snapshot_revision",
+            snapshot.as_ref().expect("qualified snapshot").revision(),
+        )?;
+        metadata.set_item("attempt", attempt.attempt)?;
+        metadata.set_item("state", attempt.state)?;
+        metadata.set_item("reason", attempt.reason.map(|reason| reason.name()))?;
+        metadata.set_item("execution_frame", attempt.execution_frame)?;
+        metadata.set_item("target_mode", target.mode.name())?;
+        metadata.set_item("target_policy_revision", target.global_revision)?;
+        metadata.set_item("target_policy_sync", target.policy_sync)?;
+        metadata.set_item("target_policy_realtime_bpm", target.policy_realtime_bpm)?;
+        metadata.set_item("target_intent_revision", target.intent_revision)?;
+        result.set_item("adoption", metadata)?;
+    } else {
+        result.set_item("adoption", py.None())?;
+    }
+    // The optional attempt is never projected onto a later Native target.
+    if adoption.is_some_and(|(_, attempt)| {
+        snapshot.as_ref().is_none_or(|snapshot| {
+            !snapshot.row_current(id) || snapshot.observation() != Some(attempt)
+        })
+    }) {
+        result.set_item("adoption", py.None())?;
+    }
     // Dictionary allocation is control-only. A replacement during it must not
     // project the old callback witness onto a new source or content incarnation.
     Ok(
