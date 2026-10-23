@@ -54,6 +54,31 @@ pub(crate) struct SourcePlayback {
 }
 
 impl SourcePlayback {
+    /// Reference anchored map coordinates only; no productive caller or realtime-cost permit.
+    /// The caller retains the same qualified original owning geometry and reader custody.
+    pub(crate) fn mapped_anchored_continuation(
+        geometry: &MappedLoopGeometry,
+        marker: u64,
+        timeline: super::transport::TransportTimeline,
+        original_domain: SourceLoopDomain,
+        position: FractionalSourcePosition,
+        output_frame: u64,
+    ) -> Result<Self, MappedClockError> {
+        let epoch = MappedClockEpoch::anchored(
+            marker,
+            timeline,
+            geometry,
+            original_domain,
+            position,
+            output_frame,
+        )?;
+        let replacement = Self::mapped(geometry, epoch, output_frame)?;
+        if !same_position(position, replacement.origin) {
+            return Err(MappedClockError::NumericalUnavailable);
+        }
+        Ok(replacement)
+    }
+
     /// The caller separately retains and qualifies the original immutable map
     /// owner. This value contains only a copied trajectory and identity markers.
     pub(crate) fn mapped(
@@ -161,6 +186,13 @@ impl SourcePlayback {
         let state = self.mapped.ok_or(MappedClockError::InvalidEpoch)?;
         if self.domain != Some(geometry.domain()) {
             return Err(MappedClockError::InvalidGeometry);
+        }
+        if !state
+            .span
+            .epoch()
+            .replacement_anchor_matches(epoch, state.intended_output_frame)
+        {
+            return Err(MappedClockError::InvalidEpoch);
         }
         let replacement = Self::mapped(geometry, epoch, state.intended_output_frame)?;
         if !same_position(self.origin, replacement.origin) {
@@ -916,6 +948,10 @@ mod source_pair_continuation_tests;
 #[cfg(test)]
 #[path = "source_playback_musical_tests.rs"]
 mod source_playback_musical_tests;
+
+#[cfg(test)]
+#[path = "source_playback_anchored_tests.rs"]
+mod anchored_tests;
 
 #[cfg(test)]
 mod tests {

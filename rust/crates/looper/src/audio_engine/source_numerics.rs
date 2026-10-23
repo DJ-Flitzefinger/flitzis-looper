@@ -171,6 +171,29 @@ pub(super) fn split_source_coordinate(
     numerator: SourceInteger,
     denominator: SourceInteger,
 ) -> Option<SourceCoordinate> {
+    split_source_coordinate_impl(numerator, denominator, None)
+}
+
+/// The same one-round split, retaining raw fraction bits on exact fractional identity.
+///
+/// Both `r*G` and `I(raw_fraction)*D` need at most 6378 bits under the existing
+/// denominator bound. The full numerator is never shifted. This grants no anchor permission.
+pub(super) fn split_source_coordinate_preserving_fraction(
+    numerator: SourceInteger,
+    denominator: SourceInteger,
+    raw_fraction: f64,
+) -> Option<SourceCoordinate> {
+    if !raw_fraction.is_finite() || !(0.0..1.0).contains(&raw_fraction) {
+        return None;
+    }
+    split_source_coordinate_impl(numerator, denominator, Some(raw_fraction))
+}
+
+fn split_source_coordinate_impl(
+    numerator: SourceInteger,
+    denominator: SourceInteger,
+    raw_fraction: Option<f64>,
+) -> Option<SourceCoordinate> {
     if numerator.negative
         || denominator.negative
         || denominator.magnitude.is_zero()
@@ -183,6 +206,22 @@ pub(super) fn split_source_coordinate(
     let mut whole = magnitude_u128(whole)?;
     if whole > SOURCE_WHOLE_LIMIT || (whole == SOURCE_WHOLE_LIMIT && !remainder.is_zero()) {
         return None;
+    }
+    if let Some(raw) = raw_fraction {
+        let identical = if raw == 0.0 {
+            remainder.is_zero()
+        } else {
+            lossless_shl(remainder, SOURCE_GRID_SHIFT)?
+                == SourceInteger::from_f64_grid(raw)?
+                    .magnitude
+                    .checked_mul(denominator.magnitude)?
+        };
+        if identical {
+            return Some(SourceCoordinate {
+                whole,
+                fraction: raw,
+            });
+        }
     }
     let fraction_bits = if remainder.is_zero() {
         0

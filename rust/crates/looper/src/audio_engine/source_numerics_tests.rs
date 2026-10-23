@@ -1,6 +1,7 @@
 use super::{
     Magnitude, SOURCE_GRID_SHIFT, SOURCE_MAGNITUDE_BITS, SOURCE_WHOLE_LIMIT, SourceCoordinate,
     SourceInteger, magnitude_u128, split_source_coordinate,
+    split_source_coordinate_preserving_fraction,
 };
 use crate::test_memory::{ThreadAllocations, observe_current_thread};
 use std::cmp::Ordering;
@@ -17,6 +18,64 @@ fn power(exponent: u32) -> SourceInteger {
 
 fn coordinate(numerator: SourceInteger, denominator: SourceInteger) -> SourceCoordinate {
     split_source_coordinate(numerator, denominator).expect("admitted rational fixture")
+}
+
+#[test]
+fn shared_split_preserves_exact_fraction_identity_without_changing_numeric_zero() {
+    for (whole, fraction) in [
+        (0, -0.0),
+        ((1_u128 << 53) + 7, -0.0),
+        (7, f64::from_bits(1)),
+        (11, 0.75),
+    ] {
+        let denominator = power(SOURCE_GRID_SHIFT);
+        let numerator = integer(whole)
+            .checked_mul(denominator)
+            .unwrap()
+            .checked_add(SourceInteger::from_f64_grid(fraction).unwrap())
+            .unwrap();
+        let raw =
+            split_source_coordinate_preserving_fraction(numerator, denominator, fraction).unwrap();
+        assert_eq!(raw.whole, whole);
+        assert_eq!(raw.fraction.to_bits(), fraction.to_bits());
+        let numeric = coordinate(numerator, denominator);
+        assert_eq!(numeric.whole, whole);
+        if fraction == 0.0 {
+            assert_eq!(numeric.fraction.to_bits(), 0);
+        }
+    }
+    // minsub/3 is not minsub: generic identity must allow legitimate underflow.
+    let denominator = power(SOURCE_GRID_SHIFT).checked_mul(integer(3)).unwrap();
+    let rounded =
+        split_source_coordinate_preserving_fraction(integer(1), denominator, f64::from_bits(1))
+            .unwrap();
+    assert_eq!(rounded.fraction.to_bits(), 0);
+}
+
+#[test]
+fn raw_fraction_hook_retains_capacity_carries_and_refuses_malformed_inputs() {
+    let denominator = power(5303).checked_add(integer(1)).unwrap();
+    let numerator = denominator
+        .checked_mul(power(64))
+        .unwrap()
+        .checked_sub(integer(1))
+        .unwrap();
+    let boundary =
+        split_source_coordinate_preserving_fraction(numerator, denominator, -0.0).unwrap();
+    assert_eq!(boundary.whole, 1_u128 << 64);
+    assert_eq!(boundary.fraction.to_bits(), 0);
+    for raw in [-f64::from_bits(1), 1.0, f64::INFINITY, f64::NAN] {
+        assert!(split_source_coordinate_preserving_fraction(integer(0), integer(1), raw).is_none());
+    }
+    assert!(split_source_coordinate_preserving_fraction(integer(1), integer(0), 0.0).is_none());
+    assert!(
+        split_source_coordinate_preserving_fraction(
+            power(64).checked_add(integer(1)).unwrap(),
+            integer(1),
+            0.0
+        )
+        .is_none()
+    );
 }
 
 fn assert_coordinate(

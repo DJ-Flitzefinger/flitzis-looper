@@ -1,5 +1,7 @@
 //! Pure bounded queries. Supported geometry is not physical/audio authority.
 
+use std::cmp::Ordering;
+
 use super::MAX_PROJECTION_POINTS;
 use super::record::{Anchor, Coverage, ValidatedMap};
 
@@ -128,6 +130,51 @@ impl Projection {
 }
 
 impl ValidatedMap {
+    pub(super) fn canonical_segment_by_source_ordering(
+        &self,
+        compare: impl FnMut(f64) -> Option<Ordering>,
+    ) -> Option<CanonicalBeatSegment> {
+        self.canonical_segment_by_ordering(true, compare)
+    }
+
+    pub(super) fn canonical_segment_by_beat_ordering(
+        &self,
+        compare: impl FnMut(f64) -> Option<Ordering>,
+    ) -> Option<CanonicalBeatSegment> {
+        self.canonical_segment_by_ordering(false, compare)
+    }
+
+    fn canonical_segment_by_ordering(
+        &self,
+        source_axis: bool,
+        mut compare: impl FnMut(f64) -> Option<Ordering>,
+    ) -> Option<CanonicalBeatSegment> {
+        let mut low = 0;
+        let mut high = self.anchors.len();
+        let mut final_ordering = None;
+        // At most ceil(log2(MAX_ANCHORS+1)) = 18 comparisons. Cache the final
+        // anchor's comparison to distinguish equality from an outside query.
+        while low < high {
+            let middle = low + (high - low) / 2;
+            let ordering = compare(axis(self.anchors[middle], source_axis))?;
+            if middle + 1 == self.anchors.len() {
+                final_ordering = Some(ordering);
+            }
+            if ordering == Ordering::Greater {
+                high = middle;
+            } else {
+                low = middle + 1;
+            }
+        }
+        if low == 0 || (low == self.anchors.len() && final_ordering? != Ordering::Equal) {
+            return None;
+        }
+        let index = (low - 1).min(self.segments.len() - 1);
+        (self.segments[index].coverage == Coverage::Trusted).then(|| {
+            CanonicalBeatSegment::from_anchors(self.anchors[index], self.anchors[index + 1])
+        })
+    }
+
     pub(super) fn visit_canonical_segments(
         &self,
         beat_start: f64,

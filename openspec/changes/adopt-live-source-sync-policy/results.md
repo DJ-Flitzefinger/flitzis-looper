@@ -715,3 +715,86 @@ Release/API/Clippy/preflight receipts. Only this factual same-review receipt and
 the bounded validation checkbox follow; the same reviewer checks final
 consistency before coherent commit and normal existing-main push. All broader
 conversion, geometry, callback-cost and acceptance gates remain OPEN.
+
+## Certified anchored reference coordinates — 2026-10-23
+
+This independent Stage A prerequisite adds a distinct copied anchored mode using
+original qualified geometry, the complete original Some(P) reader domain, raw
+Normal q/f, original inverse segment/E0 and cached actual M(E0). Exact original
+phase/knot/wrap classification and the shared one-round fractional splitter retain
+generic raw signed-zero/subnormal identities. No productive adoption caller is
+connected. Legacy projection/reader/glide and source/custody/ACK authority remain.
+Pause uses checked address translation; a changed master requires actual addressed
+M-bit continuity, finite new horizon and a history floor exactly at actual E.
+The replacement API rechecks those conditions, immutable anchor and mode itself.
+Terminal spans allow observing MAX but refuse refresh/render there. Normalization
+compares exact start*G+I(P) before any usize cast, including whole2^64.
+
+Independent stdlib Fraction/struct evidence is retained in
+`test-artifacts/anchored-coordinates-20261023/fraction-oracle.py` and `.md` outside
+repo. Its35 table rows mean34 intended arithmetic evaluations and1 intentionally
+wrong-M0 counterexample, not35 admitted Native cases. Initial FPB32000 master
+witness was corrected BEFORE Native execution to supported FPB12000: slow rate.25
+must refuse, while12000 gives2/3..2. Original M0 preserves40000/+0; recomputing it
+would produce45333/fraction bits3fd55555555501ff. Tests retain the unsupported
+rate refusal and original nominal/exact bounds.
+
+Initial12-test Native run:11PASS/1FAIL, compile2m37, wrapper158.62s. Its terminal
+fixture tried to anchor transport at MAX-10 and hit the existing downbeat-address
+guard before constructing this mode. Only the fixture changed to an ordinary
+valid frame0 master anchor; actual last-ten-frame cast plateaus still exercise
+terminal MAX. Separately, independent final-source review found a genuine missing
+changed-projection history-floor guard. Root repaired it after jobs terminated,
+added a real SourcePlayback replacement/immutability regression, and reran the
+complete affected clock suite. No existing transport guard or criterion relaxed.
+
+Final post-repair source: **319 distinct /319 selected PASS, zero overlap**, four
+OLD ignored profiles, across nine logs: MappedClock46 (33 preceding+13new),
+SourcePlayback47 (39+8new), Numerics17 (15+2new), Beatmap62, Transport46,
+SourceFeed15, PreparedNativeHistory10 (18.63s), Reader17 and Map/Custody59
+(107.9s test/108.32s wrapper). Final clock compile2m35. The initial11 passes and
+repeated isolated profile are excluded. Root's first summary guard expected419
+through an addition error; the actual parser already returned319. Correcting that
+expectation changed no Native result. Four ignored cases remain the existing
+source-feed resource profile and three mapped Native/aligned measurement profiles.
+
+Copy/noDrop and emitted Windows x64 sizes: projection32, epoch128, span232,
+SourcePlayback344, SourceFeedSpan1320, checkpoint504, 32-lane copy11008 bytes.
+Existing legacy history storage also grows: startup span payload82,837,504 to
+86,507,520B (+3.5MiB), maximum165,675,008 to173,015,040B (+7MiB). These counts
+exclude inline work, Native/PCM and allocator/Arc/ring overhead. Full resource
+acceptance remains open. No wide operand or owning reference is stored in a lane.
+
+Descriptive profiles: initial128 queries5.6777ms/16 refreshes5.0752ms; final
+parallel-suite6.6871ms/5.2274ms; isolated one-test thread6.3011ms/5.2461ms.
+Only the128 span queries were inside the allocation observer and requested zero
+Rust allocations; the16 refreshes were timed outside that scope. The observer does
+not count frees, Native/global allocation or stack high-water. These are reference-path
+cost observations, NOT a callback deadline or RT qualification. The costly wide
+path remains without a productive caller; actual stack/throughput/cohort costs
+must close before enabling it for living voices.
+
+Quick Release typecheck32.11s PASS; final CargoFMT/explicitRust2024/strict/diff PASS.
+Release all-target Clippy37.02s PASS with108lib/131libtest(56dup)/208example warnings
+(previous126/131/226; existing exact helpers are now referenced). Fresh private
+Release38.76s compiler/39.80s wrapper PASS; actual extracted Native34,577,920B,
+SHA25683edc804775168c450256053b174ff59d7020911f3bf7b4ef4e3beaf013686a5,
+actual private origin/release/13 bootstrap API/editor4 PASS. No installation or
+whole-Python rerun. Installed StageS34,838,016B/SHA3af872db... remained freshly
+identical; canonical `start.bat --check` PASS without starting App/device.
+Python/control/API evidence is reused only for unchanged inputs. Synthetic geometry
+and checked original-reader PCM do not prove actual accepted source/custody or
+public live conversion. General geometry, first-PCM authority, Stage A/B adoption,
+Native/music/B2/resource/Human and all FULL-Goal final gates remain OPEN; STOP Slice8.
+
+One continuous NONAUTHOR actual final-diff review returns CLEAR for staged tree
+`042279e4dcb774dc30dbaa7bafd40d580dac9458`, auditing actual source and repaired
+history regression, independently parsing319 unique passes and reading actual
+resource/private Release/API/preflight receipts. Only this factual same-review
+receipt and bounded validation checkbox follow, with final metadata consistency
+checked by that same reviewer. No broader conversion/RT/full-Goal gate is closed.
+After a checked coherent delivery, mandatory Conventional Commit and
+normal existing-main push without individual approval; verify clean HEAD/tracking/
+fresh actual remote before an independent next step. Preserve concise positive
+and negative evidence, then clean only exact own TMP after terminal jobs and
+ownership/path/no-reparse/process guards. One shared env/buildcache/worker remains.

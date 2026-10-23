@@ -43,6 +43,22 @@ impl SourceBeatmap {
         self.inner.canonical_segment_at_beat(beat)
     }
 
+    /// Borrow an original segment using a fallible monotone exact source comparison.
+    pub(crate) fn canonical_segment_by_source_ordering(
+        &self,
+        compare: impl FnMut(f64) -> Option<std::cmp::Ordering>,
+    ) -> Option<CanonicalBeatSegment> {
+        self.inner.canonical_segment_by_source_ordering(compare)
+    }
+
+    /// Borrow an original segment using a fallible monotone exact beat comparison.
+    pub(crate) fn canonical_segment_by_beat_ordering(
+        &self,
+        compare: impl FnMut(f64) -> Option<std::cmp::Ordering>,
+    ) -> Option<CanonicalBeatSegment> {
+        self.inner.canonical_segment_by_beat_ordering(compare)
+    }
+
     /// Visit original trusted segments with positive overlap, outside realtime.
     /// The borrowed scan allocates nothing and conveys no source or audio permission.
     pub(crate) fn visit_canonical_segments(

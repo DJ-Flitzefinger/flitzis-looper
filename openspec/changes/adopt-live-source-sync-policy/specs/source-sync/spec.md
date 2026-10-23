@@ -195,3 +195,32 @@ An independently prepared initial exact-continuation geometry SHALL certify an e
 - **AND** coincident cursor or PCM values SHALL NOT replace original-domain, source-custody or first-PCM guards
 
 This geometry prerequisite SHALL NOT enable an anchored trajectory, live adoption, new clock or source/ACK authority. It SHALL add no hidden wide scan to existing legacy construction. General geometry outside this intersection, actual anchor conversion, copied representation, stack/callback cost and all remaining acceptance gates SHALL remain open.
+
+### Requirement: Anchored mapped coordinates retain the immutable separate source anchor
+A coordinates-only anchored mapped mode SHALL be distinct from legacy mapped arithmetic. It SHALL require the original opt-in exact geometry qualification, complete bitwise original Some(P) domain equality, an already canonical Normal separate source frame/fraction, a nonzero marker, supported original nominal and exact local rates, actual E below u64::MAX and the unchanged actual master projection finite through its admitted u64 horizon. It SHALL invert the original source knots exactly at the raw source pair, prove the initial phase lies in [0,Q), retain the original inverse segment and raw fraction bits, and evaluate later positions from that immutable anchor and the exact difference of actual binary64 master evaluations. It SHALL NOT use callback integration, rounded inverse beats, a fitted offset, changed knots or an additional BPM factor.
+
+#### Scenario: A tiny fraction or master cast plateau crosses original geometry
+- **WHEN** the anchored mode evaluates an anchor, integer source displacement, original knot, wrap or distant u64 frame
+- **THEN** it SHALL classify the original segment and loop side with exact phase comparisons before separately rounding only the source fraction once
+- **AND** circular source error SHALL be at most 2^-54 frame relative to the exact original anchored spline for each admitted frozen master epoch
+- **AND** every exact source fractional identity SHALL retain the original raw fraction bits, including negative zero and subnormals, without an E-only cursor override
+- **AND** only a rounded coordinate exactly equal to the retained exclusive endpoint SHALL normalize to the original loop start before any physical address cast
+
+#### Scenario: Copies and refreshes reach a knot or the terminal output frame
+- **WHEN** copied or unequally partitioned evaluation refreshes derived segment bounds
+- **THEN** it SHALL preserve the original source/master anchor and produce the same canonical pair as direct geometry evaluation
+- **AND** source-knot and wrap searches SHALL use bounded fallible predicates without classifying arithmetic failure as a boundary
+- **AND** a finite horizon without another boundary SHALL end at u64::MAX; observing that endpoint SHALL remain possible while constructing or refreshing a renderable span there SHALL refuse without mutation
+- **AND** pre-anchor history, noncanonical input, invalid coverage, incompatible domain, nonfinite master and checked arithmetic exhaustion SHALL refuse without replacing preceding state
+
+#### Scenario: Pause or a supported master replacement retains latent exact phase
+- **WHEN** an anchored coordinate copy resumes under its unchanged actual master
+- **THEN** checked output-address translation SHALL repeat its preceding exact phase while retaining the original source pair, inverse segment and cached original master evaluation
+- **AND** a master replacement SHALL require bitwise equality of the old and new actual master at the addressed execution frame and a finite new admitted horizon before replacing the projection
+- **AND** replacement SHALL restrict earlier history and retain the original unrounded anchor rather than reanchor at a rounded source pair
+- **AND** replacing a copied epoch SHALL reject a different mode or original raw source/master anchor even when the current rounded cursor happens to match
+- **AND** the replacement API itself SHALL verify addressed actual master-bit continuity and SHALL NOT reopen history before the preceding permitted frame
+- **AND** a changed projection SHALL set the first permitted frame to the actual replacement frame rather than retain an earlier anchor's history floor
+- **AND** unsupported paused-derived or otherwise discontinuous master changes SHALL refuse without mutation
+
+The copied mode SHALL remain Copy with no destructor, mapped spans at most 240 bytes and 32 copied SourcePlayback values at most 16 KiB. Wide scratch SHALL remain outside stored spans and lanes. Legacy projection, original SourceReadPlan/interpolation, scalar glide and source/custody/ACK authorities SHALL remain unchanged. This coordinates-only mode SHALL add no productive adoption caller or callback-cost permission: actual first-PCM/custody conversion, stack/throughput, cohort integration and all final acceptance gates SHALL remain required.

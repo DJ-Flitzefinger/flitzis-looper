@@ -43,7 +43,10 @@ anchored map, original geometry or reader-domain conversion contract.
 - [x] Add opt-in off-realtime exact geometry/reader intersection qualification on the original immutable geometry, retaining trusted original knots, B/Q, exact endpoint closure, original domain and exact slope extrema without changing legacy construction.
 - [x] Prove independent eligibility/refusal vectors, reader-domain/geometry/legacy neighbors and bounded certificate ownership; finish needed Release/import/preflight and one independent final-diff review.
 
-- [ ] Freeze an analytically bounded anchored source/master representation and precise domain/boundary contract.
+- [x] Add a distinct coordinates-only anchored epoch/span mode using original raw source/master anchors, checked original-knot algebra and generic raw-fraction identity; preserve legacy arithmetic and copied layout limits.
+- [x] Verify independent actual-master rational vectors, exact first pair/unchanged-reader PCM, knots/wraps/partitions, pause/master/history/terminal/failure behavior and reverse scalar glide; finish affected checks, private Release/import/preflight and one independent final-diff review.
+
+- [x] Freeze an analytically bounded anchored source/master representation and precise domain/boundary contract.
 - [ ] Implement production fractional scalar/mapped conversion without changing legacy projections or weakening exact guards.
 - [ ] Prove exact first cursor/PCM, original geometry, unequal partitions, knots/wraps, reverse glide and size/failure bounds.
 - [ ] Finish affected checks, needed Release/import/preflight and one independent actual final-diff review.

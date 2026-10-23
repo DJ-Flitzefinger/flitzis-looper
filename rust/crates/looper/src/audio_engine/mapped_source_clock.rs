@@ -11,9 +11,12 @@ use super::source_playback::FractionalSourcePosition;
 use super::source_reader::{ExplicitSeekMode, FrameRange, SourceLoopDomain};
 use super::transport::{TransportBeatProjection, TransportTimeline};
 
+#[path = "mapped_source_clock_anchored.rs"]
+mod anchored;
 #[path = "mapped_source_clock_exact.rs"]
 mod exact;
 
+use anchored::AnchoredClock;
 use exact::ExactContinuationQualification;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -59,10 +62,18 @@ pub(crate) struct MappedLoopGeometry {
 pub(crate) struct MappedClockEpoch {
     marker: u64,
     projection: TransportBeatProjection,
-    phase_quarters: f64,
     address_shift: u64,
     first_output_frame: u64,
-    continuation_anchor: Option<ContinuationAnchor>,
+    mode: MappedClockMode,
+}
+
+#[derive(Clone, Copy, Debug)]
+enum MappedClockMode {
+    Legacy {
+        phase_quarters: f64,
+        continuation_anchor: Option<ContinuationAnchor>,
+    },
+    Anchored(AnchoredClock),
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -89,10 +100,12 @@ impl MappedClockEpoch {
         Some(Self {
             marker,
             projection,
-            phase_quarters,
             address_shift: 0,
             first_output_frame: 0,
-            continuation_anchor: None,
+            mode: MappedClockMode::Legacy {
+                phase_quarters,
+                continuation_anchor: None,
+            },
         })
     }
 
@@ -107,20 +120,54 @@ impl MappedClockEpoch {
     /// Reuse this voice's marker and creative phase with the same authoritative transport.
     /// The group claimant separately proves M(E), canonical position and original map ownership.
     pub(crate) fn with_timeline(self, timeline: TransportTimeline) -> Option<Self> {
-        if self.address_shift != 0 || self.continuation_anchor.is_some() {
+        let MappedClockMode::Legacy {
+            phase_quarters,
+            continuation_anchor,
+        } = self.mode
+        else {
+            return self.matches_timeline(&timeline).then_some(self);
+        };
+        if self.address_shift != 0 || continuation_anchor.is_some() {
             return None;
         }
-        Self::new(self.marker, timeline, self.phase_quarters)
+        Self::new(self.marker, timeline, phase_quarters)
     }
 
     /// The all-dry claimant alone changes the actual master epoch. A paused-derived
     /// projection anchors its exact old total at E rather than extrapolating the
     /// new master slope backward through a previous pause's address translation.
+    /// Anchored coordinates instead require addressed M-bit continuity and keep
+    /// their original raw source anchor and cached M0; geometry admission is separate.
     pub(crate) fn with_timeline_at(self, timeline: TransportTimeline, frame: u64) -> Option<Self> {
         if self.projection.matches_timeline(&timeline) {
             return Some(self);
         }
-        if self.address_shift == 0 && self.continuation_anchor.is_none() {
+        if self.is_anchored() {
+            if frame < self.first_output_frame {
+                return None;
+            }
+            let addressed = frame.checked_sub(self.address_shift)?;
+            let last = u64::MAX.checked_sub(self.address_shift)?;
+            let projection = timeline.beat_projection()?;
+            let old = self.projection.beat_position_at_frame(addressed);
+            let (new, _) = projection.finite_beats_for_horizon(addressed, last)?;
+            if !old.is_finite() || old.to_bits() != new.to_bits() {
+                return None;
+            }
+            return Some(Self {
+                projection,
+                first_output_frame: frame,
+                ..self
+            });
+        }
+        let MappedClockMode::Legacy {
+            continuation_anchor,
+            ..
+        } = self.mode
+        else {
+            return None;
+        };
+        if self.address_shift == 0 && continuation_anchor.is_none() {
             return self.with_timeline(timeline);
         }
         let total_quarters = self.total_at(frame)?;
@@ -130,10 +177,13 @@ impl MappedClockEpoch {
         }
         let mut replacement = Self::new(self.marker, timeline, 0.0)?;
         replacement.first_output_frame = frame;
-        replacement.continuation_anchor = Some(ContinuationAnchor {
-            total_quarters,
-            master_quarters,
-        });
+        replacement.mode = MappedClockMode::Legacy {
+            phase_quarters: 0.0,
+            continuation_anchor: Some(ContinuationAnchor {
+                total_quarters,
+                master_quarters,
+            }),
+        };
         Some(replacement)
     }
 
@@ -149,7 +199,11 @@ impl MappedClockEpoch {
             return None;
         }
         let duration = resumed.checked_sub(paused)?;
-        self.total_at(paused)?;
+        if self.is_anchored() {
+            self.addressed_master_at(paused)?;
+        } else {
+            self.total_at(paused)?;
+        }
         let mut replacement = self;
         replacement.address_shift = self.address_shift.checked_add(duration)?;
         replacement.first_output_frame = self.first_output_frame.checked_add(duration)?;
@@ -158,14 +212,32 @@ impl MappedClockEpoch {
 
     pub(crate) fn matches_exact(self, other: Self) -> bool {
         self.marker == other.marker
-            && self.phase_quarters.to_bits() == other.phase_quarters.to_bits()
             && self.address_shift == other.address_shift
             && self.first_output_frame == other.first_output_frame
-            && match (self.continuation_anchor, other.continuation_anchor) {
-                (None, None) => true,
-                (Some(left), Some(right)) => {
-                    left.total_quarters.to_bits() == right.total_quarters.to_bits()
-                        && left.master_quarters.to_bits() == right.master_quarters.to_bits()
+            && match (self.mode, other.mode) {
+                (MappedClockMode::Anchored(left), MappedClockMode::Anchored(right)) => {
+                    left.matches_exact(right)
+                }
+                (
+                    MappedClockMode::Legacy {
+                        phase_quarters: left_phase,
+                        continuation_anchor: left,
+                    },
+                    MappedClockMode::Legacy {
+                        phase_quarters: right_phase,
+                        continuation_anchor: right,
+                    },
+                ) => {
+                    left_phase.to_bits() == right_phase.to_bits()
+                        && match (left, right) {
+                            (None, None) => true,
+                            (Some(left), Some(right)) => {
+                                left.total_quarters.to_bits() == right.total_quarters.to_bits()
+                                    && left.master_quarters.to_bits()
+                                        == right.master_quarters.to_bits()
+                            }
+                            _ => false,
+                        }
                 }
                 _ => false,
             }
@@ -173,16 +245,59 @@ impl MappedClockEpoch {
     }
 
     fn total_at(self, output_frame: u64) -> Option<f64> {
+        let MappedClockMode::Legacy {
+            phase_quarters,
+            continuation_anchor,
+        } = self.mode
+        else {
+            return None;
+        };
         if output_frame < self.first_output_frame {
             return None;
         }
         let addressed = output_frame.checked_sub(self.address_shift)?;
         let master = self.projection.beat_position_at_frame(addressed);
-        let total = self.continuation_anchor.map_or_else(
-            || master + self.phase_quarters,
+        let total = continuation_anchor.map_or_else(
+            || master + phase_quarters,
             |anchor| anchor.total_quarters + (master - anchor.master_quarters),
         );
         total.is_finite().then_some(total)
+    }
+
+    pub(crate) fn is_anchored(self) -> bool {
+        matches!(self.mode, MappedClockMode::Anchored(_))
+    }
+
+    /// A changed projection cannot replace the immutable original anchor or mode.
+    pub(crate) fn replacement_anchor_matches(self, other: Self, frame: u64) -> bool {
+        match (self.mode, other.mode) {
+            (MappedClockMode::Legacy { .. }, MappedClockMode::Legacy { .. }) => true,
+            (MappedClockMode::Anchored(left), MappedClockMode::Anchored(right)) => {
+                self.marker == other.marker
+                    && self.address_shift == other.address_shift
+                    && left.matches_exact(right)
+                    && other.first_output_frame >= self.first_output_frame
+                    && (self.projection.matches_exact(other.projection)
+                        || other.first_output_frame == frame)
+                    && match (
+                        self.addressed_master_at(frame),
+                        other.addressed_master_at(frame),
+                    ) {
+                        (Some(left), Some(right)) => left.to_bits() == right.to_bits(),
+                        _ => false,
+                    }
+            }
+            _ => false,
+        }
+    }
+
+    fn addressed_master_at(self, output_frame: u64) -> Option<f64> {
+        if output_frame < self.first_output_frame {
+            return None;
+        }
+        let addressed = output_frame.checked_sub(self.address_shift)?;
+        let master = self.projection.beat_position_at_frame(addressed);
+        master.is_finite().then_some(master)
     }
 
     fn beat_at(self, output_frame: u64, start: f64, quarters: f64) -> Option<f64> {
@@ -204,6 +319,8 @@ pub(crate) struct MappedSourceSpan {
     end_frame: u64,
     endpoint_frame: usize,
     endpoint_fraction: f64,
+    source_start: u64,
+    source_period: f64,
 }
 
 impl MappedSourceSpan {
@@ -234,6 +351,9 @@ impl MappedSourceSpan {
         if !self.contains(output_frame) {
             return None;
         }
+        if self.epoch.is_anchored() {
+            return anchored::position_in_span(self, output_frame);
+        }
         let beat = self
             .epoch
             .beat_at(output_frame, self.beat_start, self.quarters)?;
@@ -257,6 +377,8 @@ impl MappedSourceSpan {
             && self.end_frame == other.end_frame
             && self.endpoint_frame == other.endpoint_frame
             && self.endpoint_fraction.to_bits() == other.endpoint_fraction.to_bits()
+            && self.source_start == other.source_start
+            && self.source_period.to_bits() == other.source_period.to_bits()
     }
 }
 
@@ -343,6 +465,10 @@ impl MappedLoopGeometry {
         epoch: MappedClockEpoch,
         output_frame: u64,
     ) -> Result<FractionalSourcePosition, MappedClockError> {
+        if epoch.is_anchored() {
+            self.validate_exact_continuation_epoch(epoch)?;
+            return self.anchored_position_at(epoch, output_frame);
+        }
         self.validate_epoch(epoch)?;
         self.canonical_position_at(epoch, output_frame)
     }
@@ -370,6 +496,9 @@ impl MappedLoopGeometry {
         epoch: MappedClockEpoch,
         output_frame: u64,
     ) -> Result<MappedSourceSpan, MappedClockError> {
+        if epoch.is_anchored() {
+            return self.refresh_anchored_span(epoch, output_frame);
+        }
         self.validate_epoch(epoch)?;
         let total = epoch
             .total_at(output_frame)
@@ -422,6 +551,11 @@ impl MappedLoopGeometry {
             end_frame,
             endpoint_frame: endpoint.frame,
             endpoint_fraction: endpoint.fraction,
+            source_start: self.domain.region.start as u64,
+            source_period: self
+                .domain
+                .musical_period
+                .ok_or(MappedClockError::InvalidGeometry)?,
         };
         if span.position_at(output_frame).is_none() || span.local_rate().is_none() {
             return Err(MappedClockError::NumericalUnavailable);
@@ -467,4 +601,4 @@ fn first_true(mut low: u64, mut high: u64, predicate: impl Fn(u64) -> bool) -> u
 
 #[cfg(test)]
 #[path = "mapped_source_clock_tests.rs"]
-mod tests;
+pub(crate) mod tests;

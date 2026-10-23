@@ -349,6 +349,86 @@ Actual raw-anchor inversion, generic signed-zero identity, finite-master spans,
 reader/first-PCM proof, pause/history/master transitions and copied layout/cost
 remain mandatory before an anchored mode or adoption can be enabled.
 
+## Certified anchored coordinate mode
+
+The next independent Stage A block stores a distinct mode in the existing copied
+epoch, retaining marker, frozen actual projection, address translation and first
+permitted output frame. Legacy phase/continuation fields move into their own enum
+branch with identical arithmetic. The anchored branch stores only raw q/f,
+original E0, cached actual M(E0) and the original inverse segment; no wide value or
+owning reference enters a copied span. Two copied scalar span fields retain the
+original physical start and Some(P) for separate endpoint normalization; legacy
+evaluation ignores them. Expected epoch/span sizes are 128/232 bytes;
+compiler checks, rather than this estimate, enforce 240 bytes and 16 KiB per 32
+SourcePlayback values. The original qualified owning geometry stays external.
+
+Require the prepared exact intersection and complete original Some(P) domain,
+reuse the delivered musical-pair canonical input guard, and retain nominal plus
+exact [.5,2] rate guards. E0 must be below u64::MAX. Certify the actual original
+M(E0)..M(u64::MAX) horizon, preserving its expression, cast plateaus and endpoint
+bits. No rounded inverse or synthetic source/beat knot is introduced.
+
+Use the preceding checked 6400-bit algebra with G=2^1074, Xi=Fs*I(seconds_i),
+Bi=I(beat_i), a=qG+I(raw_f). On original inverse segment j let dx=Xj1-Xj and
+db=Bj1-Bj. Cache no wide terms: derive
+N0=(Bj-I(B))*dx+(a-Xj)*db, V=I(Q)*dx and prove 0<=N0<V.
+At addressed output n derive N=N0+(I(actual_M(n))-I(cached_M0))*dx and its exact
+Euclidean remainder R modulo V. Select original forward segment i by comparing
+R with (Bi-I(B))*dx, without rounding the beat. Evaluate
+Y=Xi*dx*db_i+(R-(Bi-I(B))*dx)*dx_i, Z=G*dx*db_i.
+The preceding conservative capacity proof applies unchanged. Split Y/Z once with
+the existing exact quotient/remainder and fraction RN. A factored optional raw
+fraction hook compares remainder*G with I(raw_f)*Z (both at most 6378 bits), reusing
+that same division and retaining raw bits on EVERY exact fractional identity.
+Do not shift the full Y, duplicate a divider or add an E-only identity override.
+The existing numeric splitter retains its canonical +0 behavior.
+
+Compare the separate rounded whole/fraction with the original absolute exclusive
+endpoint, retaining a possible whole of 2^64 until normalization. Normalize only
+exact equality to original loop start/+0; an out-of-domain result refuses. The
+single fraction RN bounds circular source error by 2^-54 frame relative to this
+exact anchored spline per frozen master epoch. This is not an ideal master-clock,
+glide, cumulative process or acoustic accuracy claim.
+
+New fallible original-axis segment lookup uses bounded comparison callbacks and
+the original coverage, with right interior/left final-knot selection. Existing
+legacy queries remain unchanged. For span bounds derive C=N(current)-R(current)
+once and compare candidate unfolded N against C+(boundaryBeat-B)*dx; the wrap
+threshold is C+V. This avoids a wide division per boundary predicate. Two at-most
+64-step searches propagate failure, rather than treating it as boundary truth.
+Refresh only derived segment/bounds/endpoint. No next boundary before the finite
+u64::MAX horizon creates a terminal span ending there; querying/advancing to its
+endpoint is allowed, but rendering/refresh at MAX refuses without a zero-length
+refresh loop.
+
+Pause/resume translates addresses and first-permitted frame with checked u64
+addition, retaining raw anchor/inverse segment/M0. A changed master initially
+supports only bitwise equality of old/new actual M at E-address_shift and a finite
+new addressed horizon. Keep the original M0/raw anchor, change only projection and
+minimum history frame. This preserves latent exact phase without rounded rebases
+or a chain of stored epochs. Unsupported master changes, including some
+paused-derived cases, refuse. Same projection remains idempotent; an API without
+an actual execution frame cannot authorize a changed anchored master.
+The existing replacement API must also compare the immutable original anchor,
+mode, marker and address translation; an equal rounded current cursor alone
+cannot authorize a fresh anchor or cross-mode replacement. Both legacy epochs
+retain their preceding behavior.
+The replacement API itself rechecks old/new actual addressed master bits at the
+current intended frame. A changed projection requires its history floor to equal
+actual E; an unchanged projection requires a nondecreasing preceding floor. The
+API does not trust that the caller obtained its epoch through with_timeline_at:
+equal current rounded M values do not certify intervening historical evaluations.
+Endpoint comparison uses exact start*G+I(P), never a rounded binary64 start+P sum.
+
+The new coordinates-only SourcePlayback constructor dispatches through this mode
+and the existing mapped copy/refresh/project/resume machinery. Exact first pair
+and unchanged-reader taps/PCM are bounded tests, not actual source acceptance or
+live adoption. Reverse coordinates reuse the delivered musical scalar constructor
+and existing glide. No runtime publication, 32-lane claim, source authority or RT
+caller is connected. Actual stack/callback throughput remains OPEN even with zero
+observed Rust allocation; a headless timing profile is descriptive only. All
+existing ownership, reader-domain and first-PCM guards remain mandatory.
+
 ## Immutable custody and original lifetime
 
 Before enabling any conversion, an independent behavior-preserving prerequisite

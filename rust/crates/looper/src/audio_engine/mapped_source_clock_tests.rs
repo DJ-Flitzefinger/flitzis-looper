@@ -13,7 +13,7 @@ fn map(anchors: &[(f64, f64)], coverage: &[&str], verified_meter: bool) -> Sourc
     map_with_source(anchors, coverage, verified_meter, RATE, FRAMES)
 }
 
-pub(super) fn map_with_source(
+pub(crate) fn map_with_source(
     anchors: &[(f64, f64)],
     coverage: &[&str],
     verified_meter: bool,
@@ -72,6 +72,13 @@ fn timeline() -> TransportTimeline {
 
 fn epoch(phase: f64) -> MappedClockEpoch {
     MappedClockEpoch::new(7, timeline(), phase).unwrap()
+}
+
+fn legacy_phase(epoch: MappedClockEpoch) -> f64 {
+    match epoch.mode {
+        MappedClockMode::Legacy { phase_quarters, .. } => phase_quarters,
+        MappedClockMode::Anchored(_) => panic!("legacy fixture expected"),
+    }
 }
 
 fn geometry(map: SourceBeatmap, quarters: f64, end: usize) -> MappedLoopGeometry {
@@ -257,7 +264,7 @@ fn irregular_partition_and_midspan_refresh_retain_exact_global_anchors() {
                 let direct = geometry.position_at(epoch, frame).unwrap();
                 assert_eq!(span.position_at(frame), Some(direct), "frame={frame}");
                 let beat = geometry.start_beat()
-                    + (timeline().beat_position_at_frame(frame).unwrap() + epoch.phase_quarters)
+                    + (timeline().beat_position_at_frame(frame).unwrap() + legacy_phase(epoch))
                         .rem_euclid(geometry.exact_quarters());
                 let canonical =
                     geometry.map().canonical_source_at_beat(beat).unwrap() * f64::from(RATE);
@@ -352,7 +359,7 @@ fn epoch_identity_ignores_incidental_callback_now_but_preserves_real_anchor() {
     let first = epoch(0.23);
     let mut incidental = timeline();
     incidental.advance_by_rendered_frames(997);
-    let same = MappedClockEpoch::new(first.marker, incidental, first.phase_quarters).unwrap();
+    let same = MappedClockEpoch::new(first.marker, incidental, legacy_phase(first)).unwrap();
     assert!(first.matches_exact(same));
     assert!(!first.matches_exact(MappedClockEpoch::new(8, incidental, 0.23).unwrap()));
     assert!(!first.matches_exact(MappedClockEpoch::new(7, incidental, 0.24).unwrap()));
