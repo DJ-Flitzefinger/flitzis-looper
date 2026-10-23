@@ -1,3 +1,35 @@
+## Current Human bug impact: idle live-timing service — 2026-10-23
+
+Human report: loading a PAD with default REALTIME BPM ON, SYNC/BPM Lock OFF
+creates repeated missing_master attempts and Refused/Pending flicker. The current
+scalar effect compares mixer matching period with Transport before inspecting
+participants, despite Off and matching-disabled Legacy using speed only. Native
+cache service retries every terminal refusal; Python correctly exposes its changing
+attempt number. The fix belongs in existing Native eligibility/service, not a new
+Python queue or a console throttle.
+
+Retain both original masters, scalar arithmetic and final cohort capture/claim.
+Require matching master only for dependent targets; preserve Fixed refusal. On
+terminal service use existing complete actual_current acknowledgement regardless
+of earlier terminal state. Suppress only a prior NoActiveVoices while every loaded
+captured row has current qualified inactive callback evidence and no other observed
+active slot exists. Unknown/stale evidence permits retry; re-evaluate every tick.
+Keep Busy/Unsupported/Hold/renderer/capacity/source-ACK retries. Python projects a
+qualified inactive NoActiveVoices result as stopped/off without inventing ACK.
+
+Verify actual Native queue/scheduler/reader, repeated idle service, later launches,
+unknown evidence, dependent-master refusal and old recovery/custody tests; verify
+Python global/PAD status polls, real refusal visibility and scalar-settling
+precedence. Root serializes all Native jobs after author freeze; one independent
+final diff/evidence review, coherent commit and normal main push, clean fresh
+remote equality. Running Human App/held Native must remain untouched. No complete
+SYNC/REALTIME adoption, RT or Human acceptance follows from this repair.
+
+Human practical performance target is normally 2–4 simultaneous PADs, rarely six.
+An optional cap of five is conditional on demonstrated need and is not introduced.
+Future affected measurements must distinguish 2/4/6 active PADs and the existing
+32-reader stress case, with actual Reader/Native/DSP/transition scope. Internal
+capacity and all original full-goal/final gates remain unchanged.
 ## Current authority and implementation boundary
 
 TimingPolicyController and SourceSyncController publish through the existing

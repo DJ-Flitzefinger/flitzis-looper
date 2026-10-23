@@ -320,8 +320,25 @@ impl RtMixer {
         _execution: u64,
     ) -> Result<(), Error> {
         self.scalar_policy_available(snapshot)?;
-        if timeline.master_period_seconds().map(f64::to_bits)
-            != self.master_period_seconds.map(f64::to_bits)
+        if !self.voices.iter().any(|voice| voice.active) {
+            return Err(Error::NoActiveVoices);
+        }
+        let master_dependent = self
+            .voices
+            .iter()
+            .filter(|voice| voice.active)
+            .any(|voice| {
+                snapshot.row(voice.sample_id).is_none_or(|row| {
+                    row.request.mode != SourceSyncMode::Off
+                        && (row.request.mode != SourceSyncMode::Legacy
+                            || row.request.mapped_matching_enabled(self.bpm_lock_enabled))
+                })
+            });
+        // Off and matching-disabled Legacy consume speed only. Leave both
+        // independent master records intact, including their absent states.
+        if master_dependent
+            && timeline.master_period_seconds().map(f64::to_bits)
+                != self.master_period_seconds.map(f64::to_bits)
         {
             return Err(Error::MissingMaster);
         }

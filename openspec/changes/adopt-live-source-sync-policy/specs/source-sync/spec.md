@@ -101,6 +101,22 @@ An independently qualified scalar-to-scalar policy effect SHALL capture the comp
 
 This independent effect SHALL NOT open representation conversion, mapped admission or musical reader changes. The mathematical conversion contract remains mandatory before every such conversion.
 
+### Requirement: Master-independent scalar policy and idle service remain quiet
+Live scalar policy adoption SHALL omit the mixer matching-master/Transport period equality prerequisite for Off and Legacy with matching disabled. Those modes SHALL retain their established speed-only behavior without initializing, clearing or rewriting either master. Fixed and Legacy with matching enabled SHALL retain their original master qualification, including missing/mismatched-master refusal, and all final cohort, timeline, rate, source, phase and reader checks.
+
+#### Scenario: Default REALTIME BPM is on while SYNC and BPM Lock are off
+- **WHEN** a scalar Off or matching-disabled Legacy target is serviced with differing or absent mixer matching-master and a valid Transport
+- **THEN** the irrelevant master difference SHALL NOT produce missing_master
+- **AND** supported adoption SHALL preserve the exact source cursor, preceding PCM, original master states and existing target/glide semantics
+
+#### Scenario: Unchanged service observes a stopped cohort or a later current launch
+- **WHEN** the previous attempt reports no_active_voices and complete current Native callback evidence still proves all captured loaded participants inactive, with no active participant elsewhere
+- **THEN** unchanged service SHALL retain that attempt without allocating or queuing another owning work item
+- **AND** missing, stale, overlapping or mismatched evidence SHALL conservatively allow service rather than invent inactivity
+- **AND** subsequent active callback evidence SHALL permit retry or suppress obsolete work when the complete current raw target is already callback-confirmed
+- **AND** stopped/off feedback SHALL NOT present no_active_voices as a failed live change or fabricate an applied acknowledgement
+- **AND** Busy, Unsupported, capacity, Hold, renderer-configuration and independent source-acknowledgement recovery SHALL remain retryable through the existing service
+
 ### Requirement: Physical scalar coordinates preserve the separate source pair
 A coordinates-only physical scalar continuation SHALL retain an already canonical Normal source frame and fraction separately and SHALL use an explicit projection mode distinct from legacy scalar trajectories. It SHALL derive constant-rate displacement from the exact u64 elapsed-frame and binary64 rate product, reduce integer displacement before fractional addition, and keep circular rounding error at most 2^-53 source frame for the complete u64 epoch. Generic zero fractional displacement SHALL preserve fraction bits on every exact whole-loop revisit. This construction SHALL NOT authorize live adoption, source ownership or pre-conversion history, and SHALL NOT alter legacy arithmetic or reinterpret a musical domain as physical.
 

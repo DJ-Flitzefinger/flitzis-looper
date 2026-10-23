@@ -382,8 +382,12 @@ class SourceSyncController:
         if adoption is None:
             return None
         active = feedback["active"] is True
-        if adoption["state"] == "applied" and not active:
-            # A stopped voice cannot acknowledge a current glide or effective policy.
+        if not active and (
+            adoption["state"] == "applied"
+            or (adoption["state"] == "refused" and adoption["reason"] == "no_active_voices")
+        ):
+            # Idle service has no live change to apply. Keep the ordinary stopped/
+            # off projection; neither this refusal nor an old applied result is ACK.
             return None
         refused = adoption["state"] == "refused"
         policy_valid = _policy_feedback_valid(feedback)

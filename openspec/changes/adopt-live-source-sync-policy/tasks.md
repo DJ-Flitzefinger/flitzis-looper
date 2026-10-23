@@ -24,6 +24,9 @@
 - [x] Extend existing bounded effective/pending/refusal feedback and verify actual GUI/MIDI/runtime/callback, settlement, retry/pressure and lifecycle neighbors.
 - [x] Finish affected integrated checks, needed Release/import/preflight and one independent final-diff review.
 
+- [x] Repair the reported default SYNC-OFF/REALTIME-ON missing-master loop: retain the proper mode-dependent master qualification, deduplicate a fully observed idle cohort and already-current launches, retain every genuine recovery retry, and verify Native queue/callback plus Python status/diagnostic behavior without replacing the running App.
+- [ ] Reconcile the latest Human hierarchy and actual BPM-Lock master ownership before implementing MultiLoop/SYNC/Realtime availability with retained preferences, original both-off legacy behavior, genuine static and variable phase synchronization across unequal loops/one-shots, revised control order and practical2/4/6 plus stress20/10 evidence. Earlier independent-toggle or32-throughput acceptance recipes are superseded where conflicting; this is not completed by the idle repair.
+
 ## Stage A: exact copied conversion prerequisite
 
 The independent musical coordinate prerequisite below must close before a

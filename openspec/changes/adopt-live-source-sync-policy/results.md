@@ -1329,3 +1329,100 @@ actual six-file diff and275 unique raw receipts, exact search/gate proof, mixed
 before/after profiles, matched final EXE/PDB/private Release and explicit negative
 limits. Only the completed numerical cost step is closed; productive conversion,
 live adoption, peak stack and callback/Human/final acceptance remain open.
+
+## Human-reported default live-timing retry loop — 2026-10-23
+
+The Human reported a loaded PAD repeatedly logging `missing_master`, with the
+same snapshot and increasing attempts, while REALTIME BPM was on and SYNC/BPM
+Lock were off. The UI alternated Refused/Pending. This was genuine repeated
+Native work: unchanged-signature Python service retried every terminal snapshot,
+and scalar adoption compared the mixer matching period with Transport before
+checking active participants. Transport has its existing default period; an
+unlocked mixer can legitimately have no matching period.
+
+The existing scalar effect now omits that equality prerequisite only for Off
+and matching-disabled Legacy. It leaves both original records intact and retains
+Fixed/matching-enabled qualification, arithmetic, complete claim, exact source
+pair, reader/PCM, raw revisions and final timeline/rate/source freshness. A cohort
+with no active voice reports its actual NoActiveVoices result before an irrelevant
+master comparison.
+
+Terminal service uses the existing complete current callback target witness
+regardless of an earlier applied/refused state. Only a prior NoActiveVoices can
+be kept idle, and only while every captured loaded row has current inactive
+source/window/lifetime/ACK evidence and no observed active slot exists elsewhere.
+Missing/stale feedback permits retry; every tick rechecks, without a permanent
+latch or a new clock/queue. Busy, Unsupported, capacity, Hold, renderer-configuration
+and independent source-ACK recovery remain supported by unchanged service.
+Qualified inactive NoActiveVoices projects normal stopped/off status in Python;
+actual adoption remains refused, never an invented applied or effective ACK.
+Other failures and active/stale observations retain their original visibility.
+
+Validation on frozen compiled source, all jobs serial:
+
+- 64 distinct Native tests passed, zero overlap/ignored: runtime-policy 41,
+  neighboring source-sync policy 13 (nested runtime tests excluded), actual
+  timing callback 10. The first compile took 2m47s; runs took 15.04/7.20/1.54s.
+- Five new Native regressions use real queue/renderer paths: Off/Legacy speed-only
+  exact cursor/generation/257-frame PCM and unchanged masters; dependent-master
+  refusal/recovery; 32 unchanged idle services without another owning attempt,
+  followed by a current launch; missing loaded feedback; and a genuinely active
+  source outside the captured loaded cohort. Existing Hold, renderer, pressure,
+  cleanup, source/publication and allocation/freshness tests remain unchanged.
+- 245 Python tests passed in 7.28s across PAD/global policy, unchanged runtime
+  service, console diagnostics, UI projections and intent/persistence neighbors.
+  Thirteen new parameter cases cover neutral and explicit Off/RT-on defaults,
+  repeated PAD/global polls with no console spam or ACK, genuine failures,
+  active NoActiveVoices, Fixed stopped state and stale generation/window.
+- Rustfmt, Ruff format/check, strict OpenSpec and diff checks passed. Release
+  all-target Clippy passed in 38.82s with unchanged 109 library / 131 library-test
+  (56 duplicates) / 209 example warnings.
+
+Negative setup evidence is retained: the first Native command repeated arguments
+already supplied by the wrapper and was rejected before compilation; the corrected
+command passed. Initial Python selection had 73 passes and 172 setup errors because
+Root had not created the parent of the owned basetemp. Creating that parent and
+rerunning the identical selection yielded 245 passes; the earlier 73 are not added
+again. Four new assertion-style Ruff findings were corrected before tests. No
+product behavior was weakened to resolve these invocation/style issues.
+
+Practical performance clarification: the Human normally runs 2–4 PADs, rarely six,
+and permits five only if demonstrated necessary. No new cap is introduced. The
+latest Human instruction makes 20 readers the primary stress case and requires
+an additional 10-PAD case when stress failures could be caused by performance.
+Historical 32-reader timings are diagnostic evidence, not a required throughput
+release hurdle. Internal capacity, correctness and ownership bounds remain. A
+normal stereo/retriggered PAD occupies one render voice. Subsequent exact-reader
+and real Mixer/Native/DSP/transition measurements must distinguish actual 2/4/6
+PAD load and the requested stress cases.
+The previous negative anchored costs/stack limits remain scoped to their original
+inputs; this repair is not a new throughput, device, listening, whole-system or
+complete SYNC/REALTIME BPM acceptance. Productive anchored conversion/adoption
+and all genuinely open original/full-goal gates remain open.
+
+The same Human follow-up requests MultiLoop-dependent SYNC, SYNC-dependent
+Realtime BPM, retained preferences and the control order Key Lock / Multi Loop /
+BPM Lock / SYNC / Realtime BPM. It also requires original legacy timing when both
+are off, genuine continuous static-grid phase alignment with SYNC only, variable
+maps with both on, and common beat timing across short/long loops and one-shots.
+These later desired behaviors supersede conflicting older toggle/mode recipes;
+they are recorded for the next source-grounded contract reconciliation. They are
+not implemented or accepted by this idle/master-independent repair. Existing
+Fixed scalar tempo matching alone is not proof of static-grid phase alignment.
+
+Fresh private Release completed in 34.54s with 52 existing warnings. Its Native
+is 34,575,360 bytes, SHA256 d06019cdd8694e1b700614c2f75f0e690f03cf9b2f028df0d3f985b906e3e2b5;
+private-origin API checks13/editor API4 and canonical startup preflight passed.
+Nothing was installed and no App/device was started or stopped. The Human-held
+34,579,456-byte Native/0142ba22 baseline remained unchanged at11:29:26UTC;
+Scratch1480→1480, zero new roots. All own jobs/authors are terminal. Owned temporary
+pytest/wheel/import files total955/63,839,351 bytes, no reparse points; remove only
+after reviewed normal push and all original cleanup guards. One compatible shared
+environment/cache/worker remains under the existing retention decision. These
+private API/preflight results are not a behavior test of the running older image.
+
+One continuous independent nonauthor review cleared the actual final source and
+all check receipts, including the corrected setup failures and open latest-Human
+requirements. The final checkbox records only this bounded repair. Hierarchy,
+static phase convergence, one-shot integration and revised practical throughput
+acceptance remain open; no broader completion or Human test acceptance is claimed.

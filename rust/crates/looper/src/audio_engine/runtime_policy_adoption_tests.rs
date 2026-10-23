@@ -292,6 +292,222 @@ fn mapped_intent_and_missing_master_leave_original_scalar_audio_unchanged() {
 }
 
 #[test]
+fn speed_only_policy_preserves_cursor_pcm_and_both_masters_despite_matching_period_difference() {
+    for legacy in [false, true] {
+        for differing_period in [None, Some(MASTER * 2.0)] {
+            let mut path = prepared();
+            let mut reference = prepared();
+            for candidate in [&mut path, &mut reference] {
+                candidate.source.mixer.set_bpm_lock(false);
+                if let Some(period) = differing_period {
+                    candidate.source.mixer.set_master_period(period);
+                }
+            }
+            let before = path.voice(0).source_playback;
+            let generation = path.voice(0).generation;
+            let master = path.timeline;
+            path.publish((!legacy).then(|| wire(false, true, 2)), false, None);
+            let snapshot = request(&path);
+            service(&mut path);
+            assert_eq!(snapshot.observation().unwrap().state, "applied");
+            assert_eq!(
+                path.voice(0).sync_request.mode,
+                if legacy {
+                    SourceSyncMode::Legacy
+                } else {
+                    SourceSyncMode::Off
+                }
+            );
+            assert_eq!(path.voice(0).generation, generation);
+            assert!(path.voice(0).source_playback.matches_exact(&before));
+            assert!(path.timeline.matches_clock_epoch(&master));
+            assert_eq!(path.render(257), reference.render(257));
+            assert!(
+                path.voice(0)
+                    .source_playback
+                    .matches_exact(&reference.voice(0).source_playback)
+            );
+            // A following dependent request still observes the original absent
+            // or differing mixer period; speed-only adoption did not repair it.
+            let before_fixed = scalar_state(&path);
+            path.publish(Some(wire(true, false, 3)), true, None);
+            let fixed = request(&path);
+            service(&mut path);
+            assert_eq!(
+                fixed.observation().unwrap().reason,
+                Some(RuntimePolicyError::MissingMaster)
+            );
+            unchanged(&path, &before_fixed);
+            assert_eq!(
+                path.timeline.master_period_seconds(),
+                master.master_period_seconds()
+            );
+        }
+    }
+}
+
+#[test]
+fn dependent_master_refusal_retries_and_recovers_without_changing_preceding_audio() {
+    for legacy_matching in [false, true] {
+        let mut path = prepared();
+        path.source.mixer.set_bpm_lock(legacy_matching);
+        if legacy_matching {
+            path.source.mixer.set_master_period(MASTER * 2.0);
+        }
+        let before = scalar_state(&path);
+        let master = path.timeline;
+        path.publish(
+            (!legacy_matching).then(|| wire(true, false, 2)),
+            !legacy_matching,
+            None,
+        );
+        let snapshot = request(&path);
+        for attempt in 1..=2 {
+            service(&mut path);
+            let observed = snapshot.observation().unwrap();
+            assert_eq!(observed.attempt, attempt);
+            assert_eq!(observed.reason, Some(RuntimePolicyError::MissingMaster));
+            unchanged(&path, &before);
+            assert!(path.timeline.matches_clock_epoch(&master));
+            if attempt == 1 {
+                assert!(Arc::ptr_eq(&snapshot, &request(&path)));
+            }
+        }
+        path.source.mixer.set_master_period(MASTER);
+        assert!(Arc::ptr_eq(&snapshot, &request(&path)));
+        service(&mut path);
+        assert_eq!(snapshot.observation().unwrap().state, "applied");
+        let mut expected = before[0].2;
+        assert!(expected.set_target(fixed_target()));
+        expected.chunk(1024);
+        assert!(path.voice(0).source_playback.matches_exact(&expected));
+        assert!(path.timeline.matches_clock_epoch(&master));
+    }
+}
+
+#[test]
+fn stopped_current_feedback_keeps_one_idle_attempt_and_current_launch_avoids_obsolete_work() {
+    let mut path = prepared();
+    path.source.engine.stop_sample(0).unwrap();
+    path.drain();
+    path.render(0);
+    path.source.mixer.set_bpm_lock(false);
+    path.publish(Some(wire(false, true, 2)), true, None);
+    let master = path.timeline;
+    let snapshot = request(&path);
+    service(&mut path);
+    let idle = snapshot.observation().unwrap();
+    assert_eq!(idle.reason, Some(RuntimePolicyError::NoActiveVoices));
+    for id in 0..2 {
+        assert!(
+            !path
+                .source
+                .engine
+                .input_runtime_ownership
+                .source_sync_status(id)
+                .unwrap()
+                .active
+        );
+    }
+    for _ in 0..32 {
+        assert!(Arc::ptr_eq(&snapshot, &request(&path)));
+        assert_eq!(snapshot.observation(), Some(idle));
+        assert!(path.source.consumer.is_empty());
+    }
+    assert_eq!(path.start().state(), "applied");
+    path.render(1);
+    let before = scalar_state(&path);
+    assert_eq!(path.feedback(0)["policy_revision"], 2);
+    assert_eq!(path.feedback(0)["target_current"], true);
+    for _ in 0..16 {
+        assert!(Arc::ptr_eq(&snapshot, &request(&path)));
+        assert_eq!(snapshot.observation(), Some(idle));
+        assert!(path.source.consumer.is_empty());
+    }
+    unchanged(&path, &before);
+    assert_eq!(
+        path.timeline.master_period_seconds(),
+        master.master_period_seconds()
+    );
+}
+
+#[test]
+fn missing_loaded_source_feedback_keeps_idle_service_retryable() {
+    let mut path = prepared();
+    path.source.engine.stop_sample(0).unwrap();
+    path.drain();
+    path.render(0);
+    path.publish(Some(wire(false, true, 2)), true, None);
+    let snapshot = request(&path);
+    service(&mut path);
+    assert_eq!(
+        snapshot.observation().unwrap().reason,
+        Some(RuntimePolicyError::NoActiveVoices)
+    );
+    let ownership = path.source.engine.input_runtime_ownership.clone();
+    let sample = path.source.engine.sample_cache.lock().unwrap()[1]
+        .as_ref()
+        .unwrap()
+        .clone();
+    let (generation, rate) = path.source.engine.loaded_source_generations.lock().unwrap()[1];
+    // The existing test source publisher clears callback status even when the
+    // same source generation is retained. No runtime row or request is changed.
+    ownership.publish_source(1, &sample, rate, generation);
+    assert!(ownership.source_sync_status(1).is_none());
+    assert!(Arc::ptr_eq(&snapshot, &request(&path)));
+    assert_eq!(snapshot.observation().unwrap().attempt, 2);
+    assert_eq!(snapshot.observation().unwrap().state, "pending");
+    service(&mut path);
+    // The actual callback stop handler republishes current inactive evidence.
+    path.source.mixer.stop_sample(1);
+    let idle = snapshot.observation();
+    assert_eq!(
+        idle.unwrap().reason,
+        Some(RuntimePolicyError::NoActiveVoices)
+    );
+    assert!(!ownership.source_sync_status(1).unwrap().active);
+    assert!(Arc::ptr_eq(&snapshot, &request(&path)));
+    assert_eq!(snapshot.observation(), idle);
+    assert!(path.source.consumer.is_empty());
+}
+
+#[test]
+fn active_callback_outside_captured_loaded_rows_prevents_idle_suppression() {
+    let mut path = prepared();
+    path.source.engine.stop_sample(0).unwrap();
+    path.drain();
+    path.render(0);
+    publish_additional_source(&mut path, 2);
+    path.publish(Some(wire(false, true, 2)), true, None);
+    let snapshot = request(&path);
+    service(&mut path);
+    assert_eq!(
+        snapshot.observation().unwrap().reason,
+        Some(RuntimePolicyError::NoActiveVoices)
+    );
+    assert!(snapshot.row(2).is_none());
+    // Exercise the real renderer's callback evidence for a voice outside this
+    // captured publication; that row must not disappear from the idle scan.
+    assert!(path.source.mixer.play_sample(2, 1.0));
+    path.render(1);
+    assert!(
+        path.source
+            .engine
+            .input_runtime_ownership
+            .source_sync_status(2)
+            .unwrap()
+            .active
+    );
+    assert!(Arc::ptr_eq(&snapshot, &request(&path)));
+    assert_eq!(snapshot.observation().unwrap().attempt, 2);
+    service(&mut path);
+    assert_eq!(
+        snapshot.observation().unwrap().reason,
+        Some(RuntimePolicyError::SourceChanged)
+    );
+}
+
+#[test]
 fn intro_tail_and_pair_physical_keep_their_existing_projection_domain_and_exact_e_pair() {
     for mode in [
         ExplicitSeekMode::BeforeLoop,

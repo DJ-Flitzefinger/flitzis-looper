@@ -5,6 +5,7 @@ from unittest.mock import Mock
 
 import pytest
 
+from flitzis_looper.control_diagnostics import ConsoleDiagnostics
 from flitzis_looper.controller.persistence import ProjectPersistence
 from flitzis_looper.input_mapping.actions import source_sync_toggle_action
 from flitzis_looper.input_mapping.storage import load_midi_mapping_file
@@ -55,6 +56,195 @@ def _adoption(**changes: object) -> dict[str, object]:
     }
     observation.update(changes)
     return observation
+
+
+_IDLE_POLICIES = (
+    pytest.param(
+        GlobalTimingPolicy(schema_version=1, sync=None, realtime_bpm=None, revision=0),
+        id="neutral-default",
+    ),
+    pytest.param(
+        GlobalTimingPolicy(schema_version=1, sync=False, realtime_bpm=True, revision=2),
+        id="sync-off-realtime-on",
+    ),
+)
+
+
+def _inactive_policy_refusal(
+    controller: AppController,
+    audio: Mock,
+    policy: GlobalTimingPolicy,
+    *,
+    reason: str = "no_active_voices",
+) -> tuple[dict[str, object], dict[str, object]]:
+    """Qualified stopped callback fields remain separate from the complete raw target."""
+    _assigned(controller, audio)
+    controller.project.global_timing_policy = policy
+    controller.project.pad_source_sync_intent[0] = PadSourceSyncIntent(requested=False, revision=0)
+    adoption = _adoption(
+        state="refused",
+        reason=reason,
+        target_mode=controller.transport.source_sync.requested_mode(0),
+        target_policy_revision=None if policy.is_neutral else policy.revision,
+        target_policy_sync=policy.sync,
+        target_policy_realtime_bpm=policy.realtime_bpm,
+    )
+    feedback = _feedback(
+        audio,
+        active=False,
+        effective=False,
+        intent_revision=None,
+        map_revision=None,
+        policy_mode=None,
+        policy_revision=None,
+        policy_sync=None,
+        policy_realtime_bpm=None,
+        settled=None,
+        adoption=adoption,
+    )
+    return feedback, adoption
+
+
+@pytest.mark.parametrize("policy", _IDLE_POLICIES)
+def test_inactive_no_active_voice_attempt_stays_off_and_quiet_across_pad_and_global_polls(
+    controller: AppController,
+    audio_engine_mock: Mock,
+    capsys: pytest.CaptureFixture[str],
+    policy: GlobalTimingPolicy,
+) -> None:
+    feedback, adoption = _inactive_policy_refusal(controller, audio_engine_mock, policy)
+    controller.transport.source_sync.bind_diagnostics(ConsoleDiagnostics())
+    before = controller.project.model_dump()
+    capsys.readouterr()
+
+    assert adoption["target_mode"] == ("legacy" if policy.is_neutral else "off")
+    assert adoption["target_policy_revision"] == (None if policy.is_neutral else 2)
+    assert adoption["target_policy_sync"] is policy.sync
+    assert adoption["target_policy_realtime_bpm"] is policy.realtime_bpm
+    assert adoption["target_intent_revision"] == 0
+    for _ in range(4):
+        status = controller.transport.source_sync.status(0)
+        assert status.state == "off"
+        assert status.requested is False
+        assert status.active is False
+        assert status.effective is False
+        assert status.policy_mode is None
+        assert status.actual_realtime_bpm is None
+        assert status.guidance is None
+        assert status.detail is None
+        sync = controller.transport.timing_policy.status("sync")
+        realtime = controller.transport.timing_policy.status("realtime_bpm")
+        assert sync.requested is policy.sync
+        assert realtime.requested is policy.realtime_bpm
+        assert sync.preference is False
+        assert realtime.preference is True
+        assert sync.effective is False
+        assert realtime.effective is None
+        assert sync.pending is realtime.pending is False
+        assert sync.detail is realtime.detail is None
+
+    assert not capsys.readouterr().err
+    assert adoption["state"] == "refused"
+    assert adoption["reason"] == "no_active_voices"
+    assert adoption["attempt"] == 3
+    assert adoption["execution_frame"] is None
+    assert feedback["intent_revision"] is None
+    assert feedback["settled"] is None
+    assert controller.project.model_dump() == before
+
+
+@pytest.mark.parametrize("policy", _IDLE_POLICIES)
+@pytest.mark.parametrize("reason", ["missing_master", "unsupported"])
+def test_inactive_real_live_timing_refusals_remain_visible(
+    controller: AppController,
+    audio_engine_mock: Mock,
+    capsys: pytest.CaptureFixture[str],
+    policy: GlobalTimingPolicy,
+    reason: str,
+) -> None:
+    _inactive_policy_refusal(controller, audio_engine_mock, policy, reason=reason)
+    controller.transport.source_sync.bind_diagnostics(ConsoleDiagnostics())
+    capsys.readouterr()
+
+    status = controller.transport.source_sync.status(0)
+
+    assert status.state == "refused"
+    assert status.guidance == "refused"
+    assert status.active is False
+    assert status.effective is False
+    assert status.detail is not None
+    assert reason in status.detail
+    assert controller.transport.timing_policy.status("sync").pending is True
+    assert controller.transport.timing_policy.status("realtime_bpm").pending is True
+    diagnostic = capsys.readouterr().err
+    assert "operation=source_sync" in diagnostic
+    assert reason in diagnostic
+
+
+@pytest.mark.parametrize("policy", _IDLE_POLICIES)
+def test_active_no_active_voice_refusal_is_not_projected_as_idle(
+    controller: AppController, audio_engine_mock: Mock, policy: GlobalTimingPolicy
+) -> None:
+    feedback, _ = _inactive_policy_refusal(controller, audio_engine_mock, policy)
+    feedback["active"] = True
+
+    status = controller.transport.source_sync.status(0)
+
+    assert status.state == "refused"
+    assert status.guidance == "refused"
+    assert status.active is True
+    assert status.effective is False
+    assert status.detail is not None
+    assert "no_active_voices" in status.detail
+
+
+def test_requested_fixed_idle_attempt_is_stopped_without_an_applied_acknowledgement(
+    controller: AppController, audio_engine_mock: Mock, capsys: pytest.CaptureFixture[str]
+) -> None:
+    policy = GlobalTimingPolicy(schema_version=1, sync=True, realtime_bpm=False, revision=2)
+    feedback, adoption = _inactive_policy_refusal(controller, audio_engine_mock, policy)
+    controller.transport.source_sync.bind_diagnostics(ConsoleDiagnostics())
+    capsys.readouterr()
+
+    status = controller.transport.source_sync.status(0)
+
+    assert adoption["target_mode"] == "fixed"
+    assert status.state == "stopped"
+    assert status.requested is True
+    assert status.active is False
+    assert status.effective is False
+    assert status.policy_mode is None
+    assert status.actual_realtime_bpm is None
+    assert status.guidance == "restart"
+    assert controller.transport.timing_policy.status("sync").pending is False
+    assert controller.transport.timing_policy.status("realtime_bpm").pending is False
+    assert adoption["state"] == "refused"
+    assert adoption["execution_frame"] is None
+    assert feedback["settled"] is None
+    assert not capsys.readouterr().err
+
+
+@pytest.mark.parametrize("policy", _IDLE_POLICIES)
+@pytest.mark.parametrize(("field", "value"), [("source_generation", 2), ("window_revision", 8)])
+def test_idle_attempt_cannot_bypass_current_source_generation_or_window_fences(
+    controller: AppController,
+    audio_engine_mock: Mock,
+    policy: GlobalTimingPolicy,
+    field: str,
+    value: int,
+) -> None:
+    feedback, adoption = _inactive_policy_refusal(controller, audio_engine_mock, policy)
+    feedback[field] = value
+
+    status = controller.transport.source_sync.status(0)
+
+    assert status.state == "unconfirmed"
+    assert status.guidance == "unconfirmed"
+    assert status.active is None
+    assert status.effective is None
+    assert controller.transport.timing_policy.status("sync").pending is True
+    assert controller.transport.timing_policy.status("realtime_bpm").pending is True
+    assert adoption["state"] == "refused"
 
 
 def _current_scalar_glide(controller: AppController, audio: Mock, mode: str) -> dict[str, object]:

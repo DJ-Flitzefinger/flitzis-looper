@@ -330,12 +330,54 @@ impl RuntimePolicySnapshot {
         active && self.current()
     }
 
+    /// Only complete current callback evidence can keep an idle refusal quiet.
+    /// Missing loaded-row observations permit retry; every slot is still checked
+    /// for an active participant outside the captured loaded cohort.
+    fn actual_inactive(&self) -> bool {
+        for (id, row) in self.rows.iter().enumerate() {
+            let status = self.ownership.source_sync_status(id);
+            if status.is_some_and(|status| status.active) {
+                return false;
+            }
+            if !row.loaded {
+                continue;
+            }
+            let Some(status) = status else {
+                return false;
+            };
+            if !self.row_current(id)
+                || row.binding.is_none_or(|binding| {
+                    binding
+                        .placement
+                        .is_none_or(|placement| status.content_lifetime != placement.lifetime())
+                        || status.source_address != binding.source_address
+                        || status.window_revision != binding.resident.map_or(0, |r| r.revision)
+                        || self.sources[id]
+                            .is_none_or(|source| source.generation != status.source_generation)
+                })
+                || self.ownership.source_sync_status(id) != Some(status)
+            {
+                return false;
+            }
+        }
+        self.current()
+    }
+
     fn begin(self: &Arc<Self>) -> Option<RuntimePolicyWork> {
         if self.dispatch_owners.load(Ordering::Acquire) != 0 {
             return None;
         }
         let state = self.state.load(Ordering::Acquire);
-        if state == PENDING || state == UPDATING || (state == APPLIED && self.actual_current()) {
+        if state == PENDING || state == UPDATING {
+            return None;
+        }
+        if (state == APPLIED || state == REFUSED)
+            && (self.actual_current()
+                || (state == REFUSED
+                    && RuntimePolicyError::from_code(self.reason.load(Ordering::Acquire))
+                        == Some(RuntimePolicyError::NoActiveVoices)
+                    && self.actual_inactive()))
+        {
             return None;
         }
         if self
