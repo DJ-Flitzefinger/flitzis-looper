@@ -34,6 +34,8 @@ anchored map, original geometry or reader-domain conversion contract.
 - [x] Preserve the existing reader, legacy/physical arithmetic, glide, history, copied state, exact guards and checked exhaustion; prove independent rational vectors and actual unchanged-reader taps/PCM.
 - [x] Finish affected integration, needed Release/import/preflight and one independent final-diff review for the musical coordinate prerequisite.
 
+- [x] Verify the reader-domain boundary using actual cold-source custody, accepted timing publication/ACK and qualified map delivery, explicitly synthetic timing evidence and original pair/tap/PCM paths; retain exact conversion refusal and finish affected checks/review.
+
 - [ ] Freeze an analytically bounded anchored source/master representation and precise domain/boundary contract.
 - [ ] Implement production fractional scalar/mapped conversion without changing legacy projections or weakening exact guards.
 - [ ] Prove exact first cursor/PCM, original geometry, unequal partitions, knots/wraps, reverse glide and size/failure bounds.

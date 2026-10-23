@@ -5,14 +5,25 @@ mod mapped_launch_custody_tests {
 }
 
 use super::*;
+use crate::audio_engine::audio_stream::{
+    drain_control_messages, drain_parameter_messages, render_scheduled_audio,
+};
+use crate::audio_engine::buffer_retirement::ImmediateAudioBufferRetirement;
+use crate::audio_engine::constant_timing::l3_constant_timing_fixture;
 use crate::audio_engine::constants::NUM_SAMPLES;
 use crate::audio_engine::input_mapping::InputRuntime;
 use crate::audio_engine::input_runtime_binding::{self, InputRuntimePadBinding};
 use crate::audio_engine::loader_events::LoaderEventDelivery;
 use crate::audio_engine::pad_start::CapturedPadStart;
 use crate::audio_engine::pitch_actions::PitchActionReject;
+use crate::audio_engine::scheduler::FixedCapacityScheduler;
+use crate::audio_engine::source_feed_history::{SourceFeedSnapshot, SourceFeedSpan};
 use crate::audio_engine::source_map_admission::{SourceMapProjection, SourceMapRow};
+use crate::audio_engine::source_reader::{FractionalSourceTaps, StemRenderSelection};
 use crate::audio_engine::timing::InputClock;
+use crate::audio_engine::transport::TransportTimeline;
+use crate::messages::{AudioMessage, ControlParameterMessage, TriggerQuantization};
+use std::sync::{Arc, Mutex};
 
 fn runtime_fixture() -> ColdCustody {
     let mut fixture = layout_fixture("legacy");
@@ -457,4 +468,420 @@ fn omitted_map_rows_drop_cancelled_original_job_without_blocking_runtime_refresh
     assert_other_pad_uses_refreshed_region(&mut fixture, 48);
     assert!(publish(&fixture, row).is_err());
     assert_eq!(held.map().canonical_source_at_beat(0.5), coordinate);
+}
+
+const READER_DOMAIN_RATE: u32 = 48_000;
+const READER_DOMAIN_START: usize = 32_768;
+const READER_DOMAIN_END: usize = 65_536;
+const READER_DOMAIN_OUTPUT_FRAMES: usize = 65_536;
+
+struct ReaderDomainPath {
+    source: ColdCustody,
+    timeline: TransportTimeline,
+    scheduler: FixedCapacityScheduler<16>,
+    feedback: Vec<AudioMessage>,
+    parameters: rtrb::Consumer<ControlParameterMessage>,
+}
+
+impl ReaderDomainPath {
+    fn new(pcm: &[i16]) -> Self {
+        let mut source = ColdCustody::new_selected_with_signal(None, pcm);
+        source.engine.input_runtime = Some(InputRuntime::new_with_ownership(
+            source.producer.clone(),
+            InputClock::new(),
+            source.engine.input_runtime_ownership.clone(),
+        ));
+        source.engine.test_output_format = Some((READER_DOMAIN_RATE, 2));
+        source
+            .engine
+            .input_runtime
+            .as_ref()
+            .unwrap()
+            .set_render_format(READER_DOMAIN_RATE, 2)
+            .unwrap();
+        let (producer, parameters) = rtrb::RingBuffer::new(8);
+        source.engine.test_parameter_producer = Some(Arc::new(Mutex::new(producer)));
+        Self {
+            source,
+            timeline: TransportTimeline::new(READER_DOMAIN_RATE),
+            scheduler: FixedCapacityScheduler::new(),
+            feedback: Vec::new(),
+            parameters,
+        }
+    }
+
+    fn drain(&mut self) {
+        drain_control_messages(
+            &mut self.source.consumer,
+            &mut self.scheduler,
+            self.timeline.output_frame(),
+            &mut TriggerQuantization::Immediate,
+            &mut self.timeline,
+            &mut self.source.mixer,
+            &mut self.feedback,
+            &mut ImmediateAudioBufferRetirement,
+        );
+        assert!(self.source.consumer.is_empty());
+    }
+
+    fn publish_map_request(&self, delivery: &LoaderEventDelivery, mapped: bool) {
+        let current = binding(&self.source, 0);
+        let mut bindings = vec![None; NUM_SAMPLES];
+        bindings[0] = Some(current);
+        let mut rows = vec![SourceMapRow::default(); NUM_SAMPLES];
+        rows[0] = SourceMapRow {
+            sync_requested: mapped,
+            intent_revision: u64::from(mapped),
+            delivery: Some(delivery.clone()),
+            exact_quarters: None,
+        };
+        self.source
+            .engine
+            .input_runtime
+            .as_ref()
+            .unwrap()
+            .set_runtime_state_with_source_maps(
+                true,
+                (0..NUM_SAMPLES).map(|id| id == 0).collect(),
+                vec![READER_DOMAIN_START as f64 / f64::from(READER_DOMAIN_RATE); NUM_SAMPLES],
+                vec![Some(READER_DOMAIN_END as f64 / f64::from(READER_DOMAIN_RATE)); NUM_SAMPLES],
+                bindings.iter().map(Option::as_ref).collect(),
+                None,
+                Some(rows),
+            )
+            .unwrap();
+    }
+
+    fn start(&mut self) -> CapturedPadStart {
+        self.drain();
+        let start = self
+            .source
+            .engine
+            .capture_pad_start(
+                0,
+                READER_DOMAIN_START as f64 / f64::from(READER_DOMAIN_RATE),
+                Some(READER_DOMAIN_END as f64 / f64::from(READER_DOMAIN_RATE)),
+                1.0,
+                false,
+                None,
+                None,
+            )
+            .unwrap();
+        assert!(self.source.engine.publish_pad_start(&start, None).unwrap());
+        self.drain();
+        assert_eq!(start.state(), "applied", "{:?}", start.reason());
+        assert_eq!(start.target_frame(), Some(self.timeline.output_frame()));
+        assert_eq!(start.execution_frame(), start.target_frame());
+        start
+    }
+
+    fn render(&mut self, frames: usize) {
+        let mut output = vec![0.0; frames * 2];
+        render_scheduled_audio(
+            &mut self.source.mixer,
+            &mut self.scheduler,
+            &mut output,
+            &mut [0.0; NUM_SAMPLES],
+            self.timeline.output_frame(),
+            2,
+            &mut self.timeline,
+            &mut self.feedback,
+            &mut ImmediateAudioBufferRetirement,
+        );
+        self.timeline.advance_by_rendered_frames(frames);
+        assert!(output.iter().all(|sample| sample.is_finite()));
+    }
+
+    fn last_actual_source_read(
+        &self,
+        expected_active_start: u64,
+    ) -> (SourceFeedSpan, FractionalSourceTaps, [u32; 2]) {
+        let voice = self
+            .source
+            .mixer
+            .voices
+            .iter()
+            .find(|voice| voice.active && voice.sample_id == 0)
+            .unwrap();
+        assert!(!voice.stretch.has_active_native_ownership());
+        let sample = voice.sample.as_ref().unwrap();
+        let mut history = SourceFeedSnapshot::new();
+        assert!(voice.source_feed_history.capture_into(&mut history));
+        assert_eq!(
+            history.retained_range(),
+            Some(expected_active_start..expected_active_start + READER_DOMAIN_OUTPUT_FRAMES as u64)
+        );
+        // This physical slot's attempted-feed counter remains monotonic across
+        // stop/restart. It is separate from elapsed frames in either launch.
+        let active_e = expected_active_start + READER_DOMAIN_OUTPUT_FRAMES as u64 - 1;
+        let span = history
+            .spans()
+            .find(|span| span.active_start <= active_e && active_e < span.active_end())
+            .unwrap();
+        let read = span
+            .slice((active_e - span.active_start) as usize, 1)
+            .unwrap();
+        let position = read.playback.position();
+        assert_eq!(read.plan.frame_pos, position.frame);
+        assert_eq!(read.plan.seek_mode, position.seek_mode);
+        assert_eq!(read.plan.selection, StemRenderSelection::full_mix());
+        assert!(!read.plan.transition.is_active());
+        let readers = read.context.resolve_readers(read.plan, None).unwrap();
+        assert!(readers.current.is_none() && readers.outgoing.is_none());
+        let taps = read.plan.fractional_taps(position.fraction);
+        let pcm = std::array::from_fn(|channel| {
+            assert!(
+                read.plan
+                    .tap_available_with_readers(sample, readers, taps.left, channel)
+            );
+            assert!(taps.right.is_none_or(|right| {
+                read.plan
+                    .tap_available_with_readers(sample, readers, right, channel)
+            }));
+            read.plan
+                .sample_fractional_with_readers(sample, readers, position.fraction, 0.0, channel)
+                .to_bits()
+        });
+        (read, taps, pcm)
+    }
+}
+
+#[test]
+fn accepted_scalar_and_qualified_map_same_pair_have_different_actual_reader_pcm() {
+    // Synthetic declared BeatThis labels exercise real acceptance/publication and ACKs.
+    // They assert neither model inference, musical/hearing acceptance nor live conversion.
+    let mut pcm = vec![0_i16; 131_072];
+    pcm[READER_DOMAIN_START] = 16_384;
+    let mut path = ReaderDomainPath::new(&pcm);
+    path.source
+        .engine
+        .set_pad_timing_intent(0, "automatic")
+        .unwrap();
+    path.drain();
+    let timing = l3_constant_timing_fixture::publish_synthetic_loaded_timing(
+        &path.source.engine,
+        &path.source.producer,
+        0,
+        32_768.25 / f64::from(READER_DOMAIN_RATE),
+    );
+    assert_eq!(timing.publication_status().unwrap(), "pending");
+    path.drain();
+    assert_eq!(timing.publication_status().unwrap(), "accepted");
+    let original_binding = binding(&path.source, 0);
+    let accepted = original_binding.binding.accepted.unwrap();
+    let scalar_period = accepted.period_seconds * f64::from(READER_DOMAIN_RATE);
+    assert!((scalar_period - 32_768.25).abs() < 1.0e-7);
+    assert_eq!(accepted.sample_rate_hz, READER_DOMAIN_RATE);
+    assert_eq!(
+        path.source
+            .engine
+            .current_timing_acknowledgements
+            .current_for_slot(&path.source.engine.input_runtime_ownership, 0),
+        accepted.publication_epoch
+    );
+    Python::attach(|py| {
+        let metadata = path
+            .source
+            .engine
+            .current_constant_timing(py, 0)
+            .unwrap()
+            .unwrap();
+        let metadata = metadata.bind(py).cast::<PyDict>().unwrap();
+        let period = metadata
+            .get_item("period_seconds_per_quarter")
+            .unwrap()
+            .unwrap()
+            .extract::<f64>()
+            .unwrap();
+        assert_eq!(period.to_bits(), accepted.period_seconds.to_bits());
+        assert_eq!(
+            metadata
+                .get_item("frame_count")
+                .unwrap()
+                .unwrap()
+                .extract::<usize>()
+                .unwrap(),
+            pcm.len()
+        );
+    });
+
+    let original_pcm = path.source.engine.sample_cache.lock().unwrap()[0]
+        .clone()
+        .unwrap();
+    assert_eq!(original_pcm.frame_count(), pcm.len());
+    assert_eq!(original_pcm.sample_at_absolute(READER_DOMAIN_START, 0), 0.5);
+    assert_eq!(
+        original_pcm.sample_at_absolute(READER_DOMAIN_END - 1, 0),
+        0.0
+    );
+    let mut map_record = record(&path.source, 0);
+    map_record["record"]["accepted"]["anchors"][1]["source_seconds_bits"] = serde_json::json!(
+        bits(READER_DOMAIN_END as f64 / f64::from(READER_DOMAIN_RATE))
+    );
+    map_record["record"]["accepted"]["anchors"][1]["beat_bits"] = serde_json::json!(bits(2.0));
+    seal(&mut map_record);
+    let (map_job, event) = stored_event(&path.source, &map_record);
+    let delivery = Python::attach(|py| {
+        let event = event.bind(py).cast::<PyDict>().unwrap();
+        let owner = event.get_item("_native_event_owner").unwrap().unwrap();
+        let delivery = owner.extract::<PyRef<'_, LoaderEventDelivery>>().unwrap();
+        assert!(
+            map_job
+                .resolve_source_beatmap_artifact_completion(&delivery)
+                .unwrap()
+                .is_some()
+        );
+        delivery.clone()
+    });
+
+    let master_period = READER_DOMAIN_OUTPUT_FRAMES as f64 / f64::from(READER_DOMAIN_RATE);
+    path.source.engine.set_bpm_lock(false).unwrap();
+    path.source
+        .engine
+        .set_speed_and_master_period(0.5, master_period)
+        .unwrap();
+    path.drain();
+    drain_parameter_messages(
+        &mut path.parameters,
+        &mut path.source.mixer,
+        &mut path.timeline,
+    );
+    assert!(path.parameters.is_empty());
+    let master = path.timeline;
+    path.publish_map_request(&delivery, false);
+    let scalar_start = path.start();
+    assert!(scalar_start.mapped_geometry().is_none());
+    assert_eq!(scalar_start.target_frame(), Some(0));
+    path.render(READER_DOMAIN_OUTPUT_FRAMES);
+    let (scalar_read, scalar_taps, scalar_pcm) = path.last_actual_source_read(0);
+    assert!(!scalar_read.playback.is_mapped());
+    assert_eq!(scalar_read.plan.loop_period, Some(scalar_period));
+    assert_eq!(scalar_read.context.binding.accepted, Some(accepted));
+    let scalar_position = scalar_read.playback.position();
+    assert_eq!(scalar_position.frame, READER_DOMAIN_END - 1);
+    assert_eq!(scalar_position.fraction.to_bits(), 0.5_f64.to_bits());
+    assert_eq!(scalar_taps.left, READER_DOMAIN_END - 1);
+    assert_eq!(scalar_taps.right, Some(READER_DOMAIN_START));
+    let expected_scalar_gain =
+        (0.5 / (scalar_period - (READER_DOMAIN_END - READER_DOMAIN_START - 1) as f64)) as f32;
+    assert_eq!(
+        scalar_taps.right_gain.to_bits(),
+        expected_scalar_gain.to_bits()
+    );
+
+    // Keep the same source/master and advance time normally across a genuine stop/restart.
+    path.source.engine.stop_sample(0).unwrap();
+    path.drain();
+    assert!(path.source.mixer.voices.iter().all(|voice| !voice.active));
+    path.source.engine.set_bpm_lock(true).unwrap();
+    path.drain();
+    path.publish_map_request(&delivery, true);
+    let mapped_binding = binding(&path.source, 0);
+    assert_eq!(mapped_binding.binding.accepted, Some(accepted));
+    assert_eq!(
+        mapped_binding.source_generation,
+        original_binding.source_generation
+    );
+    // Policy publications advance the global layout counter without changing
+    // this original fixed-slot/content/lifetime admission. This is not equality
+    // of two committed transaction receipts; current qualification stays separate.
+    let original_placement = original_binding.binding.placement.unwrap();
+    let mapped_placement = mapped_binding.binding.placement.unwrap();
+    assert!(mapped_placement.same_projection(original_placement));
+    assert_ne!(
+        mapped_placement.layout_revision(),
+        original_placement.layout_revision()
+    );
+    let qualified = delivery.qualify_source_map(&mapped_binding, None).unwrap();
+    assert!(qualified.current_for(
+        &path.source.engine.input_runtime_ownership,
+        mapped_binding.binding
+    ));
+    let mapped_start = path.start();
+    assert_eq!(
+        mapped_start.target_frame(),
+        Some(READER_DOMAIN_OUTPUT_FRAMES as u64)
+    );
+    let geometry = mapped_start.mapped_geometry().unwrap();
+    assert_eq!(geometry.exact_quarters(), 1.0);
+    assert_eq!(geometry.domain().region.start, READER_DOMAIN_START);
+    assert_eq!(geometry.domain().region.end, READER_DOMAIN_END);
+    assert_eq!(geometry.domain().musical_period, Some(32_768.0));
+    path.render(READER_DOMAIN_OUTPUT_FRAMES);
+    let (mapped_read, mapped_taps, mapped_pcm) =
+        path.last_actual_source_read(READER_DOMAIN_OUTPUT_FRAMES as u64);
+    assert!(mapped_read.playback.is_mapped());
+    let mapped_position = mapped_read.playback.position();
+    assert_eq!(mapped_position.frame, scalar_position.frame);
+    assert_eq!(
+        mapped_position.fraction.to_bits(),
+        scalar_position.fraction.to_bits()
+    );
+    assert_eq!(mapped_position.seek_mode, scalar_position.seek_mode);
+    assert_eq!(mapped_read.context.binding.accepted, Some(accepted));
+    assert_eq!(
+        mapped_read.context.binding.source_address,
+        scalar_read.context.binding.source_address
+    );
+    let voice = path
+        .source
+        .mixer
+        .voices
+        .iter()
+        .find(|voice| voice.active && voice.sample_id == 0)
+        .unwrap();
+    assert!(original_pcm.same_source(voice.sample.as_ref().unwrap()));
+    assert!(Arc::ptr_eq(
+        &original_pcm.samples,
+        &voice.sample.as_ref().unwrap().samples
+    ));
+    assert!(
+        voice
+            .mapped_start
+            .as_ref()
+            .unwrap()
+            .original()
+            .same_owner(&mapped_start)
+    );
+    assert!(master.matches_clock_epoch(&path.timeline));
+    assert!(!scalar_read.plan.matches_exact(mapped_read.plan));
+    assert!(!scalar_read.plan.matches_source_contract(mapped_read.plan));
+    assert_eq!(mapped_taps.left, scalar_taps.left);
+    assert_eq!(mapped_taps.right, scalar_taps.right);
+    assert_eq!(mapped_taps.right_gain.to_bits(), 0.5_f32.to_bits());
+    assert_ne!(
+        scalar_taps.right_gain.to_bits(),
+        mapped_taps.right_gain.to_bits()
+    );
+    for channel in 0..2 {
+        assert_eq!(
+            scalar_pcm[channel],
+            (0.5 * scalar_taps.right_gain).to_bits()
+        );
+        assert_eq!(mapped_pcm[channel], 0.25_f32.to_bits());
+        assert_ne!(scalar_pcm[channel], mapped_pcm[channel]);
+    }
+    println!(
+        "ACCEPTED_READER_DOMAIN {}",
+        serde_json::json!({
+            "scope": "same original cold source, synthetic timing labels, real accepted ACK and qualified map; separate actual starts/raw source reads; no live conversion, model inference, DSP-output or hearing acceptance",
+            "sample_rate_hz": READER_DOMAIN_RATE,
+            "source_frames": pcm.len(),
+            "accepted_period_seconds_bits": bits(accepted.period_seconds),
+            "scalar_period_frames_bits": bits(scalar_period),
+            "mapped_period_frames_bits": bits(mapped_read.plan.loop_period.unwrap()),
+            "local_e": READER_DOMAIN_OUTPUT_FRAMES - 1,
+            "scalar_active_e": scalar_read.active_start,
+            "mapped_active_e": mapped_read.active_start,
+            "scalar_absolute_e": scalar_start.target_frame().unwrap() + READER_DOMAIN_OUTPUT_FRAMES as u64 - 1,
+            "mapped_absolute_e": mapped_read.playback.mapped_output_frame().unwrap(),
+            "source_frame": mapped_position.frame,
+            "fraction_bits": bits(mapped_position.fraction),
+            "taps": [mapped_taps.left, mapped_taps.right.unwrap()],
+            "scalar_gain_bits": format!("{:08x}", scalar_taps.right_gain.to_bits()),
+            "mapped_gain_bits": format!("{:08x}", mapped_taps.right_gain.to_bits()),
+            "scalar_pcm_bits": scalar_pcm.map(|value| format!("{value:08x}")),
+            "mapped_pcm_bits": mapped_pcm.map(|value| format!("{value:08x}")),
+        })
+    );
 }

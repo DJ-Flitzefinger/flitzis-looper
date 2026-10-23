@@ -214,6 +214,16 @@ Manual markers alone do not imply a physical domain; identical pair bits do not
 prove PCM equality if scalar and mapped musical periods differ. That conversion
 contract remains open after this coordinate prerequisite.
 
+A bounded source/reader integration must distinguish observed qualification from
+an arithmetic-only seam example. Use an actual cold source, original PCM binding,
+accepted timing publication/ACK and independently qualified map delivery. Existing
+explicitly synthetic test-only BeatThis evidence may exercise production fit and
+publication, with no model, inference or acoustic claim. Derive both domains from
+their original qualified paths; never fabricate an accepted projection, ACK or
+source generation. A differing-period pair/tap/PCM counterexample documents why
+the exact reader-domain and first-PCM guards remain mandatory. It does not enable
+conversion or permit either original domain or interpolation to be rewritten.
+
 Admit only finite P in [.5,2^64], rates [.5,2], a valid physical region and exact
 |P-L|<=1. Decode period/rate dyadics on the fixed exact grid H=2^53. C=P*H<=2^117
 and D=n*rate*H<2^118 fit u128 for the full u64 epoch. Reduce U=D mod C before

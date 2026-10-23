@@ -122,6 +122,12 @@ Before enabling a conversion, the system SHALL define and enforce its numerical 
 - **THEN** conversion SHALL refuse before any effective mutation
 - **AND** it SHALL NOT substitute a one-frame cursor correction, snapping, nextafter search, relaxed comparison or silent scalar fallback
 
+#### Scenario: Accepted scalar timing and a qualified map retain different reader periods
+- **WHEN** the same immutable source and physical loop have accepted scalar timing and an independently qualified source map with different musical reader periods
+- **THEN** equality of their separate canonical source frame/fraction SHALL NOT stand in for equality of their actual SourceReadPlan, interpolation gains or first PCM sample
+- **AND** conversion SHALL retain the existing exact first-PCM guard and refuse an unsupported reader-domain change before effective mutation
+- **AND** it SHALL NOT silently replace the accepted scalar period, reinterpret the original map geometry or change the legacy interpolation to make the comparison pass
+
 ### Requirement: Musical scalar coordinates preserve the original reader domain
 A coordinates-only musical scalar continuation SHALL use an explicit projection mode distinct from legacy and physical-pair trajectories. It SHALL retain the complete original Some(P) loop domain and an already canonical separate Normal source frame/fraction. Its numerical domain SHALL require finite binary64 P in [0.5, 2^64], exact |P minus physical length| at most one frame, a valid physical region, finite initial/target rates in [0.5, 2], and separate canonical pair comparison against P. Construction SHALL reject incompatible, noncanonical or malformed input rather than wrapping it at the anchor. It SHALL derive full-u64 constant-epoch displacement and period reduction exactly on a bounded integer dyadic grid, then round only the canonical fractional remainder. Circular source error SHALL be at most 2^-54 frame per constant epoch. Generic zero fractional displacement SHALL preserve fraction bits, including signed zero, on exact whole-period revisits.
 

@@ -475,3 +475,89 @@ independently recomputed distinct test count, actual Release/import/preflight an
 unchanged installed hash. Only this factual receipt and the final musical
 prerequisite checkbox follow; the same reviewer checks their consistency before
 coherent commit and normal existing-main push. General Stage A/B remain OPEN.
+
+## Accepted scalar/map reader-domain boundary, 2026-10-23
+
+The new test uses one actually loaded original cold source, 131072 generated mono
+PCM frames at Fs48000, with original source/decoder custody. The existing explicitly
+synthetic test-only BeatThis helper binds complete verified PCM, runs production
+fit/acceptance/publication and obtains the actual callback ACK/current metadata.
+It does not run inference. The actual accepted period in source frames is exactly
+32768.25 (`40e0000800000000`), without constructing a replacement projection.
+
+An independently completed and qualified original map artifact uses source anchors
+frame0->beat0 and frame65536->beat2, truthfully sealed against that same original
+source. Manual markers [32768,65536) derive Q1 and mapped reader period32768
+(`40e0000000000000`). Public controls set speed.5 and master65536 output frames per
+quarter. The source is started through actual capture/publish/scheduler/render,
+stopped through the existing control, then started with mapped synchronization.
+The original PCM Arc, source generation, content/lifetime admission and accepted
+projection are preserved. The same master clock epoch remains unchanged.
+
+Both successful source journals yield exactly `(65535, .5, Normal)` with identical
+fraction bits `3fe0000000000000` and taps65535->32768. The original plans retain
+different periods, and both exact plan/source-contract comparisons refuse equality:
+
+| Actual journaled read | Right gain | Gain bits | Raw source PCM, both channels | PCM bits |
+| --- | --- | --- | --- | --- |
+| Scalar | .4 | 3ecccccd | .2 | 3e4ccccd |
+| Mapped | .5 | 3f000000 | .25 | 3e800000 |
+
+Local elapsed E is65535 in each separate launch. Scalar absolute/output-active E
+is65535; mapped absolute/output-active E is131071. These counters coincide only
+for this uninterrupted fixture. The physical slot's attempted-feed journal stays
+monotonic across reuse; its ranges are0..65536 then65536..131072. The PCM values
+above are original reader evaluation replayed from each actual successful journal
+span, not captured final DSP output or an executed simultaneous conversion.
+
+### Checks and preserved negative results
+
+The first new test run fails on full SlotSnapshot equality after legitimate policy
+publications: layout14->26, with owner/slot/cell/binding epoch/lifetime unchanged
+(2m42s compile, .33s test). The fixture now uses the established same_projection
+identity and explicitly asserts the changed layout; separate original-source,
+generation, accepted ACK, map-currentness and exact PCM-Arc guards remain intact.
+The second run fails on the fixture's incorrect reset-to-zero journal assumption
+(2m35s compile, .36s test). Exact monotonic ranges and local/active/absolute times
+are now asserted separately. No production guard, clock, reader or acceptance
+criterion changed. Both failed receipts are retained as fixture errors.
+
+The corrected unique test passes after2m37s compile/.35s execution. Five compatible
+final receipts contain **170 distinct PASS**,171 selected (one overlap),0 final
+failures and3 existing ignored mapped Native measurement/aligned-birth profiles.
+Full map-admission/custody59PASS/3ignored finishes110.52s, timing89PASS10.38s,
+content ACK5PASS and reader17PASS. The three ignored diagnostic/acoustic profiles
+remain actual open gates; they were not disabled or newly ignored by this block.
+
+Cargo fmt, explicit Rust2024, whitespace and strict OpenSpec pass. The first
+OpenSpec command from the outer workspace reports Unknown item; rerunning from
+the actual repo passes, with both command results retained. All-target Release
+Clippy passes39.10s with unchanged warning debt100lib/131lib-test(56duplicates)/
+200example; no warning suppression or production edit was added.
+
+Only this existing cfg(test) file and official documentation change. Production
+Release/import/all13 API/editor4 evidence from c49b898a remains compatible and is
+reused; there is no new private build/install or claim of fresh Python validation.
+Fresh start.bat --check passes without opening the App, and the actual installed
+StageS Native remains byte-identical34,838,016B/SHA
+`3af872db756fe6f017fb0ac826f978902473e874c5a254f2462098ef53a0d209`.
+
+Receipts are in `test-artifacts/accepted-reader-domain-20261023` outside Git.
+Own TMP before delivery cleanup is241files/347188B; Scratch1480->1480, zero new
+entries. Only exact owned TMP may be cleaned after reviewed normal main push,
+clean fresh actual-remote equality and terminal/path/process/no-reparse guards.
+One existing compatible cache/env/worker remains retained; no full copies.
+
+This closes a source-grounded reader-boundary regression, not conversion or a new
+runtime refusal implementation. It confirms why matching q/f alone cannot waive
+the original reader-domain/first-PCM contract. General Stage A/B, original geometry,
+numerical/throughput/callback qualification, Native/music/B2/resource/Human/final
+gates remain OPEN, with STOP before full Rust port/Slice8. No inference, device,
+hearing, final-DSP-output or complete-Goal acceptance is claimed.
+
+One continuous independent NONAUTHOR final-diff review returns CLEAR for exact
+staged tree `60e14284b6acda23a728b550a9550ff70f82ec6a`, covering the five-file diff,
+actual receipts, independently recomputed test count and retained fixture errors.
+Only this factual receipt and the bounded reader-boundary checkbox follow; the
+same reviewer checks their final consistency before coherent commit and normal
+existing-main push. Conversion and all remaining acceptance gates stay OPEN.
