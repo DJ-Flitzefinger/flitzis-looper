@@ -49,6 +49,16 @@ blocking mapped/global-rate work retires or a valid reference becomes available.
 One refused command cannot leave the actual parent enabled indefinitely. Reuse
 bounded existing triggers and retain pending feedback; no blind queue flooding,
 second scheduler, selection-following anchor or removal of the safety guard.
+An admitted deferred ON also retains its original qualified source/content/accepted
+timing binding, following that same content through Pair moves. Replacement or a
+changed qualification cannot inherit it; requalification produces a new receipt.
+Actual OFF waits for actual Fixed voices to adopt Legacy through the original
+policy owner (or retire), then passes prospective source-history guards. Pending
+policy/history work retains preceding actual audio and its original owner.
+
+Observe requested and actual BPM Lock separately in the existing bounded status
+storage. An admitted receipt is not an actual effect. Reuse the original control
+queue and scalar mixer owner; no additional owning work queue or clock is added.
 
 ## Native policy and actual parent guards
 
@@ -69,6 +79,18 @@ possible, including pre-ACK requests. Include the parent identity in the
 original projection identity and retain it through selection-free copies. All
 runtime/adoption/GUI/MIDI/PadStart callers obtain the same request. No new owning
 queue, mutable source state or audio/rate authority is introduced.
+
+Hierarchy publication also revokes the existing global timing fence, under its
+original request serialization and complete content claim. Accepted master refresh
+and global publication must exclude each other at the actual mutation boundary;
+two comparisons before a write are insufficient. Reuse the existing global marker
+as a bounded one-attempt CAS claim, together with the original source/content claim.
+Prepare loop cuts and master/source-history changes before the infallible claimed
+effect. Contention retains the scheduled owner pending; stale identity rejects.
+No callback spin, blocking lock, allocation or fallible partial loop/master change.
+Each Native admission refuses capacity/counter exhaustion before its own mutation;
+staged cancellation and later BPM admission remain separate operations with truthful
+pending/error if a later admission fails, not an all-or-nothing transition claim.
 
 ## Recovery remains effect-safe
 

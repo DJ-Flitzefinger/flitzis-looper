@@ -11,6 +11,17 @@ The application SHALL resolve MULTI LOOP -> BPM LOCK -> SYNC -> REALTIME BPM thr
 - **AND** an unsupported current representation SHALL retain preceding actual audio with truthful pending/refusal until safe conversion is qualified
 - **AND** the existing control owner SHALL reconcile a deferred parent target when its blocking representation/rate work retires or the required reference becomes available, without blind queue flooding or another scheduler
 
+#### Scenario: Reference qualification changes after BPM Lock ON is admitted
+- **WHEN** an admitted ON request is still awaiting actual application and its original qualified reference changes or becomes unavailable
+- **THEN** the deferred effect SHALL NOT borrow another content/source/accepted-timing qualification
+- **AND** a Pair move of the same content SHALL retain its original identity, while genuine requalification SHALL require a new current receipt
+- **AND** requested and actual BPM Lock SHALL remain separately observable without treating enqueue as effect
+
+#### Scenario: BPM Lock OFF encounters an actual Fixed voice
+- **WHEN** an OFF request remains pending while Fixed synchronization is still actual
+- **THEN** the original policy owner SHALL first adopt the allowed Legacy representation or retire that voice before actual BPM Lock becomes off
+- **AND** prospective tempo/pitch/source-history safeguards SHALL remain required for the final parent effect, preserving preceding actual audio while unavailable
+
 #### Scenario: Parent changes return to equal-looking choices
 - **WHEN** an accepted parent request changes OFF then ON without changing either stored child choice
 - **THEN** a checked hierarchy request revision SHALL distinguish both changes and invalidate old captures and acknowledgements
@@ -93,6 +104,12 @@ stop/retrigger, with truthful pending state and retained original owners.
 - **WHEN** a queued or in-flight accepted-timing refresh overlaps parent OFF/ON, timing-policy recovery or a Pair content move/swap
 - **THEN** Python publication, Pair mirror projection and Native refresh claim SHALL agree on the current hierarchy identity
 - **AND** equal-looking raw BPM-Lock preferences SHALL NOT permit stale anchor/master publication
+
+#### Scenario: A hierarchy publication races the final accepted master effect
+- **WHEN** a parent/global timing publication and an accepted master refresh reach their final mutation boundary concurrently
+- **THEN** original global and source/content claims SHALL linearize the complete loop/master effect against publication, without blocking or callback retry loops
+- **AND** a pending claim SHALL retain the original scheduled owner, a stale identity SHALL reject, and no failed qualification SHALL partially apply loop cuts or master timing
+- **AND** each Native admission SHALL refuse exhausted counters or capacity before its own mutation; a later admission after accepted cancellation MAY remain explicitly pending/refused without claiming whole-transition atomicity
 
 #### Scenario: A global request encounters reserved arrangement rows
 - **WHEN** whole rows remain owned by a pending Pair or Bank ACK/mirror
