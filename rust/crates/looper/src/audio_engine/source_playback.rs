@@ -30,6 +30,12 @@ struct MappedCopyState {
     intended_output_frame: u64,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum ScalarProjection {
+    Legacy,
+    PairPhysical,
+}
+
 #[derive(Clone, Copy, Debug)]
 pub(crate) struct SourcePlayback {
     origin: FractionalSourcePosition,
@@ -40,6 +46,7 @@ pub(crate) struct SourcePlayback {
     frames_until_step: usize,
     // Before this epoch, only an intentional start/seek defines reconstructible source history.
     history_reconstructible: bool,
+    scalar_projection: ScalarProjection,
     mapped: Option<MappedCopyState>,
 }
 
@@ -64,6 +71,7 @@ impl SourcePlayback {
             target: ratio,
             frames_until_step: 0,
             history_reconstructible: false,
+            scalar_projection: ScalarProjection::Legacy,
             mapped: Some(MappedCopyState {
                 span,
                 intended_output_frame,
@@ -85,6 +93,12 @@ impl SourcePlayback {
 
     /// Include the canonical exclusive endpoint, but never invent a later span.
     pub(crate) fn can_read_frames(&self, output_frames: usize) -> bool {
+        if self.scalar_projection == ScalarProjection::PairPhysical {
+            return self
+                .elapsed_output_frames
+                .checked_add(output_frames as u64)
+                .is_some();
+        }
         self.mapped.is_none_or(|state| {
             state
                 .intended_output_frame
@@ -213,8 +227,38 @@ impl SourcePlayback {
             target: ratio,
             frames_until_step: 0,
             history_reconstructible: true,
+            scalar_projection: ScalarProjection::Legacy,
             mapped: None,
         }
+    }
+
+    /// Coordinates-only prerequisite for an exact physical source pair. No live adoption
+    /// route calls this yet, and construction grants no source, reader or history permission.
+    pub(crate) fn scalar_continuation(
+        position: FractionalSourcePosition,
+        domain: SourceLoopDomain,
+        initial_ratio: f64,
+        target: f64,
+    ) -> Option<Self> {
+        if !valid_physical_pair(position, domain)
+            || !initial_ratio.is_finite()
+            || !(SPEED_MIN..=SPEED_MAX).contains(&initial_ratio)
+            || !target.is_finite()
+            || !(SPEED_MIN..=SPEED_MAX).contains(&target)
+        {
+            return None;
+        }
+        Some(Self {
+            origin: position,
+            domain: Some(domain),
+            elapsed_output_frames: 0,
+            ratio: initial_ratio,
+            target,
+            frames_until_step: 0,
+            history_reconstructible: false,
+            scalar_projection: ScalarProjection::PairPhysical,
+            mapped: None,
+        })
     }
 
     /// Copy the current source phase into a constant-rate preparation epoch.
@@ -230,7 +274,7 @@ impl SourcePlayback {
         self.ratio = checked_ratio(ratio);
         self.target = self.ratio;
         self.frames_until_step = 0;
-        self.history_reconstructible = true;
+        self.history_reconstructible = self.scalar_projection == ScalarProjection::Legacy;
         self
     }
 
@@ -258,6 +302,9 @@ impl SourcePlayback {
             let mut history = *self;
             history.elapsed_output_frames -= output_frames as u64;
             return Some((history, 0));
+        }
+        if self.scalar_projection == ScalarProjection::PairPhysical {
+            return None;
         }
         if !self.history_reconstructible {
             return None;
@@ -304,7 +351,7 @@ impl SourcePlayback {
     /// never introduces a new rounding anchor. This is derived input, not a claim
     /// that the live voice actually read these shifted source positions.
     pub(crate) fn shifted_normal_history(mut self, shift: f64) -> Option<Self> {
-        if self.is_mapped() {
+        if self.is_mapped() || self.scalar_projection == ScalarProjection::PairPhysical {
             return None;
         }
         let domain = self.domain?;
@@ -356,6 +403,7 @@ impl SourcePlayback {
             && self.target.to_bits() == other.target.to_bits()
             && self.frames_until_step == other.frames_until_step
             && self.history_reconstructible == other.history_reconstructible
+            && self.scalar_projection == other.scalar_projection
     }
 
     /// Check pending preparation control intent while its copied smoothing clock advances.
@@ -368,7 +416,8 @@ impl SourcePlayback {
             (Some(_), None) | (None, Some(_)) => return false,
             (None, None) => {}
         }
-        self.target.to_bits() == other.target.to_bits()
+        self.scalar_projection == other.scalar_projection
+            && self.target.to_bits() == other.target.to_bits()
     }
 
     #[cfg(test)]
@@ -389,6 +438,11 @@ impl SourcePlayback {
     pub(crate) fn configure_domain(&mut self, domain: SourceLoopDomain) -> bool {
         if self.domain == Some(domain) {
             return true;
+        }
+        // A new domain needs its own future integration contract. An unchanged
+        // physical refresh retains this exact epoch; do not clamp, wrap or rebase it.
+        if self.scalar_projection == ScalarProjection::PairPhysical {
+            return false;
         }
         if self.is_mapped() {
             return false;
@@ -420,7 +474,8 @@ impl SourcePlayback {
     }
 
     pub(crate) fn clear_explicit_seek(&mut self) {
-        if self.is_mapped() {
+        // PairPhysical is already Normal. An unchanged refresh must retain its epoch.
+        if self.is_mapped() || self.scalar_projection == ScalarProjection::PairPhysical {
             return;
         }
         self.rebase();
@@ -462,6 +517,7 @@ impl SourcePlayback {
         self.domain = None;
         self.elapsed_output_frames = 0;
         self.history_reconstructible = true;
+        self.scalar_projection = ScalarProjection::Legacy;
         true
     }
 
@@ -483,7 +539,15 @@ impl SourcePlayback {
             } else {
                 (self.ratio + delta).clamp(SPEED_MIN, SPEED_MAX)
             };
-            self.frames_until_step = TEMPO_STEP_OUTPUT_FRAMES;
+            // Once the new pair mode reaches its target this timer is inactive.
+            // Canonical zero lets constant in-epoch rewind/replay retain exact state.
+            self.frames_until_step = if self.scalar_projection == ScalarProjection::PairPhysical
+                && self.ratio == self.target
+            {
+                0
+            } else {
+                TEMPO_STEP_OUTPUT_FRAMES
+            };
         }
         let frames = if self.ratio == self.target {
             max_frames
@@ -496,6 +560,8 @@ impl SourcePlayback {
     pub(crate) fn position(&self) -> FractionalSourcePosition {
         if self.is_mapped() {
             self.origin
+        } else if self.scalar_projection == ScalarProjection::PairPhysical {
+            self.pair_physical_position_at(self.elapsed_output_frames)
         } else {
             self.scalar_position_at(0)
         }
@@ -509,7 +575,48 @@ impl SourcePlayback {
                     .checked_add(output_offset as u64)?,
             );
         }
+        if self.scalar_projection == ScalarProjection::PairPhysical {
+            let elapsed = self
+                .elapsed_output_frames
+                .checked_add(output_offset as u64)?;
+            return Some(self.pair_physical_position_at(elapsed));
+        }
         Some(self.scalar_position_at(output_offset))
+    }
+
+    fn pair_physical_position_at(&self, elapsed: u64) -> FractionalSourcePosition {
+        let domain = self.domain.expect("physical pair has its admitted domain");
+        let length = domain.region.len() as u128;
+        let bits = self.ratio.to_bits();
+        let exponent = ((bits >> 52) & 0x7ff) as u32;
+        // Admitted rates are normal [0.5, 2.0]: exponent 1022..=1024,
+        // ratio = significand / 2^shift, shift 51..=53. The complete u64
+        // count times a <=53-bit significand fits in 117 bits, without f64 narrowing.
+        let significand = (bits & ((1u64 << 52) - 1)) | (1u64 << 52);
+        let shift = 1075 - exponent;
+        let product = u128::from(elapsed) * u128::from(significand);
+        let whole = product >> shift;
+        let remainder = product & ((1u128 << shift) - 1);
+        let fraction_advance = remainder as f64 / (1u64 << shift) as f64;
+        let relative = (self.origin.frame - domain.region.start) as u128;
+        let mut relative = (relative + whole % length) % length;
+        // Generic fractional additive identity, including signed zero, at every revisit.
+        let mut fraction = if remainder == 0 {
+            self.origin.fraction
+        } else {
+            self.origin.fraction + fraction_advance
+        };
+        // This sum of fractions below one is the only rounding. Rounded carry is
+        // normalized in the physical circle, whose error is <=2^-53 source frame.
+        if fraction >= 1.0 {
+            fraction -= 1.0;
+            relative = (relative + 1) % length;
+        }
+        FractionalSourcePosition {
+            frame: domain.region.start + relative as usize,
+            fraction,
+            seek_mode: ExplicitSeekMode::Normal,
+        }
     }
 
     fn scalar_position_at(&self, output_offset: usize) -> FractionalSourcePosition {
@@ -613,6 +720,14 @@ impl SourcePlayback {
             self.origin = position;
             return true;
         }
+        if self.scalar_projection == ScalarProjection::PairPhysical {
+            let Some(elapsed) = self.elapsed_output_frames.checked_add(output_frames as u64) else {
+                return false;
+            };
+            self.elapsed_output_frames = elapsed;
+            self.frames_until_step = self.frames_until_step.saturating_sub(output_frames);
+            return true;
+        }
         self.elapsed_output_frames = self
             .elapsed_output_frames
             .saturating_add(output_frames as u64);
@@ -624,6 +739,17 @@ impl SourcePlayback {
         self.origin = self.position();
         self.elapsed_output_frames = 0;
     }
+}
+
+fn valid_physical_pair(position: FractionalSourcePosition, domain: SourceLoopDomain) -> bool {
+    domain.musical_period.is_none()
+        && domain.region.start < domain.region.end
+        && domain.region.end <= domain.sample_frames
+        && position.seek_mode == ExplicitSeekMode::Normal
+        && position.frame >= domain.region.start
+        && position.frame < domain.region.end
+        && position.fraction.is_finite()
+        && (0.0..1.0).contains(&position.fraction)
 }
 
 fn same_position(left: FractionalSourcePosition, right: FractionalSourcePosition) -> bool {
@@ -639,6 +765,10 @@ fn checked_ratio(ratio: f64) -> f64 {
         1.0
     }
 }
+
+#[cfg(test)]
+#[path = "source_pair_continuation_tests.rs"]
+mod source_pair_continuation_tests;
 
 #[cfg(test)]
 mod tests {

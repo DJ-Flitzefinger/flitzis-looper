@@ -28,6 +28,41 @@ New anchored conversion must not silently change their established arithmetic.
 
 ## Exact fractional conversion
 
+### Independent physical scalar coordinate prerequisite
+
+An explicit pair-preserving scalar projection mode may be constructed from an
+already canonical Normal integer/fraction pair, a genuine physical loop domain
+(musical_period is None), and finite initial/target rates in [.5, 2]. It is
+coordinates only: no source/adoption/history permit. Reject malformed, outside,
+explicit Intro/Tail or musical domains before mutation; never change an accepted
+musical period to physical length. Existing constructors and legacy arithmetic
+remain unchanged. No live conversion is enabled by this prerequisite.
+
+For each constant-rate epoch, decode the binary64 rate into its 53-bit integer
+significand and denominator 2^s, s in [51, 53]. The product of u64 elapsed frames
+and that significand fits u128. Split the exact product into integer displacement
+and a <=53-bit fractional numerator. Reduce the integer modulo physical length
+before combining it with the relative integer anchor. Add only the two fractions,
+normalize the rounded carry, and add the absolute source start using integers.
+An exactly zero fractional displacement is the generic additive identity, including
+signed zero; every whole-loop revisit retains the anchor fraction bits. There is
+no actual-E-only override and no conversion of elapsed frames to one binary64.
+The only rounding is addition of fractions below one, with circular source error
+at most 2^-53 frame relative to exact dyadic motion, for the entire u64 epoch.
+
+Keep the existing .05-per-512-active-output-frame glide and its epoch rebases.
+Callback partitions do not rebase. Exact trajectory/rate-target comparisons include
+projection mode. Copied/sliced cursors preserve that same mode and epoch. Earlier
+history is unavailable; in-epoch constant rewind is allowed, and unproved shifted
+history refuses. An unsupported domain change refuses before mutation. Explicit
+seek starts a deliberate legacy trajectory. Checked u64 exhaustion refuses before
+advance and position_at returns unavailable on offset overflow. The copied
+32-lane/16-KiB bound remains. An already-Normal explicit-seek clear is a no-op
+in this mode. Its inactive step timer is canonical zero once the glide reaches
+target, so in-epoch constant rewind/replay restores the exact full copied state;
+legacy timer behavior remains unchanged. Noninteger musical projection and reader seam remain
+separate required work before general reverse conversion can rely on this mode.
+
 An integer source frame plus a binary64 fraction is the original cursor. Adding
 the two before inversion can lose fraction bits even at ordinary long-track
 positions; B followed by S is not an exact inverse in binary64. Store the exact

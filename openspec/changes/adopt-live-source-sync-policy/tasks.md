@@ -9,6 +9,12 @@
 - [x] Preserve one retirement-slot reservation, raw-target cleanup, current geometry/witness access and every existing admission gate.
 - [x] Prove actual launch/stop/retrigger/capacity/Move/Swap and last-reader behavior; finish affected delivery checks and one independent final-diff review.
 
+## Independent physical scalar coordinate prerequisite
+
+- [x] Add an explicit pair-preserving physical scalar mode with exact u64 dyadic displacement, canonical relative pair and generic additive identity.
+- [x] Preserve legacy arithmetic, glide, copied trajectory/history/mode guards and checked exhaustion; refuse musical or malformed domains.
+- [x] Prove exact anchor/revisits, actual reader PCM, large frames, carry, partitions/glide/history/copies/layout; finish affected checks, private Release/import and one independent final-diff review.
+
 ## Stage A: exact copied conversion prerequisite
 
 - [ ] Freeze an analytically bounded anchored source/master representation and precise domain/boundary contract.

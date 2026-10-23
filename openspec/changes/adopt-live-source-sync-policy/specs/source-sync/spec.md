@@ -49,6 +49,19 @@ The system SHALL keep adoption idempotent and retryable after successful runtime
 - **THEN** the system SHALL consider that exact current delivery for adoption without another toggle
 - **AND** cancellation or replacement before the claim SHALL preserve old audio rather than adopt stale custody
 
+### Requirement: Physical scalar coordinates preserve the separate source pair
+A coordinates-only physical scalar continuation SHALL retain an already canonical Normal source frame and fraction separately and SHALL use an explicit projection mode distinct from legacy scalar trajectories. It SHALL derive constant-rate displacement from the exact u64 elapsed-frame and binary64 rate product, reduce integer displacement before fractional addition, and keep circular rounding error at most 2^-53 source frame for the complete u64 epoch. Generic zero fractional displacement SHALL preserve fraction bits on every exact whole-loop revisit. This construction SHALL NOT authorize live adoption, source ownership or pre-conversion history, and SHALL NOT alter legacy arithmetic or reinterpret a musical domain as physical.
+
+#### Scenario: A physical cursor has a tiny fraction and revisits after a long epoch
+- **WHEN** a valid physical continuation is queried at its anchor or an exact whole-loop displacement, including elapsed values beyond binary64 integer precision
+- **THEN** its separate fraction bits SHALL remain unchanged and integer addressing SHALL remain within the admitted physical loop
+- **AND** copied and partitioned evaluation SHALL use the same immutable epoch and existing glide boundaries
+
+#### Scenario: A continuation cannot retain its declared trajectory contract
+- **WHEN** its domain or cursor is malformed, outside, non-Normal or musical, or its elapsed/offset addition exceeds u64
+- **THEN** the operation SHALL refuse before changing the preceding trajectory
+- **AND** cross-mode exact/rate-target comparisons and unsupported earlier/shifted history SHALL NOT claim equivalence or reconstruct unobserved reads
+
 ### Requirement: Anchored conversion has explicit numerical and realtime limits
 Before enabling a conversion, the system SHALL define and enforce its numerical domain, analytic error bound and original-knot/wrap classification. It SHALL retain the exact separate source anchor and frozen actual master projection, evaluate from immutable anchors rather than callback integration, and keep existing bitwise continuity guards. It SHALL keep copied mapped spans at most 240 bytes and a 32-lane SourcePlayback copy at most 16 KiB. Heavy geometry, allocation and final retirement SHALL remain off realtime; actual-E freshness and phase checks SHALL remain bounded inside the original callback claim.
 

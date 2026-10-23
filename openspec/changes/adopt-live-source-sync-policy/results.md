@@ -157,3 +157,96 @@ Numeric conversion, replacement custody, actual live
 policy/map adoption, complete 32-lane freshness/atomicity/retry and feedback remain
 open. Every FULL-Goal Human/Native/pitch/Key-Lock/B2/music/device/resource/parent/
 final gate and STOP before full Rust-port work/Slice8 remains in force.
+
+## Independent physical scalar coordinate prerequisite, 2026-10-23
+
+SourcePlayback has an explicit PairPhysical projection mode and a validated
+coordinates-only scalar_continuation constructor. Exact u64 elapsed frames times
+the binary64 rate significand fit in u128; integer displacement is reduced before
+fraction addition and absolute source start is added using integers. Generic zero
+fractional displacement preserves tiny and signed-zero fraction bits on every
+whole-loop revisit. The arithmetic circular error bound is <=2^-53 source frame
+per constant-rate epoch, not an absolute wrap-coordinate bound or an ideal real
+trajectory across multiple rounded glide rebases.
+
+This accepts only a canonical Normal pair in a genuine physical domain with
+musical_period=None and finite rates [.5,2]. Musical domains, including an equal
+integer musical period, are refused. Domain changes refuse before mutation;
+same-domain refresh is exact. Explicit Seek starts a new legacy trajectory.
+Earlier/shifted history is unavailable; constant in-epoch rewind is retained.
+Comparisons include projection mode. Offset, advance, checkpoint and reader
+preflight reject u64 exhaustion before mutation/output. Legacy constructors,
+musical projection, reader arithmetic and saturation remain unchanged. No live
+caller, conversion, source permit or policy-adoption path is opened.
+
+### Fresh verification
+
+Optimized locked wrapper, the same shared environment/cache and disjoint native
+selection sets were used. Initial/repeated runs are not added to the final total;
+filtered analysis-crate zero-test output adds nothing.
+
+| Affected native set | Result |
+| --- | --- |
+| audio_engine::source_playback | 27 PASS, 0 FAIL/IGNORE; final compile 2m36s, tests <0.01s |
+| source_feed_history::tests | 15 PASS, 0 FAIL, 1 existing resource-profile IGNORE |
+| prepared_native_history::tests | 7 PASS, 0 FAIL/IGNORE; 18.74s |
+| source_reader::tests | 17 PASS, 0 FAIL/IGNORE |
+| mapped_source_clock::tests, including copied playback | 21 PASS, 0 FAIL/IGNORE |
+
+Total: **87 distinct native PASS**, including ten new physical-pair tests on this
+64-bit target. They cover invalid pairs/rates/domains, signed-zero/subnormal/tiny
+fractions, independent analytical full-u64 dyadic cases and giant source offsets
+without giant allocation; actual physical reader taps/PCM at anchor and distant
+revisits; exact history/mode/overflow refusal; real span slices/checkpoints and
+the .05/512 glide with unequal partitions and identical executed PCM bits.
+The prepared-history neighbor includes the existing actual Native FIFO/independent
+PCM comparison through 1,000 musical cycles; this is bounded software evidence.
+The ignored host-specific resource profile remains a separate gate.
+
+Measured layout is unchanged: projection 32 B, mapped epoch 88 B, mapped span
+176 B (<=240), SourcePlayback 288 B, optional 32-lane copy 9,216 B (<=16 KiB),
+checkpoint 448 B and source-feed span 1,264 B. Copy/no-drop checks PASS. These
+measurements do not establish whole-process RSS, callback budget or 216-PAD limits.
+
+Final all-targets Release Clippy PASS, 34.96s: 97 lib / 131 lib-test (56 duplicate)
+/ 197 example warnings. The intentionally unconnected constructor joins the old
+unused project_mapped_to message, and its validator adds one unused-function
+warning. No suppression was added; this debt remains until its actual integration.
+Cargo fmt, both explicit Rust2024 source/test checks, strict OpenSpec and whitespace
+checks PASS. Compatible existing Python/launch evidence is retained, not counted
+as freshly rerun here.
+
+Normal private Release build PASS, 38.98s, 40 warnings (39 old plus the unused
+validator). Fresh private-origin/profile import and all 13 Portable API checks,
+including editor API4 and ordinary transport, PASS. Private Native is 34,448,384 B,
+SHA256 `43d9af0e1262b68f85c9e549a8a928a3d49c859eb831a90b0f972f5647aab67f`.
+It was not installed. Actual installed Native remains byte-identical at 34,446,848 B
+/ `91881c187435c0bad0e2c6382a901f7af5c6585caf3665e0da1b6928ac35e6ab` before/after.
+Canonical start.bat --check PASS applies to that explicitly old installation; it
+did not start the App. No App/device was started/stopped or held Native replaced.
+
+### Review findings, intermediate results and limits
+
+The first 27-test run passed. Independent review then found two new-mode API
+edges that its initial assertions did not cover: clearing an already-Normal seek
+rebased the immutable epoch, and the inactive final-glide timer prevented exact
+constant rewind/replay. PairPhysical clear is now a no-op; its inactive timer is
+canonical zero on reaching target. Legacy's existing timer remains unchanged.
+Stronger assertions verify clear's exact full state, actual PCM across partitions,
+and history PCM plus full-state rewind/replay. The rerun passed 27 tests.
+
+First Clippy PASS 39.60s also reported a new range-loop warning in the expanded
+PCM trace test. Iterating its exact frames-sized buffer with enumerate fixed that
+warning without changing sampled output or assertions. Final 27 tests and final
+Clippy above passed. No failed test/RED result is claimed for these review fixes.
+All intermediate logs are retained in workspace
+test-artifacts/pair-physical-continuation-20261023.
+
+One continuous independent NONAUTHOR final-diff review returned CLEAR for staged
+tree `58ea3c1dcf9b1c754cbdf4e350abc6e83b8ed227`, explicitly covering this factual
+receipt and the last physical-prerequisite checkbox. The reviewer stayed read-only.
+General musical scalar/reader semantics, anchored mapped
+conversion and actual policy/map adoption remain open. Existing exact source/PCM,
+ownership, all-lane atomicity, retry and full raw-revision requirements are retained.
+Every FULL-Goal Human/Native/pitch/Key-Lock/B2/music/device/resource/parent/final gate
+and STOP before full Rust-port work/Slice8 remains in force.
