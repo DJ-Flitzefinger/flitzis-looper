@@ -245,6 +245,8 @@ pub(crate) struct InputRuntimeOwnership {
     // One original control revocation fence, shared with the callback's rate capture.
     pub(crate) global_timing_revision: Arc<AtomicU64>,
     pub(crate) global_timing_publishing: AtomicBool,
+    /// Observation of the existing timing revision, written only by hierarchy commits.
+    pub(crate) hierarchy_stamp: AtomicU64,
     pub(crate) global_rate_status: super::global_rate_status::GlobalRateStatusSlot,
     authority: [AtomicU64; NUM_SAMPLES],
     runtime: [AtomicU64; NUM_SAMPLES],
@@ -288,6 +290,7 @@ impl Default for InputRuntimeOwnership {
             key_lock_start_policy: Arc::default(),
             global_timing_revision: Arc::new(AtomicU64::new(1)),
             global_timing_publishing: AtomicBool::new(false),
+            hierarchy_stamp: AtomicU64::new(1),
             global_rate_status: super::global_rate_status::GlobalRateStatusSlot::default(),
             authority: std::array::from_fn(|_| AtomicU64::new(1)),
             runtime: std::array::from_fn(|_| AtomicU64::new(0)),
@@ -2444,6 +2447,16 @@ pub(crate) struct InputPadBinding {
     pub(crate) accepted: Option<AcceptedTimingProjection>,
 }
 
+/// Nonowning original source qualification carried on the existing rate lane.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub(crate) struct TimingAnchor {
+    pub(crate) id: usize,
+    pub(crate) binding: InputPadBinding,
+    pub(crate) key: ContentKey,
+    pub(crate) source_identity: [u8; 32],
+    pub(crate) hierarchy_stamp: u64,
+}
+
 impl InputPadBinding {
     /// The same complete source/runtime projection, independent of unrelated layout writes.
     /// This compares captured values only; current authority still requires its native guards.
@@ -2660,6 +2673,10 @@ impl InputRuntimePadBinding {
         )?;
         metadata.set_item("source_generation", self.source_generation)?;
         metadata.set_item("content_lifetime", self.content_lifetime)?;
+        metadata.set_item(
+            "source_identity",
+            super::master_provenance::source_identity(self).map(super::master_provenance::hex),
+        )?;
         metadata.set_item("source_sha256", &self.source_digest)?;
         metadata.set_item("sample_rate_hz", self.sample_rate_hz)?;
         metadata.set_item(

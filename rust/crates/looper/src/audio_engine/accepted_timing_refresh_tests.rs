@@ -12,6 +12,9 @@ use crate::audio_engine::scheduler::{FixedCapacityScheduler, ScheduledCommand};
 use crate::audio_engine::transport::TransportTimeline;
 use crate::messages::{AudioMessage, ControlParameterMessage, TriggerQuantization};
 
+#[path = "master_provenance_tests.rs"]
+mod master_provenance_tests;
+
 struct Fixture {
     engine: AudioEngine,
     producer: Arc<Mutex<Producer<ControlMessage>>>,
@@ -116,6 +119,19 @@ impl Fixture {
     fn process_next(&mut self) {
         let message = self.consumer.pop().unwrap();
         self.apply(message, &mut ImmediateAudioBufferRetirement);
+    }
+
+    fn controls(&mut self) -> usize {
+        drain_control_messages(
+            &mut self.consumer,
+            &mut self.scheduler,
+            self.transport.output_frame(),
+            &mut self.mode,
+            &mut self.transport,
+            &mut self.mixer,
+            &mut self.messages,
+            &mut ImmediateAudioBufferRetirement,
+        )
     }
 
     fn parameters(&mut self) {
@@ -346,11 +362,17 @@ fn accepted_refresh_is_one_acknowledged_loop_master_effect_after_parameter_drain
     let ticket = fixture.refresh(Some(PERIOD));
     assert_eq!(ticket.publication_status(), "pending");
     assert!(!ticket.is_current());
-    fixture.process_next();
+    fixture.controls();
     assert_eq!(fixture.state(), before);
     assert_eq!(fixture.scheduler.peek_next_target_frame(), Some(1));
     // A subsequent immediate control drain cannot execute the deferred effect at frame zero.
-    fixture.apply(ControlMessage::Ping(), &mut ImmediateAudioBufferRetirement);
+    fixture
+        .producer
+        .lock()
+        .unwrap()
+        .push(ControlMessage::Ping())
+        .unwrap();
+    fixture.controls();
     assert_eq!(ticket.publication_status(), "pending");
     fixture.parameters();
     assert_eq!(fixture.transport.master_period_seconds(), Some(0.75));
@@ -436,9 +458,32 @@ fn accepted_refresh_coupled_master_preserves_completed_bootstrap_and_beat_epoch(
 
 #[test]
 fn accepted_refresh_old_parameter_backlog_rejects_whole_effect_then_fresh_retry_wins() {
-    use crate::audio_engine::global_rate_status::{RateError, RateState, RateTuple};
+    use crate::audio_engine::global_rate_status::{
+        GlobalRateStatus, RateError, RateState, RateTuple,
+    };
 
     let mut fixture = Fixture::new();
+    let effect_image = |status: &GlobalRateStatus| {
+        (
+            status.effect.revision,
+            status.effect.requested,
+            status.effect.effective,
+            status.effect.state,
+            status.effect.execution_frame,
+            status.effect.error,
+            status.master_provenance,
+        )
+    };
+    let before_rate = fixture
+        .engine
+        .input_runtime_ownership
+        .global_rate_status
+        .read()
+        .unwrap();
+    let expected_rate = RateTuple {
+        speed: 1.0,
+        period: Some(0.75),
+    };
     let before_revision = fixture
         .engine
         .global_timing_revision
@@ -454,7 +499,7 @@ fn accepted_refresh_old_parameter_backlog_rejects_whole_effect_then_fresh_retry_
     assert_eq!(final_request_revision, before_revision + 65);
     let before_loop = fixture.mixer.loop_region_frames(0);
     let ticket = fixture.refresh(Some(PERIOD));
-    fixture.process_next();
+    fixture.controls();
     fixture.parameters();
     assert!(!fixture.parameter_consumer.is_empty());
     fixture.render(2);
@@ -469,11 +514,17 @@ fn accepted_refresh_old_parameter_backlog_rejects_whole_effect_then_fresh_retry_
         .unwrap();
     assert_eq!(prefix.request_revision, final_request_revision);
     assert!(prefix.effect.revision < final_request_revision);
-    assert_eq!(prefix.effect.state, RateState::Rejected);
-    assert_eq!(prefix.effect.error, RateError::Superseded);
+    assert_eq!(prefix.requested, expected_rate);
+    // The newer original message must drain before terminal cleanup can consume
+    // its retained prefix. No receipt or provenance from that prefix is actual.
+    assert_eq!(effect_image(&prefix), effect_image(&before_rate));
+    assert_eq!(fixture.parameter_consumer.slots(), 1);
+    assert!(fixture.mixer.has_pending_global_rate());
+    assert_eq!(fixture.mixer.next_global_rate_frame(), None);
     // The final original stamp must apply before a fresh refresh can claim its fence.
     fixture.parameters();
     assert!(fixture.parameter_consumer.is_empty());
+    assert!(!fixture.mixer.has_pending_global_rate());
     assert_eq!(fixture.mixer.loop_region_frames(0), before_loop);
     assert_eq!(fixture.transport.master_period_seconds(), Some(0.75));
     let final_effect = fixture
@@ -482,10 +533,6 @@ fn accepted_refresh_old_parameter_backlog_rejects_whole_effect_then_fresh_retry_
         .global_rate_status
         .read()
         .unwrap();
-    let expected_rate = RateTuple {
-        speed: 1.0,
-        period: Some(0.75),
-    };
     assert_eq!(final_effect.request_revision, final_request_revision);
     assert_eq!(final_effect.effect.revision, final_request_revision);
     assert_eq!(final_effect.requested, expected_rate);
@@ -495,14 +542,39 @@ fn accepted_refresh_old_parameter_backlog_rejects_whole_effect_then_fresh_retry_
     assert_eq!(final_effect.effect.error, RateError::None);
     assert_eq!(final_effect.effect.execution_frame, Some(2));
     let retry = fixture.refresh(Some(PERIOD));
-    fixture.process_next();
+    fixture.controls();
     fixture.parameters();
     fixture.render(2);
     assert!(retry.is_current());
     assert_eq!(fixture.transport.master_period_seconds(), Some(PERIOD));
+    assert_eq!(fixture.mixer.loop_region_frames(0), (1_000, Some(14_000)));
+    let retry_rate = fixture
+        .engine
+        .input_runtime_ownership
+        .global_rate_status
+        .read()
+        .unwrap();
+    assert!(retry_rate.master_provenance.accepted_revision().is_some());
+    let retry_beat_epoch = fixture.transport.beat_position_at_frame(4).unwrap();
     fixture.parameters();
     fixture.render(2);
     assert_eq!(fixture.transport.master_period_seconds(), Some(PERIOD));
+    assert_eq!(fixture.mixer.loop_region_frames(0), (1_000, Some(14_000)));
+    assert_eq!(
+        fixture.transport.beat_position_at_frame(4),
+        Some(retry_beat_epoch)
+    );
+    let later_rate = fixture
+        .engine
+        .input_runtime_ownership
+        .global_rate_status
+        .read()
+        .unwrap();
+    assert_eq!(later_rate.request_revision, retry_rate.request_revision);
+    assert_eq!(later_rate.requested, retry_rate.requested);
+    assert_eq!(effect_image(&later_rate), effect_image(&retry_rate));
+    assert_eq!(ticket.publication_status(), "rejected");
+    assert!(!ticket.is_current());
 }
 
 #[test]
@@ -573,7 +645,7 @@ fn accepted_refresh_actual_speed_and_lock_reject_stale_calculation_at_admission_
         // Current global revision is captured after the changed native control; values still
         // must be derived from the actual native speed/lock at callback execution.
         let ticket = fixture.refresh(Some(supplied));
-        fixture.process_next();
+        fixture.controls();
         fixture.parameters();
         fixture.render(2);
         assert_eq!(ticket.publication_status(), "rejected");
@@ -582,7 +654,7 @@ fn accepted_refresh_actual_speed_and_lock_reject_stale_calculation_at_admission_
     let mut fixture = Fixture::new();
     fixture.global_parameter(ControlParameterMessage::SetSpeed(1.25));
     let ticket = fixture.refresh(Some(PERIOD / 1.25));
-    fixture.process_next();
+    fixture.controls();
     fixture.parameters();
     fixture.render(2);
     assert!(ticket.is_current());
@@ -1128,7 +1200,7 @@ fn accepted_refresh_retirement_backpressure_defers_admission_and_failed_executio
     };
     let weak = Arc::downgrade(payload);
     retirement.slots = 0;
-    execute_scheduled_command(
+    let result = execute_scheduled_command(
         &mut fixture.mixer,
         &mut fixture.transport,
         1,
@@ -1136,9 +1208,26 @@ fn accepted_refresh_retirement_backpressure_defers_admission_and_failed_executio
         &mut fixture.messages,
         &mut retirement,
     );
-    assert_eq!(ticket.publication_status(), "rejected");
+    let crate::audio_engine::audio_stream::ScheduledExecution::Pending(command) = result else {
+        panic!("retirement pressure must retain the original scheduled owner")
+    };
+    assert_eq!(ticket.publication_status(), "pending");
     assert_eq!(fixture.state(), before);
     assert!(weak.upgrade().is_some());
+    retirement.slots = 1;
+    let result = execute_scheduled_command(
+        &mut fixture.mixer,
+        &mut fixture.transport,
+        2,
+        command,
+        &mut fixture.messages,
+        &mut retirement,
+    );
+    assert!(matches!(
+        result,
+        crate::audio_engine::audio_stream::ScheduledExecution::Complete
+    ));
+    assert_eq!(ticket.publication_status(), "accepted");
     retirement.refreshes.clear(); // Control-side destruction of the immutable owner.
     assert!(weak.upgrade().is_none());
 }
@@ -1307,4 +1396,1428 @@ fn accepted_refresh_accepts_same_source_binding_after_unrelated_publication_revi
     assert_eq!(ticket.publication_status(), "accepted");
     assert!(ticket.is_current());
     assert_eq!(fixture.mixer.loop_region_frames(0), (1_000, Some(14_000)));
+}
+
+fn drain_bpm_fixture(fixture: &mut Fixture) {
+    drain_control_messages(
+        &mut fixture.consumer,
+        &mut fixture.scheduler,
+        fixture.transport.output_frame(),
+        &mut fixture.mode,
+        &mut fixture.transport,
+        &mut fixture.mixer,
+        &mut fixture.messages,
+        &mut ImmediateAudioBufferRetirement,
+    );
+    fixture.parameters();
+    fixture.render(0);
+}
+
+#[test]
+fn bpm_status_separates_admission_from_actual_application_and_requalifies_original_ack() {
+    let mut fixture = Fixture::new();
+    let ownership = fixture.engine.input_runtime_ownership.clone();
+    let initial = ownership.global_rate_status.read_bpm().unwrap();
+    assert_eq!((initial.0, initial.1.revision), (0, 0));
+    let original = fixture.binding();
+    fixture
+        .engine
+        .set_bpm_lock_with_binding(true, Some(&original))
+        .unwrap();
+    let queued = ownership.global_rate_status.read_bpm().unwrap();
+    assert!(queued.0 > queued.1.revision);
+    // A real source-authority revocation after enqueue cannot be recaptured by the target.
+    let next = ownership.next_authority(0).unwrap();
+    ownership.revoke(0, next);
+    drain_bpm_fixture(&mut fixture);
+    let stale = ownership.global_rate_status.read_bpm().unwrap();
+    assert_eq!(stale.0, stale.1.revision);
+    assert!(!stale.1.applied);
+    assert_eq!(
+        stale.1.reason,
+        crate::audio_engine::global_rate_status::BpmReason::ReferenceChanged
+    );
+    assert!(stale.1.effective);
+    let qualified = fixture.binding();
+    fixture
+        .engine
+        .set_bpm_lock_with_binding(true, Some(&qualified))
+        .unwrap();
+    drain_bpm_fixture(&mut fixture);
+    let applied = ownership.global_rate_status.read_bpm().unwrap();
+    assert!(applied.1.applied && applied.1.effective);
+    assert!(applied.0 > stale.0);
+    assert_eq!(applied.0, applied.1.revision);
+    assert_eq!(applied.1.execution_frame, Some(0));
+}
+
+#[test]
+fn bpm_full_busy_and_exhausted_admission_have_no_receipt_or_queue_prefix() {
+    for refusal in 0..3 {
+        let fixture = Fixture::new();
+        let ownership = &fixture.engine.input_runtime_ownership;
+        if refusal == 0 {
+            let mut producer = fixture.producer.lock().unwrap();
+            while !producer.is_full() {
+                producer.push(ControlMessage::Ping()).unwrap();
+            }
+        } else if refusal == 1 {
+            ownership
+                .global_timing_publishing
+                .store(true, Ordering::Release);
+        } else {
+            fixture
+                .engine
+                .global_timing_revision
+                .store(u64::MAX, Ordering::Release);
+        }
+        let before = fixture
+            .engine
+            .global_timing_revision
+            .load(Ordering::Acquire);
+        let receipt = ownership.global_rate_status.read_bpm().unwrap().0;
+        let slots = fixture.consumer.slots();
+        assert!(
+            fixture
+                .engine
+                .set_bpm_lock_with_binding(false, None)
+                .is_err()
+        );
+        assert_eq!(
+            fixture
+                .engine
+                .global_timing_revision
+                .load(Ordering::Acquire),
+            before
+        );
+        assert_eq!(ownership.global_rate_status.read_bpm().unwrap().0, receipt);
+        assert_eq!(fixture.consumer.slots(), slots);
+        ownership
+            .global_timing_publishing
+            .store(false, Ordering::Release);
+    }
+}
+
+#[test]
+fn original_launch_cancellation_witness_rejects_before_admission_and_after_enqueue_including_aba() {
+    for after_enqueue in [false, true] {
+        let mut fixture = Fixture::new();
+        let captured = fixture.binding();
+        let before = fixture.state();
+        let ticket = after_enqueue.then(|| {
+            accepted_timing_refresh::enqueue(
+                &fixture.engine,
+                &fixture.producer,
+                &captured,
+                0.125,
+                Some(1.75),
+                None,
+            )
+            .unwrap()
+        });
+        fixture.engine.cancel_pad_launches(0).unwrap();
+        fixture.engine.cancel_pad_launches(0).unwrap();
+        if let Some(ticket) = ticket {
+            drain_bpm_fixture(&mut fixture);
+            fixture.render(2);
+            assert_eq!(ticket.publication_status(), "rejected");
+        } else {
+            let authority = fixture.binding().binding.authority_revision;
+            assert!(
+                accepted_timing_refresh::enqueue(
+                    &fixture.engine,
+                    &fixture.producer,
+                    &captured,
+                    0.125,
+                    Some(1.75),
+                    None
+                )
+                .is_err()
+            );
+            assert_eq!(fixture.binding().binding.authority_revision, authority);
+        }
+        assert_eq!(fixture.state(), before);
+    }
+}
+
+#[test]
+fn accepted_refresh_global_cas_contention_preserves_original_owner_and_applies_at_retry_frame() {
+    let mut fixture = Fixture::new();
+    let before = fixture.state();
+    let ticket = fixture.refresh(None);
+    fixture.process_next();
+    let event = fixture.scheduler.pop_due_through(0, 1).unwrap();
+    let ownership = fixture.engine.input_runtime_ownership.clone();
+    ownership
+        .global_timing_publishing
+        .store(true, Ordering::Release);
+    let result = execute_scheduled_command(
+        &mut fixture.mixer,
+        &mut fixture.transport,
+        1,
+        event.command,
+        &mut fixture.messages,
+        &mut ImmediateAudioBufferRetirement,
+    );
+    let crate::audio_engine::audio_stream::ScheduledExecution::Pending(command) = result else {
+        panic!("global lease must retain pending refresh")
+    };
+    assert_eq!(fixture.state(), before);
+    assert_eq!(ticket.publication_status(), "pending");
+    ownership
+        .global_timing_publishing
+        .store(false, Ordering::Release);
+    let result = execute_scheduled_command(
+        &mut fixture.mixer,
+        &mut fixture.transport,
+        9,
+        command,
+        &mut fixture.messages,
+        &mut ImmediateAudioBufferRetirement,
+    );
+    assert!(matches!(
+        result,
+        crate::audio_engine::audio_stream::ScheduledExecution::Complete
+    ));
+    assert!(ticket.is_current());
+}
+
+#[test]
+fn callback_global_lease_winner_refuses_control_publication_without_receipt_or_partial_refresh() {
+    let mut fixture = Fixture::new();
+    let ticket = fixture.refresh(None);
+    fixture.process_next();
+    let event = fixture.scheduler.pop_due_through(0, 1).unwrap();
+    let ownership = fixture.engine.input_runtime_ownership.clone();
+    let revision = fixture.engine.global_timing_revision.clone();
+    let producer = fixture.producer.clone();
+    let before = revision.load(Ordering::Acquire);
+    crate::audio_engine::audio_stream::with_refresh_global_claim_for_test(
+        move || {
+            let mut producer = producer.lock().unwrap();
+            let slots = producer.slots();
+            assert!(
+                crate::audio_engine::push_global_timing_message(
+                    &revision,
+                    &ownership.global_timing_publishing,
+                    &mut producer,
+                    ControlMessage::Ping(),
+                    "race-control"
+                )
+                .is_err()
+            );
+            assert_eq!(revision.load(Ordering::Acquire), before);
+            assert_eq!(producer.slots(), slots);
+        },
+        || {
+            execute_scheduled_command(
+                &mut fixture.mixer,
+                &mut fixture.transport,
+                1,
+                event.command,
+                &mut fixture.messages,
+                &mut ImmediateAudioBufferRetirement,
+            )
+        },
+    );
+    assert!(ticket.is_current());
+    assert_eq!(fixture.mixer.loop_region_frames(0), (1000, Some(14000)));
+}
+
+fn publish_refresh_runtime(fixture: &mut Fixture, sync: bool, intent_revision: u64) {
+    use crate::audio_engine::input_mapping::{InputRuntime, PitchPadProjection};
+    use crate::audio_engine::source_map_admission::SourceMapRow;
+    if fixture.engine.input_runtime.is_none() {
+        fixture.engine.input_runtime = Some(InputRuntime::new_with_ownership(
+            fixture.producer.clone(),
+            crate::audio_engine::timing::InputClock::new(),
+            fixture.engine.input_runtime_ownership.clone(),
+        ));
+    }
+    let binding = fixture.binding();
+    let mut bindings = vec![None; NUM_SAMPLES];
+    bindings[0] = Some(binding);
+    let mut maps = vec![SourceMapRow::default(); NUM_SAMPLES];
+    maps[0].sync_requested = sync;
+    maps[0].intent_revision = intent_revision;
+    fixture
+        .engine
+        .input_runtime
+        .as_ref()
+        .unwrap()
+        .set_runtime_state_with_source_maps(
+            true,
+            (0..NUM_SAMPLES).map(|id| id == 0).collect(),
+            vec![0.25; NUM_SAMPLES],
+            vec![Some(2.0); NUM_SAMPLES],
+            bindings.iter().map(Option::as_ref).collect(),
+            Some(vec![
+                PitchPadProjection {
+                    sync: true,
+                    key_lock: false,
+                    ..Default::default()
+                };
+                NUM_SAMPLES
+            ]),
+            Some(maps),
+        )
+        .unwrap();
+}
+
+#[test]
+fn pad_sync_off_and_aba_runtime_publication_cancel_original_queued_refresh_geometry() {
+    for aba in [false, true] {
+        let mut fixture = Fixture::new();
+        publish_refresh_runtime(&mut fixture, true, 1);
+        let ticket = fixture.refresh(None);
+        fixture.process_next();
+        let before = fixture.state();
+        publish_refresh_runtime(&mut fixture, false, 2);
+        if aba {
+            publish_refresh_runtime(&mut fixture, true, 3);
+        }
+        fixture.render(2);
+        assert_eq!(ticket.publication_status(), "rejected");
+        assert_eq!(fixture.state(), before);
+    }
+}
+
+#[test]
+fn ordinary_trigger_and_own_binding_rebase_keep_precise_refresh_witness_live() {
+    let mut fixture = Fixture::new();
+    publish_refresh_runtime(&mut fixture, false, 0);
+    let ticket = fixture.refresh(None);
+    let launch = fixture.engine.input_runtime_ownership.launch_revision(0);
+    // This complete row publication carries the refresh's own authority-rebased binding.
+    publish_refresh_runtime(&mut fixture, false, 0);
+    assert_eq!(
+        fixture.engine.input_runtime_ownership.launch_revision(0),
+        launch
+    );
+    assert!(
+        fixture
+            .engine
+            .input_runtime
+            .as_ref()
+            .unwrap()
+            .trigger_pad(0, 0)
+    );
+    drain_bpm_fixture(&mut fixture);
+    assert_eq!(
+        fixture.engine.input_runtime_ownership.launch_revision(0),
+        launch
+    );
+    fixture.render(2);
+    assert_eq!(ticket.publication_status(), "accepted");
+    assert!(ticket.is_current());
+}
+
+#[test]
+fn qualified_initial_bpm_on_applies_flag_master_and_one_bootstrap_before_ack() {
+    let mut fixture = Fixture::new();
+    fixture.mixer.set_bpm_lock(false);
+    fixture.transport.clear_master_bpm();
+    assert_eq!(fixture.transport.master_period_seconds(), None);
+    // Observe the callback-owned tuple through its existing actual receipt.
+    assert_eq!(
+        fixture
+            .engine
+            .input_runtime_ownership
+            .global_rate_status
+            .read()
+            .unwrap()
+            .effect
+            .effective
+            .period,
+        None
+    );
+    let binding = fixture.binding();
+    let before = fixture.transport;
+    fixture
+        .engine
+        .set_bpm_lock_with_binding(true, Some(&binding))
+        .unwrap();
+    assert!(fixture.transport.matches_clock_epoch(&before));
+    assert_eq!(fixture.transport.master_period_seconds(), None);
+    drain_bpm_fixture(&mut fixture);
+    let ownership = &fixture.engine.input_runtime_ownership;
+    let bpm = ownership.global_rate_status.read_bpm().unwrap().1;
+    let rate = ownership.global_rate_status.read().unwrap();
+    assert!(bpm.applied && bpm.effective);
+    assert_eq!(bpm.execution_frame, Some(0));
+    assert_eq!(rate.effect.effective.period, Some(PERIOD));
+    assert_eq!(fixture.transport.master_period_seconds(), Some(PERIOD));
+    assert_eq!(fixture.transport.bootstrap_reference(), Some(0));
+    assert!(fixture.consumer.is_empty() && fixture.parameter_consumer.is_empty());
+}
+
+fn qualified_rate(fixture: &mut Fixture, speed: Option<f64>, period: f64) {
+    let binding = fixture.binding();
+    let anchor = crate::audio_engine::qualify_timing_anchor(&fixture.engine, &binding).unwrap();
+    crate::audio_engine::push_global_rate_message_qualified(
+        &fixture.engine.global_timing_revision,
+        &fixture
+            .engine
+            .input_runtime_ownership
+            .global_timing_publishing,
+        &fixture.engine.input_runtime_ownership.global_rate_status,
+        &mut fixture.parameter_producer,
+        speed,
+        Some(period),
+        Some(anchor),
+        "qualified-test-rate",
+    )
+    .unwrap();
+}
+
+#[test]
+fn qualified_fast_master_rejects_source_and_hierarchy_changes_without_reviving_rejected_master() {
+    for hierarchy in [false, true] {
+        let mut fixture = Fixture::new();
+        fixture.transport.clear_master_bpm();
+        assert_eq!(fixture.transport.master_period_seconds(), None);
+        // Observe the callback-owned tuple through its existing actual receipt.
+        assert_eq!(
+            fixture
+                .engine
+                .input_runtime_ownership
+                .global_rate_status
+                .read()
+                .unwrap()
+                .effect
+                .effective
+                .period,
+            None
+        );
+        qualified_rate(&mut fixture, None, PERIOD);
+        if hierarchy {
+            publish_refresh_runtime(&mut fixture, false, 0);
+        } else {
+            let ownership = &fixture.engine.input_runtime_ownership;
+            ownership.revoke(0, ownership.next_authority(0).unwrap());
+        }
+        drain_bpm_fixture(&mut fixture);
+        let rejected = fixture
+            .engine
+            .input_runtime_ownership
+            .global_rate_status
+            .read()
+            .unwrap();
+        assert_eq!(
+            rejected.effect.state,
+            crate::audio_engine::global_rate_status::RateState::Rejected
+        );
+        assert_eq!(fixture.transport.master_period_seconds(), None);
+        fixture.global_parameter(ControlParameterMessage::SetSpeed(1.16));
+        drain_bpm_fixture(&mut fixture);
+        let speed = fixture
+            .engine
+            .input_runtime_ownership
+            .global_rate_status
+            .read()
+            .unwrap();
+        assert_eq!(speed.effect.effective.speed, 1.16);
+        assert_eq!(speed.effect.effective.period, None);
+        assert_eq!(fixture.transport.master_period_seconds(), None);
+    }
+}
+
+#[test]
+fn qualified_master_speed_only_coalescing_preserves_original_guard_and_new_master_can_supersede() {
+    let mut fixture = Fixture::new();
+    qualified_rate(&mut fixture, None, PERIOD);
+    fixture.global_parameter(ControlParameterMessage::SetSpeed(1.16));
+    // The old master would be inconsistent with the new speed; its qualification cannot vanish.
+    drain_bpm_fixture(&mut fixture);
+    let refused = fixture
+        .engine
+        .input_runtime_ownership
+        .global_rate_status
+        .read()
+        .unwrap();
+    assert_eq!(
+        refused.effect.state,
+        crate::audio_engine::global_rate_status::RateState::Rejected
+    );
+    assert_eq!(refused.effect.effective.speed, 1.0);
+    qualified_rate(&mut fixture, Some(1.16), PERIOD / 1.16);
+    drain_bpm_fixture(&mut fixture);
+    let applied = fixture
+        .engine
+        .input_runtime_ownership
+        .global_rate_status
+        .read()
+        .unwrap();
+    assert_eq!(
+        applied.effect.state,
+        crate::audio_engine::global_rate_status::RateState::Applied
+    );
+    assert_eq!(applied.effect.effective.period, Some(PERIOD / 1.16));
+    assert_eq!(
+        fixture.transport.master_period_seconds(),
+        Some(PERIOD / 1.16)
+    );
+}
+
+fn fixed_bpm_reference_fixture() -> Fixture {
+    use crate::audio_engine::input_mapping::PitchPadProjection;
+    use crate::audio_engine::source_map_admission::SourceMapRow;
+    use crate::audio_engine::source_sync_policy::GlobalTimingPolicy;
+    let mut fixture = Fixture::with_source_identity(true);
+    fixture.engine.test_output_format = Some((RATE, 1));
+    fixture.mixer.set_pad_key_lock(0, false);
+    fixture.mixer.set_bpm_lock(false);
+    let original = fixture.binding();
+    fixture
+        .engine
+        .set_bpm_lock_with_binding(true, Some(&original))
+        .unwrap();
+    drain_bpm_fixture(&mut fixture);
+    publish_refresh_runtime(&mut fixture, false, 0);
+    let runtime = fixture.engine.input_runtime.as_ref().unwrap();
+    runtime.set_render_format(RATE, 1).unwrap();
+    let original = fixture.binding();
+    let mut bindings = vec![None; NUM_SAMPLES];
+    bindings[0] = Some(original);
+    let mut maps = vec![SourceMapRow::default(); NUM_SAMPLES];
+    maps[0].sync_requested = true;
+    maps[0].intent_revision = 1;
+    runtime
+        .set_runtime_state_with_policy(
+            true,
+            (0..NUM_SAMPLES).map(|id| id == 0).collect(),
+            vec![0.25; NUM_SAMPLES],
+            vec![Some(2.0); NUM_SAMPLES],
+            bindings.iter().map(Option::as_ref).collect(),
+            Some(vec![
+                PitchPadProjection {
+                    sync: true,
+                    key_lock: false,
+                    ..Default::default()
+                };
+                NUM_SAMPLES
+            ]),
+            Some(maps),
+            GlobalTimingPolicy::parse(Some(
+                r#"{"schema_version":1,"sync":true,"realtime_bpm":false,"revision":1}"#,
+            ))
+            .unwrap(),
+        )
+        .unwrap();
+    let start = fixture
+        .engine
+        .capture_pad_start(0, 0.25, Some(2.0), 1.0, false, None, None)
+        .unwrap();
+    drain_bpm_fixture(&mut fixture);
+    assert!(fixture.engine.publish_pad_start(&start, None).unwrap());
+    drain_bpm_fixture(&mut fixture);
+    assert_eq!(start.state(), "applied", "{:?}", start.reason());
+    assert_eq!(
+        fixture
+            .mixer
+            .voices
+            .iter()
+            .find(|voice| voice.active)
+            .unwrap()
+            .sync_request
+            .mode,
+        crate::audio_engine::source_sync_policy::SourceSyncMode::Fixed
+    );
+    fixture.render(13);
+    assert!(
+        fixture.transport.bootstrap_reference().is_none(),
+        "real initial bootstrap must complete before requalification"
+    );
+    fixture
+}
+
+#[test]
+fn qualified_on_after_blocked_off_reinitializes_different_reference_even_when_actual_flag_stayed_on()
+ {
+    let mut fixture = fixed_bpm_reference_fixture();
+    fixture
+        .engine
+        .set_bpm_lock_with_binding(false, None)
+        .unwrap();
+    drain_bpm_fixture(&mut fixture);
+    let blocked = fixture
+        .engine
+        .input_runtime_ownership
+        .global_rate_status
+        .read_bpm()
+        .unwrap()
+        .1;
+    assert!(!blocked.applied && blocked.effective);
+    assert_eq!(
+        blocked.reason,
+        crate::audio_engine::global_rate_status::BpmReason::PolicyPending
+    );
+    assert_eq!(fixture.transport.master_period_seconds(), Some(PERIOD));
+
+    let other = source().with_complete_source(RATE);
+    fixture.engine.sample_cache.lock().unwrap()[1] = Some(other.clone());
+    fixture.engine.pad_request_ids.lock().unwrap()[1] = 1;
+    fixture.engine.loaded_source_generations.lock().unwrap()[1] = (1, RATE);
+    fixture.engine.loaded_source_digests.lock().unwrap()[1] = Some("b".repeat(64));
+    fixture
+        .engine
+        .input_runtime_ownership
+        .publish_test_source(1, &other, RATE, 1);
+    fixture.mixer.load_sample(1, other);
+    fixture.mixer.set_pad_bpm(1, Some(80.0));
+    let other = input_runtime_binding::capture(&fixture.engine, 1)
+        .unwrap()
+        .unwrap();
+    let frame = fixture.transport.output_frame();
+    let beat = fixture.transport.beat_position_at_frame(frame).unwrap();
+    let position = fixture
+        .mixer
+        .voices
+        .iter()
+        .find(|voice| voice.active)
+        .unwrap()
+        .source_playback
+        .position();
+    fixture
+        .engine
+        .set_bpm_lock_with_binding(true, Some(&other))
+        .unwrap();
+    drain_bpm_fixture(&mut fixture);
+    let applied = fixture
+        .engine
+        .input_runtime_ownership
+        .global_rate_status
+        .read_bpm()
+        .unwrap()
+        .1;
+    assert!(applied.applied && applied.effective && applied.revision > blocked.revision);
+    assert_eq!(fixture.transport.master_period_seconds(), Some(0.75));
+    assert_eq!(
+        fixture
+            .engine
+            .input_runtime_ownership
+            .global_rate_status
+            .read()
+            .unwrap()
+            .effect
+            .effective
+            .period,
+        Some(0.75)
+    );
+    assert!((fixture.transport.beat_position_at_frame(frame).unwrap() - beat).abs() < 1e-12);
+    assert!(fixture.transport.bootstrap_reference().is_none());
+    assert_eq!(
+        fixture
+            .mixer
+            .voices
+            .iter()
+            .find(|voice| voice.active)
+            .unwrap()
+            .source_playback
+            .position(),
+        position
+    );
+}
+
+#[test]
+fn qualified_equal_on_reinitializes_same_content_new_accepted_period_and_same_period_is_noop() {
+    let mut fixture = fixed_bpm_reference_fixture();
+    let original = fixture.binding();
+    let key = original.binding.placement.unwrap().content_key().unwrap();
+    let timing = crate::audio_engine::constant_timing::l3_constant_timing_fixture::publish_synthetic_loaded_timing(
+        &fixture.engine, &fixture.producer, 0, 0.75);
+    fixture.process_next();
+    assert_eq!(timing.publication_status().unwrap(), "accepted");
+    let current = fixture.binding();
+    assert_eq!(current.binding.placement.unwrap().content_key(), Some(key));
+    assert_ne!(current.binding.accepted, original.binding.accepted);
+    let target = current.binding.accepted.unwrap().period_seconds;
+    assert!((target - 0.75).abs() < 1e-12);
+    let frame = fixture.transport.output_frame();
+    let beat = fixture.transport.beat_position_at_frame(frame).unwrap();
+    fixture
+        .engine
+        .set_bpm_lock_with_binding(true, Some(&current))
+        .unwrap();
+    drain_bpm_fixture(&mut fixture);
+    assert_eq!(fixture.transport.master_period_seconds(), Some(target));
+    assert!((fixture.transport.beat_position_at_frame(frame).unwrap() - beat).abs() < 1e-12);
+    assert!(fixture.transport.bootstrap_reference().is_none());
+
+    let before = fixture.transport;
+    let rate_before = fixture
+        .engine
+        .input_runtime_ownership
+        .global_rate_status
+        .read()
+        .unwrap()
+        .effect
+        .effective;
+    fixture
+        .engine
+        .set_bpm_lock_with_binding(true, Some(&fixture.binding()))
+        .unwrap();
+    drain_bpm_fixture(&mut fixture);
+    let effect = fixture
+        .engine
+        .input_runtime_ownership
+        .global_rate_status
+        .read_bpm()
+        .unwrap()
+        .1;
+    assert!(effect.applied && effect.effective);
+    assert!(fixture.transport.matches_clock_epoch(&before));
+    assert_eq!(
+        fixture
+            .engine
+            .input_runtime_ownership
+            .global_rate_status
+            .read()
+            .unwrap()
+            .effect
+            .effective,
+        rate_before
+    );
+}
+
+fn install_declared_retained_feed(fixture: &mut Fixture) {
+    use crate::audio_engine::native_history_permit::NativeHistoryContext;
+    use crate::audio_engine::pitch_intent::PitchIntent;
+    use crate::audio_engine::prepared_native_history::{
+        NativeAdapterState, RetainedNativeStartCut,
+    };
+    use crate::audio_engine::rubberband_backend::RubberBandLiveShifter;
+    use crate::audio_engine::source_feed_history::SourceFeedSnapshot;
+    use crate::audio_engine::stretch_processor::ProductiveSourceFeed;
+
+    const REQUEST: u64 = 0x5245_5441_494e;
+    let snapshot = fixture.mixer.capture_pitch_voice_snapshot(0).unwrap();
+    let logical = snapshot.playback;
+    let plan = snapshot.plan;
+    let sample = snapshot.sample.clone();
+    let accepted = snapshot.accepted;
+    let rate = snapshot.sample_rate_hz;
+    let channels = sample.channels;
+    assert_eq!(rate, RATE);
+    assert_eq!(channels, 1);
+    assert!(snapshot.stems.is_none());
+    let epoch_owner = fixture.engine.prepared_source_epoch(0).unwrap().clone();
+    let epoch = fixture.mixer.voices[0].stretch.preparation_epoch();
+    let permit = NativeHistoryContext {
+        id: 0,
+        ownership: &fixture.engine.input_runtime_ownership,
+        acknowledgements: &fixture.engine.current_timing_acknowledgements,
+        preparation_epoch: &epoch_owner,
+    }
+    .capture(&sample, rate, accepted)
+    .unwrap();
+    let target = fixture.transport.output_frame();
+    let pitch = PitchIntent::default();
+    let scale = pitch
+        .native_pitch_scale(logical.tempo_ratio(), true)
+        .unwrap();
+    let request = snapshot
+        .into_request(permit.clone(), pitch, true, target, REQUEST, epoch)
+        .unwrap();
+    let mut native = RubberBandLiveShifter::new(rate, channels).unwrap();
+    native.prepare_exact_pitch(scale).unwrap();
+    let history = native.source_history_frames(scale).unwrap();
+    let mut candidate = Box::new(NativeAdapterState::new(Some(native), channels));
+    // This fixed raw-stream coordinate exercises a real displaced feed. It is
+    // neither a calibration value nor a musical/ordinary-start alignment claim.
+    candidate
+        .prepare_retained_source_start_checked(
+            request,
+            Some(RetainedNativeStartCut {
+                history_output_frames: history,
+                discarded_raw_output_frames: history.checked_add(137).unwrap(),
+            }),
+        )
+        .unwrap();
+    let (actual, _) = candidate
+        .retained_start_feed(&logical, plan)
+        .unwrap()
+        .unwrap();
+    assert_ne!(actual.position(), logical.position());
+    let feed = ProductiveSourceFeed {
+        pitch_intent: pitch,
+        key_lock: true,
+        sample: &sample,
+        stems: None,
+        outgoing_stems: None,
+        sample_rate_hz: rate,
+        accepted,
+        plan,
+        playback: &logical,
+        permit: Some(&permit),
+        output_frame: Some(target),
+    };
+    let dsp_before = fixture.mixer.dsp_source_history_for_test(0).unwrap();
+    assert!(fixture.mixer.voices[0].stretch.adopt_prepared_pitch(
+        &mut candidate,
+        &feed,
+        epoch,
+        REQUEST,
+    ));
+    assert!(fixture.mixer.voices[0].stretch.has_retained_source_input());
+    assert_eq!(
+        fixture.mixer.voices[0].stretch.adopted_request_id(),
+        Some(REQUEST)
+    );
+    fixture.render(17);
+    let voice = &fixture.mixer.voices[0];
+    assert!(voice.stretch.has_retained_source_input());
+    assert_eq!(
+        voice.source_playback.position(),
+        logical.position_at(17).unwrap()
+    );
+    assert_eq!(
+        voice.stretch.productive_history().unwrap().next_position,
+        actual.position_at(17).unwrap()
+    );
+    assert_ne!(
+        voice.source_playback.position(),
+        voice.stretch.productive_history().unwrap().next_position
+    );
+    let productive = voice.stretch.productive_history().unwrap();
+    let mut reads = SourceFeedSnapshot::new();
+    assert!(voice.source_feed_history.capture_into(&mut reads));
+    let span = reads.spans().last().unwrap();
+    assert!(span.frames > 0);
+    assert_eq!(span.context.binding, productive.binding);
+    assert_eq!(span.plan.frame_pos, span.playback.position().frame);
+    assert_eq!(
+        span.playback.position_at(span.frames).unwrap(),
+        actual.position_at(17).unwrap()
+    );
+    assert_eq!(
+        span.playback.position_at(span.frames).unwrap(),
+        productive.next_position
+    );
+    // The filter consumes emitted Native output on the logical voice trajectory;
+    // the input journal above records the distinct, already processed source feed.
+    let dsp = fixture.mixer.dsp_source_history_for_test(0).unwrap();
+    assert_eq!(dsp.next_position, logical.position_at(17).unwrap());
+    assert_ne!(dsp.next_position, productive.next_position);
+    assert_eq!(dsp.binding, dsp_before.binding);
+    assert_eq!(dsp.domain, Some(plan.domain()));
+    assert_eq!(dsp.fed_output_frames, dsp_before.fed_output_frames + 17);
+}
+
+fn complete_native_history_refresh_fixture(declared_retained_feed: bool) -> Fixture {
+    let mut fixture = Fixture::with_source_identity(true);
+    fixture.engine.test_output_format = Some((RATE, 1));
+    fixture.mixer.set_bpm_lock(false);
+    fixture.mixer.set_pad_loop_region(0, 0.125, Some(1.75));
+    fixture.mixer.set_speed(0.73);
+    fixture.mixer.set_pad_key_lock(0, true);
+    let start = fixture
+        .engine
+        .capture_pad_start(0, 0.125, Some(1.75), 1.0, false, None, None)
+        .unwrap();
+    fixture.controls();
+    assert!(fixture.engine.publish_pad_start(&start, None).unwrap());
+    fixture.controls();
+    let before_wait = fixture.transport.output_frame();
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+    loop {
+        let runtime = fixture.mixer.pitch_runtime.as_mut().unwrap();
+        runtime.poll();
+        if runtime.has_ready_action(start.sequence()) {
+            break;
+        }
+        assert_ne!(start.state(), "rejected", "{:?}", start.reason());
+        assert!(
+            std::time::Instant::now() < deadline,
+            "original ordinary-start worker must become ready"
+        );
+        std::thread::sleep(std::time::Duration::from_millis(1));
+    }
+    assert_eq!(fixture.transport.output_frame(), before_wait);
+    let execution = start.execution_frame().unwrap();
+    fixture.render((execution - before_wait) as usize);
+    fixture.render(257);
+    assert_eq!(start.state(), "applied", "{:?}", start.reason());
+    assert_eq!(start.effective_frame(), Some(execution));
+    assert_eq!(
+        fixture.mixer.voices[0].stretch.adopted_request_id(),
+        Some(start.sequence())
+    );
+    assert!(!fixture.mixer.voices[0].stretch.has_retained_source_input());
+    assert!(
+        fixture.mixer.voices[0]
+            .stretch
+            .has_active_native_ownership()
+    );
+    assert_ne!(fixture.mixer.voices[0].stretch.native_state_address(), 0);
+    assert_ne!(
+        fixture.mixer.voices[0].stretch.pending_fifo_frames(),
+        (0, 0)
+    );
+    assert!(
+        fixture.mixer.voices[0]
+            .stretch
+            .productive_history()
+            .unwrap()
+            .fed_output_frames
+            > 0
+    );
+    let original = fixture.binding();
+    fixture
+        .engine
+        .set_bpm_lock_with_binding(true, Some(&original))
+        .unwrap();
+    drain_bpm_fixture(&mut fixture);
+    assert!(
+        fixture
+            .engine
+            .input_runtime_ownership
+            .global_rate_status
+            .read_bpm()
+            .unwrap()
+            .1
+            .applied
+    );
+    if declared_retained_feed {
+        install_declared_retained_feed(&mut fixture);
+    }
+    fixture.engine.pause_sample(0).unwrap();
+    drain_bpm_fixture(&mut fixture);
+    assert!(fixture.mixer.voices[0].active && fixture.mixer.voices[0].paused);
+    assert!(
+        fixture.mixer.voices[0]
+            .stretch
+            .has_active_native_ownership()
+    );
+    assert_eq!(
+        fixture.mixer.voices[0].stretch.has_retained_source_input(),
+        declared_retained_feed
+    );
+    assert!(fixture.mixer.voices[0].stretch.owns_pitch_contract(
+        crate::audio_engine::pitch_intent::PitchIntent::default(),
+        true,
+    ));
+    assert_ne!(fixture.mixer.voices[0].stretch.native_state_address(), 0);
+    assert_ne!(
+        fixture.mixer.voices[0].stretch.pending_fifo_frames(),
+        (0, 0)
+    );
+    assert!(
+        fixture.mixer.voices[0]
+            .stretch
+            .productive_history()
+            .unwrap()
+            .fed_output_frames
+            > 0
+    );
+    assert!(
+        fixture
+            .mixer
+            .dsp_source_history_for_test(0)
+            .unwrap()
+            .fed_output_frames
+            > 0
+    );
+    fixture
+}
+
+fn assert_productive_history_unchanged(
+    actual: crate::audio_engine::productive_source_history::ProductiveSourceHistory,
+    before: crate::audio_engine::productive_source_history::ProductiveSourceHistory,
+) {
+    assert_eq!(actual.binding, before.binding);
+    assert_eq!(actual.next_position, before.next_position);
+    assert_eq!(actual.domain, before.domain);
+    assert_eq!(actual.fed_output_frames, before.fed_output_frames);
+}
+
+#[test]
+fn qualified_rate_delayed_with_paused_productive_native_history_rejects_replaced_anchor_without_tuple_prefix()
+ {
+    let mut fixture = complete_native_history_refresh_fixture(false);
+    let native = fixture.mixer.voices[0].stretch.native_state_address();
+    let adopted = fixture.mixer.voices[0].stretch.adopted_request_id();
+    let epoch = fixture.mixer.voices[0].stretch.source_epoch_owner().clone();
+    let epoch_value = epoch.load(Ordering::Acquire);
+    let fifo = fixture.mixer.voices[0].stretch.pending_fifo_frames();
+    let playback = fixture.mixer.voices[0].source_playback;
+    let history = fixture.mixer.voices[0]
+        .stretch
+        .productive_history()
+        .unwrap();
+    let dsp = fixture.mixer.dsp_source_history_for_test(0).unwrap();
+    let tuple = fixture
+        .engine
+        .input_runtime_ownership
+        .global_rate_status
+        .read()
+        .unwrap()
+        .effect
+        .effective;
+    let timeline = fixture.transport;
+    qualified_rate(&mut fixture, Some(1.16), PERIOD / 1.16);
+    fixture
+        .engine
+        .input_runtime_ownership
+        .global_timing_publishing
+        .store(true, Ordering::Release);
+    fixture.parameters();
+    assert!(
+        fixture.mixer.has_pending_global_rate(),
+        "the original qualified tuple must remain held before effect"
+    );
+    fixture
+        .engine
+        .input_runtime_ownership
+        .global_timing_publishing
+        .store(false, Ordering::Release);
+    let replacement = source().with_complete_source(RATE);
+    fixture.engine.sample_cache.lock().unwrap()[0] = Some(replacement.clone());
+    fixture.engine.loaded_source_generations.lock().unwrap()[0] = (8, RATE);
+    fixture.engine.loaded_source_digests.lock().unwrap()[0] = Some("b".repeat(64));
+    fixture
+        .engine
+        .input_runtime_ownership
+        .publish_test_source(0, &replacement, RATE, 8);
+    drain_bpm_fixture(&mut fixture);
+    let effect = fixture
+        .engine
+        .input_runtime_ownership
+        .global_rate_status
+        .read()
+        .unwrap()
+        .effect;
+    assert_eq!(
+        effect.state,
+        crate::audio_engine::global_rate_status::RateState::Rejected
+    );
+    assert_eq!(
+        effect.error,
+        crate::audio_engine::global_rate_status::RateError::SourceChanged
+    );
+    assert_eq!(effect.effective, tuple);
+    assert!(fixture.transport.matches_clock_epoch(&timeline));
+    let voice = &fixture.mixer.voices[0];
+    assert!(voice.active && voice.paused && voice.stretch.has_active_native_ownership());
+    assert!(!voice.stretch.has_retained_source_input());
+    assert_eq!(voice.stretch.native_state_address(), native);
+    assert_eq!(voice.stretch.adopted_request_id(), adopted);
+    assert_eq!(epoch.load(Ordering::Acquire), epoch_value);
+    assert_eq!(voice.stretch.pending_fifo_frames(), fifo);
+    assert!(voice.source_playback.matches_exact(&playback));
+    assert_productive_history_unchanged(voice.stretch.productive_history().unwrap(), history);
+    assert_productive_history_unchanged(fixture.mixer.dsp_source_history_for_test(0).unwrap(), dsp);
+}
+
+#[test]
+fn master_and_loop_cut_preserve_productive_native_and_displaced_feed_owners_without_epoch_or_clock_prefix()
+ {
+    for declared_retained_feed in [false, true] {
+        let mut fixture = complete_native_history_refresh_fixture(declared_retained_feed);
+        let timing = crate::audio_engine::constant_timing::l3_constant_timing_fixture::publish_synthetic_loaded_timing(
+        &fixture.engine, &fixture.producer, 0, 0.75);
+        fixture.process_next();
+        assert_eq!(timing.publication_status().unwrap(), "accepted");
+        let current = fixture.binding();
+        let period = current.binding.accepted.unwrap().period_seconds / 0.73;
+        assert_ne!(fixture.transport.master_period_seconds(), Some(period));
+        let next_start = 0.75;
+        assert!(
+            fixture.mixer.voices[0].source_playback.position().frame
+                < (next_start * f64::from(RATE)) as usize
+        );
+        assert!(
+            fixture
+                .mixer
+                .loop_intent_context_available(0, next_start, Some(1.75))
+        );
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+        while fixture
+            .mixer
+            .prepare_loop_edit(0, next_start, Some(1.75))
+            .is_none()
+            && std::time::Instant::now() < deadline
+        {
+            std::thread::sleep(std::time::Duration::from_millis(1));
+        }
+        let edit = fixture
+            .mixer
+            .prepare_loop_edit(0, next_start, Some(1.75))
+            .unwrap();
+        assert!(
+            !fixture.mixer.refresh_combined_history_ready(edit, period),
+            "the actual Native/FIFO history owner must fence this physical cut plus new master"
+        );
+        let ticket = accepted_timing_refresh::enqueue(
+            &fixture.engine,
+            &fixture.producer,
+            &current,
+            next_start,
+            Some(1.75),
+            Some(period),
+        )
+        .unwrap();
+        fixture.process_next();
+        fixture.parameters();
+        let first_frame = fixture.transport.output_frame() + 1;
+        let event = fixture
+            .scheduler
+            .pop_due_through(fixture.transport.output_frame(), first_frame)
+            .unwrap();
+        let ScheduledCommand::RefreshAcceptedTiming(ref payload) = event.command else {
+            panic!("original scheduled refresh required")
+        };
+        let owner = Arc::downgrade(payload);
+        let mut command = event.command;
+        let native = fixture.mixer.voices[0].stretch.native_state_address();
+        let adopted = fixture.mixer.voices[0].stretch.adopted_request_id();
+        let epoch = fixture.mixer.voices[0].stretch.source_epoch_owner().clone();
+        let epoch_value = epoch.load(Ordering::Acquire);
+        let fifo = fixture.mixer.voices[0].stretch.pending_fifo_frames();
+        let history = fixture.mixer.voices[0]
+            .stretch
+            .productive_history()
+            .unwrap();
+        let dsp = fixture.mixer.dsp_source_history_for_test(0).unwrap();
+        let playback = fixture.mixer.voices[0].source_playback;
+        let loops = fixture.mixer.loop_region_frames(0);
+        let timeline = fixture.transport;
+        let tuple = fixture
+            .engine
+            .input_runtime_ownership
+            .global_rate_status
+            .read()
+            .unwrap()
+            .effect
+            .effective;
+        let key = current.binding.placement.unwrap().content_key().unwrap();
+        let source_control = fixture.mixer.source_control_revision(key).unwrap();
+        for frame in [first_frame, first_frame + 17] {
+            let result = execute_scheduled_command(
+                &mut fixture.mixer,
+                &mut fixture.transport,
+                frame,
+                command,
+                &mut fixture.messages,
+                &mut ImmediateAudioBufferRetirement,
+            );
+            let crate::audio_engine::audio_stream::ScheduledExecution::Pending(next) = result
+            else {
+                panic!("productive history pressure must retain pending refresh")
+            };
+            let ScheduledCommand::RefreshAcceptedTiming(ref payload) = next else {
+                panic!("same original refresh required")
+            };
+            assert!(Arc::ptr_eq(payload, &owner.upgrade().unwrap()));
+            command = next;
+            assert_eq!(ticket.publication_status(), "pending");
+            assert_eq!(fixture.mixer.loop_region_frames(0), loops);
+            assert!(fixture.transport.matches_clock_epoch(&timeline));
+            assert_eq!(
+                fixture
+                    .engine
+                    .input_runtime_ownership
+                    .global_rate_status
+                    .read()
+                    .unwrap()
+                    .effect
+                    .effective,
+                tuple
+            );
+            assert_eq!(
+                fixture.mixer.source_control_revision(key).unwrap(),
+                source_control
+            );
+            let voice = &fixture.mixer.voices[0];
+            assert!(voice.active && voice.paused && voice.stretch.has_active_native_ownership());
+            assert_eq!(
+                voice.stretch.has_retained_source_input(),
+                declared_retained_feed
+            );
+            assert_eq!(voice.stretch.native_state_address(), native);
+            assert_eq!(voice.stretch.adopted_request_id(), adopted);
+            assert_eq!(epoch.load(Ordering::Acquire), epoch_value);
+            assert_eq!(voice.stretch.pending_fifo_frames(), fifo);
+            assert!(voice.source_playback.matches_exact(&playback));
+            assert_productive_history_unchanged(
+                voice.stretch.productive_history().unwrap(),
+                history,
+            );
+            assert_productive_history_unchanged(
+                fixture.mixer.dsp_source_history_for_test(0).unwrap(),
+                dsp,
+            );
+        }
+        fixture.engine.cancel_pad_launches(0).unwrap();
+        let result = execute_scheduled_command(
+            &mut fixture.mixer,
+            &mut fixture.transport,
+            first_frame + 31,
+            command,
+            &mut fixture.messages,
+            &mut ImmediateAudioBufferRetirement,
+        );
+        assert!(matches!(
+            result,
+            crate::audio_engine::audio_stream::ScheduledExecution::Complete
+        ));
+        assert_eq!(
+            ticket.publication_status(),
+            "rejected",
+            "the original explicit cancellation must settle the held owner"
+        );
+        assert_eq!(fixture.mixer.loop_region_frames(0), loops);
+        assert!(fixture.transport.matches_clock_epoch(&timeline));
+        assert_eq!(
+            fixture
+                .engine
+                .input_runtime_ownership
+                .global_rate_status
+                .read()
+                .unwrap()
+                .effect
+                .effective,
+            tuple
+        );
+    }
+}
+
+#[test]
+fn qualified_master_only_after_terminal_unqualified_speed_rejection_uses_actual_speed() {
+    let mut fixture = fixed_bpm_reference_fixture();
+    fixture.engine.set_pad_timing_intent(0, "manual").unwrap();
+    drain_bpm_fixture(&mut fixture);
+    fixture.mixer.set_pad_bpm(0, None);
+    let current = fixture.binding();
+    assert!(current.current() && current.available() && current.binding.accepted.is_none());
+    fixture.global_parameter(ControlParameterMessage::SetSpeed(1.16));
+    drain_bpm_fixture(&mut fixture);
+    let rejected = fixture
+        .engine
+        .input_runtime_ownership
+        .global_rate_status
+        .read()
+        .unwrap();
+    assert_eq!(
+        rejected.effect.state,
+        crate::audio_engine::global_rate_status::RateState::Rejected
+    );
+    assert_eq!(
+        rejected.effect.error,
+        crate::audio_engine::global_rate_status::RateError::HistoryUnavailable
+    );
+    assert_eq!(rejected.effect.requested.speed, 1.16);
+    assert_eq!(rejected.effect.effective.speed, 1.0);
+    assert!(!fixture.mixer.has_pending_global_rate());
+    let (_, bpm) = fixture
+        .engine
+        .input_runtime_ownership
+        .global_rate_status
+        .read_bpm()
+        .unwrap();
+    assert!(bpm.applied && bpm.effective);
+    // Restoring a manual source period has no global-rate observation side effect.
+    fixture.mixer.set_pad_bpm(0, Some(80.0));
+    let before = fixture.transport;
+    qualified_rate(&mut fixture, None, 0.75);
+    drain_bpm_fixture(&mut fixture);
+    let applied = fixture
+        .engine
+        .input_runtime_ownership
+        .global_rate_status
+        .read()
+        .unwrap();
+    assert_eq!(
+        applied.effect.state,
+        crate::audio_engine::global_rate_status::RateState::Applied
+    );
+    assert_eq!(applied.effect.requested.speed, 1.0);
+    assert_eq!(applied.effect.effective.speed, 1.0);
+    assert_eq!(applied.effect.effective.period, Some(0.75));
+    assert_eq!(fixture.transport.master_period_seconds(), Some(0.75));
+    assert_eq!(fixture.transport.output_frame(), before.output_frame());
+    assert_eq!(
+        fixture.transport.bootstrap_reference(),
+        before.bootstrap_reference()
+    );
+}
+
+#[test]
+fn master_refresh_real_callback_cas_retry_keeps_same_owner_and_applies_at_second_callback_frame() {
+    let mut fixture = Fixture::new();
+    fixture.global_parameter(ControlParameterMessage::SetMasterPeriod(0.75));
+    fixture.controls();
+    fixture.parameters();
+    assert_eq!(fixture.transport.master_period_seconds(), Some(0.75));
+    let before = fixture.state();
+    let ticket = fixture.refresh(Some(PERIOD));
+    let message = fixture.consumer.pop().unwrap();
+    let ControlMessage::RefreshAcceptedTiming(ref payload) = message else {
+        panic!("original refresh message required")
+    };
+    let original = Arc::downgrade(payload);
+    fixture.apply(message, &mut ImmediateAudioBufferRetirement);
+    fixture.controls();
+    fixture.parameters();
+    let revision = fixture
+        .engine
+        .global_timing_revision
+        .load(Ordering::Acquire);
+    assert!(fixture.mixer.global_drains_claimed(revision));
+    let key = fixture
+        .binding()
+        .binding
+        .placement
+        .unwrap()
+        .content_key()
+        .unwrap();
+    let control = fixture.mixer.source_control_revision(key).unwrap();
+    let ownership = fixture.engine.input_runtime_ownership.clone();
+    ownership
+        .global_timing_publishing
+        .store(true, Ordering::Release);
+    fixture.render(2);
+    assert_eq!(ticket.publication_status(), "pending");
+    assert_eq!(fixture.state(), before);
+    assert_eq!(fixture.mixer.source_control_revision(key).unwrap(), control);
+    let deferred = fixture
+        .scheduler
+        .deferred_due()
+        .expect("first real callback must retain its original due event");
+    let ScheduledCommand::RefreshAcceptedTiming(ref payload) = deferred.command else {
+        panic!("same original refresh required")
+    };
+    assert!(Arc::ptr_eq(payload, &original.upgrade().unwrap()));
+    assert_eq!(deferred.execution_frame, 1);
+    assert!(fixture.consumer.is_empty() && fixture.mixer.deferred_control().is_none());
+    ownership
+        .global_timing_publishing
+        .store(false, Ordering::Release);
+    let retry_frame = fixture.transport.output_frame();
+    assert_eq!(retry_frame, 2);
+    let beat = fixture
+        .transport
+        .beat_position_at_frame(retry_frame)
+        .unwrap();
+    fixture.controls();
+    assert_eq!(ticket.publication_status(), "accepted");
+    assert!(ticket.is_current());
+    assert!(fixture.scheduler.deferred_due().is_none());
+    assert_eq!(fixture.transport.output_frame(), retry_frame);
+    assert_eq!(fixture.state(), ((1_000, Some(14_000)), Some(PERIOD)));
+    assert!(
+        (fixture
+            .transport
+            .beat_position_at_frame(retry_frame)
+            .unwrap()
+            - beat)
+            .abs()
+            < 1e-12
+    );
+    assert!(fixture.mixer.global_drains_claimed(revision));
+    assert!(
+        original.upgrade().is_none(),
+        "only the settled original may retire after the second callback effect"
+    );
+}
+
+#[test]
+fn master_refresh_deferred_retry_cannot_borrow_completed_drain_when_same_revision_ping_is_unread() {
+    let mut fixture = Fixture::new();
+    fixture.global_parameter(ControlParameterMessage::SetMasterPeriod(0.75));
+    fixture.controls();
+    fixture.parameters();
+    let before = fixture.state();
+    let ticket = fixture.refresh(Some(PERIOD));
+    fixture.controls();
+    fixture.parameters();
+    let ownership = fixture.engine.input_runtime_ownership.clone();
+    let revision = fixture
+        .engine
+        .global_timing_revision
+        .load(Ordering::Acquire);
+    assert!(fixture.mixer.global_drains_claimed(revision));
+    ownership
+        .global_timing_publishing
+        .store(true, Ordering::Release);
+    fixture.render(2);
+    assert_eq!(ticket.publication_status(), "pending");
+    assert!(fixture.scheduler.deferred_due().is_some());
+    fixture
+        .producer
+        .lock()
+        .unwrap()
+        .push(ControlMessage::Ping())
+        .unwrap();
+    assert_eq!(
+        fixture
+            .engine
+            .global_timing_revision
+            .load(Ordering::Acquire),
+        revision
+    );
+    assert!(!fixture.consumer.is_empty());
+    ownership
+        .global_timing_publishing
+        .store(false, Ordering::Release);
+    assert_eq!(
+        fixture.controls(),
+        1,
+        "the unread original Ping must progress after the stale drain basis rejects refresh"
+    );
+    assert_eq!(ticket.publication_status(), "rejected");
+    assert!(!ticket.is_current());
+    assert_eq!(fixture.state(), before);
+    assert!(fixture.consumer.is_empty());
+    assert!(fixture.mixer.deferred_control().is_none());
+    assert!(fixture.scheduler.deferred_due().is_none());
+    assert!(fixture.mixer.global_drains_claimed(revision));
+}
+
+#[test]
+fn master_refresh_competing_rate_rejects_only_refresh_and_same_foreign_receipt_later_applies() {
+    use crate::audio_engine::global_rate_status::{RateError, RateState};
+    let mut fixture = Fixture::new();
+    let before = fixture.state();
+    fixture.global_parameter(ControlParameterMessage::SetMasterPeriod(0.75));
+    let ticket = fixture.refresh(Some(PERIOD));
+    fixture.controls();
+    let ownership = fixture.engine.input_runtime_ownership.clone();
+    ownership
+        .global_timing_publishing
+        .store(true, Ordering::Release);
+    fixture.parameters();
+    let preparing = ownership.global_rate_status.read().unwrap();
+    assert_eq!(preparing.effect.state, RateState::Preparing);
+    assert_eq!(preparing.effect.error, RateError::None);
+    assert_eq!(preparing.effect.requested.period, Some(0.75));
+    assert!(fixture.mixer.has_pending_global_rate());
+    fixture.render(2);
+    assert_eq!(ticket.publication_status(), "rejected");
+    assert!(!ticket.is_current());
+    assert_eq!(fixture.state(), before);
+    assert!(fixture.scheduler.deferred_due().is_none());
+    let held = ownership.global_rate_status.read().unwrap();
+    assert_eq!(held.effect.revision, preparing.effect.revision);
+    assert_eq!(held.effect.state, RateState::Preparing);
+    assert_eq!(held.effect.error, RateError::None);
+    assert_eq!(held.effect.effective, preparing.effect.effective);
+    assert!(fixture.mixer.has_pending_global_rate());
+    ownership
+        .global_timing_publishing
+        .store(false, Ordering::Release);
+    fixture.controls();
+    fixture.parameters();
+    fixture.render(0);
+    let applied = ownership.global_rate_status.read().unwrap();
+    assert_eq!(applied.request_revision, preparing.request_revision);
+    assert_eq!(applied.effect.revision, preparing.effect.revision);
+    assert_eq!(applied.effect.state, RateState::Applied);
+    assert_eq!(applied.effect.error, RateError::None);
+    assert_eq!(applied.effect.execution_frame, Some(2));
+    assert_eq!(applied.effect.effective.period, Some(0.75));
+    assert_eq!(fixture.transport.master_period_seconds(), Some(0.75));
+    assert_eq!(fixture.mixer.loop_region_frames(0), before.0);
+    assert!(!fixture.mixer.has_pending_global_rate());
+    assert_eq!(ticket.publication_status(), "rejected");
 }

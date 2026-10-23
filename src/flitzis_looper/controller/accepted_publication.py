@@ -23,6 +23,7 @@ if TYPE_CHECKING:
 
 DEFAULT_CONSTANT_TIMING_PCM_LIMIT_BYTES = 512 * 1024 * 1024
 MAX_CONSTANT_TIMING_PCM_LIMIT_BYTES = 1024 * 1024 * 1024
+ACCEPTED_REFRESH_SIGNATURE_LENGTH = 19
 
 
 def validate_constant_timing_pcm_limit(value: object) -> int:
@@ -363,13 +364,20 @@ class AcceptedTimingController:
             if not self._native_placement_pending():
                 self._waiting_refresh.pop(sample_id)
             return
+        master_period = None
+        if (
+            self._transport.global_params._bpm_lock_master_ready()
+            and self._session.bpm_lock_anchor_pad_id == sample_id
+        ):
+            speed = self._transport.global_params._accepted_refresh_speed()
+            if speed is None:
+                # Keep this same explicit request under its existing owner. A
+                # queued/unobserved rate is not permission to lose its master
+                # refresh or to substitute the persisted requested multiplier.
+                return
+            master_period = snapshot.accepted_timing.period_seconds / speed
         start_s, end_s = self._transport.loop._effective_pad_loop_region(
             sample_id, timing=snapshot.accepted_timing
-        )
-        master_period = (
-            snapshot.accepted_timing.period_seconds / self._project.speed
-            if self._project.bpm_lock and self._session.bpm_lock_anchor_pad_id == sample_id
-            else None
         )
         grid_offset = self._transport.loop._clamp_grid_offset_samples(
             sample_id,
@@ -416,11 +424,7 @@ class AcceptedTimingController:
         self._refreshes.pop(sample_id)
         self._project.pad_grid_offset_samples[sample_id] = refresh.grid_offset_samples
         if refresh.master_period_seconds is not None:
-            timing = refresh.request.timing
-            self._session.master_period_seconds = refresh.master_period_seconds
-            self._session.master_bpm = 60.0 / refresh.master_period_seconds
-            self._session.bpm_lock_anchor_bpm = timing.bpm
-            self._session.bpm_lock_anchor_revision = timing.accepted_revision
+            self._transport.global_params._poll_global_rate_status()
         self._session.sample_analysis_errors.pop(sample_id, None)
         self._transport._mark_project_changed()
         for callback in refresh.request.callbacks:
@@ -463,6 +467,22 @@ class AcceptedTimingController:
         )
 
     def _control_signature(self, sample_id: int) -> tuple[object, ...]:
+        policy = self._project.global_timing_policy
+        sync = self._project.pad_source_sync_intent[sample_id]
+        intent = self._project.pad_source_beatmap_intent[sample_id]
+        selected = None if intent is None else intent.selected
+        map_signature = (
+            None if intent is None else intent.revision,
+            None
+            if selected is None
+            else (
+                selected.reference,
+                selected.bytes,
+                selected.sha256,
+                selected.map_revision,
+                selected.decoder_identity,
+            ),
+        )
         return tuple(
             _scalar_signature(value)
             for value in (
@@ -477,6 +497,13 @@ class AcceptedTimingController:
                 self._project.pad_grid_offset_samples[sample_id],
                 self._project.speed,
                 self._project.bpm_lock,
+                (policy.sync, policy.realtime_bpm, policy.revision),
+                self._project.multi_loop,
+                self._project.timing_policy_recovery,
+                self._project.resolve_bpm_lock(),
+                (sync.requested, sync.revision),
+                map_signature,
+                self._project.resolve_pad_realtime_bpm(sample_id),
                 self._session.bpm_lock_anchor_pad_id,
             )
         )

@@ -583,6 +583,7 @@ enum CandidateLifecycle {
     QueuedUnloadCleanup,
     FrozenUnload,
     FrozenResumeReaders,
+    FrozenPausedUnload,
 }
 
 #[derive(Clone, Copy)]
@@ -827,9 +828,10 @@ if selected_v1:
     assert first.is_current() and first.effective_mode_status() == 'effective'
 else:
     assert controller.stem_residency_status(0).effective is None
+previous_master = session.master_period_seconds
 assert transport.global_params.set_effective_display_bpm(210.0)
 assert project.speed == accepted_period * (210.0 / 60)
-assert session.master_period_seconds == accepted_period / project.speed
+assert session.master_period_seconds == previous_master
 assert abs(transport.global_params.effective_display_bpm() - 210.0) < 1e-10
 assert transport.bpm.current_timing(0) == timing_before_bpm
 assert previous_control.ticket.is_current()
@@ -841,20 +843,47 @@ assert not session.stem_generation_errors, session.stem_generation_errors
     let ratio = accepted.period_seconds / master;
     let rate_revision = original_public_rate_revision(locals);
     assert!(rate_revision > revision);
-    assert!(engine.global_timing_revision.load(Ordering::Acquire) > rate_revision);
+    assert_eq!(
+        engine.global_timing_revision.load(Ordering::Acquire),
+        rate_revision
+    );
     assert!(
         matches!(parameters.peek(), Ok(ControlParameterMessage::SetRateIntent {
-        revision, speed: Some(actual), period_seconds: Some(period_seconds)
+        revision, speed: Some(actual), period_seconds: Some(period_seconds), ..
     }) if *revision == rate_revision && actual.to_bits() == speed.to_bits()
         && period_seconds.to_bits() == master.to_bits())
     );
-    assert_eq!(playback.drain(consumer), 1, "own public BPM Bootstrap");
+    assert_eq!(
+        playback.drain(consumer),
+        0,
+        "qualified rate reuses the existing bootstrap"
+    );
     crate::audio_engine::audio_stream::drain_parameter_messages(
         parameters,
         &mut playback.callback.mixer,
         &mut playback.callback.transport,
     );
     assert!(consumer.is_empty() && parameters.is_empty());
+    let applied = engine
+        .input_runtime_ownership
+        .global_rate_status
+        .read()
+        .unwrap();
+    assert_eq!(
+        (applied.request_revision, applied.effect.revision),
+        (rate_revision, rate_revision)
+    );
+    assert_eq!(
+        applied.effect.state,
+        crate::audio_engine::global_rate_status::RateState::Applied
+    );
+    assert_eq!(applied.effect.effective.speed, speed);
+    assert_eq!(applied.effect.effective.period, Some(master));
+    assert_eq!(applied.effect.execution_frame, Some(playback.frame));
+    controller_python(
+        locals,
+        "transport.global_params._poll_global_rate_status()\ntransport.global_params.poll_bpm_lock_application()\nassert session.master_period_seconds == accepted_period / project.speed",
+    );
     assert_eq!(
         playback.callback.transport.master_period_seconds(),
         Some(master)
@@ -967,9 +996,10 @@ bpm_registration = bpm_selection.ticket
 bpm_error = 'Committed stem residency or mode ownership changed'
 assert failed_bpm.is_current() and not failed_bpm.claimed()
 assert failed_bpm.effective_mode_status() == 'waiting'
+previous_master = session.master_period_seconds
 assert transport.global_params.set_effective_display_bpm(162.0)
 assert project.speed == accepted_period * (162.0 / 60)
-assert session.master_period_seconds == accepted_period / project.speed
+assert session.master_period_seconds == previous_master
 assert abs(transport.global_params.effective_display_bpm() - 162.0) < 1e-10
 assert transport.bpm.current_timing(0) == timing_before_bpm
 assert live.attempt is bpm_selection and first.is_current()
@@ -980,10 +1010,13 @@ assert live.attempt is bpm_selection and first.is_current()
     let ratio = accepted.period_seconds / master;
     let rate_revision = original_public_rate_revision(locals);
     assert!(rate_revision > revision);
-    assert!(engine.global_timing_revision.load(Ordering::Acquire) > rate_revision);
+    assert_eq!(
+        engine.global_timing_revision.load(Ordering::Acquire),
+        rate_revision
+    );
     assert!(
         matches!(parameters.peek(), Ok(ControlParameterMessage::SetRateIntent {
-        revision, speed: Some(actual), period_seconds: Some(period_seconds)
+        revision, speed: Some(actual), period_seconds: Some(period_seconds), ..
     }) if *revision == rate_revision && actual.to_bits() == speed.to_bits()
         && period_seconds.to_bits() == master.to_bits())
     );
@@ -1003,7 +1036,7 @@ assert live.attempt is bpm_selection and first.is_current()
         Some(60.0 / old_master)
     );
     // The real regular callback checks controls first. Its established three-slot
-    // capacity gate retains the actual front Adopt and the following Bootstrap.
+    // capacity gate retains the actual original front Adopt before any rate effect.
     playback.callback.retirement.slots = 2;
     assert_eq!(playback.drain(consumer), 0);
     assert!(
@@ -1019,8 +1052,21 @@ assert live.attempt is bpm_selection and first.is_current()
     assert_eq!(playback.callback.transport.beat_position().unwrap(), beat);
     assert_eq!(
         playback.callback.transport.master_period_seconds(),
-        Some(master)
+        Some(old_master)
     );
+    let preparing = engine
+        .input_runtime_ownership
+        .global_rate_status
+        .read()
+        .unwrap();
+    assert_eq!(preparing.request_revision, rate_revision);
+    assert_eq!(preparing.effect.revision, rate_revision);
+    assert_eq!(
+        preparing.effect.state,
+        crate::audio_engine::global_rate_status::RateState::Preparing
+    );
+    assert_eq!(preparing.effect.effective.period, Some(old_master));
+    assert_eq!(preparing.effect.execution_frame, None);
     let changed = voice(&playback.callback.mixer);
     assert!(
         changed.source_playback.matches_exact(&clock),
@@ -1029,7 +1075,10 @@ assert live.attempt is bpm_selection and first.is_current()
     assert_eq!(changed.generation, generation);
     assert_eq!(changed.stretch.native_state_address(), native);
     assert_eq!(changed.stretch.pending_fifo_frames(), fifo);
-    assert!(changed.stretch.source_epoch_owner().load(Ordering::Acquire) > epoch);
+    assert_eq!(
+        changed.stretch.source_epoch_owner().load(Ordering::Acquire),
+        epoch
+    );
     if let Some(history) = history {
         let changed_history = changed.stretch.productive_history().unwrap();
         assert_eq!(changed_history.binding, history.binding);
@@ -1038,27 +1087,13 @@ assert live.attempt is bpm_selection and first.is_current()
     } else {
         assert!(changed.stretch.productive_history().is_none());
     }
-    let start = playback.source_frame;
-    // Keep the history and its consumption anchor together: the later V2 claim
-    // snapshot is taken after an unpaused one-frame probe and shadows `history`.
-    let rate_history = voice(&playback.callback.mixer).stretch.productive_history();
-    let mut other = ControllerRateLedger::new(
-        accepted.period_seconds * (150.0 / 60.0),
-        (LOOP_END - LOOP_START) as f64,
-    );
-    other.change(start, speed);
-    playback.rate_ledger.as_mut().unwrap().change(start, ratio);
-    playback.ratio = ratio;
-    for reference in [&mut playback.reference, &mut playback.full_mix] {
-        reference.set_speed(speed);
-        reference.set_master_period(master);
-    }
+    let waiting_source_frame = playback.source_frame;
     if paused {
         // Silent callback time advances; the old applied source clock and both
         // independent PCM/Native/EQ oracles consume no frames before Resume.
         for frames in [1, 127, 384, 512, 777] {
             playback.render_paused(frames);
-            assert_eq!(playback.source_frame, start);
+            assert_eq!(playback.source_frame, waiting_source_frame);
             assert!(
                 voice(&playback.callback.mixer)
                     .source_playback
@@ -1087,6 +1122,14 @@ assert live.attempt is bpm_selection and first.is_current()
     let clock = before.source_playback;
     let fifo = before.stretch.pending_fifo_frames();
     let history = before.stretch.productive_history();
+    assert_eq!(
+        before.stretch.source_epoch_owner().load(Ordering::Acquire),
+        epoch
+    );
+    assert_eq!(
+        playback.callback.transport.master_period_seconds(),
+        Some(old_master)
+    );
     assert_eq!(history.is_some(), key_lock);
     let dsp = playback
         .callback
@@ -1097,8 +1140,8 @@ assert live.attempt is bpm_selection and first.is_current()
     playback.callback.retirement.slots = usize::MAX;
     assert_eq!(
         playback.drain(consumer),
-        2,
-        "unchanged stale Adopt then public Bootstrap"
+        1,
+        "the original stale Adopt rejects before the waiting qualified rate"
     );
     assert!(consumer.is_empty());
     let after = voice(&playback.callback.mixer);
@@ -1173,6 +1216,87 @@ for _ in range(16):
 "#,
     );
     assert!(consumer.is_empty(), "polling cannot retry V2");
+    // The original stale operation has retired; both real drains may now admit
+    // the qualified rate effect, without changing either original PCM owner.
+    crate::audio_engine::audio_stream::drain_parameter_messages(
+        parameters,
+        &mut playback.callback.mixer,
+        &mut playback.callback.transport,
+    );
+    let effect_frame = playback.callback.transport.output_frame();
+    let effect_beat = playback.callback.transport.beat_position().unwrap();
+    playback.callback.mixer.service_global_rate(
+        effect_frame,
+        &mut playback.callback.transport,
+        &mut playback.callback.retirement,
+    );
+    let applied = engine
+        .input_runtime_ownership
+        .global_rate_status
+        .read()
+        .unwrap();
+    assert_eq!(
+        (applied.request_revision, applied.effect.revision),
+        (rate_revision, rate_revision)
+    );
+    assert_eq!(
+        applied.effect.state,
+        crate::audio_engine::global_rate_status::RateState::Applied
+    );
+    assert_eq!(applied.effect.effective.speed, speed);
+    assert_eq!(applied.effect.effective.period, Some(master));
+    assert_eq!(applied.effect.execution_frame, Some(effect_frame));
+    assert_eq!(playback.callback.transport.output_frame(), effect_frame);
+    assert_eq!(
+        playback.callback.transport.beat_position(),
+        Some(effect_beat)
+    );
+    assert!(playback.callback.transport.bootstrap_reference().is_none());
+    let applied_voice = voice(&playback.callback.mixer);
+    assert!(applied_voice.source_playback.matches_exact(&clock));
+    assert_eq!(applied_voice.generation, generation);
+    assert_eq!(applied_voice.stretch.native_state_address(), native);
+    assert_eq!(applied_voice.stretch.pending_fifo_frames(), fifo);
+    assert!(
+        applied_voice
+            .stretch
+            .source_epoch_owner()
+            .load(Ordering::Acquire)
+            > epoch
+    );
+    if let Some(history) = history {
+        let actual = applied_voice.stretch.productive_history().unwrap();
+        assert_eq!(actual.binding, history.binding);
+        assert_eq!(actual.next_position, history.next_position);
+        assert_eq!(actual.fed_output_frames, history.fed_output_frames);
+    } else {
+        assert!(applied_voice.stretch.productive_history().is_none());
+    }
+    let effect_dsp = playback
+        .callback
+        .mixer
+        .dsp_source_history_for_test(0)
+        .unwrap();
+    assert_eq!(effect_dsp.binding, dsp.binding);
+    assert_eq!(effect_dsp.next_position, dsp.next_position);
+    assert_eq!(effect_dsp.fed_output_frames, dsp.fed_output_frames);
+    controller_python(
+        locals,
+        "transport.global_params._poll_global_rate_status()\ntransport.global_params.poll_bpm_lock_application()\nassert session.master_period_seconds == accepted_period / project.speed",
+    );
+    let start = playback.source_frame;
+    let rate_history = applied_voice.stretch.productive_history();
+    let mut other = ControllerRateLedger::new(
+        accepted.period_seconds * (150.0 / 60.0),
+        (LOOP_END - LOOP_START) as f64,
+    );
+    other.change(start, speed);
+    playback.rate_ledger.as_mut().unwrap().change(start, ratio);
+    playback.ratio = ratio;
+    for reference in [&mut playback.reference, &mut playback.full_mix] {
+        reference.set_speed(speed);
+        reference.set_master_period(master);
+    }
     if paused {
         let frozen_frame = playback.source_frame;
         controller_python(
@@ -1182,14 +1306,21 @@ assert session.paused_sample_ids == {0, 215}
 assert live.blocked and first.effective_mode_status() == 'effective'
 transport.playback.resume_pad(0)
 transport.playback.resume_pad(215)
-assert not session.paused_sample_ids
+assert session.paused_sample_ids == {0, 215}
+assert not any(transport.playback._pause_intent.requested_paused(pad) for pad in (0, 215))
 assert session.stem_generation_errors == {0: bpm_error}
 "#,
         );
+        remember_public_pause_admissions(locals, false);
         assert_eq!(
             playback.drain(consumer),
             2,
             "actual public Resume after rejection"
+        );
+        assert_public_pause_effect(locals);
+        controller_python(
+            locals,
+            "transport.playback.poll_pause_observations()\nassert not session.paused_sample_ids",
         );
         for reference in [&mut playback.reference, &mut playback.full_mix] {
             reference.resume_sample_at_output_frame(0, playback.frame);
@@ -1296,13 +1427,14 @@ fn public_bpm_before_voice_birth(
 from flitzis_looper.controller.transport import TransportController
 class BpmTransportAudio:
     def __getattr__(self, name):
-        if name in {'current_constant_timing', 'set_bpm_lock', 'bootstrap_transport_from_pad',
+        if name in {'current_constant_timing', 'current_input_runtime_pad_binding', 'global_rate_status', 'set_bpm_lock', 'bpm_lock_status', 'bootstrap_transport_from_pad',
                     'set_master_period', 'set_speed_and_master_period'}:
             return getattr(bpm_audio, name)
         return getattr(playback_audio, name)
 project.selected_pad = 0
 project.speed = 1.0
 project.bpm_lock = False
+project.multi_loop = True
 project.manual_bpm[0] = None
 project.pad_loop_auto[0] = False
 project.pad_loop_start_s[0] = (declared_loop_start if explicit else 17) / fixture['rate']
@@ -1313,35 +1445,37 @@ assert timing_before_bpm is not None and timing_before_bpm.accepted_revision is 
 assert timing_before_bpm.period_seconds == accepted_period
 transport.global_params.set_bpm_lock(enabled=True)
 assert project.bpm_lock and session.bpm_lock_anchor_pad_id == 0
-assert session.master_period_seconds == accepted_period
+assert session.master_period_seconds is None
 "#,
     );
     assert!(!callback.mixer.voices.iter().any(|voice| voice.active));
-    assert!(matches!(
-        consumer.peek(),
-        Ok(ControlMessage::SetBpmLock(true))
-    ));
-    let master_revision = original_public_rate_revision(locals);
-    assert!(master_revision > 0);
-    assert!(callback.mixer.global_rate_timing_revision() > master_revision);
     assert!(
-        matches!(parameters.peek(), Ok(ControlParameterMessage::SetRateIntent {
-            revision, speed: None, period_seconds: Some(period)
-        }) if *revision == master_revision && period.to_bits() == projection.period_seconds.to_bits())
+        matches!(consumer.peek(), Ok(ControlMessage::SetBpmLockTarget(target)) if target.enabled && target.anchor.is_some())
     );
-    assert_eq!(callback.drain(consumer), 2, "actual BPM Lock and Bootstrap");
+    let master_revision = callback.mixer.global_rate_timing_revision();
+    assert!(callback.drain(consumer) >= 1);
     crate::audio_engine::audio_stream::drain_parameter_messages(
         parameters,
         &mut callback.mixer,
         &mut callback.transport,
     );
+    let frame = callback.transport.output_frame();
+    callback.mixer.service_global_rate(
+        frame,
+        &mut callback.transport,
+        &mut crate::audio_engine::buffer_retirement::ImmediateAudioBufferRetirement,
+    );
     assert!(consumer.is_empty() && parameters.is_empty());
+    controller_python(
+        locals,
+        "transport.global_params.poll_bpm_lock_application()\nassert session.master_period_seconds == accepted_period",
+    );
     controller_python(
         locals,
         r#"
 assert transport.global_params.set_effective_display_bpm(target_bpm)
 assert project.speed == accepted_period * (target_bpm / 60)
-assert session.master_period_seconds == accepted_period / project.speed
+assert session.master_period_seconds == accepted_period
 assert abs(transport.global_params.effective_display_bpm() - target_bpm) < 1e-10
 assert transport.bpm.current_timing(0) == timing_before_bpm
 "#,
@@ -1350,7 +1484,7 @@ assert transport.bpm.current_timing(0) == timing_before_bpm
     let admitted_master = projection.period_seconds / admitted_speed;
     let rate_revision = original_public_rate_revision(locals);
     assert!(rate_revision > master_revision);
-    assert!(callback.mixer.global_rate_timing_revision() > rate_revision);
+    assert_eq!(callback.mixer.global_rate_timing_revision(), rate_revision);
     // Python display/model admission is not an audio ACK: the actual callback
     // still uses its previously applied accepted source period at this point.
     assert_eq!(
@@ -1359,16 +1493,15 @@ assert transport.bpm.current_timing(0) == timing_before_bpm
     );
     assert!(
         matches!(parameters.peek(), Ok(ControlParameterMessage::SetRateIntent {
-        revision, speed: Some(speed), period_seconds: Some(period_seconds)
+        revision, speed: Some(speed), period_seconds: Some(period_seconds), ..
     }) if *revision == rate_revision && speed.to_bits() == admitted_speed.to_bits()
         && period_seconds.to_bits() == admitted_master.to_bits())
     );
-    assert!(matches!(
-        consumer.peek(),
-        Ok(ControlMessage::BootstrapTransportFromPad { id: 0 })
-    ));
-    // Match the regular callback's control-before-parameter drain order.
-    assert_eq!(callback.drain(consumer), 1);
+    assert!(
+        consumer.is_empty(),
+        "later qualified master effects do not enqueue another bootstrap"
+    );
+    callback.drain(consumer);
     crate::audio_engine::audio_stream::drain_parameter_messages(
         parameters,
         &mut callback.mixer,
@@ -1376,6 +1509,38 @@ assert transport.bpm.current_timing(0) == timing_before_bpm
     );
     assert!(consumer.is_empty() && parameters.is_empty());
     assert!(!callback.mixer.voices.iter().any(|voice| voice.active));
+    let actual = Python::attach(|py| {
+        locals
+            .bind(py)
+            .get_item("bpm_audio")
+            .unwrap()
+            .unwrap()
+            .extract::<PyRef<PublicBpmAudio>>()
+            .unwrap()
+            .engine
+            .input_runtime_ownership
+            .global_rate_status
+            .read()
+            .unwrap()
+    });
+    assert_eq!(
+        (actual.request_revision, actual.effect.revision),
+        (rate_revision, rate_revision)
+    );
+    assert_eq!(
+        actual.effect.state,
+        crate::audio_engine::global_rate_status::RateState::Applied
+    );
+    assert_eq!(actual.effect.effective.speed, admitted_speed);
+    assert_eq!(actual.effect.effective.period, Some(admitted_master));
+    assert_eq!(
+        actual.effect.execution_frame,
+        Some(callback.transport.output_frame())
+    );
+    controller_python(
+        locals,
+        "transport.global_params._poll_global_rate_status()\ntransport.global_params.poll_bpm_lock_application()\nassert session.master_period_seconds == accepted_period / project.speed",
+    );
     assert_eq!(
         callback.mixer.output_bpm_for_sample_id(0).unwrap(),
         60.0 / admitted_master
@@ -1418,6 +1583,16 @@ struct PublicBpmAudio {
 
 #[pymethods]
 impl PublicBpmAudio {
+    fn global_rate_status(&self, py: Python<'_>) -> PyResult<Option<Py<PyDict>>> {
+        self.engine.global_rate_status(py)
+    }
+    fn current_input_runtime_pad_binding(
+        &self,
+        id: usize,
+    ) -> PyResult<Option<crate::audio_engine::input_runtime_binding::InputRuntimePadBinding>> {
+        self.engine.current_input_runtime_pad_binding(id)
+    }
+
     fn current_constant_timing(&self, py: Python<'_>, id: usize) -> PyResult<Option<Py<PyAny>>> {
         if id >= NUM_SAMPLES {
             return Err(pyo3::exceptions::PyValueError::new_err("id out of range"));
@@ -1427,15 +1602,23 @@ impl PublicBpmAudio {
         crate::audio_engine::constant_timing::current_metadata(&self.engine, py, id)
     }
 
-    fn set_bpm_lock(&self, enabled: bool) -> PyResult<()> {
+    #[pyo3(signature = (enabled, *, anchor_binding=None))]
+    fn set_bpm_lock(
+        &self,
+        enabled: bool,
+        anchor_binding: Option<&crate::audio_engine::input_runtime_binding::InputRuntimePadBinding>,
+    ) -> PyResult<()> {
         let _requests = self.engine.pad_request_ids.lock().unwrap();
-        crate::audio_engine::push_global_timing_message(
-            &self.engine.global_timing_revision,
-            &self.engine.input_runtime_ownership.global_timing_publishing,
+        crate::audio_engine::push_bpm_lock_message(
+            &self.engine,
             &mut self.producer.lock().unwrap(),
-            ControlMessage::SetBpmLock(enabled),
-            "SetBpmLock",
+            enabled,
+            anchor_binding,
         )
+    }
+
+    fn bpm_lock_status(&self, py: Python<'_>) -> PyResult<Option<Py<PyDict>>> {
+        crate::audio_engine::bpm_lock_status_with_producer(&self.engine, py, &self.producer)
     }
 
     fn bootstrap_transport_from_pad(&self, id: usize) -> PyResult<()> {
@@ -1452,7 +1635,12 @@ impl PublicBpmAudio {
         )
     }
 
-    fn set_master_period(&self, period_seconds: f64) -> PyResult<()> {
+    #[pyo3(signature = (period_seconds, *, anchor_binding=None))]
+    fn set_master_period(
+        &self,
+        period_seconds: f64,
+        anchor_binding: Option<&crate::audio_engine::input_runtime_binding::InputRuntimePadBinding>,
+    ) -> PyResult<()> {
         if !period_seconds.is_finite()
             || period_seconds <= 0.0
             || !(period_seconds * f64::from(RATE) * 4.0).is_finite()
@@ -1462,17 +1650,20 @@ impl PublicBpmAudio {
             ));
         }
         let _requests = self.engine.pad_request_ids.lock().unwrap();
-        crate::audio_engine::push_global_rate_message(
+        crate::audio_engine::push_global_rate_message_qualified(
             &self.engine.global_timing_revision,
             &self.engine.input_runtime_ownership.global_timing_publishing,
             &self.engine.input_runtime_ownership.global_rate_status,
             &mut self.parameter_producer.lock().unwrap(),
             None,
             Some(period_seconds),
+            anchor_binding
+                .map(|binding| crate::audio_engine::qualify_timing_anchor(&self.engine, binding))
+                .transpose()?,
             "SetMasterPeriod",
         )?;
         // Capture the stamped request while its publisher still owns the lock,
-        // before Python can enqueue a separate Bootstrap timing revocation.
+        // before another independent global timing admission can supersede it.
         self.original_rate_revision.store(
             self.engine.global_timing_revision.load(Ordering::Acquire),
             Ordering::Release,
@@ -1480,7 +1671,13 @@ impl PublicBpmAudio {
         Ok(())
     }
 
-    fn set_speed_and_master_period(&self, speed: f64, period_seconds: f64) -> PyResult<()> {
+    #[pyo3(signature = (speed, period_seconds, *, anchor_binding=None))]
+    fn set_speed_and_master_period(
+        &self,
+        speed: f64,
+        period_seconds: f64,
+        anchor_binding: Option<&crate::audio_engine::input_runtime_binding::InputRuntimePadBinding>,
+    ) -> PyResult<()> {
         use crate::audio_engine::constants::{SPEED_MAX, SPEED_MIN};
         if !speed.is_finite() || !(SPEED_MIN..=SPEED_MAX).contains(&speed) {
             return Err(pyo3::exceptions::PyValueError::new_err(
@@ -1496,13 +1693,16 @@ impl PublicBpmAudio {
             ));
         }
         let _requests = self.engine.pad_request_ids.lock().unwrap();
-        crate::audio_engine::push_global_rate_message(
+        crate::audio_engine::push_global_rate_message_qualified(
             &self.engine.global_timing_revision,
             &self.engine.input_runtime_ownership.global_timing_publishing,
             &self.engine.input_runtime_ownership.global_rate_status,
             &mut self.parameter_producer.lock().unwrap(),
             Some(speed),
             Some(period_seconds),
+            anchor_binding
+                .map(|binding| crate::audio_engine::qualify_timing_anchor(&self.engine, binding))
+                .transpose()?,
             "SetSpeedAndMasterPeriod",
         )?;
         self.original_rate_revision.store(
@@ -3779,6 +3979,511 @@ loader.set_sample_unloaded_callback(unloaded_control)
     );
 }
 
+struct FrozenVoiceSnapshot {
+    id: usize,
+    clock: crate::audio_engine::source_playback::SourcePlayback,
+    generation: u64,
+    source_key: crate::audio_engine::content_placement::ContentKey,
+    source_pcm: std::sync::Weak<[f32]>,
+    source_address: usize,
+    native: usize,
+    adopted: Option<u64>,
+    fifo: (usize, usize),
+    history: Option<crate::audio_engine::productive_source_history::ProductiveSourceHistory>,
+    dsp: Option<crate::audio_engine::productive_source_history::ProductiveSourceHistory>,
+    filter: crate::audio_engine::dsp::DspStateForTest,
+}
+
+impl FrozenVoiceSnapshot {
+    fn capture(mixer: &RtMixer, id: usize) -> Self {
+        let voice = mixer
+            .voices
+            .iter()
+            .find(|voice| voice.is_playing_sample(id))
+            .unwrap();
+        let sample = voice.sample.as_ref().unwrap();
+        Self {
+            id,
+            clock: voice.source_playback,
+            generation: voice.generation,
+            source_key: voice
+                .source_admission
+                .as_ref()
+                .unwrap()
+                .content_key()
+                .unwrap(),
+            source_pcm: Arc::downgrade(&sample.samples),
+            source_address: sample.source_address(),
+            native: voice.stretch.native_state_address(),
+            adopted: voice.stretch.adopted_request_id(),
+            fifo: voice.stretch.pending_fifo_frames(),
+            history: voice.stretch.productive_history(),
+            dsp: mixer.dsp_source_history_for_test(id),
+            filter: mixer
+                .dsp_chain_snapshot_for_test(id)
+                .unwrap()
+                .state_for_test(),
+        }
+    }
+
+    fn assert_current(&self, mixer: &RtMixer, paused: bool) {
+        self.assert_current_with_control(mixer, paused, &self.filter.control);
+    }
+
+    fn assert_current_with_control(
+        &self,
+        mixer: &RtMixer,
+        paused: bool,
+        control: &crate::audio_engine::dsp::DspControlProvenanceForTest,
+    ) {
+        let voice = mixer
+            .voices
+            .iter()
+            .find(|voice| voice.is_playing_sample(self.id))
+            .unwrap();
+        assert_eq!(voice.paused, paused);
+        assert!(voice.source_playback.matches_exact(&self.clock));
+        assert_eq!(voice.generation, self.generation);
+        assert_eq!(
+            voice.source_admission.as_ref().unwrap().content_key(),
+            Some(self.source_key)
+        );
+        let sample = voice.sample.as_ref().unwrap();
+        assert!(self.source_pcm.ptr_eq(&Arc::downgrade(&sample.samples)));
+        assert_eq!(sample.source_address(), self.source_address);
+        assert_eq!(voice.stretch.native_state_address(), self.native);
+        assert_eq!(voice.stretch.adopted_request_id(), self.adopted);
+        assert_eq!(voice.stretch.pending_fifo_frames(), self.fifo);
+        for (before, after) in [
+            (self.history, voice.stretch.productive_history()),
+            (self.dsp, mixer.dsp_source_history_for_test(self.id)),
+        ] {
+            match (before, after) {
+                (Some(before), Some(after)) => {
+                    assert_eq!(after.binding, before.binding);
+                    assert_eq!(after.next_position, before.next_position);
+                    assert_eq!(after.domain, before.domain);
+                    assert_eq!(after.fed_output_frames, before.fed_output_frames);
+                }
+                (None, None) => {}
+                _ => panic!("ordinary transport changed retained source history"),
+            }
+        }
+        let actual_filter = mixer
+            .dsp_chain_snapshot_for_test(self.id)
+            .unwrap()
+            .state_for_test();
+        assert_eq!(actual_filter.signal_image, self.filter.signal_image);
+        assert_eq!(&actual_filter.control, control);
+    }
+}
+
+fn assert_current_bank_transport_refused(
+    engine: &AudioEngine,
+    playback: &mut ControllerPlayback,
+    consumer: &mut rtrb::Consumer<ControlMessage>,
+    locals: &Py<PyDict>,
+    resume: bool,
+) {
+    synchronize_callback_frame(&mut playback.callback, playback.frame);
+    let transport = playback.callback.transport;
+    let frame = playback.frame;
+    let consumed = playback.source_frame;
+    let paused = [
+        voice(&playback.callback.mixer).paused,
+        other_voice(&playback.callback.mixer).paused,
+    ];
+    let snapshots = [0, 215].map(|id| FrozenVoiceSnapshot::capture(&playback.callback.mixer, id));
+    let epochs = [
+        voice(&playback.callback.mixer),
+        other_voice(&playback.callback.mixer),
+    ]
+    .map(|voice| voice.stretch.source_epoch_owner().load(Ordering::Acquire));
+    let frozen = voice(&playback.callback.mixer)
+        .frozen_stems
+        .as_ref()
+        .unwrap();
+    let transition = frozen.transition;
+    let selection = frozen.selection;
+    let sets = [
+        frozen.set.as_ref().unwrap(),
+        frozen.outgoing.as_ref().unwrap(),
+    ];
+    let identities = sets.map(|set| Arc::as_ptr(&set.complete_set_identity) as usize);
+    let pcm = sets.map(|set| {
+        set.stems
+            .each_ref()
+            .map(|stem| stem.samples.as_ptr() as usize)
+    });
+    let binding = engine
+        .current_input_runtime_pad_binding(0)
+        .unwrap()
+        .unwrap();
+    assert!(binding.is_current());
+    let b_key = binding.binding.placement.unwrap().content_key().unwrap();
+    assert_ne!(b_key, snapshots[0].source_key);
+    assert_eq!(
+        engine.input_runtime_ownership.callback_content_key(0),
+        Some(b_key)
+    );
+    let feedback_before = playback.callback.feedback.events.len();
+    Python::attach(|py| {
+        locals
+            .bind(py)
+            .set_item("refused_bank_resume", resume)
+            .unwrap();
+    });
+    controller_python(
+        locals,
+        r#"
+original_bank_transport = (playback_audio.resume_sample(0) if refused_bank_resume
+                           else playback_audio.pause_sample(0))
+current_bank_binding = playback_audio.current_input_runtime_pad_binding(0)
+assert current_bank_binding is not None and current_bank_binding.is_current()
+assert original_bank_transport.current_control_slot() == 0
+assert original_bank_transport.content_lifetime == current_bank_binding.metadata()['content_lifetime']
+assert original_bank_transport.requested_paused is not refused_bank_resume
+"#,
+    );
+    let admission =
+        Python::attach(|py| {
+            locals.bind(py).get_item("original_bank_transport").unwrap().unwrap()
+            .extract::<PyRef<crate::audio_engine::ordinary_transport::OrdinaryTransportAdmission>>()
+            .unwrap().clone()
+        });
+    assert_eq!(admission.content_lifetime(), b_key.lifetime());
+    assert_eq!(
+        playback.drain(consumer),
+        1,
+        "original current-B transport refusal"
+    );
+    assert!(consumer.is_empty());
+    assert_eq!(playback.callback.feedback.events.len(), feedback_before + 1);
+    let message = &playback.callback.feedback.events[feedback_before];
+    let observation = admission.current_observation().unwrap().unwrap();
+    assert_eq!(observation.current_control_slot().unwrap(), Some(0));
+    assert!(observation.matches_admission(&admission) && observation.settles_admission(&admission));
+    assert_eq!(observation.outcome(), Some("refused"));
+    assert_eq!(
+        observation.requested_effect(),
+        Some(if resume { "resume" } else { "pause" })
+    );
+    assert!(!observation.active() && !observation.ordinary_paused());
+    match message {
+        AudioMessage::OrdinaryTransportFeedback {
+            id,
+            owner,
+            cell,
+            lifetime,
+            transport_revision,
+            observation_sequence,
+        } => {
+            assert_eq!(*id, 0);
+            assert_eq!(
+                *owner,
+                engine.input_runtime_ownership.owner_identity().diagnostic()
+            );
+            assert_eq!(*cell, b_key.cell().index());
+            assert_eq!(*lifetime, b_key.lifetime());
+            assert_eq!(*transport_revision, admission.transport_revision());
+            assert_eq!(*observation_sequence, observation.observation_sequence());
+        }
+        _ => panic!("current-B refusal must publish its own ordinary observation"),
+    }
+    let resolved = engine
+        ._resolve_ordinary_transport_feedback(message)
+        .unwrap()
+        .unwrap();
+    assert!(resolved.matches_admission(&admission) && resolved.settles_admission(&admission));
+    assert_eq!(resolved.outcome(), Some("refused"));
+    controller_python(
+        locals,
+        r#"
+transport.playback.poll_pause_observations()
+assert session.active_sample_ids == {215}
+assert session.paused_sample_ids == ({215} if refused_bank_resume else set())
+assert project.sample_paths[0] == frozen_saved_path and project.pad_content[0] == frozen_saved_content
+assert candidate.claimed() and not candidate.is_current()
+assert candidate.residency_status() == 'accepted' and candidate.effective_mode_status() == 'rejected'
+"#,
+    );
+    for (index, snapshot) in snapshots.iter().enumerate() {
+        snapshot.assert_current(&playback.callback.mixer, paused[index]);
+    }
+    let after = voice(&playback.callback.mixer)
+        .frozen_stems
+        .as_ref()
+        .unwrap();
+    assert_eq!(after.selection, selection);
+    assert!(after.transition.matches_exact(transition));
+    let sets = [
+        after.set.as_ref().unwrap(),
+        after.outgoing.as_ref().unwrap(),
+    ];
+    assert_eq!(
+        sets.map(|set| Arc::as_ptr(&set.complete_set_identity) as usize),
+        identities
+    );
+    assert_eq!(
+        sets.map(|set| set
+            .stems
+            .each_ref()
+            .map(|stem| stem.samples.as_ptr() as usize)),
+        pcm
+    );
+    assert_eq!(
+        [
+            voice(&playback.callback.mixer),
+            other_voice(&playback.callback.mixer)
+        ]
+        .map(|voice| voice.stretch.source_epoch_owner().load(Ordering::Acquire)),
+        epochs
+    );
+    assert_eq!((playback.frame, playback.source_frame), (frame, consumed));
+    assert_eq!(
+        format!("{:?}", playback.callback.transport),
+        format!("{transport:?}")
+    );
+}
+
+fn paused_frozen_source_readers_before_unload(
+    engine: &AudioEngine,
+    playback: &mut ControllerPlayback,
+    consumer: &mut rtrb::Consumer<ControlMessage>,
+    locals: &Py<PyDict>,
+    probes: (&FinalReaderProbe, &FinalReaderProbe),
+) {
+    let (old, current) = probes;
+    controller_python(
+        locals,
+        r#"
+assert original_a_pause.current_control_slot() is None
+assert original_a_pause.current_observation() is None
+assert original_peer_pause.current_control_slot() == 215
+peer_pause_observation = original_peer_pause.current_observation()
+assert peer_pause_observation is not None and peer_pause_observation.settles_admission(original_peer_pause)
+assert peer_pause_observation.outcome == 'applied' and peer_pause_observation.ordinary_paused
+"#,
+    );
+    assert_current_bank_transport_refused(engine, playback, consumer, locals, true);
+    let snapshots = [0, 215].map(|id| FrozenVoiceSnapshot::capture(&playback.callback.mixer, id));
+    let frozen = voice(&playback.callback.mixer)
+        .frozen_stems
+        .as_ref()
+        .unwrap();
+    let transition = frozen.transition;
+    let selection = frozen.selection;
+    let identities = [
+        frozen.set.as_ref().unwrap(),
+        frozen.outgoing.as_ref().unwrap(),
+    ]
+    .map(|set| Arc::as_ptr(&set.complete_set_identity) as usize);
+    let pcm = [
+        frozen.set.as_ref().unwrap(),
+        frozen.outgoing.as_ref().unwrap(),
+    ]
+    .map(|set| {
+        set.stems
+            .each_ref()
+            .map(|stem| stem.samples.as_ptr() as usize)
+    });
+    assert!(transition.is_active());
+    let frame = playback.frame;
+    let consumed = playback.source_frame;
+    let mut expected_transport = playback.callback.transport;
+    let feedback = playback.callback.feedback.events.len();
+    let raw_fifo = playback
+        .raw
+        .as_ref()
+        .map(|raw| (raw.input[0].len(), raw.output[0].len()));
+    let filter = format!("{:?}", playback.filter);
+    let epochs = [
+        voice(&playback.callback.mixer),
+        other_voice(&playback.callback.mixer),
+    ]
+    .map(|voice| voice.stretch.source_epoch_owner().load(Ordering::Acquire));
+    let current_keys = [0, 215].map(|id| {
+        engine
+            .input_runtime_ownership
+            .slot_snapshot(id)
+            .unwrap()
+            .content_key()
+            .unwrap()
+    });
+    let mut expected_controls = snapshots.each_ref().map(|snapshot| snapshot.filter.control);
+    for (index, control) in expected_controls.iter_mut().enumerate() {
+        let (original_key, since, gain_bits) = control
+            .stable_input
+            .expect("actual stable input before silence");
+        assert!(since <= frame);
+        assert!(
+            control
+                .input_observed_through
+                .is_some_and(|end| end <= frame)
+        );
+        assert!(control.input_revision != u64::MAX);
+        assert!(f32::from_bits(gain_bits).is_finite());
+        // The expected signal image stays original. Only the callback's
+        // current-content stability provenance changes at the first real
+        // render boundary; no observer implementation is replayed here.
+        control.stable_input = Some((
+            current_keys[index],
+            if original_key == current_keys[index] {
+                since
+            } else {
+                frame
+            },
+            gain_bits,
+        ));
+    }
+    for frames in [1, 127, 385] {
+        let start = playback.frame;
+        assert_eq!(
+            [0, 215].map(|id| {
+                engine
+                    .input_runtime_ownership
+                    .slot_snapshot(id)
+                    .unwrap()
+                    .content_key()
+                    .unwrap()
+            }),
+            current_keys
+        );
+        playback.render_paused(frames);
+        assert_eq!(playback.frame, start + frames as u64);
+        assert_eq!(
+            [0, 215].map(|id| {
+                engine
+                    .input_runtime_ownership
+                    .slot_snapshot(id)
+                    .unwrap()
+                    .content_key()
+                    .unwrap()
+            }),
+            current_keys
+        );
+        for (index, snapshot) in snapshots.iter().enumerate() {
+            expected_controls[index].input_observed_through = Some(playback.frame);
+            snapshot.assert_current_with_control(
+                &playback.callback.mixer,
+                true,
+                &expected_controls[index],
+            );
+        }
+        assert_eq!(
+            [
+                voice(&playback.callback.mixer),
+                other_voice(&playback.callback.mixer)
+            ]
+            .map(|voice| voice.stretch.source_epoch_owner().load(Ordering::Acquire)),
+            epochs
+        );
+        let frozen = voice(&playback.callback.mixer)
+            .frozen_stems
+            .as_ref()
+            .unwrap();
+        assert_eq!(frozen.selection, selection);
+        assert!(frozen.transition.matches_exact(transition));
+        assert_eq!(
+            [
+                frozen.set.as_ref().unwrap(),
+                frozen.outgoing.as_ref().unwrap()
+            ]
+            .map(|set| Arc::as_ptr(&set.complete_set_identity) as usize),
+            identities
+        );
+        assert_eq!(
+            [
+                frozen.set.as_ref().unwrap(),
+                frozen.outgoing.as_ref().unwrap()
+            ]
+            .map(|set| set
+                .stems
+                .each_ref()
+                .map(|stem| stem.samples.as_ptr() as usize)),
+            pcm
+        );
+        old.assert_retained();
+        current.assert_retained();
+    }
+    expected_transport.advance_by_rendered_frames(513);
+    synchronize_callback_frame(&mut playback.callback, playback.frame);
+    assert_eq!(
+        format!("{:?}", playback.callback.transport),
+        format!("{expected_transport:?}")
+    );
+    assert_eq!(
+        (playback.frame, playback.source_frame),
+        (frame + 513, consumed)
+    );
+    assert_eq!(playback.callback.feedback.events.len(), feedback);
+    assert_eq!(
+        playback
+            .raw
+            .as_ref()
+            .map(|raw| (raw.input[0].len(), raw.output[0].len())),
+        raw_fifo
+    );
+    assert_eq!(format!("{:?}", playback.filter), filter);
+    assert!(
+        fs::write(
+            old.areas[1].join("vocals.f32le"),
+            b"paused retained overwrite"
+        )
+        .is_err()
+    );
+    assert!(
+        fs::write(
+            current.areas[1].join("vocals.f32le"),
+            b"paused current overwrite"
+        )
+        .is_err()
+    );
+    controller_python(
+        locals,
+        r#"
+transport.playback.resume_pad(215)
+peer_resume = transport.playback._pause_intent._owners[project.pad_content[215].instance_id].admission
+assert peer_resume is not None and not peer_resume.requested_paused
+assert peer_resume.current_control_slot() == 215
+assert session.active_sample_ids == {215} and session.paused_sample_ids == {215}
+"#,
+    );
+    let transport = playback.callback.transport;
+    assert_eq!(
+        playback.drain(consumer),
+        1,
+        "only the independent peer resumes before Unload"
+    );
+    controller_python(
+        locals,
+        r#"
+peer_resumed = peer_resume.current_observation()
+assert peer_resumed is not None and peer_resumed.matches_admission(peer_resume)
+assert peer_resumed.settles_admission(peer_resume) and peer_resumed.outcome == 'applied'
+assert peer_resumed.active and not peer_resumed.ordinary_paused
+transport.playback.poll_pause_observations()
+assert session.active_sample_ids == {215} and not session.paused_sample_ids
+"#,
+    );
+    snapshots[0].assert_current_with_control(&playback.callback.mixer, true, &expected_controls[0]);
+    snapshots[1].assert_current_with_control(
+        &playback.callback.mixer,
+        false,
+        &expected_controls[1],
+    );
+    assert_eq!(
+        (playback.frame, playback.source_frame),
+        (frame + 513, consumed)
+    );
+    assert_eq!(
+        format!("{:?}", playback.callback.transport),
+        format!("{transport:?}")
+    );
+    old.assert_retained();
+    current.assert_retained();
+}
+
 fn frozen_source_final_readers_then_public_unload(
     engine: &AudioEngine,
     fixture: (&Path, &Arc<Mutex<rtrb::Producer<ControlMessage>>>),
@@ -3798,7 +4503,9 @@ fn frozen_source_final_readers_then_public_unload(
     let (old, current) = probes;
     assert!(matches!(
         lifecycle,
-        CandidateLifecycle::FrozenUnload | CandidateLifecycle::FrozenResumeReaders
+        CandidateLifecycle::FrozenUnload
+            | CandidateLifecycle::FrozenResumeReaders
+            | CandidateLifecycle::FrozenPausedUnload
     ));
     assert!(consumer.is_empty() && parameters.is_empty());
     assert!(playback.callback.retirement.actual.is_some());
@@ -3829,9 +4536,68 @@ del first, previous_control
     });
     old.assert_retained();
     current.assert_retained();
+    let paused_frozen = lifecycle == CandidateLifecycle::FrozenPausedUnload;
+    if lifecycle == CandidateLifecycle::FrozenResumeReaders {
+        synchronize_callback_frame(&mut playback.callback, playback.frame);
+        let mut expected_transport = playback.callback.transport;
+        let before_output = playback.frame;
+        let before_source = playback.source_frame;
+        public_busy_handover_pause_resume(playback, consumer, locals, old, current);
+        assert_eq!(playback.frame, before_output + 513);
+        assert_eq!(playback.source_frame, before_source);
+        expected_transport.advance_by_rendered_frames(513);
+        synchronize_callback_frame(&mut playback.callback, playback.frame);
+        assert_eq!(
+            format!("{:?}", playback.callback.transport),
+            format!("{expected_transport:?}")
+        );
+    } else if paused_frozen {
+        synchronize_callback_frame(&mut playback.callback, playback.frame);
+        let before_transport = playback.callback.transport;
+        let before_output = playback.frame;
+        let before_source = playback.source_frame;
+        let snapshots =
+            [0, 215].map(|id| FrozenVoiceSnapshot::capture(&playback.callback.mixer, id));
+        controller_python(
+            locals,
+            r#"
+from flitzis_looper.controller.transport import TransportController
+transport = TransportController(project, session, playback_audio)
+assert candidate.is_current() and candidate.claimed()
+assert candidate.effective_mode_status() == 'transitioning'
+transport.playback.pause_pad(0)
+transport.playback.pause_pad(215)
+assert not session.paused_sample_ids
+"#,
+        );
+        remember_public_pause_admissions(locals, true);
+        controller_python(
+            locals,
+            "original_a_pause = original_pause_admissions[0][0]\noriginal_peer_pause = original_pause_admissions[215][0]",
+        );
+        assert_eq!(playback.drain(consumer), 2, "own current-A Pause before B");
+        assert_public_pause_effect(locals);
+        for snapshot in &snapshots {
+            snapshot.assert_current(&playback.callback.mixer, true);
+        }
+        for reference in [&mut playback.reference, &mut playback.full_mix] {
+            reference.pause_sample_at_output_frame(0, playback.frame);
+        }
+        assert_eq!(
+            (playback.frame, playback.source_frame),
+            (before_output, before_source)
+        );
+        assert_eq!(
+            format!("{:?}", playback.callback.transport),
+            format!("{before_transport:?}")
+        );
+        old.assert_retained();
+        current.assert_retained();
+    }
     let a = voice(&playback.callback.mixer).sample.clone().unwrap();
     let before = voice(&playback.callback.mixer);
-    assert!(!before.paused && before.frozen_stems.is_none());
+    assert_eq!(before.paused, paused_frozen);
+    assert!(before.frozen_stems.is_none());
     let clock = before.source_playback;
     let generation = before.generation;
     let native = before.stretch.native_state_address();
@@ -3875,6 +4641,8 @@ del first, previous_control
     let other_native = other.stretch.native_state_address();
     let other_fifo = other.stretch.pending_fifo_frames();
     let other_demand = playback.callback.mixer.stem_demand_for_measurement(215);
+    assert_eq!(other.paused, paused_frozen);
+    let restore_transport = playback.callback.transport;
 
     // Reuse the actual distinct-B native restore operation from the frozen-bank
     // rejection fixture. This does not change the saved public A assignment.
@@ -4032,6 +4800,10 @@ del first, previous_control
         (output_frame, consumed)
     );
     assert_eq!(playback.callback.feedback.events.len(), feedback);
+    assert_eq!(
+        format!("{:?}", playback.callback.transport),
+        format!("{restore_transport:?}")
+    );
     assert!(
         other_voice(&playback.callback.mixer)
             .source_playback
@@ -4058,6 +4830,30 @@ assert ('stems', 0) in controller._assets._assignments
     });
     assert!(playback.callback.retirement.retired.is_empty());
     assert_frozen_owners(playback);
+
+    if paused_frozen {
+        paused_frozen_source_readers_before_unload(
+            engine,
+            playback,
+            consumer,
+            locals,
+            (old, current),
+        );
+        public_unload_reader_pairs(
+            engine,
+            playback,
+            (consumer, parameters),
+            locals,
+            &[old, current],
+            None,
+            true,
+        );
+        assert_eq!(
+            fs::read(&material.lease.original_path).unwrap(),
+            b_original_before
+        );
+        return;
+    }
 
     // Seventeen productive frames exercise FrozenStemView's set AND outgoing
     // through the independent complete A PCM/raw Native/EQ oracle. The physical
@@ -4193,6 +4989,7 @@ fn progressive_frozen_source_readers(
     let output_frame = playback.frame;
     let consumed = playback.source_frame;
     let feedback = playback.callback.feedback.events.len();
+    let entry_gap = output_frame - consumed;
     let other = other_voice(&playback.callback.mixer);
     let other_source = other.sample.clone().unwrap();
     let other_clock = other.source_playback;
@@ -4296,51 +5093,19 @@ fn progressive_frozen_source_readers(
     controller_python(
         locals,
         r#"
-from flitzis_looper.controller.transport import TransportController
-transport = TransportController(project, session, playback_audio)
 assert candidate.claimed() and not candidate.is_current()
 assert candidate.residency_status() == 'accepted' and candidate.effective_mode_status() == 'rejected'
 assert candidate.effective_failure_reason() is None
 "#,
     );
-    public_explicit_pause(playback, consumer, locals);
-    assert_frozen(playback, true);
-    old.assert_retained();
+    // A's genuine Pause/Resume already completed before B replaced the current
+    // content lifetime. B's own command cannot borrow that retained A cohort.
     assert!(
-        voice(&playback.callback.mixer)
-            .frozen_stems
-            .as_ref()
-            .unwrap()
-            .transition
-            .matches_exact(transition)
+        playback
+            .resumed_at
+            .is_some_and(|frame| frame <= output_frame)
     );
-    assert_eq!(
-        (playback.frame, playback.source_frame),
-        (output_frame + 513, consumed)
-    );
-    assert_eq!(playback.callback.feedback.events.len(), feedback);
-    assert!(playback.callback.retirement.retired.is_empty());
-    controller_python(
-        locals,
-        r#"
-controller.on_frame_render()
-assert candidate.claimed() and not candidate.is_current()
-assert candidate.effective_mode_status() == 'rejected' and candidate.effective_failure_reason() is None
-transport.playback.resume_pad(0)
-transport.playback.resume_pad(215)
-assert not session.paused_sample_ids
-"#,
-    );
-    assert_eq!(
-        playback.drain(consumer),
-        2,
-        "own frozen-A public Resume commands"
-    );
-    assert!(consumer.is_empty());
-    for reference in [&mut playback.reference, &mut playback.full_mix] {
-        reference.resume_sample_at_output_frame(0, playback.frame);
-    }
-    playback.resumed_at = Some(playback.frame);
+    assert_current_bank_transport_refused(engine, playback, consumer, locals, false);
     assert_frozen(playback, true);
     old.assert_retained();
     let resumed = voice(&playback.callback.mixer);
@@ -4371,7 +5136,7 @@ assert not session.paused_sample_ids
     let other = other_voice(&playback.callback.mixer);
     assert!(!other.paused && other.source_playback.matches_exact(&other_clock));
     assert_eq!(playback.source_frame, consumed);
-    assert_eq!(playback.callback.feedback.events.len(), feedback);
+    assert_eq!(playback.callback.feedback.events.len(), feedback + 1);
 
     // Actual consumed source distance ends the frozen ramp. Saturation prevents
     // the callback from transferring its real outgoing reader until a later pass.
@@ -4539,10 +5304,7 @@ assert project.stem_cache[0].pair == disk_v2 and ('stems', 0) in controller._ass
             prepared
         );
     }
-    assert_eq!(
-        playback.frame - playback.source_frame,
-        output_frame - consumed + 513
-    );
+    assert_eq!(playback.frame - playback.source_frame, entry_gap);
     assert!(consumer.is_empty() && playback.callback.retirement.retired.is_empty());
     controller_python(
         locals,
@@ -6298,6 +7060,38 @@ assert source_play_reopened.project.pad_loop_end_s[0] == 1517 / fixture['rate']
     reference_owners
 }
 
+fn assert_current_replaced_source_started(locals: &Py<PyDict>, message_name: &str) {
+    controller_python(
+        locals,
+        &format!(
+            r#"
+current_b_source = audio.capture_prepared_source(0, source_version_now)
+assert current_b_source.same_source_request(source_now)
+assert not current_b_source.same_source_request(source_v2)
+current_b_binding = playback_audio.current_input_runtime_pad_binding(0)
+assert current_b_binding is not None and current_b_binding.is_current()
+current_b_observation = playback_audio._current_ordinary_transport_observation(0)
+assert current_b_observation is not None
+assert current_b_observation.current_control_slot() == 0
+assert current_b_observation.content_lifetime == current_b_binding.metadata()['content_lifetime']
+assert current_b_observation.active and not current_b_observation.ordinary_paused
+# The real render loop already polls durable current-B lifecycle state. Its
+# original Started diagnostic must still resolve exactly and be idempotent.
+transport.playback.poll_pause_observations()
+assert 0 in session.active_sample_ids and 0 not in session.paused_sample_ids
+before_started_active = set(session.active_sample_ids)
+before_started_paused = set(session.paused_sample_ids)
+resolved_started = captured_audio._resolve_pad_feedback({message_name})
+assert resolved_started == 0
+transport.playback.handle_sample_started_message({message_name}, sample_id=resolved_started)
+assert session.active_sample_ids == before_started_active
+assert session.paused_sample_ids == before_started_paused
+del current_b_source, current_b_binding, current_b_observation
+"#
+        ),
+    );
+}
+
 fn public_replaced_source_key_lock_on(
     playback: &mut ControllerPlayback,
     consumer: &mut rtrb::Consumer<ControlMessage>,
@@ -6334,13 +7128,10 @@ fn public_replaced_source_key_lock_on(
             .set_item("b_on_started", Py::new(py, started).unwrap())
             .unwrap()
     });
+    assert_current_replaced_source_started(locals, "b_on_started");
     controller_python(
         locals,
         r#"
-assert 0 not in session.active_sample_ids
-resolved_started = captured_audio._resolve_pad_feedback(b_on_started)
-assert resolved_started == 0
-transport.playback.handle_sample_started_message(b_on_started, sample_id=resolved_started)
 assert 0 in session.active_sample_ids
 b_on_path = project.sample_paths[0]
 b_on_content = project.pad_content[0]
@@ -6655,14 +7446,10 @@ fn public_replaced_source_stems(
             .set_item("b_stem_key_lock", key_lock)
             .unwrap();
     });
+    assert_current_replaced_source_started(locals, "b_started");
     controller_python(
         locals,
         r#"
-if not b_stem_key_lock:
-    assert 0 not in session.active_sample_ids
-    resolved_started = captured_audio._resolve_pad_feedback(b_started)
-    assert resolved_started == 0
-    transport.playback.handle_sample_started_message(b_started, sample_id=resolved_started)
 assert 0 in session.active_sample_ids and 0 not in session.paused_sample_ids
 assert project.stem_cache[0] is None and project.pad_stem_mix_mode[0] == 'full_mix'
 b_path = project.sample_paths[0]
@@ -9338,6 +10125,63 @@ fn prove_public_loop_return(
     }
 }
 
+pub(super) fn remember_public_pause_admissions(locals: &Py<PyDict>, paused: bool) {
+    Python::attach(|py| {
+        locals
+            .bind(py)
+            .set_item("expected_ordinary_paused", paused)
+            .unwrap();
+    });
+    controller_python(
+        locals,
+        r#"
+original_pause_admissions = {}
+for pad in (0, 215):
+    content = project.pad_content[pad]
+    assert content is not None
+    owner = transport.playback._pause_intent._owners[content.instance_id]
+    admission = owner.admission
+    assert owner.pending and admission is not None
+    assert admission.requested_paused is expected_ordinary_paused
+    assert admission.current_control_slot() == pad
+    binding = transport._audio.current_input_runtime_pad_binding(pad)
+    assert binding is not None and binding.is_current()
+    assert admission.content_lifetime == binding.metadata()['content_lifetime']
+    before = admission.current_observation()
+    assert before is not None and before.current_control_slot() == pad and before.active
+    assert before.ordinary_paused is not expected_ordinary_paused
+    assert not before.settles_admission(admission)
+    original_pause_admissions[pad] = (admission, before.observation_sequence)
+assert original_pause_admissions[0][0].content_lifetime != original_pause_admissions[215][0].content_lifetime
+assert all(transport.playback._pause_intent.requested_paused(pad) is expected_ordinary_paused for pad in (0, 215))
+"#,
+    );
+}
+
+pub(super) fn assert_public_pause_effect(locals: &Py<PyDict>) {
+    controller_python(
+        locals,
+        r#"
+for pad, (admission, before_sequence) in original_pause_admissions.items():
+    assert admission.current_control_slot() == pad
+    observation = admission.current_observation()
+    assert observation is not None and observation.current_control_slot() == pad
+    assert observation.content_lifetime == admission.content_lifetime
+    assert observation.observation_sequence > before_sequence
+    assert observation.matches_admission(admission) and observation.settles_admission(admission)
+    assert observation.outcome == 'applied' and observation.active
+    assert observation.ordinary_paused is expected_ordinary_paused
+transport.playback.poll_pause_observations()
+assert session.active_sample_ids == {0, 215}
+assert session.paused_sample_ids == ({0, 215} if expected_ordinary_paused else set())
+for pad in (0, 215):
+    owner = transport.playback._pause_intent._owners[project.pad_content[pad].instance_id]
+    assert not owner.pending and owner.admission is None
+original_pause_admissions.clear()
+"#,
+    );
+}
+
 fn public_explicit_pause(
     playback: &mut ControllerPlayback,
     consumer: &mut rtrb::Consumer<ControlMessage>,
@@ -9363,13 +10207,20 @@ fn public_explicit_pause(
 assert session.active_sample_ids == {0, 215}
 transport.playback.pause_pad(0)
 transport.playback.pause_pad(215)
-assert session.paused_sample_ids == {0, 215}
+assert not session.paused_sample_ids
+assert all(transport.playback._pause_intent.requested_paused(pad) for pad in (0, 215))
 "#,
     );
+    remember_public_pause_admissions(locals, true);
     assert_eq!(
         playback.drain(consumer),
         2,
         "own public explicit Seek Pause commands"
+    );
+    assert_public_pause_effect(locals);
+    controller_python(
+        locals,
+        "transport.playback.poll_pause_observations()\nassert session.paused_sample_ids == {0, 215}",
     );
     for reference in [&mut playback.reference, &mut playback.full_mix] {
         reference.pause_sample_at_output_frame(0, playback.frame);
@@ -9476,13 +10327,20 @@ assert candidate.effective_mode_status() == 'transitioning'
 assert controller.stem_residency_status(0).effective == 'transitioning'
 transport.playback.resume_pad(0)
 transport.playback.resume_pad(215)
-assert not session.paused_sample_ids
+assert session.paused_sample_ids == {0, 215}
+assert not any(transport.playback._pause_intent.requested_paused(pad) for pad in (0, 215))
 "#,
     );
+    remember_public_pause_admissions(locals, false);
     assert_eq!(
         playback.drain(consumer),
         2,
         "own busy-handover public Resume commands"
+    );
+    assert_public_pause_effect(locals);
+    controller_python(
+        locals,
+        "transport.playback.poll_pause_observations()\nassert not session.paused_sample_ids",
     );
     assert!(consumer.is_empty());
     for reference in [&mut playback.reference, &mut playback.full_mix] {
@@ -9586,7 +10444,9 @@ fn round_trip_with_lifecycle(
     let domain_final_reader = lifecycle == CandidateLifecycle::CleanupAfterClaim;
     let frozen_final_reader = matches!(
         lifecycle,
-        CandidateLifecycle::FrozenUnload | CandidateLifecycle::FrozenResumeReaders
+        CandidateLifecycle::FrozenUnload
+            | CandidateLifecycle::FrozenResumeReaders
+            | CandidateLifecycle::FrozenPausedUnload
     );
     assert!(!frozen_final_reader || matches!(trace, CandidateTrace::Ordinary));
     let full_track = matches!(trace, CandidateTrace::FullTrack);
@@ -9903,10 +10763,33 @@ fn round_trip_with_lifecycle(
     let other_source = h.callback.mixer.bank_for_measurement()[215]
         .clone()
         .unwrap();
+    let other_ticket = h.ticket(215);
+    assert_eq!(other_ticket.id, 215);
+    assert!(other_ticket.sample.same_source(&other_source));
+    assert!(other_source.same_source(&full));
+    assert!(!other_ticket.same_source_request(&source));
+    let other_key = other_ticket
+        .admission
+        .binding
+        .placement
+        .unwrap()
+        .content_key()
+        .unwrap();
+    assert_ne!(
+        Some(other_key),
+        source.admission.binding.placement.unwrap().content_key()
+    );
+    assert_eq!(other_ticket.source_version, h.version);
+    let two_active_pads = stopped_before_poll.is_none();
     let metadata = h.material.metadata();
     let fixture = json!({
         "original_reference": metadata["new_reference"], "material_id": metadata["material_id"],
         "source_version": h.version, "pair": saved_selection, "frames": full.frame_count(), "rate": RATE,
+        "peer": {
+            "original_reference": metadata["new_reference"], "material_id": metadata["material_id"],
+            "frames": other_ticket.sample.frame_count(), "rate": other_ticket.sample_rate_hz,
+            "content_lifetime": other_key.lifetime(),
+        },
     });
     let (parameter_producer, mut parameter_consumer) = rtrb::RingBuffer::new(8);
     let parameter_producer = Arc::new(Mutex::new(parameter_producer));
@@ -9971,6 +10854,7 @@ fn round_trip_with_lifecycle(
             .set_item("declared_loop_end", loop_region.end)
             .unwrap();
         locals.set_item("paused_explicit", paused_explicit).unwrap();
+        locals.set_item("two_active_pads", two_active_pads).unwrap();
         locals.set_item("tail_key_lock", key_lock).unwrap();
         locals.set_item("live_bpm", live_bpm).unwrap();
         locals
@@ -10095,11 +10979,23 @@ project.sample_durations[0] = fixture['frames'] / fixture['rate']
 project.pad_content[0] = PadContentIdentity(instance_id='8' * 32, material_id=fixture['material_id'])
 project.pad_timing_intent[0] = 'automatic' if public_bpm or musical_explicit else 'legacy'
 project.pad_stem_mix_mode[0] = 'full_mix'
-if domain_final_reader:
-    # PAD215 is a real saved assignment before the asset service first syncs.
-    project.sample_paths[215] = fixture['original_reference']
-    project.sample_durations[215] = fixture['frames'] / fixture['rate']
-    project.pad_content[215] = PadContentIdentity(instance_id='a' * 32, material_id=fixture['material_id'])
+if two_active_pads:
+    # Both pads were independently adopted and acknowledged by Native. Their
+    # shared immutable material does not make their mutable content/intent one.
+    project.sample_paths[215] = fixture['peer']['original_reference']
+    project.sample_durations[215] = fixture['peer']['frames'] / fixture['peer']['rate']
+    project.pad_content[215] = PadContentIdentity(instance_id='a' * 32, material_id=fixture['peer']['material_id'])
+    assert project.pad_content[215].instance_id != project.pad_content[0].instance_id
+    peer_binding = playback_audio.current_input_runtime_pad_binding(215)
+    assert peer_binding is not None and peer_binding.is_current()
+    assert peer_binding.metadata()['content_lifetime'] == fixture['peer']['content_lifetime']
+    assert peer_binding.metadata()['intent'] == 'legacy'
+    project.pad_timing_intent[215] = 'legacy'
+    project.pad_key_lock[215] = False
+    project.pad_loop_auto[215] = False
+    project.pad_loop_start_s[215] = 17 / fixture['peer']['rate']
+    project.pad_loop_end_s[215] = 1517 / fixture['peer']['rate']
+    del peer_binding
 if declared_domain:
     project.pad_loop_auto[0] = False
     project.pad_loop_start_s[0] = declared_loop_start / fixture['rate']
@@ -10603,13 +11499,20 @@ from flitzis_looper.controller.transport import TransportController
 transport = TransportController(project, session, playback_audio)
 transport.playback.pause_pad(0)
 transport.playback.pause_pad(215)
-assert session.paused_sample_ids == {0, 215}
+assert not session.paused_sample_ids
+assert all(transport.playback._pause_intent.requested_paused(pad) for pad in (0, 215))
 "#,
         );
+        remember_public_pause_admissions(&locals, true);
         assert_eq!(
             playback.drain(&mut h.consumer),
             2,
             "actual public Pause commands"
+        );
+        assert_public_pause_effect(&locals);
+        controller_python(
+            &locals,
+            "transport.playback.poll_pause_observations()\nassert session.paused_sample_ids == {0, 215}",
         );
         playback
             .reference
@@ -10662,13 +11565,20 @@ assert session.paused_sample_ids == {0, 215}
 assert first.is_current() and first.effective_mode_status() == 'effective'
 transport.playback.pause_pad(0)
 transport.playback.pause_pad(215)
-assert session.paused_sample_ids == {0, 215}
+assert not session.paused_sample_ids
+assert all(transport.playback._pause_intent.requested_paused(pad) for pad in (0, 215))
 "#,
         );
+        remember_public_pause_admissions(&locals, true);
         assert_eq!(
             playback.drain(&mut h.consumer),
             2,
             "actual public V1 Pause before V2 Capture"
+        );
+        assert_public_pause_effect(&locals);
+        controller_python(
+            &locals,
+            "transport.playback.poll_pause_observations()\nassert session.paused_sample_ids == {0, 215}",
         );
         for reference in [&mut playback.reference, &mut playback.full_mix] {
             reference.pause_sample_at_output_frame(0, playback.frame);
@@ -11465,13 +12375,20 @@ assert candidate.claimed() and candidate.is_current()
 assert controller.stem_residency_status(0).effective == 'transitioning'
 transport.playback.resume_pad(0)
 transport.playback.resume_pad(215)
-assert not session.paused_sample_ids
+assert session.paused_sample_ids == {0, 215}
+assert not any(transport.playback._pause_intent.requested_paused(pad) for pad in (0, 215))
 "#,
             );
+            remember_public_pause_admissions(&locals, false);
             assert_eq!(
                 playback.drain(&mut h.consumer),
                 2,
                 "actual public Resume commands"
+            );
+            assert_public_pause_effect(&locals);
+            controller_python(
+                &locals,
+                "transport.playback.poll_pause_observations()\nassert not session.paused_sample_ids",
             );
             playback
                 .reference
@@ -13151,6 +14068,24 @@ fn actual_public_frozen_source_final_reader_resume_retires_outgoing_before_curre
                 false,
                 CandidateTrace::Ordinary,
                 CandidateLifecycle::FrozenResumeReaders,
+            )
+        },
+    );
+}
+
+#[test]
+fn actual_public_paused_frozen_source_readers_refuse_current_bank_resume_until_own_unload() {
+    residual_domain_child(
+        "actual_public_paused_frozen_source_readers_refuse_current_bank_resume_until_own_unload",
+        || {
+            round_trip_with_lifecycle(
+                true,
+                None,
+                true,
+                None,
+                false,
+                CandidateTrace::Ordinary,
+                CandidateLifecycle::FrozenPausedUnload,
             )
         },
     );

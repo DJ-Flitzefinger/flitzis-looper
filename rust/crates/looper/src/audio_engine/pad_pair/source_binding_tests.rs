@@ -72,6 +72,10 @@ fn foreign_live_source_owner_cannot_reserve_either_pair_participant() {
         expected.source_generation,
         binding(&fixture, 0).source_generation
     );
+    assert_ne!(
+        crate::audio_engine::master_provenance::source_identity(&expected),
+        crate::audio_engine::master_provenance::source_identity(&binding(&fixture, 0)),
+    );
     reject_without_reservation(&fixture, &expected);
 }
 
@@ -82,6 +86,10 @@ fn actual_replaced_source_generation_cannot_retarget_original_pair_gesture() {
     fixture.publish(0, 0.75, expected.source_generation + 1);
     assert!(!expected.is_current());
     assert!(binding(&fixture, 0).is_current());
+    assert_ne!(
+        crate::audio_engine::master_provenance::source_identity(&expected),
+        crate::audio_engine::master_provenance::source_identity(&binding(&fixture, 0)),
+    );
     reject_without_reservation(&fixture, &expected);
 }
 
@@ -150,5 +158,9 @@ fn same_pcm_digest_and_generation_replacement_cannot_retarget_original_pair_gest
         original.lifetime()
     );
     assert!(!expected.is_current());
+    assert_ne!(
+        crate::audio_engine::master_provenance::source_identity(&expected),
+        crate::audio_engine::master_provenance::source_identity(&current),
+    );
     reject_without_reservation(&fixture, &expected);
 }

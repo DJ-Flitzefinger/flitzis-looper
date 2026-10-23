@@ -336,10 +336,56 @@ def test_missing_pitch_capture_type_cannot_activate() -> None:
         check(SimpleNamespace(AudioEngine=_CompatiblePitchEngine))
 
 
+def _set_bpm_lock(self: object, enabled: object, *, anchor_binding: object = None) -> None:
+    _forbidden_native_work(self, enabled, anchor_binding=anchor_binding)
+
+
+def _bpm_lock_status(self: object) -> None:
+    _forbidden_native_work(self)
+
+
+def _set_master_period(
+    self: object, period_seconds: float, *, anchor_binding: object = None
+) -> None:
+    _forbidden_native_work(self, period_seconds, anchor_binding=anchor_binding)
+
+
+def _set_speed_and_master_period(
+    self: object, speed: float, period_seconds: float, *, anchor_binding: object = None
+) -> None:
+    _forbidden_native_work(self, speed, period_seconds, anchor_binding=anchor_binding)
+
+
+_GLOBAL_RATE_IMPLEMENTATIONS: dict[str, object] = {
+    "GLOBAL_RATE_PROVENANCE_API_VERSION": 1,
+    "global_rate_status": _forbidden_native_work,
+    "bpm_lock_status": _bpm_lock_status,
+    "set_bpm_lock": _set_bpm_lock,
+    "set_master_period": _set_master_period,
+    "set_speed_and_master_period": _set_speed_and_master_period,
+}
+
+
 def test_global_rate_observation_is_reflected_without_native_work() -> None:
     check = runpy.run_path(str(REPO / "scripts/portable/bootstrap.py"))["check_global_rate_api"]
-    engine_type = type("RateEngine", (), {"global_rate_status": _forbidden_native_work})
+    engine_type = type("RateEngine", (), _GLOBAL_RATE_IMPLEMENTATIONS)
     check(engine_type)
+
+
+@pytest.mark.parametrize("version", [None, True, 0, 2, 1.0, "1"])
+def test_invalid_global_rate_provenance_version_cannot_activate(version: object) -> None:
+    check = runpy.run_path(str(REPO / "scripts/portable/bootstrap.py"))["check_global_rate_api"]
+    attributes = _GLOBAL_RATE_IMPLEMENTATIONS | {"GLOBAL_RATE_PROVENANCE_API_VERSION": version}
+    with pytest.raises(AssertionError, match="GLOBAL_RATE_PROVENANCE_API_VERSION=1"):
+        check(type("InvalidProvenanceEngine", (), attributes))
+
+
+def test_missing_global_rate_provenance_version_cannot_activate() -> None:
+    check = runpy.run_path(str(REPO / "scripts/portable/bootstrap.py"))["check_global_rate_api"]
+    attributes = _GLOBAL_RATE_IMPLEMENTATIONS.copy()
+    del attributes["GLOBAL_RATE_PROVENANCE_API_VERSION"]
+    with pytest.raises(AssertionError, match="GLOBAL_RATE_PROVENANCE_API_VERSION=1"):
+        check(type("OldProvenanceEngine", (), attributes))
 
 
 @pytest.mark.parametrize("missing", [False, True], ids=["not-callable", "absent"])
@@ -348,6 +394,51 @@ def test_global_rate_without_callback_confirmation_cannot_activate(*, missing: b
     attributes = {} if missing else {"global_rate_status": None}
     with pytest.raises(AssertionError, match=r"AudioEngine\.global_rate_status"):
         check(type("OldRateEngine", (), attributes))
+
+
+@pytest.mark.parametrize(
+    "method",
+    ["bpm_lock_status", "set_bpm_lock", "set_master_period", "set_speed_and_master_period"],
+)
+@pytest.mark.parametrize("missing", [False, True], ids=["not-callable", "absent"])
+def test_bpm_lock_without_qualified_api_cannot_activate(method: str, *, missing: bool) -> None:
+    check = runpy.run_path(str(REPO / "scripts/portable/bootstrap.py"))["check_global_rate_api"]
+    attributes = _GLOBAL_RATE_IMPLEMENTATIONS.copy()
+    if missing:
+        del attributes[method]
+    else:
+        attributes[method] = None
+    with pytest.raises(AssertionError, match=method):
+        check(type("OldBpmEngine", (), attributes))
+
+
+@pytest.mark.parametrize("variant", ["absent", "positional", "required", "wrong-default"])
+@pytest.mark.parametrize(
+    "method", ["set_bpm_lock", "set_master_period", "set_speed_and_master_period"]
+)
+def test_bpm_lock_rejects_unqualified_setter_signatures(variant: str, method: str) -> None:
+    check = runpy.run_path(str(REPO / "scripts/portable/bootstrap.py"))["check_global_rate_api"]
+    complete = signature(_GLOBAL_RATE_IMPLEMENTATIONS[method])
+    anchor = complete.parameters["anchor_binding"]
+    if variant == "positional":
+        anchor = anchor.replace(kind=Parameter.POSITIONAL_OR_KEYWORD)
+    elif variant == "required":
+        anchor = anchor.replace(default=Parameter.empty)
+    elif variant == "wrong-default":
+        anchor = anchor.replace(default=False)
+    parameters = list(complete.parameters.values())[:-1]
+    if variant != "absent":
+        parameters.append(anchor)
+    setter = type(
+        "OldBpmSetter",
+        (),
+        {
+            "__call__": _forbidden_native_work,
+            "__signature__": complete.replace(parameters=parameters),
+        },
+    )()
+    with pytest.raises(AssertionError, match="anchor_binding"):
+        check(type("OldBpmEngine", (), _GLOBAL_RATE_IMPLEMENTATIONS | {method: setter}))
 
 
 _ORDINARY_START_METHODS = (
@@ -433,9 +524,7 @@ _ORDINARY_START_IMPLEMENTATIONS: dict[str, object] = {
 _CompatibleOrdinaryEngine = type(
     "CompatibleOrdinaryEngine",
     (_CompatiblePitchEngine,),
-    _ORDINARY_START_IMPLEMENTATIONS
-    | _KEY_START_IMPLEMENTATIONS
-    | {"global_rate_status": _forbidden_native_work},
+    _ORDINARY_START_IMPLEMENTATIONS | _KEY_START_IMPLEMENTATIONS | _GLOBAL_RATE_IMPLEMENTATIONS,
 )
 
 
@@ -933,12 +1022,13 @@ def test_runtime_preflight_accepts_complete_reflected_native_before_activation(
     assert '"portable_preflight": "passed"' in capsys.readouterr().out
 
 
+@pytest.mark.parametrize("method", ["global_rate_status", "bpm_lock_status"])
 def test_runtime_rejects_missing_rate_confirmation_before_app_imports(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, method: str
 ) -> None:
     bootstrap = runpy.run_path(str(REPO / "scripts/portable/bootstrap.py"))
     checkout = tmp_path / "flitzis-looper"
-    old_engine = type("OldRateEngine", (_CompatibleOrdinaryEngine,), {"global_rate_status": None})
+    old_engine = type("OldRateEngine", (_CompatibleOrdinaryEngine,), {method: None})
     native = SimpleNamespace(
         flitzis_looper_audio=SimpleNamespace(
             __file__=str(checkout / "src/flitzis_looper_audio/native.pyd")
@@ -954,6 +1044,6 @@ def test_runtime_rejects_missing_rate_confirmation_before_app_imports(
     )
     imported = Mock(return_value=native)
     monkeypatch.setattr(bootstrap["importlib"], "import_module", imported)
-    with pytest.raises(AssertionError, match=r"AudioEngine\.global_rate_status"):
+    with pytest.raises(AssertionError, match=rf"AudioEngine\.{method}"):
         bootstrap["check_runtime"](tmp_path, checkout, tmp_path / "Runtime")
     imported.assert_called_once_with("flitzis_looper_audio")

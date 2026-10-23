@@ -9,6 +9,7 @@ from imgui_bundle import imgui
 
 from flitzis_looper.controller.current_timing import CurrentPadTiming
 from flitzis_looper.models import PadContentIdentity
+from flitzis_looper.source_sync_intent import PadSourceSyncIntent
 from flitzis_looper.timing_policy import GlobalTimingPolicy
 from flitzis_looper.ui.render import source_beatmap_editor, waveform_editor
 from tests.flitzis_looper.controller.test_source_sync import _adoption
@@ -148,6 +149,8 @@ def _expose(
     monkeypatch: pytest.MonkeyPatch,
     geometry: Mock | None,
 ) -> tuple[Mock, Mock]:
+    ctx._controller.project.multi_loop = True
+    ctx._controller.project.bpm_lock = True
     maps = ctx.ui.source_map.selection
     monkeypatch.setattr(maps, "effective", Mock(return_value=geometry))
     monkeypatch.setattr(maps, "is_selected", lambda _pad: geometry is not None)
@@ -270,11 +273,11 @@ def test_actual_sync_click_changes_request_and_keeps_readiness_and_refusal_truth
         assert controller.project.pad_source_sync_intent[0].requested
         assert controller.project.pad_source_sync_intent[0].revision == 1
         assert ctx.audio.pads.source_sync_status(0).state == "stopped"
-        assert any("SYNC requested ON | Audio OFF | stopped" in label for label in rendered)
+        assert any("SYNC requested ON | Mode OFF | stopped" in label for label in rendered)
         technical = "mapped Native h/r tuple unavailable: diagnostic ID42"
         controller.transport.residency.report_launch_error(0, technical)
         frames.append(_full_frame(ctx, worker, observer))
-        assert any("SYNC requested ON | Audio OFF | refused" in label for label in rendered)
+        assert any("SYNC requested ON | Mode OFF | refused" in label for label in rendered)
         assert all(technical not in label and "ID42" not in label for label in rendered)
         assert technical in capsys.readouterr().err
         assert len(children) >= 10
@@ -314,7 +317,7 @@ def test_full_editor_live_policy_guidance_preserves_actual_audio_and_console_det
         )
         # This callback double supplies observations; it is not an admission proof.
         adoption = _adoption(
-            target_mode="off",
+            target_mode="legacy",
             target_policy_revision=2,
             target_policy_sync=False,
             target_policy_realtime_bpm=False,
@@ -362,7 +365,7 @@ def test_full_editor_live_policy_guidance_preserves_actual_audio_and_console_det
             rendered.clear()
             _full_frame(ctx, worker, observer)
             assert message in rendered
-            assert any("SYNC requested OFF | Audio ON" in label for label in rendered)
+            assert any("SYNC requested OFF | Mode ON" in label for label in rendered)
             assert all("Start/retrigger" not in label for label in rendered)
             assert all("Live timing adoption refused:" not in label for label in rendered)
         assert "Live timing adoption refused: unsupported" in capsys.readouterr().err
@@ -377,6 +380,9 @@ def test_full_editor_moves_one_sample_translates_and_undoes_with_same_revision(
         ctx.ui.waveform.open(0)
         geometry = _map()
         edit, _identity = _expose(ctx, monkeypatch, geometry)
+        controller.project.pad_source_sync_intent[0] = PadSourceSyncIntent(
+            requested=True, revision=0
+        )
         observer = _observe_draw(monkeypatch)
         before = controller.project.model_dump()
         frames = [_full_frame(ctx, worker, observer) for _ in range(5)]
@@ -459,6 +465,10 @@ def test_map_toolbar_release_cannot_transfer_to_replacement_target(
         ctx.ui.waveform.open(0)
         geometry = _map()
         _edit, identity = _expose(ctx, monkeypatch, geometry)
+        controller.project.pad_source_sync_intent[0] = PadSourceSyncIntent(
+            requested=True, revision=0
+        )
+        assert controller.project.resolve_pad_realtime_bpm(0)
         action = Mock()
         monkeypatch.setattr(ctx.audio.pads, method, action)
         observer = _observe_draw(monkeypatch)
@@ -480,10 +490,12 @@ def test_selected_unavailable_map_never_draws_a_scalar_substitute(
 ) -> None:
     ctx = _context(controller, Mock())[0]
     _expose(ctx, monkeypatch, None)
+    controller.project.pad_source_sync_intent[0] = PadSourceSyncIntent(requested=True, revision=0)
     monkeypatch.setattr(ctx.ui.source_map.selection, "is_selected", lambda _pad: True)
     monkeypatch.setattr(ctx.ui.source_map.selection, "status", lambda _pad: "restoring")
     scalar = Mock(side_effect=AssertionError("selected map must not fall back to scalar"))
     monkeypatch.setattr(waveform_editor, "visible_grid_lines", scalar)
+    monkeypatch.setattr(waveform_editor, "_plot_px_per_sec", Mock(return_value=100.0))
 
     waveform_editor._plot_musical_grid(
         ctx,
@@ -497,6 +509,46 @@ def test_selected_unavailable_map_never_draws_a_scalar_substitute(
     scalar.assert_not_called()
 
 
+@pytest.mark.parametrize("parent", ["multi_loop", "bpm_lock", "sync"])
+def test_inactive_parent_uses_static_grid_without_erasing_selected_map(
+    controller: AppController, monkeypatch: pytest.MonkeyPatch, parent: str
+) -> None:
+    ctx = _context(controller, Mock())[0]
+    geometry = _map()
+    _expose(ctx, monkeypatch, geometry)
+    project = controller.project
+    project.pad_source_sync_intent[0] = PadSourceSyncIntent(requested=True, revision=4)
+    project.global_timing_policy = GlobalTimingPolicy(
+        schema_version=1, sync=parent != "sync", realtime_bpm=True, revision=2
+    )
+    if parent != "sync":
+        setattr(project, parent, False)
+    original = project.model_dump()
+    scalar = Mock(return_value=())
+    map_draw = Mock()
+    monkeypatch.setattr(waveform_editor, "visible_grid_lines", scalar)
+    monkeypatch.setattr(waveform_editor, "_plot_source_map_grid", map_draw)
+    monkeypatch.setattr(waveform_editor, "_plot_px_per_sec", Mock(return_value=100.0))
+    monkeypatch.setattr(waveform_editor, "_draw_musical_grid_lines", Mock())
+    monkeypatch.setattr(waveform_editor, "_draw_musical_grid_labels", Mock())
+
+    waveform_editor._plot_musical_grid(
+        ctx,
+        0,
+        Mock(),
+        0.0,
+        4.0,
+        timing=CurrentPadTiming(period_seconds=0.5, origin_seconds=0.0, sample_rate_hz=48000),
+    )
+
+    scalar.assert_called_once()
+    assert scalar.call_args.kwargs["period_seconds"] == 0.5
+    map_draw.assert_called_once()
+    assert map_draw.call_args.kwargs["draw_grid"] is False
+    assert ctx.ui.source_map.selection.is_selected(0)
+    assert project.model_dump() == original
+
+
 @pytest.mark.parametrize(("position", "expected_bpm"), [(0.5, 110), (1.5, 110), (0.25, 120)])
 def test_local_source_tempo_uses_retained_playhead_after_seek_or_wrap(
     controller: AppController,
@@ -507,6 +559,7 @@ def test_local_source_tempo_uses_retained_playhead_after_seek_or_wrap(
     ctx = _context(controller, Mock())[0]
     geometry = _map()
     _expose(ctx, monkeypatch, geometry)
+    controller.project.pad_source_sync_intent[0] = PadSourceSyncIntent(requested=True, revision=0)
     controller.session.pad_playhead_s[0] = position
     frame = source_beatmap_editor.capture_source_map(ctx, 0)
 

@@ -8,7 +8,7 @@ import hashlib
 import json
 import struct
 from typing import TYPE_CHECKING, cast
-from unittest.mock import Mock
+from unittest.mock import Mock, call
 
 import pytest
 
@@ -125,6 +125,9 @@ def mapped_loop(controller: AppController, audio_engine_mock: Mock) -> Mock:
     controller.project.pad_loop_end_s[0] = None
     controller.project.pad_loop_bars[0] = 1.0
     controller.project.pad_loop_auto[0] = True
+    controller.project.multi_loop = True
+    controller.project.bpm_lock = True
+    controller.project.pad_source_sync_intent[0] = PadSourceSyncIntent(requested=True, revision=1)
     return _bind_map(controller, _geometry())
 
 
@@ -138,19 +141,57 @@ def _intent(controller: AppController) -> tuple[float, float | None, bool, float
     )
 
 
-def test_selection_preserves_existing_scalar_auto_region_until_explicit_map_bars(
+def test_selection_with_available_sync_parents_uses_map_bars_without_changing_source_timing(
     controller: AppController, audio_engine_mock: Mock, mapped_loop: Mock
 ) -> None:
-    assert controller.transport.loop.requested_region(0) == (1.0, 3.0)
+    assert controller.transport.loop.requested_region(0) == (1.0, 3.5)
     assert _intent(controller) == (1.0, None, True, 1.0)
     audio_engine_mock.set_pad_loop_region.assert_not_called()
 
     controller.transport.loop.set_bars(0, bars=1.0)
 
-    assert _intent(controller) == (1.0, 3.5, False, 1.0)
+    assert _intent(controller) == (1.0, 3.5, True, 1.0)
     audio_engine_mock.set_pad_loop_region.assert_called_once_with(
         0, 1.0, 3.5, expected_source_generation=1
     )
+    assert mapped_loop.effective.call_args_list == [call(0), call(0)]
+    audio_engine_mock.set_pad_bpm.assert_not_called()
+    audio_engine_mock.set_pad_timing_metadata.assert_not_called()
+
+
+@pytest.mark.parametrize("operation", ["bars", "end", "snap", "max"])
+def test_variable_loop_operation_retains_one_captured_map(
+    controller: AppController, audio_engine_mock: Mock, mapped_loop: Mock, operation: str
+) -> None:
+    geometry = _geometry()
+    mapped_loop.effective.side_effect = [geometry, AssertionError("Unexpected second map lookup.")]
+    previous = controller.project.model_dump()
+    if operation == "max":
+        assert controller.transport.loop.max_auto_loop_bars(0) == 2.5
+        assert controller.project.model_dump() == previous
+        audio_engine_mock.set_pad_loop_region.assert_not_called()
+        audio_engine_mock.current_input_runtime_pad_binding.assert_not_called()
+    else:
+        actions = {
+            "bars": lambda: controller.transport.loop.apply_source_map_bars(0, 1.0),
+            "end": lambda: controller.transport.loop.set_end(0, 5.0390625),
+            "snap": lambda: controller.transport.loop.snap_source_map_markers(0),
+        }
+        actions[operation]()
+        expected = (
+            (1.0, 5.078125, False, 1.0)
+            if operation == "end"
+            else (
+                1.0,
+                3.5,
+                operation == "bars",
+                1.0,
+            )
+        )
+        assert _intent(controller) == expected
+        audio_engine_mock.set_pad_loop_region.assert_called_once_with(
+            0, expected[0], expected[1], expected_source_generation=1
+        )
     mapped_loop.effective.assert_called_once_with(0)
     audio_engine_mock.set_pad_bpm.assert_not_called()
     audio_engine_mock.set_pad_timing_metadata.assert_not_called()
@@ -210,6 +251,7 @@ def test_explicit_map_markers_keep_materialized_region_when_map_is_cleared(
     controller: AppController, mapped_loop: Mock
 ) -> None:
     controller.transport.loop.apply_source_map_bars(0)
+    controller.transport.loop.set_auto(0, enabled=False)
     mapped_loop.effective.return_value = None
     mapped_loop.is_selected.return_value = False
 
@@ -242,7 +284,7 @@ def test_map_auto_start_edit_snaps_and_uses_variable_bar_endpoint(
     start = round(2.046875 * 48_000) / 48_000
     # Beat 8+1/16 lies in the slower third segment, at this independent fixture coordinate.
     end = 5.078125
-    assert _intent(controller) == (start, end, False, 1.0)
+    assert _intent(controller) == (start, end, True, 1.0)
     audio_engine_mock.set_pad_loop_region.assert_called_once_with(
         0, start, end, expected_source_generation=1
     )

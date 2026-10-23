@@ -120,7 +120,7 @@ impl Path {
                     vec![0.0; NUM_SAMPLES],
                     vec![Some(END as f64 / f64::from(RATE)); NUM_SAMPLES],
                     Some(bindings),
-                    None,
+                    Some(requested_pitch_rows(py)),
                     Some(rows),
                     policy.map(|value| value.to_string()),
                 )
@@ -292,6 +292,29 @@ impl Path {
     }
 }
 
+fn requested_pitch_rows(py: Python<'_>) -> Vec<Py<PyDict>> {
+    (0..NUM_SAMPLES)
+        .map(|_| {
+            let row = PyDict::new(py);
+            for key in [
+                "source_root",
+                "source_mode",
+                "correction_root",
+                "correction_mode",
+                "quantize_step_64ths",
+            ] {
+                row.set_item(key, py.None()).unwrap();
+            }
+            for key in ["base_shift", "extra_shift", "request_sequence"] {
+                row.set_item(key, 0).unwrap();
+            }
+            row.set_item("key_lock", false).unwrap();
+            row.set_item("sync", true).unwrap();
+            row.unbind()
+        })
+        .collect()
+}
+
 fn wire(sync: bool, realtime: bool, revision: u64) -> Value {
     json!({"schema_version":1,"sync":sync,"realtime_bpm":realtime,"revision":revision})
 }
@@ -331,16 +354,16 @@ fn verify_reads(path: &Path, mode: SourceSyncMode, frames: usize) {
 #[test]
 fn four_explicit_modes_drive_real_callback_reads_feedback_and_partition_invariant_pcm() {
     for (sync, realtime, mode) in [
-        (false, false, SourceSyncMode::Off),
-        (false, true, SourceSyncMode::Off),
+        (false, false, SourceSyncMode::Legacy),
+        (false, true, SourceSyncMode::Legacy),
         (true, false, SourceSyncMode::Fixed),
         (true, true, SourceSyncMode::Mapped),
     ] {
         let mut captures = Vec::new();
         for partitions in [&[31, 7, 113][..], &[128, 17, 43][..]] {
-            // Explicit OFF overrides real old BPM matching; explicit Mapped is
-            // tested with old BPM Lock OFF and the same real fixed master.
-            let mut path = Path::new(!sync);
+            // Both requested and actual parents are explicit. Inactive requested
+            // SYNC remains Legacy; this matrix disables its actual BPM matching.
+            let mut path = Path::new(sync);
             let original = path.timeline;
             let owned = sync.then(|| path.map());
             path.publish(
@@ -407,10 +430,10 @@ fn active_fixed_policy_and_full_identity_survive_requested_off_and_away_back_unt
     assert_eq!(restarted.state(), "applied");
     path.render(5);
     let next = path.feedback(0);
-    assert_eq!(next["policy_mode"], "off");
+    assert_eq!(next["policy_mode"], "legacy");
     assert_eq!(next["policy_revision"], 3);
     assert_eq!(next["effective"], false);
-    assert_eq!(path.voice(0).source_playback.tempo_ratio(), 1.5);
+    assert!((path.voice(0).source_playback.tempo_ratio() - 1.25).abs() < 1e-12);
 }
 
 #[test]
@@ -427,7 +450,7 @@ fn fixed_missing_or_out_of_range_timing_refuses_and_does_not_replace_old_audio()
         assert_eq!(refused.state(), "rejected");
         assert_eq!(refused.reason(), Some("timing_unavailable"));
         assert_eq!(path.voice(0).sync_request.global_revision, Some(1));
-        assert_eq!(path.voice(0).sync_request.mode, SourceSyncMode::Off);
+        assert_eq!(path.voice(0).sync_request.mode, SourceSyncMode::Legacy);
         path.render(9);
         assert_eq!(path.feedback(0)["policy_revision"], 1);
     }
@@ -436,7 +459,7 @@ fn fixed_missing_or_out_of_range_timing_refuses_and_does_not_replace_old_audio()
 #[test]
 fn runtime_midi_fixed_and_global_fixed_off_captures_adopt_the_actual_request() {
     for midi in [false, true] {
-        let mut path = Path::new(false);
+        let mut path = Path::new(true);
         path.publish(Some(wire(true, false, 19)), true, None);
         let runtime = path.source.engine.input_runtime.as_ref().unwrap();
         if midi {
@@ -470,8 +493,8 @@ fn runtime_midi_fixed_and_global_fixed_off_captures_adopt_the_actual_request() {
         assert_eq!(path.feedback(0)["effective"], true);
     }
     for sync in [false, true] {
-        // GLOBAL OFF must override enabled old BPM matching for every member.
-        let mut path = Path::new(!sync);
+        // Inactive requested SYNC remains Legacy under the actual BPM parent.
+        let mut path = Path::new(sync);
         let original = path.timeline;
         path.publish(Some(wire(sync, false, 23)), true, None);
         let captured = Python::attach(|py| {
@@ -515,7 +538,7 @@ fn runtime_midi_fixed_and_global_fixed_off_captures_adopt_the_actual_request() {
         let mode = if sync {
             SourceSyncMode::Fixed
         } else {
-            SourceSyncMode::Off
+            SourceSyncMode::Legacy
         };
         let ratio = if sync { 1.25 } else { 1.5 };
         verify_reads(&path, mode, 13);
@@ -558,10 +581,10 @@ fn old_legacy_matching_and_explicit_pad_optout_have_different_actual_scalar_ack(
     assert_eq!(path.start().state(), "applied");
     path.render(11);
     let off = path.feedback(0);
-    assert_eq!(off["policy_mode"], "off");
+    assert_eq!(off["policy_mode"], "legacy");
     assert_eq!(off["policy_revision"], 1);
     assert_eq!(off["effective"], false);
-    assert_eq!(path.voice(0).source_playback.tempo_ratio(), 1.5);
+    assert!((path.voice(0).source_playback.tempo_ratio() - 1.25).abs() < 1e-12);
 }
 
 #[test]
@@ -586,7 +609,7 @@ fn same_revision_same_mode_different_frozen_choices_cancel_old_capture_without_b
     path.render(7);
     let adopted = path.feedback(0);
     assert_eq!(adopted["policy_revision"], 0);
-    assert_eq!(adopted["policy_mode"], "off");
+    assert_eq!(adopted["policy_mode"], "legacy");
     assert_eq!(adopted["policy_realtime_bpm"], true);
 
     let mut mapped = Path::new(true);
@@ -630,7 +653,7 @@ fn fixed_and_off_global_rate_targets_use_the_adopted_policy_and_fixed_ack_waits_
         assert_eq!(preparing["settled"], false);
         assert_eq!(preparing["effective"], false);
         path.render(9000);
-        let expected = if sync { SOURCE / period } else { 0.75 };
+        let expected = SOURCE / period;
         assert!((path.voice(0).source_playback.tempo_ratio() - expected).abs() < 1e-12);
         assert_eq!(path.voice(0).generation, generation);
         let settled = path.feedback(0);
@@ -667,8 +690,10 @@ fn missing_map_or_actual_master_cannot_fall_back_or_create_fixed_effectiveness()
     let (_job, delivery) = path.map();
     path.publish(Some(wire(true, true, 4)), true, Some(&delivery));
     let mapped = path.start();
+    assert!(mapped.mapped_geometry().is_some());
     assert_eq!(mapped.state(), "rejected");
-    assert_eq!(mapped.reason(), Some("mapped_timing_unavailable"));
+    // The real mapped owner cannot pass the earlier actual-BPM requirement.
+    assert_eq!(mapped.reason(), Some("timing_unavailable"));
     assert_eq!(path.timeline.master_period_seconds(), Some(MASTER));
     assert!(!path.source.mixer.voices.iter().any(|voice| voice.active));
 }

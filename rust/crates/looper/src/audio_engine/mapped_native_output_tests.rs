@@ -396,7 +396,10 @@ fn captured_fixture_with_geometry(
             vec![0.0; NUM_SAMPLES],
             vec![Some(duration); NUM_SAMPLES],
             bindings.iter().map(Option::as_ref).collect(),
-            None,
+            Some(vec![crate::audio_engine::input_mapping::PitchPadProjection {
+                sync: true,
+                ..Default::default()
+            }; NUM_SAMPLES]),
             Some(rows),
         )
         .unwrap();
@@ -406,6 +409,7 @@ fn captured_fixture_with_geometry(
         .engine
         .capture_pad_start(0, 0.0, Some(duration), 1.0, false, None, None)
         .unwrap();
+    assert!(captured.mapped_geometry().is_some());
     mapped_fixed_pitch_birth_tests::drain_grid(&mut path);
     let target = captured.target_frame().unwrap();
     assert_eq!(target, (SPAN / 2) as u64);

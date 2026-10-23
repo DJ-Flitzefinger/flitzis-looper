@@ -20,7 +20,6 @@ from flitzis_looper.controller.scalar_grid import (
 from flitzis_looper.controller.timing_metadata import timing_anchor_sec_from_analysis
 from flitzis_looper.controller.validation import ensure_finite
 from flitzis_looper.models import validate_sample_id
-from flitzis_looper.timing_policy import variable_source_timing
 
 if TYPE_CHECKING:
     from flitzis_looper.controller.source_beatmap_selection import SourceBeatmapSelection
@@ -59,14 +58,23 @@ class PadLoopController:
         return self._source_maps is not None and self._source_maps.is_selected(sample_id)
 
     def _variable_map_selected(self, sample_id: int) -> bool:
-        return variable_source_timing(
-            self._project.global_timing_policy
-        ) and self._source_map_selected(sample_id)
+        return self._project.resolve_pad_realtime_bpm(sample_id) and self._source_map_selected(
+            sample_id
+        )
 
     def _requires_variable_map(self, sample_id: int) -> bool:
-        return variable_source_timing(
-            self._project.global_timing_policy
-        ) and self._project.resolve_pad_source_sync(sample_id)
+        return self._project.resolve_pad_realtime_bpm(sample_id)
+
+    def _ensure_retained_map_edit_safe(self, sample_id: int) -> None:
+        """An inactive request cannot give scalar edits custody of an old mapped voice."""
+        if self._project.resolve_pad_realtime_bpm(sample_id):
+            return
+        if not callable(getattr(self._audio, "pad_source_sync_status", None)):
+            return
+        feedback = self._transport.source_sync._observation(sample_id)
+        if feedback is not None and feedback.get("policy_mode") == "mapped" and feedback["active"]:
+            message = "Loop editing is waiting for the actual mapped voice to convert or stop."
+            raise ValueError(message)
 
     def _source_map_snapshot(self, sample_id: int) -> tuple[SourceBeatmap, int, float]:
         geometry = None if self._source_maps is None else self._source_maps.effective(sample_id)
@@ -87,6 +95,12 @@ class PadLoopController:
             raise ValueError(message)
         return geometry, rate, duration
 
+    def _source_map_start(self, sample_id: int, sample_rate_hz: int) -> float:
+        """Read the physical marker without resolving another map's automatic end."""
+        return physical_source_marker_s(
+            float(self._project.pad_loop_start_s[sample_id]), sample_rate_hz=sample_rate_hz
+        )
+
     @staticmethod
     def _source_map_marker(
         geometry: SourceBeatmap, result: SourceBeatmapEvaluation, sample_rate_hz: int
@@ -104,8 +118,8 @@ class PadLoopController:
         return physical_source_marker_s(value, sample_rate_hz=sample_rate_hz)
 
     def _capture_source_map_edit(self, sample_id: int) -> _SourceMapLoopEdit:
-        if not variable_source_timing(self._project.global_timing_policy):
-            message = "Realtime BPM is OFF; source-map physical loop actions are unavailable."
+        if not self._project.resolve_pad_realtime_bpm(sample_id):
+            message = "Variable source timing is unavailable; source-map loop actions are disabled."
             raise ValueError(message)
         generation = self._transport.capture_current_pad_edit_generation(sample_id)
         if generation is None:
@@ -193,8 +207,7 @@ class PadLoopController:
             self._stored_bars(sample_id) if bars is None else bars
         )
         edit = self._capture_source_map_edit(sample_id)
-        start, _ = self.requested_region(sample_id, timing=edit.timing)
-        start = physical_source_marker_s(start, sample_rate_hz=edit.rate)
+        start = self._source_map_start(sample_id, edit.rate)
         end = self._source_map_bar_end(edit, start, bars)
         self._publish_source_map_region(
             sample_id,
@@ -209,7 +222,12 @@ class PadLoopController:
         """Snap both requested physical markers through one current Native map snapshot."""
         validate_sample_id(sample_id)
         edit = self._capture_source_map_edit(sample_id)
-        start, end = self.requested_region(sample_id, timing=edit.timing)
+        start = self._source_map_start(sample_id, edit.rate)
+        end = (
+            self._source_map_bar_end(edit, start, self._stored_bars(sample_id))
+            if self._project.pad_loop_auto[sample_id]
+            else self._project.pad_loop_end_s[sample_id]
+        )
         start, end = self._source_map_interval(
             edit,
             edit.geometry.nearest_grid_source(start, 1.0 / 16.0),
@@ -233,7 +251,7 @@ class PadLoopController:
 
     def _set_source_map_end(self, sample_id: int, end: float | None) -> None:
         edit = self._capture_source_map_edit(sample_id)
-        start, _ = self.requested_region(sample_id, timing=edit.timing)
+        start = self._source_map_start(sample_id, edit.rate)
         start, end = self._source_map_interval(
             edit,
             edit.geometry.evaluate_source(start),
@@ -243,13 +261,10 @@ class PadLoopController:
         )
         self._publish_source_map_region(sample_id, edit, start, end)
 
-    def _max_source_map_bars(
-        self, sample_id: int, *, timing: CurrentPadTiming | None
-    ) -> float | None:
+    def _max_source_map_bars(self, sample_id: int) -> float | None:
         try:
             geometry, rate, duration = self._source_map_snapshot(sample_id)
-            start, _ = self.requested_region(sample_id, timing=timing)
-            start = physical_source_marker_s(start, sample_rate_hz=rate)
+            start = self._source_map_start(sample_id, rate)
             first, last = geometry.evaluate_source(start), geometry.evaluate_source(duration)
             self._source_map_marker(geometry, first, rate)
             self._source_map_marker(geometry, last, rate)
@@ -282,6 +297,7 @@ class PadLoopController:
     ) -> None:
         """Commit saved markers after admission; resident ACKs retain their own owner."""
         try:
+            self._ensure_retained_map_edit_safe(sample_id)
             if physical_region is None:
                 self._apply_effective_pad_loop_region_to_audio(
                     sample_id, timing=timing, expected_source_generation=expected_source_generation
@@ -550,6 +566,8 @@ class PadLoopController:
         if grid_offset_samples == self._project.pad_grid_offset_samples[sample_id]:
             return
 
+        self._ensure_retained_map_edit_safe(sample_id)
+
         if self._project.sample_paths[sample_id] is not None:
             # An explicit offset edit is legacy intent. Successful native publication
             # revokes accepted authority; failed publication leaves saved intent intact.
@@ -666,7 +684,7 @@ class PadLoopController:
 
         timing = self._resolve_timing(sample_id, timing)
         if self._variable_map_selected(sample_id) or self._requires_variable_map(sample_id):
-            return self._max_source_map_bars(sample_id, timing=timing)
+            return self._max_source_map_bars(sample_id)
         if timing is None:
             return None
 
@@ -765,33 +783,14 @@ class PadLoopController:
     def _auto_policy_region(
         self, sample_id: int, *, start: float, end: float | None, bars: float
     ) -> tuple[float, float | None] | None:
-        policy = self._project.global_timing_policy
-        preserve = (
-            not policy.is_neutral
-            and variable_source_timing(policy)
-            and not self._project.resolve_pad_source_sync(sample_id)
-        )
-        try:
-            mapped = self._mapped_auto_region(sample_id, start=start, bars=bars)
-        except RuntimeError, ValueError:
-            if not preserve:
-                raise
-            mapped = None
-        if mapped is None and preserve and self._source_map_selected(sample_id):
-            # OFF playback can retain its existing physical loop while variable
-            # grid/auto-map edits remain unsupported. Never relabel it as fixed bars.
-            return start, end
-        return mapped
+        # Requested inactive geometry is scalar. Existing mapped audio keeps its
+        # Native owner; _ensure_retained_map_edit_safe fences scalar loop edits.
+        return self._mapped_auto_region(sample_id, start=start, bars=bars)
 
     def _mapped_auto_region(
         self, sample_id: int, *, start: float, bars: float
     ) -> tuple[float, float] | None:
-        policy = self._project.global_timing_policy
-        if not variable_source_timing(policy):
-            return None
-        if not self._project.resolve_pad_source_sync(sample_id) and (
-            policy.is_neutral or not self._source_map_selected(sample_id)
-        ):
+        if not self._project.resolve_pad_realtime_bpm(sample_id):
             return None
         geometry = None if self._source_maps is None else self._source_maps.effective(sample_id)
         if geometry is None:

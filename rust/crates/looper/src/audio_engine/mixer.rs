@@ -8,9 +8,11 @@
 //! [`decode_audio_file_to_sample_buffer`](crate::audio_engine::sample_loader::decode_audio_file_to_sample_buffer).
 
 mod bank_mutation;
+mod bpm_lock;
 mod capture;
 mod endpoint_reserve;
 mod global_rate;
+pub(crate) use bpm_lock::BpmLockTarget;
 #[path = "mixer/hold_action.rs"]
 mod hold_action;
 mod key_lock_tuple;
@@ -71,6 +73,12 @@ use cpal::Sample;
 use std::sync::Arc;
 use std::sync::atomic::AtomicU64;
 use std::sync::atomic::Ordering;
+
+type MixerSourceOwners = (
+    Arc<CurrentTimingAcknowledgements>,
+    Arc<super::input_runtime_binding::InputRuntimeOwnership>,
+    Vec<Arc<AtomicU64>>,
+);
 
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum SnapshotKind {
@@ -259,6 +267,7 @@ pub struct RtMixer {
     key_lock_start_drain_revision: Option<u64>,
     key_lock_start_commands_drained: bool,
     global_rate: Option<Box<global_rate::GlobalRateCoordinator>>,
+    pending_bpm_lock: Option<BpmLockTarget>,
     // One original prepared/pending/active/terminal owner, returned whole off RT.
     mix_capture: Option<Box<super::mix_capture::CaptureRt>>,
     mix_capture_pending_start: Option<u64>,
@@ -353,6 +362,17 @@ pub struct RtMixer {
     _key_lock_preparation_worker: KeyLockPreparationWorker,
     pub(crate) pitch_runtime: Option<super::pitch_runtime::PitchRuntime>,
     _pitch_preparation_worker: super::pitch_actions::PitchActionPreparationWorker,
+}
+
+#[derive(Clone, Copy)]
+pub(crate) struct PreparedLoopEdit {
+    id: usize,
+    start: usize,
+    end: Option<usize>,
+    previous: Option<FrameRange>,
+    cuts: [bool; MAX_VOICES],
+    processing: bool,
+    unchanged: bool,
 }
 
 impl RtMixer {
@@ -860,7 +880,7 @@ impl RtMixer {
     /// A new `RtMixer` instance with empty sample bank and no active voices.
     #[cfg(test)]
     pub fn new(channels: usize, sample_rate_hz: f32) -> Self {
-        Self::try_new(channels, sample_rate_hz).expect("failed to prepare test mixer")
+        Self::try_new(channels, sample_rate_hz, None).expect("failed to prepare test mixer")
     }
 
     /// Observe the actual adopted bank without manufacturing a control-side Ready state.
@@ -920,6 +940,7 @@ impl RtMixer {
     pub(crate) fn try_new(
         channels: usize,
         sample_rate_hz: f32,
+        source_owners: Option<MixerSourceOwners>,
     ) -> Result<Self, KeyLockPreparationError> {
         let sample_rate_hz = if sample_rate_hz.is_finite() && sample_rate_hz > 0.0 {
             sample_rate_hz
@@ -932,6 +953,17 @@ impl RtMixer {
         let mut lanes = lanes.into_iter();
         let (pitch_runtime, pitch_worker) = super::pitch_runtime::PitchRuntime::new()
             .map_err(KeyLockPreparationError::WorkerSpawn)?;
+        let (current_timing_acknowledgements, input_runtime_ownership, prepared_source_epochs) =
+            source_owners.unwrap_or_else(|| {
+                (
+                    Arc::default(),
+                    Arc::default(),
+                    (0..NUM_SAMPLES).map(|_| Arc::default()).collect(),
+                )
+            });
+        // Preserve worker-startup error precedence. Invalid internal arguments
+        // cannot publish policy invalidation or a partially constructed mixer.
+        assert_eq!(prepared_source_epochs.len(), NUM_SAMPLES);
 
         Ok(Self {
             channels,
@@ -946,6 +978,7 @@ impl RtMixer {
             key_lock_start_drain_revision: None,
             key_lock_start_commands_drained: false,
             global_rate: Some(Box::new(global_rate::GlobalRateCoordinator::default())),
+            pending_bpm_lock: None,
             mix_capture: None,
             mix_capture_pending_start: None,
             mix_capture_pending_group: None,
@@ -964,9 +997,9 @@ impl RtMixer {
             pad_period_seconds: std::array::from_fn(|_| None),
             pad_phase_anchor_frame: std::array::from_fn(|_| 0.0),
             pad_accepted_timing: std::array::from_fn(|_| None),
-            input_runtime_ownership: Arc::default(),
-            current_timing_acknowledgements: Arc::default(),
-            prepared_source_epochs: (0..NUM_SAMPLES).map(|_| Arc::default()).collect(),
+            input_runtime_ownership,
+            current_timing_acknowledgements,
+            prepared_source_epochs,
             source_control_revisions: [0; NUM_SAMPLES],
             deferred_control: None,
             hold_actions: std::array::from_fn(|_| None),
@@ -1055,6 +1088,21 @@ impl RtMixer {
     pub(crate) fn set_prepared_source_epochs(&mut self, epochs: Vec<Arc<AtomicU64>>) {
         assert_eq!(epochs.len(), NUM_SAMPLES);
         self.prepared_source_epochs = epochs;
+    }
+
+    #[cfg(test)]
+    pub(crate) fn source_owners_for_test(
+        &self,
+    ) -> (
+        &Arc<CurrentTimingAcknowledgements>,
+        &Arc<super::input_runtime_binding::InputRuntimeOwnership>,
+        &[Arc<AtomicU64>],
+    ) {
+        (
+            &self.current_timing_acknowledgements,
+            &self.input_runtime_ownership,
+            &self.prepared_source_epochs,
+        )
     }
 
     pub(crate) fn set_global_commands_drained(&mut self, drained: bool) {
@@ -1275,6 +1323,27 @@ impl RtMixer {
                     }) && self.timing_for_voice(voice).accepted == binding.accepted
                 })
             && self.source_binding_current(id, binding)
+    }
+
+    /// The original admitted fields remain readable while the content marker is held.
+    pub(crate) fn refresh_admitted_binding_current(
+        &self,
+        id: usize,
+        binding: super::input_runtime_binding::InputPadBinding,
+    ) -> bool {
+        self.admitted_source_binding_current(id, binding)
+            && self
+                .voices
+                .iter()
+                .filter(|voice| voice.active && voice.sample_id == id)
+                .all(|voice| {
+                    voice.sample.as_ref().is_some_and(|sample| {
+                        sample.source_address() == binding.source_address
+                            && sample.source_sample_count() == binding.sample_count
+                            && sample.channels == binding.channels
+                            && sample.resident_binding() == binding.resident
+                    }) && self.timing_for_voice(voice).accepted == binding.accepted
+                })
     }
 
     #[cfg(test)]
@@ -1771,29 +1840,6 @@ impl RtMixer {
                     !self.loop_edit_cuts_voice(voice, region)
                         || voice.stretch.source_cut_available()
                 })
-    }
-
-    fn reserve_loop_cuts(&mut self, id: usize, sample: &SampleBuffer, region: FrameRange) -> bool {
-        let mut cuts = [false; MAX_VOICES];
-        for (index, voice) in self.voices.iter().enumerate() {
-            cuts[index] = voice.is_playing_sample(id)
-                && voice
-                    .sample
-                    .as_ref()
-                    .is_some_and(|old| old.same_source(sample))
-                && self.loop_edit_cuts_voice(voice, region);
-        }
-        if self.pad_pitch_processing_enabled(id)
-            && self
-                .voices
-                .iter()
-                .enumerate()
-                .any(|(index, voice)| cuts[index] && !voice.stretch.source_cut_available())
-        {
-            return false;
-        }
-        self.apply_source_cuts_claimed(id, cuts, self.pad_pitch_processing_enabled(id), true);
-        true
     }
 
     /// Every affected lane was checked before the enclosing effect was claimed. This sole
@@ -4269,6 +4315,7 @@ impl RtMixer {
         self.refresh_global_rate_observation();
     }
 
+    #[cfg(test)]
     pub fn set_bpm_lock(&mut self, enabled: bool) {
         if self
             .voices
@@ -4283,7 +4330,13 @@ impl RtMixer {
         if !enabled {
             self.master_period_seconds = None;
         }
-        self.refresh_global_rate_observation();
+        if enabled {
+            self.refresh_global_rate_observation();
+        } else {
+            self.refresh_global_rate_observation_with_master(
+                super::master_provenance::MasterProvenance::Absent,
+            );
+        }
     }
 
     pub fn set_key_lock(&mut self, enabled: bool) {
@@ -4855,7 +4908,9 @@ impl RtMixer {
             }
             self.invalidate_source_for_all();
             self.master_period_seconds = Some(period);
-            self.refresh_global_rate_observation();
+            self.refresh_global_rate_observation_with_master(
+                super::master_provenance::MasterProvenance::Unknown,
+            );
         }
     }
 
@@ -4863,10 +4918,29 @@ impl RtMixer {
         self.refresh_global_rate_intent();
         self.input_runtime_ownership
             .global_rate_status
-            .refresh_effective(super::global_rate_status::RateTuple {
-                speed: self.speed,
-                period: self.master_period_seconds,
-            });
+            .refresh_effective_with_master(
+                super::global_rate_status::RateTuple {
+                    speed: self.speed,
+                    period: self.master_period_seconds,
+                },
+                None,
+            );
+    }
+
+    fn refresh_global_rate_observation_with_master(
+        &mut self,
+        provenance: super::master_provenance::MasterProvenance,
+    ) {
+        self.refresh_global_rate_intent();
+        self.input_runtime_ownership
+            .global_rate_status
+            .refresh_effective_with_master(
+                super::global_rate_status::RateTuple {
+                    speed: self.speed,
+                    period: self.master_period_seconds,
+                },
+                Some(provenance),
+            );
     }
 
     pub fn set_pad_bpm(&mut self, id: usize, bpm: Option<f64>) {
@@ -5122,92 +5196,107 @@ impl RtMixer {
         self.pad_dsp_chains[id].set_parameter(parameter_id, normalized_target)
     }
 
-    pub fn set_pad_loop_region(&mut self, id: usize, start_s: f64, end_s: Option<f64>) {
-        if id >= NUM_SAMPLES {
-            return;
-        }
-
-        if !start_s.is_finite() || start_s < 0.0 {
-            return;
-        }
-
-        let start_frame = (start_s * self.sample_rate_hz as f64).round();
-        let start_frame = if start_frame.is_finite() && start_frame >= 0.0 {
-            start_frame as usize
-        } else {
-            0
-        };
-
-        let end_frame = end_s.and_then(|end_s| {
-            if !end_s.is_finite() || end_s < 0.0 {
-                return None;
-            }
-            let end_frame = (end_s * self.sample_rate_hz as f64).round();
-            if !end_frame.is_finite() || end_frame < 0.0 {
-                None
-            } else {
-                Some(end_frame as usize)
-            }
-        });
-
-        let end_frame = if let Some(mut end) = end_frame {
-            if end <= start_frame {
-                end = start_frame.saturating_add(1);
-            }
-            Some(end)
-        } else {
-            None
-        };
-
-        // Reapplying Normal markers is independent of an accepted timing refresh;
-        // its virtual clock continuity belongs to the render/timing path.
-        if start_frame == self.pad_loop_start_frame[id]
-            && end_frame == self.pad_loop_end_frame[id]
+    /// Prepare all cuts without reserving epochs or changing productive history.
+    pub(crate) fn prepare_loop_edit(
+        &self,
+        id: usize,
+        start_s: f64,
+        end_s: Option<f64>,
+    ) -> Option<PreparedLoopEdit> {
+        let (start, end) = self.loop_intent_frames(id, start_s, end_s)?;
+        let unchanged = start == self.pad_loop_start_frame[id]
+            && end == self.pad_loop_end_frame[id]
             && self
                 .voices
                 .iter()
                 .filter(|voice| voice.is_playing_sample(id))
-                .all(|voice| voice.explicit_seek_mode == ExplicitSeekMode::Normal)
-        {
-            return;
+                .all(|voice| voice.explicit_seek_mode == ExplicitSeekMode::Normal);
+        let processing = self.pad_pitch_processing_enabled(id);
+        if !unchanged && !self.loop_context_available(id, start, end) {
+            return None;
         }
-
-        if !self.loop_context_available(id, start_frame, end_frame) {
-            return;
-        }
-        if let Some(sample) = self.sample_bank[id].clone()
-            && let Some(region) =
-                effective_loop_region(start_frame, end_frame, sample.frame_count())
-            && !self.reserve_loop_cuts(id, &sample, region)
-        {
-            return;
-        }
-
-        let previous_region = self.sample_bank[id]
-            .as_ref()
-            .and_then(|sample| self.effective_loop_region(id, sample.frame_count()));
-        self.advance_source_control_revision(id);
-        self.pad_loop_start_frame[id] = start_frame;
-        self.pad_loop_end_frame[id] = end_frame;
-
         let bank = self.sample_bank[id].as_ref();
-        for voice_slot in &mut self.voices {
-            if voice_slot.is_playing_sample(id)
-                && voice_slot
+        let region =
+            bank.and_then(|sample| effective_loop_region(start, end, sample.frame_count()));
+        let mut cuts = [false; MAX_VOICES];
+        for (index, voice) in self.voices.iter().enumerate() {
+            cuts[index] = !unchanged
+                && voice.is_playing_sample(id)
+                && voice
+                    .sample
+                    .as_ref()
+                    .zip(bank)
+                    .is_some_and(|(sample, bank)| sample.same_source(bank))
+                && region.is_some_and(|region| self.loop_edit_cuts_voice(voice, region));
+            if processing && cuts[index] && !voice.stretch.source_cut_available() {
+                return None;
+            }
+        }
+        if !unchanged
+            && self
+                .input_runtime_ownership
+                .callback_cell(id)
+                .is_some_and(|cell| self.source_control_revisions[cell.index()] == u64::MAX)
+        {
+            return None;
+        }
+        Some(PreparedLoopEdit {
+            id,
+            start,
+            end,
+            previous: bank.and_then(|sample| self.effective_loop_region(id, sample.frame_count())),
+            cuts,
+            processing,
+            unchanged,
+        })
+    }
+
+    /// All fallible geometry/history checks precede the enclosing original content claim.
+    pub(crate) fn apply_loop_edit_claimed(&mut self, edit: PreparedLoopEdit) {
+        if edit.unchanged {
+            return;
+        }
+        let id = edit.id;
+        self.apply_source_cuts_claimed(id, edit.cuts, edit.processing, true);
+        self.advance_source_control_revision(id);
+        self.pad_loop_start_frame[id] = edit.start;
+        self.pad_loop_end_frame[id] = edit.end;
+        let bank = self.sample_bank[id].as_ref();
+        for voice in &mut self.voices {
+            if voice.is_playing_sample(id)
+                && voice
                     .sample
                     .as_ref()
                     .zip(bank)
                     .is_some_and(|(sample, bank)| sample.same_source(bank))
             {
-                let unchanged = voice_slot.sample.as_ref().is_some_and(|sample| {
-                    effective_loop_region(start_frame, end_frame, sample.frame_count()).is_some_and(
-                        |region| Self::unchanged_normal_loop(voice_slot, previous_region, region),
+                let unchanged = voice.sample.as_ref().is_some_and(|sample| {
+                    effective_loop_region(edit.start, edit.end, sample.frame_count()).is_some_and(
+                        |region| Self::unchanged_normal_loop(voice, edit.previous, region),
                     )
                 });
                 if !unchanged {
-                    voice_slot.clear_explicit_seek();
+                    voice.clear_explicit_seek();
                 }
             }
+        }
+    }
+
+    pub(crate) fn refresh_combined_history_ready(
+        &self,
+        edit: PreparedLoopEdit,
+        period: f64,
+    ) -> bool {
+        self.master_period_seconds == Some(period)
+            || !edit.cuts.iter().enumerate().any(|(index, cut)| {
+                *cut && (self.voices[index].stretch.has_retained_source_input()
+                    || self.voices[index].stretch.has_active_native_ownership())
+            })
+    }
+
+    pub fn set_pad_loop_region(&mut self, id: usize, start_s: f64, end_s: Option<f64>) {
+        if let Some(edit) = self.prepare_loop_edit(id, start_s, end_s) {
+            self.apply_loop_edit_claimed(edit);
         }
     }
 

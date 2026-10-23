@@ -187,6 +187,94 @@ fn native_move_source_capture_uses_logical_generation_after_private_reservation_
 }
 
 #[test]
+fn actual_move_and_swap_keep_original_master_correlation_without_replaying_a_master() {
+    use crate::audio_engine::audio_stream::{drain_control_messages, drain_parameter_messages};
+    use crate::audio_engine::buffer_retirement::ImmediateAudioBufferRetirement;
+    use crate::audio_engine::master_provenance::{self, MasterProvenance};
+    for target in [1, 2] {
+        let mut fixture = fixture();
+        let mut mixer = fixture.mixer();
+        mixer.set_prepared_source_epochs(fixture.engine.prepared_source_epochs.clone());
+        mixer.set_pad_bpm(0, Some(120.0));
+        let original = input_runtime_binding::capture(&fixture.engine, 0)
+            .unwrap()
+            .unwrap();
+        let identity = master_provenance::source_identity(&original).unwrap();
+        let mut timeline = TransportTimeline::new(48_000);
+        let mut scheduler = FixedCapacityScheduler::<8>::new();
+        let mut mode = TriggerQuantization::Immediate;
+        let mut feedback = Vec::new();
+        fixture
+            .engine
+            .set_bpm_lock_with_binding(true, Some(&original))
+            .unwrap();
+        drain_control_messages(
+            &mut fixture.consumer,
+            &mut scheduler,
+            0,
+            &mut mode,
+            &mut timeline,
+            &mut mixer,
+            &mut feedback,
+            &mut ImmediateAudioBufferRetirement,
+        );
+        let (_, mut parameters) = RingBuffer::new(1);
+        drain_parameter_messages(&mut parameters, &mut mixer, &mut timeline);
+        mixer.service_bpm_lock(0, &mut timeline);
+        let provenance = MasterProvenance::qualified(identity, original.binding);
+        let before = fixture
+            .engine
+            .input_runtime_ownership
+            .global_rate_status
+            .read()
+            .unwrap();
+        assert_eq!(before.master_provenance, provenance);
+        assert_eq!(timeline.master_period_seconds(), Some(0.5));
+        let transport = timeline;
+        let captured = capture(&fixture.engine, 0, target).unwrap();
+        let ticket = prepare(&fixture.engine, &captured, 48_000, 1).unwrap();
+        publish(&fixture.engine, &ticket).unwrap();
+        let message = fixture.consumer.pop().unwrap();
+        dispatch(
+            &mut mixer,
+            message,
+            &mut scheduler,
+            &mut timeline,
+            &mut mode,
+            &mut feedback,
+        );
+        assert!(ticket.native_acknowledgement().is_some());
+        assert!(reconcile(&fixture.engine, &ticket).unwrap());
+        // Release this exact test reservation only, as in the established native
+        // move admission fixture; this is not public durable Pair completion.
+        fixture
+            .engine
+            .input_runtime_ownership
+            .release_pair(&ticket.state.snapshots(), ticket.state.guard.reservation)
+            .unwrap();
+        let moved = input_runtime_binding::capture(&fixture.engine, target)
+            .unwrap()
+            .unwrap();
+        assert!(moved.current());
+        assert_eq!(master_provenance::source_identity(&moved), Some(identity));
+        let after = fixture
+            .engine
+            .input_runtime_ownership
+            .global_rate_status
+            .read()
+            .unwrap();
+        assert_eq!(after.master_provenance, provenance);
+        assert_eq!(
+            (after.request_revision, after.effect.revision),
+            (before.request_revision, before.effect.revision)
+        );
+        assert_eq!(after.effect.effective, before.effect.effective);
+        assert!(timeline.matches_clock_epoch(&transport));
+        assert!(fixture.consumer.is_empty() && parameters.is_empty());
+    }
+}
+
+#[test]
 fn marker_contention_and_foreign_source_leave_mirror_fenced_then_retry_identical_owner() {
     let mut fixture = fixture();
     let ticket = acknowledged(&mut fixture, 1);

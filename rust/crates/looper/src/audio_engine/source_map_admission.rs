@@ -150,6 +150,8 @@ pub(crate) struct SourceMapProjection {
     intent_revision: u64,
     selected: Option<QualifiedSourceMap>,
     policy: GlobalTimingPolicy,
+    multi_loop: bool,
+    bpm_requested: bool,
 }
 
 impl SourceMapProjection {
@@ -164,6 +166,8 @@ impl SourceMapProjection {
             intent_revision: self.intent_revision,
             selected: None,
             policy: self.policy,
+            multi_loop: self.multi_loop,
+            bpm_requested: self.bpm_requested,
         }
     }
 
@@ -194,6 +198,8 @@ impl SourceMapProjection {
             intent_revision: row.intent_revision,
             selected,
             policy: GlobalTimingPolicy::default(),
+            multi_loop: false,
+            bpm_requested: false,
         })
     }
 
@@ -206,15 +212,34 @@ impl SourceMapProjection {
         self.policy
     }
 
+    /// Requested parents are captured after the final pitch-row reconciliation.
+    pub(crate) fn remask_parents(&mut self, multi_loop: bool, bpm_requested: bool) {
+        self.multi_loop = multi_loop;
+        self.bpm_requested = bpm_requested;
+    }
+
+    pub(crate) fn same_hierarchy(&self, other: &Self) -> bool {
+        self.policy == other.policy
+            && self.multi_loop == other.multi_loop
+            && self.bpm_requested == other.bpm_requested
+    }
+
     pub(crate) fn request(&self) -> SourceSyncRequest {
-        self.policy
-            .request(self.sync_requested, self.intent_revision)
+        let mut request = self
+            .policy
+            .request(self.sync_requested, self.intent_revision);
+        if !self.multi_loop || !self.bpm_requested || request.mode == SourceSyncMode::Off {
+            request.mode = SourceSyncMode::Legacy;
+        }
+        request
     }
 
     pub(crate) fn same_projection(&self, other: &Self) -> bool {
         self.sync_requested == other.sync_requested
             && self.intent_revision == other.intent_revision
             && self.policy == other.policy
+            && self.multi_loop == other.multi_loop
+            && self.bpm_requested == other.bpm_requested
             && self.same_selected_projection(other)
     }
 
@@ -234,11 +259,15 @@ impl SourceMapProjection {
             && other.request().mode == SourceSyncMode::Legacy
             && self.request().global_revision.is_none()
             && other.request().global_revision.is_none()
+            && !self.sync_requested
+            && !other.sync_requested
         {
             return true;
         }
         self.request() == other.request()
-            && (self.request().mode != SourceSyncMode::Mapped || self.same_projection(other))
+            && self.sync_requested == other.sync_requested
+            && ((!self.sync_requested && !other.sync_requested)
+                || self.same_selected_projection(other))
     }
 
     pub(crate) fn publication_current(
@@ -279,6 +308,9 @@ pub(crate) struct SourceMapLaunchSnapshot {
 }
 
 impl SourceMapLaunchSnapshot {
+    pub(crate) fn launch_revision(&self) -> u64 {
+        self.launch_revision
+    }
     pub(crate) fn request(&self) -> SourceSyncRequest {
         self.projection.request()
     }

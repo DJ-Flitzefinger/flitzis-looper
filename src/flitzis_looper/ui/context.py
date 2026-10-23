@@ -52,7 +52,10 @@ if TYPE_CHECKING:
     from flitzis_looper.controller.stem_batch import StemBatchSummary
     from flitzis_looper.controller.stem_delete import StemDeleteSummary
     from flitzis_looper.controller.stems import StemResidencySummary
-    from flitzis_looper.controller.transport.global_params import GlobalRateStatus
+    from flitzis_looper.controller.transport.global_params import (
+        BpmLockApplicationStatus,
+        GlobalRateStatus,
+    )
     from flitzis_looper.controller.transport.key_lock_status import KeyLockStatus
     from flitzis_looper.controller.transport.source_sync import SourceSyncStatus
     from flitzis_looper.controller.transport.timing_policy import (
@@ -337,6 +340,10 @@ class GlobalSelectors:
     def global_rate_status(self) -> GlobalRateStatus:
         """Return the last coherent callback rate confirmation from the runtime tick."""
         return self._controller.transport.global_params.global_rate_status()
+
+    def bpm_lock_application_status(self) -> BpmLockApplicationStatus:
+        """Expose requested and actual BPM Lock without interpreting rate or mode ACKs."""
+        return self._controller.transport.global_params._bpm_lock_application_status()
 
     def effective_bpm(self) -> float | None:
         """Return the current effective global BPM."""

@@ -1,6 +1,7 @@
 """Requested global controls cannot certify a callback rate effect or a newer receipt."""
 
 from contextlib import contextmanager
+from dataclasses import FrozenInstanceError
 from typing import TYPE_CHECKING
 from unittest.mock import Mock
 
@@ -35,6 +36,11 @@ def _feedback(
         "effective_master_period": 0.5,
         "execution_frame": None if state == "queued" else 4096,
         "error": error,
+        "master_provenance": {
+            "kind": "unknown",
+            "source_identity": None,
+            "accepted_revision": None,
+        },
     }
 
 
@@ -171,6 +177,99 @@ def test_incomplete_receipt_cannot_confirm_audio(
     assert status.state is None
     assert status.effective_speed is None
     assert status.error
+
+
+@pytest.mark.parametrize(
+    "provenance",
+    [
+        None,
+        {},
+        {"kind": [], "source_identity": None, "accepted_revision": None},
+        {"kind": "other", "source_identity": None, "accepted_revision": None},
+        {"kind": "unknown", "source_identity": "a" * 64, "accepted_revision": None},
+        {"kind": "absent", "source_identity": None, "accepted_revision": "old"},
+        {"kind": "qualified", "source_identity": None, "accepted_revision": None},
+        {"kind": "qualified", "source_identity": "z" * 64, "accepted_revision": None},
+        {"kind": "qualified", "source_identity": "a" * 63, "accepted_revision": None},
+        {"kind": "qualified", "source_identity": "a" * 64, "accepted_revision": ""},
+        {"kind": "qualified", "source_identity": "a" * 64, "accepted_revision": 1},
+    ],
+)
+def test_invalid_master_provenance_cannot_certify_an_actual_rate(
+    controller: AppController, audio_engine_mock: Mock, provenance: object
+) -> None:
+    feedback = _feedback()
+    feedback["master_provenance"] = provenance
+    audio_engine_mock.global_rate_status = Mock(return_value=feedback)
+    parameters = controller.transport.global_params
+    parameters._poll_global_rate_status()
+    status = parameters.global_rate_status()
+    assert status.state is None
+    assert status.master_provenance is None
+    assert status.error
+
+
+def test_qualified_master_provenance_requires_an_actual_master_period(
+    controller: AppController, audio_engine_mock: Mock
+) -> None:
+    feedback = _feedback()
+    feedback.update(
+        effective_master_period=None,
+        master_provenance={
+            "kind": "qualified",
+            "source_identity": "a" * 64,
+            "accepted_revision": None,
+        },
+    )
+    audio_engine_mock.global_rate_status = Mock(return_value=feedback)
+    parameters = controller.transport.global_params
+    parameters._poll_global_rate_status()
+    assert parameters.global_rate_status().master_provenance is None
+    assert parameters.global_rate_status().error
+
+
+@pytest.mark.parametrize("accepted_revision", [None, "opaque-current-timing-revision"])
+def test_actual_master_provenance_is_an_immutable_copy_of_one_rate_image(
+    controller: AppController, audio_engine_mock: Mock, accepted_revision: str | None
+) -> None:
+    feedback = _feedback()
+    provenance = {
+        "kind": "qualified",
+        "source_identity": "a" * 64,
+        "accepted_revision": accepted_revision,
+    }
+    feedback["master_provenance"] = provenance
+    audio_engine_mock.global_rate_status = Mock(return_value=feedback)
+    parameters = controller.transport.global_params
+    parameters._poll_global_rate_status()
+    status = parameters.global_rate_status()
+    actual = status.master_provenance
+    assert actual is not None
+    provenance.update(source_identity="c" * 64, accepted_revision="later")
+    assert actual.source_identity == "a" * 64
+    assert actual.accepted_revision == accepted_revision
+    with pytest.raises(FrozenInstanceError):
+        actual.source_identity = "d" * 64
+
+
+@pytest.mark.parametrize("kind", ["absent", "unknown"])
+def test_no_qualified_reference_does_not_claim_a_transport_clock_reset(
+    controller: AppController, audio_engine_mock: Mock, kind: str
+) -> None:
+    feedback = _feedback()
+    feedback["master_provenance"] = {
+        "kind": kind,
+        "source_identity": None,
+        "accepted_revision": None,
+    }
+    audio_engine_mock.global_rate_status = Mock(return_value=feedback)
+    parameters = controller.transport.global_params
+    parameters._poll_global_rate_status()
+    status = parameters.global_rate_status()
+    assert status.effective_master_period == 0.5
+    assert status.effective_speed == 2.0
+    assert status.master_provenance is not None
+    assert status.master_provenance.kind == kind
 
 
 def test_older_request_receipt_cannot_replace_a_newer_observation(

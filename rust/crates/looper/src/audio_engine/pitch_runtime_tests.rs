@@ -232,6 +232,7 @@ impl Fixture {
         let rows = vec![
             PitchPadProjection {
                 key_lock: lock,
+                sync: true,
                 source_root: Some(0),
                 source_mode: Some(PitchKeyMode::Major),
                 ..PitchPadProjection::default()

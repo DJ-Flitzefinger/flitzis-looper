@@ -365,12 +365,32 @@ def sidebar_right(ctx: UiContext) -> None:
 
         with style_var(imgui.StyleVar_.item_spacing, (0.0, SPACING / 4)):
             _render_global_key_lock(ctx)
-            render_global_timing_policy(ctx)
+
+            multi_loop_style: ButtonStyleName = (
+                "mode-on" if ctx.state.project.multi_loop else "mode-off"
+            )
+            with button_style(multi_loop_style):
+                if imgui.button("MULTI LOOP##multi_loop", (-1, 0)):
+                    ctx.audio.global_.toggle_multi_loop()
 
             bpm_lock_style: ButtonStyleName = "mode-on" if bpm_lock else "mode-off"
+            imgui.begin_disabled(
+                not ctx.state.project.multi_loop or ctx.state.project.timing_policy_recovery
+            )
             with button_style(bpm_lock_style):
                 if imgui.button("BPM LOCK##bpm_lock", (-1, 0)):
                     ctx.audio.global_.toggle_bpm_lock()
+            imgui.end_disabled()
+            status = ctx.state.global_.bpm_lock_application_status()
+            actual = (
+                "unconfirmed" if status.effective is None else "ON" if status.effective else "OFF"
+            )
+            suffix = " | pending" if status.pending else ""
+            imgui.text(f"Audio {actual}{suffix}")
+            if status.detail is not None:
+                imgui.text_wrapped("BPM Lock is waiting for qualified audio timing.")
+
+            render_global_timing_policy(ctx)
 
 
 def _render_global_key_lock(ctx: UiContext) -> None:

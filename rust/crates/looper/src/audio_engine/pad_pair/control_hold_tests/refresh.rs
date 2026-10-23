@@ -166,7 +166,12 @@ impl RefreshFixture {
             &mut fixture.callback.mixer,
             &mut fixture.callback.transport,
         );
-        fixture.callback.control.engine.set_bpm_lock(false).unwrap();
+        fixture
+            .callback
+            .control
+            .engine
+            .set_bpm_lock_with_binding(false, None)
+            .unwrap();
         assert_eq!(fixture.callback.drain(), 1);
         let ready = fixture.window(
             SOURCE,
@@ -708,4 +713,77 @@ fn hc21_physical_marker_refresh_rejects_and_real_resident_retrigger_fences_old_h
         new_cohort.assert_retained(&fixture.callback.mixer, SOURCE, 0);
         other.assert_retained(&fixture.callback.mixer, OTHER, 0);
     }
+}
+
+#[test]
+fn qualified_bpm_anchor_follows_real_pair_move_without_runtime_revision_self_invalidation() {
+    let mut fixture = CallbackFixture::new(32);
+    fixture.mixer.set_pad_bpm(SOURCE, Some(120.0));
+    let original = input_runtime_binding::capture(&fixture.control.engine, SOURCE)
+        .unwrap()
+        .unwrap();
+    let key = original.binding.placement.unwrap().content_key().unwrap();
+    fixture
+        .control
+        .engine
+        .set_bpm_lock_with_binding(true, Some(&original))
+        .unwrap();
+    let pair = fixture.prepare_pair(EMPTY);
+    fixture.control.engine._publish_pad_pair(&pair).unwrap();
+    fixture.drain();
+    fixture.finish(&pair);
+    let (_producer, mut parameters) = RingBuffer::new(1);
+    drain_parameter_messages(&mut parameters, &mut fixture.mixer, &mut fixture.transport);
+    fixture.render(0);
+    let (revision, effect) = fixture
+        .control
+        .engine
+        .input_runtime_ownership
+        .global_rate_status
+        .read_bpm()
+        .unwrap();
+    assert_eq!(
+        fixture
+            .control
+            .engine
+            .input_runtime_ownership
+            .callback_key_slot(key),
+        Some(EMPTY)
+    );
+    assert!(effect.applied && effect.effective);
+    assert_eq!(revision, effect.revision);
+}
+
+#[test]
+fn admitted_bpm_anchor_cannot_inherit_replaced_source_or_aba_content() {
+    let mut fixture = CallbackFixture::new(32);
+    fixture.mixer.set_pad_bpm(SOURCE, Some(120.0));
+    let original = input_runtime_binding::capture(&fixture.control.engine, SOURCE)
+        .unwrap()
+        .unwrap();
+    fixture
+        .control
+        .engine
+        .set_bpm_lock_with_binding(true, Some(&original))
+        .unwrap();
+    // Two real source publications return the displayed slot/value, not its lifetime/authority.
+    fixture.control.publish(SOURCE, 0.75, 99);
+    fixture.control.publish(SOURCE, 0.25, 100);
+    fixture.drain();
+    let (_producer, mut parameters) = RingBuffer::new(1);
+    drain_parameter_messages(&mut parameters, &mut fixture.mixer, &mut fixture.transport);
+    fixture.render(0);
+    let effect = fixture
+        .control
+        .engine
+        .input_runtime_ownership
+        .global_rate_status
+        .read_bpm()
+        .unwrap()
+        .1;
+    assert!(!effect.applied && !effect.effective);
+    assert_eq!(
+        effect.reason,
+        crate::audio_engine::global_rate_status::BpmReason::ReferenceChanged
+    );
 }

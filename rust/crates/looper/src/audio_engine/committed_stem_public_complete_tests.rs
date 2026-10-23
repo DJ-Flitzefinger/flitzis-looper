@@ -20,6 +20,14 @@ impl PublicFeedbackAudio {
         self.engine._resolve_pad_feedback(message)
     }
 
+    fn _resolve_ordinary_transport_feedback(
+        &self,
+        message: &AudioMessage,
+    ) -> PyResult<Option<crate::audio_engine::ordinary_transport::OrdinaryTransportObservation>>
+    {
+        self.engine._resolve_ordinary_transport_feedback(message)
+    }
+
     fn capture_input_timestamp_ns(&self) -> u64 {
         self.engine.capture_input_timestamp_ns()
     }
@@ -82,6 +90,15 @@ pub(super) fn feedback(locals: &Py<PyDict>, callback: &mut Callback) {
     controller_python(
         locals,
         r#"
+transport.playback.set_pause_observation_fence(feedback_route._ordinary_observation_fenced)
+if feedback_route._ordinary_feedback_audio is not feedback_route._audio:
+    feedback_route._pending_ordinary_feedback.clear()
+    feedback_route._ordinary_feedback_owner = None
+    feedback_route._ordinary_feedback_audio = feedback_route._audio
+ordinary_pending = tuple(feedback_route._pending_ordinary_feedback.values())
+feedback_route._pending_ordinary_feedback.clear()
+for message in ordinary_pending:
+    assert feedback_route._handle_content_feedback(message)
 for message in native_messages:
     assert isinstance(message, messages) and type(message) is not messages, type(message)
     if feedback_route._handle_content_feedback(message):
@@ -100,6 +117,8 @@ controller.on_frame_render()
     // Production retains exact Pending events across frames. This device-free
     // carrier observes only completion of that same control publication; it
     // neither recaptures an owner nor advances the callback/source clock.
+    // Ordinary feedback instead remains retained until a later feedback pass:
+    // a real Loader/Pair/Bank fence may still be held by this caller.
     wait_until(|| {
         controller_python(
             locals,
@@ -566,13 +585,15 @@ fn pause_ramp(
     );
     controller_python(
         locals,
-        "transport.playback.pause_pad(0)\ntransport.playback.pause_pad(215)\nassert session.paused_sample_ids == {0, 215}",
+        "transport.playback.pause_pad(0)\ntransport.playback.pause_pad(215)\nassert not session.paused_sample_ids",
     );
+    l3_controller_productive_tests::remember_public_pause_admissions(locals, true);
     assert_eq!(
         playback.drain(consumer),
         2,
         "actual public Pause during component ramp"
     );
+    l3_controller_productive_tests::assert_public_pause_effect(locals);
     for mixer in [&mut playback.reference, &mut playback.full_mix] {
         mixer.pause_sample_at_output_frame(0, playback.frame);
     }
@@ -594,13 +615,15 @@ fn pause_ramp(
     feedback(locals, &mut playback.callback);
     controller_python(
         locals,
-        "transport.playback.resume_pad(0)\ntransport.playback.resume_pad(215)\nassert not session.paused_sample_ids",
+        "transport.playback.resume_pad(0)\ntransport.playback.resume_pad(215)\nassert session.paused_sample_ids == {0, 215}",
     );
+    l3_controller_productive_tests::remember_public_pause_admissions(locals, false);
     assert_eq!(
         playback.drain(consumer),
         2,
         "actual public Resume retains consumed ramp clock"
     );
+    l3_controller_productive_tests::assert_public_pause_effect(locals);
     for mixer in [&mut playback.reference, &mut playback.full_mix] {
         mixer.resume_sample_at_output_frame(0, playback.frame);
     }
@@ -904,7 +927,6 @@ fn history_with_profile(
             &locals,
             r#"
 import json
-from collections import deque
 from types import SimpleNamespace
 from flitzis_looper.controller.app import AppController
 from flitzis_looper.controller.metering import MeteringController
@@ -961,20 +983,41 @@ class ObservedFeedbackPlayback:
     def handle_sample_stopped_message(self, message, *, sample_id):
         transport_events.append(('stopped', sample_id))
         transport.playback.handle_sample_stopped_message(message, sample_id=sample_id)
+    def handle_ordinary_transport_observation(self, observation):
+        transport.playback.handle_ordinary_transport_observation(observation)
+class CurrentFixtureLoader:
+    def __init__(self):
+        self._observed_loader = False
+    def incoming_load_request_id(self, sample_id):
+        current_loader = globals().get('loader')
+        if current_loader is None:
+            # The initial Native source is already adopted; LoaderB has not begun.
+            assert not self._observed_loader
+            assert not session.loading_sample_ids and not session.pending_sample_paths
+            return None
+        self._observed_loader = True
+        return current_loader.incoming_load_request_id(sample_id)
 class PublicFeedbackRoute:
     # Exercise the production dispatch/retention methods without constructing
     # AppController, opening a stream, or substituting a Native receipt.
+    _init_audio_feedback = AppController._init_audio_feedback
     _handle_content_feedback = AppController._handle_content_feedback
+    _handle_ordinary_transport_feedback = AppController._handle_ordinary_transport_feedback
+    _ordinary_observation_fenced = AppController._ordinary_observation_fenced
+    _retain_ordinary_transport_feedback = AppController._retain_ordinary_transport_feedback
     _retain_content_feedback = AppController._retain_content_feedback
     def __init__(self):
         self._audio = feedback_audio
+        self._session = session
         self.transport = SimpleNamespace(playback=ObservedFeedbackPlayback())
+        self.loader = CurrentFixtureLoader()
         self.metering = MeteringController(project, session, feedback_audio)
         self.pairs = SimpleNamespace(observer_fenced_sample_ids=set())
         self.banks = SimpleNamespace(observer_fenced_sample_ids=set())
         self.arrangement = SimpleNamespace(fenced_sample_ids=set())
-        self._pending_content_feedback = deque()
+        self._init_audio_feedback()
 feedback_route = PublicFeedbackRoute()
+transport.playback.set_pause_observation_fence(feedback_route._ordinary_observation_fenced)
 assert not session.active_sample_ids
 controller.restore_stem_cache_from_project_state()
 assert controller.publish_restored_stem_cache_if_available(0)

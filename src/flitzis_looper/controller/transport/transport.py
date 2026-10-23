@@ -16,9 +16,13 @@ from flitzis_looper.controller.transport.waveform import WaveformController
 
 if TYPE_CHECKING:
     from collections.abc import Callable, Iterable
+    from typing import Protocol
 
     from flitzis_looper.models import ProjectState, SessionState
     from flitzis_looper_audio import AudioEngine, InputRuntimePadBinding, ResidentWindowTicket
+
+    class _MultiLoopCancellation(Protocol):
+        def __call__(self, *, enabled: bool) -> bool: ...
 
 
 class _SourceGenerationOptions(TypedDict, total=False):
@@ -55,6 +59,7 @@ class TransportController(BaseController):
         self._pad_edit_guard: Callable[[int], None] | None = None
         self._global_key_lock_edit_guard: Callable[[], None] | None = None
         self._refresh_input_runtime: Callable[[], bool] | None = None
+        self._stage_multi_loop_cancellation: _MultiLoopCancellation | None = None
         self._on_current_pad_edit: (
             Callable[[int, int | None, Literal["key_lock", "loop", "timing"]], None] | None
         ) = None
@@ -73,6 +78,21 @@ class TransportController(BaseController):
     def bind_input_runtime_refresh(self, refresh: Callable[[], bool]) -> None:
         """Publish complete current rows before any original GUI launch capture."""
         self._refresh_input_runtime = refresh
+
+    def bind_multi_loop_cancellation(self, stage: _MultiLoopCancellation) -> None:
+        """Reuse the last complete Native image when an arrangement owns current rows."""
+        self._stage_multi_loop_cancellation = stage
+
+    def stage_multi_loop_cancellation(self, *, enabled: bool) -> None:
+        """Stage cancellation before parent mutation; a missing reserved image refuses."""
+        if self._stage_multi_loop_cancellation is not None:
+            if self._stage_multi_loop_cancellation(enabled=enabled):
+                return
+            message = "Multi Loop cancellation could not publish the original runtime image."
+            raise RuntimeError(message)
+        if getattr(self, "_pair_deferred_sample_ids", ()):
+            message = "Multi Loop cancellation requires the original runtime image."
+            raise RuntimeError(message)
 
     def refresh_input_runtime(self, sample_ids: Iterable[int] | None = None) -> None:
         """Fence a capture when the complete current control publication is unavailable."""

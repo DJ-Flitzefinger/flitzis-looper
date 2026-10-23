@@ -121,7 +121,7 @@ impl GlobalTimingPolicy {
 
 impl SourceSyncRequest {
     pub(crate) fn mapped_matching_enabled(self, legacy_bpm_lock: bool) -> bool {
-        self.policy_sync == Some(true) || legacy_bpm_lock
+        legacy_bpm_lock
     }
     /// Preserve the existing scalar clock and glide. Explicit Fixed never calls
     /// a clamped approximation a source/master match.
@@ -132,6 +132,9 @@ impl SourceSyncRequest {
         master_period: Option<f64>,
         legacy_bpm_lock: bool,
     ) -> Option<f64> {
+        if matches!(self.mode, SourceSyncMode::Fixed | SourceSyncMode::Mapped) && !legacy_bpm_lock {
+            return None;
+        }
         if self.mode == SourceSyncMode::Fixed {
             let source = source_period.filter(|value| value.is_finite() && *value > 0.0)?;
             let master = master_period.filter(|value| value.is_finite() && *value > 0.0)?;

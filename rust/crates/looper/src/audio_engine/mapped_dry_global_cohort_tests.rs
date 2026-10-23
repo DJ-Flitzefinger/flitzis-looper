@@ -76,7 +76,10 @@ fn publish_cohort_maps(
             vec![32.0 / f64::from(RATE); NUM_SAMPLES],
             vec![Some(64.0 / f64::from(RATE)); NUM_SAMPLES],
             bindings.iter().map(Option::as_ref).collect(),
-            None,
+            Some(vec![crate::audio_engine::input_mapping::PitchPadProjection {
+                sync: true,
+                ..Default::default()
+            }; NUM_SAMPLES]),
             Some(rows),
         )
         .unwrap();
@@ -106,6 +109,7 @@ fn start_cohort_member(path: &mut LaunchPath, id: usize) -> CapturedPadStart {
             None,
         )
         .unwrap();
+    assert!(captured.mapped_geometry().is_some());
     path.publish_capture(&captured);
     assert_eq!(
         (

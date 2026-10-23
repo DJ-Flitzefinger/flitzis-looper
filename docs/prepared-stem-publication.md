@@ -1656,6 +1656,21 @@ independent final source/fact review closes with no actionable finding.
 
 ### Progressive frozen readers and retained-A Native — 2026-10-12
 
+Current contract reconciliation, 2026-10-23: the later source-owned Ordinary
+transport contract supersedes this historical fixture's successful public
+A-Pause/Resume-under-distinct-B ordering. Genuine public Pause/Resume must be
+confirmed while A still owns current content, preserving the unfinished handover
+and all Native/FIFO/history/reader freeze oracles. An actual semantically different
+B restore must then retain A's frozen readers; new current-B Pause/Resume must
+refuse an effect on old-lifetime A. The complete outgoing-capacity/FIFO,
+RetainedVoice history, Weak expiration, physical cleanup and final own-Unload
+proof under distinct B remains required. Same-digest restoration or synthetic
+pause is not a replacement. The historical results below do not certify that
+reconciled chronology; current integrated validation remains open.
+A separate genuinely paused-A-before-B case must also preserve both frozen
+generations through refused current-B Resume, silent callbacks and own Unload
+until actual final-reader retirement; it cannot replace the productive proof.
+
 `actual_public_frozen_source_final_reader_resume_retires_outgoing_before_current_unload`
 reuses the genuinely claimed A-V2/outgoing V1 frozen under distinct complete ON
 bank B, actual former-bank FIFO retirement and seventeen strict A output frames.

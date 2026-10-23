@@ -18,16 +18,35 @@ const PENDING: u8 = 0;
 const ACCEPTED: u8 = 1;
 const REJECTED: u8 = 2;
 
-#[derive(Debug)]
 pub(crate) struct AcceptedTimingRefresh {
     pub(crate) id: usize,
     pub(crate) binding: InputPadBinding,
     pub(crate) start_s: f64,
     pub(crate) end_s: Option<f64>,
     pub(crate) master_period_seconds: Option<f64>,
+    pub(crate) master_provenance: super::master_provenance::MasterProvenance,
     pub(crate) global_revision: u64,
     pub(crate) global_owner: Arc<AtomicU64>,
+    pub(crate) ownership: Arc<InputRuntimeOwnership>,
+    pub(crate) hierarchy_stamp: u64,
+    pub(crate) launch_revision: u64,
     status: Arc<AtomicU8>,
+}
+
+impl std::fmt::Debug for AcceptedTimingRefresh {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("AcceptedTimingRefresh")
+            .field("id", &self.id)
+            .field("binding", &self.binding)
+            .field("start_s", &self.start_s)
+            .field("end_s", &self.end_s)
+            .field("master_period_seconds", &self.master_period_seconds)
+            .field("global_revision", &self.global_revision)
+            .field("hierarchy_stamp", &self.hierarchy_stamp)
+            .field("launch_revision", &self.launch_revision)
+            .finish_non_exhaustive()
+    }
 }
 
 impl PartialEq for AcceptedTimingRefresh {
@@ -38,8 +57,10 @@ impl PartialEq for AcceptedTimingRefresh {
 
 impl AcceptedTimingRefresh {
     pub(crate) fn global_current(&self) -> bool {
-        self.master_period_seconds.is_none()
-            || self.global_owner.load(Ordering::Acquire) == self.global_revision
+        self.ownership.hierarchy_stamp.load(Ordering::Acquire) == self.hierarchy_stamp
+            && launch_current(&self.ownership, self.binding, self.launch_revision)
+            && (self.master_period_seconds.is_none()
+                || self.global_owner.load(Ordering::Acquire) == self.global_revision)
     }
 
     pub(crate) fn finish(&self, accepted: bool) {
@@ -67,6 +88,8 @@ pub struct AcceptedTimingRefreshTicket {
     acknowledgements: Arc<CurrentTimingAcknowledgements>,
     global_owner: Arc<AtomicU64>,
     global_revision: Option<u64>,
+    hierarchy_stamp: u64,
+    launch_revision: u64,
 }
 
 #[pymethods]
@@ -98,6 +121,8 @@ impl AcceptedTimingRefreshTicket {
     /// Historical acceptance alone never authorizes a control/session refresh.
     pub fn is_current(&self) -> bool {
         self.publication_status() == "accepted"
+            && self.ownership.hierarchy_stamp.load(Ordering::Acquire) == self.hierarchy_stamp
+            && launch_current(&self.ownership, self.binding, self.launch_revision)
             && self.ownership.authority_current(self.id, self.binding)
             && self.ownership.binding_source_current(self.id, self.binding)
             && self
@@ -122,6 +147,8 @@ pub(super) fn enqueue(
     end_s: Option<f64>,
     master_period_seconds: Option<f64>,
 ) -> PyResult<AcceptedTimingRefreshTicket> {
+    // Retain the supplied capture's cancellation witness before geometry/authority rebasing.
+    let launch_revision = binding.source_map_launch_snapshot().launch_revision();
     if !start_s.is_finite()
         || start_s < 0.0
         || end_s.is_some_and(|end| !end.is_finite() || end < 0.0)
@@ -147,6 +174,11 @@ pub(super) fn enqueue(
         || !binding.binding.same_projection(&current.binding)
         || !current.current()
         || !current.available()
+        || !launch_current(
+            &engine.input_runtime_ownership,
+            binding.binding,
+            launch_revision,
+        )
     {
         return Err(PyRuntimeError::new_err(
             "stale or unavailable accepted timing refresh binding",
@@ -166,7 +198,25 @@ pub(super) fn enqueue(
             "accepted timing refresh binding changed during admission",
         ));
     }
+    let _lease =
+        super::GlobalTimingLease::acquire(&engine.input_runtime_ownership.global_timing_publishing)
+            .ok_or_else(|| PyRuntimeError::new_err("global timing publication busy"))?;
+    if !binding.current()
+        || !launch_current(
+            &engine.input_runtime_ownership,
+            binding.binding,
+            launch_revision,
+        )
+    {
+        return Err(PyRuntimeError::new_err(
+            "accepted timing refresh binding changed during admission",
+        ));
+    }
     let global_revision = engine.global_timing_revision.load(Ordering::Acquire);
+    let hierarchy_stamp = engine
+        .input_runtime_ownership
+        .hierarchy_stamp
+        .load(Ordering::Acquire);
     let mut revised = current.binding;
     revised.authority_revision = next;
     let status = Arc::new(AtomicU8::new(PENDING));
@@ -176,8 +226,17 @@ pub(super) fn enqueue(
         start_s,
         end_s,
         master_period_seconds,
+        master_provenance: super::master_provenance::MasterProvenance::qualified(
+            super::master_provenance::source_identity(&current).ok_or_else(|| {
+                PyRuntimeError::new_err("accepted refresh requires original source identity")
+            })?,
+            revised,
+        ),
         global_revision,
         global_owner: engine.global_timing_revision.clone(),
+        ownership: engine.input_runtime_ownership.clone(),
+        hierarchy_stamp,
+        launch_revision,
         status: status.clone(),
     });
     engine.input_runtime_ownership.revoke(binding.id, next);
@@ -192,5 +251,25 @@ pub(super) fn enqueue(
         acknowledgements: engine.current_timing_acknowledgements.clone(),
         global_owner: engine.global_timing_revision.clone(),
         global_revision: master_period_seconds.map(|_| global_revision),
+        hierarchy_stamp,
+        launch_revision,
     })
+}
+
+fn launch_current(
+    ownership: &InputRuntimeOwnership,
+    binding: InputPadBinding,
+    revision: u64,
+) -> bool {
+    revision != u64::MAX
+        && binding
+            .placement
+            .and_then(|placement| placement.content_key())
+            .is_some_and(|key| {
+                ownership.content_key_current(key)
+                    && ownership
+                        .launch_revision_for_cell(key.cell())
+                        .load(Ordering::Acquire)
+                        == revision
+            })
 }

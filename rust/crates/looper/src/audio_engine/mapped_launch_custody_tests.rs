@@ -413,6 +413,8 @@ from flitzis_looper.source_sync_intent import PadSourceSyncIntent
 
 def make(audio, geometry):
     project = ProjectState()
+    project.multi_loop = True
+    project.bpm_lock = True
     project.pad_content[0] = PadContentIdentity(instance_id='a' * 32)
     project.pad_source_sync_intent[0] = PadSourceSyncIntent(requested=True, revision=7)
     def ready(pad):
@@ -430,8 +432,12 @@ def make(audio, geometry):
     controller.bind_source_maps(SimpleNamespace(
         effective=lambda pad: geometry, status=lambda pad: 'effective', errors={},
     ))
+    feedback = audio.pad_source_sync_status(0)
+    assert feedback['active'] and feedback['effective'] and feedback['policy_mode'] == 'mapped'
+    assert feedback['map_revision'] == geometry.revision()
     status = controller.status(0)
-    assert status.state == 'effective' and status.requested and status.effective and status.active, status
+    assert status.state == 'pending' and status.requested and status.effective and status.active, status
+    assert status.guidance == 'phase' and status.grid_phase_confirmed is None, status
     metadata = audio.current_input_runtime_pad_binding(0).metadata()
     feedback = audio.pad_source_sync_status(0)
     assert isinstance(metadata['source_id'], str)
@@ -439,11 +445,13 @@ def make(audio, geometry):
     controller.set_requested(0, requested=False)
     status = controller.status(0)
     assert status.state == 'pending' and not status.requested and status.effective and status.active, status
+    assert status.grid_phase_confirmed is None, status
     return controller
 
 def stopped(controller):
     status = controller.status(0)
     assert status.state == 'off' and not status.requested and not status.effective and not status.active, status
+    assert status.grid_phase_confirmed is None, status
 "#).unwrap();
         let module = pyo3::types::PyModule::from_code(
             py,
@@ -752,7 +760,10 @@ fn publish_mixed_members(path: &LaunchPath, delivery: &LoaderEventDelivery) {
             vec![32.0 / f64::from(RATE); NUM_SAMPLES],
             vec![Some(64.0 / f64::from(RATE)); NUM_SAMPLES],
             bindings.iter().map(Option::as_ref).collect(),
-            None,
+            Some(vec![crate::audio_engine::input_mapping::PitchPadProjection {
+                sync: true,
+                ..Default::default()
+            }; NUM_SAMPLES]),
             Some(maps),
         )
         .unwrap();
@@ -787,7 +798,7 @@ fn capture_mixed_global(
             .capture_global_start(py, entries, None)
             .unwrap()
     });
-    let members = captured
+    let members: [CapturedPadStart; 2] = captured
         .resolve()
         .unwrap()
         .unwrap()
@@ -796,6 +807,8 @@ fn capture_mixed_global(
         .collect::<Vec<_>>()
         .try_into()
         .unwrap();
+    assert!(members[0].mapped_geometry().is_some());
+    assert!(members[1].mapped_geometry().is_none());
     (captured, members)
 }
 

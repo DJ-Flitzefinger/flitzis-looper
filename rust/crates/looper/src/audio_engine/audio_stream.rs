@@ -894,13 +894,18 @@ pub(super) fn execute_scheduled_command<S: AudioMessageSink, R: AudioBufferRetir
             );
         }
         ScheduledCommand::RefreshAcceptedTiming(refresh) => {
-            let accepted = execute_accepted_timing_refresh(
+            let result = execute_accepted_timing_refresh(
                 mixer,
                 transport,
                 output_frame,
                 &refresh,
                 retirement,
             );
+            let CallbackEffectResult::Settled(accepted) = result else {
+                return ScheduledExecution::Pending(ScheduledCommand::RefreshAcceptedTiming(
+                    refresh,
+                ));
+            };
             refresh.finish(accepted);
             retirement.retire_accepted_timing_refresh(refresh);
         }
@@ -1024,50 +1029,145 @@ pub(super) fn execute_scheduled_command<S: AudioMessageSink, R: AudioBufferRetir
     ScheduledExecution::Complete
 }
 
+#[cfg(test)]
+thread_local! { static REFRESH_GLOBAL_CLAIM_HOOK: std::cell::RefCell<Option<Box<dyn FnOnce()>>> = const { std::cell::RefCell::new(None) }; }
+
+#[cfg(test)]
+pub(crate) fn with_refresh_global_claim_for_test<T>(
+    hook: impl FnOnce() + 'static,
+    action: impl FnOnce() -> T,
+) -> T {
+    struct Reset;
+    impl Drop for Reset {
+        fn drop(&mut self) {
+            REFRESH_GLOBAL_CLAIM_HOOK.with(|value| *value.borrow_mut() = None);
+        }
+    }
+    REFRESH_GLOBAL_CLAIM_HOOK
+        .with(|value| assert!(value.borrow_mut().replace(Box::new(hook)).is_none()));
+    let _reset = Reset;
+    let result = action();
+    assert!(
+        REFRESH_GLOBAL_CLAIM_HOOK.with(|value| value.borrow().is_none()),
+        "refresh claim hook was not reached"
+    );
+    result
+}
+
 fn execute_accepted_timing_refresh<R: AudioBufferRetirement>(
     mixer: &mut RtMixer,
     transport: &mut TransportTimeline,
     output_frame: u64,
     refresh: &super::accepted_timing_refresh::AcceptedTimingRefresh,
     retirement: &mut R,
-) -> bool {
-    if refresh.master_period_seconds.is_some()
-        && (mixer.has_mapped_voice() || mixer.refuse_legacy_global_rate_if_pending())
-    {
-        return false;
+) -> CallbackEffectResult {
+    if retirement.available_retirement_slots() == 0 {
+        return CallbackEffectResult::Pending;
     }
-    if retirement.available_retirement_slots() < 1
-        || !refresh.global_current()
-        || !mixer.refresh_binding_current(refresh.id, refresh.binding)
-        || !mixer.loop_intent_context_available(refresh.id, refresh.start_s, refresh.end_s)
-    {
-        return false;
+    let ownership = mixer.input_ownership_for_effect();
+    if ownership.placement_pending() {
+        return CallbackEffectResult::Pending;
     }
+    let Some(id) = mixer.timing_effect_slot(refresh.id, refresh.binding.placement) else {
+        return CallbackEffectResult::Settled(false);
+    };
+    if !refresh.global_current() || !mixer.refresh_admitted_binding_current(id, refresh.binding) {
+        return CallbackEffectResult::Settled(false);
+    }
+    if !mixer.loop_intent_context_available(id, refresh.start_s, refresh.end_s) {
+        return CallbackEffectResult::Settled(false);
+    }
+    if let Some(period) = refresh.master_period_seconds
+        && (mixer.has_pending_global_rate()
+            || !mixer.global_drains_claimed(refresh.global_revision)
+            || !mixer.accepted_refresh_master_matches(refresh.binding, period))
+    {
+        // A competing intent or incomplete calculation basis rejects this owner
+        // without consuming the independent rate request which must still progress.
+        return CallbackEffectResult::Settled(false);
+    }
+    let Some(edit) = mixer.prepare_loop_edit(id, refresh.start_s, refresh.end_s) else {
+        return CallbackEffectResult::Pending;
+    };
     let mut candidate = *transport;
+    let mut master_targets = None;
     if let Some(period) = refresh.master_period_seconds {
-        if !mixer.accepted_refresh_master_matches(refresh.binding, period)
-            || !candidate.set_master_period_preserving_beat_position_at_frame(period, output_frame)
-        {
-            return false;
+        let Some(targets) = mixer.accepted_refresh_master_targets(period, output_frame) else {
+            return CallbackEffectResult::Pending;
+        };
+        if !mixer.refresh_combined_history_ready(edit, period) {
+            return CallbackEffectResult::Pending;
         }
-        // This coupled master belongs to the acknowledged selected source. A still-pending
-        // foreign reference cannot later anchor it from another pad's source beat position.
-        // Completed one-time bootstrap remains complete; ordinary requests retain their policy.
+        master_targets = Some(targets);
+        if !candidate.set_master_period_preserving_beat_position_at_frame(period, output_frame) {
+            return CallbackEffectResult::Settled(false);
+        }
         if let Some(previous) = candidate.bootstrap_reference() {
             candidate.clear_pending_bootstrap_for_pad(previous);
         }
-        candidate.request_bootstrap(refresh.id);
+        candidate.request_bootstrap(id);
     }
-    // Recheck immediately before the first mutation; thereafter no fallible work remains.
-    if !refresh.global_current() || !mixer.refresh_binding_current(refresh.id, refresh.binding) {
-        return false;
+    // Global always precedes content. A publisher which wins first revokes this receipt;
+    // if this lease wins, publication can only proceed after the complete effect.
+    let Some(_lease) = super::GlobalTimingLease::acquire(&ownership.global_timing_publishing)
+    else {
+        return CallbackEffectResult::Pending;
+    };
+    #[cfg(test)]
+    if let Some(hook) = REFRESH_GLOBAL_CLAIM_HOOK.with(|value| value.borrow_mut().take()) {
+        hook();
     }
-    mixer.set_pad_loop_region(refresh.id, refresh.start_s, refresh.end_s);
-    if let Some(period) = refresh.master_period_seconds {
-        *transport = candidate;
-        mixer.set_master_period(period);
+    let Some(placement) = ownership.slot_snapshot(id) else {
+        return CallbackEffectResult::Pending;
+    };
+    let Ok(write) = ownership.prepare_slot_write_fixed(placement, placement.lifetime()) else {
+        return CallbackEffectResult::Pending;
+    };
+    let mixer = std::cell::RefCell::new(mixer);
+    let result = ownership.commit_slot_write_fixed(
+        &write,
+        || {
+            let mixer = mixer.borrow();
+            refresh.global_current()
+                && mixer.refresh_admitted_binding_current(id, refresh.binding)
+                && mixer.loop_intent_context_available(id, refresh.start_s, refresh.end_s)
+                && mixer
+                    .prepare_loop_edit(id, refresh.start_s, refresh.end_s)
+                    .is_some()
+                && refresh.master_period_seconds.is_none_or(|period| {
+                    mixer.global_drains_claimed(refresh.global_revision)
+                        && mixer.accepted_refresh_master_matches(refresh.binding, period)
+                        && mixer
+                            .accepted_refresh_master_targets(period, output_frame)
+                            .is_some()
+                        && mixer.refresh_combined_history_ready(edit, period)
+                })
+        },
+        |_| {
+            let mut mixer = mixer.borrow_mut();
+            mixer.apply_loop_edit_claimed(edit);
+            if let Some(period) = refresh.master_period_seconds {
+                mixer.apply_refresh_master_claimed(
+                    period,
+                    master_targets.expect("prepared master targets"),
+                    refresh.master_provenance,
+                );
+                *transport = candidate;
+            }
+        },
+    );
+    match result {
+        Ok(_) => CallbackEffectResult::Settled(true),
+        Err(_)
+            if !refresh.global_current()
+                || !mixer
+                    .borrow()
+                    .refresh_admitted_binding_current(id, refresh.binding) =>
+        {
+            CallbackEffectResult::Settled(false)
+        }
+        Err(_) => CallbackEffectResult::Pending,
     }
-    true
 }
 
 pub(super) fn global_playback_entry_slot(
@@ -1847,7 +1947,12 @@ pub(super) fn drain_control_messages<
     mixer.service_mix_capture(scheduler, retirement);
     let drain_revision = mixer.begin_global_timing_drain();
     mixer.begin_key_lock_start_control_drain();
-    mixer.set_global_commands_drained(false);
+    let retry_completed_queue = scheduler.deferred_due().is_some()
+        && consumer.is_empty()
+        && mixer.deferred_control().is_none();
+    if !retry_completed_queue {
+        mixer.set_global_commands_drained(false);
+    }
     let mut processed = 0;
 
     // An already due payload gets its one bounded retry before later queued effects.
@@ -1865,6 +1970,9 @@ pub(super) fn drain_control_messages<
         }
     }
 
+    // The preserved witness belongs only to the deferred retry. Ordinary queued
+    // work must earn a fresh complete drain after every accepted or rejected retry.
+    mixer.set_global_commands_drained(false);
     while processed < MAX_CONTROL_MESSAGES_PER_CALLBACK {
         if scheduler.deferred_due().is_some() {
             break;
@@ -1988,6 +2096,7 @@ struct PendingControlParameters {
     rate_revision: u64,
     speed: Option<f64>,
     master_period_seconds: Option<f64>,
+    rate_anchor: Option<super::TimingAnchor>,
     pad_bpm: [PendingPadBpm; MAX_PARAMETER_MESSAGES_PER_CALLBACK],
     pad_bpm_count: usize,
     pad_gain: [PendingPadGain; MAX_PARAMETER_MESSAGES_PER_CALLBACK],
@@ -2003,6 +2112,7 @@ impl Default for PendingControlParameters {
             rate_revision: 0,
             speed: None,
             master_period_seconds: None,
+            rate_anchor: None,
             pad_bpm: [PendingPadBpm {
                 placement: None,
                 id: 0,
@@ -2039,6 +2149,7 @@ impl PendingControlParameters {
                 revision,
                 speed,
                 period_seconds,
+                anchor,
             } => {
                 self.rate_revision = revision;
                 if let Some(speed) = speed {
@@ -2046,6 +2157,7 @@ impl PendingControlParameters {
                 }
                 if let Some(period) = period_seconds {
                     self.master_period_seconds = Some(period);
+                    self.rate_anchor = anchor;
                 }
             }
             #[cfg(test)]
@@ -2247,16 +2359,6 @@ impl PendingControlParameters {
             mixer.set_volume(volume);
             applied += 1;
         }
-        if self.speed.is_some() || self.master_period_seconds.is_some() {
-            mixer.stage_global_rate(
-                self.rate_revision,
-                self.speed,
-                self.master_period_seconds,
-                transport,
-            );
-            applied += usize::from(self.speed.is_some())
-                + usize::from(self.master_period_seconds.is_some());
-        }
         for pending in self.pad_bpm[..self.pad_bpm_count].iter().copied() {
             let target = if pending.through_epoch.is_none() {
                 // Only the cfg(test) unguarded SetPadBpm constructor has no retirement epoch.
@@ -2279,6 +2381,17 @@ impl PendingControlParameters {
                 mixer.clear_constant_timing_for_placement(pending.id, epoch, pending.placement);
             }
             applied += 1;
+        }
+        if self.speed.is_some() || self.master_period_seconds.is_some() {
+            mixer.stage_global_rate(
+                self.rate_revision,
+                self.speed,
+                self.master_period_seconds,
+                self.rate_anchor,
+                transport,
+            );
+            applied += usize::from(self.speed.is_some())
+                + usize::from(self.master_period_seconds.is_some());
         }
         for pending in self.pad_gain[..self.pad_gain_count].iter().copied() {
             let target = if pending.expected_epoch.is_none() {
@@ -3151,8 +3264,12 @@ pub(super) fn process_control_message<
             drop(ownership);
             retirement.retire_source_publication(publication);
         }
+        #[cfg(test)]
         ControlMessage::SetBpmLock(enabled) => {
             mixer.set_bpm_lock(enabled);
+        }
+        ControlMessage::SetBpmLockTarget(target) => {
+            mixer.stage_bpm_lock(target);
         }
         ControlMessage::SetKeyLock(enabled) => {
             mixer.set_key_lock(enabled);
@@ -3261,10 +3378,19 @@ pub(super) fn create_stream_mixer(
     input_runtime_ownership: Arc<super::input_runtime_binding::InputRuntimeOwnership>,
     prepared_source_epochs: Vec<Arc<std::sync::atomic::AtomicU64>>,
 ) -> Result<Box<RtMixer>, super::key_lock_preparation::KeyLockPreparationError> {
-    let mut mixer = Box::new(RtMixer::try_new(channels, sample_rate_hz as f32)?);
-    mixer.set_current_timing_acknowledgements(current_timing_acknowledgements);
-    mixer.set_input_runtime_ownership(input_runtime_ownership);
-    mixer.set_prepared_source_epochs(prepared_source_epochs);
+    let policy = input_runtime_ownership.key_lock_start_policy.clone();
+    let mixer = Box::new(RtMixer::try_new(
+        channels,
+        sample_rate_hz as f32,
+        Some((
+            current_timing_acknowledgements,
+            input_runtime_ownership,
+            prepared_source_epochs,
+        )),
+    )?);
+    // Supplied owners are installed directly. Invalidate their admission policy
+    // exactly once, after the complete boxed constructor has succeeded.
+    policy.invalidate_admission();
     Ok(mixer)
 }
 
@@ -4425,6 +4551,147 @@ mod tests {
         // Multiple calls should be safe (though only the first takes effect)
         setup_logger();
         setup_logger(); // Should not panic
+    }
+
+    #[test]
+    fn stream_mixer_constructor_keeps_supplied_source_owners_and_invalidates_policy_once() {
+        use crate::audio_engine::global_rate_status::RateTuple;
+        use crate::audio_engine::input_runtime_binding::InputRuntimeOwnership;
+        use crate::audio_engine::master_provenance::MasterProvenance;
+        use std::sync::atomic::AtomicU64;
+
+        let ownership = Arc::new(InputRuntimeOwnership::tracked());
+        let acknowledgements = Arc::new(CurrentTimingAcknowledgements::default());
+        let sample = SampleBuffer {
+            samples: Arc::from([0.25; 128]),
+            channels: 1,
+            residency: None,
+        }
+        .with_complete_source(8_000);
+        ownership.publish_test_source(0, &sample, 8_000, 7);
+        let placement = ownership.slot_snapshot(0).unwrap();
+        let key = placement.content_key().unwrap();
+        assert!(acknowledgements.acknowledge_for_key(&ownership, key, 23));
+        let epochs = (0..NUM_SAMPLES)
+            .map(|id| Arc::new(AtomicU64::new(id as u64 + 41)))
+            .collect::<Vec<_>>();
+        let proof = MasterProvenance::Qualified {
+            source_identity: [0x42; 32],
+            accepted_revision: Some([0x13; 32]),
+        };
+        let actual = RateTuple {
+            speed: 1.25,
+            period: Some(0.4),
+        };
+        ownership
+            .global_rate_status
+            .refresh_effective_with_master(actual, Some(proof));
+        ownership
+            .global_timing_revision
+            .store(17, Ordering::Release);
+        ownership.hierarchy_stamp.store(19, Ordering::Release);
+        let revision = ownership
+            .key_lock_start_policy
+            .begin_callback_drain()
+            .unwrap();
+        let mixer = create_stream_mixer(
+            1,
+            8_000,
+            acknowledgements.clone(),
+            ownership.clone(),
+            epochs.clone(),
+        )
+        .unwrap();
+        let (actual_ack, actual_owner, actual_epochs) = mixer.source_owners_for_test();
+        assert!(Arc::ptr_eq(actual_ack, &acknowledgements));
+        assert!(Arc::ptr_eq(actual_owner, &ownership));
+        assert_eq!(actual_epochs.len(), epochs.len());
+        for (id, (actual_epoch, supplied_epoch)) in actual_epochs.iter().zip(&epochs).enumerate() {
+            assert!(Arc::ptr_eq(actual_epoch, supplied_epoch));
+            assert_eq!(actual_epoch.load(Ordering::Acquire), id as u64 + 41);
+        }
+        assert_eq!(
+            ownership.key_lock_start_policy.begin_callback_drain(),
+            Some(revision + 1)
+        );
+        assert_eq!(ownership.slot_snapshot(0), Some(placement));
+        assert_eq!(ownership.source_generation(0, &sample, 8_000), Some(7));
+        assert_eq!(acknowledgements.current_for_key(&ownership, key), 23);
+        assert_eq!(ownership.global_timing_revision.load(Ordering::Acquire), 17);
+        assert_eq!(ownership.hierarchy_stamp.load(Ordering::Acquire), 19);
+        let observed = ownership.global_rate_status.read().unwrap();
+        assert_eq!(observed.effect.effective, actual);
+        assert_eq!(observed.master_provenance, proof);
+        assert!(!mixer.global_rate_drains_settled());
+    }
+
+    #[test]
+    fn stream_mixer_bad_epoch_vector_preserves_owners_and_worker_error_precedence() {
+        use crate::audio_engine::global_rate_status::RateTuple;
+        use crate::audio_engine::input_runtime_binding::InputRuntimeOwnership;
+        use crate::audio_engine::key_lock_preparation::KeyLockPreparationError;
+        use crate::audio_engine::master_provenance::MasterProvenance;
+        use crate::audio_engine::rubberband_backend::RubberBandError;
+        use std::panic::{AssertUnwindSafe, catch_unwind};
+        use std::sync::atomic::AtomicU64;
+
+        for channels in [0, 1] {
+            let ownership = Arc::new(InputRuntimeOwnership::tracked());
+            let acknowledgements = Arc::new(CurrentTimingAcknowledgements::default());
+            acknowledgements.acknowledge(0, 23);
+            let epochs = (0..NUM_SAMPLES - 1)
+                .map(|id| Arc::new(AtomicU64::new(id as u64 + 41)))
+                .collect::<Vec<_>>();
+            let proof = MasterProvenance::Qualified {
+                source_identity: [0x42; 32],
+                accepted_revision: None,
+            };
+            let actual = RateTuple {
+                speed: 1.25,
+                period: Some(0.4),
+            };
+            ownership
+                .global_rate_status
+                .refresh_effective_with_master(actual, Some(proof));
+            ownership
+                .global_timing_revision
+                .store(17, Ordering::Release);
+            let revision = ownership.key_lock_start_policy.begin_callback_drain();
+            let attempt = catch_unwind(AssertUnwindSafe(|| {
+                create_stream_mixer(
+                    channels,
+                    8_000,
+                    acknowledgements.clone(),
+                    ownership.clone(),
+                    epochs.clone(),
+                )
+            }));
+            if channels == 0 {
+                assert!(matches!(
+                    attempt.expect("worker error precedes epoch validation"),
+                    Err(KeyLockPreparationError::Backend(
+                        RubberBandError::InvalidChannelCount
+                    ))
+                ));
+            } else {
+                assert!(
+                    attempt.is_err(),
+                    "invalid supplied epoch length must panic before Self construction"
+                );
+            }
+            assert_eq!(
+                ownership.key_lock_start_policy.begin_callback_drain(),
+                revision
+            );
+            assert_eq!(acknowledgements.current_epoch(0), 23);
+            assert_eq!(ownership.global_timing_revision.load(Ordering::Acquire), 17);
+            for (id, epoch) in epochs.iter().enumerate() {
+                assert_eq!(epoch.load(Ordering::Acquire), id as u64 + 41);
+            }
+            let observed = ownership.global_rate_status.read().unwrap();
+            assert_eq!(observed.effect.effective, actual);
+            assert_eq!(observed.master_provenance, proof);
+        }
     }
 
     #[test]

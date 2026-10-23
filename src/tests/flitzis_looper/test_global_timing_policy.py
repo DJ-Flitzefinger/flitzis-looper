@@ -103,6 +103,8 @@ def test_policy_matrix_preserves_explicit_pad_preference_and_legacy_behavior(
 
 def test_historical_project_omission_preserves_old_pad_behavior_and_raw_seal() -> None:
     project = _full_project()
+    project.multi_loop = True
+    project.bpm_lock = True
     project.pad_source_sync_intent[0] = PadSourceSyncIntent(requested=True, revision=4)
     data = project.model_dump(mode="json")
     data.pop("global_timing_policy")
@@ -170,7 +172,7 @@ def test_corrupt_global_policy_is_safe_off_and_retains_original_with_save_fence(
 
 
 def test_invalid_pad_row_cannot_inherit_global_on_during_fenced_recovery(tmp_path: Path) -> None:
-    project = ProjectState(volume=0.61)
+    project = ProjectState(volume=0.61, multi_loop=True, bpm_lock=True)
     project.global_timing_policy = GlobalTimingPolicy.model_validate(_policy(sync=True, revision=9))
     project.pad_source_sync_intent[1] = PadSourceSyncIntent(requested=True, revision=8)
     project.pad_source_sync_intent[2] = PadSourceSyncIntent(requested=False, revision=3)

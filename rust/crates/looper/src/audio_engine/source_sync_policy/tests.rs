@@ -78,8 +78,18 @@ fn resolved_preferences_and_global_choices_keep_legacy_fixed_mapped_and_off_dist
 fn explicit_fixed_requires_real_supported_ratio_and_off_ignores_legacy_bpm_matching() {
     let fixed = policy(Some(true), Some(false), 1).request(true, 0);
     assert_eq!(
-        fixed.scalar_ratio(Some(0.5), 1.16, Some(0.4), false),
+        fixed.scalar_ratio(Some(0.5), 1.16, Some(0.4), true),
         Some(1.25)
+    );
+    assert!(
+        fixed
+            .scalar_ratio(Some(0.5), 1.16, Some(0.4), false)
+            .is_none()
+    );
+    assert!(
+        !policy(Some(true), Some(true), 1)
+            .request(true, 0)
+            .mapped_matching_enabled(false)
     );
     for (source, master) in [
         (None, Some(0.4)),

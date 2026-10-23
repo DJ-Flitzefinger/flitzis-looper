@@ -20,6 +20,8 @@ class GlobalTimingControlStatus:
     effective: bool | None
     pending: bool
     detail: str | None = None
+    available: bool = True
+    grid_phase_confirmed: bool | None = None
 
 
 class TimingPolicyController:
@@ -33,11 +35,20 @@ class TimingPolicyController:
         updated = next_global_timing_policy(current, control=control, enabled=enabled)
         if updated == current:
             return
+        if not self.available(control):
+            message = "Timing control requires its available requested parents."
+            raise ValueError(message)
         self._project.global_timing_policy = updated
         self._transport._mark_project_changed()
         # A reserved cohort may fence publication. Intent remains requested;
         # the existing runtime tick retries after its actual ACK and mirror.
         self._transport.refresh_input_runtime()
+
+    def available(self, control: TimingControl) -> bool:
+        """Configuration uses requested parents; callback mode/phase ACK is unrelated."""
+        if not self._project.resolve_bpm_lock():
+            return False
+        return control == "sync" or self.preference("sync") is True
 
     def toggle(self, control: TimingControl) -> None:
         """Use the same resolved preference for direct GUI and learned actions."""
@@ -70,12 +81,34 @@ class TimingPolicyController:
             if control == "sync"
             else {state.actual_realtime_bpm for state in states}
         )
-        pending = any(state.state in {"pending", "refused", "unconfirmed"} for state in states)
+        pending_states = (
+            states
+            if control == "sync"
+            else [
+                state
+                for state in states
+                if not (
+                    state.state == "pending"
+                    and state.guidance == "phase"
+                    and state.actual_realtime_bpm is not None
+                )
+            ]
+        )
+        pending = any(
+            state.state in {"pending", "refused", "unconfirmed"} for state in pending_states
+        )
         detail = next(
             (
                 state.guidance_text
-                for guidance in ("refused", "unconfirmed", "pending", "settling", "restart")
-                for state in states
+                for guidance in (
+                    "refused",
+                    "unconfirmed",
+                    "pending",
+                    "settling",
+                    "phase",
+                    "restart",
+                )
+                for state in pending_states
                 if state.guidance == guidance
             ),
             None,
@@ -86,4 +119,5 @@ class TimingPolicyController:
             effective=next(iter(values)) if len(values) == 1 else None,
             pending=pending,
             detail=detail,
+            available=self.available(control),
         )

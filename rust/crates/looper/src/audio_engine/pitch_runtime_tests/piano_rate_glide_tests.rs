@@ -34,6 +34,13 @@ const GLIDE_SPEED: f64 = 2.0;
 fn public_speed(route: &RateRoute, speed: f64) {
     Python::attach(|py| {
         let probe = route.route.probe.bind(py);
+        let previous_master = probe
+            .getattr("session")
+            .unwrap()
+            .getattr("master_period_seconds")
+            .unwrap()
+            .extract::<f64>()
+            .unwrap();
         probe
             .getattr("ctx")
             .unwrap()
@@ -61,7 +68,7 @@ fn public_speed(route: &RateRoute, speed: f64) {
                 .unwrap()
                 .extract::<f64>()
                 .unwrap(),
-            PERIODS[0] / speed
+            previous_master
         );
     });
 }

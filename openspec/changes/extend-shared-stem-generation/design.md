@@ -401,10 +401,27 @@ before V1 identity/four-PCM Weak expiration and three-area cleanup; A/V2 must
 remain productive until its later own public Unload. Whole-container Unload does
 not establish that outgoing retry/FIFO or RetainedVoice-authority route.
 
-The bounded progressive fixture reuses actual B restore, both frozen
-generations, bank-owner FIFO retirement and strict short A output. Public
-Pause/Resume freezes those readers without restoring current-bank candidate
-authority. Untimestamped productive partitions consume the frozen ramp under
+The bounded progressive fixture first confirms genuine public A Pause/Resume
+while A is still the current content lifetime and both generations occupy the
+unfinished handover. Its own admissions, actual callback observations and silent
+partitions preserve the source, Native/FIFO/history, transition and both reader
+generations. It then reuses an actual semantically distinct B restore, both frozen
+generations, bank-owner FIFO retirement and strict short A output. New current-B
+Pause/Resume must refuse an effect on retained old-lifetime A without changing
+those A owners or claiming A as B's ordinary state. This explicitly reconciles
+the earlier successful-A-Pause-under-B recipe with the later source-owned Ordinary
+contract in `resume-dry-mapped-playback/specs/play-samples/spec.md`: RetainedVoice
+history preparation is not public transport authority. Same-digest refresh,
+synthetic pause flags and relaxed content guards are not substitutes. All actual
+frozen-under-distinct-B retirement and cleanup gates remain required.
+An independent paused-reader lifetime case confirms A's public Pause before the
+distinct B restore, then preserves the genuinely paused A/frozen generations
+through refused current-B Resume and silent callbacks until own Unload. Actual
+FIFO and final-reader release must precede either generation's physical cleanup.
+This does not replace productive A/V2 output, outgoing-only retirement or the
+later source-bound RetainedVoice proof, and it adds no transport authority for B
+over old-lifetime A.
+Untimestamped productive partitions consume the frozen ramp under
 zero retirement capacity; capacity restoration and the actual audio FIFO end
 outgoing V1 while the used Native/history still protects it. Only subsequent
 timestamped A consumption starts a fresh retained-voice preparation, whose own
@@ -624,6 +641,34 @@ unknown/external/reparse/collision paths and forced sharing errors. Rendered
 FullMix transition preserves transport and non-target users; delayed physical
 cleanup completes only after actual final readers. Final Human all-loaded UI
 and performance checks stay open.
+
+## Queued replacement operations and admitted timing intent
+
+A prepared candidate operation captures an optional scalar copy of the existing
+global timing revision during successful admission, under the existing global
+lease and after the original capacity and ownership preflight. Capture, worker
+delivery and the candidate transaction carry that value unchanged. A worker
+finishing after newer rate admission cannot renew the old operation's witness.
+This fence belongs to the individual unclaimed operation, not its accepted V2
+registration, CandidateAuthority, selection or productive V1. An explicit fresh
+ALL request can therefore reuse that registration, and historical claimed receipts
+remain meaningful after later timing intent.
+
+Candidate Adopt requires its original witness. After retirement-capacity
+preflight, it obtains the existing global lease before the content claim and
+revalidates beneath both existing claims. Global contention retains the exact
+original pending payload; a superseded revision follows the existing rejection
+and retirement path. No GUI admission changes a productive Native/history epoch,
+and no additional clock, counter, worker pipeline or lifetime owner is introduced.
+
+Qualified rate work still waits for actual complete command and parameter drains.
+When retirement pressure retains an old V2 Adopt, newly admitted rate intent
+supersedes that operation while old audio and master timing remain effective.
+Capacity recovery lets the original Adopt reject, then complete drains allow the
+pending rate effect. Independent PCM/rate ledgers move only at that actual effect;
+paused source consumption stays frozen. Tests retain both claim-winner orders,
+failed admission without supersession, original payload under contention and
+explicit fresh V2 retry without automatic retry or loss of its accepted registration.
 
 ## Dependencies and final integration
 

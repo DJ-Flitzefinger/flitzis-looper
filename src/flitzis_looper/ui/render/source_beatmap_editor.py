@@ -8,7 +8,6 @@ from weakref import WeakKeyDictionary
 
 from imgui_bundle import imgui
 
-from flitzis_looper.timing_policy import variable_source_timing
 from flitzis_looper.ui.constants import SPACING, TEXT_MUTED_RGBA
 from flitzis_looper.ui.render.source_beatmap_manual_beat import (
     discard_manual_beat,
@@ -214,7 +213,7 @@ def _status_line(label: str) -> None:
 
 
 def _local_tempo_label(ctx: UiContext, frame: SourceMapEditorFrame) -> str:
-    if not variable_source_timing(ctx.state.project.global_timing_policy):
+    if not ctx.state.project.resolve_pad_realtime_bpm(frame.pad_id):
         timing = ctx.state.pads.current_timing(frame.pad_id)
         return (
             "Fixed source BPM unavailable"
@@ -844,15 +843,25 @@ def _render_source_map_controls(
     state = _inputs(ctx, frame)
     sync = ctx.audio.pads.source_sync_status(frame.pad_id)
     preference = ctx.audio.pads.source_sync_preference(frame.pad_id)
-    imgui.begin_disabled(frame.identity is None)
+    imgui.begin_disabled(
+        frame.identity is None
+        or not ctx.state.project.resolve_bpm_lock()
+        or ctx.state.project.global_timing_policy.sync is False
+    )
     if imgui.button(f"SYNC PAD {'ON' if preference else 'OFF'}##source-sync-toggle", (-1, 0)):
         ctx.audio.pads.toggle_source_sync(frame.pad_id)
     imgui.end_disabled()
     effective = "unconfirmed" if sync.effective is None else "ON" if sync.effective else "OFF"
+    phase = (
+        " | grid phase unconfirmed"
+        if sync.effective is True and sync.grid_phase_confirmed is None
+        else ""
+    )
     imgui.push_id("source-sync-status")
     try:
         _status_line(
-            f"SYNC requested {'ON' if sync.requested else 'OFF'} | Audio {effective} | {sync.state}"
+            f"SYNC requested {'ON' if sync.requested else 'OFF'} | Mode {effective}"
+            f" | {sync.state}{phase}"
         )
     finally:
         imgui.pop_id()

@@ -20,6 +20,13 @@ if TYPE_CHECKING:
     from flitzis_looper.controller import AppController
 
 
+@pytest.fixture(autouse=True)
+def available_timing_parents(controller: AppController) -> None:
+    """These mode/adoption tests explicitly configure their requested parents."""
+    controller.project.multi_loop = True
+    controller.project.bpm_lock = True
+
+
 def _feedback(audio: Mock, **changes: object) -> dict[str, object]:
     binding = audio.current_input_runtime_pad_binding(0)
     binding._metadata["window_revision"] = 7
@@ -117,7 +124,7 @@ def test_inactive_no_active_voice_attempt_stays_off_and_quiet_across_pad_and_glo
     before = controller.project.model_dump()
     capsys.readouterr()
 
-    assert adoption["target_mode"] == ("legacy" if policy.is_neutral else "off")
+    assert adoption["target_mode"] == "legacy"
     assert adoption["target_policy_revision"] == (None if policy.is_neutral else 2)
     assert adoption["target_policy_sync"] is policy.sync
     assert adoption["target_policy_realtime_bpm"] is policy.realtime_bpm
@@ -247,20 +254,23 @@ def test_idle_attempt_cannot_bypass_current_source_generation_or_window_fences(
     assert adoption["state"] == "refused"
 
 
-def _current_scalar_glide(controller: AppController, audio: Mock, mode: str) -> dict[str, object]:
+def _current_scalar_glide(
+    controller: AppController, audio: Mock, *, sync: bool | None
+) -> dict[str, object]:
     _assigned(controller, audio)
-    legacy = mode == "legacy"
+    neutral = sync is None
+    mode = "fixed" if sync else "legacy"
     policy = GlobalTimingPolicy(
         schema_version=1,
-        sync=None if legacy else mode == "fixed",
-        realtime_bpm=None if legacy else False,
-        revision=0 if legacy else 2,
+        sync=sync,
+        realtime_bpm=None if neutral else False,
+        revision=0 if neutral else 2,
     )
     controller.project.global_timing_policy = policy
     controller.project.pad_source_sync_intent[0] = PadSourceSyncIntent(
         requested=mode == "fixed", revision=5
     )
-    revision = None if legacy else policy.revision
+    revision = None if neutral else policy.revision
     return _feedback(
         audio,
         active=True,
@@ -285,11 +295,11 @@ def _current_scalar_glide(controller: AppController, audio: Mock, mode: str) -> 
     )
 
 
-@pytest.mark.parametrize("mode", ["legacy", "off", "fixed"])
+@pytest.mark.parametrize("sync", [None, False, True])
 def test_current_scalar_target_settling_precedes_redundant_adoption_refusal(
-    controller: AppController, audio_engine_mock: Mock, mode: str
+    controller: AppController, audio_engine_mock: Mock, *, sync: bool | None
 ) -> None:
-    feedback = _current_scalar_glide(controller, audio_engine_mock, mode)
+    feedback = _current_scalar_glide(controller, audio_engine_mock, sync=sync)
 
     status = controller.transport.source_sync.status(0)
 
@@ -304,19 +314,19 @@ def test_current_scalar_target_settling_precedes_redundant_adoption_refusal(
     assert isinstance(adoption, dict)
     assert adoption["state"] == "refused"
 
-    feedback.update(settled=True, effective=mode == "fixed")
+    feedback.update(settled=True, effective=sync is True)
     status = controller.transport.source_sync.status(0)
-    assert status.state == ("effective" if mode == "fixed" else "off")
-    assert status.guidance is None
-    assert status.detail is None
+    assert status.state == ("pending" if sync else "off")
+    assert status.guidance == ("phase" if sync else None)
+    assert status.detail == ("Grid phase is unconfirmed." if sync else None)
 
 
-@pytest.mark.parametrize("mode", ["legacy", "off", "fixed"])
+@pytest.mark.parametrize("sync", [None, False, True])
 @pytest.mark.parametrize("target_current", [None, False, "missing"])
 def test_missing_or_false_target_current_cannot_override_adoption_refusal(
-    controller: AppController, audio_engine_mock: Mock, mode: str, target_current: object
+    controller: AppController, audio_engine_mock: Mock, target_current: object, *, sync: bool | None
 ) -> None:
-    feedback = _current_scalar_glide(controller, audio_engine_mock, mode)
+    feedback = _current_scalar_glide(controller, audio_engine_mock, sync=sync)
     if target_current == "missing":
         del feedback["target_current"]
     else:
@@ -329,12 +339,12 @@ def test_missing_or_false_target_current_cannot_override_adoption_refusal(
     assert status.effective is False
 
 
-@pytest.mark.parametrize("mode", ["legacy", "off", "fixed"])
+@pytest.mark.parametrize("sync", [None, False, True])
 @pytest.mark.parametrize("target_current", [0, 1, "true", []])
 def test_malformed_target_current_is_unconfirmed_including_neutral_policy(
-    controller: AppController, audio_engine_mock: Mock, mode: str, target_current: object
+    controller: AppController, audio_engine_mock: Mock, target_current: object, *, sync: bool | None
 ) -> None:
-    feedback = _current_scalar_glide(controller, audio_engine_mock, mode)
+    feedback = _current_scalar_glide(controller, audio_engine_mock, sync=sync)
     feedback["target_current"] = target_current
 
     status = controller.transport.source_sync.status(0)
@@ -357,7 +367,7 @@ def test_malformed_target_current_is_unconfirmed_including_neutral_policy(
 def test_target_current_cannot_override_a_mismatched_raw_policy_request(
     controller: AppController, audio_engine_mock: Mock, field: str, value: object
 ) -> None:
-    feedback = _current_scalar_glide(controller, audio_engine_mock, "legacy")
+    feedback = _current_scalar_glide(controller, audio_engine_mock, sync=None)
     feedback[field] = value
 
     status = controller.transport.source_sync.status(0)
@@ -369,7 +379,7 @@ def test_target_current_cannot_override_a_mismatched_raw_policy_request(
 def test_target_current_cannot_bypass_source_fences_or_confirm_a_stopped_glide(
     controller: AppController, audio_engine_mock: Mock
 ) -> None:
-    feedback = _current_scalar_glide(controller, audio_engine_mock, "legacy")
+    feedback = _current_scalar_glide(controller, audio_engine_mock, sync=None)
     feedback["source_generation"] = 2
     assert controller.transport.source_sync.status(0).state == "unconfirmed"
     feedback.update(source_generation=1, active=False)
@@ -379,7 +389,7 @@ def test_target_current_cannot_bypass_source_fences_or_confirm_a_stopped_glide(
 def test_mapped_target_current_does_not_enter_scalar_settling_precedence(
     controller: AppController, audio_engine_mock: Mock, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    feedback = _current_scalar_glide(controller, audio_engine_mock, "fixed")
+    feedback = _current_scalar_glide(controller, audio_engine_mock, sync=True)
     geometry = _geometry()
     monkeypatch.setattr(controller.loader.source_beatmaps, "effective", lambda _id: geometry)
     controller.project.global_timing_policy = GlobalTimingPolicy(
@@ -535,7 +545,8 @@ def test_ready_map_never_implies_effective_and_old_mapped_audio_cannot_ack_new_r
     assert status.state == "pending"
     assert status.effective is True
     feedback["intent_revision"] = 4
-    assert controller.transport.source_sync.status(0).state == "effective"
+    assert controller.transport.source_sync.status(0).state == "pending"
+    assert controller.transport.source_sync.status(0).grid_phase_confirmed is None
     feedback["map_revision"] = "f" * 64
     assert controller.transport.source_sync.status(0).state == "pending"
     controller.project.pad_source_sync_intent[0] = PadSourceSyncIntent(requested=False, revision=5)

@@ -13,14 +13,17 @@
 
 ## Latest Human hierarchy, 2026-10-23
 
-- [ ] Integrate one parent-aware BPM-Lock/SYNC/per-PAD-RT resolution across controls, restore, accepted-timing publication, runtime capture and grids; retain raw preferences and Native schema/custody authority.
-- [ ] Fence accepted parent transitions with checked hierarchy request revisions before side effects; preserve no-op, reservation, omitted-row retention, counter exhaustion and OFF/ON ABA guarantees, including MultiLoop cancellation of an already reserved Pair/Bank launch.
-- [ ] Extend accepted-timing refresh identity and its Pair mirror signature projection together; exercise queued/in-flight parent OFF/ON, recovery and content move/swap against the Native revision fence.
-- [ ] Resolve captured requested MultiLoop/BPM-Lock availability before Native target selection while retaining raw intent; separately enforce actual Native BPM Lock for Fixed/Mapped consumers, with Legacy fallback following actual BPM Lock rather than remembered SYNC.
-- [ ] Reconcile deferred actual BPM-Lock application through the existing bounded control owner after mapped/global-rate work retires or a valid reference arrives; keep conversion guards and truthful pending feedback without blind retries or another scheduler.
-- [ ] Add an explicit nonserialized timing-recovery gate for actual malformed global metadata, preserving valid settings, original bytes, save/launch holds and ordinary valid False/False/revision0 semantics.
-- [ ] Reorder the five controls and apply identical GUI/MIDI/PAD availability without using playing/phase ACK as a parent prerequisite.
-- [ ] Separate current mode efficacy from unknown grid-phase qualification in status/global aggregation/labels, retaining real refusals and settlement evidence.
+- [x] Integrate one parent-aware BPM-Lock/SYNC/per-PAD-RT resolution across controls, restore, accepted-timing publication, runtime capture and grids; retain raw preferences and Native schema/custody authority.
+- [x] Fence accepted parent transitions with checked hierarchy request revisions before side effects; preserve no-op, reservation, omitted-row retention, counter exhaustion and OFF/ON ABA guarantees, including MultiLoop cancellation of an already reserved Pair/Bank launch.
+- [x] Extend accepted-timing refresh identity and its Pair mirror signature projection together; exercise queued/in-flight parent OFF/ON, recovery and content move/swap against the Native revision fence.
+- [x] Resolve captured requested MultiLoop/BPM-Lock availability before Native target selection while retaining raw intent; separately enforce actual Native BPM Lock for Fixed/Mapped consumers, with Legacy fallback following actual BPM Lock rather than remembered SYNC.
+- [x] Reconcile deferred actual BPM-Lock application through the existing bounded control owner after mapped/global-rate work retires or a valid reference arrives; keep conversion guards and truthful pending feedback without blind retries or another scheduler.
+- [x] Apply initial BPM Lock, qualified master and one-time bootstrap atomically; retain original anchor qualification through later fast/history global-rate effects and coalescing, mirror actual timing, and reject stale Native APIs before application/device construction.
+- [x] Recover transient observation/Hold presentation after an established matching Applied BPM reference without replaying effects; preserve foreign/pending/source guards and new manual-master failures, with local parent/restore/Pair fixtures retaining original ownership.
+- [x] Carry actual master provenance through the existing coherent Native rate observation and explicit master coalescing; distinguish qualified Manual/TAP/Legacy from unknown, preserve Pair/window identity and source guards, and mirror actual own revision changes without another Python master owner.
+- [x] Add an explicit nonserialized timing-recovery gate for actual malformed global metadata, preserving valid settings, original bytes, save/launch holds and ordinary valid False/False/revision0 semantics.
+- [x] Reorder the five controls and apply identical GUI/MIDI/PAD availability without using playing/phase ACK as a parent prerequisite.
+- [x] Separate current mode efficacy from unknown grid-phase qualification in status/global aggregation/labels, retaining real refusals and settlement evidence.
 - [ ] Finish meaningful affected regression/integration/static/strict checks, needed private Release/API/preflight and one independent actual final-diff review; commit and normal-main push, clean fresh remote equality and guarded own cleanup.
 
 ## Remaining product phase and musical acceptance

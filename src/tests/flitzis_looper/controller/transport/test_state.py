@@ -80,7 +80,7 @@ def test_apply_global_audio_settings_calls_all_methods(
     audio_engine_mock.set_speed.assert_called_once()
     audio_engine_mock.set_key_lock.assert_not_called()
     audio_engine_mock.set_pad_key_lock.assert_called_once_with(0, enabled)
-    audio_engine_mock.set_bpm_lock.assert_called_once()
+    audio_engine_mock.set_bpm_lock.assert_not_called()
     audio_engine_mock.set_trigger_quantization.assert_called_once_with("1_64")
 
 
@@ -331,17 +331,13 @@ def test_apply_bpm_lock_settings_enabled(
     transport_controller: TransportController,
     apply_project_state: ApplyProjectState,
 ) -> None:
-    """Test _apply_bpm_lock_settings sets anchor when BPM lock is enabled."""
+    """Restore captures placement once but never substitutes a display BPM for qualification."""
     transport_controller._project.bpm_lock = True
+    transport_controller._project.multi_loop = True
     transport_controller._project.selected_pad = 0
-
-    with patch.object(transport_controller.bpm, "effective_bpm", autospec=True) as mock_effective:
-        mock_effective.return_value = 120.0
-
-        apply_project_state._apply_bpm_lock_settings()
-
-        assert transport_controller._session.bpm_lock_anchor_pad_id == 0
-        assert transport_controller._session.bpm_lock_anchor_bpm == 120.0
+    apply_project_state._apply_bpm_lock_settings()
+    assert transport_controller._session.bpm_lock_anchor_pad_id == 0
+    assert transport_controller._session.bpm_lock_anchor_bpm is None
 
 
 def test_apply_bpm_lock_settings_disabled(
@@ -357,13 +353,13 @@ def test_apply_bpm_lock_settings_disabled(
     assert transport_controller._session.bpm_lock_anchor_bpm is None
 
 
-def test_apply_bpm_lock_settings_triggers_recompute(
+def test_apply_bpm_lock_settings_uses_only_the_deferred_application_owner(
     transport_controller: TransportController,
     apply_project_state: ApplyProjectState,
 ) -> None:
-    """Test _apply_bpm_lock_settings triggers master BPM recompute."""
+    """Restore cannot publish an unqualified follow-on master or bootstrap."""
     with patch.object(
-        transport_controller.bpm, "recompute_master_bpm", autospec=True
+        transport_controller.global_params, "poll_bpm_lock_application", autospec=True
     ) as mock_recompute:
         mock_recompute.return_value = None
 
@@ -423,5 +419,5 @@ def test_apply_project_state_with_modified_state(
         audio_engine_mock.set_speed.assert_called_once()
         audio_engine_mock.set_key_lock.assert_not_called()
         audio_engine_mock.set_pad_key_lock.assert_called_once_with(0, enabled)
-        audio_engine_mock.set_bpm_lock.assert_called_once()
+        audio_engine_mock.set_bpm_lock.assert_not_called()
         audio_engine_mock.set_trigger_quantization.assert_called_once_with("1_32")

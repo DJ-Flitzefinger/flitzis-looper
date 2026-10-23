@@ -1,12 +1,17 @@
 """Parameter gestures contain expected Native refusal without changing controller truth."""
 
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, cast
 
 import pytest
 
 from flitzis_looper.controller.persistence import ProjectPersistence
 from flitzis_looper.ui.context import UiContext
-from tests.flitzis_looper.controller.transport.test_bpm_publication_coherence import _loaded
+from tests.flitzis_looper.controller.transport.test_bpm_publication_coherence import (
+    _assert_no_legacy_lock_effects,
+    _assert_saved_lock_request,
+    _bpm_publication,
+    _loaded,
+)
 
 if TYPE_CHECKING:
     from collections.abc import Callable
@@ -110,7 +115,9 @@ def _feedback(ctx: UiContext, action: str) -> str | None:
 
 
 @pytest.mark.parametrize("error_type", [RuntimeError, ValueError])
-@pytest.mark.parametrize(("action", "native_method"), PRIMARY)
+@pytest.mark.parametrize(
+    ("action", "native_method"), [entry for entry in PRIMARY if entry[0] != "bpm_lock"]
+)
 def test_parameter_primary_refusal_is_nonfatal_and_only_an_explicit_retry_clears_feedback(
     controller: AppController,
     audio_engine_mock: Mock,
@@ -152,7 +159,7 @@ def test_parameter_primary_refusal_is_nonfatal_and_only_an_explicit_retry_clears
 
 
 @pytest.mark.parametrize("error_type", [RuntimeError, ValueError])
-@pytest.mark.parametrize("action", ["pad.bpm", "pad.clear_bpm", "pad.tap", "speed", "bpm_lock"])
+@pytest.mark.parametrize("action", ["pad.bpm", "pad.clear_bpm", "pad.tap"])
 def test_parameter_derived_refusal_keeps_already_accepted_intent_durable(
     controller: AppController,
     audio_engine_mock: Mock,
@@ -161,12 +168,7 @@ def test_parameter_derived_refusal_keeps_already_accepted_intent_durable(
     action: str,
 ) -> None:
     ctx = _context(controller, audio_engine_mock, monkeypatch, action)
-    if action == "speed":
-        controller.project.bpm_lock = True
-        controller.session.bpm_lock_anchor_pad_id = 0
-        controller.session.bpm_lock_anchor_bpm = 100.0
-    native_method = "set_pad_timing_metadata" if action.startswith("pad.") else "set_master_bpm"
-    refusal = getattr(audio_engine_mock, native_method)
+    refusal = audio_engine_mock.set_pad_timing_metadata
     refusal.side_effect = error_type(REFUSAL)
 
     _actions(ctx)[action]()
@@ -174,19 +176,190 @@ def test_parameter_derived_refusal_keeps_already_accepted_intent_durable(
     assert _feedback(ctx, action) == REFUSAL
     assert controller.persistence.flush_if_dirty()
     saved = ProjectPersistence.from_config_path(controller.persistence.config_path).project
-    if action.startswith("pad."):
-        assert saved.manual_bpm[0] == (None if action == "pad.clear_bpm" else 120.0)
-        assert saved.pad_timing_intent[0] == "legacy"
-        audio_engine_mock.set_pad_bpm.assert_called_once()
-    elif action == "speed":
-        assert saved.speed == 1.25
-        audio_engine_mock.set_speed.assert_called_once_with(1.25)
-    else:
-        assert saved.bpm_lock
-        audio_engine_mock.set_bpm_lock.assert_called_once_with(enabled=True)
+    assert saved.manual_bpm[0] == (None if action == "pad.clear_bpm" else 120.0)
+    assert saved.pad_timing_intent[0] == "legacy"
+    audio_engine_mock.set_pad_bpm.assert_called_once()
     controller.transport.on_frame_render()
     refusal.assert_called_once()
     assert ctx.audio.pads.residency_status(2) == (None, OTHER_PAD)
+
+
+def _assert_ui_timing_neighbors(ctx: UiContext, controller: AppController, audio: Mock) -> None:
+    assert ctx.audio.pads.residency_status(2) == (None, OTHER_PAD)
+    assert controller.session.active_sample_ids == {0, 2}
+    assert controller.session.paused_sample_ids == {2}
+    assert controller.session.pad_playhead_s[0] == 4.2
+    assert controller.session.pad_playhead_s[2] == 8.5
+    assert controller.session.bpm_lock_anchor_pad_id == 0
+    assert controller.transport.global_params._bpm_lock_master_ready()
+    audio.capture_pad_start.assert_not_called()
+    audio.play_sample.assert_not_called()
+    _assert_no_legacy_lock_effects(audio)
+
+
+@pytest.mark.parametrize("error_type", [RuntimeError, ValueError])
+def test_bpm_lock_ui_publication_refusal_keeps_durable_request_and_bounded_original_retry(
+    controller: AppController,
+    audio_engine_mock: Mock,
+    monkeypatch: pytest.MonkeyPatch,
+    error_type: type[Exception],
+) -> None:
+    ctx = _context(controller, audio_engine_mock, monkeypatch, "bpm_lock")
+    publication = _bpm_publication(controller, audio_engine_mock)
+    accepted = audio_engine_mock.set_bpm_lock.side_effect
+    audio_engine_mock.set_bpm_lock.side_effect = error_type(REFUSAL)
+
+    ctx.audio.global_.toggle_bpm_lock()
+
+    audio_engine_mock.set_bpm_lock.assert_called_once()
+    status = ctx.state.global_.bpm_lock_application_status()
+    assert status.requested
+    assert status.pending
+    assert status.effective is False
+    assert status.detail == REFUSAL
+    assert ctx.audio.global_.playback_error is None
+    assert controller.session.bpm_lock_anchor_pad_id == 0
+    assert controller.session.master_period_seconds is None
+    _assert_saved_lock_request(controller, enabled=True, intent="legacy")
+    publication.receipt["submission_available"] = False
+    ctx.audio.poll.poll()
+    controller.transport.on_frame_render()
+    audio_engine_mock.set_bpm_lock.assert_called_once()
+    audio_engine_mock.set_bpm_lock.side_effect = accepted
+    publication.receipt["submission_available"] = True
+    ctx.audio.poll.poll()
+    assert audio_engine_mock.set_bpm_lock.call_count == 2
+    for _ in range(3):
+        ctx.audio.poll.poll()
+    assert audio_engine_mock.set_bpm_lock.call_count == 2
+    assert controller.session.master_period_seconds is None
+    publication.apply(enabled=True, period=0.6)
+    assert controller.session.master_period_seconds == 0.6
+    assert not ctx.state.global_.bpm_lock_application_status().pending
+    _assert_ui_timing_neighbors(ctx, controller, audio_engine_mock)
+
+
+@pytest.mark.parametrize("error_type", [RuntimeError, ValueError])
+def test_bpm_lock_ui_receipt_refusal_preserves_wish_and_waits_for_own_applied_effect(
+    controller: AppController,
+    audio_engine_mock: Mock,
+    monkeypatch: pytest.MonkeyPatch,
+    error_type: type[Exception],
+) -> None:
+    ctx = _context(controller, audio_engine_mock, monkeypatch, "bpm_lock")
+    publication = _bpm_publication(controller, audio_engine_mock)
+    ctx.audio.global_.toggle_bpm_lock()
+    audio_engine_mock.bpm_lock_status.side_effect = error_type(REFUSAL)
+
+    ctx.audio.poll.poll()
+
+    status = ctx.state.global_.bpm_lock_application_status()
+    assert status.requested
+    assert status.pending
+    assert status.detail == REFUSAL
+    assert ctx.audio.global_.playback_error is None
+    assert controller.session.master_period_seconds is None
+    _assert_saved_lock_request(controller, enabled=True, intent="legacy")
+    audio_engine_mock.bpm_lock_status.side_effect = publication.receipt.copy
+    foreign = dict(publication.receipt)
+    foreign.update(
+        request_revision=2,
+        effect_revision=2,
+        state="applied",
+        effective_enabled=True,
+        execution_frame=64,
+    )
+    audio_engine_mock.bpm_lock_status.side_effect = foreign.copy
+    ctx.audio.poll.poll()
+    assert controller.session.master_period_seconds is None
+    audio_engine_mock.bpm_lock_status.side_effect = publication.receipt.copy
+    publication.apply(enabled=True, period=0.6)
+    assert controller.session.master_period_seconds == 0.6
+    assert not ctx.state.global_.bpm_lock_application_status().pending
+    audio_engine_mock.set_bpm_lock.assert_called_once()
+    _assert_ui_timing_neighbors(ctx, controller, audio_engine_mock)
+
+
+def _assert_qualified_speed_call(audio: Mock, *, count: int) -> None:
+    assert audio.set_speed_and_master_period.call_count == count
+    assert audio.set_speed_and_master_period.call_args.args == (1.25, 0.48)
+    binding = audio.set_speed_and_master_period.call_args.kwargs["anchor_binding"]
+    assert binding.metadata()["pad_id"] == 0
+    assert binding.metadata()["source_generation"] == 1
+    audio.set_speed.assert_not_called()
+
+
+@pytest.mark.parametrize("error_type", [RuntimeError, ValueError])
+def test_qualified_ui_speed_refusal_and_later_effect_rejection_preserve_requested_actual_split(
+    controller: AppController,
+    audio_engine_mock: Mock,
+    monkeypatch: pytest.MonkeyPatch,
+    error_type: type[Exception],
+) -> None:
+    ctx = _context(controller, audio_engine_mock, monkeypatch, "speed")
+    publication = _bpm_publication(controller, audio_engine_mock)
+    parameters = controller.transport.global_params
+    parameters.set_bpm_lock(enabled=True)
+    publication.apply(enabled=True, period=0.6)
+    controller.persistence.flush()
+    before_project, before_session = controller.project.model_dump(), _session(controller)
+    audio_engine_mock.set_speed_and_master_period.side_effect = error_type(REFUSAL)
+    ctx.audio.global_.set_speed(1.25)
+    assert _feedback(ctx, "speed") == REFUSAL
+    assert controller.project.model_dump() == before_project
+    assert _session(controller) == before_session
+    assert not controller.persistence.flush_if_dirty()
+    _assert_qualified_speed_call(audio_engine_mock, count=1)
+
+    def submit(speed: float, period: float, *, anchor_binding: object) -> None:
+        assert anchor_binding is not None
+        publication.rate.update(
+            request_revision=cast("int", publication.rate["request_revision"]) + 1,
+            state="queued",
+            requested_speed=speed,
+            requested_master_period=period,
+            execution_frame=None,
+            error=None,
+        )
+
+    audio_engine_mock.set_speed_and_master_period.side_effect = submit
+    ctx.audio.global_.set_speed(1.25)
+    assert _feedback(ctx, "speed") is None
+    _assert_qualified_speed_call(audio_engine_mock, count=2)
+    assert controller.session.master_period_seconds == 0.6
+    assert controller.persistence.flush_if_dirty()
+    saved = ProjectPersistence.from_config_path(controller.persistence.config_path).project
+    assert saved.speed == 1.25
+    assert saved.bpm_lock
+    publication.rate.update(
+        effect_revision=publication.rate["request_revision"],
+        state="rejected",
+        execution_frame=128,
+        error=REFUSAL,
+    )
+    for _ in range(3):
+        ctx.audio.poll.poll()
+    status = ctx.state.global_.global_rate_status()
+    assert status.state == "rejected"
+    assert status.error == REFUSAL
+    assert status.requested_speed == 1.25
+    assert status.effective_speed == 1.0
+    assert controller.session.master_period_seconds == 0.6
+    _assert_qualified_speed_call(audio_engine_mock, count=2)
+    ctx.audio.global_.set_speed(1.25)
+    _assert_qualified_speed_call(audio_engine_mock, count=3)
+    publication.rate.update(
+        effect_revision=publication.rate["request_revision"],
+        state="applied",
+        effective_speed=1.25,
+        effective_master_period=0.48,
+        execution_frame=192,
+        error=None,
+    )
+    ctx.audio.poll.poll()
+    assert controller.session.master_period_seconds == 0.48
+    assert ctx.state.global_.global_rate_status().state == "applied"
+    _assert_ui_timing_neighbors(ctx, controller, audio_engine_mock)
 
 
 @pytest.mark.parametrize(

@@ -17,8 +17,8 @@ if TYPE_CHECKING:
 
 def render_global_timing_policy(ctx: UiContext) -> None:
     controls: tuple[tuple[TimingControl, str, Callable[[], None]], ...] = (
-        ("realtime_bpm", "REALTIME BPM", ctx.audio.global_.toggle_realtime_bpm),
         ("sync", "SYNC", ctx.audio.global_.toggle_source_sync),
+        ("realtime_bpm", "REALTIME BPM", ctx.audio.global_.toggle_realtime_bpm),
     )
     for control, label, action in controls:
         status = ctx.state.global_.timing_policy_status(control)
@@ -29,9 +29,11 @@ def render_global_timing_policy(ctx: UiContext) -> None:
             if status.preference
             else "mode-off"
         )
+        imgui.begin_disabled(not status.available)
         with button_style(style):
             if imgui.button(f"{label}##global-{control}", (-1, 0)):
                 action()
+        imgui.end_disabled()
         if imgui.is_item_hovered():
             choice = (
                 "legacy preferences"
@@ -51,7 +53,9 @@ def render_global_timing_policy(ctx: UiContext) -> None:
             "mixed/unconfirmed" if status.effective is None else "ON" if status.effective else "OFF"
         )
         suffix = " | pending" if status.pending else ""
-        prefix = "Applied" if control == "realtime_bpm" else "Audio"
+        prefix = "Applied" if control == "realtime_bpm" else "Mode"
+        if control == "sync" and status.effective is True and status.grid_phase_confirmed is None:
+            suffix += " | grid phase unconfirmed"
         imgui.text_colored(TEXT_MUTED_RGBA, f"{prefix} {actual}{suffix}")
         if status.detail is not None:
             imgui.text_wrapped(status.detail)

@@ -464,6 +464,7 @@ pub(crate) enum ControlParameterMessage {
         revision: u64,
         speed: Option<f64>,
         period_seconds: Option<f64>,
+        anchor: Option<crate::audio_engine::TimingAnchor>,
     },
 
     /// Set per-pad BPM metadata.
@@ -605,7 +606,10 @@ pub enum ControlMessage {
     Ping(),
 
     /// Enable or disable BPM lock.
+    #[cfg(test)]
     SetBpmLock(bool),
+    /// Latest qualified scalar BPM request; the original receipt survives deferral.
+    SetBpmLockTarget(crate::audio_engine::BpmLockTarget),
 
     /// Enable or disable key lock (preserve pitch under tempo changes).
     SetKeyLock(bool),
@@ -918,7 +922,9 @@ impl ControlMessage {
             | ControlMessage::PublishConstantTiming { .. }
             | ControlMessage::RefreshAcceptedTiming(_)
             | ControlMessage::AdoptRuntimePolicy(_) => ControlMessageClass::Publication,
-            ControlMessage::SetBpmLock(_)
+            #[cfg(test)]
+            ControlMessage::SetBpmLock(_) => ControlMessageClass::OrderedState,
+            ControlMessage::SetBpmLockTarget(_)
             | ControlMessage::SetKeyLock(_)
             | ControlMessage::SetPadKeyLock { .. }
             | ControlMessage::SetPadKeyLockSavedIntent { .. }

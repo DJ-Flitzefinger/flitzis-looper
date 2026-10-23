@@ -55,6 +55,44 @@ class RuntimePolicyAdoption(TypedDict):
     target_policy_realtime_bpm: bool | None
     target_intent_revision: int
 
+class GlobalRateMasterProvenance(TypedDict):
+    # Actual Native evidence, coherent with the effective rate tuple; never admission.
+    kind: Literal["absent", "unknown", "qualified"]
+    source_identity: str | None
+    accepted_revision: str | None
+
+class GlobalRateFeedback(TypedDict):
+    request_revision: int
+    effect_revision: int
+    state: Literal["queued", "preparing", "applied", "rejected"]
+    requested_speed: float
+    requested_master_period: float | None
+    effective_speed: float
+    effective_master_period: float | None
+    execution_frame: int | None
+    error: str | None
+    master_provenance: GlobalRateMasterProvenance
+
+class BpmLockStatus(TypedDict):
+    request_revision: int
+    effect_revision: int
+    state: Literal["queued", "pending", "applied"]
+    requested_enabled: bool
+    effective_enabled: bool
+    reason: (
+        Literal[
+            "mapped_active",
+            "rate_pending",
+            "drain_pending",
+            "history_pending",
+            "policy_pending",
+            "reference_changed",
+        ]
+        | None
+    )
+    execution_frame: int | None
+    submission_available: bool
+
 class SourceSyncStatus(TypedDict):
     source_generation: int
     source_identity: int
@@ -530,6 +568,8 @@ class AcceptedTimingRefreshTicket:
 
 class InputRuntimePadBinding:
     # Opaque current native source/authority snapshot; no PCM owner or persisted identity.
+    # Metadata source_identity correlates the original source across Pair/window changes.
+    # It never replaces the binding's full source/window/claim execution checks.
     def is_current(self) -> bool: ...
     def metadata(self) -> dict[str, object]: ...
 
@@ -785,6 +825,7 @@ class MixCaptureTicket:
 
 class AudioEngine:
     GLOBAL_TIMING_POLICY_API_VERSION: ClassVar[int]
+    GLOBAL_RATE_PROVENANCE_API_VERSION: ClassVar[int]
     ORDINARY_TRANSPORT_API_VERSION: ClassVar[int]
     def audio_stream_failed(self) -> bool: ...
     def quiesce_failed_audio_stream(self) -> bool: ...
@@ -1249,7 +1290,7 @@ class AudioEngine:
     ) -> GlobalPlaybackBatchTicket: ...
     def set_volume(self, volume: float) -> None: ...
     def set_speed(self, speed: float) -> None: ...
-    def global_rate_status(self) -> dict[str, object] | None: ...
+    def global_rate_status(self) -> GlobalRateFeedback | None: ...
     def set_pad_gain(self, sample_id: int, gain_db: float) -> None: ...
     def set_pad_eq(self, sample_id: int, low_db: float, mid_db: float, high_db: float) -> None: ...
     def set_pad_loop_region(
@@ -1261,7 +1302,10 @@ class AudioEngine:
         expected_source_generation: int | None = None,
     ) -> None: ...
     def set_trigger_quantization(self, mode: str) -> None: ...
-    def set_bpm_lock(self, enabled: bool) -> None: ...
+    def set_bpm_lock(
+        self, enabled: bool, *, anchor_binding: InputRuntimePadBinding | None = None
+    ) -> None: ...
+    def bpm_lock_status(self) -> BpmLockStatus | None: ...
     def set_key_lock(self, enabled: bool) -> None: ...
     def set_pad_key_lock(
         self,
@@ -1277,8 +1321,16 @@ class AudioEngine:
         id: int,  # noqa: A002 - Match the existing Native keyword signature.
     ) -> SourceSyncStatus | None: ...
     def set_master_bpm(self, bpm: float) -> None: ...
-    def set_master_period(self, period_seconds: float) -> None: ...
-    def set_speed_and_master_period(self, speed: float, period_seconds: float) -> None: ...
+    def set_master_period(
+        self, period_seconds: float, *, anchor_binding: InputRuntimePadBinding | None = None
+    ) -> None: ...
+    def set_speed_and_master_period(
+        self,
+        speed: float,
+        period_seconds: float,
+        *,
+        anchor_binding: InputRuntimePadBinding | None = None,
+    ) -> None: ...
     def set_pad_bpm(
         self,
         sample_id: int,

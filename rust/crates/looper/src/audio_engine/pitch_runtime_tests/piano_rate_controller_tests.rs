@@ -70,13 +70,27 @@ def configure(probe):
     probe.ctx.audio.global_.toggle_bpm_lock()
     assert probe.project.bpm_lock
     assert probe.session.bpm_lock_anchor_pad_id == 0
+    assert probe.session.bpm_lock_anchor_revision is None
+    assert probe.session.master_period_seconds is None
+    requested = probe._audio.bpm_lock_status()
+    assert requested['state'] == 'queued' and requested['requested_enabled']
+
+
+def initial_speed_after_bpm_ack(probe):
+    probe.transport.global_params._poll_global_rate_status()
+    probe.transport.global_params.poll_bpm_lock_application()
+    actual = probe._audio.bpm_lock_status()
+    assert actual['state'] == 'applied' and actual['effective_enabled']
+    assert actual['request_revision'] == actual['effect_revision']
+    assert actual['execution_frame'] == 0
     assert (
         probe.session.bpm_lock_anchor_revision
         == probe.transport.bpm.current_timing(0).accepted_revision
     )
+    assert probe.session.master_period_seconds == 0.5
     probe.ctx.audio.global_.set_speed(2.0)
     assert probe.project.speed == 2.0
-    assert probe.session.master_period_seconds == 0.25
+    assert probe.session.master_period_seconds == 0.5
 
 
 def mouse(probe, slot, note, extra=0):
@@ -146,7 +160,7 @@ def request_rate(probe):
     assert probe.project.manual_bpm[0] is None and probe.project.manual_bpm[1] is None
     probe.ctx.audio.global_.set_speed(1.8)
     assert probe.project.speed == 1.8
-    assert probe.session.master_period_seconds == 0.5 / 1.8
+    assert probe.session.master_period_seconds == 0.25
     # Requested Python intent is not Native effective confirmation.
     status = probe.transport.global_params.global_rate_status()
     assert status.state == "queued" and status.requested_speed == 1.8
@@ -155,6 +169,7 @@ def request_rate(probe):
 
 def observe_rate(probe):
     probe.transport.global_params._poll_global_rate_status()
+    probe.transport.global_params.poll_bpm_lock_application()
     status = probe.ctx.state.global_.global_rate_status()
     actual = probe._audio.global_rate_status()
     assert actual is not None
@@ -592,6 +607,16 @@ impl RateRoute {
             last_callback_first: None,
             starts: [0, 0],
         };
+        result.callback(0);
+        result.assert_no_attacks();
+        Python::attach(|py| {
+            result
+                .helper
+                .getattr(py, "initial_speed_after_bpm_ack")
+                .unwrap()
+                .call1(py, (result.route.probe.clone_ref(py),))
+                .unwrap();
+        });
         result.callback(0);
         result.assert_no_attacks();
         let initial = result.rate();

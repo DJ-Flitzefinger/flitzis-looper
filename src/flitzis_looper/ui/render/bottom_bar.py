@@ -38,7 +38,6 @@ if TYPE_CHECKING:
 
 MODE_BUTTON_HEIGHT = 24.0
 MODE_BUTTON_WIDTH = 36.0
-MULTI_LOOP_BUTTON_WIDTH = 88.0
 MASTER_VOLUME_WIDTH = 300.0
 MASTER_VOLUME_FADER_HEIGHT = MODE_BUTTON_HEIGHT
 MASTER_METER_CLIP_WIDTH = 38.0
@@ -113,9 +112,8 @@ def _button_height(minimum: float) -> float:
 
 def _mode_group_width() -> float:
     return (
-        _button_width("MULTI LOOP", MULTI_LOOP_BUTTON_WIDTH)
-        + 2 * MODE_BUTTON_GAP
-        + _button_width("L", MODE_BUTTON_WIDTH)
+        _button_width("L", MODE_BUTTON_WIDTH)
+        + MODE_BUTTON_GAP
         + _button_width("Q", MODE_BUTTON_WIDTH)
     )
 
@@ -659,17 +657,6 @@ def _stem_mask_controls(ctx: UiContext, center_y: float) -> None:
 
 
 def _mode_controls(ctx: UiContext, center_y: float) -> None:
-    height = _button_height(MODE_BUTTON_HEIGHT)
-    _set_cursor_y_for_button(center_y=center_y, height=height)
-    style: ButtonStyleName = "mode-on" if ctx.state.project.multi_loop else "mode-off"
-
-    with button_style(style):
-        if imgui.button(
-            "MULTI LOOP", (_button_width("MULTI LOOP", MULTI_LOOP_BUTTON_WIDTH), height)
-        ):
-            ctx.audio.global_.toggle_multi_loop()
-
-    imgui.same_line(spacing=MODE_BUTTON_GAP)
     _learn_control(ctx, center_y)
     imgui.same_line(spacing=MODE_BUTTON_GAP)
     _trigger_quantization_toggle(ctx, center_y)

@@ -122,9 +122,19 @@ fn explicit_multi_loop_change_supersedes_reserved_originals_and_all_runtime_epoc
         .binding
         .unwrap();
     let before = revisions(&runtime);
+    let hierarchy = runtime.ownership.hierarchy_stamp.load(Ordering::Acquire);
+    let previous_rows = runtime.runtime_state.lock().unwrap().pads.clone();
     reserve(&runtime, &participants(&runtime), false, OWNER);
 
     rows.publish(&runtime, false).unwrap();
+
+    assert!(runtime.ownership.hierarchy_stamp.load(Ordering::Acquire) > hierarchy);
+    let after = runtime.runtime_state.lock().unwrap();
+    for (old, new) in previous_rows.iter().zip(&after.pads) {
+        assert_eq!(old.source_map.request(), new.source_map.request());
+        assert!(old.source_map.same_projection(&new.source_map));
+    }
+    drop(after);
 
     assert!(!runtime.ownership.current(0, original));
     assert!(!runtime.runtime_state.lock().unwrap().multi_loop);
@@ -332,4 +342,109 @@ fn reserved_rejected_pitch_shadow_survives_clear_boundary_then_normal_refresh_an
     rows.publish(&runtime, true).unwrap();
     assert!(runtime.trigger_pad(0, 42));
     assert_eq!(runtime.pitch_request_sequence(0).unwrap(), 0);
+}
+
+fn capture_unreserved_pitch(runtime: &InputRuntime) -> CapturedPitchAction {
+    let clock = Arc::new(SharedOutputClock::new());
+    clock.publish(OutputClockSnapshot {
+        valid: true,
+        observed_at_ns: 10_000_000,
+        audible_at_ns: 10_000_000,
+        output_frame: 24_000,
+        sample_rate_hz: 48_000,
+        master_period_seconds: Some(0.5),
+        downbeat_frame: 0,
+        master_beat: 1.0,
+        freshness_ns: 100_000_000,
+    });
+    runtime.attach_pitch_clock(clock).unwrap();
+    runtime.set_selected_pad(6).unwrap();
+    pitch::capture_selected(
+        PitchActionSpec::parse("pitch.extra:2:set").unwrap(),
+        10_000_000,
+        10_000_000,
+        &runtime.runtime_state,
+        &runtime.ownership,
+        None,
+    )
+    .unwrap()
+}
+
+fn assert_stage_retains_unreserved_row(runtime: &InputRuntime, previous: &RuntimePadState) {
+    let mut expected = previous.clone();
+    // The cancellation stage advances runtime epochs, while every requested
+    // scalar, source-map owner and pitch anchor remains in the original cohort.
+    expected.binding.as_mut().unwrap().runtime_revision = runtime.ownership.runtime_revision(6);
+    assert_eq!(runtime.runtime_state.lock().unwrap().pads[6], expected);
+}
+
+#[test]
+fn reserved_parent_stage_retains_unreserved_rejected_pitch_journal_until_stale_projection_rolls_back()
+ {
+    for copy in [false, true] {
+        let (runtime, rows, _consumer) = fixture();
+        let original = runtime.runtime_state.lock().unwrap().pads[6].clone();
+        let action = capture_unreserved_pitch(&runtime);
+        let held = runtime.runtime_state.lock().unwrap().pads[6].clone();
+        assert_eq!(held.latest_request_sequence, action.sequence());
+        assert_ne!(held.pitch.intent, original.pitch.intent);
+        let slots = participants(&runtime);
+        reserve(&runtime, &slots, copy, OWNER);
+        // A real callback terminal CAS does not run controller reconciliation.
+        // Using cancel_pitch_capture here would consume the record too early.
+        assert!(action.reject(PitchActionReject::Capacity));
+        assert_eq!(action.state(), "rejected");
+        rows.publish(&runtime, false).unwrap();
+        assert_stage_retains_unreserved_row(&runtime, &held);
+        assert!(!runtime.runtime_state.lock().unwrap().multi_loop);
+        release(&runtime, &slots, copy, OWNER);
+        assert_eq!(rows.pitch[6].request_sequence, 0);
+        rows.publish(&runtime, false).unwrap();
+        let restored = runtime.runtime_state.lock().unwrap().pads[6].clone();
+        assert_eq!(restored.pitch.intent, original.pitch.intent);
+        assert_eq!(
+            restored.pitch.request_sequence,
+            original.pitch.request_sequence
+        );
+        assert_eq!(
+            restored.latest_request_sequence,
+            original.latest_request_sequence
+        );
+        assert_eq!(restored.pitch_anchor, original.pitch_anchor);
+        rows.publish(&runtime, false).unwrap();
+        assert_eq!(runtime.runtime_state.lock().unwrap().pads[6], restored);
+    }
+}
+
+#[test]
+fn reserved_parent_stage_retains_unreserved_applied_pitch_journal_until_terminal_anchor_is_recorded()
+ {
+    for copy in [false, true] {
+        let (runtime, rows, _consumer) = fixture();
+        let original = runtime.runtime_state.lock().unwrap().pads[6].clone();
+        let action = capture_unreserved_pitch(&runtime);
+        // Exercise the original action's scheduled/claim/effective state machine.
+        // This regression observes control-journal terminal handling, not DSP output.
+        assert!(action.mark_scheduled());
+        assert!(action.claim_effect());
+        assert!(action.mark_effective(24_000));
+        assert!(action.effective());
+        let held = runtime.runtime_state.lock().unwrap().pads[6].clone();
+        assert_eq!(held.pitch_anchor, original.pitch_anchor);
+        assert_eq!(held.latest_request_sequence, action.sequence());
+        let slots = participants(&runtime);
+        reserve(&runtime, &slots, copy, OWNER);
+        rows.publish(&runtime, false).unwrap();
+        assert_stage_retains_unreserved_row(&runtime, &held);
+        release(&runtime, &slots, copy, OWNER);
+        rows.publish(&runtime, false).unwrap();
+        let applied = runtime.runtime_state.lock().unwrap().pads[6].clone();
+        assert_eq!(applied.pitch.intent, action.render().pitch);
+        assert_eq!(applied.pitch.request_sequence, action.sequence());
+        assert_eq!(applied.latest_request_sequence, action.sequence());
+        assert!(applied.pitch_anchor.is_some());
+        assert_ne!(applied.pitch_anchor, original.pitch_anchor);
+        rows.publish(&runtime, false).unwrap();
+        assert_eq!(runtime.runtime_state.lock().unwrap().pads[6], applied);
+    }
 }

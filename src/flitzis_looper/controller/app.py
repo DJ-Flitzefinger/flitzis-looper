@@ -533,6 +533,7 @@ class AppController:
         self.accepted_timing.poll()
         self.transport.residency.poll()
         self.transport.pitch.poll()
+        self.transport.global_params.poll_bpm_lock_application()
         self.banks.poll()
         self._sync_arrangement_observers()
         self.arrangement.poll()

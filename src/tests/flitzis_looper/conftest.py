@@ -402,6 +402,7 @@ class FakeInputRuntimePadBinding:
         accepted_timing: dict[str, object] | None = None,
         intent: str = "legacy",
         authority_revision: int = 1,
+        source_identity: str | None = None,
     ) -> None:
         source = accepted_timing or {}
         self._metadata: dict[str, object] = {
@@ -415,6 +416,7 @@ class FakeInputRuntimePadBinding:
             "intent": intent,
             "authority_revision": authority_revision,
             "accepted_timing": accepted_timing,
+            "source_identity": source_identity,
         }
 
     def is_current(self) -> bool:

@@ -58,6 +58,15 @@ def next_global_timing_policy(
     return GlobalTimingPolicy.model_validate(data)
 
 
+def advance_global_timing_policy(current: GlobalTimingPolicy) -> GlobalTimingPolicy:
+    """Fence a parent edit without changing either remembered child preference."""
+    current = GlobalTimingPolicy.model_validate(current)
+    if current.revision == MAX_TIMING_POLICY_REVISION:
+        message = "Global timing policy revision capacity exhausted."
+        raise ValueError(message)
+    return current.model_copy(update={"revision": current.revision + 1})
+
+
 def source_sync_preference(policy: GlobalTimingPolicy, pad: PadSourceSyncIntent) -> bool:
     """Resolve only untouched false/0 as inheritance; explicit true/0 is preserved."""
     if not pad.requested and pad.revision == 0:

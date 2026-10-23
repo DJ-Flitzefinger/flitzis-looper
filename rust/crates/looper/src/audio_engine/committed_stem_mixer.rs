@@ -11,6 +11,11 @@ use crate::audio_engine::source_reader::StemReadSets;
 use crate::messages::ControlMessage;
 use std::sync::atomic::Ordering;
 
+#[cfg(test)]
+thread_local! {
+    static CANDIDATE_BEFORE_CONTENT_CLAIM: std::cell::RefCell<Option<Box<dyn FnOnce()>>> = const { std::cell::RefCell::new(None) };
+}
+
 fn candidate_residency_available(sample: &SampleBuffer) -> bool {
     sample
         .residency
@@ -78,6 +83,25 @@ fn committed_post_stem_readers<'a>(
 }
 
 impl RtMixer {
+    #[cfg(test)]
+    pub(crate) fn with_candidate_before_content_claim_for_test<R>(
+        hook: impl FnOnce() + 'static,
+        action: impl FnOnce() -> R,
+    ) -> R {
+        struct Reset;
+        impl Drop for Reset {
+            fn drop(&mut self) {
+                CANDIDATE_BEFORE_CONTENT_CLAIM.with(|hook| *hook.borrow_mut() = None);
+            }
+        }
+        CANDIDATE_BEFORE_CONTENT_CLAIM
+            .with(|slot| assert!(slot.borrow_mut().replace(Box::new(hook)).is_none()));
+        let _reset = Reset;
+        let result = action();
+        assert!(CANDIDATE_BEFORE_CONTENT_CLAIM.with(|hook| hook.borrow().is_none()));
+        result
+    }
+
     fn committed_selection_matches(&self, id: usize, selection: &SelectionPermit) -> bool {
         id < NUM_SAMPLES
             && selection.current()
@@ -262,6 +286,9 @@ impl RtMixer {
         let id = transaction.id;
         let pin = &transaction.pin;
         if id >= NUM_SAMPLES
+            || (transaction.candidate.is_some()
+                && transaction.operation_timing_revision
+                    != Some(self.global_rate_timing_revision()))
             || pin.playback.is_mapped()
             || self.voices.iter().any(|voice| {
                 voice.active && voice.sample_id == id && voice.source_playback.is_mapped()
@@ -549,6 +576,27 @@ impl RtMixer {
         if retirement.available_retirement_slots() < 3 {
             self.defer_control(ControlMessage::CommittedStemWork(work));
             return;
+        }
+        // The candidate claim and global intent publication have one winner.
+        // Contention retains this exact original owner before any content claim.
+        let _timing_lease = if matches!(work.as_ref(), CommittedStemRtWork::Adopt(transaction)
+            if transaction.candidate.is_some())
+        {
+            let Some(lease) = crate::audio_engine::GlobalTimingLease::acquire(
+                &ownership.global_timing_publishing,
+            ) else {
+                self.defer_control(ControlMessage::CommittedStemWork(work));
+                return;
+            };
+            Some(lease)
+        } else {
+            None
+        };
+        #[cfg(test)]
+        if _timing_lease.is_some()
+            && let Some(hook) = CANDIDATE_BEFORE_CONTENT_CLAIM.with(|hook| hook.borrow_mut().take())
+        {
+            hook();
         }
         let id = snapshot.map_or(original_id, |snapshot| snapshot.slot());
         match work.as_mut() {

@@ -434,6 +434,7 @@ def test_runtime_pitch_projection_keeps_unknown_correction_authoritative_and_str
     controller.project.pad_key_lock[0] = True
     controller.project.trigger_quantization_enabled = True
     controller.project.trigger_quantization_step = "1_32"
+    controller.project.multi_loop = True
     controller.project.bpm_lock = True
     payload = controller.input_mapping._input_pitch_projection(0).payload()
     assert payload == {

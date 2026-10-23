@@ -94,7 +94,10 @@ fn feedback(fixture: &Fixture) -> Value {
 fn assert_feedback(fixture: &Fixture, sync: bool, settled: bool) {
     let observed = feedback(fixture);
     assert_eq!(observed["active"], true);
-    assert_eq!(observed["policy_mode"], if sync { "fixed" } else { "off" });
+    assert_eq!(
+        observed["policy_mode"],
+        if sync { "fixed" } else { "legacy" }
+    );
     assert_eq!(observed["policy_revision"], POLICY_REVISION);
     assert_eq!(observed["policy_sync"], sync);
     assert_eq!(observed["policy_realtime_bpm"], false);
@@ -183,7 +186,7 @@ fn fixed_and_off_key_lock_keep_prepared_native_owner_through_public_rate_tuple()
         // The shared fixture installs its bank directly. Complete the existing
         // production LoadSample claim and callback SourceACK before requesting feedback.
         adopt_current_sources(&mut fixture, true);
-        fixture.mixer.set_bpm_lock(!sync);
+        fixture.mixer.set_bpm_lock(sync);
         fixture.mixer.set_master_period(MASTER);
         fixture.mixer.set_pad_bpm(0, Some(60.0 / SOURCE));
         fixture.mixer.set_speed(1.5);
@@ -224,7 +227,7 @@ fn fixed_and_off_key_lock_keep_prepared_native_owner_through_public_rate_tuple()
         let mode = if sync {
             SourceSyncMode::Fixed
         } else {
-            SourceSyncMode::Off
+            SourceSyncMode::Legacy
         };
         let ratio = if sync { SOURCE / MASTER } else { 1.5 };
         let voice = fixture.voice(0);

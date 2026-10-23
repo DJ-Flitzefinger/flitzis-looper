@@ -40,7 +40,13 @@ cannot republish an anchor after OFF/ON, recovery or a content move/swap.
 Separate BPM-Lock wish from its existing actual application. Parent OFF requests
 the resolved effect off while keeping raw wishes. Parent ON with remembered BPM
 Lock freshly validates the existing selected reference and current source timing,
-then requests the normal control path. Missing readiness stays pending. Existing
+then requests the normal control path. Missing readiness stays pending.
+Activation on an empty selected slot retains that slot until its first content
+assignment. Before any attempt/admission/unobserved submission, the existing
+application may bind that first identity once; subsequent loss or replacement
+cannot inherit it. Selection changes never elect another reference. Pair mirrors
+retain this still-unbound slot when filling it, while bound references continue
+to follow their original content through the existing placement projection. All
 mapped-to-Legacy and mapped-BPM guards remain: this block may retain old actual
 audio pending a qualified representation conversion; it cannot claim immediate
 suspension of that unsupported current representation.
@@ -87,10 +93,106 @@ two comparisons before a write are insufficient. Reuse the existing global marke
 as a bounded one-attempt CAS claim, together with the original source/content claim.
 Prepare loop cuts and master/source-history changes before the infallible claimed
 effect. Contention retains the scheduled owner pending; stale identity rejects.
+All derived refreshes, including loop-only effects, retain a nonowning hierarchy
+stamp copied from that same global revision on successful hierarchy publication.
+Master effects additionally retain the full global fence; unrelated speed changes
+do not invalidate loop-only work. Retain the original per-content map/request
+cancellation revision as well: PAD-SYNC or selected-map changes must invalidate old
+cuts without a broad runtime-revision fence that invalidates the refresh's own
+binding rebase. Ordinary launch admission preserves this cancellation revision.
+Python refresh signatures and Pair mirrors retain the corresponding immutable
+PAD-SYNC/map request identity, with the existing anchor placement last.
+Each admitted but unapplied BPM Lock target, including OFF, also captures the
+existing hierarchy stamp. Validate it at service and under the final global claim.
+A newer hierarchy prevents the old target from applying even if replacement
+admission fails. Report pending/reference_changed without erasing actual audio.
+Python requalifies the current target once successfully per stale receipt; failed
+submission follows the same bounded fresh-observation retry rule. A reserved
+cancellation followed by full publication may require this replacement despite an
+unchanged Boolean/source fingerprint. Applied receipts remain historical facts,
+and unrelated speed publication does not revoke a current hierarchy witness.
+Initial ON derives the qualified anchor's actual Native source period divided by
+current speed inside this same original target transaction. Prepare all endangered
+histories and the existing one-time Transport bootstrap before applying flag,
+master and bootstrap together. Publish the effective rate tuple before its BPM
+applied receipt; Python then mirrors actual timing without another master command.
+Historical applied BPM receipts are not revalidated on ordinary authority rebases.
+Every fresh qualified ON first derives its current anchor period, even if the
+actual flag is already ON. Equal flag and equal actual master may acknowledge
+without another rate/bootstrap effect; a changed period retains all existing
+mapped/rate/history safeguards and cannot acknowledge the preceding master.
+Later master-bearing effects retain an optional Copy original anchor binding and
+ContentKey through the existing SetRateIntent/PendingRate and global-rate owner.
+The same nonowning hierarchy stamp remains part of this Copy qualification;
+parent changes revoke even pending pre-capture master work without relying on a
+broad runtime revision or invalidating it for unrelated speed publication.
+Both fast and delayed history commits validate the original source and the exact
+current-anchor-period/requested-speed tuple under global then content claims,
+including without active voices. Preserve the qualification through speed-only
+coalescing and discard a rejected master from the coordinator's requested state
+so subsequent speed edits cannot resurrect it. Accepted-derived refresh keeps
+its established qualified path; loop-only work remains independent of BPM ACK.
+A new qualified master-only request with no pending rate work takes its implicit
+speed from the actual tuple, preventing revival of a rejected unqualified speed
+prefix. Existing pending coalescing, explicit speed intent and unqualified Legacy
+semantics remain intact.
+Application master setters use a qualified period directly for both static/manual
+and accepted timing, avoiding a multiply/divide BPM round-trip in qualification.
+For API compatibility, an unqualified Native BPM Lock ON may retain the old
+flag-only effect with its previous master unchanged and no reference election or
+bootstrap. This compatibility transition preserves the complete Transport clock
+even at a nonzero activation frame. An explicit OFF is a no-op only when the
+actual matching flag is false and its actual master is absent; an old public
+master must otherwise clear through the existing guarded effect. Historical rate
+request identity remains unchanged, and later speed edits use the cleared actual
+tuple rather than resurrecting its former master. Its receipt certifies that flag
+only. Application activation always
+supplies the original qualified binding; it cannot use this compatibility path
+as evidence of source-qualified master adoption or synchronization.
+Pre-capture rate service distinguishes transient completed-drain/global/content
+claim contention from a genuine foreign history lane or unavailable preparation
+reserve. Only the former retains the same pending owner. The latter remains a
+terminal capacity refusal before any participant epoch or worker request changes;
+the existing captured execution boundary and all source/history guards remain.
+For accepted-derived master refresh of the already master-ready original anchor,
+keep the existing waiting entry until rate state is coherently terminal. Derive
+its master from effective speed; requested Project speed can still differ after
+rejection. Unknown, queued, preparing or locally unobserved state must not cause a
+terminal loop-only fallback that loses the later master update. Pre-BPM-ACK and
+nonanchor loop-only refresh remain independent. Retain the separate rate error,
+requested controls and Native exact period/source/global/history claims.
+Manual/TAP/Legacy master updates use the same terminal actual-speed rule through
+the existing GlobalParameters owner; automatic accepted timing keeps its refresh
+owner. Reuse the existing application fingerprint after initial application as
+the last successfully admitted manual source/timing qualification. Suppress an
+unchanged rejected master/context during periodic reconciliation while allowing
+fresh explicit or source/timing qualification. Do not replay a rejected speed.
+Receipt/content eligibility must not repeatedly resolve timing: one captured
+timing determines both the speed/master target and its qualified binding. Fresh
+Native metadata may refuse that snapshot. Resolved BPM ON without its matching
+applied original owner or current anchor timing refuses speed before any setter;
+cached actual OFF cannot authorize a speed-only fallback across initial ON.
 No callback spin, blocking lock, allocation or fallible partial loop/master change.
 Each Native admission refuses capacity/counter exhaustion before its own mutation;
 staged cancellation and later BPM admission remain separate operations with truthful
 pending/error if a later admission fails, not an all-or-nothing transition claim.
+Exact prior-row staging also retains its original requested-pitch journal:
+a terminal unreserved pitch request cannot be consumed before old rows are restored,
+or its later rollback would be lost. Ordinary complete publication after the
+reservation releases still reconciles that original terminal observation.
+Claim-pending master refresh must also progress through real consecutive callbacks.
+During a deferred retry with an empty control queue and no deferred control, retain
+only the already completed Commands witness; its recorded global revision must
+still match. Unread controls cannot borrow it. Resume normal invalidation before
+ordinary queue processing and retain the original drain completion checks. Master
+refresh purely rejects competing rate work, an incomplete drain basis or a wrong
+actual speed/lock/period target before prospective history checks. It never cancels
+the foreign rate owner to make its own effect eligible. Final CAS pressure still
+retains the same scheduled payload pending; source/global/content claims remain
+required before the complete effect. This avoids both self-invalidating drain
+evidence and waiting for a rate owner whose service is blocked by that deferred
+payload. Test actual two-callback progress, unread queue refusal and foreign-rate
+receipt preservation, rather than direct scheduled-command retries alone.
 
 ## Recovery remains effect-safe
 
@@ -115,6 +217,11 @@ mode or period, not shared-grid phase. Keep these facts and their original sourc
 map, request and parent fences. Add a separate nullable presentation qualification
 for grid phase, initially unknown until a later qualified Native witness exists.
 A matching active mode is applied-mode/phase-unconfirmed, not full SYNC success.
+Global and explicit PAD SYNC OFF resolve to the actual Legacy target in both
+feedback and live-adoption matching. A settled Legacy OFF effect cannot remain
+pending merely because a former Off target name is expected. Phase-only pending
+belongs to SYNC; confirmed actual Realtime BPM retains its own settled projection.
+Real policy/source/map/adoption/tempo mismatches still retain pending guidance.
 Global SYNC aggregation and both timing/PAD labels use that distinction. Preserve
 real refusal and tempo settling; do not erase prior actual mapped audio to make a
 requested parent appear off. RT configuration availability comes from parents'
@@ -126,6 +233,65 @@ same guards to GUI, MIDI and PAD SYNC; retain child preferences while unavailabl
 
 ## Verification and remaining gates
 
+The existing callback-owned rate record also carries actual master provenance in
+the same sequence window: absent qualified BPM reference, unknown origin, or an
+original-source correlation with an optional accepted revision. Qualified absence
+of an accepted revision is Manual/TAP/Legacy evidence, unlike unknown origin.
+Compute the fixed correlation off realtime from the original ContentKey, source
+generation and full original-source projection; omit PAD placement, authority and
+resident/window/context fields. This is correlation only. Existing complete source,
+window, hierarchy, claim and retirement guards continue to authorize every effect.
+Actual master commits replace provenance, even for an unchanged tuple; speed-only
+and failed/pending observations preserve it. An explicit master-publication bit in
+the existing coordinator distinguishes intent from a period carried in the base
+tuple and survives only genuine pending-master coalescing.
+
+Python observes this proof rather than creating another pending master. It compares
+the fixed source correlation against its original reference before projecting the
+actual accepted revision or qualified None. Unknown/foreign/unavailable evidence
+stays unconfirmed while the actual Native rate tuple remains separately observable.
+Keep the historical Boolean/source-content `_bpm_lock_master_ready` fence usable
+for recovery; do not make accepted refresh depend on a proof it must repair. A
+manual same-period no-op requires matching actual own Manual provenance as well
+as period equality. Reflect the Native provenance API version without constructing
+an Engine, and retain opaque nonempty accepted revision strings at the Python DTO
+boundary instead of rewriting all existing controlled test labels.
+
+Accepted-refresh completion uses this same fresh actual observation for the whole
+Session master group. The existing ticket-current check retains its source,
+hierarchy and global-owner guards, but a later callback may run after that check;
+copying the earlier request values afterwards could overwrite newer actual timing.
+Grid completion and callbacks keep their existing independent ticket authority.
+
+After a terminal unqualified master refusal, the coordinator's next speed-only
+base period comes from actual state while its stored speed preference and rejected
+receipt remain intact. Preserve a newer request already coalesced with a genuinely
+pending master when the older request becomes superseded; terminal cleanup must
+not discard that newer explicit intent.
+
+Production stream construction passes the existing ownership, acknowledgements
+and preparation epochs directly into the common mixer initializer. Creating large
+default owners and immediately replacing them needlessly nests their initialization
+inside construction of the complete mixer. Standalone test construction retains its
+defaults. Supplied owner identity and state remain intact; the existing admission
+invalidation happens once after successful construction, and invalid construction
+cannot invalidate the supplied policy. Retain the unchanged explicit two-MiB
+production constructor/callback gate in Debug and Release; a larger fixture test
+stack does not replace that bound.
+
+Variable loop edits retain their original immutable map capture while reading the
+saved physical start at that capture's sample rate. General requested-region
+resolution would fetch a second map under active parents, so bar/end/max queries
+reuse the captured start and resnap derives an automatic endpoint from that same
+geometry. Maximum-bars queries keep their existing read-only snapshot without
+capturing a mutable edit or remembering residency.
+
+After a transient feedback read or original-source Hold, a normal qualified poll
+may clear a stale presentation error only for its own matching Applied BPM receipt
+whose master was already projected. This does not resubmit BPM or bootstrap. Clear
+before ordinary manual-master reconciliation so a new failure remains visible;
+pending/foreign receipts and missing or replacement references remain unconfirmed.
+
 Cover parent/raw/actual matrices, no-op/exhaustion before side effects, selected
 reference reactivation, Legacy BPM behavior, unavailable Fixed/Mapped, Native
 omitted rows, reserved cohorts and ABA, grids and complete publication. This
@@ -135,6 +301,10 @@ move/swap with matching Python/Native fences and mirror signature projection.
 Recovery checks include invalid policy with both parents true, failed/absent App hold,
 valid False/False0, unrelated errors, original bytes and nonserialization. Mode
 ACK must not confirm phase. Reuse existing layout/reader/custody/idle/Hold/rate tests.
+Portable startup reflection also requires the qualified optional anchor submission
+and callback BPM receipt API before application/device construction. Reuse the
+existing global-rate API preflight and forbidden-call mocks; never invoke Native
+as part of this interface check.
 
 Static phase convergence, variable shared-grid convergence, actual8/64bar and
 one-shot EOF remain open product work. Static grids cannot identify true tempo

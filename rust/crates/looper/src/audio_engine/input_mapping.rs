@@ -757,6 +757,29 @@ impl InputRuntime {
             }
         }
         pitch_shadow.reconcile(&mut pads, &self.ownership);
+        let reserved_parent_stage = guard.multi_loop != multi_loop
+            && reservations
+                .iter()
+                .any(|reservation| *reservation != (0, 0));
+        if reserved_parent_stage {
+            // This accepted cancellation stage retains the complete original cohort.
+            // Policy adoption belongs to the later full publication after ACK/mirror.
+            pads.clone_from(&guard.pads);
+            pitch_shadow = guard.pitch_shadow.clone();
+        } else {
+            for pad in &mut pads {
+                pad.source_map.remask_parents(multi_loop, pad.pitch.sync);
+            }
+        }
+        let hierarchy_changed = guard.multi_loop != multi_loop
+            || guard
+                .pads
+                .iter()
+                .zip(&pads)
+                .any(|(old, new)| !old.source_map.same_hierarchy(&new.source_map));
+        let hierarchy_revision = hierarchy_changed
+            .then(|| super::next_epoch(&self.ownership.global_timing_revision))
+            .transpose()?;
         let mut revisions = Vec::with_capacity(NUM_SAMPLES);
         let mut map_cancellations = Vec::with_capacity(NUM_SAMPLES);
         for (idx, pad) in pads.iter_mut().enumerate() {
@@ -836,11 +859,24 @@ impl InputRuntime {
             .is_some_and(|next| guard.multi_loop != next.multi_loop || guard.pads != next.pads);
         let mut previous = None;
         before_commit();
+        let _global_lease = if hierarchy_changed {
+            Some(
+                super::GlobalTimingLease::acquire(&self.ownership.global_timing_publishing)
+                    .ok_or("global timing publication busy")?,
+            )
+        } else {
+            None
+        };
         self.ownership
             .commit_slot_write_fixed(
                 &write,
                 || {
-                    revisions
+                    hierarchy_revision.is_none_or(|revision| {
+                        self.ownership
+                            .global_timing_revision
+                            .load(Ordering::Acquire)
+                            == revision - 1
+                    }) && revisions
                         .iter()
                         .all(|prepared| self.ownership.runtime_revision_write_current(*prepared))
                         && map_cancellations
@@ -869,6 +905,14 @@ impl InputRuntime {
                         })
                 },
                 |_| {
+                    if let Some(revision) = hierarchy_revision {
+                        self.ownership
+                            .global_timing_revision
+                            .store(revision, Ordering::Release);
+                        self.ownership
+                            .hierarchy_stamp
+                            .store(revision, Ordering::Release);
+                    }
                     for prepared in &revisions {
                         self.ownership.apply_runtime_revision_write(*prepared);
                     }

@@ -12,6 +12,7 @@ from typing import TYPE_CHECKING, cast
 
 from pydantic import BaseModel
 
+from flitzis_looper.controller.accepted_publication import ACCEPTED_REFRESH_SIGNATURE_LENGTH
 from flitzis_looper.controller.pad_selection import PreparedPadSelection
 from flitzis_looper.copy_snapshot import CONTENT_FIELDS, canonical_snapshot_json
 from flitzis_looper.models import ProjectState, SessionState
@@ -361,7 +362,9 @@ class PreparedPairControlMirror:
         self._prepare_global()
         self._prepare_views()
         self._anchor_before = controller._session.bpm_lock_anchor_pad_id
-        self._anchor_after = self._placement.project(self._anchor_before)
+        self._anchor_after = self._project_session_placement(
+            "bpm_lock_anchor_pad_id", self._anchor_before
+        )
         self._prepare_refresh_signatures(project_anchor=True)
 
     @property
@@ -425,10 +428,21 @@ class PreparedPairControlMirror:
                     controller._session,
                     name,
                     before,
-                    self._placement.project(before),
+                    self._project_session_placement(name, before),
                     retain_newer=True,
                 )
             )
+
+    def _project_session_placement(self, name: str, before: object) -> object:
+        if (
+            name == "bpm_lock_anchor_pad_id"
+            and type(before) is int
+            and self._controller.transport.global_params._bpm_anchor_waiting_for_first_content(
+                before
+            )
+        ):
+            return before
+        return self._placement.project(before)
 
     def _prepare_controls(self) -> None:
         controller = self._controller
@@ -498,7 +512,7 @@ class PreparedPairControlMirror:
             if id(request) in self._refresh_signatures:
                 continue
             before = request.control_signature
-            if not isinstance(before, tuple) or len(before) != 12:
+            if not isinstance(before, tuple) or len(before) != ACCEPTED_REFRESH_SIGNATURE_LENGTH:
                 message = "Pair accepted refresh has an unsupported control signature"
                 raise TypeError(message)
             after = before

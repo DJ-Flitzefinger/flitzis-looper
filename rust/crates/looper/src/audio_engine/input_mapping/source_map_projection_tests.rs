@@ -40,7 +40,13 @@ fn publish(fixture: &LaunchFixture, maps: Vec<SourceMapRow>) -> Result<(), Strin
             vec![16.0 / 48_000.0; NUM_SAMPLES],
             vec![Some(96.0 / 48_000.0); NUM_SAMPLES],
             bindings.iter().map(Option::as_ref).collect(),
-            None,
+            Some(vec![
+                crate::audio_engine::input_mapping::PitchPadProjection {
+                    sync: true,
+                    ..Default::default()
+                };
+                NUM_SAMPLES
+            ]),
             Some(maps),
         )
 }
@@ -238,7 +244,13 @@ fn omitted_rows_keep_sync_intent_and_revision_when_the_original_source_is_replac
             starts,
             vec![Some(96.0 / 48_000.0); NUM_SAMPLES],
             bindings.iter().map(Option::as_ref).collect(),
-            None,
+            Some(vec![
+                PitchPadProjection {
+                    sync: true,
+                    ..Default::default()
+                };
+                NUM_SAMPLES
+            ]),
             None,
         )
         .unwrap();
@@ -282,11 +294,137 @@ fn arrangement_reserved_rows_keep_their_map_projection_and_launch_revision() {
             vec![0.0; NUM_SAMPLES],
             vec![None; NUM_SAMPLES],
             bindings.iter().map(Option::as_ref).collect(),
-            None,
+            Some(vec![
+                crate::audio_engine::input_mapping::PitchPadProjection {
+                    sync: true,
+                    ..Default::default()
+                };
+                NUM_SAMPLES
+            ]),
             Some(maps),
         )
         .unwrap();
     assert_eq!(runtime.runtime_state.lock().unwrap().pads[..2], before);
     assert_eq!(ownership.launch_revision(0), revision);
     ownership.release_pair(&participants, 41).unwrap();
+}
+
+#[test]
+fn cold_and_parent_off_full_rows_retain_raw_sync_without_acquiring_map_custody() {
+    let fixture = fixture();
+    let runtime = fixture.engine.input_runtime.as_ref().unwrap();
+    let mut maps = vec![SourceMapRow::default(); NUM_SAMPLES];
+    maps[0].sync_requested = true;
+    maps[0].intent_revision = 71;
+    for (multi_loop, bpm_requested) in [(false, true), (true, false), (false, false)] {
+        let bindings = bindings(&fixture);
+        runtime
+            .set_runtime_state_with_policy(
+                multi_loop,
+                (0..NUM_SAMPLES).map(|id| id < 2).collect(),
+                vec![0.0; NUM_SAMPLES],
+                vec![None; NUM_SAMPLES],
+                bindings.iter().map(Option::as_ref).collect(),
+                Some(vec![
+                    PitchPadProjection {
+                        sync: bpm_requested,
+                        ..Default::default()
+                    };
+                    NUM_SAMPLES
+                ]),
+                Some(maps.clone()),
+                super::super::source_sync_policy::GlobalTimingPolicy::parse(Some(
+                    r#"{"schema_version":1,"sync":true,"realtime_bpm":true,"revision":71}"#,
+                ))
+                .unwrap(),
+            )
+            .unwrap();
+        let guard = runtime.runtime_state.lock().unwrap();
+        assert_eq!(guard.pads[0].source_map.intent_revision_for_test(), 71);
+        assert_eq!(
+            guard.pads[0].source_map.request().mode,
+            super::super::source_sync_policy::SourceSyncMode::Legacy
+        );
+        assert_eq!(
+            guard.pads[0].source_map.without_selection().request().mode,
+            super::super::source_sync_policy::SourceSyncMode::Legacy
+        );
+    }
+    let bindings = bindings(&fixture);
+    runtime
+        .set_runtime_state_with_source_maps(
+            true,
+            (0..NUM_SAMPLES).map(|id| id < 2).collect(),
+            vec![0.0; NUM_SAMPLES],
+            vec![None; NUM_SAMPLES],
+            bindings.iter().map(Option::as_ref).collect(),
+            Some(vec![
+                PitchPadProjection {
+                    sync: true,
+                    ..Default::default()
+                };
+                NUM_SAMPLES
+            ]),
+            None,
+        )
+        .unwrap();
+    let current = input_runtime_binding::capture(&fixture.engine, 0)
+        .unwrap()
+        .unwrap();
+    assert_eq!(
+        current.source_map_launch_snapshot().request().mode,
+        super::super::source_sync_policy::SourceSyncMode::Mapped
+    );
+    assert!(matches!(
+        current
+            .source_map_launch_snapshot()
+            .admit(&fixture.engine.input_runtime_ownership, current.binding),
+        Err(PitchActionReject::TimingUnavailable)
+    ));
+    assert!(!PitchPadProjection::default().sync);
+}
+
+#[test]
+fn hierarchy_exhaustion_and_busy_global_claim_have_no_row_or_counter_prefix() {
+    for exhausted in [false, true] {
+        let fixture = fixture();
+        let runtime = fixture.engine.input_runtime.as_ref().unwrap();
+        let ownership = &fixture.engine.input_runtime_ownership;
+        let rows = runtime.runtime_state.lock().unwrap().pads.clone();
+        let stamp = ownership.hierarchy_stamp.load(Ordering::Acquire);
+        let launch = ownership.launch_revision(0);
+        let bindings = bindings(&fixture);
+        if exhausted {
+            ownership
+                .global_timing_revision
+                .store(u64::MAX, Ordering::Release);
+        } else {
+            ownership
+                .global_timing_publishing
+                .store(true, Ordering::Release);
+        }
+        let revision = ownership.global_timing_revision.load(Ordering::Acquire);
+        assert!(
+            runtime
+                .set_runtime_state_with_pitch(
+                    false,
+                    (0..NUM_SAMPLES).map(|id| id < 2).collect(),
+                    vec![0.0; NUM_SAMPLES],
+                    vec![None; NUM_SAMPLES],
+                    bindings.iter().map(Option::as_ref).collect(),
+                    vec![PitchPadProjection::default(); NUM_SAMPLES]
+                )
+                .is_err()
+        );
+        assert_eq!(runtime.runtime_state.lock().unwrap().pads, rows);
+        assert_eq!(ownership.hierarchy_stamp.load(Ordering::Acquire), stamp);
+        assert_eq!(
+            ownership.global_timing_revision.load(Ordering::Acquire),
+            revision
+        );
+        assert_eq!(ownership.launch_revision(0), launch);
+        ownership
+            .global_timing_publishing
+            .store(false, Ordering::Release);
+    }
 }

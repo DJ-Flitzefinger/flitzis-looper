@@ -59,6 +59,7 @@ from flitzis_looper.timing_policy import (
     neutral_global_timing_policy,
     source_sync_preference,
     source_sync_requested,
+    variable_source_timing,
 )
 
 if TYPE_CHECKING:
@@ -603,11 +604,32 @@ class ProjectState(BaseModel):
     global_timing_policy: GlobalTimingPolicy = Field(default_factory=neutral_global_timing_policy)
     """Global matching/tracking choices; historical absence preserves prior PAD behavior."""
 
+    _timing_policy_recovery: bool = PrivateAttr(default=False)
+
+    @property
+    def timing_policy_recovery(self) -> bool:
+        """Expose the load quarantine without serializing it or deriving it from valid intent."""
+        return self._timing_policy_recovery
+
+    def quarantine_timing_policy(self) -> None:
+        """Latch malformed-policy recovery for this model's lifetime."""
+        self._timing_policy_recovery = True
+
+    def resolve_bpm_lock(self) -> bool:
+        """Resolve qualified requested parents, independently of callback acknowledgement."""
+        return self.multi_loop and self.bpm_lock and not self._timing_policy_recovery
+
     def resolve_pad_source_sync(self, sample_id: int) -> bool:
         """Resolve the global gate and durable PAD preference without claiming adoption."""
         validate_sample_id(sample_id)
-        return source_sync_requested(
+        return self.resolve_bpm_lock() and source_sync_requested(
             self.global_timing_policy, self.pad_source_sync_intent[sample_id]
+        )
+
+    def resolve_pad_realtime_bpm(self, sample_id: int) -> bool:
+        """Resolve variable timing only when the complete requested hierarchy is available."""
+        return self.resolve_pad_source_sync(sample_id) and variable_source_timing(
+            self.global_timing_policy
         )
 
     def pad_source_sync_preference(self, sample_id: int) -> bool:

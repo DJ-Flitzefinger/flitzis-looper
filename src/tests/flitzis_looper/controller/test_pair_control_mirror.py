@@ -19,6 +19,7 @@ from flitzis_looper.controller.transport import TransportController, global_play
 from flitzis_looper.models import PadContentIdentity, ProjectState, SessionState, StemCacheEntry
 from flitzis_looper.pair_snapshot import PairSnapshot, capture_pair_snapshot
 from flitzis_looper.ui.context import WaveformEditorActions
+from tests.flitzis_looper.conftest import FakeInputRuntimePadBinding
 
 if TYPE_CHECKING:
     from collections.abc import Callable
@@ -134,6 +135,13 @@ def _refresh(
             0,
             1.0,
             True,
+            (None, None, 0),
+            True,
+            False,
+            True,
+            (False, 0),
+            (None, None),
+            False,
             anchor,
         ),
         (callback,) if callback is not None else (),
@@ -628,3 +636,122 @@ def test_fresh_next_pair_follows_prior_selected_content_without_reusing_its_old_
     second.apply(bundle.acknowledgement)
     assert app._project.selected_pad == 0
     assert app._session.pad_selection_content_id == "a" * 32
+
+
+def _install_bpm_queue(audio: Mock) -> None:
+    """Controller-only queued receipt; no actual Native completion is simulated."""
+    receipt: dict[str, object] = {
+        "request_revision": 0,
+        "effect_revision": 0,
+        "state": "applied",
+        "requested_enabled": False,
+        "effective_enabled": False,
+        "reason": None,
+        "execution_frame": None,
+        "submission_available": True,
+    }
+
+    def admit(*, enabled: bool, anchor_binding: object = None) -> None:
+        assert enabled is True
+        assert anchor_binding is not None
+        receipt.update(request_revision=1, state="queued", requested_enabled=True)
+
+    audio.bpm_lock_status = Mock(side_effect=receipt.copy)
+    audio.set_bpm_lock = Mock(side_effect=admit)
+    audio.current_constant_timing = Mock(return_value=None)
+    audio.pad_timing_intent = Mock(return_value="legacy")
+    audio.output_sample_rate = Mock(return_value=48_000)
+    audio.current_input_runtime_pad_binding = Mock(side_effect=FakeInputRuntimePadBinding)
+
+
+@pytest.mark.parametrize("swap", [False, True])
+def test_unbound_empty_anchor_stays_at_pair_fill_slot_then_admits_that_first_content_once(
+    *, swap: bool
+) -> None:
+    bundle = _bundle(occupied=swap)
+    app = bundle.app
+    project, session = app._project, app._session
+    target = (project.pad_content[215], project.sample_paths[215], project.stem_cache[215])
+    project.pad_content[215] = None
+    project.sample_paths[215] = None
+    project.stem_cache[215] = None
+    project.multi_loop = project.bpm_lock = True
+    project.selected_pad = 215
+    parameters = app.transport.global_params
+    parameters._begin_bpm_lock_application(capture_anchor=True)
+    application = parameters._bpm_application
+    assert application is not None
+    assert application.original_content_id is None
+    # Swap requires an occupied target. Its first assignment arrives under the
+    # existing reservation before the BPM owner may observe or bind it.
+    project.pad_content[215], project.sample_paths[215], project.stem_cache[215] = target
+    project.manual_bpm[0] = 120.0
+    guard = Mock(side_effect=ValueError("Pair assignment is held."))
+    app.transport.bind_pad_edit_guard(guard)
+    with pytest.raises(ValueError, match="held"):
+        parameters._bind_first_bpm_content()
+    assert application.original_content_id is None
+    bundle.snapshot = capture_pair_snapshot(project, 0, 215, operation="swap" if swap else "move")
+    record_pad_selection(project, session, 36)
+    refresh = _refresh(215)
+    app.accepted_timing._waiting_refresh[0] = refresh
+    plan = bundle.prepare()
+    assert plan._anchor_after == 215
+    plan.apply(bundle.acknowledgement)
+    plan.apply(bundle.acknowledgement)
+    assert session.bpm_lock_anchor_pad_id == 215
+    assert project.selected_pad == 36
+    assert app.accepted_timing._waiting_refresh[215] is refresh
+    assert refresh.control_signature[-1] == 215
+    assert project.pad_content[215].instance_id == "a" * 32
+    assert application.original_content_id is None
+    guard.side_effect = None
+    _install_bpm_queue(bundle.audio)
+    for _ in range(4):
+        parameters.poll_bpm_lock_application()
+    assert application.original_content_id == "a" * 32
+    bundle.audio.set_bpm_lock.assert_called_once()
+    binding = bundle.audio.set_bpm_lock.call_args.kwargs["anchor_binding"]
+    assert binding.metadata()["pad_id"] == 215
+
+
+@pytest.mark.parametrize(
+    ("swap", "anchor", "expected"),
+    [(False, 0, 215), (True, 0, 215), (True, 215, 0)],
+)
+def test_bound_bpm_original_keeps_existing_pair_content_and_signature_projection(
+    *, swap: bool, anchor: int, expected: int
+) -> None:
+    bundle = _bundle(occupied=swap)
+    app = bundle.app
+    project = app._project
+    project.multi_loop = project.bpm_lock = True
+    project.selected_pad = anchor
+    parameters = app.transport.global_params
+    parameters._begin_bpm_lock_application(capture_anchor=True)
+    application = parameters._bpm_application
+    assert application is not None
+    original = application.original_content_id
+    assert original is not None
+    refresh = _refresh(anchor)
+    app.accepted_timing._waiting_refresh[0] = refresh
+    plan = bundle.prepare()
+    assert plan._anchor_after == expected
+    plan.apply(bundle.acknowledgement)
+    assert app._session.bpm_lock_anchor_pad_id == expected
+    assert refresh.control_signature[-1] == expected
+    assert project.pad_content[expected].instance_id == original
+    assert application.original_content_id == original
+    assert not parameters._bpm_anchor_waiting_for_first_content(expected)
+
+
+@pytest.mark.parametrize(("swap", "expected"), [(False, None), (True, 0)])
+def test_legacy_anchor_without_an_unbound_application_keeps_existing_pair_projection(
+    *, swap: bool, expected: int | None
+) -> None:
+    bundle = _bundle(occupied=swap)
+    bundle.app._session.bpm_lock_anchor_pad_id = 215
+    plan = bundle.prepare()
+    assert plan._anchor_after == expected
+    plan.apply(bundle.acknowledgement)
+    assert bundle.app._session.bpm_lock_anchor_pad_id == expected

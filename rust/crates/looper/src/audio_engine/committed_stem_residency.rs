@@ -796,6 +796,7 @@ pub(crate) struct StemVoiceCapture {
     pub(crate) selection: SelectionPermit,
     pub(crate) status: Arc<ResidencyStatus>,
     pub(crate) launch_revision: u64,
+    pub(crate) operation_timing_revision: Option<u64>,
     pub(crate) target: StemMixMode,
     pub(crate) candidate: Option<Arc<CandidateAuthority>>,
     sender: UnsafeCell<Producer<StemVoicePin>>,
@@ -833,6 +834,7 @@ pub(crate) struct StemResidencyTransaction {
     pub(crate) selection: SelectionPermit,
     pub(crate) status: Arc<ResidencyStatus>,
     pub(crate) launch_revision: u64,
+    pub(crate) operation_timing_revision: Option<u64>,
     pub(crate) target: StemMixMode,
     pub(crate) mask: u8,
     pub(crate) candidate: Option<Arc<CandidateAuthority>>,
@@ -1277,6 +1279,21 @@ impl AudioEngine {
         {
             return Err(PyRuntimeError::new_err("resident adoption is in progress"));
         }
+        // Candidate timing belongs to this operation, not the reusable disk selection.
+        // Acquire before any proposal/epoch mutation and retain through Capture admission.
+        let timing_lease = if candidate.is_some() {
+            Some(
+                super::GlobalTimingLease::acquire(
+                    &self.input_runtime_ownership.global_timing_publishing,
+                )
+                .ok_or_else(|| PyRuntimeError::new_err("global timing publication busy"))?,
+            )
+        } else {
+            None
+        };
+        let operation_timing_revision = candidate
+            .as_ref()
+            .map(|_| self.global_timing_revision.load(Ordering::Acquire));
         let base_intent = owner.intent_epoch.load(Ordering::Acquire);
         let (epoch, expected) = if policy_only {
             let expected = next_epoch(&owner.committed.policy_operation_epoch)
@@ -1355,6 +1372,7 @@ impl AudioEngine {
             selection: selection.owner.rt_permit(),
             status: status.clone(),
             launch_revision,
+            operation_timing_revision,
             target,
             candidate: candidate.clone(),
             sender: UnsafeCell::new(sender),
@@ -1388,6 +1406,7 @@ impl AudioEngine {
             target,
             mask: enabled_mask,
             launch_revision,
+            operation_timing_revision,
             candidate: candidate.clone(),
             assets: self.project_assets.clone(),
             owners: self.resident_stem_cache.clone(),
@@ -1403,6 +1422,7 @@ impl AudioEngine {
             policy_only,
             preload,
         };
+        drop(timing_lease);
         drop(owners);
         drop(producer_guard);
         drop(_requests);
@@ -1554,6 +1574,7 @@ struct ResidencyWork {
     target: StemMixMode,
     mask: u8,
     launch_revision: u64,
+    operation_timing_revision: Option<u64>,
     candidate: Option<Arc<CandidateAuthority>>,
     assets: Arc<super::project_assets::ProjectAssets>,
     owners: Arc<Mutex<Vec<super::resident_relocation::ResidentStemCache>>>,
@@ -1876,6 +1897,7 @@ impl ResidencyWork {
                             selection: self.selection.rt_permit(),
                             status: self.status.clone(),
                             launch_revision: self.launch_revision,
+                            operation_timing_revision: self.operation_timing_revision,
                             target: self.target,
                             mask: self.mask,
                             candidate: self.candidate.clone(),

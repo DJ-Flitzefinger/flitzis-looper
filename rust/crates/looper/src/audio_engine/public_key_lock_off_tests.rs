@@ -198,6 +198,80 @@ fn paused_render(playback: &mut ControllerPlayback, frames: usize) {
     playback.frame += frames as u64;
 }
 
+fn remember_own_pause_admission(locals: &Py<PyDict>, paused: bool) {
+    Python::attach(|py| {
+        locals
+            .bind(py)
+            .set_item("own_requested_paused", paused)
+            .unwrap();
+    });
+    controller_python(
+        locals,
+        r#"
+assert project.pad_content[0] == off_content
+assert session.active_sample_ids == {0, 215}
+assert session.paused_sample_ids == (set() if own_requested_paused else {0})
+assert not feedback_route._ordinary_observation_fenced(0)
+own_pause_owner = transport.playback._pause_intent._owners[off_content.instance_id]
+own_pause_admission = own_pause_owner.admission
+assert own_pause_owner.pending and own_pause_admission is not None
+assert own_pause_admission.requested_paused is own_requested_paused
+assert own_pause_admission.current_control_slot() == 0
+own_pause_binding = transport._audio.current_input_runtime_pad_binding(0)
+assert own_pause_binding is not None and own_pause_binding.is_current()
+own_pause_source_keys = (
+    'content_lifetime', 'source_generation', 'source_sha256', 'sample_rate_hz',
+    'channels', 'frame_count', 'window_revision', 'resident_start_frame',
+    'resident_end_frame', 'resident_pcm_identity', 'resident_context')
+own_pause_metadata = own_pause_binding.metadata()
+own_pause_source = tuple(own_pause_metadata[key] for key in own_pause_source_keys)
+assert own_pause_admission.content_lifetime == own_pause_metadata['content_lifetime']
+own_pause_before = own_pause_admission.current_observation()
+assert own_pause_before is not None and own_pause_before.current_control_slot() == 0
+assert own_pause_before.content_lifetime == own_pause_admission.content_lifetime
+assert own_pause_before.active and own_pause_before.ordinary_paused is not own_requested_paused
+assert not own_pause_before.settles_admission(own_pause_admission)
+own_pause_before_sequence = own_pause_before.observation_sequence
+assert transport.playback._pause_intent.requested_paused(0) is own_requested_paused
+assert not transport.playback._pause_intent.requested_paused(215)
+assert own_pause_owner.admission is own_pause_admission and own_pause_owner.pending
+assert session.paused_sample_ids == (set() if own_requested_paused else {0})
+"#,
+    );
+}
+
+fn assert_own_pause_effect(locals: &Py<PyDict>) {
+    controller_python(
+        locals,
+        r#"
+assert project.pad_content[0] == off_content
+assert own_pause_binding.is_current()
+own_pause_current_binding = transport._audio.current_input_runtime_pad_binding(0)
+assert own_pause_current_binding is not None and own_pause_current_binding.is_current()
+own_pause_current_metadata = own_pause_current_binding.metadata()
+assert tuple(own_pause_current_metadata[key] for key in own_pause_source_keys) == own_pause_source
+assert own_pause_admission.current_control_slot() == 0
+own_pause_observation = own_pause_admission.current_observation()
+assert own_pause_observation is not None and own_pause_observation.current_control_slot() == 0
+assert own_pause_observation.content_lifetime == own_pause_admission.content_lifetime
+assert own_pause_observation.content_lifetime == own_pause_current_metadata['content_lifetime']
+assert own_pause_observation.observation_sequence > own_pause_before_sequence
+assert own_pause_observation.matches_admission(own_pause_admission)
+assert own_pause_observation.settles_admission(own_pause_admission)
+assert own_pause_observation.outcome == 'applied' and own_pause_observation.active
+assert own_pause_observation.ordinary_paused is own_requested_paused
+transport.playback.poll_pause_observations()
+assert session.active_sample_ids == {0, 215}
+assert session.paused_sample_ids == ({0} if own_requested_paused else set())
+assert not transport.playback._pause_intent.requested_paused(215)
+assert not own_pause_owner.pending and own_pause_owner.admission is None
+del own_pause_owner, own_pause_admission, own_pause_binding, own_pause_metadata
+del own_pause_source_keys, own_pause_source, own_pause_before, own_pause_before_sequence
+del own_pause_current_binding, own_pause_current_metadata, own_pause_observation
+"#,
+    );
+}
+
 fn assert_off_status(locals: &Py<PyDict>) {
     controller_python(
         locals,
@@ -317,11 +391,10 @@ assert session.active_sample_ids == {0, 215} and not session.paused_sample_ids
 "#,
     );
     if paused {
-        controller_python(
-            locals,
-            "transport.playback.pause_pad(0)\nassert session.paused_sample_ids == {0}",
-        );
+        controller_python(locals, "transport.playback.pause_pad(0)");
+        remember_own_pause_admission(locals, true);
         assert_eq!(playback.drain(consumer), 1, "public own Pause");
+        assert_own_pause_effect(locals);
         for reference in [&mut playback.reference, &mut playback.full_mix] {
             reference.pause_sample_at_output_frame(0, playback.frame);
         }
@@ -547,9 +620,11 @@ assert registration.is_current() and project.stem_cache[0].pair == disk_selectio
         }
         controller_python(
             locals,
-            "assert session.paused_sample_ids == {0}\ntransport.playback.resume_pad(0)\nassert not session.paused_sample_ids",
+            "assert session.paused_sample_ids == {0}\ntransport.playback.resume_pad(0)",
         );
+        remember_own_pause_admission(locals, false);
         assert_eq!(playback.drain(consumer), 1, "public own Resume after OFF");
+        assert_own_pause_effect(locals);
         for reference in [&mut playback.reference, &mut playback.full_mix] {
             reference.resume_sample_at_output_frame(0, playback.frame);
         }

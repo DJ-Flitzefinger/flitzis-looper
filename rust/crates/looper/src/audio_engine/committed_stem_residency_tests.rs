@@ -706,6 +706,316 @@ impl Productive {
 }
 
 #[test]
+fn candidate_claim_wins_global_lease_and_failed_rate_admission_does_not_supersede_its_operation() {
+    use crate::audio_engine::committed_stem_residency::CommittedStemRtWork;
+    use crate::messages::ControlParameterMessage;
+    let mut p = Productive::new(true, 0.75);
+    // Productive's direct render fixture has emitted these real virtual frames.
+    p.h.callback
+        .transport
+        .advance_by_rendered_frames(p.frame as usize);
+    let (_pair, registration) = l3_native_tests::candidate(&mut p, 871);
+    let receipt = l3_native_tests::request_candidate(&mut p, &registration, 0b1010);
+    p.capture_then_wait(&receipt);
+    let ControlMessage::CommittedStemWork(work) = p.h.consumer.pop().unwrap() else {
+        panic!("original Adopt");
+    };
+    let ownership = p.h.engine.input_runtime_ownership.clone();
+    let revision = p.h.engine.global_timing_revision.clone();
+    let before = revision.load(Ordering::Acquire);
+    let requested_before = ownership.global_rate_status.requested_revision();
+    assert!(
+        matches!(work.as_ref(), CommittedStemRtWork::Adopt(transaction)
+        if transaction.operation_timing_revision == Some(before))
+    );
+    let (mut parameters, mut consumer) = rtrb::RingBuffer::new(1);
+    parameters
+        .push(ControlParameterMessage::SetVolume(1.0))
+        .unwrap();
+    assert!(
+        crate::audio_engine::push_global_rate_message(
+            &revision,
+            &ownership.global_timing_publishing,
+            &ownership.global_rate_status,
+            &mut parameters,
+            Some(1.25),
+            None,
+            "candidate full-queue regression",
+        )
+        .is_err()
+    );
+    assert_eq!(revision.load(Ordering::Acquire), before);
+    assert_eq!(
+        ownership.global_rate_status.requested_revision(),
+        requested_before
+    );
+    consumer.pop().unwrap();
+    let parameters = Arc::new(Mutex::new(parameters));
+    let attempted_parameters = parameters.clone();
+    let attempted_ownership = ownership.clone();
+    let attempted_revision = revision.clone();
+    RtMixer::with_candidate_before_content_claim_for_test(
+        move || {
+            assert!(
+                attempted_ownership
+                    .global_timing_publishing
+                    .load(Ordering::Acquire)
+            );
+            assert!(!attempted_ownership.placement_pending());
+            assert!(
+                crate::audio_engine::push_global_rate_message(
+                    &attempted_revision,
+                    &attempted_ownership.global_timing_publishing,
+                    &attempted_ownership.global_rate_status,
+                    &mut attempted_parameters.lock().unwrap(),
+                    Some(1.25),
+                    None,
+                    "candidate lease-winner regression",
+                )
+                .is_err()
+            );
+            assert_eq!(attempted_revision.load(Ordering::Acquire), before);
+            assert_eq!(
+                attempted_ownership.global_rate_status.requested_revision(),
+                requested_before
+            );
+        },
+        || {
+            let callback = p.h.callback.as_mut();
+            callback
+                .mixer
+                .apply_committed_stem_work(work, &mut callback.retirement);
+        },
+    );
+    assert_eq!(receipt.residency_status(), "accepted");
+    assert!(receipt.claimed() && registration.is_current());
+    let clock = voice(&p.h.callback.mixer).source_playback;
+    let native = voice(&p.h.callback.mixer).stretch.native_state_address();
+    let fifo = voice(&p.h.callback.mixer).stretch.pending_fifo_frames();
+    let epoch = voice(&p.h.callback.mixer)
+        .stretch
+        .source_epoch_owner()
+        .load(Ordering::Acquire);
+    crate::audio_engine::push_global_rate_message(
+        &revision,
+        &ownership.global_timing_publishing,
+        &ownership.global_rate_status,
+        &mut parameters.lock().unwrap(),
+        Some(1.25),
+        None,
+        "later accepted rate",
+    )
+    .unwrap();
+    assert!(revision.load(Ordering::Acquire) > before);
+    // Admission cannot retroactively revoke the already claimed operation.
+    assert_eq!(receipt.residency_status(), "accepted");
+    assert!(receipt.is_current() && registration.is_current());
+    assert!(
+        voice(&p.h.callback.mixer)
+            .source_playback
+            .matches_exact(&clock)
+    );
+    assert_eq!(
+        voice(&p.h.callback.mixer).stretch.native_state_address(),
+        native
+    );
+    assert_eq!(
+        voice(&p.h.callback.mixer).stretch.pending_fifo_frames(),
+        fifo
+    );
+    assert_eq!(
+        voice(&p.h.callback.mixer)
+            .stretch
+            .source_epoch_owner()
+            .load(Ordering::Acquire),
+        epoch
+    );
+    p.select_reference("all_stems", 0b0011); // Independent V1 oracle permutes V2's two exchanged stems.
+    p.render(257, false);
+}
+
+#[test]
+fn rate_admission_fences_original_candidate_worker_and_busy_retry_keeps_exact_box_until_rejection()
+{
+    use crate::audio_engine::committed_stem_residency::CommittedStemRtWork;
+    let mut p = Productive::new(true, 0.75);
+    p.h.callback
+        .transport
+        .advance_by_rendered_frames(p.frame as usize);
+    let (_pair, registration) = l3_native_tests::candidate(&mut p, 872);
+    let receipt = l3_native_tests::request_candidate(&mut p, &registration, 0b1010);
+    let original_revision = p.h.engine.global_timing_revision.load(Ordering::Acquire);
+    assert!(
+        matches!(p.h.consumer.peek().unwrap(), ControlMessage::CommittedStemWork(work)
+        if matches!(work.as_ref(), CommittedStemRtWork::Capture(capture)
+            if capture.operation_timing_revision == Some(original_revision)))
+    );
+    let (mut parameters, mut consumer) = rtrb::RingBuffer::new(8);
+    crate::audio_engine::push_global_rate_message(
+        &p.h.engine.global_timing_revision,
+        &p.h.engine.input_runtime_ownership.global_timing_publishing,
+        &p.h.engine.input_runtime_ownership.global_rate_status,
+        &mut parameters,
+        Some(1.25),
+        None,
+        "rate admission before candidate worker",
+    )
+    .unwrap();
+    assert!(p.h.engine.global_timing_revision.load(Ordering::Acquire) > original_revision);
+    p.capture_then_wait(&receipt);
+    let ControlMessage::CommittedStemWork(work) = p.h.consumer.pop().unwrap() else {
+        panic!("original Adopt");
+    };
+    assert!(
+        matches!(work.as_ref(), CommittedStemRtWork::Adopt(transaction)
+        if transaction.operation_timing_revision == Some(original_revision))
+    );
+    let address = work.as_ref() as *const CommittedStemRtWork as usize;
+    let clock = voice(&p.h.callback.mixer).source_playback;
+    let generation = voice(&p.h.callback.mixer).generation;
+    let native = voice(&p.h.callback.mixer).stretch.native_state_address();
+    let fifo = voice(&p.h.callback.mixer).stretch.pending_fifo_frames();
+    let epoch = voice(&p.h.callback.mixer)
+        .stretch
+        .source_epoch_owner()
+        .load(Ordering::Acquire);
+    let history = voice(&p.h.callback.mixer)
+        .stretch
+        .productive_history()
+        .unwrap();
+    let dsp = p.h.callback.mixer.dsp_source_history_for_test(0).unwrap();
+    let master = p.h.callback.transport;
+    let ownership = p.h.engine.input_runtime_ownership.clone();
+    let lease =
+        crate::audio_engine::GlobalTimingLease::acquire(&ownership.global_timing_publishing)
+            .unwrap();
+    {
+        let callback = p.h.callback.as_mut();
+        callback
+            .mixer
+            .apply_committed_stem_work(work, &mut callback.retirement);
+    }
+    let Some(ControlMessage::CommittedStemWork(work)) = p.h.callback.mixer.take_deferred_control()
+    else {
+        panic!("same original deferred Adopt");
+    };
+    assert_eq!(
+        work.as_ref() as *const CommittedStemRtWork as usize,
+        address
+    );
+    assert_eq!(receipt.residency_status(), "pending");
+    assert!(!receipt.claimed());
+    drop(lease);
+    {
+        let callback = p.h.callback.as_mut();
+        callback
+            .mixer
+            .apply_committed_stem_work(work, &mut callback.retirement);
+    }
+    assert_eq!(receipt.residency_status(), "rejected");
+    assert!(!receipt.claimed() && registration.is_current());
+    assert_eq!(registration.publication_status(), "accepted");
+    assert!(p.h.callback.mixer.stems_for_measurement()[0].is_none());
+    assert!(
+        voice(&p.h.callback.mixer)
+            .source_playback
+            .matches_exact(&clock)
+    );
+    assert_eq!(voice(&p.h.callback.mixer).generation, generation);
+    assert_eq!(
+        voice(&p.h.callback.mixer).stretch.native_state_address(),
+        native
+    );
+    assert_eq!(
+        voice(&p.h.callback.mixer).stretch.pending_fifo_frames(),
+        fifo
+    );
+    assert_eq!(
+        voice(&p.h.callback.mixer)
+            .stretch
+            .source_epoch_owner()
+            .load(Ordering::Acquire),
+        epoch
+    );
+    let retained = voice(&p.h.callback.mixer)
+        .stretch
+        .productive_history()
+        .unwrap();
+    assert_eq!(retained.binding, history.binding);
+    assert_eq!(retained.next_position, history.next_position);
+    assert_eq!(retained.fed_output_frames, history.fed_output_frames);
+    let retained_dsp = p.h.callback.mixer.dsp_source_history_for_test(0).unwrap();
+    assert_eq!(retained_dsp.binding, dsp.binding);
+    assert_eq!(retained_dsp.next_position, dsp.next_position);
+    assert_eq!(retained_dsp.fed_output_frames, dsp.fed_output_frames);
+    assert_eq!(
+        format!("{:?}", p.h.callback.transport),
+        format!("{master:?}")
+    );
+    p.render(257, false);
+    p.h.callback.transport.advance_by_rendered_frames(257);
+    assert!(
+        p.h.consumer.is_empty(),
+        "rejected operations never retry implicitly"
+    );
+    // Service the admitted rate through the existing real drains, then capture
+    // a fresh explicit operation using the SAME accepted disk registration.
+    p.h.callback.drain(&mut p.h.consumer);
+    {
+        let callback = p.h.callback.as_mut();
+        crate::audio_engine::audio_stream::drain_parameter_messages(
+            &mut consumer,
+            &mut callback.mixer,
+            &mut callback.transport,
+        );
+    }
+    assert_eq!(
+        p.h.engine
+            .input_runtime_ownership
+            .global_rate_status
+            .read()
+            .unwrap()
+            .effect
+            .state,
+        crate::audio_engine::global_rate_status::RateState::Applied
+    );
+    p.reference.set_speed(1.25);
+    p.render(257, false);
+    p.h.callback.transport.advance_by_rendered_frames(257);
+    let fresh = l3_native_tests::request_candidate(&mut p, &registration, 0b1010);
+    p.capture_then_wait(&fresh);
+    assert_eq!(p.h.callback.drain(&mut p.h.consumer), 1);
+    assert_eq!(fresh.residency_status(), "accepted");
+    assert!(fresh.claimed() && registration.is_current());
+    p.select_reference("all_stems", 0b0011);
+    p.render(257, false);
+}
+
+#[test]
+fn candidate_adopt_requires_its_original_operation_witness() {
+    use crate::audio_engine::committed_stem_residency::CommittedStemRtWork;
+    let mut p = Productive::new(true, 0.75);
+    let (_pair, registration) = l3_native_tests::candidate(&mut p, 873);
+    let receipt = l3_native_tests::request_candidate(&mut p, &registration, 0b1010);
+    p.capture_then_wait(&receipt);
+    let ControlMessage::CommittedStemWork(mut work) = p.h.consumer.pop().unwrap() else {
+        panic!("original Adopt");
+    };
+    let CommittedStemRtWork::Adopt(transaction) = work.as_mut() else {
+        panic!("candidate Adopt");
+    };
+    assert!(transaction.operation_timing_revision.take().is_some());
+    let callback = p.h.callback.as_mut();
+    callback
+        .mixer
+        .apply_committed_stem_work(work, &mut callback.retirement);
+    assert_eq!(receipt.residency_status(), "rejected");
+    assert!(!receipt.claimed() && registration.is_current());
+    assert!(p.h.callback.mixer.stems_for_measurement()[0].is_none());
+    p.render(257, false);
+}
+
+#[test]
 fn committed_selection_uses_own_callback_ack_and_keeps_full_mix_components_absent() {
     let mut h = Harness::new();
     let first_source = h.ticket(0);
@@ -2266,20 +2576,30 @@ impl ReadyPlaybackAudio {
         self.engine.publish_pad_start(start, window)
     }
 
-    fn pause_sample(&self, id: usize) -> PyResult<()> {
-        self.producer
-            .lock()
-            .unwrap()
-            .push(ControlMessage::PauseSample { id })
-            .map_err(|_| pyo3::exceptions::PyRuntimeError::new_err("test Pause queue full"))
+    fn pause_sample(
+        &self,
+        id: usize,
+    ) -> PyResult<crate::audio_engine::ordinary_transport::OrdinaryTransportAdmission> {
+        let _requests = self.engine.pad_request_ids.lock().unwrap();
+        crate::audio_engine::transport_intent_control::publish_under_request_lock(
+            &self.engine,
+            &mut self.producer.lock().unwrap(),
+            id,
+            crate::messages::TransportContentEffect::Pause,
+        )
     }
 
-    fn resume_sample(&self, id: usize) -> PyResult<()> {
-        self.producer
-            .lock()
-            .unwrap()
-            .push(ControlMessage::ResumeSample { id })
-            .map_err(|_| pyo3::exceptions::PyRuntimeError::new_err("test Resume queue full"))
+    fn resume_sample(
+        &self,
+        id: usize,
+    ) -> PyResult<crate::audio_engine::ordinary_transport::OrdinaryTransportAdmission> {
+        let _requests = self.engine.pad_request_ids.lock().unwrap();
+        crate::audio_engine::transport_intent_control::publish_under_request_lock(
+            &self.engine,
+            &mut self.producer.lock().unwrap(),
+            id,
+            crate::messages::TransportContentEffect::Resume,
+        )
     }
 
     fn output_sample_rate(&self) -> u32 {

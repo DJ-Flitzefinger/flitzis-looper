@@ -18,9 +18,15 @@ use crate::audio_engine::voice_slot::ExplicitSeekMode;
 use std::sync::{Arc, mpsc};
 
 fn prepared() -> Path {
-    let mut path = Path::new(false);
+    let mut path = Path::new(true);
     path.publish(Some(wire(false, false, 1)), true, None);
-    let mut rows = vec![PitchPadProjection::default(); NUM_SAMPLES];
+    let mut rows = vec![
+        PitchPadProjection {
+            sync: true,
+            ..Default::default()
+        };
+        NUM_SAMPLES
+    ];
     rows[0].key_lock = false;
     rows[1].key_lock = false;
     path.source
@@ -35,10 +41,82 @@ fn prepared() -> Path {
     path
 }
 
+fn publish_with_bpm_parent(path: &Path, policy: Option<Value>, requested: bool, enabled: bool) {
+    let bindings = (0..NUM_SAMPLES)
+        .map(|id| {
+            (id < 2).then(|| {
+                path.source
+                    .engine
+                    .current_input_runtime_pad_binding(id)
+                    .unwrap()
+                    .unwrap()
+            })
+        })
+        .collect::<Vec<_>>();
+    let mut maps =
+        vec![crate::audio_engine::source_map_admission::SourceMapRow::default(); NUM_SAMPLES];
+    for row in &mut maps[..2] {
+        row.sync_requested = requested;
+        row.intent_revision = 7;
+    }
+    let encoded = policy.map(|policy| policy.to_string());
+    path.source
+        .engine
+        .input_runtime
+        .as_ref()
+        .unwrap()
+        .set_runtime_state_with_policy(
+            true,
+            (0..NUM_SAMPLES).map(|id| id < 2).collect(),
+            vec![0.0; NUM_SAMPLES],
+            vec![Some(END as f64 / f64::from(RATE)); NUM_SAMPLES],
+            bindings.iter().map(Option::as_ref).collect(),
+            Some(vec![
+                PitchPadProjection {
+                    sync: enabled,
+                    key_lock: false,
+                    ..Default::default()
+                };
+                NUM_SAMPLES
+            ]),
+            Some(maps),
+            GlobalTimingPolicy::parse(encoded.as_deref()).unwrap(),
+        )
+        .unwrap();
+}
+
+fn prepared_with_bpm_parent(enabled: bool) -> Path {
+    if enabled {
+        return prepared();
+    }
+    let mut path = Path::new(false);
+    publish_with_bpm_parent(&path, Some(wire(false, false, 1)), true, false);
+    let birth = path.start();
+    assert_eq!(birth.state(), "applied");
+    assert_eq!(birth.sync_request().mode, SourceSyncMode::Legacy);
+    path.render(17);
+    assert_eq!(path.voice(0).source_playback.tempo_ratio(), 1.5);
+    path
+}
+
 fn fixed_target() -> f64 {
     // The original manual-BPM route converts BPM back to a period before
     // dividing by the master. Retain that operation order and every bit.
     (60.0 / (60.0 / SOURCE)) / MASTER
+}
+
+fn prepared_for_fixed_glide() -> Path {
+    let mut path = prepared_with_bpm_parent(false);
+    let original = path.voice(0).source_playback;
+    assert_eq!(path.voice(0).sync_request.mode, SourceSyncMode::Legacy);
+    assert_eq!(original.tempo_ratio(), 1.5);
+    assert_eq!(original.rate_target(), 1.5);
+    assert_ne!(original.rate_target().to_bits(), fixed_target().to_bits());
+    // Only actual BPM changes here. Each caller publishes its original Fixed
+    // request before any positive render can retarget the living Legacy clock.
+    path.source.mixer.set_bpm_lock(true);
+    assert!(path.voice(0).source_playback.matches_exact(&original));
+    path
 }
 
 fn request(path: &Path) -> Arc<RuntimePolicySnapshot> {
@@ -95,7 +173,7 @@ fn unchanged(path: &Path, before: &[(usize, u64, SourcePlayback, SourceSyncReque
 
 #[test]
 fn live_fixed_off_publication_uses_both_drains_actual_e_and_one_existing_step() {
-    let mut path = prepared();
+    let mut path = prepared_for_fixed_glide();
     let original = path.voice(0).source_playback;
     let generation = path.voice(0).generation;
     let master = path.timeline;
@@ -120,6 +198,11 @@ fn live_fixed_off_publication_uses_both_drains_actual_e_and_one_existing_step() 
     expected.chunk(1024);
     assert!(path.voice(0).source_playback.matches_exact(&expected));
     assert_eq!(path.feedback(0)["adoption"]["target_policy_revision"], 2);
+    assert_eq!(path.voice(0).source_playback.rate_target(), fixed_target());
+    assert_ne!(
+        path.voice(0).source_playback.tempo_ratio().to_bits(),
+        fixed_target().to_bits()
+    );
     assert_eq!(path.feedback(0)["settled"], false);
     let mut retained = SourceFeedSnapshot::new();
     assert!(
@@ -134,36 +217,53 @@ fn live_fixed_off_publication_uses_both_drains_actual_e_and_one_existing_step() 
     path.render(2049);
     assert_eq!(path.feedback(0)["settled"], true);
     let mut off = path.voice(0).source_playback;
-    assert!(off.set_target(1.5));
+    // Disabling SYNC retains actual BPM matching through Legacy.
+    assert!(off.set_target(fixed_target()));
     off.chunk(1024);
     path.publish(Some(wire(false, true, 3)), true, None);
     request(&path);
     service(&mut path);
-    assert_eq!(path.voice(0).sync_request.mode, SourceSyncMode::Off);
-    assert_eq!(path.voice(0).source_playback.rate_target(), 1.5);
+    assert_eq!(path.voice(0).sync_request.mode, SourceSyncMode::Legacy);
+    assert_eq!(path.voice(0).source_playback.rate_target(), fixed_target());
     assert!(path.voice(0).source_playback.matches_exact(&off));
     assert!(path.timeline.matches_clock_epoch(&master));
 }
 
 #[test]
 fn equal_target_revision_and_cache_hit_preserve_complete_pending_glide() {
-    let mut path = prepared();
+    let mut path = prepared_for_fixed_glide();
     path.publish(Some(wire(true, false, 2)), true, None);
     let first = request(&path);
     service(&mut path);
+    assert_eq!(path.voice(0).source_playback.rate_target(), fixed_target());
+    assert_ne!(
+        path.voice(0).source_playback.tempo_ratio().to_bits(),
+        fixed_target().to_bits()
+    );
+    assert_eq!(path.feedback(0)["settled"], false);
     path.render(37);
     let pending = path.voice(0).source_playback;
+    let master = path.timeline;
+    assert_ne!(
+        pending.tempo_ratio().to_bits(),
+        pending.rate_target().to_bits()
+    );
+    assert_eq!(path.feedback(0)["settled"], false);
     path.publish(Some(wire(true, false, 4)), true, None);
     let next = request(&path);
     assert!(!Arc::ptr_eq(&first, &next));
     service(&mut path);
     assert!(path.voice(0).source_playback.matches_exact(&pending));
+    assert_eq!(path.feedback(0)["settled"], false);
     assert_eq!(path.voice(0).sync_request.global_revision, Some(4));
     for _ in 0..8 {
         assert!(Arc::ptr_eq(&request(&path), &next));
     }
     assert!(path.source.consumer.is_empty());
     assert!(path.voice(0).source_playback.matches_exact(&pending));
+    assert_eq!(path.feedback(0)["settled"], false);
+    assert!(path.timeline.matches_clock_epoch(&master));
+    assert_eq!(path.timeline.output_frame(), master.output_frame());
     assert_eq!(next.observation().unwrap().attempt, 1);
 }
 
@@ -171,10 +271,16 @@ fn equal_target_revision_and_cache_hit_preserve_complete_pending_glide() {
 fn retarget_unequal_callback_partitions_have_identical_pcm_and_copied_clock() {
     let mut results = Vec::new();
     for parts in [&[1, 17, 513][..], &[256, 3, 71][..]] {
-        let mut path = prepared();
+        let mut path = prepared_for_fixed_glide();
         path.publish(Some(wire(true, false, 2)), true, None);
         request(&path);
         service(&mut path);
+        assert_eq!(path.voice(0).source_playback.rate_target(), fixed_target());
+        assert_ne!(
+            path.voice(0).source_playback.tempo_ratio().to_bits(),
+            fixed_target().to_bits()
+        );
+        assert_eq!(path.feedback(0)["settled"], false);
         let mut pcm = Vec::new();
         let mut index = 0;
         while pcm.len() / 2 < 2601 {
@@ -182,6 +288,8 @@ fn retarget_unequal_callback_partitions_have_identical_pcm_and_copied_clock() {
             pcm.extend(path.render(n));
             index += 1;
         }
+        assert_eq!(path.feedback(0)["settled"], true);
+        assert_eq!(path.voice(0).source_playback.tempo_ratio(), fixed_target());
         results.push((pcm, path.voice(0).source_playback));
     }
     assert_eq!(results[0].0, results[1].0);
@@ -295,8 +403,8 @@ fn mapped_intent_and_missing_master_leave_original_scalar_audio_unchanged() {
 fn speed_only_policy_preserves_cursor_pcm_and_both_masters_despite_matching_period_difference() {
     for legacy in [false, true] {
         for differing_period in [None, Some(MASTER * 2.0)] {
-            let mut path = prepared();
-            let mut reference = prepared();
+            let mut path = prepared_with_bpm_parent(false);
+            let mut reference = prepared_with_bpm_parent(false);
             for candidate in [&mut path, &mut reference] {
                 candidate.source.mixer.set_bpm_lock(false);
                 if let Some(period) = differing_period {
@@ -306,7 +414,7 @@ fn speed_only_policy_preserves_cursor_pcm_and_both_masters_despite_matching_peri
             let before = path.voice(0).source_playback;
             let generation = path.voice(0).generation;
             let master = path.timeline;
-            path.publish((!legacy).then(|| wire(false, true, 2)), false, None);
+            publish_with_bpm_parent(&path, (!legacy).then(|| wire(false, true, 2)), false, false);
             let snapshot = request(&path);
             service(&mut path);
             assert_eq!(snapshot.observation().unwrap().state, "applied");
@@ -315,7 +423,7 @@ fn speed_only_policy_preserves_cursor_pcm_and_both_masters_despite_matching_peri
                 if legacy {
                     SourceSyncMode::Legacy
                 } else {
-                    SourceSyncMode::Off
+                    SourceSyncMode::Legacy
                 }
             );
             assert_eq!(path.voice(0).generation, generation);
@@ -374,6 +482,9 @@ fn dependent_master_refusal_retries_and_recovers_without_changing_preceding_audi
             }
         }
         path.source.mixer.set_master_period(MASTER);
+        if !legacy_matching {
+            path.source.mixer.set_bpm_lock(true);
+        }
         assert!(Arc::ptr_eq(&snapshot, &request(&path)));
         service(&mut path);
         assert_eq!(snapshot.observation().unwrap().state, "applied");
@@ -704,7 +815,13 @@ fn publish_members(path: &Path, revision: u64, sync: bool) {
             )
             .unwrap();
     });
-    let mut rows = vec![PitchPadProjection::default(); NUM_SAMPLES];
+    let mut rows = vec![
+        PitchPadProjection {
+            sync: true,
+            ..Default::default()
+        };
+        NUM_SAMPLES
+    ];
     for row in &mut rows[..count] {
         row.key_lock = false;
     }
@@ -720,24 +837,39 @@ fn publish_members(path: &Path, revision: u64, sync: bool) {
 #[test]
 fn scalar_legacy_target_changes_are_unsettled_until_real_glide_converges() {
     for from_fixed in [false, true] {
-        let mut path = prepared();
+        let mut path = prepared_with_bpm_parent(from_fixed);
         if from_fixed {
             path.publish(Some(wire(true, false, 2)), true, None);
             request(&path);
             service(&mut path);
             path.render(2049);
-        } else {
-            path.source.mixer.set_bpm_lock(true);
         }
-        path.publish(None, false, None);
+        let before = path.voice(0).source_playback;
+        let master = path.timeline;
+        let generation = path.voice(0).generation;
+        let desired = if from_fixed { 1.5 } else { fixed_target() };
+        assert_eq!(
+            before.rate_target(),
+            if from_fixed { fixed_target() } else { 1.5 }
+        );
+        path.source.mixer.set_bpm_lock(!from_fixed);
+        publish_with_bpm_parent(&path, None, false, !from_fixed);
         let snapshot = request(&path);
         service(&mut path);
         assert_eq!(snapshot.observation().unwrap().state, "applied");
         assert_eq!(path.feedback(0)["policy_mode"], "legacy");
         assert!(path.feedback(0)["policy_revision"].is_null());
         assert_eq!(path.feedback(0)["settled"], false);
+        assert_eq!(path.feedback(0)["target_current"], true);
+        let mut expected = before;
+        assert!(expected.set_target(desired));
+        expected.chunk(1024);
+        assert!(path.voice(0).source_playback.matches_exact(&expected));
+        assert_eq!(path.voice(0).generation, generation);
+        assert!(path.timeline.matches_clock_epoch(&master));
         path.render(2049);
         assert_eq!(path.feedback(0)["settled"], true);
+        assert_eq!(path.feedback(0)["target_current"], true);
         assert_eq!(
             path.voice(0).source_playback.rate_target(),
             if from_fixed { 1.5 } else { fixed_target() }
@@ -1043,7 +1175,7 @@ fn actual_retirement_queue_and_backlog_preserve_unpopped_control_owner_until_cap
     path.publish(Some(wire(true, false, 2)), true, None);
     let snapshot = request(&path);
     let (release, blocked) = mpsc::channel();
-    let (mut callback, worker) = create_audio_buffer_retirement_with_callback_paused(
+    let (callback, worker) = create_audio_buffer_retirement_with_callback_paused(
         |retirement| {
             Box::new(CloseImage {
                 scheduler: FixedCapacityScheduler::new(),
@@ -1055,6 +1187,8 @@ fn actual_retirement_queue_and_backlog_preserve_unpopped_control_owner_until_cap
         },
     )
     .unwrap();
+    // Unwinding releases the gate, closes the callback, then joins the worker.
+    let mut callback = callback;
     let mut release = ReleaseOnDrop(Some(release));
     let state = callback.state_mut();
     let sample = path.voice(0).sample.as_ref().unwrap().clone();
@@ -1118,7 +1252,7 @@ fn callback_close_releases_pending_lease_with_cache_still_strong_and_with_cache_
         let snapshot = request(&path);
         let weak = Arc::downgrade(&snapshot);
         let (release, blocked) = mpsc::channel();
-        let (mut callback, worker) = create_audio_buffer_retirement_with_callback_paused(
+        let (callback, worker) = create_audio_buffer_retirement_with_callback_paused(
             |retirement| {
                 Box::new(CloseImage {
                     scheduler: FixedCapacityScheduler::new(),
@@ -1130,6 +1264,7 @@ fn callback_close_releases_pending_lease_with_cache_still_strong_and_with_cache_
             },
         )
         .unwrap();
+        let mut callback = callback;
         let mut release = ReleaseOnDrop(Some(release));
         let state = callback.state_mut();
         drain_control_messages(
@@ -1270,7 +1405,7 @@ fn actual_e_max_is_present_and_callback_preflight_has_no_rust_allocations_or_dea
 #[test]
 fn stop_and_real_retrigger_do_not_borrow_old_attempt_ack_or_replace_original_launch() {
     for behavior in ["first_sound_at_grid", "attack_at_grid"] {
-        let mut path = Path::new(false);
+        let mut path = Path::new(true);
         path.drain();
         path.source.mixer.finish_key_lock_start_callback(true);
         assert!(
@@ -1280,7 +1415,13 @@ fn stop_and_real_retrigger_do_not_borrow_old_attempt_ack_or_replace_original_lau
                 .unwrap()
         );
         path.publish(Some(wire(false, false, 1)), true, None);
-        let mut rows = vec![PitchPadProjection::default(); NUM_SAMPLES];
+        let mut rows = vec![
+            PitchPadProjection {
+                sync: true,
+                ..Default::default()
+            };
+            NUM_SAMPLES
+        ];
         rows[0].key_lock = false;
         rows[1].key_lock = false;
         path.source
@@ -1314,9 +1455,11 @@ fn stop_and_real_retrigger_do_not_borrow_old_attempt_ack_or_replace_original_lau
 fn genuine_future_pitch_work_blocks_scalar_adoption_without_key_lock_pending_arrays() {
     use crate::audio_engine::pitch_runtime_tests::{Fixture, LOOP_END, LOOP_START};
     let mut fixture = Fixture::new(false);
+    fixture.mixer.set_bpm_lock(true);
     fixture.mixer.set_master_period(0.5);
     assert!(fixture.transport.set_master_period(0.5));
     fixture.mixer.set_pad_bpm(0, Some(120.0));
+    crate::audio_engine::ordinary_endpoint_reserve_tests::refresh_actual_runtime_bindings(&fixture);
     let initial = fixture.capture(0, "pitch.extra:0:set_retrigger");
     fixture.publish(&initial);
     fixture.render(1);
@@ -1357,9 +1500,14 @@ fn genuine_future_pitch_work_blocks_scalar_adoption_without_key_lock_pending_arr
     fixture.rows(PitchPadProjection {
         key_lock: false,
         quantize_step_64ths: Some(16),
-        ..PitchPadProjection::default()
+        ..PitchPadProjection {
+            sync: true,
+            ..Default::default()
+        }
     });
     let pending = fixture.capture(0, "pitch.extra:0:set_retrigger");
+    assert_eq!(pending.sync_request().mode, SourceSyncMode::Fixed);
+    assert_eq!(pending.sync_request().global_revision, Some(2));
     fixture.publish(&pending);
     assert!(pending.execution_target() > fixture.transport.output_frame());
     let key = pending.content_key();
@@ -1462,11 +1610,20 @@ fn genuine_future_ordinary_start_blocks_even_an_unchanged_scalar_target() {
 
 #[test]
 fn due_retirement_exhaustion_preserves_owner_old_audio_and_reports_actual_late_e_on_retry() {
+    retirement_due_retry(false);
+}
+
+#[test]
+fn unread_same_revision_ping_cannot_borrow_completed_drains_for_retirement_due_policy_retry() {
+    retirement_due_retry(true);
+}
+
+fn retirement_due_retry(unread_ping: bool) {
     let mut path = prepared();
     path.publish(Some(wire(true, false, 2)), true, None);
     let snapshot = request(&path);
     let (release, blocked) = mpsc::channel();
-    let (mut callback, worker) = create_audio_buffer_retirement_with_callback_paused(
+    let (callback, worker) = create_audio_buffer_retirement_with_callback_paused(
         |retirement| {
             Box::new(CloseImage {
                 scheduler: FixedCapacityScheduler::new(),
@@ -1478,6 +1635,7 @@ fn due_retirement_exhaustion_preserves_owner_old_audio_and_reports_actual_late_e
         },
     )
     .unwrap();
+    let mut callback = callback;
     let mut release = ReleaseOnDrop(Some(release));
     let state = callback.state_mut();
     drain_control_messages(
@@ -1498,6 +1656,7 @@ fn due_retirement_exhaustion_preserves_owner_old_audio_and_reports_actual_late_e
         filled += 1;
         assert!(filled < 2000);
     }
+    assert!(filled > crate::audio_engine::buffer_retirement::RETIRED_AUDIO_BUFFER_QUEUE_CAPACITY);
     let start = path.timeline.output_frame();
     let mut output = [0.0; 20];
     render_scheduled_audio(
@@ -1516,6 +1675,27 @@ fn due_retirement_exhaustion_preserves_owner_old_audio_and_reports_actual_late_e
     assert!(state.scheduler.deferred_due().is_some());
     assert_eq!(snapshot.observation().unwrap().state, "pending");
     assert_eq!(path.voice(0).sync_request.global_revision, Some(1));
+    let ScheduledCommand::AdoptRuntimePolicy(work) =
+        &state.scheduler.deferred_due().unwrap().command
+    else {
+        panic!("the original RuntimePolicy work must remain deferred");
+    };
+    assert!(std::ptr::eq(&**work, snapshot.as_ref()));
+    let attempt = snapshot.observation().unwrap().attempt;
+    let before_retry = path.voice(0).source_playback;
+    let master = path.timeline;
+    let revision = path.source.mixer.global_rate_timing_revision();
+    assert!(path.source.mixer.global_rate_drains_settled());
+    assert!(path.source.consumer.is_empty());
+    if unread_ping {
+        path.source
+            .producer
+            .lock()
+            .unwrap()
+            .push(crate::messages::ControlMessage::Ping())
+            .unwrap();
+        assert_eq!(path.source.mixer.global_rate_timing_revision(), revision);
+    }
     release.release();
     wait_for(|| state.retirement.available_retirement_slots() > 0);
     drain_control_messages(
@@ -1528,28 +1708,54 @@ fn due_retirement_exhaustion_preserves_owner_old_audio_and_reports_actual_late_e
         &mut path.events,
         &mut state.retirement,
     );
-    // Existing deferred-due retry precedes the new drain. It must refuse Busy,
-    // rather than claiming a policy effect before both drains have settled.
-    assert_eq!(
-        snapshot.observation().unwrap().reason,
-        Some(RuntimePolicyError::Busy)
+    assert!(
+        path.source.consumer.is_empty(),
+        "the unread Ping must make queue progress"
     );
+    assert!(state.scheduler.deferred_due().is_none());
+    assert_eq!(snapshot.observation().unwrap().attempt, attempt);
     assert_eq!(
         snapshot.observation().unwrap().execution_frame,
         Some(start + 10)
     );
-    wait_for(|| {
-        request(&path);
-        !path.source.consumer.is_empty()
-    });
-    let before = path.voice(0).source_playback.position();
-    service(&mut path);
+    assert!(path.timeline.matches_clock_epoch(&master));
+    assert_eq!(path.timeline.output_frame(), master.output_frame());
+    assert_eq!(
+        path.voice(0).source_playback.position(),
+        before_retry.position()
+    );
+    if unread_ping {
+        assert_eq!(
+            snapshot.observation().unwrap().reason,
+            Some(RuntimePolicyError::Busy)
+        );
+        assert!(path.voice(0).source_playback.matches_exact(&before_retry));
+        assert_eq!(path.voice(0).sync_request.global_revision, Some(1));
+        wait_for(|| {
+            assert!(Arc::ptr_eq(&snapshot, &request(&path)));
+            !path.source.consumer.is_empty()
+        });
+        service(&mut path);
+        assert_eq!(snapshot.observation().unwrap().attempt, attempt + 1);
+    } else {
+        // Both original exact-revision drains were already complete. Empty-queue
+        // retry applies this original work directly at its actual later E.
+        assert!(snapshot.observation().unwrap().reason.is_none());
+        assert!(Arc::ptr_eq(&snapshot, &request(&path)));
+        assert_eq!(snapshot.observation().unwrap().attempt, attempt);
+    }
     assert_eq!(snapshot.observation().unwrap().state, "applied");
     assert_eq!(
         snapshot.observation().unwrap().execution_frame,
         Some(start + 10)
     );
-    assert_eq!(path.voice(0).source_playback.position(), before);
+    assert_eq!(
+        path.voice(0).source_playback.position(),
+        before_retry.position()
+    );
+    assert_eq!(path.voice(0).sync_request.global_revision, Some(2));
+    assert!(path.timeline.matches_clock_epoch(&master));
+    assert_eq!(path.timeline.output_frame(), master.output_frame());
     drop(callback);
     worker.join_checked().unwrap();
 }
@@ -1591,7 +1797,13 @@ fn runtime_pitch_change_before_claim_refuses_all_copied_lanes() {
     let before = scalar_state(&path);
     crate::audio_engine::mixer::RtMixer::with_runtime_policy_before_claim_for_test(
         move || {
-            let mut rows = vec![PitchPadProjection::default(); NUM_SAMPLES];
+            let mut rows = vec![
+                PitchPadProjection {
+                    sync: true,
+                    ..Default::default()
+                };
+                NUM_SAMPLES
+            ];
             rows[0].key_lock = false;
             rows[1].key_lock = false;
             rows[0].intent = crate::audio_engine::pitch_intent::PitchIntent::new(0, 1).unwrap();
@@ -1917,7 +2129,7 @@ fn real_resident_control_already_published_before_preflight_refuses_entire_scala
 
 #[test]
 fn source_sync_target_current_is_public_during_ordinary_global_rate_glide() {
-    let mut path = prepared();
+    let mut path = prepared_with_bpm_parent(false);
     let raw = path.voice(0).sync_request;
     let (producer, mut consumer) = rtrb::RingBuffer::new(8);
     path.source.engine.test_parameter_producer = Some(Arc::new(std::sync::Mutex::new(producer)));
@@ -1941,7 +2153,7 @@ fn source_sync_target_current_is_public_during_ordinary_global_rate_glide() {
         .unwrap();
     assert!(callback.target_current && !callback.settled);
     let status = path.feedback(0);
-    assert_eq!(status["policy_mode"], "off");
+    assert_eq!(status["policy_mode"], "legacy");
     assert_eq!(status["policy_revision"], 1);
     assert_eq!(status["settled"], false);
     assert_eq!(status["target_current"], true);
@@ -2038,7 +2250,7 @@ fn source_sync_target_current_survives_redundant_unsupported_attempt_on_native_p
     let raw = fixture.voice(0).sync_request;
     assert_eq!(
         (raw.mode, raw.global_revision),
-        (SourceSyncMode::Off, Some(1))
+        (SourceSyncMode::Legacy, Some(1))
     );
     let (producer, mut consumer) = rtrb::RingBuffer::new(8);
     fixture.control.engine.test_parameter_producer =
@@ -2096,7 +2308,7 @@ fn source_sync_target_current_survives_redundant_unsupported_attempt_on_native_p
             .unwrap();
         serde_json::from_str(&json).unwrap()
     });
-    assert_eq!(status["policy_mode"], "off");
+    assert_eq!(status["policy_mode"], "legacy");
     assert_eq!(status["policy_revision"], 1);
     assert_eq!(status["settled"], false);
     assert_eq!(status["adoption"]["state"], "refused");

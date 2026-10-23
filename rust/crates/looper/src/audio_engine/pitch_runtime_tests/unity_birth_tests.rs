@@ -1062,8 +1062,24 @@ fn public_bpm_lock_off_updates_effective_period_without_relabelling_the_applied_
     assert_eq!(applied.effective_speed, 1.8);
     assert!(!fixture.mixer.voices.iter().any(|voice| voice.active));
 
-    fixture.control.engine.set_bpm_lock(false).unwrap();
+    fixture
+        .control
+        .engine
+        .set_bpm_lock_with_binding(false, None)
+        .unwrap();
     fixture.drain();
+    drain_parameter_messages(&mut parameters, &mut fixture.mixer, &mut fixture.transport);
+    fixture.render(0);
+    let (bpm_revision, bpm) = fixture
+        .control
+        .engine
+        .input_runtime_ownership
+        .global_rate_status
+        .read_bpm()
+        .unwrap();
+    assert_eq!(bpm_revision, bpm.revision);
+    assert!(bpm.applied && !bpm.effective && !bpm.requested);
+    assert_eq!(bpm.execution_frame, Some(0));
     let cleared = rate_status(&fixture);
     assert_eq!(cleared.state, "applied", "{cleared:?}");
     assert_eq!(cleared.request_revision, applied.request_revision);
@@ -1077,6 +1093,13 @@ fn public_bpm_lock_off_updates_effective_period_without_relabelling_the_applied_
 
     let transport_period_after_clear = fixture.transport.master_period_seconds();
     fixture.control.engine.set_speed(1.6).unwrap();
+    let queued = rate_status(&fixture);
+    assert!(queued.request_revision > cleared.request_revision);
+    assert_eq!(queued.effect_revision, cleared.effect_revision);
+    assert_eq!(queued.state, "queued");
+    assert_eq!(queued.requested_speed, 1.6);
+    assert_eq!(queued.requested_master_period, None);
+    assert_eq!(queued.effective_master_period, None);
     drain_rate(&mut fixture, &mut parameters);
     let next = rate_status(&fixture);
     assert_eq!(next.state, "applied", "{next:?}");
@@ -1166,6 +1189,24 @@ fn foreign_second_history_lane_refuses_both_unity_voices_before_work_and_both_re
     assert_eq!(rejected.execution_frame, None);
     assert_eq!(fixture.transport.master_period_seconds(), old_period);
     // The unavailable second lane is found before A's epoch or work is changed.
+    assert_eq!(fixture.voice(0).stretch.preparation_epoch(), first_epoch);
+    assert!(fixture.voice(1).stretch.source_lane_busy());
+    assert_eq!(
+        fixture
+            .mixer
+            .voices
+            .iter_mut()
+            .find(|voice| voice.active && voice.sample_id == 1)
+            .unwrap()
+            .stretch
+            .prepared_target_output_frame(),
+        Some(foreign_execution)
+    );
+    fixture.render(0);
+    let terminal = rate_status(&fixture);
+    assert_eq!(terminal.state, "rejected");
+    assert_eq!(terminal.effect_revision, rejected.effect_revision);
+    assert_eq!(terminal.execution_frame, None);
     assert_eq!(fixture.voice(0).stretch.preparation_epoch(), first_epoch);
     for id in [0, 1] {
         assert_eq!(fixture.voice(id).stretch.native_state_address(), native[id]);
@@ -1288,4 +1329,190 @@ fn foreign_second_history_lane_refuses_both_unity_voices_before_work_and_both_re
         assert_eq!(fixture.starts(id), 1);
     }
     assert!(first_birth.effective() && second_birth.effective());
+}
+
+#[test]
+fn qualified_rate_after_actual_history_capture_rejects_replaced_paused_native_anchor_without_tuple_prefix()
+ {
+    use crate::audio_engine::global_rate_status::{RateError, RateState};
+    let (mut fixture, mut parameters) = parameter_fixture();
+    fixture.control.engine.set_speed(2.0).unwrap();
+    drain_rate(&mut fixture, &mut parameters);
+    for id in [0, 1] {
+        fixture.control.engine.set_pad_bpm(id, Some(120.0)).unwrap();
+    }
+    drain_rate(&mut fixture, &mut parameters);
+    // Manual timing edits advance source authority. Publish fresh original
+    // bindings before capturing a new pitch action, retaining the same requests.
+    let mut loaded = vec![false; NUM_SAMPLES];
+    let mut starts = vec![0.0; NUM_SAMPLES];
+    let mut ends = vec![None; NUM_SAMPLES];
+    let mut bindings = vec![None; NUM_SAMPLES];
+    for id in [0, 1] {
+        loaded[id] = true;
+        starts[id] = LOOP_START as f64 / f64::from(RATE);
+        ends[id] = Some(LOOP_END as f64 / f64::from(RATE));
+        bindings[id] = input_runtime_binding::capture(&fixture.control.engine, id).unwrap();
+        assert!(bindings[id].as_ref().unwrap().current());
+    }
+    fixture
+        .control
+        .engine
+        .input_runtime
+        .as_ref()
+        .unwrap()
+        .set_runtime_state_with_pitch(
+            true,
+            loaded,
+            starts,
+            ends,
+            bindings.iter().map(Option::as_ref).collect(),
+            vec![
+                PitchPadProjection {
+                    key_lock: true,
+                    sync: true,
+                    source_root: Some(0),
+                    source_mode: Some(PitchKeyMode::Major),
+                    ..PitchPadProjection::default()
+                };
+                NUM_SAMPLES
+            ],
+        )
+        .unwrap();
+    let anchor = input_runtime_binding::capture(&fixture.control.engine, 1)
+        .unwrap()
+        .unwrap();
+    fixture
+        .control
+        .engine
+        .set_bpm_lock_with_binding(true, Some(&anchor))
+        .unwrap();
+    drain_rate(&mut fixture, &mut parameters);
+    assert_eq!(fixture.transport.master_period_seconds(), Some(0.25));
+    let other = fixture.capture(1, "pitch.extra:7:set_retrigger");
+    fixture.publish(&other);
+    fixture.apply(&other);
+    let unity = public_unity_birth(&mut fixture);
+    fixture.pcm(DRY_FRAMES);
+    fixture.control.engine.pause_sample(1).unwrap();
+    drain_rate(&mut fixture, &mut parameters);
+    let old_anchor = fixture.voice(1);
+    assert!(old_anchor.active && old_anchor.paused);
+    assert_eq!(
+        old_anchor.stretch.adopted_request_id(),
+        Some(other.sequence())
+    );
+    assert!(old_anchor.stretch.has_active_native_ownership());
+    assert!(
+        !old_anchor.stretch.has_retained_source_input(),
+        "ordinary physical birth has no displaced feed timeline"
+    );
+    assert!(
+        old_anchor
+            .stretch
+            .owns_pitch_contract(PitchIntent::new(0, 7).unwrap(), true)
+    );
+    let native = old_anchor.stretch.native_state_address();
+    assert_ne!(native, 0);
+    let request = old_anchor.stretch.adopted_request_id();
+    let epoch = old_anchor.stretch.source_epoch_owner().clone();
+    let epoch_value = epoch.load(Ordering::Acquire);
+    let fifo = old_anchor.stretch.pending_fifo_frames();
+    assert_ne!(fifo, (0, 0));
+    let playback = old_anchor.source_playback;
+    let history = old_anchor.stretch.productive_history().unwrap();
+    let dsp = fixture.mixer.dsp_source_history_for_test(1).unwrap();
+    assert!(history.fed_output_frames > 0 && dsp.fed_output_frames > 0);
+    let tuple = fixture
+        .control
+        .engine
+        .input_runtime_ownership
+        .global_rate_status
+        .read()
+        .unwrap()
+        .effect
+        .effective;
+    let timeline = fixture.transport;
+    let anchor = input_runtime_binding::capture(&fixture.control.engine, 1)
+        .unwrap()
+        .unwrap();
+    let key = anchor.binding.placement.unwrap().content_key().unwrap();
+    assert!(anchor.current() && anchor.available());
+    fixture
+        .control
+        .engine
+        .set_speed_and_master_period_with_binding(1.8, 0.5 / 1.8, Some(&anchor))
+        .unwrap();
+    // Normal command and parameter drains really capture the endangered dry-unity
+    // history before the original paused productive anchor is replaced.
+    drain_rate(&mut fixture, &mut parameters);
+    let execution = fixture
+        .mixer
+        .next_global_rate_frame()
+        .expect("actual RateCapture required before source replacement");
+    assert_eq!(execution, timeline.output_frame() + HISTORY_FRAMES as u64);
+    assert!(execution > fixture.transport.output_frame());
+    let captured = fixture
+        .control
+        .engine
+        .input_runtime_ownership
+        .global_rate_status
+        .read()
+        .unwrap();
+    assert_eq!(captured.effect.state, RateState::Preparing);
+    assert_eq!(captured.effect.execution_frame, Some(execution));
+    assert_eq!(captured.effect.effective, tuple);
+    assert!(fixture.transport.matches_clock_epoch(&timeline));
+    wait_source_target(&mut fixture, 0, execution);
+    assert_eq!(fixture.voice(1).stretch.native_state_address(), native);
+    assert_eq!(epoch.load(Ordering::Acquire), epoch_value);
+    assert_eq!(fixture.voice(1).stretch.pending_fifo_frames(), fifo);
+    publish_tone(&fixture.control, 1, tone(411.0), true);
+    let replacement = input_runtime_binding::capture(&fixture.control.engine, 1)
+        .unwrap()
+        .unwrap();
+    assert_ne!(
+        replacement.binding.placement.unwrap().content_key(),
+        Some(key)
+    );
+    assert!(!anchor.current());
+    assert!(fixture.transport.output_frame() < execution);
+    drain_rate(&mut fixture, &mut parameters);
+    let rejected = fixture
+        .control
+        .engine
+        .input_runtime_ownership
+        .global_rate_status
+        .read()
+        .unwrap();
+    assert_eq!(rejected.effect.state, RateState::Rejected);
+    assert_eq!(rejected.effect.error, RateError::SourceChanged);
+    assert_eq!(rejected.effect.revision, captured.effect.revision);
+    assert_eq!(rejected.effect.execution_frame, Some(execution));
+    assert_eq!(rejected.effect.effective, tuple);
+    assert!(fixture.mixer.next_global_rate_frame().is_none());
+    assert!(fixture.transport.matches_clock_epoch(&timeline));
+    let old_anchor = fixture.voice(1);
+    assert!(
+        old_anchor.active && old_anchor.paused && old_anchor.stretch.has_active_native_ownership()
+    );
+    assert!(!old_anchor.stretch.has_retained_source_input());
+    assert_eq!(old_anchor.stretch.native_state_address(), native);
+    assert_eq!(old_anchor.stretch.adopted_request_id(), request);
+    assert_eq!(epoch.load(Ordering::Acquire), epoch_value);
+    assert_eq!(old_anchor.stretch.pending_fifo_frames(), fifo);
+    assert!(old_anchor.source_playback.matches_exact(&playback));
+    let after = old_anchor.stretch.productive_history().unwrap();
+    assert_eq!(after.binding, history.binding);
+    assert_eq!(after.next_position, history.next_position);
+    assert_eq!(after.domain, history.domain);
+    assert_eq!(after.fed_output_frames, history.fed_output_frames);
+    let after = fixture.mixer.dsp_source_history_for_test(1).unwrap();
+    assert_eq!(after.binding, dsp.binding);
+    assert_eq!(after.next_position, dsp.next_position);
+    assert_eq!(after.domain, dsp.domain);
+    assert_eq!(after.fed_output_frames, dsp.fed_output_frames);
+    assert!(other.effective() && unity.effective());
+    assert_eq!(fixture.starts(0), 1);
+    assert_eq!(fixture.starts(1), 1);
 }

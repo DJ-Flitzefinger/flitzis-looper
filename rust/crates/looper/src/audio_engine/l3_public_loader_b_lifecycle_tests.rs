@@ -1050,6 +1050,7 @@ project.pad_loop_auto[0] = False
 project.pad_loop_start_s[0] = 17 / fixture['rate']
 project.pad_loop_end_s[0] = 1517 / fixture['rate']
 transport = TransportController(project, session, BTransportAudio(), persistence.mark_dirty)
+transport.playback.set_pause_observation_fence(feedback_route._ordinary_observation_fenced)
 captured_start_calls, captured_dependency_calls = [], []
 ordinary_timestamp = captured_audio.capture_input_timestamp_ns()
 transport.playback.trigger_pad_keep_others(0, received_at_ns=ordinary_timestamp)

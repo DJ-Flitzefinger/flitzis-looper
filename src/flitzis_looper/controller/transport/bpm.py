@@ -185,55 +185,16 @@ class BpmController:
         publish_master: bool = True,
     ) -> None:
         """Publish master timing using one resolved anchor snapshot."""
-        if not self._project.bpm_lock:
-            self._session.master_bpm = None
-            self._session.master_period_seconds = None
-            self._session.bpm_lock_anchor_revision = None
+        if not publish_master or not self._project.resolve_bpm_lock():
             return
-
         anchor_pad_id = self._session.bpm_lock_anchor_pad_id
         if isinstance(timing, UnresolvedTiming):
             timing = self.current_timing(anchor_pad_id) if anchor_pad_id is not None else None
-        if (
-            anchor_pad_id is not None
-            and timing is None
-            and self.awaiting_automatic_timing(anchor_pad_id)
-        ):
-            # No acknowledgement is not permission to replace accepted master timing.
+        if timing is None:
             return
-        anchor_bpm = normalize_bpm(
-            self._legacy_bpm(anchor_pad_id)
-            if anchor_pad_id is not None and (timing is None or timing.accepted_revision is None)
-            else timing.bpm
-            if timing is not None
-            else self._session.bpm_lock_anchor_bpm
-        )
-        if anchor_bpm is None:
-            self._session.master_bpm = None
-            self._session.master_period_seconds = None
-            self._session.bpm_lock_anchor_revision = None
-            return
-
-        period = timing.period_seconds if timing is not None else 60.0 / anchor_bpm
-        master_period = period / self._project.speed
-        master_bpm = (
-            60.0 / master_period
-            if timing is not None and timing.accepted_revision is not None
-            else anchor_bpm * self._project.speed
-        )
-        if timing is not None and timing.accepted_revision is not None:
-            if publish_master:
-                self._audio.set_master_period(master_period)
-        else:
-            if publish_master:
-                self._audio.set_master_bpm(master_bpm)
-            master_period = 60.0 / master_bpm
-        self._session.master_bpm = master_bpm
-        self._session.master_period_seconds = master_period
-        self._session.bpm_lock_anchor_bpm = anchor_bpm
-        self._session.bpm_lock_anchor_revision = timing.accepted_revision if timing else None
-        if anchor_pad_id is not None:
-            self._audio.bootstrap_transport_from_pad(anchor_pad_id)
+        # Accepted automatic timing retains its existing qualified refresh owner.
+        # Manual/Legacy reconciliation must never retry a refused speed request.
+        self._transport.global_params._publish_manual_bpm_master(timing=timing)
 
     def on_pad_bpm_changed(
         self,
@@ -309,7 +270,6 @@ class BpmController:
         if self._session.bpm_lock_anchor_pad_id != sample_id:
             return
 
-        self._session.bpm_lock_anchor_bpm = bpm
         self.recompute_master_bpm(timing=timing)
 
 

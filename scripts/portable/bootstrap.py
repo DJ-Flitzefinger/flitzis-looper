@@ -221,10 +221,32 @@ def check_timing_completion_api(native_module: object) -> None:
 
 
 def check_global_rate_api(engine_type: object) -> None:
-    """Require callback rate observation before activating the global rate controls."""
+    """Require qualified parent control and callback receipts without invoking Native."""
     assert callable(getattr(engine_type, "global_rate_status", None)), (
         "Native rate confirmation API missing: AudioEngine.global_rate_status"
     )
+    status = inspect.getattr_static(engine_type, "bpm_lock_status", None)
+    assert callable(status), "Native BPM Lock API missing: AudioEngine.bpm_lock_status"
+    assert tuple(inspect.signature(status).parameters) == ("self",), (
+        "Native BPM Lock API invalid signature: AudioEngine.bpm_lock_status"
+    )
+    for method, arguments in (
+        ("set_bpm_lock", ("self", "enabled", "anchor_binding")),
+        ("set_master_period", ("self", "period_seconds", "anchor_binding")),
+        ("set_speed_and_master_period", ("self", "speed", "period_seconds", "anchor_binding")),
+    ):
+        setter = inspect.getattr_static(engine_type, method, None)
+        assert callable(setter), f"Native BPM Lock API missing: AudioEngine.{method}"
+        parameters = inspect.signature(setter).parameters
+        error = f"Native BPM Lock API requires {method} optional keyword-only anchor_binding=None"
+        assert tuple(parameters) == arguments, error
+        anchor = parameters["anchor_binding"]
+        assert anchor.kind is inspect.Parameter.KEYWORD_ONLY, error
+        assert anchor.default is None, error
+    provenance_version = getattr(engine_type, "GLOBAL_RATE_PROVENANCE_API_VERSION", None)
+    provenance_error = "Native master provenance API requires GLOBAL_RATE_PROVENANCE_API_VERSION=1"
+    assert type(provenance_version) is int, provenance_error
+    assert provenance_version == 1, provenance_error
 
 
 def check_ordinary_transport_api(native_module: object) -> None:

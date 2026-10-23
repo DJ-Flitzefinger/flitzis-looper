@@ -6,12 +6,16 @@ from unittest.mock import Mock, call
 
 import pytest
 
-from flitzis_looper.controller.current_timing import UNRESOLVED_TIMING, CurrentPadTiming
+from flitzis_looper.controller.current_timing import UNRESOLVED_TIMING
 from flitzis_looper.controller.pad_arrangement import PadArrangementController
+from flitzis_looper.controller.persistence import ProjectPersistence
 from flitzis_looper.copy_snapshot import capture_copy_snapshot
 from flitzis_looper.models import PadContentIdentity, StemCacheEntry
 from flitzis_looper.stem_intent import PadStemIntent
 from flitzis_looper.stem_pair_selection import StemPairSelection
+from tests.flitzis_looper.controller.transport.test_bpm_publication_coherence import (
+    _bpm_publication,
+)
 
 if TYPE_CHECKING:
     from collections.abc import Callable
@@ -232,6 +236,7 @@ def test_bpm_lock_rejects_reserved_selected_anchor_before_any_state_change(
     if target_projected:
         _bind_copied_pair(controller)
     controller.project.selected_pad = TARGET
+    controller.project.multi_loop = True
     controller.project.bpm_lock = False
     controller.session.bpm_lock_anchor_pad_id = SOURCE
     controller.session.bpm_lock_anchor_bpm = 123.0
@@ -260,29 +265,25 @@ def test_speed_rejects_reserved_active_bpm_anchor_before_publication(
     *,
     provided_timing: bool,
 ) -> None:
+    _bind_copied_pair(controller)
+    controller.project.manual_bpm[TARGET] = 120.0
+    publication = _bpm_publication(controller, audio_engine_mock, pad_id=TARGET)
+    controller.transport.global_params.set_bpm_lock(enabled=True)
+    publication.apply(enabled=True, period=0.5)
+    captured_timing = controller.transport.bpm.current_timing(TARGET)
+    assert captured_timing is not None
+    assert controller.transport.global_params._bpm_lock_master_ready()
     monkeypatch.setattr(
         PadArrangementController, "fenced_sample_ids", property(lambda _self: frozenset({TARGET}))
     )
-    _bind_copied_pair(controller)
-    controller.project.bpm_lock = True
     controller.project.selected_pad = SOURCE
-    controller.session.bpm_lock_anchor_pad_id = TARGET
     current_timing = Mock()
     monkeypatch.setattr(controller.transport.bpm, "current_timing", current_timing)
     before = controller.project.model_dump()
     session = controller.session.model_dump()
     revision = controller.persistence.revision
     audio_engine_mock.reset_mock()
-    timing = (
-        CurrentPadTiming(
-            period_seconds=0.5,
-            origin_seconds=0.125,
-            sample_rate_hz=48_000,
-            accepted_revision="scripted-own-target",
-        )
-        if provided_timing
-        else UNRESOLVED_TIMING
-    )
+    timing = captured_timing if provided_timing else UNRESOLVED_TIMING
 
     with pytest.raises(ValueError, match="Complete Copy target receipt is pending"):
         controller.transport.global_params.set_speed(1.25, anchor_timing=timing)
@@ -304,34 +305,78 @@ def test_global_speed_and_bpm_anchor_on_other_pad_remain_editable(
     controller.project.sample_paths[SOURCE] = "samples/source.wav"
     controller.project.manual_bpm[SOURCE] = 120.0
     controller.project.bpm_lock = False
+    publication = _bpm_publication(controller, audio_engine_mock, pad_id=SOURCE)
     audio_engine_mock.reset_mock()
 
-    controller.transport.global_params.set_bpm_lock(enabled=True)
-    controller.transport.global_params.set_speed(1.25)
+    parameters = controller.transport.global_params
+    parameters.set_bpm_lock(enabled=True)
+    with pytest.raises(RuntimeError, match="not acknowledged"):
+        parameters.set_speed(1.25)
+    assert controller.project.speed == 1.0
+    audio_engine_mock.set_speed_and_master_period.assert_not_called()
+    publication.apply(enabled=True, period=0.5)
+    parameters.set_speed(1.25)
 
     assert controller.project.bpm_lock is True
     assert controller.session.bpm_lock_anchor_pad_id == SOURCE
     assert controller.project.speed == 1.25
-    audio_engine_mock.set_bpm_lock.assert_called_once_with(enabled=True)
-    audio_engine_mock.set_speed.assert_called_once_with(1.25)
+    audio_engine_mock.set_bpm_lock.assert_called_once()
+    binding = audio_engine_mock.set_bpm_lock.call_args.kwargs["anchor_binding"]
+    assert binding.metadata()["pad_id"] == SOURCE
+    assert audio_engine_mock.set_speed_and_master_period.call_args.args == (1.25, 0.4)
+    speed_binding = audio_engine_mock.set_speed_and_master_period.call_args.kwargs["anchor_binding"]
+    assert speed_binding.metadata()["pad_id"] == SOURCE
+    audio_engine_mock.set_speed.assert_not_called()
+    audio_engine_mock.set_master_bpm.assert_not_called()
+    audio_engine_mock.bootstrap_transport_from_pad.assert_not_called()
 
 
 def test_disabling_bpm_lock_releases_reserved_anchor_without_target_edit(
     controller: AppController, audio_engine_mock: Mock, monkeypatch: pytest.MonkeyPatch
 ) -> None:
+    _bind_copied_pair(controller)
+    controller.project.manual_bpm[TARGET] = 120.0
+    publication = _bpm_publication(controller, audio_engine_mock, pad_id=TARGET)
+    parameters = controller.transport.global_params
+    parameters.set_bpm_lock(enabled=True)
+    publication.apply(enabled=True, period=0.5)
     monkeypatch.setattr(
         PadArrangementController, "fenced_sample_ids", property(lambda _self: frozenset({TARGET}))
     )
-    controller.project.bpm_lock = True
-    controller.project.selected_pad = TARGET
-    controller.session.bpm_lock_anchor_pad_id = TARGET
+    controller._sync_arrangement_observers()
     audio_engine_mock.reset_mock()
 
-    controller.transport.global_params.set_bpm_lock(enabled=False)
+    parameters.set_bpm_lock(enabled=False)
 
     assert controller.project.bpm_lock is False
-    assert controller.session.bpm_lock_anchor_pad_id is None
+    assert controller.session.bpm_lock_anchor_pad_id == TARGET
+    assert controller.session.master_period_seconds == 0.5
+    assert parameters._bpm_lock_application_status().pending
     audio_engine_mock.set_bpm_lock.assert_called_once_with(enabled=False)
+    assert controller.persistence.flush_if_dirty()
+    saved = ProjectPersistence.from_config_path(controller.persistence.config_path).project
+    assert saved.bpm_lock is False
+    foreign = dict(publication.receipt)
+    foreign.update(
+        request_revision=3,
+        effect_revision=3,
+        state="applied",
+        effective_enabled=False,
+        execution_frame=128,
+    )
+    audio_engine_mock.bpm_lock_status.side_effect = foreign.copy
+    parameters.poll_bpm_lock_application()
+    assert controller.session.bpm_lock_anchor_pad_id == TARGET
+    assert controller.session.master_period_seconds == 0.5
+    audio_engine_mock.bpm_lock_status.side_effect = publication.receipt.copy
+    publication.apply(enabled=False, period=None)
+    assert controller.session.bpm_lock_anchor_pad_id is None
+    assert controller.session.master_period_seconds is None
+    audio_engine_mock.set_bpm_lock.assert_called_once_with(enabled=False)
+    audio_engine_mock.set_pad_bpm.assert_not_called()
+    audio_engine_mock.set_pad_timing_metadata.assert_not_called()
+    audio_engine_mock.set_pad_loop_region.assert_not_called()
+    audio_engine_mock.capture_pad_start.assert_not_called()
     audio_engine_mock.bootstrap_transport_from_pad.assert_not_called()
 
 

@@ -384,11 +384,22 @@ immediate change SHALL NOT silently discard the command.
 - **AND** KEY LOCK OFF SHALL confirm V2's own dry output; KEY LOCK ON SHALL preserve actual raw Native/FIFO chronology and require V2's own later complete 4096-frame preparation and ready Wet output
 - **AND** current registration, accepted residency and audible effectiveness SHALL remain separate, and earlier FullMix or V1 acknowledgements SHALL NOT confirm V2
 
+#### Scenario: Admitted timing intent supersedes only an original replacement operation
+
+- **GIVEN** an original unclaimed replacement operation carries its own prepared candidate and captured global timing intent
+- **WHEN** a newer coupled rate intent is successfully admitted before that operation claims adoption
+- **THEN** the original candidate operation SHALL reject at its final Adopt claim without changing the accepted V2 registration, long-lived selection or productive V1 ownership
+- **AND** Capture and worker delivery SHALL retain the original operation witness even if the worker completes after the newer admission; they SHALL NOT renew it from current timing
+- **AND** the existing global claim SHALL precede the existing content claim and revalidate the witness; claim contention SHALL retain the same original pending payload without an effect or final-owner destruction
+- **AND** a failed new admission SHALL NOT revoke the old operation; an already claimed operation's historical receipt SHALL remain valid after a later admitted intent
+- **AND** only an explicit fresh ALL gesture SHALL prepare a new operation against current timing while reusing the same accepted V2 registration
+
 #### Scenario: Public live BPM invalidates an already queued replacement Adopt
 
 - **GIVEN** productive finite NormalLoop V1 with KEY LOCK ON, accepted Automatic timing and V2's own already captured and queued Adopt
-- **WHEN** actual retirement pressure retains that Control message, the public transport controller's coupled BPM parameter command applies at the continuously advancing callback time, and a later callback dispatches the unchanged Adopt
-- **THEN** the stale unclaimed V2 transaction SHALL reject while V1's readers, voice, fractional source phase, Native/FIFO and uninterrupted filter history remain usable under the new rate trajectory
+- **WHEN** actual retirement pressure retains that Control message and the public transport controller admits a newer coupled BPM intent at the continuously advancing callback time
+- **THEN** the previously effective rate and master timing SHALL remain in force while pending; after retirement capacity returns, the unchanged superseded V2 Adopt SHALL reject before completed command and parameter drains permit the qualified rate effect
+- **AND** V1's readers, voice, fractional source phase, Native/FIFO and uninterrupted filter history SHALL remain usable under the later actual new rate trajectory
 - **AND** display admission SHALL remain distinct from actual timing authority; the musical period and source timing acknowledgement SHALL remain current, and the other active pad SHALL retain its own physical loop trajectory under the global rate change
 - **AND** receipt polling SHALL report the failed own attempt without an implicit retry or a native-preparation-failed acknowledgement
 - **AND** an explicit identical ALL gesture SHALL obtain a fresh own Capture/worker/Adopt receipt for the same accepted V2 registration and prove its source-frame handover and later own prepared wet effectiveness
@@ -396,8 +407,9 @@ immediate change SHALL NOT silently discard the command.
 #### Scenario: Public live BPM rejection and retry with KEY LOCK OFF
 
 - **GIVEN** productive finite NormalLoop V1 with KEY LOCK OFF, accepted Automatic timing and V2's own already captured and queued Adopt
-- **WHEN** actual retirement pressure retains that Control message, the public transport controller's coupled BPM parameter applies at continuously advancing callback time, and a later callback dispatches the unchanged Adopt
-- **THEN** the stale unclaimed V2 attempt SHALL reject with its own error while V1's current readers, voice, fractional musical phase, Native/FIFO owners and uninterrupted dry filter output remain usable under the new rate trajectory
+- **WHEN** actual retirement pressure retains that Control message and the public transport controller admits a newer coupled BPM intent at continuously advancing callback time
+- **THEN** the previously effective rate and master timing SHALL remain in force while pending; after retirement capacity returns, the unchanged superseded V2 Adopt SHALL reject with its own error before completed command and parameter drains permit the qualified rate effect
+- **AND** V1's current readers, voice, fractional musical phase, Native/FIFO owners and uninterrupted dry filter output SHALL remain usable under the later actual new rate trajectory
 - **AND** independent complete PCM SHALL verify actual Varispeed interpolation across active-output-frame smoothing and irregular callbacks; the other active pad SHALL retain its independent physical trajectory under the global speed change
 - **AND** repeated receipt polling SHALL retain the same accepted V2 registration and failed own attempt without implicitly retrying or reporting native-preparation-failed
 - **AND** an explicit identical ALL gesture SHALL obtain a fresh own Capture/worker/Adopt receipt, consume the actual 128-source-frame handover and acknowledge its own dry effective output without claiming Native wet processing or preparation
@@ -405,8 +417,9 @@ immediate change SHALL NOT silently discard the command.
 #### Scenario: Public live BPM changes while productive V1 is already paused
 
 - **GIVEN** productive finite NormalLoop V1 with accepted Automatic timing and KEY LOCK OFF or ON is publicly paused before V2's own Capture and queued Adopt
-- **WHEN** retirement pressure retains that unchanged Adopt, the public coupled BPM parameter applies, and actual paused callbacks advance transport time before the old Adopt is dispatched
-- **THEN** the stale unclaimed V2 attempt SHALL reject under its own receipt while the same V1 readers, source fraction, voice, Native/FIFO, filter history and handover remain frozen; paused callbacks SHALL consume no source or report new effective output
+- **WHEN** retirement pressure retains that unchanged Adopt, a newer public coupled BPM intent is admitted, and actual paused callbacks advance transport time before the old Adopt is dispatched
+- **THEN** actual master timing SHALL remain unchanged while pending; after retirement capacity returns, the unchanged superseded V2 Adopt SHALL reject before completed command and parameter drains permit the qualified rate effect
+- **AND** the same V1 readers, source fraction, voice, Native/FIFO, filter history and handover SHALL remain frozen; paused callbacks SHALL consume no source or report new effective output
 - **AND** timing acknowledgement SHALL remain authoritative independently of display intent, and the new applied source-rate glide SHALL begin only on resumed source consumption rather than silent output time
 - **AND** public Resume SHALL retain the same V1 voice and independent other-pad physical trajectory; complete-PCM interpolation and uninterrupted dry or actual Native/FIFO/filter output SHALL verify all smoothing steps across irregular callbacks
 - **AND** polling SHALL preserve the failed own attempt without an implicit retry or native-preparation-failed acknowledgement; an explicit identical ALL gesture after Resume SHALL obtain a fresh own Capture/worker/Adopt receipt and prove the consumed-source handover and its own dry or later prepared wet effectiveness before its observed effect clears the error
@@ -843,16 +856,31 @@ Original FullMix/source PCM SHALL remain usable after stem deletion.
 - **AND** this retained-reader proof SHALL NOT authorize a current-bank candidate to borrow A's frozen voice or substitute native restore for public Loader assignment replacement
 
 #### Scenario: Frozen outgoing completion keeps current stems live through later retained-voice preparation
-- **GIVEN** retained source A owns claimed V2, outgoing V1 and its used V1 Native/history under distinct actual bank B, while its candidate receipt is obsolete
-- **WHEN** the retained voice is publicly paused and resumed without a new source assignment
-- **THEN** paused output SHALL preserve both exact frozen generations, source phase, occupied transition and Native/FIFO/history, and own Resume SHALL continue their consumed-source chronology
+- **GIVEN** current source A owns claimed V2, outgoing V1 and its used V1 Native/history during an unfinished consumed-source handover
+- **WHEN** A is publicly paused and resumed while A still owns the current content lifetime
+- **THEN** the original admissions and their own callback observations SHALL confirm Pause and Resume, paused output SHALL preserve both exact generations, source phase, occupied transition and Native/FIFO/history, and Resume SHALL continue their consumed-source chronology
+- **WHEN** an actual semantically distinct bank B is subsequently restored and A remains a retained frozen reader with an obsolete candidate receipt
+- **THEN** A SHALL retain both exact frozen generations and its uninterrupted resumed source, Native/FIFO and filter history independently of B
+- **AND** a new public current-B Pause or Resume SHALL refuse an effect on the old-lifetime A voice without changing A's source, pause state, transition or reader owners, and SHALL NOT report A as current-B ordinary pause authority
+- **AND** a same-digest window refresh, a synthetic pause flag or an unqualified slot command SHALL NOT substitute for this distinct-B and source-owned transport proof
 - **WHEN** that frozen handover finishes while callback retirement capacity is exhausted
 - **THEN** outgoing V1 SHALL remain owned and immutable until capacity returns and the actual audio worker consumes its outgoing retirement; used V1 Native/history SHALL continue protecting its files afterward
-- **WHEN** the retained A voice's own later source-bound Native preparation covers the required complete history after Resume and handover, and is actually adopted
+- **WHEN** the retained A voice's own later source-bound Native preparation covers the required complete history after its earlier own Resume and the frozen handover, and is actually adopted
 - **THEN** the retained-voice authority SHALL bind that preparation to A's source, voice and current frozen V2 independently of B's bank; it SHALL NOT rehabilitate the obsolete candidate receipt
 - **AND** only expiration of every V1 complete identity and component PCM owner SHALL permit its exact three-area cleanup while A/V2 remains productive with continuous source, Native/FIFO and filter output
 - **WHEN** the later own public V2 Unload reports its own callback `SampleStopped` acknowledgement
 - **THEN** actual remaining frozen, Native/history and complete-reader release SHALL precede V2 identity/component expiration and its exact three-area cleanup, preserving both originals and unrelated playing pads
+
+#### Scenario: A publicly paused old source remains protected under distinct bank B
+- **GIVEN** current A owns claimed V2, outgoing V1 and an unfinished handover, and its own public Pause has an actual matching Applied observation
+- **WHEN** semantically different bank B is restored while A remains paused
+- **THEN** A SHALL retain its original source/content key and both frozen generations independently of B's new lifetime
+- **AND** new current-B Resume SHALL refuse an effect on A without claiming A as current-B ordinary pause authority
+- **AND** silent callbacks SHALL consume no A source, handover or Native/filter history and SHALL preserve its exact phase, Native/FIFO, reader owners and all protected generation files
+- **WHEN** own public Unload is consumed and reports its own callback acknowledgement
+- **THEN** actual FIFO retirement and every final frozen, Native/history and complete-reader release SHALL precede both generations' identity/component expiration and exact three-area cleanup
+- **AND** the independent peer's own transport and both source originals SHALL remain usable and protected
+- **AND** this paused-reader proof SHALL supplement, not replace, the productive distinct-B handover and later RetainedVoice preparation proof
 
 #### Scenario: Cleanup races a new generation or fails sharing
 - **WHEN** cleanup encounters a new generation, unknown file, external path, reparse point or sharing denial

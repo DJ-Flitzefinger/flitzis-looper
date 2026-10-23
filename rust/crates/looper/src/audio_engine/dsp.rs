@@ -303,7 +303,48 @@ pub(crate) struct PerPadDspChain {
     input_observed_through: Option<u64>,
 }
 
+#[cfg(test)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) struct DspControlProvenanceForTest {
+    pub(crate) input_revision: u64,
+    pub(crate) stable_input: Option<(crate::audio_engine::content_placement::ContentKey, u64, u32)>,
+    pub(crate) input_observed_through: Option<u64>,
+}
+
+#[cfg(test)]
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct DspStateForTest {
+    pub(crate) signal_image: String,
+    pub(crate) control: DspControlProvenanceForTest,
+}
+
 impl PerPadDspChain {
+    #[cfg(test)]
+    pub(crate) fn state_for_test(&self) -> DspStateForTest {
+        DspStateForTest {
+            // Capture every signal field independently of callback control
+            // observation. This includes all parameter ramps, coefficients,
+            // channel filter storage, gains and productive source history.
+            signal_image: format!(
+                "{:?}",
+                (
+                    self.pad_id,
+                    self.channels,
+                    &self.parameters,
+                    &self.isolator_node,
+                    self.source_history
+                )
+            ),
+            control: DspControlProvenanceForTest {
+                input_revision: self.input_revision,
+                stable_input: self
+                    .stable_input
+                    .map(|(key, since, gain)| (key, since, gain.to_bits())),
+                input_observed_through: self.input_observed_through,
+            },
+        }
+    }
+
     pub(crate) fn invalidate_input_intent(&mut self) {
         self.input_revision = self.input_revision.saturating_add(1);
         self.stable_input = None;

@@ -46,7 +46,7 @@ impl Default for PitchPadProjection {
             intent: PitchIntent::default(),
             key_lock: true,
             quantize_step_64ths: None,
-            sync: true,
+            sync: false,
             request_sequence: 0,
         }
     }
@@ -862,6 +862,7 @@ impl InputRuntime {
 
     /// Pitch intent does not advance the unrelated runtime/source revision. Every older
     /// admitted action owns its frozen tuple. A full source/loop publication still fences.
+    #[cfg(test)]
     pub(crate) fn set_pitch_runtime_state(
         &self,
         projections: Vec<PitchPadProjection>,
@@ -887,6 +888,10 @@ impl InputRuntime {
                 pitch_shadow.anchor_row(row);
             }
             changed |= before != (row.pitch, row.latest_request_sequence, row.pitch_anchor);
+        }
+        let multi_loop = state.multi_loop;
+        for row in &mut state.pads {
+            row.source_map.remask_parents(multi_loop, row.pitch.sync);
         }
         if changed {
             self.ownership.publish_runtime_policy_revision();

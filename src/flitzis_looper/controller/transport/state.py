@@ -1,6 +1,5 @@
 from typing import TYPE_CHECKING
 
-from flitzis_looper.controller.validation import normalize_bpm
 from flitzis_looper.models import ProjectState
 
 if TYPE_CHECKING:
@@ -43,9 +42,6 @@ class ApplyProjectState:
             self._audio.set_speed(self._project.speed)
 
         self._apply_key_lock_settings(defaults)
-
-        if self._project.bpm_lock != defaults.bpm_lock:
-            self._audio.set_bpm_lock(enabled=self._project.bpm_lock)
 
         if self._project.trigger_quantization_enabled != defaults.trigger_quantization_enabled:
             mode = (
@@ -127,16 +123,7 @@ class ApplyProjectState:
             self._bpm.on_pad_bpm_changed(sample_id)
 
     def _apply_bpm_lock_settings(self) -> None:
-        if self._project.bpm_lock and (
-            self._restored_sample_ids is None
-            or self._project.selected_pad in self._restored_sample_ids
-        ):
-            anchor_pad_id = self._project.selected_pad
-            anchor_bpm = normalize_bpm(self._bpm.effective_bpm(anchor_pad_id))
-            self._session.bpm_lock_anchor_pad_id = anchor_pad_id
-            self._session.bpm_lock_anchor_bpm = anchor_bpm
-        else:
-            self._session.bpm_lock_anchor_pad_id = None
-            self._session.bpm_lock_anchor_bpm = None
-
-        self._bpm.recompute_master_bpm()
+        self._global_modes._begin_bpm_lock_application(
+            capture_anchor=self._project.resolve_bpm_lock()
+        )
+        self._global_modes.poll_bpm_lock_application()

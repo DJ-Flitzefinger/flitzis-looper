@@ -4,7 +4,7 @@ import struct
 from concurrent.futures import Future
 from threading import Event
 from typing import TYPE_CHECKING, cast
-from unittest.mock import Mock, patch
+from unittest.mock import DEFAULT, Mock, patch
 
 import pytest
 
@@ -14,13 +14,19 @@ from flitzis_looper.controller.accepted_publication import (
     ExplicitTimingAssessment,
     validate_constant_timing_pcm_limit,
 )
-from flitzis_looper.models import BeatGrid, SampleAnalysis
+from flitzis_looper.models import BeatGrid, PadContentIdentity, SampleAnalysis
 from flitzis_looper.pair_snapshot import capture_pair_snapshot
 from tests.flitzis_looper.conftest import FakeInputRuntimePadBinding, current_timing_metadata
 from tests.flitzis_looper.controller.test_pair_control_mirror import _bundle
+from tests.flitzis_looper.controller.test_timing_hierarchy import (
+    BPM_REFERENCE_SOURCE_IDENTITY,
+    _acknowledged_bpm_reference,
+    _bind_fixture_source_identity,
+    _master_provenance,
+)
 
 if TYPE_CHECKING:
-    from collections.abc import Mapping
+    from collections.abc import Callable, Mapping
     from typing import Literal
 
     from flitzis_looper.controller import AppController
@@ -76,6 +82,7 @@ class _RefreshTicket:
         self.status = status
         self.current = current
         self.marker_pending = False
+        self.on_current: Callable[[], None] | None = None
 
     def placement_pending(self) -> bool:
         return self.marker_pending
@@ -84,7 +91,11 @@ class _RefreshTicket:
         return self.status
 
     def is_current(self) -> bool:
-        return self.status == "accepted" and self.current
+        current = self.status == "accepted" and self.current
+        if current and self.on_current is not None:
+            self.on_current()
+            self.on_current = None
+        return current
 
 
 @pytest.fixture
@@ -101,6 +112,7 @@ def automatic_pad(controller: AppController, audio_engine_mock: Mock) -> dict[st
     project.pad_loop_start_s[0] = 10.000001
     project.pad_grid_offset_samples[0] = 200_000
     project.bpm_lock = True
+    project.multi_loop = True
     project.speed = 1.25
     controller.session.bpm_lock_anchor_pad_id = 0
     controller.session.master_period_seconds = 0.7
@@ -109,9 +121,54 @@ def automatic_pad(controller: AppController, audio_engine_mock: Mock) -> dict[st
     metadata = current_timing_metadata(period=PERIOD)
     audio_engine_mock.current_constant_timing.return_value = metadata
     audio_engine_mock.pad_timing_intent.return_value = "automatic"
+    _bind_fixture_source_identity(audio_engine_mock, pad_id=0)
     audio_engine_mock.refresh_current_constant_timing = Mock(return_value=_RefreshTicket())
+    rate_feedback: dict[str, object] = {
+        "request_revision": 0,
+        "effect_revision": 0,
+        "state": "applied",
+        "requested_speed": 1.25,
+        "requested_master_period": 0.7,
+        "effective_speed": 1.25,
+        "effective_master_period": 0.7,
+        "execution_frame": 0,
+        "error": None,
+        "master_provenance": _master_provenance(accepted_revision="previous-effective"),
+    }
+    audio_engine_mock.global_rate_status = Mock(return_value=rate_feedback)
+
+    def capture_refresh(
+        _binding: object, _start: float, _end: float | None, master: float | None
+    ) -> object:
+        ticket = audio_engine_mock.refresh_current_constant_timing.return_value
+        if isinstance(ticket, _RefreshTicket):
+
+            def accepted_effect() -> None:
+                if master is not None:
+                    rate_feedback["effective_master_period"] = master
+                    assert isinstance(_binding, FakeInputRuntimePadBinding)
+                    binding_metadata = _binding.metadata()
+                    accepted = binding_metadata["accepted_timing"]
+                    assert isinstance(accepted, dict)
+                    rate_feedback["master_provenance"] = _master_provenance(
+                        cast("str", binding_metadata["source_identity"]),
+                        cast("str", accepted["revision"]),
+                    )
+
+            # This control fixture models only a matching opaque actual ACK.
+            # It provides no source/callback/device or musical acceptance proof.
+            ticket.on_current = accepted_effect
+        return DEFAULT
+
+    audio_engine_mock.refresh_current_constant_timing.side_effect = capture_refresh
     audio_engine_mock._content_placement_pending = Mock(return_value=False)
     audio_engine_mock.poll_loader_events.return_value = None
+    project.pad_content[0] = PadContentIdentity(instance_id="a" * 32)
+    _acknowledged_bpm_reference(controller)
+    bpm_feedback = controller.transport.global_params._bpm_feedback
+    assert bpm_feedback is not None
+    audio_engine_mock.bpm_lock_status = Mock(side_effect=bpm_feedback.copy)
+    controller.transport.global_params._poll_global_rate_status()
     controller.persistence._dirty = False
     return metadata
 
@@ -139,6 +196,220 @@ def _submit_publication(
         ASSESSMENT.acceptance_provenance,
     )
     return future, worker
+
+
+def test_replaced_bpm_reference_blocks_master_effects_but_keeps_qualified_loop_only_refresh(
+    controller: AppController,
+    audio_engine_mock: Mock,
+    automatic_pad: dict[str, object],
+) -> None:
+    controller.project.pad_content[0] = PadContentIdentity(instance_id="b" * 32)
+    controller.transport.bpm.recompute_master_bpm()
+    with pytest.raises(RuntimeError, match="not acknowledged"):
+        controller.transport.global_params.set_speed(1.5)
+    assert controller.project.speed == 1.25
+    audio_engine_mock.set_speed.assert_not_called()
+    audio_engine_mock.set_master_period.assert_not_called()
+    audio_engine_mock.set_master_bpm.assert_not_called()
+    audio_engine_mock.set_speed_and_master_period.assert_not_called()
+    controller.accepted_timing.refresh_current(0)
+    controller.accepted_timing.poll()
+    args = audio_engine_mock.refresh_current_constant_timing.call_args.args
+    assert args[0].metadata()["accepted_timing"] == automatic_pad
+    assert args[-1] is None
+    assert controller.session.master_period_seconds == 0.7
+
+
+def _rate_feedback(audio: Mock) -> dict[str, object]:
+    feedback = audio.global_rate_status.return_value
+    assert isinstance(feedback, dict)
+    return cast("dict[str, object]", feedback)
+
+
+def test_rejected_requested_speed_uses_actual_speed_for_qualified_master_and_loop_ack(
+    controller: AppController,
+    audio_engine_mock: Mock,
+    automatic_pad: dict[str, object],
+) -> None:
+    controller.project.speed = 1.5
+    feedback = _rate_feedback(audio_engine_mock)
+    feedback.update(
+        request_revision=1,
+        effect_revision=1,
+        state="rejected",
+        requested_speed=1.5,
+        effective_speed=1.0,
+        execution_frame=64,
+        error="Source history is unavailable for the requested speed.",
+    )
+    parameters = controller.transport.global_params
+    parameters._poll_global_rate_status()
+    for _ in range(3):
+        parameters.poll_bpm_lock_application()
+    audio_engine_mock.set_master_period.assert_not_called()
+    owner = controller.accepted_timing
+    owner.refresh_current(0)
+    owner.poll()
+    _binding, start, end, master = audio_engine_mock.refresh_current_constant_timing.call_args.args
+    assert master == PERIOD
+    assert start == round(10.000001 * 48_000) / 48_000
+    assert end == round((10.000001 + PERIOD * 4) * 48_000) / 48_000
+    assert master != PERIOD / 1.5
+    audio_engine_mock.refresh_current_constant_timing.return_value.status = "accepted"
+    owner.poll()
+    assert controller.session.master_period_seconds == PERIOD
+    assert controller.project.pad_grid_offset_samples[0] == round(PERIOD * 4 * 48_000)
+    assert controller.project.speed == 1.5
+    rate = parameters.global_rate_status()
+    assert rate.state == "rejected"
+    assert rate.requested_speed == 1.5
+    assert rate.effective_speed == 1.0
+    assert rate.error == feedback["error"]
+    assert controller.session.bpm_lock_anchor_revision == automatic_pad["revision"]
+
+
+@pytest.mark.parametrize("later", ["own", "foreign", "unknown", "missing", "malformed"])
+def test_accepted_refresh_cannot_overwrite_a_later_actual_master_image(
+    controller: AppController,
+    audio_engine_mock: Mock,
+    automatic_pad: dict[str, object],
+    later: str,
+) -> None:
+    previous = (
+        controller.session.master_period_seconds,
+        controller.session.master_bpm,
+        controller.session.bpm_lock_anchor_bpm,
+        controller.session.bpm_lock_anchor_revision,
+    )
+    completed = Mock()
+    owner = controller.accepted_timing
+    owner.refresh_current(0, on_refreshed=completed)
+    owner.poll()
+    refresh = audio_engine_mock.refresh_current_constant_timing.return_value
+    own_refresh_effect = refresh.on_current
+    assert own_refresh_effect is not None
+    feedback = _rate_feedback(audio_engine_mock)
+
+    def later_actual_effect() -> None:
+        # The genuine own ticket ACK precedes a later callback effect. Its
+        # earlier is_current result cannot certify the requested master now.
+        own_refresh_effect()
+        feedback.update(
+            request_revision=2,
+            effect_revision=2,
+            effective_speed=1.5,
+            effective_master_period=0.4,
+            master_provenance=_master_provenance(
+                "c" * 64 if later == "foreign" else BPM_REFERENCE_SOURCE_IDENTITY,
+                "later-actual-revision",
+            ),
+        )
+        if later == "unknown":
+            feedback["master_provenance"] = _master_provenance(None, kind="unknown")
+        elif later == "missing":
+            audio_engine_mock.global_rate_status.return_value = None
+        elif later == "malformed":
+            feedback.pop("master_provenance")
+
+    refresh.on_current = later_actual_effect
+    refresh.status = "accepted"
+    owner.poll()
+    completed.assert_called_once_with(0)
+    assert not owner._refreshes
+    assert controller.project.pad_grid_offset_samples[0] == round(PERIOD * 4 * 48_000)
+    parameters = controller.transport.global_params
+    if later == "own":
+        assert controller.session.master_period_seconds == 0.4
+        assert controller.session.master_bpm == 150.0
+        assert controller.session.bpm_lock_anchor_bpm == pytest.approx(100.0)
+        assert controller.session.bpm_lock_anchor_revision == "later-actual-revision"
+        assert not parameters._bpm_lock_application_status().pending
+    else:
+        assert (
+            controller.session.master_period_seconds,
+            controller.session.master_bpm,
+            controller.session.bpm_lock_anchor_bpm,
+            controller.session.bpm_lock_anchor_revision,
+        ) == previous
+        assert parameters._bpm_lock_application_status().pending
+    audio_engine_mock.set_master_period.assert_not_called()
+    audio_engine_mock.set_master_bpm.assert_not_called()
+    audio_engine_mock.bootstrap_transport_from_pad.assert_not_called()
+
+
+@pytest.mark.parametrize("pending", ["queued", "preparing", "unobserved", "missing_speed"])
+def test_pending_rate_retains_original_master_refresh_until_terminal_actual_speed(
+    controller: AppController,
+    audio_engine_mock: Mock,
+    automatic_pad: dict[str, object],
+    pending: str,
+) -> None:
+    controller.project.speed = 1.5
+    feedback = _rate_feedback(audio_engine_mock)
+    feedback.update(requested_speed=1.5, effective_speed=1.0)
+    parameters = controller.transport.global_params
+    if pending == "queued":
+        feedback.update(request_revision=2, state="queued", execution_frame=None)
+    elif pending == "preparing":
+        feedback.update(request_revision=2, effect_revision=2, state="preparing")
+    elif pending == "missing_speed":
+        feedback["effective_speed"] = None
+    parameters._poll_global_rate_status()
+    if pending == "unobserved":
+        parameters._record_rate_request()
+    owner = controller.accepted_timing
+    owner.refresh_current(0)
+    original = owner._waiting_refresh[0]
+    for _ in range(3):
+        owner.poll()
+    assert owner._waiting_refresh[0] is original
+    assert original.admission_failures == 0
+    audio_engine_mock.refresh_current_constant_timing.assert_not_called()
+    feedback.update(
+        request_revision=3,
+        effect_revision=3,
+        state="applied",
+        effective_speed=1.0,
+        execution_frame=192,
+    )
+    parameters._poll_global_rate_status()
+    owner.poll()
+    assert not owner._waiting_refresh
+    assert owner._refreshes[0].request is original
+    audio_engine_mock.refresh_current_constant_timing.assert_called_once()
+    assert audio_engine_mock.refresh_current_constant_timing.call_args.args[-1] == PERIOD
+    audio_engine_mock.refresh_current_constant_timing.return_value.status = "accepted"
+    owner.poll()
+    assert controller.session.master_period_seconds == PERIOD
+    assert controller.session.bpm_lock_anchor_revision == automatic_pad["revision"]
+    assert controller.project.speed == 1.5
+
+
+def test_before_bpm_effect_ack_rate_pending_still_admits_qualified_loop_only_refresh(
+    controller: AppController,
+    audio_engine_mock: Mock,
+    automatic_pad: dict[str, object],
+) -> None:
+    parameters = controller.transport.global_params
+    assert parameters._bpm_feedback is not None
+    parameters._bpm_feedback.update(
+        state="queued", effect_revision=0, effective_enabled=False, execution_frame=None
+    )
+    feedback = _rate_feedback(audio_engine_mock)
+    feedback.update(request_revision=2, state="queued", execution_frame=None)
+    parameters._poll_global_rate_status()
+    owner = controller.accepted_timing
+    owner.refresh_current(0)
+    owner.poll()
+    audio_engine_mock.refresh_current_constant_timing.assert_called_once()
+    args = audio_engine_mock.refresh_current_constant_timing.call_args.args
+    assert args[0].metadata()["accepted_timing"] == automatic_pad
+    assert args[-1] is None
+    assert not owner._waiting_refresh
+    audio_engine_mock.refresh_current_constant_timing.return_value.status = "accepted"
+    owner.poll()
+    assert controller.project.pad_grid_offset_samples[0] == round(PERIOD * 4 * 48_000)
+    assert controller.session.master_period_seconds == 0.7
 
 
 def test_productive_general_publication_needs_both_native_acknowledgements(
@@ -327,6 +598,7 @@ def test_native_refresh_status_and_actual_current_fence_preserve_state(
 def test_capacity_admission_is_bounded_and_retryable_only_from_matching_current(
     controller: AppController, audio_engine_mock: Mock, automatic_pad: dict[str, object]
 ) -> None:
+    capture_refresh = audio_engine_mock.refresh_current_constant_timing.side_effect
     audio_engine_mock.refresh_current_constant_timing.side_effect = RuntimeError(
         "full command ring"
     )
@@ -336,7 +608,7 @@ def test_capacity_admission_is_bounded_and_retryable_only_from_matching_current(
     assert audio_engine_mock.refresh_current_constant_timing.call_count == 3
     assert not controller.accepted_timing._waiting_refresh
     assert not controller.persistence._dirty
-    audio_engine_mock.refresh_current_constant_timing.side_effect = None
+    audio_engine_mock.refresh_current_constant_timing.side_effect = capture_refresh
     controller.accepted_timing.refresh_current(0)
     controller.poll_runtime_events()
     audio_engine_mock.refresh_current_constant_timing.return_value.status = "accepted"
@@ -612,13 +884,15 @@ def test_transient_command_capacity_failure_retries_then_waits_for_native_ack(
     controller: AppController, audio_engine_mock: Mock, automatic_pad: dict[str, object]
 ) -> None:
     refresh = _RefreshTicket()
-    audio_engine_mock.refresh_current_constant_timing.side_effect = [
-        RuntimeError("full command ring"),
-        refresh,
-    ]
+    capture_refresh = audio_engine_mock.refresh_current_constant_timing.side_effect
+    audio_engine_mock.refresh_current_constant_timing.side_effect = RuntimeError(
+        "full command ring"
+    )
     controller.accepted_timing.refresh_current(0)
     controller.poll_runtime_events()
     assert not controller.persistence._dirty
+    audio_engine_mock.refresh_current_constant_timing.side_effect = capture_refresh
+    audio_engine_mock.refresh_current_constant_timing.return_value = refresh
     controller.poll_runtime_events()
     assert audio_engine_mock.refresh_current_constant_timing.call_count == 2
     assert not controller.persistence._dirty
@@ -633,12 +907,13 @@ def test_callback_refresh_rejection_preserves_state_and_allows_explicit_retry(
 ) -> None:
     first = _RefreshTicket("rejected")
     second = _RefreshTicket()
-    audio_engine_mock.refresh_current_constant_timing.side_effect = [first, second]
+    audio_engine_mock.refresh_current_constant_timing.return_value = first
     controller.accepted_timing.refresh_current(0)
     controller.poll_runtime_events()
     controller.poll_runtime_events()
     assert not controller.persistence._dirty
     assert controller.session.master_period_seconds == 0.7
+    audio_engine_mock.refresh_current_constant_timing.return_value = second
     controller.accepted_timing.refresh_current(0)
     controller.poll_runtime_events()
     second.status = "accepted"
@@ -683,6 +958,7 @@ def test_invalid_pcm_policy_has_no_authority_or_capture_side_effects(
 ) -> None:
     controller.project.manual_bpm[0] = 94.0
     controller.project.pad_timing_intent[0] = "manual"
+    audio_engine_mock.current_input_runtime_pad_binding.reset_mock()
     with pytest.raises(ValueError, match="PCM limit"):
         controller.accepted_timing.prepare(
             0, 0.001, "independent bound", intent="automatic", pcm_limit_bytes=pcm_limit_bytes
@@ -1215,6 +1491,20 @@ def test_cancel_and_shutdown_stop_deferred_publication_retry(
     assert not controller.persistence._dirty
 
 
+def _pair_current_timing(bundle: _Bundle, sample_id: int) -> dict[str, object]:
+    current = current_timing_metadata(sample_id=sample_id, period=PERIOD)
+    bundle.audio.current_constant_timing = Mock(return_value=current)
+    bundle.audio.current_input_runtime_pad_binding = Mock(
+        return_value=FakeInputRuntimePadBinding(
+            sample_id,
+            accepted_timing=current,
+            intent="automatic",
+            source_identity=BPM_REFERENCE_SOURCE_IDENTITY,
+        )
+    )
+    return current
+
+
 def _automatic_pair_bundle(operation: Literal["move", "swap"]) -> tuple[_Bundle, Mock]:
     bundle = _bundle(occupied=operation == "swap")
     app = bundle.app
@@ -1225,6 +1515,7 @@ def _automatic_pair_bundle(operation: Literal["move", "swap"]) -> tuple[_Bundle,
     project.pad_loop_start_s[0] = 10.000001
     project.pad_grid_offset_samples[0] = 200_000
     project.bpm_lock = True
+    project.multi_loop = True
     project.speed = 1.25
     app._session.bpm_lock_anchor_pad_id = 0
     app._session.master_period_seconds = 0.7
@@ -1233,9 +1524,70 @@ def _automatic_pair_bundle(operation: Literal["move", "swap"]) -> tuple[_Bundle,
     bundle.audio.pad_timing_intent = Mock(return_value="automatic")
     bundle.audio._content_placement_pending = Mock(return_value=False)
     bundle.audio.publish_constant_timing = Mock()
+    _pair_current_timing(bundle, 0)
+    rate_feedback: dict[str, object] = {
+        "request_revision": 0,
+        "effect_revision": 0,
+        "state": "applied",
+        "requested_speed": 1.25,
+        "requested_master_period": 0.7,
+        "effective_speed": 1.25,
+        "effective_master_period": 0.7,
+        "execution_frame": 0,
+        "error": None,
+        "master_provenance": _master_provenance(accepted_revision="previous-effective"),
+    }
+    bundle.audio.global_rate_status = Mock(return_value=rate_feedback)
     refresh = _RefreshTicket()
+
+    def capture_refresh(
+        _binding: object, _start: float, _end: float | None, master: float | None
+    ) -> object:
+        def accepted_effect() -> None:
+            if master is not None:
+                rate_feedback["effective_master_period"] = master
+                assert isinstance(_binding, FakeInputRuntimePadBinding)
+                binding_metadata = _binding.metadata()
+                accepted = binding_metadata["accepted_timing"]
+                assert isinstance(accepted, dict)
+                rate_feedback["master_provenance"] = _master_provenance(
+                    cast("str", binding_metadata["source_identity"]),
+                    cast("str", accepted["revision"]),
+                )
+
+        # Only this refresh's own accepted current ticket models its actual effect.
+        refresh.on_current = accepted_effect
+        return DEFAULT
+
     bundle.audio.refresh_current_constant_timing = Mock(return_value=refresh)
+    bundle.audio.refresh_current_constant_timing.side_effect = capture_refresh
+    _acknowledged_bpm_reference(app)
+    parameters = app.transport.global_params
+    bpm_feedback = parameters._bpm_feedback
+    assert bpm_feedback is not None
+    bundle.audio.bpm_lock_status = Mock(side_effect=bpm_feedback.copy)
+    parameters._poll_global_rate_status()
+    assert parameters._bpm_lock_master_ready()
+    assert parameters.global_rate_status().effective_speed == 1.25
     return bundle, changed
+
+
+def _assert_original_pair_reference(
+    bundle: _Bundle,
+    original_application: object,
+    original_content: PadContentIdentity | None,
+    *,
+    sample_id: int,
+) -> None:
+    parameters = bundle.app.transport.global_params
+    application = parameters._bpm_application
+    assert application is original_application
+    assert application is not None
+    assert original_content is not None
+    assert bundle.app._project.pad_content[sample_id] is original_content
+    assert application.original_content_id == original_content.instance_id
+    assert bundle.app._session.bpm_lock_anchor_pad_id == sample_id
+    assert parameters._bpm_lock_master_ready()
 
 
 @pytest.mark.parametrize("operation", ["move", "swap"])
@@ -1245,6 +1597,10 @@ def test_pending_publication_retry_follows_pair_mirror_with_same_original_owners
     bundle, changed = _automatic_pair_bundle(operation)
     app = bundle.app
     project = app._project
+    parameters = app.transport.global_params
+    original_application = parameters._bpm_application
+    original_content = project.pad_content[0]
+    _assert_original_pair_reference(bundle, original_application, original_content, sample_id=0)
     ticket = _PublicationTicket()
     future, worker = _submit_publication(app, monkeypatch, ticket)
     owner = app.accepted_timing._publications[0]
@@ -1263,13 +1619,10 @@ def test_pending_publication_retry_follows_pair_mirror_with_same_original_owners
     assert owner.ticket is ticket.native_ticket
     assert owner.assessment is ASSESSMENT
     assert owner.original_future is future
+    _assert_original_pair_reference(bundle, original_application, original_content, sample_id=215)
     ticket.marker_pending = False
     ticket.control_slot = 215
-    current = current_timing_metadata(sample_id=215, period=PERIOD)
-    bundle.audio.current_constant_timing = Mock(return_value=current)
-    bundle.audio.current_input_runtime_pad_binding = Mock(
-        return_value=FakeInputRuntimePadBinding(215, accepted_timing=current, intent="automatic")
-    )
+    current = _pair_current_timing(bundle, 215)
     retry: Future[None] = Future()
     worker.submit.return_value = retry
     app.accepted_timing.poll()
@@ -1279,6 +1632,7 @@ def test_pending_publication_retry_follows_pair_mirror_with_same_original_owners
     ticket.status = "accepted"
     app.accepted_timing.poll()
     bundle.audio.refresh_current_constant_timing.assert_called_once()
+    assert bundle.audio.refresh_current_constant_timing.call_args.args[-1] == PERIOD / 1.25
     assert app._session.master_period_seconds == 0.7
     assert project.pad_grid_offset_samples[215] == 200_000
     changed.assert_not_called()
@@ -1286,6 +1640,8 @@ def test_pending_publication_retry_follows_pair_mirror_with_same_original_owners
     app.accepted_timing.poll()
     assert app._session.bpm_lock_anchor_pad_id == 215
     assert app._session.master_period_seconds == PERIOD / 1.25
+    assert app._session.bpm_lock_anchor_revision == current["revision"]
+    assert not parameters._bpm_lock_application_status().pending
     assert project.pad_grid_offset_samples[215] == round(PERIOD * 4 * 48_000)
     changed.assert_called_once_with()
 

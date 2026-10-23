@@ -1,6 +1,6 @@
 import math
 from typing import TYPE_CHECKING
-from unittest.mock import call
+from unittest.mock import ANY, call
 
 import pytest
 
@@ -11,11 +11,47 @@ from flitzis_looper.constants import (
     VOLUME_MAX,
     VOLUME_MIN,
 )
+from tests.flitzis_looper.controller.test_timing_hierarchy import (
+    _acknowledged_bpm_reference,
+    _configured,
+    _master_provenance,
+)
 
 if TYPE_CHECKING:
     from unittest.mock import Mock
 
     from flitzis_looper.controller import AppController
+
+
+def _apply_bpm_request(controller: AppController, audio: Mock, *, enabled: bool) -> None:
+    receipt = _configured(controller, audio, pad_id=controller.project.selected_pad)
+    parameters = controller.transport.global_params
+    parameters.set_bpm_lock(enabled=enabled)
+    receipt.update(
+        state="applied",
+        effect_revision=receipt["request_revision"],
+        effective_enabled=enabled,
+        execution_frame=64,
+    )
+    parameters.poll_bpm_lock_application()
+
+
+def _confirm_rate(controller: AppController, audio: Mock, speed: float, bpm: float) -> None:
+    period = 60.0 / bpm
+    audio.global_rate_status.side_effect = None
+    audio.global_rate_status.return_value = {
+        "request_revision": 1,
+        "effect_revision": 1,
+        "state": "applied",
+        "requested_speed": speed,
+        "requested_master_period": period,
+        "effective_speed": speed,
+        "effective_master_period": period,
+        "execution_frame": 128,
+        "error": None,
+        "master_provenance": _master_provenance(),
+    }
+    controller.transport.global_params._poll_global_rate_status()
 
 
 def test_set_volume_normal(controller: AppController, audio_engine_mock: Mock) -> None:
@@ -300,12 +336,17 @@ def test_set_effective_display_bpm_uses_locked_master_reference(
     controller.project.bpm_lock = True
     controller.project.speed = 1.5
     controller.session.master_bpm = 180.0
+    _configured(controller, audio_engine_mock)
+    controller.session.bpm_lock_anchor_pad_id = 0
+    _acknowledged_bpm_reference(controller)
 
     changed = controller.transport.global_params.set_effective_display_bpm(180.1)
 
     assert changed is True
     expected_speed = 180.1 / 120.0
-    audio_engine_mock.set_speed.assert_called_with(pytest.approx(expected_speed))
+    audio_engine_mock.set_speed_and_master_period.assert_called_with(
+        pytest.approx(expected_speed), pytest.approx(60.0 / 180.1), anchor_binding=ANY
+    )
     assert controller.project.speed == pytest.approx(expected_speed)
 
 
@@ -401,9 +442,9 @@ def test_set_bpm_lock_enable(controller: AppController, audio_engine_mock: Mock)
     """Test enabling BPM lock mode."""
     controller.project.bpm_lock = False
 
-    controller.transport.global_params.set_bpm_lock(enabled=True)
+    _apply_bpm_request(controller, audio_engine_mock, enabled=True)
 
-    audio_engine_mock.set_bpm_lock.assert_called_with(enabled=True)
+    audio_engine_mock.set_bpm_lock.assert_called_with(enabled=True, anchor_binding=ANY)
     assert controller.project.bpm_lock is True
 
 
@@ -411,13 +452,13 @@ def test_set_bpm_lock_disable(controller: AppController, audio_engine_mock: Mock
     """Test disabling BPM lock mode."""
     controller.project.bpm_lock = True
 
-    controller.transport.global_params.set_bpm_lock(enabled=False)
+    _apply_bpm_request(controller, audio_engine_mock, enabled=False)
 
     audio_engine_mock.set_bpm_lock.assert_called_with(enabled=False)
     assert controller.project.bpm_lock is False
 
 
-def test_bpm_lock_publishes_signed_selected_reference_before_session_bootstrap(
+def test_bpm_lock_mirrors_native_effect_without_unqualified_master_or_bootstrap_followup(
     controller: AppController, audio_engine_mock: Mock
 ) -> None:
     audio_engine_mock.output_sample_rate.return_value = 48_000
@@ -425,21 +466,18 @@ def test_bpm_lock_publishes_signed_selected_reference_before_session_bootstrap(
     controller.project.sample_paths[1] = "samples/reference.wav"
     controller.project.pad_grid_offset_samples[1] = -240
     controller.transport.bpm.set_manual_bpm(1, 123.5)
+    audio_engine_mock.set_pad_timing_metadata.assert_called_with(
+        1, -0.005, expected_source_generation=1
+    )
     audio_engine_mock.reset_mock()
 
-    controller.transport.global_params.set_bpm_lock(enabled=True)
+    _apply_bpm_request(controller, audio_engine_mock, enabled=True)
 
     assert controller.session.bpm_lock_anchor_pad_id == 1
     assert controller.session.bpm_lock_anchor_bpm == 123.5
-    audio_engine_mock.set_pad_timing_metadata.assert_called_once_with(1, -0.005)
-    audio_engine_mock.bootstrap_transport_from_pad.assert_called_once_with(1)
-    calls = audio_engine_mock.mock_calls
-    assert calls.index(call.set_pad_timing_metadata(1, -0.005)) < calls.index(
-        call.bootstrap_transport_from_pad(1)
-    )
-    assert calls.index(call.set_master_bpm(123.5)) < calls.index(
-        call.bootstrap_transport_from_pad(1)
-    )
+    audio_engine_mock.set_pad_timing_metadata.assert_not_called()
+    audio_engine_mock.bootstrap_transport_from_pad.assert_not_called()
+    audio_engine_mock.set_master_bpm.assert_not_called()
     audio_engine_mock.anchor_transport_phase_from_pad.assert_not_called()
 
     controller.project.selected_pad = 2
@@ -447,8 +485,10 @@ def test_bpm_lock_publishes_signed_selected_reference_before_session_bootstrap(
     audio_engine_mock.reset_mock()
     controller.transport.global_params.set_speed(1.25)
 
-    audio_engine_mock.set_master_bpm.assert_called_once_with(123.5 * 1.25)
-    audio_engine_mock.bootstrap_transport_from_pad.assert_called_once_with(1)
+    audio_engine_mock.set_speed_and_master_period.assert_called_once_with(
+        1.25, pytest.approx(60.0 / (123.5 * 1.25)), anchor_binding=ANY
+    )
+    audio_engine_mock.bootstrap_transport_from_pad.assert_not_called()
     audio_engine_mock.set_pad_timing_metadata.assert_not_called()
     audio_engine_mock.anchor_transport_phase_from_pad.assert_not_called()
 
@@ -462,25 +502,26 @@ def test_bpm_lock_anchors_master_bpm_to_selected_pad(
 
     audio_engine_mock.reset_mock()
 
-    controller.transport.global_params.set_bpm_lock(enabled=True)
+    _apply_bpm_request(controller, audio_engine_mock, enabled=True)
 
     assert controller.session.bpm_lock_anchor_pad_id == 1
     assert controller.session.master_bpm == pytest.approx(180.0)
 
-    audio_engine_mock.set_bpm_lock.assert_called_with(enabled=True)
-    assert audio_engine_mock.set_master_bpm.call_count == 1
-    called_bpm = audio_engine_mock.set_master_bpm.call_args.args[0]
-    assert called_bpm == pytest.approx(180.0)
+    audio_engine_mock.set_bpm_lock.assert_called_with(enabled=True, anchor_binding=ANY)
+    audio_engine_mock.set_master_bpm.assert_not_called()
     audio_engine_mock.anchor_transport_phase_from_pad.assert_not_called()
 
     audio_engine_mock.reset_mock()
 
     controller.transport.global_params.set_speed(2.0)
 
+    assert controller.session.master_bpm == pytest.approx(180.0)
+    audio_engine_mock.set_speed_and_master_period.assert_called_once_with(
+        2.0, pytest.approx(0.25), anchor_binding=ANY
+    )
+    _confirm_rate(controller, audio_engine_mock, 2.0, 240.0)
     assert controller.session.master_bpm == pytest.approx(240.0)
-    assert audio_engine_mock.set_master_bpm.call_count == 1
-    called_bpm = audio_engine_mock.set_master_bpm.call_args.args[0]
-    assert called_bpm == pytest.approx(240.0)
+    audio_engine_mock.set_master_bpm.assert_not_called()
     audio_engine_mock.anchor_transport_phase_from_pad.assert_not_called()
 
 
@@ -543,6 +584,8 @@ def test_set_bpm_lock_none_effective_bpm(
 ) -> None:
     controller.project.selected_pad = 1
     controller.project.sample_paths[1] = "samples/foo.wav"
+    _configured(controller, audio_engine_mock, pad_id=1)
+    controller.project.manual_bpm[1] = None
 
     controller.transport.global_params.set_bpm_lock(enabled=True)
 
@@ -556,6 +599,8 @@ def test_set_bpm_lock_non_finite_effective_bpm(
 ) -> None:
     controller.project.selected_pad = 1
     controller.project.sample_paths[1] = "samples/foo.wav"
+    _configured(controller, audio_engine_mock, pad_id=1)
+    controller.project.manual_bpm[1] = None
 
     controller.transport.global_params.set_bpm_lock(enabled=True)
 
@@ -572,7 +617,7 @@ def test_set_bpm_lock_disable_clears_anchor(
     controller.session.bpm_lock_anchor_pad_id = 1
     controller.session.bpm_lock_anchor_bpm = 120.0
 
-    controller.transport.global_params.set_bpm_lock(enabled=False)
+    _apply_bpm_request(controller, audio_engine_mock, enabled=False)
 
     assert controller.session.bpm_lock_anchor_pad_id is None
     assert controller.session.bpm_lock_anchor_bpm is None

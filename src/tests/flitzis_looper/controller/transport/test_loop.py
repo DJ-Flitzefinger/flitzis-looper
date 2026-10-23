@@ -6,7 +6,13 @@ import pytest
 
 from flitzis_looper.controller.current_timing import CurrentPadTiming
 from flitzis_looper.models import BeatGrid, SampleAnalysis
-from tests.flitzis_looper.conftest import current_timing_metadata
+from tests.flitzis_looper.conftest import FakeInputRuntimePadBinding, current_timing_metadata
+from tests.flitzis_looper.controller.test_timing_hierarchy import (
+    BPM_REFERENCE_SOURCE_IDENTITY,
+    _configured,
+    _master_provenance,
+    _rate_image,
+)
 
 if TYPE_CHECKING:
     from collections.abc import Callable
@@ -482,6 +488,7 @@ def test_grid_anchor_and_snapped_start_stay_stable_under_global_modes(
     controller: AppController,
     audio_engine_mock: Mock,
 ) -> None:
+    receipt = _configured(controller, audio_engine_mock)
     sample_id = 0
     controller.project.selected_pad = sample_id
     anchor_s, snapped_start_s = _configure_source_stable_grid_pad(
@@ -489,9 +496,20 @@ def test_grid_anchor_and_snapped_start_stay_stable_under_global_modes(
     )
     audio_engine_mock.reset_mock()
 
+    def apply_bpm_lock(*, enabled: bool) -> None:
+        parameters = controller.transport.global_params
+        parameters.set_bpm_lock(enabled=enabled)
+        receipt.update(
+            state="applied",
+            effect_revision=receipt["request_revision"],
+            effective_enabled=enabled,
+            execution_frame=64 if enabled else 128,
+        )
+        parameters.poll_bpm_lock_application()
+
     actions: list[Callable[[], None]] = [
         lambda: controller.transport.global_params.set_speed(1.5),
-        lambda: controller.transport.global_params.set_bpm_lock(enabled=True),
+        lambda: apply_bpm_lock(enabled=True),
         lambda: controller.transport.global_params.set_key_lock(enabled=True),
         lambda: controller.transport.global_params.set_trigger_quantization_enabled(enabled=True),
         lambda: controller.transport.global_params.set_trigger_quantization_step("1_32"),
@@ -499,7 +517,7 @@ def test_grid_anchor_and_snapped_start_stay_stable_under_global_modes(
         controller.transport.bpm.recompute_master_bpm,
         lambda: controller.transport.global_params.set_speed(1.25),
         lambda: controller.transport.global_params.set_key_lock(enabled=False),
-        lambda: controller.transport.global_params.set_bpm_lock(enabled=False),
+        lambda: apply_bpm_lock(enabled=False),
     ]
 
     for action in actions:
@@ -511,7 +529,8 @@ def test_grid_anchor_and_snapped_start_stay_stable_under_global_modes(
             snapped_start_s=snapped_start_s,
         )
 
-    audio_engine_mock.set_pad_timing_metadata.assert_called_once_with(sample_id, anchor_s)
+    audio_engine_mock.set_pad_timing_metadata.assert_not_called()
+    assert audio_engine_mock.set_bpm_lock.call_count == 2
 
 
 def test_grid_anchor_and_snapped_start_stay_stable_when_other_pad_plays(
@@ -1317,9 +1336,8 @@ def test_explicit_offset_edit_resumes_legacy_tempo_and_refreshes_locked_master(
     controller: AppController, audio_engine_mock: Mock
 ) -> None:
     audio_engine_mock.output_sample_rate.return_value = 48_000
-    audio_engine_mock.current_constant_timing.return_value = current_timing_metadata(
-        period=0.48602673147023145, origin=-0.1
-    )
+    original = current_timing_metadata(period=0.48602673147023145, origin=-0.1)
+    audio_engine_mock.current_constant_timing.return_value = original
     audio_engine_mock.pad_timing_intent.return_value = "automatic"
     controller.project.sample_paths[0] = "samples/current.wav"
     controller.project.sample_durations[0] = 60.0
@@ -1328,8 +1346,40 @@ def test_explicit_offset_edit_resumes_legacy_tempo_and_refreshes_locked_master(
     )
     controller.project.pad_loop_auto[0] = True
     controller.project.pad_loop_bars[0] = 0.5
-    controller.project.bpm_lock = True
-    controller.session.bpm_lock_anchor_pad_id = 0
+    receipt = _configured(controller, audio_engine_mock)
+    controller.project.manual_bpm[0] = None
+
+    def original_binding(sample_id: int) -> FakeInputRuntimePadBinding:
+        current = audio_engine_mock.current_constant_timing.return_value
+        binding = FakeInputRuntimePadBinding(
+            sample_id,
+            accepted_timing=current if isinstance(current, dict) else None,
+            intent=audio_engine_mock.pad_timing_intent.return_value,
+            source_identity=BPM_REFERENCE_SOURCE_IDENTITY,
+        )
+        for key in (
+            "source_id",
+            "source_generation",
+            "source_sha256",
+            "sample_rate_hz",
+            "frame_count",
+        ):
+            binding._metadata[key] = original[key]
+        return binding
+
+    audio_engine_mock.current_input_runtime_pad_binding.side_effect = original_binding
+    rate = _rate_image(audio_engine_mock, state="applied", revision=1)
+    rate.update(
+        requested_speed=1.0,
+        requested_master_period=original["period_seconds_per_quarter"],
+        effective_master_period=original["period_seconds_per_quarter"],
+        master_provenance=_master_provenance(accepted_revision=original["revision"]),
+    )
+    parameters = controller.transport.global_params
+    parameters.set_bpm_lock(enabled=True)
+    receipt.update(state="applied", effect_revision=1, effective_enabled=True, execution_frame=64)
+    parameters.poll_bpm_lock_application()
+    assert controller.session.bpm_lock_anchor_revision == original["revision"]
 
     def revoke_current(_sample_id: int, _origin: float, **_kwargs: object) -> None:
         audio_engine_mock.current_constant_timing.return_value = None
@@ -1344,11 +1394,28 @@ def test_explicit_offset_edit_resumes_legacy_tempo_and_refreshes_locked_master(
     assert timing.accepted_revision is None
     assert controller.transport.loop.grid_anchor_sec(0) == 10.01
     assert controller.transport.loop.effective_region(0) == (0.0, 64_000 / 48_000)
+    assert controller.session.bpm_lock_anchor_revision == original["revision"]
+    audio_engine_mock.set_master_period.assert_called_once()
+    assert audio_engine_mock.set_master_period.call_args.args == (60.0 / 90.0,)
+    assert (
+        audio_engine_mock.set_master_period.call_args.kwargs["anchor_binding"].metadata()[
+            "source_generation"
+        ]
+        == 7
+    )
+    rate.update(
+        request_revision=2,
+        effect_revision=2,
+        requested_master_period=60.0 / 90.0,
+        effective_master_period=60.0 / 90.0,
+        master_provenance=_master_provenance(),
+    )
+    parameters._poll_global_rate_status()
     assert controller.session.master_bpm == 90.0
     assert controller.session.bpm_lock_anchor_revision is None
     audio_engine_mock.set_pad_bpm.assert_called_with(0, 90.0, expected_source_generation=7)
-    audio_engine_mock.set_master_bpm.assert_called_with(90.0)
-    audio_engine_mock.bootstrap_transport_from_pad.assert_called_with(0)
+    audio_engine_mock.set_master_bpm.assert_not_called()
+    audio_engine_mock.bootstrap_transport_from_pad.assert_not_called()
 
 
 @pytest.mark.parametrize("operation", ["start", "end", "auto", "bars", "all", "initialize"])

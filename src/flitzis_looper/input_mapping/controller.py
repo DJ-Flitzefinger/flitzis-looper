@@ -39,7 +39,6 @@ from flitzis_looper.models import (
     StemMixMode,
     validate_sample_id,
 )
-from flitzis_looper.timing_policy import variable_source_timing
 
 if TYPE_CHECKING:
     from collections.abc import Callable
@@ -148,6 +147,7 @@ class InputMappingController(BaseController):
         self._input_action_error: tuple[str, str] | None = None
         app.transport.pitch.bind_runtime_refresh(self.refresh_pitch_runtime_state)
         app.transport.bind_input_runtime_refresh(self._refresh_rust_runtime_state)
+        app.transport.bind_multi_loop_cancellation(self._stage_multi_loop_cancellation)
         self._on_frame_render_callbacks.append(self._sync_rust_runtime_state)
         self._on_frame_render_callbacks.append(self._poll_rust_input_events)
 
@@ -820,6 +820,26 @@ class InputMappingController(BaseController):
         if signature == self._last_input_runtime_state_signature:
             return self._request_runtime_policy_adoption()
 
+        if not self._publish_runtime_signature(signature):
+            return False
+        return self._request_runtime_policy_adoption()
+
+    def _stage_multi_loop_cancellation(self, *, enabled: bool) -> bool:
+        """Change only Multi Loop in the last complete image, without policy adoption."""
+        previous = self._last_input_runtime_state_signature
+        if previous is None:
+            if self._app.transport._pair_deferred_sample_ids:
+                return False
+            try:
+                previous = self._input_runtime_state_signature()
+            except (RuntimeError, ValueError, TypeError) as error:
+                self._last_input_runtime_state_error = str(error)
+                return False
+        signature = (enabled, previous[1], previous[2], previous[3])
+        return self._publish_runtime_signature(signature)
+
+    def _publish_runtime_signature(self, signature: _InputRuntimeStateSignature) -> bool:
+        """Publish an already captured complete image; never recapture reserved rows."""
         multi_loop, _sample_rate_hz, pad_signatures, policy_json = signature
         policy_options: _TimingPolicyOptions = (
             {"timing_policy_json": policy_json} if policy_json is not None else {}
@@ -855,7 +875,7 @@ class InputMappingController(BaseController):
             return False
 
         self._last_input_runtime_state_signature = signature
-        return self._request_runtime_policy_adoption()
+        return True
 
     def _request_runtime_policy_adoption(self) -> bool:
         """Retry the current Native-owned request without replacing published rows."""
@@ -887,12 +907,20 @@ class InputMappingController(BaseController):
                 pad_signatures.append(previous[2][sample_id])
                 continue
             if sample_path is None:
-                pad_signatures.append(_InputRuntimePadSignature())
+                pad_signatures.append(
+                    _InputRuntimePadSignature(
+                        pitch=_InputPitchProjection(sync=self._project.resolve_bpm_lock())
+                    )
+                )
                 continue
             try:
                 self._app.transport.ensure_current_source_assignment_ready(sample_id)
             except ValueError:
-                pad_signatures.append(_InputRuntimePadSignature())
+                pad_signatures.append(
+                    _InputRuntimePadSignature(
+                        pitch=_InputPitchProjection(sync=self._project.resolve_bpm_lock())
+                    )
+                )
                 continue
 
             timing = self._app.transport.bpm.current_timing(sample_id)
@@ -966,7 +994,7 @@ class InputMappingController(BaseController):
             extra_shift=intent.extra_shift,
             key_lock=self._project.resolve_pad_key_lock(sample_id),
             quantize_step_64ths=quantize_step,
-            sync=self._project.bpm_lock,
+            sync=self._project.resolve_bpm_lock(),
             request_sequence=self._app.transport.pitch.projection_sequence(sample_id),
         )
 
@@ -983,7 +1011,7 @@ class InputMappingController(BaseController):
     def _input_source_map_projection(self, sample_id: int) -> _InputSourceMapProjection:
         intent = self._project.pad_source_sync_intent[sample_id]
         requested = self._project.resolve_pad_source_sync(sample_id)
-        variable = variable_source_timing(self._project.global_timing_policy)
+        variable = self._project.resolve_pad_realtime_bpm(sample_id)
         maps = self._app.loader.source_beatmaps
         delivery = maps.playback_delivery(sample_id) if variable and requested else None
         if requested and delivery is not None:

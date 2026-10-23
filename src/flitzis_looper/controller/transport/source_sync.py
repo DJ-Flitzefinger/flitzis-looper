@@ -13,7 +13,9 @@ if TYPE_CHECKING:
     from flitzis_looper.controller.transport import TransportController
 
 
-type SourceSyncGuidance = Literal["pending", "settling", "refused", "restart", "unconfirmed"]
+type SourceSyncGuidance = Literal[
+    "pending", "settling", "refused", "restart", "unconfirmed", "phase"
+]
 
 _GUIDANCE: dict[SourceSyncGuidance, str] = {
     "pending": "Live timing change pending.",
@@ -21,6 +23,7 @@ _GUIDANCE: dict[SourceSyncGuidance, str] = {
     "refused": "Live timing change refused.",
     "restart": "Start/retrigger to apply this timing change.",
     "unconfirmed": "Audio confirmation unavailable.",
+    "phase": "Timing mode applied; grid phase is unconfirmed.",
 }
 # Exact wire names of Native's bounded RuntimePolicyError enum.
 _ADOPTION_REASONS = frozenset({
@@ -51,6 +54,7 @@ class SourceSyncStatus:
     policy_mode: Literal["legacy", "off", "fixed", "mapped"] | None = None
     actual_realtime_bpm: bool | None = None
     guidance: SourceSyncGuidance | None = None
+    grid_phase_confirmed: bool | None = None
 
     @property
     def guidance_text(self) -> str | None:
@@ -120,7 +124,7 @@ def _policy_feedback_valid(feedback: dict[str, object]) -> bool:
 def _actual_realtime_bpm(feedback: dict[str, object]) -> bool | None:
     if feedback.get("policy_mode") is None or feedback.get("settled") is not True:
         return None
-    return feedback["policy_realtime_bpm"] is not False
+    return feedback["policy_mode"] == "mapped" and feedback["policy_realtime_bpm"] is not False
 
 
 def _adoption_state_valid(adoption: dict[str, object]) -> bool:
@@ -197,6 +201,9 @@ class SourceSyncController:
         current = self._project.pad_source_sync_intent[sample_id]
         if requested == self._project.pad_source_sync_preference(sample_id):
             return
+        if not self._project.resolve_bpm_lock() or self._project.global_timing_policy.sync is False:
+            message = "PAD SYNC requires available Multi Loop, BPM Lock and global SYNC."
+            raise ValueError(message)
         updated = next_source_sync_intent(current, requested=requested)
         self._project.pad_source_sync_intent[sample_id] = updated
         self._transport._mark_project_changed()
@@ -209,12 +216,10 @@ class SourceSyncController:
             sample_id, requested=not self._project.pad_source_sync_preference(sample_id)
         )
 
-    def requested_mode(self, sample_id: int) -> Literal["legacy", "off", "fixed", "mapped"]:
+    def requested_mode(self, sample_id: int) -> Literal["legacy", "fixed", "mapped"]:
         """Resolve the same mode matrix as Native without granting adoption."""
         policy = self._project.global_timing_policy
         requested = self._project.resolve_pad_source_sync(sample_id)
-        if policy.sync is False or (policy.sync is True and not requested):
-            return "off"
         if not requested:
             return "legacy"
         return "mapped" if variable_source_timing(policy) else "fixed"
@@ -255,7 +260,6 @@ class SourceSyncController:
     def _status(self, sample_id: int) -> SourceSyncStatus:
         """Compare current intent/map with actual callback feedback, never map readiness."""
         validate_sample_id(sample_id)
-        intent = self._project.pad_source_sync_intent[sample_id]
         requested = self._project.resolve_pad_source_sync(sample_id)
         try:
             feedback = self._observation(sample_id)
@@ -276,7 +280,7 @@ class SourceSyncController:
         if adoption is not None:
             return adoption
         active, effective = feedback["active"] is True, feedback["effective"] is True
-        if not intent.requested:
+        if not requested:
             return SourceSyncStatus(
                 requested=False,
                 effective=effective,
@@ -313,9 +317,11 @@ class SourceSyncController:
                 requested=requested,
                 effective=effective,
                 active=active,
-                state="effective" if requested else "off",
+                state="pending" if requested else "pending" if effective else "off",
                 policy_mode=mode,
                 actual_realtime_bpm=_actual_realtime_bpm(feedback),
+                detail="Grid phase is unconfirmed." if requested else None,
+                guidance="phase" if requested else None,
             )
         if (
             matching
@@ -342,7 +348,7 @@ class SourceSyncController:
             requested=requested,
             effective=effective,
             active=active,
-            state="pending" if active else "stopped" if requested else "off",
+            state="pending" if active or effective else "stopped" if requested else "off",
             policy_mode=mode,
             actual_realtime_bpm=_actual_realtime_bpm(feedback),
             detail=f"Start/retrigger to apply {expected} timing." if active or requested else None,
@@ -431,7 +437,7 @@ class SourceSyncController:
             ),
             actual_realtime_bpm=_actual_realtime_bpm(feedback),
         )
-        if status.state == "effective":
+        if status.guidance == "phase":
             return replace(
                 status,
                 state="pending",
@@ -454,7 +460,12 @@ class SourceSyncController:
         )
         if matching:
             return SourceSyncStatus(
-                requested=True, effective=True, active=active, state="effective"
+                requested=True,
+                effective=True,
+                active=active,
+                state="pending",
+                detail="Grid phase is unconfirmed.",
+                guidance="phase",
             )
         pending, error = self._transport.residency.status(sample_id)
         if error:

@@ -1,5 +1,5 @@
 from types import SimpleNamespace
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, cast
 from unittest.mock import call, patch
 
 import pytest
@@ -13,6 +13,11 @@ from flitzis_looper.controller.transport import TransportController
 from flitzis_looper.input_mapping import InputMappingController
 from flitzis_looper.models import BeatGrid, ProjectState, SampleAnalysis
 from tests.conftest import write_mono_pcm16_wav
+from tests.flitzis_looper.conftest import FakeInputRuntimePadBinding
+from tests.flitzis_looper.controller.test_timing_hierarchy import (
+    _bind_fixture_source_identity,
+    _master_provenance,
+)
 
 if TYPE_CHECKING:
     from pathlib import Path
@@ -291,6 +296,69 @@ def test_recovery_held_missing_assignment_is_retained_without_startup_control_or
     audio_engine_mock.bootstrap_transport_from_pad.assert_not_called()
 
 
+def _restored_bpm_receipt(audio: Mock, manual_bpm: float | None) -> dict[str, object]:
+    """Keep restore admission and an explicitly delivered actual effect separate."""
+    receipt: dict[str, object] = {
+        "request_revision": 0,
+        "effect_revision": 0,
+        "state": "applied",
+        "requested_enabled": False,
+        "effective_enabled": False,
+        "reason": None,
+        "execution_frame": None,
+        "submission_available": True,
+    }
+    audio.bpm_lock_status.side_effect = receipt.copy
+    _bind_fixture_source_identity(audio, pad_id=1)
+    submitted_provenance = _master_provenance(None, kind="absent")
+
+    def admit_bpm(*, enabled: bool, anchor_binding: object = None) -> None:
+        nonlocal submitted_provenance
+        assert enabled
+        assert isinstance(anchor_binding, FakeInputRuntimePadBinding)
+        submitted_provenance = _master_provenance(
+            cast("str", anchor_binding.metadata()["source_identity"])
+        )
+        receipt.update(request_revision=1, requested_enabled=True, state="queued")
+
+    audio.set_bpm_lock.side_effect = admit_bpm
+    audio.global_rate_status.side_effect = lambda: {
+        "request_revision": 0,
+        "effect_revision": 0,
+        "state": "applied",
+        "requested_speed": 1.0,
+        "requested_master_period": None,
+        "effective_speed": 1.0,
+        "effective_master_period": 60.0 / manual_bpm
+        if receipt["effective_enabled"] and manual_bpm is not None
+        else None,
+        "execution_frame": 0,
+        "error": None,
+        "master_provenance": submitted_provenance.copy()
+        if receipt["effective_enabled"] and manual_bpm is not None
+        else _master_provenance(None, kind="absent"),
+    }
+    return receipt
+
+
+def _observe_restored_bpm_effect(
+    restored: AppController, audio: Mock, receipt: dict[str, object], manual_bpm: float
+) -> None:
+    parameters = restored.transport.global_params
+    parameters.poll_bpm_lock_application()
+    audio.set_bpm_lock.assert_called_once()
+    binding = audio.set_bpm_lock.call_args.kwargs["anchor_binding"]
+    assert binding.metadata()["pad_id"] == 1
+    assert parameters._bpm_lock_application_status().pending
+    assert restored.session.master_period_seconds is None
+    receipt.update(state="applied", effect_revision=1, effective_enabled=True, execution_frame=64)
+    parameters.poll_bpm_lock_application()
+    assert restored.session.bpm_lock_anchor_pad_id == 1
+    assert restored.session.master_period_seconds == 60.0 / manual_bpm
+    assert not parameters._bpm_lock_application_status().pending
+    audio.set_bpm_lock.assert_called_once()
+
+
 @pytest.mark.parametrize(
     ("has_analysis", "manual_bpm"), [(False, None), (False, 123.5), (True, 123.5)]
 )
@@ -307,7 +375,7 @@ def test_restore_republishes_signed_grid_and_preserves_loop_markers(
     sample_path = tmp_path / "samples" / "reference.wav"
     sample_path.parent.mkdir()
     write_mono_pcm16_wav(sample_path, 48_000)
-    project = ProjectState(bpm_lock=True, selected_pad=1)
+    project = ProjectState(multi_loop=True, bpm_lock=True, selected_pad=1)
     project.sample_paths[1] = "samples/reference.wav"
     project.manual_bpm[1] = manual_bpm
     project.pad_grid_offset_samples[1] = -18_000
@@ -323,16 +391,16 @@ def test_restore_republishes_signed_grid_and_preserves_loop_markers(
     persistence = ProjectPersistence(project)
     persistence.mark_dirty()
     persistence.flush(now=0.0)
+    receipt = _restored_bpm_receipt(audio_engine_mock, manual_bpm)
 
     restored = app_module.AppController()
 
     expected_origin_s = -0.125 if has_analysis else -0.375
     audio_engine_mock.set_pad_bpm.assert_called_with(1, manual_bpm)
     audio_engine_mock.set_pad_timing_metadata.assert_called_with(1, expected_origin_s)
-    if manual_bpm is None:
-        audio_engine_mock.bootstrap_transport_from_pad.assert_not_called()
-    else:
-        audio_engine_mock.bootstrap_transport_from_pad.assert_called_with(1)
+    audio_engine_mock.set_bpm_lock.assert_not_called()
+    audio_engine_mock.bootstrap_transport_from_pad.assert_not_called()
+    assert restored.session.master_period_seconds is None
     assert restored.transport.loop.grid_anchor_sec(1) == expected_origin_s
     audio_engine_mock.reset_mock()
     audio_engine_mock.poll_loader_events.side_effect = [
@@ -357,9 +425,12 @@ def test_restore_republishes_signed_grid_and_preserves_loop_markers(
     audio_engine_mock.set_pad_timing_metadata.assert_called_with(1, expected_origin_s)
     audio_engine_mock.set_pad_loop_region.assert_called_with(1, 1.0, 9.0)
     if manual_bpm is None:
-        audio_engine_mock.bootstrap_transport_from_pad.assert_not_called()
+        audio_engine_mock.set_bpm_lock.assert_not_called()
     else:
-        audio_engine_mock.bootstrap_transport_from_pad.assert_called_with(1)
+        _observe_restored_bpm_effect(restored, audio_engine_mock, receipt, manual_bpm)
+    audio_engine_mock.set_master_period.assert_not_called()
+    audio_engine_mock.set_master_bpm.assert_not_called()
+    audio_engine_mock.bootstrap_transport_from_pad.assert_not_called()
     audio_engine_mock.anchor_transport_phase_from_pad.assert_not_called()
 
 

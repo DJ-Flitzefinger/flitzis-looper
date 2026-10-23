@@ -528,7 +528,7 @@ class ProjectPersistence:
             except json.JSONDecodeError:
                 state = ProjectState()
             except ValidationError as error:
-                state = ProjectPersistence._recover_metadata_fields(raw, error)
+                state = ProjectPersistence._recover_project_with_timing_quarantine(raw, error)
                 persistence = ProjectPersistence(state)
                 persistence.recording_settings_warning = recording_warning
                 if any(
@@ -579,6 +579,14 @@ class ProjectPersistence:
         persistence = ProjectPersistence(state)
         persistence.recording_settings_warning = recording_warning
         return persistence
+
+    @staticmethod
+    def _recover_project_with_timing_quarantine(raw: str, error: ValidationError) -> ProjectState:
+        """Latch only an actual malformed global policy before any restore can use the model."""
+        state = ProjectPersistence._recover_metadata_fields(raw, error)
+        if any(item["loc"] and item["loc"][0] == "global_timing_policy" for item in error.errors()):
+            state.quarantine_timing_policy()
+        return state
 
     @staticmethod
     def _recover_metadata_fields(raw: str, error: ValidationError) -> ProjectState:
