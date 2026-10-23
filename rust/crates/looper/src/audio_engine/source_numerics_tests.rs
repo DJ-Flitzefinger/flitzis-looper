@@ -20,6 +20,52 @@ fn coordinate(numerator: SourceInteger, denominator: SourceInteger) -> SourceCoo
     split_source_coordinate(numerator, denominator).expect("admitted rational fixture")
 }
 
+// Retain the pre-fusion decode followed by the original generic bnum multiplication.
+// This oracle does not call either optimized grid decoding or optimized multiplication.
+fn original_grid_scaled(value: f64, factor: u32) -> Option<SourceInteger> {
+    let bits = value.to_bits();
+    let exponent = u32::try_from((bits >> 52) & 0x7ff).ok()?;
+    if exponent == 0x7ff {
+        return None;
+    }
+    let fraction = bits & ((1_u64 << 52) - 1);
+    let (significand, shift) = if exponent == 0 {
+        (fraction, 0)
+    } else {
+        (fraction | (1_u64 << 52), exponent.checked_sub(1)?)
+    };
+    // Every finite unscaled decode is below 2^2098, so this shift cannot discard a bit.
+    let decoded = Magnitude::try_from(significand).ok()?.checked_shl(shift)?;
+    let magnitude = decoded.checked_mul(Magnitude::try_from(factor).ok()?)?;
+    Some(SourceInteger::canonical(magnitude, bits >> 63 != 0))
+}
+
+// Preserve the original division/direct-qD algorithm independently of the new remainder API
+// and shared multiplication shortcuts.
+fn original_div_rem_euclid(
+    numerator: SourceInteger,
+    denominator: SourceInteger,
+) -> Option<(SourceInteger, SourceInteger)> {
+    if denominator.negative || denominator.magnitude.is_zero() {
+        return None;
+    }
+    let quotient = numerator.magnitude.checked_div(denominator.magnitude)?;
+    let remainder = numerator
+        .magnitude
+        .checked_sub(quotient.checked_mul(denominator.magnitude)?)?;
+    if numerator.negative && !remainder.is_zero() {
+        Some((
+            SourceInteger::canonical(quotient.checked_add(Magnitude::from(true))?, true),
+            SourceInteger::canonical(denominator.magnitude.checked_sub(remainder)?, false),
+        ))
+    } else {
+        Some((
+            SourceInteger::canonical(quotient, numerator.negative),
+            SourceInteger::canonical(remainder, false),
+        ))
+    }
+}
+
 #[test]
 fn shared_split_preserves_exact_fraction_identity_without_changing_numeric_zero() {
     for (whole, fraction) in [
@@ -166,6 +212,65 @@ fn nonfinite_grid_inputs_refuse_and_numeric_zero_is_canonical() {
 }
 
 #[test]
+fn fused_grid_scale_matches_original_exact_product_across_all_finite_exponents() {
+    let factors = [0, 1, 2, 3, 10, 44_100, 48_000, u32::MAX];
+    let fraction_mask = (1_u64 << 52) - 1;
+    for exponent in 0_u64..=2046 {
+        for fraction in [0, 1, fraction_mask] {
+            let bits = (exponent << 52) | fraction;
+            for factor in factors {
+                let expected = original_grid_scaled(f64::from_bits(bits), factor).unwrap();
+                for negative in [false, true] {
+                    let signed_bits = bits | (u64::from(negative) << 63);
+                    let actual =
+                        SourceInteger::from_f64_grid_scaled(f64::from_bits(signed_bits), factor);
+                    let signed_expected = if negative {
+                        expected.negated()
+                    } else {
+                        expected
+                    };
+                    assert_eq!(
+                        actual,
+                        Some(signed_expected),
+                        "binary64 bits {signed_bits:016x}, factor {factor}"
+                    );
+                }
+            }
+        }
+    }
+    for bits in [
+        0x7ff0_0000_0000_0000,
+        0xfff0_0000_0000_0000,
+        0x7ff0_0000_0000_0001,
+        0x7ff8_0000_0000_0000,
+        0xfff8_1234_5678_9abc,
+    ] {
+        for factor in factors {
+            assert!(original_grid_scaled(f64::from_bits(bits), factor).is_none());
+            assert!(SourceInteger::from_f64_grid_scaled(f64::from_bits(bits), factor).is_none());
+        }
+    }
+}
+
+#[test]
+fn fused_decimal_scale_retains_exact_residual_that_legacy_rounding_erases() {
+    // binary64(.1) = 3602879701896397 / 2^55, hence its exact product with 10
+    // is 1 + 2^-54. This expected integer is independent of the retained decoder oracle.
+    let expected = power(SOURCE_GRID_SHIFT)
+        .checked_add(power(SOURCE_GRID_SHIFT - 54))
+        .unwrap();
+    let exact = SourceInteger::from_f64_grid_scaled(0.1, 10).unwrap();
+    assert_eq!(exact, expected);
+    assert_eq!(
+        SourceInteger::from_f64_grid_scaled(-0.1, 10),
+        Some(expected.negated())
+    );
+    let legacy_rounded = 0.1_f64 * 10.0;
+    assert_eq!(legacy_rounded.to_bits(), 1.0_f64.to_bits());
+    assert_ne!(exact, SourceInteger::from_f64_grid(legacy_rounded).unwrap());
+}
+
+#[test]
 fn numerical_source_pair_keeps_large_integer_and_tiny_fraction_separate() {
     let frame = (1_u64 << 53) + 7;
     let tiny = f64::from_bits(1);
@@ -205,6 +310,53 @@ fn signed_arithmetic_compares_cancels_and_multiplies_exactly() {
 }
 
 #[test]
+fn multiplication_shortcuts_match_original_bnum_in_both_orders_and_all_signs() {
+    let values = [
+        SourceInteger::ZERO,
+        integer(1),
+        integer(2),
+        integer(3),
+        integer(10),
+        integer(u128::MAX),
+        power(63),
+        power(64),
+        power(1074),
+        power(3199),
+        power(3200),
+        power(6398),
+        power(6399),
+        power(6330).checked_add(integer(17)).unwrap(),
+        SourceInteger::canonical(Magnitude::MAX, false),
+    ];
+    for (left_index, left) in values.into_iter().enumerate() {
+        for (right_index, right) in values.into_iter().enumerate() {
+            let original = left.magnitude.checked_mul(right.magnitude);
+            for left_negative in [false, true] {
+                for right_negative in [false, true] {
+                    let left = if left_negative { left.negated() } else { left };
+                    let right = if right_negative {
+                        right.negated()
+                    } else {
+                        right
+                    };
+                    let expected = original.map(|magnitude| {
+                        SourceInteger::canonical(magnitude, left_negative != right_negative)
+                    });
+                    assert_eq!(
+                        left.checked_mul(right),
+                        expected,
+                        "operands {left_index}/{right_index}, signs {left_negative}/{right_negative}"
+                    );
+                }
+            }
+        }
+    }
+    // The largest exact single-bit product is admitted; the next bit still refuses.
+    assert_eq!(power(3199).checked_mul(power(3200)), Some(power(6399)));
+    assert!(power(3200).checked_mul(power(3200)).is_none());
+}
+
+#[test]
 fn euclidean_division_floors_negative_inputs_without_cycle_narrowing() {
     for (value, divisor, quotient, remainder) in
         [(7, 3, -3, 2), (6, 3, -2, 0), (1, 2, -1, 1), (0, 3, 0, 0)]
@@ -240,6 +392,72 @@ fn euclidean_division_floors_negative_inputs_without_cycle_narrowing() {
     );
     assert!(input.div_rem_euclid(SourceInteger::ZERO).is_none());
     assert!(input.div_rem_euclid(integer(3).negated()).is_none());
+}
+
+#[test]
+fn quotient_free_remainder_matches_original_division_at_signed_full_width_edges() {
+    let maximum = SourceInteger::canonical(Magnitude::MAX, false);
+    let numerators = [
+        SourceInteger::ZERO,
+        integer(1),
+        integer(2),
+        integer(6),
+        integer(7),
+        integer(11),
+        power(6330).checked_add(integer(17)).unwrap(),
+        power(6399),
+        maximum,
+    ];
+    let denominators = [
+        SourceInteger::ZERO,
+        integer(1),
+        integer(2),
+        integer(3),
+        integer(7),
+        power(1074),
+        power(6330).checked_add(integer(19)).unwrap(),
+        power(6399),
+        maximum.checked_sub(integer(1)).unwrap(),
+        maximum,
+    ];
+    for numerator in numerators {
+        for denominator in denominators {
+            for numerator_negative in [false, true] {
+                for denominator_negative in [false, true] {
+                    let numerator = if numerator_negative {
+                        numerator.negated()
+                    } else {
+                        numerator
+                    };
+                    let denominator = if denominator_negative {
+                        denominator.negated()
+                    } else {
+                        denominator
+                    };
+                    let expected = original_div_rem_euclid(numerator, denominator);
+                    assert_eq!(numerator.div_rem_euclid(denominator), expected);
+                    let actual = numerator.rem_euclid(denominator);
+                    assert_eq!(actual, expected.map(|(_, remainder)| remainder));
+                    if let Some(remainder) = actual {
+                        assert!(remainder >= SourceInteger::ZERO && remainder < denominator);
+                    }
+                }
+            }
+        }
+    }
+    assert!(
+        SourceInteger::ZERO
+            .rem_euclid(SourceInteger::ZERO)
+            .is_none()
+    );
+    assert_eq!(
+        maximum.negated().rem_euclid(maximum),
+        Some(SourceInteger::ZERO)
+    );
+    assert_eq!(
+        integer(1).negated().rem_euclid(maximum),
+        maximum.checked_sub(integer(1))
+    );
 }
 
 #[test]
@@ -475,16 +693,19 @@ fn numerical_operations_request_zero_rust_allocations_on_observed_thread() {
     let signed = power(6330).checked_add(integer(17)).unwrap().negated();
     let three = integer(3);
     let (actual, allocations) = observe_current_thread(|| {
-        let decoded = SourceInteger::from_f64_grid(f64::MAX)?;
+        let decoded = SourceInteger::from_f64_grid_scaled(f64::MAX, u32::MAX)?;
         let cancelled = decoded.checked_add(decoded.negated())?;
         let divided = signed.div_rem_euclid(three)?;
+        let remainder = signed.rem_euclid(three)?;
         let rounded = split_source_coordinate(numerator, denominator)?;
         let tiny = SourceInteger::from_source_pair_grid((1_u64 << 53) + 7, f64::from_bits(1))?;
-        Some((cancelled, divided, rounded, tiny))
+        Some((cancelled, divided, remainder, rounded, tiny))
     });
-    let (cancelled, divided, rounded, tiny) = actual.expect("all measured operations admitted");
+    let (cancelled, divided, remainder, rounded, tiny) =
+        actual.expect("all measured operations admitted");
     assert_eq!(cancelled, SourceInteger::ZERO);
     assert!(divided.1 >= SourceInteger::ZERO && divided.1 < three);
+    assert_eq!(remainder, divided.1);
     assert_eq!(rounded.whole, 1);
     assert_eq!(rounded.fraction.to_bits(), 0);
     assert!(tiny > SourceInteger::ZERO);

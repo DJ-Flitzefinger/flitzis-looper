@@ -47,6 +47,7 @@ anchored map, original geometry or reader-domain conversion contract.
 - [x] Verify independent actual-master rational vectors, exact first pair/unchanged-reader PCM, knots/wraps/partitions, pause/master/history/terminal/failure behavior and reverse scalar glide; finish affected checks, private Release/import/preflight and one independent final-diff review.
 
 - [x] Freeze an analytically bounded anchored source/master representation and precise domain/boundary contract.
+- [x] Optimize exact checked multiplication, finite grid/u32 decoding and phase-only remainder while preserving all admission/refusal, rounding and original-domain guards; compare unchanged minsub and additional isolated profiles, complete affected checks and independent final-diff review.
 - [ ] Implement production fractional scalar/mapped conversion without changing legacy projections or weakening exact guards.
 - [ ] Prove exact first cursor/PCM, original geometry, unequal partitions, knots/wraps, reverse glide and size/failure bounds.
 - [ ] Finish affected checks, needed Release/import/preflight and one independent actual final-diff review.

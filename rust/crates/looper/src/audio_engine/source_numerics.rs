@@ -48,10 +48,19 @@ impl SourceInteger {
 
     /// Decode every finite binary64 exactly onto the integer grid `G = 2^1074`.
     pub(super) fn from_f64_grid(value: f64) -> Option<Self> {
+        Self::from_f64_grid_scaled(value, 1)
+    }
+
+    /// Decode `value * factor` onto G without an intermediate rounded binary64 product.
+    pub(super) fn from_f64_grid_scaled(value: f64, factor: u32) -> Option<Self> {
         let bits = value.to_bits();
         let exponent = u32::try_from((bits >> 52) & 0x7ff).ok()?;
         if exponent == 0x7ff {
             return None;
+        }
+        // Keep the finite guard first: even a zero factor must refuse NaN and infinity.
+        if factor == 0 {
+            return Some(Self::ZERO);
         }
         let fraction = bits & FRACTION_MASK;
         let (significand, shift) = if exponent == 0 {
@@ -59,6 +68,8 @@ impl SourceInteger {
         } else {
             (fraction | (1_u64 << 52), exponent.checked_sub(1)?)
         };
+        // At most 53 + 32 bits before the grid shift; no precision or capacity is lost.
+        let significand = u128::from(significand).checked_mul(u128::from(factor))?;
         let magnitude = lossless_shl(Magnitude::try_from(significand).ok()?, shift)?;
         Some(Self::canonical(magnitude, bits >> 63 != 0))
     }
@@ -97,7 +108,7 @@ impl SourceInteger {
 
     pub(super) fn checked_mul(self, other: Self) -> Option<Self> {
         Some(Self::canonical(
-            self.magnitude.checked_mul(other.magnitude)?,
+            checked_magnitude_mul(self.magnitude, other.magnitude)?,
             self.negative != other.negative,
         ))
     }
@@ -113,6 +124,20 @@ impl SourceInteger {
             lossless_shl(self.magnitude, shift)?,
             self.negative,
         ))
+    }
+
+    /// Exact nonnegative remainder for a strictly positive denominator, without a quotient.
+    pub(super) fn rem_euclid(self, denominator: Self) -> Option<Self> {
+        if denominator.negative || denominator.magnitude.is_zero() {
+            return None;
+        }
+        let remainder = self.magnitude.checked_rem(denominator.magnitude)?;
+        let remainder = if self.negative && !remainder.is_zero() {
+            denominator.magnitude.checked_sub(remainder)?
+        } else {
+            remainder
+        };
+        Some(Self::canonical(remainder, false))
     }
 
     /// Exact floor quotient and nonnegative remainder for a strictly positive denominator.
@@ -212,9 +237,10 @@ fn split_source_coordinate_impl(
             remainder.is_zero()
         } else {
             lossless_shl(remainder, SOURCE_GRID_SHIFT)?
-                == SourceInteger::from_f64_grid(raw)?
-                    .magnitude
-                    .checked_mul(denominator.magnitude)?
+                == checked_magnitude_mul(
+                    SourceInteger::from_f64_grid(raw)?.magnitude,
+                    denominator.magnitude,
+                )?
         };
         if identical {
             return Some(SourceCoordinate {
@@ -249,13 +275,34 @@ fn lossless_shl(value: Magnitude, shift: u32) -> Option<Magnitude> {
     value.checked_shl(shift)
 }
 
+/// Exact common factors avoid the fixed-width generic multiply without changing overflow.
+fn checked_magnitude_mul(left: Magnitude, right: Magnitude) -> Option<Magnitude> {
+    if left.is_zero() || right.is_zero() {
+        return Some(Magnitude::MIN);
+    }
+    let one = Magnitude::from(true);
+    if left == one {
+        return Some(right);
+    }
+    if right == one {
+        return Some(left);
+    }
+    if left.is_power_of_two() {
+        return lossless_shl(right, left.trailing_zeros());
+    }
+    if right.is_power_of_two() {
+        return lossless_shl(left, right.trailing_zeros());
+    }
+    left.checked_mul(right)
+}
+
 /// Bnum has no inherent fused checked div/rem: use one division and the exact qD residual.
 fn unsigned_div_rem(
     numerator: Magnitude,
     denominator: Magnitude,
 ) -> Option<(Magnitude, Magnitude)> {
     let quotient = numerator.checked_div(denominator)?;
-    let remainder = numerator.checked_sub(quotient.checked_mul(denominator)?)?;
+    let remainder = numerator.checked_sub(checked_magnitude_mul(quotient, denominator)?)?;
     Some((quotient, remainder))
 }
 

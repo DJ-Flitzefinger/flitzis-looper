@@ -274,6 +274,20 @@ the potential 2^64 endpoint before caller domain normalization. Numeric zero
 does not preserve raw signed zero; original pair identity still belongs to the
 converter. All capacity failures return before mutation.
 
+Cost refinement keeps the same capacity and algebra. A shared magnitude product
+dispatches zero/unit and either power-of-two operand through the existing lossless
+shift; general operands retain pinned checked multiplication. The helper also
+serves exact qD reconstruction and raw-fraction identity. Decode finite binary64
+before an exact u128 significand*u32 product (at most 85 bits), then widen and
+shift: the result remains below 2^2130. Check nonfinite input before a zero factor;
+preserve the separate unchanged legacy-rounded-product comparison in geometry.
+A phase-only checked remainder avoids the unused quotient/qD reconstruction,
+with the same positive-divisor and negative Euclidean adjustment. Source splitting
+still uses shared quotient/remainder and one fraction RN. Compare unchanged minsub
+and separate near-one, negative-zero, virtual-period, large-epoch and general-product
+shapes before/after. No timing threshold, smaller capacity, new caller or
+stack/callback permission follows from these descriptive measurements.
+
 The following conditional original-knot algebra records capacity research only;
 it does not choose exact seconds*Fs over legacy rounded knot geometry. Let
 I(v)=G*v, Xi=Fs*I(seconds_i), Bi=I(beat_i), B0=I(loop_start_beat), Q0=I(loop_quarters),

@@ -648,3 +648,89 @@ fn descriptive_headless_query_and_refresh_profile_observes_only_thread_requests(
         "anchored_reference_profile: 128_span_queries={query_elapsed:?} 16_refreshes={refresh_elapsed:?}; descriptive only, stack/callback throughput OPEN; observer counts thread Rust requests, not frees/Native/global allocation"
     );
 }
+
+#[test]
+fn descriptive_extended_profiles_keep_edge_shapes_separate() {
+    use std::hint::black_box;
+    use std::time::Instant;
+
+    let virtual_geometry = qualified_geometry(
+        &[(0.0, 0.0), (9.0 / 32768.0, 2.0_f64.powi(-13))],
+        8192,
+        3,
+        FrameRange { start: 0, end: 2 },
+        2.0_f64.powi(-13),
+    );
+    for (name, geometry, position, first) in [
+        ("near_one", variable(), pair(0, 0x3fef_ffff_ffff_ffff), 0),
+        (
+            "negative_zero",
+            variable(),
+            pair(0, (-0.0_f64).to_bits()),
+            0,
+        ),
+        (
+            "virtual",
+            virtual_geometry,
+            pair(2, 0x3fc0_0000_0000_0000),
+            0,
+        ),
+        ("large_epoch", variable(), pair(17, 1), (1_u64 << 53) + 7),
+    ] {
+        let epoch = new_epoch(&geometry, timeline(16_000.0, first, 0.0), position, first);
+        let span = geometry.refresh_span(epoch, first).unwrap();
+        let width = span.end_frame().checked_sub(first).unwrap();
+        assert!(width > 0);
+        let before = Instant::now();
+        let (ok, allocations) = observe_current_thread(|| {
+            (0..128).all(|offset| {
+                black_box(span.position_at(black_box(first + offset % width))).is_some()
+            })
+        });
+        let queries = before.elapsed();
+        assert!(ok);
+        assert_eq!(allocations, ThreadAllocations::default());
+        let before = Instant::now();
+        for offset in 0..16 {
+            black_box(
+                geometry
+                    .refresh_span(epoch, black_box(first + offset * 1000))
+                    .unwrap(),
+            );
+        }
+        let refreshes = before.elapsed();
+        eprintln!(
+            "anchored_extended_profile: {name} 128_queries={queries:?} 16_refreshes={refreshes:?}; queries observed only, descriptive shapes, no worstcase/stack/callback permission"
+        );
+    }
+    let one = SourceInteger::from_integer(1).unwrap();
+    for (name, left, right) in [
+        (
+            "sparse_general",
+            one.checked_shl(3100)
+                .unwrap()
+                .checked_add(SourceInteger::from_integer(3).unwrap())
+                .unwrap(),
+            one.checked_shl(3200)
+                .unwrap()
+                .checked_add(SourceInteger::from_integer(7).unwrap())
+                .unwrap(),
+        ),
+        (
+            "dense_general",
+            one.checked_shl(3199).unwrap().checked_sub(one).unwrap(),
+            one.checked_shl(3199).unwrap().checked_sub(one).unwrap(),
+        ),
+    ] {
+        let before = Instant::now();
+        let (ok, allocations) = observe_current_thread(|| {
+            (0..128).all(|_| black_box(black_box(left).checked_mul(black_box(right))).is_some())
+        });
+        let elapsed = before.elapsed();
+        assert!(ok);
+        assert_eq!(allocations, ThreadAllocations::default());
+        eprintln!(
+            "anchored_extended_profile: {name} 128_products={elapsed:?}; observed Rust thread requests only; no worstcase/RT permission"
+        );
+    }
+}

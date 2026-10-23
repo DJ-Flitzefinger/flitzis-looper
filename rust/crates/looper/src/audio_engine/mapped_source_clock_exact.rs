@@ -146,8 +146,7 @@ impl MappedLoopGeometry {
 }
 
 fn original_frame_grid(seconds: f64, loaded_rate_hz: u32) -> Option<SourceInteger> {
-    let exact = SourceInteger::from_f64_grid(seconds)?
-        .checked_mul(SourceInteger::from_integer(u128::from(loaded_rate_hz))?)?;
+    let exact = SourceInteger::from_f64_grid_scaled(seconds, loaded_rate_hz)?;
     let rounded = SourceInteger::from_f64_grid(seconds * f64::from(loaded_rate_hz))?;
     (exact == rounded).then_some(exact)
 }

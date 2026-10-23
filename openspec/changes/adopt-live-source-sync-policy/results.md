@@ -798,3 +798,78 @@ normal existing-main push without individual approval; verify clean HEAD/trackin
 fresh actual remote before an independent next step. Preserve concise positive
 and negative evidence, then clean only exact own TMP after terminal jobs and
 ownership/path/no-reparse/process guards. One shared env/buildcache/worker remains.
+
+## Exact numerical cost refinement — 2026-10-23
+
+The existing 6400-bit checked algebra now shares exact zero/unit/symmetric
+power-of-two multiplication across signed products, qD reconstruction and raw
+fraction identity. General operands retain pinned bnum checked multiplication.
+Finite binary64/u32 scaling multiplies the integer significand in u128 before
+widening/shifting (maximum85 bits before shift,2130 after), retaining nonfinite
+refusal before factor zero. Anchored phase requests the checked nonnegative
+Euclidean remainder directly; bnum may still compute an internal quotient. The
+source splitter retains shared div/rem, exact raw-fraction identity and single RN.
+The original geometry qualifier still compares against its unchanged legacy
+rounded product. No source/domain/history/first-PCM/adoption/RT guard was relaxed.
+
+The independent retained-algorithm tests cover98,256 signed finite exponent/edge/
+factor cases plus40 nonfinite cases,900 signed multiplication pairs and360
+signed full-width division/remainder combinations. An independent stdlib Fraction
+oracle confirms .1*10=1+2^-54 while the legacy binary64 product equals1; both the
+numeric residual and existing geometry-intersection refusal remain tested.
+
+Serial Release regressions:324 distinctPASS/324 selected/0overlap,4OLDignored
+(one feed resource and three existing Native diagnostics). Numerics21,Clock47,
+Playback47,Beatmap62,Transport46,Feed15,Prepared7+Retained3,Reader17,Custody59.
+The initial Prepared selector selected direct tests only (7PASS); all3
+retained-start neighbors then ran separately, without duplicate counting.
+No failed functional test. Fresh fmt/strict/diffPASS; Release all-target Clippy
+39.73sPASS with109lib/131libtest(56duplicates)/209example warnings: one additional
+unused signed-div/rem support method after phase switched to remainder; no
+suppression or admission change. Full Python/device/music/Human gates not claimed.
+
+Isolated descriptive before/after values (ms,128 queries or16 refreshes):
+
+| Shape | Queries before | Queries after | Refresh before | Refresh after |
+| --- | ---: | ---: | ---: | ---: |
+| Unchanged minsub |5.2905|1.8856|5.1819|3.7831|
+| Near one |5.2864|2.2153|5.1599|3.9761|
+| Negative zero |5.0065|1.8683|5.0737|3.7803|
+| Virtual period |2.2673|0.4236|4.7971|3.7050|
+| Large epoch |5.2629|1.9044|5.1646|3.8946|
+
+128 general products: sparse277.5→281.5us; dense281.4→287.2us. Thus general
+multiplication did not improve in this run. Same Release profile/input/count,
+one test thread, no concurrent owned Native job during isolated profiles. These
+single-run host timings are descriptive, not a statistical/worstcase guarantee.
+Only query/product thread Rust allocation requests were observed (zero); refresh,
+frees, Native/global allocators, actual stack, callbacks and32-lane deadlines are
+NOT qualified. Current exact coordinate path remains without productive RT caller.
+
+Artifacts: workspace/test-artifacts/exact-numerics-cost-20261023, including retained
+before/after logs, oracle, complete distinct-test summary and actual checks. Root
+observed installed Native34577920B/SHA1cd2c058d8d5298e60fe2bdabdc3922b08d0aa7ef34b0ed25c21691d41695c1c,
+mtime07:43:30UTC BEFORE this chat's08:14+ activation, differing from the historic
+StageS handoff snapshot. Fresh local baseline controls this block; no installation
+or App/device action was performed. Private Release/import/final review/publication
+receipts follow; entire FULL scope and STOP before full Rustport/Slice8 remain.
+
+Private Release37.79sPASS (52 production build warnings),34577408B/SHA256
+fb08f148ebe7d6465c5b23a14bcba7f67b0e46807433c194638c518a49b9fd3e. Fresh isolated
+private-origin/release/13API/editor4 checksPASS; NOT installed. Canonical
+start.bat --checkPASS/noApp on the freshly observed existing installation;
+installed-after independently equals installed-before34577920B/1cd2c058…,
+mtime07:43:30UTC predating this chat. OwnTMP6files46998968B (<128MiB), allNativejobs
+and numeric authorTERMINAL. Source-compatible prior Python integration reused;
+no full Python rerun, installation or device/hearing acceptance claimed.
+
+ONE continuous independent NONAUTHOR final source/results/meta review CLEAR;
+raw logs and exact counts independently checked. Documentation-only final diff
+check initially detected two appended CR line endings; normalized to the existing
+LF format and final diff/strict checks passed. No runtime source changed after
+the successful tests/build. Delivery census (all regular including hidden, no
+reparse traversal) before own TMP cleanup: test-artifacts17841042794B/454692files,
+env3249696864B/21323files, target16022538990B/10749files. Retain ONE compatible
+shared env/cache/worker under the existing >30GiB decision; only new exact own TMP
+46998968B is disposable after reviewed publication/clean fresh remote/terminal/
+ownership/path/no-reparse/process guards. Human/unknown/denied/old data protected.

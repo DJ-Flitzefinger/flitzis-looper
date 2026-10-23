@@ -251,8 +251,7 @@ fn anchor(epoch: MappedClockEpoch) -> Option<AnchoredClock> {
 
 fn frame_grid(seconds: f64, loaded_rate_hz: u32) -> Option<SourceInteger> {
     // Outside search probes need exact arithmetic, not an extra legacy-knot veto.
-    SourceInteger::from_f64_grid(seconds)?
-        .checked_mul(SourceInteger::from_integer(u128::from(loaded_rate_hz))?)
+    SourceInteger::from_f64_grid_scaled(seconds, loaded_rate_hz)
 }
 
 fn anchor_terms(
@@ -304,7 +303,7 @@ fn phase_at(
 ) -> Option<Phase> {
     let terms = anchor_terms(epoch, beat_start, quarters, rate)?;
     let unfolded = unfolded_at(epoch, &terms, frame)?;
-    let (_, remainder) = unfolded.div_rem_euclid(terms.period)?;
+    let remainder = unfolded.rem_euclid(terms.period)?;
     Some(Phase {
         terms,
         unfolded,
