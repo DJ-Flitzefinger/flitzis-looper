@@ -561,3 +561,77 @@ actual receipts, independently recomputed test count and retained fixture errors
 Only this factual receipt and the bounded reader-boundary checkbox follow; the
 same reviewer checks their final consistency before coherent commit and normal
 existing-main push. Conversion and all remaining acceptance gates stay OPEN.
+
+## Checked exact numerical support and finite master horizon — 2026-10-23
+
+After ae7602bf, the next bounded gap was reusable exact arithmetic, before any
+geometry/conversion choice. The new private SourceInteger adapter uses pinned
+bnum0.14.4/default-features=false, 800 inline bytes/6400 magnitude bits and checked
+immutable sign-magnitude operations. It decodes finite f64 on G=2^1074, rejects
+nonfinite/high-bit-loss/capacity/zero-divisor input, and keeps signed Euclidean
+quotients without u64 narrowing. Rational splitting retains whole:u128, rounds
+only its exact fraction once with ties-to-even, and refuses exact values above
+2^64 before rounding. A fractional-one carry may produce the virtual 2^64
+endpoint for later checked caller normalization. Numeric zero is +0; raw source
+fraction identity, geometry, reader custody and physical addressing are separate.
+
+The independent stdlib Fraction/struct oracle supplies20 exact vectors: large
+whole parts, non-dyadic fractions, both even neighbors, zero/subnormal/normal
+ties, fractional-one carry, full5304-bit denominators and 2^64 boundaries.
+Accepted N is necessarily below2^5368 under the D/value bounds; the conservative
+6363-bit input cap is not presented as a reachable accepted numerator. The
+design retains the conditional original-knot algebra and capacity derivation
+without choosing exact-seconds versus legacy geometry. Its splitter bound uses
+r<D, then at most1074 shift bits, requiring at most6378 of6400 bits.
+
+TransportBeatProjection now has a read-only finite horizon helper using exactly
+the existing evaluator. Ordered finite endpoints bound its nondecreasing actual
+projection; cast plateaus and intermediate overflow remain unchanged. An actual
+Timeline with Fs8192 and valid period2^-1013 has M(2^24-1) finite but M(2^24)=Inf.
+The helper refuses that longer horizon and full-u64 use. Tests also retain a
+valid -MAX anchor whose actual intermediate division overflows, rather than
+reassociating it into another clock. The projection stays32 bytes/Copy/no-drop.
+
+Four final compatible receipts contain121 DISTINCT PASS, zero overlap/failure/
+ignore: new Numerics15, whole Transport46 (six new), SourcePlayback39 and
+MappedClock21. Initial Numerics15 passed after2m40 compile; final15 after2m44,
+both0.00s. No software-test RED occurred. The Rust allocator scope observed zero
+alloc/alloc_zeroed/realloc requests on its thread for the measured operations;
+it does not observe deallocations, Native/C++ allocation or whole-process cost.
+Fixed values are Copy/no-drop and no wide operand enters any lane/span.
+
+CargoFMT/explicitRust2024/strict OpenSpec/diff checks pass. Initial all-target
+Release Clippy37.36s passed but exposed one redundant constant test assertion;
+only that assertion was removed, with actual zero-decode/cancellation/negation/
+product checks retained. Final Clippy39.78s passes117lib/131lib-test(56duplicates)/
+217example warnings. The17 additional production/example warnings identify
+these dormant numerical prerequisites; existing warning debt is not hidden.
+
+Private locked Release38.44s passes, Native34,838,528B/SHA256
+`c3cead37a890a018c393eb4a21580becb7f78a451883b6616f3ef9104fdf3c0c`;
+actual private origin/release profile/all13 Portable API checks/editor4 pass.
+The later test-only assertion removal leaves that production evidence compatible.
+Bnum adds only its locked package/direct edge, no mandatory dependencies, new
+runtime DLL or bootstrap route; MSRV1.87 fits actual rustc1.95.0. Complete
+Portable acceptance remains open. No installation or fresh whole-Python claim:
+installed StageS Native remains34,838,016B/SHA3af872..., and fresh canonical
+start.bat --check passes without App/device start. Existing unchanged-path
+Python evidence is reused only within its compatible scope.
+
+Receipts/oracle/repro live outside Git at
+test-artifacts/bounded-source-numerics-20261023. Own TMP may be removed only after
+reviewed coherent commit/normal main push/clean fresh actual-remote equality,
+terminal jobs and exact ownership/path/process/no-reparse guards. One shared
+compatible cache/env/worker is retained under the existing storage decision.
+No productive converter/adoption caller, new clock or geometry decision follows.
+Anchored first-pair/PCM, original knots/wraps, source/ACK/retirement, copied layout,
+actual stack/callback throughput and all FULL-Goal Native/music/B2/resource/Human/
+final gates remain OPEN; STOP before full Rust-port/Slice8.
+
+One continuous independent NONAUTHOR final-diff review returns CLEAR on exact
+staged tree `9a0ad01d61ad8e375385f15d0c7fbfc5e4c714e8`, independently confirming
+the121 distinct/selected passes and actual Clippy/private Release/API/preflight
+receipts. Only this factual receipt and the bounded validation checkbox follow;
+the same reviewer verifies final consistency before commit/normal main push.
+Own TMP is6files/47,354,535B; direct Scratch1480->1480, zero new entries. Cleanup
+remains gated by publication/clean actual remote/terminal and ownership checks.

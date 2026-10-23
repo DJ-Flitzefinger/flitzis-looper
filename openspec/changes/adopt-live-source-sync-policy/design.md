@@ -257,6 +257,53 @@ Both genuine global start-mode settings use this same live conversion; the
 settings themselves remain fully-stopped-only and never acquire a live override.
 AutoBars/window changes and unsupported transitions retain their explicit gates.
 
+## Exact numerical support and finite master horizon
+
+Before choosing the anchored geometry implementation, an independent exact
+numerical adapter uses pinned `bnum =0.14.4`, with default features disabled.
+Its current `Uint<800>` API stores 800 inline bytes (6400 bits), has no mandatory
+dependency with those features and is Copy/no-drop. Explicit checked operations
+are required: its checked left shift alone does not reject high-bit loss.
+Decode finite f64 exactly as signed integer G*v, G=2^1074; this keeps the least
+subnormal fraction without a rounded inverse. One checked division followed by
+checked q*D/subtraction obtains a quotient/remainder without duplicate division.
+Signed Euclidean division and nonnegative rational-to-source splitting are
+separate operations. The latter keeps the integer quotient, rounds only r/D once
+with ties-to-even, including subnormal and rounded-one carry, and uses u128 for
+the potential 2^64 endpoint before caller domain normalization. Numeric zero
+does not preserve raw signed zero; original pair identity still belongs to the
+converter. All capacity failures return before mutation.
+
+The following conditional original-knot algebra records capacity research only;
+it does not choose exact seconds*Fs over legacy rounded knot geometry. Let
+I(v)=G*v, Xi=Fs*I(seconds_i), Bi=I(beat_i), B0=I(loop_start_beat), Q0=I(loop_quarters),
+a=q*G+I(f), mu=I(actual_M(n))-I(actual_M(E)), with anchor segment j and forward
+segment i. Set dx=Xj1-Xj, db=Bj1-Bj, dx_i=Xi1-Xi and db_i=Bi1-Bi. Then
+N=(Bj-B0)*dx+(a-Xj)*db+mu*dx, V=Q0*dx, R=N-floor(N/V)*V. The source ratio is
+Y/Z, where Y=Xi*dx*db_i+(R-(Bi-B0)*dx)*dx_i and Z=G*dx*db_i.
+For finite binary64 inputs, |I(v)|<2^2098 and nonzero u32 Fs gives |Xi|<2^2130;
+differences have |dx|,|a-Xj|<2^2131 and |db|,|mu|,|Bi-B0|<2^2099.
+The three N terms yield |N|<2^4232, V<2^4229; the two Y terms yield
+|Y|<2^6363, while Z<2^5304. Extra exact source-period rational reduction is not
+covered. Geometry/domain/reader qualification and actual implementation remain open.
+
+The splitter independently enforces N<2^6363, D<2^5304 and exact N/D<=2^64.
+Together the latter two imply accepted N<2^5368. For fractional RN, r<D has at
+most 5304 bits; its at-most1074-bit shift requires at most 6378 bits, within6400.
+No wide value enters a span/lane/checkpoint. Fixed storage and bounded library
+loops prove neither stack budget nor throughput. Bnum is pure Rust, needs no
+new runtime DLL/bootstrap route, and its MSRV1.87 fits the existing Rust1.95
+locked Maturin build; complete Portable acceptance remains a separate final gate.
+
+The same prerequisite adds a read-only endpoint certification helper on the
+existing TransportBeatProjection. With valid positive slope and finite anchor,
+the unchanged rounded evaluator is nondecreasing, so finite ordered endpoints
+bound every intervening query. Preserve raw endpoint bits and old plateaus;
+never substitute a new (n-E)/P clock. Existing valid period checks alone do not
+exclude a later infinity. Certify the actual admitted horizon, through u64::MAX
+when claiming full-u64 support. No production conversion/adoption is connected.
+Original geometry/seam choice, layout, costs and full acceptance remain OPEN.
+
 ## Immutable custody and original lifetime
 
 Before enabling any conversion, an independent behavior-preserving prerequisite

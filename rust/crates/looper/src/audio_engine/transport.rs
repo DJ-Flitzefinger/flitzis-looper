@@ -67,6 +67,28 @@ impl TransportBeatProjection {
             + (output_frame as f64 - self.beat_anchor_frame as f64) / self.frames_per_beat()
     }
 
+    /// Certify the actual immutable projection over an inclusive frame horizon.
+    /// With a finite anchor and positive finite divisor the unchanged evaluator
+    /// is nondecreasing, including its u64-to-f64 plateaus. Finite ordered
+    /// endpoints therefore bound every interior evaluation. Do not reassociate
+    /// the expression: intermediate overflow is part of the existing clock.
+    pub(crate) fn finite_beats_for_horizon(self, first: u64, last: u64) -> Option<(f64, f64)> {
+        let frames_per_beat = self.frames_per_beat();
+        if first > last
+            || self.sample_rate_hz == 0
+            || !self.master_period_seconds.is_finite()
+            || self.master_period_seconds <= 0.0
+            || !frames_per_beat.is_finite()
+            || frames_per_beat <= 0.0
+            || !self.beat_anchor_position.is_finite()
+        {
+            return None;
+        }
+        let first_beat = self.beat_position_at_frame(first);
+        let last_beat = self.beat_position_at_frame(last);
+        (first_beat.is_finite() && last_beat.is_finite()).then_some((first_beat, last_beat))
+    }
+
     pub(crate) fn matches_exact(self, other: Self) -> bool {
         self.sample_rate_hz == other.sample_rate_hz
             && self.master_period_seconds.to_bits() == other.master_period_seconds.to_bits()
@@ -481,6 +503,139 @@ fn frame_at_or_after(target_frame: f64, current_frame: u64) -> u64 {
     // Floating beat arithmetic can put an exact integer boundary a tiny
     // fraction of a frame above itself. Preserve that boundary consistently.
     ((target_frame - GRID_EPSILON_FRAMES).ceil() as u64).max(current_frame)
+}
+
+#[cfg(test)]
+mod projection_horizon_tests {
+    use super::*;
+
+    #[test]
+    fn finite_horizon_retains_actual_timeline_bits_without_progress_or_extra_state() {
+        assert_eq!(std::mem::size_of::<TransportBeatProjection>(), 32);
+        assert!(!std::mem::needs_drop::<TransportBeatProjection>());
+        for sample_rate in [8_192, 44_100, 48_000, u32::MAX] {
+            for period in [0.125, 0.5, 1.125] {
+                for anchor in [-3.25, -0.0, 0.0, 3.125] {
+                    let mut timeline = TransportTimeline::new(sample_rate);
+                    assert!(
+                        timeline.set_master_period_and_anchor_beat_position_at_frame(
+                            period, anchor, 96_007,
+                        )
+                    );
+                    let projection = timeline.beat_projection().unwrap();
+                    let before_frame = timeline.output_frame();
+                    let (first, last) = projection.finite_beats_for_horizon(0, u64::MAX).unwrap();
+                    assert_eq!(
+                        first.to_bits(),
+                        timeline.beat_position_at_frame(0).unwrap().to_bits()
+                    );
+                    assert_eq!(
+                        last.to_bits(),
+                        timeline.beat_position_at_frame(u64::MAX).unwrap().to_bits()
+                    );
+                    for frame in [0, 1, 96_006, 96_007, 96_008, 1 << 53, u64::MAX] {
+                        let actual = timeline.beat_position_at_frame(frame).unwrap();
+                        assert!(actual.is_finite() && actual >= first && actual <= last);
+                    }
+                    assert_eq!(timeline.output_frame(), before_frame);
+                    assert!(projection.matches_timeline(&timeline));
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn ordered_horizons_include_single_frame_and_actual_tiny_anchor_results() {
+        for anchor in [0.0, -0.0, f64::from_bits(1), -f64::from_bits(1)] {
+            let mut timeline = TransportTimeline::new(48_000);
+            assert!(timeline.set_master_period_and_anchor_beat_position_at_frame(0.5, anchor, 0));
+            let projection = timeline.beat_projection().unwrap();
+            assert!(projection.finite_beats_for_horizon(1, 0).is_none());
+            let actual = projection.beat_position_at_frame(0).to_bits();
+            let (first, last) = projection.finite_beats_for_horizon(0, 0).unwrap();
+            assert_eq!((first.to_bits(), last.to_bits()), (actual, actual));
+        }
+    }
+
+    #[test]
+    fn valid_period_can_have_finite_current_beat_but_overflow_a_later_horizon() {
+        let mut timeline = TransportTimeline::new(8_192);
+        assert!(timeline.set_master_period(2.0_f64.powi(-1013)));
+        let projection = timeline.beat_projection().unwrap();
+        assert_eq!(projection.frames_per_beat(), 2.0_f64.powi(-1000));
+        let final_finite_frame = (1 << 24) - 1;
+        assert!(
+            projection
+                .beat_position_at_frame(final_finite_frame)
+                .is_finite()
+        );
+        assert_eq!(projection.beat_position_at_frame(1 << 24), f64::INFINITY);
+        assert!(
+            projection
+                .finite_beats_for_horizon(0, final_finite_frame)
+                .is_some()
+        );
+        assert!(projection.finite_beats_for_horizon(0, 1 << 24).is_none());
+        assert!(projection.finite_beats_for_horizon(0, u64::MAX).is_none());
+        assert_eq!(timeline.output_frame(), 0);
+    }
+
+    #[test]
+    fn certification_preserves_large_frame_cast_plateaus() {
+        let mut timeline = TransportTimeline::new(8_192);
+        assert!(timeline.set_master_period(1.0 / 8_192.0));
+        let projection = timeline.beat_projection().unwrap();
+        for (first_frame, last_frame) in [(1 << 53, (1 << 53) + 1), (u64::MAX - 1, u64::MAX)] {
+            let (first, last) = projection
+                .finite_beats_for_horizon(first_frame, last_frame)
+                .unwrap();
+            assert_eq!(first.to_bits(), last.to_bits());
+            assert_eq!(
+                first.to_bits(),
+                projection.beat_position_at_frame(first_frame).to_bits()
+            );
+            assert_eq!(
+                last.to_bits(),
+                projection.beat_position_at_frame(last_frame).to_bits()
+            );
+        }
+    }
+
+    #[test]
+    fn intermediate_overflow_is_not_reassociated_into_a_finite_beat() {
+        let mut timeline = TransportTimeline::new(8_192);
+        assert!(
+            timeline.set_master_period_and_anchor_beat_position_at_frame(
+                2.0_f64.powi(-973),
+                -f64::MAX,
+                0,
+            )
+        );
+        let projection = timeline.beat_projection().unwrap();
+        assert_eq!(projection.frames_per_beat(), 2.0_f64.powi(-960));
+        assert_eq!(projection.beat_position_at_frame(u64::MAX), f64::INFINITY);
+        assert!(projection.finite_beats_for_horizon(0, 0).is_some());
+        assert!(projection.finite_beats_for_horizon(0, u64::MAX).is_none());
+    }
+
+    #[test]
+    fn malformed_projection_inputs_refuse_without_panicking() {
+        let original = TransportTimeline::new(48_000).beat_projection().unwrap();
+        let mut malformed = original;
+        malformed.sample_rate_hz = 0;
+        assert!(malformed.finite_beats_for_horizon(0, 0).is_none());
+        for period in [0.0, -0.0, -1.0, f64::NAN, f64::INFINITY, f64::MAX] {
+            malformed = original;
+            malformed.master_period_seconds = period;
+            assert!(malformed.finite_beats_for_horizon(0, u64::MAX).is_none());
+        }
+        for anchor in [f64::NAN, f64::INFINITY, f64::NEG_INFINITY] {
+            malformed = original;
+            malformed.beat_anchor_position = anchor;
+            assert!(malformed.finite_beats_for_horizon(0, u64::MAX).is_none());
+        }
+        assert!(original.matches_exact(TransportTimeline::new(48_000).beat_projection().unwrap()));
+    }
 }
 
 #[cfg(test)]

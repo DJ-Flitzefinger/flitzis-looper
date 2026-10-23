@@ -149,3 +149,27 @@ A coordinates-only musical scalar continuation SHALL use an explicit projection 
 - **AND** no source, reader, mapped-conversion, adoption or realtime preparation permission SHALL follow from coordinates alone
 
 The musical coordinate prerequisite SHALL NOT change legacy/physical arithmetic, source timing ownership or reader-domain selection. Its per-epoch bound SHALL NOT be presented as a global ideal unrounded-glide, whole-process resource or music/device acceptance bound.
+
+### Requirement: Supporting exact arithmetic has explicit fixed capacity and rounding
+Supporting source arithmetic SHALL use checked fixed-capacity values with at most 6400 magnitude bits and no heap owner. Finite binary64 inputs SHALL decode exactly onto the integer lattice G=2^1074; nonfinite input, lost high bits, arithmetic capacity exhaustion and zero divisors SHALL refuse without changing preceding state. A checked shift SHALL reject discarded high bits, not merely an excessive shift count. Signed Euclidean division SHALL retain the exact quotient and nonnegative remainder without a u64 cycle narrowing.
+
+#### Scenario: An exact source ratio rounds a separate fractional frame
+- **WHEN** nonnegative numerator N is below 2^6363, positive denominator D is below 2^5304 and the exact source coordinate is at most 2^64
+- **THEN** support arithmetic SHALL retain the integer quotient separately and round only its exact fractional remainder once to binary64 using round-to-nearest ties-to-even
+- **AND** normal ties, subnormals and a rounded fractional one SHALL be handled exactly, allowing an integer result of 2^64 for subsequent checked loop normalization before any physical address cast
+- **AND** converting the full numerator/denominator to floating point SHALL NOT replace exact quotient/remainder rounding
+
+#### Scenario: A numeric zero is distinct from the original raw source fraction
+- **WHEN** supporting integer arithmetic canonicalizes zero
+- **THEN** it SHALL NOT claim preservation of an original negative-zero fraction or grant source-domain, reader, conversion or history permission
+- **AND** the future source converter SHALL still retain raw anchor bits and use the established generic zero-displacement identity
+
+### Requirement: Frozen master horizons use the actual finite projection
+Before anchored conversion relies on a frozen master horizon, it SHALL certify ordered frame bounds, finite positive frames-per-beat, a finite anchor and finite endpoint evaluations of the existing nondecreasing TransportBeatProjection. The original evaluation order and u64-to-binary64 plateaus SHALL remain unchanged. An invalid or nonfinite horizon SHALL refuse before effective mutation and SHALL NOT be classified as a genuine source knot or wrap.
+
+#### Scenario: Individually valid master values overflow at a later address
+- **WHEN** the existing period is valid but the actual frozen projection becomes nonfinite within the proposed horizon
+- **THEN** horizon certification SHALL refuse
+- **AND** a full-u64 conversion SHALL require a certified endpoint at u64::MAX rather than infer safety from current E alone
+
+These numerical prerequisites SHALL add no productive conversion caller, second clock, source ownership, oversized copied span or realtime throughput approval. Geometry, reader-domain, original-knot, stack and actual callback-cost qualification SHALL remain separate mandatory gates.

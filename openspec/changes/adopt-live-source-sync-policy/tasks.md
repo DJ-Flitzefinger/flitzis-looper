@@ -36,6 +36,10 @@ anchored map, original geometry or reader-domain conversion contract.
 
 - [x] Verify the reader-domain boundary using actual cold-source custody, accepted timing publication/ACK and qualified map delivery, explicitly synthetic timing evidence and original pair/tap/PCM paths; retain exact conversion refusal and finish affected checks/review.
 
+- [x] Add a checked fixed-capacity exact numerical adapter with pinned alloc-free integer storage, exact finite-f64 decoding, signed Euclidean division and separately rounded rational source fractions.
+- [x] Certify finite ordered horizons using the unchanged actual master evaluator, preserving endpoint bits and legacy plateaus without adding a clock or productive converter.
+- [x] Prove independent rational vectors, capacity/shift/tie/subnormal/carry/failure/ownership limits and affected transport compatibility; finish needed Release/import/preflight and one independent final-diff review.
+
 - [ ] Freeze an analytically bounded anchored source/master representation and precise domain/boundary contract.
 - [ ] Implement production fractional scalar/mapped conversion without changing legacy projections or weakening exact guards.
 - [ ] Prove exact first cursor/PCM, original geometry, unequal partitions, knots/wraps, reverse glide and size/failure bounds.

@@ -203,6 +203,7 @@ mod source_feed_history;
 mod source_grid;
 mod source_map_admission;
 mod source_map_api;
+mod source_numerics;
 mod source_playback;
 mod source_reader;
 mod source_sync_policy;
