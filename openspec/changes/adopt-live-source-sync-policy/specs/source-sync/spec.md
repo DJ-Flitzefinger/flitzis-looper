@@ -206,7 +206,8 @@ These numerical prerequisites SHALL add no productive conversion caller, second 
 
 #### Scenario: Cost evidence uses the copied reader path and identifies its limits
 - **WHEN** supporting anchored coordinates are profiled before productive conversion
-- **THEN** evidence SHALL distinguish isolated coordinate queries from complete copied-reader blocks, including endpoint preflight, span refresh and advancement for a fixed 32-lane cohort
+- **THEN** evidence SHALL distinguish isolated queries from complete copied-reader blocks with endpoint preflight, span refresh and advancement, including realistic two/four/six participants, twenty as primary stress and ten as fallback when stress failure may be performance-related
+- **AND** historical thirty-two-reader timings SHALL remain diagnostic evidence rather than a throughput release hurdle; internal thirty-two-lane capacity, correctness, layout and ownership bounds SHALL remain unchanged
 - **AND** full-reader and checked-reader routes, original knot/wrap bursts, virtual periods, raw fraction edges and large epochs SHALL retain their actual work and report host timings against an explicitly stated frame-count/sample-rate interval
 - **AND** compiled unwind evidence SHALL identify its exact executable/PDB and distinguish individual fixed stack adjustments from a complete peak-stack bound
 - **AND** component timings SHALL identify their prepared inputs and non-additive observation costs; a counted boundary-search replay SHALL match actual span endpoints and SHALL NOT be presented as an instrumented production call trace

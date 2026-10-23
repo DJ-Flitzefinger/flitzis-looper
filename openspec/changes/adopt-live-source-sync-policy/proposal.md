@@ -22,6 +22,8 @@ integer/fraction source cursor through a binary64 B/S round trip.
 
 ## Non-goals
 
+The later Human hierarchy and shared-grid/unequal-loop/one-shot requirements remain binding in the full Goal. This conversion block's exclusions below do not exclude their separate implementation; existing fixed ratio or mapped creative-offset mode acknowledgement is not complete grid-phase acceptance. Performance acceptance now uses realistic2/4/6 and stress20, with10 when performance-related stress failure warrants it; historical32 timing remains diagnostic while internal32 capacity/correctness bounds remain.
+
 This change does not qualify automatic musical analysis, select a new stretcher,
 open Native/pitch/Key-Lock transitions, change master tempo, alter physical loop
 markers, implement mapped Seek/EOF, or close music/device/Human/resource gates.

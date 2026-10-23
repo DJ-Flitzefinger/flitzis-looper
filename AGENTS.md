@@ -1,3 +1,44 @@
+## Direkte Humanregel2026-10-23: verbindlicher Funktions-Zusammenspiel-Agent
+
+Diese dauerhafte Projektregel gilt für alle künftigen Features, Bugfixes, Planung,
+Refactorings, UI, Persistenz, Tests und Pflege. Ein eigener spezialisierter Agent
+prüft das Zusammenspiel der Looper-Funktionen vor der Implementierung und nochmals
+am tatsächlich eingefrorenen Implementierungsversuch vor integrierten Tests/Build.
+Aktuelle Rolle systems_interactions; in späteren Chats neu einsetzen, nicht als
+fortbestehenden Laufzeitagenten erfinden. Root bleibt selbst für End-to-End-Urteil,
+Lösung und Integration verantwortlich.
+
+Der Agent prüft explizite UND implizite Abhängigkeiten, sinnvolle Betriebszustände,
+Eltern-/Kindwechsel, gespeicherte Wünsche versus Verfügbarkeit/Pending/Actual/Phase,
+GUI/MIDI, Load/Restore/Recovery/Persistenz, Master/Zeit/Rate/Pitch, Source-/Content-/
+Lifetime-/ACK-/Retirement, Loop/OneShot/EOF/Pause/Hold und tatsächlich betroffene
+Nachbarfunktionen samt stale/cancel/ABA/Fehler-/Kapazitätsfällen. Er hinterfragt den
+Gesamtansatz; alte Pläne oder aktueller Code ersetzen keine logische kombinierte
+Produktprüfung. Neueste Humanentscheidungen und gültige spätere Normen steuern.
+Mode-/Tempo-/Map-ACK darf keine unbewiesene Gridphase oder Humanabnahme bestätigen.
+
+Vor Writer-GO liefert er konkrete priorisierte Befunde, Quellen/Invarianten und
+passende Interaktionsregressionen. Root löst Vertrags-/Architekturkonflikte vor
+abhängigem Code. Nach dem Implementierungsversuch prüft er den tatsächlichen Diff
+und das kombinierte Verhalten sowie den Testplan; Quickformat/Syntax darf vorher.
+Nach wesentlichen Fixes nur betroffene Befunde erneut prüfen. Die Prüfung ergänzt
+den einen generischen unabhängigen Finaldiffreview und Tests; keine redundante
+Voll-Auditkette, keine eigenen Build-/Test-/Writer-/Git-/Appjobs des Agenten. Kleine
+Änderungen passend skalieren. Offene Befunde ehrlich lösen/als reale offene Gates
+führen, kein falsches CLEAR/Scopekürzen/Guardentfernen.
+
+Diese Rolle und die originalen Workspace-/Systemsqualitäts-/Humanregeln in jeden
+Writerauftrag und jede Übergabe übernehmen, auch bei älterem Worktree-AGENTS.
+Rollendetail: codex-meta/quality/looper-systems-interactions.md im ursprünglichen
+Workspace. Humanabwesenheit erzeugt keine neue Start-/Freigabefrage. Voller
+Goalumfang, App/Privat/RT-Schutz und STOP vor Rustport/Slice8 bleiben. Nach jedem
+geprüften kohärenten Schritt im Rahmen der jeweils geltenden Goal-/Git-
+Autorisierung tatsächliche Checks/Review, Commit+normalmainPush OHNE Einzelabsegnung
+und clean HEAD=Tracking=frisch actualRemote vor Folgeschritt.
+Kapazität weiter unterbrechbar20/40/max60s ohne gewähltes Retry-/Gesamtlimit
+wiederholen/effectsfirst; kein Modell-/Scopewechsel oder freiwilliger Goalstopp
+allein deswegen. Keine zusätzlichen destruktiven Git-/Remote-/PR-Rechte.
+
 ## Direkte Humanregel 2026-10-23: Modellkapazität abwarten und Auftrag fortsetzen
 
 Die Meldung "Selected model is at capacity. Please try a different model." ist

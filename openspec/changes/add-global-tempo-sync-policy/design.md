@@ -1,95 +1,131 @@
-## Authoritative paths and compatibility
+## Latest Human contract and reusable authority — 2026-10-23
 
-Reuse ProjectState, existing project persistence/recovery and strict historical
-Pair/Copy/Portable journal validation. Global choices are project settings, not
-content snapshot fields. Keep per-content PadSourceSyncIntent bytes and revision
-semantics, Copy/Move/Swap/Bank behavior and historical seals unchanged.
+The effective hierarchy is MultiLoop -> BPM Lock -> SYNC -> Realtime BPM. Retain
+separate raw project/content preferences; suspend child availability while a
+parent is off and requalify on reactivation. This supersedes earlier usable
+independent controls and the SYNC-OFF bypass of existing BPM matching. The selected
+PAD at BPM-Lock activation remains its reference; no automatic selection-follow,
+new master election, Transport reset or source seek is introduced.
 
-Exactly false/revision0 is neutral PAD intent. Explicit true/revision0 remains
-valid; explicit OFF at a later revision remains an opt-out. Global ON can enable
-neutral eligible content; global OFF suppresses every PAD without overwriting
-its stored preference. A missing global choice preserves prior behavior rather
-than automatically enabling old untouched content or suppressing old explicit ON.
-Use a strict optional global policy with checked revisioning for this compatibility
-state, not extra per-PAD sentinels or revision rewrites. PAD toggle/set operations
-must compare resolved preference so inherited ON can become explicit OFF.
+ProjectState, existing controllers, the complete Native runtime publication and
+actual callback claim remain the only paths. Reuse strict optional schema1 with
+required nullable sync/realtime_bpm and u64 revision; no wire ABI change or new
+persisted effective fields. Preserve historical seals, raw PAD intents and valid
+other settings. Historical absence preserves wishes, now masked by the hierarchy.
 
-The strict project DTO is schema1 with required `sync: bool|null`,
-`realtime_bpm: bool|null` and checked `revision: u64`. Both choices null at revision0
-are the neutral legacy policy. Native receives optional keyword-only
-`timing_policy_json=None` on existing `set_input_runtime_state`; validate at most
-1024 UTF-8 bytes and the exact schema before mutation. Omitted/neutral policy
-retains legacy calls. Preserve positional arguments and existing map-row custody.
+## Shared resolution and parent request identity
 
-## One timing-policy resolver
+ProjectState resolves BPM Lock from MultiLoop, its stored preference and the
+specific timing-recovery gate. PAD SYNC adds its existing global/content request;
+PAD variable timing adds raw RT preference. Keep raw preference helpers for
+remembered UI state. Every grid, auto extent, editor, restore, accepted-timing
+publication, speed/master coupling and capture consumer uses this resolution.
 
-Keep initial constant timing from BpmController/current accepted timing, manual,
-TAP and the existing legacy path. Do not freeze the current variable segment when
-Realtime BPM is turned off. Preserve selected map data, corrections and jobs.
-Qualified variable geometry continues to use existing SourceBeatmap/Native delivery.
-Source tempo policy does not feed local map BPM back into master tempo.
+An accepted parent edit increments the existing checked global revision without
+changing child choices. Its role is now hierarchy request identity. Check capacity
+before Native or project mutation; equal setters remain no-ops. A revision proves
+a new request, never actual audio. Reuse complete JSON/reserved-cohort, row/cache,
+future-launch and full raw callback fences for OFF/ON ABA. Preserve ordinary
+MultiLoop launch cancellation and request-only Hold behavior in their own domains.
+In particular, the Python revision preflight must allow the existing MultiLoop
+cancellation/supersession of a pending Pair/Bank launch; a reserved-row global
+policy rejection must not prevent the parent action. Preserve complete reserved
+publication until its original cancellation/ACK boundary, without partial rows.
 
-Explicit SYNC OFF bypasses both variable mapped adaptation and fixed BPM matching.
-SYNC ON with Realtime BPM OFF selects existing fixed source-period/master-period
-matching. Both ON require qualified variable geometry and retain its strict
-unavailable/gap/unsupported behavior. Fixed matching is an explicit policy, never
-an automatic fallback from failed variable qualification. Key Lock, speed, BPM
-Lock requested state and trigger quantization remain independent. Existing
-TransportTimeline remains the only master authority.
+Accepted-timing refresh uses the same hierarchy/recovery identity in its control
+signature and existing Native global-revision fence. Update the Pair mirror's
+signature projection together with publication; stale queued/in-flight refreshes
+cannot republish an anchor after OFF/ON, recovery or a content move/swap.
 
-GUI, MIDI/Learn, input runtime rows and loop/grid resolution must consume the same
-resolved policy. Native and control feedback must distinguish fixed, variable and
-off trajectories; an ordinary scalar voice cannot impersonate qualified mapped
-adoption. Global policy identity participates in capture cancellation and current
-feedback matching so OFF/ON or fixed/variable changes cannot borrow an old ACK.
-Persisted revisions remain data, not Native source or audio ownership authority.
+Separate BPM-Lock wish from its existing actual application. Parent OFF requests
+the resolved effect off while keeping raw wishes. Parent ON with remembered BPM
+Lock freshly validates the existing selected reference and current source timing,
+then requests the normal control path. Missing readiness stays pending. Existing
+mapped-to-Legacy and mapped-BPM guards remain: this block may retain old actual
+audio pending a qualified representation conversion; it cannot claim immediate
+suspension of that unsupported current representation.
+The existing control owner must reconcile an unapplied BPM-Lock target when the
+blocking mapped/global-rate work retires or a valid reference becomes available.
+One refused command cannot leave the actual parent enabled indefinitely. Reuse
+bounded existing triggers and retain pending feedback; no blind queue flooding,
+second scheduler, selection-following anchor or removal of the safety guard.
 
-Actual admitted voices freeze a small Legacy/Off/Fixed/Mapped request containing
-both raw global choices, global policy revision and PAD intent revision independently of optional mapped
-custody. Off and Fixed must affect actual scalar rendering, preparation, snapshots
-and global-rate target resolution, rather than merely labelling a launch. Fixed
-requires finite current source/master periods and an unclamped supported ratio;
-Legacy preserves existing clamping. Fixed effective feedback waits for actual
-rate settlement and has no fabricated map revision. Mapped retains its original
-map identity. Off can acknowledge its actual mode/revision despite effective=false.
-Feedback compares both frozen nullable choices as well as the mode and revisions;
-neutral null/null/0 cannot acknowledge explicit false/false/0. Missing feedback
-fields are compatible only with unchanged neutral legacy policy.
+## Native policy and actual parent guards
 
-An explicit global SYNC ON mapped request may satisfy the existing dry mapped
-matching-enable guard even if requested BPM Lock is off. The same valid existing
-master and every pitch, delay, Key Lock, source, epoch and whole-map rate guard
-still apply. Global-null legacy requests retain the old BPM Lock requirement.
-The existing dry rate coordinator uses each voice's own frozen matching choice;
-this introduces no policy conversion of active voices or master-follow behavior.
-The current GUI establishes a master through its existing BPM LOCK reference.
-With BPM Lock OFF, existing control recomputation may clear the master; global
-SYNC ON alone does not invent one. The Native OFF-lock cases require an actually
-established master and are not proof that a fresh GUI project without a reference
-can synchronize. Missing master remains a concrete refusal. A future separate
-master-establishment control must use the same clock and real rate coordinator.
+Unresolved/inactive SYNC selects Legacy, preserving original constant detected,
+manual or TAP timing and BPM matching only under actual BPM Lock. A remembered
+SYNC=true must not override a suspended actual parent. Effective SYNC chooses
+Fixed or Mapped from RT preference; unavailable variable geometry cannot silently
+fall back. Actual Fixed/Mapped consumers require actual BPM Lock, not a retained
+period proxy. Keep all current source, epoch, pitch, reader, rate, drain and final
+claim checks and the no-active/idle recovery repair.
 
-## Publication, active audio and feedback
+Keep Native raw SourceMapProjection intent and derived captured MultiLoop and
+requested BPM-Lock availability rather than destructively erasing omitted-row
+wishes. Resolve an inactive requested parent to Legacy before target selection;
+the separate actual-BPM-Lock guard cannot substitute for that resolution. Reuse
+the existing qualified runtime pitch/control capture for the BPM parent where
+possible, including pre-ACK requests. Include the parent identity in the
+original projection identity and retain it through selection-free copies. All
+runtime/adoption/GUI/MIDI/PadStart callers obtain the same request. No new owning
+queue, mutable source state or audio/rate authority is introduced.
 
-Reuse the complete current input-runtime publication, original binding fences,
-captured GUI/MIDI/GLOBAL groups, existing rate coordination and bounded feedback.
-Reserve capacity before publishing cancellation/revision changes. Reserved
-arrangement rows retain their complete previous state; a global change waits for
-the existing actual ACK/mirror rather than partially changing that cohort.
+## Recovery remains effect-safe
 
-Existing living mapped voices intentionally retain their original mapping until
-supported real adoption or stop/retrigger. Global intent and pending state must
-be visible immediately, but no control flag, enqueue or map readiness can count
-as an actual switch. Do not reset SourcePlayback to an integer coordinate, discard
-its owning future, bypass mapped conversion guards or destroy an owner in the
-callback. Full continuous live switching remains an explicit wider SYNC gate.
+Malformed global metadata is detected at its existing precise validation-error
+location. Set one nonserialized ProjectState recovery latch before returning the
+recovered model; existing PrivateAttr is appropriate. Valid BPM Lock, MultiLoop,
+speed and content preferences remain stored, but resolved timing effects and
+master-coupled publication remain suspended. Existing original-byte/save fences
+and material-migration launch holds remain independent defenses, including when
+hold acquisition fails or restore is used without AppController.
 
-## Modularity and verification
+Do not distinguish corruption using False/False/revision0 or a magic exhausted
+revision: that is a valid ordinary preference. Parent toggles, equal-looking
+requests and in-place mirrors cannot clear the latch. Historical omissions and
+unrelated metadata errors do not set it. A fresh valid project load has normal
+availability; no new repair/clear workflow or serialized recovery field is added.
 
-Put policy DTO/resolution, global controller behavior and policy rendering in
-focused modules; Engine/Mixer receive necessary delegation. Keep worker acquisition
-and musical qualification independent. Check migration and strict malformed input,
-neutral/explicit PAD preferences, GUI/MIDI equivalence, all four explicit switch
-combinations, original source/policy/capture fences, fixed versus variable actual
-feedback, active pending transitions, Copy/Bank/restore and historical seals.
-No protocol double or software pass substitutes for music/device/Human gates.
+## Mode facts and phase qualification
+
+The current Native effective/target_current/settled/map fields prove configured
+mode or period, not shared-grid phase. Keep these facts and their original source,
+map, request and parent fences. Add a separate nullable presentation qualification
+for grid phase, initially unknown until a later qualified Native witness exists.
+A matching active mode is applied-mode/phase-unconfirmed, not full SYNC success.
+Global SYNC aggregation and both timing/PAD labels use that distinction. Preserve
+real refusal and tempo settling; do not erase prior actual mapped audio to make a
+requested parent appear off. RT configuration availability comes from parents'
+qualified requested state, never actual playing or phase confirmation.
+
+Render Key Lock, Multi Loop, BPM Lock, SYNC, Realtime BPM in the right sidebar;
+remove the old bottom-bar duplicate. Retain existing tags/Learn actions. Apply the
+same guards to GUI, MIDI and PAD SYNC; retain child preferences while unavailable.
+
+## Verification and remaining gates
+
+Cover parent/raw/actual matrices, no-op/exhaustion before side effects, selected
+reference reactivation, Legacy BPM behavior, unavailable Fixed/Mapped, Native
+omitted rows, reserved cohorts and ABA, grids and complete publication. This
+also covers pending reserved launch cancellation and deferred actual-parent
+reconciliation. Exercise accepted refresh before/after parent changes and Pair
+move/swap with matching Python/Native fences and mirror signature projection.
+Recovery checks include invalid policy with both parents true, failed/absent App hold,
+valid False/False0, unrelated errors, original bytes and nonserialization. Mode
+ACK must not confirm phase. Reuse existing layout/reader/custody/idle/Hold/rate tests.
+
+Static phase convergence, variable shared-grid convergence, actual8/64bar and
+one-shot EOF remain open product work. Static grids cannot identify true tempo
+variation absent from their reference. Later phase control must preserve exact
+activation cursor/first PCM, both real start modes and Key-Lock-OFF tempo/pitch
+coupling without stop/restart or seek. Use realistic2/4/6 and stress20, then10 when
+performance-related stress failure warrants it. Old32 timings are diagnostic;
+internal32 layout/correctness/ownership bounds remain.
+
+Root serializes checks/builds after every compiled writer freezes, performs one
+independent final diff/evidence review, coherent commit and normal existing-main
+push without per-step approval, and verifies clean HEAD/tracking/fresh remote.
+Protect the running App/held Native, original/private/denied data and all full-goal
+final gates. Realtime has no I/O/GIL/locks/logging/inference/heavy allocation or
+final owner destruction. Capacity failures use interruptible20/40/max60s same-step
+retry without a chosen total/retry limit, model/scope change or voluntary Goal stop.

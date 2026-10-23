@@ -1,6 +1,6 @@
 ## Why
 
-The Human requests independently switchable global Realtime BPM and SYNC controls.
+The latest Human requests the hierarchy MultiLoop -> BPM Lock -> SYNC -> Realtime BPM, with separately retained preferences and fresh qualification after parent reactivation. This supersedes the earlier independently usable controls and SYNC-OFF matching bypass.
 Some material should retain its initially determined fixed BPM; other material
 should use a qualified variable source beat map. The Human explicitly chose to
 keep the established master tempo as the common target.
@@ -15,9 +15,10 @@ mapped trajectories, but no single explicit policy selecting these behaviors.
   checked revisioning and compatible old-project behavior.
 - Resolve those choices with existing independent PAD preferences through one
   policy path shared by GUI, Learn/MIDI, loop/grid selection and Native capture.
-- Select fixed matching, qualified variable matching or no matching explicitly;
+- Resolve unavailable SYNC through the original Legacy/BPM-Lock path, static SYNC or qualified variable SYNC explicitly;
   preserve the existing master, source/map owners and unrelated controls.
 - Report actual callback-owned policy adoption independently of requested state.
+- Distinguish existing mode/tempo acknowledgements from the still-open shared-grid phase qualification, and keep recovery timing effects suspended without discarding valid saved preferences.
 
 ## Non-goals
 

@@ -62,15 +62,16 @@ The system SHALL assign deterministic item tags to each pad and bank control to 
 - **THEN** the MultiLoop control exists with tag `multiloop_btn`
 
 ### Requirement: MultiLoop Toggle Control
-The system SHALL provide a MultiLoop toggle control in the performance view, positioned below the bank selector controls, that enables or disables MultiLoop mode (see `multi-loop-mode`). The control SHALL visually indicate whether MultiLoop mode is enabled.
+The system SHALL provide a MultiLoop toggle control in the right performance sidebar directly below Key Lock. The control group SHALL appear in the order Key Lock, Multi Loop, BPM Lock, SYNC, Realtime BPM, retain the stable MultiLoop tag and use the original controller/Learn actions. Dependent controls SHALL show retained preferences while unavailable under the MultiLoop/BPM-Lock/SYNC hierarchy; actual mode, pending adoption and unconfirmed grid phase SHALL remain separate observations.
 
 #### Scenario: MultiLoop control is visible
 - **WHEN** the UI is started
 - **THEN** a MultiLoop control is visible in the performance view
 
-#### Scenario: MultiLoop control is positioned below bank selector
+#### Scenario: Timing controls follow the requested hierarchy
 - **WHEN** the UI is started
-- **THEN** the MultiLoop control is positioned below the bank selector controls
+- **THEN** Key Lock, Multi Loop, BPM Lock, SYNC and Realtime BPM SHALL appear in that order in the right sidebar
+- **AND** the old bottom-bar MultiLoop button SHALL NOT be duplicated
 
 #### Scenario: MultiLoop control indicates enabled state
 - **WHEN** MultiLoop mode is enabled
@@ -452,7 +453,7 @@ disabled red mode style while disabled, and SHALL render with the enabled green 
 enabled. Activating `Q` SHALL toggle only the global trigger-quantization enabled state.
 
 The performance view SHALL NOT render the previous `IMMEDIATE`/`BEAT`/`BAR` segmented trigger
-quantization controls. The bottom-bar `Q`, input-learn `L`, Multi Loop button, selected-pad stem
+quantization controls. The bottom-bar `Q`, input-learn `L`, selected-pad stem
 mask buttons, and Settings toggle SHALL share a consistent horizontal alignment and SHALL be
 visually grouped by function.
 
